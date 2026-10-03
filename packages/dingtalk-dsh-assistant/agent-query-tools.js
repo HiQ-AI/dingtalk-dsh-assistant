@@ -5,6 +5,12 @@ const correctable = new Set(['QUERY_ARGUMENT_INVALID','QUERY_NOT_FOUND','QUERY_L
 export const classifyAgentQueryError = error => correctable.has(error?.code) ? 'correctable' : 'fatal'
 const fail = code => { throw executionError(code) }
 export function agentEvidenceBinding(binding) {
+  if (binding?.kind === 'task-owner') {
+    const keys = ['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest']
+    if (['taskId','sessionId','turnId','inputDigest'].some(key => typeof binding[key] !== 'string' || !binding[key])
+      || ['leaseEpoch','ownerEpoch','requirementRevision'].some(key => !Number.isSafeInteger(binding[key]) || binding[key] < 1)) fail('QUERY_BINDING_INVALID')
+    return Object.fromEntries(keys.map(key => [key, binding[key]]))
+  }
   const message = binding?.kind === 'message-unit'
   const keys = message ? ['kind','runId','unitId','inputVersion','inputDigest','sessionId','leaseEpoch'] : ['taskId','runId','nodeRunId','generation','inputDigest','sessionId','leaseEpoch']
   if (binding?.kind !== undefined && !['task-node','message-unit'].includes(binding.kind)) fail('QUERY_BINDING_INVALID')
@@ -66,4 +72,25 @@ export async function verifyAgentEvidence({ artifacts, refs, binding, allowedBin
 }
 export async function verifyAgentQueryEvidence({ refs, binding, input, resolveScope, artifacts, allowedBindings }) {
   return verifyAgentEvidence({ refs, binding, artifacts, allowedBindings, scope: await resolveScope({binding,input}) })
+}
+
+/** 从原生成功工具回执重建查询集合，引用由Host产出，不采用模型自报的查询清单。 */
+export function readExecutedAgentQueryRefs(events, toolNames) {
+  if (!Array.isArray(events) || !Array.isArray(toolNames)) fail('QUERY_EVIDENCE_INVALID')
+  const names = new Set(toolNames), calls = new Map(events.filter(event => event.type === 'tool/call').map(event => [event.seq, event]))
+  const refs = new Set()
+  for (const event of events.filter(item => item.type === 'tool/result')) {
+    const call = event.sourceEventSeqs?.length === 1 ? calls.get(event.sourceEventSeqs[0]) : null
+    if (!call || !names.has(call.data.name)) continue
+    const block = event.data.message.content[0]
+    if (event.data.message.source.callId !== call.data.callId || block?.toolCallId !== call.data.callId || block.type !== 'tool-result') fail('QUERY_EVIDENCE_INVALID')
+    if (block.isError) continue
+    if (block.content.length !== 1 || block.content[0].type !== 'text') fail('QUERY_EVIDENCE_INVALID')
+    let value
+    try { value = JSON.parse(block.content[0].text) } catch { fail('QUERY_EVIDENCE_INVALID') }
+    if (value?.status === 'correctable_error') continue
+    if (typeof value?.evidenceRef !== 'string' || !value.evidenceRef) fail('QUERY_EVIDENCE_INVALID')
+    refs.add(value.evidenceRef)
+  }
+  return [...refs]
 }

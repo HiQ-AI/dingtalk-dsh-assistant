@@ -1,4 +1,4 @@
-import { acceptanceCriteriaSchema } from './task-input-contract.js'
+import { acceptanceCriteriaSchema, taskTitleSchema } from './task-input-contract.js'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 
@@ -66,16 +66,16 @@ export const fileDeliveryArguments = z.strictObject({ sourceQuote: argumentText,
   files: z.array(z.strictObject({ role: argumentText, fileName: argumentText })).min(1).max(20) })
 export const taskWorkflowCatalog = Object.freeze([
   { id: 'task-group-file-delivery', label: '群聊文件交付', purpose: '将当前需求必交文件逐件发送到原任务群，下载核验原字节后才完成', mode: 'delivery' },
-  { id: 'task-investigation', label: '调查与分析', purpose: '自主使用授权查询能力，交付调查、分析、评审或方案；按目标核对证据', mode: 'read-only' },
   { id: 'task-engineering', label: '代码开发', purpose: '开发并向明确指定的uat1至uat9环境提交PR，由Host映射分支；未指定先询问，禁止main', mode: 'engineering' },
   { id: 'task-uat-deployment', label: 'UAT 部署', purpose: '将已合入UAT分支的精确提交部署到UAT环境', mode: 'external' },
   { id: 'task-main-pr-merge', label: '上线合并 main', purpose: 'UAT及业务验收完成并获上线批准后，独立合并精确PR至main', mode: 'external' },
   { id: 'task-uat-pr-merge', label: 'UAT PR 合并', purpose: '核验精确 PR 和必要检查后合并至 UAT 分支并回读来源', mode: 'external' },
   { id: 'task-production-release', label: '生产发布', purpose: '生产发布', mode: 'external' },
   { id: 'task-data-change', label: '数据变更', purpose: '数据变更', mode: 'external' },
+  { id: 'task-data-change-approval-resume', label: '已有工单审批', purpose: '仅接续同任务已核验的未执行工单，按当前指令提交插件人工审批', mode: 'external' },
   { id: 'task-uat-rebuild', label: 'UAT 同提交重建', purpose: 'UAT同提交重建', mode: 'external' },
 ])
-const actionArguments = z.strictObject({ fileDelivery: fileDeliveryArguments.optional(), objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional(), targetId: argumentText.optional(), commitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), pullRequestNumber: z.number().int().positive().optional(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), releaseTag: z.string().regex(/^v\d{8}-[1-9]\d*$/).optional(), changeRef: argumentText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), explicitStages: z.array(argumentText).max(8).optional(), stageAuthorizations: z.array(z.strictObject({ workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)), sourceQuote: argumentText, objective: argumentText.optional(), gate: z.enum(['none', 'confirmation']).optional() })).max(8).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), language: z.enum(['zh-CN', 'en-US']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
+const actionArguments = z.strictObject({ title: taskTitleSchema.optional(), fileDelivery: fileDeliveryArguments.optional(), objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional(), targetId: argumentText.optional(), commitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), pullRequestNumber: z.number().int().positive().optional(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), releaseTag: z.string().regex(/^v\d{8}-[1-9]\d*$/).optional(), changeRef: argumentText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), explicitStages: z.array(argumentText).max(8).optional(), stageAuthorizations: z.array(z.strictObject({ workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)), sourceQuote: argumentText, objective: argumentText.optional(), gate: z.enum(['none', 'confirmation']).optional() })).max(8).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), language: z.enum(['zh-CN', 'en-US']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
 export const taskActionRequirements = Object.freeze({ create: ['objective'], research: ['objective'], reopen: ['objective'], revise: ['objective'],
   report: ['language'], clarification: ['runId', 'requestId', 'answer'], approval: ['requestId', 'decision'] })
 const taskActionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', 'research', 'create', 'revise', 'report', 'pause', 'cancel', 'resume', 'status', 'result', 'reopen', 'approval', 'clarification']), arguments: actionArguments, dependsOn: z.array(z.number().int().nonnegative()) }).superRefine((action, ctx) => {

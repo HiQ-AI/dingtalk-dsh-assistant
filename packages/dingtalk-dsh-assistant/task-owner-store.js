@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { parseArtifactReference } from './execution-artifacts.js'
 import { transientRecoveryReasons, correctableOwnerReasons, ownerRetryableReason, recoveryRetryDelayMs } from './execution-recovery-policy.js'
+import { readCurrentTaskSource } from './message-ledger.js'
 
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
 const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -35,11 +36,21 @@ function validatePlanChange(chosen, currentTask) {
       fail('TASK_OWNER_ADVANCE_CONFLICT')
 }
 const decision = value => {
-  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair'], ['action', 'summary', 'evidenceRefs'])
+  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair', 'condition'], ['action', 'summary', 'evidenceRefs'])
   if (!['advance', 'wait', 'complete', 'block', 'repairCurrentStage'].includes(value.action)
     || typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 4000
     || !Array.isArray(value.evidenceRefs) || value.evidenceRefs.length > 128) fail('TASK_OWNER_DECISION_INVALID')
   value.evidenceRefs.forEach(ref)
+  if (['wait', 'block'].includes(value.action)) {
+    const c = value.condition
+    if (!c) fail('TASK_OWNER_CONDITION_REQUIRED')
+    exact(c, ['kind', 'missing', 'responsibleParty', 'resumeWhen', 'evidenceRefs'])
+    if (!['business-input', 'approval', 'capability', 'permission', 'execution'].includes(c.kind)
+      || ['missing', 'responsibleParty', 'resumeWhen'].some(key => typeof c[key] !== 'string' || !c[key].trim() || c[key].length > 2000)
+      || !Array.isArray(c.evidenceRefs) || c.evidenceRefs.length > 128) fail('TASK_OWNER_CONDITION_INVALID')
+    c.evidenceRefs.forEach(ref)
+    if (c.evidenceRefs.some(item => !value.evidenceRefs.includes(item))) fail('TASK_OWNER_CONDITION_INVALID')
+  } else if (value.condition !== undefined) fail('TASK_OWNER_CONDITION_INVALID')
   if (value.action === 'repairCurrentStage') {
     if (value.planChange || value.appendStages || value.assessments) fail('TASK_OWNER_DECISION_INVALID')
     exact(value.repair, ['stageId', 'runId', 'generation', 'runRevision', 'requirementRevision'])
@@ -96,11 +107,49 @@ const decision = value => {
   return value
 }
 const task = (db, taskId) => {
-  const row = db.prepare(`SELECT t.task_id,t.requirement_revision,t.plan_revision,t.plan_requirement_revision,t.status AS plan_status,
+  const row = db.prepare(`SELECT t.task_id,t.requirement_ref,t.requirement_revision,t.plan_revision,t.plan_requirement_revision,t.status AS plan_status,
     c.control_revision,c.state AS control_state FROM business_tasks t
     JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?`).get(id(taskId))
   if (!row) fail('TASK_OWNER_TASK_NOT_FOUND')
   return row
+}
+// 候选与接纳共用同一状态合同；接纳仍在版本核验后的事务内重查。
+function validateDecisionState(db, o, chosen) {
+  const currentTask = task(db, o.task_id)
+  const activeStage = db.prepare(`SELECT status FROM task_plan_stages WHERE task_id=? AND plan_revision=?
+    AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
+    .get(o.task_id, currentTask.plan_revision)
+  if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
+  validatePlanChange(chosen, currentTask)
+  if (chosen.action === 'complete') {
+    const direct = db.prepare("SELECT e.payload_ref FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").all(o.task_id, currentTask.requirement_revision,o.authorization_revision,o.input_fence_revision)
+    const stageCount = db.prepare('SELECT COUNT(*) AS count FROM task_plan_stages WHERE task_id=? AND plan_revision=?').get(o.task_id,currentTask.plan_revision).count
+    if ((stageCount ? currentTask.plan_status !== 'succeeded' : !direct.length) || chosen.appendStages !== undefined
+      || stageCount && currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
+    const stages = db.prepare('SELECT workflow_id,status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
+    .all(o.task_id, currentTask.plan_revision)
+    if (stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
+      || !Array.isArray(JSON.parse(stage.evidence_refs)) || !JSON.parse(stage.evidence_refs).length))
+      fail('TASK_OWNER_COMPLETION_UNPROVEN')
+    const items = db.prepare('SELECT item_id FROM task_acceptance_items WHERE task_id=? AND active=1 ORDER BY rowid')
+      .all(o.task_id).map(row => row.item_id)
+    const assessments = chosen.assessments ?? []
+    const knownEvidence = new Set([...stages.flatMap(stage => [stage.output_ref, ...JSON.parse(stage.evidence_refs)]), ...direct.map(row => row.payload_ref)])
+    if (stages.length && stages.every(stage => stage.workflow_id === 'task-general-intake')
+      || !items.length || assessments.length !== items.length
+      || new Set(assessments.map(item => item.itemId)).size !== items.length
+      || assessments.some(item => !items.includes(item.itemId)
+        || item.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
+      || chosen.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
+    fail('TASK_OWNER_COMPLETION_UNPROVEN')
+  } else if (chosen.action === 'advance' && (currentTask.plan_status === 'succeeded'
+    || !['ready', 'running'].includes(activeStage?.status))) {
+    const continuation = currentTask.plan_status === 'pending' && chosen.planChange?.kind === 'initialize'
+      || chosen.planChange?.kind === 'replaceSuffix'
+      || currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
+    if (!continuation) fail('TASK_OWNER_ADVANCE_CONFLICT')
+  }
+  // wait/block属于整体任务的条件，不改变任何已成功或运行中的阶段。
 }
 const owner = (db, taskId) => {
   const row = db.prepare('SELECT * FROM task_owners WHERE task_id=?').get(id(taskId))
@@ -330,6 +379,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
   if (command.kind === 'task.owner.event') {
     exact(a, ['taskId', 'eventKey', 'eventType', 'payloadRef'], ['taskId', 'eventKey', 'eventType'])
     const o = owner(db, a.taskId); id(a.eventKey); id(a.eventType)
+    if (a.eventType === 'query.succeeded') fail('TASK_OWNER_QUERY_EVENT_RESERVED')
     if (a.payloadRef !== undefined && a.payloadRef !== null) ref(a.payloadRef)
     const prior = db.prepare('SELECT * FROM task_events WHERE event_key=?').get(a.eventKey)
     if (prior) {
@@ -363,6 +413,21 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     return { status: 'applied', turnId: a.turnId, leaseEpoch: epoch, eventWatermark: o.event_watermark,
       sessionId: o.session_id, sessionBound: !!o.session_bound, ownerEpoch: o.owner_epoch, versions: v }
   }
+  if (command.kind === 'task.owner.query-evidence') {
+    exact(a, ['taskId','turnId','leaseEpoch','requirementRevision','evidenceRef'])
+    const { owner: o, turn: t } = turn(db,a)
+    ref(a.evidenceRef)
+    const workspaceTaskId = parseArtifactReference(task(db,a.taskId).requirement_ref).logicalTaskId ?? a.taskId
+    if (parseArtifactReference(a.evidenceRef).logicalTaskId !== workspaceTaskId) fail('TASK_OWNER_QUERY_EVIDENCE_INVALID')
+    const v = versions(db,o)
+    if (v.controlRevision !== t.control_revision || v.authorizationRevision !== t.authorization_revision || v.inputFenceRevision !== t.input_fence_revision || task(db,a.taskId).control_state !== 'active') fail('TASK_OWNER_QUERY_STALE')
+    if (t.status !== 'running' || revision(a.requirementRevision) !== t.requirement_revision
+      || task(db,a.taskId).requirement_revision !== t.requirement_revision) fail('TASK_OWNER_QUERY_STALE')
+    const eventKey = `query-${createHash('sha256').update(json([a.taskId,a.turnId,a.evidenceRef])).digest('hex')}`
+    db.prepare("INSERT OR IGNORE INTO task_events(task_id,event_key,event_type,payload_ref,created_at,handled_at,turn_id) VALUES(?,?,'query.succeeded',?,?,?,?)")
+      .run(o.task_id,eventKey,a.evidenceRef,now,now,t.turn_id)
+    return { status:'recorded', evidenceRef:a.evidenceRef }
+  }
   if (command.kind === 'task.owner.sessionBound') {
     exact(a, ['taskId', 'turnId', 'leaseEpoch', 'sessionId'])
     const { owner: o, turn: t } = turn(db, a)
@@ -372,10 +437,10 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
   }
   if (command.kind === 'task.owner.candidate') {
     exact(a, ['taskId', 'turnId', 'leaseEpoch', 'decision'])
-    const { turn: t } = turn(db, a)
+    const { owner: o, turn: t } = turn(db, a)
     if (t.status !== 'running') fail('TASK_OWNER_CANDIDATE_CONFLICT')
     const chosen = decision(a.decision)
-    validatePlanChange(chosen, task(db, t.task_id))
+    validateDecisionState(db, o, chosen)
     db.prepare("UPDATE task_owner_turns SET candidate_json=?,status='candidate',updated_at=? WHERE turn_id=?")
       .run(json(chosen), now, t.turn_id)
     return { status: 'received', turnId: t.turn_id }
@@ -396,52 +461,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       try { parseArtifactReference(a.deliveryManifestRef) }
       catch { fail('TASK_OWNER_DELIVERY_MANIFEST_INVALID') }
     }
-    const currentTask = task(db, o.task_id)
-    const activeStage = db.prepare(`SELECT status FROM task_plan_stages WHERE task_id=? AND plan_revision=?
-      AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
-      .get(o.task_id, currentTask.plan_revision)
-    if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
-    validatePlanChange(chosen, currentTask)
-    if (chosen.action === 'complete') {
-      if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined
-        || currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
-      const stages = db.prepare('SELECT workflow_id,status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
-        .all(o.task_id, currentTask.plan_revision)
-      if (!stages.length || stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
-        || !Array.isArray(JSON.parse(stage.evidence_refs)) || !JSON.parse(stage.evidence_refs).length))
-        fail('TASK_OWNER_COMPLETION_UNPROVEN')
-      const items = db.prepare('SELECT item_id FROM task_acceptance_items WHERE task_id=? AND active=1 ORDER BY rowid')
-        .all(o.task_id).map(row => row.item_id)
-      const assessments = chosen.assessments ?? []
-      const knownEvidence = new Set(stages.flatMap(stage => [stage.output_ref, ...JSON.parse(stage.evidence_refs)]))
-      if (stages.every(stage => stage.workflow_id === 'task-general-intake')
-        || !items.length || assessments.length !== items.length
-        || new Set(assessments.map(item => item.itemId)).size !== items.length
-        || assessments.some(item => !items.includes(item.itemId)
-          || item.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
-        || chosen.evidenceRefs.some(evidence => !knownEvidence.has(evidence)))
-        fail('TASK_OWNER_COMPLETION_UNPROVEN')
-    } else if (chosen.action === 'advance' && (currentTask.plan_status === 'succeeded'
-      || !['ready', 'running'].includes(activeStage?.status))) {
-      const generalStep = chosen.appendStages?.length === 1
-        && chosen.appendStages[0].workflowId === 'task-general-capability'
-        && chosen.appendStages[0].capabilityStep
-      const fileDeliveryStep = chosen.appendStages?.length === 1
-        && chosen.appendStages[0].workflowId === 'task-group-file-delivery'
-        && !chosen.appendStages[0].capabilityStep
-      const continuation = currentTask.plan_status === 'pending' && chosen.planChange?.kind === 'initialize'
-        || chosen.planChange?.kind === 'replaceSuffix'
-        || currentTask.plan_status === 'succeeded' && chosen.appendStages?.length
-        && (generalStep || fileDeliveryStep || db.prepare(`SELECT 1 FROM task_events WHERE task_id=? AND seq>? AND seq<=?
-          AND event_type='intent.received' LIMIT 1`).get(o.task_id, o.processed_watermark, t.event_watermark))
-      if (!continuation) fail('TASK_OWNER_ADVANCE_CONFLICT')
-    } else if (chosen.action === 'wait' && currentTask.plan_status !== 'pending'
-      && !['ready', 'running', 'waiting_confirmation'].includes(activeStage?.status)) {
-      fail('TASK_OWNER_WAIT_CONFLICT')
-    } else if (chosen.action === 'block' && currentTask.plan_status !== 'pending'
-      && !['ready', 'running', 'waiting_confirmation', 'blocked'].includes(activeStage?.status)) {
-      fail('TASK_OWNER_BLOCK_CONFLICT')
-    }
+    validateDecisionState(db, o, chosen)
     db.prepare("UPDATE task_owner_turns SET decision_json=candidate_json,status='accepted',application_status='pending',updated_at=? WHERE turn_id=?")
       .run(now, t.turn_id)
     db.prepare('UPDATE task_events SET handled_at=?,turn_id=? WHERE task_id=? AND seq<=? AND handled_at IS NULL')
@@ -449,7 +469,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     db.prepare("UPDATE task_owners SET status='idle',processed_watermark=?,current_turn_id=NULL,failure_count=0,last_failure=NULL,revision=revision+1,updated_at=? WHERE task_id=?")
       .run(t.event_watermark, now, o.task_id)
     db.prepare('INSERT INTO task_reports(report_id,task_id,turn_id,report_type,facts_json,created_at) VALUES(?,?,?,?,?,?)')
-      .run(`owner:${t.turn_id}`, o.task_id, t.turn_id, chosen.action, json({ summary: chosen.summary, evidenceRefs: chosen.evidenceRefs }), now)
+      .run(`owner:${t.turn_id}`, o.task_id, t.turn_id, chosen.action, json({ summary: chosen.summary, evidenceRefs: chosen.evidenceRefs, ...(chosen.condition ? { condition: chosen.condition } : {}) }), now)
     return { status: 'accepted', taskId: o.task_id, turnId: t.turn_id, decision: chosen,
       ...(a.deliveryManifestRef ? { deliveryManifestRef: a.deliveryManifestRef,
         requirementRevision: t.requirement_revision, planRevision: t.plan_revision } : {}),
@@ -474,16 +494,34 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     const rejectedRepair = t.application_status === 'blocked' && a.reason === 'WORKFLOW_REPAIR_NOT_ADMITTED'
       && o.status === 'blocked' && o.last_failure === a.reason && !o.current_turn_id && o.lease_epoch === t.lease_epoch
       && JSON.parse(t.decision_json ?? '{}').action === 'repairCurrentStage'
-    if (t.application_status !== 'pending' && !rejectedRepair) fail('TASK_OWNER_ACTION_ALREADY_APPLIED')
-    if (rejectedRepair && (task(db, a.taskId).control_state !== 'active'
+    const rejectedSourcePlan = t.application_status === 'blocked' && a.reason === 'TASK_STAGE_SOURCE_CONDITION_INVALID'
+      && o.status === 'blocked' && o.last_failure === a.reason && !o.current_turn_id && o.lease_epoch === t.lease_epoch
+      && JSON.parse(t.decision_json ?? '{}').action === 'advance'
+      && v.requirementRevision === t.requirement_revision && v.planRevision === t.plan_revision && v.controlRevision === t.control_revision
+    const rejectedAction = rejectedRepair || rejectedSourcePlan
+    if (t.application_status !== 'pending' && !rejectedAction) fail('TASK_OWNER_ACTION_ALREADY_APPLIED')
+    if (rejectedAction && (task(db, a.taskId).control_state !== 'active'
       || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,t.turn_id)
-      || !db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('waiting','failed')").get(a.taskId)
+      || !db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns q ON q.turn_id=e.turn_id AND q.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND q.requirement_revision=? AND q.authorization_revision=? AND q.input_fence_revision=?").get(a.taskId,v.requirementRevision,o.authorization_revision,o.input_fence_revision)
       || db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('waiting','failed','succeeded'))").get(a.taskId)
       || db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
       || db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
       || db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId)
       || db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId))) fail('TASK_OWNER_DISCARD_UNSAFE')
-    if (!rejectedRepair && o.event_watermark === t.event_watermark && v.requirementRevision === t.requirement_revision
+    if (rejectedSourcePlan) {
+      if (db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${t.turn_id}`)) fail('TASK_OWNER_DISCARD_UNSAFE')
+      const decision = JSON.parse(t.decision_json)
+      const stages = [...(decision.planChange?.stages ?? []), ...(decision.appendStages ?? [])]
+      if (!stages.length) fail('TASK_OWNER_DISCARD_UNSAFE')
+      for (const { sourceCondition: condition } of stages) {
+        if (!condition) continue
+        const source = readCurrentTaskSource(db, condition.sourceKey, { taskId: a.taskId })
+        if (!source || source.sourceVersion !== condition.sourceVersion || !source.body.includes(condition.sourceQuote)
+          || !condition.sourceQuote.includes(condition.objective)
+          || condition.requiredActorId && source.actorId !== condition.requiredActorId) fail('TASK_OWNER_DISCARD_UNSAFE')
+      }
+    }
+    if (!rejectedAction && o.event_watermark === t.event_watermark && v.requirementRevision === t.requirement_revision
       && v.planRevision === t.plan_revision && v.controlRevision === t.control_revision
       && v.authorizationRevision === t.authorization_revision && v.inputFenceRevision === t.input_fence_revision)
       fail('TASK_OWNER_ACTION_STILL_CURRENT')
@@ -601,6 +639,13 @@ export function queryTaskOwner(db, query) {
         inputFenceRevision: row.input_fence_revision,
         retryAt: row.application_failures ? new Date(Date.parse(row.updated_at) + recoveryRetryDelayMs(row.application_failures)).toISOString() : null,
         decision: JSON.parse(row.decision_json), sequenceId: row.sequence_id }))
+  }
+  if (query?.kind === 'task.owner.query-evidence') {
+    const current = task(db,query.taskId)
+    const wanted = query.requirementRevision ?? current.requirement_revision
+    if (revision(wanted) !== current.requirement_revision) fail('TASK_OWNER_QUERY_STALE')
+    return db.prepare("SELECT e.payload_ref,t.turn_id,t.lease_epoch,t.requirement_revision FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=? ORDER BY e.seq")
+      .all(query.taskId,wanted,owner(db,query.taskId).authorization_revision,owner(db,query.taskId).input_fence_revision).map(row => ({ artifactRef:row.payload_ref,taskId:query.taskId,turnId:row.turn_id,leaseEpoch:row.lease_epoch,requirementRevision:row.requirement_revision }))
   }
   if (query?.kind === 'task.owner.events') {
     exact(query, ['kind', 'taskId', 'afterSequenceId', 'limit'], ['kind', 'taskId'])

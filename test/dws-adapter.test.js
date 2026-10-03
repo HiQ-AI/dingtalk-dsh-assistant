@@ -128,6 +128,44 @@ test('本人私聊发送等待DWS异步投递完成后再记录消息ID', async 
   assert.equal(result.messageId, 'delayed-message')
 })
 
+test('原生私聊审批先取得openTaskId，确认只读回查真实ID及完整冻结正文',async()=>{
+ const calls=[],text='**待审批**\n\n批准这项操作\nSQL: SELECT  process_id FROM public.process_id_temp;\r\n审批请求 ID：approval-1'
+ let pending=true,observed=text
+ const runner={async run(args){calls.push(args);if(args.includes('+messages-send'))return{exitCode:0,stdout:JSON.stringify({sendReceipt:{openTaskId:'operation'}})};
+  if(args.includes('+messages-query-send-status'))return{exitCode:0,stdout:JSON.stringify({result:{sendStatus:pending?'PROCESSING':'SUCCESS'},messageRef:{openConversationId:'private',openMessageId:'notice'}})};
+  return{exitCode:0,stdout:JSON.stringify({complete:true,hasMore:false,failedCount:0,failures:[],foundCount:1,notFoundMessageIds:[],messages:[{conversationId:'private',messageId:'notice',recipientUserId:'recipient',text:observed}]})}}}
+ const adapter=createDwsAdapter({enabled:true,writesAuthorized:true,runner})
+ assert.deepEqual(await adapter.sendSelfIntent({userId:'recipient',text,idempotencyKey:'frozen'}),{openTaskId:'operation'})
+ assert.equal(calls.length,1)
+ assert.equal(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),undefined)
+ pending=false;assert.deepEqual(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),{openTaskId:'operation',conversationId:'private',messageId:'notice'})
+ observed=text.replace(/\n\n/gu,'  \n');assert.deepEqual(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),{openTaskId:'operation',conversationId:'private',messageId:'notice'})
+ observed=text.replace(/\r?\n/gu,' ');assert.deepEqual(await adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),{openTaskId:'operation',conversationId:'private',messageId:'notice'})
+ for(const changed of [observed.replace('SELECT  ','SELECT '),observed.replace('process_id FROM','process_id2 FROM'),observed.replace(';','')]) {
+  observed=changed;await assert.rejects(adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),/content_mismatch/)
+ }
+ observed='另一个审批';await assert.rejects(adapter.confirmSelfDelivery({openTaskId:'operation',recipientUserId:'recipient',text}),/content_mismatch/)
+ assert.equal(calls.filter(args=>args.includes('+messages-send')).length,1)
+})
+
+test('未知私聊审批只认完整正文及权威收件人，模糊/他人/缺身份/截断结果不能认领',async()=>{
+ const text='审批编号：123456789abc\nSQL: SELECT  process_id FROM public.process_id_temp;\r\n完整范围',request={requestId:'external:full-request-123456789abc',recipientUserId:'recipient',text}
+ let messages=[],partial=false
+ const runner={async run(args){if(args.includes('+search-msg')){assert.equal(args[args.indexOf('--query')+1],'123456789abc');return{exitCode:0,stdout:JSON.stringify({complete:!partial,hasMore:partial,messages})}};return{exitCode:0,stdout:JSON.stringify({complete:true,failedCount:0,failures:[],foundCount:1,notFoundMessageIds:[],messages})}}}
+ const adapter=createDwsAdapter({enabled:true,runner})
+ for(const message of [{text:text+'多余字',recipientUserId:'recipient'},{text,recipientUserId:'other'},{text}]) {
+  messages=[{conversationId:'private',messageId:'notice',...message}];assert.equal(await adapter.findWorkflowApprovalNotice(request),undefined)
+ }
+ messages=[{conversationId:'private',messageId:'notice',recipientUserId:'recipient',text}]
+ assert.deepEqual(await adapter.findWorkflowApprovalNotice(request),{conversationId:'private',messageId:'notice'})
+ messages[0].text=text.replace(/\r?\n/gu,' ')
+ assert.deepEqual(await adapter.findWorkflowApprovalNotice(request),{conversationId:'private',messageId:'notice'})
+ for(const changed of [messages[0].text.replace('SELECT  ','SELECT '),messages[0].text.replace('process_id FROM','process_id2 FROM'),messages[0].text.replace(';','')]) {
+  messages[0].text=changed;assert.equal(await adapter.findWorkflowApprovalNotice(request),undefined)
+ }
+ partial=true;await assert.rejects(adapter.findWorkflowApprovalNotice(request),/search_partial/)
+})
+
 test('本人私聊回读限定起止时间但不设置消息条数上限', () => {
   const adapter = createDwsAdapter({ enabled: true, runner: { run: async () => undefined, spawn: () => undefined } })
   const args = adapter.compileConversationRead('self-conversation', { start: '2026-08-24T10:00:00.000Z', end: '2026-08-24T18:00:00.000Z' })
@@ -215,6 +253,35 @@ test('历史命中但缺少真实消息ID时不得确认或盲目重发', async 
     }
     await assert.rejects(dispatchOutbox({ adapter, groupId: 'g', outbound: { outboundId: 'out', text: 'reply' } }), /outbox_message_id_required/)
     assert.equal(sends, hit === 'after' ? 1 : 0)
+  }
+})
+
+test('私聊uuid长度预检拒绝超过128且零外发，合法key保持原值', async () => {
+  let sends = 0
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => { sends++; return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) } } } })
+  await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: 'x'.repeat(129) }), /dws_self_send_uuid_too_long/u)
+  assert.equal(sends, 0)
+  const legal = 'x'.repeat(128)
+  assert.equal(adapter.compileSelfSend({ userId: 'u', text: 't', idempotencyKey: legal }).includes(legal), true)
+})
+
+test('私聊负回执只对服务端精确uuid拒绝声明确定未发送', async () => {
+  const key = 'x'.repeat(156)
+  for (const [serverErrorCode, errorMsg, known] of [
+    ['1001', "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 156.", true],
+    ['1001', 'network unknown', false],
+    ['500', "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 156.", false],
+    ['1001', "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 157.", false],
+  ]) {
+    const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => ({ exitCode: 1, stderr: JSON.stringify({ error: { server_error_code: serverErrorCode, errorMsg, trace_id: 'trace' } }) }) } })
+    // 模拟旧版本已经编译的156字符请求；新版本正常编译已在上一用例零外发拒绝。
+    adapter.compileSelfSend = () => ['existing-compiled-command']
+    await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: key }), error => {
+      assert.equal(error.serverErrorCode, serverErrorCode)
+      assert.equal(error.knownNotSent === true, known)
+      if (known) assert.deepEqual(error.proof, { kind: 'dws-uuid-rejected', idempotencyKey: key, serverErrorCode, errorMessage: errorMsg, traceId: 'trace' })
+      return true
+    })
   }
 })
 

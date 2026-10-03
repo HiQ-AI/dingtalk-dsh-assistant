@@ -25,7 +25,20 @@ export function narrowVerificationSql(verificationSql) {
 }
 
 /** 两端同一只读查询，固定排序用于比较全库关系列结构。 */
-export function uatCatalogBaselineSql() {
+export function uatCatalogBaselineSql(scope, countOnly = false) {
+  if (scope !== undefined && (!scope || Object.keys(scope).sort().join(',') !== 'schema,table'
+    || !exactName(scope.schema) || !exactName(scope.table))) throw new Error('POSTGRES_UAT_SCHEMA_SCOPE_INVALID')
+  const projection = countOnly ? 'count(*)::integer AS expected_rows' : `n.nspname AS schema_name, c.relname AS table_name,
+    c.relkind AS relation_kind, a.attname AS column_name, a.atttypid::regtype::text AS data_type,
+    a.attnotnull AS not_null, pg_get_expr(d.adbin, d.adrelid) AS default_expression`
+  const filter = scope ? 'n.nspname = $1 AND c.relname = $2'
+    : "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'"
+  if (scope || countOnly) return `SELECT ${projection}
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+    LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+    WHERE ${filter}
+      AND c.relkind IN ('r', 'p', 'v', 'm')${countOnly ? '' : '\n    ORDER BY n.nspname, c.relname, a.attnum'}`
   return `SELECT n.nspname AS schema_name, c.relname AS table_name,
     c.relkind AS relation_kind, a.attname AS column_name, a.atttypid::regtype::text AS data_type,
     a.attnotnull AS not_null, pg_get_expr(d.adbin, d.adrelid) AS default_expression

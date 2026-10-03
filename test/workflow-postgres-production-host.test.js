@@ -22,7 +22,70 @@ const proof = { schema: 'public', table: 't', relationKind: 'r', rowSecurity: fa
 const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1;'
 const verificationSql = 'SELECT v FROM public.t WHERE id = 1'
 
-test('生产从库端口只提供三项只读方法，并对每次连接核验从库身份', async () => {
+test('精确表基线只读取参数化表目录，拒绝伪造范围及目录错表', async () => {
+  let wrongTable = false
+  const queries = [], scope = { schema: 'public', table: 't' }
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      assert.deepEqual(values, ['public', 't'])
+      assert.ok(sql.includes('n.nspname = $1 AND c.relname = $2'))
+      if (sql.startsWith('SELECT count(')) return { rows: [{ expected_rows: 1 }] }
+      return { rows: wrongTable ? [{ ...catalog[0], table_name: 'other' }] : catalog }
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client }), args = { project: 'projects/flbn', target: target('hiq_editor'), scope }
+  const result = await port.readBaseline(args)
+  assert.deepEqual(result.scope, scope)
+  assert.equal(result.schemaVersion, 'pg-catalog-table-columns-v1')
+  assert.equal(queries.some(row => row.sql === uatCatalogBaselineSql() || row.sql === uatCatalogBaselineCountSql()), false)
+  await assert.rejects(port.readBaseline({ ...args, scope: { ...scope, column: 'name' } }), /POSTGRES_PRODUCTION_SCOPE_INVALID/)
+  await assert.rejects(port.readBaseline({ ...args, scope: { ...scope, table: 't;drop' } }), /POSTGRES_PRODUCTION_SCOPE_INVALID/)
+  wrongTable = true
+  await assert.rejects(port.readBaseline(args), /POSTGRES_PRODUCTION_SCOPE_UNCONFIRMED/)
+})
+
+test('简单加列只核对精确表列，真实从库回读完整列属性，拒绝已存在列和错误验收', async () => {
+  const queries = [], expectedRow = { column_name: 'label', data_type: 'character varying', is_nullable: 'YES',
+    column_default: null, character_maximum_length: null }
+  let columnExists = false, observed = expectedRow
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      if (sql.includes('AS column_exists')) return { rows: [{ relation_kind: 'r', column_exists: columnExists, has_children: false }] }
+      if (sql.includes('FROM information_schema.columns')) return { rows: [observed] }
+      throw Error('UNEXPECTED_BROAD_QUERY')
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client })
+  const sql = 'ALTER TABLE public.t ADD COLUMN label character varying;'
+  const verificationSql = "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'label'"
+  const args = { project: 'projects/flbn', target: target('hiq_editor'), baseline: { evidenceRef: 'baseline' },
+    applySql: sql, applySqlSha256: sha(sql), verificationSql, expectedChange: JSON.stringify({ rows: [expectedRow] }) }
+  assert.equal((await port.checkPreconditions(args)).passed, true)
+  assert.deepEqual(queries.at(-1).values, ['public', 't', 'label'])
+  assert.equal(queries.some(row => row.sql === uatCatalogBaselineSql()), false)
+  columnExists = true
+  assert.equal((await port.checkPreconditions(args)).passed, false)
+  const verify = { project: args.project, target: args.target, sql: verificationSql,
+    expectedChange: args.expectedChange, packageDigest: 'a'.repeat(64), taskRunId: 'task-run-1' }
+  assert.equal((await port.queryVerification(verify)).passed, true)
+  observed = { ...expectedRow, is_nullable: 'NO' }
+  await assert.rejects(port.queryVerification(verify), /POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED/)
+  await assert.rejects(port.queryVerification({ ...verify, sql: verificationSql + '; DROP TABLE public.t' }), /POSTGRES_COLUMN_VERIFICATION_INVALID/)
+})
+
+test('生产从库端口只提供目录及验收只读方法，并对每次连接核验从库身份', async () => {
   const opened = [], statements = []
   class Client {
     constructor(options) { opened.push(options); this.options = options }
@@ -39,7 +102,7 @@ test('生产从库端口只提供三项只读方法，并对每次连接核验�
     async end() {}
   }
   const port = createProductionPostgresHost({ entries, Client })
-  assert.deepEqual(Object.keys(port), ['getDatabase', 'readBaseline', 'checkPreconditions'])
+  assert.deepEqual(Object.keys(port), ['getDatabase', 'readBaseline', 'checkPreconditions', 'queryVerification'])
   assert.deepEqual(await port.getDatabase({ project: 'projects/flbn', target: target('hiq_editor') }),
     { project: 'projects/flbn', ...target('hiq_editor') })
   const baseline = await port.readBaseline({ project: 'projects/flbn', target: target('hiq_editor') })
@@ -53,6 +116,86 @@ test('生产从库端口只提供三项只读方法，并对每次连接核验�
   assert.equal(statements.filter(sql => sql.includes('pg_is_in_recovery()')).length, opened.length)
   await assert.rejects(port.getDatabase({ project: 'projects/flbn', target: target('other') }),
     /POSTGRES_PRODUCTION_TARGET_NOT_ALLOWED/u)
+})
+
+test('明确单列删除只读核对存在与依赖，拒绝自动依赖、继承及超出范围的 SQL', async () => {
+  const safe = { relation_kind: 'r', identity_kind: '', generated_kind: '', has_inheritance: false, has_dependencies: false }
+  let observed = [safe]
+  const queries = []
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      assert.deepEqual(values, ['public', 't', 'label'])
+      assert.match(sql, /d\.refobjsubid = a\.attnum/)
+      assert.doesNotMatch(sql, /d\.deptype|COUNT\(|FROM public\./i)
+      assert.match(sql, /h\.inhparent = c\.oid OR h\.inhrelid = c\.oid/)
+      return { rows: observed }
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client })
+  const sql = 'ALTER TABLE public.t DROP COLUMN label;'
+  const args = { project: 'projects/flbn', target: target('hiq_editor'), baseline: { evidenceRef: 'baseline', scope: { schema: 'public', table: 't' } },
+    applySql: sql, applySqlSha256: sha(sql), expectedChange: '{"rows":[]}',
+    verificationSql: "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'label'" }
+  const receipt = await port.checkPreconditions(args)
+  assert.equal(receipt.passed, true);assert.equal(receipt.baselineEvidenceRef, 'baseline')
+  assert.match(receipt.checkId, /^postgres-production-drop-column-preconditions:/)
+  for (const rows of [[], [safe, safe], ...[{ relation_kind: 'p' }, { identity_kind: 'a' }, { generated_kind: 's' },
+    { has_inheritance: true }, { has_dependencies: true }].map(change => [{ ...safe, ...change }])]) {
+    observed = rows
+    assert.equal((await port.checkPreconditions(args)).passed, false)
+  }
+  observed = [safe]
+  const before = queries.length
+  for (const change of [
+    { baseline: { ...args.baseline, scope: { schema: 'public', table: 'other' } } },
+    { applySqlSha256: 'a'.repeat(64) }, { expectedChange: '{"rows":[{}]}' },
+    { expectedChange: '{"rows":[],"columnEmpty":true}' },
+    { verificationSql: args.verificationSql.replace("column_name = 'label'", "column_name = 'other'") },
+    ...['ALTER TABLE public.t DROP COLUMN label CASCADE;', 'ALTER TABLE public.t DROP COLUMN IF EXISTS label;',
+      'ALTER TABLE public.t DROP COLUMN label; DROP TABLE public.t;'].map(applySql => ({ applySql, applySqlSha256: sha(applySql) })),
+  ]) assert.equal((await port.checkPreconditions({ ...args, ...change })).passed, false)
+  assert.equal(queries.length, before)
+})
+
+test('删除列验收同一只读目录快照确认表仍存在与列消失，拒绝整表消失', async () => {
+  let observed = [{ relation_kind: 'r', column_exists: false, columns: [] }]
+  const queries = []
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push(sql)
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database,
+        transaction_read_only: 'on', in_recovery: true }] }
+      assert.deepEqual(values, ['public', 't', 'label'])
+      assert.match(sql, /FROM information_schema\.columns/)
+      assert.match(sql, /FROM pg_class c JOIN pg_namespace/)
+      return { rows: observed }
+    }
+  }
+  const port = createProductionPostgresHost({ entries, Client })
+  const args = { project: 'projects/flbn', target: target('hiq_editor'), expectedChange: '{"rows":[]}',
+    packageDigest: 'a'.repeat(64), taskRunId: 'delete-task-run',
+    sql: "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'label'" }
+  const receipt = await port.queryVerification(args)
+  assert.equal(receipt.passed, true);assert.equal(receipt.observedChange, '[]')
+  assert.equal(queries.length, 2)
+  for (const rows of [[], [{ relation_kind: 'v', column_exists: false, columns: [] }],
+    [{ relation_kind: 'r', column_exists: true, columns: [] }],
+    [{ relation_kind: 'r', column_exists: true, columns: [{ column_name: 'label' }] }]]) {
+    observed = rows
+    await assert.rejects(port.queryVerification(args), /POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED/)
+  }
+  const before = queries.length
+  await assert.rejects(port.queryVerification({ ...args, sql: args.sql + '; DROP TABLE public.t;' }), /POSTGRES_COLUMN_VERIFICATION_INVALID/)
+  assert.equal(queries.length, before)
 })
 
 test('主库或读写会话身份不符时拒绝，且不读取基线', async () => {

@@ -513,3 +513,16 @@ test('删除Task接口强制本机身份和显式零写检查参数',async()=>{
   assert.deepEqual(calls,[{taskId:'t',expectedControlRevision:3,checkOnly:true},{taskId:'t',expectedControlRevision:3,checkOnly:false}])
  },{overrides:{deleteWorkflowTask:async value=>{calls.push(value);return{taskId:value.taskId}}}})
 })
+
+
+test('审批重新投递入口拒绝外部Origin且保留明确未发送证明参数', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const body = { noticeDigest: 'a'.repeat(64), proof: { kind: 'dws-uuid-rejected', traceId: 'synthetic-only' } }
+    const post = origin => fetch(base + '/authorizations/request/reissue', { method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
+    assert.equal((await post('https://untrusted.invalid')).status, 403)
+    assert.equal(calls.length, 0)
+    assert.equal((await post('http://127.0.0.1:3080')).status, 200)
+    assert.deepEqual(calls, [{ requestId: 'request', ...body }])
+  }, { overrides: { reissueAuthorization: async input => { calls.push(input); return input } } })
+})

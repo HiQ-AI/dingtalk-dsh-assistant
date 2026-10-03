@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -12,18 +12,39 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import PermissionPresetService from '@deepseek-ai/dsh-permission-presets'
+import ApprovalService from '@deepseek-ai/dsh-user-approval'
+import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import { createGroupCoordinatorSessions } from '../packages/dingtalk-dsh-assistant/group-coordinator-session.js'
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { kind: 'no_action', reason: '人际闲聊' }
 const decisionSchema = { type: 'object', properties: { kind: { type: 'string' }, reason: { type: 'string' } }, required: ['kind', 'reason'], additionalProperties: false }
-async function host(root) {
+async function host(root, options = {}) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
+  ctx.provide('shell', { sandboxMode: 'workspace-write' })
+  new ApprovalService(ctx, { policy: 'ask' })
+  new PermissionPresetService(ctx, { presets: {
+    'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
+    'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+  } })
+  new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
+  const memberships = new Map()
+  ctx.provide('workspaceRegistry', {
+    async resolveByPath(path) { return memberships.get(path) },
+    async create(path) {
+      const target = { sessionIds: [], async attachSession(id) {
+        assert.equal((await ctx.sessionPersistence.inspect(id)).meta.cwd, path)
+        if (!this.sessionIds.includes(id)) this.sessionIds.push(id)
+      } }
+      memberships.set(path, target); return target
+    },
+  })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
   class Scripted extends LlmAdapter {
@@ -39,8 +60,8 @@ async function host(root) {
   }
   ctx.llm.registerAdapter(['group-fixture'], new Scripted())
   let lease = 1
-  const sessions = createGroupCoordinatorSessions({ ctx, isCurrent: async b => b.leaseEpoch === lease })
-  return { ctx, requests, sessions, setLease(n) { lease = n }, async close() { await sessions.close(); await ctx.fiber.dispose() } }
+  const sessions = createGroupCoordinatorSessions({ ctx, isCurrent: async b => b.leaseEpoch === lease, ...options })
+  return { ctx, requests, sessions, memberships, setLease(n) { lease = n }, async close() { await sessions.close(); await ctx.fiber.dispose() } }
 }
 
 test('原生群会话同轮读取材料后提交，跨轮恢复同一session并保留历史', async t => {
@@ -148,3 +169,89 @@ test('原生会话超过32次合法反馈仍可继续提交，不设自造步数
     onCandidate: async () => { if (++submissions <= 33) throw Object.assign(new Error('合并重复动作'), { code: 'GROUP_COORDINATOR_EXISTING_TASK_REQUIRES_UPDATE' }) } })
   assert.equal(result.status, 'submitted'); assert.equal(submissions, 34)
 })
+
+test('旧职责目录派生到Agent根，完整继承日志，恢复群名和完全权限且不调用模型', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'group-relocation-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  let cwd = join(root, 'session-workspaces', '群聊常驻'), name = '具有超过二十八字的完整群聊名称用于验证名称没有被事项标题截断'
+  await mkdir(cwd, { recursive: true })
+  const h = await host(root, { getWorkspaceDir: () => cwd, getGroupName: () => name }); t.after(() => h.close())
+  const args = { binding: { conversationId: 'group', sessionId: 'old-group', turnId: 'first', leaseEpoch: 1, sessionBound: false },
+    input: { sources: [{ runId: 'm1', sourceVersion: 1, actorId: 'user', sourceKey: 'source:m1', body: '不要改生产，只分析；附件已提供', context: { quotes: [{ text: '引用原文' }], attachments: [{ resourceRef: 'file' }] } }], candidates: [{ obsoleteSnapshot: '旧目录'.repeat(20000) }] },
+    provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {} }
+  assert.equal((await h.sessions.run(args)).status, 'submitted')
+  const parent = await h.ctx.sessionPersistence.inspect('old-group')
+  const parentPath = h.ctx.sessionPersistence.locate(parent.meta).path, originalBytes = await readFile(parentPath)
+  assert.equal(parent.events.findLast(e => e.type === 'session/title').data.title, name)
+  assert.equal(parent.events.findLast(e => e.type === 'permission/preset').data.preset, 'danger-full-access')
+  assert.equal(parent.events.findLast(e => e.type === 'approval/policy').data.policy, 'never')
+  cwd = root
+  const binding = { conversationId: 'group', sessionId: 'old-group', sessionBound: true, leaseEpoch: 1 }
+  const callsBefore = h.requests.length
+  const relocated = await h.sessions.prepare(binding)
+  assert.equal(relocated.previousSessionId, 'old-group')
+  assert.equal(relocated.expectedLeaseEpoch, 1)
+  assert.equal(h.requests.length, callsBefore)
+  // 模拟绑定CAS回执丢失：同一旧绑定只恢复同一个派生Session，不重复复制。
+  assert.deepEqual(await h.sessions.prepare(binding), relocated)
+  const child = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
+  assert.equal(child.meta.cwd, root)
+  assert.deepEqual(h.memberships.get(root).sessionIds, [relocated.sessionId])
+  assert.ok(h.ctx.sessions.get(relocated.sessionId), '空闲协调会话仍挂接，宿主可读标题与权限投影')
+  const visible = h.ctx.sessionProjections.cachedSnapshot(h.ctx.sessions.get(relocated.sessionId))
+  assert.equal(visible.values.title, name)
+  assert.equal(visible.values.permissions.currentValue, 'danger-full-access')
+  assert.equal(child.meta.parentSession, 'old-group')
+  assert.equal(child.inheritedEventCount, parent.events.length)
+  assert.deepEqual(child.events.slice(0, parent.events.length), parent.events)
+  assert.deepEqual(await readFile(parentPath), originalBytes)
+  const history = child.events.findLast(e => e.data?.source?.groupCoordinatorHistory)
+  assert.equal(JSON.parse(history.data.content[0].text).sources[0].body, args.input.sources[0].body)
+  assert.deepEqual(JSON.parse(history.data.content[0].text).sources[0].attachments, args.input.sources[0].context.attachments)
+  assert.ok(!history.data.content[0].text.includes('obsoleteSnapshot'))
+  h.setLease(3); name = '广场与编辑器迭代'
+  assert.equal(await h.sessions.prepare({ conversationId: 'group', sessionId: relocated.sessionId, sessionBound: true, leaseEpoch: 2 }), null)
+  assert.equal(h.requests.length, callsBefore)
+  assert.equal((await h.ctx.sessionPersistence.inspect(relocated.sessionId)).events.findLast(e => e.type === 'session/title').data.title, name)
+  assert.equal((await h.sessions.run({ ...args, input: { sources: [], candidates: [{ current: true }] },
+    binding: { ...args.binding, sessionId: relocated.sessionId, turnId: 'next', leaseEpoch: 3, sessionBound: true } })).status, 'submitted')
+  const saved = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
+  assert.equal(saved.events.findLast(e => e.type === 'session/title').data.title, name)
+  assert.equal(saved.events.filter(e => e.type === 'dingtalk/group-coordinator-session').length, 2)
+  await assert.rejects(h.sessions.run({ ...args, binding: { ...args.binding, sessionId: relocated.sessionId, leaseEpoch: 3, sessionBound: true } }), /LEASE_NOT_ADVANCED/)
+})
+
+test('每轮完整输入保留，下一轮原生surface只保留历史来源而不重复Host快照', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'group-input-history-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root); t.after(() => h.close())
+  const input = { sources: [{ runId: 'm1', sourceVersion: 1, actorId: 'user', sourceKey: 'source:m1', body: '完整原文：仅分析、不执行' }], candidates: [{ fullHostSnapshot: '旧候选'.repeat(10000) }] }
+  const args = { binding: { conversationId: 'group', sessionId: 'history-group', turnId: 'first', leaseEpoch: 1, sessionBound: false },
+    input, provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {} }
+  await h.sessions.run(args)
+  const before = JSON.stringify(h.requests[0].messages)
+  assert.ok(before.includes('fullHostSnapshot'))
+  h.setLease(2)
+  await h.sessions.run({ ...args, input: { sources: [{ ...input.sources[0], runId: 'm2', body: '补充事实' }], candidates: [{ currentSnapshot: '本轮完整目录' }] },
+    binding: { ...args.binding, turnId: 'next', leaseEpoch: 2, sessionBound: true } })
+  const current = JSON.stringify(h.requests.at(-1).messages)
+  assert.ok(current.includes('完整原文：仅分析、不执行'))
+  assert.ok(current.includes('currentSnapshot'))
+  assert.ok(!current.includes('fullHostSnapshot'))
+  assert.ok(current.length < before.length / 2)
+  t.diagnostic(`模型可见输入字符：完整旧快照=${before.length}，下一轮保留原文与当前快照=${current.length}`)
+  const saved = await h.ctx.sessionPersistence.inspect('history-group')
+  assert.ok(saved.events.some(e => e.type === 'user/message' && e.surfaceOp === 'append' && JSON.stringify(e.data).includes('fullHostSnapshot')))
+  assert.equal(saved.events.filter(e => e.data?.source?.groupCoordinatorHistory).length, 1)
+})
+
+test('常驻空闲挂接保留原生投影、拒绝任意模型步进，关闭释放全部句柄',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-idle-visible-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const h=await host(root,{getWorkspaceDir:()=>root,getGroupName:()=> '业务群'});t.after(()=>h.close());
+ await h.sessions.run({binding:{conversationId:'g',sessionId:'visible-group',turnId:'t',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,onSessionBound:async()=>{},onCandidate:async()=>{}});
+ const live=h.ctx.sessions.get('visible-group');assert.ok(live);assert.equal(h.ctx.sessionProjections.cachedSnapshot(live).values.title,'业务群');
+ assert.deepEqual(h.memberships.get(root).sessionIds,['visible-group']);
+ const calls=h.requests.length;const {createUserMessage}=await import('@deepseek-ai/dsh-llm');
+ const agent=h.ctx.agents.get('visible-group');agent.steer(createUserMessage({source:{kind:'user'},content:[{type:'text',text:'用户误触发送'}]}));await agent.whenIdle();assert.equal(h.requests.length,calls);
+ await h.sessions.close();assert.equal(h.ctx.agents.get('visible-group'),undefined);assert.equal(h.ctx.sessions.get('visible-group'),undefined);
+});

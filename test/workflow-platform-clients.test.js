@@ -1,12 +1,87 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createPlatformClients } from '../packages/dingtalk-dsh-assistant/workflow-platform-clients.js'
 
 const SHA = 'a'.repeat(40)
 const json = body => ({ ok: true, json: async () => body })
 const target = { repository: 'HiQ-AI/dataset', branch: 'feature/uat3-base',
   woodpecker: { baseUrl: 'https://woodpecker.hiqdat.dev', repositoryId: 4, cronName: 'dataset-uat3-poll' } }
+
+function approvalFixture({ status = 'APPROVED', issueStatus = 'OPEN', comments, approvers, revisedSql = false, repeatToken = false } = {}) {
+  const project = 'projects/flbn', issueId = `${project}/issues/1`, planId = `${project}/plans/1`, sheetId = `${project}/sheets/1`
+  const target = { instance: 'instances/flbnpguaf', database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  const sql = 'ALTER TABLE public.t ADD COLUMN label character varying;'
+  const sheetSha256 = createHash('sha256').update(sql).digest('hex'), packageDigest = 'b'.repeat(64)
+  const operationKey = 'a'.repeat(64), scopeDigest = 'c'.repeat(64), title = `Assistant data change ${operationKey}`
+  const rows = comments ?? [{ name: `${issueId}/issueComments/review-1`, creator: 'users/reviewer@example.test',
+    createTime: '2026-10-02T01:00:00Z', approval: { status }, comment: '字段改为 text' }]
+  let writes = 0
+  const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev', bytebaseToken: 'fixture',
+    fetchImpl: async (url, options = {}) => {
+      if (options.method && options.method !== 'GET') writes++
+      const path = new URL(url).pathname
+      if (path.endsWith('/issueComments')) return json({ issueComments: rows, ...(repeatToken ? { nextPageToken: 'repeat' } : {}) })
+      if (path.endsWith('/issues/1')) return json({ name: issueId, plan: planId, status: issueStatus, type: 'DATABASE_CHANGE',
+        title, description: JSON.stringify({ operationKey, packageDigest, applySqlSha256: sheetSha256, target }),
+        approvalStatus: status, approvers: approvers ?? [{ principal: 'users/reviewer@example.test', status }] })
+      if (path.endsWith('/plans/1')) return json({ name: planId, issue: issueId, title,
+        specs: [{ id: 'spec-1', changeDatabaseConfig: { targets: [target.database], sheet: sheetId } }] })
+      if (path.endsWith('/sheets/1')) return json({ name: sheetId, content: Buffer.from(revisedSql ? `${sql} -- changed` : sql).toString('base64') })
+      throw Error('unexpected request')
+    } }).bytebase
+  return { client, input: { project, issueId, planId, sheetId, sheetSha256, target, packageDigest, scopeDigest }, writes: () => writes }
+}
+
+test('Bytebase 真人审批独立回读当前 SQL 和审批人事件，不发送批准或执行', async () => {
+  const fixture = approvalFixture()
+  const view = await fixture.client.getIssueApproval(fixture.input)
+  assert.equal(view.decision, 'approved')
+  assert.equal(view.source, 'bytebase')
+  assert.equal(view.human, true)
+  assert.equal(view.decidedBy, 'users/reviewer@example.test')
+  assert.equal(view.sheetSha256, fixture.input.sheetSha256)
+  assert.equal(fixture.writes(), 0)
+})
+
+test('Bytebase pending 和 SKIPPED 区分待审与未配置，均无真人批准', async () => {
+  for (const [status, decision] of [['PENDING', 'pending'], ['CHECKING', 'pending'], ['SKIPPED', 'unconfigured']]) {
+    const fixture = approvalFixture({ status })
+    const view = await fixture.client.getIssueApproval(fixture.input)
+    assert.equal(view.decision, decision)
+    assert.equal(view.human, false)
+    assert.equal(fixture.writes(), 0)
+  }
+  const done = approvalFixture({ status: 'SKIPPED', issueStatus: 'DONE' })
+  assert.equal((await done.client.getIssueApproval(done.input)).decision, 'unconfigured')
+  const canceled = approvalFixture({ status: 'APPROVED', issueStatus: 'CANCELED' })
+  await assert.rejects(canceled.client.getIssueApproval(canceled.input), /BYTEBASE_APPROVAL_ISSUE_NOT_ACTIVE/)
+})
+
+test('Bytebase 驳回返回真实意见及审批事件，供修订后重新送审', async () => {
+  const fixture = approvalFixture({ status: 'REJECTED' })
+  const view = await fixture.client.getIssueApproval(fixture.input)
+  assert.equal(view.decision, 'rejected')
+  assert.equal(view.comment, '字段改为 text')
+  assert.match(view.requestId, /issueComments\/review-1$/)
+})
+
+test('Bytebase SQL 变化、缺少人审批事件或修订后的旧批准不能执行', async () => {
+  for (const options of [{ revisedSql: true }, { comments: [] }, { approvers: [] },
+    { comments: [{ name: 'projects/flbn/issues/1/issueComments/a', creator: 'users/reviewer@example.test',
+      createTime: '2026-10-02T01:00:00Z', approval: { status: 'APPROVED' } },
+    { name: 'projects/flbn/issues/1/issueComments/b', createTime: '2026-10-02T02:00:00Z', planSpecUpdate: {} }] }]) {
+    const fixture = approvalFixture(options)
+    await assert.rejects(fixture.client.getIssueApproval(fixture.input), /BYTEBASE_(SHEET|HUMAN_APPROVAL)_UNCONFIRMED/)
+    assert.equal(fixture.writes(), 0)
+  }
+})
+
+test('Bytebase 审批评论分页重复游标报错，不能截断后误认批准', async () => {
+  const fixture = approvalFixture({ repeatToken: true })
+  await assert.rejects(fixture.client.getIssueApproval(fixture.input), /BYTEBASE_APPROVAL_COMMENTS_INCOMPLETE/)
+})
 
 test('木啄只读全量分页并过滤私有 variables', async () => {
   const calls = []
@@ -157,6 +232,10 @@ test('Bytebase 工单以 operationKey 唯一对账，执行前检查任务且独
     const path = new URL(url).pathname
     const method = options.method ?? 'GET'
     if (method === 'POST') writes.push(path)
+    if (path === `/v1/${target.database}`) return json({ name: target.database, project,
+      instanceResource: { name: target.instance }, effectiveEnvironment: 'environments/prod' })
+    if (path === '/v1/environments/prod/policies/rollout_policy') return json({ name: 'environments/prod/policies/rollout_policy',
+      type: 'ROLLOUT_POLICY', resourceType: 'ENVIRONMENT', rolloutPolicy: { automatic: false } })
     if (path.endsWith('/issues') && method === 'GET') return json({ issues: created
       ? [{ name: issueId, title }] : [] })
     if (path.endsWith('/sheets') && method === 'POST') return json({ name: sheetId })
@@ -193,14 +272,19 @@ test('Bytebase 工单以 operationKey 唯一对账，执行前检查任务且独
     packageDigest, applySqlSha256, applySql })
   assert.deepEqual(same, createdBundle)
   assert.equal(writes.filter(path => path.endsWith('/issues')).length, 1)
-  const activatedBundle = await client.activateRollout({ project, issueId, operationKey })
+  const approvalRequestId = `${issueId}/issueComments/approval-1`
+  const executionIdentity = { issueCreationOperationKey: operationKey, approvalRequestId, planId, sheetId, target, applySqlSha256, packageDigest,
+    executeOperationKey: executionDigest({ stage: 'execute-task', packageDigest, issueId, approvalRequestId }) }
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity, issueCreationOperationKey: 'c'.repeat(64) }), /BYTEBASE_ROLLOUT_IDENTITY_CHANGED/)
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity, executeOperationKey: operationKey }), /BYTEBASE_ROLLOUT_IDENTITY_CHANGED/)
+  const activatedBundle = await client.activateRollout({ project, issueId, ...executionIdentity })
   assert.equal(activatedBundle.task.id, taskId)
   assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
-  assert.deepEqual(await client.activateRollout({ project, issueId, operationKey }), activatedBundle)
+  assert.deepEqual(await client.activateRollout({ project, issueId, ...executionIdentity }), activatedBundle)
   assert.equal(writes.filter(path => path.endsWith('/rollout')).length, 1)
-  await client.runTask({ project, issueId, taskId, operationKey })
+  await client.runTask({ project, issueId, taskId, ...executionIdentity })
   assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, 1)
-  assert.deepEqual(await client.runTask({ project, issueId, taskId, operationKey }), { taskId })
+  assert.deepEqual(await client.runTask({ project, issueId, taskId, ...executionIdentity }), { taskId })
   assert.equal(writes.filter(path => path.endsWith('/tasks:batchRun')).length, 1)
   const execution = await client.getTaskExecution({ project, issueId, taskId })
   assert.equal(execution.taskRun.status, 'DONE')
@@ -218,6 +302,11 @@ test('Bytebase 工单首步结果未知时拒绝再次发送写请求', async ()
   const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev',
     bytebaseToken: 'fixture-token', fetchImpl: async (url, options = {}) => {
       if (options.method === 'POST') { writes++; throw new Error('uncertain') }
+      const path = new URL(url).pathname
+      if (path === `/v1/${target.database}`) return json({ name: target.database, project,
+        instanceResource: { name: target.instance }, effectiveEnvironment: 'environments/prod' })
+      if (path === '/v1/environments/prod/policies/rollout_policy') return json({ name: 'environments/prod/policies/rollout_policy',
+        type: 'ROLLOUT_POLICY', resourceType: 'ENVIRONMENT', rolloutPolicy: { automatic: false } })
       return json({ issues: [] })
     } }).bytebase
   const applySql = 'UPDATE public.t SET v = 2 WHERE id = 1'
@@ -226,6 +315,56 @@ test('Bytebase 工单首步结果未知时拒绝再次发送写请求', async ()
   await assert.rejects(client.createIssueBundle(request), /PLATFORM_REQUEST_FAILED/)
   await assert.rejects(client.createIssueBundle(request), /BYTEBASE_CREATE_RESULT_UNKNOWN/)
   assert.equal(writes, 1)
+})
+
+test('送审前读取原生环境执行策略，AUTO、拒读及畸形策略均零Sheet/Plan/Issue写入', async () => {
+  const project = 'projects/flbn', target = { instance: 'instances/flbnpguaf',
+    database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  for (const mode of ['auto', 'denied', 'malformed']) {
+    let writes = 0
+    const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev', bytebaseToken: 'fixture',
+      fetchImpl: async (url, options = {}) => {
+        if (options.method === 'POST') { writes++; throw Error('UNEXPECTED_WRITE') }
+        const path = new URL(url).pathname
+        if (path.endsWith('/issues')) return json({ issues: [] })
+        if (path === `/v1/${target.database}`) return json({ name: target.database, project,
+          instanceResource: { name: target.instance }, effectiveEnvironment: 'environments/prod' })
+        if (path.endsWith('/policies/rollout_policy')) {
+          if (mode === 'denied') return { ok: false, status: 403 }
+          return json({ name: 'environments/prod/policies/rollout_policy', type: 'ROLLOUT_POLICY',
+            resourceType: 'ENVIRONMENT', ...(mode === 'malformed' ? {} : { rolloutPolicy: { automatic: true } }) })
+        }
+        throw Error('UNEXPECTED_READ')
+      } }).bytebase
+    const applySql = 'ALTER TABLE public.t ADD COLUMN name text;'
+    await assert.rejects(client.createIssueBundle({ project, target, operationKey: 'a'.repeat(64), packageDigest: 'b'.repeat(64),
+      applySql, applySqlSha256: createHash('sha256').update(applySql).digest('hex') }),
+    mode === 'auto' ? /BYTEBASE_AUTOMATIC_ROLLOUT_NOT_ALLOWED_FOR_REVIEW/ : /BYTEBASE_ROLLOUT_POLICY_UNCONFIRMED/)
+    assert.equal(writes, 0)
+  }
+})
+
+test('TaskRuns 原生空ProtoJSON仅完整空对象表示未执行，未知及畸形返回不能证明空列表', async () => {
+  const project = 'projects/flbn', issueId = `${project}/issues/857`, planId = `${project}/plans/878`
+  const taskId = `${planId}/rollout/stages/prod/tasks/905`
+  for (const [body, valid] of [[{}, true], [{ taskRuns: [] }, true], [null, false], [[], false],
+    [{ taskRuns: null }, false], [{ error: 'denied' }, false], [{ nextPageToken: 'next' }, false],
+    [{ taskRuns: {} }, false]]) {
+    let reads = 0, writes = 0
+    const client = createPlatformClients({ bytebaseBaseUrl: 'https://bytebase.hiqdat.dev', bytebaseToken: 'fixture',
+      fetchImpl: async (url, options = {}) => {
+        if (options.method && options.method !== 'GET') writes++
+        assert.equal(new URL(url).pathname, `/v1/${taskId}/taskRuns`)
+        reads++
+        return json(body)
+      } }).bytebase
+    client.getIssueBundle = async () => ({ task: { id: taskId, planId, status: 'NOT_STARTED' } })
+    const result = client.getTaskExecution({ project, issueId, taskId })
+    if (valid) assert.equal((await result).taskRun, null)
+    else await assert.rejects(result, /BYTEBASE_TASK_RUN_LIST_UNCONFIRMED/)
+    assert.equal(reads, 1)
+    assert.equal(writes, 0)
+  }
 })
 
 test('Bytebase Rollout 提交结果未知时禁止重发，留给只读对账', async () => {
@@ -251,8 +390,11 @@ test('Bytebase Rollout 提交结果未知时禁止重发，留给只读对账', 
         content: Buffer.from(applySql).toString('base64') })
       throw new Error(`unexpected ${path}`)
     } }).bytebase
-  await assert.rejects(client.activateRollout({ project, issueId, operationKey }), /PLATFORM_REQUEST_FAILED/)
-  await assert.rejects(client.activateRollout({ project, issueId, operationKey }), /BYTEBASE_ROLLOUT_RESULT_UNKNOWN/)
+  const approvalRequestId = `${issueId}/issueComments/approval-1`, executionIdentity = { issueCreationOperationKey: operationKey, approvalRequestId, planId, sheetId: `${project}/sheets/1`, target,
+    applySqlSha256: createHash('sha256').update(applySql).digest('hex'), packageDigest: 'b'.repeat(64),
+    executeOperationKey: executionDigest({ stage: 'execute-task', packageDigest: 'b'.repeat(64), issueId, approvalRequestId }) }
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity }), /PLATFORM_REQUEST_FAILED/)
+  await assert.rejects(client.activateRollout({ project, issueId, ...executionIdentity }), /BYTEBASE_ROLLOUT_RESULT_UNKNOWN/)
   assert.equal(writes, 1)
 })
 

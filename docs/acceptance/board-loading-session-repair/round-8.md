@@ -1,0 +1,12 @@
+# 第八轮：真实送审合同与受管恢复
+
+前轮真实失败保留。修复来源合法但旧 advance 拒绝状态阻止恢复的问题；受管恢复要求当前版本、租约、真实来源、仅排空调查、零外部效果及无计划应用回执。11项恢复边界、36项Owner持久合同及1项独立SQLite审计回读通过。
+
+Bytebase客户端区分创建与执行幂等身份；真实审批效果收据按持久化观测层级解析。四模块45项通过，跨层普通与AUTO两例从真实StageContract/Host/客户端/v4 Controller送审、批准、TaskRun到生产只读列回读通过；AUTO已有执行记录零重复POST。等待原因读取最新审批观测，pending转unconfigured四项服务测试通过。测试不等于真实生产送审和执行。
+
+精确加列仍读取全库基线的反证已记录，正在收敛为候选SQL解析出的目标表基线。第五包仅零写Check通过，尚未正式部署；待重新打包、部署后恢复原Task r2并独立读取实际工单。
+
+最后六模块56/56通过，包括v5精确表基线全链、错范围拒绝、复杂SQL原合同和持久v4待审Run升级后恢复执行。真实生产只读精确基线public/process_id_temp及候选预检passed；未执行DDL。
+
+第五包正式安装100文件SHA256 766825ece2dd3b63b8cc3dfbe8f120ee15eb854771f3ba1a6c982f3fef10ed6b，PID46264、双端口及Resume通过。原Task受管恢复event209，旧turn.application_status=discarded，原3阶段/输出完全保留；需求r2、计划r3已增加数据变更阶段。原Task实际创建Bytebase Issue857/Plan878，独立Sheet回读准确SQL ALTER TABLE public.process_id_temp ADD COLUMN name character varying;。
+真实反证：工单DONE/SKIPPED且服务端已创建Rollout/Task905，插件误把存在Task当身份不一致，因此节点readback-issue等待程序修复。原生Task905=NOT_STARTED、TaskRuns空；生产只读副本pg_is_in_recovery=true/readonly=on、name列rows空，未执行DDL。DONE不等于执行成功。该误判失败保留，不用送审成功掩盖等待投影失败。新身份错误群说明已撤回，独立同群近七天精确搜索complete=true/count=0/failedCount=0。

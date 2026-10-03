@@ -20,6 +20,62 @@ const prepared = { package: pkg, rehearsal: { adapterId: 'bytebase', adapterVers
   receiptId: 'uat-run-1', packageDigest: pkg.validation.packageDigest,
   uat: true, passed: true, observedChange: 'v=2' } }
 
+test('完成回查绑定冻结审批 SQL 与当前工单，仅使用只读端口且拒绝漂移及未完成事实', async () => {
+  let bundle, taskFailed = false, reads = 0
+  const f = fixture({ api: {
+    async getIssueBundle() { reads++; return bundle },
+    async getTaskExecution() { return { task: { ...bundle.task, status: taskFailed ? 'FAILED' : 'DONE' },
+      taskRun: { id: 'task-run-1', taskId: bundle.task.id, status: taskFailed ? 'FAILED' : 'DONE' } } },
+    async createIssueBundle() { assert.fail('完成回查不得创建工单') },
+    async activateRollout() { assert.fail('完成回查不得发布') },
+    async runTask() { assert.fail('完成回查不得执行 SQL') },
+  } })
+  f.issue.operationKey = sha('original-creation')
+  const requestId = 'approval-1'
+  const scopeDigest = executionDigest({ runId: 'run-1', generation: 1, issueId: f.issue.id,
+    planId: f.plan.id, sheetId: f.sheet.id, target, sheetSha256: pkg.applySqlSha256,
+    packageDigest: pkg.validation.packageDigest })
+  const operationKey = executionDigest({ stage: 'execute-task', packageDigest: pkg.validation.packageDigest,
+    issueId: f.issue.id, approvalRequestId: requestId })
+  const view = { prepared, issue: { id: f.issue.id, planId: f.plan.id }, sheet: f.sheet, plan: f.plan,
+    approval: { decision: 'approved', source: 'assistant', human: true, decidedBy: 'reviewer', requestId,
+      issueId: f.issue.id, planId: f.plan.id, sheetId: f.sheet.id, target,
+      sheetSha256: pkg.applySqlSha256, packageDigest: pkg.validation.packageDigest, scopeDigest } }
+  const request = { workflowKind: 'data-change', stage: 'execute-task', runId: 'run-1', generation: 1,
+    requirementDigest: sha('requirement'), packageDigest: pkg.validation.packageDigest,
+    applySqlSha256: pkg.applySqlSha256, target, approvalRequestId: requestId,
+    intent: { project: 'projects/app', target, packageDigest: pkg.validation.packageDigest,
+      applySqlSha256: pkg.applySqlSha256, issueId: f.issue.id, planId: f.plan.id, sheetId: f.sheet.id,
+      approvalRequestId: requestId, approvalScopeDigest: scopeDigest, applySql,
+      issueCreationOperationKey: f.issue.operationKey, executeOperationKey: operationKey, operationKey } }
+  const receipt = { status: 'succeeded', result: { taskId: f.task.id } }
+  const original = { issue: f.issue, sheet: f.sheet, plan: f.plan, task: { ...f.task, status: 'DONE' } }
+  bundle = structuredClone(original)
+  const digestBefore = f.workflowAdapter.rulesDigest
+  const result = await f.workflowAdapter.readCompletion({ request, receipt, view })
+  assert.equal(result.applySql, applySql)
+  assert.equal(result.task.status, 'DONE')
+  assert.equal(result.taskRun.status, 'DONE')
+  assert.equal(result.production.passed, true)
+  assert.deepEqual(result.production.verification.observation.rows, [{ relation_kind: 'r', column_exists: false, columns: [] }])
+  assert.equal(f.workflowAdapter.rulesDigest, digestBefore)
+  assert.equal(reads, 1)
+  assert.deepEqual(f.calls, ['verify'])
+  for (const change of [b => { b.sheet.sha256 = sha('different SQL') },
+    b => { b.sheet.target.database = 'instances/prod/databases/other' },
+    b => { b.issue.id = 'projects/app/issues/other' }, b => { b.plan.id = 'projects/app/plans/other' },
+    b => { b.sheet.id = 'projects/app/sheets/other' }, b => { b.sheet.project = 'projects/other' },
+    b => { b.issue.operationKey = sha('other creation') }, b => { b.issue.packageDigest = sha('other package') },
+    b => { delete b.sheet.project }]) {
+    bundle = structuredClone(original); change(bundle)
+    await assert.rejects(f.workflowAdapter.readCompletion({ request, receipt, view }),
+      { code: 'BYTEBASE_COMPLETION_IDENTITY_UNCONFIRMED' })
+  }
+  bundle = structuredClone(original); taskFailed = true
+  await assert.rejects(f.workflowAdapter.readCompletion({ request, receipt, view }), { code: 'BYTEBASE_TASK_RUN_FAILED' })
+  assert.deepEqual(f.calls, ['verify'])
+})
+
 function fixture(options = {}) {
   const calls = []
   let rehearsalResult = null
@@ -66,7 +122,7 @@ function fixture(options = {}) {
     async getTaskExecution() { calls.push('read-task'); return { task: { ...task, status: 'DONE' },
       taskRun: { id: 'task-run-1', taskId: task.id, status: 'DONE' } } },
     async queryVerification(args) { calls.push('verify'); return { passed: true, target: args.target,
-      packageDigest: pkg.validation.packageDigest, readbackId: 'readback-1', observedChange: 'v=2' } },
+      packageDigest: pkg.validation.packageDigest, readbackId: 'readback-1', observedChange: 'v=2', observation: { rows: [{ relation_kind: 'r', column_exists: false, columns: [] }] } } },
     async findIssueByOperationKey() { calls.push('find-issue'); return options.issueVisible
       ? { issue, sheet, plan, task: null } : null },
   }
@@ -97,6 +153,29 @@ test('Bytebase 必须显式配置生产与 UAT 精确目标', () => {
     { code: 'BYTEBASE_PLATFORM_NOT_CONFIGURED' })
   const f = fixture()
   assert.equal(f.workflowAdapter.id, 'bytebase')
+})
+
+test('候选基线只由受信 SQL 提取范围，错表回读及伪造包范围拒绝，复杂候选保持全库合同', async () => {
+  const scopes = []
+  let wrong = false
+  const f = fixture({ api: { async getIssueApproval() {} }, productionApi: {
+    async readBaseline(args) {
+      scopes.push(args.scope)
+      return { project: args.project, target: args.target, snapshotId: 'baseline-1', sha256: pkg.baseline.sha256,
+        schemaVersion: 'migration-42', schemaDigest: sha('schema'), evidenceRef: 'read-only-proof',
+        ...(args.scope === 'current' ? {} : { scope: wrong ? { schema: 'public', table: 'other' } : args.scope }) }
+    } } })
+  const sql = 'ALTER TABLE public.t ADD COLUMN name character varying;'
+  const baseline = await f.workflowAdapter.readBaselineForCandidate({ target, applySql: sql })
+  assert.deepEqual(baseline.scope, { schema: 'public', table: 't' })
+  assert.deepEqual(scopes, [{ schema: 'public', table: 't' }])
+  wrong = true
+  await assert.rejects(f.workflowAdapter.readBaselineForCandidate({ target, applySql: sql }), { code: 'BYTEBASE_BASELINE_SCOPE_UNCONFIRMED' })
+  await assert.rejects(f.workflowAdapter.validate({ ...packageBody, applySql: sql, applySqlSha256: sha(sql),
+    baseline: { ...baseline, scope: { schema: 'public', table: 'other' } } }), { code: 'BYTEBASE_BASELINE_SCOPE_UNCONFIRMED' })
+  const complex = await f.workflowAdapter.readBaselineForCandidate({ target, applySql })
+  assert.equal(complex.scope, undefined)
+  assert.equal(scopes.at(-1), 'current')
 })
 
 test('SQL Review 与 UAT 演练均核验精确摘要和同结构基线', async () => {
@@ -221,4 +300,69 @@ test('未列入配置的目标和审批漂移均阻止外部执行', async () =>
     approvalRequestId }
   await assert.rejects(f.externalAdapter.execute(executionRequest), { code: 'BYTEBASE_APPROVAL_UNCONFIRMED' })
   assert.ok(!f.calls.includes('run-task'))
+})
+
+test('原生审批区分等待、SKIPPED 与真人决定，不调用 Assistant 审批', async () => {
+  let decision = 'pending'
+  const f = fixture({ api: { async getIssueApproval(args) { return { ...args, source: 'bytebase',
+    decision, human: ['approved','rejected'].includes(decision), decidedBy: 'users/reviewer',
+    requestId: 'projects/app/issues/i/issueComments/review-1', comment: '改名后重审', evidenceRef: 'approval-evidence' } } },
+    approvalApi: { async getApproval() { throw Error('unexpected Assistant approval') } } })
+  const view = { prepared, issue: { id: f.issue.id, planId: f.plan.id },
+    sheet: { id: f.sheet.id, sha256: f.sheet.sha256, target }, plan: { id: f.plan.id, sheetId: f.sheet.id } }
+  const intent = await f.workflowAdapter.prepareApproval({ view, runId: 'native', generation: 1, requirementDigest: sha('req') })
+  const request = { workflowKind: 'data-change', stage: 'approval-gate', runId: 'native', generation: 1,
+    requirementDigest: sha('req'), packageDigest: pkg.validation.packageDigest,
+    applySqlSha256: pkg.applySqlSha256, target, intent }
+  assert.equal((await f.externalAdapter.execute(request)).reason, 'BYTEBASE_APPROVAL_PENDING')
+  decision = 'unconfigured'
+  assert.equal((await f.externalAdapter.reconcile(request)).reason, 'BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED')
+  decision = 'rejected'
+  const rejected = await f.externalAdapter.reconcile(request)
+  assert.equal(rejected.status, 'succeeded')
+  assert.equal(rejected.result.approval.decision, 'rejected')
+  decision = 'approved'
+  assert.equal((await f.externalAdapter.reconcile(request)).result.approval.human, true)
+  assert.equal(f.calls.includes('run-task'), false)
+})
+
+test('原生工单已有未执行Task仅独立回读接纳，任何TaskRun或已执行状态拒绝', async () => {
+  for (const mode of ['unstarted', 'pending-run', 'done']) {
+    let reads = 0
+    const f = fixture({ api: { async getIssueApproval() {},
+      async getIssueBundle() { return { issue: f.issue, sheet: f.sheet, plan: f.plan,
+        task: { ...f.task, status: mode === 'done' ? 'DONE' : 'NOT_STARTED' } } },
+      async getTaskExecution() { reads++; return { task: { ...f.task, status: mode === 'done' ? 'DONE' : 'NOT_STARTED' },
+        taskRun: mode === 'pending-run' ? { id: 'run', taskId: f.task.id, status: 'PENDING' } : null } } } })
+    const identity = { runId: 'run', generation: 1, requirementDigest: sha('requirement') }
+    const intent = await f.workflowAdapter.prepareIssue({ prepared, ...identity })
+    f.issue.operationKey = intent.operationKey
+    const request = { ...identity, action: 'external', workflowKind: 'data-change', stage: 'create-issue',
+      target, packageDigest: pkg.validation.packageDigest, applySqlSha256: pkg.applySqlSha256, intent }
+    const read = f.workflowAdapter.readback({ stage: 'create-issue', request, receipt: { status: 'succeeded', result: { issueId: f.issue.id } } })
+    if (mode === 'unstarted') { const view = await read; assert.equal(view.issue.id, f.issue.id); assert.equal(view.task, undefined); assert.equal(reads, 1) }
+    else await assert.rejects(read, { code: 'BYTEBASE_PREAPPROVAL_EXECUTION_DETECTED' })
+    assert.ok(!f.calls.includes('run-task'))
+  }
+})
+
+test('简单加列仅做生产只读前置核对，其他 SQL 继续演练', async () => {
+  const f = fixture({ config: { ...config, targets: [{ project: 'projects/app', target }] },
+    api: { async getIssueApproval() {} }, uatApi: { getDatabase: undefined, readBaseline: undefined,
+      checkPreconditions: undefined, validateSql: undefined, rehearseInUat: undefined, getUatRehearsalByOperationKey: undefined } })
+  for (const sql of ['ALTER TABLE public.t ADD COLUMN name character varying;',
+    'ALTER TABLE public.other_table ADD COLUMN display_name text;']) {
+    const body = { ...packageBody, applySql: sql, applySqlSha256: sha(sql) }
+    const result = await f.workflowAdapter.validate({ ...body, packageDigest: executionDigest(body) })
+    assert.equal(result.passed, true)
+    assert.equal(f.workflowAdapter.requiresRehearsal(body), false)
+  }
+  for (const sql of ['ALTER TABLE public.t ADD COLUMN name text NOT NULL;',
+    "ALTER TABLE public.t ADD COLUMN name text DEFAULT '';", 'UPDATE public.t SET v=2;',
+    'ALTER TABLE public.t ADD COLUMN name text; DROP TABLE public.t;', 'ALTER TABLE public.t DROP COLUMN name;', 'ALTER TABLE public.t DROP COLUMN name CASCADE;',
+    'ALTER TABLE public.t DROP COLUMN IF EXISTS name;', 'ALTER TABLE public.t DROP COLUMN name; DROP TABLE public.t;']) {
+    assert.equal(f.workflowAdapter.requiresRehearsal({ applySql: sql }), true)
+  }
+  assert.equal(f.calls.includes('review'), false)
+  assert.equal(f.calls.includes('rehearse-uat'), false)
 })

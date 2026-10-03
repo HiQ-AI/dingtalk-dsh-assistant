@@ -68,6 +68,8 @@ function workflowTopicSummary(topic) {
 function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
+  const coordinator = workflowMailboxes?.coordinators?.[group.groupId]
+  if (coordinator) summary.coordinator = coordinator
   const topics = runtime.listTopics(group.groupId)
   summary.messages = (summary.messages ?? []).map((message) => ({
     ...message,
@@ -196,7 +198,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         requirementRevision: z.number().int().positive(), controlRevision: z.number().int().positive(),
         planRevision: z.number().int().positive(), runSequence: z.number().int().nonnegative(),
         stageId: requiredText.max(128), outputRef: requiredText.max(4096), confirmationText: requiredText.max(16000) })
-        : z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : { context: requiredText.max(16000) }) })).parse(await readJson(request))
+        : z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : {
+          context: requiredText.max(16000), requirement: z.strictObject({
+            objective: requiredText.max(12000), acceptanceCriteria: acceptanceCriteriaSchema,
+            stageTargets: z.record(z.string(), requiredText),
+            stageAuthorizations: z.array(z.strictObject({ workflowId: requiredText, sourceQuote: requiredText,
+              objective: requiredText, gate: z.enum(['none', 'confirmation']) })),
+          }).optional(),
+        }) })).parse(await readJson(request))
       const result = await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) })
       return send(response, 202, result)
     } catch(error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL|STALE|NOT_WAITING|TASK_ARCHIVE_|RUN_BUDGET_CONTINUATION_/u.test(error.message) ? 409 : 400, { error: error.message }) }
@@ -212,6 +221,19 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         requirementRevision: z.number().int().positive(), controlRevision: z.number().int().positive(), planRevision: z.number().int().positive() }).parse(await readJson(request))
       return send(response, 202, await store.retryWorkflowInvestigation({ ...body, taskId: decodeURIComponent(investigationRetry[1]) }))
     } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  const approvalHandoff = /^\/tasks\/([^/]+)\/handoff-data-change-approval$/u.exec(url.pathname)
+  if (request.method === 'POST' && approvalHandoff) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.handoffWorkflowDataChangeApproval) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ runId: requiredText, recoveryKey: requiredText.max(200), reason: requiredText.max(16000), dryRun: z.boolean(),
+        expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
+        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
+        expectedPlanRevision: z.number().int().positive(), expectedRunRevision: z.number().int().nonnegative(), generation: z.number().int().positive() }).parse(await readJson(request))
+      return send(response, body.dryRun ? 200 : 202, await store.handoffWorkflowDataChangeApproval({ ...body, taskId: decodeURIComponent(approvalHandoff[1]) }))
+    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT|UNSAFE|MAINTENANCE/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   const readonlyReassessment = /^\/tasks\/([^/]+)\/reassess-readonly$/u.exec(url.pathname)
   if (request.method === 'POST' && readonlyReassessment) {
@@ -482,6 +504,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     return send(response, 200, await store.decideAuthorization({ requestId, ...(await readJson(request)), source: 'web' }))
   }
   if (request.method === 'POST' && /^\/authorizations\/[^/]+\/reissue$/u.test(url.pathname)) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
     const requestId = decodeURIComponent(url.pathname.slice('/authorizations/'.length, -'/reissue'.length))
     return send(response, 200, await store.reissueAuthorization({ requestId, ...(await readJson(request)) }))
   }

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createInvestigationWorkflow, createLegacyInvestigationWorkflow, validateInvestigationResult, validateAgentWorkResult, createInvestigationStageContract } from '../packages/dingtalk-dsh-assistant/agent-work.js'
+import { createInvestigationWorkflow, createInvestigationWorkflowV8, createInvestigationWorkflowV7, createInvestigationWorkflowV6, createLegacyInvestigationWorkflow, validateInvestigationResult, validateAgentWorkResult, createInvestigationStageContract, createInvestigationCompletionPolicy } from '../packages/dingtalk-dsh-assistant/agent-work.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { createGeneralCapabilityStepWorkflow, verifyTaskAcceptance } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
@@ -17,11 +17,24 @@ const result = () => ({ outcome: 'completed', summary: '已定位；修复待后
 const options = { provider: 'fixture', model: 'fixture', allowedTools: ['query'], capabilityIdentity: 'query-v1',
   verifyResult: async ({ result: value }) => validateAgentWorkResult(value, { sourceRefs: ['source-a'], verifyEvidence: async () => false }) }
 
-test('v5 冻结定义保留历史 digest，新运行 v6 维持原预算', () => {
+test('v5/v6/v7/v8 冻结定义保留历史 digest，新运行 v9 交付候选且维持证据核验及原预算', () => {
   const old = defineExecutionWorkflow(createLegacyInvestigationWorkflow(options))
-  assert.equal(old.digest, '62b750dda434456907624168d6acb58aa974d223582dd8ceb2c6d53a2faaf81a')
+  assert.equal(old.digest, 'f996f51dcbc56f7b7799a95088e3ce894792006dba731ded669e27b43b5cb673')
   const current = defineExecutionWorkflow(createInvestigationWorkflow(options))
-  assert.equal(current.version, '6')
+  assert.equal(current.version, '9')
+  const v8 = defineExecutionWorkflow(createInvestigationWorkflowV8(options))
+  assert.equal(v8.version, '8'); assert.notEqual(v8.digest, current.digest)
+  assert.equal(v8.digest, '7baa1d25e627bb485e74ec45434cf57c5d0e451ab5b3c8c6b79f3323c4fee80e')
+  assert.match(v8.nodes[0].prompt, /缺失字段规格若可从授权资料或代码核验/)
+  assert.doesNotMatch(current.nodes[0].prompt, /缺失字段规格若可从授权资料或代码核验|核验完整列定义、约束/)
+  const v7=defineExecutionWorkflow(createInvestigationWorkflowV7(options))
+  assert.equal(v7.version,'7');assert.notEqual(v7.digest,current.digest)
+  const frozen=defineExecutionWorkflow(createInvestigationWorkflowV6(options))
+  assert.equal(frozen.version,'6')
+  assert.equal(frozen.digest,'74aa6a8220bc45b46db463fbf10d006ab8dd4ef51fd7806ed3a1d763c5b63cee')
+  assert.notEqual(current.digest,frozen.digest)
+  assert.equal(current.nodes[0].classifyOutputError({code:'AGENT_WORK_COVERAGE_INCOMPLETE'}),'correctable')
+  assert.equal(frozen.nodes[0].classifyOutputError({code:'AGENT_WORK_COVERAGE_INCOMPLETE'}),'fatal')
   assert.notEqual(current.digest, old.digest)
   assert.equal(current.nodes[0].maxSteps, old.nodes[0].maxSteps)
   assert.equal(current.nodes[0].timeoutMs, old.nodes[0].timeoutMs)
@@ -63,15 +76,15 @@ test('Owner不能把调查明确不足改成已满足，必须引用随后阶段
       itemId: item.itemId, status: 'satisfied', evidenceRefs: ['investigation'],
     })) }
     const args = { taskId: 'task', plan, requirement, decision }
-    assert.equal(await facade.authorizeCompletion(args), false)
+    await assert.rejects(facade.authorizeCompletion(args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
     plan.stages.push(later)
-    assert.equal(await facade.authorizeCompletion(args), false, '存在后续成功阶段但不引用仍不能覆盖不足')
+    await assert.rejects(facade.authorizeCompletion(args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
     decision.assessments[1].evidenceRefs = ['delivered']
     decision.evidenceRefs.push('delivered')
     assert.equal(await facade.authorizeCompletion(args), true)
     deliveryContract.id = 'agent-investigation-result'
     laterOutput.criterionReviews = [{ itemId: 'acceptance-2', status: 'insufficient_evidence' }]
-    assert.equal(await facade.authorizeCompletion(args), false, '另一份仍不足的调查不是补齐证据')
+    await assert.rejects(facade.authorizeCompletion(args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
     laterOutput.criterionReviews[0].status = 'satisfied'
     assert.equal(await facade.authorizeCompletion(args), true)
   }
@@ -152,7 +165,7 @@ function mixedFixture({ verdict = true, legacy = false, external = false } = {})
   const check = async input => {
     calls.push(structuredClone(input))
     return { status: verdict ? 'satisfied' : 'unsatisfied', resultVerified: verdict,
-      criteria: input.acceptanceCriteria.map(criterion => ({ criterion, passed: verdict, evidenceIds: ['out-2'] })) }
+      criteria: input.acceptanceCriteria.map((criterion, index) => ({ criterion, passed: verdict, evidenceIds: [`out-${index + 1}`] })) }
   }
   const current = createGeneralCapabilityStepWorkflow({ capabilities: [], completionCheck: check }).ownerContract
   const second = external ? legacy ? legacyExternalWorkflowOwnerContract : externalWorkflowOwnerContract
@@ -179,11 +192,11 @@ function mixedFixture({ verdict = true, legacy = false, external = false } = {})
 
 test('混合领域只核验实际承担条目，无关写入拒绝且有效保存不必再次证明调查', async () => {
   const rejected = mixedFixture({ verdict: false })
-  assert.equal(await rejected.helpers.authorizeCompletion(rejected.args), false)
+  await assert.rejects(rejected.helpers.authorizeCompletion(rejected.args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   assert.equal((await rejected.helpers.readDeliveryManifest(rejected.args)).businessValidation.status, 'unverified')
-  assert.deepEqual(rejected.calls[0].acceptanceCriteria, ['保存调查记录'])
-  assert.deepEqual(rejected.calls[0].acceptanceItems.map(item => item.itemId), ['acceptance-2'])
-  assert.deepEqual(rejected.calls[0].evidence.map(item => item.evidenceId), ['out-2'])
+  assert.deepEqual(rejected.calls[0].acceptanceCriteria, ['查明原因', '保存调查记录'])
+  assert.deepEqual(rejected.calls[0].acceptanceItems.map(item => item.itemId), ['acceptance-1', 'acceptance-2'])
+  assert.deepEqual(rejected.calls[0].evidence.map(item => item.evidenceId), ['out-1', 'out-2'])
   const accepted = mixedFixture()
   assert.equal(await accepted.helpers.authorizeCompletion(accepted.args), true)
   const receipt = (await accepted.helpers.readDeliveryManifest(accepted.args)).businessValidation
@@ -212,7 +225,7 @@ test('历史通用阶段无承担条目时只核验效果，承担条目时仍�
   assert.equal(await f.helpers.authorizeCompletion(f.args), true)
   assert.equal(f.calls.length, 0)
   const assigned = mixedFixture({ legacy: true, verdict: false })
-  assert.equal(await assigned.helpers.authorizeCompletion(assigned.args), false)
+  await assert.rejects(assigned.helpers.authorizeCompletion(assigned.args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   assert.equal(assigned.calls.length, 1)
 })
 
@@ -220,8 +233,8 @@ test('旧新平台效果都不能作为生产修复的逐项接纳，当前域�
   for (const legacy of [false, true]) {
     const f = mixedFixture({ external: true, legacy, verdict: false })
     f.goal.acceptanceItems[1].criterion = f.goal.acceptanceCriteria[1] = '生产故障已修复'
-    assert.equal(await f.helpers.authorizeCompletion(f.args), false)
-    assert.deepEqual(f.calls[0].acceptanceCriteria, ['生产故障已修复'])
+    await assert.rejects(f.helpers.authorizeCompletion(f.args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+    assert.deepEqual(f.calls[0].acceptanceCriteria, ['查明原因', '生产故障已修复'])
     assert.equal((await f.helpers.readDeliveryManifest(f.args)).businessValidation.status, 'unverified')
   }
 })
@@ -238,4 +251,46 @@ test('验收输入身份不能被产物同名字段覆盖，跨项引用不能�
   } }), true)
   assert.equal(await verifyTaskAcceptance({ ...context, check: async () => ({ status: 'satisfied', resultVerified: true,
     criteria: [{ criterion: '第一项', passed: true, evidenceIds: ['b'] }] }) }), false)
+})
+
+for (const target of ['public.profile.display_name', 'sales.order_notes.label']) test(`明确目标 ${target} 未指定字段细节时可交付待审候选，审批和执行仍未完成`, async () => {
+  const input = { acceptanceItems: [{ itemId: 'column-added', criterion: `新增 ${target}，审批后执行并核验` }], acceptanceCriteria: [`新增 ${target}`] }
+  const output = { outcome: 'completed', summary: '目标及现有列已核对，候选可提交审批', evidenceRefs: ['source-a'],
+    limitations: ['类型、可空和无默认值是候选建议，尚未审批或执行'], question: '',
+    findings: [{ kind: 'fact', statement: '精确目标已确认且待加列不存在', evidenceRefs: ['source-a'] },
+      { kind: 'recommendation', statement: `建议为 ${target} 新增可空字符列，无默认值，交真人审批`, evidenceRefs: [] }],
+    openItems: [{ description: '审批并执行本次候选', reason: '后续受管变更阶段负责', evidenceRefs: [] }],
+    criterionReviews: [{ itemId: 'column-added', status: 'insufficient_evidence', reason: '候选尚未审批和执行', evidenceRefs: [] }] }
+  const workflow = createInvestigationWorkflow(options)
+  const binding = { runId: 'run', taskId: 'task', generation: 1 }
+  assert.deepEqual(await workflow.nodes[0].admitOutput({ output, input, binding }), { outcome: 'succeeded' })
+  assert.deepEqual(await workflow.nodes[1].execute({ input: { requirement: input, result: output }, ...binding, signal: new AbortController().signal }), output)
+  assert.equal(await workflow.ownerContract.validateCompletion({ output, state: { run: { requirementRef: 'requirement' } }, artifacts: { read: async () => input } }), false)
+  assert.match(workflow.nodes[0].prompt, /能够给后续准备或审批阶段交付候选时用completed/)
+})
+
+test('目标不明和实质冲突仍可等待用户选择，不将未知冒充候选事实', async () => {
+  const workflow = createInvestigationWorkflow(options)
+  const output = { ...result(), outcome: 'needs_input', summary: '原始来源指向两个不同的目标数据库', question: '请确认本次变更的目标数据库。' }
+  assert.deepEqual(await workflow.nodes[0].admitOutput({ output, input: requirement, binding: { runId: 'run', taskId: 'task', generation: 1 } }),
+    { outcome: 'waiting', waitReason: { kind: 'input', reference: 'AGENT_WORK_NEEDS_INPUT' } })
+})
+
+
+test('当前调查策略保留冻结结构但复合不足项可由明确绑定的先前领域事实补齐', async () => {
+  const frozen = createInvestigationWorkflowV8(options).ownerContract
+  assert.equal(frozen.version, '4')
+  const policy = createInvestigationCompletionPolicy(frozen), output = result()
+  output.criterionReviews = output.criterionReviews.map(review => ({ ...review, status: 'insufficient_evidence', evidenceRefs: [] }))
+  let checks = 0
+  const context = { output, state: { run: { requirementRef: 'original' } }, artifacts: { read: async () => requirement },
+    acceptanceItems: [{ itemId: 'acceptance-1', criterion: '完整复合交付', evidenceRefs: ['earlier-external','last-investigation'] }],
+    verifyAcceptance: async () => { checks++; return true } }
+  assert.equal(await policy.validateCompletion(context), true)
+  assert.equal(checks, 1)
+  assert.equal(await policy.validateCompletion({ ...context, verifyAcceptance: async () => false }), false)
+  assert.equal(await policy.validateCompletion({ ...context, verifyAcceptance: undefined }), false)
+  assert.equal(await policy.validateCompletion({ ...context, acceptanceItems: [], verifyAcceptance: () => { throw Error('历史仅验证自身') } }), true)
+  assert.equal(await policy.validateCompletion({ ...context, output: { ...output, outcome: 'blocked' } }), false)
+  await assert.rejects(policy.validateCompletion({ ...context, output: { ...output, criterionReviews: [] } }), /AGENT_WORK_RESULT_INVALID/)
 })

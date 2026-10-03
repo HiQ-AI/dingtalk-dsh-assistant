@@ -157,5 +157,19 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       if (flights.has(effectId)) return flights.get(effectId).promise
       return reconcile(effectId)
     },
+    async closeReadonlyApproval(effectId, { beforeObserve } = {}) {
+      const effect = await lookup(effectId), payload = effect?.definition?.payload
+      if (flights.has(effectId) || effect?.definition?.action !== 'external'
+        || payload?.workflowKind !== 'data-change' || payload.stage !== 'approval-gate'
+        || payload.intent?.approvalSource !== 'bytebase'
+        || !(effect.state === 'unknown' || effect.state === 'failed' && effect.result?.result?.reason === 'APPROVAL_CHANNEL_SUPERSEDED')
+        || typeof externalAdapter?.closeReadonlyApproval !== 'function' || typeof beforeObserve !== 'function')
+        throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_EFFECT_UNCONFIRMED')
+      const observation = await externalAdapter.closeReadonlyApproval(structuredClone(payload))
+      if (observation?.status !== 'failed' || observation.reason !== 'APPROVAL_CHANNEL_SUPERSEDED')
+        throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_EFFECT_UNCONFIRMED')
+      await beforeObserve()
+      return effect.state === 'failed' ? effect : observe(effectId, observation)
+    },
   }
 }

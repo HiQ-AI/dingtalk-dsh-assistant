@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -12,6 +12,8 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import PermissionPresetService from '@deepseek-ai/dsh-permission-presets'
+import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import { digest, referencedResourceIds } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { createMessageCoordinator } from '../packages/dingtalk-dsh-assistant/message-coordinator.js'
 import { createMessageWorkflow } from '../packages/dingtalk-dsh-assistant/message-workflow.js'
@@ -26,6 +28,12 @@ async function fixture(t, action = false, hooks = {}) {
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
+  ctx.provide('shell', { sandboxMode: 'workspace-write' })
+  new ApprovalService(ctx, { policy: 'ask' })
+  new PermissionPresetService(ctx, { presets: {
+    'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
+    'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+  } })
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const inputs = [], requests = []
@@ -56,6 +64,7 @@ async function fixture(t, action = false, hooks = {}) {
   Object.assign(context, hooks.context?.(store) ?? {})
   const coordinatorStore = hooks.coordinatorQuery ? { command: store.command.bind(store), query: async args => hooks.coordinatorQuery(args, await store.query(args)) } : store
   const coordinator = createMessageCoordinator({ ctx, store: coordinatorStore, context, sessionRunner: hooks.sessionRunner, clock: hooks.clock,
+    getWorkspaceDir: hooks.getWorkspaceDir,
     modelConfig: hooks.modelConfig ?? (async () => ({ provider: 'coordinator-fixture', model: 'scripted' })) })
   const workflow = createMessageWorkflow({ store, coordinator, context, judge: async () => { judges++; throw Error('旧阶段不得运行') }, handlers: { answer: async () => { dispatched++; return { status: 'completed', reply: '已核验' } }, ...hooks.handlers } })
   t.after(async () => { await workflow.close(); await store.close(); await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) })
@@ -91,6 +100,30 @@ test('原生协调接纳动作经既有dispatch实际执行一次，恢复不重
   await f.workflow.recover()
   assert.equal(f.counters().judges, 0)
   assert.equal(f.counters().dispatched, 1)
+})
+
+test('idle群恢复自动派生到新工作区，控制账绑定和原生父日志一致且无需新消息', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'coordinator-root-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  let cwd = join(root, '旧职责目录')
+  await mkdir(cwd)
+  const f = await fixture(t, false, { getWorkspaceDir: () => cwd, context: () => ({ groups: () => ['group'] }) })
+  await f.receive('before-root', '原有上下文不丢失')
+  const prior = (await f.store.query({ kind: 'message.coordinator', conversationId: 'group' })).coordinator
+  cwd = root
+  await f.workflow.recover()
+  const current = (await f.store.query({ kind: 'message.coordinator', conversationId: 'group' })).coordinator
+  assert.notEqual(current.sessionId, prior.sessionId)
+  assert.equal(current.leaseEpoch, prior.leaseEpoch + 1)
+  assert.equal(current.sessionHistory[0].sessionId, prior.sessionId)
+  const child = await f.ctx.sessionPersistence.inspect(current.sessionId)
+  assert.equal(child.meta.cwd, root)
+  assert.equal(child.meta.parentSession, prior.sessionId)
+  assert.equal(f.requests.length, 1)
+  await f.receive('after-root', '同群补充')
+  assert.equal(f.requests.length, 2)
+  assert.equal((await f.store.query({ kind: 'message.coordinator', conversationId: 'group' })).coordinator.sessionId, current.sessionId)
+  assert.equal((await f.workflow.state('before-root')).run.status, 'settled')
 })
 
 
@@ -456,4 +489,18 @@ test('暂态探测递增退避，无次数上限，新来源无需等待旧退�
  }
  await assert.rejects(f.receive('network-new','新增资料'),{code:'ECONNRESET'})
  assert.equal(calls,8)
+})
+
+test('群协调传递原始简单加列目标，候选细节不升级为业务硬条件', async t => {
+  const f = await fixture(t, true)
+  const body = '生产 sales 数据库的order_notes表新增label列，提交Bytebase审批，通过后执行'
+  await f.receive('simple-column', body)
+  const instruction = f.inputs[0].instructions
+  assert.match(instruction, /objective只表达来源中用户要求的交付、范围和明确条件/)
+  assert.match(instruction, /系统建议的代码扫描、字段用途澄清、演练、备份等不得扩写/)
+  assert.match(instruction, /未指定的实现细节可提出明确候选交真人审批/)
+  const state = await f.workflow.state('simple-column')
+  assert.equal(state.units[0].goalText, body)
+  assert.equal(state.requests.length, 0)
+  assert.equal(state.commands.length, 1)
 })

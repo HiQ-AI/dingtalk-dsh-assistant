@@ -7,13 +7,15 @@ import { maintenanceStatus, assertMaintenanceDispatch, reduceMaintenanceCommand 
 import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recoverEffects,
   queryEffects, assertRunEffectsDrained, assertNodeEffectsSettled } from './execution-effects.js'
 
-import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance } from './message-ledger.js'
+import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance, isBusinessTaskTerminal, readCurrentTaskSource } from './message-ledger.js'
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
 import { transientRecoveryReasons, recoveryRetryDelayMs } from './execution-recovery-policy.js'
+import { acceptanceCriteriaSchema } from './task-input-contract.js'
+import { executionDigest, parseArtifactReference } from './execution-artifacts.js'
 
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -92,6 +94,54 @@ function assertTaskDispatchAllowed(r) {
     || !db.prepare(`SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=?
       AND run_id=? AND status='running'`).get(r.task_id, task.plan_revision, r.run_id)) fail('TASK_DISPATCH_BLOCKED')
 }
+// 续行只针对已定位的 agent 可纠正问题；未知工具、身份和存储故障不能自动重放。
+function inspectNodeRecovery(runId) {
+  const r = getRun(runId), current = nodes(runId), candidate = current.find(n => ['waiting', 'failed'].includes(n.status))
+  const base = { repairable: false, mode: 'resume-agent', reason: 'node-not-recoverable',
+    runRevision: r.revision, generation: r.generation, evidenceRefs: [] }
+  if (!candidate) return base
+  const n = candidate, wait = JSON.parse(n.wait_reason ?? 'null')
+  const record = db.prepare("SELECT payload FROM execution_events WHERE kind='node.failure' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.leaseEpoch')=? ORDER BY seq DESC LIMIT 1").get(n.node_run_id, n.lease_epoch)
+  const failure = record ? JSON.parse(record.payload).failure : { code: wait?.reference, phase: 'execution', targetNodeId: n.node_id }
+  const detail = { ...base, nodeId: n.node_id, nodeRunId: n.node_run_id, leaseEpoch: n.lease_epoch, inputDigest: n.input_digest,
+    evidenceRefs: [...new Set([n.output_ref, ...JSON.parse(n.evidence_refs)].filter(Boolean))], failure }
+  if (typeof failure?.code !== 'string') return detail
+  const problemKey = executionDigest({ nodeRunId: n.node_run_id, inputDigest: n.input_digest,
+    code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId })
+  detail.problemKey = problemKey
+  const correctable = ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'execution_step_budget_exhausted', 'execution_timeout',
+    'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY'].includes(failure.code)
+    || ['output-validation', 'output-admission'].includes(failure.phase)
+      && ['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT', 'AGENT_WORK_RESULT_INVALID',
+        'AGENT_WORK_EVIDENCE_INVALID', 'AGENT_WORK_COVERAGE_INCOMPLETE', 'QUERY_EVIDENCE_INVALID', 'GROUP_REPLY_INTERNAL_DETAILS'].includes(failure.code)
+  if (!correctable) return { ...detail, reason: 'failure-requires-implementation-repair' }
+  if (n.executor !== 'agent' || !n.session_bound || !n.session_id || !n.input_digest || !n.input_ref
+    || !['failed', 'waiting'].includes(r.status) || wait?.kind !== 'recovery' || failure.code !== wait.reference
+    || r.pause_requested || r.stop_requested || pendingInputs(runId).length || current.some(node => !node.drained)
+    || current.slice(0, n.position).some(node => node.status !== 'succeeded')
+    || current.slice(n.position + 1).some(node => node.status !== 'blocked' || node.lease_epoch !== 0)
+    || db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)
+    || db.prepare("SELECT 1 FROM execution_effects WHERE run_id=? AND state NOT IN ('succeeded','failed') LIMIT 1").get(runId)) return detail
+  const task = db.prepare('SELECT t.*,c.state AS control_state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
+  const stages = task && db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? ORDER BY position').all(r.task_id, task.plan_revision)
+  const stage = stages?.find(item => item.run_id === runId)
+  if (!task || task.control_state !== 'active' || !['active', 'blocked'].includes(task.status)
+    || task.plan_requirement_revision !== task.requirement_revision || !stage || !['running', 'blocked'].includes(stage.status)
+    || stage.workflow_digest !== r.workflow_digest || stage.requirement_ref !== r.requirement_ref || stage.output_ref
+    || stages.slice(0, stage.position).some(item => item.status !== 'succeeded')
+    || stages.slice(stage.position + 1).some(item => item.run_id || !['ready','waiting_confirmation','blocked'].includes(item.status))) return { ...detail, reason: 'task-plan-not-current' }
+  try { assertMessageTaskUnfenced(db, r.task_id) } catch (error) { return { ...detail, reason: error.code } }
+  if (maintenanceStatus(db, workerData.processIncarnation).active) return { ...detail, reason: 'runtime-maintenance' }
+  if (stage.source_condition) {
+    const condition = JSON.parse(stage.source_condition), source = readCurrentTaskSource(db, condition.sourceKey, { taskId: r.task_id })
+    if (!source || source.status === 'superseded' || source.sourceVersion !== condition.sourceVersion
+      || !source.body.includes(condition.sourceQuote) || !condition.sourceQuote.includes(condition.objective)
+      || condition.requiredActorId && source.actorId !== condition.requiredActorId) return { ...detail, reason: 'task-source-not-current' }
+  }
+  if (db.prepare("SELECT 1 FROM execution_events WHERE kind='node.resume' AND json_extract(payload,'$.problemKey')=? LIMIT 1").get(problemKey))
+    return { ...detail, reason: 'strategy-change-required' }
+  return { ...detail, repairable: true, reason: failure.code }
+}
 function assertDispatchAllowed(a) {
   const r = activeRun(a)
   assertTaskDispatchAllowed(r)
@@ -142,6 +192,7 @@ function install() {
     CREATE TABLE execution_receipts(command_id TEXT PRIMARY KEY,payload_digest TEXT NOT NULL,result TEXT NOT NULL CHECK(json_valid(result)),created_at TEXT NOT NULL) STRICT;
     CREATE TABLE execution_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,command_id TEXT,kind TEXT NOT NULL,
       payload TEXT NOT NULL CHECK(json_valid(payload)),created_at TEXT NOT NULL) STRICT;
+    CREATE INDEX execution_events_kind_seq ON execution_events(kind,seq);
   `)
   db.prepare('INSERT INTO execution_meta(singleton,instance_id,schema_version) VALUES(1,?,?)').run(workerData.instanceId, SCHEMA_VERSION)
   installEffectsSchema(db)
@@ -165,6 +216,12 @@ function validate(connection) {
     'SELECT command_id,payload_digest,result,created_at FROM execution_receipts LIMIT 0',
     'SELECT seq,command_id,kind,payload,created_at FROM execution_events LIMIT 0',
   ]) connection.prepare(sql).all()
+  const eventIndex = connection.prepare("PRAGMA index_list('execution_events')").all()
+    .find(index => index.name === 'execution_events_kind_seq')
+  const eventColumns = connection.prepare("PRAGMA index_info('execution_events_kind_seq')").all()
+  if (!eventIndex || eventIndex.unique !== 0 || eventIndex.partial !== 0 || eventIndex.origin !== 'c'
+    || eventColumns.length !== 2 || eventColumns[0].name !== 'kind' || eventColumns[1].name !== 'seq')
+    fail('STORE_SCHEMA_MISMATCH')
   const bad = connection.prepare(`SELECT node_run_id FROM execution_nodes WHERE
     (status IN ('ready','running') AND (input_ref IS NULL OR input_digest IS NULL))
     OR (session_bound=1 AND session_id IS NULL)
@@ -520,6 +577,33 @@ function coreCommand(command, now, consumption = {}) {
     db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now,r.run_id)
     return {nodeRunId:n.node_run_id,inputVersion:history.inputVersion+1,inputHistory:[...history.inputHistory,{inputVersion:history.inputVersion,inputDigest:n.input_digest}],eventId:a.eventId,answerDigest:a.answerDigest,expectedOutputRef:a.expectedOutputRef}
   }
+  if (command.kind === 'node.resume') {
+    object(a, ['runId','expectedRevision','nodeRunId','generation','leaseEpoch','inputDigest','contextRef','problemKey','workflowDigest','sources',
+      'expectedRequirementRevision','expectedPlanRevision','expectedControlRevision'])
+    ref(a.contextRef, 'contextRef'); digest(a.problemKey, 'problemKey'); digest(a.workflowDigest, 'workflowDigest'); digest(a.inputDigest, 'inputDigest')
+    const r = getRun(a.runId), recovery = inspectNodeRecovery(a.runId)
+    const task = db.prepare('SELECT t.*,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
+    if (!recovery.repairable || recovery.problemKey !== a.problemKey || r.workflow_digest !== a.workflowDigest
+      || r.revision !== a.expectedRevision || recovery.nodeRunId !== a.nodeRunId || recovery.generation !== a.generation
+      || recovery.leaseEpoch !== a.leaseEpoch || recovery.inputDigest !== a.inputDigest
+      || task?.requirement_revision !== a.expectedRequirementRevision || task?.plan_revision !== a.expectedPlanRevision
+      || task?.control_revision !== a.expectedControlRevision) fail('NODE_RECOVERY_NOT_ADMITTED', recovery.reason)
+    if (!Array.isArray(a.sources)) fail('NODE_RECOVERY_SOURCE_INVALID')
+    for (const frozen of a.sources) {
+      object(frozen, ['sourceKey','sourceVersion','actorId','bodyDigest'])
+      const source = readCurrentTaskSource(db, frozen.sourceKey, { taskId: r.task_id })
+      if (!source || source.status === 'superseded' || source.sourceVersion !== frozen.sourceVersion
+        || source.actorId !== frozen.actorId || executionDigest(source.body) !== frozen.bodyDigest) fail('NODE_RECOVERY_SOURCE_INVALID')
+    }
+    const n = nodes(a.runId).find(node => node.node_run_id === a.nodeRunId)
+    db.prepare("UPDATE execution_nodes SET status='ready',output_ref=NULL,evidence_refs='[]',wait_reason=NULL WHERE node_run_id=?").run(n.node_run_id)
+    db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now, r.run_id)
+    db.prepare("UPDATE task_plan_stages SET status='running' WHERE task_id=? AND plan_revision=(SELECT plan_revision FROM business_tasks WHERE task_id=?) AND run_id=?").run(r.task_id, r.task_id, r.run_id)
+    db.prepare("UPDATE business_tasks SET status='active',updated_at=? WHERE task_id=?").run(now, r.task_id)
+    return { status: 'applied', runId: r.run_id, taskId: r.task_id, nodeRunId: n.node_run_id, generation: n.generation,
+      inputDigest: n.input_digest, nextLeaseEpoch: n.lease_epoch + 1, previousRunRevision: r.revision, contextRef: a.contextRef, problemKey: recovery.problemKey,
+      failure: recovery.failure, previousOutputRef: n.output_ref, evidenceRefs: recovery.evidenceRefs }
+  }
   if (command.kind === 'node.claim') {
     object(a, ['runId', 'nodeId', 'expectedGeneration', 'expectedLeaseEpoch'])
     const r = activeRun(a)
@@ -550,7 +634,7 @@ function coreCommand(command, now, consumption = {}) {
     return { status: 'applied' }
   }
   if (command.kind === 'node.commit') {
-    object(a, ['runId', 'nodeId', 'generation', 'leaseEpoch', 'inputDigest', 'outcome', 'outputRef', 'evidenceRefs', 'waitReason', 'nextInput'],
+    object(a, ['runId', 'nodeId', 'generation', 'leaseEpoch', 'inputDigest', 'outcome', 'outputRef', 'evidenceRefs', 'waitReason', 'nextInput', 'failure'],
       ['runId', 'nodeId', 'generation', 'leaseEpoch', 'inputDigest', 'outcome', 'evidenceRefs'])
     // 已领取执行的真实结果按原 generation/input 入账；新消息只阻挡后继领取，不能制造重复执行。
     const r = activeRun(a,{allowMessageFence:true}), n = currentNode(a)
@@ -569,6 +653,12 @@ function coreCommand(command, now, consumption = {}) {
       if (!['input', 'external', 'approval', 'retry', 'recovery'].includes(a.waitReason.kind)) fail('INVALID_WAIT_REASON')
       text(a.waitReason.reference, 'waitReason.reference')
       if (a.nextInput !== undefined) fail('UNEXPECTED_NEXT_INPUT')
+    }
+    if (a.failure !== undefined) {
+      object(a.failure, ['code','phase','targetNodeId'])
+      for (const key of ['code','phase','targetNodeId']) text(a.failure[key], key)
+      if (a.outcome === 'succeeded' || a.failure.code !== a.waitReason.reference) fail('INVALID_NODE_FAILURE')
+      emitEvent(command.id, 'node.failure', { nodeRunId: n.node_run_id, leaseEpoch: n.lease_epoch, failure: a.failure }, now)
     }
     const next = nodes(r.run_id).find(other => other.position === n.position + 1)
     if (a.outcome === 'succeeded' && next) {
@@ -677,7 +767,7 @@ function command(value) {
           if (!stage || stage.status !== 'waiting_confirmation' || stage.gate !== 'confirmation') fail('TASK_CONFIRMATION_NOT_WAITING')
           if (!previous.length || previous.some(item => item.status !== 'succeeded') || previous.at(-1).output_ref !== request.outputRef) fail('TASK_CONFIRMATION_OUTPUT_STALE')
         } else if (request.inputVersion !== task.requirement_revision + 1 || request.runSequence !== count) fail('REVISION_CONFLICT')
-        if (request.action === 'context' && (task.status === 'succeeded' || ['cancelling', 'cancelled'].includes(control.state))) fail('RUN_TERMINAL')
+        if (request.action === 'context' && isBusinessTaskTerminal(db, request.taskId)) fail('RUN_TERMINAL')
         combined = { event: { id: eventId, channel: 'web', actorId, request, input, status: 'pending', expectedControlRevision: control.control_revision } }
       }
     } else if (value.kind === 'task.web-input.finish') {
@@ -698,9 +788,10 @@ function command(value) {
       for (const member of family.taskIds) assertTaskDrained(member, actorId, 'TASK_RERUN_SOURCE')
       const previousRuns = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=? ORDER BY rowid DESC').all(rerunOfTaskId)
       const previousTask = db.prepare('SELECT t.status,c.state FROM business_tasks t JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?').get(rerunOfTaskId)
+      const completed = isBusinessTaskTerminal(db, rerunOfTaskId)
       if (previousRuns.length ? previousRuns[0].run_id !== request.expectedRunId
-        : request.expectedRunId !== null || previousTask?.state !== 'cancelled') fail('TASK_RERUN_SOURCE_CHANGED')
-      if (previousTask && previousTask.status !== 'succeeded' && previousTask.state !== 'cancelled'
+        : request.expectedRunId !== null || !completed) fail('TASK_RERUN_SOURCE_CHANGED')
+      if (previousTask && !completed && previousTask.status !== 'succeeded' && previousTask.state !== 'cancelled'
         || previousRuns.some(run => !['succeeded', 'failed', 'cancelled'].includes(run.status))) fail('TASK_RERUN_SOURCE_CHANGED')
       const created = reduceTaskPlanCommand(db, { kind: 'task.plan.accept', args: { taskId, requirementRef, requirementRevision: 1 } }, context(value.id, now))
       const sessionId = `owner-${createHash('sha256').update(taskId).digest('hex').slice(0, 40)}`
@@ -739,25 +830,90 @@ function command(value) {
         ||task.requirement_revision!==a.expectedRequirementRevision||task.control_revision!==a.expectedControlRevision)fail('TASK_OWNER_REASSESS_STALE')
       ref(a.payloadRef,'payloadRef');digest(a.requestDigest,'requestDigest')
       const invalidRepair=owner.last_failure==='WORKFLOW_REPAIR_NOT_ADMITTED' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='repairCurrentStage'").get(a.taskId,owner.lease_epoch) : null
-      if(task.state!=='active'||task.status==='succeeded'||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
-        ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,invalidRepair?.turn_id??'')
-        ||!db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('failed','waiting')").get(a.taskId)
-        ||db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('failed','waiting','succeeded'))").get(a.taskId)
+      const rejectedSourcePlan=owner.last_failure==='TASK_STAGE_SOURCE_CONDITION_INVALID' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='advance'").get(a.taskId,owner.lease_epoch) : null
+      const rejectedAction=invalidRepair??rejectedSourcePlan
+      const externalRuns=db.prepare("SELECT * FROM execution_runs WHERE task_id=? AND workflow_id<>'task-investigation'").all(a.taskId)
+      const handedOffRuns=new Set()
+      for(const run of externalRuns.filter(run=>run.workflow_id==='task-data-change'&&run.status==='cancelled'&&run.stop_requested)){
+        const historical=db.prepare('SELECT * FROM execution_effects WHERE run_id=?').all(run.run_id)
+        const gate=historical.find(effect=>effect.node_id==='approval-gate'),created=historical.find(effect=>effect.node_id==='create-issue')
+        const closed=gate?.result_json&&JSON.parse(gate.result_json),proof=closed?.result?.result,view=proof?.view,pack=view?.prepared?.package
+        const handoffEvent=db.prepare("SELECT event_key FROM task_events WHERE task_id=? AND event_type='approval.channel.changed' AND payload_ref IS NOT NULL").all(a.taskId).find(event=>{
+          const receipt=db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(`${event.event_key}:stop`)
+          const stopped=receipt&&JSON.parse(receipt.result).run
+          return stopped?.runId===run.run_id&&stopped.taskId===a.taskId&&stopped.requirementRef===run.requirement_ref&&stopped.generation===run.generation
+            &&stopped.stopRequested&&JSON.parse(stopped.recoveryReason??'null')?.kind==='approval-channel-handoff'
+        })
+        if(historical.length!==2||!gate||!created||created.state!=='succeeded'||gate.state!=='failed'
+          ||closed.result?.reason!=='APPROVAL_CHANNEL_SUPERSEDED'||closed.status!=='failed'||closed.effectId!==gate.effect_id||proof?.kind!=='data-change-approval-handoff'
+          ||proof.taskId!==a.taskId||proof.originalRunId!==run.run_id||proof.originalGeneration!==run.generation||proof.originalRequirementRef!==run.requirement_ref
+          ||proof.effectId!==gate.effect_id||proof.nodeRunId!==gate.node_run_id||proof.inputDigest!==gate.input_digest||proof.effectDigest!==executionDigest(JSON.parse(gate.definition_json))
+          ||!pack||!handoffEvent
+          ||db.prepare('SELECT 1 FROM execution_nodes WHERE run_id=? AND drained=0').get(run.run_id))continue
+        if(!historical.every(effect=>effect.result_json&&db.prepare('SELECT 1 FROM execution_effect_observations WHERE effect_id=? AND payload_json=? AND payload_digest=?').get(effect.effect_id,effect.result_json,executionDigest(JSON.parse(effect.result_json)))))continue
+        const createdResult=JSON.parse(created.result_json)
+        if(createdResult.effectId!==created.effect_id||createdResult.status!=='succeeded'||createdResult.result?.result?.issueId!==view.issue?.id)continue
+        const resume=externalRuns.find(next=>next.workflow_id==='task-data-change-approval-resume'&&next.status==='succeeded'
+          &&db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=? AND status='succeeded'").get(a.taskId,task.plan_revision,next.run_id)
+          &&db.prepare("SELECT 1 FROM execution_nodes WHERE run_id=? AND node_id='freeze-existing-issue' AND current=1 AND status='succeeded' AND drained=1 AND output_ref IS NOT NULL").get(next.run_id)
+          &&db.prepare("SELECT definition_json FROM execution_effects WHERE run_id=? AND node_id='execute-task' AND state='succeeded'").all(next.run_id).some(effect=>{
+            const intent=JSON.parse(effect.definition_json).payload?.intent
+            return intent&&intent.issueId===view.issue?.id&&intent.planId===view.plan?.id&&intent.sheetId===view.sheet?.id
+              &&intent.applySqlSha256===pack.applySqlSha256&&intent.packageDigest===pack.validation?.packageDigest&&canonical(intent.target)===canonical(pack.target)
+          }))
+        if(resume)handedOffRuns.add(run.run_id)
+      }
+      const completedExternal=externalRuns.length>0 && (()=>{
+        const stages=db.prepare("SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND status<>'invalidated'").all(a.taskId,task.plan_revision)
+        if(!stages.length||stages.some(stage=>stage.status!=='succeeded'||!stage.output_ref||!stage.run_id))return false
+        for(const run of externalRuns){
+          if(handedOffRuns.has(run.run_id))continue
+          const stage=stages.find(stage=>stage.run_id===run.run_id)
+          if(!['task-data-change','task-data-change-approval-resume'].includes(run.workflow_id)||run.status!=='succeeded'
+            ||!stage||stage.workflow_id!==run.workflow_id||stage.workflow_digest!==run.workflow_digest||stage.requirement_ref!==run.requirement_ref
+            ||db.prepare("SELECT 1 FROM execution_nodes WHERE run_id=? AND current=1 AND (status<>'succeeded' OR drained=0)").get(run.run_id))return false
+          const condition=stage.source_condition&&JSON.parse(stage.source_condition)
+          const source=condition&&a.sources?.find(source=>source.sourceKey===condition.sourceKey&&source.sourceVersion===condition.sourceVersion)
+          const current=source&&readCurrentTaskSource(db,source.sourceKey,{taskId:a.taskId})
+          if(!current||!condition.sourceQuote||!current.body.includes(condition.sourceQuote)||condition.requiredActorId&&condition.requiredActorId!==current.actorId)return false
+        }
+        const effects=db.prepare('SELECT e.* FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').all(a.taskId)
+        if(!effects.length)return false
+        for(const effect of effects){
+          if(handedOffRuns.has(effect.run_id))continue
+          const node=db.prepare('SELECT * FROM execution_nodes WHERE node_run_id=?').get(effect.node_run_id)
+          const result=effect.result_json&&JSON.parse(effect.result_json)
+          if(effect.state!=='succeeded'||!node||node.run_id!==effect.run_id||node.node_id!==effect.node_id||!node.current
+            ||node.generation!==effect.generation||node.input_digest!==effect.input_digest||node.status!=='succeeded'||!node.drained
+            ||result?.effectId!==effect.effect_id||result.status!=='succeeded'||!result.evidenceRef
+            ||!db.prepare('SELECT 1 FROM execution_effect_observations WHERE effect_id=? AND payload_json=? AND payload_digest=?').get(effect.effect_id,effect.result_json,executionDigest(result)))return false
+          if(effect.request_id){
+            const approval=db.prepare('SELECT * FROM execution_approvals WHERE request_id=? AND effect_id=?').get(effect.request_id,effect.effect_id)
+            if(!approval||approval.decision!=='approved'||approval.revoked||!JSON.parse(approval.approver_ids_json).includes(approval.decided_by))return false
+          }
+        }
+        return true
+      })()
+      if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
+        ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,rejectedAction?.turn_id??'')
+        ||rejectedSourcePlan&&db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${rejectedSourcePlan.turn_id}`)
+        ||!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
+        ||db.prepare('SELECT * FROM execution_runs WHERE task_id=?').all(a.taskId).some(run=>!handedOffRuns.has(run.run_id)
+          &&(!['failed','waiting','succeeded'].includes(run.status)||run.workflow_id!=='task-investigation'&&!completedExternal))
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
         ||db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
-        ||db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId)
-        ||db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId))fail('TASK_OWNER_REASSESS_FORBIDDEN')
+        ||!completedExternal&&db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId)
+        ||!completedExternal&&db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId))fail('TASK_OWNER_REASSESS_FORBIDDEN')
       if(!Array.isArray(a.sources)||!a.sources.length)fail('TASK_AUTHORIZATION_SOURCE_STALE')
       for(const source of a.sources){
         object(source,['sourceKey','sourceVersion','actorId','bodyDigest'])
-        const row=db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(source.sourceKey)
-        const current=row&&JSON.parse(row.body)
+        const current=readCurrentTaskSource(db,source.sourceKey,{taskId:a.taskId})
         if(!current||current.status==='superseded'||current.sourceVersion!==source.sourceVersion||current.actorId!==source.actorId
           ||createHash('sha256').update(canonical(current.body)).digest('hex')!==source.bodyDigest)fail('TASK_AUTHORIZATION_SOURCE_STALE')
       }
-      if(invalidRepair)reduceTaskOwnerCommand(db,{kind:'task.owner.discard',args:{taskId:a.taskId,turnId:invalidRepair.turn_id,leaseEpoch:invalidRepair.lease_epoch,reason:'WORKFLOW_REPAIR_NOT_ADMITTED'}},context(value.id,now))
+      if(rejectedAction)reduceTaskOwnerCommand(db,{kind:'task.owner.discard',args:{taskId:a.taskId,turnId:rejectedAction.turn_id,leaseEpoch:rejectedAction.lease_epoch,reason:owner.last_failure}},context(value.id,now))
       const event=reduceTaskOwnerCommand(db,{kind:'task.owner.event',args:{taskId:a.taskId,eventKey:a.eventKey,eventType:'system.recovery',payloadRef:a.payloadRef}},context(value.id,now))
-      combined={status:'pending',taskId:a.taskId,eventSeq:event.eventSeq,ownerRevision:owner.revision+1+(invalidRepair?1:0),sessionId:owner.session_id,requestDigest:a.requestDigest,...(invalidRepair?{discardedTurnId:invalidRepair.turn_id}:{})}
+      combined={status:'pending',taskId:a.taskId,eventSeq:event.eventSeq,ownerRevision:owner.revision+1+(rejectedAction?1:0),sessionId:owner.session_id,requestDigest:a.requestDigest,...(rejectedAction?{discardedTurnId:rejectedAction.turn_id}:{})}
     } else if (value.kind === 'task.authorization.repair') {
       const a = object(value.args, ['taskId','expectedRequirementRevision','expectedRequirementRef','requirementRef','eventKey','payloadRef','sources','requestDigest'])
       const task = db.prepare('SELECT requirement_ref,requirement_revision FROM business_tasks WHERE task_id=?').get(a.taskId)
@@ -766,8 +922,7 @@ function command(value) {
       if (!Array.isArray(a.sources) || !a.sources.length) fail('TASK_AUTHORIZATION_SOURCE_STALE')
       for (const source of a.sources) {
         object(source, ['sourceKey','sourceVersion','actorId','bodyDigest'])
-        const row = db.prepare('SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=r.source_version WHERE r.source_key=?').get(source.sourceKey)
-        const current = row && JSON.parse(row.body)
+        const current = readCurrentTaskSource(db, source.sourceKey, { taskId: a.taskId })
         if (!current || current.status === 'superseded' || current.sourceVersion !== source.sourceVersion || current.actorId !== source.actorId
           || createHash('sha256').update(canonical(current.body)).digest('hex') !== source.bodyDigest) fail('TASK_AUTHORIZATION_SOURCE_STALE')
       }
@@ -788,7 +943,32 @@ function command(value) {
         ['taskId', 'expectedRequirementRevision', 'requirementRef', 'eventKey'])
       const { taskId, expectedRequirementRevision, requirementRef, eventKey, payloadRef } = value.args
       if (db.prepare('SELECT 1 FROM task_events WHERE event_key=?').get(eventKey)) fail('TASK_OWNER_EVENT_CONFLICT')
+      // 只有真实待处理的人工结构化修订能替换验收；普通上下文追加保持原验收。
+      const webEventId = eventKey.startsWith('web:') ? eventKey.slice(4) : null
+      const webEvent = webEventId ? webTaskEvent(webEventId) ?? queryMessages(db, { kind: 'message.web-task', eventId: webEventId }) : null
+      const revision = webEvent?.request?.requirement
+      if (revision) {
+        const sourceKey = `web-context:${webEventId}`
+        if (webEvent.status !== 'pending' || webEvent.request.action !== 'context' || webEvent.request.taskId !== taskId
+          || webEvent.request.inputVersion !== expectedRequirementRevision + 1
+          || !acceptanceCriteriaSchema.safeParse(revision.acceptanceCriteria).success
+          || !webEvent.input || webEvent.input.request !== revision.objective || webEvent.input.objective !== revision.objective
+          || canonical(webEvent.input?.acceptanceCriteria) !== canonical(revision.acceptanceCriteria)
+          || webEvent.input?.authorization?.channel !== 'web' || webEvent.input.authorization.sourceKey !== sourceKey
+          || webEvent.input.authorization.actorId !== webEvent.actorId
+          || webEvent.input.authorization.requestId !== webEvent.request.requestId
+          || !webEvent.input.scope?.sourceKeys?.includes(sourceKey)
+          || parseArtifactReference(requirementRef).digest !== executionDigest(webEvent.input)) fail('TASK_WEB_REQUIREMENT_INVALID')
+      }
       const updated = reduceTaskPlanCommand(db, { kind: 'task.requirement.update', args: { taskId, expectedRequirementRevision, requirementRef } }, context(value.id, now))
+      if (revision) {
+        const sourceKey = `web-context:${webEventId}`
+        const itemPrefix = `acceptance-${expectedRequirementRevision + 1}-${executionDigest(sourceKey).slice(0, 24)}`
+        db.prepare('UPDATE task_acceptance_items SET active=0 WHERE task_id=? AND active=1').run(taskId)
+        for (const [index, criterion] of revision.acceptanceCriteria.entries())
+          db.prepare('INSERT INTO task_acceptance_items(task_id,item_id,criterion,source_key) VALUES(?,?,?,?)')
+            .run(taskId, `${itemPrefix}-${index + 1}`, criterion, sourceKey)
+      }
       const event = reduceTaskOwnerCommand(db, { kind: 'task.owner.event', args: { taskId, eventKey, eventType: 'intent.received', payloadRef: payloadRef ?? requirementRef } }, context(value.id, now))
       combined = { ...updated, eventSeq: event.eventSeq }
     }
@@ -890,7 +1070,8 @@ function assertTaskDrained(taskId, actorId, code) {
   const owner = db.prepare('SELECT task_id FROM task_owners WHERE task_id=?').get(taskId)
     ? queryTaskOwner(db, { kind: 'task.owner', taskId }) : null
   const ownerComplete = owner?.decision?.action === 'complete' && owner.applicationStatus === 'applied'
-    && task?.plan_requirement_revision === task?.requirement_revision && owner.eventWatermark === owner.processedWatermark
+    && owner.requirementRevision === task?.requirement_revision
+    && (task.plan_revision === 0 || task.plan_requirement_revision === task.requirement_revision) && owner.eventWatermark === owner.processedWatermark
   const runs = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=?').all(taskId)
   const completed = task ? task.control_state === 'cancelled'
     || task.control_state === 'active' && (owner ? ownerComplete : task.status === 'succeeded')
@@ -931,6 +1112,13 @@ function inspectTaskDeletion({ taskId, actorId, expectedControlRevision }) {
     retained: ['source-messages','command-receipts','audit-events','artifact-files','native-sessions'] }
 }
 function query(value) {
+  if (value?.kind === 'node.recovery') { object(value, ['kind','runId']); return inspectNodeRecovery(value.runId) }
+  if (value?.kind === 'node.recovery-context') {
+    object(value, ['kind','nodeRunId','inputDigest','leaseEpoch'])
+    const row = db.prepare("SELECT payload FROM execution_events WHERE kind='node.resume' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.inputDigest')=? AND json_extract(payload,'$.nextLeaseEpoch')<=? ORDER BY seq DESC LIMIT 1")
+      .get(text(value.nodeRunId, 'nodeRunId'), digest(value.inputDigest, 'inputDigest'), integer(value.leaseEpoch, 'leaseEpoch', 1))
+    return row ? JSON.parse(row.payload) : null
+  }
   if (value?.kind === 'task.delete.check') return inspectTaskDeletion(value)
   if (value?.kind === 'task.deleted') return taskDeleted(value.taskId)
   if (value?.kind === 'task.viewRevision') {
@@ -982,8 +1170,7 @@ function query(value) {
     .map(row => webTaskEvent(row.id)).filter(event => event.status === 'pending')
   if (value?.kind === 'task.origin') return taskOrigin(value.taskId, value.latest === true)
   if (value?.kind === 'task.source') {
-    const row = db.prepare("SELECT payload FROM execution_events WHERE kind='task.web-rerun.accept' AND json_extract(payload,'$.source.sourceKey')=? ORDER BY seq LIMIT 1").get(value.sourceKey)
-    return row ? JSON.parse(row.payload).source : queryMessages(db, { kind: 'message.source', sourceKey: value.sourceKey })
+    return readCurrentTaskSource(db, value.sourceKey)
   }
   if (value?.kind === 'task.executionTiming') {
     object(value, ['kind', 'taskId']); text(value.taskId, 'taskId')
@@ -1020,8 +1207,9 @@ function query(value) {
       .map(row => ({ ...runDto(row), sequenceId: row.sequence_id }))
   }
   if (value?.kind === 'run') {
-    object(value, ['kind', 'runId', 'includeHistory'], ['kind', 'runId'])
+    object(value, ['kind', 'runId', 'includeHistory', 'includeRecovery'], ['kind', 'runId'])
     if (value.includeHistory !== undefined && typeof value.includeHistory !== 'boolean') fail('INVALID_ARGUMENT')
+    if (value.includeRecovery !== undefined && typeof value.includeRecovery !== 'boolean') fail('INVALID_ARGUMENT')
     text(value.runId, 'runId')
     const run = db.prepare('SELECT * FROM execution_runs WHERE run_id=?').get(value.runId)
     const inputs = db.prepare('SELECT * FROM execution_inputs WHERE run_id=? ORDER BY seq').all(value.runId).map(i => ({
@@ -1030,6 +1218,7 @@ function query(value) {
     }))
     refreshNodeTimes()
     return { run: runDto(run) ?? null, nodes: nodes(value.runId).map(timedNodeDto), inputs,
+      ...(value.includeRecovery && run ? { nodeRecovery: inspectNodeRecovery(value.runId) } : {}),
       pendingInputCount: inputs.filter(i => i.status === 'pending').length,
       ...(value.includeHistory ? { nodeHistory: db.prepare('SELECT * FROM execution_nodes WHERE run_id=? ORDER BY generation,position').all(value.runId).map(timedNodeDto) } : {}) }
   }
@@ -1045,6 +1234,24 @@ function query(value) {
   const messageResult = queryMessages(db, value)
   if (messageResult !== undefined) return messageResult
   const result = queryEffects(db, value)
+  if (value?.kind === 'approval.notice') return result
+  if (result !== null && ['approval.get', 'approval.list'].includes(value?.kind)) {
+    const approvals = Array.isArray(result) ? result : [result]
+    const comments = new Map()
+    const byRequest = new Map(approvals.map(item => [item.requestId, item]))
+    for (const row of db.prepare("SELECT payload FROM execution_events WHERE kind='approval.decided' AND json_extract(payload,'$.requestId') IN (SELECT value FROM json_each(?)) ORDER BY seq")
+      .all(JSON.stringify(approvals.map(item => item.requestId)))) {
+      const event = JSON.parse(row.payload)
+      const approval = byRequest.get(event.requestId)
+      if (!comments.has(event.requestId) && approval.effectId === event.effectId
+        && approval.decision === event.decision && approval.decidedBy === event.actorId
+        && approval.decisionSource === event.source && typeof event.comment === 'string' && event.comment.trim())
+        comments.set(event.requestId, event.comment)
+    }
+    const withComment = item => comments.has(item.requestId) ? { ...item, comment: comments.get(item.requestId) } : item
+    return Array.isArray(result) ? approvals.map(withComment) : withComment(result)
+  }
+
   if (result === null || result === undefined) fail('UNKNOWN_QUERY')
   return result
 }

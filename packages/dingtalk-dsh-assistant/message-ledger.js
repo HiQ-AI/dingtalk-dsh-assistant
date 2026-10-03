@@ -1,8 +1,48 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
+import { taskNotificationAllowed } from './workflow-notifications.js'
 import { sameDwsFileProjection } from './coordination-resources.js'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
+
+// Host 查询与阶段来源校验共用当前真实来源；Web 人工修订只在持久接纳后授予该 Task。
+export function readCurrentTaskSource(db, sourceKey, { taskId } = {}) {
+  if (sourceKey?.startsWith('web-context:')) {
+    const eventId = sourceKey.slice('web-context:'.length)
+    const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('task.web-input.prepare','task.web-input.finish') AND json_extract(payload,'$.event.id')=? ORDER BY seq DESC LIMIT 1").get(eventId)
+    const event = row ? JSON.parse(row.payload).event : queryMessages(db, { kind: 'message.web-task', eventId })
+    if (!event || event.status !== 'accepted' || event.request.action !== 'context' || !event.request.requirement
+      || taskId && event.request.taskId !== taskId
+      || event.input?.authorization?.channel !== 'web' || event.input.authorization.sourceKey !== sourceKey
+      || event.input.authorization.sourceVersion !== 1 || event.input.authorization.actorId !== event.actorId
+      || !event.input.scope?.sourceKeys?.includes(sourceKey) || event.input.scope.sourceVersions?.[sourceKey] !== 1) return null
+    return { sourceKey, sourceVersion: 1, actorId: event.actorId, channel: 'web',
+      body: event.request.context, conversationId: event.input.scope.conversationId, status: 'active' }
+  }
+  const row = db.prepare("SELECT payload FROM execution_events WHERE kind='task.web-rerun.accept' AND json_extract(payload,'$.source.sourceKey')=? ORDER BY seq LIMIT 1").get(sourceKey)
+  if (row) {
+    const accepted = JSON.parse(row.payload), source = accepted.source
+    if (taskId && accepted.taskId !== taskId || source.sourceVersion !== 1 || source.channel !== 'web') return null
+    return source
+  }
+  return queryMessages(db, { kind: 'message.source', sourceKey })
+}
+
+// 阶段结束不代表业务结束；仅取消控制或当前需求/水位已应用的 Owner 完成决定封闭上下文修订。
+export function isBusinessTaskTerminal(db, taskId) {
+  const task = db.prepare('SELECT t.*,c.state AS control_state,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(taskId)
+  if (!task) return false
+  if (['cancelling', 'cancelled'].includes(task.control_state)) return true
+  if (!db.prepare('SELECT 1 FROM task_owners WHERE task_id=?').get(taskId)) return task.status === 'succeeded'
+  return !!db.prepare(`SELECT 1 FROM task_owners o JOIN task_owner_turns r ON r.turn_id=(
+      SELECT turn_id FROM task_owner_turns WHERE task_id=o.task_id AND status='accepted' ORDER BY rowid DESC LIMIT 1)
+    WHERE o.task_id=? AND o.status='idle' AND o.current_turn_id IS NULL
+      AND o.event_watermark=o.processed_watermark AND r.event_watermark=o.processed_watermark
+      AND r.application_status='applied' AND json_extract(r.decision_json,'$.action')='complete'
+      AND r.requirement_revision=? AND r.plan_revision=? AND r.control_revision=?`).get(
+    taskId, task.requirement_revision, task.plan_revision, task.control_revision)
+    && (task.plan_revision === 0 || task.plan_requirement_revision === task.requirement_revision)
+}
 
 // 排队和维护不算执行时间；旧账以真实模型领取时间推导，不能重置已用预算。
 export function messageExecutionStartedAt(run, nodes) {
@@ -433,6 +473,13 @@ function reduceCoordinator(db,kind,a,ctx) {
   const {group,coordinator:c,sources,unconsumedTaskEvents}=coordinatorState(db,a.conversationId),now=ctx.now
   const binding=()=>({conversationId:a.conversationId,...c})
   const saveGroup=()=>{group.coordinator=c;db.prepare('INSERT INTO message_groups VALUES(?,?) ON CONFLICT(conversation_id) DO UPDATE SET body=excluded.body').run(a.conversationId,json(group))}
+  if(kind==='message.coordinator.relocate') {
+    if(group.state!=='active'||group.engine!=='workflow'||c.status!=='idle'||c.leaseEpoch!==a.expectedLeaseEpoch
+      ||c.sessionId!==a.previousSessionId||!c.sessionBound||str(a.sessionId)===c.sessionId)fail('MESSAGE_COORDINATOR_STALE')
+    c.sessionHistory=[...(c.sessionHistory??[]),{sessionId:c.sessionId,leaseEpoch:c.leaseEpoch,replacedAt:now}]
+    c.sessionId=a.sessionId;c.sessionBound=true;c.leaseEpoch++;c.turnId=null;c.recovery=null;c.error=null;c.retryAt=null
+    saveGroup();return {result:{binding:binding()}}
+  }
   if(kind==='message.coordinator.claim') {
     if(group.state!=='active'||group.engine!=='workflow')fail('MESSAGE_ENGINE_NOT_ACTIVE')
     if(c.status!=='idle'||c.leaseEpoch!==a.expectedLeaseEpoch)fail('MESSAGE_COORDINATOR_STALE')
@@ -652,11 +699,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(!origin)fail('MESSAGE_TASK_NOT_FOUND')
     const task=db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(a.executionRunId,a.request.taskId)
     const businessTask=db.prepare('SELECT requirement_revision,requirement_ref FROM business_tasks WHERE task_id=?').get(a.request.taskId)
-    if(!task||!businessTask?.requirement_ref||a.request.runSequence!==1
+    const runCount=db.prepare('SELECT count(*) AS count FROM execution_runs WHERE task_id=?').get(a.request.taskId).count
+    if((runCount ? !task : a.executionRunId !== null)||!businessTask?.requirement_ref||a.request.runSequence!==runCount
       ||a.request.inputVersion!==businessTask.requirement_revision+1)fail('REVISION_CONFLICT')
     if(!['cancel','context'].includes(a.request.action))fail('MESSAGE_WEB_ACTION_UNSUPPORTED')
-    if(a.request.action==='context'&&['succeeded','failed','cancelled'].includes(task.status))fail('RUN_TERMINAL')
-    const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task.run_id,request:a.request,input:a.input??null,status:'pending'}
+    if(a.request.action==='context'&&isBusinessTaskTerminal(db,a.request.taskId))fail('RUN_TERMINAL')
+    const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task?.run_id??null,request:a.request,input:a.input??null,status:'pending'}
     put(db,event.runId,'web-task',event);return {result:{event}}
   }
   if(kind==='message.web-task.finish') {
@@ -787,6 +835,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       return {result:{replacement}}
     }
     if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision||n.payload?.phase==='system_wait'&&(!q.blocked||rows(db,source.runId,'request').some(item=>item.status==='pending'&&item.kind==='needs_context'&&!item.blocked)||rows(db,source.runId,'command').some(item=>['pending','running'].includes(item.status))||rows(db,source.runId,'node').some(item=>item.status==='running'))){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
+      const phase=n.payload?.phase
+      const action=n.commandId?get(db,'command',n.commandId):null
+      const row=phase?.startsWith('owner:')?db.prepare(`SELECT r.*,t.application_status FROM task_reports r
+        JOIN task_owner_turns t ON t.turn_id=r.turn_id WHERE r.report_id=?`).get(phase.slice(6)):null
+      const report=row?{reportType:row.report_type,applicationStatus:row.application_status,facts:JSON.parse(row.facts_json),
+        triggerTypes:db.prepare('SELECT DISTINCT event_type FROM task_events WHERE turn_id=?').all(row.turn_id).map(e=>e.event_type)}:null
+      if(!taskNotificationAllowed({phase,action,report})){
+        n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
+        return {result:{notification:n},dispatchEligible:false}
+      }
       const taskId=n.payload?.fact?.taskId??(n.commandId?get(db,'command',n.commandId).result?.taskId:n.acceptanceId?get(db,'acceptance',n.acceptanceId).taskId:null)
       if(notificationTaskDeleted(db,taskId)){n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}
       const version=n.payload?.fact
@@ -821,14 +879,14 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
         const reportId=n.payload.phase.slice(applicationWait?'owner:application_wait:'.length:'owner:'.length)
         const releasedWait=n.payload.phase==='owner:application_wait:released'
         const fact=releasedWait?ownerReleasedWait(db,taskId):db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,t.requirement_revision AS report_requirement_revision,o.event_watermark,o.processed_watermark,
-          b.requirement_revision,b.plan_requirement_revision,c.control_revision,t.control_revision AS report_control_revision,o.status AS owner_status
+          b.requirement_revision,b.plan_revision,b.plan_requirement_revision,c.control_revision,t.control_revision AS report_control_revision,o.status AS owner_status
           FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id
           JOIN task_owners o ON o.task_id=r.task_id
           JOIN business_tasks b ON b.task_id=r.task_id JOIN task_controls c ON c.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
         const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
         if(!fact||(!releasedWait&&((applicationWait ? fact.application_status!=='blocked'||fact.owner_status!=='blocked'||fact.report_control_revision!==fact.control_revision : fact.application_status!=='applied'||fact.event_watermark!==fact.processed_watermark)||latest?.turn_id!==fact.turn_id
             ||fact.report_requirement_revision!==fact.requirement_revision
-            ||fact.report_type==='complete'&&fact.plan_requirement_revision!==fact.requirement_revision))){
+            ||fact.report_type==='complete'&&fact.plan_revision>0&&fact.plan_requirement_revision!==fact.requirement_revision))){
           n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
           return {result:{notification:n},dispatchEligible:false}
         }
@@ -1468,7 +1526,14 @@ export function queryMessages(db,a) {
   if(a.kind==='message.notification'){if(Boolean(a.notificationId)===Boolean(a.eventKey))fail('MESSAGE_NOTIFICATION_QUERY_INVALID');const row=a.eventKey?db.prepare("SELECT body FROM message_items WHERE kind='notification' AND json_extract(body,'$.eventKey')=? LIMIT 1").get(str(a.eventKey)):db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationOperation'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+str(a.operationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationReplacement'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-replacement:'+str(a.replacementId));return row?JSON.parse(row.body):null}
-  if(a.kind==='message.notificationReplacements')return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(str(a.notificationId)).map(row=>JSON.parse(row.body))
+  if(a.kind==='message.notificationReplacements') {
+    if(a.notificationIds !== undefined) {
+      if(!Array.isArray(a.notificationIds) || a.notificationIds.length>200)fail('MESSAGE_NOTIFICATION_REPLACEMENTS_INVALID')
+      const ids=a.notificationIds.map(str)
+      return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId') IN (SELECT value FROM json_each(?)) ORDER BY rowid").all(JSON.stringify(ids)).map(row=>JSON.parse(row.body))
+    }
+    return db.prepare("SELECT body FROM message_items WHERE kind='notification-replacement' AND json_extract(body,'$.restoresNotificationId')=? ORDER BY rowid").all(str(a.notificationId)).map(row=>JSON.parse(row.body))
+  }
   if(a.kind==='message.web-task'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('web-task:'+str(a.eventId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.web-tasks.pending')return db.prepare("SELECT body FROM message_items WHERE kind='web-task' AND json_extract(body,'$.status')='pending' ORDER BY rowid LIMIT 100").all().map(row=>JSON.parse(row.body))
   const topic=queryMessageTopics(db,a)
@@ -1530,17 +1595,25 @@ export function queryMessages(db,a) {
   if(a.kind==='message.notifications') {
     const limit=a.limit??100,after=a.afterSequenceId??0,states=a.states??['prepared','sending','acknowledged','unknown']
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(after)||after<0||!Array.isArray(states)||!states.length||states.some(s=>!['prepared','sending','acknowledged','unknown','delivered','superseded'].includes(s)))fail('MESSAGE_INVALID_LIMIT')
-    const scoped = (a.runId ? ' AND run_id=?' : '') + (a.sourceKey ? ' AND run_id IN (SELECT run_id FROM message_runs WHERE source_key=?)' : '')
+    const scoped = (a.runId ? ' AND run_id=?' : '') + (a.sourceKey ? ' AND run_id IN (SELECT run_id FROM message_runs WHERE source_key=?)' : '') + (a.taskId ? " AND json_extract(body,'$.payload.fact.taskId')=?" : '')
     return db.prepare(`SELECT rowid AS seq,body FROM message_items WHERE kind='notification' AND rowid>? AND json_extract(body,'$.status') IN (SELECT value FROM json_each(?))${scoped} ORDER BY rowid LIMIT ?`)
-      .all(after,json(states),...(a.runId?[str(a.runId)]:[]),...(a.sourceKey?[str(a.sourceKey)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
+      .all(after,json(states),...(a.runId?[str(a.runId)]:[]),...(a.sourceKey?[str(a.sourceKey)]:[]),...(a.taskId?[str(a.taskId)]:[]),limit).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
   }
   if(a.kind==='message.group') {const row=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(str(a.conversationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.task-candidates') {const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT i.rowid AS seq,r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_type(i.body,'$.args.taskId')='text' AND length(json_extract(i.body,'$.args.taskId'))>0 AND json_extract(r.body,'$.conversationId')=? AND NOT EXISTS (SELECT 1 FROM execution_events e WHERE e.kind='task.delete' AND json_extract(e.payload,'$.taskId')=json_extract(i.body,'$.args.taskId')) AND i.rowid<? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command),sequenceId:x.seq}))}
-  if(a.kind==='message.list') {
+  if(a.kind==='message.list'||a.kind==='message.mailbox') {
     const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT')
     const sql=a.conversationId?"SELECT rowid AS seq,body FROM message_runs WHERE json_extract(body, '$.status')!='alias' AND json_extract(body, '$.conversationId')=? AND rowid<? ORDER BY rowid DESC LIMIT ?":"SELECT rowid AS seq,body FROM message_runs WHERE json_extract(body, '$.status')!='alias' AND rowid<? ORDER BY rowid DESC LIMIT ?"
-    return db.prepare(sql).all(...(a.conversationId?[a.conversationId,before,limit]:[before,limit])).map(x=>({...JSON.parse(x.body),sequenceId:x.seq}))
+    return db.prepare(sql).all(...(a.conversationId?[a.conversationId,before,limit]:[before,limit])).map(x=>{
+      const source={...JSON.parse(x.body),sequenceId:x.seq}
+      if(a.kind==='message.list')return source
+      // 看板只读取业务状态；模型节点、执行输入和输出留在按需详情中。
+      const units=db.prepare("SELECT json_extract(body,'$.unitId') AS unitId,json_extract(body,'$.id') AS id,json_extract(body,'$.goalText') AS goalText,json_extract(body,'$.blockedReason') AS blockedReason FROM message_items WHERE run_id=? AND kind='unit' AND json_type(body,'$.blockedReason')='text' ORDER BY rowid").all(source.runId)
+      const requests=db.prepare("SELECT body FROM message_items WHERE run_id=? AND kind='request' AND json_extract(body,'$.status')='pending' ORDER BY rowid").all(source.runId).map(row=>JSON.parse(row.body))
+      const commands=db.prepare("SELECT json_extract(body,'$.kind') AS kind,json_extract(body,'$.status') AS status,json_extract(body,'$.result') AS result FROM message_items WHERE run_id=? AND kind='command' AND json_extract(body,'$.kind')='answer' AND json_extract(body,'$.status')='applied' AND json_extract(body,'$.result.status')='blocked' ORDER BY rowid").all(source.runId).map(row=>({...row,result:JSON.parse(row.result)}))
+      return {run:source,units,requests,commands,sequenceId:x.seq}
+    })
   }
   if(a.kind==='message.task') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') ORDER BY i.rowid LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}
   if(a.kind==='message.task.latest') {const row=db.prepare("SELECT r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=? AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen','revise','pause','resume','cancel','confirm') AND json_extract(i.body,'$.status')='applied' ORDER BY i.rowid DESC LIMIT 1").get(str(a.taskId));return row?{run:JSON.parse(row.run),command:JSON.parse(row.command)}:null}

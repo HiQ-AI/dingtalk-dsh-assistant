@@ -462,7 +462,7 @@ window.__ModuleLoader__.load({
                   React.createElement('div', { style: { display: 'flex', gap: 8 } }, contextCursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursor(contextCursorHistory.at(-1)); setContextCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, topicContext.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursorHistory((items) => [...items, contextCursor]); setContextCursor(topicContext.nextCursor) } }, '下一页') : null)) : React.createElement('span', { style: { color: colors.muted } }, '历史未记录')),
               React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 12, padding: '16px 0', borderBottom: `1px solid ${colors.border}` } },
                 React.createElement('section', { 'aria-label': '当前待解决问题', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `待解决问题 · ${topic?.openQuestions?.length || 0}`), topic?.openQuestions?.length ? React.createElement('ul', { style: { margin: 0, paddingLeft: 18, display: 'grid', gap: 6, fontSize: 12, lineHeight: 1.6 } }, ...topic.openQuestions.map((question, index) => React.createElement('li', { key: index }, question))) : React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '当前没有待解决问题')),
-                React.createElement('section', { 'aria-label': '关联任务', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `关联任务 · ${relatedTasks.length}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', disabled: task.engine !== 'workflow-v2' && (!task.childSessionId || task.state === 'queued'), onClick: () => onOpenTask(task), style: { maxWidth: '100%' } }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, task.title || task.objective))), relatedTasks.length === 0 ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '暂无关联任务') : null))),
+                React.createElement('section', { 'aria-label': '关联任务', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `关联任务 · ${relatedTasks.length}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', disabled: task.engine !== 'workflow-v2' && (!task.childSessionId || task.state === 'queued'), onClick: () => onOpenTask(task), style: { maxWidth: '100%' } }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: task.title || task.objective }, taskDisplayTitle(task)))), relatedTasks.length === 0 ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '暂无关联任务') : null))),
               React.createElement('section', { 'aria-label': '群聊消息', style: { marginTop: 4 } },
                 React.createElement('strong', { style: { display: 'block', padding: '14px 0', fontSize: 13, fontWeight: 600 } }, `群聊消息 · ${context.total} 条`),
                 React.createElement('div', { style: { display: 'grid' } }, ...(context.messages?.length ? context.messages.map((message, index) => React.createElement('article', { key: `${message.messageId}:${index}`, style: { position: 'relative', minWidth: 0, padding: '10px 0 15px 22px', borderLeft: `1px solid ${colors.border}` } }, React.createElement('span', { 'aria-hidden': true, style: { position: 'absolute', top: 15, left: -4, width: 7, height: 7, borderRadius: '50%', background: index === 0 ? colors.accent : colors.cardSurface, border: `1px solid ${index === 0 ? colors.accent : colors.border}` } }), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', color: colors.muted, fontSize: 11 } }, React.createElement('strong', { style: { color: 'inherit', fontWeight: 600 } }, message.senderName || message.sourceKind || '未知发送人'), React.createElement('time', { dateTime: message.occurredAt || undefined, style: { fontVariantNumeric: 'tabular-nums' } }, fmt(message.occurredAt))), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, lineHeight: 1.7 } }, message.text || '（空消息）'), message.quotedMessage?.content ? React.createElement('details', { style: { marginTop: 9, color: colors.muted, fontSize: 12 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, '查看引用消息'), React.createElement('blockquote', { style: { margin: '7px 0 0', padding: '8px 10px', borderLeft: `2px solid ${colors.border}`, background: colors.surface2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.6 } }, message.quotedMessage.content)) : null)) : [emptyState('此版本没有消息')])),
@@ -559,9 +559,13 @@ window.__ModuleLoader__.load({
       const [authorizationPage, setAuthorizationPage] = useState(1)
       const [authorizationFilter, setAuthorizationFilter] = useState('all')
       const [selectedAuthorizationId, setSelectedAuthorizationId] = useState('')
-      const refresh = useCallback(async () => {
-        try { setData(await load()); setUpdatedAt(new Date()); setError(undefined) }
-        catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+      const pendingRefresh = useRef(null)
+      const refresh = useCallback(() => {
+        if (pendingRefresh.current) return pendingRefresh.current
+        pendingRefresh.current = load().then(value => { setData(value); setUpdatedAt(new Date()); setError(undefined) },
+          cause => { setError(cause instanceof Error ? cause.message : String(cause)) })
+          .finally(() => { pendingRefresh.current = null })
+        return pendingRefresh.current
       }, [])
       const manualRefresh = useCallback(async () => {
         if (refreshState === 'refreshing') return
@@ -570,11 +574,18 @@ window.__ModuleLoader__.load({
         setRefreshState('done')
         window.setTimeout(() => setRefreshState('idle'), 1200)
       }, [refresh, refreshState])
+      const pendingDetail = useRef(null)
       useEffect(() => {
         if (!selectedWorkflowTaskId) { setWorkflowTaskDetail(undefined); setWorkflowDetailError(''); return }
         let active = true
         setWorkflowDetailError('')
-        get(`/state/tasks/${encodeURIComponent(selectedWorkflowTaskId)}/detail`).then(value => {
+        if (pendingDetail.current?.taskId !== selectedWorkflowTaskId || pendingDetail.current?.retry !== workflowDetailRetry) {
+          const request = { taskId: selectedWorkflowTaskId, retry: workflowDetailRetry }
+          request.promise = get(`/state/tasks/${encodeURIComponent(selectedWorkflowTaskId)}/detail`)
+            .finally(() => { if (pendingDetail.current === request) pendingDetail.current = null })
+          pendingDetail.current = request
+        }
+        pendingDetail.current.promise.then(value => {
           if (!active) return
           const previous = [...document.querySelectorAll('[aria-label="任务执行详情"] li.observer-task-step')]
           const focused = document.activeElement?.closest?.('li.observer-task-step')
@@ -862,6 +873,8 @@ window.__ModuleLoader__.load({
         dataViewTabs,
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' } },
           (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1); setSelectedMessageRunId('') }, fitContent: true }) : null,
+          selectedGroup?.coordinator?.sessionId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: navigatingSessionId === selectedGroup.coordinator.sessionId,
+            onClick: () => navigate(selectedGroup.coordinator.sessionId) }, navigatingSessionId === selectedGroup.coordinator.sessionId ? '正在打开…' : '打开群常驻会话') : null,
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '核对相关输入' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'waiting_clarification', label: '等待用户补充' }, { id: 'waiting_context', label: '正在读取材料' }, { id: 'waiting_system', label: '材料读取受阻' }, { id: 'execution_blocked', label: '执行受阻' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
@@ -945,12 +958,13 @@ window.__ModuleLoader__.load({
       const tasksPage = workflowDetailPending || workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
+        'sending-unknown': { label: '投递待确认', state: 'warning' },
         'waiting-reply': { label: '等待处理', state: 'warning' },
         answered: { label: '已处理', state: 'done' },
         superseded: { label: '已失效', state: 'neutral' },
       }
       const authorizationDecision = { approved: { label: '已继续', state: 'done' }, rejected: { label: '不执行', state: 'error' } }
-      const isPendingAuthorization = (item) => item.status === 'pending-send' || item.status === 'waiting-reply'
+      const isPendingAuthorization = (item) => item.status === 'pending-send' || item.status === 'sending-unknown' || item.status === 'waiting-reply'
       const authorizationPresentation = (item) => item.status === 'answered'
         ? authorizationDecision[item.decision] || authorizationStatus.answered
         : authorizationStatus[item.status] || { label: '状态异常', state: 'error' }

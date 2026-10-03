@@ -123,6 +123,110 @@ function approvalDto(row) {
     createdAt: row.created_at, updatedAt: row.updated_at }
 }
 
+function approvalNoticeLifecycle(db, effect) {
+  const run = db.prepare('SELECT * FROM execution_runs WHERE run_id=?').get(effect.run_id)
+  const node = db.prepare('SELECT * FROM execution_nodes WHERE node_run_id=?').get(effect.node_run_id)
+  const task = run?.task_id && db.prepare('SELECT t.status,c.state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE task_id=?').get(run.task_id)
+  const invalid = !run || run.stop_requested || ['succeeded','failed','cancelled'].includes(run.status)
+    || run.generation !== effect.generation || !node || !node.current || node.generation !== effect.generation
+    || node.input_digest !== effect.input_digest || task && (['cancelling','cancelled'].includes(task.state) || ['succeeded','completed','cancelling','cancelled'].includes(task.status))
+    || task && !db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=(SELECT plan_revision FROM business_tasks WHERE task_id=?) AND run_id=? AND status='running'").get(run.task_id, run.task_id, run.run_id)
+  return { invalid: !!invalid, paused: !!run?.pause_requested || !!task && task.state !== 'active' }
+}
+
+function approvalNotice(db, requestId) {
+  const row = db.prepare(`SELECT payload FROM execution_events WHERE kind IN
+    ('approval.notice.prepare','approval.notice.send','approval.notice.receipt','approval.notice.delivered','approval.notice.recalled','approval.notice.unsent')
+    AND json_extract(payload,'$.requestId')=? ORDER BY seq DESC LIMIT 1`).get(text(requestId, 'requestId'))
+  if (!row) return null
+  const notice = JSON.parse(row.payload), approval = approvalRow(db, requestId)
+  const effect = effectRow(db, notice.effectId)
+  if (approval.effect_id !== notice.effectId || effect.request_id !== requestId
+    || !JSON.parse(approval.approver_ids_json).includes(notice.approverActorId)) fail('approval_notice_identity_conflict')
+  if (notice.status === 'waiting-reply' && (approval.decision !== 'pending' || approval.revoked || effect.state !== 'prepared' || approvalNoticeLifecycle(db, effect).invalid))
+    return { ...notice, status: 'recall-required' }
+  return notice
+}
+
+function approvalNoticeCommand(db, args, context, action) {
+  const fields = {
+    prepare: ['requestId','effectId','recipientUserId','approverActorId','text'],
+    send: ['requestId','noticeDigest'], receipt: ['requestId','noticeDigest','openTaskId'],
+    unsent: ['requestId','noticeDigest','proof'],
+    delivered: ['requestId','noticeDigest','conversationId','messageId','openTaskId','sentAt'],
+    recalled: ['requestId','noticeDigest','conversationId','messageId','recalledAt'],
+  }[action]
+  const required = action === 'delivered' ? fields.slice(0, 4) : action === 'recalled' ? fields.slice(0, 4) : fields
+  if (Object.keys(args).some(key => !fields.includes(key)) || required.some(key => !Object.hasOwn(args, key))) fail('effect_invalid_argument')
+  const requestId = text(args.requestId, 'requestId'), approval = approvalRow(db, requestId)
+  const effect = effectRow(db, approval.effect_id), pending = approval.decision === 'pending' && !approval.revoked && effect.state === 'prepared'
+  const previous = approvalNotice(db, requestId)
+  let notice
+  if (action === 'prepare') {
+    const frozen = Object.fromEntries(fields.map(key => [key, text(args[key], key)]))
+    if (frozen.text.length > 24000 || frozen.effectId !== approval.effect_id || effect.request_id !== requestId
+      || !JSON.parse(approval.approver_ids_json).includes(frozen.approverActorId)) fail('approval_notice_identity_conflict')
+    const noticeDigest = digest(frozen)
+    if (previous) {
+      if (previous.digest !== noticeDigest) fail('approval_notice_identity_conflict')
+      return changed({ notice: previous, applied: false })
+    }
+    if (!pending) fail('approval_notice_not_pending')
+    notice = { ...frozen, digest: noticeDigest, status: 'prepared', createdAt: context.now, updatedAt: context.now, delivery: {} }
+  } else {
+    if (!previous) fail('approval_notice_not_found')
+    if (text(args.noticeDigest, 'noticeDigest') !== previous.digest) fail('approval_notice_identity_conflict')
+    if (action === 'send') {
+      if (previous.status !== 'prepared') return changed({ notice: previous, applied: false })
+      if (!pending) fail('approval_notice_not_pending')
+      const lifecycle = approvalNoticeLifecycle(db, effect)
+      if (lifecycle.invalid || lifecycle.paused) return changed({ notice: previous, applied: false })
+      notice = { ...previous, status: 'unknown', updatedAt: context.now }
+    } else if (action === 'unsent') {
+      const proof = object(args.proof, 'proof')
+      const proofFields = ['kind','idempotencyKey','serverErrorCode','errorMessage','traceId']
+      if (Object.keys(proof).some(key => !proofFields.includes(key)) || proofFields.some(key => typeof proof[key] !== 'string')) fail('approval_notice_unsent_not_proven')
+      const key = `workflow-approval:${requestId}:${previous.digest}`
+      const expectedError = `sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is ${key.length}.`
+      if (proof.kind !== 'dws-uuid-rejected' || proof.idempotencyKey !== key || key.length <= 128
+        || proof.serverErrorCode !== '1001' || proof.errorMessage !== expectedError || !/^[a-zA-Z0-9]{16,128}$/.test(proof.traceId)
+        || previous.unsentProof?.traceId === proof.traceId || previous.status !== 'unknown' || Object.keys(previous.delivery).length || !pending) fail('approval_notice_unsent_not_proven')
+      notice = { ...previous, status: 'prepared', updatedAt: context.now, unsentProof: { ...proof } }
+    } else if (action === 'receipt') {
+      const openTaskId = text(args.openTaskId, 'openTaskId')
+      if (previous.delivery.openTaskId && previous.delivery.openTaskId !== openTaskId) fail('approval_notice_delivery_conflict')
+      if (previous.status !== 'unknown') {
+        if (previous.delivery.openTaskId === openTaskId) return changed({ notice: previous, applied: false })
+        fail('approval_notice_send_required')
+      }
+      if (previous.delivery.openTaskId === openTaskId) return changed({ notice: previous, applied: false })
+      notice = { ...previous, updatedAt: context.now, delivery: { ...previous.delivery, openTaskId } }
+    } else if (action === 'delivered') {
+      const delivery = { conversationId: text(args.conversationId, 'conversationId'), messageId: text(args.messageId, 'messageId') }
+      if (args.openTaskId !== undefined) delivery.openTaskId = text(args.openTaskId, 'openTaskId')
+      if (args.sentAt !== undefined) {
+        if (!Number.isFinite(Date.parse(text(args.sentAt, 'sentAt')))) fail('effect_invalid_argument', 'sentAt')
+        delivery.sentAt = args.sentAt
+      }
+      if (Object.entries(delivery).some(([key, value]) => previous.delivery[key] !== undefined && previous.delivery[key] !== value)) fail('approval_notice_delivery_conflict')
+      if (['waiting-reply','recall-required','recalled'].includes(previous.status)) return changed({ notice: previous, applied: false })
+      if (previous.status !== 'unknown') fail('approval_notice_send_required')
+      // Web 决定可与外发竞争；真实发送回执必须保留，随后明确撤回。
+      notice = { ...previous, status: pending && !approvalNoticeLifecycle(db, effect).invalid ? 'waiting-reply' : 'recall-required', updatedAt: context.now, delivery: { ...previous.delivery, ...delivery } }
+    } else {
+      if (text(args.conversationId, 'conversationId') !== previous.delivery.conversationId
+        || text(args.messageId, 'messageId') !== previous.delivery.messageId) fail('approval_notice_delivery_conflict')
+      if (previous.status === 'recalled') return changed({ notice: previous, applied: false })
+      if (pending && !approvalNoticeLifecycle(db, effect).invalid || previous.status !== 'recall-required') fail('approval_notice_recall_not_required')
+      const recalledAt = args.recalledAt ?? context.now
+      if (!Number.isFinite(Date.parse(text(recalledAt, 'recalledAt')))) fail('effect_invalid_argument', 'recalledAt')
+      notice = { ...previous, status: 'recalled', updatedAt: context.now, recalledAt }
+    }
+  }
+  context.emitEvent(`approval.notice.${action}`, notice)
+  return { result: { notice, applied: true }, dispatchEligible: action === 'send' }
+}
+
 function prepare(db, args, context) {
   const effectId = text(args.effectId, 'effectId')
   if (!['operation', 'job'].includes(args.kind)) fail('effect_invalid_argument', 'kind')
@@ -264,6 +368,7 @@ function observe(db, args, context) {
 function approval(db, args, context, revoke) {
   const row = approvalRow(db, args.requestId)
   const actorId = text(args.actorId, 'actorId')
+  if (args.comment !== undefined && (typeof args.comment !== 'string' || args.comment.length > 2000)) fail('effect_invalid_argument', 'comment')
   if (!JSON.parse(row.approver_ids_json).includes(actorId)) fail('approval_actor_forbidden')
   if (!['web', 'dingtalk'].includes(args.source)) fail('effect_invalid_argument', 'source')
   if (revoke) {
@@ -277,7 +382,25 @@ function approval(db, args, context, revoke) {
     db.prepare('UPDATE execution_approvals SET decision=?, decided_by=?, decision_source=?, updated_at=? WHERE request_id=?')
       .run(args.decision, actorId, args.source, context.now, row.request_id)
   }
-  context.emitEvent(revoke ? 'approval.revoked' : 'approval.decided', { requestId: row.request_id, effectId: row.effect_id, actorId, source: args.source })
+  if (!revoke && args.decision === 'rejected') {
+    const effect = effectRow(db, row.effect_id)
+    const payload = JSON.parse(effect.definition_json).payload
+    if (effect.state === 'prepared' && payload?.workflowKind === 'data-change'
+      && payload.stage === 'approval-gate' && payload.intent?.approvalSource === 'assistant') {
+      // 真人驳回关闭尚未发送的审批门禁，不处理任何在途外部写入。
+      const observation = { effectId: effect.effect_id, status: 'failed',
+        evidenceRef: `plugin-approval:${row.request_id}`, result: { reason: 'approval_rejected', mutationAttempted: false } }
+      db.prepare('INSERT INTO execution_effect_observations VALUES(?,?,?,?,?)')
+        .run(`approval-rejected:${row.request_id}`, effect.effect_id, digest(observation), encode(observation), context.now)
+      db.prepare("UPDATE execution_effects SET state='failed', result_json=?, updated_at=? WHERE effect_id=?")
+        .run(encode(observation), context.now, effect.effect_id)
+      db.prepare('DELETE FROM execution_resource_holds WHERE effect_id=?').run(effect.effect_id)
+      context.emitEvent('effect.observed', { effectId: effect.effect_id, runId: effect.run_id,
+        state: 'failed', receiptId: `approval-rejected:${row.request_id}` })
+    }
+  }
+  context.emitEvent(revoke ? 'approval.revoked' : 'approval.decided', { requestId: row.request_id, effectId: row.effect_id, actorId, source: args.source,
+    ...(!revoke ? { decision: args.decision, comment: (args.comment ?? '').trim() } : {}) })
   return changed({ approval: approvalDto(approvalRow(db, row.request_id)), applied: true })
 }
 
@@ -302,6 +425,8 @@ export function reduceEffectCommand(db, command, context) {
     'effect.prepare': prepare, 'effect.begin': begin, 'effect.rearmUnsent': rearmUnsent, 'effect.identity': recordIdentity, 'effect.observe': observe,
     'approval.decide': (db, args, context) => approval(db, args, context, false),
     'approval.revoke': (db, args, context) => approval(db, args, context, true), 'safety.revoke': revokeSafety,
+    ...Object.fromEntries(['prepare','send','receipt','delivered','recalled','unsent'].map(action =>
+      [`approval.notice.${action}`, (db, args, context) => approvalNoticeCommand(db, args, context, action)])),
   }
   const handler = handlers[command.kind]
   if (!Object.hasOwn(handlers, command.kind)) return null
@@ -316,6 +441,40 @@ export function queryEffects(db, query) {
   if (query.kind === 'effect.get') return effectDto(effectRow(db, args.effectId))
   if (query.kind === 'effect.list') return db.prepare('SELECT * FROM execution_effects WHERE run_id=? ORDER BY created_at,effect_id').all(text(args.runId, 'runId')).map(effectDto)
   if (query.kind === 'approval.get') return approvalDto(approvalRow(db, args.requestId))
+  if (query.kind === 'approval.execution-proof') {
+    const approval = approvalRow(db, args.requestId), gate = effectRow(db, approval.effect_id)
+    const execute = effectRow(db, args.executeEffectId), payload = JSON.parse(execute.definition_json).payload
+    if (approval.decision !== 'approved' || approval.revoked || !approval.decided_by
+      || !JSON.parse(approval.approver_ids_json).includes(approval.decided_by)
+      || gate.state !== 'succeeded' || execute.state !== 'succeeded' || gate.run_id !== execute.run_id
+      || gate.generation !== execute.generation || payload?.stage !== 'execute-task'
+      || payload.approvalRequestId !== approval.request_id) fail('approval_execution_not_proven')
+    const decided = db.prepare("SELECT seq,payload FROM execution_events WHERE kind='approval.decided' AND json_extract(payload,'$.requestId')=? ORDER BY seq LIMIT 1").get(approval.request_id)
+    const started = db.prepare("SELECT seq FROM execution_events WHERE kind='effect.started' AND json_extract(payload,'$.effectId')=? ORDER BY seq LIMIT 1").get(execute.effect_id)
+    const observed = db.prepare("SELECT seq FROM execution_events WHERE kind='effect.observed' AND json_extract(payload,'$.effectId')=? AND json_extract(payload,'$.state')='succeeded' ORDER BY seq LIMIT 1").get(execute.effect_id)
+    const decision = decided && JSON.parse(decided.payload)
+    if (!decided || !started || !observed || decided.seq >= started.seq || started.seq >= observed.seq
+      || decision.decision !== 'approved' || decision.effectId !== gate.effect_id
+      || decision.actorId !== approval.decided_by || decision.source !== approval.decision_source) fail('approval_execution_not_proven')
+    const presented = db.prepare("SELECT seq,payload FROM execution_events WHERE kind='approval.notice.delivered' AND json_extract(payload,'$.requestId')=? AND seq<? ORDER BY seq LIMIT 1").get(approval.request_id, decided.seq)
+    let presentation
+    if (presented) {
+      const notice = JSON.parse(presented.payload), current = approvalNotice(db, approval.request_id)
+      const frozen = Object.fromEntries(['requestId','effectId','recipientUserId','approverActorId','text'].map(key => [key, notice[key]]))
+      const prepared = db.prepare("SELECT seq,payload FROM execution_events WHERE kind='approval.notice.prepare' AND json_extract(payload,'$.requestId')=? ORDER BY seq LIMIT 1").get(approval.request_id)
+      if (!prepared || prepared.seq >= presented.seq || notice.digest !== digest(frozen)
+        || current?.digest !== notice.digest || JSON.parse(prepared.payload).digest !== notice.digest
+        || notice.effectId !== gate.effect_id || notice.approverActorId !== approval.decided_by
+        || !notice.recipientUserId || !notice.text || !notice.delivery?.conversationId || !notice.delivery?.messageId)
+        fail('approval_presentation_not_proven')
+      presentation = { ...frozen, digest: notice.digest, delivery: notice.delivery,
+        preparedSequence: prepared.seq, deliveredSequence: presented.seq }
+    }
+    return { approval: approvalDto(approval), gateEffectId: gate.effect_id, executeEffectId: execute.effect_id,
+      ...(presentation ? { presentation } : {}),
+      approvedSequence: decided.seq, executionStartedSequence: started.seq, executionSucceededSequence: observed.seq }
+  }
+  if (query.kind === 'approval.notice') return approvalNotice(db, args.requestId)
   if (query.kind === 'approval.list') {
     const limit = args.limit ?? 200
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) fail('effect_invalid_argument', 'limit')

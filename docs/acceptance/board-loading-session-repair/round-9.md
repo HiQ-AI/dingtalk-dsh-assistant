@@ -1,0 +1,11 @@
+# 第九轮：Bytebase 真实原生语义与审批等待
+
+依据部署版本3.18.0服务端原生实现及真实Issue857/Plan878/Task905：建单可自动创建未执行Rollout并置Issue DONE；仅有效发布策略automatic=true会创建PendingTaskRun。当前真实prod policy.rolloutPolicy={}，按proto3缺省automatic=false；任务NOT_STARTED、TaskRuns空、生产只读name列空，未执行变更。
+
+修复只接纳独立确认NOT_STARTED且没有TaskRun的原生既有Task；原工单、计划、Sheet、SQL、目标与包身份仍逐项核验。OPEN/DONE均读取原生审批状态，CANCELED拒绝；SKIPPED明确等待管理员启用规则并重新送审，不能承诺改配置就自动恢复旧工单。新建任何Sheet/Plan/Issue前须原生prod发布策略确认为manual，AUTO、拒读或畸形均零写。已有工单按原operationKey复用，恢复只读不重建。
+
+服务沿既有recover入口，先用冻结readback-issue只读节点核验既有工单，再恢复原节点；核对输入封套摘要、workflow/node身份、代际/租约、排空、任务控制、维护和未知效果，拒绝变化期间恢复。15项服务恢复与屏障及59项平台回归待最终统计回读。当前尚未部署第六包，原Task仍等待身份校验修复。
+
+最终代码六平台模块59/59、服务恢复/审批/维护控制屏障15/15通过；此前277项含过程中导入旧源码，仅作为过程验证，不算本轮最终统计。真实生产发布策略已独立回读name=environments/prod/policies/rollout_policy、rolloutPolicy={}，按proto3为manual。
+
+第六包100文件SHA256 9547eac3b5d085bb5bec99f990104359cacc4721d9f7441c38a36ded6c4c7021正式安装，PID18856与Resume通过，延迟health=ok/inboundProcessing=true。真实只读恢复仍失败：TaskRun空响应实际为{}，客户端强制taskRuns数组，错误BYTEBASE_TASK_RUN_LIST_UNCONFIRMED在恢复证明阶段拒绝。原工单857、Task905和候选保持，仍未执行。此协议反证保留；源码测试的显式空数组不能代替真实空ProtoJSON响应。

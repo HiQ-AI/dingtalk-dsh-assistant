@@ -193,7 +193,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
   }
   let boundStore = null
   async function readDataApproval({ runId, generation, requirementDigest, resourceKey,
-    scopeDigest, issueId, planId, sheetId, target, sheetSha256, packageDigest, requestId }) {
+    scopeDigest, issueId, planId, sheetId, target, sheetSha256, packageDigest, requestId, legacy = false }) {
     const expectedScope = executionDigest({ runId, generation, issueId, planId, sheetId,
       target, sheetSha256, packageDigest })
     if (!boundStore || scopeDigest !== expectedScope) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
@@ -211,25 +211,61 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       && effect.definition.payload.intent?.sheetSha256 === sheetSha256
       && effect.definition.payload.intent?.packageDigest === packageDigest
       && executionDigest(effect.definition.payload.target) === executionDigest(target))
+    const nativeApproval = !legacy && gates[0]?.definition.payload.intent?.approvalSource === 'bytebase'
+    if (!nativeApproval && gates[0]?.definition.payload.intent?.approvalSource === 'assistant') {
+      if (gates.length !== 1 || !gates[0].requestId || requestId && requestId !== gates[0].requestId)
+        throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+      const approval = await boundStore.query({ kind: 'approval.get', requestId: gates[0].requestId })
+      if (approval.effectId !== gates[0].effectId || approval.revoked) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+      const binding = { source: 'assistant', issueId, planId, sheetId, target, sheetSha256, packageDigest,
+        scopeDigest, requestId: approval.requestId, evidenceRef: `plugin-approval:${approval.requestId}` }
+      if (approval.decision === 'pending') return { ...binding, decision: 'pending', human: false, comment: '等待插件人工审批' }
+      if (!['approved', 'rejected'].includes(approval.decision) || !['web', 'dingtalk'].includes(approval.decisionSource) || !approval.decidedBy)
+        throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+      if (approval.decision === 'rejected') return { ...binding, decision: 'rejected', human: true,
+        decidedBy: approval.decidedBy, comment: approval.comment || '插件审批已驳回，审批人未填写修改意见' }
+    }
+    const receipt = gates[0]?.result?.result
     if (gates.length !== 1 || gates[0].state !== 'succeeded'
-      || !gates[0].requestId || (requestId && gates[0].requestId !== requestId)
+      || (!nativeApproval && (!gates[0].requestId || (requestId && gates[0].requestId !== requestId)))
       || gates[0].result?.status !== 'succeeded'
-      || gates[0].result?.result?.scopeDigest !== scopeDigest
-      || gates[0].result?.result?.operationKey !== gates[0].definition.payload.intent.operationKey)
+      || receipt?.status !== 'succeeded'
+      || receipt.result?.scopeDigest !== scopeDigest
+      || receipt.result?.operationKey !== gates[0].definition.payload.intent.operationKey)
       throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+    if (nativeApproval) {
+      const decision = await clients.bytebase.getIssueApproval({ project: [...databaseTargets.values()].find(item => executionDigest(item.target) === executionDigest(target))?.project,
+        issueId, planId, sheetId, target, sheetSha256, packageDigest, scopeDigest })
+      if (decision?.decision !== 'approved' || decision.source !== 'bytebase' || decision.human !== true
+        || !decision.decidedBy || (requestId && decision.requestId !== requestId)
+        || receipt.result.approval?.requestId !== decision.requestId) throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+      return decision
+    }
     const approval = await boundStore.query({ kind: 'approval.get', requestId: gates[0].requestId })
     if (approval.effectId !== gates[0].effectId || approval.decision !== 'approved'
-      || approval.revoked || approval.decisionSource !== 'web' || !approval.decidedBy)
+      || approval.revoked || !['web', 'dingtalk'].includes(approval.decisionSource) || !approval.decidedBy)
       throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
     return { decision: 'approved', source: 'assistant', human: true, issueId, planId, sheetId,
       target, sheetSha256, packageDigest, scopeDigest,
-      requestId: gates[0].requestId, decidedBy: approval.decidedBy }
+      requestId: gates[0].requestId, decidedBy: approval.decidedBy,
+      ...(gates[0].definition.payload.intent?.approvalSource === 'assistant' ? { comment: approval.comment || '', evidenceRef: `plugin-approval:${gates[0].requestId}` } : {}) }
   }
   const bytebase = config?.bytebase?.targets?.length
-    ? createBytebaseDataChangePlatform({ config: config.bytebase, api: clients?.bytebase,
+    ? createBytebaseDataChangePlatform({ config: config.bytebase, api: clients?.bytebase, approvalSource: 'assistant',
       productionApi: clients?.productionPostgres,
       uatApi: clients?.uatPostgres, approvalApi: { getApproval: readDataApproval } })
     : null
+  const nativeBytebase = bytebase ? createBytebaseDataChangePlatform({ config: config.bytebase, api: clients.bytebase,
+    productionApi: clients.productionPostgres, uatApi: clients.uatPostgres, approvalApi: { getApproval: readDataApproval } }) : null
+  if (bytebase && nativeBytebase) { bytebase.workflowAdapter.nativeAdapter = nativeBytebase.workflowAdapter }
+  if (nativeBytebase?.workflowAdapter.nativeApproval && config.bytebase.targets.every(entry => entry.uatTarget)) {
+    const legacyApi = Object.fromEntries(Object.entries(clients.bytebase).filter(([name]) => name !== 'getIssueApproval'))
+    const legacyPlatform = createBytebaseDataChangePlatform({ config: config.bytebase, api: legacyApi,
+      productionApi: clients.productionPostgres, uatApi: clients.uatPostgres,
+      approvalApi: { getApproval: args => readDataApproval({ ...args, legacy: true }) } })
+    bytebase.workflowAdapter.legacyAdapter = legacyPlatform.workflowAdapter
+    bytebase.legacyExternalAdapter = legacyPlatform.externalAdapter
+  }
   if (!release && !bytebase && !uatMerge) return null
   const databaseTargets = new Map((config.bytebase?.targets ?? []).map(target => [target.id, target]))
   if ([...releaseTargets.keys(), ...databaseTargets.keys()].some(id => !id || typeof id !== 'string')
@@ -240,6 +276,69 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       || typeof value?.store?.query !== 'function')
       throw executionError('UAT_EXECUTION_BINDING_INVALID')
     execution = value
+  }
+  async function verifyDataChangeApprovalHandoff({ taskId, runId }) {
+    if (!execution || !nativeBytebase) throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_UNAVAILABLE')
+    const state = await execution.controller.state(runId), run = state?.run
+    const gate = state?.nodes?.find(node => node.nodeId === 'approval-gate')
+    if (run?.taskId !== taskId || run.workflowId !== 'task-data-change'
+      || execution.controller.workflowDefinition(run.workflowId, run.workflowDigest)?.version !== '5'
+      || !gate?.inputRef || gate.generation !== run.generation || state.nodes.some(node => !node.drained))
+      throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_STALE')
+    const effects = await execution.store.query({ kind: 'effect.list', runId })
+    const gates = effects.filter(effect => effect.definition?.action === 'external'
+      && effect.definition.payload?.workflowKind === 'data-change' && effect.definition.payload.stage === 'approval-gate'
+      && effect.definition.payload.intent?.approvalSource === 'bytebase')
+    const effect = gates[0]
+    if (gates.length !== 1 || effect.nodeRunId !== gate.nodeRunId || effect.generation !== run.generation
+      || effect.inputDigest !== gate.inputDigest || effects.some(item => item !== effect && !['succeeded', 'failed'].includes(item.state))
+      || !(effect.state === 'unknown' || effect.state === 'failed' && effect.result?.result?.reason === 'APPROVAL_CHANNEL_SUPERSEDED'))
+      throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_EFFECT_UNCONFIRMED')
+    const frozenInput = await execution.artifacts.read(gate.inputRef), input = frozenInput.data
+    if (executionDigest(frozenInput) !== gate.inputDigest
+      || executionDigest(input?.request) !== executionDigest(effect.definition.payload))
+      throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID')
+    const view = await nativeBytebase.verifyApprovalHandoff(input)
+    return { kind: 'data-change-approval-handoff', taskId, originalRunId: runId,
+      originalGeneration: run.generation, originalRequirementRef: run.requirementRef,
+      effectId: effect.effectId, effectDigest: executionDigest(effect.definition), nodeRunId: gate.nodeRunId,
+      inputDigest: gate.inputDigest, leaseEpoch: gate.leaseEpoch, view }
+  }
+  async function readApprovalHandoff(taskId) {
+    if (!execution) throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_UNAVAILABLE')
+    let afterSequenceId = 0, event
+    for (;;) {
+      const page = await execution.store.query({ kind: 'task.owner.events', taskId, afterSequenceId, limit: 200 })
+      for (const item of page) if (item.eventType === 'approval.channel.changed') event = item
+      if (page.length < 200) break
+      afterSequenceId = page.at(-1).eventSeq
+    }
+    if (!event) throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_REQUIRED')
+    const saved = await execution.artifacts.read(event.payloadRef)
+    const plan = await execution.controller.taskPlan(taskId)
+    if (saved.requirementRef !== plan?.task.requirementRef || saved.requirementRevision !== plan.task.requirementRevision)
+      throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_STALE')
+    const requirement = await execution.artifacts.read(plan.task.requirementRef)
+    const source = requirement.sourceInstructions?.findLast(item => item.sourceKey === saved.sourceKey)
+    const currentSource = source && await execution.store.query({ kind: 'task.source', sourceKey: source.sourceKey })
+    if (!source || currentSource?.status === 'superseded' || currentSource?.sourceVersion !== source.sourceVersion
+      || currentSource.actorId !== source.actorId || currentSource.body !== source.text
+      || source.actorId !== requirement.authorization?.actorId
+      || !/插件.*审批|审批.*插件/u.test(source.text))
+      throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_SOURCE_STALE')
+    const proof = await verifyDataChangeApprovalHandoff({ taskId, runId: saved.originalRunId })
+    const state = await execution.controller.state(saved.originalRunId)
+    const effect = await execution.store.query({ kind: 'effect.get', effectId: proof.effectId })
+    if (state.run.status !== 'cancelled' || effect?.state !== 'failed'
+      || effect.result?.result?.reason !== 'APPROVAL_CHANNEL_SUPERSEDED'
+      || executionDigest(proof) !== executionDigest(Object.fromEntries(Object.keys(proof).map(key => [key, saved[key]]))))
+      throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID')
+    return proof.view
+  }
+  if (bytebase) bytebase.workflowAdapter.validateExistingIssue = async ({ taskId, view }) => {
+    const trusted = await readApprovalHandoff(taskId)
+    if (executionDigest(view) !== executionDigest(trusted)) throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID')
+    return trusted
   }
   async function prepareUatRebuildFromFailure({ taskId, runId, mergeRunId }) {
     if (!execution || !release) throw executionError('UAT_REBUILD_SOURCE_UNCONFIRMED')
@@ -274,9 +373,16 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       arguments: { objective: requirement.request, targetId: matches[0].id, commitSha: requirement.target.commitSha },
       constraints: requirement.constraints }, materials: [{ resourceRef: `uat-failed-task:${taskId}:${runId}` }] })
   }
-  async function prepareRequirement({ workflowId, action, materials }) {
+  async function prepareRequirement({ workflowId, action, materials, definitionVersion }) {
     const request = requireText(action.arguments?.objective, 'EXTERNAL_OBJECTIVE_REQUIRED')
     const constraints = [...new Set(action.constraints ?? [])]
+    if (workflowId === 'task-data-change-approval-resume') {
+      const view = await readApprovalHandoff(action.taskId)
+      const selected = databaseTargets.get(action.arguments?.targetId)
+      if (!selected || executionDigest(selected.target) !== executionDigest(view.prepared.package.target))
+        throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
+      return view
+    }
     if (workflowId === 'task-uat-pr-merge') {
       if (!uatMerge) throw executionError('UAT_MERGE_PLATFORM_UNAVAILABLE')
       const targetId = requireText(action.arguments?.targetId, 'UAT_MERGE_TARGET_REQUIRED')
@@ -361,25 +467,35 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       const changeRef = requireText(action.arguments.changeRef, 'EXTERNAL_CHANGE_REF_REQUIRED')
       const source = materials.find(item => item.resourceRef === changeRef)
       if (!source?.text) throw executionError('EXTERNAL_MATERIAL_NOT_FOUND')
-      const snapshot = await clients.productionPostgres.readBaseline({ project: selected.project,
+      const currentNative = (bytebase.workflowAdapter.pluginApproval || nativeBytebase?.workflowAdapter.nativeApproval) && !['3', '4'].includes(definitionVersion)
+      const snapshot = currentNative ? null : await clients.productionPostgres.readBaseline({ project: selected.project,
         target: selected.target, scope: 'current' })
-      if (snapshot?.project !== selected.project || executionDigest(snapshot.target) !== executionDigest(selected.target)
+      if (!currentNative && (snapshot?.project !== selected.project || executionDigest(snapshot.target) !== executionDigest(selected.target)
         || typeof snapshot.snapshotId !== 'string' || !snapshot.snapshotId
         || !/^[a-f0-9]{64}$/.test(snapshot.sha256 ?? '') || typeof snapshot.evidenceRef !== 'string'
-        || !snapshot.evidenceRef) throw executionError('EXTERNAL_BASELINE_UNCONFIRMED')
+        || !snapshot.evidenceRef)) throw executionError('EXTERNAL_BASELINE_UNCONFIRMED')
       return { request, constraints, target: selected.target,
         sources: [{ id: changeRef, sha256: digestText(source.text), content: source.text }],
-        baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 } }
+        ...(snapshot ? { baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 } } : {}),
+        ...(action.arguments.previousIssueId ? { previousIssueId: action.arguments.previousIssueId } : {}) }
     }
     throw executionError('EXTERNAL_WORKFLOW_NOT_CONFIGURED')
   }
   const operationAdapter = {
+    async closeReadonlyApproval(prepared) {
+      const state = await execution?.controller.state(prepared.runId)
+      const proof = await verifyDataChangeApprovalHandoff({ taskId: state?.run.taskId, runId: prepared.runId })
+      const effect = await execution.store.query({ kind: 'effect.get', effectId: proof.effectId })
+      if (executionDigest(effect.definition.payload) !== executionDigest(prepared))
+        throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID')
+      return { status: 'failed', reason: 'APPROVAL_CHANNEL_SUPERSEDED', result: proof }
+    },
     execute: prepared => prepared.workflowKind === 'data-change'
-      ? bytebase?.externalAdapter.execute(prepared)
+      ? (prepared.intent?.approvalSource === 'bytebase' ? nativeBytebase?.externalAdapter : prepared.intent?.approvalSource === 'assistant' ? bytebase?.externalAdapter : bytebase?.legacyExternalAdapter ?? bytebase?.externalAdapter).execute(prepared)
       : prepared.workflowKind === 'uat-pr-merge'
         ? uatMerge?.operationAdapter.execute(prepared) : release?.operationAdapter.execute(prepared),
     reconcile: prepared => prepared.workflowKind === 'data-change'
-      ? bytebase?.externalAdapter.reconcile(prepared)
+      ? (prepared.intent?.approvalSource === 'bytebase' ? nativeBytebase?.externalAdapter : prepared.intent?.approvalSource === 'assistant' ? bytebase?.externalAdapter : bytebase?.legacyExternalAdapter ?? bytebase?.externalAdapter).reconcile(prepared)
       : prepared.workflowKind === 'uat-pr-merge'
         ? uatMerge?.operationAdapter.reconcile(prepared) : release?.operationAdapter.reconcile(prepared),
   }
@@ -427,19 +543,24 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (prepared.workflowKind === 'data-change') {
       if (!bytebase || ![...databaseTargets.values()].some(item => executionDigest(item.target) === executionDigest(prepared.target)))
         throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
+      if (prepared.stage === 'approval-gate' && prepared.intent?.approvalSource === 'bytebase') return { principalId: owner, authorizationRef: `bytebase-approval-read:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
       if (prepared.stage === 'approval-gate') return { principalId: owner, approval: {
         requestId: `external:${executionDigest([binding.runId, binding.nodeRunId, prepared])}`,
         approverIds: [...new Set(productionApprovers)],
       } }
-      if (prepared.stage === 'execute-task') await readDataApproval({
+      if (prepared.stage === 'execute-task') {
+        const approval = await readDataApproval({
         runId: prepared.runId, generation: prepared.generation,
         requirementDigest: prepared.requirementDigest, resourceKey: prepared.resourceKey,
         scopeDigest: prepared.intent?.approvalScopeDigest, issueId: prepared.intent?.issueId,
         planId: prepared.intent?.planId, sheetId: prepared.intent?.sheetId,
         target: prepared.target,
         sheetSha256: prepared.applySqlSha256, packageDigest: prepared.packageDigest,
-        requestId: prepared.approvalRequestId,
-      })
+        requestId: prepared.approvalRequestId, legacy: prepared.intent?.approvalSource !== 'bytebase',
+        })
+        if (approval.decision !== 'approved' || approval.human !== true)
+          throw executionError('BYTEBASE_APPROVAL_PROOF_REQUIRED')
+      }
       return { principalId: owner, authorizationRef: `bytebase:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
     } else if (!release || !release.configuredKinds.includes(prepared.workflowKind)) {
       throw executionError('EXTERNAL_TARGET_NOT_ALLOWED')
@@ -456,12 +577,13 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
   return { releaseAdapters: release?.releaseAdapters ?? {},
     ...(uatMerge ? { uatMergeAdapter: uatMerge.adapter } : {}),
     ...(bytebase ? { dataChangeAdapter: bytebase.workflowAdapter } : {}),
-    operationAdapter, authorizeExternal, prepareRequirement, prepareUatRebuildFromFailure, bindStore, bindExecution,
+    operationAdapter, authorizeExternal, prepareRequirement, prepareUatRebuildFromFailure, verifyDataChangeApprovalHandoff, bindStore, bindExecution,
     availableTargets: [
       ...[...releaseTargets].map(([targetId, target]) => ({ targetId, workflowId: `task-${target.kind}`,
         ...(target.kind === 'uat-deployment' ? { repository: target.repository, branch: target.branch } : {}) })),
       ...(uatMerge ? uatMerge.configuredTargetIds.map(targetId => ({ targetId, workflowId: 'task-uat-pr-merge',
         repository: releaseTargets.get(targetId).repository, branch: releaseTargets.get(targetId).branch })) : []),
       ...[...databaseTargets.keys()].map(targetId => ({ targetId, workflowId: 'task-data-change' })),
+      ...[...databaseTargets.keys()].map(targetId => ({ targetId, workflowId: 'task-data-change-approval-resume' })),
     ] }
 }

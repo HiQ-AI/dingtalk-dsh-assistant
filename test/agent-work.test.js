@@ -22,6 +22,23 @@ test('问答证据须由Host实际验证，false、缺失和跨范围拒绝不�
   assert.deepEqual(await validateAgentWorkResult(result(), { sourceRefs: ['evidence-a'] }), result())
 })
 
+test('调查先拒绝模型截短或拼造的证据，真实返回引用的存储故障仍致命', async () => {
+  const ref = `tasks/task/sha256-${'a'.repeat(64)}.json`
+  let reads = 0
+  const missing = Object.assign(Error('original evidence missing'), { code: 'ENOENT' })
+  const options = { requireExecutedQueryAccounting: true, executedQueryRefs: [ref], sourceRefs: ['source'],
+    verifyEvidence: async () => { reads++; throw missing } }
+  for (const wrong of [ref.split('/').at(-1), ref.replace('/task/', '/other/'), `tasks/task/sha256-${'b'.repeat(64)}.json`]) {
+    await assert.rejects(validateAgentWorkResult(result({ evidenceRefs: [wrong] }), options), { code: 'AGENT_WORK_EVIDENCE_INVALID' })
+  }
+  assert.equal(reads, 0)
+  await assert.rejects(validateAgentWorkResult(result({ evidenceRefs: [ref] }), options), error => error === missing)
+  assert.equal(classifyAgentWorkOutputError(missing), 'fatal')
+  assert.equal(reads, 1)
+  assert.equal((await validateAgentWorkResult(result({ evidenceRefs: ['source', ref] }), { ...options,
+    verifyEvidence: async refs => { assert.deepEqual(refs, [ref]); return true } })).outcome, 'completed')
+})
+
 test('结果区分已答复、必需补充和能力阻塞；limitations不自动将答复变成等待', async () => {
   const options = { sourceRefs: ['evidence-a'] }
   assert.equal((await validateAgentWorkResult(result(), options)).outcome, 'completed')

@@ -6,7 +6,8 @@ export const transientRecoveryReasons = Object.freeze(['ECONNRESET', 'ETIMEDOUT'
 export const recoveryRetryDelayMs = attempt => Math.min(60_000, 1000 * 2 ** Math.min(6, Math.max(0, attempt - 1)))
 export const correctableOwnerReasons = Object.freeze(['TASK_OWNER_NO_DECISION', 'TASK_OWNER_ADVANCE_CONFLICT',
   'TASK_OWNER_DECISION_INVALID', 'TASK_OWNER_REPAIR_BINDING_INVALID', 'TASK_OWNER_COMPLETION_UNVERIFIED',
-  'TASK_OWNER_STAGE_NOT_AUTHORIZED', 'TASK_OWNER_EVENTS_UNREAD'])
+  'TASK_OWNER_STAGE_NOT_AUTHORIZED', 'TASK_OWNER_EVENTS_UNREAD', 'TASK_OWNER_RECOVERY_AVAILABLE',
+  'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD', 'TASK_OWNER_REPEATED_INVALID_DECISION'])
 export const ownerRetryableReason = code => transientRecoveryReasons.includes(code)
   || correctableOwnerReasons.includes(code) || ['TASK_OWNER_SESSION_MISSING', 'TASK_OWNER_TIMEOUT'].includes(code)
 

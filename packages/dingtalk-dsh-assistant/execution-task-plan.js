@@ -1,6 +1,7 @@
 import { executionDigest } from './execution-artifacts.js'
 // 业务任务与执行 Run 的阶段账同属控制库事务，模型不能直接写入。
 import { assertRunEffectsDrained } from './execution-effects.js'
+import { readCurrentTaskSource } from './message-ledger.js'
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const name = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)) fail('TASK_PLAN_ID_INVALID')
@@ -116,7 +117,7 @@ export function queryTaskPlan(db, query) {
   return { task: taskDto(task), stages: stageRows(db, taskId, task.plan_revision).map(stageDto) }
 }
 
-function validateStages(stages, db) {
+function validateStages(stages, db, taskId) {
   if (!Array.isArray(stages) || stages.length < 1) fail('TASK_PLAN_STAGES_INVALID')
   const ids = new Set()
   stages.forEach((stage, index) => {
@@ -130,10 +131,8 @@ function validateStages(stages, db) {
         || !condition.sourceQuote.includes(condition.objective)
         || condition.requiredActorId !== undefined && (typeof condition.requiredActorId !== 'string' || !condition.requiredActorId.trim())
         || stage.gate === 'confirmation' && !condition.requiredActorId) fail('TASK_STAGE_SOURCE_CONDITION_INVALID')
-      const source = db.prepare('SELECT body FROM message_runs WHERE source_key=? AND source_version=?').get(condition.sourceKey, condition.sourceVersion)
-      const current = db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(condition.sourceKey)
-      const message = source ? JSON.parse(source.body) : null
-      if (!message || current?.current_version !== condition.sourceVersion || !message.body.includes(condition.sourceQuote)
+      const message = readCurrentTaskSource(db, condition.sourceKey, { taskId })
+      if (!message || message.sourceVersion !== condition.sourceVersion || !message.body.includes(condition.sourceQuote)
         || condition.requiredActorId && condition.requiredActorId !== message.actorId) fail('TASK_STAGE_SOURCE_CONDITION_INVALID')
     }
     if (stage.unavailableReason === null) {
@@ -211,7 +210,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
       || task.requirement_revision !== natural(a.expectedRequirementRevision)
       || task.control_revision !== natural(a.expectedControlRevision)
       || task.control_state !== 'active' || task.status !== 'pending' || !task.requirement_ref) fail('TASK_PLAN_STALE')
-    validateStages(a.stages, db)
+    validateStages(a.stages, db, taskId)
     insertStages(db, taskId, 1, a.stages)
     const first = a.stages[0]
     const status = first.unavailableReason ? 'blocked' : 'active'
@@ -271,7 +270,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     if (!old.length) fail('TASK_PLAN_STAGES_INVALID')
     validateStages([...old.map(row => ({ stageId: row.stage_id, workflowId: row.workflow_id,
       workflowDigest: row.workflow_digest, unavailableReason: row.unavailable_reason,
-      requirementRef: row.requirement_ref, gate: row.gate })), ...a.stages], db)
+      requirementRef: row.requirement_ref, gate: row.gate })), ...a.stages], db, taskId)
     if (a.stages.some(stage => stage.requirementRef !== null)) fail('TASK_STAGE_INPUT_NOT_BOUND')
     const readyNow = task.status === 'succeeded' && old.every(stage => stage.status === 'succeeded')
     for (const [index, stage] of a.stages.entries()) {
@@ -309,7 +308,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
   }
   if (command.kind === 'task.plan.create') {
     exact(a, ['taskId', 'requirementRevision', 'stages'])
-    const taskId = name(a.taskId); natural(a.requirementRevision); validateStages(a.stages, db)
+    const taskId = name(a.taskId); natural(a.requirementRevision); validateStages(a.stages, db, taskId)
     if (taskRow(db, taskId)) fail('TASK_PLAN_EXISTS')
     // 已有单 Run 任务由显式迁移接管；不能在仍有活动 Run 时另建控制计划。
     if (db.prepare('SELECT run_id FROM execution_runs WHERE task_id=? LIMIT 1').get(taskId)) fail('TASK_PLAN_LEGACY_RUN_EXISTS')
@@ -424,7 +423,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     if (!task || task.control_state !== 'active' || task.control_revision !== natural(a.expectedControlRevision)
       || task.plan_revision !== natural(a.expectedPlanRevision)
       || a.requirementRevision !== task.requirement_revision + (task.requirement_ref ? 0 : 1)) fail('TASK_PLAN_STALE')
-    natural(a.requirementRevision); validateStages(a.stages, db)
+    natural(a.requirementRevision); validateStages(a.stages, db, taskId)
     const old = stageRows(db, taskId, task.plan_revision), affectedFrom = a.affectedFrom
     if (!Number.isSafeInteger(affectedFrom) || affectedFrom < 0 || affectedFrom >= a.stages.length || affectedFrom > old.length) fail('TASK_PLAN_IMPACT_INVALID')
     if (old.some(stage => stage.status === 'running')) fail('TASK_STAGE_STILL_RUNNING')

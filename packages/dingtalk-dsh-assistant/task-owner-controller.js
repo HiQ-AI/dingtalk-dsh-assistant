@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createTaskOwnerSessions } from './task-owner-session.js'
+import { executionDigest } from './execution-artifacts.js'
 
 const error = code => Object.assign(new Error(code), { code })
 const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
@@ -9,7 +10,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
   const result = []
   for (const stage of stages.filter(item => item.status !== 'invalidated')) {
     signal?.throwIfAborted()
-    const state = stage.runId ? await controller.state(stage.runId) : null
+    const state = stage.runId ? await controller.state(stage.runId, { includeRecovery: true }) : null
     if (state && (state.run?.taskId !== taskId || state.run.runId !== stage.runId
       || state.run.workflowId !== stage.workflowId || state.run.workflowDigest !== stage.workflowDigest))
       throw error('TASK_OWNER_STAGE_RUN_MISMATCH')
@@ -27,6 +28,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
         ...(extension?.nodeArtifacts ?? []).map(node => node.artifactRef)].some(ref => !known.has(ref)))
         throw error('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')
       if (extension?.nodeArtifacts) entry.nodeArtifacts = extension.nodeArtifacts
+      if (extension?.domainEvidence !== undefined) entry.domainEvidence = structuredClone(extension.domainEvidence)
       entry.evidenceRefs = [...new Set([...entry.evidenceRefs, ...(extension?.evidenceRefs ?? [])])]
       if (extension?.completionEvidenceRefs) entry.completionEvidenceRefs = extension.completionEvidenceRefs
     }
@@ -44,12 +46,14 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
-  authorizeStages, authorizeCompletion = async () => true, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
-  readStageArtifacts, readDeliveryManifest, readCurrentSources, readMaterialAccess, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir }) {
+  authorizeStages, authorizeCompletion, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
+  readStageArtifacts, readDeliveryManifest, readCurrentSources, readMaterialAccess, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir, tools = [], prepareQueryInput }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
   const flights = new Map()
+  const dispatchFlights = new Map()
+  let dispatchFlight, dispatchRequested = false
   const flightAborts = new Map()
   const sessions = sessionRunner ?? createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => {
     const owner = await store.query({ kind: 'task.owner', taskId: binding.taskId })
@@ -82,7 +86,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       eventKey: `task-recovered-${key(taskId).slice(0, 40)}`, eventType: 'task.created' })
     const currentExecution = await inspectCurrentExecution?.(taskId, plan)
     for (const stage of plan.stages) {
-      const state = stage.status === 'running' && stage.runId ? await controller.state(stage.runId) : null
+      const state = ['running', 'blocked'].includes(stage.status) && stage.runId ? await controller.state(stage.runId) : null
       const problemNodes = (state?.nodes ?? []).filter(node => ['waiting', 'failed'].includes(node.status))
       if (!['succeeded', 'blocked', 'waiting_confirmation'].includes(stage.status) && !problemNodes.length) continue
       const eventType = stage.status === 'waiting_confirmation' ? 'workflow.confirmation.required'
@@ -93,9 +97,9 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         ...(problemNodes.length ? { diagnostics: problemNodes.map(node => ({ nodeId: node.nodeId,
           nodeRunId: node.nodeRunId, generation: node.generation, leaseEpoch: node.leaseEpoch,
           status: node.status, drained: node.drained, waitReason: node.waitReason, evidenceRefs: node.evidenceRefs })) } : {}),
-        ...(stage.status === 'running' && currentExecution?.stageId === stage.stageId ? { currentExecution } : {}) }
-      // 终态阶段沿用既有身份；只有运行中诊断需要按执行代际和失败内容再次唤醒。
-      const eventIdentity = stage.status === 'running' ? payload : [taskId, plan.task.planRevision, stage.stageId, stage.status]
+        ...(currentExecution?.stageId === stage.stageId ? { currentExecution } : {}) }
+      // 失败诊断或恢复资格发生变化才唤醒；完成阶段沿用稳定身份，轮询不制造新事件。
+      const eventIdentity = ['running', 'blocked'].includes(stage.status) ? payload : [taskId, plan.task.planRevision, stage.stageId, stage.status]
       await event({ taskId, eventKey: `stage-${key(eventIdentity).slice(0, 40)}`,
         eventType, payload })
     }
@@ -110,7 +114,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     let cursor = owner.processedWatermark
     for (;;) {
       const page = await store.query({ kind: 'task.owner.events', taskId, afterSequenceId: cursor, limit: 200 })
-      const selected = page.filter(item => item.eventSeq <= claim.eventWatermark)
+      const selected = page.filter(item => item.eventSeq <= claim.eventWatermark && item.eventType !== 'query.succeeded')
       for (const item of selected) {
         events.push({ eventSeq: item.eventSeq, eventType: item.eventType, payloadRef: item.payloadRef ?? null })
       }
@@ -153,6 +157,22 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     return result
   }
 
+  async function readTaskEvidence({ taskId, requirementRevision, signal }) {
+    const records = await store.query({kind:'task.owner.query-evidence',taskId, ...(requirementRevision !== undefined ? {requirementRevision} : {})})
+    const result = []
+    for (const record of records) {
+      signal?.throwIfAborted()
+      const evidence = await artifacts.read(record.artifactRef), execution = evidence?.execution
+      if (evidence?.kind !== 'agent-query-evidence' || execution?.kind !== 'task-owner'
+        || execution.taskId !== taskId || execution.turnId !== record.turnId || execution.leaseEpoch !== record.leaseEpoch
+        || execution.requirementRevision !== record.requirementRevision
+        || !evidence.verification?.sourceRefs?.length || evidence.verification.outputDigest !== executionDigest(evidence.result))
+        throw error('TASK_OWNER_QUERY_EVIDENCE_INVALID')
+      result.push({...record,evidenceRef:record.artifactRef,queryId:evidence.capabilityId,result:evidence.result,evidence})
+    }
+    return result
+  }
+
   async function drive(taskId) {
     if (closed) throw error('TASK_OWNER_CONTROLLER_CLOSED')
     if (flights.has(taskId)) return flights.get(taskId)
@@ -179,12 +199,32 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       try {
         signal.throwIfAborted()
         const input = await snapshot(taskId, claim, signal)
+        const queryInput = await prepareQueryInput?.({taskId,requirement:await artifacts.read(input.task.requirementRef),origin:input.currentSources,planning:input,binding})
+        Object.assign(binding,{kind:'task-owner',requirementRevision:input.task.requirementRevision,
+          inputRef:input.task.requirementRef,inputDigest:executionDigest(queryInput ?? input.goal)})
+        input.queryEvidence = (await readTaskEvidence({taskId,requirementRevision:binding.requirementRevision,signal}))
+          .map(({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision }) =>
+            ({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision }))
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
-          [stage.outputRef, ...stage.evidenceRefs].filter(Boolean)))
+          [stage.outputRef, ...stage.evidenceRefs, ...(stage.nodeArtifacts ?? []).map(node => node.artifactRef)].filter(Boolean)))
+        for (const item of input.queryEvidence) readableArtifacts.add(item.artifactRef)
+        const readArtifacts = new Map()
         if (input.deliveryManifest) readableArtifacts.add(input.deliveryManifest.ref)
         for (const ref of [...input.events.map(event => event.payloadRef), ...(input.goal?.materials ?? []).map(material => material.artifactRef)].filter(Boolean)) readableArtifacts.add(ref)
-        const result = await sessions.run({ binding, input, ...modelConfig(), signal,
+        let acceptedCompletion
+        const result = await sessions.run({ binding, input, tools, queryInput, ...modelConfig(), signal,
+          onQueryEvidence: async ({binding: queryBinding,evidenceRef}) => {
+            const evidence = await artifacts.read(evidenceRef)
+            const expected = Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(name => [name,binding[name]]))
+            if (executionDigest(queryBinding) !== executionDigest(expected) || executionDigest(evidence?.execution) !== executionDigest(expected)
+              || evidence?.kind !== 'agent-query-evidence' || !evidence.verification?.sourceRefs?.length
+              || evidence.verification.outputDigest !== executionDigest(evidence.result)) throw error('TASK_OWNER_QUERY_EVIDENCE_INVALID')
+            await command(`owner-query:${turnId}:${key(evidenceRef)}`,'task.owner.query-evidence',{
+              taskId,turnId,leaseEpoch:claim.leaseEpoch,requirementRevision:binding.requirementRevision,evidenceRef})
+            readableArtifacts.add(evidenceRef)
+            readArtifacts.set(evidenceRef,evidence)
+          },
           readPage: async pageRef => {
             if (!unreadPages.has(pageRef)) throw error('TASK_OWNER_PAGE_NOT_ALLOWED')
             const page = await artifacts.read(pageRef)
@@ -194,22 +234,61 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           readArtifact: async artifactRef => {
             if (!readableArtifacts.has(artifactRef)) throw error('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
             const value = await artifacts.read(artifactRef)
+            readArtifacts.set(artifactRef, value)
             return value?.encoding === 'base64' && typeof value.data === 'string'
               ? { ...value, text: Buffer.from(value.data, 'base64').toString('utf8') } : value
           },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
-          onCandidate: decision => {
+          onCandidate: async decision => {
             if (unreadPages.size) throw error('TASK_OWNER_EVENTS_UNREAD')
+            if (input.currentExecution?.repairable === true && ['wait', 'block'].includes(decision.action))
+              throw error('TASK_OWNER_RECOVERY_AVAILABLE')
             if (decision.action === 'repairCurrentStage') {
               const expected = input.currentExecution?.repairBinding
               if (input.currentExecution?.repairable !== true || !expected
                 || Object.keys(decision.repair ?? {}).length !== Object.keys(expected).length
                 || Object.entries(expected).some(([key, value]) => decision.repair?.[key] !== value))
                 throw error('TASK_OWNER_REPAIR_BINDING_INVALID')
+              if (!decision.evidenceRefs?.length || !decision.evidenceRefs.every(ref =>
+                input.currentExecution.evidenceRefs.includes(ref) && readArtifacts.has(ref)))
+                throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD')
+              if (input.currentExecution.mode === 'resume-agent' && !decision.evidenceRefs.some(ref => {
+                const diagnostic = readArtifacts.get(ref), current = input.currentExecution
+                return diagnostic?.kind === 'execution-failure' && diagnostic.runId === current.runId
+                  && diagnostic.nodeRunId === current.nodeRunId && diagnostic.generation === current.generation
+                  && diagnostic.leaseEpoch === current.leaseEpoch && diagnostic.inputDigest === current.inputDigest
+              })) throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD')
             }
-            return command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
+            const proposed = decision.planChange?.stages ?? decision.appendStages
+            if (proposed && !await authorizeStages({ taskId, stages: proposed, signal })) throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
+            if (decision.action === 'complete') {
+              if ([...(decision.evidenceRefs ?? []), ...(decision.assessments ?? []).flatMap(item => item.evidenceRefs ?? [])].some(ref => (input.queryEvidence.some(item => item.artifactRef === ref) || readArtifacts.get(ref)?.kind === 'agent-query-evidence') && !readArtifacts.has(ref))) throw error('TASK_OWNER_COMPLETION_EVIDENCE_UNREAD')
+              try {
+                if (!input.stages.length && typeof authorizeCompletion !== 'function' || authorizeCompletion && !await authorizeCompletion({ taskId, decision, signal })) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
+              } catch (cause) {
+                delete cause.ownerDiagnosticRef
+                if (cause.code === 'TASK_OWNER_COMPLETION_UNVERIFIED' && cause.diagnosticRef) {
+                  const diagnostic = await artifacts.read(cause.diagnosticRef)
+                  if (diagnostic.kind !== 'domain-acceptance-rejection' || diagnostic.taskId !== taskId
+                    || !Array.isArray(diagnostic.evidence) || !diagnostic.evidence.length
+                    || diagnostic.evidence.some(item => item.hostQuery
+                      ? item.hostQuery.taskId !== taskId || item.hostQuery.requirementRevision !== binding.requirementRevision
+                        || readArtifacts.get(item.evidenceId)?.kind !== 'agent-query-evidence'
+                      : item.hostExecution?.taskId !== taskId
+                        || !input.stages.some(stage => stage.runId === item.hostExecution.runId && stage.outputRef === item.evidenceId)))
+                    throw error('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')
+                  readableArtifacts.add(cause.diagnosticRef)
+                  cause.ownerDiagnosticRef = cause.diagnosticRef
+                }
+                throw cause
+              }
+            }
+            const digest = decision.action === 'complete' ? executionDigest(decision) : null
+            const candidate = await command(`owner-candidate:${turnId}`, 'task.owner.candidate', {
               taskId, turnId, leaseEpoch: claim.leaseEpoch, decision })
+            if (digest) acceptedCompletion = { decision, digest }
+            return candidate
           },
         })
         signal.throwIfAborted()
@@ -217,14 +296,16 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const proposedStages = result.decision.planChange?.stages ?? result.decision.appendStages
         if (proposedStages && !await authorizeStages({ taskId, stages: proposedStages, signal }))
           throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
-        if (result.decision.action === 'complete' && !await authorizeCompletion({ taskId, decision: result.decision, signal }))
-          throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
+        // 领域完成验收已在候选提交前实跑；最终清单及事务版本校验防止旧候选接纳。
         signal.throwIfAborted()
         let deliveryManifestRef
         if (result.decision.action === 'complete' && readDeliveryManifest) {
+          if (!acceptedCompletion || executionDigest(result.decision) !== acceptedCompletion.digest
+            || executionDigest(acceptedCompletion.decision) !== acceptedCompletion.digest)
+            throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
           const plan = await controller.taskPlan(taskId)
           const requirement = await artifacts.read(plan.task.requirementRef)
-          const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: result.decision, signal })
+          const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision: acceptedCompletion.decision, signal })
           signal.throwIfAborted()
           if (manifest?.kind !== 'task-delivery-manifest' || manifest.version !== 1 || manifest.complete !== true
               || manifest.businessValidation?.status !== 'accepted'
@@ -252,7 +333,20 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     return flight
   }
 
-  async function applyPending() {
+  let applicationFlight
+  let applicationRequested = false
+  function applyPending() {
+    applicationRequested = true
+    return applicationFlight ??= (async () => {
+      const failures = []
+      do {
+        applicationRequested = false
+        failures.push(...await applyPendingActions())
+      } while (applicationRequested && !closed)
+      return failures
+    })().finally(() => { applicationFlight = undefined })
+  }
+  async function applyPendingActions() {
     let afterSequenceId = 0
     const failures = []
     for (;;) {
@@ -339,20 +433,48 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     return failures
   }
 
+  function dispatch() {
+    if (closed) return Promise.resolve()
+    dispatchRequested = true
+    return dispatchFlight ??= (async () => {
+      do {
+        dispatchRequested = false
+        let beforeSequenceId
+        do {
+          const page = await store.query({ kind: 'task.owners.pending', limit: 100,
+            ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+          for (const item of page) {
+            if (closed || dispatchFlights.size >= 4) break
+            if (dispatchFlights.has(item.taskId) || flights.has(item.taskId)) continue
+            if (item.retryAt && Date.now() < Date.parse(item.retryAt)) continue
+            let claimed = false
+            const work = (async () => {
+              try {
+                const result = await drive(item.taskId)
+                claimed = result !== null
+                return await applyPending()
+              }
+              catch (cause) { return [{ scope: 'owner', taskId: item.taskId, code: cause.code ?? cause.message }] }
+            })().finally(() => {
+              dispatchFlights.delete(item.taskId)
+              if (!closed && claimed) dispatch().catch(cause => ctx.logger?.warn?.('Task Owner dispatch failed: %s', cause.code ?? cause.message))
+            })
+            dispatchFlights.set(item.taskId, work)
+          }
+          beforeSequenceId = page.length === 100 ? page.at(-1).sequenceId : undefined
+        } while (!closed && beforeSequenceId && dispatchFlights.size < 4)
+      } while (!closed && dispatchRequested && dispatchFlights.size < 4)
+    })().finally(() => {
+      dispatchFlight = undefined
+      if (!closed && dispatchRequested && dispatchFlights.size < 4)
+        dispatch().catch(cause => ctx.logger?.warn?.('Task Owner dispatch failed: %s', cause.code ?? cause.message))
+    })
+  }
   async function recover() {
     const failures = await applyPending()
-    let beforeSequenceId
-    for (;;) {
-      const page = await store.query({ kind: 'task.owners.pending', limit: 100,
-        ...(beforeSequenceId ? { beforeSequenceId } : {}) })
-      for (const item of page) {
-        try { await drive(item.taskId) }
-        catch (cause) { failures.push({ scope: 'owner', taskId: item.taskId, code: cause.code ?? cause.message }) }
-      }
-      if (page.length < 100) break
-      beforeSequenceId = page.at(-1).sequenceId
-    }
-    failures.push(...await applyPending())
+    await dispatch()
+    const results = await Promise.all([...dispatchFlights.values()])
+    failures.push(...results.flat(), ...await applyPending())
     return failures
   }
 
@@ -362,10 +484,13 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     await flights.get(taskId)
   }
 
-  return { ensure, event, observe, drive, recover, applyPending, cancel, async close() {
+  return { ensure, event, observe, drive, dispatch, recover, applyPending, cancel, readTaskEvidence, async close() {
     closed = true
+    await dispatchFlight
     for (const abort of flightAborts.values()) abort.abort(error('TASK_OWNER_CONTROLLER_CLOSED'))
     await sessions.close()
     await Promise.allSettled([...flights.values()])
+    await Promise.allSettled([...dispatchFlights.values()])
+    await applicationFlight
   } }
 }

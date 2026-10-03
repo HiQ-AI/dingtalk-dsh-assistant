@@ -193,7 +193,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /approved: \{ label: '已继续'/)
   assert.match(source, /rejected: \{ label: '不执行'/)
   assert.match(source, /superseded: \{ label: '已失效', state: 'neutral' \}/)
-  assert.match(source, /const isPendingAuthorization = \(item\) => item\.status === 'pending-send' \|\| item\.status === 'waiting-reply'/)
+  assert.match(source, /const isPendingAuthorization = \(item\) => item\.status === 'pending-send' \|\| item\.status === 'sending-unknown' \|\| item\.status === 'waiting-reply'/)
   assert.match(source, /authorizationStatus\[item\.status\] \|\| \{ label: '状态异常', state: 'error' \}/)
   assert.match(source, /authorizationFilter === 'superseded' \? item\.status === 'superseded'/)
   assert.match(source, /selectedAuthorizationPending \? React\.createElement\('footer'/)
@@ -444,6 +444,47 @@ function flattenElements(tree) {
   if (!tree || typeof tree !== 'object') return []
   return [tree, ...(tree.children || []).flatMap(flattenElements)]
 }
+
+test('私聊投递待确认仍出现在待处理列表并可从详情批准或拒绝', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('      const authorizationStatus ='), source.indexOf('      const archivedTasks ='))
+  for (const [status, decision, label, pending] of [
+    ['pending-send', 'pending', '待发送', true],
+    ['sending-unknown', 'pending', '投递待确认', true],
+    ['waiting-reply', 'pending', '等待处理', true],
+    ['answered', 'approved', '已继续', false],
+    ['answered', 'rejected', '不执行', false],
+    ['superseded', 'pending', '已失效', false],
+  ]) {
+    const requests = []
+    const createElement = (type, props, ...children) => ({ type, props: props || {}, children: children.flat() })
+    const result = runInNewContext(`${fragment}; ({ rows: authorizationRows, detail: authorizationDetail })`, {
+      React: { createElement, Fragment: 'fragment' }, Button: 'button', SelectMenu: 'select',
+      colors: {}, tableFrame: {}, toolbar: {}, tableFooter: {},
+      statusTag: label => createElement('tag', null, label), tableStatusTag: label => createElement('tag', null, label), fmt: value => value || '',
+      data: { authorizations: [{ requestId: 'approval-857', status, decision, objective: '添加 name 列', requestedAction: '批准 DDL', groupId: 'group' }] },
+      authorizationFilter: 'pending', authorizationPage: 1, selectedAuthorizationId: 'approval-857',
+      groupsById: new Map(), authorizationComments: { 'approval-857': '已核对 SQL' }, decidingAuthorizationId: '',
+      setNavigationError() {}, setDecidingAuthorizationId() {}, refresh: async () => {},
+      post: async (path, body) => requests.push({ path, body }),
+    })
+    assert.equal(result.rows.length, pending ? 1 : 0, status)
+    const detail = flattenElements(result.detail)
+    assert.ok(detail.some(element => element.type === 'tag' && element.children.includes(label)), status)
+    const approve = detail.find(element => element.type === 'button' && element.children.includes('批准该事项并继续'))
+    const reject = detail.find(element => element.type === 'button' && element.children.includes('不执行'))
+    assert.equal(Boolean(approve), pending, status)
+    assert.equal(Boolean(reject), pending, status)
+    if (pending) {
+      await approve.props.onClick()
+      await reject.props.onClick()
+      assert.deepEqual(JSON.parse(JSON.stringify(requests)), [
+        { path: '/authorizations/approval-857/decision', body: { decision: 'approved', comment: '已核对 SQL' } },
+        { path: '/authorizations/approval-857/decision', body: { decision: 'rejected', comment: '已核对 SQL' } },
+      ])
+    }
+  }
+})
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
 test('任务详情只展示当前步骤，支持旧详情别名并保持稳定步骤身份', async () => {
@@ -619,3 +660,37 @@ test('已读取材料但执行受阻走实际状态分支与显示标签，不�
  assert.equal(delivery[state({...message,workflowStatus:'waiting_system'})].label,'材料读取受阻')
  assert.equal([message].filter(item=>state(item)==='execution_blocked').length,1)
 })
+
+test('任务短名称合同拒绝超过30字，读模型回退截断不修改完整目标',async()=>{
+ const {taskTitle,taskTitleSchema}=await import('../packages/dingtalk-dsh-assistant/task-input-contract.js');
+ assert.equal(taskTitleSchema.safeParse('字'.repeat(30)).success,true);
+ assert.equal(taskTitleSchema.safeParse('字'.repeat(31)).success,false);
+ const objective='针对孙鹏要求在生产环境Editor数据库process_id_temp表新增name列，调查结构并准备DDL';
+ assert.equal(Array.from(taskTitle(objective)).length,30);
+ assert.equal(taskTitle('  核对Editor临时表结构  '),'核对Editor临时表结构');
+ assert.ok(objective.includes('准备DDL'));
+ const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/workflow-service.js',import.meta.url),'utf8');
+ assert.match(source,/title: taskTitle\(requirement\?\.title/);
+});
+
+test('自动与手动刷新共用一个请求，失败后可重新读取',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
+ const fragment=source.slice(source.indexOf('      const pendingRefresh = '),source.indexOf('      const manualRefresh = '));
+ let calls=0,resolve,reject;const updates=[],errors=[];const operation=()=>{calls++;return new Promise((yes,no)=>{resolve=yes;reject=no})};
+ const refresh=runInNewContext(`(()=>{${fragment};return refresh})()`,{useRef:value=>({current:value}),useCallback:fn=>fn,load:operation,setData:v=>updates.push(v),setUpdatedAt:()=>{},setError:e=>errors.push(e),Date,Error});
+ const first=refresh();assert.equal(refresh(),first);assert.equal(calls,1);resolve({groups:[]});await first;assert.equal(updates.length,1);
+ const failed=refresh();reject(new Error('读取失败'));await failed;assert.equal(errors.at(-1),'读取失败');
+ const recovered=refresh();resolve({groups:[1]});await recovered;assert.equal(calls,3);assert.equal(updates.length,2);
+});
+
+test('详情慢查询跨刷新复用，切换任务不接受旧响应',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
+ const start=source.indexOf('      const pendingDetail = '),end=source.lastIndexOf('      useEffect(() => {',source.indexOf('        const target = detailFocusTarget.current',start));
+ const effects=[],requests=[],details=[],pending={current:null};
+ const environment={useRef:()=>pending,useEffect:fn=>effects.push(fn),selectedWorkflowTaskId:'one',workflowDetailRetry:0,updatedAt:0,get:path=>new Promise(resolve=>requests.push({path,resolve})),setWorkflowTaskDetail:v=>details.push(v),setWorkflowDetailError:()=>{},setStepReadingNotice:()=>{},detailFocusTarget:{current:null},adjacentCurrentStep:()=>null,document:{querySelectorAll:()=>[],activeElement:null},window:{innerHeight:900},encodeURIComponent};
+ const effect=()=>{runInNewContext(`(()=>{${source.slice(start,end)}})()`,environment);return effects.pop()()};
+ const first=effect();first();const refresh=effect();assert.equal(requests.length,1);refresh();
+ environment.selectedWorkflowTaskId='two';effect();assert.equal(requests.length,2);
+ requests[0].resolve({taskId:'one'});requests[1].resolve({taskId:'two'});await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(details.map(v=>v.taskId),['two']);
+});

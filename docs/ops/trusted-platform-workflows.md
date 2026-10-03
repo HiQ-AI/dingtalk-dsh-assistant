@@ -10,9 +10,11 @@ UAT 部署可独立发起，显式给出白名单目标和目标分支当前提�
 
 - release.targets 每项含唯一 id、kind、仓库、环境、服务、runbook、目标分支、Woodpecker 仓库与 Cron、Kubernetes Deployment、Registry 镜像与 HTTPS 入口。目标 SHA 由请求显式给出，Host 再查目标分支头；生产目标还需已核实的 Tag→Woodpecker 触发链。生产 Tag 是**每次任务**明确给出的 `action.arguments.releaseTag`（格式 `vYYYYMMDD-N`），与 commitSha 一起冻结在 Run 的 target、审批范围和效果身份中；不得写死在 `release.targets`，不得由模型猜序号。同一生产目标可按不同 Tag 多次发布，每次均重新检查 Tag 冲突、流水线与真人审批。UAT 部署预检与生产合并阶段只确认已经合入且 merge SHA 等于目标分支头的唯一 PR，当前固定需求合同不能自动合并未合入 PR。
 - 当前生产目标白名单只允许 `HiQ-AI/dataset` 的 `dataset` 与 `HiQ-AI/dataset-web` 的 `dataset-web`，均以已核实的 `main` 分支和 `hiqlcd-app-prod` Deployment 为准；其他服务不加入 `release.targets`。准入仍取决于生产触发链、可信客户端和审批入口全部通过，不因出现在白名单中就自动可发起。
-- bytebase.targets 每项含唯一 id、Bytebase 项目、精确生产目标及对应的精确 UAT 数据库。UAT 的 SQL 审查与事务演练由本地 PostgreSQL 受信连接完成，不调用 Bytebase；生产结构基线和同表结构证明由本地连接天翼云只读副本取得，Bytebase 负责生产工单、执行和回读。双方对脚本涉及表运行同一固定 pg_catalog 结构查询，规范化指纹必须一致；整库快照用于各自冻结，不要求无关表全库一致。UAT 与生产的行数据不要求相同，也不把 UAT 演练当作生产结果。SQL 正文来自当前消息已授权的精确资源，生产基线由 Host 受信回读并冻结，无需消息提供证明文档。缺少 UAT 目标或同表结构证明时阻断。生产写入必须经过 Bytebase，不能改用数据库直连凭据。
-- 四类外部效果都经 execution-delivery.js 的 external 效果账。每个效果请求冻结运行、代次、目标和内容身份；发送回执不能充当独立回读。未知结果仅恢复对账，不自动重发。生产发布在合并身份回读后进入真人审批节点；Tag 授权再次查询同 Run、代次与目标的审批效果及审批账，必须已由 Web 真人批准且未撤销，并逐项核对 Tag、提交、范围与回执摘要，才可创建精确 Tag。生产数据变更先在 Bytebase 创建并回读 Sheet、Plan、Issue，**此时不创建 Rollout/Task**；Assistant 任务页真人审批绑定 Run、代次、Issue、Plan、Sheet、目标库、SQL SHA256 与变更包摘要。批准且未撤销后才创建 Rollout/Task 并执行，因为 Bytebase 自动发布策略可能在创建 Rollout 时立即运行 Task。Bytebase 工单的 `approvalStatus=SKIPPED` 不构成人工批准。UAT 演练和建工单不触发重复的真人审批。
+- bytebase.targets 每项登记唯一 id、Bytebase 项目和精确生产目标。新数据变更 v6 的单条新增可空、无默认值列先由生产只读连接核对准确表列，生成候选 DDL 并提交 Bytebase；不要求 UAT 目标、全库一致或额外业务用途调查。复杂 SQL 仍要求配置 UAT 目标并完成既有演练。生产写入只经过 Bytebase，新增列验收通过生产只读副本固定列目录查询完成。
+- 外部写操作沿用持久效果账和独立回读。数据变更先创建并回读 Sheet、Plan、Issue；Bytebase 3.18 可自动创建未执行 Rollout/Task 并将 Issue 标为 DONE，该状态不能证明 SQL 执行。适配器只接纳独立回读为 NOT_STARTED 且没有 TaskRun 的既有 Task。新工单在任何 Sheet/Plan/Issue 写入前只读核对准确生产环境的原生 rollout_policy 为手动策略；AUTO、无权限或缺少完整策略返回均拒绝发送。人工审批使用插件审批账与认证身份，绑定准确目标、SQL、工单、当前运行和变更包。待审继续等待，驳回保留意见并在同 Task 修改候选、关联原工单重新送审；SQL 改动使旧批准失效。Bytebase 原生审批的 SKIPPED、APPROVED 不作为插件审批结果，不能用自动生成的 DONE 替代插件真人批准。批准后复用既有 Rollout/Task，执行前再次回读批准和目标，执行后分别核对 TaskRun 与真实数据库列属性。既有冻结流程保持原定义恢复。生产发布的 Web 真人批准与 Tag 来源链保持既有合同。
 - D:/baibu-agent/.secrets 中的凭据只由本机受信客户端读取；Host 配置和模型输入不包含凭据值，凭据也不能写入仓库、工件或日志。不得把宽泛的 Bytebase MCP call_api 当成受信执行端口。
+
+简单加列的新定义为 v6。候选形成前不读取生产全库基线；受信适配器解析单条 DDL 的 schema/table，生产只读 Host 用参数化目录查询和独立行数核验获取该表基线。scope、摘要和快照身份冻结进变更包，准备、校验、批准后执行均核对同一准确表范围。模型提供的范围或基线不作为可信输入。复杂 SQL 保留原全库基线与 UAT 合同；持久化 v3/v4/v5 定义按原合同恢复。
 
 ## 本地客户端装配
 
@@ -27,7 +29,7 @@ UAT 部署可独立发起，显式给出白名单目标和目标分支当前提�
 
 Host 在启动时只读取当前 Poller Secret、GitHub CLI 登录及 Docker buildx 可用性，失败则拒绝装配；不会把凭据写入 profile。目标白名单仍由 `workflow.platforms` 单独配置，缺证明和目标时目录保持不可发起。部署前先核实当前 Poller Secret 名称与 UAT K3s Server；若变更，更新客户端配置和定向验证后再安装，不修改凭据文件来适配旧代码。
 
-数据变更接入时，同一 Host 配置另需 `uatPostgres.receiptDbPath`（本机持久 SQLite 文件的绝对路径）、`uatPostgres.targets` 和 `productionPostgres.targets` 三项 `{project, target}`；Resident 的 `workflow.platforms.bytebase` 另登记三个 `{id, project, target, uatTarget}`。生产 `target` 是 Bytebase 资源名，只读连接精确映射 `.secrets/db-credentials.json` 中的 `tianyi_editor_slave`、`tianyi_bg_slave`、`tianyi_admin_slave`，须确认 `pg_is_in_recovery()=true` 和会话只读。`uatTarget`/Host `target` 是 `{instance: postgresql/192.168.8.8:30770, database: 同名库, environment: uat}`。三处清单必须逐项一致，Host 不从配置读取用户名或密码。安装前用只读客户端核对三库 `current_database()`、会话只读、实时 catalog 完整行数和生产副本身份；不得用过期 Bytebase `/schema` 缓存快照替代。UAT 回执文件所在目录应与工作流控制账一同备份，未知预留不能自动清除后重演。
+复杂数据变更接入时，同一 Host 配置另需 `uatPostgres.receiptDbPath`（本机持久 SQLite 文件的绝对路径）、`uatPostgres.targets` 和 `productionPostgres.targets` 三项 `{project, target}`；Resident 的 `workflow.platforms.bytebase` 另登记三个 `{id, project, target, uatTarget}`。生产 `target` 是 Bytebase 资源名，只读连接精确映射 `.secrets/db-credentials.json` 中的 `tianyi_editor_slave`、`tianyi_bg_slave`、`tianyi_admin_slave`，须确认 `pg_is_in_recovery()=true` 和会话只读。`uatTarget`/Host `target` 是 `{instance: postgresql/192.168.8.8:30770, database: 同名库, environment: uat}`。三处清单必须逐项一致，Host 不从配置读取用户名或密码。安装前用只读客户端核对三库 `current_database()`、会话只读、实时 catalog 完整行数和生产副本身份；不得用过期 Bytebase `/schema` 缓存快照替代。UAT 回执文件所在目录应与工作流控制账一同备份，未知预留不能自动清除后重演。
 当前已核实的 UAT 部署目标如下；本机配置以这些精确资源为白名单，每次仍需独立预检：
 
 目标 ID 分别为 `dataset-web-uat2-deployment` 与 `dataset-uat3-deployment`，`kind` 均为 `uat-deployment`。发起时指定目标 ID 和目标分支当前 `commitSha`；工程流程自动后继时可由受信工程 Run 推导目标和提交。部署结果 `uat-deployed` 仅代表精确版本运行成功。
@@ -46,7 +48,7 @@ Host 在启动时只读取当前 Poller Secret、GitHub CLI 登录及 Docker bui
 | dataset | `HiQ-AI/dataset` / `main` | `1` | `hiqlcd-app-prod/dataset` | `registry.cn-sh1.ctyun.cn/hiq-ai/dataset` | `https://editor.hiqlcd.com/api/dataset/ready` |
 | dataset-web | `HiQ-AI/dataset-web` / `main` | `2` | `hiqlcd-app-prod/dataset-web` | `registry.cn-sh1.ctyun.cn/hiq-ai/dataset-web` | `https://editor.hiqlcd.com/` |
 
-Bytebase `projects/flbn` 下的三个已确认生产数据库分别是 `instances/flbnpguaf/databases/hiq_editor`、`instances/flbnpguaf/databases/hiq_background_db`、`instances/flbnpguaf/databases/hiq_admin`，环境均为 `environments/prod`。同名 UAT PostgreSQL 数据库通过 `192.168.8.8:30770` 本地连接；Host 从 `.secrets/db-credentials.json` 精确读取 `hiq_editor_uat` 连接，仅复用其主机、端口与凭据并显式指定三库各自数据库名。UAT receipt SQLite 放在 Host 持久目录。当前 SQL 审查仅支持单表整数列 UPDATE 与同表 SELECT 回查；有触发器、规则、RLS、外键或 CHECK 等复杂对象时拒绝演练，不将其泛化为任意 SQL 支持。
+Bytebase `projects/flbn` 下的三个已确认生产数据库分别是 `instances/flbnpguaf/databases/hiq_editor`、`instances/flbnpguaf/databases/hiq_background_db`、`instances/flbnpguaf/databases/hiq_admin`，环境均为 `environments/prod`。同名 UAT PostgreSQL 数据库通过 `192.168.8.8:30770` 本地连接；Host 从 `.secrets/db-credentials.json` 精确读取 `hiq_editor_uat` 连接，仅复用其主机、端口与凭据并显式指定三库各自数据库名。UAT receipt SQLite 放在 Host 持久目录。复杂 SQL 的既有演练审查支持单表整数列 UPDATE 与同表 SELECT 回查；新增可空无默认值列走上述 v4 简单路径；有触发器、规则、RLS、外键或 CHECK 等复杂对象时拒绝演练，不将其泛化为任意 SQL 支持。
 
 以上仓库 ID、Cron 分支和命名空间来自当前 Poller/Kubernetes 只读回读，业务回归见 `../acceptance/topic-intent-task-composition/round-8.md`。运行时仍须检查分支头、目标 SHA、同 SHA 构建与独立制品/Pod 证据。
 ## 当前本地接入状态与验证
@@ -243,3 +245,28 @@ Owner 快照复用同一成功工程 Run 的交付证明，将构建检查、验
 ### 超时流水线已部分部署的同提交重建
 
 流水线整体 failure/error/killed 不代表构建步骤失败。重建预检可接受本次失败流水线的同提交制品已运行：Host 必须独立确认唯一 `buildkit-build-and-push` 步骤 success/exit0、该步骤日志中唯一且一致的export/push digest、Registry manifest，以及目标Deployment全部Ready副本的实际imageID。若该构建未成功，仍可用失败前成功流水线的旧制品证明；混合新旧副本、无来源digest、更新流水线和不完整Pod清单继续阻断。`readBuildEvidence` 默认仍要求整体成功；仅重建证明显式传入精确 `expectedPipelineStatus` 才允许检查失败流水线中的成功构建。
+
+### 数据变更插件审批的持续接续
+
+当前数据变更 v6 在 Bytebase 创建工单后进入插件审批，待审批不是执行受阻。插件对准确目标、SQL、工单和当前运行绑定批准；收到插件真人批准后恢复原 Run 执行，驳回后修订送审。Bytebase 平台的 APPROVED、SKIPPED 均不能替代插件批准。历史 v4/v5 冻结运行继续保留原定义，不能直接改成新审批或重发建单。完成调查但 Owner 未完成的 Task 可经本机 context 修订下一步；成功调查成果保留，取消或已业务完成任务不能用此入口续办。
+
+群通知使用一句简短进展或具体受阻原因，完整 condition 保留在任务详情，不自动拼接责任人和继续条件。审批页展示工单、准确生产目标、SQL 原文及摘要，批准仍由已配置的插件审批人作出。
+
+审批意见沿现有 approval.decided 审计事件与首终态决定同事务保存，重启后从原生批量投影读取；重复或晚到决定不能覆盖首个意见。数据变更驳回仅关闭尚未发送的插件审批门禁，原有未知写入仍先对账。
+
+审批私聊发送结果未知时，运行看板显示“投递待确认”，仍列入待处理并保留 Web 批准、拒绝入口；投递确认不代替审批决定。
+
+### 旧原生审批观察阻止精确包切换
+
+若正式维护预检仅有旧v5原生approval-gate未知观察，仍不能忽略effects或强行停止Resident。使用scripts/recover-data-change-approval.ps1和scripts/reconcile-data-change-approval.mjs参数化交接；manifest位于私人docs/tmp，绑定当前包/profile/实例/Task/Run/effect/节点及版本，不复制凭据。--check为零写，返回绑定摘要；取得摘要后冻结manifest并用ExpectedManifestSha256约束每阶段。
+
+PowerShell Phase依次check、offline、reconcile、install、start、readback、resume-dispatch。offline先维护禁派发，见证完整dispose，取得owner锁，停止精确PID并完整备份包括任务工件；对账阶段释放外部锁后由原生Store自身独占，独立验证备份和无监听，只关闭唯一纯审批读取，不stop业务Run、修改Owner或批准DDL。效果failed且busy清零后原生seal，才安装精确包并恢复原profile。恢复自启和派发前独立回读新进程、包文件、完整profile、历史及HTTP。
+
+对账--readback用于中断续查，不重复未知操作。其它未知写效果、已执行TaskRun、SQL/目标/包/节点漂移、备份缺失或维护不符全部拒绝。正常新运行仍走普通部署runbook，不能把本领域范围扩成全局unknown豁免。安装后正式context纠正当前需求，再handoff同Task已有工单进入插件审批；旧闭合failed观察被幂等接受。
+
+
+插件私聊审批使用 `workflow-approval:<冻结通知摘要>` 作为82字符幂等键，发送前校验钉钉128字符上限。网络异常或缺回执保持 unknown；只有同一请求/摘要绑定的精确平台 UUID 长度拒绝、1001错误码及真实trace可登记明确未发送。现有 `POST /authorizations/:requestId/reissue` 对原生通知恢复要求本机同源、配置Web身份、维护已排空及 `noticeDigest/proof`；原请求和SQL保持，负回执不给生产执行许可。恢复后下一次发送使用新命令身份，重复恢复或重启不重新授予旧发送许可。
+
+钉钉消息回读会将文本软换行显示为空格，审批确认只归一段落回读产生的 Markdown 硬换行和 CRLF/LF 软换行显示差异；其他空格、SQL及标点必须保持。已有 openTaskId 只查发送状态并读取原消息，显示差异不得触发重新发送。
+
+审批私聊使用 Markdown 标题、空行和明确字段，私聊正文不包含执行SQL，完整SQL保留在工单及审批详情；避免堆放重复目标、resourceKey和长摘要。短审批编号用于消息定位，未知发送仍须完整正文及权威收件人匹配，不能仅凭编号认领。已送达消息可原位编辑展示，审批仍绑定原请求、冻结执行内容和同一引用消息ID，不新建审批或补发。

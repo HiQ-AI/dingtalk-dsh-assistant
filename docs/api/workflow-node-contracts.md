@@ -122,27 +122,25 @@ task-actions 仅接受 Host 固定注册的适配器，每个适配器实现参�
 
 当前任务整体 `complete` 仍要求全部有效验收项满足；没有新增部分成功终态。调查可以成功产出不足意见，但若任务承诺尚未满足，Owner 必须继续处理或按既有等待/阻塞路径说明原因。
 
-### 调查 v6 与历史定义
+### 调查定义退役
 
-新 `task-investigation` 使用版本 6；输入 `acceptanceItems:[{itemId,criterion}]` 来自 Owner 的当前有效验收项，不能按位置自行生成 ID。输出保留 `outcome/summary/evidenceRefs/limitations/question`，并要求：
+普通调查由 Task Owner 直接查询，不再注册 task-investigation v4–v9，不再提交 findings/openItems/criterionReviews。活动或暂停的旧调查 Run 拒绝启动切换，取消或业务完成的历史记录保留且不提供旧定义执行能力。原始记录不改写为新查询证据。
 
-- `findings`：最多 64 项 `{kind:fact|judgment|recommendation,statement,evidenceRefs}`；fact 必须有证据。
-- `openItems`：最多 32 项 `{description,reason,evidenceRefs}`，记录未知项和未执行工作。
-- `criterionReviews`：逐一覆盖输入的 itemId，禁止缺项、重复及额外项；每项为 `{itemId,status,reason,evidenceRefs}`，status 只允许 `satisfied/insufficient_evidence/not_applicable`，satisfied 必须有证据。
-
-嵌套证据引用必须包含于顶层证据，来源仍经过当前 Task/Run/代及受信前序引用校验。completed 调查须有证据和至少一项 finding 或 openItem。调查明确标记不足或不适用的验收项，不能由 Owner 单独改口为已满足：后续领域必须接纳同一验收项的证据；只增加备忘录或无关文件不能补齐缺口。
-
-旧 v5 定义继续按冻结摘要注册和恢复，不把历史结果补造成 v6 结构，不静默升级已有 Run。新版本与旧版本的输入、输出合同分别验证。
+新工程 v18 接收 Host 核验的当前 Task 查询 taskContext；v17 及既有工程仍按冻结定义恢复。Owner 输入和最终交付清单的 queryEvidence 只保存身份、queryId 与工件引用；当前轮工具结果自动计为已读，跨轮完整结果必须用受限 readArtifact 读取，Host 最终语义验收仍读取完整受信结果。原生查询证明同时绑定 Task、需求版本、Owner 租约及轮次，普通事件不能冒充证明。周期恢复仅扫描持久待办并派发可运行 Owner，不等待模型完成；每任务仍串行应用，受控写入和插件真人审批不变。
 
 ### 正式交付清单与恢复诊断
 
-`readDeliveryManifest` 从当前需求版本的成功阶段生成清单，包含阶段/Run/冻结定义、结果合同、产物引用及验收项与阶段证据的对应关系。必交文件来自 `scope.artifactFiles` 和 `fileDelivery.files`，按角色与文件名去重；核对当前需求版本、成功生产节点、登记文件及实际字节，并要求文件生产阶段具有验收证据关联。缺项、歧义、旧代文件或无法验证的文件阻止完成；要求外发的文件继续沿用独立发送回读。
+`readDeliveryManifest` 从当前需求版本的原生查询证据及成功受管阶段生成清单，包含阶段/Run/冻结定义、结果合同、产物引用及验收项与阶段证据的对应关系。必交文件来自 `scope.artifactFiles` 和 `fileDelivery.files`，按角色与文件名去重；核对当前需求版本、成功生产节点、登记文件及实际字节，并要求文件生产阶段具有验收证据关联。缺项、歧义、旧代文件或无法验证的文件阻止完成；要求外发的文件继续沿用独立发送回读。
 
 完成接纳事件保存清单引用；`taskDetail.deliveryManifest` 只返回 `null` 或 `{ref,taskId,turnId,requirementRevision,planRevision}`，不展开清单全文。引用从已接纳的 complete 事件回读；与当前需求或计划版本不符时返回 null，不把旧完成清单投影为当前交付。
 
 清单的 `complete` 仅表示结构与证据绑定通过，业务验收另存于 `businessValidation`。Host 按 `ownerContract.id` 分组，将 Owner 对每项引用的证据映射到生产领域，向该领域 `validateCompletion` 传入裁剪后的 `acceptanceItems`、`requirement`、`decision` 和领域阶段；跨领域引用不能触发跳过检查。同一项引用多个领域时，各被引用领域均须通过；没有分派验收项的阶段仍核对自己的有效输出。
 
 所有领域检查通过后，Host 生成 `businessValidation:{status:'accepted',policy:'domain-items-v1',items}`，记录验收项、证据及 validator 的阶段/Run/冻结定义/合同版本和实际验收 `policyDigest`。实际准入规则摘要与生产 Run 的 `workflowDigest` 分开保留。回执绑定本次 decision 和结构清单摘要，候选或清单变化后不能沿用；未经过本次检查时状态为 `unverified`。Owner 完成接纳要求已接受回执，并随最终清单持久化；模型不能自行填写回执取得许可。
+
+数据变更当前完成策略为 external-result v5：各阶段只接收验收项显式引用的本阶段证据；浏览历史时返回批准、执行及当时回查的原始证明（timeScope=at-execution），承担当前验收项时另作实时回查（timeScope=current-acceptance）。旧v4策略源码及执行定义保持冻结，Host完成准入采用当前v5；不能通过修改旧函数或旧rulesDigest使已落盘任务失去定义。新v5同样必须经专用原生证明校验，不得退回通用领域合同。
+
+原生批准执行证明可包含presentation：仅来自实际批准前的投递事件，绑定原request/effect/审批人/收件人/正文摘要和消息身份，批准后撤回审批提示不抹掉历史呈现。没有记录时字段缺失，不用新生成文案补造历史。生产verification保留Host实际执行过的原始目录观测及范围，语义验收不能只拿passed或空数组猜测；也不得将Host已准入生产只读源擅自扩大为主库权限要求。
 
 新通用阶段使用 Workflow v6 / Owner 合同 v2，外部操作使用 Owner 合同 v2，文件投递使用 Workflow/Owner 合同 v2。每个效果仍独立核实，同领域只检查其分派的验收项，不要求整理材料阶段验证整个工程目标，也不因计划含其他领域而跳过。旧工厂保留原定义和摘要以恢复已冻结 Run；Host 仅在完成准入时采用当前修正规则，不改写历史执行/产物、不重跑副作用。结构清单、领域业务接纳和实际渠道投递是三份独立证据，PR、HTTP 成功或非空文字本身不是业务验收结论。
 
@@ -294,9 +292,19 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 ### 只读 Owner 再评估
 
+#### Owner 驱动的节点续行
+
+Host 的 `Controller.inspectNodeRecovery(runId)` 返回 `mode=resume-agent`、当前节点身份、原始失败、诊断引用及准入结果；`reason=strategy-change-required` 表示同一节点/输入/问题已有受管续行，不能原样重放。该能力由既有 `repairCurrentStage` 决定驱动，不增加 Web 接口或模型写控制账工具。
+
+`Controller.resumeNode` 接受 commandId/runId/expectedRevision/nodeRunId/generation/leaseEpoch/inputDigest/contextRef。上下文来自已读诊断，绑定 task/run/node/generation、诊断时 requirementRevision/planRevision/controlRevision、修复方向及证据；Controller 读冻结定义和工件，Store 同事务核对版本、来源、维护、排空、输入围栏和效果。仅当前可纠正的 pure/read Agent 节点准入；原node/session/generation/输入及成功前缀保留，下一领取递增lease。`node.resume` 保存旧诊断与上下文；接管到更高lease仍可读取该上下文，直到输入或节点替代。审批、code外部动作、未知效果及真实权限拒绝不经此入口。
+
+Owner 有受信恢复能力时不得仅wait/block而消耗事件；原始诊断未实际读过则以可纠正反馈返回。重复无效决定仅结束当前思考轮，并沿持久退避在原会话继续，未处理事件保留；动作指纹忽略summary及condition解释措辞。真正的审批等待继续由原审批事件唤醒。
+
 `POST /tasks/:taskId/reassess-readonly` 仅本机 Web 身份且有任务访问权可调用。参数仅为 `recoveryKey/reason/expectedOwnerRevision/expectedLeaseEpoch/expectedRequirementRevision/expectedControlRevision`。禁止传入材料、权限、替代 requirement 或来源正文。Host 按当前 requirement 验证材料可读范围与旧 scope 缺口，记录固定 `system.recovery` 事件；这不证明远端查询成功。
 
-仅 active 控制态、idle/blocked Owner 无在途决定、存在已失败/等待的只读调查、所有节点排空且无 pending input、外部阶段或 effect 可接受。事务 CAS 与来源摘要复查；同key同参数回读，异参冲突。保留 Task/session、requirement 和失败产物；Owner 接收新事实后正常决定计划与执行，不把系统恢复等同于新业务要求、测试确认或审批。
+仅 active 控制态、idle/blocked Owner 无在途决定、存在已失败/等待/成功的只读调查、所有节点排空且无 pending input、外部阶段或 effect 可接受。计划阶段全部成功不代表整个任务完成；当前要求和计划已有已应用的 Owner complete 决定时拒绝重评。事务 CAS 与来源摘要复查；同key同参数回读，异参冲突。保留 Task/session、requirement 和已有产物；Owner 接收新事实后正常决定计划与执行，不把系统恢复等同于新业务要求、测试确认或审批。恢复工件保存 previousDecision 的 action/condition/applicationStatus/lastFailure，以区分业务条件及系统诊断。
+
+新 Owner wait/block 必须提交 condition，字段为 kind（business-input/approval/capability/permission/execution）、missing、responsibleParty、resumeWhen、evidenceRefs。condition证据必须包含于决定的evidenceRefs；其他动作不接受condition。候选与最终接纳共用状态校验，最终事务仍复核版本、权限和完成证据。成功阶段后可等待整体目标条件或追加后续计划；已成功和运行中的阶段不因条件登记而改写。业务条件用于说明所需行动，满足条件仍须通过受信事件及正常授权检查，不构成自动生产执行批准。相同候选因同一合同再次被拒绝时保留诊断并结束当前思考轮；按持久退避继续纠正，不把内部异常视为业务任务终止。
 
 `reassess-readonly` 可在同一事务中原生discard已知无效果的非法 `repairCurrentStage` 动作：仅当前租约的 application blocked 且 Owner 最后错误严格等于 `WORKFLOW_REPAIR_NOT_ADMITTED`。仍要求完整CAS、只读失败排空、无effects和其他在途动作。其他错误或pending动作拒绝；返回 `discardedTurnId`，原decision、应用失败次数、报告仍保留为discarded，再记录system.recovery。不修改requirement。
 
@@ -309,3 +317,41 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 Owner真实阻塞释放而未产生report时，通知仍读取真实Owner阻塞事实：Owner须blocked、无当前turn、最后turn为未接纳的released，Task控制仍active且无pending/ready/running阶段。通过现有owner:application_wait唯一出口使用固定人工介入正文；准备和领取均复核，不伪造Owner报告。暂态重试不告知，恢复前同阻塞只告知一次，实际成功后的新阻塞可开启新一次。
 
 PR预检暂态失败仅在Host适配器通过完整本地日志独立证明同一冻结操作从未发送时进入持久退避。原节点新lease恢复同effect，原生事务核对失败收据、冻结摘要、操作身份、权限、资源占用及安全屏障后重新取得发送许可。已有send-intent、结果未知或无完整证明时只对账，不重新发送；模型不能提交未发送证明。每次dispatch lease独立记录观察收据，避免重复失败结果被旧回执吞掉。
+
+### 原 Task 的明确需求修订与原生数据库审批
+
+本机已有 `POST /tasks/:id/context` 可选传 `requirement: {objective, acceptanceCriteria, stageTargets, stageAuthorizations}`，与 `context`、`requestId`、`inputVersion`、`runSequence` 一起使用。objective 必须包含在实际 context 中；阶段授权包含 workflowId、sourceQuote、objective、gate。服务核验当前操作者和目标白名单，将本次真实 Web 指令记录为新来源，保留原始来源及已冻结运行，不伪造群成员发言。原请求的比较版本和幂等约束仍生效。该入口不构成生产 SQL 批准。
+
+`task-data-change` v4 的原生审批等待保留 `waitReason.kind=recovery` 以复用现有对账恢复机制；reference 为 `BYTEBASE_APPROVAL_PENDING` 或 `BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED`。投影展示真实等待事项、责任方及恢复条件。驳回产物为 `outcome=needs_revision`，携带工单、SQL、真实意见和证据，后继同 Task 的候选绑定 previousIssueId，必须重新取得审批。普通调查改由 Task Owner 直接查询，不再注册旧调查合同；历史终态记录只读保留，活动旧调查先收尾再切换。
+
+已有调查 Run 或全部调查阶段成功不封闭原 Task 的需求修订。取消控制或当前需求与事件水位已应用的 Owner complete 才拒绝 context；无 Owner 的历史 Task 仍按业务终态判断。原生审批的两个等待代码复用外部效果只读对账路由，未批准不恢复执行，批准/驳回后原 Run 接续，禁止重新发送未知写入。
+明确 requirement 修订的验收清单与目标在同一事务更新；从真实 pending Web 事件读取并核对完整输入摘要、操作者、来源和比较版本，旧验收保留 inactive。普通 context 追加仍保留原验收。
+任务阶段来源验证、Host task.source 查询及只读重评/授权投影修复共享当前真实来源解析。Web 修订仅在实际持久 accepted 后生效，绑定 Task、actor、sourceVersion=1 与实际 context；跨 Task、篡改版本/引用/操作者拒绝。DWS 仍要求当前消息版本，旧成功成果不改写。
+
+来源校验修复后的 advance 拒绝决定可由同一 reassess-readonly 审计恢复：必须为当前租约和需求版本、错误严格为 TASK_STAGE_SOURCE_CONDITION_INVALID，真实来源重新校验通过，仅已排空成功调查，无外部效果及计划应用回执。旧决定 discarded 并保留报告和失败历史；返回 discardedTurnId，需求、成功阶段与 outputRef 不变。其他拒绝原因不自动重发。
+## 数据变更审批渠道交接
+
+`POST /tasks/:taskId/handoff-data-change-approval` 仅本机同源Web身份，并沿现有任务访问授权。body严格接受runId、recoveryKey、reason、dryRun及expectedOwnerRevision、expectedLeaseEpoch、expectedRequirementRevision、expectedControlRevision、expectedPlanRevision、expectedRunRevision、generation。Run revision可从0开始；其余范围遵循原生领域版本。dryRun返回checked/authorized且零写，apply返回accepted及resumeWorkflowId。
+
+先用现有context修订需求与活动验收，当前同Task最新真实来源明确授权插件审批并登记task-data-change-approval-resume目标和来源条件；context只修订业务Task，不向未知效果的冻结Run插入pendingInput。交接只允许旧v5原生纯审批gate、成功前缀、排空及无其它未知效果；受信Host再次证明准确SQL/目标/工单仍未执行。apply通过原生观察关闭旧审批读取、原生stop取消旧Run，并投递approval.channel.changed事件让Owner只替换后段。事件附固定resumeWorkflowId和动作说明，不重新建单。
+
+同recoveryKey绑定完整请求摘要，重复幂等；原生stop收据允许同请求在停止后继续，任意其它版本漂移仍拒绝。维护、租约、需求/控制/计划/运行漂移、来源错误、跨Task、已有执行及未排空均拒绝。完整条件留详情，群只给简短待审进展。
+
+Owner已接受但尚未落地的决定，仅当它准确替换当前后缀为一个已有工单接续阶段，且来源绑定当前需求时允许交接。取消旧Run后先持久化渠道变更事件，让旧待落地决定因水位变化失效，再推进计划；事件后中断的同请求重试补推进计划。其它待落地决定和正在运行的Owner仍拒绝。
+
+审批列表的目标使用当前业务需求，SQL、数据库及工单仍来自冻结审批效果；需求文字修订不改写已提交包。群中数据变更待审通知只在当前阶段有准确工单绑定、prepared效果及pending插件审批时生成“Bytebase 工单 #编号 已新建，等待人工审批。”；完整SQL和恢复条件留详情，其它等待仍展示实际简要原因。
+
+
+任务最终验收组合当前任务各条目明确引用的原生查询和受管操作事实，所有领域共享一次语义判断。纯查询可零阶段；外部操作仍核验原生批准、执行和回查。未引用、跨任务、旧需求和无来源证据不能补足验收。
+
+完成校验拒绝沿既有TASK_OWNER_COMPLETION_UNVERIFIED返回具体校验位置、阶段/合同、当前版本或缺失清单；领域已有原始诊断保持。负责人据此纠正引用或执行策略，内部诊断不作为用户缺资料或群中间进度发送。
+
+## 任务执行会话直接调查
+
+普通调查不再注册task-investigation，不需要独立调查Run、investigate/accept-result节点或criterionReviews。Owner工具清单直接包含已登记只读能力；查询输入及资源scope由Host生成，模型不能扩大授权。可纠正参数/范围/分页错误在同会话返回feedback，租约或需求换代的查询结果拒绝交付。
+
+查询证据execution.kind=task-owner，精确绑定taskId、sessionId、turnId、leaseEpoch、ownerEpoch、requirementRevision及inputDigest。成功工具由Host保存agent-query-evidence，并以task.owner.query-evidence原生事务登记query.succeeded已处理事件；查询本身不改变业务唤醒水位。task.owner.query-evidence查询只返回当前需求证据，支持重启读取。
+
+工件目录按当前需求所在逻辑 Task 工作区校验，独立重执行可复用同族根目录；目录相同不代表证据可共享，原生 execution.taskId 仍须匹配本次执行。query.succeeded 不进入普通业务事件材料白名单，防止旧需求证据经事件引用复活。
+
+最终delivery manifest新增queryEvidence；这些证据与受管操作证据共同构成引用白名单。纯调查允许零阶段，仍需真实查询证据、全部acceptanceItem的精确评估及一个共享语义验收。已有SQL等阶段继续核验真实效果、目标、插件真人批准和批准先于执行；查询证据不能绕过这些客观边界。内部失败不主动群汇报，最终完成仍使用原通知幂等账。

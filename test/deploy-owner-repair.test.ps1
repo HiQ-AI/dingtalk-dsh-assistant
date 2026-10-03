@@ -4,6 +4,11 @@ $path=Join-Path $PSScriptRoot '../docs/acceptance/topic-context-completeness/scr
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw '脚本解析失败'}
 $MigrateMessageImpact=$false
+ $MigrateExecutionEventsIndex=$false
+ $indexReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-ExecutionEventsIndexReadback'},$true)
+ Invoke-Expression $indexReadbackFunction.Extent.Text
+ $controlReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-DeploymentControlRecord'},$true)
+ Invoke-Expression $controlReadbackFunction.Extent.Text
 $impactReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-MessageImpactReadback'},$true)
 Invoke-Expression $impactReadbackFunction.Extent.Text
 $workspaceAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$workspace'},$true)
@@ -21,6 +26,14 @@ foreach($case in @(@{revision=29},@{maintenanceId='other'},@{drained=$false},@{p
  $rejected=$false;try{Assert-MaintenanceContinuation $changed @{ProcessId=6012}}catch{$rejected=$true}
  if(-not $rejected){throw '接续维护必须拒绝漂移或未排空状态'}
 }
+$sealedContinuation=$continuationState.Clone();$sealedContinuation.phase='stopping';$sealedContinuation.stopPermitted=$true;$sealedContinuation.sealedIncarnation=$sealedContinuation.processIncarnation
+Assert-MaintenanceContinuation $sealedContinuation @{ProcessId=6012}
+foreach($case in @(@{stopPermitted=$false},@{sealedIncarnation='6012:other'},@{processIncarnation='6013:instance'},@{revision=29})){
+ $changed=$sealedContinuation.Clone();foreach($key in $case.Keys){$changed[$key]=$case[$key]}
+ $rejected=$false;try{Assert-MaintenanceContinuation $changed @{ProcessId=6012}}catch{$rejected=$true}
+ if(-not $rejected){throw '已封存接续必须拒绝停机许可、封存进程或水位漂移'}
+}
+Write-Output 'PASS 5/5: 同PID封存许可可接续，缺停机许可及身份/版本漂移拒绝'
 $ExpectedMaintenanceRevision=$null;$rejected=$false
 try{Assert-MaintenanceContinuation $continuationState @{ProcessId=6012}}catch{$rejected=$true}
 if(-not $rejected){throw '接续维护不得缺失revision'}
@@ -147,9 +160,9 @@ if($script:subscriptions-ne 1){throw '重复检查不得重新订阅'}
 $script:groupRead[0].name='changed'
 $failed=$false;try{Ensure-EnrollmentSubscription $proposal}catch{$failed=$true}
 if(-not $failed -or $script:subscriptions-ne 1){throw '已有群配置漂移必须拒绝'}
-$enrollmentTaskName='test-task';$script:taskState='Disabled';$script:enabled=0
-function Get-ScheduledTask {param($TaskName) @{State=$script:taskState}}
-function Enable-ScheduledTask {param($TaskName) $script:enabled++;$script:taskState='Ready'}
+$enrollmentTaskName='test-task';$script:taskState='Running';$script:taskEnabled=$false;$script:enabled=0
+function Get-ScheduledTask {param($TaskName) @{State=$script:taskState;Settings=@{Enabled=$script:taskEnabled}}}
+function Enable-ScheduledTask {param($TaskName) $script:enabled++;$script:taskEnabled=$true}
 Restore-EnrollmentAutostart @{enrollmentAutostartRestore=$false}
 if($script:enabled){throw '原先禁用的任务不得启用'}
 Restore-EnrollmentAutostart @{enrollmentAutostartRestore=$true}
@@ -191,6 +204,7 @@ Write-Output 'PASS 6/6: 看板合并后的旧身份别名通过；请求/逻辑/
 $permitFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-StoppedRepairPermit'},$true)
 Invoke-Expression $permitFunction.Extent.Text
 $ExpectedProfileSha256='profile';$ExpectedPackageSha256='new';$DirectQueriesProposal='D:/query.json'
+function Get-FileHash {param($LiteralPath) @{Hash='profile'}}
 $record=[pscustomobject]@{mode='maintenance';profileSha256='profile';sourceProfileSha256='profile';backup='backup';packageSha256='old';directQueriesProposal='D:\query.json';maintenanceId='maintenance'}
 $state=[pscustomobject]@{active=$true;phase='stopping';drained=$true;maintenanceId='maintenance';revision=110;sealedIncarnation='123:identity';stopPermitted=$true;busy=[pscustomobject]@{nodes=0;owners=0;effects=0;messages=0}}
 $sealed=[pscustomobject]@{state=$state};$before=[pscustomobject]@{maintenance=$state};$backupRecord=[pscustomobject]@{backup='backup';packageSha256='old';oldPid=123}

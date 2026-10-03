@@ -7,7 +7,7 @@ import { classifyExecutionFailure } from './execution-recovery-policy.js'
 
 const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)
 const requireId = value => { if (!identifier(value)) throw executionError('INVALID_IDENTIFIER'); return value }
-const plannedStageRunId = (taskId, planRevision, stageId, attempt) =>
+export const plannedStageRunId = (taskId, planRevision, stageId, attempt) =>
   `run-${executionDigest({ taskId, planRevision, stageId, attempt })}`
 const validate = (schema, value) => {
   canonicalExecutionJson(value)
@@ -79,7 +79,7 @@ export function defineExecutionWorkflow(definition) {
     assertSupportedJsonSchema(node.inputSchema); assertSupportedJsonSchema(node.outputSchema)
     return freeze({ ...node, allowedEffects: [...node.allowedEffects], ...(node.allowedTools ? { allowedTools: [...node.allowedTools] } : {}), inputSchema: structuredClone(node.inputSchema), outputSchema: structuredClone(node.outputSchema) })
   })
-  const digestInput = normalizeSource => ({ id: definition.id, version: definition.version,
+  const digestInput = (normalizeSource, historicalLimits = false) => ({ id: definition.id, version: definition.version,
     ...(ownerContract ? { ownerContract: { id: ownerContract.id, version: ownerContract.version,
       rulesDigest: ownerContract.rulesDigest ?? null,
       ...(ownerContract.resultContract ? { resultContract: ownerContract.resultContract } : {}),
@@ -87,6 +87,7 @@ export function defineExecutionWorkflow(definition) {
         .map(key => [key, ownerContract[key] ? normalizeSource(ownerContract[key].toString()) : null])) } } : {}),
     nodes: nodes.map(n => ({
     id: n.id, version: n.version, executor: n.executor, allowedEffects: n.allowedEffects,
+    ...(historicalLimits ? { maxSteps: n.maxSteps ?? 32, timeoutMs: n.timeoutMs ?? 120000 } : {}),
     inputSchema: n.inputSchema, outputSchema: n.outputSchema, mapper: normalizeSource(n.mapInput.toString()),
     implementation: n.execute ? normalizeSource(n.execute.toString()) : null, provider: n.provider ?? null, model: n.model ?? null,
     ...(n.reasoningEffort === undefined ? {} : { reasoningEffort: n.reasoningEffort }),
@@ -97,8 +98,11 @@ export function defineExecutionWorkflow(definition) {
     ...(n.inputDependencies ? { inputDependencies: n.inputDependencies } : {}),
   })) })
   const digest = executionDigest(digestInput(source => source.replace(/\r\n?/g, '\n')))
-  const legacyDigests = [executionDigest(digestInput(source => source)),
-    executionDigest(digestInput(source => source.replace(/\r\n?|\n/g, '\r\n')))].filter(value => value !== digest)
+  // 已落盘定义曾将执行上限计入摘要；恢复其身份，不恢复已移除的运行上限。
+  const legacyDigests = [source => source, source => source.replace(/\r\n?/g, '\n'),
+    source => source.replace(/\r\n?|\n/g, '\r\n')]
+    .flatMap(normalize => [false, true].map(historicalLimits => executionDigest(digestInput(normalize, historicalLimits))))
+    .filter(value => value !== digest)
   return Object.freeze({ id: definition.id, version: definition.version, nodes: Object.freeze(nodes), digest,
     ...(ownerContract ? { ownerContract } : {}),
     legacyDigests: Object.freeze([...new Set(legacyDigests)]) })
@@ -124,12 +128,27 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   for (const input of workflows) registerDefinition(input)
   let closed = false, running = 0
   const queue = [], flights = new Map(), active = new Map(), errors = new Map(), dirty = new Set()
-  const query = runId => store.query({ kind: 'run', runId })
+  const query = (runId, options = {}) => store.query({ kind: 'run', runId, ...options })
   const command = (id, kind, args, context = {}) => store.command({ id, kind, args, ...context })
   function definitionOf(run) {
     const definition = byDigest.get(run.workflowDigest)
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
     return run.workflowDigest === definition.digest ? definition : { ...definition, digest: run.workflowDigest }
+  }
+  async function inspectNodeRecovery(runId, suppliedState) {
+    const state = suppliedState ?? await query(runId, { includeRecovery: true })
+    const recovery = state.nodeRecovery
+    if (!recovery) throw executionError('WORKFLOW_RECOVERY_SNAPSHOT_MISSING')
+    if (!recovery.repairable) return recovery
+    if (closed || flights.has(runId)) return { ...recovery, repairable: false, reason: 'executor-still-active' }
+    const definition = definitionOf(state.run)
+    const node = state.nodes.find(item => item.nodeRunId === recovery.nodeRunId), frozen = node && definition.nodes[node.position]
+    if (!frozen || frozen.executor !== 'agent' || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect)))
+      return { ...recovery, repairable: false, reason: 'node-effects-not-readonly' }
+    const input = await artifacts.read(node.inputRef)
+    if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId)
+      return { ...recovery, repairable: false, reason: 'node-input-identity-mismatch' }
+    return recovery
   }
   async function prepareInput(definition, node, requirementRef, previousOutput, dependencyOutputs = {}) {
     const requirement = await artifacts.read(requirementRef)
@@ -246,7 +265,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         } else {
           if (!sessions) throw executionError('SESSION_ADAPTER_UNAVAILABLE')
           const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
+          const recovery = await store.query({ kind: 'node.recovery-context', nodeRunId: binding.nodeRunId,
+            inputDigest: binding.inputDigest, leaseEpoch: binding.leaseEpoch })
           outcome = await sessions.run({ binding, input: input.data, definition: agentDefinition,
+            ...(recovery ? { recoveryContext: await artifacts.read(recovery.contextRef) } : {}),
             ...(nodeDefinition.validateOutput ? { validateOutput: value => nodeDefinition.validateOutput({ output: value, input: input.data, binding }),
               classifyOutputError: nodeDefinition.classifyOutputError } : {}),
             onSessionBound: () => command(`bound:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.sessionBound', {
@@ -275,14 +297,18 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           if (!(failure instanceof ResultAdmissionError))
             for (const payload of failure.evidence) evidenceRefs.push((await artifacts.put(payload, { reference: binding.inputRef })).ref)
         }
-        const reportedReason = failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.reason ?? outcome?.status)
+        const reportedReason = failure?.code ?? (failure ? 'NODE_EXECUTION_FAILED' : outcome?.failure?.code ?? outcome?.reason ?? outcome?.status)
         const reason = typeof reportedReason === 'string' && reportedReason.trim() ? reportedReason.slice(0, 200) : 'NO_NODE_SUBMISSION'
+        const diagnosticFailure = { code: reason, phase: failure?.phase ?? outcome?.failure?.phase ?? 'execution',
+          targetNodeId: failure?.nodeId ?? ready.nodeId }
         evidenceRefs.push((await artifacts.put({ kind: 'execution-failure', ...identity, nodeRunId: binding.nodeRunId,
-          phase: failure?.phase ?? 'execution', targetNodeId: failure?.nodeId ?? ready.nodeId,
-          code: reason, message: String(failure?.message ?? reason).slice(0, 2000),
-          recovery: classifyExecutionFailure({ code: reason, phase: failure?.phase }) }, { reference: binding.inputRef })).ref)
+          ...diagnosticFailure, message: String(failure?.message ?? outcome?.failure?.message ?? reason).slice(0, 2000),
+          ...(outcome?.failure?.tool ? { tool: outcome.failure.tool } : {}),
+          ...(outcome?.reason ? { sessionReason: outcome.reason } : {}),
+          recovery: classifyExecutionFailure(diagnosticFailure) }, { reference: binding.inputRef })).ref)
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
           ...identity, outcome: terminalDeliveryFailure ? 'failed' : 'waiting', evidenceRefs, waitReason: { kind: 'recovery', reference: reason },
+          failure: diagnosticFailure,
         })
         return
       }
@@ -300,7 +326,8 @@ export function createExecutionController({ store, artifacts, sessions, delivery
               phase: 'output-admission', targetNodeId: ready.nodeId, code, message: code,
               producedOutputRef: result.ref, recovery: classifyExecutionFailure({ code, phase: 'output-admission' }) }, { reference: binding.inputRef })
             await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', { ...identity,
-              outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref, diagnosis.ref], waitReason: disposition.waitReason })
+              outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref, diagnosis.ref], waitReason: disposition.waitReason,
+              failure: { code, phase: 'output-admission', targetNodeId: ready.nodeId } })
             return
           }
           if (disposition?.outcome !== 'succeeded') throw executionError('NODE_ADMISSION_INVALID')
@@ -330,7 +357,8 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             ...(result ? { producedOutputRef: result.ref } : {}) }, { reference: binding.inputRef })
           await command(`invalid-result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
             ...identity, outcome: 'failed', evidenceRefs: [...(result ? [result.ref] : []), diagnosis.ref],
-            waitReason: { kind: 'recovery', reference: error.code } })
+            waitReason: { kind: 'recovery', reference: error.code },
+            failure: { code: error.code, phase: error.phase, targetNodeId: error.nodeId } })
           return
         }
         throw error
@@ -339,6 +367,47 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   }
   return {
     isCurrent,
+    inspectNodeRecovery,
+    async resumeNode({ commandId, runId, expectedRevision, nodeRunId, generation, leaseEpoch, inputDigest, contextRef }) {
+      if (closed) throw executionError('CONTROLLER_CLOSED')
+      const replay = await store.query({ kind: 'receipt', commandId })
+      if (replay) {
+        const prior = replay.result
+        if (prior.runId !== runId || prior.nodeRunId !== nodeRunId || prior.generation !== generation
+          || prior.inputDigest !== inputDigest || prior.contextRef !== contextRef || prior.nextLeaseEpoch !== leaseEpoch + 1
+          || prior.previousRunRevision !== expectedRevision) throw executionError('NODE_RECOVERY_CONFLICT')
+        schedule(runId); return replay
+      }
+      const recovery = await inspectNodeRecovery(runId)
+      if (!recovery.repairable || recovery.nodeRunId !== nodeRunId || recovery.runRevision !== expectedRevision
+        || recovery.generation !== generation || recovery.leaseEpoch !== leaseEpoch || recovery.inputDigest !== inputDigest)
+        throw executionError('NODE_RECOVERY_NOT_ADMITTED', recovery.reason)
+      const state = await query(runId), context = await artifacts.read(contextRef)
+      if (context?.kind !== 'execution-recovery-context' || context.taskId !== state.run.taskId || context.runId !== runId
+        || context.nodeRunId !== nodeRunId || context.generation !== generation
+        || typeof context.diagnosis !== 'string' || !context.diagnosis.trim() || typeof context.strategy !== 'string' || !context.strategy.trim()
+        || !Array.isArray(context.evidenceRefs) || !context.evidenceRefs.length
+        || context.evidenceRefs.some(ref => !recovery.evidenceRefs.includes(ref))
+        || context.problemKey !== undefined && context.problemKey !== recovery.problemKey)
+        throw executionError('NODE_RECOVERY_CONTEXT_INVALID')
+      await Promise.all(context.evidenceRefs.map(ref => artifacts.read(ref)))
+      const plan = await store.query({ kind: 'task.plan', taskId: state.run.taskId })
+      if (context.requirementRevision !== plan.task.requirementRevision || context.planRevision !== plan.task.planRevision
+        || context.controlRevision !== plan.task.controlRevision) throw executionError('NODE_RECOVERY_CONTEXT_STALE')
+      const requirement = plan.task.requirementRef ? await artifacts.read(plan.task.requirementRef) : {}
+      const sources = []
+      for (const frozen of requirement.sourceInstructions ?? []) {
+        const source = await store.query({ kind: 'task.source', sourceKey: frozen.sourceKey })
+        if (!source || source.status === 'superseded' || source.sourceVersion !== frozen.sourceVersion
+          || source.actorId !== frozen.actorId || source.body !== frozen.text) throw executionError('NODE_RECOVERY_SOURCE_INVALID')
+        sources.push({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, bodyDigest: executionDigest(source.body) })
+      }
+      const receipt = await command(commandId, 'node.resume', { runId, expectedRevision, nodeRunId, generation, leaseEpoch,
+        inputDigest, contextRef, problemKey: recovery.problemKey, workflowDigest: state.run.workflowDigest, sources,
+        expectedRequirementRevision: context.requirementRevision, expectedPlanRevision: context.planRevision,
+        expectedControlRevision: context.controlRevision })
+      errors.delete(runId); schedule(runId); return receipt
+    },
     workflowDefinition(workflowId, digest) {
       if (digest !== undefined) return definitionOf({ workflowId, workflowDigest: digest })
       const definition = definitions.get(workflowId)
@@ -639,7 +708,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       schedule(runId)
     },
     async whenIdle(runId) { while (flights.has(runId)) { await flights.get(runId); await Promise.resolve() } return query(runId) },
-    async state(runId) { return { ...await query(runId), controllerError: errors.get(runId)?.code ?? errors.get(runId)?.message ?? null } },
+    async state(runId, options) { return { ...await query(runId, options), controllerError: errors.get(runId)?.code ?? errors.get(runId)?.message ?? null } },
     async close() {
       closed = true
       for (const runId of active.keys()) interrupt(runId)

@@ -19,7 +19,7 @@ import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workfl
 import { join, resolve } from 'node:path'
 
 export const name = 'dingtalk-dsh-assistant'
-export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments', 'dingtalkTaskWorkflowPlatformClients']
+export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments', 'dingtalkTaskWorkflowPlatformClients']
 
 export async function verifyResidentWorkflowSeal(ctx, workflowConfig) {
   const domain = ctx.storageDomain
@@ -137,7 +137,7 @@ export async function apply(ctx, config = {}) {
     config: workflowConfig.platforms, clients: ctx.get?.('dingtalkTaskWorkflowPlatformClients'),
     ownerActorId: workflowConfig.ownerActorId,
   }) : null
-  const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile }, legacy: runtime,
+  const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile, approvalRecipientUserId: dwsConfig.humanUserId }, legacy: runtime,
     external: workflowConfig.platforms ? trustedPlatforms : ctx.get?.('dingtalkTaskWorkflowExternal'),
     generalCapabilities: ctx.get?.('dingtalkTaskGeneralCapabilities') ?? [],
     generalCompletionCheck: ctx.get?.('dingtalkTaskGeneralCompletionCheck'),
@@ -224,6 +224,7 @@ export async function apply(ctx, config = {}) {
     runtime.retryWorkflowInvestigation = args => workflow.retryInvestigation(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.repairWorkflowStageAuthorizations = args => workflow.repairStageAuthorizations(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.reassessWorkflowReadonly = args => workflow.reassessReadonly(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.handoffWorkflowDataChangeApproval = args => workflow.handoffDataChangeApproval(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.deleteWorkflowTask = args => workflow.deleteCancelledTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
@@ -236,8 +237,25 @@ export async function apply(ctx, config = {}) {
     runtime.decideAuthorization = async args => {
       if (!await workflow.isApprovalRequest(args.requestId)) return legacyDecideAuthorization(args)
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
-      return workflow.decideApproval({ requestId: args.requestId, decision: args.decision,
+      return workflow.decideApproval({ requestId: args.requestId, decision: args.decision, comment: args.comment,
         eventId: `web:${args.requestId}:${args.decision}` }, { channel: 'web', actorId: workflowConfig.webActorId })
+    }
+    runtime.getWorkflowApprovalRequest = requestId => workflow.getApprovalRequest(requestId)
+    runtime.getWorkflowApprovalNotice = requestId => workflow.getApprovalNotice(requestId)
+    runtime.prepareWorkflowApprovalNotice = args => workflow.prepareApprovalNotice(args)
+    runtime.beginWorkflowApprovalNotice = args => workflow.approvalNoticeCommand('send', args)
+    runtime.recordWorkflowApprovalNoticeReceipt = args => workflow.approvalNoticeCommand('receipt', args)
+    runtime.recordWorkflowApprovalNoticeUnsent = args => workflow.approvalNoticeCommand('unsent', args)
+    runtime.recordWorkflowApprovalNoticeDelivery = args => workflow.approvalNoticeCommand('delivered', args)
+    runtime.recordWorkflowApprovalNoticeRecall = args => workflow.approvalNoticeCommand('recalled', args)
+    runtime.decideWorkflowApprovalReply = args => {
+      const { actorId, conversationId, quoteMessageId, ...decision } = args
+      return workflow.decideApproval(decision, { channel: 'im', actorId, conversationId, quoteMessageId })
+    }
+    const legacyReissueAuthorization = runtime.reissueAuthorization
+    runtime.reissueAuthorization = async args => {
+      if (!await workflow.isApprovalRequest(args.requestId)) return legacyReissueAuthorization(args)
+      return workflow.reissueApprovalNotice(args, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     const legacyListAuthorizations = runtime.listAuthorizationRequests
     runtime.listAuthorizationRequests = async () => [...legacyListAuthorizations(), ...await workflow.listApprovalRequests()]

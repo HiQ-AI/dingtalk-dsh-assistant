@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
+import { simpleNullableColumnDefinition, simpleDroppedColumnDefinition } from './workflow-data-change.js'
 import { narrowSql, reviewUatSql, uatCatalogBaselineSql,
   uatCatalogBaselineCountSql, uatCatalogBaselineDigest } from './workflow-postgres-uat-host.js'
 
@@ -7,6 +8,12 @@ const sha = value => createHash('sha256').update(value).digest('hex')
 const databases = new Set(['hiq_editor', 'hiq_background_db', 'hiq_admin'])
 const sameTarget = (a, b) => a?.instance === b?.instance && a?.database === b?.database
   && a?.environment === b?.environment
+
+/** 列变更验收只允许固定目录投影和三个精确名字，不开放任意 SELECT。 */
+export function columnVerificationScope(sql) {
+  const match = /^SELECT\s+column_name\s*,\s*data_type\s*,\s*is_nullable\s*,\s*column_default\s*,\s*character_maximum_length\s+FROM\s+information_schema\.columns\s+WHERE\s+table_schema\s*=\s*'([a-z][a-z0-9_]*)'\s+AND\s+table_name\s*=\s*'([a-z][a-z0-9_]*)'\s+AND\s+column_name\s*=\s*'([a-z][a-z0-9_]*)'\s*;?$/iu.exec(sql ?? '')
+  return match ? { schema: match[1], table: match[2], column: match[3] } : null
+}
 
 /** 生产从库端口仅提供目录/前置条件只读回读，没有任何 SQL 写方法。 */
 export function createProductionPostgresHost({ entries, Client }) {
@@ -54,18 +61,28 @@ export function createProductionPostgresHost({ entries, Client }) {
   }
   const readBaseline = async ({ project, target, scope = 'current', signal }) => {
     signal?.throwIfAborted()
-    if (scope !== 'current') throw new Error('POSTGRES_PRODUCTION_SCOPE_INVALID')
+    const scoped = scope !== 'current'
+    if (scoped && (!scope || Object.keys(scope).sort().join(',') !== 'schema,table'
+      || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(scope.schema ?? '')
+      || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(scope.table ?? ''))) throw new Error('POSTGRES_PRODUCTION_SCOPE_INVALID')
     const entry = entryFor(project, target)
     const client = await connect(entry.connection)
     try {
+      const sql = uatCatalogBaselineSql(scoped ? scope : undefined)
+      const values = scoped ? [scope.schema, scope.table] : undefined
+      const countSql = scoped ? uatCatalogBaselineSql(scope, true) : uatCatalogBaselineCountSql()
       const [catalog, count] = await Promise.all([
-        client.query(uatCatalogBaselineSql()), client.query(uatCatalogBaselineCountSql()),
+        client.query(sql, values), client.query(countSql, values),
       ])
       if (count.rows.length !== 1 || count.rows[0].expected_rows !== catalog.rows.length)
         throw new Error('POSTGRES_PRODUCTION_CATALOG_INCOMPLETE')
-      const schemaDigest = uatCatalogBaselineDigest(catalog.rows)
-      return { project, target, snapshotId: `pg-catalog-columns-v1:${entry.connection.database}:${schemaDigest}`,
-        sha256: schemaDigest, schemaVersion: 'pg-catalog-columns-v1', schemaDigest,
+      if (scoped && catalog.rows.some(row => row.schema_name !== scope.schema || row.table_name !== scope.table))
+        throw new Error('POSTGRES_PRODUCTION_SCOPE_UNCONFIRMED')
+      const catalogDigest = uatCatalogBaselineDigest(catalog.rows)
+      const schemaDigest = scoped ? executionDigest({ scope, catalogDigest }) : catalogDigest
+      const schemaVersion = scoped ? 'pg-catalog-table-columns-v1' : 'pg-catalog-columns-v1'
+      return { project, target, snapshotId: `${schemaVersion}:${entry.connection.database}:${schemaDigest}`,
+        sha256: schemaDigest, schemaVersion, schemaDigest, ...(scoped ? { scope } : {}),
         evidenceRef: `postgres-production-readonly:${target.database}:${schemaDigest}` }
     } finally { await client.end() }
   }
@@ -73,6 +90,65 @@ export function createProductionPostgresHost({ entries, Client }) {
     applySqlSha256, expectedChange, verificationSql, signal }) => {
     signal?.throwIfAborted()
     const entry = entryFor(project, target)
+    const column = simpleNullableColumnDefinition(applySql), verification = columnVerificationScope(verificationSql)
+    const dropped = simpleDroppedColumnDefinition(applySql)
+    if (dropped) {
+      if (sha(applySql) !== applySqlSha256 || !verification
+        || dropped.schema !== verification.schema || dropped.table !== verification.table || dropped.column !== verification.column
+        || baseline?.scope && (baseline.scope.schema !== dropped.schema || baseline.scope.table !== dropped.table)) return { passed: false }
+      let expected
+      try { expected = JSON.parse(expectedChange) } catch { return { passed: false } }
+      if (executionDigest(expected) !== executionDigest({ rows: [] })) return { passed: false }
+      const client = await connect(entry.connection)
+      try {
+        const result = await client.query(`SELECT c.relkind AS relation_kind,
+          a.attidentity AS identity_kind, a.attgenerated AS generated_kind,
+          EXISTS (SELECT 1 FROM pg_inherits h WHERE h.inhparent = c.oid OR h.inhrelid = c.oid) AS has_inheritance,
+          EXISTS (SELECT 1 FROM pg_depend d WHERE d.refclassid = 'pg_class'::regclass
+            AND d.refobjid = c.oid AND d.refobjsubid = a.attnum) AS has_dependencies
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = $3 AND a.attnum > 0 AND NOT a.attisdropped
+          WHERE n.nspname = $1 AND c.relname = $2`, [dropped.schema, dropped.table, dropped.column])
+        signal?.throwIfAborted()
+        if (result.rows.length !== 1 || result.rows[0].relation_kind !== 'r'
+          || result.rows[0].identity_kind !== '' || result.rows[0].generated_kind !== ''
+          || result.rows[0].has_inheritance !== false || result.rows[0].has_dependencies !== false) return { passed: false }
+        const schemaProofDigest = executionDigest({ dropped, before: result.rows })
+        return { passed: true, target, sqlSha256: applySqlSha256, baselineEvidenceRef: baseline.evidenceRef,
+          schemaProofDigest, checkId: `postgres-production-drop-column-preconditions:${schemaProofDigest}` }
+      } finally { await client.end() }
+    }
+    if (column) {
+      if (baseline?.scope && (baseline.scope.schema !== column.schema || baseline.scope.table !== column.table)) return { passed: false }
+      if (sha(applySql) !== applySqlSha256 || !verification
+        || column.schema !== verification.schema || column.table !== verification.table || column.column !== verification.column)
+        return { passed: false }
+      let expected
+      try { expected = JSON.parse(expectedChange) } catch { return { passed: false } }
+      const type = column.type.replace(/\s*\(.*$/u, '')
+      const dataType = ({ varchar: 'character varying', char: 'character', decimal: 'numeric',
+        timestamp: 'timestamp without time zone' })[type] ?? type
+      const length = /\(\s*([0-9]+)\s*\)/u.exec(column.type)
+      const expectedRow = { column_name: column.column, data_type: dataType, is_nullable: 'YES', column_default: null,
+        character_maximum_length: ['varchar', 'character varying', 'char', 'character'].includes(type)
+          ? length ? Number(length[1]) : ['char', 'character'].includes(type) ? 1 : null : null }
+      if (executionDigest(expected) !== executionDigest({ rows: [expectedRow] })) return { passed: false }
+      const client = await connect(entry.connection)
+      try {
+        const result = await client.query(`SELECT c.relkind AS relation_kind,
+          EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = $3
+            AND a.attnum > 0 AND NOT a.attisdropped) AS column_exists,
+          EXISTS (SELECT 1 FROM pg_inherits h WHERE h.inhparent = c.oid) AS has_children
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = $1 AND c.relname = $2`, [column.schema, column.table, column.column])
+        signal?.throwIfAborted()
+        if (result.rows.length !== 1 || !['r', 'p'].includes(result.rows[0].relation_kind)
+          || result.rows[0].column_exists !== false || result.rows[0].has_children !== false) return { passed: false }
+        const schemaProofDigest = executionDigest({ column, before: result.rows })
+        return { passed: true, target, sqlSha256: applySqlSha256, baselineEvidenceRef: baseline.evidenceRef,
+          schemaProofDigest, checkId: `postgres-production-column-preconditions:${schemaProofDigest}` }
+      } finally { await client.end() }
+    }
     const statement = narrowSql(applySql, verificationSql)
     if (!statement || sha(applySql) !== applySqlSha256
       || typeof expectedChange !== 'string') return { passed: false }
@@ -93,5 +169,48 @@ export function createProductionPostgresHost({ entries, Client }) {
       checkId: `postgres-production-preconditions:${executionDigest({ target,
         baseline: actual.evidenceRef, applySqlSha256, schemaProofDigest: review.schemaProofDigest })}` }
   }
-  return Object.freeze({ getDatabase, readBaseline, checkPreconditions })
+  const queryVerification = async ({ project, target, sql, expectedChange, packageDigest, taskRunId, signal }) => {
+    signal?.throwIfAborted()
+    const scope = columnVerificationScope(sql), entry = entryFor(project, target)
+    let expected
+    try { expected = JSON.parse(expectedChange) } catch { throw new Error('POSTGRES_COLUMN_VERIFICATION_INVALID') }
+    const columns = ['column_name', 'data_type', 'is_nullable', 'column_default', 'character_maximum_length']
+    if (!scope || !/^[a-f0-9]{64}$/u.test(packageDigest ?? '') || !taskRunId
+      || !Array.isArray(expected?.rows) || expected.rows.length > 1
+      || expected.rows.length === 0 && executionDigest(expected) !== executionDigest({ rows: [] })
+      || expected.rows.length === 1 && (executionDigest(Object.keys(expected.rows[0]).sort()) !== executionDigest([...columns].sort())
+        || expected.rows[0].column_name !== scope.column))
+      throw new Error('POSTGRES_COLUMN_VERIFICATION_INVALID')
+    const client = await connect(entry.connection)
+    try {
+      if (expected.rows.length === 0) {
+        // 同一目录快照核对表和列，整表缺失不能冒充单列删除成功。
+        const result = await client.query(`SELECT c.relkind AS relation_kind,
+          EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = $3
+            AND a.attnum > 0 AND NOT a.attisdropped) AS column_exists,
+          (SELECT COALESCE(json_agg(row_to_json(cols)), '[]'::json) FROM (
+            SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
+            FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
+          ) cols) AS columns
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = $1 AND c.relname = $2`, [scope.schema, scope.table, scope.column])
+        signal?.throwIfAborted()
+        if (result.rows.length !== 1 || result.rows[0].relation_kind !== 'r' || result.rows[0].column_exists !== false
+          || executionDigest(result.rows[0].columns) !== executionDigest(expected.rows))
+          throw new Error('POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED')
+        return { passed: true, target, packageDigest, observation: { scope, rows: result.rows }, observedChange: JSON.stringify(result.rows[0].columns),
+          readbackId: `postgres-production-column:${executionDigest({ taskRunId, target, scope, rows: result.rows[0].columns })}` }
+      }
+      // 参数绑定只查询本次列；SQL正文经过固定结构识别后不直接执行。
+      const result = await client.query(`SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
+        FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3`,
+      [scope.schema, scope.table, scope.column])
+      signal?.throwIfAborted()
+      if (executionDigest(result.rows) !== executionDigest(expected.rows))
+        throw new Error('POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED')
+      return { passed: true, target, packageDigest, observation: { scope, rows: result.rows }, observedChange: JSON.stringify(result.rows),
+        readbackId: `postgres-production-column:${executionDigest({ taskRunId, target, rows: result.rows })}` }
+    } finally { await client.end() }
+  }
+  return Object.freeze({ getDatabase, readBaseline, checkPreconditions, queryVerification })
 }

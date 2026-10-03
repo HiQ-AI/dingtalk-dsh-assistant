@@ -1,5 +1,13 @@
 # 执行底座与消息工作流本地运维
 
+## 持续任务执行的运行核验
+
+持续执行改造不新增控制库 schema，沿 [普通本地部署](resident-review-local-deployment.md) 的 Check、维护排空、精确包安装、Readback、Resume；不备份历史副本。核验包 SHA256/版本、新进程和健康，再读取实际 Owner、节点和效果状态。
+
+恢复属于同一 Task 的责任闭环：可纠正 Agent 节点的 `node.resume` 事件须保留原 nodeRunId/sessionId/generation、输入摘要、旧诊断及恢复上下文；下次领取仅递增租约。成功前缀不得重跑。相同问题再次出现时应显示 `strategy-change-required` 并由 Owner 调整路径；不能手工改 SQLite 或把原外部操作换身份重发。审批 pending、未知效果、暂停、待接纳新输入及来源变化均不得通过通用续行绕过。内部恢复不应出现群进度通知，最终完成仍需独立业务验收。
+
+定义摘要继续规范换行；已落盘、曾包含maxSteps/timeoutMs的旧摘要通过既有legacyDigests恢复身份，不重新引入已移除的执行上限。部署回归须同时覆盖当前摘要和历史摘要的查找。
+
 第 1—8 节记录独立执行底座的装配与边界，第 9 节为当前 resident 消息工作流的正式切换步骤。独立入口与 resident 集成入口不能同时对同一控制库持有写者。以下 M1/M2 描述仅适用于独立装配，不代表第 9 节集成入口仍缺少消息、通知或工程适配器。
 
 M1 对应的独立执行入口 `@zzusp/dingtalk-dsh-assistant/execution`。它**不默认加载**，不读取或迁移 resident 的 Task 账；现有群消息、Web 看板和 resident 流程继续使用原入口。当前仅准入受信定义的 `pure/read` 顺序节点，用于隔离环境中的合成任务与受控读取。
@@ -541,6 +549,18 @@ Owner 原生提交工具按当前 currentExecution 开放阶段修复动作；�
 
 启动尚未ready、localhost尚无listener只表示未就绪，不能据此重复安装或另启第二个写者。检查原启动进程及stderr，等待其真实ready或明确失败；独占锁冲突仍立即失败。ready之后命令/查询回执的10秒COMMIT_ACK_UNKNOWN保护不变：禁止派生新效果，按原命令身份重开回读。维护状态在成功启动和独立回读前保持封存。
 
+## 事件查询索引 schema7 → schema8 升级
+
+schema8 增加唯一指定的非唯一、非部分索引 `execution_events_kind_seq(kind,seq)`；不改变事件、审批、任务或效果数据。新运行时只接纳 schema8 和准确索引，启动不自动迁移。
+
+先执行 `node scripts/migrate-execution-events-index.mjs --check <绝对库路径>`，只读核对双版本、索引和全部表摘要，包含自增序列。正式部署沿 `deploy-owner-repair.ps1` 增加 `-MigrateExecutionEventsIndex`，先同参数 `-Check`；该模式与 Bootstrap、RepairStoppedLaunch、MessageImpact 和任务文件迁移互斥。部署自检实际执行零写迁移检查，不创建证据目录。
+
+正式执行复用原生维护排空、封存许可、精确旧PID停机、禁用计划任务自启和持续 owner 独占锁。完整备份及独立回读成功后，锁进程执行7→8事务；全表摘要仅忽略 `execution_meta.schema_version`，任何业务数据改变均回滚。已有同名索引的 schema7 拒绝，schema8 幂等复核且错误结构拒绝，不使用 `IF NOT EXISTS` 掩盖错误。
+
+迁移证明绑定工具摘要与原完整备份清单摘要，Launch 前再核对结构、双版本及迁移瞬间全表摘要。`-Readback`、`-Resume` 必须沿用索引迁移开关，验证回执摘要、工具及备份绑定，仅只读核对当前结构；正常恢复后新增事件不与迁移瞬间摘要比较。原任务、旧节点和终态 Run 的历史校验保持原规则；恢复派发及计划任务自启仍沿原部署流程。失败保留封存、原备份和回执，恢复旧包必须同时恢复原 schema7 一致备份。
+
+独立脚本 `--execute <绝对库路径> <已停止PID>` 仅用于已有原生封存停机许可的运维路径，仍校验PID退出、获取owner独占锁及排空；不会创建备份，正式本地部署使用上述完整备份入口。
+
 ## 持续执行 v6 → v7 离线升级
 
 本次删除 execution_runs.max_claims 及 claim_count 上限约束，schema 升至7。运行时只接受当前 schema，不自动升级。
@@ -552,3 +572,11 @@ Owner 原生提交工具按当前 currentExecution 开放阶段修复动作；�
 5. 启动新进程，核对 schema7、维护许可、新PID和健康，再恢复派发。禁止重建旧任务来验证升级。
 
 暂态错误退避等待，不按次数终结；相同条件的实现错误等待修复或新事实。校验、授权、效果对账与业务验收仍必需。并发与分页是资源调度，不限制任务总量。
+
+### 证据引用提交纠错恢复
+
+模型截短 evidenceRef 时，应先按原生成功查询回执拒绝未知身份，再由同会话纠正。不得复制工件到全局目录或将所有 ENOENT 改成可忽略。真实已返回的工件丢失仍是存储故障。无 schema 变更时沿普通本地部署；已记录 execution_submission_rejected 的原调查不会凭新包自动成功，回读 Task/run/节点版本后使用上文 retry-investigation 原生入口，同 run 新代次重新提交并验收。
+
+### 单列删除送审验收
+
+数据变更v7支持严格单列DROP候选，Host目录预检拒绝依赖、继承、identity/generated和非普通表。准确目录回查用rows空数组表示列消失，同时确认表仍存在。检查新工单、私聊不可恢复影响说明、精确插件批准与执行先后、TaskRun DONE和最终验收；旧加列工单及批准不能复用。无需新增数据库读取白名单、迁移或历史副本。原Task若持有模型追加的冗余前提，经既有Web context明确记录当前操作者的系统修正并由Owner重评，不伪造群消息或清除实际用户确认门禁。

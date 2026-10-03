@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
-import { createWorkflowNotifications, notificationSilence, sameDeliveredText } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+import { createWorkflowNotifications, notificationSilence, sameDeliveredText, taskNotificationAllowed } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+
+test('内部修复方向即使继承确认事件也不投递到群', () => {
+  assert.equal(taskNotificationAllowed({ phase: 'owner:repair:1', report: {
+    applicationStatus: 'applied', reportType: 'repairCurrentStage', triggerTypes: ['workflow.confirmation.required'],
+  } }), false)
+})
 
 async function fixture(t, body = '请处理') {
   const dir = await mkdtemp(join(tmpdir(), 'notice-obligation-'))
@@ -15,18 +21,70 @@ async function fixture(t, body = '请处理') {
   await call('receive', { runId: 'm', sourceKey: 'source', sourceVersion: 1, conversationId: 'g', actorId: 'a', body,
     context: { sourceMessageId: 'in', replyObligation: { required: true, sourceKey: 'source', sourceVersion: 1 } } })
   return { store, call, notices: () => store.query({ kind: 'message.notifications', states: ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered', 'superseded'] }),
-    flush: adapter => createWorkflowNotifications({ store, controller: { taskPlan: taskId => store.query({ kind: 'task.plan', taskId }) }, artifacts: {}, adapter }).flush() }
+    flush: adapter => createWorkflowNotifications({ store, controller: {
+      taskPlan: taskId => store.query({ kind: 'task.plan', taskId }), state: runId => store.query({ kind: 'run', runId }) }, artifacts: {}, adapter }).flush() }
 }
 
-test('需要排查的容量失败有真实状态通知，重启扫描不重复', async t => {
+for (const scenario of [
+  { name: '普通数据变更待审', workflowId: 'task-data-change', short: true },
+  { name: '已有工单接续待审', workflowId: 'task-data-change-approval-resume', short: true },
+  { name: '审批已批准', decision: 'approved' },
+  { name: '审批已驳回', decision: 'rejected' },
+  { name: 'Bytebase原生审批', approvalSource: 'bytebase' },
+  { name: '其它任务阶段', workflowId: 'task-uat-deployment' },
+  { name: '其它外部效果领域', workflowKind: 'production-release' },
+  { name: '非真实工单资源名', issueId: '857' },
+]) test(`审批等待不发群进度且原生审批不受影响：${scenario.name}`, async t => {
+  const f = await fixture(t)
+  const send = (kind, args) => f.store.command({ id: randomUUID(), kind, args })
+  await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '添加name列' }] })
+  await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task', replyPolicy: 'none' } }] })
+  const claim = (await f.call('command.claim', { commandId: 'c' })).result.command
+  await send('task.accept', { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`,
+    requirementRevision: 1, sessionId: 'owner', criteria: ['添加name列'], sourceKey: 'source', eventKey: 'created' })
+  await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task' } })
+  const workflowId = scenario.workflowId ?? 'task-data-change'
+  await send('task.plan.initialize', { taskId: 'task', expectedPlanRevision: 0, expectedRequirementRevision: 1,
+    expectedControlRevision: 1, stages: [{ stageId: 'stage-1', workflowId, workflowDigest: 'a'.repeat(64),
+      unavailableReason: null, requirementRef: 'sha256/in', gate: 'none' }] })
+  await send('run.create', { runId: 'business', taskId: 'task', workflowId, workflowDigest: 'a'.repeat(64),
+    requirementRef: 'sha256/in', stageBinding: { planRevision: 1, stageId: 'stage-1', attempt: 1, expectedControlRevision: 1 },
+    nodes: [{ nodeId: 'approval-gate', nodeVersion: '1', executor: 'code', inputRef: 'sha256/in', inputDigest: 'a'.repeat(64) }] })
+  const binding = (await send('node.claim', { runId: 'business', nodeId: 'approval-gate', expectedGeneration: 1, expectedLeaseEpoch: 0 })).result.binding
+  await send('effect.prepare', { effectId: 'gate-effect', kind: 'operation', runId: 'business', nodeId: 'approval-gate',
+    generation: binding.generation, leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
+    definition: { adapterId: 'external-operation', adapterVersion: '1', principalId: 'owner', action: 'external',
+      payload: { workflowKind: scenario.workflowKind ?? 'data-change', stage: 'approval-gate',
+        intent: { approvalSource: scenario.approvalSource ?? 'assistant', issueId: scenario.issueId ?? 'projects/app/issues/857' } } },
+    resourceKeys: ['external:database:app'], approval: { requestId: 'approval-857', approverIds: ['owner'] } })
+  if (scenario.decision) await send('approval.decide', { requestId: 'approval-857', actorId: 'owner', source: 'web', decision: scenario.decision })
+  await send('node.drained', { runId: 'business', nodeId: 'approval-gate', generation: binding.generation,
+    leaseEpoch: binding.leaseEpoch, evidenceRef: 'native-drain-proof' })
+  await send('node.commit', { runId: 'business', nodeId: 'approval-gate', generation: binding.generation,
+    leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest, outcome: 'waiting', evidenceRefs: [],
+    waitReason: { kind: 'approval', reference: 'approval-857' } })
+  const summary = 'Owner生成的长进展，已核对精确表基线及SQL并保留已有工单，仍说明多项内部判断。'.repeat(8)
+  await send('task.owner.claim', { taskId: 'task', turnId: 'turn', expectedLeaseEpoch: 0 })
+  await send('task.owner.sessionBound', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, sessionId: 'owner' })
+  await send('task.owner.candidate', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, decision: { action: 'wait', summary,
+    evidenceRefs: [], condition: { kind: 'approval', missing: '本次DDL批准', responsibleParty: '审批人',
+      resumeWhen: '批准后执行，驳回后修改重审', evidenceRefs: [] } } })
+  await send('task.owner.accept', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
+  await send('task.owner.applied', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
+  await f.flush(); await f.flush()
+  const notices = (await f.notices()).filter(item => item.payload.phase.startsWith('owner:'))
+  assert.equal(notices.length, 0)
+  assert.equal((await f.store.query({ kind: 'task.owner.reports', taskId: 'task' }))[0].facts.summary, summary)
+  assert.equal((await f.store.query({ kind: 'approval.get', requestId: 'approval-857' })).decision, scenario.decision ?? 'pending')
+})
+
+test('系统容量失败仅留内部状态，重启扫描不发进度', async t => {
   const f = await fixture(t)
   await f.call('attention', { runId: 'm', reason: 'MESSAGE_MODEL_CONTEXT_WINDOW_EXCEEDED:S:$' })
   await f.flush(); await f.flush()
   const notices = await f.notices()
-  assert.equal(notices.length, 1)
-  assert.equal(notices[0].payload.text, '处理遇到系统问题，无法继续推进，需要人工介入。')
-  assert.equal(notices[0].payload.fact.sourceVersion, 1)
-  assert.equal(notices[0].status, 'prepared')
+  assert.equal(notices.length, 0)
+  assert.equal((await f.store.query({ kind: 'message.run', runId: 'm' })).run.status, 'needs_attention')
 })
 
 test('点名问候无业务command仍有一次回应，发送未知只回读', async t => {
@@ -68,18 +126,7 @@ test('内部读取失败不按次数制造人工告知；恢复后仍无多余�
   assert.equal((await f.notices()).length, 0)
 })
 
-test('来源更新使已准备的系统状态通知失效，零发送', async t => {
-  const f = await fixture(t)
-  await f.call('attention', { runId: 'm', reason: 'MANUAL_RECOVERY_REQUIRED' })
-  await f.flush()
-  const [notice] = await f.notices()
-  await f.call('receive', { runId: 'm2', sourceKey: 'source', sourceVersion: 2, conversationId: 'g', actorId: 'a', body: '修正要求' })
-  const result = await f.call('notification.claim', { notificationId: notice.id })
-  assert.equal(result.dispatchEligible, false)
-  assert.equal(result.result.notification.status, 'superseded')
-})
-
-test('Task已落账但command尚未完成仍有承接责任，完成后不重复；需求修订使旧回执失效', async t => {
+test('Task承接、命令完成和需求修订均不发送中间回执', async t => {
   const f = await fixture(t)
   await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
   await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task', replyPolicy: 'none' } }] })
@@ -87,23 +134,17 @@ test('Task已落账但command尚未完成仍有承接责任，完成后不重复
   await f.store.command({ id: 'task-accept', kind: 'task.accept', args: { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`,
     requirementRevision: 1, sessionId: 'owner', criteria: ['交付结果'], sourceKey: 'source', eventKey: 'created' } })
   await f.flush()
-  const [notice] = await f.notices()
-  assert.equal(notice.payload.phase, 'accepted')
-  assert.equal(notice.payload.text, '正在核对执行条件，处理尚未开始。')
-  assert.equal(notice.payload.fact.requirementRevision, 1)
+  assert.equal((await f.notices()).length, 0)
   await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task', reply: '已收到' } })
-  await f.flush(); assert.equal((await f.notices()).length, 1)
+  await f.flush(); assert.equal((await f.notices()).length, 0)
   await f.store.command({ id: 'task-update', kind: 'task.requirement.update', args: { taskId: 'task', expectedRequirementRevision: 1,
     requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'updated' } })
-  const stale = await f.call('notification.claim', { notificationId: notice.id })
-  assert.equal(stale.dispatchEligible, false)
-  assert.equal(stale.result.notification.status, 'superseded')
-  await f.flush()
+  await f.flush(); assert.equal((await f.notices()).length, 0)
 })
 
 test('发送未知后来源更新仍回读旧通知，不删除效果或再次发送', async t => {
   const f = await fixture(t)
-  await f.call('attention', { runId: 'm', reason: 'MANUAL_RECOVERY_REQUIRED' })
+  await f.call('wait', { runId: 'm', unitId: '$', nodeId: 'R', reason: '需要业务信息', request: { requestId: 'question', kind: 'needs_clarification', question: '请选择目标环境', permittedActors: ['a'] } })
   let sends = 0, reads = 0
   const adapter = { canDisclose: async () => true, send: async () => { sends++; throw new Error('unknown') },
     readback: async () => ++reads > 1 ? { messageId: 'out' } : null }
@@ -114,7 +155,8 @@ test('发送未知后来源更新仍回读旧通知，不删除效果或再次�
   assert.equal((await f.notices())[0].status, 'delivered')
 })
 
-for (const revised of [false, true]) test(`无计划Owner阻塞报告：${revised ? '新需求使未发报告失效' : '可发送且unknown在更新后仍回读'}`, async t => {
+for (const kind of ['business-input', 'permission', 'execution', 'capability', 'approval'])
+for (const revised of [false, true]) test(`Owner ${kind} 通知及原生领取：${revised ? '需求更新' : '当前需求'}`, async t => {
   const f = await fixture(t)
   await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
   await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task', replyPolicy: 'none' } }] })
@@ -126,11 +168,25 @@ for (const revised of [false, true]) test(`无计划Owner阻塞报告：${revise
   await send('task.owner.claim', { taskId: 'task', turnId: 'turn', expectedLeaseEpoch: 0 })
   await send('task.owner.sessionBound', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, sessionId: 'owner' })
   await send('task.owner.candidate', { taskId: 'task', turnId: 'turn', leaseEpoch: 1,
-    decision: { action: 'block', summary: '缺少读取生产状态的能力，尚未开始。', evidenceRefs: [] } })
+    decision: { action: 'block', summary: '请确认目标环境。', evidenceRefs: [],
+      condition: { kind, missing: '目标环境', responsibleParty: '交办人', resumeWhen: '提供目标后继续', evidenceRefs: [] } } })
   await send('task.owner.accept', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
   await send('task.owner.applied', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
   await f.flush()
   const notice = (await f.notices()).find(item => item.payload.phase.startsWith('owner:'))
+  if (['execution', 'capability', 'approval'].includes(kind)) {
+    assert.equal(notice, undefined)
+    const [report] = await f.store.query({ kind: 'task.owner.reports', taskId: 'task' })
+    assert.equal(report.facts.condition.kind, kind)
+    // 模拟部署前已有的待发报告，必须由原生领取判定失效。
+    await f.call('notification.prepare', { runId: 'm', commandId: 'c', notificationId: 'legacy-progress',
+      eventKey: `task.owner.report:${report.reportId}`, payload: { phase: `owner:${report.reportId}`, text: '处理暂时受阻', fact: { taskId: 'task' } },
+      disclosure: { conversationId: 'g', authorizationRef: 'source' } })
+    const claimed = await f.call('notification.claim', { notificationId: 'legacy-progress' })
+    assert.equal(claimed.dispatchEligible, false)
+    assert.equal(claimed.result.notification.status, 'superseded')
+    return
+  }
   assert.ok(notice)
   if (revised) {
     await send('task.requirement.update', { taskId: 'task', expectedRequirementRevision: 1,
@@ -149,7 +205,7 @@ for (const revised of [false, true]) test(`无计划Owner阻塞报告：${revise
   assert.equal((await f.notices()).find(item => item.id === notice.id).status, 'delivered')
 })
 
-test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等', async () => {
+test('Owner无结构化用户操作的阻塞只留内部事实', async () => {
   const run = { runId: 'm', sourceKey: 's', sourceVersion: 1, revision: 0, conversationId: 'g', actorId: 'a', context: { sourceMessageId: 'in' } }
   const action = { commandId: 'c', status: 'applied', kind: 'create', args: { replyPolicy: 'none' }, result: { taskId: 'task', reply: '已收到要求，目前尚未开始。' } }
   const notices = new Map(); let reports = 0
@@ -165,53 +221,52 @@ test('replyPolicy none不丢Task承接及Owner阻塞事实，重新扫描幂等'
   }, async command({ kind, args }) { assert.equal(kind, 'message.notification.prepare'); notices.set(args.notificationId, { ...args, id: args.notificationId }); return {} } }
   await createWorkflowNotifications({ store }).flush()
   await createWorkflowNotifications({ store }).flush()
-  assert.equal(reports, 2); assert.equal(notices.size, 2)
-  assert.ok([...notices.values()].some(n => n.payload.text.includes('尚未开始')))
-  const blocked = [...notices.values()].find(n => n.payload.phase.startsWith('owner:'))
-  assert.ok(blocked.payload.text.startsWith('处理暂时受阻，需要人工介入。'))
-  assert.equal(blocked.payload.text.includes('等待负责人审批'), false)
+  assert.equal(reports, 2); assert.equal(notices.size, 0)
 })
 
-test('同一事项的多条补充不逐条回复，实际开始仍有一次通知', async () => {
+test('同一事项多条补充和实际开始均静默', async () => {
   const run={runId:'supplement',sourceKey:'source',sourceVersion:1,revision:0,conversationId:'g',actorId:'a',context:{sourceMessageId:'in'}}
   const commands=['first','second'].map(commandId=>({commandId,status:'applied',kind:'revise',args:{replyPolicy:'receipt'},result:{taskId:'task',reply:'任务要求已更新，正在核对后续处理。'}}))
   const notices=new Map()
   const store={async query(q){
     if(['message.notification.diagnostics','message.acceptances','task.owner.reports'].includes(q.kind))return []
+    if(q.kind==='message.notifications')return [...notices.values()]
     if(q.kind==='message.list')return [run]
     if(q.kind==='message.run')return {run,requests:[],commands}
     if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
     if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+    if(q.kind==='task.owner.events')return []
     throw Error(q.kind)
   },async command({args}){notices.set(args.notificationId,{...args,id:args.notificationId});return {}}}
   const controller={taskPlan:async()=>({task:{controlState:'active'},stages:[{status:'running',runId:'run'}]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:'2026-10-01T00:00:00Z'}]})}
   for(let n=0;n<2;n++)await createWorkflowNotifications({store,controller}).flush()
-  assert.equal(notices.size,1)
-  assert.equal([...notices.values()][0].payload.text,'任务已开始处理。')
+  assert.equal(notices.size,0)
 })
 
-test('只有节点真实开始才发开始进度，重复扫描沿用同一通知', async () => {
+test('计划、开始和暂停阶段均不主动汇报进度', async () => {
  for(const mode of ['planned','created','started','paused']) {
   const run={runId:'start-message',sourceKey:'source',sourceVersion:1,revision:0,conversationId:'g',actorId:'a',context:{sourceMessageId:'in'}}
   const action={commandId:'start-command',status:'applied',kind:'create',args:{replyPolicy:'none'},result:{taskId:'task'}}
   const notices=new Map()
   const store={async query(q){
    if(q.kind==='message.notification.diagnostics'||q.kind==='message.acceptances'||q.kind==='task.owner.reports')return[]
+   if(q.kind==='message.notifications')return [...notices.values()]
    if(q.kind==='message.list')return[run]
    if(q.kind==='message.run')return{run,requests:[],commands:[action]}
    if(q.kind==='message.notification')return q.eventKey?[...notices.values()].find(n=>n.eventKey===q.eventKey):notices.get(q.notificationId)
    if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
-   throw Error(q.kind)
+   if(q.kind==='task.owner.events')return []
+    throw Error(q.kind)
   },async command({args}){notices.set(args.notificationId,{...args,id:args.notificationId});return{}}}
   const controller={taskPlan:async()=>({task:{controlState:mode==='paused'?'paused':'active'},stages:[{status:mode==='planned'?'planned':'running',runId:'run'}]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:mode==='created'?null:'2026-10-01T00:00:00Z'}]})}
   for(let n=0;n<2;n++)await createWorkflowNotifications({store,controller}).flush()
   const starts=[...notices.values()].filter(n=>n.payload.phase.startsWith('owner:started:'))
-  assert.equal(starts.length,mode==='started'?1:0)
+  assert.equal(starts.length,0)
   if(starts.length)assert.equal(starts[0].payload.text,'任务已开始处理。')
  }
 })
 
-for (const started of [false, true]) test(`开始通知领取核对真实执行状态：${started}`, async t => {
+for (const started of [false, true]) test(`升级前已准备的开始通知在原生领取时静默失效：${started}`, async t => {
   const f = await fixture(t)
   const send = (kind, args) => f.store.command({ id: randomUUID(), kind, args })
   await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '任务' }] })
@@ -223,9 +278,11 @@ for (const started of [false, true]) test(`开始通知领取核对真实执行�
   await send('run.create', { runId: 'business', taskId: 'task', workflowId: 'w', workflowDigest: 'a'.repeat(64), requirementRef: 'sha256/in', stageBinding: { planRevision: 1, stageId: 'stage-1', attempt: 1, expectedControlRevision: 1 }, nodes: [{ nodeId: 'n', nodeVersion: '1', executor: 'code', inputRef: 'sha256/in', inputDigest: 'a'.repeat(64) }] })
   if (started) await send('node.claim', { runId: 'business', nodeId: 'n', expectedGeneration: 1, expectedLeaseEpoch: 0 })
   await f.call('notification.prepare', { runId: 'm', commandId: 'start-command', notificationId: 'start', eventKey: 'task.owner.report:started:business', payload: { phase: 'owner:started:business', text: '任务已开始处理。', fact: { taskId: 'task', sourceVersion: 1, runRevision: 0 } }, disclosure: { conversationId: 'g', authorizationRef: 'source' } })
+  assert.deepEqual((await f.store.query({kind:'message.notifications',taskId:'task',states:['prepared']})).map(n=>n.id),['start'])
+  assert.deepEqual(await f.store.query({kind:'message.notifications',taskId:'other-task',states:['prepared']}),[])
   const claim = await f.call('notification.claim', { notificationId: 'start' })
-  assert.equal(claim.dispatchEligible, started)
-  assert.equal(claim.result.notification.status, started ? 'sending' : 'superseded')
+  assert.equal(claim.dispatchEligible, false)
+  assert.equal(claim.result.notification.status, 'superseded')
 })
 
 test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared正常投递', async t => {
@@ -234,7 +291,7 @@ test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared�
   await send('task.accept',{taskId:'task',requirementRef:`sha256-${'a'.repeat(64)}.json`,requirementRevision:1,sessionId:'owner',criteria:['交付结果'],sourceKey:'source',eventKey:'created'})
   await send('task.owner.claim',{taskId:'task',turnId:'turn',expectedLeaseEpoch:0})
   await send('task.owner.sessionBound',{taskId:'task',turnId:'turn',leaseEpoch:1,sessionId:'owner'})
-  await send('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'block',summary:'等待审批',evidenceRefs:[]}})
+  await send('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'block',summary:'等待审批',evidenceRefs:[],condition:{kind:'business-input',missing:'目标环境',responsibleParty:'需求方',resumeWhen:'提供环境后继续',evidenceRefs:[]}}})
   await send('task.owner.accept',{taskId:'task',turnId:'turn',leaseEpoch:1})
   await send('task.owner.applied',{taskId:'task',turnId:'turn',leaseEpoch:1})
   const [report]=await f.store.query({kind:'task.owner.reports',taskId:'task'})
@@ -250,7 +307,7 @@ test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared�
   const old=(await f.call('notification.claim',{notificationId:'old-id-other-command'})).result.notification
   await f.call('notification.sent',{notificationId:old.id,leaseEpoch:old.leaseEpoch,ack:{messageId:'old-out'}})
   await f.call('notification.readback',{notificationId:old.id,leaseEpoch:old.leaseEpoch,evidence:{messageId:'old-out'}})
-  await f.call('attention',{runId:'m',reason:'MANUAL_RECOVERY_REQUIRED'})
+  await f.call('wait',{runId:'m',unitId:'$',nodeId:'R',reason:'需要业务信息',request:{requestId:'question',kind:'needs_clarification',question:'请选择目标环境',permittedActors:['a']}})
   const store=f.store
   let sends=0
   await createWorkflowNotifications({store,adapter:{canDisclose:async()=>true,send:async()=>{sends++;return {messageId:'new-out'}},readback:async()=>({messageId:'new-out'})}}).flush()
@@ -262,7 +319,7 @@ test('旧Owner报告跨command已送达，稳定eventKey复用且其他prepared�
 
 test('单条事实失败不阻断unknown回读，诊断可回读且相同错误不反复写账',async t=>{
   const f=await fixture(t)
-  await f.call('attention',{runId:'m',reason:'MANUAL_RECOVERY_REQUIRED'})
+  await f.call('wait',{runId:'m',unitId:'$',nodeId:'R',reason:'需要业务信息',request:{requestId:'question',kind:'needs_clarification',question:'请选择目标环境',permittedActors:['a']}})
   await f.flush({canDisclose:async()=>true,send:async()=>{throw Error('ACK_LOST')},readback:async()=>null})
   let broken=true,diagnosticWrites=0,reads=0
   const store={query:q=>{if(broken&&q.kind==='message.acceptances')throw Error('BROKEN_FACT');return f.store.query(q)},command:q=>{if(q.kind==='message.notification.diagnostic')diagnosticWrites++;return f.store.command(q)}}
@@ -276,164 +333,6 @@ test('单条事实失败不阻断unknown回读，诊断可回读且相同错误�
   broken=false;await notifier.flush()
   state=await f.store.query({kind:'message.run',runId:'m'})
   assert.equal(state.notificationDiagnostics[0].status,'resolved');assert.equal(diagnosticWrites,2)
-})
-
-
-test('逻辑来源等待跨原因和重放去重，不同来源独立告知', async t => {
-  const f = await fixture(t)
-  let sends = 0
-  const adapter = { canDisclose: async () => true, send: async () => ({ messageId: `out-${++sends}` }), readback: async n => ({ messageId: n.ack.messageId }) }
-  await f.call('attention', { runId: 'm', reason: 'MESSAGE_NODE_TIMEOUT' })
-  await f.flush(adapter)
-  await f.call('attention', { runId: 'm', reason: 'MANUAL_RECOVERY_REQUIRED' })
-  await f.flush(adapter)
-  assert.equal(sends, 1)
-  await f.call('reprocess', { runId: 'm', newRunId: 'm2', reason: '修复后恢复' })
-  await f.call('attention', { runId: 'm2', reason: 'OTHER_INTERNAL_FAILURE' })
-  await f.flush(adapter)
-  assert.equal(sends, 1)
-  await f.call('receive', { runId: 'other', sourceKey: 'other-source', sourceVersion: 1, conversationId: 'g', actorId: 'a', body: '另一件事', context: { sourceMessageId: 'other-in' } })
-  await f.call('attention', { runId: 'other', reason: 'OTHER_INTERNAL_FAILURE' })
-  await f.flush(adapter)
-  assert.equal(sends, 2)
-  const notices = await f.store.query({ kind: 'message.notifications', sourceKey: 'source', states: ['delivered'] })
-  assert.equal(notices.length, 1)
-  assert.equal(notices[0].runId, 'm')
-})
-
-test('未知发送同等待仅回查，未发送旧版本不遮蔽新版本', async t => {
-  const f = await fixture(t)
-  await f.call('attention', { runId: 'm', reason: 'FIRST' })
-  await f.flush()
-  await f.call('reprocess', { runId: 'm', newRunId: 'm2', reason: '修复' })
-  await f.call('attention', { runId: 'm2', reason: 'SECOND' })
-  let sends = 0
-  const adapter = { canDisclose: async () => true, send: async () => { sends++; throw Error('ACK_LOST') }, readback: async () => null }
-  await f.flush(adapter)
-  await f.call('attention', { runId: 'm2', reason: 'THIRD' })
-  await f.flush(adapter)
-  assert.equal(sends, 1)
-  assert.deepEqual((await f.notices()).map(n => n.status), ['superseded', 'unknown'])
-})
-
-
-test('同来源正文修改是新请求，公开等待事实变化后可再次告知', async t => {
-  const f = await fixture(t)
-  let sends = 0
-  const adapter = { canDisclose: async () => true, send: async () => ({ messageId: `out-${++sends}` }), readback: async n => ({ messageId: n.ack.messageId }) }
-  await f.call('attention', { runId: 'm', reason: 'FIRST' })
-  await f.flush(adapter)
-  await f.call('receive', { runId: 'edited', sourceKey: 'source', sourceVersion: 2, conversationId: 'g', actorId: 'a', body: '修改后的新要求', context: { sourceMessageId: 'in' } })
-  await f.call('attention', { runId: 'edited', reason: 'FIRST' })
-  await f.flush(adapter)
-  assert.equal(sends, 2)
-  await f.call('attention', { runId: 'edited', reason: 'MESSAGE_CONTEXT_CAPACITY:S' })
-  await f.flush(adapter)
-  assert.equal(sends, 2)
-  await f.call('attention', { runId: 'edited', reason: 'FIRST' })
-  await f.flush(adapter)
-  assert.equal(sends, 2)
-  await f.flush(adapter)
-  assert.equal(sends, 2)
-})
-
-
-test('等待通知仅显示进度，不复述原文或话题标题', async t => {
-  const f = await fixture(t)
-  await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
-  await f.call('topic.bind', { runId: 'm', unitId: 'u', expectedRevision: 0,
-    binding: { kind: 'binding', disposition: 'new', candidateId: null },
-    topic: { topicId: 'topic', conversationId: 'g', sourceRunId: 'm', unitId: 'u', title: '不相关的旧主题', facts: [] } })
-  await f.call('attention', { runId: 'm', reason: 'FIRST' })
-  await f.flush()
-  assert.equal((await f.notices())[0].payload.text, '处理遇到系统问题，无法继续推进，需要人工介入。')
-})
-
-
-test('已送达旧等待文案，简化为进度后不重发', async t => {
-  const f = await fixture(t)
-  await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
-  await f.call('attention', { runId: 'm', reason: 'OLD_TECHNICAL_REASON' })
-  const { run } = await f.store.query({ kind: 'message.run', runId: 'm' })
-  const text = '已收到，目前处理遇到系统问题，尚未完成，需要先排查恢复。你暂时不需要重复提交或补充内部资料。'
-  await f.call('notification.prepare', { runId: 'm', notificationId: 'old-unlabelled', eventKey: 'old-wait',
-    stateFact: { revision: run.revision, status: run.status, reason: run.reason, intentStatus: run.intentStatus ?? null, phase: 'attention' },
-    payload: { text, phase: 'attention', conversationId: 'g', sourceMessageId: 'in', actorId: 'a' },
-    disclosure: { conversationId: 'g', authorizationRef: 'source' } })
-  const n = (await f.call('notification.claim', { notificationId: 'old-unlabelled' })).result.notification
-  await f.call('notification.sent', { notificationId: n.id, leaseEpoch: n.leaseEpoch, ack: { messageId: 'old-out' } })
-  await f.call('notification.readback', { notificationId: n.id, leaseEpoch: n.leaseEpoch, evidence: { messageId: 'old-out' } })
-  await f.call('attention', { runId: 'm', reason: 'NEW_TECHNICAL_REASON' })
-  let sends = 0
-  await f.flush({ canDisclose: async () => true, send: async () => { sends++; return {} }, readback: async () => null })
-  assert.equal(sends, 0)
-  assert.equal((await f.notices()).length, 1)
-  assert.equal((await f.notices())[0].payload.text, text)
-})
-
-for (const revised of [false, true]) test(`Owner决定应用失败系统告知：${revised ? '新需求使未发报告失效' : '可发送且unknown在更新后仍回读'}`, async t => {
-  const f = await fixture(t)
-  await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
-  await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task', replyPolicy: 'none' } }] })
-  const claim = (await f.call('command.claim', { commandId: 'c' })).result.command
-  const send = (kind, args) => f.store.command({ id: randomUUID(), kind, args })
-  await send('task.accept', { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`, requirementRevision: 1,
-    sessionId: 'owner', criteria: ['交付结果'], sourceKey: 'source', eventKey: 'created' })
-  await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task' } })
-  await send('task.owner.claim', { taskId: 'task', turnId: 'turn', expectedLeaseEpoch: 0 })
-  await send('task.owner.sessionBound', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, sessionId: 'owner' })
-  await send('task.owner.candidate', { taskId: 'task', turnId: 'turn', leaseEpoch: 1,
-    decision: { action: 'repairCurrentStage', repair: { stageId: 'stage-1', runId: 'r', generation: 1, runRevision: 0, requirementRevision: 1 }, summary: '缺少读取生产状态的能力，尚未开始。', evidenceRefs: [] } })
-  await send('task.owner.accept', { taskId: 'task', turnId: 'turn', leaseEpoch: 1 })
-  await send('task.owner.action.fail', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, reason: 'WORKFLOW_REPAIR_NOT_ADMITTED' })
-  await f.flush()
-  const notice = (await f.notices()).find(item => item.payload.phase.startsWith('owner:'))
-  assert.ok(notice)
-  assert.match(notice.payload.phase, /^owner:application_wait:/)
-  assert.match(notice.payload.text, /需要人工介入/)
-  assert.doesNotMatch(notice.payload.text, /缺少读取生产状态|WORKFLOW_REPAIR/)
-  await f.flush()
-  assert.equal((await f.notices()).filter(n => n.payload.phase.startsWith('owner:application_wait:')).length, 1)
-  if (revised) {
-    await send('task.requirement.update', { taskId: 'task', expectedRequirementRevision: 1,
-      requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'before-claim' })
-    const stale = await f.call('notification.claim', { notificationId: notice.id })
-    assert.equal(stale.dispatchEligible, false)
-    assert.equal(stale.result.notification.status, 'superseded')
-    return
-  }
-  await f.call('notification.prepare',{runId:'m',commandId:'c',notificationId:'concurrent-owner-wait',eventKey:'concurrent-owner-wait',payload:notice.payload,disclosure:notice.disclosure})
-  const preparedClaim = await f.call('notification.claim', { notificationId: notice.id })
-  assert.equal(preparedClaim.dispatchEligible, true)
-  const concurrent=await f.call('notification.claim',{notificationId:'concurrent-owner-wait'})
-  assert.equal(concurrent.dispatchEligible,false)
-  assert.equal(concurrent.result.notification.status,'superseded')
-  await f.call('notification.fail', { notificationId: notice.id, leaseEpoch: preparedClaim.result.notification.leaseEpoch, error: 'ack lost' })
-  await send('task.requirement.update', { taskId: 'task', expectedRequirementRevision: 1,
-    requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'new-requirement' })
-  await f.flush({ canDisclose: async () => true, send: async () => { throw new Error('no new send expected') }, readback: async () => ({ messageId: 'out' }) })
-  assert.equal((await f.notices()).find(item => item.id === notice.id).status, 'delivered')
-  for (const epoch of [2,3]) {
-    if (epoch === 3) await send('task.owner.event',{taskId:'task',eventKey:'actual-success',eventType:'workflow.succeeded'})
-    await send('task.owner.claim',{taskId:'task',turnId:`turn-${epoch}`,expectedLeaseEpoch:epoch-1})
-    await send('task.owner.candidate',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch,decision:{action:'repairCurrentStage',repair:{stageId:'stage-1',runId:'r',generation:epoch,runRevision:0,requirementRevision:2},summary:'同一受阻条件',evidenceRefs:[]}})
-    await send('task.owner.accept',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch})
-    await send('task.owner.action.fail',{taskId:'task',turnId:`turn-${epoch}`,leaseEpoch:epoch,reason:'OTHER_TECHNICAL_ERROR'})
-    await f.flush()
-    assert.equal((await f.notices()).filter(n=>n.payload.phase.startsWith('owner:application_wait:')&&n.status!=='superseded').length,epoch===2?1:2)
-  }
-})
-
-test('标题更正遇到真实归类等待只给简洁进度，不复述原文或催重复材料',async t=>{
- const f=await fixture(t,'表格的标题写错了，应该是新的LCA专家')
- await f.call('split',{runId:'m',units:[{unitId:'u',goalText:'表格的标题写错了，应该是新的LCA专家'}]})
- await f.call('topic.bind',{runId:'m',unitId:'u',expectedRevision:0,binding:{kind:'binding',disposition:'new',candidateId:null},topic:{topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'标题更正',facts:[]}})
- const oldNow=Date.now;Date.now=()=>oldNow()+61000
- try{await f.flush()}finally{Date.now=oldNow}
- const notice=(await f.notices()).find(n=>n.payload.phase==='routing_wait')
- assert.ok(notice)
- assert.equal(notice.payload.text,'目前正在核对可能相关的补充要求，相关处理尚未开始；核对清楚后继续。')
- assert.doesNotMatch(notice.payload.text,/关于|已收到|重复提交|标题写错/)
 })
 
 
@@ -478,34 +377,51 @@ test('短引用通知只允许明确发送人前缀及完整正文匹配',()=>{
  }
 })
 
-for(const recoverBeforeClaim of [false,true])test(`Owner真实实现阻塞首次released无report即告知，恢复边界：${recoverBeforeClaim}`,async t=>{
- const f=await fixture(t),send=(kind,args)=>f.store.command({id:randomUUID(),kind,args})
- await f.call('split',{runId:'m',units:[{unitId:'u',goalText:'核验'}]})
- await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'create',args:{taskId:'task',replyPolicy:'none'}}]})
- const claim=(await f.call('command.claim',{commandId:'c'})).result.command
- await send('task.accept',{taskId:'task',requirementRef:`sha256-${'a'.repeat(64)}.json`,requirementRevision:1,sessionId:'owner',criteria:['核验'],sourceKey:'source',eventKey:'created'})
- await f.call('command.complete',{commandId:'c',leaseEpoch:claim.leaseEpoch,result:{taskId:'task'}})
- let epoch=0
- const release=async()=>{const previous=epoch++;await send('task.owner.claim',{taskId:'task',turnId:`released-${epoch}`,expectedLeaseEpoch:previous});await send('task.owner.release',{taskId:'task',turnId:`released-${epoch}`,leaseEpoch:epoch,reason:'ADVANCE_CONFLICT'})}
- await f.flush()
- assert.equal((await f.notices()).filter(n=>n.payload.phase.startsWith('owner:application_wait:')).length,0)
- await release();await f.flush();await f.flush()
- assert.deepEqual(await f.store.query({kind:'task.owner.reports',taskId:'task'}),[])
- const notices=(await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released')
- assert.equal(notices.length,1);assert.equal(notices[0].payload.text,'处理遇到系统问题，无法继续推进，需要人工介入。')
- if(recoverBeforeClaim){
-  await send('task.owner.event',{taskId:'task',eventKey:'recovered',eventType:'workflow.succeeded'})
-  const result=await f.call('notification.claim',{notificationId:notices[0].id})
-  assert.equal(result.dispatchEligible,false);assert.equal(result.result.notification.status,'superseded');return
- }
- let sends=0
- const adapter={canDisclose:async()=>true,send:async()=>({messageId:`sent-${++sends}`}),readback:async n=>({messageId:n.ack.messageId})}
- await f.flush(adapter);await f.flush(adapter)
- assert.equal((await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released'&&n.status==='delivered').length,1)
- const sentBefore=sends
- await send('task.owner.event',{taskId:'task',eventKey:'actual-recovery',eventType:'workflow.succeeded'})
- await release()
- await f.flush(adapter);await f.flush(adapter)
- assert.equal(sends,sentBefore+1)
- assert.equal((await f.notices()).filter(n=>n.payload.phase==='owner:application_wait:released'&&n.status==='delivered').length,2)
+test('升级前发送未知的进度仅回读，未发送的系统等待原生失效', async t => {
+ const f=await fixture(t)
+ await f.call('attention',{runId:'m',reason:'MANUAL_RECOVERY_REQUIRED'})
+ const {run}=await f.store.query({kind:'message.run',runId:'m'})
+ await f.call('notification.prepare',{runId:'m',notificationId:'old-wait',eventKey:'old-wait',
+  stateFact:{revision:run.revision,status:run.status,reason:run.reason,intentStatus:run.intentStatus??null,phase:'attention'},
+  payload:{phase:'attention',text:'处理暂时受阻',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'source'}})
+ const claimed=await f.call('notification.claim',{notificationId:'old-wait'})
+ assert.equal(claimed.dispatchEligible,false)
+ assert.equal(claimed.result.notification.status,'superseded')
+ const unknown={id:'old-progress',runId:'m',status:'unknown',leaseEpoch:1,payload:{phase:'owner:started:old',text:'任务已开始处理。'}}
+ let sends=0,reads=0,confirmed=0
+ const store={query:async q=>q.kind==='message.notifications'&&q.states.includes('unknown')?[unknown]:[],
+  command:async({kind,args})=>{assert.equal(kind,'message.notification.readback');assert.equal(args.notificationId,unknown.id);confirmed++;return{}}}
+ await createWorkflowNotifications({store,adapter:{canDisclose:async()=>true,send:async()=>{sends++},
+  readback:async()=>{reads++;return{messageId:'original-send'}}}}).flush()
+ assert.deepEqual({sends,reads,confirmed},{sends:0,reads:1,confirmed:1})
+})
+
+for(const scenario of ['internal-progress','ordinary-progress','internal-started','internal-block','complete','user-action','new-intent'])test(`所有任务采用相同通知策略：${scenario}`,async()=>{
+ const run={runId:'silent-message',sourceKey:'source',sourceVersion:1,revision:0,conversationId:'g',actorId:'a',context:{sourceMessageId:'in'}}
+ const action={commandId:'silent-command',status:'applied',kind:'revise',args:{replyPolicy:'none'},result:{taskId:'task'}}
+ const events=Array.from({length:200},(_,i)=>({eventSeq:i+1,eventKey:i===199?'readonly-reassess:verified':'historical:'+i,eventType:i===199?'system.recovery':'workflow.succeeded',turnId:'historical'}))
+ if(scenario==='ordinary-progress')events[199].eventKey='ordinary-recovery'
+ if(scenario==='new-intent')events.push({eventSeq:201,eventKey:'new-source',eventType:'intent.received',turnId:'new'})
+ events.push({eventSeq:202,eventKey:'stage-finished',eventType:'workflow.succeeded',turnId:'reported-turn'})
+ const reportType=scenario==='complete'?'complete':scenario==='internal-block'?'block':scenario==='user-action'?'wait':'advance'
+ const condition={kind:scenario==='internal-block'?'capability':'business-input',missing:'待确认字段规格',responsibleParty:'需求方',resumeWhen:'确认后继续',evidenceRefs:['proof']}
+ const report={reportId:'reported',turnId:'reported-turn',reportType,applicationStatus:'applied',triggerTypes:['workflow.succeeded'],facts:{summary:'已核对工单，正在验收',evidenceRefs:['proof'],...(['block','wait'].includes(reportType)?{condition}:{})}}
+ const notices=new Map(),pages=[]
+ const store={async query(q){
+  if(['message.notification.diagnostics','message.acceptances'].includes(q.kind))return []
+  if(q.kind==='message.list')return [run]
+  if(q.kind==='message.run')return{run,requests:[],commands:[action]}
+  if(q.kind==='task.owner.events'){pages.push(q.afterSequenceId);return events.filter(e=>e.eventSeq>q.afterSequenceId).slice(0,q.limit)}
+  if(q.kind==='task.owner.reports')return scenario==='internal-started'?[]:[report]
+  if(q.kind==='message.notification')return notices.get(q.notificationId)
+  if(q.kind==='message.notifications')return [...notices.values()]
+  if(['message.task.latest','task.deleted','message.owner.released-wait'].includes(q.kind))return null
+  throw Error(q.kind)
+ },async command({kind,args}){assert.equal(kind,'message.notification.prepare');notices.set(args.notificationId,{...args,id:args.notificationId});return{}}}
+ const controller={taskPlan:async()=>({task:{controlState:'active'},stages:scenario==='internal-started'?[{status:'running',runId:'investigation'}]:[]}),state:async()=>({run:{status:'running'},nodes:[{status:'running',startedAt:'2026-10-02T00:00:00Z'}]})}
+ for(let n=0;n<2;n++)await createWorkflowNotifications({store,controller}).flush()
+ const visible=[...notices.values()].filter(n=>n.payload.phase.startsWith('owner:'))
+ assert.equal(visible.length,['complete','user-action'].includes(scenario)?1:0)
+ assert.equal(pages.length,0) // 通知策略不再依赖特殊恢复事件分页。
+ if(scenario==='complete')assert.match(visible[0].payload.text,/^任务已完成/u)
 })

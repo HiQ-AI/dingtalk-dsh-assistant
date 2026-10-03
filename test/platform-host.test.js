@@ -133,3 +133,35 @@ test('Host 将三个 Bytebase 生产目标分别绑定天翼云只读从库凭�
   assert.deepEqual(observed[0].entries.map(entry => entry.connection.user), databases.map(db => `user-${db}`))
   assert.equal('password' in clients.productionPostgres, false)
 })
+
+test('加列验收先独立确认Bytebase执行，再查询生产只读连接；未完成不读列', async () => {
+  const databases = ['hiq_editor', 'hiq_background_db', 'hiq_admin']
+  const target = { instance: 'instances/flbnpguaf', database: 'instances/flbnpguaf/databases/hiq_editor', environment: 'production' }
+  const taskId = 'projects/flbn/plans/1/rollout/stages/prod/tasks/1', taskRunId = `${taskId}/taskRuns/1`
+  let status = 'DONE', columnReads = 0
+  const bytebase = { queryVerification: async () => { throw Error('UNEXPECTED_BYTEBASE_QUERY') },
+    findIssueByTaskPlan: async () => ({ issueId: 'projects/flbn/issues/1' }),
+    getIssueBundle: async () => ({ plan: { id: 'projects/flbn/plans/1' }, task: { id: taskId },
+      sheet: { target }, issue: { packageDigest: 'a'.repeat(64) } }),
+    getTaskExecution: async () => ({ task: { status }, taskRun: { id: taskRunId, status } }) }
+  const clients = await createHostPlatformClients({ secretsDirectory: 'C:/secret-home',
+    productionPostgres: { targets: databases.map(database => ({ project: 'projects/flbn',
+      target: { ...target, database: `instances/flbnpguaf/databases/${database}` } })) },
+    statImpl: async () => ({ isFile: () => true }),
+    readFileImpl: async path => path.endsWith('bytebase.json') ? JSON.stringify({ username: 'fixture', password: 'secret' })
+      : JSON.stringify({ connections: Object.fromEntries(['editor', 'bg', 'admin'].map((name, index) => [`tianyi_${name}_slave`, {
+        host: '101.89.215.147', port: 5432, db: databases[index], user: 'fixture', password: 'secret' }])) }),
+    execFileImpl: async name => ({ stdout: name === 'kubectl'
+      ? JSON.stringify({ data: { WOODPECKER_TOKEN: Buffer.from('fixture').toString('base64') } }) : 'fixture' }),
+    createClients: () => ({ bytebase, kubernetes: { readDeployment() {}, readPods() {}, readEntry() {} } }),
+    loadPostgres: async () => ({ Client: class {} }),
+    createProductionPostgres: () => ({ queryVerification: async args => { columnReads++; return { passed: true, ...args } } }),
+  })
+  const args = { project: 'projects/flbn', target: { database: target.database, environment: target.environment, instance: target.instance },
+    taskRunId, sql: "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema='public' AND table_name='t' AND column_name='label'", expectedChange: '{}' }
+  assert.equal((await clients.bytebase.queryVerification(args)).packageDigest, 'a'.repeat(64))
+  assert.equal(columnReads, 1)
+  status = 'PENDING'
+  await assert.rejects(clients.bytebase.queryVerification(args), /BYTEBASE_TASK_RUN_UNCONFIRMED/)
+  assert.equal(columnReads, 1)
+})

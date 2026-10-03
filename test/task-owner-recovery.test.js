@@ -9,6 +9,125 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
+import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
+
+test('Owner经真实恢复合同续行原Agent节点和会话，保留成功前缀与输入', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'owner-agent-continuation-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.sqlite'), instanceId: 'owner-agent-continuation', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  let owner, prefixCalls = 0, finalCalls = 0
+  const visits = []
+  const agentSessions = { async close() {}, async cancel() {}, async run({ binding, input, recoveryContext, onSessionBound, onResult }) {
+    await onSessionBound()
+    visits.push({ binding, input, recoveryContext })
+    if (visits.length === 1) await onResult({ ready: false, reason: '查询参数错误，需修正后继续' })
+    else {
+      assert.equal(recoveryContext.kind, 'execution-recovery-context')
+      assert.equal(recoveryContext.nodeRunId, binding.nodeRunId)
+      assert.equal(recoveryContext.strategy, '根据原始诊断修正查询参数并继续当前核验')
+      await onResult({ ready: true, result: 7 })
+    }
+    return { status: 'submitted' }
+  } }
+  const object = { type: 'object' }
+  const workflow = { id: 'review-inventory', version: '1', nodes: [
+    { id: 'prepare', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: object, outputSchema: object,
+      mapInput: ({ requirement }) => requirement, execute: async () => { prefixCalls++; return { prepared: true } } },
+    { id: 'review', version: '1', executor: 'agent', allowedEffects: ['read'], allowedTools: [], provider: 'fixture', model: 'scripted', prompt: '核对当前库存',
+      inputSchema: object, outputSchema: object, mapInput: ({ previousOutput }) => previousOutput,
+      admitOutput: ({ output }) => output.ready ? { outcome: 'succeeded' } : { outcome: 'failed', waitReason: { kind: 'recovery', reference: 'AGENT_WORK_BLOCKED' } } },
+    { id: 'finish', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: object, outputSchema: object,
+      mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => { finalCalls++; return input } },
+  ] }
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow], sessions: agentSessions })
+  t.after(async () => { await owner?.close(); await controller.close(); await store.close() })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'first', workflowId: workflow.id, input: { request: '核对库存' } }] })
+  const started = await controller.advanceTaskPlan('task'), runId = started.stages[0].runId
+  const failed = await controller.whenIdle(runId)
+  await controller.advanceTaskPlan('task')
+  assert.equal((await controller.taskPlan('task')).stages[0].status, 'blocked')
+  const helpers = createTaskWorkflowContracts({ controller, store, artifacts })
+  owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller, modelConfig: () => ({}),
+    advanceTask: async () => {}, authorizeStages: async () => false,
+    inspectCurrentExecution: helpers.inspectCurrentExecution, repairCurrentStage: helpers.repairCurrentStage,
+    sessionRunner: { async close() {}, async run({ input, readArtifact, onSessionBound, onCandidate }) {
+      await onSessionBound()
+      assert.equal(input.currentExecution.repairable, true)
+      for (const ref of input.currentExecution.evidenceRefs) await readArtifact(ref)
+      const decision = { action: 'repairCurrentStage', summary: '根据原始诊断修正查询参数并继续当前核验',
+        repair: input.currentExecution.repairBinding, evidenceRefs: input.currentExecution.evidenceRefs }
+      await onCandidate(decision); return { status: 'submitted', decision }
+    } } })
+  await owner.ensure({ taskId: 'task', criteria: ['核对库存'], sourceKey: 'source', origin: {} })
+  await owner.observe('task'); await owner.drive('task')
+  assert.deepEqual(await owner.applyPending(), [])
+  const resumed = await controller.whenIdle(runId)
+  assert.equal(resumed.run.status, 'succeeded')
+  assert.equal(resumed.run.generation, failed.run.generation)
+  assert.equal(prefixCalls, 1); assert.equal(finalCalls, 1); assert.equal(visits.length, 2)
+  for (const field of ['sessionId', 'nodeRunId', 'generation', 'inputDigest']) assert.equal(visits[1].binding[field], visits[0].binding[field], field)
+  assert.ok(visits[1].binding.leaseEpoch > visits[0].binding.leaseEpoch)
+  assert.deepEqual(visits[1].input, visits[0].input)
+  assert.equal(resumed.nodes[0].outputRef, failed.nodes[0].outputRef)
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'task' })).decision.action, 'repairCurrentStage')
+})
+
+for (const repairable of [true, false]) test(`Owner读取诊断后推进可恢复问题，真实外部等待仍可保留：${repairable}`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'owner-continuation-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.sqlite'), instanceId: 'continuation', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const workflow = { id: 'inspect', version: '1', nodes: [{ id: 'read', version: '1', executor: 'code', allowedEffects: ['read'],
+    inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement,
+    execute: async () => { if (repairable) return { parameter: 'column', reason: 'QUERY_PARAMETER_INVALID' }
+      throw Object.assign(Error('等待真人审批'), { code: 'PLUGIN_APPROVAL_PENDING', evidence: [{ approval: 'pending' }] }) },
+    ...(repairable ? { admitOutput: () => ({ outcome: 'failed', waitReason: { kind: 'recovery', reference: 'QUERY_PARAMETER_INVALID' } }) } : {}) }] }
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow] })
+  let owner, repairCalls = 0
+  t.after(async () => { await owner?.close(); await controller.close(); await store.close() })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'first', workflowId: 'inspect', input: { request: '读取当前表' } }] })
+  const started = await controller.advanceTaskPlan('task'), runId = started.stages[0].runId
+  const state = await controller.whenIdle(runId)
+  const failedPlan = await controller.advanceTaskPlan('task')
+  assert.equal(failedPlan.stages[0].status, repairable ? 'blocked' : 'running')
+  const evidenceRefs = state.nodes[0].evidenceRefs
+  assert.ok(evidenceRefs.length)
+  let observedReason = repairable ? 'QUERY_PARAMETER_INVALID' : 'PLUGIN_APPROVAL_PENDING'
+  const inspectCurrentExecution = async () => ({ stageId: 'first', runId, mode: 'resume-agent', repairable, reason: observedReason, evidenceRefs,
+    nodeRunId: state.nodes[0].nodeRunId, generation: state.run.generation, leaseEpoch: state.nodes[0].leaseEpoch, inputDigest: state.nodes[0].inputDigest,
+    repairBinding: { stageId: 'first', runId, generation: state.run.generation, runRevision: state.run.revision, requirementRevision: 1 } })
+  owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller,
+    modelConfig: () => ({}), advanceTask: async () => {}, authorizeStages: async () => false, inspectCurrentExecution,
+    repairCurrentStage: async () => { repairCalls++ },
+    sessionRunner: { async close() {}, async run({ input, readArtifact, onSessionBound, onCandidate }) {
+      await onSessionBound()
+      const waiting = action => ({ action, summary: '等待当前必要条件', evidenceRefs,
+        condition: { kind: 'approval', missing: '真人批准', responsibleParty: '审批人', resumeWhen: '插件审批结果到达', evidenceRefs } })
+      if (!repairable) { const decision = waiting('wait'); await onCandidate(decision); return { status: 'submitted', decision } }
+      for (const action of ['wait', 'block']) await assert.rejects(onCandidate(waiting(action)), { code: 'TASK_OWNER_RECOVERY_AVAILABLE' })
+      const decision = { action: 'repairCurrentStage', summary: '读取错误并修正查询参数', evidenceRefs, repair: input.currentExecution.repairBinding }
+      await assert.rejects(onCandidate(decision), { code: 'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD' })
+      await readArtifact(state.nodes[0].outputRef)
+      await assert.rejects(onCandidate({ ...decision, evidenceRefs: [state.nodes[0].outputRef] }), { code: 'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD' })
+      for (const ref of evidenceRefs) await readArtifact(ref)
+      await onCandidate(decision)
+      return { status: 'submitted', decision }
+    } } })
+  await owner.ensure({ taskId: 'task', criteria: ['读取当前表'], sourceKey: 'source', origin: {} })
+  await owner.observe('task')
+  const before = await store.query({ kind: 'task.owner', taskId: 'task' })
+  await owner.observe('task')
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'task' })).eventWatermark, before.eventWatermark)
+  await owner.drive('task')
+  assert.deepEqual(await owner.applyPending(), [])
+  assert.equal(repairCalls, repairable ? 1 : 0)
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'task' })).decision.action, repairable ? 'repairCurrentStage' : 'wait')
+  observedReason = 'NEW_DIAGNOSTIC'
+  await owner.observe('task')
+  const changed = await store.query({ kind: 'task.owner', taskId: 'task' })
+  assert.ok(changed.eventWatermark > before.eventWatermark)
+  await owner.observe('task')
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'task' })).eventWatermark, changed.eventWatermark)
+})
 
 // 使用完整原生 Store 和持久文件，覆盖维护命令、事务 CAS 与重启；不连接外部服务。
 async function fixture(t) {
@@ -147,4 +266,70 @@ test('新Task首轮输入不把未建立计划误判为需求过期，同turn纠
  assert.equal(state.failureCount,0)
  const actions=await store.query({kind:'task.owner.actions.pending'})
  assert.equal(actions.length,1);assert.equal(actions[0].decision.planChange.kind,'initialize')
+})
+
+
+for (const barrier of ['future-retry', 'pending-message']) test(`真实控制账Owner派发不空转且原恢复可继续：${barrier}`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'owner-dispatch-barrier-'))
+  const dbPath = join(directory, 'control.sqlite')
+  const store = await openExecutionStore({ dbPath, instanceId: 'dispatch-barrier', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const controller = createExecutionController({ store, artifacts, workflows: [] })
+  let owner, calls = 0, scans = 0, claims = 0
+  t.after(async () => { await owner?.close(); await controller.close(); await store.close() })
+  const command = (kind, args) => store.command({ id: randomUUID(), kind, args })
+  const receive = id => command('message.receive', { runId: id, sourceKey: id, sourceVersion: 1,
+    conversationId: 'group', actorId: 'actor', body: `来源 ${id}` })
+  await receive('origin')
+  await command('message.split', { runId: 'origin', units: [{ unitId: 'origin-unit' }] })
+  await command('message.topic.bind', { runId: 'origin', unitId: 'origin-unit', expectedRevision: 0,
+    binding: { type: 'topic' }, topic: { topicId: 'topic', conversationId: 'group', sourceRunId: 'origin',
+      unitId: 'origin-unit', title: '原任务', facts: [] } })
+  await command('message.topic.intent.accept', { runId: 'origin', topicId: 'topic', conversationId: 'group', inputRevision: 1,
+    decisions: [{ unitId: 'origin-unit', expectedRevision: 0, commands: [{ commandId: 'create', kind: 'create', args: { taskId: 'task' } }] }] })
+  const requirementRef = (await artifacts.put({ request: '调查原任务', acceptanceCriteria: ['确认事实'] })).ref
+  await command('task.accept', { taskId: 'task', requirementRef, requirementRevision: 1,
+    sessionId: 'session', criteria: ['确认事实'], sourceKey: 'origin', eventKey: 'created' })
+  if (barrier === 'future-retry') {
+    await command('task.owner.claim', { taskId: 'task', turnId: 'failed', expectedLeaseEpoch: 0 })
+    await command('task.owner.release', { taskId: 'task', turnId: 'failed', leaseEpoch: 1, reason: 'ETIMEDOUT' })
+    assert.ok(Date.parse((await store.query({ kind: 'task.owner', taskId: 'task' })).retryAt) > Date.now())
+  } else await receive('new-input')
+  // 仅计量实际控制账调用，所有查询及命令仍原样进入SQLite事务。
+  const observedStore = { query: request => {
+    if (request.kind === 'task.owners.pending') scans++
+    return store.query(request)
+  }, command: request => {
+    if (request.kind === 'task.owner.claim') claims++
+    return store.command(request)
+  } }
+  owner = createTaskOwnerController({ ctx: {}, store: observedStore, artifacts, controller,
+    advanceTask: async () => {}, authorizeStages: async () => false, modelConfig: () => ({}), sessionRunner: { async close() {}, async run({ onSessionBound, onCandidate }) {
+      calls++; await onSessionBound()
+      const decision = { action: 'wait', summary: '等待真实业务选择', evidenceRefs: [], condition: {
+        kind: 'business-input', missing: '选择方案', responsibleParty: '交办人', resumeWhen: '确认后继续', evidenceRefs: [] } }
+      await onCandidate(decision); return { status: 'submitted', decision }
+    } } })
+  await owner.recover()
+  const before = { scans, claims }
+  await new Promise(resolve => setTimeout(resolve, 40))
+  assert.deepEqual({ scans, claims }, before)
+  assert.equal(calls, 0); assert.equal(scans, 1)
+  assert.equal(claims, barrier === 'future-retry' ? 0 : 1)
+  if (barrier === 'future-retry') {
+    const db = new DatabaseSync(dbPath)
+    try { db.prepare("UPDATE task_owners SET updated_at=? WHERE task_id='task'").run(new Date(Date.now() - 2000).toISOString()) }
+    finally { db.close() }
+  } else {
+    const impact = await store.query({ kind: 'message.impact', runId: 'new-input' })
+    const source = (await store.query({ kind: 'message.run', runId: 'new-input' })).run
+    await command('message.impact.resolve', { runId: 'new-input', expectedRevision: source.revision,
+      unitId: '$', catalogRevision: impact.catalogRevision, assessments: [{ topicId: 'topic', relation: 'independent',
+        reason: '核对对象与原任务不同', sourceRefs: [{ sourceKey: 'new-input', sourceVersion: 1, text: source.body }] }] })
+  }
+  await owner.recover()
+  assert.equal(calls, 1)
+  const state = await store.query({ kind: 'task.owner', taskId: 'task' })
+  assert.equal(state.decision.action, 'wait'); assert.equal(state.applicationStatus, 'applied')
+  assert.equal(state.sessionId, 'session')
 })
