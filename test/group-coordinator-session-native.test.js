@@ -34,6 +34,17 @@ async function host(root, options = {}) {
   } })
   new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
+  const memberships = new Map()
+  ctx.provide('workspaceRegistry', {
+    async resolveByPath(path) { return memberships.get(path) },
+    async create(path) {
+      const target = { sessionIds: [], async attachSession(id) {
+        assert.equal((await ctx.sessionPersistence.inspect(id)).meta.cwd, path)
+        if (!this.sessionIds.includes(id)) this.sessionIds.push(id)
+      } }
+      memberships.set(path, target); return target
+    },
+  })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
   class Scripted extends LlmAdapter {
@@ -50,7 +61,7 @@ async function host(root, options = {}) {
   ctx.llm.registerAdapter(['group-fixture'], new Scripted())
   let lease = 1
   const sessions = createGroupCoordinatorSessions({ ctx, isCurrent: async b => b.leaseEpoch === lease, ...options })
-  return { ctx, requests, sessions, setLease(n) { lease = n }, async close() { await sessions.close(); await ctx.fiber.dispose() } }
+  return { ctx, requests, sessions, memberships, setLease(n) { lease = n }, async close() { await sessions.close(); await ctx.fiber.dispose() } }
 }
 
 test('原生群会话同轮读取材料后提交，跨轮恢复同一session并保留历史', async t => {
@@ -185,6 +196,7 @@ test('旧职责目录派生到Agent根，完整继承日志，恢复群名和完
   assert.deepEqual(await h.sessions.prepare(binding), relocated)
   const child = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
   assert.equal(child.meta.cwd, root)
+  assert.deepEqual(h.memberships.get(root).sessionIds, [relocated.sessionId])
   assert.ok(h.ctx.sessions.get(relocated.sessionId), '空闲协调会话仍挂接，宿主可读标题与权限投影')
   const visible = h.ctx.sessionProjections.cachedSnapshot(h.ctx.sessions.get(relocated.sessionId))
   assert.equal(visible.values.title, name)
@@ -235,9 +247,10 @@ test('每轮完整输入保留，下一轮原生surface只保留历史来源而�
 
 test('常驻空闲挂接保留原生投影、拒绝任意模型步进，关闭释放全部句柄',async t=>{
  const root=await mkdtemp(join(tmpdir(),'group-idle-visible-'));t.after(()=>rm(root,{recursive:true,force:true}));
- const h=await host(root,{getGroupName:()=> '业务群'});t.after(()=>h.close());
+ const h=await host(root,{getWorkspaceDir:()=>root,getGroupName:()=> '业务群'});t.after(()=>h.close());
  await h.sessions.run({binding:{conversationId:'g',sessionId:'visible-group',turnId:'t',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,onSessionBound:async()=>{},onCandidate:async()=>{}});
  const live=h.ctx.sessions.get('visible-group');assert.ok(live);assert.equal(h.ctx.sessionProjections.cachedSnapshot(live).values.title,'业务群');
+ assert.deepEqual(h.memberships.get(root).sessionIds,['visible-group']);
  const calls=h.requests.length;const {createUserMessage}=await import('@deepseek-ai/dsh-llm');
  const agent=h.ctx.agents.get('visible-group');agent.steer(createUserMessage({source:{kind:'user'},content:[{type:'text',text:'用户误触发送'}]}));await agent.whenIdle();assert.equal(h.requests.length,calls);
  await h.sessions.close();assert.equal(h.ctx.agents.get('visible-group'),undefined);assert.equal(h.ctx.sessions.get('visible-group'),undefined);

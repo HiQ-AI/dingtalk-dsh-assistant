@@ -128,3 +128,6 @@ completion-rejection-diagnostics,28,PASS,round-28.md
 continuous-execution-local-deployment,28,PASS,round-28.md
 single-column-delete-final-acceptance,28,PASS,round-28.md
 single-column-delete-unique-group-result,28,PASS,round-28.md
+
+resident-workspace-membership,29,PASS,round-29.md
+resident-workspace-old-session-cleanup,29,PASS,round-29.md

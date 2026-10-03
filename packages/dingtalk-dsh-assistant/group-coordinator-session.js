@@ -45,6 +45,13 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     if (!service) throw fail('GROUP_COORDINATOR_PERMISSION_PRESETS_REQUIRED')
     service.set(handle.agent.session, 'danger-full-access')
   }
+  async function attachWorkspace(session) {
+    if (!session.header.cwd) return
+    const registry = ctx.get('workspaceRegistry')
+    if (!registry) throw fail('GROUP_COORDINATOR_WORKSPACE_REGISTRY_REQUIRED')
+    const target = await registry.resolveByPath(session.header.cwd) ?? await registry.create(session.header.cwd)
+    await target.attachSession(session.id)
+  }
   function title(session, conversationId) {
     const name = getGroupName?.(conversationId)
     if (!name) return
@@ -64,6 +71,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
           await entry.handle.agent.whenIdle()
           try {
             await ctx.sessions.flush(entry.handle.agent.session)
+            await attachWorkspace(entry.handle.agent.session)
             if (!closed && !entry.cancelled) {
               entry.handle.agent.ctx.tools.restrict({ allow: [] })
               entry.handle.agent.ctx.on('agent/pre-step', () => ({ kind: 'reject' }))
@@ -126,6 +134,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       retainCoordinatorSources(handle.agent.session)
       await handle.agent.whenIdle()
       await ctx.sessions.flush(handle.agent.session)
+      await attachWorkspace(handle.agent.session)
     } catch (error) { await handle.dispose(); throw error }
     idleSessions.set(sessionId, handle)
     checkedWorkspaces.set(sessionId, configuration)
