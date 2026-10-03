@@ -27,4 +27,3 @@
 隔离测试的模型和通知为测试适配器；真实文件、Git、HTTP、SQLite、工件和原生事务已经实跑。本轮未创建生产工单、执行生产 SQL、代真人审批或向真实群发送测试消息。此前删除列业务闭环保留旧轮次，不能代替本轮验证。
 
 部署首次停在停机前检查：自启任务 Settings.Enabled=false，但其 State 仍是 Running。旧 PID52928 仍存活且尚未安装；维护已封存 revision413。沿根因修正原生 Enabled 回读、禁用前保存恢复意图及同进程原封存许可接续，不绕过维护。两个 PowerShell 测试文件全绿（24组、6组），包含身份/版本漂移拒绝。恢复既有自启配置后，新的接续 Check 为 writes=0/tasks=0，继续同 maintenanceId 和 revision413，证据改存 `docs/tmp/direct-owner-r32-deployment/`。
-
