@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
-import { taskNotificationAllowed } from './workflow-notifications.js'
+import { taskNotificationAllowed, notificationSilence } from './workflow-notifications.js'
 import { sameDwsFileProjection } from './coordination-resources.js'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { installMessageTopics, validateMessageTopics, reduceMessageTopic, queryMessageTopics, bindQuietTopic, invalidateMessageSourceTopics, unbindMessageUnit, wholeTopicFactRevision } from './message-topics.js'
@@ -809,6 +809,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       else if(a.requestId){const q=get(db,'request',a.requestId);current(db,r,q.revision);if(q.runId!==r.runId||q.status!=='pending'||!(q.kind==='needs_clarification'||q.kind==='needs_context'&&q.blocked===true))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
       else if(a.acceptanceId){const fact=get(db,'acceptance',a.acceptanceId);if(fact.runId!==r.runId||db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(fact.taskId)?.requirement_revision!==fact.requirementRevision)fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')}
       else if(!notificationStateCurrent(r,a.stateFact))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
+      if(a.payload?.phase==='task:started'){
+        const c=a.commandId?get(db,'command',a.commandId):null
+        if(!taskNotificationAllowed({phase:'task:started',action:c})||c.result.taskId!==taskId
+          ||c.args?.taskId&&c.args.taskId!==taskId||a.eventKey!==`task.started:${taskId}`
+          ||!db.prepare('SELECT 1 FROM task_owners WHERE task_id=?').get(taskId))fail('MESSAGE_NOTIFICATION_FACT_REQUIRED')
+      }
       if(!a.disclosure||a.disclosure.conversationId!==r.conversationId||!a.disclosure.authorizationRef)fail('MESSAGE_DISCLOSURE_REQUIRED')
       str(a.notificationId)
       const eventKey=str(a.eventKey??`${a.requestId?'request.clarification':'action.reply'}:${a.requestId??a.commandId}:${a.payload?.phase??'notice'}`)
@@ -860,6 +866,15 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
         if(action.status==='applied'&&action.kind==='revise'||['status','result'].includes(action.kind)&&action.result?.runId&&latest&&latest.run_id!==action.result.runId){
           n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
         }
+      }
+      if(phase==='task:started'){
+        const task=db.prepare(`SELECT b.status,c.state FROM business_tasks b JOIN task_controls c USING(task_id) WHERE b.task_id=?`).get(taskId)
+        const complete=db.prepare(`SELECT 1 FROM task_owner_turns WHERE task_id=? AND application_status='applied'
+          AND json_extract(decision_json,'$.action')='complete' ORDER BY rowid DESC LIMIT 1`).get(taskId)
+        if(source.channel==='web'||source.externalMessaging===false||notificationSilence(source,'progress')||action?.result?.taskId!==taskId||n.eventKey!==`task.started:${taskId}`||!task||task.state!=='active'||task.status==='succeeded'||complete){
+          n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
+        }
+        assertMessageTaskUnfenced(db,taskId)
       }
       if(n.payload?.phase?.startsWith('owner:started:')){
         const executionRunId=n.payload.phase.slice('owner:started:'.length)

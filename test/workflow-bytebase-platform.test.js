@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createBytebaseDataChangePlatform } from '../packages/dingtalk-dsh-assistant/workflow-bytebase-platform.js'
+import { simpleNullableColumnDefinition } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
 
 const sha = value => createHash('sha256').update(value).digest('hex')
 const target = { instance: 'instances/prod', database: 'instances/prod/databases/app', environment: 'production' }
@@ -19,6 +20,31 @@ const pkg = { ...packageBody, validation: { adapterId: 'bytebase', adapterVersio
 const prepared = { package: pkg, rehearsal: { adapterId: 'bytebase', adapterVersion: '1',
   receiptId: 'uat-run-1', packageDigest: pkg.validation.packageDigest,
   uat: true, passed: true, observedChange: 'v=2' } }
+
+test('简单整型默认值严格识别十进制常量及范围，不开放表达式和非空列', async () => {
+  for (const [type, value] of [['smallint', '-32768'], ['smallint', '32767'], ['integer', '0'],
+    ['integer', '-2147483648'], ['integer', '2147483647'], ['bigint', '9223372036854775807'],
+    ['bigint', '-9223372036854775808']]) {
+    const sql = `ALTER TABLE public.t ADD COLUMN is_deleted ${type} DEFAULT ${value};`
+    assert.deepEqual(simpleNullableColumnDefinition(sql), { schema: 'public', table: 't', column: 'is_deleted', type, defaultValue: value })
+  }
+  for (const definition of ['integer DEFAULT now()', 'integer DEFAULT (0)', 'integer DEFAULT 1+1',
+    'integer DEFAULT random()', 'integer DEFAULT 0 NOT NULL', 'integer NOT NULL DEFAULT 0',
+    'text DEFAULT 0', 'integer DEFAULT 0.0', 'integer DEFAULT NULL', 'integer DEFAULT 2147483648',
+    'smallint DEFAULT -32769', 'bigint DEFAULT 9223372036854775808', 'integer DEFAULT 0; DROP TABLE public.t;'])
+    assert.equal(simpleNullableColumnDefinition(`ALTER TABLE public.t ADD COLUMN is_deleted ${definition}`), null, definition)
+  const sql = 'ALTER TABLE public.t ADD COLUMN is_deleted integer DEFAULT 0;'
+  const f = fixture({ api: { async getIssueApproval() {} }, config: { ...config, targets: [{ project: 'projects/app', target }] },
+    productionApi: { async readBaseline(args) { return { project: args.project, target, scope: args.scope,
+      snapshotId: 'baseline-1', sha256: sha('baseline'), schemaVersion: 'v1', schemaDigest: sha('schema'), evidenceRef: 'baseline-proof' } } } })
+  const baseline = await f.workflowAdapter.readBaselineForCandidate({ target, applySql: sql })
+  const body = { ...packageBody, applySql: sql, applySqlSha256: sha(sql), baseline,
+    verificationSql: "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema='public' AND table_name='t' AND column_name='is_deleted';",
+    expectedChange: JSON.stringify({ rows: [{ column_name: 'is_deleted', data_type: 'integer', is_nullable: 'YES', column_default: '0', character_maximum_length: null }] }) }
+  const result = await f.workflowAdapter.validate({ ...body, packageDigest: executionDigest(body) })
+  assert.ok(result.receiptId)
+  assert.equal(f.calls.includes('rehearse-uat'), false)
+})
 
 test('完成回查绑定冻结审批 SQL 与当前工单，仅使用只读端口且拒绝漂移及未完成事实', async () => {
   let bundle, taskFailed = false, reads = 0

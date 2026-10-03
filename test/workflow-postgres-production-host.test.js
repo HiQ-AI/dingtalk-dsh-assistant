@@ -85,6 +85,43 @@ test('简单加列只核对精确表列，真实从库回读完整列属性，�
   await assert.rejects(port.queryVerification({ ...verify, sql: verificationSql + '; DROP TABLE public.t' }), /POSTGRES_COLUMN_VERIFICATION_INVALID/)
 })
 
+test('整型常量默认值前置核对与回查保持真实默认表达式，拒绝值漂移及表达式', async () => {
+  let row
+  const queries = []
+  class Client {
+    constructor(options) { this.options = options }
+    async connect() {}
+    async end() {}
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (sql.includes('pg_is_in_recovery()')) return { rows: [{ database_name: this.options.database, transaction_read_only: 'on', in_recovery: true }] }
+      assert.deepEqual(values, ['public', 't', 'is_deleted'])
+      if (sql.includes('AS column_exists')) return { rows: [{ relation_kind: 'r', column_exists: false, has_children: false }] }
+      if (sql.includes('information_schema.columns')) return { rows: [row] }
+      throw Error('UNEXPECTED_QUERY')
+    }
+  }
+  const host = createProductionPostgresHost({ entries, Client })
+  for (const [type, value, expression] of [['integer', '0', '0'], ['smallint', '-1', "'-1'::integer"],
+    ['bigint', '9223372036854775807', "'9223372036854775807'::bigint"]]) {
+    row = { column_name: 'is_deleted', data_type: type, is_nullable: 'YES', column_default: expression, character_maximum_length: null }
+    const applySql = `ALTER TABLE public.t ADD COLUMN is_deleted ${type} DEFAULT ${value};`
+    const sql = "SELECT column_name, data_type, is_nullable, column_default, character_maximum_length FROM information_schema.columns WHERE table_schema='public' AND table_name='t' AND column_name='is_deleted';"
+    const args = { project: 'projects/flbn', target: target('hiq_editor'), baseline: { evidenceRef: 'baseline', scope: { schema: 'public', table: 't' } },
+      applySql, applySqlSha256: sha(applySql), verificationSql: sql, expectedChange: JSON.stringify({ rows: [row] }) }
+    assert.equal((await host.checkPreconditions(args)).passed, true)
+    const verify = { project: args.project, target: args.target, sql, expectedChange: args.expectedChange, packageDigest: sha('pkg'), taskRunId: 'run-1' }
+    assert.equal((await host.queryVerification(verify)).observedChange, JSON.stringify([row]))
+    for (const column_default of [null, '1', '0+0', 'random()', "'0'::numeric"]) {
+      assert.equal((await host.checkPreconditions({ ...args, expectedChange: JSON.stringify({ rows: [{ ...row, column_default }] }) })).passed, false)
+    }
+    row = { ...row, column_default: null }
+    await assert.rejects(host.queryVerification(verify), /POSTGRES_COLUMN_VERIFICATION_UNCONFIRMED/)
+  }
+  assert.equal(queries.some(({ sql }) => /^\s*(ALTER|UPDATE|INSERT|DELETE|CREATE)/iu.test(sql)), false)
+  assert.equal(queries.some(({ sql }) => sql === uatCatalogBaselineSql()), false)
+})
+
 test('生产从库端口只提供目录及验收只读方法，并对每次连接核验从库身份', async () => {
   const opened = [], statements = []
   class Client {

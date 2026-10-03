@@ -9,7 +9,8 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
-import { intentContext, validateExecutionMaterialRefs } from '../packages/dingtalk-dsh-assistant/message-context.js'
+import { toToolJsonSchema } from '../packages/dingtalk-dsh-assistant/tool-schema.js'
+import { intentContext, validateExecutionMaterialRefs, messageSchemas } from '../packages/dingtalk-dsh-assistant/message-context.js'
 
 test('启动材料引用由Host列举，查询资源和其他事项引用不能进入材料等待', () => {
   const input = intentContext({ sourceKey: 'source-a', executionMaterialRefs: ['attachment-a'],
@@ -24,6 +25,34 @@ test('启动材料引用由Host列举，查询资源和其他事项引用不能�
     { unitId: 'a', intent: intent(['source-b']) }] }, batch), /MESSAGE_EXECUTION_MATERIAL_REF_INVALID/)
   assert.doesNotThrow(() => validateExecutionMaterialRefs('IB', { kind: 'topic_intents', decisions: [
     { unitId: 'a', intent: intent(['source-a']) }, { unitId: 'b', intent: intent(['source-b']) }] }, batch))
+})
+
+test('外部阶段授权在消息入口要求完整原文合同，非外部任务不增加门槛', () => {
+  const body = '生产 Editor process_id_temp 新增 is_deleted 默认0'
+  const intent = args => ({ kind: 'intent', actions: [{ intent: 'create', arguments: { objective: body, ...args }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' })
+  const authorization = { workflowId: 'task-data-change', sourceQuote: body, objective: body, gate: 'none' }
+  assert.equal(messageSchemas.I.safeParse(intent({ stageAuthorizations: [authorization] })).success, true)
+  const toolSchema = toToolJsonSchema(messageSchemas.I)
+  const rendered = JSON.stringify(toolSchema)
+  assert.match(rendered, /objective/)
+  const findExternal = node => {
+    if (!node || typeof node !== 'object') return null
+    if (node.properties?.workflowId?.enum?.includes('task-data-change') && node.properties?.sourceQuote) return node
+    for (const value of Object.values(node)) { const found = Array.isArray(value) ? value.map(findExternal).find(Boolean) : findExternal(value); if (found) return found }
+    return null
+  }
+  assert.ok(findExternal(toolSchema).required.includes('objective'))
+  assert.ok(findExternal(toolSchema).required.includes('gate'))
+  for (const field of ['objective', 'gate']) {
+    const missing = { ...authorization }; delete missing[field]
+    assert.equal(messageSchemas.I.safeParse(intent({ stageAuthorizations: [missing] })).success, false)
+    assert.throws(() => validateExecutionMaterialRefs('I', intent({ stageAuthorizations: [missing] }), { text: body }), /MESSAGE_STAGE_AUTHORIZATION_INVALID/)
+  }
+  assert.equal(messageSchemas.I.safeParse(intent({ workflowId: 'task-data-change' })).success, false)
+  assert.equal(messageSchemas.I.safeParse(intent({ workflowId: 'task-data-change', stageAuthorizations: [authorization] })).success, true)
+  assert.equal(messageSchemas.I.safeParse(intent({})).success, true)
+  assert.equal(messageSchemas.I.safeParse(intent({ stageAuthorizations: [{ workflowId: 'task-group-file-delivery', sourceQuote: body }] })).success, true)
+  assert.throws(() => validateExecutionMaterialRefs('I', intent({ stageAuthorizations: [{ ...authorization, objective: '全库清理' }] }), { text: body }), /MESSAGE_STAGE_AUTHORIZATION_INVALID/)
 })
 
 const answer = summary => ({ outcome: 'completed', summary, evidenceRefs: [], limitations: [], question: '' })
@@ -154,11 +183,11 @@ test('需要补充创建message request，授权答复沿用会话递增输入�
   assert.equal(h.calls[1].input.clarificationAnswers[0].answer, 'UAT2')
 })
 
-test('新目录统一调查入口，旧材料流程不再可选', async t => {
+test('调查直接由任务会话处理，独立调查及旧材料流程不再可选', async t => {
   const h = await fixture(t)
   const catalog = h.service.catalog().workflows
   const ids = catalog.map(item => item.id ?? item.workflowId)
-  assert.ok(ids.includes('task-investigation'))
+  assert.ok(!ids.includes('task-investigation'))
   for (const id of ['task-analysis', 'task-planning', 'task-pr-review', 'task-data-query', 'task-retrospective', 'task-general', 'task-general-intake']) assert.ok(!ids.includes(id), id)
 })
 

@@ -6,13 +6,251 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
-import { openExecutionArtifacts, executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { openExecutionArtifacts, executionDigest, executionError } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
-import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
+import { createTaskWorkflowContracts, validateWorkflowRepairAdmission } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { readOnlyWorkflowOwnerContract } from '../packages/dingtalk-dsh-assistant/task-readonly-workflows.js'
 import { createGeneralCapabilityStepWorkflow } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
 import { externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, createReleaseTaskWorkflow } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 import { openWorkflowService } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
+import { dataChangeProposalRepairPolicy } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
+
+test('数据变更候选修复仅接纳零外部效果，保留旧定义并以受信票据重做当前输入', async () => {
+  const stage = { stageId: 'sql', runId: 'run', workflowId: 'task-data-change', workflowDigest: 'a'.repeat(64), status: 'running' }
+  const plan = { task: { taskId: 'task', controlState: 'active', requirementRevision: 3, planRequirementRevision: 3, requirementRef: 'task-requirement' }, stages: [stage] }
+  const state = { run: { taskId: 'task', runId: 'run', workflowId: stage.workflowId, workflowDigest: stage.workflowDigest,
+    status: 'waiting', generation: 2, revision: 7, requirementRef: 'original' }, pendingInputCount: 0, nodes: [
+      { nodeId: 'freeze-input', status: 'succeeded', drained: true, outputRef: 'frozen' },
+      { nodeId: 'propose-sql', status: 'succeeded', drained: true, outputRef: 'proposal' },
+      { nodeId: 'validate-package', status: 'waiting', drained: true, evidenceRefs: ['failure'], waitReason: { reference: 'DATA_CHANGE_PROPOSAL_INVALID' } },
+      { nodeId: 'approval-gate', status: 'blocked', drained: true },
+    ] }
+  const original = { request: '增加name列', target: { database: 'editor' }, constraints: [], sources: [{ id: 'message', content: '增加name列' }] }
+  const values = { original, 'task-requirement': original, proposal: { applySql: '' }, failure: { code: 'DATA_CHANGE_PROPOSAL_INVALID' } }
+  let effects = [], changed, prepared = 0
+  const contract = Object.freeze({ id: 'native-data-change', version: '3' })
+  const facade = createTaskWorkflowContracts({
+    controller: { taskPlan: async () => plan, state: async () => state, workflowDefinition: () => ({ ownerContract: contract }),
+      changeInput: async value => { changed = value; return { accepted: true } } },
+    store: { query: async ({ kind }) => kind === 'effect.list' ? effects : null },
+    artifacts: { read: async ref => values[ref] },
+    prepareDataChangeRepairInput: async ({ repairConstraints }) => { prepared++
+      values.context = { taskId: 'task', runId: 'run', generation: 2 }
+      return { contextRef: 'context', input: { ...original, constraints: repairConstraints, sources: [...original.sources, { id: 'current-query', content: '当前表只有id列' }] } }
+    },
+  })
+  const observed = await facade.inspectCurrentExecution('task')
+  assert.equal(observed.repairable, true); assert.equal(observed.requiresCurrentQuery, true)
+  assert.equal(contract.inspectRepair, undefined)
+  const decision = { summary: '读取当前表结构并补齐SQL候选', repair: observed.repairBinding, evidenceRefs: ['failure', 'proposal'] }
+  for (const effect of ['succeeded', 'failed', 'unknown', 'sending']) {
+    effects = [{ state: effect }]
+    assert.equal((await facade.inspectCurrentExecution('task')).repairable, false)
+    await assert.rejects(facade.repairCurrentStage({ taskId: 'task', commandId: `deny-${effect}`, decision }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  }
+  effects = []
+  state.nodes.at(-1).status = 'succeeded'; state.nodes.at(-1).outputRef = 'approval'
+  assert.equal((await facade.inspectCurrentExecution('task')).repairable, false)
+  state.nodes.at(-1).status = 'blocked'; delete state.nodes.at(-1).outputRef
+  assert.deepEqual(await facade.repairCurrentStage({ taskId: 'task', commandId: 'repair', decision }), { accepted: true })
+  assert.equal(prepared, 1); assert.equal(changed.expectedRevision, 7)
+  assert.equal(changed.input.constraints.includes(`候选修正：${decision.summary}`), true)
+  const admission = { state, plan, definition: { digest: stage.workflowDigest, ownerContract: contract }, ...changed,
+    store: { query: async () => effects }, artifacts: { read: async ref => values[ref] } }
+  assert.equal(await validateWorkflowRepairAdmission(admission), stage.workflowDigest)
+  effects = [{ state: 'succeeded' }]
+  await assert.rejects(validateWorkflowRepairAdmission(admission), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  effects = []
+  await assert.rejects(validateWorkflowRepairAdmission({ ...admission, repairAdmission: {} }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  await assert.rejects(validateWorkflowRepairAdmission({ ...admission, input: { ...changed.input, request: '删除库' } }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  original.constraints = [`候选修正：${decision.summary}`]
+  await assert.rejects(facade.repairCurrentStage({ taskId: 'task', commandId: 'repeat', decision }), /DATA_CHANGE_REPAIR_STRATEGY_REPEATED/)
+  assert.equal(prepared, 1)
+})
+
+test('数据变更候选修复拒绝缺少受信查询修正和目标漂移', async () => {
+  const original = { request: '增加列', target: { database: 'editor' }, constraints: [] }
+  const context = { state: { run: { requirementRef: 'input' }, nodes: [{ nodeId: 'propose-sql', outputRef: 'proposal' }] },
+    artifacts: { read: async ref => ref === 'input' ? original : {} }, observed: { evidenceRefs: ['failure'] }, decision: { summary: '补全候选' } }
+  await assert.rejects(dataChangeProposalRepairPolicy.prepareRepair(context), /DATA_CHANGE_REPAIR_CONTEXT_REQUIRED/)
+  for (const build of [() => original, constraints => ({ ...original, constraints, target: { database: 'other' } }),
+    constraints => ({ ...original, constraints, request: '删除库' }), () => ({ ...original, sources: [{ id: 'unbound' }] })]) {
+    await assert.rejects(dataChangeProposalRepairPolicy.prepareRepair({ ...context,
+      prepareDataChangeRepairInput: async ({ repairConstraints }) => ({ input: build(repairConstraints), contextRef: 'context' }) }), /DATA_CHANGE_REPAIR_INPUT_UNCHANGED/)
+  }
+  const fact = { kind: 'verified-task-query', capabilityId: 'production-schema', result: { columns: ['id'] } }
+  original.sources = [{ id: 'old-query', content: JSON.stringify({ ...fact, evidenceRef: 'old-query' }) }]
+  await assert.rejects(dataChangeProposalRepairPolicy.prepareRepair({ ...context,
+    decision: { summary: '换一种表述重新尝试' }, prepareDataChangeRepairInput: async ({ repairConstraints }) => ({ contextRef: 'context',
+      input: { ...original, constraints: repairConstraints, sources: [
+        ...original.sources, { id: 'new-query', content: JSON.stringify({ ...fact, evidenceRef: 'new-query' }) },
+      ] } }),
+  }), /DATA_CHANGE_REPAIR_INPUT_UNCHANGED/)
+})
+
+test('候选修复附带查询与阶段诊断独立核验，不能省略原诊断或借用旧任务阶段证明', async () => {
+  const stage = { stageId: 'sql', runId: 'run', workflowId: 'task-data-change', workflowDigest: 'a'.repeat(64), status: 'running' }
+  const plan = { task: { taskId: 'task', planRevision: 1, controlState: 'active', requirementRevision: 3,
+    planRequirementRevision: 3, requirementRef: 'requirement' }, stages: [stage] }
+  const state = { run: { taskId: 'task', runId: 'run', workflowId: stage.workflowId, workflowDigest: stage.workflowDigest,
+    status: 'waiting', generation: 2, revision: 7, requirementRef: 'original' }, pendingInputCount: 0, nodes: [
+    { nodeId: 'freeze-input', status: 'succeeded', drained: true },
+    { nodeId: 'propose-sql', status: 'succeeded', drained: true, outputRef: 'proposal' },
+    { nodeId: 'validate-package', nodeRunId: 'failed-node', leaseEpoch: 1, status: 'waiting', drained: true,
+      evidenceRefs: ['failure'], waitReason: { reference: 'DATA_CHANGE_PROPOSAL_INVALID' } },
+  ] }
+  const original = { request: '增加列', target: { database: 'editor' }, constraints: [], sources: [{ content: '原文' }] }
+  const record = { artifactRef: 'query', turnId: 'query-turn', leaseEpoch: 4, requirementRevision: 3 }
+  const result = { columns: ['id'] }
+  const query = { kind: 'agent-query-evidence', execution: { kind: 'task-owner', taskId: 'task',
+    requirementRevision: 3, turnId: record.turnId, leaseEpoch: record.leaseEpoch }, result,
+    verification: { sourceRefs: ['production-catalog'], outputDigest: executionDigest(result) } }
+  let records = [record], events = [], changed, preparations = 0
+  const values = { original, requirement: original, failure: { code: 'DATA_CHANGE_PROPOSAL_INVALID' }, proposal: { applySql: '' }, query }
+  const contract = Object.freeze({ id: 'native-data-change', version: '3' })
+  const store = { query: async ({ kind }) => kind === 'effect.list' ? [] : kind === 'task.owner.query-evidence' ? records
+    : kind === 'task.owner.events' ? events : null }
+  const artifacts = { read: async ref => values[ref] }
+  const facade = createTaskWorkflowContracts({ store, artifacts,
+    controller: { taskPlan: async () => plan, state: async () => state, workflowDefinition: () => ({ ownerContract: contract }),
+      changeInput: async request => { changed = request; return { accepted: true } } },
+    prepareDataChangeRepairInput: async ({ repairConstraints }) => { preparations++
+      values.context = { taskId: 'task', runId: 'run', generation: 2 }
+      return { input: { ...original, constraints: repairConstraints, sources: [{ content: '原文' }, { content: '当前目录列:id' }] }, contextRef: 'context' }
+    },
+  })
+  const observed = await facade.inspectCurrentExecution('task')
+  values.wrapper = { taskId: 'task', planRevision: 1, stageId: 'sql', runId: 'run', workflowId: stage.workflowId,
+    currentExecution: { repairBinding: observed.repairBinding }, diagnostics: [{ nodeRunId: 'failed-node', generation: 2, leaseEpoch: 1 }] }
+  events = [{ eventSeq: 1, eventType: 'workflow.failed', payloadRef: 'wrapper' }]
+  const decision = { summary: '依据目录资料补齐候选', repair: observed.repairBinding, evidenceRefs: ['failure', 'proposal', 'query', 'wrapper'] }
+  const reject = async (refs, commandId) => assert.rejects(facade.repairCurrentStage({ taskId: 'task', commandId,
+    decision: { ...decision, evidenceRefs: refs } }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  await reject(['query', 'wrapper'], 'only-extra')
+  await reject(['failure', 'query'], 'missing-proposal')
+  for (const [name, extra] of [
+    ['foreign-task', { ...query, execution: { ...query.execution, taskId: 'foreign' } }],
+    ['old-revision', { ...query, execution: { ...query.execution, requirementRevision: 2 } }],
+    ['bad-query-digest', { ...query, result: { columns: ['forged'] } }],
+    ['other-stage', { ...values.wrapper, stageId: 'other' }],
+    ['other-run', { ...values.wrapper, runId: 'other' }],
+    ['old-generation', { ...values.wrapper, diagnostics: [{ nodeRunId: 'failed-node', generation: 1, leaseEpoch: 1 }] }],
+    ['old-binding', { ...values.wrapper, currentExecution: { repairBinding: { ...observed.repairBinding, generation: 1 } } }],
+    ['old-plan', { ...values.wrapper, planRevision: 0 }],
+    ['goal-material', { content: '普通任务材料' }],
+  ]) {
+    values[name] = extra
+    records = extra.kind === 'agent-query-evidence' ? [record, { ...record, artifactRef: name }] : [record]
+    events = [events[0], { eventSeq: 2, eventType: 'workflow.failed', payloadRef: name }]
+    await reject(['failure', 'proposal', name], name)
+  }
+  records = [record]; events = [events[0]]
+  values.unrecorded = values.wrapper
+  await reject(['failure', 'proposal', 'unrecorded'], 'unrecorded')
+  assert.equal(preparations, 0)
+  assert.deepEqual(await facade.repairCurrentStage({ taskId: 'task', commandId: 'valid', decision }), { accepted: true })
+  assert.equal(preparations, 1)
+  const admission = { state, plan, definition: { digest: stage.workflowDigest, ownerContract: contract }, ...changed, store, artifacts }
+  assert.equal(await validateWorkflowRepairAdmission(admission), stage.workflowDigest)
+  records = []
+  await assert.rejects(validateWorkflowRepairAdmission(admission), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+})
+
+test('数据变更候选通过真实控制账新generation重新生成，原失败与冻结digest保留且无外部效果', async t => {
+  const input = { request: '编写增加列的候选', target: { database: 'editor' }, sources: [{ id: 'message', content: '增加列' }], constraints: [] }
+  const workflow = { id: 'task-data-change', version: '7', ownerContract: externalWorkflowOwnerContract, nodes: [
+    { id: 'freeze-input', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
+      mapInput: ({ requirement }) => requirement, execute: async ({ input }) => input },
+    { id: 'propose-sql', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
+      mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => ({ applySql: input.sources.length > 1 ? 'candidate-only' : '' }) },
+    { id: 'validate-package', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
+      mapInput: ({ previousOutput }) => previousOutput, execute: async ({ input }) => {
+        if (!input.applySql) throw executionError('DATA_CHANGE_PROPOSAL_INVALID'); return input
+      } },
+  ] }
+  const f = await fixture(t, workflow, input)
+  const goal = await f.artifacts.put(requirement)
+  await f.store.command({ id: 'sql-bind-goal', kind: 'task.requirement.bind-legacy', args: { taskId: 'task', expectedRequirementRevision: 1,
+    requirementRef: goal.ref, sessionId: 'owner-session', criteria: requirement.acceptanceCriteria, sourceKey: 'source', eventKey: 'bound' } })
+  const plan = await f.controller.advanceTaskPlan('task'), runId = plan.stages[0].runId
+  await f.controller.whenIdle(runId)
+  const before = await f.controller.state(runId)
+  assert.equal(before.run.status, 'waiting')
+  const facade = createTaskWorkflowContracts({ controller: f.controller, store: f.store, artifacts: f.artifacts,
+    prepareDataChangeRepairInput: async ({ repairConstraints, state }) => ({ input: { ...input,
+      constraints: repairConstraints, sources: [...input.sources, { id: 'verified-query', content: '当前表只有id列' }] },
+      contextRef: (await f.artifacts.put({ taskId: 'task', runId, generation: state.run.generation }, { taskId: 'task' })).ref }),
+  })
+  const observed = await facade.inspectCurrentExecution('task')
+  assert.equal(observed.repairable, true)
+  await facade.repairCurrentStage({ taskId: 'task', commandId: 'sql-repair', decision: {
+    summary: '根据当前查询补齐完整候选', repair: observed.repairBinding, evidenceRefs: observed.evidenceRefs,
+  } })
+  await f.controller.whenIdle(runId)
+  const after = await f.controller.state(runId)
+  assert.equal(after.run.status, 'succeeded'); assert.equal(after.run.generation, before.run.generation + 1)
+  assert.equal(after.run.workflowDigest, before.run.workflowDigest)
+  assert.deepEqual(await f.store.query({ kind: 'effect.list', runId }), [])
+  const oldFailure = before.nodes.find(node => node.nodeId === 'validate-package').evidenceRefs[0]
+  assert.equal((await f.artifacts.read(oldFailure)).code, 'DATA_CHANGE_PROPOSAL_INVALID')
+  assert.equal(workflow.ownerContract.inspectRepair, undefined)
+})
+
+test('冻结SQL校验只在当前Host纯只读预检通过后恢复，静态证明不随回执时间或源引用变化', async t => {
+  let supported = false, calls = 0
+  const candidate = { applySql: 'ALTER TABLE public.process_id_temp ADD COLUMN is_deleted integer DEFAULT 0;',
+    rollbackSql: '仅作回滚预案', verificationSql: '只读目录查询', expectedChange: '{"rows":[]}' }
+  const input = { request: '增加is_deleted整型默认0', target: { instance: 'postgres', database: 'editor', environment: 'production' },
+    constraints: [], sources: [{ id: 'current-query', content: '当前只有id列' }] }
+  const workflow = { id: 'task-data-change', version: '7', ownerContract: externalWorkflowOwnerContract, nodes: [
+    { id: 'freeze-input', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
+      mapInput: ({ requirement }) => requirement, execute: async ({ input }) => input },
+    { id: 'propose-sql', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
+      mapInput: ({ previousOutput }) => previousOutput, execute: async () => candidate },
+    { id: 'validate-package', version: '1', executor: 'code', allowedEffects: ['read'], rulesDigest: 'b'.repeat(64), inputSchema: schema, outputSchema: schema,
+      mapInput: ({ requirement, previousOutput }) => ({ requirement, proposal: previousOutput }), execute: async ({ input }) => {
+        calls++
+        if (!supported) throw executionError('BYTEBASE_PRECONDITIONS_UNCONFIRMED')
+        const body = { ...input.proposal, target: input.requirement.target, applySqlSha256: 'c'.repeat(64),
+          sourceDigest: executionDigest(input.requirement.sources), baseline: { snapshotId: `read-${calls}`, sha256: 'd'.repeat(64) } }
+        return { ...body, validation: { adapterId: 'native-postgres', adapterVersion: '1', packageDigest: executionDigest(body), receiptId: `receipt-${calls}` } }
+      } },
+  ] }
+  const f = await fixture(t, workflow, input), goal = await f.artifacts.put(requirement)
+  await f.store.command({ id: 'sql-validation-bind-goal', kind: 'task.requirement.bind-legacy', args: { taskId: 'task', expectedRequirementRevision: 1,
+    requirementRef: goal.ref, sessionId: 'owner-session', criteria: requirement.acceptanceCriteria, sourceKey: 'source', eventKey: 'bound' } })
+  const plan = await f.controller.advanceTaskPlan('task'), runId = plan.stages[0].runId
+  await f.controller.whenIdle(runId)
+  const before = await f.controller.state(runId)
+  const facade = createTaskWorkflowContracts({ store: f.store, artifacts: f.artifacts, controller: f.controller,
+    prepareDataChangeRepairInput: async ({ repairConstraints, observed, state }) => ({
+      input: { ...input, constraints: repairConstraints, sources: [...input.sources, observed.validationSource] },
+      contextRef: (await f.artifacts.put({ taskId: 'task', runId, generation: state.run.generation }, { taskId: 'task' })).ref,
+    }),
+  })
+  assert.equal((await facade.inspectCurrentExecution('task')).repairable, false)
+  supported = true
+  const observed = await facade.inspectCurrentExecution('task')
+  assert.equal(observed.repairable, true); assert.ok(observed.validationSource)
+  const repeated = await facade.inspectCurrentExecution('task')
+  assert.deepEqual(repeated.validationSource, observed.validationSource)
+  assert.equal(observed.validationSource.content.includes('receipt-'), false)
+  assert.equal(observed.validationSource.content.includes('read-'), false)
+  assert.equal(observed.validationSource.content.includes('sourceDigest'), false)
+  supported = false
+  await assert.rejects(facade.repairCurrentStage({ taskId: 'task', commandId: 'still-failed', decision: {
+    summary: '确认原SQL仅修复Host准备校验', repair: observed.repairBinding, evidenceRefs: observed.evidenceRefs,
+  } }), /WORKFLOW_REPAIR_NOT_ADMITTED/)
+  supported = true
+  await facade.repairCurrentStage({ taskId: 'task', commandId: 'validation-repair', decision: {
+    summary: '确认原SQL仅修复Host准备校验', repair: observed.repairBinding, evidenceRefs: observed.evidenceRefs,
+  } })
+  await f.controller.whenIdle(runId)
+  const after = await f.controller.state(runId)
+  assert.equal(after.run.status, 'succeeded'); assert.equal(after.run.generation, before.run.generation + 1)
+  assert.equal(after.run.workflowDigest, before.run.workflowDigest)
+  assert.deepEqual(await f.store.query({ kind: 'effect.list', runId }), [])
+})
 
 const schema = { type: 'object' }
 const requirement = { request: '按现有材料回答问题', acceptanceCriteria: ['给出有依据的调查结论'], constraints: [], scope: {} }

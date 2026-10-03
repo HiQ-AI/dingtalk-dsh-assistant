@@ -23,7 +23,7 @@ import { isPassiveTaskProgress } from './message-ledger.js'
 import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referencedResourceIds } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
 import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
-import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV6, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow, simpleDroppedColumnDefinition, columnDeletionImpact } from './workflow-data-change.js'
+import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV6, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow, simpleDroppedColumnDefinition, columnDeletionImpact, dataChangeProposalRepairConstraints, assertDataChangeProposalRepairInput } from './workflow-data-change.js'
 import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract, createNativeDataChangeCompletionPolicy, createScopedNativeDataChangeCompletionPolicy } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
 import { createWorkflowApprovalService } from './workflow-approval.js'
@@ -1207,6 +1207,13 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     `run-${executionDigest({ taskId, planRevision, stageId, attempt })}`
   async function createPlannedTask({ action, info }) {
     const taskId = requireText(action.taskId, 'WORKFLOW_TASK_ID_REQUIRED')
+    const stageAuthorizations = action.arguments.stageAuthorizations ?? []
+    if (catalogById.get(action.arguments.workflowId)?.mode === 'external'
+      && !stageAuthorizations.some(item => item.workflowId === action.arguments.workflowId)
+      || stageAuthorizations.some(item => catalogById.get(item.workflowId)?.mode === 'external'
+        && (typeof item.objective !== 'string' || !item.objective.trim() || !['none', 'confirmation'].includes(item.gate)
+          || !info.run.body.includes(item.sourceQuote) || !item.sourceQuote.includes(item.objective))))
+      throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID', '当前外部阶段授权合同不完整或不属于原文；旧持久动作也必须经完整授权修复，不能新建缺字段Task。')
     const topic = action.binding?.topicId ? await fullTopic(action.binding.topicId) : null
     const sourceKeys = [...new Set([info.run.sourceKey,
       ...(topic?.facts.flatMap(fact => fact.sourceRefs.map(ref => ref.sourceKey)) ?? [])])]
@@ -1224,7 +1231,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const fileDelivery = bindFileDelivery(action.arguments.fileDelivery, info.run.body)
     if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
     const requirement = { request: taskSourceRequest(info), objective, title: taskTitle(action.arguments.title ?? objective),
-      stageAuthorizations: [...(action.arguments.stageAuthorizations ?? []), ...(action.arguments.workflowId ? [{ workflowId: action.arguments.workflowId, sourceQuote: info.run.body }] : [])].map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) })),
+      stageAuthorizations: [...(action.arguments.stageAuthorizations ?? []), ...(action.arguments.workflowId && !action.arguments.stageAuthorizations?.some(item => item.workflowId === action.arguments.workflowId) ? [{ workflowId: action.arguments.workflowId, sourceQuote: info.run.body }] : [])].map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) })),
       sourceInstructions: sources.map(source => ({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body, attachments: source.context?.attachments ?? [] })),
       ...(fileDelivery ? { fileDelivery } : {}),
       acceptanceCriteria: action.arguments.acceptanceCriteria ?? [sourceRequestCriterion],
@@ -1349,6 +1356,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     createGeneralCapabilityStageContract(),
     createFileDeliveryStageContract({ prepareFiles: prepareFileDeliveryInput }),
     ...createExternalStageContracts({ workflowIds: [...selectedExternal.byId.keys()], external,
+      readTaskEvidence: args => taskOwner.readTaskEvidence(args),
       readEngineeringProof: async (taskId, stage) => readEngineeringDeliveryProof({
         state: await controller.state(stage.runId), artifacts, store, taskId }),
       readArtifact: ref => artifacts.read(ref) }),
@@ -1385,8 +1393,35 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const completionPolicies = new Map([stepWorkflow?.ownerContract, createEngineeringCompletionPolicy(),
     withAcceptanceIdentity(externalWorkflowOwnerContract), fileWorkflow && withAcceptanceIdentity(fileWorkflow.ownerContract)]
     .filter(Boolean).map(policy => [policy.id, policy]))
+  async function prepareCurrentDataChangeInput({ taskId, stageId, decision }) {
+    const plan = await controller.taskPlan(taskId)
+    const stage = plan?.stages.find(item => item.stageId === stageId)
+    const requirement = plan?.task.requirementRef ? await artifacts.read(plan.task.requirementRef) : null
+    const origin = await store.query({ kind: 'task.origin', taskId })
+    if (!stage || stage.workflowId !== 'task-data-change' || !origin || !requirement?.request) throw executionError('TASK_REQUIREMENT_MISSING')
+    const prepared = await stageContracts.prepare({ taskId, stage, plan,
+      stageIndex: plan.stages.findIndex(item => item.stageId === stageId), requirement, origin })
+    if (!decision) return prepared.input
+    const state = await controller.state(stage.runId)
+    const originalInput = await artifacts.read(state.run.requirementRef)
+    const observed = await ownerContracts.inspectCurrentExecution(taskId, plan)
+    const input = { ...prepared.input,
+      sources: [...prepared.input.sources, ...(observed?.repairable && observed.validationSource ? [observed.validationSource] : [])],
+      constraints: [...prepared.input.constraints, ...dataChangeProposalRepairConstraints(originalInput, decision)] }
+    assertDataChangeProposalRepairInput({ originalInput, input, decision })
+    return input
+  }
   const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller,
     readTaskEvidence: args => taskOwner.readTaskEvidence(args), prepareRepairContext: engineering.prepareRepairContext,
+    prepareDataChangeRepairInput: async context => {
+      const input = await prepareCurrentDataChangeInput({ taskId: context.taskId, stageId: context.stage.stageId, decision: context.decision })
+      const evidence = await taskOwner.readTaskEvidence({ taskId: context.taskId, requirementRevision: context.plan.task.requirementRevision })
+      const saved = await artifacts.put({ kind: 'data-change-proposal-repair-context', taskId: context.taskId, runId: context.stage.runId,
+        generation: context.state.run.generation, requirementRevision: context.plan.task.requirementRevision,
+        queryEvidenceRefs: evidence.map(item => item.artifactRef), failureEvidence: context.failureEvidence,
+        diagnosis: context.decision.summary, inputDigest: executionDigest(input) }, { taskId: context.taskId })
+      return { input, contextRef: saved.ref }
+    },
     completionPolicy: (contract, context) => {
       if (contract.id === 'external-result' && ['3', '4', '5'].includes(contract.version)
         && ['task-data-change', 'task-data-change-approval-resume'].includes(context?.state?.run?.workflowId))
@@ -1413,6 +1448,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         ...(externalWorkflows.find(entry => entry.id === item.id)?.targetIds
           ? { targetIds: externalWorkflows.find(entry => entry.id === item.id).targetIds } : {}) })),
     prepareInitialStage, inspectCurrentExecution, repairCurrentStage, readStageArtifacts,
+    validateDataChangeRepairContext: args => prepareCurrentDataChangeInput(args),
     readMaterialAccess: readTaskMaterialAccess,
     readCurrentSources: async ({ taskId }) => (await store.query({ kind: 'message.task.inputs', taskId }))
       .map(source => ({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId,
@@ -1462,9 +1498,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         if (stage.sourceCondition) {
           const condition = stage.sourceCondition
           const source = (requirement.sourceInstructions ?? []).find(item => item.sourceKey === condition.sourceKey && item.sourceVersion === condition.sourceVersion)
-          if (!source || !source.text.includes(condition.sourceQuote) || !condition.sourceQuote.includes(condition.objective)
-            || condition.requiredActorId && condition.requiredActorId !== source.actorId
-            || stage.gate === 'confirmation' && !condition.requiredActorId) return false
+          if (!source || !source.text.includes(condition.sourceQuote)) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'sourceCondition.sourceQuote/sourceKey/sourceVersion 未绑定当前原文来源；请复制 goal.stageAuthorizations 中本阶段的来源。')
+          if (!condition.sourceQuote.includes(condition.objective)) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'sourceCondition.objective 必须逐字复制 goal.stageAuthorizations 的 objective，且是 sourceQuote 的连续原文片段；实现方案和 SQL 写入 summary 或执行参数。')
+          if (condition.requiredActorId && condition.requiredActorId !== source.actorId
+            || stage.gate === 'confirmation' && !condition.requiredActorId) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'gate confirmation 必须绑定原来源 requiredActorId；不能替真人确认或删除原文验证门槛。')
           const current = await store.query({ kind: 'task.source', sourceKey: condition.sourceKey })
           if (!current || current.sourceVersion !== condition.sourceVersion || current.status === 'superseded') return false
         }
@@ -1476,7 +1513,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             && item.sourceQuote === stage.sourceCondition?.sourceQuote
             && typeof item.objective === 'string' && item.objective.trim() && item.objective === stage.sourceCondition?.objective
             && ['none','confirmation'].includes(item.gate) && item.gate === stage.gate)
-          if (!authorized || !(requirement.sourceInstructions ?? []).some(source => source.sourceKey === authorized.sourceKey
+          if (!authorizations.some(item => typeof item.objective === 'string' && item.objective.trim() && ['none', 'confirmation'].includes(item.gate)))
+            throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'goal.stageAuthorizations 缺 objective/gate，属于授权投影合同不完整；不能猜测或视为生产批准，需沿受管原文授权修复入口恢复当前 Task。')
+          if (!authorized) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'sourceCondition 与 goal.stageAuthorizations 的 workflowId/sourceKey/sourceVersion/sourceQuote/objective/gate 不一致；请逐字复制匹配授权，禁止自行增删验证门槛。')
+          if (!(requirement.sourceInstructions ?? []).some(source => source.sourceKey === authorized.sourceKey
             && source.sourceVersion === authorized.sourceVersion && source.actorId === requirement.authorization.actorId
             && source.text.includes(authorized.sourceQuote))
             || authorized.gate === 'confirmation' && (stage.gate !== 'confirmation'
@@ -1490,6 +1530,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         if (item.id === 'task-uat-pr-merge' && !/合并|部署|提测|UAT/iu.test(userText) && origin.channel !== 'web') return false
         if (item.id === 'task-main-pr-merge' && !/上线|合并.*main|main.*合并/iu.test(userText)) return false
         if (item.id === 'task-production-release' && !/生产发布|上线/iu.test(userText)) return false
+        if (item.id === 'task-data-change' && external?.dataChangeAdapter?.pluginApproval === true
+          && !(await taskOwner.readTaskEvidence({ taskId, requirementRevision: plan.task.requirementRevision })).length)
+          throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', '当前需求版本缺少本任务查询证据；请先使用查询工具核对当前生产目标或来源材料，再依据当前查询结果提交数据变更阶段。旧需求证据不能代替当前版本。')
+        if (item.id === 'task-data-change' && external?.dataChangeAdapter?.pluginApproval === true)
+          await stageContracts.prepare({ taskId, stage: { ...stage, stageId: 'candidate-data-change' }, stageIndex: plan.stages.length, plan, requirement, origin })
         if (item.id === 'task-data-change' && origin.channel !== 'web' && !requirement.sourceInstructions
           && requirement.target?.workflowId !== item.id && origin.command?.args?.arguments?.workflowId !== item.id) return false
       }
@@ -2184,8 +2229,16 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           ...(topic ? { topicTasks: await topicTaskFacts(topic, run) } : {}) }
       },
       async validateActions({ run, unit, binding, intent, requests }) {
-        for (const action of intent.actions) if ((action.arguments.stageAuthorizations ?? []).some(item => !run.body.includes(item.sourceQuote) || item.objective && !item.sourceQuote.includes(item.objective)))
-          throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID')
+        for (const action of intent.actions) {
+          const authorizations = action.arguments.stageAuthorizations ?? []
+          if (catalogById.get(action.arguments.workflowId)?.mode === 'external'
+            && !authorizations.some(item => item.workflowId === action.arguments.workflowId)
+            || authorizations.some(item => catalogById.get(item.workflowId)?.mode === 'external'
+              && (typeof item.objective !== 'string' || !item.objective.trim() || !['none', 'confirmation'].includes(item.gate))))
+            throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID', '外部阶段授权必须包含当前原文 sourceQuote、逐字 objective 和明确 gate；不能只指定 workflowId。')
+          if (authorizations.some(item => !run.body.includes(item.sourceQuote) || item.objective && !item.sourceQuote.includes(item.objective)))
+            throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID')
+        }
         for (const action of intent.actions.filter(item => item.intent === 'cancel_answer')) {
           const targets = await cancellableAnswers(run)
           if (!await selectedAnswerCancellation(action, run, unit.id ?? unit.unitId, requests)) {

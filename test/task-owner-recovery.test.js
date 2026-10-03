@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
@@ -109,6 +110,7 @@ for (const repairable of [true, false]) test(`Owner读取诊断后推进可恢�
       await readArtifact(state.nodes[0].outputRef)
       await assert.rejects(onCandidate({ ...decision, evidenceRefs: [state.nodes[0].outputRef] }), { code: 'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD' })
       for (const ref of evidenceRefs) await readArtifact(ref)
+      await assert.rejects(onCandidate({ ...decision, evidenceRefs: [...evidenceRefs, 'untrusted-artifact'] }), { code: 'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD' })
       await onCandidate(decision)
       return { status: 'submitted', decision }
     } } })
@@ -332,4 +334,62 @@ for (const barrier of ['future-retry', 'pending-message']) test(`真实控制账
   const state = await store.query({ kind: 'task.owner', taskId: 'task' })
   assert.equal(state.decision.action, 'wait'); assert.equal(state.applicationStatus, 'applied')
   assert.equal(state.sessionId, 'session')
+})
+
+test('候选修复先拒绝缺失及旧版本查询，当前原生查询后同Owner同turn继续',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'owner-current-query-repair-'))
+ const store=await openExecutionStore({dbPath:join(directory,'control.sqlite'),instanceId:'query-repair',initialize:true})
+ const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true,taskWorkspaceRoot:join(directory,'tasks'),getTaskDirectories:async()=>({logicalTaskId:'task'})})
+ const workflow={id:'blocked-query',version:'1',nodes:[{id:'inspect',version:'1',executor:'code',allowedEffects:['read'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({requirement})=>requirement,execute:async()=>({reason:'QUERY_PARAMETER_INVALID'}),admitOutput:()=>({outcome:'failed',waitReason:{kind:'recovery',reference:'QUERY_PARAMETER_INVALID'}})}]}
+ const controller=createExecutionController({store,artifacts,workflows:[workflow]})
+ let owner,phase='old',runs=0,repairs=0,oldEvidence,currentEvidence
+ const bindings=[]
+ t.after(async()=>{await owner?.close();await controller.close();await store.close()})
+ await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'first',workflowId:workflow.id,input:{request:'查目标结构'}}]})
+ const started=await controller.advanceTaskPlan('task'),runId=started.stages[0].runId
+ const state=await controller.whenIdle(runId);await controller.advanceTaskPlan('task')
+ const evidenceRefs=state.nodes[0].evidenceRefs
+ const inspectCurrentExecution=async()=>({stageId:'first',runId,mode:'repair-proposal',repairable:phase==='current',queryContextRequired:phase==='current',reason:'QUERY_PARAMETER_INVALID',evidenceRefs,repairBinding:{stageId:'first',runId,generation:state.run.generation,runRevision:state.run.revision,requirementRevision:phase==='current'?2:1}})
+ owner=createTaskOwnerController({ctx:{},store,artifacts,controller,modelConfig:()=>({}),advanceTask:async()=>{},authorizeStages:async()=>false,inspectCurrentExecution,repairCurrentStage:async()=>{repairs++},validateDataChangeRepairContext:async()=>{const current=await owner.readTaskEvidence({taskId:'task'});if(!current.length)throw Object.assign(Error('缺少当前需求只读结构证明'),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'});assert.equal(current[0].result.revision,2)},sessionRunner:{async close(){},async run({binding,input,onSessionBound,onQueryEvidence,readArtifact,onCandidate}){
+  runs++;bindings.push(binding);await onSessionBound()
+  const queryBinding=Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(k=>[k,binding[k]]))
+  const record=async()=>{
+   const result={columns:['id','name'],revision:binding.requirementRevision}
+   const ref=(await artifacts.put({kind:'agent-query-evidence',capabilityId:'production.structure',execution:queryBinding,result,verification:{sourceRefs:['production-readonly-catalog'],outputDigest:executionDigest(result)}},{taskId:'task'})).ref
+   await onQueryEvidence({binding:queryBinding,evidenceRef:ref});return ref
+  }
+  if(phase==='old'){
+   oldEvidence=await record()
+   const decision={action:'wait',summary:'保存首轮只读结果',evidenceRefs:[oldEvidence],condition:{kind:'business-input',missing:'当前删除要求',responsibleParty:'需求方',resumeWhen:'新要求到达',evidenceRefs:[oldEvidence]}}
+   await onCandidate(decision);return{status:'submitted',decision}
+  }
+  assert.equal(input.queryEvidence.length,0)
+  for(const ref of evidenceRefs)await readArtifact(ref)
+  const decision={action:'repairCurrentStage',summary:'重新核验当前目标结构后继续原步骤',evidenceRefs,repair:input.currentExecution.repairBinding}
+  await assert.rejects(onCandidate(decision),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+  const db=new DatabaseSync(join(directory,'control.sqlite'));try{const turn=db.prepare('SELECT status,candidate_json,decision_json FROM task_owner_turns WHERE turn_id=?').get(binding.turnId);assert.equal(turn.status,'running');assert.equal(turn.candidate_json,null);assert.equal(turn.decision_json,null)}finally{db.close()}
+  assert.equal((await store.query({kind:'task.owner.query-evidence',taskId:'task'})).length,0)
+  assert.ok((await store.query({kind:'task.owner.events',taskId:'task'})).some(e=>e.eventType==='query.succeeded'&&e.payloadRef===oldEvidence))
+  await assert.rejects(onQueryEvidence({binding:{...queryBinding,requirementRevision:1},evidenceRef:oldEvidence}),{code:'TASK_OWNER_QUERY_EVIDENCE_INVALID'})
+  await assert.rejects(onCandidate(decision),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+  currentEvidence=await record()
+  const current=await store.query({kind:'task.owner.query-evidence',taskId:'task'})
+  assert.equal(current.length,1);assert.equal(current[0].turnId,binding.turnId);assert.equal(current[0].artifactRef,currentEvidence)
+  await assert.rejects(onCandidate({...decision,evidenceRefs:[currentEvidence]}),{code:'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD'});
+  await assert.rejects(onCandidate({...decision,evidenceRefs:[...evidenceRefs,oldEvidence]}),{code:'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD'});
+  const withQuery={...decision,evidenceRefs:[...evidenceRefs,currentEvidence]};
+  await onCandidate(withQuery);return{status:'submitted',decision:withQuery}
+ }}})
+ await owner.ensure({taskId:'task',criteria:['核验当前目标结构'],sourceKey:'source',origin:{}})
+ const initialRequirement=(await artifacts.put({request:'查目标结构'},{taskId:'task'})).ref
+ const nativeOwner=await store.query({kind:'task.owner',taskId:'task'})
+ await store.command({id:'bind-requirement',kind:'task.requirement.bind-legacy',args:{taskId:'task',expectedRequirementRevision:1,requirementRef:initialRequirement,sessionId:nativeOwner.sessionId,criteria:['核验当前目标结构'],sourceKey:'source',eventKey:'bind-current'}})
+ await owner.drive('task');assert.deepEqual(await owner.applyPending(),[])
+ const requirement=(await artifacts.put({request:'删除name，先只读核验'},{taskId:'task'})).ref
+ await store.command({id:'new-requirement',kind:'task.requirement.update',args:{taskId:'task',expectedRequirementRevision:1,requirementRef:requirement,eventKey:'new-requirement'}})
+ phase='current';await owner.event({taskId:'task',eventKey:'current-repair',eventType:'intent.received'})
+ await owner.drive('task');assert.deepEqual(await owner.applyPending(),[])
+ assert.equal(runs,2);assert.equal(repairs,1);assert.equal(bindings[0].sessionId,bindings[1].sessionId)
+ assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision.action,'repairCurrentStage')
+ assert.notEqual(currentEvidence,oldEvidence)
 })

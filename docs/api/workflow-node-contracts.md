@@ -1,5 +1,11 @@
 # 工作流节点契约
 
+## 简单加列的整型常量默认值
+
+受信 SQL 识别器接受单条可空 `ALTER TABLE schema.table ADD COLUMN column smallint|integer|bigint DEFAULT signed_decimal_integer;`。仅接受十进制整数字面量并按 PostgreSQL 类型范围用 BigInt 精确校验；拒绝函数、算术、括号表达式、SQL cast、`NOT NULL` 及附带语句。返回的 `defaultValue` 是规范十进制字符串；无默认值时不包含该字段。
+
+预检仍使用准确 schema/table 的只读目录基线。`expectedChange.rows` 必须包含固定五列：`column_name`、`data_type`、`is_nullable`、`column_default`、`character_maximum_length`；整型要求 `YES`、长度 null、默认值表达式字符串与候选常量精确相等。默认 `0` 的目录表达式为 `"0"`；负数及大 bigint 可采用目录返回的整型常量 cast，预检仅校验常量值，不将表达式改写为 null。生产回查对五列及原默认值表达式严格比较；SQL 原文、摘要、变更包及本次插件批准继续完整绑定。
+
 ## 群常驻协调入口（当前 Workflow 主链）
 
 消息语义的唯一入口是 `createMessageCoordinator` 驱动的原生群会话；`createMessageWorkflow` 仅负责来源接收、持久命令派发和执行恢复，必须提供 coordinator。不存在 S/R/I/IB 模型入口、judge 注入或失败后旧链回退。下文旧 Resident Topic/Goal 接口不属于这条消息主链。
@@ -286,7 +292,7 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 入口只替换既有 requirement 的 stageAuthorizations；逐字核对当前原来源并在事务内复查版本、actor、正文摘要及旧 requirement CAS。只允许没有外部阶段/效果、运行或未排空执行的只读任务；旧Task、失败和回执保留。固定 `authorization.projection.repaired` 事件的 payloadRef 保存原/新requirement引用、来源摘要及修复原因。同repairKey同参数回读原结果，异参冲突。
 
-外部阶段的授权必须明确 objective 和 gate，二者与计划精确匹配。缺字段的历史授权不能作为通配授权；sourceInstructions 原文仍保留供只读调查及审计。这是遗漏投影修复，不是用户新要求或审批批准。
+外部阶段的入站 schema 及落账授权必须明确 objective 和 gate，二者与计划精确匹配。workflowId 简写不能代替完整外部授权，sourceQuote/objective 必须是来源原文连续片段。Owner逐字复制已落账授权字段；Host拒绝反馈说明具体不匹配字段，SQL实现描述不写入授权objective。缺字段的历史授权不能作为通配授权；sourceInstructions 原文仍保留供只读调查及审计。这是遗漏投影修复，不是用户新要求或审批批准。
 
 授权投影修复使 requirementRevision 递增而旧 planRequirementRevision 保留。后续必须走 Owner 正常重评计划，保留失败旧run并建立同Task新阶段；`retry-investigation` 在两版本不等时拒绝，即使调用者携带新的CAS也不能复用旧计划。未改变requirement的纯读取范围修复仍可原run重试。
 
@@ -355,3 +361,9 @@ Owner已接受但尚未落地的决定，仅当它准确替换当前后缀为一
 工件目录按当前需求所在逻辑 Task 工作区校验，独立重执行可复用同族根目录；目录相同不代表证据可共享，原生 execution.taskId 仍须匹配本次执行。query.succeeded 不进入普通业务事件材料白名单，防止旧需求证据经事件引用复活。
 
 最终delivery manifest新增queryEvidence；这些证据与受管操作证据共同构成引用白名单。纯调查允许零阶段，仍需真实查询证据、全部acceptanceItem的精确评估及一个共享语义验收。已有SQL等阶段继续核验真实效果、目标、插件真人批准和批准先于执行；查询证据不能绕过这些客观边界。内部失败不主动群汇报，最终完成仍使用原通知幂等账。
+
+新任务开始通知使用task:started及task.started:<taskId>持久事件键，每个逻辑Task最多一次；零阶段/零Run也适用。消息命令applied且任务真实存在才准备，领取重新核验当前控制、来源、未终态和输入屏障。明确不回复、Web及禁止外发保持静默。恢复/补充/重评不生成第二次开始；未知发送只回读，不重发。
+
+数据变更候选修复：Host策略独立于冻结v7 ownerContract，只匹配validate-package的DATA_CHANGE_PROPOSAL_INVALID且effect.list为空、后续工单/审批/执行节点未开展。currentExecution提供queryContextRequired与repairBinding；Owner先读失败证据并准备当前Task查询，候选前使用与正式阶段相同的零写准备函数及纯修复检查。准入后沿原repairCurrentStage/changeInput生成新generation，票据应用前重复核验原文、目标、版本及零效果；不改旧定义、数据库schema或效果账。只换ref/重复查询同事实及重复策略均不能机械重试。
+
+候选恢复的 evidenceRefs 必须包含已读的全部失败/候选诊断，可附带当前 Task/需求版本原生查询和精确当前阶段恢复包装。Host 在候选、领域准备及准入分别核验；不把额外查询视为失败诊断，也不允许旧版本、其他Task或阶段资料绕过绑定。普通只读节点恢复仍沿原有诊断白名单。

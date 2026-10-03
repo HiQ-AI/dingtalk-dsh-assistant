@@ -56,6 +56,31 @@ test('数据变更输入只接受白名单目标和精确 SQL 来源，基线由
     { code: 'EXTERNAL_BASELINE_UNCONFIRMED' })
 })
 
+test('数据变更SQL候选接收当前Task原生查询，拒绝旧需求跨任务及篡改证据', async () => {
+  const platform = createTrustedWorkflowPlatforms({ config, clients: { bytebase: api, productionPostgres, uatPostgres }, ownerActorId: 'owner' })
+  const scope = { actorId: 'owner', databaseIds: ['app-prod'] }, artifactRef = 'tasks/task-1/sha256-' + 'a'.repeat(64) + '.json'
+  const record = { artifactRef, taskId: 'task-1', requirementRevision: 2, turnId: 'owner-turn', leaseEpoch: 3 }
+  const result = { operation: 'columns', table: 'public.process_id_temp', rows: [{ column_name: 'id' }] }
+  const evidence = { kind: 'agent-query-evidence', capabilityId: 'query_readonly_database', execution: { kind: 'task-owner', taskId: 'task-1', requirementRevision: 2, turnId: record.turnId, leaseEpoch: record.leaseEpoch }, result,
+    verification: { outputDigest: executionDigest(result), sourceRefs: ['database:app-prod:public.process_id_temp'] } }
+  platform.bindExecution({ controller: { state: async () => ({}) }, store: { query: async args => args.kind === 'task.plan'
+    ? { task: { requirementRevision: 2, requirementRef: 'current-requirement' } } : [record] }, artifacts: { read: async ref => ref === artifactRef ? evidence : { scope } } })
+  const request = { workflowId: 'task-data-change', definitionVersion: '7', action: { taskId: 'task-1', arguments: { objective: '新增is_deleted默认0', targetId: 'app-prod', changeRef: 'original-source' }, constraints: [] },
+    materials: [{ resourceRef: 'original-source', text: '新增is_deleted默认0' }], taskContext: { taskId: 'task-1', requirementRevision: 2, scope, queryEvidence: [{ artifactRef }] } }
+  const input = await platform.prepareRequirement(request)
+  assert.equal(input.sources.length, 2)
+  assert.equal(input.sources[1].id, artifactRef)
+  assert.match(input.sources[1].content, /public.process_id_temp/)
+  assert.equal(input.sources[1].sha256, createHash('sha256').update(input.sources[1].content).digest('hex'))
+  for (const taskContext of [{ ...request.taskContext, taskId: 'other' }, { ...request.taskContext, requirementRevision: 1 }, { ...request.taskContext, scope: { actorId: 'other' } }, { ...request.taskContext, queryEvidence: [{ artifactRef: 'forged' }] }])
+    await assert.rejects(platform.prepareRequirement({ ...request, taskContext }), { code: 'DATA_CHANGE_TASK_CONTEXT_INVALID' })
+  await assert.rejects(platform.prepareRequirement({ ...request, taskContext: { ...request.taskContext, queryEvidence: [] } }), error => error.code === 'TASK_OWNER_STAGE_NOT_AUTHORIZED' && error.message.includes('查询'))
+  evidence.execution.requirementRevision = 1
+  await assert.rejects(platform.prepareRequirement(request), { code: 'DATA_CHANGE_TASK_CONTEXT_INVALID' })
+  evidence.execution.requirementRevision = 2; evidence.result.rows = []
+  await assert.rejects(platform.prepareRequirement(request), { code: 'DATA_CHANGE_TASK_CONTEXT_INVALID' })
+})
+
 test('数据变更工单在 Assistant 任务页审批，生产执行前重验精确范围', async () => {
   const platform = createTrustedWorkflowPlatforms({ config,
     clients: { bytebase: api, productionPostgres, uatPostgres }, ownerActorId: 'owner' })
