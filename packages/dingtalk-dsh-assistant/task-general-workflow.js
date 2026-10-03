@@ -212,10 +212,12 @@ export function createGeneralCapabilityStepWorkflow({ capabilities, completionCh
 }
 
 /** 领域效果回执与所承担的自然语言条目匹配，结构和证据仍由代码独立核验。 */
-export async function verifyTaskAcceptance({ check, requirement, decision, stages, acceptanceItems, signal }) {
+export async function verifyTaskAcceptance({ check, requirement, decision, stages, directEvidence = [], acceptanceItems, signal }) {
   if (typeof check !== 'function' || !Array.isArray(acceptanceItems) || !acceptanceItems.length) return false
   const evidence = stages.map(item => ({ ...item.output, evidenceId: item.stage.outputRef,
-    ...(item.input === undefined ? {} : { executedInput: item.input }) }))
+    ...(item.input === undefined ? {} : { executedInput: item.input }) })).concat(directEvidence.map(item => ({
+    ...item.evidence, evidenceId: item.evidenceRef,
+    hostQuery: { taskId: item.taskId, requirementRevision: item.requirementRevision, toolId: item.queryId } })))
   const assessment = await check({ request: requirement.request,
     acceptanceCriteria: acceptanceItems.map(item => item.criterion), acceptanceItems,
     constraints: requirement.constraints, scope: requirement.scope, evidence,

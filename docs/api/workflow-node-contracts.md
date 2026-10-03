@@ -122,21 +122,15 @@ task-actions 仅接受 Host 固定注册的适配器，每个适配器实现参�
 
 当前任务整体 `complete` 仍要求全部有效验收项满足；没有新增部分成功终态。调查可以成功产出不足意见，但若任务承诺尚未满足，Owner 必须继续处理或按既有等待/阻塞路径说明原因。
 
-### 调查 v6 与历史定义
+### 调查定义退役
 
-新 `task-investigation` 使用版本 6；输入 `acceptanceItems:[{itemId,criterion}]` 来自 Owner 的当前有效验收项，不能按位置自行生成 ID。输出保留 `outcome/summary/evidenceRefs/limitations/question`，并要求：
+普通调查由 Task Owner 直接查询，不再注册 task-investigation v4–v9，不再提交 findings/openItems/criterionReviews。活动或暂停的旧调查 Run 拒绝启动切换，取消或业务完成的历史记录保留且不提供旧定义执行能力。原始记录不改写为新查询证据。
 
-- `findings`：最多 64 项 `{kind:fact|judgment|recommendation,statement,evidenceRefs}`；fact 必须有证据。
-- `openItems`：最多 32 项 `{description,reason,evidenceRefs}`，记录未知项和未执行工作。
-- `criterionReviews`：逐一覆盖输入的 itemId，禁止缺项、重复及额外项；每项为 `{itemId,status,reason,evidenceRefs}`，status 只允许 `satisfied/insufficient_evidence/not_applicable`，satisfied 必须有证据。
-
-嵌套证据引用必须包含于顶层证据，来源仍经过当前 Task/Run/代及受信前序引用校验。completed 调查须有证据和至少一项 finding 或 openItem。调查明确标记不足或不适用的验收项，不能由 Owner 单独改口为已满足：后续领域必须接纳同一验收项的证据；只增加备忘录或无关文件不能补齐缺口。
-
-旧 v5 定义继续按冻结摘要注册和恢复，不把历史结果补造成 v6 结构，不静默升级已有 Run。新版本与旧版本的输入、输出合同分别验证。
+新工程 v18 接收 Host 核验的当前 Task 查询 taskContext；v17 及既有工程仍按冻结定义恢复。Owner 输入和最终交付清单的 queryEvidence 只保存身份、queryId 与工件引用；当前轮工具结果自动计为已读，跨轮完整结果必须用受限 readArtifact 读取，Host 最终语义验收仍读取完整受信结果。原生查询证明同时绑定 Task、需求版本、Owner 租约及轮次，普通事件不能冒充证明。周期恢复仅扫描持久待办并派发可运行 Owner，不等待模型完成；每任务仍串行应用，受控写入和插件真人审批不变。
 
 ### 正式交付清单与恢复诊断
 
-`readDeliveryManifest` 从当前需求版本的成功阶段生成清单，包含阶段/Run/冻结定义、结果合同、产物引用及验收项与阶段证据的对应关系。必交文件来自 `scope.artifactFiles` 和 `fileDelivery.files`，按角色与文件名去重；核对当前需求版本、成功生产节点、登记文件及实际字节，并要求文件生产阶段具有验收证据关联。缺项、歧义、旧代文件或无法验证的文件阻止完成；要求外发的文件继续沿用独立发送回读。
+`readDeliveryManifest` 从当前需求版本的原生查询证据及成功受管阶段生成清单，包含阶段/Run/冻结定义、结果合同、产物引用及验收项与阶段证据的对应关系。必交文件来自 `scope.artifactFiles` 和 `fileDelivery.files`，按角色与文件名去重；核对当前需求版本、成功生产节点、登记文件及实际字节，并要求文件生产阶段具有验收证据关联。缺项、歧义、旧代文件或无法验证的文件阻止完成；要求外发的文件继续沿用独立发送回读。
 
 完成接纳事件保存清单引用；`taskDetail.deliveryManifest` 只返回 `null` 或 `{ref,taskId,turnId,requirementRevision,planRevision}`，不展开清单全文。引用从已接纳的 complete 事件回读；与当前需求或计划版本不符时返回 null，不把旧完成清单投影为当前交付。
 
@@ -328,7 +322,7 @@ PR预检暂态失败仅在Host适配器通过完整本地日志独立证明同�
 
 本机已有 `POST /tasks/:id/context` 可选传 `requirement: {objective, acceptanceCriteria, stageTargets, stageAuthorizations}`，与 `context`、`requestId`、`inputVersion`、`runSequence` 一起使用。objective 必须包含在实际 context 中；阶段授权包含 workflowId、sourceQuote、objective、gate。服务核验当前操作者和目标白名单，将本次真实 Web 指令记录为新来源，保留原始来源及已冻结运行，不伪造群成员发言。原请求的比较版本和幂等约束仍生效。该入口不构成生产 SQL 批准。
 
-`task-data-change` v4 的原生审批等待保留 `waitReason.kind=recovery` 以复用现有对账恢复机制；reference 为 `BYTEBASE_APPROVAL_PENDING` 或 `BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED`。投影展示真实等待事项、责任方及恢复条件。驳回产物为 `outcome=needs_revision`，携带工单、SQL、真实意见和证据，后继同 Task 的候选绑定 previousIssueId，必须重新取得审批。新默认调查合同为 v9，v8 及以前保持原摘要恢复。
+`task-data-change` v4 的原生审批等待保留 `waitReason.kind=recovery` 以复用现有对账恢复机制；reference 为 `BYTEBASE_APPROVAL_PENDING` 或 `BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED`。投影展示真实等待事项、责任方及恢复条件。驳回产物为 `outcome=needs_revision`，携带工单、SQL、真实意见和证据，后继同 Task 的候选绑定 previousIssueId，必须重新取得审批。普通调查改由 Task Owner 直接查询，不再注册旧调查合同；历史终态记录只读保留，活动旧调查先收尾再切换。
 
 已有调查 Run 或全部调查阶段成功不封闭原 Task 的需求修订。取消控制或当前需求与事件水位已应用的 Owner complete 才拒绝 context；无 Owner 的历史 Task 仍按业务终态判断。原生审批的两个等待代码复用外部效果只读对账路由，未批准不恢复执行，批准/驳回后原 Run 接续，禁止重新发送未知写入。
 明确 requirement 修订的验收清单与目标在同一事务更新；从真实 pending Web 事件读取并核对完整输入摘要、操作者、来源和比较版本，旧验收保留 inactive。普通 context 追加仍保留原验收。
@@ -348,6 +342,16 @@ Owner已接受但尚未落地的决定，仅当它准确替换当前后缀为一
 审批列表的目标使用当前业务需求，SQL、数据库及工单仍来自冻结审批效果；需求文字修订不改写已提交包。群中数据变更待审通知只在当前阶段有准确工单绑定、prepared效果及pending插件审批时生成“Bytebase 工单 #编号 已新建，等待人工审批。”；完整SQL和恢复条件留详情，其它等待仍展示实际简要原因。
 
 
-任务最终验收组合当前任务各条目明确引用的受信事实，所有领域共享一次语义判断。调查节点只核对自身结果结构及原冻结需求；其局部缺证不要求用后续新阶段补齐，已有前序原生批准、执行和回查证明可以参与联合验收。领域原生结构与效果核验保留，未引用、跨任务和无来源证据不能补足验收。冻结执行定义不改写，Host按调查结果结构v2选择当前准入策略，覆盖已有v6至v9工作流，避免逐项枚举Owner合同版本而漏掉已部署定义。
+任务最终验收组合当前任务各条目明确引用的原生查询和受管操作事实，所有领域共享一次语义判断。纯查询可零阶段；外部操作仍核验原生批准、执行和回查。未引用、跨任务、旧需求和无来源证据不能补足验收。
 
 完成校验拒绝沿既有TASK_OWNER_COMPLETION_UNVERIFIED返回具体校验位置、阶段/合同、当前版本或缺失清单；领域已有原始诊断保持。负责人据此纠正引用或执行策略，内部诊断不作为用户缺资料或群中间进度发送。
+
+## 任务执行会话直接调查
+
+普通调查不再注册task-investigation，不需要独立调查Run、investigate/accept-result节点或criterionReviews。Owner工具清单直接包含已登记只读能力；查询输入及资源scope由Host生成，模型不能扩大授权。可纠正参数/范围/分页错误在同会话返回feedback，租约或需求换代的查询结果拒绝交付。
+
+查询证据execution.kind=task-owner，精确绑定taskId、sessionId、turnId、leaseEpoch、ownerEpoch、requirementRevision及inputDigest。成功工具由Host保存agent-query-evidence，并以task.owner.query-evidence原生事务登记query.succeeded已处理事件；查询本身不改变业务唤醒水位。task.owner.query-evidence查询只返回当前需求证据，支持重启读取。
+
+工件目录按当前需求所在逻辑 Task 工作区校验，独立重执行可复用同族根目录；目录相同不代表证据可共享，原生 execution.taskId 仍须匹配本次执行。query.succeeded 不进入普通业务事件材料白名单，防止旧需求证据经事件引用复活。
+
+最终delivery manifest新增queryEvidence；这些证据与受管操作证据共同构成引用白名单。纯调查允许零阶段，仍需真实查询证据、全部acceptanceItem的精确评估及一个共享语义验收。已有SQL等阶段继续核验真实效果、目标、插件真人批准和批准先于执行；查询证据不能绕过这些客观边界。内部失败不主动群汇报，最终完成仍使用原通知幂等账。

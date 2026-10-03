@@ -128,18 +128,20 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   for (const input of workflows) registerDefinition(input)
   let closed = false, running = 0
   const queue = [], flights = new Map(), active = new Map(), errors = new Map(), dirty = new Set()
-  const query = runId => store.query({ kind: 'run', runId })
+  const query = (runId, options = {}) => store.query({ kind: 'run', runId, ...options })
   const command = (id, kind, args, context = {}) => store.command({ id, kind, args, ...context })
   function definitionOf(run) {
     const definition = byDigest.get(run.workflowDigest)
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
     return run.workflowDigest === definition.digest ? definition : { ...definition, digest: run.workflowDigest }
   }
-  async function inspectNodeRecovery(runId) {
-    const recovery = await store.query({ kind: 'node.recovery', runId })
+  async function inspectNodeRecovery(runId, suppliedState) {
+    const state = suppliedState ?? await query(runId, { includeRecovery: true })
+    const recovery = state.nodeRecovery
+    if (!recovery) throw executionError('WORKFLOW_RECOVERY_SNAPSHOT_MISSING')
     if (!recovery.repairable) return recovery
     if (closed || flights.has(runId)) return { ...recovery, repairable: false, reason: 'executor-still-active' }
-    const state = await query(runId), definition = definitionOf(state.run)
+    const definition = definitionOf(state.run)
     const node = state.nodes.find(item => item.nodeRunId === recovery.nodeRunId), frozen = node && definition.nodes[node.position]
     if (!frozen || frozen.executor !== 'agent' || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect)))
       return { ...recovery, repairable: false, reason: 'node-effects-not-readonly' }
@@ -706,7 +708,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       schedule(runId)
     },
     async whenIdle(runId) { while (flights.has(runId)) { await flights.get(runId); await Promise.resolve() } return query(runId) },
-    async state(runId) { return { ...await query(runId), controllerError: errors.get(runId)?.code ?? errors.get(runId)?.message ?? null } },
+    async state(runId, options) { return { ...await query(runId, options), controllerError: errors.get(runId)?.code ?? errors.get(runId)?.message ?? null } },
     async close() {
       closed = true
       for (const runId of active.keys()) interrupt(runId)

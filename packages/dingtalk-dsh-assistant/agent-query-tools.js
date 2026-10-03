@@ -5,6 +5,12 @@ const correctable = new Set(['QUERY_ARGUMENT_INVALID','QUERY_NOT_FOUND','QUERY_L
 export const classifyAgentQueryError = error => correctable.has(error?.code) ? 'correctable' : 'fatal'
 const fail = code => { throw executionError(code) }
 export function agentEvidenceBinding(binding) {
+  if (binding?.kind === 'task-owner') {
+    const keys = ['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest']
+    if (['taskId','sessionId','turnId','inputDigest'].some(key => typeof binding[key] !== 'string' || !binding[key])
+      || ['leaseEpoch','ownerEpoch','requirementRevision'].some(key => !Number.isSafeInteger(binding[key]) || binding[key] < 1)) fail('QUERY_BINDING_INVALID')
+    return Object.fromEntries(keys.map(key => [key, binding[key]]))
+  }
   const message = binding?.kind === 'message-unit'
   const keys = message ? ['kind','runId','unitId','inputVersion','inputDigest','sessionId','leaseEpoch'] : ['taskId','runId','nodeRunId','generation','inputDigest','sessionId','leaseEpoch']
   if (binding?.kind !== undefined && !['task-node','message-unit'].includes(binding.kind)) fail('QUERY_BINDING_INVALID')

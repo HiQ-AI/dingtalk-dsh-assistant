@@ -127,7 +127,7 @@ test('相同等待动作只改写condition说明仍触发重新诊断', async t 
   assert.equal(h.requests.length, 2)
 })
 
-async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1) {
+async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1, queryCalls = []) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
@@ -141,10 +141,11 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
     async *stream(options) {
       requests.push(options)
       const selectedArtifact = typeof artifactRef === 'function' ? artifactRef(requests.length) : artifactRef
-      const id = `call-${requests.length}`, name = pageRef && requests.length === 1
+      const queryCall = queryCalls[requests.length - 1]
+      const id = `call-${requests.length}`, name = queryCall ? queryCall.name : pageRef && requests.length === 1
         ? 'task_owner_read_events' : selectedArtifact && requests.length <= artifactPages
           ? 'task_owner_read_artifact' : 'task_owner_submit'
-      const args = JSON.stringify(name === 'task_owner_read_events' ? { pageRef }
+      const args = JSON.stringify(queryCall ? queryCall.args : name === 'task_owner_read_events' ? { pageRef }
         : name === 'task_owner_read_artifact' ? { artifactRef: selectedArtifact, offset: typeof artifactRef === 'function' ? 0 : (requests.length - 1) * 16000 } : { decision: typeof candidate === 'function' ? candidate(requests.length) : candidate })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
@@ -463,9 +464,78 @@ test('Owner读取调查的待补充建议后可安排待审候选阶段，不机
     readArtifact: async () => { read = true; return { outcome: 'needs_input', question: '是否确认全部字段规格？', limitations: ['目标明确，候选可供审批'] } },
     onCandidate: async value => { assert.equal(read, true); assert.equal(value.action, 'advance'); submitted = true } })
   assert.equal(result.status, 'submitted'); assert.equal(submitted, true)
-  assert.match(h.requests[0].system, /不机械继承业务等待/)
-  assert.match(h.requests[0].system, /读取本次审批的真实意见/)
-  assert.match(h.requests[0].system, /修改后的SQL必须取得对应版本的新批准/)
-  assert.match(h.requests[0].system, /尚未完成的调查仍需修复或重评未完成阶段/)
+  assert.match(h.requests[0].system, /不把候选当用户事实/)
+  assert.match(h.requests[0].system, /驳回时读真实意见/)
+  assert.match(h.requests[0].system, /修改后重新送审/)
+  assert.match(h.requests[0].system, /普通调查.*直接使用本会话的查询工具/)
   assert.doesNotMatch(h.requests[0].system, /outcome=needs_input 时 wait 并询问/)
+})
+
+test('任务会话直接查询并同轮修正，成功证据先落账再读取提交；过期结果不交付', async t => {
+  for (const stale of [false, true]) {
+    const root = await mkdtemp(join(tmpdir(), 'owner-query-native-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const ref = `sha256-${'9'.repeat(64)}.json`
+    const h = await host(root, null, null, { ...decision, evidenceRefs: [ref] }, undefined, 1, [
+      { name: 'query_fixture', args: { valid: false } },
+      { name: 'query_fixture', args: { valid: true } },
+      { name: 'task_owner_read_artifact', args: { artifactRef: ref } },
+    ])
+    t.after(() => h.close())
+    let persisted = false, submitted = false
+    const queryBinding = { kind: 'task-owner', taskId: 'task-query', sessionId: 'owner-query', turnId: 'turn-1', leaseEpoch: 1,
+      ownerEpoch: 1, requirementRevision: 2, inputDigest: 'a'.repeat(64) }
+    const result = await h.sessions.run({ binding: { ...queryBinding, sessionBound: false }, input: { goal: { request: '核验事实' } },
+      provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {}, queryInput: { scope: 'registered' },
+      tools: [{ name: 'query_fixture', description: '受信只读查询', parameters: { type: 'object', properties: { valid: { type: 'boolean' } }, required: ['valid'], additionalProperties: false },
+        classifyError: error => error.code === 'QUERY_SCOPE_DENIED' ? 'correctable' : 'fatal',
+        async execute({ binding, input, args }) {
+          assert.deepEqual(binding, queryBinding); assert.deepEqual(input, { scope: 'registered' })
+          if (!args.valid) throw Object.assign(Error('选择已授权查询范围'), { code: 'QUERY_SCOPE_DENIED' })
+          if (stale) h.setLease(2)
+          return { evidenceRef: ref, result: { verified: true }, sourceRefs: ['source'] }
+        } }],
+      onQueryEvidence: async value => { assert.deepEqual(value, { binding: queryBinding, evidenceRef: ref }); persisted = true },
+      readArtifact: async value => { assert.equal(persisted, true); assert.equal(value, ref); return { verified: true } },
+      onCandidate: async value => { assert.equal(persisted, true); assert.deepEqual(value.evidenceRefs, [ref]); submitted = true } })
+    assert.equal(result.status, stale ? 'stale' : 'submitted')
+    assert.equal(persisted, !stale); assert.equal(submitted, !stale)
+    assert.match(JSON.stringify(h.requests[1]), /correctable_error/)
+    assert.ok(h.requests[0].tools.some(tool => tool.name === 'query_fixture'))
+    assert.ok(h.requests[0].tools.every(tool => ['query_fixture', 'task_owner_read_artifact', 'task_owner_submit'].includes(tool.name)))
+  }
+})
+
+test('任务查询仅开放注入工具；未知工具与未知执行错误不能伪装为可纠正结果', async t => {
+  for (const mode of ['unregistered', 'fatal']) {
+    const root = await mkdtemp(join(tmpdir(), 'owner-query-guard-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const h = await host(root, null, null, decision, undefined, 1, [{ name: mode === 'unregistered' ? 'not_injected' : 'query_fixture', args: {} }])
+    t.after(() => h.close())
+    let executed = 0, persisted = 0
+    await h.sessions.run({ binding: { taskId: 'guard-task', sessionId: 'guard-owner', turnId: 'turn-1', leaseEpoch: 1,
+      ownerEpoch: 1, requirementRevision: 1, inputDigest: 'b'.repeat(64), sessionBound: false },
+      input: {}, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {}, onCandidate: async () => {},
+      queryInput: {}, readArtifact: async () => ({}), onQueryEvidence: async () => { persisted++ },
+      tools: [{ name: 'query_fixture', description: '受信只读查询', parameters: { type: 'object', properties: {}, additionalProperties: false },
+        classifyError: () => 'fatal', execute: async () => { executed++; throw Object.assign(Error('连接实现故障'), { code: 'QUERY_DRIVER_BROKEN' }) } }] })
+    assert.equal(executed, mode === 'fatal' ? 1 : 0); assert.equal(persisted, 0)
+    const saved = await h.ctx.sessionPersistence.inspect('guard-owner')
+    assert.ok(saved.events.some(event => event.type === 'tool/result' && event.data.message.content[0].isError))
+    assert.doesNotMatch(JSON.stringify(saved.events), /"status":"correctable_error"/)
+  }
+})
+
+test('跨轮查询证据由Host清单重新注入可读范围，不依赖旧材料或阶段', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-query-history-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ref = `sha256-${'8'.repeat(64)}.json`
+  const h = await host(root, null, ref, { ...decision, evidenceRefs: [ref] })
+  t.after(() => h.close())
+  let read = false
+  const result = await h.sessions.run({ binding: { taskId: 'history-task', sessionId: 'history-owner', turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+    input: { queryEvidence: [{ artifactRef: ref }] }, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    readArtifact: async value => { assert.equal(value, ref); read = true; return { kind: 'agent-query-evidence', result: { verified: true } } },
+    onCandidate: async () => assert.equal(read, true) })
+  assert.equal(result.status, 'submitted')
 })

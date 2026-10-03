@@ -63,7 +63,7 @@ for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${a
   const requirement = await artifacts.put(prepared.input)
   await store.command({ id: 'bind', kind: 'task.requirement.bind-legacy', args: { taskId: 'task', expectedRequirementRevision: 1, requirementRef: requirement.ref, sessionId: 'owner-test', criteria: ['值正确'], sourceKey: 'web:test', eventKey: 'created' } })
   await controller.advanceTaskPlan('task'); await controller.whenIdle(runId)
-  const first = await controller.state(runId), failed = first.nodes.find(node => node.nodeId === (ambiguous ? 'apply-changes' : 'verify-candidate'))
+  const first = await controller.state(runId, { includeRecovery: true }), failed = first.nodes.find(node => node.nodeId === (ambiguous ? 'apply-changes' : 'verify-candidate'))
   assert.equal(failed.status, 'waiting', JSON.stringify(first)); assert.equal(failed.waitReason.reference, ambiguous ? 'ENGINEERING_PATCH_AMBIGUOUS' : 'ENGINEERING_VERIFICATION_FAILED')
   const evidenceRef = ambiguous ? first.nodes.find(node => ['inspect-and-propose', 'propose-changes'].includes(node.nodeId)).outputRef : failed.evidenceRefs[0]
   const failedEvidence = await artifacts.read(evidenceRef)
@@ -72,8 +72,8 @@ for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${a
   const helpers = createEngineeringFailureRepair({ store, artifacts, controller, engineering: registry })
   const observed = await helpers.inspectCurrentExecution('task'); assert.equal(observed.repairable, true)
   if (ambiguous) for (const change of [{ nodeId: 'verify-candidate' }, { waitReason: { reference: 'EDIT_BASE_CONFLICT' } }]) {
-    const wrongController = { ...controller, state: async runId => {
-      const value = await controller.state(runId)
+    const wrongController = { ...controller, state: async (runId, options) => {
+      const value = await controller.state(runId, options)
       return { ...value, nodes: value.nodes.map(node => node.nodeId === 'apply-changes' ? { ...node, ...change } : node) }
     } }
     assert.equal((await createEngineeringFailureRepair({ store, artifacts, controller: wrongController, engineering: registry }).inspectCurrentExecution('task')).repairable, false)
@@ -95,6 +95,7 @@ for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${a
     repairCurrentStage: args => { repairCommand = args.commandId; return helpers.repairCurrentStage(args) },
     sessionRunner: { async run({ input, onSessionBound, onCandidate, readArtifact }) {
       assert.equal(input.currentExecution.repairable, true)
+      for (const ref of decision.evidenceRefs) await readArtifact(ref)
       if (!ambiguous) assert.equal((await readArtifact(evidenceRef)).text, Buffer.from(failedEvidence.data, 'base64').toString('utf8'))
       await onSessionBound(); await onCandidate(decision); return { status: 'submitted', decision }
     }, async close() {} } })

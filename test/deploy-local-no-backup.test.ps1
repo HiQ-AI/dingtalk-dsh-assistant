@@ -78,8 +78,8 @@ foreach($change in @(@{active=$false},@{revision=43},@{phase='draining'},@{maint
 Write-Output "PASS $($cases+1)/$($cases+1): 无备份自启恢复许可通过；迁移/包/profile/control/维护许可漂移拒绝"
 $noBackupRepair=$true;$deploymentInputs=@($Package);$evidenceHashes=@{$controlPath=(Get-FileHash -LiteralPath $controlPath).Hash}
 $script:commands=@();$script:live=@();$script:ports=@()
-$enrollmentTaskName='fixture';$script:taskState='Disabled'
-function Get-ScheduledTask { @{State=$script:taskState} }
+$enrollmentTaskName='fixture';$script:taskState='Running';$script:taskEnabled=$false
+function Get-ScheduledTask { @{State=$script:taskState;Settings=@{Enabled=$script:taskEnabled}} }
 function Listeners { $script:ports }
 function Get-CimInstance { $script:live }
 function Assert-LocalPackageSources {}
@@ -89,10 +89,10 @@ function Run-Node([string[]]$Arguments){
 }
 $proof=Test-StoppedRepair
 if(-not $proof.history.verified -or $proof.backup -or @($script:commands|Where-Object {$_[1]-eq 'package' -and $_[2]-eq $retainedObserverPackage}).Count-ne 1){throw '须回查历史及原Observer，不能访问备份'}
-$script:taskState='Ready';$rejected=$false
+$script:taskEnabled=$true;$rejected=$false
 try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复要求原自启任务仍禁用'}
 if(-not $rejected){throw '自启重新启用时不得进入离线安装'}
-$script:taskState='Disabled'
+$script:taskState='Running';$script:taskEnabled=$false
 foreach($liveCase in @(@{ports=@(3080);live=@()},@{ports=@();live=@([pscustomobject]@{ProcessId=123})},@{ports=@();live=@([pscustomobject]@{ProcessId=456})})){
  $script:ports=$liveCase.ports;$script:live=$liveCase.live;$rejected=$false
  try{Test-StoppedRepair}catch{$rejected=$true};if(-not $rejected){throw '监听或原进程存活必须拒绝'}
@@ -110,9 +110,9 @@ $controlBranch=$ast.Find({param($node) $node -is [System.Management.Automation.L
 Invoke-Expression $controlBranch.Extent.Text
 Assert-DeploymentControlRecord $launchRecord
 if($launchRecord.backupCreated-ne $false -or -not $launchRecord.enrollmentAutostartRestore -or $launchRecord.retainedObserverPackage-ne $retainedObserverPackage -or $launchRecord.observerPackage){throw '新launch必须保留无备份/自启/原Observer且不安装Observer'}
-$enrollmentTaskName='fixture';$script:taskState='Disabled';$script:enabled=0
-function Get-ScheduledTask { @{State=$script:taskState} }
-function Enable-ScheduledTask { $script:enabled++;$script:taskState='Ready' }
+$enrollmentTaskName='fixture';$script:taskState='Running';$script:taskEnabled=$false;$script:enabled=0
+function Get-ScheduledTask { @{State=$script:taskState;Settings=@{Enabled=$script:taskEnabled}} }
+function Enable-ScheduledTask { $script:enabled++;$script:taskEnabled=$true }
 Restore-EnrollmentAutostart $launchRecord
 Restore-EnrollmentAutostart $launchRecord
 if($script:enabled-ne 1){throw '精确包修复必须幂等恢复原自启'}

@@ -267,3 +267,69 @@ test('新Task首轮输入不把未建立计划误判为需求过期，同turn纠
  const actions=await store.query({kind:'task.owner.actions.pending'})
  assert.equal(actions.length,1);assert.equal(actions[0].decision.planChange.kind,'initialize')
 })
+
+
+for (const barrier of ['future-retry', 'pending-message']) test(`真实控制账Owner派发不空转且原恢复可继续：${barrier}`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'owner-dispatch-barrier-'))
+  const dbPath = join(directory, 'control.sqlite')
+  const store = await openExecutionStore({ dbPath, instanceId: 'dispatch-barrier', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const controller = createExecutionController({ store, artifacts, workflows: [] })
+  let owner, calls = 0, scans = 0, claims = 0
+  t.after(async () => { await owner?.close(); await controller.close(); await store.close() })
+  const command = (kind, args) => store.command({ id: randomUUID(), kind, args })
+  const receive = id => command('message.receive', { runId: id, sourceKey: id, sourceVersion: 1,
+    conversationId: 'group', actorId: 'actor', body: `来源 ${id}` })
+  await receive('origin')
+  await command('message.split', { runId: 'origin', units: [{ unitId: 'origin-unit' }] })
+  await command('message.topic.bind', { runId: 'origin', unitId: 'origin-unit', expectedRevision: 0,
+    binding: { type: 'topic' }, topic: { topicId: 'topic', conversationId: 'group', sourceRunId: 'origin',
+      unitId: 'origin-unit', title: '原任务', facts: [] } })
+  await command('message.topic.intent.accept', { runId: 'origin', topicId: 'topic', conversationId: 'group', inputRevision: 1,
+    decisions: [{ unitId: 'origin-unit', expectedRevision: 0, commands: [{ commandId: 'create', kind: 'create', args: { taskId: 'task' } }] }] })
+  const requirementRef = (await artifacts.put({ request: '调查原任务', acceptanceCriteria: ['确认事实'] })).ref
+  await command('task.accept', { taskId: 'task', requirementRef, requirementRevision: 1,
+    sessionId: 'session', criteria: ['确认事实'], sourceKey: 'origin', eventKey: 'created' })
+  if (barrier === 'future-retry') {
+    await command('task.owner.claim', { taskId: 'task', turnId: 'failed', expectedLeaseEpoch: 0 })
+    await command('task.owner.release', { taskId: 'task', turnId: 'failed', leaseEpoch: 1, reason: 'ETIMEDOUT' })
+    assert.ok(Date.parse((await store.query({ kind: 'task.owner', taskId: 'task' })).retryAt) > Date.now())
+  } else await receive('new-input')
+  // 仅计量实际控制账调用，所有查询及命令仍原样进入SQLite事务。
+  const observedStore = { query: request => {
+    if (request.kind === 'task.owners.pending') scans++
+    return store.query(request)
+  }, command: request => {
+    if (request.kind === 'task.owner.claim') claims++
+    return store.command(request)
+  } }
+  owner = createTaskOwnerController({ ctx: {}, store: observedStore, artifacts, controller,
+    advanceTask: async () => {}, authorizeStages: async () => false, modelConfig: () => ({}), sessionRunner: { async close() {}, async run({ onSessionBound, onCandidate }) {
+      calls++; await onSessionBound()
+      const decision = { action: 'wait', summary: '等待真实业务选择', evidenceRefs: [], condition: {
+        kind: 'business-input', missing: '选择方案', responsibleParty: '交办人', resumeWhen: '确认后继续', evidenceRefs: [] } }
+      await onCandidate(decision); return { status: 'submitted', decision }
+    } } })
+  await owner.recover()
+  const before = { scans, claims }
+  await new Promise(resolve => setTimeout(resolve, 40))
+  assert.deepEqual({ scans, claims }, before)
+  assert.equal(calls, 0); assert.equal(scans, 1)
+  assert.equal(claims, barrier === 'future-retry' ? 0 : 1)
+  if (barrier === 'future-retry') {
+    const db = new DatabaseSync(dbPath)
+    try { db.prepare("UPDATE task_owners SET updated_at=? WHERE task_id='task'").run(new Date(Date.now() - 2000).toISOString()) }
+    finally { db.close() }
+  } else {
+    const impact = await store.query({ kind: 'message.impact', runId: 'new-input' })
+    const source = (await store.query({ kind: 'message.run', runId: 'new-input' })).run
+    await command('message.impact.resolve', { runId: 'new-input', expectedRevision: source.revision,
+      unitId: '$', catalogRevision: impact.catalogRevision, assessments: [{ topicId: 'topic', relation: 'independent',
+        reason: '核对对象与原任务不同', sourceRefs: [{ sourceKey: 'new-input', sourceVersion: 1, text: source.body }] }] })
+  }
+  await owner.recover()
+  assert.equal(calls, 1)
+  const state = await store.query({ kind: 'task.owner', taskId: 'task' })
+  assert.equal(state.decision.action, 'wait'); assert.equal(state.applicationStatus, 'applied')
+  assert.equal(state.sessionId, 'session')
+})

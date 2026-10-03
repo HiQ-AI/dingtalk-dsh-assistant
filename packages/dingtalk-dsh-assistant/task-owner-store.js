@@ -107,7 +107,7 @@ const decision = value => {
   return value
 }
 const task = (db, taskId) => {
-  const row = db.prepare(`SELECT t.task_id,t.requirement_revision,t.plan_revision,t.plan_requirement_revision,t.status AS plan_status,
+  const row = db.prepare(`SELECT t.task_id,t.requirement_ref,t.requirement_revision,t.plan_revision,t.plan_requirement_revision,t.status AS plan_status,
     c.control_revision,c.state AS control_state FROM business_tasks t
     JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?`).get(id(taskId))
   if (!row) fail('TASK_OWNER_TASK_NOT_FOUND')
@@ -122,18 +122,20 @@ function validateDecisionState(db, o, chosen) {
   if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
   validatePlanChange(chosen, currentTask)
   if (chosen.action === 'complete') {
-    if (currentTask.plan_status !== 'succeeded' || chosen.appendStages !== undefined
-      || currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
+    const direct = db.prepare("SELECT e.payload_ref FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").all(o.task_id, currentTask.requirement_revision,o.authorization_revision,o.input_fence_revision)
+    const stageCount = db.prepare('SELECT COUNT(*) AS count FROM task_plan_stages WHERE task_id=? AND plan_revision=?').get(o.task_id,currentTask.plan_revision).count
+    if ((stageCount ? currentTask.plan_status !== 'succeeded' : !direct.length) || chosen.appendStages !== undefined
+      || stageCount && currentTask.plan_requirement_revision !== currentTask.requirement_revision) fail('TASK_OWNER_COMPLETION_UNPROVEN')
     const stages = db.prepare('SELECT workflow_id,status,output_ref,evidence_refs FROM task_plan_stages WHERE task_id=? AND plan_revision=?')
     .all(o.task_id, currentTask.plan_revision)
-    if (!stages.length || stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
+    if (stages.some(stage => stage.status !== 'succeeded' || !stage.output_ref
       || !Array.isArray(JSON.parse(stage.evidence_refs)) || !JSON.parse(stage.evidence_refs).length))
       fail('TASK_OWNER_COMPLETION_UNPROVEN')
     const items = db.prepare('SELECT item_id FROM task_acceptance_items WHERE task_id=? AND active=1 ORDER BY rowid')
       .all(o.task_id).map(row => row.item_id)
     const assessments = chosen.assessments ?? []
-    const knownEvidence = new Set(stages.flatMap(stage => [stage.output_ref, ...JSON.parse(stage.evidence_refs)]))
-    if (stages.every(stage => stage.workflow_id === 'task-general-intake')
+    const knownEvidence = new Set([...stages.flatMap(stage => [stage.output_ref, ...JSON.parse(stage.evidence_refs)]), ...direct.map(row => row.payload_ref)])
+    if (stages.length && stages.every(stage => stage.workflow_id === 'task-general-intake')
       || !items.length || assessments.length !== items.length
       || new Set(assessments.map(item => item.itemId)).size !== items.length
       || assessments.some(item => !items.includes(item.itemId)
@@ -377,6 +379,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
   if (command.kind === 'task.owner.event') {
     exact(a, ['taskId', 'eventKey', 'eventType', 'payloadRef'], ['taskId', 'eventKey', 'eventType'])
     const o = owner(db, a.taskId); id(a.eventKey); id(a.eventType)
+    if (a.eventType === 'query.succeeded') fail('TASK_OWNER_QUERY_EVENT_RESERVED')
     if (a.payloadRef !== undefined && a.payloadRef !== null) ref(a.payloadRef)
     const prior = db.prepare('SELECT * FROM task_events WHERE event_key=?').get(a.eventKey)
     if (prior) {
@@ -409,6 +412,21 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       .run(epoch, a.turnId, now, a.taskId)
     return { status: 'applied', turnId: a.turnId, leaseEpoch: epoch, eventWatermark: o.event_watermark,
       sessionId: o.session_id, sessionBound: !!o.session_bound, ownerEpoch: o.owner_epoch, versions: v }
+  }
+  if (command.kind === 'task.owner.query-evidence') {
+    exact(a, ['taskId','turnId','leaseEpoch','requirementRevision','evidenceRef'])
+    const { owner: o, turn: t } = turn(db,a)
+    ref(a.evidenceRef)
+    const workspaceTaskId = parseArtifactReference(task(db,a.taskId).requirement_ref).logicalTaskId ?? a.taskId
+    if (parseArtifactReference(a.evidenceRef).logicalTaskId !== workspaceTaskId) fail('TASK_OWNER_QUERY_EVIDENCE_INVALID')
+    const v = versions(db,o)
+    if (v.controlRevision !== t.control_revision || v.authorizationRevision !== t.authorization_revision || v.inputFenceRevision !== t.input_fence_revision || task(db,a.taskId).control_state !== 'active') fail('TASK_OWNER_QUERY_STALE')
+    if (t.status !== 'running' || revision(a.requirementRevision) !== t.requirement_revision
+      || task(db,a.taskId).requirement_revision !== t.requirement_revision) fail('TASK_OWNER_QUERY_STALE')
+    const eventKey = `query-${createHash('sha256').update(json([a.taskId,a.turnId,a.evidenceRef])).digest('hex')}`
+    db.prepare("INSERT OR IGNORE INTO task_events(task_id,event_key,event_type,payload_ref,created_at,handled_at,turn_id) VALUES(?,?,'query.succeeded',?,?,?,?)")
+      .run(o.task_id,eventKey,a.evidenceRef,now,now,t.turn_id)
+    return { status:'recorded', evidenceRef:a.evidenceRef }
   }
   if (command.kind === 'task.owner.sessionBound') {
     exact(a, ['taskId', 'turnId', 'leaseEpoch', 'sessionId'])
@@ -484,7 +502,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     if (t.application_status !== 'pending' && !rejectedAction) fail('TASK_OWNER_ACTION_ALREADY_APPLIED')
     if (rejectedAction && (task(db, a.taskId).control_state !== 'active'
       || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,t.turn_id)
-      || !db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND (status IN ('waiting','failed') OR (?=1 AND status='succeeded'))").get(a.taskId,rejectedSourcePlan?1:0)
+      || !db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns q ON q.turn_id=e.turn_id AND q.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND q.requirement_revision=? AND q.authorization_revision=? AND q.input_fence_revision=?").get(a.taskId,v.requirementRevision,o.authorization_revision,o.input_fence_revision)
       || db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('waiting','failed','succeeded'))").get(a.taskId)
       || db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
       || db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
@@ -621,6 +639,13 @@ export function queryTaskOwner(db, query) {
         inputFenceRevision: row.input_fence_revision,
         retryAt: row.application_failures ? new Date(Date.parse(row.updated_at) + recoveryRetryDelayMs(row.application_failures)).toISOString() : null,
         decision: JSON.parse(row.decision_json), sequenceId: row.sequence_id }))
+  }
+  if (query?.kind === 'task.owner.query-evidence') {
+    const current = task(db,query.taskId)
+    const wanted = query.requirementRevision ?? current.requirement_revision
+    if (revision(wanted) !== current.requirement_revision) fail('TASK_OWNER_QUERY_STALE')
+    return db.prepare("SELECT e.payload_ref,t.turn_id,t.lease_epoch,t.requirement_revision FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=? ORDER BY e.seq")
+      .all(query.taskId,wanted,owner(db,query.taskId).authorization_revision,owner(db,query.taskId).input_fence_revision).map(row => ({ artifactRef:row.payload_ref,taskId:query.taskId,turnId:row.turn_id,leaseEpoch:row.lease_epoch,requirementRevision:row.requirement_revision }))
   }
   if (query?.kind === 'task.owner.events') {
     exact(query, ['kind', 'taskId', 'afterSequenceId', 'limit'], ['kind', 'taskId'])

@@ -131,3 +131,11 @@ single-column-delete-unique-group-result,28,PASS,round-28.md
 
 resident-workspace-membership,29,PASS,round-29.md
 resident-workspace-old-session-cleanup,29,PASS,round-29.md
+owner-direct-query-core,30,PASS,round-30.md
+owner-direct-query-service,31,FAIL,round-31.md
+owner-direct-query-core,32,PASS,round-32.md
+owner-direct-query-service,32,PASS,round-32.md
+owner-direct-query-guarded-handoff,32,PASS,round-32.md
+owner-direct-query-recovery,32,PASS,round-32.md
+owner-direct-query-lifecycle,32,PASS,round-32.md
+owner-direct-query-deployment,32,PASS,round-32.md

@@ -24,9 +24,11 @@ test('存量已终态定义不影响启动，但任何旧活动引用阻止切�
  }
  assert.throws(()=>assertRetiredWorkflowsDrained({records:[],activeDefinitions:new Set(),pendingStages:[{workflowId:'task-general-intake',workflowDigest:null}]}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
 })
-test('新的共享调查和授权写阶段可以原身份恢复',()=>{
- const records=[{workflowId:'task-investigation',definitionVersion:'3',digest:'i'},{workflowId:'task-general-capability',definitionVersion:'4',digest:'w'}]
- assert.doesNotThrow(()=>assertRetiredWorkflowsDrained({records,currentDefinitions:records.map(record=>({id:record.workflowId,version:record.definitionVersion})),activeDefinitions:new Set(['task-investigation:i','task-general-capability:w'])}))
+test('调查已退役且拒绝活动引用，授权写阶段仍可原身份恢复',()=>{
+ const records=[{workflowId:'task-investigation',definitionVersion:'9',digest:'i'},{workflowId:'task-general-capability',definitionVersion:'4',digest:'w'}]
+ const currentDefinitions=[{id:'task-general-capability',version:'4'}]
+ assert.throws(()=>assertRetiredWorkflowsDrained({records,currentDefinitions,activeDefinitions:new Set(['task-investigation:i'])}),{code:'WORKFLOW_CUTOVER_ACTIVE_REFERENCES'})
+ assert.doesNotThrow(()=>assertRetiredWorkflowsDrained({records,currentDefinitions,activeDefinitions:new Set(['task-general-capability:w'])}))
 })
 
 test('调查v5切换拒绝v4活动引用，终态历史无需套用新完成合同',()=>{

@@ -1,7 +1,7 @@
 import { executionError } from './execution-artifacts.js'
 
 // 仅保留历史产物校验与部署切换门禁；此模块不再提供任何可执行 Workflow。
-export const retiredWorkflowIds = Object.freeze(['task-analysis','task-general','task-general-intake','task-planning','task-pr-review','task-data-query','task-retrospective'])
+export const retiredWorkflowIds = Object.freeze(['task-investigation','task-analysis','task-general','task-general-intake','task-planning','task-pr-review','task-data-query','task-retrospective'])
 export function assertRetiredWorkflowsDrained({ records, activeDefinitions, pendingStages = [], currentDefinitions = [] }) {
   const retired = record => retiredWorkflowIds.includes(record.workflowId)
     || ['task-investigation','task-general-capability'].includes(record.workflowId)

@@ -66,7 +66,6 @@ export const fileDeliveryArguments = z.strictObject({ sourceQuote: argumentText,
   files: z.array(z.strictObject({ role: argumentText, fileName: argumentText })).min(1).max(20) })
 export const taskWorkflowCatalog = Object.freeze([
   { id: 'task-group-file-delivery', label: '群聊文件交付', purpose: '将当前需求必交文件逐件发送到原任务群，下载核验原字节后才完成', mode: 'delivery' },
-  { id: 'task-investigation', label: '调查与分析', purpose: '自主使用授权查询能力，交付调查、分析、评审或方案；按目标核对证据', mode: 'read-only' },
   { id: 'task-engineering', label: '代码开发', purpose: '开发并向明确指定的uat1至uat9环境提交PR，由Host映射分支；未指定先询问，禁止main', mode: 'engineering' },
   { id: 'task-uat-deployment', label: 'UAT 部署', purpose: '将已合入UAT分支的精确提交部署到UAT环境', mode: 'external' },
   { id: 'task-main-pr-merge', label: '上线合并 main', purpose: 'UAT及业务验收完成并获上线批准后，独立合并精确PR至main', mode: 'external' },

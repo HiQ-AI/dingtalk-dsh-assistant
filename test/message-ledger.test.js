@@ -778,12 +778,13 @@ test('已有模型领取旧账保留真实startedAt，排队墙钟年龄不拒�
  const recovered=(await f.call('recover',{runId:'m'})).result.run;assert.equal(recovered.status,'pending');assert.equal(recovered.executionStartedAt,'2020-01-01T00:00:00.000Z')
 })
 
-test('高来源版本42无业务命令已送达纯状态通知允许重处理并保留旧回执',async t=>{
+test('高来源版本42历史纯状态通知送达后允许重处理并保留旧回执',async t=>{
  const f=await fixture(t);await f.call('receive',receive('m',{sourceVersion:42}));await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
  await f.call('notification.prepare',{runId:'m',notificationId:'state',stateFact:{revision:0,status:'needs_attention',reason:'recovery_exhausted',intentStatus:null,phase:'attention'},payload:{phase:'attention',conversationId:'g',text:'系统等待'},disclosure:{conversationId:'g',authorizationRef:'m'}})
- const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
- await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
- await f.call('notification.sent',{notificationId:'state',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out'}})
+ // 当前策略静默内部受阻；此处重建已在旧版本发送中的历史回执，验证对账边界。
+ await f.editSnapshot(db=>{const row=db.prepare("SELECT rowid,body FROM message_items WHERE kind='notification' AND json_extract(body,'$.id')='state'").get();const value=JSON.parse(row.body);value.status='sending';value.leaseEpoch=1;db.prepare('UPDATE message_items SET body=? WHERE rowid=?').run(JSON.stringify(value),row.rowid)})
+ const notice=await f.store.query({kind:'message.notification',notificationId:'state'})
+ assert.equal(notice.status,'unknown')
  await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
  await f.call('notification.readback',{notificationId:'state',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
  const before=await f.store.query({kind:'message.notification',notificationId:'state'})
@@ -803,11 +804,10 @@ test('维护禁止首个模型领取且不启动执行钟，解除后过期排�
  assert.ok((await f.store.query({kind:'message.run',runId:'m'})).run.executionStartedAt)
 })
 
-test('纯状态通知发送结果unknown仍禁止重处理',async t=>{
+test('历史纯状态通知发送结果unknown仍禁止重处理',async t=>{
  const f=await fixture(t);await f.call('receive',receive());await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
  await f.call('notification.prepare',{runId:'m',notificationId:'state',stateFact:{revision:0,status:'needs_attention',reason:'recovery_exhausted',intentStatus:null,phase:'attention'},payload:{phase:'attention',conversationId:'g',text:'系统等待'},disclosure:{conversationId:'g',authorizationRef:'m'}})
- const notice=(await f.call('notification.claim',{notificationId:'state'})).result.notification
- await f.call('notification.fail',{notificationId:'state',leaseEpoch:notice.leaseEpoch,error:'network'})
+ await f.editSnapshot(db=>{const row=db.prepare("SELECT rowid,body FROM message_items WHERE kind='notification' AND json_extract(body,'$.id')='state'").get();const value=JSON.parse(row.body);value.status='unknown';value.leaseEpoch=1;value.error='network';db.prepare('UPDATE message_items SET body=? WHERE rowid=?').run(JSON.stringify(value),row.rowid)})
  await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
 })
 

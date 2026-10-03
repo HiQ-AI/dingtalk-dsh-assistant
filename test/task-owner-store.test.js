@@ -511,6 +511,7 @@ test('Owner受管恢复拒绝未知错误和未应用候选', () => {
 for(const mode of ['known','unknown','pending','effect','running'])test(`原生discard仅封存明确未执行的blocked修复动作：${mode}`,()=>{
  const f=fixture()
  try{
+  f.db.prepare("UPDATE business_tasks SET requirement_ref=? WHERE task_id='task-1'").run(`tasks/task-1/sha256-${'d'.repeat(64)}.json`)
   f.db.exec("CREATE TABLE execution_runs(run_id TEXT,task_id TEXT,workflow_id TEXT,status TEXT); CREATE TABLE execution_nodes(run_id TEXT,drained INTEGER,status TEXT); CREATE TABLE execution_effects(run_id TEXT); CREATE TABLE execution_inputs(run_id TEXT,status TEXT)")
   f.db.prepare("UPDATE task_plan_stages SET workflow_id='task-investigation' WHERE task_id='task-1'").run()
   f.db.prepare("INSERT INTO execution_runs VALUES('r','task-1','task-investigation',?)").run(mode==='running'?'running':'failed')
@@ -519,6 +520,7 @@ for(const mode of ['known','unknown','pending','effect','running'])test(`原生d
   f.send('task.owner.event',{taskId:'task-1',eventKey:'created',eventType:'task.created'})
   f.send('task.owner.claim',{taskId:'task-1',turnId:'turn-1',expectedLeaseEpoch:0})
   f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,sessionId:'session-1'})
+  f.send('task.owner.query-evidence',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,requirementRevision:1,evidenceRef:`tasks/task-1/sha256-${'c'.repeat(64)}.json`})
   const decision={action:'repairCurrentStage',summary:'非法阶段修复',evidenceRefs:[],repair:{stageId:'stage-1',runId:'r',generation:1,runRevision:0,requirementRevision:1}}
   f.send('task.owner.candidate',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1,decision})
   f.send('task.owner.accept',{taskId:'task-1',turnId:'turn-1',leaseEpoch:1})
@@ -607,4 +609,32 @@ test('可纠正动作仅封存失败候选，当前Owner收到诊断继续', () 
   assert.equal(f.read('task.owner').status,'pending');assert.equal(f.read('task.owner').lastFailure,'TASK_OWNER_ADVANCE_CONFLICT')
   assert.equal(f.read('task.owner').sessionId,'session-1')
  } finally {f.db.close()}
+})
+
+
+test('无阶段调查以原生查询证明完成；隔离任务、需求版本和Owner租约', () => {
+  const f = fixture()
+  try {
+    f.db.prepare("DELETE FROM task_plan_stages WHERE task_id='task-1'").run()
+    f.db.prepare("UPDATE business_tasks SET plan_revision=0,plan_requirement_revision=0,requirement_ref=? WHERE task_id='task-1'").run(`tasks/task-1/sha256-${'a'.repeat(64)}.json`)
+    f.send('task.owner.event',{taskId:'task-1',eventKey:'created-direct',eventType:'task.created'})
+    const claim = f.send('task.owner.claim',{taskId:'task-1',turnId:'turn-direct',expectedLeaseEpoch:0})
+    f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'turn-direct',leaseEpoch:1,sessionId:'session-1'})
+    const evidenceRef = `tasks/task-1/sha256-${'b'.repeat(64)}.json`
+    const decision = {action:'complete',summary:'调查目标已完成',evidenceRefs:[evidenceRef],assessments:[{itemId:'acceptance-1',status:'satisfied',evidenceRefs:[evidenceRef]}]}
+    assert.throws(()=>f.send('task.owner.candidate',{taskId:'task-1',turnId:'turn-direct',leaseEpoch:1,decision}),{code:'TASK_OWNER_COMPLETION_UNPROVEN'})
+    assert.throws(()=>f.send('task.owner.event',{taskId:'task-1',eventKey:'fake-query',eventType:'query.succeeded',payloadRef:evidenceRef}),{code:'TASK_OWNER_QUERY_EVENT_RESERVED'})
+    const args = {taskId:'task-1',turnId:'turn-direct',leaseEpoch:1,requirementRevision:1,evidenceRef}
+    assert.throws(()=>f.send('task.owner.query-evidence',{...args,requirementRevision:2}),{code:'TASK_OWNER_QUERY_STALE'})
+    assert.throws(()=>f.send('task.owner.query-evidence',{...args,leaseEpoch:2}),{code:'TASK_OWNER_LEASE_STALE'})
+    assert.throws(()=>f.send('task.owner.query-evidence',{...args,evidenceRef:evidenceRef.replace('task-1','task-2')}),{code:'TASK_OWNER_QUERY_EVIDENCE_INVALID'})
+    f.send('task.owner.query-evidence',args)
+    assert.equal(f.read('task.owner').eventWatermark,claim.eventWatermark)
+    assert.equal(f.read('task.owner.query-evidence')[0].artifactRef,evidenceRef)
+    f.send('task.owner.candidate',{taskId:'task-1',turnId:'turn-direct',leaseEpoch:1,decision})
+    assert.equal(f.send('task.owner.accept',{taskId:'task-1',turnId:'turn-direct',leaseEpoch:1}).status,'accepted')
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM task_plan_stages').get().n,0)
+    f.db.prepare("UPDATE business_tasks SET requirement_revision=2 WHERE task_id='task-1'").run()
+    assert.deepEqual(f.read('task.owner.query-evidence'),[])
+  } finally {f.db.close()}
 })

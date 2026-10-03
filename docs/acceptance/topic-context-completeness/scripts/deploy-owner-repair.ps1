@@ -145,8 +145,8 @@ function Restore-EnrollmentAutostart($record) {
  if($record.enrollmentAutostartRestore){
   $task=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
   if($task.Count-ne 1){throw '接入后自启任务身份不唯一'}
-  if([string]$task[0].State-eq 'Disabled'){$null=Enable-ScheduledTask -TaskName $enrollmentTaskName}
-  if([string](Get-ScheduledTask -TaskName $enrollmentTaskName).State-eq 'Disabled'){throw '接入后自启任务未恢复'}
+  if($task[0].Settings.Enabled-ne $true){$null=Enable-ScheduledTask -TaskName $enrollmentTaskName}
+  if((Get-ScheduledTask -TaskName $enrollmentTaskName).Settings.Enabled-ne $true){throw '接入后自启任务未恢复'}
  }
 }
 function Acquire-OwnerLock {
@@ -273,8 +273,9 @@ function Change-Maintenance($state,[bool]$active,[string]$maintenanceId) {
  return Invoke-RestMethod -Uri http://127.0.0.1:18998/runtime/maintenance -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
 }
 function Assert-MaintenanceContinuation($state,$old) {
+ $phaseAllowed=$state.phase-eq 'draining' -or ($state.phase-eq 'stopping' -and $state.stopPermitted-eq $true -and $state.sealedIncarnation-eq $state.processIncarnation)
  if(-not $ContinueMaintenanceId -or $null-eq $ExpectedMaintenanceRevision -or
-    -not $state.active -or $state.phase-ne 'draining' -or -not $state.drained -or
+    -not $state.active -or -not $phaseAllowed -or -not $state.drained -or
     $state.maintenanceId-ne $ContinueMaintenanceId -or $state.revision-ne $ExpectedMaintenanceRevision -or
     $state.processIncarnation-notmatch ('^'+[regex]::Escape([string]$old.ProcessId)+':')){throw '接续维护许可身份、版本或排空状态不匹配'}
 }
@@ -485,7 +486,7 @@ if($RepairStoppedLaunch){
   foreach($path in $evidenceHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $evidenceHashes[$path]){throw '修复输入或原证据已变化'}}
   if($noBackupRepair -and $record.enrollmentAutostartRestore){
    $scheduled=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
-   if($scheduled.Count-ne 1 -or [string]$scheduled[0].State-ne 'Disabled'){throw '离线修复要求原自启任务仍禁用'}
+   if($scheduled.Count-ne 1 -or $scheduled[0].Settings.Enabled-ne $false){throw '离线修复要求原自启任务仍禁用'}
   }
   Assert-StoppedRepairProcesses $record $backupRecord
   $current=Run-Node @($checker,'maintenance')|ConvertFrom-Json
@@ -631,7 +632,7 @@ try {$snapshot=Wait-DrainedSnapshot}catch{
  [void](Change-Maintenance $entered.state $false $maintenanceId)
  throw '维护排空未完成，已恢复原实例派发，本次未停机'
 }
-$sealed=Change-MaintenancePhase $entered.state 'seal' $maintenanceId
+$sealed=if($entered.state.phase-eq 'stopping'){$entered}else{Change-MaintenancePhase $entered.state 'seal' $maintenanceId}
 if(-not $sealed.state.stopPermitted -or $sealed.state.maintenanceId-ne $maintenanceId -or $sealed.state.processIncarnation -notmatch ('^'+[regex]::Escape([string]$old.ProcessId)+':')){throw '未取得绑定原进程的封存停机许可'}
 $sealed|ConvertTo-Json -Depth 8|Set-Content -LiteralPath "$EvidenceDirectory/maintenance-sealed.json" -Encoding utf8
 $snapshot=Wait-DrainedSnapshot
@@ -656,10 +657,11 @@ if($old){
  if(-not $Bootstrap){
   $scheduled=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
   if($scheduled.Count-ne 1){throw '新群接入自启任务身份不唯一'}
-  $enrollmentAutostartRestore=[string]$scheduled[0].State-ne 'Disabled'
-  if($enrollmentAutostartRestore){$null=Disable-ScheduledTask -TaskName $enrollmentTaskName}
-  if([string](Get-ScheduledTask -TaskName $enrollmentTaskName).State-ne 'Disabled'){throw '新群接入前自启任务未禁用'}
+  if($scheduled[0].Settings.Enabled-notin @($true,$false)){throw '自启任务启用配置无法核验'}
+  $enrollmentAutostartRestore=$scheduled[0].Settings.Enabled-eq $true
   @{taskName=$enrollmentTaskName;restore=$enrollmentAutostartRestore}|ConvertTo-Json|Set-Content "$EvidenceDirectory/enrollment-autostart.json"
+  if($enrollmentAutostartRestore){$null=Disable-ScheduledTask -TaskName $enrollmentTaskName}
+  if((Get-ScheduledTask -TaskName $enrollmentTaskName).Settings.Enabled-ne $false){throw '新群接入前自启任务未禁用'}
  }
  Stop-Process -Id $old.ProcessId -Force
  foreach($child in $children){$current=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)";if($current -and $current.CreationDate-eq $child.CreationDate){Stop-Process -Id $child.ProcessId -Force}}

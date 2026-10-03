@@ -522,3 +522,46 @@ test('完成拒绝沿原错误合同返回具体门禁、阶段及当前版本�
     completionPolicy: () => ({ ...contract, validateCompletion: async () => { throw original } }) })
   await assert.rejects(throwing.authorizeCompletion(completed), error => error === original && error.diagnosticRef === 'trusted-original')
 })
+
+test('无调查阶段以当前任务原生查询证据验收，拒绝伪造引用及旧需求证据', async () => {
+  const proof = { taskId: 'direct', requirementRevision: 3, evidenceRef: 'query-proof', artifactRef: 'query-proof',
+    queryId: 'query_readonly_database', turnId: 'turn', leaseEpoch: 4, result: { rows: [{ column_name: 'name' }] }, evidence: { result: { rows: [{ column_name: 'name' }] } } }
+  const item = { itemId: 'item', criterion: '确认目标列存在' }
+  const plan = { task: { taskId: 'direct', requirementRevision: 3, status: 'active', planRevision: 0 }, stages: [] }
+  const decision = { action: 'complete', summary: '列存在', evidenceRefs: ['query-proof'],
+    assessments: [{ itemId: 'item', status: 'satisfied', evidenceRefs: ['query-proof'] }] }
+  let evidence = [proof], calls = 0
+  const contracts = createTaskWorkflowContracts({ controller: {}, artifacts: {},
+    store: { async query({ kind }) { return kind === 'task.owner.acceptance' ? [item] : { taskId: 'direct' } } },
+    readTaskEvidence: async binding => { assert.deepEqual(binding, { taskId: 'direct', requirementRevision: 3 }); return evidence },
+    verifyAcceptance: async context => {
+      calls++; assert.deepEqual(context.stages, []); assert.deepEqual(context.directEvidence, [proof]); return true
+    } })
+  const args = { taskId: 'direct', plan, requirement: { request: '确认目标列', scope: {} }, decision }
+  assert.equal(await contracts.authorizeCompletion(args), true)
+  const manifest = await contracts.readDeliveryManifest(args)
+  assert.equal(manifest.complete, true); assert.equal(manifest.businessValidation.status, 'accepted'); assert.equal(calls, 1)
+  assert.deepEqual(manifest.queryEvidence, [{ taskId: 'direct', requirementRevision: 3, evidenceRef: 'query-proof',
+    artifactRef: 'query-proof', queryId: 'query_readonly_database', turnId: 'turn', leaseEpoch: 4 }])
+  assert.equal(JSON.stringify(manifest.queryEvidence).includes('column_name'), false)
+  await assert.rejects(contracts.authorizeCompletion({ ...args, decision: { ...decision, evidenceRefs: ['invented'] } }),
+    { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+  evidence = [{ ...proof, requirementRevision: 2 }]
+  await assert.rejects(contracts.authorizeCompletion(args), { code: 'TASK_OWNER_ARTIFACT_SCOPE_MISMATCH' })
+  evidence = [{ ...proof, taskId: 'other' }]
+  await assert.rejects(contracts.readDeliveryManifest(args), { code: 'TASK_OWNER_ARTIFACT_SCOPE_MISMATCH' })
+  evidence = []
+  await assert.rejects(contracts.authorizeCompletion(args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+})
+
+test('直接查询必须经过共享语义验收，查询成功不代表业务完成', async () => {
+  const proof = { taskId: 'task', requirementRevision: 1, evidenceRef: 'proof', artifactRef: 'proof', evidence: {} }
+  const item = { itemId: 'item', criterion: '给出结论' }
+  const args = { taskId: 'task', requirement: {}, plan: { task: { taskId: 'task', requirementRevision: 1 }, stages: [] },
+    decision: { evidenceRefs: ['proof'], assessments: [{ itemId: 'item', status: 'satisfied', evidenceRefs: ['proof'] }] } }
+  const options = { controller: {}, artifacts: {}, readTaskEvidence: async () => [proof],
+    store: { async query({ kind }) { return kind === 'task.owner.acceptance' ? [item] : {} } } }
+  await assert.rejects(createTaskWorkflowContracts(options).authorizeCompletion(args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+  await assert.rejects(createTaskWorkflowContracts({ ...options, verifyAcceptance: async () => false }).authorizeCompletion(args),
+    { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+})

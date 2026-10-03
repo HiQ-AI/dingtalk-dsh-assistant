@@ -41,7 +41,7 @@ export function isBusinessTaskTerminal(db, taskId) {
       AND r.application_status='applied' AND json_extract(r.decision_json,'$.action')='complete'
       AND r.requirement_revision=? AND r.plan_revision=? AND r.control_revision=?`).get(
     taskId, task.requirement_revision, task.plan_revision, task.control_revision)
-    && task.plan_requirement_revision === task.requirement_revision
+    && (task.plan_revision === 0 || task.plan_requirement_revision === task.requirement_revision)
 }
 
 // 排队和维护不算执行时间；旧账以真实模型领取时间推导，不能重置已用预算。
@@ -700,11 +700,11 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const task=db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(a.executionRunId,a.request.taskId)
     const businessTask=db.prepare('SELECT requirement_revision,requirement_ref FROM business_tasks WHERE task_id=?').get(a.request.taskId)
     const runCount=db.prepare('SELECT count(*) AS count FROM execution_runs WHERE task_id=?').get(a.request.taskId).count
-    if(!task||!businessTask?.requirement_ref||a.request.runSequence!==runCount
+    if((runCount ? !task : a.executionRunId !== null)||!businessTask?.requirement_ref||a.request.runSequence!==runCount
       ||a.request.inputVersion!==businessTask.requirement_revision+1)fail('REVISION_CONFLICT')
     if(!['cancel','context'].includes(a.request.action))fail('MESSAGE_WEB_ACTION_UNSUPPORTED')
     if(a.request.action==='context'&&isBusinessTaskTerminal(db,a.request.taskId))fail('RUN_TERMINAL')
-    const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task.run_id,request:a.request,input:a.input??null,status:'pending'}
+    const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task?.run_id??null,request:a.request,input:a.input??null,status:'pending'}
     put(db,event.runId,'web-task',event);return {result:{event}}
   }
   if(kind==='message.web-task.finish') {
@@ -879,14 +879,14 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
         const reportId=n.payload.phase.slice(applicationWait?'owner:application_wait:'.length:'owner:'.length)
         const releasedWait=n.payload.phase==='owner:application_wait:released'
         const fact=releasedWait?ownerReleasedWait(db,taskId):db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status,t.requirement_revision AS report_requirement_revision,o.event_watermark,o.processed_watermark,
-          b.requirement_revision,b.plan_requirement_revision,c.control_revision,t.control_revision AS report_control_revision,o.status AS owner_status
+          b.requirement_revision,b.plan_revision,b.plan_requirement_revision,c.control_revision,t.control_revision AS report_control_revision,o.status AS owner_status
           FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id
           JOIN task_owners o ON o.task_id=r.task_id
           JOIN business_tasks b ON b.task_id=r.task_id JOIN task_controls c ON c.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
         const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
         if(!fact||(!releasedWait&&((applicationWait ? fact.application_status!=='blocked'||fact.owner_status!=='blocked'||fact.report_control_revision!==fact.control_revision : fact.application_status!=='applied'||fact.event_watermark!==fact.processed_watermark)||latest?.turn_id!==fact.turn_id
             ||fact.report_requirement_revision!==fact.requirement_revision
-            ||fact.report_type==='complete'&&fact.plan_requirement_revision!==fact.requirement_revision))){
+            ||fact.report_type==='complete'&&fact.plan_revision>0&&fact.plan_requirement_revision!==fact.requirement_revision))){
           n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
           return {result:{notification:n},dispatchEligible:false}
         }

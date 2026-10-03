@@ -217,3 +217,16 @@ test('成功查询必须逐项引用或Host归属核验后的明确排除，原�
  await assert.rejects(validateAgentWorkResult(excluded,{...options,verifyEvidence:async refs=>{await verifyAgentEvidence({artifacts:f.artifacts,refs,binding:{...binding,inputVersion:2},scope});return true}}),{code:'QUERY_EVIDENCE_INVALID'})
  await assert.rejects(validateAgentWorkResult({...excluded,coverageExclusions:[{evidenceRef:'unexecuted-ref',reason:'任意材料'}]},options),{code:'AGENT_WORK_RESULT_INVALID'})
 })
+
+test('任务会话查询证据精确绑定需求、轮次和租约，历史绑定只能由Host显式授权', async t => {
+ const f = await fixture(t), scope = { resourceIds: ['docs'] }
+ const owner = { kind: 'task-owner', taskId: 'task-owner-read', sessionId: 'owner-read', turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, requirementRevision: 1, inputDigest: 'a'.repeat(64) }
+ const [tool] = createAgentQueryTools({ capabilities: [f.capability], resolveScope: async () => scope, artifacts: f.artifacts })
+ const value = await tool.execute({ binding: owner, input: {}, args: { resourceId: 'docs', operation: 'read', path: 'docs/a.md' } })
+ await verifyAgentEvidence({ artifacts: f.artifacts, refs: [value.evidenceRef], binding: owner, scope })
+ for (const patch of [{ turnId: 'turn-2' }, { requirementRevision: 2 }, { leaseEpoch: 2 }, { ownerEpoch: 2 }, { taskId: 'other' }]) {
+  await assert.rejects(verifyAgentEvidence({ artifacts: f.artifacts, refs: [value.evidenceRef], binding: { ...owner, ...patch }, scope }), { code: 'QUERY_EVIDENCE_INVALID' })
+ }
+ await verifyAgentEvidence({ artifacts: f.artifacts, refs: [value.evidenceRef], binding: { ...owner, turnId: 'turn-2' }, allowedBindings: [owner], scope })
+ await assert.rejects(tool.execute({ binding: { ...owner, requirementRevision: 0 }, args: { resourceId: 'docs', operation: 'list' } }), { code: 'QUERY_BINDING_INVALID' })
+})

@@ -43,19 +43,19 @@ Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runti
 仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、owner锁和恢复门禁；普通无迁移部署不复制历史副本，已有历史迁移专用路径保留其必要备份。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受 Agent 自身明确的资料/固定提交/status授权；数据库提案显式提供 `credentialsPath`（绝对文件路径）与 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`。使用现有 UAT 账号时，仅目标数据库资源显式追加 `environment: uat` 和 `identityPolicy: host-enforced-readonly`；其他环境不允许该模式。permissions 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。默认严格检查只读角色；显式 UAT 模式由 Host 限定结构化查询并逐次核验只读事务。登记成功不代表数据库验收通过。凭据不得写入提案，配置器只接受路径。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实环境路径的提案及原始证据，不提交公开仓库。
 
 
-本轮改动把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
+历史切换曾把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。当前普通调查由 Task Owner 直接使用 Host 查询工具，不再注册独立调查定义。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
 
 1. 在本次检出运行 `node docs/acceptance/agent-direct-execution/scripts/inventory-legacy-workflows.mjs --check --db <控制库路径> --instance <实例ID>`；不传 `--output` 只读输出，保存证据时使用全新 `--output <路径>`（拒绝覆盖）。正式维护排空后再次执行，保存两次清点。确认旧流程活动运行、当前阶段、未排空节点及未确认效果为零。旧 `answer.text` 未完成命令须在旧合同下收尾或明确停止，不能交给新 Agent 猜测其含义。
 2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。旧 grants 不再接受，部署必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；不能只升级包而保留旧配置。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
 3. 仓库资源冻结完整提交；状态资源限定固定 GET URL 和返回字段；数据库资源限定表、列。默认使用专用只读账号；用户明确指定使用现有 UAT 账号时，配置 UAT 专属 Host 强制只读事务模式，并实测写入拒绝。账号凭据始终只由 Host 读取，不交给模型，也不登记生产连接。
-4. 安装后独立回读包摘要、进程、健康、流程目录及旧历史。新目录只有统一调查入口，工程与外部交付仍可按原权限发起；旧成功任务可读且没有重放通知。
+4. 安装后独立回读包摘要、进程、健康、流程目录及旧历史。新目录不包含 `task-investigation`，Task Owner 直接查询；工程与外部交付仍可按原权限发起；旧成功任务可读且没有重放通知。
 5. 在已授权的独立测试群分别验证材料问答、真实资料/代码/数据库读取、调查交付、补充、取消、重启和权限反例。核对真实工具工件、会话、Task 增量与钉钉独立回读；健康正常及原生本地会话通过不能代替渠道验收。
 
 本地隔离原生查询脚本 `verify-native-query.mjs --check <profile> <DSH_HOME> <输出目录>` 先做零写预检，`--run` 使用实际配置的 Codex Connect、原生 AgentLoop 与查询工具；会话与工件写入指定的新目录，不接入业务控制库或钉钉，模型认证仍使用正式提供商服务。调用时原生启动环境的 DSH_HOME 必须与参数一致。该模式不覆盖消息分流、Task Owner 或数据库验收。
 
 同一脚本 `--message` 使用隔离控制库与真实模型执行消息拆分、关联、意图和问答 Agent；它断言问答命令成功、证据来自实际工具且业务 Task 为零，通知渠道明确禁用。因此该模式仍不能代替正式钉钉送达验收。
 
-`--investigate` 在隔离控制库中经真实意图判断和 Task Owner 创建一个调查任务，核对调查结果、真实查询工件和 Owner 最终验收。其输出目录必须不存在，父目录需已建立；失败后用新目录重跑，保留先前证据。
+历史 `verify-native-query.mjs --investigate` 用于独立调查阶段的隔离验证，当前不再提供该脚本或该入口。当前验证须覆盖原生 Task Owner 直接查询、真实查询工件、零阶段/零 Run 的最终验收，以及查询错误纠正和权限反例；不能以旧调查阶段输出代替原生查询证明。
 
 S 保留完整当前消息和已提供背景，R 逐页累积候选及排除证据，I/IB 接收完整必要材料与限制。S/R/I/IB 不设固定字节或累计输入/输出 token 额度拒绝，实际请求字节和提供商 usage 仅用于计量；默认调用超时 180 秒，节点租约由同一调用窗口加提交余量确定，调用次数与有界协议纠正仍有效。节点失败保存真实结束原因、错误码及 usage；明确容量失败等待系统修复，不自动重复同一输入。模型提供方实际容量错误保持明确系统责任。旧容量失败只在当前来源、材料和无副作用条件满足时恢复，不能把部署健康视为处理成功。
 
@@ -572,3 +572,18 @@ Bytebase 3.18 的空 TaskRun 列表会按 ProtoJSON 返回完整空对象{}；�
 完成校验拒绝沿既有TASK_OWNER_COMPLETION_UNVERIFIED返回具体校验位置、阶段/合同、当前版本或缺失清单；领域已有原始诊断保持。负责人据此纠正引用或执行策略，内部诊断不作为用户缺资料或群中间进度发送。
 
 群常驻会话在创建及恢复后除保存Agent根目录为cwd，还须经原生workspaceRegistry登记对应工作区并attachSession。目录正确不代表页面工作区成员关系已建立；部署回读同时核对原生工作区sessionIds、群名及完全权限。已派生的旧常驻会话可原生归档隐藏，任务会话和历史证明保留。
+
+## 调查并入任务执行会话切换
+
+本次不迁移schema，沿本页完整维护排空、封存、精确安装、新进程回读和resume。切换前必须没有退役task-investigation活动Run或待执行阶段；检查拒绝时核对真正活动任务，不修改旧冻结定义来绕过。当前用户已授权清空本地业务数据，切换前任务、审批和话题应为空，已接收消息去重回执保留，防止回补重建旧任务。
+
+Owner直接使用现有directQueries登记资源及Task工件目录；查询scope和证据由Host生成，不新增凭据、扩大生产授权或新建审批系统。部署后检查当前工作流目录没有task-investigation，查询能力仍与登记资源一致，新Task持续会话有这些工具；独立验证零阶段只读完成及可纠正查询错误、旧证据拒绝，再验证插件审批/未知效果边界。健康和包摘要不替代实际任务闭环；生产SQL测试必须另有本次真人批准，不能借部署验证执行SQL。
+
+创建消息在 Task 接纳后返回；命令落账后扫描原生待办并使用四路空位，完成即补位，恢复计时器负责重启接续，不等待旧模型回合才接纳或派发后来任务。单 Task 原生租约及当前需求绑定保持；部署排空须同时等待派发扫描、运行会话与应用动作。
+
+
+本次直查切换的新工程目录采用 v18，以 Host 核验的当前 Task 查询 taskContext 准备工程方案；v17 及已有工程定义保留冻结恢复。周期恢复只扫描持久待办并派发，不等待模型完成；独立回读新任务可在已有任务调查期间派发、同一任务动作串行应用及停机排空。插件审批、受控写入与未知外部效果对账边界不变，查询成功不能替代变更批准或业务最终验收。
+
+自启任务是否禁用以 `Get-ScheduledTask.Settings.Enabled` 独立回读为准；任务仍在运行时 State 可以继续为 Running，不能据此误判禁用失败。停机前先保存原 Enabled 对应的恢复意图，再禁用。Resume 恢复后再次读取 Enabled。
+
+停机前被检查中断而旧进程仍存活时，可使用既有 ContinueMaintenanceId 和 ExpectedMaintenanceRevision 接续原封存维护；要求同一进程 incarnation、准确 revision、drained=true、stopPermitted=true 和 sealedIncarnation 一致。已封存状态不重复 seal；任何身份或版本漂移均拒绝。进程已停止时仍按原离线恢复规则，不冒用此接续路径。

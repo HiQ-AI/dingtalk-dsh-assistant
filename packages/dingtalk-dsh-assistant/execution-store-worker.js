@@ -788,9 +788,10 @@ function command(value) {
       for (const member of family.taskIds) assertTaskDrained(member, actorId, 'TASK_RERUN_SOURCE')
       const previousRuns = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=? ORDER BY rowid DESC').all(rerunOfTaskId)
       const previousTask = db.prepare('SELECT t.status,c.state FROM business_tasks t JOIN task_controls c ON c.task_id=t.task_id WHERE t.task_id=?').get(rerunOfTaskId)
+      const completed = isBusinessTaskTerminal(db, rerunOfTaskId)
       if (previousRuns.length ? previousRuns[0].run_id !== request.expectedRunId
-        : request.expectedRunId !== null || previousTask?.state !== 'cancelled') fail('TASK_RERUN_SOURCE_CHANGED')
-      if (previousTask && previousTask.status !== 'succeeded' && previousTask.state !== 'cancelled'
+        : request.expectedRunId !== null || !completed) fail('TASK_RERUN_SOURCE_CHANGED')
+      if (previousTask && !completed && previousTask.status !== 'succeeded' && previousTask.state !== 'cancelled'
         || previousRuns.some(run => !['succeeded', 'failed', 'cancelled'].includes(run.status))) fail('TASK_RERUN_SOURCE_CHANGED')
       const created = reduceTaskPlanCommand(db, { kind: 'task.plan.accept', args: { taskId, requirementRef, requirementRevision: 1 } }, context(value.id, now))
       const sessionId = `owner-${createHash('sha256').update(taskId).digest('hex').slice(0, 40)}`
@@ -896,7 +897,7 @@ function command(value) {
       if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
         ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,rejectedAction?.turn_id??'')
         ||rejectedSourcePlan&&db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${rejectedSourcePlan.turn_id}`)
-        ||!db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND workflow_id='task-investigation' AND status IN ('failed','waiting','succeeded')").get(a.taskId)
+        ||!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
         ||db.prepare('SELECT * FROM execution_runs WHERE task_id=?').all(a.taskId).some(run=>!handedOffRuns.has(run.run_id)
           &&(!['failed','waiting','succeeded'].includes(run.status)||run.workflow_id!=='task-investigation'&&!completedExternal))
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
@@ -1069,7 +1070,8 @@ function assertTaskDrained(taskId, actorId, code) {
   const owner = db.prepare('SELECT task_id FROM task_owners WHERE task_id=?').get(taskId)
     ? queryTaskOwner(db, { kind: 'task.owner', taskId }) : null
   const ownerComplete = owner?.decision?.action === 'complete' && owner.applicationStatus === 'applied'
-    && task?.plan_requirement_revision === task?.requirement_revision && owner.eventWatermark === owner.processedWatermark
+    && owner.requirementRevision === task?.requirement_revision
+    && (task.plan_revision === 0 || task.plan_requirement_revision === task.requirement_revision) && owner.eventWatermark === owner.processedWatermark
   const runs = db.prepare('SELECT run_id,status FROM execution_runs WHERE task_id=?').all(taskId)
   const completed = task ? task.control_state === 'cancelled'
     || task.control_state === 'active' && (owner ? ownerComplete : task.status === 'succeeded')
@@ -1205,8 +1207,9 @@ function query(value) {
       .map(row => ({ ...runDto(row), sequenceId: row.sequence_id }))
   }
   if (value?.kind === 'run') {
-    object(value, ['kind', 'runId', 'includeHistory'], ['kind', 'runId'])
+    object(value, ['kind', 'runId', 'includeHistory', 'includeRecovery'], ['kind', 'runId'])
     if (value.includeHistory !== undefined && typeof value.includeHistory !== 'boolean') fail('INVALID_ARGUMENT')
+    if (value.includeRecovery !== undefined && typeof value.includeRecovery !== 'boolean') fail('INVALID_ARGUMENT')
     text(value.runId, 'runId')
     const run = db.prepare('SELECT * FROM execution_runs WHERE run_id=?').get(value.runId)
     const inputs = db.prepare('SELECT * FROM execution_inputs WHERE run_id=? ORDER BY seq').all(value.runId).map(i => ({
@@ -1215,6 +1218,7 @@ function query(value) {
     }))
     refreshNodeTimes()
     return { run: runDto(run) ?? null, nodes: nodes(value.runId).map(timedNodeDto), inputs,
+      ...(value.includeRecovery && run ? { nodeRecovery: inspectNodeRecovery(value.runId) } : {}),
       pendingInputCount: inputs.filter(i => i.status === 'pending').length,
       ...(value.includeHistory ? { nodeHistory: db.prepare('SELECT * FROM execution_nodes WHERE run_id=? ORDER BY generation,position').all(value.runId).map(timedNodeDto) } : {}) }
   }
