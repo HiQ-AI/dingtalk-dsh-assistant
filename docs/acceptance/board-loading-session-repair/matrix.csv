@@ -153,3 +153,4 @@ task-owner-trusted-repair-evidence,36,PASS,round-36.md
 task-autonomous-proposal-recovery,36,PASS,round-36.md
 task-integer-default-preconditions,36,PASS,round-36.md
 task-current-plugin-private-approval,36,PASS,round-36.md
+task-current-change-final-acceptance,36,PASS,round-36.md

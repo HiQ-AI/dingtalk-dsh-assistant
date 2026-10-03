@@ -407,7 +407,7 @@ for (const [automatic, precreated, decision = 'approved', drop = false] of [[fal
     execute: async () => {
       const client = new Client({ database: 'hiq_editor' })
       await client.connect()
-      try { return { target: exactTarget, rows: (await client.query('SELECT n.nspname = $1 AND c.relname = $2', ['public', 'process_id_temp'])).rows } }
+      try { return { target: exactTarget, rows: (await client.query(uatCatalogBaselineSql({ schema: 'public', table: 'process_id_temp' }), ['public', 'process_id_temp'])).rows } }
       finally { await client.end() }
     }, verify: async ({ output }) => ({ passed: output.target.database === exactTarget.database, sourceRefs: ['production-readonly-catalog'] }) }] })
   const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller, modelConfig: () => ({}), advanceTask: async () => {}, authorizeStages: async () => false,

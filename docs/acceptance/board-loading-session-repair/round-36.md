@@ -23,3 +23,11 @@
 最终包独立安装/Readback/Resume及运行HTTP回读：PID47360、health=ok/inboundProcessing=true、maintenance=false revision429、dispatchResumed=true/autostart=true，前进程53572已退出。普通部署无历史备份。工程修复及实际送审PASS，当前唯一等待为本次插件真人审批；不声称生产DDL已完成。
 
 新增当前Task查询合同对应的全链fixture已按真实Owner/原生query-evidence和受管stageBinding修正，批准/驳回、自动发布、既有工单、加列/删列6/6通过（32928ms）；不放宽生产授权或接纳伪造证明。
+
+## 真人批准后的实际完整闭环
+
+13:40:34.835插件钉钉真人批准落账，13:40:36.047才创建本次执行效果；SQL/Sheet/package/目标绑定一致。工单859/Task907/TaskRun903执行后生产回读：is_deleted integer/可空/default0/无字符长度。Owner又调用当前生产只读columns，transactionReadOnly及productionReplicaVerified=true，独立确认同列属性。原Owner complete accepted/applied，Task completed、manifest.complete=true/missing=[]。
+
+完整群记录最终3条：原需求、开始1条、完成1条；内部进度0。没有重复建单或再次SQL。原始开始和终态回执均独立DWS精确消息回读。此前pending描述为13:34检查点，最终状态已完成。
+
+最终关联external全文件18/18 PASS（57772.1838ms），fixture目录SQL复用现有uatCatalogBaselineSql，测试与生产源码均已稳定。

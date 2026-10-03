@@ -63,9 +63,9 @@
 ## 当前检查点
 
 - 当前子目标：SG29c
-- 唯一下一步：本次SQL等待插件真人审批，执行会话按既有批准事件继续；工程修复已验收并交付新PR。
-- 未闭环项：工程修复及实际送审已闭环；本次SQL未获批准、未执行，不计为业务变更完成。
-- 原Task r2同Owner同Run已自动恢复generation3，工单859/Plan880、插件pending/waiting-reply私聊独立回读1条，批准前SQL执行0；群开始独立窗口1条且内部进度0。正式包880734540e77、新PID47360，maintenance=false revision429、dispatchResumed=true。
+- 唯一下一步：无；本轮修复及实际新任务审批、执行、独立回查、最终验收和唯一群回执全部完成。
+- 未闭环项：无本轮业务或工程阻塞；广泛旧Agent/native环境测试未全绿的边界单独记录，不声称全仓或CI通过。
+- 原Task r2同Owner同Run generation3已完成，工单859/Task907/TaskRun903、插件钉钉真人批准先于执行，生产is_deleted integer DEFAULT0独立回查，Owner complete及manifest complete；群开始1/完成1/内部进度0。PR153 OPEN，精确包880734540e77/PID47360，maintenance=false429。
 - 本轮保留插件真人批准及未知效果边界，禁止代批准或直接执行生产SQL。原任务通过既有受管修复/重评入口恢复，不改在线数据库或伪造来源。
 ## 进展
 
