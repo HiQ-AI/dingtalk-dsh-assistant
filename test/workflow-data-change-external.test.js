@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
+import { createAgentQueryTools } from '../packages/dingtalk-dsh-assistant/agent-query-tools.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExternalStageContracts, nativeDataChangeOwnerContract } from '../packages/dingtalk-dsh-assistant/task-release-workflows.js'
 import { createDataChangeTaskWorkflow, createDataChangeTaskWorkflowV6, createDataChangeTaskWorkflowV4, simpleNullableColumnDefinition } from '../packages/dingtalk-dsh-assistant/workflow-data-change.js'
@@ -380,20 +382,9 @@ for (const [automatic, precreated, decision = 'approved', drop = false] of [[fal
     clients: { bytebase, productionPostgres } })
   const source = { summary: '生产 public.process_id_temp 只有 id 列；新增 name 使用待审批候选',
     evidenceRefs: ['production-column-proof'], limitations: [] }
-  const [contract] = createExternalStageContracts({ workflowIds: ['task-data-change'], external, readArtifact: async ref => {
-    assert.equal(ref, 'verified-investigation-output'); return source
-  } })
-  const prepared = await contract.prepare({ taskId: 'same-production-task', stage: { workflowId: 'task-data-change' }, stageIndex: 1,
-    plan: { stages: [{ workflowId: 'task-investigation', status: 'succeeded', outputRef: 'verified-investigation-output' }] },
-    requirement: { request: '生产 Editor public.process_id_temp 新增 name，提交 Bytebase 真人审批后执行', constraints: [], stageTargets: { 'task-data-change': 'editor-prod' } },
-    origin: { command: { args: { arguments: {} } }, run: { body: 'process_id_temp新增name', sourceKey: 'original' } } })
-  assert.deepEqual(JSON.parse(prepared.input.sources[0].content), source)
-  assert.deepEqual(prepared.input.target, exactTarget)
-  assert.equal(prepared.input.baseline, undefined)
-  assert.equal(queries.length, 0, '候选形成前不得扫描生产目录')
   const directory = await mkdtemp(join(tmpdir(), 'dsh-simple-change-real-contract-'))
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'real-contract', initialize: true })
-  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true, taskWorkspaceRoot: join(directory, 'tasks'), getTaskDirectories: async taskId => ({ logicalTaskId: taskId }) })
   external.bindStore(store)
   const workflow = createDataChangeTaskWorkflow({ provider: 'fixture', model: 'fixture', adapter: external.dataChangeAdapter })
   assert.equal(workflow.version, '7')
@@ -406,8 +397,52 @@ for (const [automatic, precreated, decision = 'approved', drop = false] of [[fal
         verificationSql, expectedChange: JSON.stringify({ rows: drop ? [] : [expectedRow] }) })
     }, async close() {}, async cancel() {} } })
   t.after(async () => { await controller.close(); await store.close() })
+  external.bindExecution({ store, artifacts, controller })
+  const requirement = { request: drop ? '生产 Editor public.process_id_temp 删除 name，提交 Bytebase 真人审批后执行' : '生产 Editor public.process_id_temp 新增 name，提交 Bytebase 真人审批后执行',
+    constraints: [], scope: { database: exactTarget.database, schema: 'public', table: 'process_id_temp' }, stageTargets: { 'task-data-change': 'editor-prod' } }
+  await controller.createTaskPlan({ commandId: 'real-task-plan', taskId: 'same-production-task', stages: [{ stageId: 'change', workflowId: workflow.id, input: requirement }] })
+  const queryTools = createAgentQueryTools({ artifacts, resolveScope: async () => requirement.scope, capabilities: [{
+    id: 'query_readonly_database', identity: { id: 'editor-readonly-catalog', version: '1' }, effectClass: 'read', parameters: { type: 'object', additionalProperties: false },
+    authorize: async ({ scope }) => scope.database === exactTarget.database,
+    execute: async () => {
+      const client = new Client({ database: 'hiq_editor' })
+      await client.connect()
+      try { return { target: exactTarget, rows: (await client.query('SELECT n.nspname = $1 AND c.relname = $2', ['public', 'process_id_temp'])).rows } }
+      finally { await client.end() }
+    }, verify: async ({ output }) => ({ passed: output.target.database === exactTarget.database, sourceRefs: ['production-readonly-catalog'] }) }] })
+  const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller, modelConfig: () => ({}), advanceTask: async () => {}, authorizeStages: async () => false,
+    tools: queryTools, prepareQueryInput: async () => requirement,
+    sessionRunner: { async close() {}, async run({ binding, tools, queryInput, onSessionBound, onQueryEvidence, onCandidate }) {
+      await onSessionBound()
+      const queried = await tools[0].execute({ binding, input: queryInput, args: {} })
+      const queryBinding = Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(key => [key, binding[key]]))
+      await onQueryEvidence({ binding: queryBinding, evidenceRef: queried.evidenceRef })
+      const decision = { action: 'wait', summary: '当前目标结构已核对，等待本测试提交审批候选', evidenceRefs: [queried.evidenceRef], condition: { kind: 'execution', missing: '审批候选', responsibleParty: '执行方', resumeWhen: '本测试继续', evidenceRefs: [queried.evidenceRef] } }
+      await onCandidate(decision); return { status: 'submitted', decision }
+    } } })
+  t.after(() => owner.close())
+  await owner.ensure({ taskId: 'same-production-task', sourceKey: 'original', criteria: ['精确SQL经过插件审批后完成回查'], origin: {} })
+  const ownerRecord = await store.query({ kind: 'task.owner', taskId: 'same-production-task' })
+  const requirementRef = (await artifacts.put(requirement, { taskId: 'same-production-task' })).ref
+  await store.command({ id: 'bind-current-requirement', kind: 'task.requirement.bind-legacy', args: { taskId: 'same-production-task', expectedRequirementRevision: 1, requirementRef, sessionId: ownerRecord.sessionId, criteria: ['精确SQL经过插件审批后完成回查'], sourceKey: 'original', eventKey: 'bind-current' } })
+  await owner.drive('same-production-task')
+  const [contract] = createExternalStageContracts({ workflowIds: ['task-data-change'], external,
+    readTaskEvidence: args => owner.readTaskEvidence(args), readArtifact: async ref => { assert.equal(ref, 'verified-investigation-output'); return source } })
+  const currentPlan = await controller.taskPlan('same-production-task')
+  const prepared = await contract.prepare({ taskId: 'same-production-task', stage: { workflowId: 'task-data-change' }, stageIndex: 1,
+    plan: { ...currentPlan, stages: [{ workflowId: 'task-investigation', status: 'succeeded', outputRef: 'verified-investigation-output' }] }, requirement,
+    origin: { command: { args: { arguments: {} } }, run: { body: requirement.request, sourceKey: 'original' } } })
+  assert.deepEqual(JSON.parse(prepared.input.sources[0].content), source)
+  const queryProof = JSON.parse(prepared.input.sources.at(-1).content)
+  assert.equal(queryProof.taskId, 'same-production-task'); assert.equal(queryProof.requirementRevision, currentPlan.task.requirementRevision)
+  assert.deepEqual(queryProof.result.rows, catalog)
+  assert.deepEqual(prepared.input.target, exactTarget)
+  assert.equal(prepared.input.baseline, undefined)
+  assert.equal(queries.length, 1, '候选形成前只有Owner主动提交的只读结构查询')
+  await controller.reviseTaskPlan({ commandId: 'bind-prepared-change', taskId: 'same-production-task', expectedPlanRevision: currentPlan.task.planRevision, expectedControlRevision: currentPlan.task.controlRevision, requirementRevision: currentPlan.task.requirementRevision, affectedFrom: 0, stages: [{ stageId: 'change', workflowId: workflow.id, input: prepared.input }] })
+  const boundPlan = await controller.taskPlan('same-production-task')
   await controller.createRun({ commandId: 'real-contract-create', runId: 'real-contract-run', taskId: 'same-production-task',
-    workflowId: workflow.id, input: prepared.input })
+    workflowId: workflow.id, input: prepared.input, stageBinding: { stageId: 'change', planRevision: boundPlan.task.planRevision, attempt: boundPlan.stages[0].attempt, expectedControlRevision: boundPlan.task.controlRevision } })
   const state = await controller.whenIdle('real-contract-run')
   assert.equal(state.nodes[10].waitReason?.reference, 'PLUGIN_APPROVAL_PENDING', JSON.stringify(state.nodes.map(node => [node.nodeId,node.waitReason])))
   assert.deepEqual(writes, [`/v1/${project}/sheets`, `/v1/${project}/plans`, `/v1/${project}/issues`])

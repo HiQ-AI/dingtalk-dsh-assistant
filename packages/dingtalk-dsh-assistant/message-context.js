@@ -75,12 +75,20 @@ export const taskWorkflowCatalog = Object.freeze([
   { id: 'task-data-change-approval-resume', label: '已有工单审批', purpose: '仅接续同任务已核验的未执行工单，按当前指令提交插件人工审批', mode: 'external' },
   { id: 'task-uat-rebuild', label: 'UAT 同提交重建', purpose: 'UAT同提交重建', mode: 'external' },
 ])
-const actionArguments = z.strictObject({ title: taskTitleSchema.optional(), fileDelivery: fileDeliveryArguments.optional(), objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional(), targetId: argumentText.optional(), commitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), pullRequestNumber: z.number().int().positive().optional(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), releaseTag: z.string().regex(/^v\d{8}-[1-9]\d*$/).optional(), changeRef: argumentText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), explicitStages: z.array(argumentText).max(8).optional(), stageAuthorizations: z.array(z.strictObject({ workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)), sourceQuote: argumentText, objective: argumentText.optional(), gate: z.enum(['none', 'confirmation']).optional() })).max(8).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), language: z.enum(['zh-CN', 'en-US']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
+const externalWorkflowIds = taskWorkflowCatalog.filter(item => item.mode === 'external').map(item => item.id)
+const stageAuthorizationSchema = z.union([
+  z.strictObject({ workflowId: z.enum(externalWorkflowIds), sourceQuote: argumentText, objective: argumentText, gate: z.enum(['none', 'confirmation']) }),
+  z.strictObject({ workflowId: z.enum(taskWorkflowCatalog.filter(item => item.mode !== 'external').map(item => item.id)), sourceQuote: argumentText, objective: argumentText.optional(), gate: z.enum(['none', 'confirmation']).optional() }),
+])
+const actionArguments = z.strictObject({ title: taskTitleSchema.optional(), fileDelivery: fileDeliveryArguments.optional(), objective: argumentText.optional(), workflowId: z.enum(taskWorkflowCatalog.map(item => item.id)).optional(), repositoryId: argumentText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional(), targetId: argumentText.optional(), commitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), pullRequestNumber: z.number().int().positive().optional(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), releaseTag: z.string().regex(/^v\d{8}-[1-9]\d*$/).optional(), changeRef: argumentText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), explicitStages: z.array(argumentText).max(8).optional(), stageAuthorizations: z.array(stageAuthorizationSchema).max(8).optional(), runId: argumentText.optional(), scope: z.enum(['conversation', 'task']).optional(), resultRef: argumentText.optional(), requestId: argumentText.optional(), answer: argumentText.optional(), decision: z.enum(['approved', 'rejected']).optional(), language: z.enum(['zh-CN', 'en-US']).optional(), kind: z.enum(['fact', 'constraint']).optional(), text: argumentText.optional() })
 export const taskActionRequirements = Object.freeze({ create: ['objective'], research: ['objective'], reopen: ['objective'], revise: ['objective'],
   report: ['language'], clarification: ['runId', 'requestId', 'answer'], approval: ['requestId', 'decision'] })
 const taskActionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', 'research', 'create', 'revise', 'report', 'pause', 'cancel', 'resume', 'status', 'result', 'reopen', 'approval', 'clarification']), arguments: actionArguments, dependsOn: z.array(z.number().int().nonnegative()) }).superRefine((action, ctx) => {
   const required = [...(taskActionRequirements[action.intent] ?? [])]
   if (action.arguments.workflowId === 'task-engineering') required.push('repositoryId')
+  if (externalWorkflowIds.includes(action.arguments.workflowId)
+    && !action.arguments.stageAuthorizations?.some(item => item.workflowId === action.arguments.workflowId))
+    ctx.addIssue({ code: 'custom', path: ['arguments', 'stageAuthorizations'], message: '外部 workflowId 必须提供对应完整阶段授权；objective逐字引用原文，gate明确none或confirmation' })
   for (const key of required) if (!action.arguments[key]) ctx.addIssue({ code: 'custom', path: ['arguments', key], message: `${action.intent} requires ${key}` })
 })
 const actionSchema = z.union([
@@ -262,6 +270,9 @@ export function validateExecutionMaterialRefs(stage, output, input) {
     if (intent.kind !== 'intent') return
     const sourceTexts = context?.sourceSegments ?? [context?.text]
     for (const action of intent.actions) for (const authorization of action.arguments.stageAuthorizations ?? []) {
+      if (externalWorkflowIds.includes(authorization.workflowId)
+        && (typeof authorization.objective !== 'string' || !authorization.objective.trim() || !['none', 'confirmation'].includes(authorization.gate)))
+        throw new Error('MESSAGE_STAGE_AUTHORIZATION_INVALID:外部阶段授权objective和gate必填；objective逐字引用sourceQuote，gate明确none或confirmation，不代替插件真人审批')
       if (!sourceTexts.some(text => typeof text === 'string' && text.includes(authorization.sourceQuote))
         || authorization.objective && !authorization.sourceQuote.includes(authorization.objective))
         throw new Error('MESSAGE_STAGE_AUTHORIZATION_INVALID:stageAuthorizations.sourceQuote必须逐字连续引用当前事项原文；objective必须逐字连续引用该sourceQuote中的片段，不得概括、改写或拼接')

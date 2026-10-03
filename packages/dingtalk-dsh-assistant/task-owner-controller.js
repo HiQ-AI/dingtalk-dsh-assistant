@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createTaskOwnerSessions } from './task-owner-session.js'
 import { executionDigest } from './execution-artifacts.js'
 
-const error = code => Object.assign(new Error(code), { code })
+const error = (code, message = code) => Object.assign(new Error(message), { code })
 const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 
 /** 当前阶段的成功证明和诊断引用分开；领域扩展只来自冻结定义的受信合同。 */
@@ -47,7 +47,7 @@ export async function readTaskOwnerStageArtifacts({ taskId, stages, controller, 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
   authorizeStages, authorizeCompletion, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
-  readStageArtifacts, readDeliveryManifest, readCurrentSources, readMaterialAccess, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir, tools = [], prepareQueryInput }) {
+  readStageArtifacts, readDeliveryManifest, readCurrentSources, readMaterialAccess, validateDataChangeRepairContext, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir, tools = [], prepareQueryInput }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
   let closed = false
@@ -245,14 +245,29 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             if (input.currentExecution?.repairable === true && ['wait', 'block'].includes(decision.action))
               throw error('TASK_OWNER_RECOVERY_AVAILABLE')
             if (decision.action === 'repairCurrentStage') {
+              if (input.currentExecution?.queryContextRequired === true) {
+                if (typeof validateDataChangeRepairContext !== 'function') throw error('WORKFLOW_REPAIR_NOT_ADMITTED')
+                await validateDataChangeRepairContext({ taskId, stageId: input.currentExecution.stageId, decision, signal })
+              }
               const expected = input.currentExecution?.repairBinding
               if (input.currentExecution?.repairable !== true || !expected
                 || Object.keys(decision.repair ?? {}).length !== Object.keys(expected).length
                 || Object.entries(expected).some(([key, value]) => decision.repair?.[key] !== value))
                 throw error('TASK_OWNER_REPAIR_BINDING_INVALID')
-              if (!decision.evidenceRefs?.length || !decision.evidenceRefs.every(ref =>
-                input.currentExecution.evidenceRefs.includes(ref) && readArtifacts.has(ref)))
-                throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD')
+              const requiredDiagnostics = input.currentExecution.evidenceRefs
+              const allowedRepairEvidence = ref => {
+                if (requiredDiagnostics.includes(ref)) return readArtifacts.has(ref)
+                if (input.currentExecution.mode !== 'repair-proposal') return false
+                const evidence = readArtifacts.get(ref)
+                return evidence?.kind === 'agent-query-evidence'
+                  ? evidence.execution?.taskId === taskId && evidence.execution?.requirementRevision === binding.requirementRevision
+                  : evidence?.taskId === taskId && evidence.stageId === expected.stageId && evidence.runId === expected.runId
+                    && evidence.currentExecution?.repairable === true && executionDigest(evidence.currentExecution.repairBinding) === executionDigest(expected)
+              }
+              if (!decision.evidenceRefs?.length || !requiredDiagnostics.every(ref =>
+                decision.evidenceRefs.includes(ref) && readArtifacts.has(ref))
+                || !decision.evidenceRefs.every(allowedRepairEvidence))
+                throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD', '须在本轮读取并引用 currentExecution.evidenceRefs 的全部诊断；额外证据须已通过本轮受信查询或允许的工件读取。')
               if (input.currentExecution.mode === 'resume-agent' && !decision.evidenceRefs.some(ref => {
                 const diagnostic = readArtifacts.get(ref), current = input.currentExecution
                 return diagnostic?.kind === 'execution-failure' && diagnostic.runId === current.runId

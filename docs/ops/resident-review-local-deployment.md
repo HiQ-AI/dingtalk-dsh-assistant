@@ -587,3 +587,7 @@ Owner直接使用现有directQueries登记资源及Task工件目录；查询scop
 自启任务是否禁用以 `Get-ScheduledTask.Settings.Enabled` 独立回读为准；任务仍在运行时 State 可以继续为 Running，不能据此误判禁用失败。停机前先保存原 Enabled 对应的恢复意图，再禁用。Resume 恢复后再次读取 Enabled。
 
 停机前被检查中断而旧进程仍存活时，可使用既有 ContinueMaintenanceId 和 ExpectedMaintenanceRevision 接续原封存维护；要求同一进程 incarnation、准确 revision、drained=true、stopPermitted=true 和 sealedIncarnation 一致。已封存状态不重复 seal；任何身份或版本漂移均拒绝。进程已停止时仍按原离线恢复规则，不冒用此接续路径。
+
+任务开始通知及阶段授权修复切换：部署后独立核验一个仍未结束的新Task仅一条开始回执，正常恢复及补充无第二条；已终态/取消的旧任务不补发开场。旧需求授权投影缺字段时，只能沿repair-stage-authorizations核验原文来源及准确需求版本恢复，再由原Owner继续；不直接写控制库、不猜授予新工作流权限。生产变更依旧提交工单并走插件真人审批，开始通知不证明工单或生产执行完成。
+
+候选恢复升级不迁移schema、不修改冻结v7定义。正式部署后核对原Task/Run及失败工件保持，恢复资格变化通过现有Owner观察事件唤醒；无需伪造事件或重复建Task。真实恢复须独立回读新generation及当前受信查询交接，推进至本次工单/插件待审；仅健康与开始通知不代表恢复成功。任何已有外部effect或工单不准候选重做。

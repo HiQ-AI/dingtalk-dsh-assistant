@@ -129,7 +129,18 @@ export function createProductionPostgresHost({ entries, Client }) {
       const dataType = ({ varchar: 'character varying', char: 'character', decimal: 'numeric',
         timestamp: 'timestamp without time zone' })[type] ?? type
       const length = /\(\s*([0-9]+)\s*\)/u.exec(column.type)
-      const expectedRow = { column_name: column.column, data_type: dataType, is_nullable: 'YES', column_default: null,
+      let columnDefault = null
+      if (column.defaultValue !== undefined) {
+        columnDefault = expected?.rows?.[0]?.column_default
+        // 目录可能将负数或 bigint 常量显示为类型转换；只接受常量，保留原目录表达式做精确回查。
+        const literal = typeof columnDefault === 'string'
+          && /^(?:([+-]?\d+)|'([+-]?\d+)'::(smallint|integer|bigint))$/u.exec(columnDefault)
+        if (!literal || BigInt(literal[1] ?? literal[2]).toString() !== column.defaultValue
+          || literal[3] && literal[3] !== type && (literal[3] !== 'integer'
+            || BigInt(column.defaultValue) < -2147483648n || BigInt(column.defaultValue) > 2147483647n))
+          return { passed: false }
+      }
+      const expectedRow = { column_name: column.column, data_type: dataType, is_nullable: 'YES', column_default: columnDefault,
         character_maximum_length: ['varchar', 'character varying', 'char', 'character'].includes(type)
           ? length ? Number(length[1]) : ['char', 'character'].includes(type) ? 1 : null : null }
       if (executionDigest(expected) !== executionDigest({ rows: [expectedRow] })) return { passed: false }

@@ -139,3 +139,17 @@ owner-direct-query-guarded-handoff,32,PASS,round-32.md
 owner-direct-query-recovery,32,PASS,round-32.md
 owner-direct-query-lifecycle,32,PASS,round-32.md
 owner-direct-query-deployment,32,PASS,round-32.md
+task-start-notification,33,PASS,round-33.md
+task-stage-authorization,33,PASS,round-33.md
+task-start-deployment,33,PASS,round-33.md
+task-autonomous-proposal-recovery,33,FAIL,round-33.md
+task-autonomous-proposal-recovery,34,FAIL,round-34.md
+task-owner-trusted-repair-evidence,35,PASS,round-35.md
+task-autonomous-proposal-recovery,35,FAIL,round-35.md
+task-start-notification,36,PASS,round-36.md
+task-stage-authorization,36,PASS,round-36.md
+task-start-deployment,36,PASS,round-36.md
+task-owner-trusted-repair-evidence,36,PASS,round-36.md
+task-autonomous-proposal-recovery,36,PASS,round-36.md
+task-integer-default-preconditions,36,PASS,round-36.md
+task-current-plugin-private-approval,36,PASS,round-36.md

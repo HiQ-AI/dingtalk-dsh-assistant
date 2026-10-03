@@ -24,6 +24,98 @@ const rehearsalSchema = { type: 'object', properties: {
 }, required: ['package', 'rehearsal'], additionalProperties: false }
 const hash = value => createHash('sha256').update(value, 'utf8').digest('hex')
 const nonempty = value => typeof value === 'string' && !!value.trim() && value === value.trim()
+const proposalSourceFacts = sources => executionDigest([...new Set((sources ?? []).map(source => {
+  let value
+  try { value = JSON.parse(source.content) } catch { return source.content ?? null }
+  return value?.kind === 'verified-task-query' ? { capabilityId: value.capabilityId, result: value.result } : source.content
+}).map(value => executionDigest(value)))].sort())
+
+export function dataChangeProposalRepairConstraints(originalInput, decision) {
+  if (!nonempty(decision?.summary)) throw executionError('DATA_CHANGE_REPAIR_CONTEXT_REQUIRED')
+  const correction = `候选修正：${decision.summary}`
+  if (originalInput.constraints?.includes(correction)) throw executionError('DATA_CHANGE_REPAIR_STRATEGY_REPEATED')
+  return [correction,
+    '上一轮候选未通过准备校验；必须提交非空applySql、rollbackSql、expectedChange、verificationSql，依据当前受信查询或Host已通过的只读校验事实重新确认完整候选。']
+}
+
+/** 候选写入前和应用前共用；改引用、改诊断措辞或重复同一查询均不算新增事实。 */
+export function assertDataChangeProposalRepairInput({ originalInput, input, decision }) {
+  const constraints = dataChangeProposalRepairConstraints(originalInput, decision)
+  if (!input || proposalSourceFacts(input.sources) === proposalSourceFacts(originalInput.sources)
+    || executionDigest(input.target) !== executionDigest(originalInput.target)
+    || input.request !== originalInput.request || constraints.some(item => !input.constraints?.includes(item)))
+    throw executionError('DATA_CHANGE_REPAIR_INPUT_UNCHANGED')
+}
+
+// Host 修复策略与冻结工作流定义分离；仅重做尚未产生任何外部效果的候选。
+export const dataChangeProposalRepairPolicy = Object.freeze({
+  async inspectRepair({ taskId, state, store, artifacts, definition, plan, signal }) {
+    const waiting = state.nodes.filter(node => node.status === 'waiting')
+    const proposal = state.nodes.find(node => node.nodeId === 'propose-sql')
+    const effects = await store.query({ kind: 'effect.list', runId: state.run.runId })
+    let repairable = waiting.length === 1 && waiting[0].nodeId === 'validate-package'
+      && ['DATA_CHANGE_PROPOSAL_INVALID', 'BYTEBASE_PRECONDITIONS_UNCONFIRMED'].includes(waiting[0].waitReason?.reference)
+      && proposal?.status === 'succeeded' && !!proposal.outputRef && effects.length === 0
+      && state.run.status === 'waiting' && state.nodes.every(node => node.drained) && !state.pendingInputCount
+      && state.nodes.filter(node => !['freeze-input', 'propose-sql', 'validate-package'].includes(node.nodeId))
+        .every(node => node.status === 'blocked' && !node.outputRef)
+    let validationSource, validationFailure
+    if (repairable && waiting[0].waitReason.reference === 'BYTEBASE_PRECONDITIONS_UNCONFIRMED') {
+      repairable = false
+      const candidate = await artifacts.read(proposal.outputRef), parsed = simpleNullableColumnDefinition(candidate.applySql)
+      const validator = definition?.nodes.find(node => node.id === 'validate-package')
+      if (parsed?.defaultValue !== undefined && validator?.executor === 'code' && typeof validator.execute === 'function'
+        && validator.allowedEffects.every(effect => ['pure', 'read'].includes(effect))) {
+        const input = await artifacts.read(waiting[0].inputRef)
+        if (executionDigest(input) !== waiting[0].inputDigest || input.workflowDigest !== state.run.workflowDigest
+          || input.nodeId !== 'validate-package' || executionDigest(input.data?.proposal) !== executionDigest(candidate))
+          throw executionError('WORKFLOW_OWNER_ARTIFACT_SCOPE_MISMATCH')
+        try {
+          const checked = await validator.execute({ input: input.data, runId: state.run.runId, generation: state.run.generation,
+            requirementDigest: executionDigest(await artifacts.read(state.run.requirementRef)), signal })
+          const { validation, ...body } = checked
+          if (validation?.packageDigest === executionDigest(body) && nonempty(validation.receiptId)
+            && executionDigest(body.target) === executionDigest(input.data.requirement.target)
+            && body.applySql === candidate.applySql) {
+            const { sourceDigest, ...staticBody } = body
+            const semantic = { ...staticBody, baseline: { sha256: body.baseline.sha256, ...(body.baseline.scope ? { scope: body.baseline.scope } : {}) } }
+            const content = JSON.stringify({ kind: 'verified-data-change-validation', taskId,
+              requirementRevision: plan.task.requirementRevision, proposalDigest: executionDigest(candidate),
+              packageDigest: executionDigest(semantic), package: semantic,
+              validator: { adapterId: validation.adapterId, adapterVersion: validation.adapterVersion, rulesDigest: validator.rulesDigest } })
+            validationSource = { id: `host-validation:${hash(content)}`, content, sha256: hash(content) }
+            repairable = true
+          }
+        } catch (error) {
+          signal?.throwIfAborted()
+          validationFailure = { code: error.code ?? 'DATA_CHANGE_VALIDATION_UNCONFIRMED' }
+        }
+      }
+    }
+    return { repairable, mode: 'repair-proposal', requiresCurrentQuery: true, queryContextRequired: true,
+      ...(validationSource ? { validationSource } : {}),
+      ...(validationFailure ? { validationFailure } : {}),
+      instruction: validationSource
+        ? '当前Host已对原候选完成只读准备校验，附带新的受信校验事实。读取原诊断与候选后确认本次精确SQL，再提交repairCurrentStage；不需要重复查询已有目录事实，后续仍须本次独立真人审批。'
+        : '候选尚未产生外部效果。先读取失败候选和校验错误，查询当前目标的受信结构资料，再用不同于上次失败的具体修正策略提交repairCurrentStage；不得原样重试空SQL，不得替换既有工单或批准。',
+      waitingNodes: waiting.map(node => ({ nodeId: node.nodeId, reason: node.waitReason?.reference, drained: node.drained })),
+      evidenceRefs: [...new Set([...waiting.flatMap(node => node.evidenceRefs ?? []), ...(proposal?.outputRef ? [proposal.outputRef] : [])])] }
+  },
+  async prepareRepair(context) {
+    const { state, artifacts, prepareDataChangeRepairInput, decision } = context
+    if (typeof prepareDataChangeRepairInput !== 'function' || !nonempty(decision?.summary))
+      throw executionError('DATA_CHANGE_REPAIR_CONTEXT_REQUIRED')
+    const originalInput = await artifacts.read(state.run.requirementRef)
+    const proposal = await artifacts.read(state.nodes.find(node => node.nodeId === 'propose-sql').outputRef)
+    const failureEvidence = await Promise.all(context.observed.evidenceRefs.map(ref => artifacts.read(ref)))
+    const repairConstraints = dataChangeProposalRepairConstraints(originalInput, decision)
+    const prepared = await prepareDataChangeRepairInput({ ...context, originalInput, proposal, failureEvidence, repairConstraints })
+    if (context.observed.validationSource && !prepared?.input?.sources?.some(source =>
+      executionDigest(source) === executionDigest(context.observed.validationSource))) throw executionError('DATA_CHANGE_REPAIR_INPUT_UNCHANGED')
+    assertDataChangeProposalRepairInput({ originalInput, input: prepared?.input, decision })
+    return prepared
+  },
+})
 const isSha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const sameTarget = (a, b) => a?.instance === b?.instance && a?.database === b?.database
   && a?.environment === b?.environment
@@ -274,14 +366,24 @@ export function createLegacyDataChangeTaskWorkflow({ provider, model, reasoningE
 }
 
 
-/** 仅识别单条、无默认值且可空的 PostgreSQL 加列；其余 SQL 保留演练。 */
+/** 单条可空加列；默认值只允许范围内的整型常量，其余 SQL 保留演练。 */
 export function simpleNullableColumnDefinition(sql) {
   const identifier = '(?:[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*")'
   const type = '(?:text|character\\s+varying|varchar|character|char|boolean|smallint|integer|bigint|numeric|decimal|real|double\\s+precision|date|timestamp|uuid|jsonb?)(?:\\s*\\(\\s*\\d+(?:\\s*,\\s*\\d+)?\\s*\\))?'
-  const match = typeof sql === 'string' && new RegExp(`^\\s*ALTER\\s+TABLE\\s+(${identifier})\\.(${identifier})\\s+ADD\\s+COLUMN\\s+(${identifier})\\s+(${type})(?:\\s+NULL)?\\s*;?\\s*$`, 'i').exec(sql)
+  const match = typeof sql === 'string' && new RegExp(`^\\s*ALTER\\s+TABLE\\s+(${identifier})\\.(${identifier})\\s+ADD\\s+COLUMN\\s+(${identifier})\\s+(${type})(?:\\s+NULL)?(?:\\s+DEFAULT\\s+([+-]?\\d+))?\\s*;?\\s*$`, 'i').exec(sql)
   if (!match) return null
   const name = value => value.startsWith('"') ? value.slice(1, -1) : value.toLowerCase()
-  return { schema: name(match[1]), table: name(match[2]), column: name(match[3]), type: match[4].toLowerCase().replace(/\s+/g, ' ').trim() }
+  const columnType = match[4].toLowerCase().replace(/\s+/g, ' ').trim()
+  let defaultValue
+  if (match[5] !== undefined) {
+    const ranges = { smallint: [-32768n, 32767n], integer: [-2147483648n, 2147483647n],
+      bigint: [-9223372036854775808n, 9223372036854775807n] }
+    const range = ranges[columnType], value = BigInt(match[5])
+    if (!range || value < range[0] || value > range[1]) return null
+    defaultValue = value.toString()
+  }
+  return { schema: name(match[1]), table: name(match[2]), column: name(match[3]), type: columnType,
+    ...(defaultValue === undefined ? {} : { defaultValue }) }
 }
 export const isSimpleNullableColumnSql = sql => simpleNullableColumnDefinition(sql) !== null
 

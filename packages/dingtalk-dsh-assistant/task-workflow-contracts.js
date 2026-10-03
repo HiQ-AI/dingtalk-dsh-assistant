@@ -1,6 +1,7 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { selectTaskDeliveryFiles } from './task-group-file-delivery.js'
+import { dataChangeProposalRepairPolicy } from './workflow-data-change.js'
 
 /** 业务准备合同由各领域提供；只接纳受信函数，不解释模型生成的执行代码。 */
 export function createTaskStageContracts({ contracts, controller, artifacts,
@@ -92,12 +93,15 @@ export async function readTaskStageHandoff({ taskId, plan, stage, controller, ar
 
 // 只在本进程中把受信合同准备的输入交给 Controller；模型/持久 JSON 不能伪造票据。
 const repairAdmissions = new WeakMap()
+const repairPolicyFor = context => context.state.run.workflowId === 'task-data-change'
+  ? dataChangeProposalRepairPolicy : context.contract
 const requiredContract = context => {
   if (!context.contract) throw executionError('WORKFLOW_OWNER_CONTRACT_UNAVAILABLE')
   return context.contract
 }
 async function inspectRepair(context) {
-  const { contract, stage, state, plan, store } = context
+  const { stage, state, plan, store } = context
+  const contract = repairPolicyFor(context)
   if (!contract?.inspectRepair) return null
   const inspected = await contract.inspectRepair(context)
   const known = new Set(state.nodes.flatMap(node => [node.outputRef, ...(node.evidenceRefs ?? [])].filter(Boolean)))
@@ -116,6 +120,39 @@ function assertRepairContext(value, state) {
     throw executionError('WORKFLOW_REPAIR_CONTEXT_MISMATCH')
 }
 
+async function verifyProposalRepairEvidence(context, observed, evidenceRefs) {
+  if (!observed.evidenceRefs.every(ref => evidenceRefs.includes(ref))) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+  const extra = evidenceRefs.filter(ref => !observed.evidenceRefs.includes(ref))
+  if (!extra.length) return
+  const { taskId, stage, state, plan, store, artifacts } = context
+  const queries = await store.query({ kind: 'task.owner.query-evidence', taskId, requirementRevision: plan.task.requirementRevision })
+  const wrappers = new Set()
+  let cursor = 0
+  for (;;) {
+    const page = await store.query({ kind: 'task.owner.events', taskId, afterSequenceId: cursor, limit: 200 })
+    for (const event of page) if (event.eventType === 'workflow.failed') wrappers.add(event.payloadRef)
+    if (page.length < 200) break
+    cursor = page.at(-1).eventSeq
+  }
+  for (const ref of extra) {
+    const value = await artifacts.read(ref), record = queries.find(item => item.artifactRef === ref)
+    if (record) {
+      const binding = value?.execution
+      if (value.kind !== 'agent-query-evidence' || binding?.kind !== 'task-owner' || binding.taskId !== taskId
+        || binding.requirementRevision !== plan.task.requirementRevision || binding.turnId !== record.turnId
+        || binding.leaseEpoch !== record.leaseEpoch || !value.verification?.sourceRefs?.length
+        || value.verification.outputDigest !== executionDigest(value.result)) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+      continue
+    }
+    if (!wrappers.has(ref) || value?.taskId !== taskId || value.stageId !== stage.stageId || value.runId !== stage.runId
+      || value.planRevision !== plan.task.planRevision || value.workflowId !== stage.workflowId
+      || !value.currentExecution?.repairBinding || executionDigest(value.currentExecution.repairBinding) !== executionDigest(observed.repairBinding)
+      || !value.diagnostics?.some(diagnostic => state.nodes.some(node => ['waiting', 'failed'].includes(node.status)
+        && diagnostic.nodeRunId === node.nodeRunId && diagnostic.generation === state.run.generation
+        && diagnostic.leaseEpoch === node.leaseEpoch))) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+  }
+}
+
 /** Controller 写入前独立回查资格和准备票据，普通 changeInput 不取得修复权限。 */
 export async function validateWorkflowRepairAdmission({ state, plan, definition, repair, input, expectedRevision, store, artifacts, repairAdmission }) {
   const ticket = repairAdmissions.get(repairAdmission)
@@ -127,14 +164,17 @@ export async function validateWorkflowRepairAdmission({ state, plan, definition,
     || stage.runId !== state.run.runId || stage.runId !== repair.runId
     || stage.workflowId !== state.run.workflowId || stage.workflowDigest !== state.run.workflowDigest)
     throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
-  const context = { taskId: repair.taskId, stage, state, plan, contract: definition.ownerContract,
+  const context = { taskId: repair.taskId, stage, state, plan, definition, contract: definition.ownerContract,
     store: Object.freeze({ query: request => store.query(request) }), artifacts: Object.freeze({ read: ref => artifacts.read(ref) }) }
-  const contract = requiredContract(context)
+  const contract = repairPolicyFor(context)
   if (!contract.inspectRepair || !contract.prepareRepair) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
   const observed = await inspectRepair(context)
   const { contextRef, taskId, ...binding } = repair
   if (!observed.repairable || executionDigest(observed.repairBinding) !== executionDigest(binding))
     throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+  if (observed.validationSource && !input.sources?.some(source => executionDigest(source) === executionDigest(observed.validationSource)))
+    throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+  if (observed.mode === 'repair-proposal') await verifyProposalRepairEvidence(context, observed, ticket.evidenceRefs)
   const material = await artifacts.read(contextRef)
   assertRepairContext(material, state)
   if (ticket.contextDigest !== executionDigest(material)) throw executionError('WORKFLOW_REPAIR_CONTEXT_MISMATCH')
@@ -143,7 +183,7 @@ export async function validateWorkflowRepairAdmission({ state, plan, definition,
 
 /** 领域合同的公共接入：按冻结定义取规则，公共身份与控制账写入仍由 Host 负责。 */
 export function createTaskWorkflowContracts({ controller, store, artifacts, prepareRepairContext, validateFiles, verifyFileDelivery,
-  completionPolicy = contract => contract, verifyAcceptance, readTaskEvidence }) {
+  completionPolicy = contract => contract, verifyAcceptance, readTaskEvidence, prepareDataChangeRepairInput }) {
   const readableStore = Object.freeze({ query: query => store.query(query) })
   const readableArtifacts = Object.freeze({ read: ref => artifacts.read(ref) })
   // 只传递本次真实验收回执给紧接的持久化，不能由模型 JSON 提供；清单变化即失效。
@@ -164,7 +204,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
     let definition
     try { definition = controller.workflowDefinition(stage.workflowId, stage.workflowDigest) }
     catch (error) { if (error.code !== 'WORKFLOW_VERSION_UNAVAILABLE') throw error }
-    return { taskId, stage, state, plan, contract: definition?.ownerContract,
+    return { taskId, stage, state, plan, definition, contract: definition?.ownerContract,
       store: readableStore, artifacts: readableArtifacts }
   }
   async function inspectCurrentStage(context) {
@@ -430,8 +470,10 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       const observed = await inspectCurrentStage(context)
       if (!observed && !context.contract) throw executionError('WORKFLOW_OWNER_CONTRACT_UNAVAILABLE')
       if (!observed?.repairable || executionDigest(observed.repairBinding) !== executionDigest(decision.repair)
-        || !decision.evidenceRefs?.length || !decision.evidenceRefs.every(ref => observed.evidenceRefs.includes(ref)))
+        || !decision.evidenceRefs?.length || observed.mode !== 'repair-proposal'
+          && !decision.evidenceRefs.every(ref => observed.evidenceRefs.includes(ref)))
         throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
+      if (observed.mode === 'repair-proposal') await verifyProposalRepairEvidence(context, observed, decision.evidenceRefs)
       if (observed.mode === 'resume-agent') {
         if (typeof decision.summary !== 'string' || !decision.summary.trim()) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
         for (const ref of decision.evidenceRefs) await artifacts.read(ref)
@@ -443,16 +485,16 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           nodeRunId: observed.nodeRunId, generation: observed.generation, leaseEpoch: observed.leaseEpoch,
           inputDigest: observed.inputDigest, contextRef: saved.ref })
       }
-      const contract = requiredContract(context)
+      const contract = repairPolicyFor(context)
       if (!contract.inspectRepair || !contract.prepareRepair) throw executionError('WORKFLOW_REPAIR_NOT_ADMITTED')
       const requirement = await artifacts.read(plan.task.requirementRef)
-      const prepared = await contract.prepareRepair({ ...context, requirement, observed, prepareRepairContext })
+      const prepared = await contract.prepareRepair({ ...context, requirement, observed, prepareRepairContext, prepareDataChangeRepairInput, decision })
       const material = await artifacts.read(prepared.contextRef)
       assertRepairContext(material, context.state)
       const repair = { ...observed.repairBinding, taskId, contextRef: prepared.contextRef }
       const repairAdmission = Object.freeze({})
       repairAdmissions.set(repairAdmission, { workflowDigest: stage.workflowDigest, inputDigest: executionDigest(prepared.input),
-        repairDigest: executionDigest(repair), contextDigest: executionDigest(material) })
+        repairDigest: executionDigest(repair), contextDigest: executionDigest(material), evidenceRefs: [...decision.evidenceRefs] })
       return controller.changeInput({ commandId, runId: stage.runId, inputId: commandId, sourceKey: commandId,
         input: prepared.input, expectedRevision: observed.repairBinding.runRevision, repair, repairAdmission })
     },
