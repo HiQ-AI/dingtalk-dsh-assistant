@@ -591,3 +591,21 @@ Owner直接使用现有directQueries登记资源及Task工件目录；查询scop
 任务开始通知及阶段授权修复切换：部署后独立核验一个仍未结束的新Task仅一条开始回执，正常恢复及补充无第二条；已终态/取消的旧任务不补发开场。旧需求授权投影缺字段时，只能沿repair-stage-authorizations核验原文来源及准确需求版本恢复，再由原Owner继续；不直接写控制库、不猜授予新工作流权限。生产变更依旧提交工单并走插件真人审批，开始通知不证明工单或生产执行完成。
 
 候选恢复升级不迁移schema、不修改冻结v7定义。正式部署后核对原Task/Run及失败工件保持，恢复资格变化通过现有Owner观察事件唤醒；无需伪造事件或重复建Task。真实恢复须独立回读新generation及当前受信查询交接，推进至本次工单/插件待审；仅健康与开始通知不代表恢复成功。任何已有外部effect或工单不准候选重做。
+
+## 桌面安全重启及耗时
+
+正式逻辑在 `scripts/restart-web.ps1`，本机桌面入口仅委托 `D:/dsh_home/launchers/restart-web.ps1`，并显式传 `-ProjectRoot D:/project/dingtalk-dsh-assistant`。源码交付工作树不改变主检出已有文件；本地安装把已核对的正式脚本复制到持久launchers，以SHA256独立核验，不备份历史副本。已有桌面入口的Check参数保留。
+
+先运行 `C:/Users/64554/Desktop/App/restart-dsh-web.ps1 -Check`。预检确认已有实例/维护许可与自启入口、原生排空；Check不改变进程、自启或维护。再不带Check执行。正在维护、已有实例身份不符、活动操作未排空、未取得封存许可时均拒绝，不能直接启动第二个实例。
+
+初始检查和最终回读仍以真实进程命令行、创建时间、双端口Owner以及health/recoveryIssueCount/匿名401为准。等待中无监听只读.NET原生监听表，不反复全进程或MSFT端口表枚举；端口集合变化或HTTP就绪时进行完整独立核验。所有者查询使用一条过滤后的MSFT_NetTCPConnection CIM查询；不是省略端口归属。登录URL只在最终回读当前进程日志时解析，不在轮询中重复读日志。旧进程退出也先看监听表，之后一次完整回读确认停止。
+
+TimingSeconds输出InitialCheckSeconds、DrainAndSealSeconds、StopSeconds、ServiceReadySeconds、VerifyAndResumeSeconds、TotalSeconds。ServiceReady包含计划任务启动及新实例全部健康门槛，不能当作Node单纯导入或端口监听耗时。每10秒输出等待时长和已监听端口，240秒超时不重启、不自动解除封存维护；仍按原证据接续。
+
+一次性诊断只记录模块计数、CPU、子进程可执行名称和耗时、匿名HTTP类别/耗时及监听时间，不记录参数、输出、URL令牌或凭据。临时Node preload须在实际新进程前启用，并在finally独立核对还原计划任务Action；诊断进程仍带preload，最终正常重启移除。不要把临时采样留作正式配置。
+
+正式启动使用Node24原生module.registerHooks同步load透传；只把模块读取改为同线程路径，nextLoad保留Node解析、源码、缓存和错误，不转换模块内容、清空缓存或改写node_modules。预加载通过显式--require指定，不写NODE_OPTIONS全局环境、不留临时计时hook。
+
+交付时将scripts/start-web.ps1、restart-web.ps1、web-module-loader.cjs三文件统一复制到DSH_HOME/launchers并独立核对SHA256。DSH Web Local仅改Action到该目录start-web.ps1，传入真实主检出ProjectRoot，保留UserId/触发器/Settings/日志位置及DSH_HOME。桌面入口仍是restart-dsh-web.ps1 -Check/正常重启；正式包部署工具也指向同一持久启动脚本并显式传ProjectRoot，避免后续部署重新走旧慢入口。
+
+本机完整对照：不带同步hook的ServiceReady171.18秒/总181.54秒；只启用同步load透传为17.65/29.91秒；正式三文件入口无诊断为17.64/29.43秒。小9库import对照均约1.6秒，不能用其代替完整profile boot。主结论范围是当前完整启动路径，未把操作系统/磁盘的底层延迟细分为已证实原因。运行明细见docs/acceptance/web-restart-startup-speed/round-1.md。

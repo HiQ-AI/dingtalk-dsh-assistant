@@ -1,9 +1,10 @@
 param(
-    [string]$ProxyUrl
+    [string]$ProxyUrl,
+    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot)
 )
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = Split-Path -Parent $PSScriptRoot
+$moduleLoader = Join-Path $PSScriptRoot 'web-module-loader.cjs'
 $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
 $nodeExe = (Get-Command node -ErrorAction Stop).Source
 $nodeMajor = [int]((& $nodeExe --version).TrimStart('v').Split('.')[0])
@@ -26,6 +27,7 @@ if ([string]::IsNullOrWhiteSpace($ProxyUrl) -and (Test-Path -LiteralPath $reside
 
 if ($nodeMajor -lt 24) { throw "dsh 需要 Node.js 24 或更高版本，当前为 $(& $nodeExe --version)。" }
 if (-not (Test-Path -LiteralPath $dshEntry)) { throw "缺少本机 dsh 启动入口：$dshEntry" }
+if (-not (Test-Path -LiteralPath $moduleLoader)) { throw "缺少正式 Web 模块加载入口：$moduleLoader" }
 
 $env:DSH_HOME = $dshHome
 if (-not [string]::IsNullOrWhiteSpace($ProxyUrl)) {
@@ -38,7 +40,7 @@ $env:NO_PROXY = '127.0.0.1,localhost'
 $env:no_proxy = $env:NO_PROXY
 Push-Location $projectRoot
 try {
-    & $nodeExe --use-env-proxy $dshEntry web --no-open
+    & $nodeExe --require $moduleLoader --use-env-proxy $dshEntry web --no-open
     exit $LASTEXITCODE
 }
 finally {
