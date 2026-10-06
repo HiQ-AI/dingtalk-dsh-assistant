@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 
-export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；所有任务流的承接、开始、中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
+export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务首次接纳后只发一次开始通知；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
 
 // 只识别明确的插件运行标签与机制，避免把业务代码、普通编号当成内部数据。
 export function assertGroupReply(text, internalIds = []) {
@@ -59,6 +59,7 @@ export function notificationSilence(run, phase) {
 
 // 准备与领取共用事实策略；不根据正文、工作流或恢复事件猜测是否需要用户操作。
 export function taskNotificationAllowed({ phase = '', action, report } = {}) {
+  if (phase === 'task:started') return action?.status === 'applied' && ['create', 'research'].includes(action.kind) && Boolean(action.result?.taskId)
   if (['accepted', 'attention', 'routing_wait', 'system_wait'].includes(phase)
     || phase.startsWith('owner:started:') || phase.startsWith('owner:application_wait:')) return false
   if (phase === 'receipt' && action?.status === 'applied'
@@ -141,15 +142,15 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
     const answerReceipt = phase === 'receipt' && action.kind === 'answer'
     if (answerReceipt && action.result?.status === 'blocked' && action.result?.reason === 'execution_tool_failed') text = '本次查询因系统读取问题未完成，执行已停止，需要修复后继续。'
     const attemptVersion = answerReceipt && action.readonlyRetryHistory?.length ? action.result?.inputVersion : undefined
-    const eventKey=attemptVersion ? `action.reply:${action.commandId}:${phase}:input:${attemptVersion}` : phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
+    const eventKey=phase === 'task:started' ? `task.started:${action.result.taskId}` : attemptVersion ? `action.reply:${action.commandId}:${phase}:input:${attemptVersion}` : phase.startsWith('owner:') ? `task.owner.report:${phase.slice(6)}`
       : phase.startsWith('terminal:') ? `task.result:${action.result.runId}:${phase}`
       : action.status==='rejected' ? `action.rejected:${action.commandId}` : `action.reply:${action.commandId}:${phase}`
-    const notificationId = `notice-${executionDigest(attemptVersion ? [action.commandId, phase, attemptVersion] : phase.startsWith('owner:') ? eventKey : [action.commandId, phase])}`
-    const existing = (phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', eventKey }) : null)
+    const notificationId = `notice-${executionDigest(phase === 'task:started' ? eventKey : attemptVersion ? [action.commandId, phase, attemptVersion] : phase.startsWith('owner:') ? eventKey : [action.commandId, phase])}`
+    const existing = (phase === 'task:started' || phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', eventKey }) : null)
       ?? await store.query({ kind: 'message.notification', notificationId })
       ?? (phase.startsWith('owner:') ? await store.query({ kind: 'message.notification', notificationId: `notice-${executionDigest([action.commandId, phase])}` }) : null)
     if (existing) {
-      if (phase.startsWith('owner:') ? existing.eventKey !== eventKey
+      if (phase === 'task:started' || phase.startsWith('owner:') ? existing.eventKey !== eventKey
         : existing.runId !== run.runId || existing.commandId !== action.commandId) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
       return
     }
@@ -243,6 +244,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         await attempt(run.runId, action.commandId, async () => {
         if (action.result?.taskId && await store.query({ kind: 'task.deleted', taskId: action.result.taskId })) return
         const lifecycle = Boolean(action.result?.taskId) && ['create', 'research', 'answer', 'reopen', 'revise', 'pause', 'resume', 'cancel', 'confirm'].includes(action.kind)
+        if (action.status === 'applied' && ['create', 'research'].includes(action.kind) && action.result?.taskId) await prepare(run, action, 'task:started', '任务已开始处理。', 'progress')
         const hasAcceptance = acceptances.some(item => item.commandId === action.commandId)
         // 补充、更正只更新同一事项；只在最终完成或需要用户输入时通知，不逐条承接。
         if (!hasAcceptance && (action.kind !== 'revise' || action.status === 'rejected') && action.result?.reply && (lifecycle || action.status === 'rejected' || action.args.replyPolicy !== 'none')) await prepare(run, action, 'receipt', action.result.reply)

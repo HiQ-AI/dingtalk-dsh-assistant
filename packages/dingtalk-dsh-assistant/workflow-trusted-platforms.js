@@ -373,7 +373,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       arguments: { objective: requirement.request, targetId: matches[0].id, commitSha: requirement.target.commitSha },
       constraints: requirement.constraints }, materials: [{ resourceRef: `uat-failed-task:${taskId}:${runId}` }] })
   }
-  async function prepareRequirement({ workflowId, action, materials, definitionVersion }) {
+  async function prepareRequirement({ workflowId, action, materials, definitionVersion, taskContext }) {
     const request = requireText(action.arguments?.objective, 'EXTERNAL_OBJECTIVE_REQUIRED')
     const constraints = [...new Set(action.constraints ?? [])]
     if (workflowId === 'task-data-change-approval-resume') {
@@ -468,6 +468,29 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       const source = materials.find(item => item.resourceRef === changeRef)
       if (!source?.text) throw executionError('EXTERNAL_MATERIAL_NOT_FOUND')
       const currentNative = (bytebase.workflowAdapter.pluginApproval || nativeBytebase?.workflowAdapter.nativeApproval) && !['3', '4'].includes(definitionVersion)
+      const querySources = []
+      if (currentNative && action.taskId) {
+        if (!execution || !taskContext || taskContext.taskId !== action.taskId || !Array.isArray(taskContext.queryEvidence))
+          throw executionError('DATA_CHANGE_TASK_CONTEXT_INVALID')
+        const plan = await execution.store.query({ kind: 'task.plan', taskId: action.taskId })
+        if (!plan?.task || taskContext.requirementRevision !== plan.task.requirementRevision) throw executionError('DATA_CHANGE_TASK_CONTEXT_INVALID')
+        const requirement = await execution.artifacts.read(plan.task.requirementRef)
+        if (executionDigest(taskContext.scope) !== executionDigest(requirement.scope)) throw executionError('DATA_CHANGE_TASK_CONTEXT_INVALID')
+        const records = await execution.store.query({ kind: 'task.owner.query-evidence', taskId: action.taskId, requirementRevision: taskContext.requirementRevision })
+        if (!taskContext.queryEvidence.length) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', '当前需求没有本任务查询证据；先只读查询准确生产目标或来源材料，再提交候选修复。旧需求查询不能代替当前证据。')
+        for (const proof of taskContext.queryEvidence) {
+          const record = records.find(item => item.artifactRef === proof.artifactRef)
+          if (!record) throw executionError('DATA_CHANGE_TASK_CONTEXT_INVALID')
+          const evidence = await execution.artifacts.read(proof.artifactRef), binding = evidence?.execution
+          if (evidence.kind !== 'agent-query-evidence' || binding?.kind !== 'task-owner' || binding.taskId !== action.taskId
+            || binding.requirementRevision !== taskContext.requirementRevision || binding.turnId !== record.turnId
+            || binding.leaseEpoch !== record.leaseEpoch || evidence.verification?.outputDigest !== executionDigest(evidence.result)
+            || !evidence.verification?.sourceRefs?.length) throw executionError('DATA_CHANGE_TASK_CONTEXT_INVALID')
+          const content = JSON.stringify({ kind: 'verified-task-query', taskId: action.taskId, requirementRevision: taskContext.requirementRevision,
+            evidenceRef: proof.artifactRef, capabilityId: evidence.capabilityId, result: evidence.result })
+          querySources.push({ id: proof.artifactRef, sha256: digestText(content), content })
+        }
+      }
       const snapshot = currentNative ? null : await clients.productionPostgres.readBaseline({ project: selected.project,
         target: selected.target, scope: 'current' })
       if (!currentNative && (snapshot?.project !== selected.project || executionDigest(snapshot.target) !== executionDigest(selected.target)
@@ -475,7 +498,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         || !/^[a-f0-9]{64}$/.test(snapshot.sha256 ?? '') || typeof snapshot.evidenceRef !== 'string'
         || !snapshot.evidenceRef)) throw executionError('EXTERNAL_BASELINE_UNCONFIRMED')
       return { request, constraints, target: selected.target,
-        sources: [{ id: changeRef, sha256: digestText(source.text), content: source.text }],
+        sources: [{ id: changeRef, sha256: digestText(source.text), content: source.text }, ...querySources],
         ...(snapshot ? { baseline: { snapshotId: snapshot.snapshotId, sha256: snapshot.sha256 } } : {}),
         ...(action.arguments.previousIssueId ? { previousIssueId: action.arguments.previousIssueId } : {}) }
     }

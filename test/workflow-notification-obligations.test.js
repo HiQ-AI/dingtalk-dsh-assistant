@@ -3,6 +3,7 @@ import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { createWorkflowNotifications, notificationSilence, sameDeliveredText, taskNotificationAllowed } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
@@ -20,7 +21,7 @@ async function fixture(t, body = '请处理') {
   const call = (kind, args) => store.command({ id: randomUUID(), kind: `message.${kind}`, args })
   await call('receive', { runId: 'm', sourceKey: 'source', sourceVersion: 1, conversationId: 'g', actorId: 'a', body,
     context: { sourceMessageId: 'in', replyObligation: { required: true, sourceKey: 'source', sourceVersion: 1 } } })
-  return { store, call, notices: () => store.query({ kind: 'message.notifications', states: ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered', 'superseded'] }),
+  return { store, call, edit: fn => { const db=new DatabaseSync(join(dir,'control.sqlite'));try{fn(db)}finally{db.close()} }, notices: () => store.query({ kind: 'message.notifications', states: ['prepared', 'sending', 'acknowledged', 'unknown', 'delivered', 'superseded'] }),
     flush: adapter => createWorkflowNotifications({ store, controller: {
       taskPlan: taskId => store.query({ kind: 'task.plan', taskId }), state: runId => store.query({ kind: 'run', runId }) }, artifacts: {}, adapter }).flush() }
 }
@@ -126,7 +127,7 @@ test('内部读取失败不按次数制造人工告知；恢复后仍无多余�
   assert.equal((await f.notices()).length, 0)
 })
 
-test('Task承接、命令完成和需求修订均不发送中间回执', async t => {
+test('Task接纳完成只通知一次开始，需求修订不再通知', async t => {
   const f = await fixture(t)
   await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
   await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task', replyPolicy: 'none' } }] })
@@ -136,10 +137,12 @@ test('Task承接、命令完成和需求修订均不发送中间回执', async t
   await f.flush()
   assert.equal((await f.notices()).length, 0)
   await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task', reply: '已收到' } })
-  await f.flush(); assert.equal((await f.notices()).length, 0)
+  await f.flush(); assert.equal((await f.notices()).length, 1)
+  assert.equal((await f.notices())[0].eventKey,'task.started:task')
+  assert.equal((await f.notices())[0].payload.text,'任务已开始处理。')
   await f.store.command({ id: 'task-update', kind: 'task.requirement.update', args: { taskId: 'task', expectedRequirementRevision: 1,
     requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'updated' } })
-  await f.flush(); assert.equal((await f.notices()).length, 0)
+  await f.flush(); assert.equal((await f.notices()).length, 1)
 })
 
 test('发送未知后来源更新仍回读旧通知，不删除效果或再次发送', async t => {
@@ -221,7 +224,7 @@ test('Owner无结构化用户操作的阻塞只留内部事实', async () => {
   }, async command({ kind, args }) { assert.equal(kind, 'message.notification.prepare'); notices.set(args.notificationId, { ...args, id: args.notificationId }); return {} } }
   await createWorkflowNotifications({ store }).flush()
   await createWorkflowNotifications({ store }).flush()
-  assert.equal(reports, 2); assert.equal(notices.size, 0)
+  assert.equal(reports, 2); assert.equal(notices.size, 1); assert.equal([...notices.values()][0].payload.phase,'task:started')
 })
 
 test('同一事项多条补充和实际开始均静默', async () => {
@@ -424,4 +427,52 @@ for(const scenario of ['internal-progress','ordinary-progress','internal-started
  assert.equal(visible.length,['complete','user-action'].includes(scenario)?1:0)
  assert.equal(pages.length,0) // 通知策略不再依赖特殊恢复事件分页。
  if(scenario==='complete')assert.match(visible[0].payload.text,/^任务已完成/u)
+})
+
+async function acceptStartTask(f,taskId='task',commandId='c',runId='m') {
+ await f.call('split',{runId,units:[{unitId:'u-'+commandId,goalText:'核查结果'}]})
+ await f.call('accept',{runId,unitId:'u-'+commandId,commands:[{commandId,kind:'create',args:{taskId,replyPolicy:'none'}}]})
+ const claim=(await f.call('command.claim',{commandId})).result.command
+ if(!(await f.store.query({kind:'task.catalog'})).some(t=>t.task_id===taskId||t.taskId===taskId)) await f.store.command({id:randomUUID(),kind:'task.accept',args:{taskId,requirementRef:`sha256-${'a'.repeat(64)}.json`,requirementRevision:1,sessionId:'owner-'+taskId,criteria:['核查结果'],sourceKey:'source',eventKey:'created-'+taskId}})
+ await f.call('command.complete',{commandId,leaseEpoch:claim.leaseEpoch,result:{taskId}})
+}
+
+test('零Run任务开始投递一次；发送未知重启恢复只回查',async t=>{
+ const f=await fixture(t);await acceptStartTask(f)
+ let sends=0,reads=0
+ const adapter={canDisclose:async()=>true,send:async()=>{sends++;throw Error('lost ACK')},readback:async()=>{reads++;return null}}
+ await f.flush(adapter);await f.flush(adapter)
+ assert.equal(sends,1);assert.equal(reads,2)
+ assert.equal((await f.notices())[0].status,'unknown')
+ assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages.length,0)
+})
+for(const mode of ['cancelled','completed','web','explicit-silence'])test(`领取任务开始通知复核并拒绝过期或禁发：${mode}`,async t=>{
+ const f=await fixture(t,mode==='explicit-silence'?'请处理，不用回复我。':'请处理')
+ await acceptStartTask(f)
+ if(mode==='web') f.edit(db=>{const row=db.prepare("SELECT body FROM message_runs WHERE run_id='m'").get();const r=JSON.parse(row.body);r.channel='web';db.prepare("UPDATE message_runs SET body=? WHERE run_id='m'").run(JSON.stringify(r))})
+ await f.flush()
+ if(['web','explicit-silence'].includes(mode)){assert.equal((await f.notices()).length,0);return}
+ const notice=(await f.notices())[0]
+ f.edit(db=>{if(mode==='cancelled')db.prepare("UPDATE task_controls SET state='cancelled' WHERE task_id='task'").run();else db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task'").run()})
+ const claimed=await f.call('notification.claim',{notificationId:notice.id})
+ assert.equal(claimed.dispatchEligible,false);assert.equal(claimed.result.notification.status,'superseded')
+})
+
+test('重复创建同一Task跨消息只开始一次，不同同名Task分别开始',async t=>{
+ const f=await fixture(t);await acceptStartTask(f);await f.flush()
+ for(const [runId,commandId,taskId] of [['m2','c2','task'],['m3','c3','task-other']]){
+  await f.call('receive',{runId,sourceKey:runId,sourceVersion:1,conversationId:'g',actorId:'a',body:'请核查同名结果',context:{sourceMessageId:runId}})
+  await acceptStartTask(f,taskId,commandId,runId);await f.flush()
+ }
+ const starts=(await f.notices()).filter(n=>n.payload.phase==='task:started')
+ assert.deepEqual(starts.map(n=>n.eventKey).sort(),['task.started:task','task.started:task-other'])
+})
+
+test('原生开始准备拒绝未应用命令及借用另一Task身份',async t=>{
+ const f=await fixture(t);await acceptStartTask(f)
+ const args={runId:'m',commandId:'c',notificationId:'forged-start',eventKey:'task.started:other',payload:{phase:'task:started',text:'任务已开始处理。',conversationId:'g',fact:{taskId:'other'}},disclosure:{conversationId:'g',authorizationRef:'source'}}
+ await assert.rejects(f.call('notification.prepare',args),{code:'MESSAGE_NOTIFICATION_FACT_REQUIRED'})
+ f.edit(db=>{const row=db.prepare("SELECT body FROM message_items WHERE item_id='command:c'").get();const c=JSON.parse(row.body);c.status='pending';db.prepare("UPDATE message_items SET body=? WHERE item_id='command:c'").run(JSON.stringify(c))})
+ await assert.rejects(f.call('notification.prepare',{...args,eventKey:'task.started:task',payload:{...args.payload,fact:{taskId:'task'}}}),{code:'MESSAGE_NOTIFICATION_FACT_REQUIRED'})
+ assert.equal((await f.notices()).length,0)
 })

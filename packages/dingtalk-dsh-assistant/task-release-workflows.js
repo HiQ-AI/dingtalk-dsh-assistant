@@ -2,12 +2,12 @@ import { executionDigest, executionError } from './execution-artifacts.js'
 import { assertDataChangeExecutionIdentity } from './workflow-data-change.js'
 
 /** 平台领域决定前序证明的消费规则，公共服务不再拼装各平台参数。 */
-export function createExternalStageContracts({ workflowIds, external, readEngineeringProof, readArtifact }) {
+export function createExternalStageContracts({ workflowIds, external, readEngineeringProof, readArtifact, readTaskEvidence }) {
   return workflowIds.map(id => ({ id, version: '1',
     async prepare({ taskId, stage, plan, stageIndex, requirement, origin, definitionVersion }) {
       const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request,
         ...(requirement.stageTargets?.[id] ? { targetId: requirement.stageTargets[id] } : {}) }
-      let materials = []
+      let materials = [], taskContext
       if (['task-uat-deployment', 'task-uat-pr-merge'].includes(id)) {
         const completed = plan.stages.slice(0, Math.max(0, stageIndex)).filter(item => item.status === 'succeeded')
         const merged = completed.findLast(item => item.workflowId === 'task-uat-pr-merge' && item.outputRef)
@@ -31,8 +31,10 @@ export function createExternalStageContracts({ workflowIds, external, readEngine
         args.changeRef = sourceRef
         if (source?.outcome === 'needs_revision') args.previousIssueId = source.issueId
         materials = [{ resourceRef: sourceRef, text: typeof source === 'string' ? source : JSON.stringify(source) }]
+        if (readTaskEvidence) taskContext = { taskId, requirementRevision: plan.task.requirementRevision, scope: requirement.scope,
+          queryEvidence: (await readTaskEvidence({ taskId, requirementRevision: plan.task.requirementRevision })).map(({ artifactRef }) => ({ artifactRef })) }
       }
-      return { input: await external.prepareRequirement({ workflowId: stage.workflowId, definitionVersion,
+      return { input: await external.prepareRequirement({ workflowId: stage.workflowId, definitionVersion, ...(taskContext ? { taskContext } : {}),
         action: { taskId, arguments: { ...args, workflowId: id }, constraints: requirement.constraints }, materials }) }
     } }))
 }

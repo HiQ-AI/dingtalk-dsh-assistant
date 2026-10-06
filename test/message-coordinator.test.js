@@ -222,8 +222,8 @@ for (const placement of ['same-unit', 'same-topic-units']) test(`同一事项重
   f = await fixture(t, true, { sessionRunner: { close: async () => {}, run: async args => {
     await args.onSessionBound()
     const candidate = answerDecision(args.input), unit = candidate.decisions[0].units[0]
-    unit.intent.actions = [{ intent: 'create', arguments: { objective: '完整事项', workflowId: 'task-investigation' }, dependsOn: [] }]
-    if (placement === 'same-unit') unit.intent.actions.push({ intent: 'research', arguments: { objective: '同一事项准备', workflowId: 'task-investigation' }, dependsOn: [0] })
+    unit.intent.actions = [{ intent: 'create', arguments: { objective: '完整事项' }, dependsOn: [] }]
+    if (placement === 'same-unit') unit.intent.actions.push({ intent: 'research', arguments: { objective: '同一事项准备' }, dependsOn: [0] })
     else candidate.decisions[0].units.push({ ...structuredClone(unit), binding: { disposition: 'conversation', candidateId: `source:${args.input.sources[0].runId}` } })
     await assert.rejects(args.onCandidate(candidate), { code: 'GROUP_COORDINATOR_EXISTING_TASK_REQUIRES_UPDATE' })
     rejected++
@@ -245,7 +245,7 @@ test('原生协调重复创建反馈后同会话纠正，拒绝候选不落账�
     if (count === 2) {
       invalidSubmitted = true
       decision.decisions[0].units[0].intent.actions = ['create', 'research'].map(intent => ({ intent,
-        arguments: { objective: '同一事项', workflowId: 'task-investigation' }, dependsOn: [] }))
+        arguments: { objective: '同一事项' }, dependsOn: [] }))
     }
   } })
   await f.receive('native-duplicate', '核对同一事项')
@@ -305,9 +305,8 @@ for(const code of ['GROUP_COORDINATOR_RUN_INVALID','GROUP_COORDINATOR_READ_TOOL_
  const notifier=createWorkflowNotifications({store:f.store,adapter:{canDisclose:async()=>true,send:async()=>{sent++;return{messageId:'notice-message'}},readback:async()=>({messageId:'notice-message',conversationId:'group'})}})
  await notifier.flush();await notifier.flush()
  const notices=await f.store.query({kind:'message.notifications',states:['prepared','acknowledged','delivered','superseded']})
- assert.equal(sent,permanent?1:0)
- assert.equal(notices.length,permanent?1:0)
- if(permanent){assert.equal(notices[0].status,'delivered');assert.equal(notices[0].payload.phase,'attention')}
+ assert.equal(sent,0)
+ assert.equal(notices.length,0) // 内部协调故障保持静默，不把恢复问题交给群成员。
 })
 
 for (const mention of ['required', 'objective']) test(`同批引用附件来源不能忽略或错绑，修正fact后整批接纳：${mention}`, async t => {
@@ -319,7 +318,7 @@ for (const mention of ['required', 'objective']) test(`同批引用附件来源�
     const fileDecision=candidate.decisions.find(d=>d.runId===file.runId), taskDecision=candidate.decisions.find(d=>d.runId===request.runId)
     const fileUnit=fileDecision.units[0]
     fileDecision.units=[]
-    taskDecision.units[0].intent.actions=[{intent:'research',arguments:{objective:'核对生产现状',workflowId:'task-investigation'},dependsOn:[]}]
+    taskDecision.units[0].intent.actions=[{intent:'research',arguments:{objective:'核对生产现状'},dependsOn:[]}]
     taskDecision.units[0].intent.requiredExecutionMaterials=mention==='required'?['sql-file']:[]
     if(mention==='objective')taskDecision.units[0].intent.actions[0].arguments.objective='核对附件fileId=sql-file，调查生产现状'
     await assert.rejects(args.onCandidate(candidate), error => error.code === 'GROUP_COORDINATOR_MATERIAL_SOURCE_UNBOUND'
@@ -351,7 +350,7 @@ test('消费v2忽略来源只解除本源编辑屏障，跨任务屏障保留', 
 test('原生持久同session重放回读旧命令无Task事实，历史received不冒充任务接纳', async t => {
   let f, attempts=0, replayObserved=false
   f=await fixture(t,true,{
-    transformDecision(decision){for(const d of decision.decisions)d.units[0].intent.actions=[{intent:'research',arguments:{objective:'核对材料',workflowId:'task-investigation'},dependsOn:[]}]},
+    transformDecision(decision){for(const d of decision.decisions)d.units[0].intent.actions=[{intent:'research',arguments:{objective:'核对材料'},dependsOn:[]}]},
     onModel(input){
       if(input.sources[0]?.sourceVersion===2){
         const current=input.sources[0].processing

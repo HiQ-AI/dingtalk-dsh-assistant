@@ -1993,7 +1993,7 @@ test('群协调只提交目标，调查由Task会话直接执行且不导出独�
   assert.equal(messageSchemas.I.safeParse({ kind: 'intent', actions: [{ intent: 'create', arguments: {
     objective: '调查', workflowId: 'task-investigation' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }).success, false)
   assert.equal(messageSchemas.I.safeParse({ kind: 'intent', actions: [{ intent: 'create', arguments: {
-    objective: '生产数据变更', workflowId: 'task-data-change' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }).success, true)
+    objective: '生产数据变更', workflowId: 'task-data-change' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }).success, false)
 })
 
 test('受信外部适配器齐备时协调目录可见，语义提交不直接执行外部效果', async t => {
@@ -4759,7 +4759,7 @@ test('原114与115连续交办复用同Task并保存审批与先两条后69条�
     return { kind: 'intent', actions: [{ intent: input.text === secondText ? 'revise' : 'create',
       arguments: { objective: input.text === secondText ? firstText + '\n' + secondText : firstText,
         explicitStages: input.text === secondText ? [secondText] : [firstText],
-        stageAuthorizations: [{ workflowId: 'task-data-change', sourceQuote: input.text }] }, dependsOn: [] }],
+        stageAuthorizations: [{ workflowId: 'task-data-change', sourceQuote: input.text, objective: input.text, gate: 'confirmation' }] }, dependsOn: [] }],
       constraints: ['行业审核记录和状态保留', '不改派单，不发业务通知，不改审核轮次', '生产执行需精确脚本审批'], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }
   const { service, message, execution } = await fixture(t, 'owner', undefined, { judge })
@@ -4782,7 +4782,7 @@ test('原114与115连续交办复用同Task并保存审批与先两条后69条�
   assert.equal(new Set(origins.map(item => item.command.args.taskId)).size, 1)
 })
 
-for (const proposedGate of ['none', 'confirmation', 'missing-gate', 'missing-objective']) test(`Owner不能删除I已落账的原发送人验证门槛：${proposedGate}`, async t => {
+for (const proposedGate of ['none', 'confirmation']) test(`Owner不能删除I已落账的原发送人验证门槛：${proposedGate}`, async t => {
   let effects = 0, rejectedCode = null
   const forbidden = async () => { effects++; throw new Error('PRODUCTION_EFFECT_FORBIDDEN') }
   const dataChangeAdapter = { id: 'stage-gate-test', version: '1', rulesDigest: 'a'.repeat(64),
@@ -4792,14 +4792,14 @@ for (const proposedGate of ['none', 'confirmation', 'missing-gate', 'missing-obj
   const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
     : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['当前明确请求'] }
       : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: body, targetId: 'production-db',
-        stageAuthorizations: [{ workflowId: 'task-data-change', sourceQuote: body, ...(proposedGate === 'missing-objective' ? {} : { objective: '刷69条正式数据' }), ...(proposedGate === 'missing-gate' ? {} : { gate: 'confirmation' }) }] }, dependsOn: [] }],
+        stageAuthorizations: [{ workflowId: 'task-data-change', sourceQuote: body, objective: '刷69条正式数据', gate: 'confirmation' }] }, dependsOn: [] }],
         constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   const taskOwnerSessions = { async run({ input, onSessionBound, onCandidate }) {
     await onSessionBound()
     const source = input.goal.sourceInstructions[0]
     const decision = { action: input.stages.some(stage => stage.workflowId === 'task-data-change') ? 'wait' : 'advance', summary: '按已登记条件处理', evidenceRefs: [],
       ...(!input.stages.some(stage => stage.workflowId === 'task-data-change') ? { appendStages: [
-        { workflowId: 'task-data-change', gate: proposedGate.startsWith('missing-') ? 'none' : proposedGate, sourceCondition: { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion,
+        { workflowId: 'task-data-change', gate: proposedGate, sourceCondition: { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion,
           sourceQuote: body, objective: '刷69条正式数据', requiredActorId: source.actorId } },
       ] } : {}) }
     if (proposedGate !== 'confirmation') {
@@ -5109,11 +5109,109 @@ test('直接Task附件scope仅纳入已证明材料，拒绝无关附件和旧�
   assert.equal((await execution.store.query({kind:'task.owner',taskId})).decision.action,'wait')
 })
 
+test('旧已排队外部workflowId简写不能绕过完整授权新建Task', async t => {
+  const { service, execution } = await fixture(t, 'owner')
+  const runId = 'queued-external-shorthand', unitId = 'old-unit', commandId = 'old-external-create'
+  const command = (kind, args) => execution.store.command({ id: `queued-external:${kind}`, kind: `message.${kind}`, args })
+  await command('receive', { runId, sourceKey: runId, sourceVersion: 1, actorId: 'owner', conversationId: 'g', body: '生产表新增is_deleted默认0', context: {}, policy: { initialWindowMs: 45000 } })
+  await command('split', { runId, units: [{ unitId }] })
+  await command('accept', { runId, unitId, commands: [{ commandId, kind: 'create', args: { taskId: 'queued-malformed-task', arguments: { objective: '生产表新增is_deleted默认0', workflowId: 'task-data-change' }, binding: { disposition: 'new' }, replyPolicy: 'none' }, dependsOn: [] }] })
+  await service.messages.process(runId)
+  const state = await service.state(runId)
+  assert.equal(state.commands[0].status, 'unknown')
+  assert.match(state.commands[0].error, /TASK_STAGE_AUTHORIZATION_SOURCE_INVALID/)
+  assert.equal(await execution.controller.taskPlan('queued-malformed-task'), null)
+  assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
+})
+
+for (const invalidFirstProposal of [false, true, 'preconditions']) test(`新生产加列完整原文授权经Owner直接建单进入插件待审且不执行SQL：恢复空候选=${invalidFirstProposal}`, async t => {
+  let hostExecution, proposals = 0, repairedRunId, validations = 0
+  const body = '小小鹏，生产环境的editor数据库的process_id_temp表要新增is_deleted列，默认值0'
+  const applySql = 'ALTER TABLE public.process_id_temp ADD COLUMN is_deleted integer DEFAULT 0;'
+  const target = { instance: 'prod', database: 'editor', environment: 'production' }
+  const sha = value => createHash('sha256').update(value).digest('hex')
+  const sends = [], issue = { id: 'projects/test/issues/1', planId: 'plan-1' }, sheet = { id: 'sheet-1', sha256: sha(applySql), target }, plan = { id: 'plan-1', sheetId: 'sheet-1' }
+  const forbidden = async () => { throw Error('PRODUCTION_EXECUTION_FORBIDDEN') }
+  const adapter = { id: 'owner-add-column', version: '1', rulesDigest: sha('owner-add-column'), pluginApproval: true,
+    requiresRehearsal: () => false, validateExistingIssue: forbidden,
+    readBaselineForCandidate: async () => ({ snapshotId: 'current-columns', sha256: sha('id-only') }),
+    validate: async args => {
+      if (invalidFirstProposal === 'preconditions' && validations++ === 0) throw Object.assign(Error('整型默认常量旧预检不支持'), { code: 'BYTEBASE_PRECONDITIONS_UNCONFIRMED' })
+      return { passed: true, packageDigest: args.packageDigest, receiptId: 'validated-current-sql' }
+    },
+    prepareRehearsal: forbidden, readbackRehearsal: forbidden,
+    prepareIssue: async () => ({ sheetSha256: sha(applySql) }),
+    readback: async args => { assert.equal(args.stage, 'create-issue'); return { issue, sheet, plan } },
+    prepareApproval: async () => ({ issueId: issue.id, planId: plan.id, sheetId: sheet.id, scopeDigest: sha('scope'), operationKey: sha('approval') }),
+    inspect: async args => { assert.equal(args.stage, 'approval-state'); return { decision: 'pending' } },
+    prepareExecute: forbidden }
+  const operationAdapter = { execute: async prepared => { sends.push(prepared.stage); assert.equal(prepared.stage, 'create-issue'); return { status: 'succeeded', result: { issueId: issue.id } } }, reconcile: forbidden }
+  const authorizeExternal = async ({ prepared }) => prepared.stage === 'approval-gate'
+    ? { principalId: 'owner', approval: { requestId: 'current-add-is-deleted-approval', approverIds: ['owner'] } }
+    : { principalId: 'owner', authorizationRef: 'current-source-create-issue' }
+  const sourceAuthorization = { workflowId: 'task-data-change', sourceQuote: body, objective: body, gate: 'none' }
+  const intent = { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: body, targetId: 'production-db', stageAuthorizations: [sourceAuthorization] }, dependsOn: [] }], constraints: ['执行前须本次插件真人批准'], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  assert.equal(messageSchemas.I.safeParse(intent).success, true)
+  const ownerSessions = { async run({ input, binding, tools, queryInput, onQueryEvidence, readArtifact, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    if (input.currentExecution?.repairable) {
+      for (const ref of input.currentExecution.evidenceRefs) await readArtifact(ref)
+      const decision = { action: 'repairCurrentStage', summary: '当前public.process_id_temp已有id，结合本轮查询明确schema为public；重新生成is_deleted integer DEFAULT 0和完整目录回查，不重复空SQL', evidenceRefs: input.currentExecution.evidenceRefs, repair: input.currentExecution.repairBinding }
+      repairedRunId = input.currentExecution.runId
+      if (!input.queryEvidence.length) {
+        await assert.rejects(onCandidate(decision), error => error.code === 'TASK_OWNER_STAGE_NOT_AUTHORIZED' && error.message.includes('查询'))
+        decision.evidenceRefs = [...decision.evidenceRefs, ...await queryOwnerSources({ binding, tools, queryInput, onQueryEvidence })]
+      } else {
+        for (const item of input.queryEvidence) { await readArtifact(item.artifactRef); decision.evidenceRefs.push(item.artifactRef) }
+      }
+      await onCandidate(decision); return { status: 'submitted', decision }
+    }
+    if (invalidFirstProposal && !input.stages.length) { const decision = { action: 'wait', summary: '保留既有原文目标', evidenceRefs: [], condition: { kind: 'execution', missing: '历史冻结候选阶段待恢复', responsibleParty: '执行会话', resumeWhen: '读取当前Run并受管修复', evidenceRefs: [] } }; await onCandidate(decision); return { status: 'submitted', decision } }
+    const auth = input.goal.stageAuthorizations[0]
+    const { workflowId, gate, ...sourceCondition } = auth
+    const decision = input.stages.length ? { action: 'wait', summary: '等待本次插件审批', evidenceRefs: [], condition: { kind: 'approval', missing: '本次SQL插件真人批准', responsibleParty: 'owner', resumeWhen: '真人批准本次精确SQL', evidenceRefs: [] } }
+      : { action: 'advance', summary: '新增integer列DEFAULT 0作为明确候选送审', evidenceRefs: [], planChange: { kind: 'initialize', stages: [{ workflowId, gate, sourceCondition }] } }
+    if (!input.stages.length) {
+      await assert.rejects(onCandidate({ ...decision, planChange: { kind: 'initialize', stages: [{ workflowId, gate, sourceCondition: { ...sourceCondition, objective: applySql } }] } }), error => error.code === 'TASK_OWNER_STAGE_NOT_AUTHORIZED' && error.message.includes('sourceCondition.objective'))
+      await assert.rejects(onCandidate(decision), error => error.code === 'TASK_OWNER_STAGE_NOT_AUTHORIZED' && error.message.includes('查询证据'))
+      decision.evidenceRefs = await queryOwnerSources({ binding, tools, queryInput, onQueryEvidence })
+    }
+    await onCandidate(decision); return { status: 'submitted', decision }
+  }, async close() {} }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
+    judge: async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text) : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['本次原文'] } : intent,
+    taskOwnerSessions: ownerSessions,
+    executionSessions: { async run({ input, onSessionBound, onResult }) { await onSessionBound(); proposals++; if (invalidFirstProposal === true && proposals === 1) { await onResult({ applySql: '', rollbackSql: '未确定schema，不执行', verificationSql: '', expectedChange: '{"rows":[]}' }); return { status: 'submitted' } } if (invalidFirstProposal && proposals > 1) assert.ok(input.sources.some(source => source.content.includes('verified-task-query'))); await onResult({ applySql, rollbackSql: 'ALTER TABLE public.process_id_temp DROP COLUMN is_deleted;', verificationSql: 'SELECT column_default FROM information_schema.columns WHERE table_schema=\'public\' AND table_name=\'process_id_temp\' AND column_name=\'is_deleted\';', expectedChange: '{"rows":[{"column_default":"0"}]}' }); return { status: 'submitted' } }, async cancel() {}, async close() {} },
+    deliveryOptions: { authorize: async () => ({ principalId: 'owner', authorizationRef: 'source' }), externalAdapter: operationAdapter, authorizeExternal },
+    external: { dataChangeAdapter: adapter, operationAdapter, authorizeExternal, availableTargets: [{ workflowId: 'task-data-change', targetId: 'production-db' }], prepareRequirement: async ({ taskContext }) => { if (!taskContext.queryEvidence.length) throw Object.assign(Error('当前需求缺少查询证据，请先只读查询'), { code: 'TASK_OWNER_STAGE_NOT_AUTHORIZED' }); const sources = [{ id: 'current-request', content: body, sha256: sha(body) }]; for (const proof of taskContext.queryEvidence) { const artifact = await hostExecution.artifacts.read(proof.artifactRef), content = JSON.stringify({ kind: 'verified-task-query', capabilityId: artifact.capabilityId, result: artifact.result }); sources.push({ id: proof.artifactRef, content, sha256: sha(content) }) } return { request: body, constraints: ['插件真人批准后执行'], target, sources } } } })
+  hostExecution = execution
+  const received = await service.ingest({ ...message, text: body }), state = await service.messages.process(received.runId)
+  const taskId = state.commands[0].result.taskId
+  if (invalidFirstProposal) {
+    await settleTaskOwners(service, execution)
+    await execution.controller.initializeTaskPlan({ commandId: 'restore-old-v7-plan', taskId, expectedPlanRevision: 0, expectedRequirementRevision: 1, stages: [{ stageId: 'stage-1', workflowId: 'task-data-change', gate: 'none', input: { request: body, constraints: ['插件真人批准后执行'], target, sources: [{ id: 'current-request', content: body, sha256: sha(body) }] } }] })
+    const frozen = await execution.controller.advanceTaskPlan(taskId)
+    await execution.controller.whenIdle(frozen.stages[0].runId)
+  }
+  assert.deepEqual((await settleTaskOwners(service, execution)).failures, [])
+  const saved = await execution.controller.taskPlan(taskId)
+  assert.equal(saved.stages.length, 1); assert.equal(saved.stages[0].workflowId, 'task-data-change')
+  let run = await execution.controller.whenIdle(saved.stages[0].runId)
+  if (invalidFirstProposal) { await settleTaskOwners(service, execution); run = await execution.controller.whenIdle(saved.stages[0].runId) }
+  assert.equal(run.nodes.find(node => node.nodeId === 'approval-gate').waitReason?.reference, 'PLUGIN_APPROVAL_PENDING', JSON.stringify({ owner: await execution.store.query({ kind: 'task.owner', taskId }), generation: run.run.generation, status: run.run.status, waiting: run.nodes.filter(node => ['waiting', 'failed'].includes(node.status)).map(node => ({ id: node.nodeId, reason: node.waitReason })) }))
+  assert.equal((await execution.store.query({ kind: 'approval.get', requestId: 'current-add-is-deleted-approval' })).decision, 'pending')
+  assert.deepEqual(sends, ['create-issue'])
+  assert.equal(run.run.generation, invalidFirstProposal ? 2 : 1)
+  assert.equal(proposals, invalidFirstProposal ? 2 : 1)
+  if (invalidFirstProposal) assert.equal(saved.stages[0].runId, repairedRunId)
+  assert.equal((await execution.artifacts.read(saved.task.requirementRef)).stageAuthorizations[0].objective, body)
+})
+
 test('受管授权投影修复只更新既有原文授权并保留Task和旧要求审计', async t => {
  const body='线上先执行这两条，刷完找我验证，我验证通过，再刷这69条正式数据'
  const {service,execution,message}=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},
   judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['当前来源']}:
-   {kind:'intent',actions:[{intent:'create',arguments:{objective:body,stageAuthorizations:[{workflowId:'task-data-change',sourceQuote:body}]},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'},
+   {kind:'intent',actions:[{intent:'create',arguments:{objective:body,stageAuthorizations:[{workflowId:'task-data-change',sourceQuote:body,objective:body,gate:'confirmation'}]},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'},
   taskOwnerSessions:{async run({onSessionBound,onCandidate}){await onSessionBound();const decision={action:'wait',summary:'等待系统修复',evidenceRefs:[],condition:{kind:'capability',missing:'系统读取能力',responsibleParty:'维护方',resumeWhen:'能力修复后评估',evidenceRefs:[]}};await onCandidate(decision);return{status:'submitted',decision}},async close(){}}})
  const received=await service.ingest({...message,text:body});const state=await service.messages.process(received.runId)
  const taskId=state.commands.find(c=>c.kind==='create').args.taskId
@@ -5165,7 +5263,7 @@ test('授权投影修复后同Task同Owner按新需求查询，旧证据不可�
   }}
   const {service,execution,message,root}=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},taskOwnerSessions:sessions,
     judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['当前来源']}:
-      {kind:'intent',actions:[{intent:'create',arguments:{objective:body,stageAuthorizations:[{workflowId:'task-data-change',sourceQuote:body}]},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
+      {kind:'intent',actions:[{intent:'create',arguments:{objective:body,stageAuthorizations:[{workflowId:'task-data-change',sourceQuote:body,objective:body,gate:'confirmation'}]},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}})
   const received=await service.ingest({...message,text:body}),state=await service.messages.process(received.runId),taskId=state.commands[0].result.taskId
   assert.deepEqual((await settleTaskOwners(service, service.execution)).failures,[])
   const before=await execution.controller.taskPlan(taskId),original=await execution.artifacts.read(before.task.requirementRef),source=original.sourceInstructions[0]
