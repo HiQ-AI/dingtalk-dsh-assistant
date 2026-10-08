@@ -63,3 +63,10 @@ stage-source-host-boundaries,18,PASS,round-18.md
 stage-source-package-check,18,PASS,round-18.md
 stage-source-deployed-health,18,PASS,round-18.md
 original-source-task-recovery,18,BLOCKED_OLD_CLARIFICATION,round-18.md
+clarification-recovery-ledger,19,PASS,round-19.md
+clarification-recovery-service-http,19,PASS,round-19.md
+clarification-recovery-workflow,19,PASS,round-19.md
+store-native-reload,19,PASS,round-19.md
+clarification-recovery-deployment,19,PASS,round-19.md
+source-124-request-resolved,19,PASS,round-19.md
+original-source-task-recovery,19,PASS,round-19.md
