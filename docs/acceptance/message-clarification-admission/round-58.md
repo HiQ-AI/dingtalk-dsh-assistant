@@ -23,3 +23,5 @@ SG19沿原Task重评event407被接受，Owner已从pending进入running（revisi
 额外 scope 组合 5/6 PASS：查询在途 pause/cancel/requirement 三项及真实查询+前序执行组合验收两项通过；既有“授权投影修复后同Task同Owner按新需求查询”在 workflow-service.test.js:5404 observed.length 期望2实际1。该例只提交 wait、不执行本次 complete 分支，但尚未独立确认基线，不能声明其已排除；日志 owner-known-evidence-scope.log 保留，未扩范围修改。
 
 上述授权投影失败已补独立基线验证：当前单例 1/1 FAIL（1196ms），git archive c4a69f5 隔离检出同一测试亦 1/1 FAIL（1789ms），均在5404得到 observed.length 1 != 2。隔离目录 docs/tmp/owner-evidence-baseline-c4a69f5，仅逐个链接第三方依赖真实目录，不链接workspace源码或整个node_modules；首次缺pg的环境失败单独保留，依赖补齐后实际断言与当前一致。日志 owner-authorization-projection-isolated.log、owner-authorization-projection-baseline-deps.log。该失败已证实基线存在，非本次完成证据门禁新增；未修改它或冻结源码。
+
+SG19现场闭环：原readonlyreassess event411、Owner40→42，原会话turn14再次提交complete被Host接纳。独立HTTP详情state=completed/outcome=succeeded/waitingCondition=null；SG21同样仍completed。证据 docs/tmp/task-5c4b495243ce147b3d6e32279fe9715f-after-script-detail.json 与 sg19-known-evidence-reassess.json。通知Task完成的是复现/定位，未假称业务故障已修复或补发。
