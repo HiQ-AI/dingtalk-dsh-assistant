@@ -158,7 +158,12 @@ test('通知操作仅本机逐条预检和按路径执行，拒绝额外对象�
    assert.equal((await post('/workflows/notifications/operations/op/execute',{expectedFactDigest:'sha',authorizationRef:'user-request'})).status,202)
    assert.equal((await post('/workflows/notifications/operations/op/reconcile',{messageId:'out',evidenceRef:'readback',recallStatus:'SUCCESS'})).status,400)
    assert.equal((await post('/workflows/notifications/operations/op/reconcile',{authorizationRef:'user-request'})).status,200)
-   assert.deepEqual(calls.map(item=>item[0]),['prepare','execute','reconcile'])
+   assert.equal((await post('/workflows/notifications/operations',{...prepare,actorId:'owner'})).status,400)
+   const {authorizationRef,...webPrepare}=prepare
+   assert.equal((await post('/workflows/notifications/operations',webPrepare)).status,200)
+   assert.equal((await post('/workflows/notifications/operations/op/execute',{expectedFactDigest:'sha'})).status,202)
+   assert.equal((await post('/workflows/notifications/operations/op/reconcile',{})).status,200)
+   assert.deepEqual(calls.map(item=>item[0]),['prepare','execute','reconcile','prepare','execute','reconcile'])
    assert.equal(calls[1][1].operationId,'op')
  },{overrides:{prepareWorkflowNotificationOperation:async args=>{calls.push(['prepare',args]);return {operationId:args.operationId}},executeWorkflowNotificationOperation:async args=>{calls.push(['execute',args]);return {status:'acknowledged'}},reconcileWorkflowNotificationOperation:async args=>{calls.push(['reconcile',args]);return {status:'completed'}}}})
 })
@@ -584,4 +589,16 @@ test('历史话题CLI只检查不写入，apply核对digest并独立读回且不
   await assert.rejects(reconcileTopic([...args, '--check'], request), /不会自动进入维护/)
   assert.deepEqual(calls.map(item => item.path), ['/runtime/maintenance'])
   await assert.rejects(reconcileTopic([...args, '--check', '--endpoint', 'http://example.com'], request), /本机回环/)
+})
+
+
+test('通知操作拒绝非本机连接且不进入受管方法',async()=>{
+ for(const path of ['/workflows/notifications/operations','/workflows/notifications/operations/op/execute','/workflows/notifications/operations/op/reconcile']){
+  let status,payload,calls=0
+  const response={setHeader(){},writeHead(code){status=code},end(body){payload=JSON.parse(body)}}
+  const forbidden=async()=>{calls++;throw new Error('must not invoke')}
+  await handleRequest({method:'POST',url:path,headers:{},socket:{remoteAddress:'192.0.2.1'}},response,{
+   prepareWorkflowNotificationOperation:forbidden,executeWorkflowNotificationOperation:forbidden,reconcileWorkflowNotificationOperation:forbidden})
+  assert.equal(status,403);assert.equal(payload.error,'workflow_local_identity_required');assert.equal(calls,0)
+ }
 })

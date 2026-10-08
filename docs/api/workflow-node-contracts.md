@@ -223,6 +223,10 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 ## 本地部署维护与原子停机许可
 
+本机通知撤回仍使用 `POST /workflows/notifications/operations` 和 `/{operationId}/execute|reconcile`。prepare 接受 `operationId,notificationId,type,reason`；execute 接受 `expectedFactDigest`。既有群消息授权可显式传 `authorizationRef`；省略时 Host 注入已配置 Web 操作者身份，仅允许 `reason=explicit_user`，授权与原通知快照持久绑定。客户端不能自报 actor 或撤回回执；必须实际调用 DWS 并独立回读后记录 recalled，未知状态只允许 reconcile。非本机或非法 Origin 拒绝。
+
+`POST /workflows/{runId}/reprocess` 可恢复已核验撤回的错误 coordinator 澄清：仅零业务命令、当前 pending 澄清、同群已送达通知及完整撤回证据满足时放行。保留作者、正文和 sourceKey，增加来源版本、审计旧等待，并使用 Host 当前策略重新协调；不伪造用户 answer。其他节点、未撤回、撤回未知和已有业务副作用继续拒绝。
+
 这些接口仅接受本机连接及现有可信 Web Origin，写入身份由 Host `webActorId` 注入，不能从请求体提供。
 
 - `GET /runtime/maintenance`：返回 `active`、`phase`（`inactive|draining|stopping`）、`revision`、`maintenanceId`、`busy`、`drained`、`processIncarnation`、`stopPermitted`、`resumePermitted`。`processIncarnation` 为 Host 启动时生成的 `PID:UUID`；同进程开库或模块重载不会改变，HTTP/Store options 不能设置。

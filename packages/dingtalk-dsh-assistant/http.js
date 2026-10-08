@@ -318,9 +318,9 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     if(!store[method])return send(response,404,{error:'workflow_disabled'})
     try{
       const fields=action==='prepare'
-        ? z.strictObject({operationId:requiredText,notificationId:requiredText,type:z.enum(['recall','restore']),reason:z.enum(['fact_conflict','duplicate_event','explicit_user','correction']),authorizationRef:requiredText,evidenceRef:requiredText.optional(),keepNotificationId:requiredText.optional(),body:requiredText.optional()})
-        : action==='execute'?z.strictObject({expectedFactDigest:requiredText,authorizationRef:requiredText})
-          :z.strictObject({authorizationRef:requiredText})
+        ? z.strictObject({operationId:requiredText,notificationId:requiredText,type:z.enum(['recall','restore']),reason:z.enum(['fact_conflict','duplicate_event','explicit_user','correction']),authorizationRef:requiredText.optional(),evidenceRef:requiredText.optional(),keepNotificationId:requiredText.optional(),body:requiredText.optional()})
+        : action==='execute'?z.strictObject({expectedFactDigest:requiredText,authorizationRef:requiredText.optional()})
+          :z.strictObject({authorizationRef:requiredText.optional()})
       const body=fields.parse(await readJson(request))
       return send(response,action==='execute'?202:200,await store[method]({...body,...(operationId?{operationId}:{})}))
     }catch(error){return send(response,error instanceof z.ZodError?400:/AUTHORIZATION|FORBIDDEN/u.test(error.message)?403:/STALE|CONFLICT|READY|RECONCILE|RECALLED|DUPLICATE/u.test(error.message)?409:400,{error:error.message})}

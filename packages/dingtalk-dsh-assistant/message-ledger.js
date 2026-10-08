@@ -1056,7 +1056,12 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       &&item.payload?.conversationId===old.conversationId
       &&['attention','routing_wait','system_wait'].includes(item.payload?.phase)
       &&(item.stateFact?.phase===item.payload.phase||item.payload.phase==='system_wait'&&rows(db,old.runId,'request').some(request=>request.id===item.requestId&&request.kind==='needs_context'))
-    if(oldNotifications.some(item=>!['prepared','superseded'].includes(item.status)&&!answeredNotice(item)&&!deliveredState(item)))fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+    const recalledClarification=item=>oldCommands.length===0&&item.status==='delivered'&&!item.commandId
+      &&item.payload?.conversationId===old.conversationId&&item.recallStatus==='recalled'
+      &&typeof item.recallEvidenceRef==='string'&&item.recallEvidenceRef.trim().length>0
+      &&rows(db,old.runId,'request').some(request=>request.id===item.requestId&&request.status==='pending'
+        &&request.nodeId==='coordinator'&&request.kind==='needs_clarification'&&request.revision===old.revision)
+    if(oldNotifications.some(item=>!['prepared','superseded'].includes(item.status)&&!answeredNotice(item)&&!deliveredState(item)&&!recalledClarification(item)))fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     const rejectedFacts=old.status==='settled'&&oldUnits.length>0&&oldCommands.length>0
       && oldCommands.every(item=>item.kind==='fact'&&item.status==='rejected')
       && oldNotifications.every(item=>item.status==='prepared')
@@ -1073,7 +1078,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     for(const notice of oldNotifications.filter(item=>item.status==='prepared')){notice.status='superseded';notice.supersededAt=now;put(db,old.runId,'notification',notice)}
     old.status='superseded';old.routingStatus='routing_superseded';old.reason='message_reprocessed';save(db,old);invalidateMessageSourceTopics(db,old.sourceKey,now)
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,
-      context:{...old.context,occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
+      context:{...old.context,...(a.compactPolicy !== undefined ? {compactPolicy:str(a.compactPolicy)} : {}),occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
       budgetBaseline:spent,policy:{...old.policy,...a.policy}}
     delete next.activatedAt;delete next.executionStartedAt;delete next.reason;delete next.capacityRetryVersion;delete next.attentionScope;delete next.attentionUnitIds;delete next.coordinatorConsumed
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))

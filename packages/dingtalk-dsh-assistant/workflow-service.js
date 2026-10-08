@@ -889,7 +889,13 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       return true
     },
   })
-  async function authorizedNotificationOperation(notification, authorizationRef, type) {
+  async function authorizedNotificationOperation(notification, authorizationRef, type, identity, reason) {
+    if (authorizationRef?.startsWith('host-web:')) {
+      if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId
+        || authorizationRef !== `host-web:${encodeURIComponent(identity.actorId)}` || reason !== 'explicit_user'
+        || !notification || !groups.has(notification.payload?.conversationId)) throw executionError('WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED')
+      return
+    }
     if (!notification || !groups.has(notification.payload?.conversationId) || !config.webActorId) throw executionError('WORKFLOW_NOTIFICATION_FORBIDDEN')
     const source = await store.query({ kind: 'task.source', sourceKey: requireText(authorizationRef, 'WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED') })
     const action = type === 'recall' ? '撤回通知' : '补发通知'
@@ -900,16 +906,20 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       throw executionError('WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED')
     return source
   }
-  async function prepareWorkflowNotificationOperation(input) {
+  async function prepareWorkflowNotificationOperation(input, identity) {
+    input = { ...input, authorizationRef: input.authorizationRef ?? `host-web:${encodeURIComponent(identity?.actorId ?? '')}` }
     const notice = await store.query({ kind: 'message.notification', notificationId: input.notificationId })
-    await authorizedNotificationOperation(notice, input.authorizationRef, input.type)
+    await authorizedNotificationOperation(notice, input.authorizationRef, input.type, identity, input.reason)
     return (await store.command({ id: `notification-operation:${input.operationId}:prepare`, kind: 'message.notification.operation.prepare', args: input })).result.operation
   }
-  async function executeWorkflowNotificationOperation(input) {
+  async function executeWorkflowNotificationOperation(input, identity) {
+    input = { ...input, authorizationRef: input.authorizationRef ?? `host-web:${encodeURIComponent(identity?.actorId ?? '')}` }
     const operation = await store.query({ kind: 'message.notificationOperation', operationId: input.operationId })
     if (!operation) throw executionError('MESSAGE_NOTIFICATION_OPERATION_NOT_FOUND')
     const notice = await store.query({ kind: 'message.notification', notificationId: operation.snapshot.notificationId })
-    await authorizedNotificationOperation(notice, input.authorizationRef, operation.snapshot.type)
+    await authorizedNotificationOperation(notice, input.authorizationRef, operation.snapshot.type, identity, operation.snapshot.reason)
+    if (input.authorizationRef !== operation.snapshot.authorizationRef) throw executionError('WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED')
+    if (input.expectedFactDigest !== operation.snapshot.expectedFactDigest) throw executionError('MESSAGE_NOTIFICATION_OPERATION_STALE')
     const adapter = { ...notifications,
       async readbackRecall(args) {
         const observation = await notifications.readbackRecall(args)
@@ -926,11 +936,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     }
     return executeNotificationOperation({ store, adapter, ...input })
   }
-  async function reconcileWorkflowNotificationOperation(input) {
+  async function reconcileWorkflowNotificationOperation(input, identity) {
+    input = { ...input, authorizationRef: input.authorizationRef ?? `host-web:${encodeURIComponent(identity?.actorId ?? '')}` }
     const operation = await store.query({ kind: 'message.notificationOperation', operationId: input.operationId })
     if (!operation || !['acknowledged', 'unknown', 'in_flight'].includes(operation.status)) throw executionError('MESSAGE_NOTIFICATION_OPERATION_RECONCILE_REQUIRED')
     const notice = await store.query({ kind: 'message.notification', notificationId: operation.snapshot.notificationId })
-    await authorizedNotificationOperation(notice, input.authorizationRef, operation.snapshot.type)
+    await authorizedNotificationOperation(notice, input.authorizationRef, operation.snapshot.type, identity, operation.snapshot.reason)
     if (input.authorizationRef !== operation.snapshot.authorizationRef) throw executionError('WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED')
     const snapshot = operation.snapshot
     const observed = snapshot.type === 'recall'
@@ -2849,11 +2860,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return { runId: current.run.runId, sourceVersion: current.run.sourceVersion,
       request: current.requests.find(item => item.id === request.id) }
   }
+  const messageCompactPolicy = conversationId => `${legacyGroup(conversationId)?.responsibility ?? ''}\n任务准入由Host核验当前交办和关联来源；模型只提交明确意图，不根据身份猜测无权或索要负责人重复确认。taskAdmission为当前绑定的事实，目标改变后由Host重新核验；执行阶段继续独立校验授权。具体可用流程由协调输入的availableWorkflows确定。`
   async function reprocessMessage(runId, identity) {
     if(identity?.channel!=='web'||!config.webActorId||identity.actorId!==config.webActorId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     const prior=await messages.state(requireText(runId,'WORKFLOW_RUN_REQUIRED'))
     if(!groups.has(prior.run.conversationId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
-    const result=await messages.reprocess(runId)
+    const result=await messages.reprocess(runId, messageCompactPolicy(prior.run.conversationId))
     return {previousRunId:runId,runId:result.run.runId,status:result.run.status,
       units:result.units.map(unit=>({unitId:unit.id,status:unit.status})),
       requests:result.requests.filter(request=>request.status==='pending').map(request=>({requestId:request.id,kind:request.kind,question:request.question}))}
@@ -2931,7 +2943,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         ...(existing ? { editOf: { sourceRunId: existing.aliasOf ?? existing.runId, sourceVersion: existing.sourceVersion, sourceKey: key } } : {}),
         quoteRefs: quoteKey ? [{ sourceKey: quoteKey, messageId: quote.messageId, ...(quote.content ? { text: quote.content } : {}) }] : [],
         attachments: normalizeResourceRefs(message.resourceRefs, message.text).map(resource => ({ resourceRef: resource.resourceId, ...(resource.type === 'fileId' ? { fileId: resource.resourceId } : {}), ...(resource.name ? { name: resource.name } : {}), sourceMessageId: message.messageId, sourceVersion, state: 'pending', source: resource })),
-        compactPolicy: `${legacyGroup(message.groupId)?.responsibility ?? ''}\n任务准入由Host核验当前交办和关联来源；模型只提交明确意图，不根据身份猜测无权或索要负责人重复确认。taskAdmission为当前绑定的事实，目标改变后由Host重新核验；执行阶段继续独立校验授权。具体可用流程由协调输入的availableWorkflows确定。`,
+        compactPolicy: messageCompactPolicy(message.groupId),
       } })
     return { accepted: true, duplicate: false, runId: result.runId, processing: 'pending' }
   }

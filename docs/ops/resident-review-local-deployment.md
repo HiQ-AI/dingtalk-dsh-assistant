@@ -646,3 +646,6 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 6. 标准部署 helper 的历史回读核对 Task、Run、Node，不替代上述话题回读。确认本次话题与原业务状态均符合预期后，使用同一部署输入执行 helper 的 `-Resume`；维护身份、版本、活动执行或摘要冲突都应保留阻塞并重新核对，不跳过校验。
 
 脚本默认仅访问 `http://127.0.0.1:18998`，可用 `--endpoint` 指定其他本机回环 HTTP 端口用于隔离验证。检查/执行的权限、排空、来源版本和摘要最终均由 Host 校验。
+
+
+历史 coordinator 错误澄清恢复：仅当原消息没有任何业务命令，当前 pending 澄清对应已送达通知已由原生撤回流程核验为 recalled 并保存 recallEvidenceRef 时，可使用本机 `POST /workflows/<runId>/reprocess`。其他未知、未撤回通知仍阻止恢复。重处理保留原来源、作者、正文和旧请求审计，递增 sourceVersion，并用当前群规则重建 compactPolicy；不伪造用户答复。先读回撤回证据和零命令，再逐条操作，最后读回新来源版本、旧请求 superseded、新任务数量及当前等待。此入口会启动正常协调与业务派发，操作授权须覆盖原业务承接。

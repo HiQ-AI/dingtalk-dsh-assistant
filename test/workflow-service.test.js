@@ -1713,6 +1713,10 @@ test('本机操作者逐条重处理旧澄清，旧请求失效且有命令消�
   clarified=true
   const replay=await service.reprocessMessage(first.runId,{channel:'web',actorId:'owner'})
   assert.notEqual(replay.runId,first.runId)
+  const refreshed=(await service.state(replay.runId)).run
+  assert.match(refreshed.context.compactPolicy,/任务准入由Host核验/u)
+  assert.doesNotMatch(refreshed.context.compactPolicy,/只有已认证任务所有者可以要求执行/u)
+  assert.equal(refreshed.actorId,message.senderOpenDingTalkId)
   assert.equal((await service.state(first.runId)).requests[0].status,'superseded')
   assert.equal((await service.state(replay.runId)).commands.length,1)
   assert.equal((await service.ingest(message)).duplicate,true)
@@ -6572,4 +6576,35 @@ test('受管话题关联服务封存后预检零写，旧链接读取四条且�
  assert.deepEqual(await f.service.tasks(),[])
  assert.deepEqual(await store.query({kind:'message.notifications'}),[])
  const mailbox=await f.service.mailboxes('g');assert.deepEqual(mailbox.outbox,[])
+})
+
+
+test('本机Web显式撤回绑定Host身份和快照摘要，重复执行不重复外发',async t=>{
+ let recalls=0,reads=0
+ const notifications={canDisclose:async()=>true,send:async()=>({messageId:'web-out'}),readback:async()=>({messageId:'web-out',conversationId:'g'}),
+  recall:async()=>{recalls++;return {recallStatus:'SUCCESS'}},readbackRecall:async({messageId,ack})=>{reads++;assert.equal(ack.recallStatus,'SUCCESS');if(reads===1)return undefined;return {messageId,conversationId:'g',recallStatus:'SUCCESS'}}}
+ const {service,execution,message}=await fixture(t,'owner',notifications,{config:{webActorId:'operator'}})
+ const received=await service.ingest(message);await service.messages.process(received.runId)
+ await settleTaskOwners(service,execution);await service.flushNotifications()
+ const notice=(await execution.store.query({kind:'message.notifications',states:['delivered']}))[0]
+ const input={operationId:'web-recall',notificationId:notice.id,type:'recall',reason:'explicit_user'},identity={channel:'web',actorId:'operator'}
+ for(const invalid of [undefined,{channel:'im',actorId:'operator'},{channel:'web',actorId:'wrong'}])
+  await assert.rejects(service.prepareWorkflowNotificationOperation(input,invalid),/AUTHORIZATION_REQUIRED/u)
+ await assert.rejects(service.prepareWorkflowNotificationOperation({...input,reason:'correction'},identity),/AUTHORIZATION_REQUIRED/u)
+ await assert.rejects(service.prepareWorkflowNotificationOperation({...input,authorizationRef:'host-web:wrong'},identity),/AUTHORIZATION_REQUIRED/u)
+ const prepared=await service.prepareWorkflowNotificationOperation(input,identity)
+ assert.equal(prepared.snapshot.authorizationRef,'host-web:operator')
+ assert.deepEqual(await service.prepareWorkflowNotificationOperation(input,identity),prepared)
+ const execute={operationId:prepared.id,expectedFactDigest:prepared.snapshot.expectedFactDigest}
+ await assert.rejects(service.executeWorkflowNotificationOperation({...execute,expectedFactDigest:'old'},identity),/OPERATION_STALE/u)
+ await assert.rejects(service.executeWorkflowNotificationOperation(execute,{channel:'web',actorId:'wrong'}),/AUTHORIZATION_REQUIRED/u)
+ assert.equal(recalls,0)
+ assert.equal((await service.executeWorkflowNotificationOperation(execute,identity)).status,'acknowledged')
+ await assert.rejects(service.reconcileWorkflowNotificationOperation({operationId:prepared.id},{channel:'web',actorId:'wrong'}),/AUTHORIZATION_REQUIRED/u)
+ assert.equal((await service.reconcileWorkflowNotificationOperation({operationId:prepared.id},identity)).status,'completed')
+ assert.equal((await service.executeWorkflowNotificationOperation(execute,identity)).status,'completed')
+ await assert.rejects(service.executeWorkflowNotificationOperation({...execute,expectedFactDigest:'old'},identity),/OPERATION_STALE/u)
+ assert.equal(recalls,1);assert.equal(reads,2)
+ const after=await execution.store.query({kind:'message.notification',notificationId:notice.id})
+ assert.equal(after.recallStatus,'recalled');assert.ok(after.recallEvidenceRef)
 })

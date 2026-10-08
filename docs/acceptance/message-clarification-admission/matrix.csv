@@ -38,3 +38,11 @@ four-message-live-topic-repair,13,PASS,round-13/live-topic-readback.json
 original-business-history-preserved,13,PASS,round-13.md
 live-dingtalk-inbound,13,BLOCKED_AUTH,round-13.md
 pull-request-readback,13,PASS,round-13.md
+historical-clarification-recovery,14,PASS,round-14.md
+recalled-clarification-final-suite,14,PASS,round-14.md
+notification-web-explicit-user-boundary,14,PASS,round-14.md
+recovery-package-process-readback,15,PASS,round-15.md
+dws-cli-upgrade-readback,15,PASS,round-15.md
+dws-fresh-login,15,BLOCKED_AUTH,round-15.md
+explicit-two-notification-recall,15,PREPARED_NOT_EXECUTED,round-15.md
+original-source-task-recovery,15,BLOCKED_AUTH,round-15.md

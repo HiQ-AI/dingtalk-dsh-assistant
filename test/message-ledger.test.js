@@ -1405,3 +1405,34 @@ for(const variant of ['foreign','command','unsealed','digest','topic-version','s
  assert.equal((await f.store.query({kind:'message.topic',topicId:'source-topic'})).mergedIntoTopicId,undefined)
  if(variant!=='source-version')assert.deepEqual(await f.store.query({kind:'message.topic',topicId:'source-topic'}),before)
 })
+
+
+test('旧协调澄清仅在通知核验撤回且无业务命令时原来源恢复',async t=>{
+ const f=await deliveredAnsweredSplitClarification(t,{nodeId:'coordinator',answered:false})
+ await f.call('notification.recall.record',{notificationId:'n',messageId:'out',recallStatus:'SUCCESS',evidenceRef:'verified-recall'})
+ const before=await f.store.query({kind:'message.run',runId:'m'})
+ const next=(await f.call('reprocess',{runId:'m',newRunId:'m-replay',compactPolicy:'当前Host准入策略'})).result.run
+ for(const key of ['sourceKey','actorId','conversationId','body'])assert.equal(next[key],before.run[key])
+ assert.equal(next.sourceVersion,2);assert.equal(next.context.compactPolicy,'当前Host准入策略')
+ assert.equal(next.context.replayOf,'m')
+ const old=await f.store.query({kind:'message.run',runId:'m'})
+ assert.equal(old.requests[0].status,'superseded');assert.equal(old.requests[0].answer,undefined)
+ assert.equal((await f.store.query({kind:'message.run',runId:'m-replay'})).requests.length,0)
+ assert.equal((await f.store.query({kind:'message.notification',notificationId:'n'})).recallEvidenceRef,'verified-recall')
+ await f.reopen()
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m-replay')
+})
+
+test('旧协调澄清恢复拒绝未撤回未知发送其他节点及业务命令',async t=>{
+ for(const variant of [{},{unknown:true},{sending:true},{nodeId:'R',recall:true},{answered:true,recall:true},{business:true,recall:true}]){
+  const f=await deliveredAnsweredSplitClarification(t,{nodeId:'coordinator',answered:false,...variant})
+  if(variant.recall)await f.call('notification.recall.record',{notificationId:'n',messageId:'out',recallStatus:'SUCCESS',evidenceRef:'verified-recall'})
+  if(variant.business){
+   await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+   await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'answer',args:{}}]})
+   await f.call('attention',{runId:'m',reason:'recovery_exhausted'})
+  }
+  await bad(f.call('reprocess',{runId:'m',newRunId:'next'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+  assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m')
+ }
+})

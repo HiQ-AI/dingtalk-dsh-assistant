@@ -24,11 +24,11 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
     if (launch) void process(runId).catch(() => {})
     return { ...result, runId }
   }
-  async function reprocess(runId) {
+  async function reprocess(runId, compactPolicy) {
     const previous=await state(runId)
     const nextVersion=previous.run.sourceVersion+1
     const newRunId=`msg-replay-${digest([previous.run.sourceKey,nextVersion]).slice(0,40)}`
-    const result=await cmd('message.reprocess',{runId,newRunId,policy:config},`reprocess:${runId}:${newRunId}`)
+    const result=await cmd('message.reprocess',{runId,newRunId,policy:config,...(compactPolicy !== undefined ? {compactPolicy} : {})},`reprocess:${runId}:${newRunId}`)
     await process(result.run.runId)
     return state(result.run.runId)
   }

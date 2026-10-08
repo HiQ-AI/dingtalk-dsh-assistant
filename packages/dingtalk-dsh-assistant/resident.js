@@ -204,9 +204,9 @@ export async function apply(ctx, config = {}) {
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     runtime.getWorkflowMailboxes = () => workflow.mailboxes()
-    runtime.prepareWorkflowNotificationOperation = args => workflow.prepareWorkflowNotificationOperation(args)
-    runtime.executeWorkflowNotificationOperation = args => workflow.executeWorkflowNotificationOperation(args)
-    runtime.reconcileWorkflowNotificationOperation = args => workflow.reconcileWorkflowNotificationOperation(args)
+    runtime.prepareWorkflowNotificationOperation = args => workflow.prepareWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.executeWorkflowNotificationOperation = args => workflow.executeWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.reconcileWorkflowNotificationOperation = args => workflow.reconcileWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.listWorkflowTopics = groupId => workflow.topics(groupId)
     runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
     runtime.getWorkflowCatalog = () => workflow.catalog()

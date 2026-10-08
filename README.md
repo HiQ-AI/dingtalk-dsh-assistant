@@ -734,3 +734,8 @@ Owner 候选提交和最终接纳共用状态校验，候选拒绝在同一轮�
 数据变更候选消费同一Task当前需求版本的原生查询事实，Host独立核验后交既有sources；缺证据或字段错误在候选提交前返回执行会话纠正。尚无任何外部效果的候选校验失败可在原Run新代次受管重做，冻结定义和失败证明保留；已有工单、审批或未知执行结果先对账，不重建。
 
 恢复提交必须读取并引用当前失败诊断，可附带当前 Task/需求版本的受信只读查询和精确当前阶段诊断证明；附带证明不再被误当成未知诊断而拒绝。未知效果和既有工单仍不能重做。
+
+
+历史 coordinator 错误澄清恢复：仅当原消息没有任何业务命令，当前 pending 澄清对应已送达通知已由原生撤回流程核验为 recalled 并保存 recallEvidenceRef 时，可使用本机 `POST /workflows/<runId>/reprocess`。其他未知、未撤回通知仍阻止恢复。重处理保留原来源、作者、正文和旧请求审计，递增 sourceVersion，并用当前群规则重建 compactPolicy；不伪造用户答复。先读回撤回证据和零命令，再逐条操作，最后读回新来源版本、旧请求 superseded、新任务数量及当前等待。此入口会启动正常协调与业务派发，操作授权须覆盖原业务承接。
+
+本机显式撤回/补发通知也可使用现有 `/workflows/notifications/operations`：prepare 使用 `reason: explicit_user` 并省略 `authorizationRef`，由 Host 配置的 `webActorId` 记录 `host-web:<编码actor>` 授权来源。execute 继续提交预检的 `expectedFactDigest`，execute/reconcile 同样省略 `authorizationRef`；身份不可由正文传入。此路径仍逐条调用 DWS 并回读后记账，未知结果仅 reconcile，不重新发送。原群负责人消息授权路径保持。

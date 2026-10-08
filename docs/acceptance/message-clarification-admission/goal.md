@@ -1,8 +1,8 @@
 # 群消息澄清与准入实施
 
-> 状态：COMPLETE
+> 状态：ACTIVE
 > Goal ID：message-clarification-admission
-> 最近维护：2026-10-08T10:41:17+08:00
+> 最近维护：2026-10-08T10:57:16+08:00
 > 权威目标：D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/acceptance/message-clarification-admission/goal.md
 
 ## 总目标
@@ -34,10 +34,12 @@
 
 | SG7 | 同话题连续归属与名称摘要演进 | 四条链路同话题，当前展示随有效输入更新，版本反例通过 | 已完成 | round-10/12 模型通过；round-13 现场四条同话题 |
 
+| SG8 | 历史错误澄清原来源恢复 | 已核验撤回且零业务副作用可重处理，当前策略刷新，反例拒绝 | 进行中 | round-14/15；代码已部署，真实撤回与原消息恢复待DWS授权 |
+
 ## 当前检查点
 
-- 当前子目标：SG5
-- 唯一下一步：本轮代码、PR 与本地部署已完成；原 DWS 账号重新登录后再验证真实群收信。
+- 当前子目标：SG8
+- 唯一下一步：同账号重新完成新版 DWS 登录（本次等待已超时），在线核验后执行已准备的两条撤回及原消息恢复。
 - 未闭环项：独立外部依赖 DWS 原账号需重新登录；PR 未合并；四项既有服务失败未扩范围修复；未替业务任务执行。
 
 ## 进展
