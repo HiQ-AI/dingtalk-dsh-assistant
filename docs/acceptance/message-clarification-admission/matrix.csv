@@ -113,6 +113,10 @@ original-task-stable-execution,37,FAIL,round-37.md
 readonly-reassess-before-first-query,38,PASS,round-38.md
 provider-transport-bounded-recovery,39,PASS,round-39.md
 shared-task-material-directory,40,PASS,round-40.md
+live-shared-task-material-discovery,42,PASS,round-42.md
+shared-task-package-preflight,42,PASS,round-42.md
+shared-task-package-deployment,42,FAIL,round-42.md
+verification-directory-dependency-exclusion,44,PASS,round-44.md
 engineering-checks-checkpoint,41,PASS,round-41.md
 engineering-shared-material-read,41,PASS,round-41.md
 engineering-scope-native-recovery,41,PASS,round-41.md

@@ -136,7 +136,7 @@ test('工程源码副本的node_modules明确排除，复制不遍历链接且�
  await writeFile(join(repo,'package.json'),'{}');await writeFile(join(repo,'source.js'),'source')
  const nested=join(repo,'packages/web');await mkdir(nested,{recursive:true});await symlink(outside,join(nested,'node_modules'),'junction')
  const checked=await checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory})
- assert.equal(checked.taskBackupExclusions.length,1)
+ assert.equal(checked.taskBackupExclusions.length,2)
  const backupRoot=join(f.root,'filtered-backup');await mkdir(backupRoot)
  for(const name of ['runtime','domain','profile'])await cp(f[name],join(backupRoot,name),{recursive:true})
  const copied=await copyDeploymentTaskDirectory({taskDirectory:f.taskDirectory,destination:join(backupRoot,'tasks')})
@@ -272,3 +272,21 @@ for(const purged of [true,false])test(`历史消息候选只按已清理Task排�
  if(!purged)return assert.rejects(verifyDeploymentBackup(f),/BACKUP_ARTIFACT_MISSING/);
  assert.equal((await verifyDeploymentBackup(f)).database.artifactRefs,1);
 });
+
+for(const location of ['checks/verify-Ab12cD','checks/verify-Ab12cD/packages/web'])test(`Host检查目录可再生依赖排除但源码产物保留：${location}`,async t=>{
+ const f=await taskFixture(t),base=join(f.taskDirectory,'family-1/work/engineering','a'.repeat(24)),dir=join(base,location),outside=join(f.root,'dependencies')
+ await mkdir(dir,{recursive:true});await mkdir(outside);await writeFile(join(outside,'dependency'),'regenerable')
+ await symlink(outside,join(dir,'node_modules'),'junction')
+ await writeFile(join(dir,'source.js'),'source');await writeFile(join(dir,'result.json'),'result')
+ const checked=await checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory});assert.equal(checked.writes,0)
+ const dest=join(f.root,'copied-tasks');await copyDeploymentTaskDirectory({taskDirectory:f.taskDirectory,destination:dest})
+ const paths=await readdir(dest,{recursive:true});assert.equal(paths.some(p=>p.includes('node_modules')),false)
+ assert.equal(paths.some(p=>p.endsWith('source.js')),true);assert.equal(paths.some(p=>p.endsWith('result.json')),true)
+ await writeFile(join(f.taskDirectory,'family-1/work/artifacts',f.name),'corrupt')
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory}),/BACKUP_ARTIFACT_INVALID/)
+})
+for(const location of ['checks/verify-Ab12cD/dist','checks/verify-Ab12cD/source-link','checks/verify-other/node_modules','checks/not-verify/node_modules','outputs/verify-Ab12cD/node_modules'])test(`非Host依赖路径链接仍拒绝：${location}`,async t=>{
+ const f=await taskFixture(t),path=join(f.taskDirectory,'family-1/work/engineering','a'.repeat(24),location),outside=join(f.root,'outside')
+ await mkdir(join(path,'..'),{recursive:true});await mkdir(outside);await symlink(outside,path,'junction')
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory}),/BACKUP_LINK_UNSAFE/)
+})

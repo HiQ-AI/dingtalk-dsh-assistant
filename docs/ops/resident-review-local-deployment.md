@@ -366,7 +366,7 @@ alidocs节点类型以同profile的`drive +inspect`为准。普通HTML文件不�
 
 正常部署脚本 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1` 增加显式参数 `-TaskDirectory <Agent工作区绝对路径>/tasks`。升级后已出现新引用时，该参数为必填；沿既有部署流程，先以完整参数加 `-Check` 零写预检，核对目录、容量和引用闭包后再执行。尚未有新任务且目录不存在时可暂不传；不要为自检创建虚假根。`-Resume`、`-Readback` 及部署复核须沿用原任务根。
 
-备份将任务文件复制到 `backup/tasks`，清单绑定源任务根并校验文件摘要；闭包检查直接查找限定引用，不扫描猜归属。唯一依赖排除规则为 `<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules`，包括仓库根和嵌套依赖目录，显式保存于 `taskBackupExclusions`。容量统计、复制和源清单校验共用该规则，复制不进入依赖链接；备份目标意外出现额外文件仍拒绝。恢复后按源码锁文件重新安装依赖，不声称恢复了依赖缓存。
+备份将任务文件复制到 `backup/tasks`，清单绑定源任务根并校验文件摘要；闭包检查直接查找限定引用，不扫描猜归属。依赖排除仅限 `<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules` 和 Host 检查目录 `<logicalTaskId>/work/engineering/<24-hex>/checks/verify-<6-alphanumeric>/**/node_modules`，包括仓库根和嵌套依赖目录，显式保存于 `taskBackupExclusions`。容量统计、复制和源清单校验共用该规则，复制不进入依赖链接；备份目标意外出现额外文件仍拒绝。恢复后按源码锁文件重新安装依赖，不声称恢复了依赖缓存。
 
 控制库、共享工件、Session 和任务根必须来自同一停稳检查点。缺根、坏摘要或排除范围外的链接均停止；不能仅备份原 `artifactDirectory` 后声称可恢复。恢复时保留原 Agent 工作区绝对路径，先验证完整备份再启动唯一写者。启用 workflow 后在线修改工作区会返回 `workflow_task_workspace_change_requires_offline_migration`，配置不写入；同根更新与模型修改仍可用。不要绕过此保护仅修改磁盘根配置，已有相对任务引用会失去原位置；换根须另行设计包含工程绝对路径绑定的停机迁移，本轮不迁移。
 
@@ -703,6 +703,8 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 临时 profile 修改逐步先 `--check`；执行期间保持 profile CAS，桥关闭 worker/自有原生句柄后独立读取控制账及新原生 header。按精确尾块反序移除桥、恢复 session-controller、bootstrap enable，确认 profile 回到原摘要。随后走普通部署 Check/安装/Readback/Resume，并以新 lease 的原生输入及实际工具调用证明续行，不能以 running 投影代替。临时维护脚本及含真实身份的 manifest 留在 docs/tmp；不向版本库提交私人任务内容，不创建历史备份副本。
 
 任务目录含大型验证检出时，文件枚举逐项合并子树，避免数组展开为函数实参触发 Maximum call stack size exceeded；已有依赖排除规则和普通文件/链接核验保持不变，不靠扩大忽略范围绕过预检。
+
+正在执行的仓库读取会创建并删除临时候选文件，不能把在线文件枚举的ENOENT当成持久材料损坏。任务可能自动续行时，先通过正式maintenance接口停止新派发，回读busy全零、drained=true后，再携带同一ContinueMaintenanceId与ExpectedMaintenanceRevision运行Check和部署。排空前不删临时目录或忽略校验错误；正在执行的回合自然结束，成功结果保留。
 
 ### 共享任务材料与恢复核验
 

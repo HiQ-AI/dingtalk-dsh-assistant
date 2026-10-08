@@ -11,8 +11,8 @@ const fail = code => { throw new Error(code) }
 const hash = value => createHash('sha256').update(value).digest('hex')
 const artifactName = /^(?:tasks\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\/)?sha256-[a-f0-9]{64}\.json$/
 const taskRef = ref => ref.startsWith('tasks/')
-const taskBackupExclusions = Object.freeze(['<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules'])
-const excludedTaskDependency = path => /^[^/]+\/work\/engineering\/[a-f0-9]{24}\/ws-[a-f0-9]{64}\/repository\/(?:[^/]+\/)*node_modules$/.test(path)
+const taskBackupExclusions = Object.freeze(['<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules', '<logicalTaskId>/work/engineering/<24-hex>/checks/verify-<6-alphanumeric>/**/node_modules'])
+const excludedTaskDependency = path => /^[^/]+\/work\/engineering\/[a-f0-9]{24}\/(?:ws-[a-f0-9]{64}\/repository|checks\/verify-[A-Za-z0-9]{6})\/(?:[^/]+\/)*node_modules$/.test(path)
 function collectArtifactRefs(value, refs, key = '', parent = null, depth = 0, purgedTasks = new Set(), purgedRuns = new Set()) {
   if (depth > 128) fail('BACKUP_ARTIFACT_CAPACITY')
   if (value && typeof value === 'object' && (purgedTasks.has(value.taskId) || purgedRuns.has(value.runId))) return
