@@ -1175,3 +1175,233 @@ test('看板消息分页只投影业务等待状态，完整节点大输入不�
  assert.deepEqual([first[0].run.runId,second[0].run.runId],['mailbox-next','mailbox-heavy']);
  await assert.rejects(f.store.query({kind:'message.mailbox',conversationId:'g',limit:201}),/MESSAGE_INVALID_LIMIT/);
 });
+
+
+test('授权请求只接受指定身份且重复恢复保留同一个请求', async t => {
+ const f=await fixture(t)
+ await f.call('receive',receive())
+ await f.call('wait',{runId:'m',nodeId:'coordinator',request:{requestId:'authorization',kind:'needs_authorization',permittedActors:['owner'],question:'授权开发'}})
+ await bad(f.call('wake',{runId:'m',requestId:'authorization',actorId:'a',ownerAnswer:true,eventId:'reply',answer:'同意'}),'MESSAGE_ACTOR_FORBIDDEN')
+ assert.equal((await f.store.query({kind:'message.request',requestId:'authorization'})).status,'pending')
+ await f.call('wake',{runId:'m',requestId:'authorization',actorId:'owner',eventId:'reply',answer:'同意'})
+ await f.reopen()
+ await f.call('wake',{runId:'m',requestId:'authorization',actorId:'owner',eventId:'reply',answer:'同意'})
+ const state=await f.store.query({kind:'message.run',runId:'m'})
+ assert.equal(state.requests.length,1)
+ assert.equal(state.requests[0].status,'resolved')
+ assert.equal(state.requests[0].resolvedByActorId,'owner')
+ assert.equal(state.commands.length,0)
+})
+
+test('授权请求没有指定身份不能通过 ownerAnswer 绕过', async t => {
+ const f=await fixture(t)
+ await f.call('receive',receive())
+ await f.call('wait',{runId:'m',nodeId:'coordinator',request:{requestId:'authorization',kind:'needs_authorization',question:'授权开发'}})
+ await bad(f.call('wake',{runId:'m',requestId:'authorization',actorId:'owner',ownerAnswer:true,eventId:'reply',answer:'同意'}),'MESSAGE_ACTOR_FORBIDDEN')
+})
+
+
+test('授权答复折叠后可在重启时补挂原话题并保留唯一请求', async t => {
+ const f=await fixture(t)
+ await f.call('receive',receive())
+ await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('topic.bind',{runId:'m',unitId:'u',expectedRevision:0,binding:{kind:'binding',disposition:'new',candidateId:null},topic:{topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'开发',facts:[]}})
+ await f.call('wait',{runId:'m',unitId:'u',nodeId:'coordinator',request:{requestId:'q',kind:'needs_authorization',permittedActors:['owner'],question:'授权开发'}})
+ await f.call('notification.prepare',{runId:'m',notificationId:'n',requestId:'q',payload:{text:'授权开发',phase:'authorization',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'m'}})
+ const notice=(await f.call('notification.claim',{notificationId:'n'})).result.notification
+ await f.call('notification.sent',{notificationId:'n',leaseEpoch:notice.leaseEpoch,ack:{messageId:'out'}})
+ await f.call('notification.readback',{notificationId:'n',leaseEpoch:notice.leaseEpoch,evidence:{messageId:'out'}})
+ await f.call('receive',receive('answer',{actorId:'owner',context:{quoteRefs:[{messageId:'out'}]}}))
+ await f.call('clarification.fold',{runId:'answer',targetRunId:'m',requestId:'q',eventId:'answer',replyToMessageId:'out'})
+ await f.call('wake',{runId:'m',requestId:'q',actorId:'owner',eventId:'answer',answer:'approved'})
+ await f.reopen()
+ assert.deepEqual(await f.store.query({kind:'message.clarifications.unlinked'}),[{runId:'answer',targetRunId:'m',requestId:'q'}])
+ await f.call('clarification.reconcile',{runId:'answer',targetRunId:'m',requestId:'q'})
+ await f.call('clarification.reconcile',{runId:'answer',targetRunId:'m',requestId:'q'})
+ assert.deepEqual(await f.store.query({kind:'message.clarifications.unlinked'}),[])
+ assert.equal((await f.store.query({kind:'message.run',runId:'m'})).requests.length,1)
+ assert.equal((await f.store.query({kind:'message.run',runId:'answer'})).run.foldedIntoRunId,'m')
+})
+
+
+test('授权回复在事务内拒绝已变化的话题版本', async t => {
+ const f=await fixture(t)
+ await f.call('receive',receive())
+ await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ const topicArgs={topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'开发',facts:[]}
+ await f.call('topic.bind',{runId:'m',unitId:'u',expectedRevision:0,binding:{kind:'binding',disposition:'new',candidateId:null},topic:topicArgs})
+ const topic=await f.store.query({kind:'message.topic',topicId:'topic'})
+ await f.call('wait',{runId:'m',unitId:'u',nodeId:'coordinator',request:{requestId:'q',kind:'needs_authorization',permittedActors:['owner'],authorization:{topicId:'topic',topicInputRevision:topic.inputRevision},question:'授权开发'}})
+ await f.call('receive',receive('new-source'))
+ await f.call('split',{runId:'new-source',units:[{unitId:'new-unit'}]})
+ await f.call('topic.bind',{runId:'new-source',unitId:'new-unit',expectedRevision:0,binding:{kind:'binding',disposition:'conversation',candidateId:null},topic:{...topicArgs,sourceRunId:'new-source',unitId:'new-unit'}})
+ await bad(f.call('wake',{runId:'m',requestId:'q',actorId:'owner',eventId:'reply',answer:'approved'}),'MESSAGE_AUTHORIZATION_STALE')
+ assert.equal((await f.store.query({kind:'message.request',requestId:'q'})).status,'pending')
+})
+
+
+for(const stale of [false,true])test(`授权提交绑定最终批次版本并在原子接纳前核对授权：${stale?'过期拒绝':'当前接纳'}`,async t=>{
+ const f=await fixture(t)
+ for(const id of ['auth-a','auth-b'])await f.call('receive',receive(id))
+ const sourceRuns=['auth-a','auth-b'].map(runId=>({runId,sourceVersion:1}))
+ const first=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'authorization',sourceRuns})).result.binding
+ await f.call('coordinator.commit',{...first,decisions:sourceRuns.map((source,index)=>({...source,units:[{unitId:`auth-unit-${index}`,topic:{topicId:'auth-topic',title:'开发'},commands:[],...(index?{}:{request:{requestId:'grant',kind:'needs_authorization',permittedActors:['owner'],authorization:{sourceKey:'auth-a',sourceVersion:1,actorId:'a',conversationId:'g',topicId:'auth-topic'},question:'授权开发'}})}]}))})
+ await f.call('coordinator.release',{...first,drained:true})
+ const frozen=await f.store.query({kind:'message.request',requestId:'grant'})
+ assert.equal(frozen.authorization.topicInputRevision,(await f.store.query({kind:'message.topic',topicId:'auth-topic'})).inputRevision)
+ await f.call('wake',{runId:'auth-a',requestId:'grant',actorId:'owner',answer:'approved',eventId:'reply'})
+ if(stale)await f.editSnapshot(db=>{const topic=JSON.parse(db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get('auth-topic').body);topic.inputRevision++;db.prepare('UPDATE message_topics SET body=? WHERE topic_id=?').run(JSON.stringify(topic),'auth-topic')})
+ const topic=await f.store.query({kind:'message.topic',topicId:'auth-topic'})
+ const second=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:first.leaseEpoch,turnId:'authorized-action',sourceRuns:[sourceRuns[0]]})).result.binding
+ const commit={...second,topicVersions:[{topicId:topic.topicId,inputRevision:topic.inputRevision,contextRevision:topic.contextRevision}],decisions:[{...sourceRuns[0],units:[{unitId:'accepted-unit',topic:{topicId:'auth-topic',title:'开发'},commands:[{commandId:'authorized-command',kind:'create',args:{authorizationRequestId:'grant'}}]}]}]}
+ if(stale)await bad(f.call('coordinator.commit',commit),'MESSAGE_AUTHORIZATION_STALE')
+ else{
+  await f.call('coordinator.commit',commit)
+  const current=await f.store.query({kind:'message.run',runId:'auth-a'})
+  assert.equal(current.commands[0].args.authorizationRequestId,'grant')
+  assert.equal(current.commands[0].topicInputRevision,(await f.store.query({kind:'message.topic',topicId:'auth-topic'})).inputRevision)
+  assert.equal((await f.store.query({kind:'message.request',requestId:'grant'})).authorization.topicInputRevision,frozen.authorization.topicInputRevision)
+ }
+})
+
+
+test('显式话题展示演进可重启读回，不更改输入版本、Task需求或授权',async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive())
+ await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ const args={topicId:'topic',conversationId:'g',sourceRunId:'m',unitId:'u',title:'来个任务',facts:[]}
+ await f.call('topic.upsert',args)
+ const first=await f.store.query({kind:'message.topic',topicId:'topic'})
+ await f.call('wait',{runId:'m',unitId:'u',nodeId:'coordinator',request:{requestId:'grant',kind:'needs_authorization',permittedActors:['owner'],authorization:{topicId:'topic',topicInputRevision:first.inputRevision},question:'是否承接'}})
+ await f.store.command({id:'task-for-presentation',kind:'task.accept',args:{taskId:'business',requirementRef:'sha256-'+ 'a'.repeat(64)+'.json',requirementRevision:1,sessionId:'owner',criteria:['开发'],sourceKey:'m',eventKey:'accepted'}})
+ const taskBefore=await f.store.query({kind:'task.plan',taskId:'business'}),grantBefore=await f.store.query({kind:'message.request',requestId:'grant'})
+ const presentation={title:'数据集过程导入导出开发',summary:'按已提供的规则文档开发，边做边修插件；实现细节待核对。'}
+ await f.call('topic.upsert',{...args,expectedRevision:first.revision,topicPresentation:presentation})
+ const updated=await f.store.query({kind:'message.topic',topicId:'topic'})
+ assert.equal(updated.title,presentation.title);assert.equal(updated.summary,presentation.summary)
+ assert.equal(updated.inputRevision,first.inputRevision)
+ assert.equal(updated.contextRevision,first.contextRevision+1)
+ await f.call('topic.upsert',{...args,title:'省略展示不覆盖',expectedRevision:updated.revision})
+ const omitted=await f.store.query({kind:'message.topic',topicId:'topic'})
+ assert.equal(omitted.title,presentation.title);assert.equal(omitted.summary,presentation.summary)
+ await f.call('topic.upsert',{...args,expectedRevision:omitted.revision,topicPresentation:presentation})
+ assert.equal((await f.store.query({kind:'message.topic',topicId:'topic'})).contextRevision,updated.contextRevision)
+ await f.reopen()
+ const restored=await f.store.query({kind:'message.topic',topicId:'topic'})
+ assert.equal(restored.title,presentation.title);assert.equal(restored.summary,presentation.summary)
+ assert.deepEqual(await f.store.query({kind:'task.plan',taskId:'business'}),taskBefore)
+ assert.deepEqual(await f.store.query({kind:'message.request',requestId:'grant'}),grantBefore)
+ assert.deepEqual(await f.store.query({kind:'run.list'}),[])
+})
+
+for(const invalid of ['duplicate','stale','cross-group','source-stale'])test(`话题展示提交失败整批回滚：${invalid}`,async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('seed'))
+ await f.call('split',{runId:'seed',units:[{unitId:'seed-unit'}]})
+ await f.call('topic.upsert',{topicId:'topic',conversationId:'g',sourceRunId:'seed',unitId:'seed-unit',title:'原事项',facts:[]})
+ if(invalid==='cross-group'){
+  await f.call('receive',receive('foreign',{conversationId:'other'}));await f.call('split',{runId:'foreign',units:[{unitId:'foreign-unit'}]})
+  await f.call('topic.upsert',{topicId:'foreign-topic',conversationId:'other',sourceRunId:'foreign',unitId:'foreign-unit',title:'别群事项',facts:[]})
+ }
+ await f.call('receive',receive('incoming'))
+ const binding=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'presentation',sourceRuns:[{runId:'incoming',sourceVersion:1}]})).result.binding
+ const topic=await f.store.query({kind:'message.topic',topicId:'topic'})
+ const before=await f.store.query({kind:'message.run',runId:'incoming'})
+ const unit={unitId:'presentation-unit',topic:{topicId:'topic',title:'旧标题',topicPresentation:{title:'新标题',summary:'本轮摘要'}},commands:[]}
+ const commit={...binding,topicVersions:[{topicId:'topic',inputRevision:topic.inputRevision,contextRevision:invalid==='stale'?topic.contextRevision+1:topic.contextRevision}],decisions:[{runId:'incoming',sourceVersion:invalid==='source-stale'?2:1,units:[unit]}]}
+ if(invalid==='duplicate')commit.decisions[0].units.push({...unit,unitId:'duplicate-unit'})
+ if(invalid==='cross-group'){const foreign=await f.store.query({kind:'message.topic',topicId:'foreign-topic'});commit.topicVersions.push({topicId:'foreign-topic',inputRevision:foreign.inputRevision,contextRevision:foreign.contextRevision});commit.decisions[0].units.push({...unit,unitId:'foreign-write',topic:{...unit.topic,topicId:'foreign-topic'}})}
+ await bad(f.call('coordinator.commit',commit),invalid==='duplicate'?'MESSAGE_TOPIC_PRESENTATION_DUPLICATE':invalid==='source-stale'?'MESSAGE_STALE':'MESSAGE_TOPIC_STALE')
+ assert.deepEqual(await f.store.query({kind:'message.topic',topicId:'topic'}),topic)
+ assert.deepEqual(await f.store.query({kind:'message.run',runId:'incoming'}),before)
+})
+
+test('同批仅一次展示更新反映整条交办，同群不同话题展示独立',async t=>{
+ const f=await fixture(t)
+ const ids=['request','document','mention','develop','other']
+ for(const id of ids)await f.call('receive',receive(id))
+ const sources=ids.map(runId=>({runId,sourceVersion:1}))
+ const binding=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'presentation-batch',sourceRuns:sources})).result.binding
+ const presentation={title:'数据集过程导入导出开发',summary:'已提供规则文档并明确交办开发，执行中修复相关插件问题。'}
+ await f.call('coordinator.commit',{...binding,decisions:sources.map((source,index)=>({...source,units:[{unitId:`presentation-${index}`,topic:{topicId:index===4?'other-topic':'topic',title:index===4?'另一个事项':'来个任务',...(index===3?{topicPresentation:presentation}:{})},commands:[],outcome:'ignored'}]}))})
+ const topic=await f.store.query({kind:'message.topic',topicId:'topic'})
+ assert.equal(topic.title,presentation.title);assert.equal(topic.summary,presentation.summary)
+ assert.equal(topic.inputRevision,4)
+ const other=await f.store.query({kind:'message.topic',topicId:'other-topic'})
+ assert.equal(other.title,'另一个事项');assert.equal(other.summary,undefined)
+ assert.equal((await f.store.query({kind:'message.topic.bindings',conversationId:'g'})).filter(item=>item.topic.topicId==='topic').length,4)
+ assert.deepEqual(await f.store.query({kind:'task.catalog'}),[])
+})
+
+
+async function topicReconcileFixture(t,{foreign=false,command=false,seal=true}={}){
+ const f=await fixture(t)
+ for(const [id,group] of [['source','g'],['target',foreign?'foreign':'g']]){
+  await f.call('receive',receive(id,{conversationId:group}))
+  await f.call('split',{runId:id,units:[{unitId:id+'-unit'}]})
+  await f.call('topic.upsert',{topicId:id+'-topic',conversationId:group,sourceRunId:id,unitId:id+'-unit',title:id,facts:[{kind:'fact',text:'do this',sourceRefs:[{sourceKey:id,sourceVersion:1,text:'do this'}]}]})
+ }
+ if(command)await f.call('accept',{runId:'source',unitId:'source-unit',commands:[{commandId:'unsafe',kind:'create',args:{}}]})
+ else{
+  await f.call('wait',{runId:'source',unitId:'source-unit',nodeId:'coordinator',request:{requestId:'old-question',kind:'needs_clarification',question:'哪个问题',permittedActors:['a']}})
+  await f.call('notification.prepare',{runId:'source',requestId:'old-question',notificationId:'old-notice',payload:{text:'哪个问题',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'source'}})
+  const n=(await f.call('notification.claim',{notificationId:'old-notice'})).result.notification
+  await f.call('notification.sent',{notificationId:n.id,leaseEpoch:n.leaseEpoch,ack:{messageId:'sent'}})
+  await f.call('notification.readback',{notificationId:n.id,leaseEpoch:n.leaseEpoch,evidence:{messageId:'sent'}})
+ }
+ await f.store.command({id:'maintenance',kind:'runtime.maintenance.change',args:{expectedRevision:0,maintenanceId:'topic-reconcile',actorId:'operator',reason:'修复展示',active:true}})
+ if(seal)await f.store.command({id:'seal',kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'topic-reconcile',actorId:'operator',reason:'修复展示'}})
+ return Object.assign(f,{args:{sourceTopicId:'source-topic',targetTopicId:'target-topic',maintenanceId:'topic-reconcile',maintenanceRevision:2,actorId:'operator',reason:'同一事项错误分话题',topicPresentation:{title:'数据集过程导入导出开发',summary:'同一交办链的工作方式与文档开发要求。'}}})
+}
+
+test('受管话题关联预检零写，合并只改展示关联并保留旧请求通知和任务',async t=>{
+ const f=await topicReconcileFixture(t)
+ await f.store.command({id:'existing-target-task',kind:'task.accept',args:{taskId:'business',requirementRef:'sha256-'+ 'a'.repeat(64)+'.json',requirementRevision:1,sessionId:'owner',criteria:['开发'],sourceKey:'target',eventKey:'accepted'}})
+ const taskBefore=await f.store.query({kind:'task.plan',taskId:'business'})
+ const sourceBefore=await f.store.query({kind:'message.run',runId:'source'}),targetBefore=await f.store.query({kind:'message.run',runId:'target'})
+ const notices=await f.store.query({kind:'message.notifications'}),tasks=await f.store.query({kind:'task.catalog'})
+ const db=new DatabaseSync(f.store.info.dbPath,{readOnly:true})
+ const eventCount=()=>db.prepare('SELECT count(*) n FROM execution_events').get().n
+ const beforeCount=eventCount()
+ const check=await f.store.query({kind:'message.topic.reconcile.check',...f.args})
+ assert.equal(eventCount(),beforeCount);db.close()
+ assert.equal(check.counts.movedUnits,1);assert.equal(check.counts.copiedFacts,1)
+ assert.equal(JSON.stringify(check).includes('do this'),false)
+ assert.deepEqual(await f.store.query({kind:'message.run',runId:'source'}),sourceBefore)
+ const result=await f.call('topic.reconcile',{...f.args,expectedDigest:check.expectedDigest},'reconcile-once')
+ assert.equal((await f.call('topic.reconcile',{...f.args,expectedDigest:check.expectedDigest},'reconcile-once')).replayed,true)
+ assert.equal(result.result.actorId,'operator')
+ const sourceAfter=await f.store.query({kind:'message.run',runId:'source'})
+ assert.deepEqual(sourceAfter.run,sourceBefore.run)
+ assert.deepEqual(sourceAfter.requests,sourceBefore.requests)
+ assert.deepEqual(sourceAfter.commands,sourceBefore.commands)
+ assert.equal(sourceAfter.units[0].topicId,'target-topic')
+ assert.deepEqual(await f.store.query({kind:'message.run',runId:'target'}),targetBefore)
+ assert.deepEqual(await f.store.query({kind:'message.notifications'}),notices)
+ assert.deepEqual(await f.store.query({kind:'task.catalog'}),tasks)
+ assert.deepEqual(await f.store.query({kind:'task.plan',taskId:'business'}),taskBefore)
+ const topics=await f.store.query({kind:'message.topics',conversationId:'g'})
+ assert.deepEqual(topics.map(topic=>topic.topicId),['target-topic'])
+ assert.equal(topics[0].title,f.args.topicPresentation.title)
+ assert.equal(topics[0].facts.find(fact=>fact.sourceRunId==='source').actorId,'a')
+ assert.equal((await f.store.query({kind:'message.topic',topicId:'source-topic'})).mergedIntoTopicId,'target-topic')
+ await f.reopen()
+ assert.deepEqual((await f.store.query({kind:'message.topics',conversationId:'g'})).map(topic=>topic.topicId),['target-topic'])
+ assert.deepEqual(await f.store.query({kind:'message.notifications'}),notices)
+})
+
+for(const variant of ['foreign','command','unsealed','digest','topic-version','source-version'])test(`受管话题关联拒绝不安全输入且零部分写：${variant}`,async t=>{
+ const f=await topicReconcileFixture(t,{foreign:variant==='foreign',command:variant==='command',seal:variant!=='unsealed'})
+ const before=await f.store.query({kind:'message.topic',topicId:'source-topic'})
+ if(['foreign','command','unsealed'].includes(variant)){
+  await bad(f.store.query({kind:'message.topic.reconcile.check',...f.args}),variant==='foreign'?'MESSAGE_TOPIC_RECONCILE_SCOPE':variant==='command'?'MESSAGE_TOPIC_RECONCILE_EFFECT_PRESENT':'MESSAGE_TOPIC_RECONCILE_MAINTENANCE_REQUIRED')
+ }else{
+  const check=await f.store.query({kind:'message.topic.reconcile.check',...f.args})
+  if(variant==='topic-version')await f.call('topic.upsert',{topicId:'target-topic',conversationId:'g',sourceRunId:'target',unitId:'target-unit',title:'target',facts:[],topicPresentation:{title:'新标题',summary:'新摘要'}})
+  if(variant==='source-version')await f.call('receive',receive('source-new',{sourceKey:'source',sourceVersion:2}))
+  await bad(f.call('topic.reconcile',{...f.args,expectedDigest:variant==='digest'?'wrong':check.expectedDigest}),variant==='source-version'?'MESSAGE_TOPIC_RECONCILE_SOURCE_STALE':'MESSAGE_TOPIC_RECONCILE_STALE')
+ }
+ assert.equal((await f.store.query({kind:'message.run',runId:'source'})).units[0].topicId,'source-topic')
+ assert.equal((await f.store.query({kind:'message.topic',topicId:'source-topic'})).mergedIntoTopicId,undefined)
+ if(variant!=='source-version')assert.deepEqual(await f.store.query({kind:'message.topic',topicId:'source-topic'}),before)
+})

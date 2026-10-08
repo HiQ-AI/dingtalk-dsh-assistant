@@ -60,7 +60,7 @@ function topicSummary(topic) {
 function workflowTopicSummary(topic) {
   return { topicId: topic.topicId, groupId: topic.conversationId, title: topic.title,
     revision: topic.revision, processedRevision: topic.revision, status: 'active',
-    summary: topic.facts.map(fact=>fact.text).join('\n').slice(0,1000), summaryRevision: topic.revision,
+    summary: String(topic.summary ?? ''), summaryRevision: topic.contextRevision ?? topic.revision,
     openQuestionCount: 0, pendingRevisionCount: 0, pendingUnitCount: 0,
     createdAt: topic.createdAt, updatedAt: topic.updatedAt, engine: 'workflow-v2' }
 }
@@ -143,6 +143,20 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         maintenanceId: requiredText.max(200), expectedMaintenanceRevision: z.number().int().nonnegative(), reason: requiredText.max(2000) }).parse(await readJson(request))
       return send(response, 200, await store.reconcileCompletedWorkflowObservations({ ...body, taskId }))
     } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|NOT_DRAINED/.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  if (['/runtime/topics/reconcile/check', '/runtime/topics/reconcile'].includes(url.pathname)) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (request.method !== 'POST') return send(response, 405, { error: 'method_not_allowed' })
+    if (!store.reconcileWorkflowTopic) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
+    const check = url.pathname.endsWith('/check')
+    try {
+      const body = z.strictObject({ sourceTopicId: requiredText.max(200), targetTopicId: requiredText.max(200),
+        topicPresentation: z.strictObject({ title: requiredText.max(80), summary: requiredText.max(1200) }),
+        maintenanceId: requiredText.max(200), maintenanceRevision: z.number().int().nonnegative(), reason: requiredText.max(2000),
+        ...(check ? {} : { requestId: requiredText.max(200), expectedDigest: z.string().regex(/^[a-f0-9]{64}$/) }) }).parse(await readJson(request))
+      return send(response, 200, await store.reconcileWorkflowTopic(body, check))
+    } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|MAINTENANCE|ACTIVE/.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   if (['/runtime/maintenance','/runtime/maintenance/seal','/runtime/maintenance/resume'].includes(url.pathname)) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)

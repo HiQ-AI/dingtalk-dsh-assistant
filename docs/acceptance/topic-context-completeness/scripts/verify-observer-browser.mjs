@@ -136,12 +136,18 @@ try {
   await page.getByRole('button', { name: '上一页判断', exact: true }).click()
   await page.locator('summary').filter({ hasText: /ib-1/ }).waitFor()
   checks.push('topic-context', 'stale-response-ignored', 'intent-batches', 'independent-intent-pagination', 'intent-trace-return-preserves-page')
+  Object.assign(topics[1], { title: '数据集导入导出开发', summary: '按已提供文档开发，并在执行中修复插件。', revision: 2, summaryRevision: 2 })
+  await page.getByRole('button', { name: /刷新/ }).click()
+  await page.getByRole('button', { name: '数据集导入导出开发', exact: true }).waitFor()
+  await page.getByLabel('话题摘要', { exact: true }).getByText('按已提供文档开发，并在执行中修复插件。', { exact: true }).waitFor()
+  checks.push('selected-topic-presentation-refresh')
   await page.screenshot({ path: path.join(output, 'topic-context.png'), fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('region', { name: '话题详情内容' }).scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(output, 'topic-context-narrow.png'), fullPage: true })
   await page.setViewportSize({ width: 1440, height: 1000 })
   checks.push('narrow-topic-context')
+  if (!process.argv.includes('--topic-only')) {
   await page.getByRole('button', { name: '任务看板', exact: true }).click()
   await page.getByText('隔离任务', { exact: true }).click()
   assert.equal(calls.filter(url => url.includes('/tasks/task-1/runs')).length, 0)
@@ -236,8 +242,10 @@ try {
   await page.screenshot({ path: path.join(output, 'acceptance-gate-narrow.png'), fullPage: true })
   checks.push('build-acceptance-separated', 'acceptance-missing-blocker-readable')
 
+  }
   assert.deepEqual(errors, []); assert.deepEqual(writes, [])
   const result = { passed: true, checks, screenshots: { message: 'message-trace.png', topic: 'topic-context.png', topicNarrow: 'topic-context-narrow.png', task: 'task-detail-desktop.png', taskNarrow: 'task-detail-narrow.png' }, sourceSha256: createHash('sha256').update(observer).digest('hex'), browser: await browser.version(), errors, writes, apiCalls: calls.length, boundary: '真实React与完整observer代码；隔离临时server，API全部由Playwright拦截，未访问真实18998；DSH primitives为语义替身。' }
+  if (process.argv.includes('--topic-only')) { delete result.screenshots.task; delete result.screenshots.taskNarrow }
   await writeFile(path.join(output, 'browser-results.json'), JSON.stringify(result, null, 2))
   console.log(JSON.stringify(result))
 } finally { await context.close(); await browser.close(); await new Promise(resolve => server.close(resolve)) }

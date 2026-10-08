@@ -71,7 +71,10 @@ export function createEngineeringStageContract({ engineering, controller, mayCre
         commandId: `stage:${taskId}:${executionPlanRevision}:${stage.stageId}`,
         stageRunId: controller.plannedTaskStageRunId({ taskId, planRevision: executionPlanRevision,
           stageId: stage.stageId, attempt: stage.attempt ?? 1 }),
-        authorizedGroupRequest: await mayCreate(origin.run, 'task-engineering'),
+        authorizedGroupRequest: requirement.authorization?.ownerConfirmed === true || await mayCreate(origin.run, 'task-engineering', origin.command.args.binding, {
+          intent: origin.command.kind, arguments: origin.command.args.arguments, constraints: origin.command.args.constraints,
+          requiredExecutionMaterials: origin.command.args.requiredExecutionMaterials, commandId: origin.command.id,
+        }),
       }, controller)
     } }
 }

@@ -1,0 +1,24 @@
+{
+  "at": "2026-10-08T02:26:47.557Z",
+  "provider": "openai-codex",
+  "model": "gpt-6-sol",
+  "reasoningEffort": "low",
+  "externalEffects": 0,
+  "results": [
+    {
+      "id": "topic-chain-batch",
+      "passed": true,
+      "elapsedMs": 23165
+    },
+    {
+      "id": "topic-chain-sequential",
+      "passed": false,
+      "error": {
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "message": "Expected values to be strictly equal:\n\n2 !== 1\n"
+      },
+      "elapsedMs": 40774
+    }
+  ]
+}

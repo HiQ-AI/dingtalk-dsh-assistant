@@ -539,3 +539,31 @@ test('跨轮查询证据由Host清单重新注入可读范围，不依赖旧材�
     onCandidate: async () => assert.equal(read, true) })
   assert.equal(result.status, 'submitted')
 })
+
+test('工程准备缺UAT在同一Owner会话纠正为具体等待，未接纳工程计划', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-engineering-input-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const wait = { action: 'wait', summary: '请指定本任务目标UAT环境（uat1至uat9）', evidenceRefs: [],
+    condition: { kind: 'business-input', missing: 'uatEnvironment', responsibleParty: '交办人',
+      resumeWhen: '目标UAT补入当前Task需求后继续', evidenceRefs: [] } }
+  const h = await host(root, null, null, step => step === 1 ? {
+    action: 'advance', summary: '按文档开发', evidenceRefs: [],
+    planChange: { kind: 'initialize', stages: [{ workflowId: 'task-engineering', gate: 'none' }] },
+  } : wait)
+  t.after(() => h.close())
+  const accepted = []
+  const result = await h.sessions.run({
+    binding: { taskId: 'engineering-task', sessionId: 'engineering-owner', turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+    input: { task: { planRevision: 0 }, stages: [], goal: { request: '按文档开发', target: { repositoryId: 'repo' } } },
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    onCandidate: async value => {
+      if (value.action === 'advance') throw Object.assign(Error('缺少uatEnvironment；先读取来源，确实缺少则等待交办人补充目标UAT'), { code: 'TASK_OWNER_ENGINEERING_INPUT_REQUIRED' })
+      accepted.push(value)
+    },
+  })
+  assert.equal(result.status, 'submitted')
+  assert.deepEqual(accepted, [wait])
+  assert.equal(h.requests.length, 2)
+  assert.match(JSON.stringify(h.requests[1]), /缺少uatEnvironment/u)
+  assert.match(h.requests[0].system, /补充后继续原Task/u)
+})

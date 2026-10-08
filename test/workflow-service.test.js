@@ -88,7 +88,7 @@ for (const version of ['4', '5', '6', '7', '8', '9']) for (const control of ['ca
 import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability } from '../packages/dingtalk-dsh-assistant/task-artifact-write.js'
 import { createSourceDossierCapability, createTaskMessageResourceCapability, isDirectedTaskRequest, openWorkflowService,
   rankMessageCandidates, verifyDefaultGeneralCompletion, describeTaskNodeOutput } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
-import { messageSchemas, taskWorkflowCatalog } from '../packages/dingtalk-dsh-assistant/message-context.js'
+import { messageSchemas, taskWorkflowCatalog, candidateCards } from '../packages/dingtalk-dsh-assistant/message-context.js'
 import { createWorkflowNotifications, formatGroupReply, notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 import { queryConversationTaskProgress } from '../packages/dingtalk-dsh-assistant/task-progress-query.js'
 import { groupTaskExecutions } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
@@ -98,6 +98,8 @@ import { createNativeDataChangeCompletionPolicy } from '../packages/dingtalk-dsh
 
 const schema = { type: 'object', additionalProperties: true }
 const splitOne = text => ({ kind: 'split', units: [{ spans: [{ start: 0, end: text.length }], goalText: text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: text.length, role: 'unit' }] })
+const coordinatorQuestion = (source, value) => ({ kind: 'needs_clarification', reason: 'target_conflict',
+  question: value.question ?? value.reason, missingField: value.reason, blockedAction: '确定本次事项', checkedSourceRefs: [source.sourceKey] })
 
 test('数据变更升级v7后重启保留v6冻结定义和旧计划', async t => {
   const root = await mkdtemp(join(tmpdir(), 'data-change-v6-restore-'))
@@ -541,7 +543,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
       const scriptInput={...source.context,source:{...source.context.source,text:source.body},text:source.body,goalText:source.body,
         candidates:input.candidates,groupResponsibility:input.groupResponsibility,clarificationAnswers:source.requests.filter(r=>r.status==='resolved').map(r=>({answer:r.answer}))}
       const split=await legacyJudge({stage:'S',input:scriptInput})
-      if(split.kind==='needs_clarification'){decisions.push({runId:source.runId,reason:split.reason,units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding:{disposition:'new',candidateId:null},intent:split}]});continue}
+      if(split.kind==='needs_clarification'){decisions.push({runId:source.runId,reason:split.reason,units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding:{disposition:'new',candidateId:null},intent:coordinatorQuestion(source,split)}]});continue}
       if(split.kind==='no_action'){decisions.push({runId:source.runId,reason:split.reason,units:[]});continue}
       const units=[]
       for(const unit of split.units){
@@ -552,12 +554,12 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
           scriptInput.clarificationAnswers.push(...answers)
           routed=await legacyJudge({stage:'R',input:{...scriptInput,...unit}})
         }
-        if(routed.kind==='needs_clarification'){units.push({spans:unit.spans,goalText:unit.goalText,binding:{disposition:'new',candidateId:null},intent:routed});continue}
+        if(routed.kind==='needs_clarification'){units.push({spans:unit.spans,goalText:unit.goalText,binding:{disposition:'new',candidateId:null},intent:coordinatorQuestion(source,routed)});continue}
         if(routed.kind!=='binding')throw Error(`OBSOLETE_ROUTING_FIXTURE:${routed.kind}`)
         const card=input.candidates.find(c=>c.candidateId===routed.candidateId)
         const facts=card?await readTools.find(t=>t.name==='group_coordinator_read_task').execute({runId:source.runId,candidateId:card.candidateId}):source.facts
         const intent=await legacyJudge({stage:'I',input:{...scriptInput,...unit,binding:{...routed,...(card?{taskId:card.taskId,engine:card.engine,target:card}: {})},facts}})
-        units.push({spans:unit.spans,goalText:unit.goalText,binding:{disposition:routed.disposition,candidateId:routed.candidateId},intent})
+        units.push({spans:unit.spans,goalText:unit.goalText,binding:{disposition:routed.disposition,candidateId:routed.candidateId},intent:intent.kind==='needs_clarification'?coordinatorQuestion(source,intent):intent})
       }
       decisions.push({runId:source.runId,reason:'隔离业务脚本',units})
     }
@@ -566,7 +568,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
       // 隔离模型收到Host准入反馈后重新提交明确澄清；不绕过生产门禁。
       const question=error.code==='MESSAGE_TOPIC_FACT_REVISION_FORBIDDEN'?'请由原交办人明确确认要替换的完整限制范围。':error.message.slice(error.message.indexOf(':')+1)
       const reason=error.code==='MESSAGE_TOPIC_FACT_REVISION_FORBIDDEN'?'TOPIC_FACT_REVISION_UNCONFIRMED':question
-      await onCandidate({decisions:decisions.map(d=>({...d,units:d.units.map(u=>({...u,intent:{kind:'needs_clarification',reason,question,needs:[]}}))}))})
+      await onCandidate({decisions:decisions.map(d=>({...d,units:d.units.map(u=>({...u,intent:coordinatorQuestion(input.sources.find(source=>source.runId===d.runId),{reason,question})}))}))})
     }
     return {status:'submitted'}
   },async close(){}}
@@ -1432,15 +1434,18 @@ test('同条消息两个独立目标分别建Task，明确追问只续A不默认
   assert.equal((await service.tasks()).length, 2)
 })
 
-test('模型要求为非本人创建Task仍被Host拒绝，未受权群也拒绝', async t => {
+test('模型要求为非本人创建Task由Host等待授权，未受权群仍拒绝', async t => {
   const { service, execution, message } = await fixture(t, 'outsider')
   const accepted = await service.ingest(message)
   await service.messages.process(accepted.runId)
   assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
   const rejected = await service.state(accepted.runId)
-  assert.equal(rejected.run.status, 'settled')
-  assert.equal(rejected.commands[0].status, 'rejected')
-  assert.match(rejected.commands[0].result.reply, /权限/)
+  assert.equal(rejected.run.status, 'pending')
+  assert.equal(rejected.commands.length, 0)
+  assert.equal(rejected.requests[0].kind, 'needs_authorization')
+  assert.equal(rejected.requests[0].status, 'pending')
+  assert.deepEqual(rejected.requests[0].permittedActors, ['owner'])
+  assert.equal((await service.tasks()).length, 0)
   await service.ingest(message)
   assert.deepEqual(await execution.store.query({ kind: 'run.list' }), [])
   await assert.rejects(service.ingest({ ...message, groupId: 'another' }), /WORKFLOW_GROUP_NOT_ADMITTED/)
@@ -1679,9 +1684,16 @@ test('群职责允许明确点名交办创建任务，普通问题报告仍无�
   }})
   const passive=await service.ingest({...message,messageId:'report',text:'@用户(用户) 修复又引入了归一化计算问题：当前得到 0.001 t。'})
   await service.messages.process(passive.runId)
-  assert.equal((await service.state(passive.runId)).commands[0].status,'rejected')
+  const passiveState=await service.state(passive.runId)
+  assert.equal(passiveState.commands.length,0)
+  assert.equal(passiveState.requests.length,0)
+  await service.flushNotifications()
+  assert.deepEqual(await execution.store.query({kind:'message.notifications',runId:passive.runId}),[])
   const unconfigured=await service.ingest({...message,messageId:'unconfigured',text:'小助手，请修复这个问题'})
-  assert.equal((await service.messages.process(unconfigured.runId)).commands[0].status,'rejected')
+  const unknownState=await service.messages.process(unconfigured.runId)
+  assert.equal(unknownState.commands.length,0)
+  assert.equal(unknownState.requests[0].kind,'needs_authorization')
+  assert.equal((await service.tasks()).length,0)
   const directed=await service.ingest({...message,messageId:'request',text:'客服(乙)，数据集合并出现的这个问题需要修复'})
   await service.messages.process(directed.runId)
   assert.equal((await service.state(directed.runId)).commands[0].status,'applied')
@@ -1871,7 +1883,7 @@ test('来源变更隔离旧回声候选，群协调真实排空后旧lease不能
 test('已回读的自身澄清通知不再作为新消息入站，收发信箱分别投影', async t => {
   const sent = []
   const notifications = { canDisclose: async () => true, send: async notice => { const item = { messageId: 'out-1', text: notice.payload.text }; sent.push(item); return { messageId: item.messageId } }, readback: async () => ({ messageId: 'out-1', conversationId: 'g' }) }
-  const { service, execution, message } = await fixture(t, 'owner', notifications, { coordinatorSessions: coordinatorFixtureSessions(source=>({runId:source.runId,reason:'缺少业务目标',units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding:{disposition:'new',candidateId:null},intent:{kind:'needs_clarification',reason:'问题不明确',question:'请说明具体任务',needs:[]}}]})) })
+  const { service, execution, message } = await fixture(t, 'owner', notifications, { coordinatorSessions: coordinatorFixtureSessions(source=>({runId:source.runId,reason:'缺少业务目标',units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding:{disposition:'new',candidateId:null},intent:coordinatorQuestion(source,{reason:'问题不明确',question:'请说明具体任务'})}]})) })
   const original = await service.ingest(message)
   await service.messages.process(original.runId)
   await service.flushNotifications()
@@ -3153,7 +3165,7 @@ test('原发送人撤销仅排查条件可替换历史，另一发送人不得�
    assert.equal(history.facts[0].supersededBy.sourceQuote,sourceQuote)
   }else{
    assert.deepEqual(state.commands,[])
-   assert.ok(state.requests.some(request=>request.reason==='TOPIC_FACT_REVISION_UNCONFIRMED'&&request.status==='pending'),JSON.stringify(state))
+   assert.ok(state.requests.some(request=>request.reason==='target_conflict'&&request.missingField==='TOPIC_FACT_REVISION_UNCONFIRMED'&&request.status==='pending'),JSON.stringify(state))
    assert.equal(active.facts.some(fact=>fact.text===priorText),true)
    assert.equal(history.facts.length,0)
    assert.deepEqual(await execution.store.query({kind:'run.list'}),[])
@@ -3175,7 +3187,7 @@ test('局部撤销范围及模型误报整话题均保留其他任务限制且�
   const receipt=await service.ingest({...message,messageId:`partial-answer-${scope}`,text:`请整理材料；${sourceQuote}`,quotedMessage:{messageId:`seed-message-partial-${scope}`,content:priorText}})
   const state=await service.messages.process(receipt.runId)
   assert.deepEqual(state.commands,[])
-  assert.ok(state.requests.some(request=>request.reason==='TOPIC_FACT_REVISION_UNCONFIRMED'&&request.status==='pending'),JSON.stringify(state))
+  assert.ok(state.requests.some(request=>request.reason==='target_conflict'&&request.missingField==='TOPIC_FACT_REVISION_UNCONFIRMED'&&request.status==='pending'),JSON.stringify(state))
   const active=await execution.store.query({kind:'message.topic.facts',topicId:'partial-revision-topic',status:'active'})
   const history=await execution.store.query({kind:'message.topic.facts',topicId:'partial-revision-topic',status:'superseded'})
   assert.ok(active.facts.some(fact=>fact.text===priorText))
@@ -3354,42 +3366,67 @@ test('业务验收产出独立显示验收项、预期和实际结果', () => {
 })
 
 
-for (const [body, environment] of [['修复合并问题', undefined], ['修复合并问题', 'uat1'], ['提交到uat1或uat2', 'uat1'], ['提交到uat1～9', 'uat1']]) test(`开发目标缺失或不明确先询问具体UAT：${body}/${environment}`, async t => {
-  const { service, message } = await fixture(t, 'owner', undefined, { judge: async ({ stage, input }) => {
+for (const [body, environment] of [['修复合并问题', undefined], ['修复合并问题', 'uat1'], ['提交到uat1或uat2', 'uat1'], ['提交到uat1～9', 'uat1']]) test(`开发环境缺失或不明确先承接Task再由Owner询问具体UAT：${body}/${environment}`, async t => {
+  const taskOwnerSessions = { async close() {}, async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    assert.equal(input.goal.target.uatEnvironment, undefined)
+    const decision = { action: 'wait', summary: '请指定唯一目标UAT环境', evidenceRefs: [], condition: {
+      kind: 'business-input', missing: 'uatEnvironment', responsibleParty: '交办人', resumeWhen: '指定唯一uat1至uat9后继续原任务', evidenceRefs: [] } }
+    await onCandidate(decision); return { status: 'submitted', decision }
+  } }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { taskOwnerSessions, judge: async ({ stage, input }) => {
     if (stage === 'S') return splitOne(input.source.text)
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
-    return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: body, workflowId: 'task-engineering', repositoryId: 'repo', ...(environment ? { uatEnvironment: environment } : {}) }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
+    return { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: body, repositoryId: 'repo', ...(environment ? { uatEnvironment: environment } : {}) }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
   } })
   const receipt = await service.ingest({ ...message, text: body })
   const state = await service.messages.process(receipt.runId)
-  assert.equal(state.commands.length, 0)
-  const question = state.requests.find(item => item.kind === 'needs_clarification' && item.status === 'pending')
-  assert.match(question.reason, /UAT/)
-  assert.match(question.question, /uat1～uat9/)
+  assert.equal(state.commands.length, 1)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.requests.length, 0)
+  await settleTaskOwners(service, execution)
+  const taskId = state.commands[0].args.taskId
+  const owner = await execution.store.query({ kind: 'task.owner', taskId })
+  assert.equal(owner.decision.condition.kind, 'business-input')
+  assert.equal(owner.decision.condition.missing, 'uatEnvironment')
+  assert.equal((await execution.controller.taskPlan(taskId)).stages.length, 0)
+  assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), [])
 })
 
 
-test('UAT澄清回答绑定同一请求并进入任务目标，不猜环境或重新拆消息', async t => {
-  let environment, splits=0
-  const { service, execution, message }=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},judge:async({stage,input})=>{
-    if(stage==='S'){splits++;return splitOne(input.source.text)}
-    if(stage==='R')return {kind:'binding',disposition:'new',candidateId:null,evidence:['source']}
-    return {kind:'intent',actions:[{intent:'create',arguments:{objective:'修复代码',workflowId:'task-engineering',repositoryId:'repo',...(environment?{uatEnvironment:environment}:{})},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'result'}
-  }})
-  const receipt=await service.ingest({...message,text:'修复代码'})
-  const before=await service.messages.process(receipt.runId)
-  const request=before.requests.find(item=>item.status==='pending')
-  environment='uat4'
-  await service.resumeRequest({runId:receipt.runId,requestId:request.id,eventId:'choose-uat4',answer:'uat4'},{channel:'web',actorId:'owner'})
-  const after=await service.messages.process(receipt.runId)
-  assert.equal(after.requests.filter(item=>item.status==='pending').length,0)
-  assert.equal(splits,2)
-  const command=after.commands.find(item=>item.status==='applied')
-  assert.ok(command,JSON.stringify(after.commands))
-  const plan=await execution.controller.taskPlan(command.result.taskId)
-  assert.equal((await execution.artifacts.read(plan.task.requirementRef)).target.uatEnvironment,'uat4')
+test('UAT补充绑定同一开发Task并更新目标，不新建澄清请求或第二任务', async t => {
+  const snapshots = []
+  const taskOwnerSessions = { async close() {}, async run({ input, onSessionBound, onCandidate }) {
+    await onSessionBound(); snapshots.push({ taskId: input.task.taskId, target: input.goal.target })
+    const decision = { action: 'wait', summary: input.goal.target.uatEnvironment ? '已接收目标环境，继续核对文档' : '请指定目标UAT', evidenceRefs: [], condition: {
+      kind: input.goal.target.uatEnvironment ? 'execution' : 'business-input', missing: input.goal.target.uatEnvironment ? '文档核对结果' : 'uatEnvironment', responsibleParty: '执行方', resumeWhen: '核对后继续原任务', evidenceRefs: [] } }
+    await onCandidate(decision); return { status: 'submitted', decision }
+  } }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { taskOwnerSessions, judge: async ({ stage, input }) => {
+    if (stage === 'S') return splitOne(input.source.text)
+    if (stage === 'R') return { kind: 'binding', disposition: input.candidates.length ? 'existing' : 'new', candidateId: input.candidates[0]?.candidateId ?? null, evidence: ['同一开发事项'] }
+    return { kind: 'intent', actions: [{ intent: input.text === 'uat4' ? 'revise' : 'create', arguments: { objective: '修复代码', repositoryId: 'repo', ...(input.text === 'uat4' ? { uatEnvironment: 'uat4' } : {}) }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' }
+  } })
+  const receipt = await service.ingest({ ...message, text: '修复代码' })
+  const before = await service.messages.process(receipt.runId)
+  await settleTaskOwners(service, execution)
+  const taskId = before.commands[0].args.taskId
+  assert.equal(before.requests.length, 0)
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).decision.condition.missing, 'uatEnvironment')
+  const answer = await service.ingest({ ...message, messageId: 'choose-uat4', text: 'uat4' })
+  const after = await service.messages.process(answer.runId)
+  await settleTaskOwners(service, execution)
+  assert.equal(after.commands[0].kind, 'revise')
+  assert.equal(after.commands[0].status, 'applied')
+  assert.equal(after.commands[0].args.taskId, taskId)
+  assert.equal(after.requests.length, 0)
+  assert.equal((await service.tasks()).length, 1)
+  const plan = await execution.controller.taskPlan(taskId)
+  assert.equal((await execution.artifacts.read(plan.task.requirementRef)).target.uatEnvironment, 'uat4')
+  assert.ok(snapshots.some(item => item.taskId === taskId && item.target.uatEnvironment === 'uat4'))
+  assert.equal(plan.stages.length, 0)
+  assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), [])
 })
-
 test('本地验收产出：条件、方案与目录准确展示且不泄漏执行参数', () => {
   const hidden = 'secret-acceptance-parameter'
   const project = (nodeId, output) => describeTaskNodeOutput({ nodeId }, output)
@@ -4096,7 +4133,7 @@ test('Owner直接查询证据经真实Service与工程准备进入方案输入�
       : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['source'] }
       : { kind: 'intent', actions: [{ intent: 'create', arguments: { objective: '调查后修复value', repositoryId: 'repo', uatEnvironment: 'uat2', acceptanceCriteria: ['value符合预期'] }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' } })
   execution = f.execution
-  const received = await f.service.ingest(f.message); await f.service.messages.process(received.runId)
+  const received = await f.service.ingest({ ...f.message, text: '调查后修复value，提交到uat2' }); await f.service.messages.process(received.runId)
   const taskId = (await f.service.state(received.runId)).commands[0].result.taskId
   for (let attempt = 0; attempt < 8 && !proposalInput; attempt++) {
     const plan = await execution.controller.taskPlan(taskId)
@@ -4569,6 +4606,25 @@ test('明确查表和多阶段脚本交办保留来源原文，任务准入不�
   assert.equal((await execution.store.query({ kind: 'run.list' })).length, 0)
 })
 
+for (const actor of ['owner', 'participant']) test(`指向其他同事时不向所有者索要授权，明确转交才承接：${actor}`, async t => {
+  const { service, message, execution } = await fixture(t, actor, undefined, { legacy: {
+    getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['资料助理'] }),
+    getGroup: id => ({ groupId: id, responsibility: '任务准入：明确交办可以创建任务', messages: [] }),
+  } })
+  const other = await service.ingest({ ...message, messageId: 'to-colleague', text: '@李辰 请处理这份文档' })
+  await service.messages.process(other.runId)
+  await service.flushNotifications()
+  const state = await service.state(other.runId)
+  assert.equal(state.commands.length, 0)
+  assert.equal(state.requests.length, 0)
+  assert.equal((await service.tasks()).length, 0)
+  assert.deepEqual(await execution.store.query({ kind: 'message.notifications', runId: other.runId }), [])
+  const forwarded = await service.ingest({ ...message, messageId: 'to-agent', text: '资料助理，请处理这份文档', quotedMessage: { messageId: 'to-colleague' } })
+  await service.messages.process(forwarded.runId)
+  assert.equal((await service.state(forwarded.runId)).commands[0].status, 'applied')
+  assert.equal((await service.tasks()).length, 1)
+})
+
 test('同发送人精确引用已点名来源可续办，换人引用不继承创建权', async t => {
   const { service, message } = await fixture(t, 'participant', undefined, { legacy: {
     getAgentConfig: () => ({ provider: 'test', model: 'test', agentNames: ['小小鹏'] }),
@@ -4581,7 +4637,11 @@ test('同发送人精确引用已点名来源可续办，换人引用不继承�
   assert.equal((await service.state(follow.runId)).commands[0].status, 'applied')
   const other = await service.ingest({ ...message, messageId: 'other', senderOpenDingTalkId: 'outsider', text: '按他的授权创建另一个任务', quotedMessage: { messageId: 'direct' } })
   await service.messages.process(other.runId)
-  assert.equal((await service.state(other.runId)).commands[0].status, 'rejected')
+  const blocked=await service.state(other.runId)
+  assert.equal(blocked.commands.length,0)
+  assert.equal(blocked.requests[0].kind,'needs_authorization')
+  assert.deepEqual(blocked.requests[0].permittedActors,['owner'])
+  assert.equal((await service.tasks()).length,2)
 })
 
 test('历史缺附件消息只经独立DWS同源回读补元数据，不增版本不重放', async t => {
@@ -5393,6 +5453,89 @@ function coordinatorUnit(source,intent,args,binding={disposition:'new',candidate
  return {runId:source.runId,reason:'原文明确',units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding,
   intent:{kind:'intent',actions:[{intent,arguments:args,dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}]}
 }
+
+test('任务准入授权：仅指定所有者批准冻结事项，恢复后只创建一个Task', async t => {
+  const f = await fixture(t, 'guest', undefined, { coordinatorSessions: coordinatorFixtureSessions((source, input) => {
+    const topic = input.candidates.find(item => item.topicId && !item.taskId)
+    return coordinatorUnit(source, 'create', { objective: '核对这份材料' }, topic ? { disposition: 'existing', candidateId: topic.candidateId } : undefined)
+  }) })
+  const received = await f.service.ingest({ ...f.message, text: '核对这份材料' })
+  let state = await f.service.messages.process(received.runId)
+  const request = state.requests.find(item => item.status === 'pending')
+  assert.equal(request.kind, 'needs_authorization')
+  assert.deepEqual(request.permittedActors, ['owner'])
+  assert.equal(state.commands.length, 0)
+  assert.equal((await f.service.mailboxes()).messages.find(item => item.runId === received.runId).workflowStatus, 'waiting_authorization')
+  const input = { runId: received.runId, requestId: request.id, eventId: 'owner-grant', answer: '同意' }
+  await assert.rejects(f.service.resumeRequest(input, { channel: 'im', actorId: 'guest', conversationId: 'g' }), /WORKFLOW_ACTION_FORBIDDEN/)
+  await assert.rejects(f.service.resumeRequest({ ...input, answer: '需求补充' }, { channel: 'im', actorId: 'owner', conversationId: 'g' }), { code: 'WORKFLOW_AUTHORIZATION_DECISION_REQUIRED' })
+  await f.service.resumeRequest(input, { channel: 'im', actorId: 'owner', conversationId: 'g' })
+  state = await f.service.messages.process(received.runId)
+  assert.equal(state.requests.find(item => item.id === request.id).resolvedByActorId, 'owner')
+  assert.equal(state.commands.length, 1)
+  assert.equal(state.commands[0].status, 'applied', JSON.stringify(state.commands))
+  assert.equal(state.commands[0].args.authorizationRequestId, request.id)
+  const plan = await f.execution.controller.taskPlan(state.commands[0].args.taskId)
+  assert.equal((await f.execution.artifacts.read(plan.task.requirementRef)).authorization.ownerConfirmed, true)
+  await f.service.resumeRequest(input, { channel: 'im', actorId: 'owner', conversationId: 'g' })
+  assert.equal((await f.execution.store.query({ kind: 'task.catalog' })).length, 1)
+})
+
+test('任务准入授权：拒绝后收口，批准不能复用到修改后的动作', async t => {
+  for (const rejected of [true, false]) {
+    let change = false
+    const f = await fixture(t, 'guest', undefined, { coordinatorSessions: coordinatorFixtureSessions((source, input) => {
+      const topic = input.candidates.find(item => item.topicId && !item.taskId)
+      return coordinatorUnit(source, 'create', { objective: change ? '修改其他功能' : '核对材料' }, topic ? { disposition: 'existing', candidateId: topic.candidateId } : undefined)
+    }) })
+    const received = await f.service.ingest(f.message)
+    const before = await f.service.messages.process(received.runId)
+    const request = before.requests[0]
+    change = !rejected
+    await f.service.resumeRequest({ runId: received.runId, requestId: request.id, eventId: 'owner-answer', answer: rejected ? '拒绝' : '同意' },
+      { channel: 'im', actorId: 'owner', conversationId: 'g' })
+    const after = await f.service.messages.process(received.runId)
+    assert.equal(after.commands.length, 0)
+    assert.equal((await f.execution.store.query({ kind: 'task.catalog' })).length, 0)
+    if (rejected) assert.equal(after.run.status, 'settled')
+    else assert.ok(after.requests.some(item => item.id !== request.id && item.status === 'pending' && item.kind === 'needs_authorization'))
+  }
+})
+
+test('任务准入沿同作者有效点名来源承接后续开发，其他作者不能借用', async t => {
+  for (const actor of ['member', 'other']) {
+    const f = await fixture(t, 'member', undefined, { legacy: { getGroup: id => ({ groupId: id, responsibility: '## 任务准入\n明确交办可以承接', messages: [] }) },
+      coordinatorSessions: coordinatorFixtureSessions((source, input) => {
+        const topic = input.candidates.find(item => item.topicId && !item.taskId)
+        return coordinatorUnit(source, source.body.includes('按文档') ? 'create' : 'fact',
+          source.body.includes('按文档') ? { objective: '按文档开发' } : { kind: 'fact', text: source.body },
+          topic ? { disposition: 'existing', candidateId: topic.candidateId } : undefined)
+      }) })
+    const first = await f.service.ingest({ ...f.message, text: '@小助手 请看这份文档', messageId: 'doc-address' })
+    const firstState = await f.service.messages.process(first.runId)
+    assert.equal(firstState.commands[0]?.status, 'applied', JSON.stringify(firstState.commands))
+    const second = await f.service.ingest({ ...f.message, text: '按文档开发', messageId: 'doc-develop', senderOpenDingTalkId: actor })
+    const state = await f.service.messages.process(second.runId)
+    if (actor === 'member') {
+      assert.equal(state.commands[0]?.status, 'applied', JSON.stringify(state))
+      assert.equal(state.requests.some(item => item.status === 'pending'), false)
+    } else {
+      assert.equal(state.commands.length, 0)
+      assert.equal(state.requests.find(item => item.status === 'pending')?.kind, 'needs_authorization')
+    }
+  }
+})
+
+test('工程环境由来源确定，模型猜测不能补齐UAT且关联来源不必重复', async t => {
+  for (const [body, supplied, expected] of [['按文档开发', 'uat2', undefined], ['按文档开发并提交uat3', undefined, 'uat3'], ['uat2或uat3尚未决定', 'uat2', undefined]]) {
+    const f = await fixture(t, 'owner', undefined, { coordinatorSessions: coordinatorFixtureSessions(source =>
+      coordinatorUnit(source, 'create', { objective: '按文档开发', ...(supplied ? { uatEnvironment: supplied } : {}) })) })
+    const received = await f.service.ingest({ ...f.message, text: body })
+    const state = await f.service.messages.process(received.runId)
+    const plan = await f.execution.controller.taskPlan(state.commands[0].args.taskId)
+    assert.equal((await f.execution.artifacts.read(plan.task.requirementRef)).target.uatEnvironment, expected)
+  }
+})
 test('群协调真实store：闲聊及文件资料静默且旧judge零调用',async t=>{
  let oldCalls=0,turns=0
  const f=await fixture(t,'owner',undefined,{judge:async()=>{oldCalls++;throw Error('OLD_JUDGE_FORBIDDEN')},
@@ -5460,7 +5603,7 @@ for(const mode of ['question','answer','permission'])test(`原生Task补充澄�
   if(source.body==='先排查草稿')return coordinatorUnit(source,'research',{objective:source.body})
   const card=input.candidates.find(c=>c.taskId);assert.ok(card)
   const binding={disposition:'existing',candidateId:card.candidateId}
-  if(!source.requests.some(r=>r.status==='resolved'))return {runId:source.runId,reason:'补充目标尚未明确',units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding,intent:{kind:'needs_clarification',reason:'此前仅排查',question:'继续排查还是修复并验证？',needs:[]}}]}
+  if(!source.requests.some(r=>r.status==='resolved'))return {runId:source.runId,reason:'补充目标尚未明确',units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding,intent:coordinatorQuestion(source,{reason:'此前仅排查',question:'继续排查还是修复并验证？'})}]}
   return coordinatorUnit(source,'revise',{objective:'修复草稿并验证'},binding)
  })})
  const initial=await f.service.ingest({...f.message,text:'先排查草稿'})
@@ -6184,4 +6327,249 @@ test('Markdown能力真实回执投影文件证明，未核验结果不声明保
   assert.match(result.text, /34 字节/); assert.match(result.text, /SHA-256\nabc123/)
   const unverified = describeTaskNodeOutput({ nodeId: 'execute' }, { ...envelope, verification: { passed: false } })
   assert.doesNotMatch(unverified.overview, /已保存/)
+})
+
+test('开发缺UAT先承接并等待具体环境，补充后原Task恢复且不提前准备工程', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'engineering-input-service-'))
+  const source = join(root, 'source'), managedRoot = join(root, 'managed')
+  await mkdir(source); await mkdir(managedRoot)
+  await writeFile(join(source, 'value.txt'), 'unchanged')
+  const first = '按文档开发', second = '目标环境使用uat2'
+  const snapshots = []
+  const judge = async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+    : stage === 'R' ? { kind: 'binding', disposition: input.candidates.length ? 'existing' : 'new', candidateId: input.candidates[0]?.candidateId ?? null, evidence: ['同一开发事项补充环境'] }
+      : { kind: 'intent', actions: [{ intent: input.text === first ? 'create' : 'revise', arguments: {
+        objective: first, repositoryId: 'repo', ...(input.text === second ? { uatEnvironment: 'uat2' } : {}),
+      }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  const sessions = { async close() {}, async run({ input, binding, tools, queryInput, onQueryEvidence, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    snapshots.push({ taskId: input.task.taskId, target: input.goal.target, revision: input.task.requirementRevision })
+    const refs = await queryOwnerSources({ binding, tools, queryInput, onQueryEvidence })
+    if (!input.goal.target.uatEnvironment) await assert.rejects(onCandidate({ action: 'advance', summary: '准备开发', evidenceRefs: refs,
+      planChange: { kind: 'initialize', stages: [{ workflowId: 'task-engineering', gate: 'none' }] },
+    }), { code: 'TASK_OWNER_ENGINEERING_INPUT_REQUIRED' })
+    const decision = { action: 'wait', evidenceRefs: refs,
+      summary: input.goal.target.uatEnvironment ? '已读取补充环境，继续核对文档' : '请指定本任务目标UAT环境',
+      condition: input.goal.target.uatEnvironment
+        ? { kind: 'execution', missing: '文档核对结果', responsibleParty: '执行方', resumeWhen: '文档核对后继续工程准备', evidenceRefs: refs }
+        : { kind: 'business-input', missing: 'uatEnvironment', responsibleParty: '交办人', resumeWhen: '目标UAT补入当前Task需求后继续', evidenceRefs: refs } }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  } }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { root, judge, taskOwnerSessions: sessions,
+    config: { repositories: [{ id: 'repo', sourceRepository: source, managedRoot, remote: source,
+      githubRepository: 'test/repo', baseRef: 'main', editablePaths: ['value.txt'],
+      checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }] } })
+  const received = await service.ingest({ ...message, text: first })
+  const state = await service.messages.process(received.runId)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.requests.length, 0)
+  const taskId = state.commands[0].args.taskId
+  for (let attempt = 0; attempt < 100 && !(await execution.store.query({ kind: 'task.owner', taskId })).decision; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  const owner = await execution.store.query({ kind: 'task.owner', taskId })
+  assert.ok(owner.decision, JSON.stringify(owner))
+  assert.equal(owner.decision.action, 'wait')
+  assert.equal(owner.decision.condition.missing, 'uatEnvironment')
+  assert.equal((await execution.controller.taskPlan(taskId)).stages.length, 0)
+  assert.equal((await execution.store.query({ kind: 'run.list', taskId })).length, 0)
+  const continued = await service.ingest({ ...message, messageId: 'engineering-uat-answer', text: second })
+  const revised = await service.messages.process(continued.runId)
+  assert.equal(revised.commands[0].kind, 'revise')
+  assert.equal(revised.commands[0].status, 'applied')
+  assert.equal(revised.commands[0].args.taskId, taskId)
+  const plan = await execution.controller.taskPlan(taskId), requirement = await execution.artifacts.read(plan.task.requirementRef)
+  assert.equal(requirement.target.uatEnvironment, 'uat2')
+  assert.equal(plan.task.requirementRevision, 2)
+  assert.equal((await service.tasks()).length, 1)
+  for (let attempt = 0; attempt < 100 && (await execution.store.query({ kind: 'task.owner', taskId })).decision?.condition?.kind !== 'execution'; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).decision.condition.kind, 'execution')
+  assert.ok(snapshots.some(item => item.taskId === taskId && item.revision === 2 && item.target.uatEnvironment === 'uat2'))
+  const { readdir } = await import('node:fs/promises')
+  assert.deepEqual(await readdir(managedRoot), [])
+  assert.equal(await readFile(join(source, 'value.txt'), 'utf8'), 'unchanged')
+})
+
+
+test('非owner获批后补环境保留原Task承接授权，新增外部阶段仍拒绝', async t => {
+  let revisedTaskId, checkedExternal = 0
+  const sessions = { async close() {}, async run(args) {
+    await args.onSessionBound()
+    const refs = await queryOwnerSources(args)
+    if(args.input.goal.target.uatEnvironment){
+      await assert.rejects(args.onCandidate({ action:'advance',summary:'尝试生产数据变更',evidenceRefs:refs,
+        planChange:{kind:'initialize',stages:[{workflowId:'task-data-change',gate:'none'}]} }),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+      checkedExternal++
+    }
+    const decision={action:'wait',summary:'继续核对当前事项',evidenceRefs:refs,
+      condition:{kind:'business-input',missing:'核对结果',responsibleParty:'交办人',resumeWhen:'核对后继续',evidenceRefs:refs}}
+    await args.onCandidate(decision);return{status:'submitted',decision}
+  } }
+  const f=await fixture(t,'guest',undefined,{taskOwnerSessions:sessions,coordinatorSessions:coordinatorFixtureSessions((source,input)=>{
+    const candidate=input.candidates.find(item=>revisedTaskId?item.taskId===revisedTaskId:item.topicId&&!item.taskId)
+    return coordinatorUnit(source,revisedTaskId?'revise':'create',{objective:'按文档开发',...(revisedTaskId?{uatEnvironment:'uat2'}:{})},candidate?{disposition:'existing',candidateId:candidate.candidateId}:undefined)
+  })})
+  const received=await f.service.ingest({...f.message,text:'按文档开发'})
+  const request=(await f.service.messages.process(received.runId)).requests[0]
+  await f.service.resumeRequest({runId:received.runId,requestId:request.id,eventId:'grant',answer:'同意'},{channel:'im',actorId:'owner',conversationId:'g'})
+  const accepted=await f.service.messages.process(received.runId)
+  revisedTaskId=accepted.commands[0].args.taskId
+  assert.equal(accepted.commands[0].status,'applied')
+  await settleTaskOwners(f.service,f.execution)
+  const reply=await f.service.ingest({...f.message,messageId:'environment-reply',text:'目标环境使用uat2'})
+  const revised=await f.service.messages.process(reply.runId)
+  assert.equal(revised.commands[0].status,'applied')
+  assert.equal(revised.commands[0].args.taskId,revisedTaskId)
+  await settleTaskOwners(f.service,f.execution)
+  const plan=await f.execution.controller.taskPlan(revisedTaskId),requirement=await f.execution.artifacts.read(plan.task.requirementRef)
+  assert.equal(requirement.authorization.ownerConfirmed,true)
+  assert.equal(requirement.target.uatEnvironment,'uat2')
+  assert.equal(plan.task.requirementRevision,2)
+  assert.equal((await f.service.tasks()).length,1)
+  assert.ok(checkedExternal>0)
+  assert.deepEqual(plan.stages,[])
+  assert.deepEqual(await f.execution.store.query({kind:'run.list',taskId:revisedTaskId}),[])
+})
+
+test('旧授权过期后再次批准当前授权，只创建一次Task',async t=>{
+  const f=await fixture(t,'guest',undefined,{coordinatorSessions:coordinatorFixtureSessions((source,input)=>{
+    const topic=input.candidates.find(item=>item.topicId&&!item.taskId)
+    return coordinatorUnit(source,'create',{objective:'核对这份材料'},topic?{disposition:'existing',candidateId:topic.candidateId}:undefined)
+  })})
+  const received=await f.service.ingest({...f.message,text:'核对这份材料'})
+  const first=(await f.service.messages.process(received.runId)).requests[0]
+  const approve=request=>f.service.resumeRequest({runId:received.runId,requestId:request.id,eventId:`grant-${request.id}`,answer:'同意'},{channel:'im',actorId:'owner',conversationId:'g'})
+  // 模拟批准已持久化、协调恢复前新的同话题输入到达。
+  await f.execution.store.command({id:'persist-first-grant',kind:'message.wake',args:{runId:received.runId,requestId:first.id,actorId:'owner',eventId:'first-grant',answer:'approved'}})
+  const extra=await f.service.messages.receive({sourceKey:'new-topic-input',sourceVersion:1,actorId:'guest',conversationId:'g',body:'收到',context:{}},{process:false})
+  await f.execution.store.command({id:'extra-split',kind:'message.split',args:{runId:extra.run.runId,units:[{unitId:'extra-unit'}]}})
+  await f.execution.store.command({id:'extra-bind',kind:'message.topic.bind',args:{runId:extra.run.runId,unitId:'extra-unit',expectedRevision:0,binding:{kind:'binding',disposition:'conversation',candidateId:null},topic:{topicId:first.authorization.topicId,conversationId:'g',sourceRunId:extra.run.runId,unitId:'extra-unit',title:'核对材料',facts:[]}}})
+  await f.execution.store.command({id:'extra-quiet',kind:'message.accept',args:{runId:extra.run.runId,unitId:'extra-unit',commands:[],outcome:'ignored'}})
+  const next=await f.service.messages.process(received.runId)
+  const second=next.requests.find(item=>item.status==='pending')
+  assert.ok(second&&second.id!==first.id)
+  await approve(second)
+  const final=await f.service.messages.process(received.runId)
+  assert.equal(final.commands.length,1)
+  assert.equal(final.commands[0].status,'applied')
+  assert.equal(final.commands[0].args.authorizationRequestId,second.id)
+  await approve(second)
+  assert.equal((await f.service.tasks()).length,1)
+})
+
+test('明确开发缺目标仓库先通过协调schema承接，Owner读取来源后等待仓库且无工程副作用', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'engineering-repository-input-'))
+  const source = join(root, 'source'), managedRoot = join(root, 'managed')
+  await mkdir(source); await mkdir(managedRoot)
+  await writeFile(join(source, 'value.txt'), 'unchanged')
+  const body = '按文档开发，目标环境uat2'
+  const intent = { kind: 'intent', actions: [{ intent: 'create', arguments: {
+    objective: '按文档开发', workflowId: 'task-engineering', uatEnvironment: 'uat2',
+  }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
+  assert.equal(messageSchemas.I.safeParse(intent).success, true)
+  let sourceRead = false
+  const sessions = { async close() {}, async run({ input, binding, tools, queryInput, onQueryEvidence, onSessionBound, onCandidate }) {
+    await onSessionBound()
+    assert.equal(input.goal.target.repositoryId, undefined)
+    assert.equal(input.goal.target.uatEnvironment, 'uat2')
+    const refs = await queryOwnerSources({ binding, tools, queryInput, onQueryEvidence })
+    assert.ok(refs.length)
+    sourceRead = true
+    await assert.rejects(onCandidate({ action: 'advance', summary: '准备开发', evidenceRefs: refs,
+      planChange: { kind: 'initialize', stages: [{ workflowId: 'task-engineering', gate: 'none' }] },
+    }), error => error.code === 'TASK_OWNER_ENGINEERING_INPUT_REQUIRED' && error.message.includes('仓库'))
+    const decision = { action: 'wait', summary: '请指定本次开发的目标仓库', evidenceRefs: refs,
+      condition: { kind: 'business-input', missing: 'repositoryId', responsibleParty: '交办人',
+        resumeWhen: '目标仓库补入当前Task需求后继续', evidenceRefs: refs } }
+    await onCandidate(decision)
+    return { status: 'submitted', decision }
+  } }
+  const { service, execution, message } = await fixture(t, 'owner', undefined, { root, taskOwnerSessions: sessions,
+    judge: async ({ stage, input }) => stage === 'S' ? splitOne(input.source.text)
+      : stage === 'R' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['当前开发交办'] } : intent,
+    config: { repositories: [{ id: 'available-repo', sourceRepository: source, managedRoot, remote: source,
+      githubRepository: 'test/repo', baseRef: 'main', editablePaths: ['value.txt'],
+      checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }] } })
+  const received = await service.ingest({ ...message, text: body })
+  const state = await service.messages.process(received.runId)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(state.requests.length, 0)
+  assert.deepEqual((await settleTaskOwners(service, execution)).failures, [])
+  const taskId = state.commands[0].args.taskId
+  const owner = await execution.store.query({ kind: 'task.owner', taskId })
+  assert.equal(sourceRead, true)
+  assert.equal(owner.decision.condition.missing, 'repositoryId')
+  assert.equal((await service.tasks()).length, 1)
+  assert.equal((await execution.controller.taskPlan(taskId)).stages.length, 0)
+  assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), [])
+  const { readdir } = await import('node:fs/promises')
+  assert.deepEqual(await readdir(managedRoot), [])
+  assert.equal(await readFile(join(source, 'value.txt'), 'utf8'), 'unchanged')
+})
+
+test('同话题新消息更新名称摘要并进入后续协调候选，展示不创建任务', async t => {
+ const seen=[]
+ const f=await fixture(t,'owner',undefined,{coordinatorSessions:coordinatorFixtureSessions((source,input)=>{
+  const card=input.candidates.find(c=>c.state==='topic');seen.push(card)
+  const decision=coordinatorUnit(source,'fact',{kind:'fact',text:source.body},card?{disposition:'conversation',candidateId:card.candidateId}:{disposition:'new',candidateId:null})
+  if(source.body!=='继续补充')decision.units[0].topicPresentation=source.body==='来个任务'
+    ?{title:'待明确的开发任务',summary:'已请求提供具体任务。'}
+    :{title:'数据集过程导入导出开发',summary:'依据提供的规则文档实施数据集过程导入导出，保留边做边改进插件的工作方式。'}
+  return decision
+ })})
+ for(const [index,text] of ['来个任务','按数据集导入导出文档开发','继续补充'].entries()){
+  const r=await f.service.ingest({...f.message,messageId:`presentation-${index}`,text});await f.service.messages.process(r.runId)
+ }
+ const topics=await f.service.topics('g');assert.equal(topics.length,1)
+ assert.equal(topics[0].title,'数据集过程导入导出开发');assert.equal(seen[2].summary,topics[0].summary)
+ assert.equal(candidateCards([seen[2]])[0].summary,topics[0].summary)
+ const context=await f.service.topicContext({groupId:'g',topicId:topics[0].topicId})
+ assert.equal(context.total,3);assert.equal(context.topic.summary,topics[0].summary)
+ assert.deepEqual(await f.service.tasks(),[])
+})
+
+
+test('受管话题关联服务封存后预检零写，旧链接读取四条且不派发业务',async t=>{
+ const f=await fixture(t,'owner',undefined,{config:{webActorId:'operator'}})
+ const store=f.execution.store, identity={channel:'web',actorId:'operator'}
+ const runs=[]
+ for(const [index,body] of ['来个任务，边做边修插件','数据集过程导入导出规则','按文档开发','目标环境uat2'].entries()){
+  const state=await f.service.messages.receive({sourceKey:`reconcile-${index}`,sourceVersion:1,actorId:'owner',conversationId:'g',body,context:{sourceMessageId:`m-${index}`}},{process:false})
+  const runId=state.run.runId; runs.push(runId)
+  await store.command({id:`split-${index}`,kind:'message.split',args:{runId,units:[{unitId:`u-${index}`}]}})
+  await store.command({id:`topic-${index}`,kind:'message.topic.upsert',args:{topicId:index===0?'old-topic':'current-topic',conversationId:'g',sourceRunId:runId,unitId:`u-${index}`,title:'开发',facts:[{kind:'fact',text:body,sourceRefs:[{sourceKey:`reconcile-${index}`,sourceVersion:1,text:body}]}]}})
+ }
+ const args={sourceTopicId:'old-topic',targetTopicId:'current-topic',maintenanceId:'reconcile-test',maintenanceRevision:2,reason:'修复同一事项关联',topicPresentation:{title:'数据集过程导入导出开发',summary:'依据规则文档开发，目标环境uat2，并持续改进插件。'}}
+ for(const invalid of [{channel:'im',actorId:'operator'},{channel:'web',actorId:'other'},undefined]){
+  await assert.rejects(f.service.reconcileTopic(args,invalid,true),{code:'WORKFLOW_WEB_ACTOR_FORBIDDEN'})
+ }
+ await assert.rejects(f.service.reconcileTopic(args,identity,true),{code:'MESSAGE_TOPIC_RECONCILE_MAINTENANCE_REQUIRED'})
+ await f.service.changeMaintenance({requestId:'start',expectedRevision:0,maintenanceId:args.maintenanceId,reason:args.reason,active:true},identity)
+ await assert.rejects(f.service.reconcileTopic(args,identity,true),{code:'MESSAGE_TOPIC_RECONCILE_MAINTENANCE_REQUIRED'})
+ await f.service.changeMaintenance({requestId:'seal',expectedRevision:1,maintenanceId:args.maintenanceId,reason:args.reason},identity,'seal')
+ const before=await Promise.all(runs.map(runId=>f.service.messages.state(runId)))
+ const db=new DatabaseSync(store.info.dbPath,{readOnly:true})
+ try{
+  const count=()=>db.prepare('SELECT count(*) n FROM execution_events').get().n
+  const previous=count()
+  const check=await f.service.reconcileTopic({...args,actorId:'spoofed'},identity,true)
+  assert.equal(count(),previous);assert.equal(check.counts.movedUnits,1)
+  await assert.rejects(f.service.reconcileTopic({...args,requestId:'bad',expectedDigest:'stale'},identity),{code:'MESSAGE_TOPIC_RECONCILE_STALE'})
+  const result=await f.service.reconcileTopic({...args,actorId:'spoofed',requestId:'apply',expectedDigest:check.expectedDigest},identity)
+  assert.equal(result.actorId,'operator')
+  assert.deepEqual(await f.service.reconcileTopic({...args,actorId:'spoofed',requestId:'apply',expectedDigest:check.expectedDigest},identity),result)
+ }finally{db.close()}
+ const context=await f.service.topicContext({groupId:'g',topicId:'old-topic'})
+ assert.equal(context.topic.topicId,'current-topic');assert.equal(context.total,4)
+ assert.deepEqual(new Set(context.messages.map(item=>item.messageId)),new Set(['m-0','m-1','m-2','m-3']))
+ assert.equal(context.topic.summary,args.topicPresentation.summary)
+ assert.deepEqual((await f.service.topics('g')).map(topic=>topic.topicId),['current-topic'])
+ assert.equal(await f.service.topicContext({groupId:'foreign',topicId:'old-topic'}),null)
+ for(const [index,runId] of runs.entries()){
+  const after=await f.service.messages.state(runId)
+  assert.deepEqual(after.run,before[index].run);assert.deepEqual(after.requests,before[index].requests)
+  assert.deepEqual(after.commands,[])
+ }
+ assert.deepEqual(await f.service.tasks(),[])
+ assert.deepEqual(await store.query({kind:'message.notifications'}),[])
+ const mailbox=await f.service.mailboxes('g');assert.deepEqual(mailbox.outbox,[])
 })

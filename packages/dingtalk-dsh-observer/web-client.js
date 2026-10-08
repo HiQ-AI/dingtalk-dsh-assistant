@@ -411,6 +411,14 @@ window.__ModuleLoader__.load({
         return () => { active = false }
       }, [groupId, offset, retry, updatedAt])
       useEffect(() => {
+        const current = listing?.topics.find(item => item.topicId === selection?.topicId && item.groupId === selection?.groupId)
+        if (!current || current.revision === selection.revision && current.summaryRevision === selection.summaryRevision && current.updatedAt === selection.updatedAt) return
+        setSelection({ groupId: current.groupId, topicId: current.topicId, revision: current.revision, summaryRevision: current.summaryRevision, updatedAt: current.updatedAt })
+        setMessageOffset(0); setContextCursor(''); setContextCursorHistory([])
+        setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined)
+        setContext(undefined); setTopicContext(undefined)
+      }, [listing, selection])
+      useEffect(() => {
         if (!selection) { setContext(undefined); return }
         let active = true
         setDetailLoading(true); setDetailError(''); setContext(undefined)
@@ -652,7 +660,7 @@ window.__ModuleLoader__.load({
       const selectedGroup = groupsById.get(selectedGroupId) || (data?.groups || [])[0]
       const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || message.sourceKind === 'workflow-v2' || !message.sourceKind).sort((left, right) => (new Date(right.occurredAt).getTime() || 0) - (new Date(left.occurredAt).getTime() || 0) || Number(right.sequence || 0) - Number(left.sequence || 0))
       const messageWorkflowState = (message) => {
-        if (['routing', 'waiting_clarification', 'waiting_context', 'waiting_system', 'execution_blocked', 'routing_blocked', 'waiting_routing_barrier', 'intent_judging', 'intent_rejudging', 'processed'].includes(message.workflowStatus)) return message.workflowStatus
+        if (['routing', 'waiting_clarification', 'waiting_authorization', 'waiting_context', 'waiting_system', 'execution_blocked', 'routing_blocked', 'waiting_routing_barrier', 'intent_judging', 'intent_rejudging', 'processed'].includes(message.workflowStatus)) return message.workflowStatus
         if (message.routingStatus === 'failed') return 'failed'
         if (message.routingStatus !== 'routed') return 'routing'
         if (message.sourceKind === 'workflow-v2') return 'processed'
@@ -670,6 +678,7 @@ window.__ModuleLoader__.load({
       const visibleMessages = filteredMessages.slice((currentMessagePage - 1) * pageSize, currentMessagePage * pageSize)
       const delivery = {
         routing: { label: '待归类', state: 'ongoing' },
+        waiting_authorization: { label: '等待授权', state: 'ongoing' },
         waiting_clarification: { label: '等待用户补充', state: 'ongoing' },
         waiting_context: { label: '正在读取材料', state: 'ongoing' },
         waiting_system: { label: '材料读取受阻', state: 'error' },
@@ -876,7 +885,7 @@ window.__ModuleLoader__.load({
           selectedGroup?.coordinator?.sessionId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: navigatingSessionId === selectedGroup.coordinator.sessionId,
             onClick: () => navigate(selectedGroup.coordinator.sessionId) }, navigatingSessionId === selectedGroup.coordinator.sessionId ? '正在打开…' : '打开群常驻会话') : null,
           groupTableView === 'messages'
-            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '核对相关输入' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'waiting_clarification', label: '等待用户补充' }, { id: 'waiting_context', label: '正在读取材料' }, { id: 'waiting_system', label: '材料读取受阻' }, { id: 'execution_blocked', label: '执行受阻' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
+            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '核对相关输入' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'waiting_clarification', label: '等待用户补充' }, { id: 'waiting_authorization', label: '等待授权' }, { id: 'waiting_context', label: '正在读取材料' }, { id: 'waiting_system', label: '材料读取受阻' }, { id: 'execution_blocked', label: '执行受阻' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },

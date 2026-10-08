@@ -36,6 +36,23 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
 
+test('话题关联修复本机入口区分零写预检和摘要绑定执行，拒绝跨站与自报身份', async () => {
+  const calls = [], input = { sourceTopicId: 'source', targetTopicId: 'target',
+    topicPresentation: { title: '数据集导入导出开发', summary: '依据已提供规则文档开发。' },
+    maintenanceId: 'maintenance', maintenanceRevision: 2, reason: '用户明确四条消息属于同一事项' }
+  await withServer(false, async base => {
+    const post = (suffix, body, origin) => fetch(base + '/runtime/topics/reconcile' + suffix, { method: 'POST',
+      headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
+    assert.equal((await post('/check', input)).status, 200)
+    assert.equal((await post('', { ...input, requestId: 'apply', expectedDigest: 'a'.repeat(64) })).status, 200)
+    assert.deepEqual(calls.map(call => call.check), [true, false])
+    assert.equal((await post('/check', input, 'https://untrusted.example')).status, 403)
+    assert.equal((await post('/check', { ...input, actorId: 'owner' })).status, 400)
+    assert.equal((await post('', { ...input, requestId: 'apply' })).status, 400)
+    assert.equal(calls.length, 2)
+  }, { overrides: { reconcileWorkflowTopic: async (value, check) => { calls.push({ value, check }); return { checked: true } } } })
+})
+
 test('工作流只读状态与异步任务视图保留新节点真实完成状态', async () => {
   await withServer(false, async base => {
     const tasks = await (await fetch(base + '/state/tasks')).json()
@@ -101,9 +118,19 @@ test('新工作流话题进入列表与详情，跨群详情不可读',async()=>
     const listing=await(await fetch(base+'/state/topics?groupId=g')).json()
     assert.equal(listing.total,1)
     assert.equal(listing.topics[0].topicId,'workflow-topic')
+    assert.equal(listing.topics[0].summary, '')
     const detail=await(await fetch(base+'/state/topics/workflow-topic?groupId=g')).json()
     assert.equal(detail.topic?.engine,'workflow-v2',JSON.stringify(detail))
     assert.equal(detail.messages[0].text,'原消息')
+    topic.title = '数据集导入导出开发'
+    topic.summary = '按已提供文档开发；先核对目标仓库。'
+    topic.contextRevision = 4
+    const refreshed = await (await fetch(base+'/state/topics?groupId=g')).json()
+    const refreshedDetail = await (await fetch(base+'/state/topics/workflow-topic?groupId=g')).json()
+    assert.equal(refreshed.topics[0].title, topic.title)
+    assert.equal(refreshed.topics[0].summary, topic.summary)
+    assert.equal(refreshed.topics[0].summaryRevision, 4)
+    assert.equal(refreshedDetail.topic.summary, topic.summary)
     assert.equal((await fetch(base+'/state/topics/workflow-topic?groupId=other')).status,404)
   },{overrides:{listWorkflowTopics:async groupId=>groupId==='other'?[]:[topic],getWorkflowTopicContext:async({groupId})=>groupId==='g'?{topic,messages:[{messageId:'m',text:'原消息'}],total:1}:null}})
 })
@@ -525,4 +552,36 @@ test('审批重新投递入口拒绝外部Origin且保留明确未发送证明�
     assert.equal((await post('http://127.0.0.1:3080')).status, 200)
     assert.deepEqual(calls, [{ requestId: 'request', ...body }])
   }, { overrides: { reissueAuthorization: async input => { calls.push(input); return input } } })
+})
+
+test('历史话题CLI只检查不写入，apply核对digest并独立读回且不自动维护', async () => {
+  const { reconcileTopic } = await import('../docs/acceptance/message-clarification-admission/scripts/reconcile-topic.mjs')
+  const args = ['--source-topic', 'source', '--target-topic', 'target', '--title', '数据集导入导出开发', '--summary', '按文档开发并在过程中修复插件', '--reason', '修复确定的同事项历史归属']
+  const calls = [], digest = 'a'.repeat(64)
+  let active = true
+  const request = async (url, options) => {
+    calls.push({ path: url.pathname, method: options.method, body: options.body && JSON.parse(options.body) })
+    const value = url.pathname === '/runtime/maintenance' ? { active, maintenanceId: 'maintenance', revision: 3 }
+      : url.pathname.endsWith('/check') ? { expectedDigest: digest }
+        : url.pathname === '/runtime/topics/reconcile' ? { sourceTopicId: 'source', targetTopicId: 'target' }
+          : { topicId: 'target', current: { topicTitle: '数据集导入导出开发' } }
+    return new Response(JSON.stringify(value), { status: 200 })
+  }
+  assert.deepEqual(await reconcileTopic([...args, '--check'], request), { expectedDigest: digest })
+  assert.deepEqual(calls.map(item => item.path), ['/runtime/maintenance', '/runtime/topics/reconcile/check'])
+  assert.equal(calls[1].body.maintenanceRevision, 3)
+  calls.length = 0
+  await assert.rejects(reconcileTopic([...args, '--apply'], request), /expected-digest/)
+  assert.equal(calls.length, 0)
+  await assert.rejects(reconcileTopic([...args, '--apply', '--expected-digest', 'b'.repeat(64), '--request-id', 'one'], request), /摘要已变化/)
+  assert.ok(calls.every(item => item.path !== '/runtime/topics/reconcile'))
+  calls.length = 0
+  const applied = await reconcileTopic([...args, '--apply', '--expected-digest', digest, '--request-id', 'one'], request)
+  assert.equal(applied.target.topicId, 'target')
+  assert.deepEqual(calls.map(item => item.path), ['/runtime/maintenance', '/runtime/topics/reconcile/check', '/runtime/topics/reconcile', '/state/workflows/topics/target/context'])
+  assert.equal(calls[2].body.requestId, 'one')
+  calls.length = 0; active = false
+  await assert.rejects(reconcileTopic([...args, '--check'], request), /不会自动进入维护/)
+  assert.deepEqual(calls.map(item => item.path), ['/runtime/maintenance'])
+  await assert.rejects(reconcileTopic([...args, '--check', '--endpoint', 'http://example.com'], request), /本机回环/)
 })

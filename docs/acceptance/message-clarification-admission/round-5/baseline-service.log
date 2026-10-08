@@ -1,0 +1,89 @@
+✖ 受信外部适配器齐备时协调目录可见，语义提交不直接执行外部效果 (333.492ms)
+✖ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (907.3132ms)
+✖ 任务直接调查真实登记状态查询入账，无业务Run且同会话唯一完成 (687.3591ms)
+✖ 任务直接调查真实登记状态查询入账，无业务Run且重启后唯一完成 (1297.326ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3805.1055
+
+✖ failing tests:
+
+test at test\workflow-service.test.js:1999:1
+✖ 受信外部适配器齐备时协调目录可见，语义提交不直接执行外部效果 (333.492ms)
+  ZodError: [
+    {
+      "code": "custom",
+      "path": [
+        "decisions",
+        0,
+        "units",
+        0,
+        "intent",
+        "actions",
+        0,
+        "arguments",
+        "stageAuthorizations"
+      ],
+      "message": "外部 workflowId 必须提供对应完整阶段授权；objective逐字引用原文，gate明确none或confirmation"
+    }
+  ]
+      at accept (file:///D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/tmp/clarification-baseline-20261008095725/repo/packages/dingtalk-dsh-assistant/message-coordinator.js:91:46)
+      at onCandidate (file:///D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/tmp/clarification-baseline-20261008095725/repo/packages/dingtalk-dsh-assistant/message-coordinator.js:275:37)
+      at Object.run (file:///D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/tmp/clarification-baseline-20261008095725/repo/test/workflow-service.test.js:564:17)
+      at async drive (file:///D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/tmp/clarification-baseline-20261008095725/repo/packages/dingtalk-dsh-assistant/message-coordinator.js:267:18)
+
+test at test\workflow-service.test.js:2716:1
+✖ C13 渠道读回挂起时新业务和取消继续，ACK不冒充送达 (907.3132ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/tmp/clarification-baseline-20261008095725/repo/test/workflow-service.test.js:2774:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:5959:37
+✖ 任务直接调查真实登记状态查询入账，无业务Run且同会话唯一完成 (687.3591ms)
+  AssertionError [ERR_ASSERTION]: {"reports":[{"reportId":"owner:turn-d608ad5c-751d-4f93-b017-31a31f144673","taskId":"task-179fa50bb1148fd0c119abff170fcf6a","turnId":"turn-d608ad5c-751d-4f93-b017-31a31f144673","reportType":"complete","applicationStatus":"applied","triggerTypes":["task.created","query.succeeded"],"facts":{"summary":"登记状态端点返回ok","evidenceRefs":["tasks/task-179fa50bb1148fd0c119abff170fcf6a/sha256-9827419148454045a4c3169b5db351f8c484bfc5de22bcce93fd7f813ef6eff9.json"]},"createdAt":"2026-10-08T01:58:45.153Z"}],"sourceState":{"run":{"sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1,"conversationId":"g","actorId":"owner","body":"确认状态端点返回ok","barriers":[],"context":{"sourceMessageId":"m","directedToAgent":false,"agentNames":["小助手","用户"],"quoteRefs":[],"attachments":[],"compactPolicy":"处理本人交办事项\n只有已认证任务所有者可以要求执行。具体可用流程由协调输入的availableWorkflows确定，不把分析流程当成工程或数据库执行。"},"runId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e","policy":{"version":"message-v2.6","concurrency":2},"revision":0,"status":"settled","routingStatus":"routing_complete","intentStatus":"processed","createdAt":"2026-10-08T01:58:44.734Z","snapshot":{"source":{"sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1,"text":"确认状态端点返回ok","actorId":"owner","conversationId":"g"},"sourceEdit":null,"historyManifest":[],"history":[],"quotes":[],"attachments":[],"policy":"处理本人交办事项\n只有已认证任务所有者可以要求执行。具体可用流程由协调输入的availableWorkflows确定，不把分析流程当成工程或数据库执行。","replyObligation":{"required":false,"reason":"no_direct_address","sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1},"agentNames":["小助手","用户"],"actorPermissions":[],"omissions":[],"snapshotId":"6e492663837e790453bc89ebb5caa06dc7b1c9a3b7592ac929dec6a218f07b13"},"sequenceId":1,"reason":null,"attentionScope":null,"coordinatorConsumed":{"turnId":"75a0c41f-bbd7-4baf-ae62-b4ab957c37c9","leaseEpoch":1,"at":"2026-10-08T01:58:44.767Z"}},"notificationDiagnostics":[],"units":[{"unitId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:75a0c41f-bbd7-4baf-ae62-b4ab957c37c9:0","spans":[{"start":0,"end":10}],"goalText":"确认状态端点返回ok","routingBinding":{"kind":"binding","disposition":"new","candidateId":null,"engine":"workflow","target":null,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","evidence":["隔离业务脚本"],"explicitReferenceMatches":[]},"topic":{"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","title":"确认状态端点返回ok","facts":[{"kind":"fact","text":"确认状态端点返回ok","sourceRefs":[{"sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1,"text":"确认状态端点返回ok"}]}]},"commands":[{"commandId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:75a0c41f-bbd7-4baf-ae62-b4ab957c37c9:0:0","kind":"create","args":{"taskId":"task-179fa50bb1148fd0c119abff170fcf6a","arguments":{"objective":"确认状态端点返回ok"},"binding":{"kind":"binding","disposition":"new","candidateId":null,"engine":"workflow","target":null,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","evidence":["隔离业务脚本"],"explicitReferenceMatches":[]},"constraints":[],"requiredExecutionMaterials":[],"replyPolicy":"result"},"dependsOn":[]}],"id":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:75a0c41f-bbd7-4baf-ae62-b4ab957c37c9:0","runId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e","revision":0,"status":"applied","topicId":"topic-f0b4be37303d09b4dc1f70778d919d80"}],"nodes":[],"commands":[{"commandId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:75a0c41f-bbd7-4baf-ae62-b4ab957c37c9:0:0","kind":"create","args":{"taskId":"task-179fa50bb1148fd0c119abff170fcf6a","arguments":{"objective":"确认状态端点返回ok"},"binding":{"kind":"binding","disposition":"new","candidateId":null,"engine":"workflow","target":null,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","evidence":["隔离业务脚本"],"explicitReferenceMatches":[]},"constraints":[],"requiredExecutionMaterials":[],"replyPolicy":"result"},"dependsOn":[],"id":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:75a0c41f-bbd7-4baf-ae62-b4ab957c37c9:0:0","runId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e","unitId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:75a0c41f-bbd7-4baf-ae62-b4ab957c37c9:0","revision":0,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","status":"applied","leaseEpoch":1,"createdAt":"2026-10-08T01:58:44.767Z","topicInputRevision":1,"startedAt":"2026-10-08T01:58:44.775Z","result":{"taskId":"task-179fa50bb1148fd0c119abff170fcf6a","runId":null,"status":"accepted","reply":"正在核对执行条件，处理尚未开始。"},"error":null,"completedAt":"2026-10-08T01:58:44.816Z"}],"requests":[],"executions":[],"barriers":[],"budget":{"claims":0,"corrections":0,"input_tokens":0,"output_tokens":0}},"records":[]}
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/tmp/clarification-baseline-20261008095725/repo/test/workflow-service.test.js:6036:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\workflow-service.test.js:5959:37
+✖ 任务直接调查真实登记状态查询入账，无业务Run且重启后唯一完成 (1297.326ms)
+  AssertionError [ERR_ASSERTION]: {"reports":[{"reportId":"owner:turn-4688a543-4519-4da0-b77e-a63f882bbe3c","taskId":"task-5fcbe2187564aaa8785a867fe341839a","turnId":"turn-4688a543-4519-4da0-b77e-a63f882bbe3c","reportType":"wait","applicationStatus":"applied","triggerTypes":["task.created","query.succeeded"],"facts":{"summary":"测试重启持久读取","evidenceRefs":["tasks/task-5fcbe2187564aaa8785a867fe341839a/sha256-531f0d2ad94b7d211ff0f9c9aab76310da827eb10e0c16e6c32f7c5100799016.json"],"condition":{"kind":"business-input","missing":"测试重新接入","responsibleParty":"测试","resumeWhen":"恢复后验证","evidenceRefs":["tasks/task-5fcbe2187564aaa8785a867fe341839a/sha256-531f0d2ad94b7d211ff0f9c9aab76310da827eb10e0c16e6c32f7c5100799016.json"]}},"createdAt":"2026-10-08T01:58:45.722Z"},{"reportId":"owner:turn-093cf9ea-4d76-47a0-b686-b303b0c01bdf","taskId":"task-5fcbe2187564aaa8785a867fe341839a","turnId":"turn-093cf9ea-4d76-47a0-b686-b303b0c01bdf","reportType":"complete","applicationStatus":"applied","triggerTypes":["system.recovery"],"facts":{"summary":"登记状态端点返回ok","evidenceRefs":["tasks/task-5fcbe2187564aaa8785a867fe341839a/sha256-531f0d2ad94b7d211ff0f9c9aab76310da827eb10e0c16e6c32f7c5100799016.json"]},"createdAt":"2026-10-08T01:58:46.385Z"}],"sourceState":{"run":{"sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1,"conversationId":"g","actorId":"owner","body":"确认状态端点返回ok","barriers":[],"context":{"sourceMessageId":"m","directedToAgent":false,"agentNames":["小助手","用户"],"quoteRefs":[],"attachments":[],"compactPolicy":"处理本人交办事项\n只有已认证任务所有者可以要求执行。具体可用流程由协调输入的availableWorkflows确定，不把分析流程当成工程或数据库执行。"},"runId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e","policy":{"version":"message-v2.6","concurrency":2},"revision":0,"status":"settled","routingStatus":"routing_complete","intentStatus":"processed","createdAt":"2026-10-08T01:58:45.459Z","snapshot":{"source":{"sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1,"text":"确认状态端点返回ok","actorId":"owner","conversationId":"g"},"sourceEdit":null,"historyManifest":[],"history":[],"quotes":[],"attachments":[],"policy":"处理本人交办事项\n只有已认证任务所有者可以要求执行。具体可用流程由协调输入的availableWorkflows确定，不把分析流程当成工程或数据库执行。","replyObligation":{"required":false,"reason":"no_direct_address","sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1},"agentNames":["小助手","用户"],"actorPermissions":[],"omissions":[],"snapshotId":"6e492663837e790453bc89ebb5caa06dc7b1c9a3b7592ac929dec6a218f07b13"},"sequenceId":1,"reason":null,"attentionScope":null,"coordinatorConsumed":{"turnId":"c739e8c1-5728-40cd-817e-048ef1b9d09e","leaseEpoch":1,"at":"2026-10-08T01:58:45.487Z"}},"notificationDiagnostics":[],"units":[{"unitId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:c739e8c1-5728-40cd-817e-048ef1b9d09e:0","spans":[{"start":0,"end":10}],"goalText":"确认状态端点返回ok","routingBinding":{"kind":"binding","disposition":"new","candidateId":null,"engine":"workflow","target":null,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","evidence":["隔离业务脚本"],"explicitReferenceMatches":[]},"topic":{"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","title":"确认状态端点返回ok","facts":[{"kind":"fact","text":"确认状态端点返回ok","sourceRefs":[{"sourceKey":"dws:ce29852ab89cb08aa521f2a9dc03ef5fad7355d9d064f3538355e0cd097745f0","sourceVersion":1,"text":"确认状态端点返回ok"}]}]},"commands":[{"commandId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:c739e8c1-5728-40cd-817e-048ef1b9d09e:0:0","kind":"create","args":{"taskId":"task-5fcbe2187564aaa8785a867fe341839a","arguments":{"objective":"确认状态端点返回ok"},"binding":{"kind":"binding","disposition":"new","candidateId":null,"engine":"workflow","target":null,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","evidence":["隔离业务脚本"],"explicitReferenceMatches":[]},"constraints":[],"requiredExecutionMaterials":[],"replyPolicy":"result"},"dependsOn":[]}],"id":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:c739e8c1-5728-40cd-817e-048ef1b9d09e:0","runId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e","revision":0,"status":"applied","topicId":"topic-f0b4be37303d09b4dc1f70778d919d80"}],"nodes":[],"commands":[{"commandId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:c739e8c1-5728-40cd-817e-048ef1b9d09e:0:0","kind":"create","args":{"taskId":"task-5fcbe2187564aaa8785a867fe341839a","arguments":{"objective":"确认状态端点返回ok"},"binding":{"kind":"binding","disposition":"new","candidateId":null,"engine":"workflow","target":null,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","evidence":["隔离业务脚本"],"explicitReferenceMatches":[]},"constraints":[],"requiredExecutionMaterials":[],"replyPolicy":"result"},"dependsOn":[],"id":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:c739e8c1-5728-40cd-817e-048ef1b9d09e:0:0","runId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e","unitId":"msg-d8f6599cf3a34ac59192968a1513582f1a82438e:coordinator:c739e8c1-5728-40cd-817e-048ef1b9d09e:0","revision":0,"topicId":"topic-f0b4be37303d09b4dc1f70778d919d80","status":"applied","leaseEpoch":1,"createdAt":"2026-10-08T01:58:45.487Z","topicInputRevision":1,"startedAt":"2026-10-08T01:58:45.497Z","result":{"taskId":"task-5fcbe2187564aaa8785a867fe341839a","runId":null,"status":"accepted","reply":"正在核对执行条件，处理尚未开始。"},"error":null,"completedAt":"2026-10-08T01:58:45.554Z"}],"requests":[],"executions":[],"barriers":[],"budget":{"claims":0,"corrections":0,"input_tokens":0,"output_tokens":0}},"records":[]}
+
+  2 !== 1
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/tmp/clarification-baseline-20261008095725/repo/test/workflow-service.test.js:6036:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

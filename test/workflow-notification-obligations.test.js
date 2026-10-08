@@ -476,3 +476,24 @@ test('原生开始准备拒绝未应用命令及借用另一Task身份',async t=
  await assert.rejects(f.call('notification.prepare',{...args,eventKey:'task.started:task',payload:{...args.payload,fact:{taskId:'task'}}}),{code:'MESSAGE_NOTIFICATION_FACT_REQUIRED'})
  assert.equal((await f.notices()).length,0)
 })
+
+
+test('授权请求使用独立通知且回执丢失和重启扫描不重复发送', async t => {
+  const f = await fixture(t)
+  await f.call('wait', { runId: 'm', unitId: '$', nodeId: 'coordinator', request: {
+    requestId: 'authorize-question', kind: 'needs_authorization', question: '请 owner 授权按文档开发。', permittedActors: ['owner'],
+  } })
+  let sends = 0, reads = 0
+  const adapter = { canDisclose: async () => true,
+    send: async () => { sends++; throw new Error('ack lost') },
+    readback: async () => ++reads > 1 ? { messageId: 'authorization-out' } : null }
+  await f.flush(adapter); await f.flush(adapter); await f.flush(adapter)
+  const notices = await f.notices()
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0].payload.phase, 'authorization')
+  assert.equal(notices[0].eventKey, 'request.authorization:authorize-question:0')
+  assert.equal(notices[0].status, 'delivered')
+  assert.equal(sends, 1)
+  const pending = await f.store.query({ kind: 'message.request', requestId: 'authorize-question' })
+  assert.equal(pending.status, 'pending')
+})

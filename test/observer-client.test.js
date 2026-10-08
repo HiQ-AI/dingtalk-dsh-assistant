@@ -43,6 +43,8 @@ test('收信箱区分话题关联等待与意图重判，任务详情展示业�
 test('收信箱分开表达材料读取责任及通知回读，详情可用键盘展开', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /waiting_context: \{ label: '正在读取材料'/)
+  assert.match(source, /waiting_authorization: \{ label: '等待授权'/)
+  assert.match(source, /id: 'waiting_authorization', label: '等待授权'/)
   assert.match(source, /waiting_clarification: \{ label: '等待用户补充'/)
   assert.match(source, /waiting_system: \{ label: '材料读取受阻'/)
   assert.match(source, /React\.createElement\('details'[\s\S]*React\.createElement\('summary'[\s\S]*'等待与通知'/)
@@ -694,3 +696,25 @@ test('详情慢查询跨刷新复用，切换任务不接受旧响应',async()=>
  requests[0].resolve({taskId:'one'});requests[1].resolve({taskId:'two'});await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(details.map(v=>v.taskId),['two']);
 });
+
+test('已选话题新版本刷新详情并重置旧分页，同版本及其他话题不打断阅读', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const start = source.indexOf('        const current = listing?.topics.find')
+  const end = source.indexOf('      }, [listing, selection])', start)
+  const code = `(()=>{${source.slice(start, end)}})()`
+  const changes = []
+  const selection = { topicId: 'selected', groupId: 'g', revision: 2, summaryRevision: 3, updatedAt: 'old' }
+  const env = { selection, listing: { topics: [{ ...selection }] } }
+  for (const name of ['setSelection', 'setMessageOffset', 'setContextCursor', 'setContextCursorHistory', 'setIntentCursor', 'setIntentCursorHistory', 'setSelectedIntentRun', 'setContextRevision', 'setContext', 'setTopicContext']) env[name] = value => changes.push([name, value])
+  runInNewContext(code, env)
+  assert.equal(changes.length, 0)
+  env.listing.topics = [{ ...selection, topicId: 'other', revision: 4 }]
+  runInNewContext(code, env)
+  assert.equal(changes.length, 0)
+  env.listing.topics = [{ ...selection, summaryRevision: 4, updatedAt: 'new' }]
+  runInNewContext(code, env)
+  assert.equal(changes.find(([name]) => name === 'setSelection')[1].summaryRevision, 4)
+  assert.equal(changes.find(([name]) => name === 'setContextRevision')[1], undefined)
+  assert.equal(changes.find(([name]) => name === 'setMessageOffset')[1], 0)
+  assert.equal(changes.find(([name]) => name === 'setTopicContext')[1], undefined)
+})

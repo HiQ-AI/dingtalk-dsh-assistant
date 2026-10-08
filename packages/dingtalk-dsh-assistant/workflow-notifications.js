@@ -223,10 +223,11 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         if (!(await store.query({kind:'message.impact',runId:run.runId})).impact?.coordinatorManaged)
         await attempt(run.runId, 'reply_obligation', () => prepareState(run, 'reply_obligation', /在不在|在[吗嘛么]/u.test(run.body ?? '') ? '在的，请说。' : '已收到。'))
       }
-      for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_clarification')) {
+      for (const request of state.requests.filter(item => item.status === 'pending' && ['needs_clarification', 'needs_authorization'].includes(item.kind))) {
         await attempt(run.runId, request.id, async () => {
-        if (notificationSilence(run, 'clarification')) return
-        const notificationId = `clarify-${executionDigest([run.runId, request.id, request.revision])}`
+        const phase = request.kind === 'needs_authorization' ? 'authorization' : 'clarification'
+        if (notificationSilence(run, phase)) return
+        const notificationId = `${phase === 'authorization' ? 'authorize' : 'clarify'}-${executionDigest([run.runId, request.id, request.revision])}`
         const existing = await store.query({ kind: 'message.notification', notificationId })
         if (existing) {
           if (existing.runId !== run.runId || existing.requestId !== request.id) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
@@ -234,8 +235,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         }
         const responsibility = groupResponsibility(run.conversationId)
         if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
-        await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId, eventKey:`request.clarification:${request.id}:${request.revision}`,
-          payload: { text: formatGroupReply(request.question ?? request.reason, responsibility), phase: 'clarification', conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
+        await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId, eventKey:`request.${phase}:${request.id}:${request.revision}`,
+          payload: { text: formatGroupReply(request.question ?? request.reason, responsibility), phase, conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
           disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
         }, `prepare:${notificationId}`)
         })

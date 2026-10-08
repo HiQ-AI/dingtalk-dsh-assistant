@@ -1,5 +1,5 @@
 import { messageTimestamp, normalizeMessageTime, normalizeResourceRefs } from './dws-bridge.js'
-import { isNamedAgentDirection } from './decision.js'
+import { isNamedAgentDirection, isDirectedToOtherParticipants } from './decision.js'
 import { acceptanceCriteriaSchema, taskTitle } from './task-input-contract.js'
 import { sessionWorkspace, taskFilePath, checkedTaskDirectory } from './session-workspaces.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
@@ -341,6 +341,19 @@ const sourceKey = (profile, groupId, messageId) => `dws:${executionDigest([profi
 // 这里仅核对被点名的接收者；语义动作已经由 I/IB 判定，执行批准仍走阶段批准。
 export const isDirectedTaskRequest = (body, agentNames = []) => typeof body === 'string' && isNamedAgentDirection(body, agentNames)
 const requireText = (value, code) => { if (typeof value !== 'string' || !value.trim()) throw executionError(code); return value }
+const authorizationAnswer = value => ({ '同意': 'approved', '批准': 'approved', approved: 'approved',
+  '拒绝': 'rejected', '不同意': 'rejected', rejected: 'rejected' })[String(value).trim()]
+// 环境来自有效来源；模型填写的参数不能为缺失的交付目标制造授权。
+const engineeringTarget = (target, texts, prior = {}) => {
+  const body = texts.filter(Boolean).join('\n')
+  const named = [...new Set(body.toLowerCase().match(/\buat[1-9]\b/g) ?? [])]
+  const selected = named.length === 1 && !/uat[1-9]\s*[~～至到-]\s*(?:uat)?[1-9]/i.test(body) ? named[0] : undefined
+  const result = { ...prior, ...target }
+  delete result.uatEnvironment
+  if (selected) result.uatEnvironment = selected
+  else if (!named.length && target.uatEnvironment === undefined && prior.uatEnvironment) result.uatEnvironment = prior.uatEnvironment
+  return result
+}
 // 目标摘要可用于展示；执行要求取已接纳事项的原文，避免模型附加的调查方法升级为交付前提。
 const taskSourceRequest = ({ run, unit }) => requireText(unit.spans.map(span => run.body.slice(span.start, span.end)).join('\n'), 'WORKFLOW_SOURCE_REQUEST_REQUIRED')
 const sourceRequestCriterion = '完成当前事项原文要求的交付'
@@ -937,27 +950,52 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const investigationConfirmation = request => request.reason === 'COMPLETED_INVESTIGATION_REPORTED_AGAIN'
     || (request.nodeId === 'I' && request.kind === 'needs_clarification'
       && /此前对应任务仅授权排查分析/u.test(String(request.reason)))
-  const mayCreate = async (run, workflowId, binding) => {
-    if (run.channel === 'web') return run.actorId === config.webActorId && run.externalMessaging === false
-    if (run.actorId === ownerActorId) return true
-    if (!/任务准入/u.test(legacyGroup(run.conversationId)?.responsibility ?? '')) return false
-    if (isDirectedTaskRequest(run.body, agentNames())) return true
-    const referenceKeys = new Set([...(run.context?.quoteRefs ?? []).map(ref => ref.sourceKey), ...(binding?.explicitReferenceMatches ?? [])])
+  const admissionActionDigest = action => executionDigest({ intent: action.intent, arguments: action.arguments,
+    constraints: action.constraints ?? [], requiredExecutionMaterials: action.requiredExecutionMaterials ?? [] })
+  const taskAdmission = async (run, binding, action) => {
+    const result = (allowed, reasonCode, sourceRefs = []) => ({ allowed, reasonCode, sourceRefs })
+    if (run.channel === 'web') return result(run.actorId === config.webActorId && run.externalMessaging === false, 'WEB_IDENTITY')
+    if (isDirectedToOtherParticipants(run.body, agentNames())) return result(false, 'ADDRESSED_TO_OTHERS')
+    if (run.actorId === ownerActorId) return result(true, 'OWNER', [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion }])
+    const state = await store.query({ kind: 'message.run', runId: run.runId })
+    const grants = state.requests.filter(request => request.kind === 'needs_authorization' && request.status === 'resolved'
+      && request.revision === state.run.revision && request.resolvedByActorId === ownerActorId
+      && request.authorization?.sourceKey === run.sourceKey && request.authorization.sourceVersion === run.sourceVersion
+      && request.authorization.actorId === run.actorId && request.authorization.conversationId === run.conversationId
+      && Array.isArray(request.authorization.actions) && executionDigest(request.authorization.actions) === request.authorization.actionDigest
+      && (!binding?.topicId || request.authorization.topicId === binding.topicId)
+      && (!action || request.authorization.actions.some(candidate => admissionActionDigest(candidate) === admissionActionDigest(action))))
+    for (const grant of grants) {
+      const topic = await fullTopic(grant.authorization.topicId)
+      const dispatched = action?.commandId ? (await store.query({ kind: 'message.run', runId: run.runId })).commands.find(command => command.id === action.commandId) : null
+      const boundCommand = dispatched?.args.authorizationRequestId === grant.id && dispatched.topicId === grant.authorization.topicId
+        && dispatched.topicInputRevision === topic?.inputRevision
+      if (topic?.conversationId === run.conversationId && (topic.inputRevision === grant.authorization.topicInputRevision || boundCommand))
+        return { ...result(grant.answer === 'approved', grant.answer === 'approved' ? 'OWNER_APPROVED' : 'OWNER_REJECTED',
+          [{ sourceKey: grant.authorization.sourceKey, sourceVersion: grant.authorization.sourceVersion, requestId: grant.id }]),
+          authorizationRequestId: grant.id }
+    }
+    if (!/任务准入/u.test(legacyGroup(run.conversationId)?.responsibility ?? '')) return result(false, 'GROUP_ADMISSION_NOT_CONFIGURED')
+    if (isDirectedTaskRequest(run.body, agentNames())) return result(true, 'DIRECTED_REQUEST', [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion }])
+    const referenceKeys = new Map([...(run.context?.quoteRefs ?? []).map(ref => [ref.sourceKey, ref.sourceVersion]),
+      ...(binding?.explicitReferenceMatches ?? []).map(key => [key, undefined])])
     // 只有已经关联的事项来源可续接；同群相邻消息不进入授权证据集合。
     if (binding?.topicId) {
       const topic = await fullTopic(binding.topicId)
       if (topic?.conversationId === run.conversationId) for (const fact of topic.facts ?? [])
-        for (const ref of fact.sourceRefs ?? []) referenceKeys.add(ref.sourceKey)
+        for (const ref of fact.sourceRefs ?? []) referenceKeys.set(ref.sourceKey, ref.sourceVersion)
     }
-    for (const key of referenceKeys) {
+    for (const [key, version] of referenceKeys) {
       const source = await store.query({ kind: 'task.source', sourceKey: key })
       if (source && source.actorId === run.actorId && source.conversationId === run.conversationId
-        && source.status !== 'superseded' && isDirectedTaskRequest(source.body, agentNames())) return true
+        && source.status !== 'superseded' && (version === undefined || source.sourceVersion === version)
+        && isDirectedTaskRequest(source.body, agentNames())) return result(true, 'RELATED_DIRECTED_REQUEST', [{ sourceKey: key, sourceVersion: source.sourceVersion }])
     }
-    const state = await store.query({ kind: 'message.run', runId: run.runId })
-    return state.requests.some(request => investigationConfirmation(request)
+    const confirmed = state.requests.some(request => investigationConfirmation(request)
       && request.status === 'resolved' && /^(?:是|需要|请|好|可以|同意|继续|修复)/u.test(String(request.answer).trim()))
+    return result(confirmed, confirmed ? 'INVESTIGATION_CONFIRMED' : 'DIRECTED_REQUEST_NOT_ESTABLISHED')
   }
+  const mayCreate = async (run, _workflowId, binding, action) => (await taskAdmission(run, binding, action)).allowed
 
   async function taskAccess(taskId, actorId, conversationId) {
     const origin = await store.query({ kind: 'task.origin', taskId })
@@ -1238,8 +1276,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       constraints: [...new Set(action.constraints ?? [...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])],
       explicitStages: action.arguments.explicitStages ?? [],
       materials: resolved.data.resources.map(item => ({ id: item.resourceRef, text: item.text })),
-      target: Object.fromEntries(['repositoryId', 'uatEnvironment', 'targetId', 'commitSha', 'releaseTag', 'changeRef', 'pullRequestNumber', 'headCommitSha']
+      target: engineeringTarget(Object.fromEntries(['repositoryId', 'uatEnvironment', 'targetId', 'commitSha', 'releaseTag', 'changeRef', 'pullRequestNumber', 'headCommitSha']
         .filter(key => action.arguments[key] !== undefined).map(key => [key, action.arguments[key]])),
+        [...sources.map(source => source.body), ...resolved.data.resources.map(resource => resource.text)]),
       scope: queryScope({ actorId: info.run.actorId, conversationId: info.run.conversationId, sourceKeys,
         sourceVersions: Object.fromEntries(sources.map(source => [source.sourceKey, source.sourceVersion])),
         readableFiles, ...(fileDelivery ? { artifactFiles: fileDelivery.files } : {}),
@@ -1473,7 +1512,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const requirement = await artifacts.read(plan.task.requirementRef)
       const origin = await store.query({ kind: 'task.origin', taskId })
       if (!origin || !requirement?.authorization
-        || !requirement.authorization.ownerConfirmed && !await mayCreate(origin.run)) return false
+        || !requirement.authorization.ownerConfirmed && !await mayCreate(origin.run, null, origin.command?.args?.binding,
+          origin.command ? { intent: origin.command.kind, ...origin.command.args.arguments && { arguments: origin.command.args.arguments },
+            constraints: origin.command.args.constraints, requiredExecutionMaterials: origin.command.args.requiredExecutionMaterials } : undefined)) return false
       if (origin.channel === 'web' && (requirement.authorization.channel !== 'web'
         || requirement.reportChannel !== 'web' || requirement.externalMessaging !== false
         || stages.length !== origin.run.request.stages.length
@@ -1525,7 +1566,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         if (stage.workflowId === 'task-group-file-delivery' && (!fileWorkflow || !requirement.fileDelivery
           || plan.stages.some(previous => previous.workflowId === stage.workflowId && previous.status !== 'invalidated'))) return false
         if (!item || item.id === 'task-general' || item.mode === 'external' && !selectedExternal.byId.has(item.id)) return false
-        if (item.mode === 'engineering' && (!requirement.target.repositoryId || !uatBranchFor(requirement.target.uatEnvironment))) return false
+        if (item.mode === 'engineering' && (!requirement.target.repositoryId || !uatBranchFor(requirement.target.uatEnvironment)))
+          throw executionError('TASK_OWNER_ENGINEERING_INPUT_REQUIRED', `${!requirement.target.repositoryId ? '目标仓库' : '目标 UAT 环境'}尚未明确；先读当前材料及关联来源，确实缺少时提交 wait/business-input，只询问缺失参数，不重复确认开发意图。`)
         if (item.mode === 'external' && !(requirement.stageTargets?.[item.id] ?? requirement.target.targetId)) return false
         if (item.id === 'task-uat-pr-merge' && !/合并|部署|提测|UAT/iu.test(userText) && origin.channel !== 'web') return false
         if (item.id === 'task-main-pr-merge' && !/上线|合并.*main|main.*合并/iu.test(userText)) return false
@@ -1735,8 +1777,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return false
   }
   async function createTask(action, info) {
-    const ownerConfirmed = await ownerConfirmedPriorTask(action, info)
-    if (!await mayCreate(info.run, action.arguments.workflowId, info.binding) && !ownerConfirmed) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    const admission = await taskAdmission(info.run, info.binding, { ...action, commandId: info.commandId })
+    const ownerConfirmed = admission.reasonCode === 'OWNER_APPROVED' || await ownerConfirmedPriorTask(action, info)
+    if (!admission.allowed && !ownerConfirmed) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     info = { ...info, ownerConfirmed }
     if (info.run.context.editOf) {
       const original = await messages.state(info.run.context.editOf.sourceRunId)
@@ -1845,14 +1888,16 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         acceptanceCriteria: action.arguments.acceptanceCriteria ?? previous.acceptanceCriteria,
         constraints: [...new Set([...(previous.constraints ?? []), ...(action.constraints ?? [])])],
         explicitStages: [...new Set([...(previous.explicitStages ?? []), ...(action.arguments.explicitStages ?? [])])],
-        target: { ...previous.target, ...Object.fromEntries(['repositoryId', 'uatEnvironment', 'targetId', 'commitSha', 'releaseTag', 'changeRef', 'pullRequestNumber', 'headCommitSha']
-          .filter(key => action.arguments[key] !== undefined).map(key => [key, action.arguments[key]])) },
+        target: engineeringTarget(Object.fromEntries(['repositoryId', 'uatEnvironment', 'targetId', 'commitSha', 'releaseTag', 'changeRef', 'pullRequestNumber', 'headCommitSha']
+          .filter(key => action.arguments[key] !== undefined).map(key => [key, action.arguments[key]])),
+          [source.body], previous.target),
         scope: { ...previous.scope, sourceKeys: [...new Set([...previous.scope.sourceKeys, info.run.sourceKey])],
           ...(fileDelivery ? { artifactFiles: fileDelivery.files } : {}),
           sourceVersions: { ...previous.scope.sourceVersions, [info.run.sourceKey]: source.sourceVersion },
           writeMarkdown: previous.scope.writeMarkdown || /(?:生成|创建|写入|输出|保存).{0,16}(?:Markdown|md文件|文档|文件)/iu.test(info.run.body) },
         authorization: { actorId: info.run.actorId, sourceKey: info.run.sourceKey,
-          sourceVersion: info.run.sourceVersion, commandId: info.commandId } }
+          sourceVersion: info.run.sourceVersion, commandId: info.commandId,
+          ownerConfirmed: previous.authorization?.ownerConfirmed === true } }
       const saved = await artifacts.put(next, { taskId })
       await store.command({ id: `task-requirement:${info.commandId}`, kind: 'task.requirement.update', args: {
         taskId, expectedRequirementRevision: plan.task.requirementRevision, requirementRef: saved.ref,
@@ -2067,7 +2112,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           return ['status', 'result', 'no_action', 'fact', 'answer'].includes(action.intent) ? { allowed: true } : reject('旧任务只读，请明确发起新工作流任务')
         }
         if (!handlers[action.intent] && action.intent !== 'no_action') return reject(`尚未提供 ${action.intent} 处理流程`)
-        if (['create', 'research', 'reopen'].includes(action.intent) && !await mayCreate(info.run, action.arguments.workflowId, info.binding)
+        if (['create', 'research', 'reopen'].includes(action.intent) && !await mayCreate(info.run, action.arguments.workflowId, info.binding, { ...action, commandId: info.commandId })
           && !await ownerConfirmedPriorTask(action, info)) return reject('当前消息发送人没有创建业务任务的权限')
         if (['create', 'research', 'reopen'].includes(action.intent)
           && !action.arguments.objective?.trim()) return reject('任务目标未明确')
@@ -2146,8 +2191,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         }
         for (const topic of topics) {
           if (topic.facts.every(fact=>fact.sourceRunId===run.runId)) continue
-          if (result.some(card => card.topicId === topic.topicId)) continue
-          result.push({ candidateId: topic.topicId, topicId: topic.topicId, title: topic.title, goal: topic.title, state: 'topic', relevantTime: topic.updatedAt,
+          const taskCards = result.filter(card => card.topicId === topic.topicId)
+          if (taskCards.length) {
+            for (const card of taskCards) { card.topicTitle = topic.title; card.summary = topic.summary ?? '' }
+            continue
+          }
+          result.push({ candidateId: topic.topicId, topicId: topic.topicId, title: topic.title, summary: topic.summary ?? '', goal: topic.title, state: 'topic', relevantTime: topic.updatedAt,
             versions: { topic: topic.revision }, sourceRefs: topic.facts.flatMap(fact => fact.sourceRefs.map(ref => ref.sourceKey)),
             explicitReferenceMatches: explicitTopics.get(topic.topicId) ?? [], distinguishingFacts: ['话题事实，尚未关联执行Task'] })
         }
@@ -2201,12 +2250,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           if (pending.runId === run.runId || pending.conversationId !== run.conversationId || pending.status === 'superseded') continue
           const state = await messages.state(pending.runId)
           for (const request of state.requests) {
-            if (request.kind !== 'needs_clarification' || request.status !== 'pending'
+            if (!['needs_clarification', 'needs_authorization'].includes(request.kind) || request.status !== 'pending'
               || request.revision !== state.run.revision
               || !(request.permittedActors ?? []).includes(run.actorId) && run.actorId !== ownerActorId) continue
             clarificationRequests.push({ runId: pending.runId, requestId: request.id, sourceKey: pending.sourceKey,
               sourceVersion: pending.sourceVersion, actorId: pending.actorId, sourceText: pending.body,
-              question: request.question, reason: request.reason, unitId: request.unitId })
+              question: request.question, reason: request.reason, kind: request.kind, unitId: request.unitId })
           }
         }
         const cancellable = { cancellableAnswers: await cancellableAnswers(run), clarificationRequests }
@@ -2218,17 +2267,39 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         const storedTopic = binding.topicId ? await fullTopic(binding.topicId) : null
         if (binding.topicId && (!storedTopic || storedTopic.conversationId !== run.conversationId)) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
         const topic = storedTopic ? { ...storedTopic, facts: storedTopic.facts.map(fact => ({ ...fact, sourceRefs: fact.sourceRefs.map(({ text: _text, ...ref }) => ref) })), sources: [...new Map(storedTopic.facts.flatMap(fact => fact.sourceRefs).map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, ref])).values()] } : null
-        if (topic && !binding.taskId) {
-          return { ...cancellable, topic, ...(await topicTaskFacts(topic, run)), availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, null, binding) }
+        if (!binding.taskId) {
+          const admission = await taskAdmission(run, binding)
+          return { ...cancellable, ...(topic ? { topic, ...(await topicTaskFacts(topic, run)) } : {}),
+            availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows],
+            unavailableWorkflows, actorMayCreate: admission.allowed, taskAdmission: admission }
         }
-        if (!binding.taskId) return { ...cancellable, availableWorkflows: [...readOnlyCatalog, ...generalCatalog, ...engineering.availableWorkflows(), ...externalWorkflows], unavailableWorkflows, actorMayCreate: await mayCreate(run, null, binding) }
         await taskAccess(binding.taskId, run.actorId, run.conversationId)
         const origin = await store.query({ kind: 'task.origin', taskId: binding.taskId })
         const detail = await taskFacts(origin, binding.runId)
         return { ...cancellable, ...(topic ? { topic } : {}), task: detail,
           ...(topic ? { topicTasks: await topicTaskFacts(topic, run) } : {}) }
       },
-      async validateActions({ run, unit, binding, intent, requests }) {
+      async validateActions({ run, unit, binding, intent, requests, facts }) {
+        const acceptedAdmission = { kind: 'accepted' }
+        const inheritedConstraints = (facts?.topic?.facts ?? []).filter(fact => fact.kind === 'constraint'
+          && !(intent.factRevisions ?? []).some(revision => revision.factId === fact.id)).map(fact => fact.text)
+        const creations = intent.actions.filter(action => ['create', 'research', 'reopen'].includes(action.intent))
+          .map(action => ({ intent: action.intent, arguments: action.arguments, constraints: [...new Set([...inheritedConstraints, ...intent.constraints])],
+            requiredExecutionMaterials: intent.requiredExecutionMaterials }))
+        for (const action of creations) {
+          const admission = await taskAdmission(run, binding, action)
+          if (admission.allowed) { if (admission.authorizationRequestId) acceptedAdmission.authorizationRequestId = admission.authorizationRequestId; continue }
+          if (['OWNER_REJECTED', 'ADDRESSED_TO_OTHERS'].includes(admission.reasonCode)) return { kind: 'rejected', reason: 'TASK_ADMISSION_REJECTED', reasonCode: admission.reasonCode }
+          const ownerSource = (await store.query({ kind: 'message.list', conversationId: run.conversationId, limit: 200 }))
+            .find(source => source.actorId === ownerActorId && source.context?.senderName)
+          const ownerName = ownerSource?.context.senderName
+            ?? legacyGroup(run.conversationId)?.messages?.find(message => message.senderOpenDingTalkId === ownerActorId && message.senderName)?.senderName ?? ownerActorId
+          return { kind: 'needs_authorization', reason: 'TASK_ADMISSION_APPROVAL_REQUIRED', responsibility: 'owner',
+            question: `已明确交办内容：${creations.map(item => item.arguments.objective).join('；')}。当前交办来源尚未满足任务准入，请任务所有者 ${ownerName} 引用本通知回复“同意”或“拒绝”。该确认仅允许承接此事项，生产操作仍需独立审批。`,
+            permittedActors: [ownerActorId], needs: [], authorization: { sourceKey: run.sourceKey, sourceVersion: run.sourceVersion,
+              actorId: run.actorId, conversationId: run.conversationId, topicId: binding.topicId,
+              actionDigest: executionDigest(creations), actions: creations } }
+        }
         for (const action of intent.actions) {
           const authorizations = action.arguments.stageAuthorizations ?? []
           if (catalogById.get(action.arguments.workflowId)?.mode === 'external'
@@ -2252,37 +2323,27 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             }
           }
         }
-        for (const action of intent.actions.filter(item => ['create', 'reopen', 'revise'].includes(item.intent) && item.arguments.workflowId === 'task-engineering')) {
-          const environment = action.arguments.uatEnvironment
-          const answer = [...requests].reverse().find(item => item.unitId === unit.unitId && item.reason === 'ENGINEERING_UAT_ENVIRONMENT_REQUIRED' && item.status === 'resolved')?.answer
-          const source = typeof answer === 'string' ? answer : run.body
-          const named = [...new Set((source ?? '').toLowerCase().match(/\buat[1-9]\b/g) ?? [])]
-          if (!uatBranchFor(environment) || /uat[1-9]\s*[~～至到-]\s*(?:uat)?[1-9]/i.test(source ?? '') || named.length !== 1 || named[0] !== environment) return {
-            kind: 'needs_clarification', reason: 'ENGINEERING_UAT_ENVIRONMENT_REQUIRED',
-            question: '这次开发要提交到哪个 UAT 环境？请明确选择 uat1～uat9 中的一个，系统会映射到对应的 feature/uatN-base 分支；不会默认选择。合并 main 需单独的上线任务。', needs: [],
-          }
-        }
         for (const action of intent.actions.filter(item => item.intent === 'clarification')) {
           const target = action.arguments.runId === run.runId ? await messages.state(run.runId)
             : await messages.state(action.arguments.runId).catch(() => null)
           const request = target?.requests.find(item => item.id === action.arguments.requestId)
-          if (!request || request.kind !== 'needs_clarification' || request.status !== 'pending'
+          if (!request || !['needs_clarification', 'needs_authorization'].includes(request.kind) || request.status !== 'pending'
             || target.run.conversationId !== run.conversationId || request.revision !== target.run.revision
             || !(request.permittedActors ?? []).includes(run.actorId) && run.actorId !== ownerActorId) return {
             kind: 'needs_clarification', reason: 'CLARIFICATION_TARGET_INVALID',
             question: '这条消息没有可确认的待答澄清，请明确所指的排查事项。', needs: [],
           }
         }
-        if (!run.context.editOf) return { kind: 'accepted' }
+        if (!run.context.editOf) return acceptedAdmission
         const original = await messages.state(run.context.editOf.sourceRunId)
         const previous = original.commands.filter(item => item.args?.taskId && ['create', 'research', 'answer', 'reopen'].includes(item.kind))
-        if (!previous.length) return { kind: 'accepted' }
+        if (!previous.length) return acceptedAdmission
         const confirmedNew = requests.some(request => request.unitId === unit.unitId && request.reason === 'SOURCE_EDIT_NEW_MATTER' && request.status === 'resolved' && request.answer === '新增独立任务')
         if (intent.actions.some(action => ['create', 'research', 'reopen'].includes(action.intent)) && !confirmedNew) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_NEW_MATTER', question: '原消息已有任务。本次是修改原任务，还是新增独立事项？若确需新增，请回复“新增独立任务”；否则说明要修改或取消哪个原任务。', needs: [] }
         if (confirmedNew && intent.actions.some(action => ['create', 'research', 'reopen'].includes(action.intent)) && binding.taskId) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_NEW_MATTER_BINDING', question: '新增事项仍关联原任务，请明确新事项的独立目标。', needs: [] }
         if (intent.actions.some(action => ['revise', 'cancel', 'pause', 'resume'].includes(action.intent)) && !previous.some(item => item.args.taskId === binding.taskId)) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_TARGET_UNRESOLVED', question: '请指定本次编辑要修订、暂停或取消的原任务。', needs: [] }
         if (intent.actions.every(action => action.intent === 'no_action')) return { kind: 'needs_clarification', reason: 'SOURCE_EDIT_CONTROL_UNRESOLVED', question: '原消息已有任务。此次编辑是取消原任务，还是仅修改说明并继续原任务？', needs: [] }
-        return { kind: 'accepted' }
+        return acceptedAdmission
       },
       async bindTopic({ run, unit, binding, facts }) {
         const topicId = binding.disposition === 'conversation'
@@ -2353,7 +2414,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
                 }
                 material = { text: `${materialSource.body}\n\n${contents.join('\n\n')}` }
                 await store.command({ id: `material:${run.runId}:${executionDigest([cacheRef, material])}`, kind: 'message.material.record', args: { runId: run.runId, resourceRef: cacheRef, material } })
-              } catch (error) { return { ready: false, responsibility: 'system', reason: `MATERIAL_READ_FAILED:${error.code ?? error.message}` } }
+              } catch (error) { return { ready: false, responsibility: 'system', reason: `MATERIAL_READ_FAILED:${error.code ?? error.message}`,
+                error: { code: error.code, status: error.status, retryAfterMs: error.retryAfterMs } } }
             }
             items.push({ resourceRef: materialRef, ...material }); continue
           }
@@ -2494,11 +2556,22 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (!groups.has(data.run.conversationId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
     if (identity.channel === 'im' && identity.conversationId !== data.run.conversationId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
     const request = data.requests.find(item => item.id === input.requestId)
-    if (!request || request.kind !== 'needs_clarification') throw executionError('WORKFLOW_CLARIFICATION_NOT_FOUND')
+    if (!request || !['needs_clarification', 'needs_authorization'].includes(request.kind)) throw executionError('WORKFLOW_CLARIFICATION_NOT_FOUND')
     const ownerAnswer = identity.actorId === ownerActorId
     if (request.reason === 'MESSAGE_AGENT_CANCEL_TARGET_REQUIRED' && identity.actorId !== data.run.actorId) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
-    if (!request.permittedActors?.includes(identity.actorId) && !ownerAnswer) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
-    const answer = requireText(input.answer, 'WORKFLOW_ANSWER_REQUIRED')
+    if (!request.permittedActors?.includes(identity.actorId) && (request.kind === 'needs_authorization' || !ownerAnswer)) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+    let answer = requireText(input.answer, 'WORKFLOW_ANSWER_REQUIRED')
+    if (request.kind === 'needs_authorization') {
+      const bound = request.authorization
+      const latest = await store.query({ kind: 'message.source', sourceKey: data.run.sourceKey })
+      if (!bound || latest?.runId !== data.run.runId || latest.sourceVersion !== bound.sourceVersion
+        || bound.sourceKey !== data.run.sourceKey || bound.actorId !== data.run.actorId
+        || bound.conversationId !== data.run.conversationId || request.revision !== data.run.revision
+        || executionDigest(bound.actions) !== bound.actionDigest) throw executionError('WORKFLOW_AUTHORIZATION_STALE')
+      const normalized = authorizationAnswer(answer)
+      if (!normalized) throw executionError('WORKFLOW_AUTHORIZATION_DECISION_REQUIRED', '请引用授权通知明确回复“同意”或“拒绝”。')
+      answer = normalized
+    }
     if (request.nodeId === 'investigation' && request.executionRunId) {
       const state = await store.query({ kind: 'run', runId: request.executionRunId })
       const result = await resumeInvestigation({ ...input, runId: request.executionRunId }, identity, state)
@@ -2790,6 +2863,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (!messageId) return null
     const item = await store.query({ kind: 'message.requestByReply', conversationId: message.groupId, messageId })
     if (!item) return null
+    if (item.request.kind === 'needs_authorization' && !authorizationAnswer(message.text)) return null
     if (!item.request.permittedActors?.includes(message.senderOpenDingTalkId)
       && message.senderOpenDingTalkId !== ownerActorId) return null
     const eventId=sourceKey(config.profile ?? '', message.groupId, message.messageId)
@@ -2857,7 +2931,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         ...(existing ? { editOf: { sourceRunId: existing.aliasOf ?? existing.runId, sourceVersion: existing.sourceVersion, sourceKey: key } } : {}),
         quoteRefs: quoteKey ? [{ sourceKey: quoteKey, messageId: quote.messageId, ...(quote.content ? { text: quote.content } : {}) }] : [],
         attachments: normalizeResourceRefs(message.resourceRefs, message.text).map(resource => ({ resourceRef: resource.resourceId, ...(resource.type === 'fileId' ? { fileId: resource.resourceId } : {}), ...(resource.name ? { name: resource.name } : {}), sourceMessageId: message.messageId, sourceVersion, state: 'pending', source: resource })),
-        compactPolicy: `${legacyGroup(message.groupId)?.responsibility ?? ''}\n只有已认证任务所有者可以要求执行。具体可用流程由协调输入的availableWorkflows确定，不把分析流程当成工程或数据库执行。`,
+        compactPolicy: `${legacyGroup(message.groupId)?.responsibility ?? ''}\n任务准入由Host核验当前交办和关联来源；模型只提交明确意图，不根据身份猜测无权或索要负责人重复确认。taskAdmission为当前绑定的事实，目标改变后由Host重新核验；执行阶段继续独立校验授权。具体可用流程由协调输入的availableWorkflows确定。`,
       } })
     return { accepted: true, duplicate: false, runId: result.runId, processing: 'pending' }
   }
@@ -3263,11 +3337,14 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const topicRefs = topicRefsBySource.get(run.sourceKey) ?? []
           const pendingRequests = state.requests.filter(item => item.status === 'pending')
           const pendingRequest = pendingRequests.find(item => item.blocked) ?? pendingRequests[0]
-          const waitingStatus = pendingRequest?.blocked ? 'waiting_system' : pendingRequest?.kind === 'needs_clarification' ? 'waiting_clarification' : pendingRequest?.kind === 'needs_context' ? 'waiting_context' : null
+          const waitingStatus = pendingRequest?.blocked ? 'waiting_system' : pendingRequest?.kind === 'needs_authorization' ? 'waiting_authorization'
+            : pendingRequest?.kind === 'needs_clarification' ? 'waiting_clarification' : pendingRequest?.kind === 'needs_context' ? 'waiting_context' : null
           const waiting = pendingRequests.map(request => ({ requestId: request.id, unitId: request.unitId, kind: request.kind,
-            responsibility: request.responsibility ?? (request.kind === 'needs_clarification' ? 'requester' : 'host'),
+            responsibility: request.responsibility ?? (request.kind === 'needs_authorization' ? 'owner' : request.kind === 'needs_clarification' ? 'requester' : 'host'),
             reason: request.question ?? request.reason, blocked: request.blocked === true, attempts: request.attempts ?? 0, retryAt: request.retryAt ?? null,
-            recoveryCondition: request.kind === 'needs_clarification' ? '收到该问题的有效补充后继续' : request.blocked ? '修复材料读取问题并恢复原请求后继续' : '取得并核验所需材料后继续' }))
+            recoveryCondition: request.kind === 'needs_authorization' ? '指定授权人批准当前版本的交办后继续'
+              : request.kind === 'needs_clarification' ? (request.missingField ? `补齐${request.missingField}后继续${request.blockedAction ?? '处理'}` : '收到该问题的有效补充后继续')
+                : request.blocked ? '修复材料读取问题并恢复原请求后继续' : '取得并核验所需材料后继续' }))
           for (const unit of state.units.filter(item => item.blockedReason)) waiting.push({ kind: 'system', responsibility: 'system', blocked: true,
             unitId: unit.unitId ?? unit.id, goalText: unit.goalText, reason: unit.blockedReason,
             recoveryCondition: '修复该事项的处理故障后，按当前来源版本恢复；已证明独立的其他事项可继续' })
@@ -3331,8 +3408,13 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   }
   async function topicContext({groupId,topicId,offset=0,limit=50}) {
     if(!groups.has(groupId)) return null
-    const topic=await store.query({kind:'message.topic',topicId})
+    let topic=await store.query({kind:'message.topic',topicId})
     if(!topic||topic.conversationId!==groupId) return null
+    if(topic.mergedIntoTopicId) {
+      topic=await store.query({kind:'message.topic',topicId:topic.mergedIntoTopicId})
+      if(!topic||topic.conversationId!==groupId||topic.mergedIntoTopicId) return null
+      topicId=topic.topicId
+    }
     const refs=[...new Set([...topic.facts.flatMap(fact=>fact.sourceRefs.map(ref=>ref.sourceKey)),...await store.query({kind:'message.topic.sources',topicId})])]
     const messages=(await Promise.all(refs.map(key=>store.query({kind:'message.source',sourceKey:key})))).filter(Boolean)
       .map(run=>({messageId:run.context?.sourceMessageId,text:run.body,senderName:run.context?.senderName,occurredAt:run.context?.occurredAt??run.createdAt,sourceKind:'workflow-v2'}))
@@ -3518,6 +3600,17 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     ingest, resumeRequest, handoffDataChangeApproval, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, getApprovalRequest, prepareApprovalNotice, approvalNoticeCommand, reissueApprovalNotice,
     getApprovalNotice: requestId => store.query({ kind: 'approval.notice', requestId }), submitWebTask, mailboxes, topics, topicContext,
     maintenance: () => store.query({ kind: 'runtime.maintenance' }),
+    async reconcileTopic(request, identity, check = false) {
+      if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+      const { requestId, ...input } = request
+      const args = { ...input, actorId: identity.actorId }
+      const source = await store.query({ kind: 'message.topic', topicId: args.sourceTopicId })
+      const target = await store.query({ kind: 'message.topic', topicId: args.targetTopicId })
+      if (!source || !target || !groups.has(source.conversationId) || source.conversationId !== target.conversationId) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
+      if (check) return store.query({ kind: 'message.topic.reconcile.check', ...args })
+      if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 200) throw executionError('MESSAGE_TOPIC_RECONCILE_INVALID')
+      return (await store.command({ id: `topic-reconcile:${requestId}`, kind: 'message.topic.reconcile', args })).result
+    },
     completedObservations: taskId => store.query({ kind: 'task.owner.completed-observations', taskId }),
     async reconcileCompletedObservations(request, identity) {
       if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')

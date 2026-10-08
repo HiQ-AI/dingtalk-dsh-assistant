@@ -1,5 +1,11 @@
 # 常驻通知修复本地部署
 
+## 群消息澄清与任务准入切换
+
+本次同时修改 Assistant 与 Observer，无数据库 schema 迁移，按下文普通双包部署并保留既有请求。新协调候选必须提供澄清类别、具体缺项、阻塞动作和已核对来源；历史澄清不自动改判或重发。任务准入不足由 Host 生成 `needs_authorization`，授权仅绑定当前来源、话题版本和动作，不能代替执行阶段审批。开发任务可先承接，仓库和 UAT 在 Owner 工程准备前补齐；不默认环境或分支。
+
+切换前运行本特性验收目录中的定向回归和隔离模型回放；后者不派发业务或发送群消息。切换后独立核对双包摘要、新进程、健康、收信箱授权状态及实际新消息的来源/话题/任务链。旧错误澄清仍保留历史证据；未经明确授权不重处理原消息、不撤回或补发通知、不替原业务任务开始开发。授权请求只允许配置的任务所有者通过原请求明确同意或拒绝，来源或话题变化后旧授权不可复用。
+
 ## 普通本地部署不备份历史副本
 
 数据库变更验收证据交接修复无 schema 迁移，沿本页普通部署。切换后先只读核对原成功 Run 的节点工件、插件批准与执行事件序号、工单原始 SQL、Task/TaskRun DONE 及生产列定义；再按当前 Owner/需求/控制版本调用原 Task 的 `reassess-readonly`。成功外部阶段仅在节点排空、效果成功、批准有效且当前来源未变时允许重评。旧定义不改写，不新建工单、不再次执行 DDL；独立回读业务验收、任务完成和群消息后才算恢复完成。
@@ -92,7 +98,7 @@ S 保留完整当前消息和已提供背景，R 逐页累积候选及排除证�
 
 话题看板同时列出旧引擎话题和新工作流话题；收信箱的新消息从持久 `message_topic_bindings` 读取话题引用，不能填空数组。尚停在 R 节点取材料、没有确定话题绑定的消息继续显示待关联；不得凭相似标题硬挂旧话题。已确认的历史无命令消息可经 `docs/acceptance/message-reprocess/scripts/backfill-topics.mjs --check` 先校验，再在实例停止和备份后用 `--apply` 写入确定的话题事实；完成后独立回读话题列表和消息引用。
 
-消息接纳在同一 SQLite 事务中保存话题版本、带源消息版本和原文的事实、单元归属及命令。纯话题事实也可成为后续关联候选；有效话题限制由 Host 加入任务输入，不依赖模型再次复述。S 使用代码计算的 UTF-16 片段边界和全文长度，I 参数为严格命名合同（创建/调研要求 objective，工程要求 repositoryId；I 不提交 workflowPlan）。Task 与 Owner 原子接纳后由 Owner 依据受信目录初始化计划。字段校验失败只重试原节点并提供错误位置；必需上下文超限明确进入 needs_attention，不能制造无法补齐的空材料等待。执行材料就绪前不接纳业务命令，材料恢复不重跑已成功 I。
+消息接纳在同一 SQLite 事务中保存话题版本、带源消息版本和原文的事实、单元归属及命令。纯话题事实也可成为后续关联候选；有效话题限制由 Host 加入任务输入，不依赖模型再次复述。S 使用代码计算的 UTF-16 片段边界和全文长度，I 参数为严格命名合同（创建/调研要求 objective，工程准备前由 Owner 补齐 repositoryId 与 UAT；I 不提交 workflowPlan）。Task 与 Owner 原子接纳后由 Owner 依据受信目录初始化计划。字段校验失败只重试原节点并提供错误位置；必需上下文超限明确进入 needs_attention，不能制造无法补齐的空材料等待。执行材料就绪前不接纳业务命令，材料恢复不重跑已成功 I。
 
 业务命令领取前执行 Host 只读准入检查：主体、工作流、仓库、目标任务和执行版本。不满足条件时持久 `rejected` 并生成拒绝事实通知，依赖动作同时拒绝；没有外部调用的已知拒绝不归 `unknown`。开始执行之后的异常仍按未知效果对账。旧已完成任务以 `engine=legacy` 的只读候选提供状态/结果，不能交给新 Controller 恢复，也不能因询问历史结果创建新任务。
 
@@ -609,3 +615,34 @@ TimingSeconds输出InitialCheckSeconds、DrainAndSealSeconds、StopSeconds、Ser
 交付时将scripts/start-web.ps1、restart-web.ps1、web-module-loader.cjs三文件统一复制到DSH_HOME/launchers并独立核对SHA256。DSH Web Local仅改Action到该目录start-web.ps1，传入真实主检出ProjectRoot，保留UserId/触发器/Settings/日志位置及DSH_HOME。桌面入口仍是restart-dsh-web.ps1 -Check/正常重启；正式包部署工具也指向同一持久启动脚本并显式传ProjectRoot，避免后续部署重新走旧慢入口。
 
 本机完整对照：不带同步hook的ServiceReady171.18秒/总181.54秒；只启用同步load透传为17.65/29.91秒；正式三文件入口无诊断为17.64/29.43秒。小9库import对照均约1.6秒，不能用其代替完整profile boot。主结论范围是当前完整启动路径，未把操作系统/磁盘的底层延迟细分为已证实原因。运行明细见docs/acceptance/web-restart-startup-speed/round-1.md。
+
+## 历史话题归属与展示修复
+
+仅用于已核对的同事项历史误拆。脚本 `docs/acceptance/message-clarification-admission/scripts/reconcile-topic.mjs` 复用本机受管 HTTP 接口，不直接修改数据库；源话题的来源绑定并入目标话题并更新名称摘要，保留历史请求/通知，不重跑业务命令、不新建 Task、不发送消息。新建此脚本是因为既有重处理脚本会进入业务调度，不能承载零业务副作用的归属修复。
+
+1. 先只读核对源/目标话题、消息来源版本、已有 Task/命令/请求。本次已确认的四条交办链是 #122“边做边修插件”作为源，#123 文档、#124 点名、#125“按文档开发”已有话题作为目标；具体 topicId 必须从当前 Runtime 回读，不能仅凭序号执行。
+2. 按本 runbook 标准部署/维护流程进入维护并排空；脚本不会自动进入或退出维护。随部署处理时可使用部署 helper 的 `-HoldMaintenance` 保持维护，安装回读通过后再做下述检查。
+3. 用 PowerShell 参数数组固定检查和执行的全部输入。`--check` 只 GET 维护状态并 POST 零写检查接口，返回 `expectedDigest` 与待变更快照。源/目标、名称摘要、原因或状态发生变化必须重新检查。
+
+```powershell
+$topicRepairScript = 'docs/acceptance/message-clarification-admission/scripts/reconcile-topic.mjs'
+$topicRepairArgs = @(
+  '--source-topic', '<当前源topicId>',
+  '--target-topic', '<当前目标topicId>',
+  '--title', '数据集过程导入导出开发',
+  '--summary', '按已提供的导入导出规则文档开发，在执行过程中发现并修复插件问题；原始交办和阶段授权分别核验。',
+  '--reason', '已核对四条消息属于同一交办链，修复历史归属与展示，不重跑业务'
+)
+node $topicRepairScript @topicRepairArgs --check
+```
+
+4. 核对快照后，以检查返回的摘要和本次唯一 requestId 执行；脚本再次只读检查当前维护身份及摘要，变化时拒绝写入。`--apply` 必须显式提供这两个字段，不能凭新检查结果自动替换用户指定摘要。
+
+```powershell
+node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回的expectedDigest>' --request-id '<本次唯一修复编号>'
+```
+
+5. 脚本在写入回执后独立 GET 目标话题上下文；再从 `/state/groups` 和 `/state/topics` 核对四条消息归属、名称摘要以及原请求保留。原请求的解决需另走其正式恢复路径，不把元数据修复当成澄清已解除。
+6. 标准部署 helper 的历史回读核对 Task、Run、Node，不替代上述话题回读。确认本次话题与原业务状态均符合预期后，使用同一部署输入执行 helper 的 `-Resume`；维护身份、版本、活动执行或摘要冲突都应保留阻塞并重新核对，不跳过校验。
+
+脚本默认仅访问 `http://127.0.0.1:18998`，可用 `--endpoint` 指定其他本机回环 HTTP 端口用于隔离验证。检查/执行的权限、排空、来源版本和摘要最终均由 Host 校验。

@@ -60,13 +60,20 @@ export function projectMaterialText(text, maxBytes = 2400) {
 const span = z.strictObject({ start: z.number().int().nonnegative(), end: z.number().int().positive() })
 const need = z.strictObject({ resourceRef: z.string().min(1), reason: z.string().min(1) })
 const wait = z.strictObject({ kind: z.enum(['needs_context', 'needs_clarification']), reason: z.string().min(1), needs: z.array(need).default([]), question: z.string().optional() })
+// 当前协调提交专用；历史分阶段记录继续使用原 wait 合同。
+export const coordinatorClarificationSchema = z.strictObject({
+  kind: z.literal('needs_clarification'),
+  reason: z.enum(['target_conflict', 'scope_conflict', 'required_parameter_missing', 'no_actionable_target']),
+  question: z.string().trim().min(1), missingField: z.string().trim().min(1), blockedAction: z.string().trim().min(1),
+  checkedSourceRefs: z.array(z.string().min(1)).min(1),
+})
 const argumentText = z.string().trim().min(1)
 export const messageAnswerArguments = z.strictObject({ objective: argumentText })
 export const fileDeliveryArguments = z.strictObject({ sourceQuote: argumentText,
   files: z.array(z.strictObject({ role: argumentText, fileName: argumentText })).min(1).max(20) })
 export const taskWorkflowCatalog = Object.freeze([
   { id: 'task-group-file-delivery', label: '群聊文件交付', purpose: '将当前需求必交文件逐件发送到原任务群，下载核验原字节后才完成', mode: 'delivery' },
-  { id: 'task-engineering', label: '代码开发', purpose: '开发并向明确指定的uat1至uat9环境提交PR，由Host映射分支；未指定先询问，禁止main', mode: 'engineering' },
+  { id: 'task-engineering', label: '代码开发', purpose: '承接明确开发目标，由Owner读取来源确定仓库与uat1至uat9环境；缺少参数时在工程准备前只询问该参数，禁止默认环境或main', mode: 'engineering' },
   { id: 'task-uat-deployment', label: 'UAT 部署', purpose: '将已合入UAT分支的精确提交部署到UAT环境', mode: 'external' },
   { id: 'task-main-pr-merge', label: '上线合并 main', purpose: 'UAT及业务验收完成并获上线批准后，独立合并精确PR至main', mode: 'external' },
   { id: 'task-uat-pr-merge', label: 'UAT PR 合并', purpose: '核验精确 PR 和必要检查后合并至 UAT 分支并回读来源', mode: 'external' },
@@ -85,7 +92,6 @@ export const taskActionRequirements = Object.freeze({ create: ['objective'], res
   report: ['language'], clarification: ['runId', 'requestId', 'answer'], approval: ['requestId', 'decision'] })
 const taskActionSchema = z.strictObject({ intent: z.enum(['no_action', 'fact', 'research', 'create', 'revise', 'report', 'pause', 'cancel', 'resume', 'status', 'result', 'reopen', 'approval', 'clarification']), arguments: actionArguments, dependsOn: z.array(z.number().int().nonnegative()) }).superRefine((action, ctx) => {
   const required = [...(taskActionRequirements[action.intent] ?? [])]
-  if (action.arguments.workflowId === 'task-engineering') required.push('repositoryId')
   if (externalWorkflowIds.includes(action.arguments.workflowId)
     && !action.arguments.stageAuthorizations?.some(item => item.workflowId === action.arguments.workflowId))
     ctx.addIssue({ code: 'custom', path: ['arguments', 'stageAuthorizations'], message: '外部 workflowId 必须提供对应完整阶段授权；objective逐字引用原文，gate明确none或confirmation' })
@@ -148,7 +154,7 @@ export function unitContext(snapshot, unit) {
 export function candidateCards(candidates) {
   if (candidates.length > 10000) throw new Error('MESSAGE_CANDIDATE_CAPACITY')
   return candidates.map((candidate, index) => {
-    const card = pick(candidate, ['candidateId', 'engine', 'topicId', 'taskId', 'runId', 'resultRef', 'title', 'goal', 'historyRef', 'detailRef', 'entityKeys', 'scope', 'state', 'relevantTime', 'explicitReferenceMatches', 'distinguishingFacts', 'sourceRefs', 'versions'])
+    const card = pick(candidate, ['candidateId', 'engine', 'topicId', 'taskId', 'runId', 'resultRef', 'title', 'topicTitle', 'summary', 'goal', 'historyRef', 'detailRef', 'entityKeys', 'scope', 'state', 'relevantTime', 'explicitReferenceMatches', 'distinguishingFacts', 'sourceRefs', 'versions'])
     const omissions = []
     // 未被本次引用的历史来源只参与 Host 召回，不重复塞进 R 的身份卡。
     if (card.sourceRefs?.length) {

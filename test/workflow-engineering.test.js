@@ -4,10 +4,10 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { createEngineeringStageContract, createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
@@ -332,7 +332,14 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   const controller = { registerWorkflow: workflow => admitted.push(defineExecutionWorkflow(workflow).digest) }
   const action = { taskId: 'task', constraints: ['I节点新增限制'], arguments: { repositoryId: 'project', uatEnvironment: 'uat1', objective: '修改value', sourceRepository: 'C:/ignored', checks: ['malicious'] } }
   const info = { commandId: 'command', run: { actorId: 'owner' }, unit: { constraints: [], sharedConstraints: [] } }
-  for (const uatEnvironment of [null, 'uat0', 'uat10', 'main']) await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment } }, info, controller), /ENGINEERING_UAT_ENVIRONMENT_REQUIRED/)
+  for (const uatEnvironment of [null, 'uat0', 'uat10', 'main', ['uat1', 'uat2']]) {
+    await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment } }, info, controller), /ENGINEERING_UAT_ENVIRONMENT_REQUIRED/)
+    assert.deepEqual(admitted, [])
+    assert.deepEqual(await store.query({ kind: 'workflow.list' }), [])
+    assert.deepEqual(await readdir(root), [])
+    assert.equal(await readFile(join(source, 'value.txt'), 'utf8'), 'old')
+    assert.equal((await git('worktree', 'list', '--porcelain')).match(/^worktree /gm).length, 1)
+  }
   await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment: 'uat9' } }, info, controller), /ENGINEERING_UAT_BRANCH_NOT_FOUND/)
   for (const acceptanceCriteria of [[], [' '], ['x'.repeat(2001)], [42], '条件', null])
     await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, acceptanceCriteria } }, info, controller), { code: 'LOCAL_ACCEPTANCE_CRITERIA_REQUIRED' })
@@ -554,4 +561,15 @@ test('真实本地Git引用超过1MiB仍完整读回，取消不会误分类暂�
  const controller=new AbortController(),reason=Object.assign(Error('requested cancel'),{code:'TASK_CANCELLED'})
  controller.abort(reason)
  await assert.rejects(readEngineeringRemoteRefs(directory,['ls-remote',directory],{signal:controller.signal}),error=>error===reason)
+})
+
+for(const ownerConfirmed of [true,false])test(`工程阶段保留已核验任务授权及完整原动作：ownerConfirmed=${ownerConfirmed}`,async()=>{
+ const action={intent:'create',arguments:{objective:'按文档开发'},constraints:['限制范围'],requiredExecutionMaterials:[],commandId:'original-command'}
+ const binding={topicId:'topic'},run={actorId:'participant'}
+ let checks=0,prepared
+ const contract=createEngineeringStageContract({engineering:{prepareTask:async(input,context)=>{prepared=context;return input}},controller:{plannedTaskStageRunId:()=> 'engineering-run'},readTaskEvidence:async()=>[],
+  mayCreate:async(...args)=>{checks++;assert.deepEqual(args,[run,'task-engineering',binding,action]);return false}})
+ await contract.prepare({taskId:'task',stage:{stageId:'engineering'},plan:{task:{planRevision:1,requirementRevision:1}},requirement:{request:'按文档开发',authorization:{ownerConfirmed}},origin:{run,command:{id:action.commandId,kind:action.intent,args:{binding,arguments:action.arguments,constraints:action.constraints,requiredExecutionMaterials:[]}}}})
+ assert.equal(prepared.authorizedGroupRequest,ownerConfirmed)
+ assert.equal(checks,ownerConfirmed?0:1)
 })

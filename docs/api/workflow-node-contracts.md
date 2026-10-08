@@ -240,7 +240,11 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 消息S节点支持 `{kind: "no_action", reason, coverage: [{start,end}]}`：仅用于无待办的语义判断，Host核对全文覆盖与成功S节点后结束；不建立事项、话题或任务。若冻结来源保存了 `replyObligation.required`，通知 Host 仍履行一次回应义务，不能把无任务等同无需回应。message.no_action不接受有事项/命令/待补请求/屏障或修订的运行。
 
-收信箱 `workflowStatus` 区分 `waiting_clarification`（用户需补充）、`waiting_context`（助手读取材料）、`waiting_system`（真实系统阻塞，需恢复依赖）；真正处理失败仍为 `routing_blocked`。`waiting_routing_barrier` 仅表示当前事项的相关输入待核对，不表示全群排空。`workflowStatusDetail` 保留实际问题或原因。
+协调 unit 可提交 `topicPresentation:{title,summary}`（分别最多 80、1200 字符）。同次提交的同一话题最多更新一次，Host 沿来源版本及话题版本校验后与绑定一起落账；省略表示保持当前展示。当前名称及累计摘要进入后续候选、话题列表和详情；展示更新不创建 Task、不授予权限，也不代表业务完成。
+
+本机受管历史关联修复：`POST /runtime/topics/reconcile/check` 接受 `{sourceTopicId,targetTopicId,topicPresentation,maintenanceId,maintenanceRevision,reason}`，返回 `expectedDigest,movedUnits,counts,before,after`，零写入。`POST /runtime/topics/reconcile` 在同样字段上增加 `requestId,expectedDigest`，返回修复审计结果。均仅接受本机连接和可信 Web Origin，actor 由 Host 注入；额外身份字段拒绝。要求维护状态 `stopping` 且排空、同群、全部来源版本有效，源话题所有历史消息没有业务 command、任务接纳或执行输入；检查摘要变化则拒绝执行。修复仅迁移当前来源绑定及其原始事实、更新展示，保留请求、已发送通知和业务任务；源空话题保留合并审计且从当前列表隐藏，旧上下文链接解析到目标话题。不得用此接口替代重跑业务或审批。
+
+收信箱 `workflowStatus` 区分 `waiting_clarification`（用户需补充）、`waiting_authorization`（指定责任人确认任务承接）、`waiting_context`（助手读取材料）、`waiting_system`（真实系统阻塞，需恢复依赖）；真正处理失败仍为 `routing_blocked`。`waiting_routing_barrier` 仅表示当前事项的相关输入待核对，不表示全群排空。`workflowStatusDetail` 保留实际问题或原因。
 
 每条消息另外返回以下只读事实，不以通知是否送达改写业务处理状态：
 
