@@ -95,7 +95,7 @@ function assertTaskDispatchAllowed(r) {
       AND run_id=? AND status='running'`).get(r.task_id, task.plan_revision, r.run_id)) fail('TASK_DISPATCH_BLOCKED')
 }
 // 续行只针对已定位的 agent 可纠正问题；未知工具、身份和存储故障不能自动重放。
-function inspectNodeRecovery(runId) {
+function inspectNodeRecovery(runId, { reclassifyInterrupted = false } = {}) {
   const r = getRun(runId), current = nodes(runId), candidate = current.find(n => ['waiting', 'failed'].includes(n.status))
   const base = { repairable: false, mode: 'resume-agent', reason: 'node-not-recoverable',
     runRevision: r.revision, generation: r.generation, evidenceRefs: [] }
@@ -109,7 +109,7 @@ function inspectNodeRecovery(runId) {
   const problemKey = executionDigest({ nodeRunId: n.node_run_id, inputDigest: n.input_digest,
     code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId })
   detail.problemKey = problemKey
-  const correctable = ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'execution_step_budget_exhausted', 'execution_timeout',
+  const correctable = reclassifyInterrupted && failure.code === 'execution_tool_failed' || ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'EXECUTION_TURN_INTERRUPTED', 'execution_step_budget_exhausted', 'execution_timeout',
     'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY'].includes(failure.code)
     || ['output-validation', 'output-admission'].includes(failure.phase)
       && ['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT', 'AGENT_WORK_RESULT_INVALID',
@@ -421,26 +421,30 @@ function coreCommand(command, now, consumption = {}) {
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
   if (command.kind === 'node.failure.reclassify') {
-    object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','evidenceRef'])
+    object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','evidenceRef','previousCode','code'])
+    const { previousCode, code } = a
+    if (!(previousCode === 'execution_no_submission' && code === 'EXECUTION_PROVIDER_TRANSIENT')
+      && !(previousCode === 'execution_tool_failed' && code === 'EXECUTION_TURN_INTERRUPTED')) fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
     const r = activeRun(a), current = nodes(r.run_id), waiting = current.filter(n => n.status === 'waiting'), n = waiting[0]
     assertTaskDispatchAllowed(r)
     if (maintenanceStatus(db, workerData.processIncarnation).active) fail('RUNTIME_MAINTENANCE_ACTIVE')
     if (db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(r.task_id)) {
-      const recovery = inspectNodeRecovery(r.run_id)
+      const recovery = inspectNodeRecovery(r.run_id, { reclassifyInterrupted: previousCode === 'execution_tool_failed' })
       if (!recovery.repairable && recovery.reason !== 'strategy-change-required') fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
     }
     if (r.status !== 'waiting' || r.revision !== a.runRevision || r.generation !== a.generation || waiting.length !== 1
       || n.node_run_id !== a.nodeRunId || n.lease_epoch !== a.leaseEpoch || n.input_digest !== a.inputDigest
       || n.session_id !== a.sessionId || !n.session_bound || n.executor !== 'agent' || n.output_ref
-      || JSON.parse(n.wait_reason ?? 'null')?.kind !== 'recovery' || JSON.parse(n.wait_reason).reference !== 'execution_no_submission'
+      || JSON.parse(n.wait_reason ?? 'null')?.kind !== 'recovery' || JSON.parse(n.wait_reason).reference !== previousCode
       || current.some(node => !node.drained) || pendingInputs(r.run_id).length
       || db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)
       || typeof a.evidenceRef !== 'string' || !a.evidenceRef) fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
     assertRunEffectsDrained(db, r.run_id)
-    const failure = { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', evidenceRef: a.evidenceRef }
-    db.prepare('UPDATE execution_nodes SET wait_reason=? WHERE node_run_id=?').run(JSON.stringify({kind:'recovery',reference:failure.code}),n.node_run_id)
+    const failure = { code, phase: code === 'EXECUTION_PROVIDER_TRANSIENT' ? 'provider' : 'execution', targetNodeId: n.node_id, evidenceRef: a.evidenceRef }
+    const evidenceRefs = [...new Set([...JSON.parse(n.evidence_refs), a.evidenceRef])]
+    db.prepare('UPDATE execution_nodes SET wait_reason=?,evidence_refs=? WHERE node_run_id=?').run(JSON.stringify({kind:'recovery',reference:failure.code}),JSON.stringify(evidenceRefs),n.node_run_id)
     db.prepare('UPDATE execution_runs SET recovery_reason=?,revision=revision+1,updated_at=? WHERE run_id=?').run(failure.code,now,r.run_id)
-    emitEvent(command.id, 'node.failure', { ...a, failure, previousCode: 'execution_no_submission' }, now)
+    emitEvent(command.id, 'node.failure', { ...a, failure, previousCode }, now)
     return { reclassified: true, code: failure.code }
   }
   if (command.kind === 'run.recovery.admit') {
@@ -466,6 +470,7 @@ function coreCommand(command, now, consumption = {}) {
     const r = activeRun(a)
     const recovering = nodes(r.run_id).filter(n => n.status === 'waiting' && n.wait_reason && JSON.parse(n.wait_reason).kind === 'recovery')
     if (!recovering.length) fail('RUN_NOT_RECOVERING')
+    if (recovering.some(n => JSON.parse(n.wait_reason).reference === 'EXECUTION_TURN_INTERRUPTED')) fail('NODE_RECOVERY_REQUIRES_OWNER')
     if (recovering.some(n => !n.drained)) fail('NODE_NOT_DRAINED')
     assertRunEffectsDrained(db, r.run_id)
     for (const n of recovering) {

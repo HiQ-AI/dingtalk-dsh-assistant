@@ -27,6 +27,7 @@ const classifiedReasons = new Map([
     'RELEASE_PIPELINE_FAILED', ...engineeringPatchRepairReasons].map(code => [code, 'business-validation']),
   ['AGENT_WORK_NEEDS_INPUT', 'missing-input'],
   ['AGENT_WORK_BLOCKED', 'task-blocked'],
+  ['EXECUTION_TURN_INTERRUPTED', 'task-blocked'],
   ['ENGINEERING_UAT_ENVIRONMENT_REQUIRED', 'missing-environment'],
   ['ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE', 'missing-environment'],
   ['SESSION_ADAPTER_UNAVAILABLE', 'missing-environment'],

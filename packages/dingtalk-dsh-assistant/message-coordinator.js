@@ -352,7 +352,7 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
       if (failure && ['GROUP_COORDINATOR_SESSION_MISSING', 'GROUP_COORDINATOR_SESSION_IDENTITY_MISMATCH', 'GROUP_COORDINATOR_SESSION_LEASE_NOT_ADVANCED', 'GROUP_COORDINATOR_RUN_INVALID', 'GROUP_COORDINATOR_READ_TOOL_REQUIRED'].includes(failure.code))
         for (const run of claimed.sources) await command('message.attention', { runId: run.runId, reason: failure.code })
       if (failure) throw failure
-      for (const run of claimed.sources) await dispatch(run.runId)
+      for (const run of claimed.sources) await dispatch(run.runId, { resolvedCoordinatorTurnId: binding.turnId })
     }
   }
   async function process(runId, { dispatch }) {

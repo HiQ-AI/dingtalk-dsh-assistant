@@ -16,7 +16,7 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { createExecutionSessions, inspectLegacyProviderFailure } from '../packages/dingtalk-dsh-assistant/execution-session.js'
+import { createExecutionSessions, inspectLegacyTurnFailure } from '../packages/dingtalk-dsh-assistant/execution-session.js'
 import { createAgentQueryTools, verifyAgentEvidence, readExecutedAgentQueryRefs } from '../packages/dingtalk-dsh-assistant/agent-query-tools.js'
 import { createAgentResourceReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-resources.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -740,10 +740,10 @@ test('旧provider失败只读重分类核对原生身份、本轮租约及未提
   const message = 'Codex error: Our servers are currently overloaded. Please try again later.'
   const h = await host({ script: [{ providerFailure: { code: 'PI_AI_ERROR', message } }] }); t.after(() => h.close())
   await drive(h)
-  const b = binding({ sessionBound: true }), proof = await inspectLegacyProviderFailure(h.ctx, b)
+  const b = binding({ sessionBound: true }), proof = await inspectLegacyTurnFailure(h.ctx, b)
   assert.equal(proof.failure.code, 'EXECUTION_PROVIDER_TRANSIENT')
-  await assert.rejects(inspectLegacyProviderFailure(h.ctx, { ...b, inputDigest: 'forged' }), { code: 'execution_session_identity_mismatch' })
-  assert.equal(await inspectLegacyProviderFailure(h.ctx, { ...b, leaseEpoch: 2 }), null)
+  await assert.rejects(inspectLegacyTurnFailure(h.ctx, { ...b, inputDigest: 'forged' }), { code: 'execution_session_identity_mismatch' })
+  assert.equal(await inspectLegacyTurnFailure(h.ctx, { ...b, leaseEpoch: 2 }), null)
   const stored = await h.ctx.sessionPersistence.inspect(b.sessionId)
   for (const extra of [
     { type: 'user/message', data: { source: { kind: 'web' } } },
@@ -751,7 +751,37 @@ test('旧provider失败只读重分类核对原生身份、本轮租约及未提
     { type: 'tool/result', data: { name: 'execution_node_submit' } },
   ]) {
     const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events: [...stored.events, { ...extra, seq: stored.events.at(-1).seq + 1 }] }) } }
-    assert.equal(await inspectLegacyProviderFailure(ctx, b), null)
+    assert.equal(await inspectLegacyTurnFailure(ctx, b), null)
   }
-  assert.equal(await inspectLegacyProviderFailure({ ...h.ctx, agents: { get: () => ({}) } }, b), null)
+  assert.equal(await inspectLegacyTurnFailure({ ...h.ctx, agents: { get: () => ({}) } }, b), null)
+})
+
+test('原生用户中断正在执行的只读工具保留中断类型而非工具失败', async t => {
+  const entered = Promise.withResolvers()
+  const h = await host({ tools: [{ name: 'query', description: 'read', parameters: { type: 'object' }, async execute({ signal }) {
+    entered.resolve(); await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  } }], script: [{ name: 'query' }] }); t.after(() => h.close())
+  const running = drive(h, { definition: definition({ allowedTools: ['query'] }) })
+  await entered.promise
+  h.handles[0].cancel({ kind: 'user' }, { keepInbox: true })
+  const result = await running
+  assert.equal(result.reason, 'EXECUTION_TURN_INTERRUPTED'); assert.equal(result.failure.code, 'EXECUTION_TURN_INTERRUPTED')
+})
+
+test('历史中断证据仅接纳最后本轮精确只读工具取消形态', async () => {
+  const b = binding({ sessionBound: true })
+  const identity = Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key => [key,b[key]]))
+  const events = [{ seq: 0, type: 'dingtalk/execution-session', data: { version: 1, identity, creationLease: 1 } },
+    { seq: 1, type: 'user/message', data: { source: { kind: 'coordinator', executionSession: { sessionId: b.sessionId, leaseEpoch: 1 } } } },
+    { seq: 2, type: 'tool/call', data: { name: 'engineering_repo_inspect', callId: 'call' } },
+    { seq: 3, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'call', isError: true, content: [{ type: 'text', text: 'Error: [object Object]' }] }] } } },
+    { seq: 4, type: 'step/end', data: {} }, { seq: 5, type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } }]
+  const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events }) } }
+  assert.equal((await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')).failure.code,'EXECUTION_TURN_INTERRUPTED')
+  assert.equal(await inspectLegacyTurnFailure(ctx,b),null)
+  events[3].data.message.content[0].content[0].text = 'Error: real failure'
+  assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
+  events[3].data.message.content[0].content[0].text = 'Error: [object Object]'
+  events[5].data.reason.reason.kind = 'shutdown'
+  assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
 })

@@ -5,7 +5,7 @@ import { sessionWorkspace, taskFilePath, checkedTaskDirectory } from './session-
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { join } from 'node:path'
 import { transientRecoveryReasons } from './execution-recovery-policy.js'
-import { inspectLegacyProviderFailure } from './execution-session.js'
+import { inspectLegacyTurnFailure } from './execution-session.js'
 import { openExecutionRuntime, closeExecutionResources } from './execution.js'
 import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
@@ -3298,7 +3298,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const state = await store.query({ kind: 'run', runId: run.runId })
           const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
-          if (node.waitReason?.kind === 'recovery' && node.waitReason.reference === 'execution_no_submission'
+          if (node.waitReason?.kind === 'recovery' && ['execution_no_submission','execution_tool_failed'].includes(node.waitReason.reference)
             && ctx?.sessionPersistence && state.nodes.every(item => item.drained) && node.sessionBound && !node.outputRef) {
             const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
             const frozen = definition.nodes.find(item => item.id === node.nodeId)
@@ -3307,13 +3307,15 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
               || effects.some(effect => effect.nodeRunId === node.nodeRunId || !['succeeded','failed'].includes(effect.state))) continue
             const input = await artifacts.read(node.inputRef)
             if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId) continue
-            const proof = await inspectLegacyProviderFailure(ctx, { taskId: run.taskId, runId: run.runId, nodeRunId: node.nodeRunId,
-              generation: state.run.generation, inputDigest: node.inputDigest, sessionId: node.sessionId, leaseEpoch: node.leaseEpoch, sessionBound: true })
+            const proof = await inspectLegacyTurnFailure(ctx, { taskId: run.taskId, runId: run.runId, nodeRunId: node.nodeRunId,
+              generation: state.run.generation, inputDigest: node.inputDigest, sessionId: node.sessionId, leaseEpoch: node.leaseEpoch, sessionBound: true }, node.waitReason.reference)
             if (!proof) continue
-            const evidence = await artifacts.put({ kind: 'legacy-provider-failure-classification', ...proof }, { taskId: run.taskId })
+            const evidence = await artifacts.put({ kind: 'legacy-turn-failure-classification', ...proof }, { taskId: run.taskId })
+            // 已发布的幂等键保留，避免把同一历史回合重分类记作另一项操作。
             await store.command({ id: `provider-reclassify:${node.nodeRunId}:${node.leaseEpoch}`, kind: 'node.failure.reclassify', args: {
               runId: run.runId, runRevision: state.run.revision, nodeRunId: node.nodeRunId, generation: state.run.generation,
-              leaseEpoch: node.leaseEpoch, inputDigest: node.inputDigest, sessionId: node.sessionId, evidenceRef: evidence.ref } })
+              leaseEpoch: node.leaseEpoch, inputDigest: node.inputDigest, sessionId: node.sessionId, evidenceRef: evidence.ref,
+              previousCode: node.waitReason.reference, code: proof.failure.code } })
             continue
           }
           if (node.waitReason?.reference === 'AGENT_WORK_NEEDS_INPUT') { await ensureInvestigationMessageRequest(run.runId); continue }

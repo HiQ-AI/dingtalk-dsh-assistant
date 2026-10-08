@@ -93,3 +93,9 @@ engineering-provider-recovery,27,PASS,round-27.md
 source-repository-restored,27,PASS,round-27.md
 business-resume-and-recovery,28,PASS,round-28.md
 message-ledger-full-regression,28,PASS,round-28.md
+reply-recovery-local-deployment,29,PASS,round-29.md
+clear-notice-delivery-readback,29,PASS,round-29.md
+business-reply-command-reconciliation,29,PASS,round-29.md
+original-engineering-tasks-resumed,29,FAIL,round-29.md
+zero-action-barrier-settlement,30,PASS,round-30.md
+native-interruption-recovery,31,PASS,round-31.md

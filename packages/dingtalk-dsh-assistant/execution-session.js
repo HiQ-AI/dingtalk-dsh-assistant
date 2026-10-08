@@ -22,7 +22,7 @@ const identityOf = binding => Object.fromEntries(keysFor(binding).map(key => [ke
 const providerTransient = cause => cause?.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.'
 
 // 只读核验旧分类；不恢复会话，不向模型投递输入。
-export async function inspectLegacyProviderFailure(ctx, binding) {
+export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'execution_no_submission') {
   validateBinding(binding)
   if (binding.kind || !binding.sessionBound || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) return null
   const stored = await ctx.sessionPersistence.inspect(binding.sessionId), events = stored.events
@@ -33,14 +33,28 @@ export async function inspectLegacyProviderFailure(ctx, binding) {
   const input = inputs.findLast(event => event.data.source?.kind === 'coordinator')
   if (input?.data.source.executionSession?.sessionId !== binding.sessionId || input.data.source.executionSession.leaseEpoch !== binding.leaseEpoch) return null
   const end = events.findLast(event => event.type === 'turn/end')
-  if (!end || end.seq <= input.seq || end.data.reason?.kind !== 'error' || !providerTransient(end.data.reason.error)) return null
+  if (!end || end.seq <= input.seq) return null
+  const overloaded = previousCode === 'execution_no_submission' && end.data.reason?.kind === 'error' && providerTransient(end.data.reason.error)
+  const interrupted = previousCode === 'execution_tool_failed' && end.data.reason?.kind === 'aborted' && end.data.reason.reason?.kind === 'user'
+  if (!overloaded && !interrupted) return null
+  if (interrupted) {
+    const errors = events.filter(event => event.seq > input.seq && event.type === 'tool/result' && event.data.message?.content?.some(block => block.type === 'tool-result' && block.isError))
+    if (errors.length !== 1 || errors[0].data.message.content.length !== 1) return null
+    const result = errors[0].data.message.content[0]
+    const call = events.findLast(event => event.seq < errors[0].seq && event.type === 'tool/call')
+    if (result.content?.length !== 1 || result.content[0].type !== 'text' || result.content[0].text !== 'Error: [object Object]'
+      || call?.data.name !== 'engineering_repo_inspect' || call.data.callId !== result.toolCallId
+      || events.some(event => event.seq > errors[0].seq && event.seq < end.seq && event.type !== 'step/end')) return null
+  }
   if (events.some(event => event.seq > end.seq && event.type !== 'session/end-seed')
     || events.some(event => event.seq > input.seq && /^(assistant\/|tool\/)/u.test(event.type) && JSON.stringify(event.data).includes(SUBMIT))) return null
   // 未消费的额外 inbox 输入也不得被当作旧错误续行。
   const inbox = events.filter(event => event.type === 'agent/inbox/spliced').flatMap(event => event.data.inserted ?? [])
   if (inbox.some(message => message.source?.kind !== 'coordinator' && !(message.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt' && message.source.form === 'snapshot'))) return null
   if (inbox.some(message => message.source?.kind === 'coordinator' && (message.source.executionSession?.sessionId !== binding.sessionId || message.source.executionSession.leaseEpoch > binding.leaseEpoch))) return null
-  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', message: String(end.data.reason.error.message).slice(0, 2000) } }
+  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: interrupted
+    ? { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留失败工具历史，需Owner核对后受管续行。' }
+    : { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', message: String(end.data.reason.error.message).slice(0, 2000) } }
 }
 
 function validateBinding(binding) {
@@ -182,6 +196,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       agentCtx.on('tools/result', (exec, result) => {
         const feedback = entry.correctableCalls.get(exec.token)
         entry.correctableCalls.delete(exec.token)
+        if (result.isError && exec.signal.aborted) { entry.interruptedTool = true; return }
         if (result.isError && !(feedback && result.error?.message === feedback && !entry.attempted
           && !entry.haltCode && !entry.stale && !entry.cancelled && !exec.signal.aborted)) {
           entry.failure ??= { code: result.error?.code ?? 'execution_tool_failed', tool: exec.name,
@@ -328,6 +343,10 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         await drain(entry)
         if (entry.cancelled || closed) return { status: 'cancelled' }
         if (!await current(entry)) return { status: 'stale' }
+        const currentEnd = session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
+        if (!entry.accepted && !entry.haltCode && !entry.failure && entry.interruptedTool
+          && currentEnd?.data?.reason?.kind === 'aborted' && currentEnd.data.reason.reason?.kind === 'user')
+          entry.failure = { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；需Owner核对诊断后续行。' }
         if (!entry.accepted && !entry.haltCode && !entry.failure) {
           const end = session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
           if (end?.data?.reason?.kind === 'error') {
@@ -336,7 +355,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             entry.failure = { code: transient ? 'EXECUTION_PROVIDER_TRANSIENT' : 'EXECUTION_PROVIDER_FAILED', phase: 'provider', message: message.slice(0, 2000) }
           }
         }
-        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? (entry.failure?.phase === 'provider' ? entry.failure.code : 'execution_no_submission'), ...(entry.failure ? { failure: entry.failure } : {}) }
+        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? (entry.failure?.phase === 'provider' || entry.failure?.code === 'EXECUTION_TURN_INTERRUPTED' ? entry.failure.code : 'execution_no_submission'), ...(entry.failure ? { failure: entry.failure } : {}) }
         await onResult(copy(entry.output))
         return { status: 'submitted', output: copy(entry.output) }
       } catch (error) {

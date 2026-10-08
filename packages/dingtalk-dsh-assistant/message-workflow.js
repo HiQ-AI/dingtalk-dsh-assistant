@@ -52,8 +52,13 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
       return value?.ready && !incompleteMaterial(value.data) ? value : { ready: false, reason: value?.reason ?? 'MATERIAL_UNAVAILABLE' }
     } catch (error) { return { ready: false, reason: error.code ?? error.message } }
   }
-  async function dispatch(runId) {
+  async function dispatch(runId, { resolvedCoordinatorTurnId } = {}) {
     const data = await state(runId)
+    if (resolvedCoordinatorTurnId && data.run.coordinatorConsumed?.turnId === resolvedCoordinatorTurnId) {
+      for (const barrier of data.barriers.filter(item => item.ownerRunId === runId && item.status === 'resolved'
+        && item.resolution === 'coordinator_no_action_consumed' && item.resolvedCoordinatorTurnId === resolvedCoordinatorTurnId))
+        await context.onBarrierResolved?.(barrier, data)
+    }
     await Promise.all(data.commands.filter(command => !['applied', 'rejected', 'unknown', 'failed', 'running', 'waiting', 'cancelled', 'superseded'].includes(command.status)).map(async command => {
       const action = { intent: command.kind, ...command.args }
       const info = { run: data.run, unit: data.units.find(unit => (unit.id ?? unit.unitId) === command.unitId), binding: command.args.binding, commandId: command.commandId }
@@ -112,6 +117,15 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
       if (check.eligible) await cmd('message.echo.reconcile', { runId: check.runId, expectedDigest: check.expectedDigest }, `echo-reconcile:${check.runId}:${check.expectedDigest}`)
     }
     for (const run of await store.query({ kind: 'message.pending' })) {
+      const noAction = await store.query({ kind: 'message.barrier.no-action', runId: run.runId })
+      if (noAction.eligible && noAction.barrierIds.length) {
+        try {
+          await cmd('message.barrier.reconcile-no-action', { runId: run.runId, expectedDigest: noAction.expectedDigest }, `no-action-barriers:${run.runId}:${noAction.expectedDigest}`)
+          const resolved = await state(run.runId)
+          for (const barrier of resolved.barriers.filter(item => noAction.barrierIds.includes(item.id) && item.status === 'resolved')) await context.onBarrierResolved?.(barrier, resolved)
+        }
+        catch (error) { if (error.code !== 'MESSAGE_NO_ACTION_BARRIER_STALE') throw error }
+      }
       if (run.context?.sourceMessageId && await store.query({ kind: 'message.outboundByMessage', conversationId: run.conversationId, messageId: run.context.sourceMessageId })) {
         try { await cmd('message.echo.quarantine', { runId: run.runId }, `echo-quarantine:${run.runId}`) }
         catch (error) { if (error.code !== 'MESSAGE_ECHO_QUARANTINE_FORBIDDEN') throw error }

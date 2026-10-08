@@ -1574,3 +1574,35 @@ test('公共会话事实只记话题不唤醒Owner，真实revise继续增加任
  }
  assert.equal((await f.store.query({kind:'message.topic',topicId:'owner-topic'})).facts.length,2)
 })
+
+test('零事项协调提交原子结算来源屏障且历史恢复严格CAS',async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('zero',{barriers:[{barrierId:'zero-fence',targetSourceKey:'other-source'}]}))
+ const initial=await f.store.query({kind:'message.barrier.no-action',runId:'zero'})
+ assert.equal(initial.eligible,false)
+ await bad(f.call('barrier.reconcile-no-action',{runId:'zero',expectedDigest:initial.expectedDigest}),'MESSAGE_NO_ACTION_BARRIER_STALE')
+ const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'zero-turn',sourceRuns:[{runId:'zero',sourceVersion:1}]})).result.binding
+ await f.call('coordinator.commit',{conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,decisions:[{runId:'zero',sourceVersion:1,units:[]}]})
+ let state=await f.store.query({kind:'message.run',runId:'zero'})
+ assert.equal(state.run.status,'settled');assert.equal(state.barriers[0].status,'resolved')
+ // 仅测试库恢复旧版“已消费、无事项但遗留屏障”快照。
+ await f.editSnapshot(db=>db.prepare("UPDATE message_items SET body=json_set(body,'$.status','pending') WHERE item_id='barrier:zero-fence'").run())
+ const checked=await f.store.query({kind:'message.barrier.no-action',runId:'zero'})
+ assert.equal(checked.eligible,true);assert.deepEqual(checked.barrierIds,['zero-fence'])
+ await bad(f.call('barrier.reconcile-no-action',{runId:'zero',expectedDigest:'stale'}),'MESSAGE_NO_ACTION_BARRIER_STALE')
+ for(const variant of ['request','command','unit','source','pending-run']){
+  await f.editSnapshot(db=>{
+   if(variant==='pending-run')db.prepare("UPDATE message_runs SET body=json_set(body,'$.status','pending') WHERE run_id='zero'").run()
+   else if(variant==='source')db.prepare("UPDATE message_sources SET current_version=2 WHERE source_key='zero'").run()
+   else db.prepare('INSERT INTO message_items VALUES(?,?,?,?)').run(`${variant}:negative`,'zero',variant,JSON.stringify({id:'negative',status:'pending'}))
+  })
+  assert.equal((await f.store.query({kind:'message.barrier.no-action',runId:'zero'})).eligible,false)
+  await bad(f.call('barrier.reconcile-no-action',{runId:'zero',expectedDigest:checked.expectedDigest}),'MESSAGE_NO_ACTION_BARRIER_STALE')
+  await f.editSnapshot(db=>{if(variant==='pending-run')db.prepare("UPDATE message_runs SET body=json_set(body,'$.status','settled') WHERE run_id='zero'").run();else if(variant==='source')db.prepare("UPDATE message_sources SET current_version=1 WHERE source_key='zero'").run();else db.prepare('DELETE FROM message_items WHERE item_id=?').run(`${variant}:negative`)})
+ }
+ await f.call('barrier.reconcile-no-action',{runId:'zero',expectedDigest:checked.expectedDigest})
+ await f.reopen()
+ state=await f.store.query({kind:'message.run',runId:'zero'})
+ assert.equal(state.barriers[0].status,'resolved');assert.equal(state.barriers[0].resolution,'coordinator_no_action_consumed')
+ assert.equal(state.run.status,'settled');assert.equal(state.units.length,0);assert.equal(state.commands.length,0)
+})

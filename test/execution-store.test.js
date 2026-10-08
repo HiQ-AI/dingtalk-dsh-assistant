@@ -885,7 +885,7 @@ for (const variant of ['valid', 'revision', 'lease', 'digest', 'session', 'outpu
       if (variant === 'effect') db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('prior-effect','operation','run',?,'one',1,?,'digest','{}','[]','fixture','succeeded','now','now')").run(n.nodeRunId,d)
     } finally { db.close() }
   }
-  const cmd = command('node.failure.reclassify', args)
+  const cmd = command('node.failure.reclassify', { ...args, previousCode: 'execution_no_submission', code: 'EXECUTION_PROVIDER_TRANSIENT' })
   if (variant !== 'valid') { await rejects(f.store.command(cmd), 'NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED'); assert.equal((await f.query()).nodes[0].waitReason.reference, 'execution_no_submission'); return }
   assert.equal((await f.store.command(cmd)).result.reclassified, true)
   const after = await f.query(); assert.equal(after.nodes[0].waitReason.reference, 'EXECUTION_PROVIDER_TRANSIENT')

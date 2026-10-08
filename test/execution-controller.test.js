@@ -806,3 +806,23 @@ test('超过32个节点的完整Run持续执行并保留全部成功产物', asy
   assert.equal(result.nodes.length,80);assert.ok(result.nodes.every(node=>node.status==='succeeded'&&node.outputRef))
   assert.equal(await artifacts.read(result.nodes.at(-1).outputRef),80)
 })
+
+test('历史原生中断重分类仍只允许Owner同一问题续行一次并保留成功前缀', async t => {
+  let count = 0
+  const f = await agentRecoveryFixture(t, () => ({ status: 'no_submission', reason: ++count === 1 ? 'execution_tool_failed' : 'EXECUTION_TURN_INTERRUPTED', failure: { code: count === 1 ? 'execution_tool_failed' : 'EXECUTION_TURN_INTERRUPTED', phase: 'execution' } }))
+  const before = await f.controller.state(f.runId), n = before.nodes[1]
+  assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable,false)
+  const proof = await f.artifacts.put({ kind: 'legacy-interruption-proof', endSeq: 566 })
+  await f.store.command({ id: 'reclassify-interruption', kind: 'node.failure.reclassify', args: { runId:f.runId,runRevision:before.run.revision,nodeRunId:n.nodeRunId,generation:n.generation,leaseEpoch:n.leaseEpoch,inputDigest:n.inputDigest,sessionId:n.sessionId,evidenceRef:proof.ref,previousCode:'execution_tool_failed',code:'EXECUTION_TURN_INTERRUPTED' } })
+  const recovery = await f.controller.inspectNodeRecovery(f.runId)
+  assert.equal(recovery.repairable,true);assert.ok(recovery.evidenceRefs.includes(proof.ref))
+  await assert.rejects(f.store.command({ id: 'bypass-store-interruption', kind: 'run.recover', args: { runId: f.runId } }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+  await assert.rejects(f.controller.recover({ commandId: 'bypass-controller-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+  const held = await f.controller.state(f.runId)
+  assert.equal(held.run.status, 'waiting');assert.equal(held.nodes[1].leaseEpoch,n.leaseEpoch)
+  await f.controller.resumeNode(await f.resumeArgs());await f.controller.whenIdle(f.runId)
+  const after = await f.controller.state(f.runId), repeated = await f.controller.inspectNodeRecovery(f.runId)
+  assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].sessionId,n.sessionId)
+  assert.equal(repeated.problemKey,recovery.problemKey);assert.equal(repeated.reason,'strategy-change-required');assert.equal(repeated.repairable,false)
+  await assert.rejects(f.controller.recover({ commandId: 'bypass-repeat-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+})

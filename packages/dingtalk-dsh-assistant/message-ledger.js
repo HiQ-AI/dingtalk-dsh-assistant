@@ -301,6 +301,27 @@ function priorityTopicControls(db,topic,controls){
  const byUnit=new Map(controls.map(control=>[control.unitId,control]))
  return entries.every(({run:source,unit})=>authorizedPriorityControl(db,byUnit.get(unit.id),unit,source))?byUnit:null
 }
+function noActionBarrierState(db,r,committing=false) {
+  const items=db.prepare('SELECT kind,body FROM message_items WHERE run_id=? ORDER BY item_id').all(r.runId).map(row=>({kind:row.kind,value:JSON.parse(row.body)}))
+  const source=db.prepare('SELECT current_version FROM message_sources WHERE source_key=?').get(r.sourceKey)
+  const group=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(r.conversationId)
+  const coordinator=group?JSON.parse(group.body).coordinator:null
+  const processing=coordinator?.status==='running'&&coordinator.sources?.some(item=>item.runId===r.runId)
+  const eligible=source?.current_version===(r.validSourceVersion??r.sourceVersion)&&r.status==='settled'&&!r.correction&&(committing||!processing)
+    &&!!r.coordinatorConsumed&&r.routingStatus==='routing_complete'&&r.intentStatus==='processed'
+    &&!items.some(({kind,value})=>kind==='unit'&&value.status!=='superseded'
+      ||kind==='request'&&value.status==='pending'
+      ||kind==='command'&&!['applied','rejected','cancelled','superseded'].includes(value.status)
+      ||kind==='agent-execution'&&!['succeeded','failed','cancelled','superseded'].includes(value.status))
+  return {eligible,expectedDigest:executionDigest({run:r,items,currentVersion:source?.current_version??null,processing:processing?coordinator:null}),
+    barriers:items.filter(({kind,value})=>kind==='barrier'&&value.status==='pending'&&value.ownerRunId===r.runId&&value.reason!=='source_edit').map(item=>item.value)}
+}
+function settleNoActionBarriers(db,r,now,committing=false) {
+  const state=noActionBarrierState(db,r,committing)
+  if(!state.eligible)return false
+  for(const barrier of state.barriers){barrier.status='resolved';barrier.resolution='coordinator_no_action_consumed';barrier.resolvedAt=now;barrier.resolvedCoordinatorTurnId=r.coordinatorConsumed.turnId;put(db,r.runId,'barrier',barrier)}
+  r.status='settled';save(db,r);return true
+}
 function settle(db,r) {
   const units=rows(db,r.runId,'unit').filter(u=>u.status!=='superseded')
   const requests=rows(db,r.runId,'request').filter(q=>q.status==='pending')
@@ -656,7 +677,7 @@ function reduceCoordinator(db,kind,a,ctx) {
       const impact=rows(db,r.runId,'impact')[0]
       if(impact){impact.coordinatorManaged=true;impact.boundTopicIds=[...new Set(decision.units.map(u=>u.topic?.topicId).filter(Boolean))];impact.status='decided';put(db,r.runId,'impact',impact)}
       settle(db,r)
-      if(!decision.units.length){r.status='settled';r.reason=decision.reason??'coordinator_no_action';save(db,r)}
+      if(!decision.units.length){r.status='settled';r.reason=decision.reason??'coordinator_no_action';if(!settleNoActionBarriers(db,r,now,true)){r.status='pending';save(db,r)}}
       c.consumedSequence=Math.max(c.consumedSequence,r.sequenceId);accepted.push(r)
     }
     const topicIds=new Set(a.decisions.flatMap(d=>d.units.map(u=>u.topic?.topicId).filter(Boolean)))
@@ -689,6 +710,11 @@ function ownerReleasedWait(db,taskId) {
   return fact
 }
 export function reduceMessageCommand(db,{kind,args:a},ctx) {
+  if(kind==='message.barrier.reconcile-no-action'){
+    const r=run(db,str(a.runId)),checked=noActionBarrierState(db,r)
+    if(!checked.eligible||checked.expectedDigest!==a.expectedDigest)fail('MESSAGE_NO_ACTION_BARRIER_STALE')
+    settleNoActionBarriers(db,r,ctx.now);return {result:{run:r,resolvedBarrierIds:checked.barriers.map(b=>b.id)}}
+  }
   if(kind==='message.clarification.recover'){
     const checked=inspectClarificationRecovery(db,a)
     if(a.expectedDigest!==checked.expectedDigest)fail('MESSAGE_CLARIFICATION_RECOVERY_STALE')
@@ -1703,6 +1729,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   fail('MESSAGE_UNKNOWN_COMMAND')
 }
 export function queryMessages(db,a) {
+  if(a.kind==='message.barrier.no-action'){const checked=noActionBarrierState(db,run(db,str(a.runId)));return {eligible:checked.eligible,expectedDigest:checked.expectedDigest,barrierIds:checked.barriers.map(b=>b.id)}}
   if(a.kind==='message.clarification.recover.check')return inspectClarificationRecovery(db,a)
   if(a.kind==='message.topic.reconcile.check')return topicReconciliationView(inspectTopicReconciliation(db,a))
   if(a.kind==='message.batch.cleanup.check')return inspectMessageBatchCleanup(db,a)
