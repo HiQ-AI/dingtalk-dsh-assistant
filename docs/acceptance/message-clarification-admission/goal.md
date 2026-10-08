@@ -1,6 +1,6 @@
 # 群消息澄清与准入实施
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：message-clarification-admission
 > 最近维护：2026-10-08T14:52:47.8359416+08:00
 > 权威目标：D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/acceptance/message-clarification-admission/goal.md
@@ -41,8 +41,8 @@
 ## 当前检查点
 
 - 当前子目标：SG5
-- 唯一下一步：提交并更新PR最终验收；本轮插件修复与原任务发起已完成，业务开发由原Task继续。
-- 未闭环项：PR 未合并；四项既有服务基线失败未扩范围修复；业务开发尚未完成，不影响本轮任务发起验收。
+- 唯一下一步：本轮已完成；原业务Task继续工程开发，PR合并不在本轮范围。
+- 未闭环项：本轮范围内无；PR #155保持OPEN未合并，四项既有服务基线失败及原业务开发完成均为本轮边界。
 
 ## 进展
 
@@ -65,4 +65,4 @@
 ## 重要信息
 
 - 主检出 D:/project/dingtalk-dsh-assistant 保持原样；当前工作分支 worktree-message-clarification-admission。
-- 子代理仅修改分配文件，主代理负责 workflow-service.js 与最终集成。
+- 子代理仅修改分配文件，主代理负责最终集成；最终源码已部署，PR #155的正文、base/head及OPEN状态已独立回读。

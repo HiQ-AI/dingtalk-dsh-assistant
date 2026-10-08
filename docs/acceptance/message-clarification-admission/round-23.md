@@ -19,3 +19,5 @@
 受管重评返回event316并废弃原未生效候选；随后独立 GET Task detail：state=running，Owner lease5/revision19、lastFailure=null，plan.version=1且requirementCurrent=true，stage-1 running，Run为`run-8fd2d5775eca1d446eb3fd72f2f881db5132b52326ebcaa06d949d585e37283c`。因此本轮不仅是重评accepted，已真实进入原Task工程阶段。
 
 本轮目标为插件修复与任务发起；数据集功能实现、PR、测试提测和业务验收仍由该业务Task继续，不能以此记录宣称完成。
+
+收尾再次独立读取：原Task仍running，prepare-generation、define-local-acceptance、plan-local-acceptance已succeeded，prepare-workspace running；后续节点等待前序。PR #155正文与本地文件一致，OPEN，main ← worktree-message-clarification-admission，源码提交2f4cb17已推送并核对远端。
