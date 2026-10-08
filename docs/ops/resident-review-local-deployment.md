@@ -701,3 +701,5 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 本次维护复用 bootstrap witness/profile CAS：进入正式 maintenance，让其他实际工作自然排空；witness 证明 Resident 完整 Loader dispose 后，单独禁用 `session-controller`。维护桥须再次核对两个精确模块 disabled、fiber 已释放及两个旧 Agent/Session 均不存在，取得原生控制库独占，并按当前配置恢复真实工程定义。仅调用内部 `controller.prepareManagedSession`，核对精确维护 id/revision、原 Task/Run/node/input/lease、完成历史与零节点效果，完整 seed 派生受管子会话后正式 CAS 换绑排空；不启动模型、不重做成功步骤、不取消业务任务。
 
 临时 profile 修改逐步先 `--check`；执行期间保持 profile CAS，桥关闭 worker/自有原生句柄后独立读取控制账及新原生 header。按精确尾块反序移除桥、恢复 session-controller、bootstrap enable，确认 profile 回到原摘要。随后走普通部署 Check/安装/Readback/Resume，并以新 lease 的原生输入及实际工具调用证明续行，不能以 running 投影代替。临时维护脚本及含真实身份的 manifest 留在 docs/tmp；不向版本库提交私人任务内容，不创建历史备份副本。
+
+任务目录含大型验证检出时，文件枚举逐项合并子树，避免数组展开为函数实参触发 Maximum call stack size exceeded；已有依赖排除规则和普通文件/链接核验保持不变，不靠扩大忽略范围绕过预检。

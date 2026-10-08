@@ -83,7 +83,7 @@ async function files(root, prefix = '', excludeTaskDependencies = false) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name
     if (excludeTaskDependencies && excludedTaskDependency(path) && (entry.isDirectory() || entry.isSymbolicLink())) continue
     if (entry.isSymbolicLink()) fail('BACKUP_LINK_UNSAFE')
-    if (entry.isDirectory()) result.push(...await files(root, path, excludeTaskDependencies))
+    if (entry.isDirectory()) for (const file of await files(root, path, excludeTaskDependencies)) result.push(file)
     else if (entry.isFile()) result.push(path)
     else fail('BACKUP_FILE_UNSAFE')
   }

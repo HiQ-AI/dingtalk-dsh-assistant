@@ -105,3 +105,5 @@ engineering-native-turn-started,32,FAIL,round-32.md
 readonly-short-table-arguments,33,PASS,round-33.md
 managed-engineering-session-ownership,34,PASS,round-34.md
 internal-block-not-user-confirmation,35,PASS,round-35.md
+historical-native-session-migration,36,PASS,round-36.md
+large-task-directory-preflight-regression,36,PASS,round-36.md
