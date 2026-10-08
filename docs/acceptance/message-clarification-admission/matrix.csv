@@ -125,3 +125,6 @@ engineering-checks-checkpoint,41,PASS,round-41.md
 engineering-shared-material-read,41,PASS,round-41.md
 engineering-scope-native-recovery,41,PASS,round-41.md
 engineering-prior-delivery-rerun,41,PASS,round-41.md
+shared-material-native-execution,46,PASS,round-46.md
+lineage-package-deployment,46,PASS,round-46.md
+derived-stage-requirement-sync,47,PASS,round-47.md

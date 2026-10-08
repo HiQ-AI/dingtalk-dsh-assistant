@@ -94,6 +94,25 @@ function assertTaskDispatchAllowed(r) {
     || !db.prepare(`SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=?
       AND run_id=? AND status='running'`).get(r.task_id, task.plan_revision, r.run_id)) fail('TASK_DISPATCH_BLOCKED')
 }
+// 历史 input.apply 已正式接纳而遗漏 Stage 投影时，只在恢复命令事务内对账。
+function reconcileAppliedStageRequirement(r, commandId, now) {
+  const stage = db.prepare(`SELECT s.* FROM task_plan_stages s JOIN business_tasks t USING(task_id)
+    WHERE s.task_id=? AND s.plan_revision=t.plan_revision AND s.run_id=?`).get(r.task_id, r.run_id)
+  if (!stage || stage.requirement_ref === r.requirement_ref) return
+  const chain = db.prepare("SELECT kind,payload FROM execution_events WHERE kind IN ('run.create','input.apply') AND json_extract(payload,'$.run.runId')=? ORDER BY seq").all(r.run_id)
+    .map(row => ({ kind: row.kind, run: JSON.parse(row.payload).run }))
+  if (stage.workflow_digest !== r.workflow_digest || !['running','blocked'].includes(stage.status) || stage.output_ref
+    || chain.length !== r.generation || chain[0]?.kind !== 'run.create'
+    || chain.some((entry,index) => entry.run.generation !== index + 1 || entry.run.taskId !== r.task_id
+      || entry.run.workflowDigest !== r.workflow_digest || index > 0 && (entry.kind !== 'input.apply'
+        || !db.prepare("SELECT 1 FROM execution_inputs WHERE run_id=? AND requirement_ref=? AND status='applied'").get(r.run_id,entry.run.requirementRef)))
+    || !chain.slice(0,-1).some(entry => entry.run.requirementRef === stage.requirement_ref)
+    || chain.at(-1)?.run.requirementRef !== r.requirement_ref) fail('TASK_STAGE_REQUIREMENT_LINEAGE_INVALID')
+  db.prepare('UPDATE task_plan_stages SET requirement_ref=? WHERE task_id=? AND plan_revision=? AND stage_id=?')
+    .run(r.requirement_ref,r.task_id,stage.plan_revision,stage.stage_id)
+  emitEvent(commandId,'task.stage.requirement.reconciled',{taskId:r.task_id,runId:r.run_id,planRevision:stage.plan_revision,
+    stageId:stage.stage_id,fromRef:stage.requirement_ref,toRef:r.requirement_ref,generation:r.generation},now)
+}
 // 续行只针对已定位的 agent 可纠正问题；未知工具、身份和存储故障不能自动重放。
 function inspectNodeRecovery(runId, { reclassifyInterrupted = false, reclassifyProvider = false } = {}) {
   const r = getRun(runId), current = nodes(runId), candidate = current.find(n => ['waiting', 'failed'].includes(n.status))
@@ -350,6 +369,7 @@ function coreCommand(command, now, consumption = {}) {
     ref(a.requirementRef, 'requirementRef')
     const r = activeRun(a, { allowFence: true })
     if (r.revision !== integer(a.expectedRevision, 'expectedRevision')) fail('REVISION_CONFLICT')
+    reconcileAppliedStageRequirement(r, command.id, now)
     const inputs = pendingInputs(r.run_id)
     if (!Array.isArray(a.inputIds) || !a.inputIds.length || a.inputIds.length > inputs.length
       || a.inputIds.some((id, i) => id !== inputs[i].input_id) || a.requirementRef !== inputs[a.inputIds.length - 1].requirement_ref) fail('INPUT_BATCH_CONFLICT')
@@ -369,6 +389,14 @@ function coreCommand(command, now, consumption = {}) {
       const n = current[i], replacement = a.nodes[i - first]
       db.prepare("UPDATE execution_nodes SET current=0,status='superseded' WHERE node_run_id=?").run(n.node_run_id)
       addNode(r.run_id, { nodeId: n.node_id, nodeVersion: n.node_version, executor: n.executor, ...replacement }, n.position, generation, i === first ? 'ready' : 'blocked')
+    }
+    const stage = db.prepare(`SELECT s.* FROM task_plan_stages s JOIN business_tasks t USING(task_id)
+      WHERE s.task_id=? AND s.plan_revision=t.plan_revision AND s.run_id=?`).get(r.task_id,r.run_id)
+    if (stage) {
+      if (stage.workflow_digest !== r.workflow_digest || stage.requirement_ref !== r.requirement_ref
+        || !['running','blocked'].includes(stage.status) || stage.output_ref) fail('TASK_STAGE_REQUIREMENT_STALE')
+      db.prepare('UPDATE task_plan_stages SET requirement_ref=? WHERE task_id=? AND plan_revision=? AND stage_id=?')
+        .run(a.requirementRef,r.task_id,stage.plan_revision,stage.stage_id)
     }
     for (const id of a.inputIds) db.prepare("UPDATE execution_inputs SET status='applied',applied_at=? WHERE run_id=? AND input_id=?").run(now, r.run_id, id)
     db.prepare("UPDATE execution_runs SET requirement_ref=?,revision=revision+1,generation=?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
@@ -463,6 +491,7 @@ function coreCommand(command, now, consumption = {}) {
     assertTaskDispatchAllowed(r)
     if (maintenanceStatus(db, workerData.processIncarnation).active) fail('RUNTIME_MAINTENANCE_ACTIVE')
     if (db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(r.task_id)) {
+      reconcileAppliedStageRequirement(r, command.id, now)
       const recovery = inspectNodeRecovery(r.run_id, { reclassifyInterrupted: previousCode === 'execution_tool_failed', reclassifyProvider: previousCode === 'EXECUTION_PROVIDER_FAILED' })
       if (!recovery.repairable && recovery.reason !== 'strategy-change-required') fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
     }
@@ -595,6 +624,7 @@ function coreCommand(command, now, consumption = {}) {
     const oldRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.fromDigest),nextRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.toDigest)
     const old=oldRow&&JSON.parse(oldRow.body),next=nextRow&&JSON.parse(nextRow.body)
     const task=db.prepare('SELECT t.*,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
+    reconcileAppliedStageRequirement(r,command.id,now)
     const stage=task&&db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=?').get(r.task_id,task.plan_revision,r.run_id)
     if(a.kind!=='checks'||a.startNodeId!=='verify-candidate'||r.status!=='waiting'||r.revision!==a.expectedRevision||r.workflow_digest!==a.fromDigest
       ||a.fromDigest===a.toDigest||!old||!next||old.definitionVersion!=='18'||next.definitionVersion!=='18'||next.workflowId!==a.toWorkflowId

@@ -144,3 +144,13 @@ Host 核对引用是否真实、同群、版本有效，以及必要的来源读
 现场重处理不是自动授权实施开发或生产操作。先用无外部写能力的隔离回放确认新判断，再按用户明确授权范围执行现场动作。
 
 完成条件：两例不再被错误归为补充需求；必要澄清、权限、环境与生产审批反例仍成立；真实 Task/请求/通知读回一致；文档与运行配置一致。有限测试不能保证所有未来语义判断绝不出错，每个新澄清保留缺失字段、阻塞动作和来源依据，供后续核验。
+
+## SG：派生执行输入与 Stage 需求引用一致性
+
+现场83的正式run.create(gen1)绑定Stage输入815f87cc；随后三次input.apply(gen2/3/4)正式接纳工程输入38569545，Run引用已变化而Stage仍旧值。node恢复坚持Stage/Run同源检查因此拒绝，不能删除该检查。
+
+最小修复：input.apply在既有事务内同步当前plan绑定Stage的requirement_ref；更新前仍要求旧Stage/Run引用和workflow一致、Stage处于运行/阻塞且无完成输出。历史只在已有node.failure.reclassify事务内对账：完整run.create→逐代input.apply事件，Task/Run/workflow固定，当前generation连续，派生引用存在applied输入账，旧Stage引用必须为该链较早引用，末端引用等于当前Run。对账后仍经过所有来源、计划、租约、无副作用及CAS门禁，后续失败整事务回滚。留下task.stage.requirement.reconciled事件。不增加HTTP或绕过维护，不直接修库；跨workflow/reissue历史不纳入本次对账。
+
+追加同因入口：历史投影漂移也可能在下一次input.apply才触发。该入口在原事务的revision CAS后复用相同正式历史链对账，再执行输入批次/排空/后缀/Stage同步检查。不会要求必须先遇到可重分类失败；非法链仍拒绝且整个事务回滚。
+
+checkpoint同因处理：切换检查workflow摘要之前，在既有checkpoint事务内复用严格输入派生链对账，避免将已确认的Stage旧引用带入新摘要。当前Task/Run/generation、成功前缀及全部checkpoint门禁保持。

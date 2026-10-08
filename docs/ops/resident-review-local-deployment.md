@@ -714,6 +714,8 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 
 换绑会话的恢复核验先验证原生rebind链，只承认rebind之前、精确父session且旧lease的已消费输入；不删除父历史以通过检查。离线回放通过仍需回查在线重分类回执和新lease实际执行。
 
+旧工程任务在已接纳输入后Stage/Run引用不一致，由既有输入或恢复事务核验正式逐代input.apply链并同步Stage。切换后独立回读task.stage.requirement.reconciled事件、原Run代际和实际新租约工具调用；不得手改Stage引用，也不删除当前计划一致性检查。
+
 ### 工程检查配置的同代维护修正
 
 检查路径不存在属于检查配置前提，不能驱动业务代码整代重跑。仅在正式 maintenance 排空、封存并停止 Resident 后，以控制库独占方式调用内部 `engineering.updateCheckpoint({runId,requestId,kind:'checks',checks,maintenance:{maintenanceId,revision}},controller,artifacts)`。`checks` 必须是已审阅的完整注册配置（本次只把固定缺失文件参数改为 `node --test` 并提高检查版本）；用当前安装绝对路径的真实工程工厂恢复定义，不伪造摘要或函数。调用返回 receipt.result 中的原 runId/generation、旧新 digest 和 evidenceRef；不启动模型、不执行检查、不创建新 Task/Run/generation。恢复 Resident 后才调度 ready 的 verify-candidate。先前成功节点、工作区、候选和旧失败证据均保留。调用失败不能跳过门禁改库。

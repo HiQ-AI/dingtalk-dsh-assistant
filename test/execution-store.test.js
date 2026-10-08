@@ -966,7 +966,7 @@ for(const variant of ['capability','permission','execution','business-input','ap
  }else await assert.rejects(send('task.owner.reassess',args,'reassess-before-query'),{code:'TASK_OWNER_REASSESS_FORBIDDEN'})
 })
 
-for (const variant of ['valid','revision','control','scope','undrained','node-plan','maintenance']) test(`工程检查checkpoint保留同代成功前缀 ${variant}`,async t=>{
+for (const variant of ['valid','revision','control','scope','undrained','node-plan','maintenance','history','invalid-history']) test(`工程检查checkpoint保留同代成功前缀 ${variant}`,async t=>{
  const f=await fixture(t,null),nextDigest='b'.repeat(64),old={workflowId:'engineering',digest:d,definitionVersion:'18',config:{kind:'engineering',runId:'run',taskId:'task',repoId:'repo',ownerActorId:'owner',sourceCommandId:'source'}}
  const next={...old,workflowId:'engineering-checkpoint',digest:nextDigest,config:{...old.config,checkpoint:{kind:'checks',fromDigest:d,requestId:'fix-check'},checkpointChecks:[{id:'build',version:'2'}]}}
  const send=f.store.command.bind(f.store);f.store={...f.store,command:async value=>{try{return await send(value)}catch(error){error.message=`${value.kind}: ${error.message}`;throw error}}}
@@ -976,10 +976,19 @@ for (const variant of ['valid','revision','control','scope','undrained','node-pl
  await f.store.command(command('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:'engineering',workflowDigest:d,unavailableReason:null,requirementRef:'sha256/requirement.json',gate:'none'}]}))
  const nodes=[plan('prepare'),plan('verify-candidate','code',false),plan('deliver','code',false)]
  await f.store.command(command('run.create',creation(nodes,{workflowId:'engineering',stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})))
- const prefix=await f.claim('prepare');await f.drain(prefix)
+ const historical=['history','invalid-history'].includes(variant),generation=historical?2:1
+ if(historical){
+  await f.store.command(command('input.accept',{runId:'run',inputId:'repair-check',sourceKey:'repair-check',requirementRef:'sha256/repair-check.json'}))
+  await f.store.command(command('input.apply',{runId:'run',inputIds:['repair-check'],expectedRevision:0,requirementRef:'sha256/repair-check.json',nodes:nodes.map(({nodeId,inputRef,inputDigest})=>({nodeId,inputRef,inputDigest}))}))
+ }
+ const prefix=await f.claim('prepare',generation);await f.drain(prefix)
  await f.store.command(command('node.commit',{...identity(prefix),inputDigest:d,outcome:'succeeded',outputRef:'sha256/candidate.json',evidenceRefs:[],nextInput:{nodeId:'verify-candidate',inputRef:'sha256/verify.json',inputDigest:d}}))
- const verify=await f.claim('verify-candidate');await f.drain(verify)
+ const verify=await f.claim('verify-candidate',generation);await f.drain(verify)
  await f.store.command(command('node.commit',{...identity(verify),inputDigest:d,outcome:'waiting',evidenceRefs:['sha256/failure.json'],waitReason:{kind:'recovery',reference:'ENGINEERING_VERIFICATION_FAILED'}}))
+ if(historical){await f.store.close();const db=new DatabaseSync(f.dbPath);try{
+  db.prepare("UPDATE task_plan_stages SET requirement_ref='sha256/requirement.json' WHERE task_id='task'").run()
+  if(variant==='invalid-history')db.prepare("DELETE FROM execution_events WHERE kind='input.apply'").run()
+ }finally{db.close()}await f.open()}
  const before=await f.query(),args={runId:'run',expectedRevision:before.run.revision,fromDigest:d,toDigest:nextDigest,toWorkflowId:next.workflowId,kind:'checks',startNodeId:'verify-candidate',inputRef:'sha256/new-verify.json',inputDigest:nextDigest,evidenceRef:'sha256/checkpoint.json',expectedRequirementRevision:1,expectedControlRevision:1,nodes:nodes.map(({nodeId,nodeVersion,executor})=>({nodeId,nodeVersion,executor}))}
  if(variant==='revision')args.expectedRevision--
  if(variant==='control')args.expectedControlRevision++
@@ -988,9 +997,58 @@ for (const variant of ['valid','revision','control','scope','undrained','node-pl
  await f.store.command(command('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'检查配置修正'}))
  args.maintenance={maintenanceId:'checks',revision:variant==='maintenance'?2:1}
  const cmd=command('run.workflow.checkpoint',args,'checkpoint')
- if(variant!=='valid'){await assert.rejects(f.store.command(cmd));assert.equal((await f.query()).run.workflowDigest,d);return}
+ if(!['valid','history'].includes(variant)){await assert.rejects(f.store.command(cmd));assert.equal((await f.query()).run.workflowDigest,d);return}
  const result=await f.store.command(cmd),after=await f.query()
- assert.equal(result.result.generation,1);assert.equal(after.run.generation,1);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].status,'ready');assert.equal(after.nodes[1].leaseEpoch,1);assert.deepEqual(after.nodes[1].evidenceRefs,['sha256/failure.json']);assert.equal(after.nodes[2].status,'blocked')
+ assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,after.run.requirementRef)
+ assert.equal(result.result.generation,generation);assert.equal(after.run.generation,generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].status,'ready');assert.equal(after.nodes[1].leaseEpoch,1);assert.deepEqual(after.nodes[1].evidenceRefs,['sha256/failure.json']);assert.equal(after.nodes[2].status,'blocked')
  assert.deepEqual((await f.store.command(cmd)).result,result.result)
  assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].workflowDigest,nextDigest)
+})
+for(const variant of ['current','history','missing-event','foreign-ref','unapplied','plan-drift','lease-drift','history-next-input','invalid-next-input'])test(`派生输入Stage引用同步与历史恢复：${variant}`,async t=>{
+ const f=await fixture(t,null)
+ await f.store.command(command('task.accept',{taskId:'task',requirementRevision:1,requirementRef:'sha256/requirement.json',sessionId:'owner',criteria:['完成'],sourceKey:'source',eventKey:'source'}))
+ await f.store.command(command('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:'sequential',workflowDigest:d,unavailableReason:null,requirementRef:'sha256/requirement.json',gate:'none'}]}))
+ await f.store.command(command('run.create',creation([plan('one','agent')],{stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})))
+ for(let generation=1;generation<=3;generation++){
+  await f.store.command(command('input.accept',{runId:'run',inputId:`repair-${generation}`,sourceKey:`repair-${generation}`,requirementRef:'sha256/repair.json'}))
+  await f.store.command(command('input.apply',{runId:'run',inputIds:[`repair-${generation}`],expectedRevision:generation-1,requirementRef:'sha256/repair.json',nodes:[{nodeId:'one',inputRef:'sha256/repaired-input.json',inputDigest:d}]}))
+ }
+ assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/repair.json')
+ const n=await f.claim('one',4,0);await f.store.command(command('node.sessionBound',{...identity(n),sessionId:n.sessionId}));await f.drain(n)
+ await f.store.command(command('node.commit',{...identity(n),inputDigest:d,outcome:'waiting',evidenceRefs:[],waitReason:{kind:'recovery',reference:'execution_tool_failed'}}))
+ if(variant!=='current'){
+  await f.store.close();const db=new DatabaseSync(f.dbPath)
+  try{
+   db.prepare("UPDATE task_plan_stages SET requirement_ref=? WHERE task_id='task'").run(variant==='foreign-ref'?'sha256/foreign.json':'sha256/requirement.json')
+   if(['missing-event','invalid-next-input'].includes(variant))db.prepare("DELETE FROM execution_events WHERE kind='input.apply'").run()
+   if(variant==='unapplied')db.prepare("UPDATE execution_inputs SET status='pending'").run()
+   if(variant==='plan-drift')db.prepare("UPDATE business_tasks SET requirement_revision=2").run()
+  }finally{db.close()}await f.open()
+ }
+ if(['history-next-input','invalid-next-input'].includes(variant)){
+  await f.store.command(command('input.accept',{runId:'run',inputId:'next',sourceKey:'next',requirementRef:'sha256/next.json'}))
+  const state=await f.query(),next=command('input.apply',{runId:'run',inputIds:['next'],expectedRevision:state.run.revision,requirementRef:'sha256/next.json',nodes:[{nodeId:'one',inputRef:'sha256/next-input.json',inputDigest:d}]})
+  if(variant==='history-next-input'){
+   await f.store.command(next)
+   assert.equal((await f.query()).run.generation,5)
+   assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/next.json')
+  }else{
+   await rejects(f.store.command(next),'TASK_STAGE_REQUIREMENT_LINEAGE_INVALID')
+   assert.equal((await f.query()).run.generation,4)
+   assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/requirement.json')
+  }
+  return
+ }
+ const state=await f.query(),args={runId:'run',runRevision:state.run.revision,nodeRunId:n.nodeRunId,generation:4,leaseEpoch:n.leaseEpoch+(variant==='lease-drift'?1:0),inputDigest:d,sessionId:n.sessionId,evidenceRef:'sha256/scope-proof.json',previousCode:'execution_tool_failed',code:'ENGINEERING_READ_PATH_INVALID'}
+ const operation=command('node.failure.reclassify',args)
+ if(['current','history'].includes(variant)){
+  await f.store.command(operation)
+  assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/repair.json')
+  assert.equal((await f.query()).nodes[0].waitReason.reference,'ENGINEERING_READ_PATH_INVALID')
+  assert.equal((await f.store.command(operation)).replayed,true)
+ }else{
+  await assert.rejects(f.store.command(operation))
+  assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,variant==='foreign-ref'?'sha256/foreign.json':'sha256/requirement.json')
+  assert.equal((await f.query()).nodes[0].waitReason.reference,'execution_tool_failed')
+ }
 })
