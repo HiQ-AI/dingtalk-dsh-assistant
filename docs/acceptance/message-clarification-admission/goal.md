@@ -63,7 +63,7 @@
 ## 当前检查点
 
 - 当前子目标：SG20
-- 唯一下一步：4afb包已由统一脚本完整部署，原profile不变/PID79644健康；SG20原gen4检查点已生效并完成define/plan重评，SG18原gen4 apply已领取lease3；两Host诊断事件已送入SG18/22原Owner。maintenance517已退出。只读跟进真实增量、原Owner必要依赖阶段及三开发任务验收，禁止重投成功操作。SG19/21/23已完成。
+- 唯一下一步：4afb包已由统一脚本完整部署，原profile不变/PID79644健康；SG20原gen4检查点已生效并完成define/plan重评，SG18原gen4 apply lease3已成功，新增量效果只执行1次，旧8文件保持，已进入verify；两Host诊断事件已送入SG18/22原Owner。maintenance517已退出。只读跟进真实增量、原Owner必要依赖阶段及三开发任务验收，禁止重投成功操作。SG19/21/23已完成。
 - 未闭环项：五条业务Task的实际完成及SG16全局检查配置收口；禁止伪造验收或只修改状态。
 
 ## 本轮关键决策

@@ -16,3 +16,5 @@
 
 ## 现场恢复边界
 service不会自动重试DELIVERY错误。既有受信controller.recover已由隔离原账实际验证可原Run恢复；主线程部署后精确读取当前身份及正式审计，再沿该入口恢复，禁止手改库。此轮不部署、不改业务代码；通过的是插件恢复/真实文件效果链，不表示原Task业务已经完成。
+
+现场闭环（4afb包）：原gen4 apply-changes lease3 succeeded，新edit-e972 succeeded且effect.started恰1，旧edit.started仍1，旧8文件逐SHA保持，增量1文件；原Run已进入verify-candidate lease2。独立证明 sg18-v2-real-increment-proof.json 与 sg20-v2-dispatch-readback.json。只证明原候选增量恢复，不表示完整导入导出FR已交付；检查4尚未绑定。
