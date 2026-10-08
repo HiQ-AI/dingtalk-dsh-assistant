@@ -679,3 +679,5 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 工程准备若仅返回 Git exit128，应按配置的 `sourceRepository` 独立只读复现首条命令并核对目录；缺失源仓库不能误报用户未给UAT或GitHub未授权。恢复时使用配置的远端在原sourceRepository路径建立独立完整Git仓库，禁止浅克隆、共享alternates、symlink或改用用户主检出；核对origin/main和选定UAT远端SHA。既有Task尚无执行阶段/外部效果时，沿上述reassess-readonly门禁重评，不新建Task，不伪造需求补充。源仓库恢复不是功能代码提交、部署或业务验收完成。
 
 上述工程前置恢复也要求当前 Owner 的 blocked advance 仅包含有来源条件的 task-engineering 初始化候选、计划版本0，且全Task无任何计划阶段/接纳收据/执行Run/效果；原来源与Owner/租约/需求/控制版本均须匹配。只有这个未生效工程准备分支不要求当前需求已产生查询证据，其他只读重评规则不变。恢复废弃旧候选并产生system.recovery审计，再由同一Owner重新决策；不按128或任意错误码自动重领。
+
+已发过时通知更正：先按原通知ID和完整正文唯一定位，核对当前业务事实；用notification operation的recall/explicit_user撤回，独立核验recallStatus及证据。再用同一notificationId准备restore/correction和简洁更正文，通过受信host-web身份执行并独立读取notification-replacement及DWS回读工件。保持同一profile/会话/原引用，未知投递仅reconcile，不重复send；不把旧正文直接补回，不伪造群内授权消息。

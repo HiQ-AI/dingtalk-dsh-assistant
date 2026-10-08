@@ -2,7 +2,7 @@
 
 > 状态：COMPLETED
 > Goal ID：message-clarification-admission
-> 最近维护：2026-10-08T14:52:47.8359416+08:00
+> 最近维护：2026-10-08T15:09:05.8894568+08:00
 > 权威目标：D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/acceptance/message-clarification-admission/goal.md
 
 ## 总目标
@@ -38,10 +38,12 @@
 
 | SG9 | Task 钉钉文档正文读取 | 原消息链接进入只读材料范围，DWS正文完整证据落盘，原Task先读文档和分析再等待UAT；隔离反例通过 | 已完成 | round-21原Task实际读取57222字节HTML并保存查询证据；文档缺失等待已消除 |
 
+| SG10 | 已发过时通知更正 | 指定索要UAT消息撤回并回读，按真实UAT2状态补发更正文且去重 | 已完成 | round-24两条旧通知recalled，单条更正送达且DWS回读工件独立核验 |
+
 ## 当前检查点
 
-- 当前子目标：SG5
-- 唯一下一步：本轮已完成；原业务Task继续工程开发，PR合并不在本轮范围。
+- 当前子目标：SG10
+- 唯一下一步：本轮已完成；业务Task继续，PR保持待合并。
 - 未闭环项：本轮范围内无；PR #155保持OPEN未合并，四项既有服务基线失败及原业务开发完成均为本轮边界。
 
 ## 进展

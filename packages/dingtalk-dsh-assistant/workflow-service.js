@@ -898,7 +898,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   async function authorizedNotificationOperation(notification, authorizationRef, type, identity, reason) {
     if (authorizationRef?.startsWith('host-web:')) {
       if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId
-        || authorizationRef !== `host-web:${encodeURIComponent(identity.actorId)}` || reason !== 'explicit_user'
+        || authorizationRef !== `host-web:${encodeURIComponent(identity.actorId)}` || !(reason === 'explicit_user' || type === 'restore' && reason === 'correction')
         || !notification || !groups.has(notification.payload?.conversationId)) throw executionError('WORKFLOW_NOTIFICATION_AUTHORIZATION_REQUIRED')
       return
     }

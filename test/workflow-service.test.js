@@ -6646,7 +6646,7 @@ test('受管话题关联服务封存后预检零写，旧链接读取四条且�
 
 test('本机Web显式撤回绑定Host身份和快照摘要，重复执行不重复外发',async t=>{
  let recalls=0,reads=0
- const notifications={canDisclose:async()=>true,send:async()=>({messageId:'web-out'}),readback:async()=>({messageId:'web-out',conversationId:'g'}),
+ const notifications={canDisclose:async()=>true,send:async({id})=>({messageId:`web-out-${id}`}),readback:async({id})=>({messageId:`web-out-${id}`,conversationId:'g'}),
   recall:async()=>{recalls++;return {recallStatus:'SUCCESS'}},readbackRecall:async({messageId,ack})=>{reads++;assert.equal(ack.recallStatus,'SUCCESS');if(reads===1)return undefined;return {messageId,conversationId:'g',recallStatus:'SUCCESS'}}}
  const {service,execution,message}=await fixture(t,'owner',notifications,{config:{webActorId:'operator'}})
  const received=await service.ingest(message);await service.messages.process(received.runId)
@@ -6672,6 +6672,18 @@ test('本机Web显式撤回绑定Host身份和快照摘要，重复执行不重�
  assert.equal(recalls,1);assert.equal(reads,2)
  const after=await execution.store.query({kind:'message.notification',notificationId:notice.id})
  assert.equal(after.recallStatus,'recalled');assert.ok(after.recallEvidenceRef)
+ const correction={operationId:'web-correction',notificationId:notice.id,type:'restore',reason:'correction',body:'已确认使用 UAT2，继续原开发任务。'}
+ for(const invalid of [undefined,{channel:'im',actorId:'operator'},{channel:'web',actorId:'wrong'}])
+  await assert.rejects(service.prepareWorkflowNotificationOperation(correction,invalid),/AUTHORIZATION_REQUIRED/u)
+ await assert.rejects(service.prepareWorkflowNotificationOperation({...correction,authorizationRef:'host-web:wrong'},identity),/AUTHORIZATION_REQUIRED/u)
+ await assert.rejects(service.prepareWorkflowNotificationOperation({...correction,reason:'automatic'},identity),/AUTHORIZATION_REQUIRED/u)
+ const restored=await service.prepareWorkflowNotificationOperation(correction,identity)
+ assert.equal(restored.snapshot.body,correction.body)
+ assert.equal(restored.snapshot.notificationId,notice.id)
+ assert.equal(restored.snapshot.authorizationRef,'host-web:operator')
+ assert.equal((await service.executeWorkflowNotificationOperation({operationId:restored.id,expectedFactDigest:restored.snapshot.expectedFactDigest},identity)).status,'completed')
+ const replacement=await execution.store.query({kind:'message.notificationReplacement',replacementId:restored.id})
+ assert.equal(replacement.body,correction.body);assert.equal(replacement.restoresNotificationId,notice.id)
 })
 
 
