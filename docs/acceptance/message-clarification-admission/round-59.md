@@ -50,3 +50,7 @@
 实跑 `pwsh -NoProfile -File test/deploy-local-no-backup.test.ps1` 全文件通过，新增8/8使用真实helper AST执行模式函数、configArgs和check/apply分支：Package-only通过、四种部分提案拒绝、零配置调用、profile漂移拒绝。同步修正既有字符串断言以包含当前backupScope/backupManifestSha256字段，未改变备份行为。未执行现场部署。
 
 入口既有全文件实跑 `node --test test/deploy-local.test.js`：12/12 PASS，92.78秒（启动时文件快照，不含随后追加的最小JSON用例）；新增 `node --test --test-name-pattern='最小Package' test/deploy-local.test.js`：1/1 PASS，3.31秒。合计本轮13个入口用例实跑通过。`git diff --check`通过，仅Windows行尾提示。
+
+## Package-only正式部署闭环
+统一入口一次调用完成4afb1c88包替换、计划任务启动、Readback、Resume。installed.json独立核验101文件，summary ready/dispatchResumed=true；现场独立health=ok、inboundProcessing=true、bridgehealthy、recoveryIssueCount=0、maintenance515 inactive、自启enabled，两个本机端口同新Host。profile仍3b5c原摘要，config-applied.json不存在，backupCreated=false。证据 five-native-checkpoint-script-independent-readback.json 与 five-native-checkpoint-script-deployment-runner/。实际部署闭环不冒称三项剩余业务已完成。
+本轮控制台日志CreationTime 02:16:09.054→summary LastWriteTime 02:19:02.715，起止约173.66秒；此为本轮测量，不外推所有部署耗时。新Host PID79644同持18998/3080。

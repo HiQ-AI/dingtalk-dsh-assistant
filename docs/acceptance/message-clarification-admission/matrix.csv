@@ -180,3 +180,4 @@ sg18-incremental-effect-identity,61,PASS,round-61.md
 sg18-incremental-repair-rejections,61,PASS,round-61.md
 sg18-second-incremental-repair,61,PASS,round-61.md
 sg18-original-snapshot-incremental,61,PASS,round-61.md
+deploy-package-only-live-full-cycle,59,PASS,round-59.md
