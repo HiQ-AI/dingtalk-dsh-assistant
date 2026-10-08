@@ -131,3 +131,4 @@ derived-stage-requirement-sync,47,PASS,round-47.md
 task-stage-package-deployment,48,PASS,round-48.md
 backend-unit-discovery-proof,49,PASS,round-49.md
 same-generation-live-checkpoint,48,PASS,round-48.md
+stage-lineage-native-recovery,48,PASS,round-48.md

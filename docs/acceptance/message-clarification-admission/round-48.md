@@ -20,3 +20,5 @@
 桥及witness精确移除，profile独立SHA恢复b6c386735c67d91a2fc3d7a8014973dc2def130cfea4a943c3bc8935f3a6a261。独立证据checks-checkpoint-retry-manifest-report.json、checkpoint-independent-readback.json；旧失败证据checks-checkpoint-manifest-report.json不覆盖。检查节点恢复不等于检查已经通过。
 
 19:50正式Resume及独立HTTP确认maintenance495 inactive、PID146784健康、收信启用。两条原verify节点已领取lease2，Run分别仍gen5/gen1，七个成功前缀再次核验一致。83旧路径错误已正式重分类为ENGINEERING_READ_PATH_INVALID，Stage历史引用对账通过；实际Owner续行另外核验。
+
+19:52最终原生回读：83同session97c9d965、同generation4，inspect-and-propose lease2/inputSeq88；seq100读取共享索引，seq181/267分页读取当前需求正文6922f336，随后seq289及308/310/312/314/353实际读取仓库组件。由此确认正式原节点续行、共享材料读取均发生，而非仅状态投影running。两条检查仍执行中，未宣称测试、构建或业务E2E通过。
