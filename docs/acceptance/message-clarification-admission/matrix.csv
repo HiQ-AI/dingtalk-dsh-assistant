@@ -79,3 +79,7 @@ public-fact-ledger,22,PASS,round-22.md
 public-fact-coordinator,22,PASS,round-22.md
 uat-source-service,22,PASS,round-22.md
 uat-source-live-recovery,22,PASS,round-22.md
+engineering-preplan-reassessment,22,FAIL,round-22.md
+engineering-preplan-tests,23,PASS,round-23.md
+engineering-preplan-reassessment,23,PASS,round-23.md
+original-task-engineering-started,23,PASS,round-23.md

@@ -182,6 +182,22 @@ const versions = (db, row) => {
     controlRevision: t.control_revision, authorizationRevision: row.authorization_revision,
     inputFenceRevision: row.input_fence_revision }
 }
+// 只证明工程候选尚未进入计划/执行账，不按Git退出码推断副作用。
+export function isUnstartedEngineeringPreparation(db, o, t) {
+  if (!t || o.status !== 'blocked' || o.current_turn_id || o.lease_epoch !== t.lease_epoch
+    || t.status !== 'accepted' || t.application_status !== 'blocked') return false
+  const v = versions(db, o), decision = JSON.parse(t.decision_json ?? '{}')
+  const stages = decision.planChange?.stages ?? decision.appendStages
+  if (decision.action !== 'advance' || decision.planChange && decision.planChange.kind !== 'initialize'
+    || !Array.isArray(stages) || !stages.length || stages.some(stage => stage.workflowId !== 'task-engineering' || !stage.sourceCondition)
+    || v.planRevision !== 0 || v.requirementRevision !== t.requirement_revision || v.planRevision !== t.plan_revision
+    || v.controlRevision !== t.control_revision || v.authorizationRevision !== t.authorization_revision || v.inputFenceRevision !== t.input_fence_revision) return false
+  return !db.prepare('SELECT 1 FROM task_plan_stages WHERE task_id=?').get(o.task_id)
+    && !db.prepare('SELECT 1 FROM execution_runs WHERE task_id=?').get(o.task_id)
+    && !db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(o.task_id)
+    && !db.prepare("SELECT 1 FROM execution_receipts r JOIN task_owner_turns t ON r.command_id='owner-plan:'||t.turn_id WHERE t.task_id=?").get(o.task_id)
+    && !db.prepare("SELECT 1 FROM execution_events WHERE kind IN ('task.plan.initialize','task.plan.create','task.plan.extend','task.plan.revise') AND json_extract(payload,'$.taskId')=?").get(o.task_id)
+}
 const turn = (db, args) => {
   const o = owner(db, args.taskId)
   const t = db.prepare('SELECT * FROM task_owner_turns WHERE turn_id=? AND task_id=?').get(id(args.turnId), o.task_id)
@@ -498,17 +514,18 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       && o.status === 'blocked' && o.last_failure === a.reason && !o.current_turn_id && o.lease_epoch === t.lease_epoch
       && JSON.parse(t.decision_json ?? '{}').action === 'advance'
       && v.requirementRevision === t.requirement_revision && v.planRevision === t.plan_revision && v.controlRevision === t.control_revision
-    const rejectedAction = rejectedRepair || rejectedSourcePlan
+    const rejectedPreparation = a.reason === o.last_failure && isUnstartedEngineeringPreparation(db, o, t)
+    const rejectedAction = rejectedRepair || rejectedSourcePlan || rejectedPreparation
     if (t.application_status !== 'pending' && !rejectedAction) fail('TASK_OWNER_ACTION_ALREADY_APPLIED')
     if (rejectedAction && (task(db, a.taskId).control_state !== 'active'
       || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,t.turn_id)
-      || !db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns q ON q.turn_id=e.turn_id AND q.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND q.requirement_revision=? AND q.authorization_revision=? AND q.input_fence_revision=?").get(a.taskId,v.requirementRevision,o.authorization_revision,o.input_fence_revision)
+      || !rejectedPreparation && !db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns q ON q.turn_id=e.turn_id AND q.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND q.requirement_revision=? AND q.authorization_revision=? AND q.input_fence_revision=?").get(a.taskId,v.requirementRevision,o.authorization_revision,o.input_fence_revision)
       || db.prepare("SELECT 1 FROM execution_runs WHERE task_id=? AND (workflow_id<>'task-investigation' OR status NOT IN ('waiting','failed','succeeded'))").get(a.taskId)
       || db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
       || db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(a.taskId)
       || db.prepare("SELECT 1 FROM task_plan_stages WHERE task_id=? AND workflow_id<>'task-investigation' AND status<>'invalidated'").get(a.taskId)
       || db.prepare('SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?').get(a.taskId))) fail('TASK_OWNER_DISCARD_UNSAFE')
-    if (rejectedSourcePlan) {
+    if (rejectedSourcePlan || rejectedPreparation) {
       if (db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${t.turn_id}`)) fail('TASK_OWNER_DISCARD_UNSAFE')
       const decision = JSON.parse(t.decision_json)
       const stages = [...(decision.planChange?.stages ?? []), ...(decision.appendStages ?? [])]

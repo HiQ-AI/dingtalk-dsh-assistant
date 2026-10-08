@@ -27,3 +27,5 @@
 维护期间首次重处理调用已登记版本2，但进入调度时返回RUNTIME_MAINTENANCE_ACTIVE；Resume后沿同一原runId幂等回查/接续，四条仍为版本2，没有增至版本3。已同步runbook，不用HTTP失败推断零写入。
 
 Owner从wait变为advance后遇到Git exit128；只读复现为配置源目录不存在，尚未访问远端，非DWS或话题/UAT错误。正在按原配置恢复独立dataset源仓库并系统重评；本记录不把要求更新等同于业务开发完成。
+
+源仓库已完整恢复：独立 `.git`、无 shallow/alternates、工作区干净；origin/main=`bb022f5279483e8b8814d6486ccf82d63ef3f1ec`，origin/feature/uat2-base=`fe42eb27028310392a239c29532db3255ddafeb6`。首次远端传输early EOF，重试完整克隆成功，未使用用户主检出。原重评入口仍因blocked advance无匹配资格而拒绝，没有写Task状态；受限恢复实现与反例转入下一轮。

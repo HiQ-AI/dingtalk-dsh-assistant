@@ -10,7 +10,7 @@ import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recov
 import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance, isBusinessTaskTerminal, readCurrentTaskSource } from './message-ledger.js'
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
-  queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
+  queryTaskOwner, recoverTaskOwners, isUnstartedEngineeringPreparation } from './task-owner-store.js'
 import { transientRecoveryReasons, recoveryRetryDelayMs } from './execution-recovery-policy.js'
 import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { executionDigest, parseArtifactReference } from './execution-artifacts.js'
@@ -831,7 +831,9 @@ function command(value) {
       ref(a.payloadRef,'payloadRef');digest(a.requestDigest,'requestDigest')
       const invalidRepair=owner.last_failure==='WORKFLOW_REPAIR_NOT_ADMITTED' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='repairCurrentStage'").get(a.taskId,owner.lease_epoch) : null
       const rejectedSourcePlan=owner.last_failure==='TASK_STAGE_SOURCE_CONDITION_INVALID' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='advance'").get(a.taskId,owner.lease_epoch) : null
-      const rejectedAction=invalidRepair??rejectedSourcePlan
+      const blockedAdvance=db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='advance'").get(a.taskId,owner.lease_epoch)
+      const rejectedPreparation=isUnstartedEngineeringPreparation(db,owner,blockedAdvance)?blockedAdvance:null
+      const rejectedAction=invalidRepair??rejectedSourcePlan??rejectedPreparation
       const externalRuns=db.prepare("SELECT * FROM execution_runs WHERE task_id=? AND workflow_id<>'task-investigation'").all(a.taskId)
       const handedOffRuns=new Set()
       for(const run of externalRuns.filter(run=>run.workflow_id==='task-data-change'&&run.status==='cancelled'&&run.stop_requested)){
@@ -897,7 +899,7 @@ function command(value) {
       if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
         ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,rejectedAction?.turn_id??'')
         ||rejectedSourcePlan&&db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${rejectedSourcePlan.turn_id}`)
-        ||!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
+        ||!rejectedPreparation&&!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
         ||db.prepare('SELECT * FROM execution_runs WHERE task_id=?').all(a.taskId).some(run=>!handedOffRuns.has(run.run_id)
           &&(!['failed','waiting','succeeded'].includes(run.status)||run.workflow_id!=='task-investigation'&&!completedExternal))
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)

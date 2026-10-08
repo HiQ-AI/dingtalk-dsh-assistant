@@ -804,3 +804,48 @@ test('v6到v7移除领取截止，检查零写并完整保留来源和执行数�
   indexMigration.close()
   await f.open();assert.equal((await f.query()).run.claimCount,500)
 })
+
+for(const variant of ['clean','receipt','stage','run','undrained','effect','source','lease','requirement','authorization','control','condition','external','fence'])test(`工程准备未落计划的Owner受管重评：${variant}`,async t=>{
+ const f=await fixture(t,null),send=(kind,args,id)=>f.store.command(command(kind,args,id))
+ await send('task.accept',{taskId:'task',requirementRef:'sha256/requirement.json',requirementRevision:1,sessionId:'owner',criteria:['按文档开发'],sourceKey:'source',eventKey:'created'})
+ await send('message.receive',{runId:'source-run',sourceKey:'source',sourceVersion:1,actorId:'requester',conversationId:'g',body:'按文档开发'})
+ await send('message.split',{runId:'source-run',units:[{unitId:'unit'}]})
+ await send('message.accept',{runId:'source-run',unitId:'unit',commands:[{commandId:'create-task',kind:'create',args:{taskId:'task'}}]})
+ const msg=(await send('message.command.claim',{commandId:'create-task'})).result.command
+ await send('message.command.complete',{commandId:'create-task',leaseEpoch:msg.leaseEpoch,result:{taskId:'task'}})
+ const claim=(await send('task.owner.claim',{taskId:'task',turnId:'prepare',expectedLeaseEpoch:0})).result
+ const binding={taskId:'task',turnId:'prepare',leaseEpoch:claim.leaseEpoch}
+ await send('task.owner.sessionBound',{...binding,sessionId:'owner'},variant==='receipt'?'owner-plan:prepare':undefined)
+ await send('task.owner.candidate',{...binding,decision:{action:'advance',summary:'准备工程',evidenceRefs:[],planChange:{kind:'initialize',stages:[{workflowId:variant==='external'?'task-data-change':'task-engineering',gate:'none',sourceCondition:{sourceKey:'source',sourceVersion:1,sourceQuote:variant==='condition'?'错误原文':'按文档开发',objective:variant==='condition'?'错误原文':'按文档开发'}}]}}})
+ await send('task.owner.accept',binding)
+ await send('task.owner.action.fail',{...binding,reason:'128'})
+ if(['stage','run','undrained','effect','authorization','fence'].includes(variant)){
+  await f.store.close()
+  const db=new DatabaseSync(f.dbPath)
+  try{
+   if(variant==='stage')db.prepare("INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,gate,status,attempt) VALUES('task',1,'old',0,'task-investigation','none','invalidated',1)").run()
+   if(variant==='fence')db.prepare("UPDATE task_owners SET input_fence_revision=input_fence_revision+1 WHERE task_id='task'").run()
+   if(variant==='authorization')db.prepare("UPDATE task_owners SET authorization_revision=authorization_revision+1 WHERE task_id='task'").run()
+   if(['run','undrained','effect'].includes(variant)){
+    const now=new Date().toISOString()
+    db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,status,created_at,updated_at) VALUES('prior','task','task-investigation',?,'sha256/requirement.json','succeeded',?,?)").run(d,now,now)
+    if(['undrained','effect'].includes(variant))db.prepare("INSERT INTO execution_nodes(node_run_id,run_id,node_id,node_version,executor,position,generation,input_ref,input_digest,status,drained) VALUES('prior-node','prior','n','1','code',0,1,'sha256/requirement.json',?,'succeeded',0)").run(d)
+    if(variant==='effect')db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('effect','operation','prior','prior-node','n',1,?,?,'{}','[]','test','succeeded',?,?)").run(d,d,now,now)
+   }
+  }finally{db.close()}
+  await f.open()
+ }
+ const owner=await f.store.query({kind:'task.owner',taskId:'task'})
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ const args={taskId:'task',eventKey:'reassess',payloadRef:'sha256/recovery.json',expectedOwnerRevision:owner.revision,expectedLeaseEpoch:owner.leaseEpoch+(variant==='lease'?1:0),expectedRequirementRevision:variant==='requirement'?2:1,expectedControlRevision:(await f.store.query({kind:'task.plan',taskId:'task'})).task.controlRevision+(variant==='control'?1:0),sources:[{sourceKey:'source',sourceVersion:variant==='source'?2:1,actorId:'requester',bodyDigest:executionDigest('按文档开发')}],requestDigest:d}
+ if(variant!=='clean'){
+  await assert.rejects(send('task.owner.reassess',args,'reassess'),/TASK_OWNER_REASSESS|TASK_AUTHORIZATION_SOURCE_STALE|TASK_OWNER_DISCARD_UNSAFE/)
+  assert.equal((await f.store.query({kind:'task.owner',taskId:'task'})).status,'blocked')
+ }else{
+  const result=await send('task.owner.reassess',args,'reassess')
+  assert.equal(result.result.discardedTurnId,'prepare')
+  assert.equal((await f.store.query({kind:'task.owner',taskId:'task'})).status,'pending')
+  assert.equal((await send('task.owner.reassess',args,'reassess')).replayed,true)
+  assert.deepEqual(await f.store.query({kind:'run.list',taskId:'task'}),[])
+ }
+})

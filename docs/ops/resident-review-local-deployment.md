@@ -677,3 +677,5 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 纯会话事实误分话题的恢复也使用 `/workflows/<runId>/reprocess`：仅已 settled、全部 applied 的 conversation-scope 静默 fact，且无 Task 绑定、通知、执行/外部效果、同话题其他 Task 命令时允许。先只读核验原来源、作者、正文、来源版本和上述零副作用证据，部署 Resume 后逐条重处理，回读旧来源 superseded、新来源版本递增。维护期间可能已登记新来源、但派发返回 RUNTIME_MAINTENANCE_ACTIVE；若遇此错误先读回来源版本和命令，Resume 后只接续既有新来源，不按失败回执推断零写入。随后独立核验原 Task 要求是否更新、话题是否一致；不重放原 create，不将维护操作者当原消息作者。公共事实不产生 Task 输入事件，实际需求补充须通过合法 revise 接纳。
 
 工程准备若仅返回 Git exit128，应按配置的 `sourceRepository` 独立只读复现首条命令并核对目录；缺失源仓库不能误报用户未给UAT或GitHub未授权。恢复时使用配置的远端在原sourceRepository路径建立独立完整Git仓库，禁止浅克隆、共享alternates、symlink或改用用户主检出；核对origin/main和选定UAT远端SHA。既有Task尚无执行阶段/外部效果时，沿上述reassess-readonly门禁重评，不新建Task，不伪造需求补充。源仓库恢复不是功能代码提交、部署或业务验收完成。
+
+上述工程前置恢复也要求当前 Owner 的 blocked advance 仅包含有来源条件的 task-engineering 初始化候选、计划版本0，且全Task无任何计划阶段/接纳收据/执行Run/效果；原来源与Owner/租约/需求/控制版本均须匹配。只有这个未生效工程准备分支不要求当前需求已产生查询证据，其他只读重评规则不变。恢复废弃旧候选并产生system.recovery审计，再由同一Owner重新决策；不按128或任意错误码自动重领。
