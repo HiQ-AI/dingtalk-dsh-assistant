@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, realpath, lstat, readFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
-import { executionDigest, executionError } from './execution-artifacts.js'
+import { executionDigest, executionError, readTaskMaterials } from './execution-artifacts.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { createManagedWorkspaces } from './execution-workspace.js'
 import { createManagedEdits } from './execution-edit.js'
@@ -386,7 +386,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         return value.run(snapshot, context)
       } } : value
     }
-    const checks = config.checks.map(check => taskCheck(createVerificationJobCheck, check, join(managedRoot, 'checks')))
+    const checks = (saved.checkpointChecks ?? config.checks).map(check => taskCheck(createVerificationJobCheck, check, join(managedRoot, 'checks')))
     const runner = ['11', '12', '13', '14', '15', '16', '17', '18'].includes(record.definitionVersion) || !record.definitionVersion
       ? (saved.taskFiles ? createTaskLocalAcceptanceRunner({ root: join(managedRoot, 'local-acceptance'), config: saved.localAcceptanceConfig, tempRoot: saved.taskFiles.tmp }) : createLocalAcceptanceRunner({ root: join(managedRoot, 'local-acceptance'), config: saved.localAcceptanceConfig })) : undefined
     const signals = new Map(), drainFailures = new Map()
@@ -453,6 +453,15 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
     if (!saved || !config?.discovery || !['6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
     const { operation, query = '', path, offset = 0, source = 'current', limit = operation === 'read' ? 8000 : 100 } = args
+    if (operation === 'materials') {
+      const state = await store.query({ kind: 'run', runId: binding.runId })
+      if (state.run.generation !== binding.generation || state.run.workflowDigest !== item.record.digest) fail('ENGINEERING_READ_STALE')
+      if (!saved.taskFiles || !artifactStore || source !== 'current') fail('ENGINEERING_READ_SCOPE_INVALID')
+      const plan = await store.query({ kind: 'task.plan', taskId: saved.taskId })
+      return readTaskMaterials({ directories: saved.taskFiles, artifacts: artifactStore,
+        requirementRevision: plan?.task?.requirementRevision, requirementRef: plan?.task?.requirementRef,
+        ...(path ? { artifactRef: path } : {}), offset, limit: args.limit ?? 16000 })
+    }
     let repairContext
     if (source === 'previous' || operation === 'repair') {
       const current = await store.query({ kind: 'run', runId: binding.runId })
@@ -501,14 +510,15 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     }
     signal?.throwIfAborted()
     const allowed = value => config.discovery.allowedPrefixes.some(prefix => value.startsWith(prefix))
-    if (operation === 'read' && !allowed(path)) fail('ENGINEERING_READ_PATH_INVALID')
+    if (operation === 'read' && !allowed(path)) return { status: 'scope_denied', code: 'ENGINEERING_READ_SCOPE_DENIED', path,
+      allowedPrefixes: [...config.discovery.allowedPrefixes], message: '该路径不在本任务仓库读取范围；请先列出准入文件。需求材料和历史产物请用 materials 读取。',
+      suggestedCall: { operation: 'list', source } }
     const maxLimit = operation === 'read' ? 16000 : 200
     if (limit > maxLimit) return { status: 'invalid_limit', code: 'ENGINEERING_READ_LIMIT_EXCEEDED', maxLimit,
       message: `本次未读取正文；请将 limit 调整为不超过 ${maxLimit}，按 nextOffset 继续分页。`,
       suggestedCall: { operation, ...(path === undefined ? {} : { path }), query, source, offset, limit: maxLimit } }
     const files = snapshot.files.filter(file => allowed(file.path) && (operation === 'read' || !path || file.path.startsWith(path)))
     if (operation === 'read') {
-      if (!allowed(path)) fail('ENGINEERING_READ_PATH_INVALID')
       const file = files.find(file => file.path === path)
       if (!file) return { status: 'not_found', code: 'ENGINEERING_READ_NOT_FOUND', path, source,
         message: '该路径不在当前受信文件快照中；请先用 list/search 确认实际路径再读取。',
@@ -702,6 +712,31 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (item.record.config.fingerprint !== fingerprint) fail('ENGINEERING_TASK_COMMAND_CONFLICT')
     controller.registerWorkflow(item.workflow)
     return { taskId, runId, workflowId, input: structuredClone(item.record.config.input) }
+  }
+  async function updateCheckpoint({ runId, requestId, kind, checks, maintenance }, controller, artifacts) {
+    text(requestId,'WORKFLOW_REQUEST_ID_REQUIRED')
+    const state=await store.query({kind:'run',runId}),prior=routes.get(runId)
+    if(!prior || kind!=='checks' || prior.record.definitionVersion!=='18')fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+    if(prior.record.config.checkpoint?.requestId===requestId){
+      if(executionDigest(prior.record.config.checkpointChecks)!==executionDigest(checks))fail('ENGINEERING_CHECKPOINT_CONFLICT')
+      const receipt=await store.query({kind:'receipt',commandId:`engineering-checkpoint:${runId}:${requestId}`})
+      if(receipt)return receipt
+      fail('ENGINEERING_CHECKPOINT_CONFLICT')
+    }
+    const held=await store.query({kind:'runtime.maintenance'})
+    if(!held.active||!held.drained||held.maintenanceId!==maintenance?.maintenanceId||held.revision!==maintenance?.revision)fail('RUNTIME_MAINTENANCE_STALE')
+    const nextConfig={...prior.record.config,checkpoint:{kind,fromDigest:state.run.workflowDigest,requestId}}
+    if(!Array.isArray(checks)||!checks.length)fail('ENGINEERING_CHECKPOINT_CHECKS_REQUIRED')
+    nextConfig.checkpointChecks=structuredClone(checks)
+    const record={...prior.record,workflowId:`task-engineering-checkpoint-${executionDigest([runId,requestId]).slice(0,32)}`,config:nextConfig}
+    delete record.digest
+    try{
+      const next=await build(record)
+      await store.command({id:`workflow:${next.definition.digest}`,kind:'workflow.register',args:routes.get(runId).record})
+      controller.registerWorkflow(next.workflow)
+      return await controller.updateEngineeringCheckpoint({commandId:`engineering-checkpoint:${runId}:${requestId}`,runId,
+        expectedRevision:state.run.revision,kind,workflowId:next.definition.id,workflowDigest:next.definition.digest,maintenance})
+    }catch(error){routes.set(runId,prior);throw error}
   }
   async function reissueTask({ taskId, repositoryId, requestId, uatEnvironment }, controller, artifacts) {
     text(taskId, 'WORKFLOW_TASK_ID_REQUIRED'); text(repositoryId, 'ENGINEERING_REPOSITORY_REQUIRED')
@@ -904,6 +939,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       preparing.set(key, { digest, promise }); return promise
     },
     reissueTask,
+    updateCheckpoint,
     availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: config.purpose ?? '仅在配置范围内开发，业务验收后提交到用户明确指定的UAT分支；用户须明确uat1至uat9环境，由Host映射feature/uatN-base；缺少环境先询问，禁止提交main' })),
   }
 }

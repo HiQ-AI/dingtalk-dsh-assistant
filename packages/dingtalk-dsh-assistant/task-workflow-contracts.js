@@ -2,6 +2,37 @@ import { executionDigest, executionError } from './execution-artifacts.js'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { selectTaskDeliveryFiles } from './task-group-file-delivery.js'
 import { dataChangeProposalRepairPolicy } from './workflow-data-change.js'
+import { createHash } from 'node:crypto'
+
+/** 只识别 Host 已保存的 Node 检查器“显式测试文件不存在”证据，不按业务描述猜测修复方向。 */
+export async function inspectEngineeringCheckPrerequisite({ state, artifacts }) {
+  const waiting = state.nodes.filter(node => node.status === 'waiting')
+  if (waiting.length !== 1 || waiting[0].nodeId !== 'verify-candidate'
+    || waiting[0].waitReason?.reference !== 'ENGINEERING_VERIFICATION_FAILED') return null
+  const groups = new Map()
+  for (const ref of waiting[0].evidenceRefs ?? []) {
+    const value = await artifacts.read(ref)
+    if (value.kind !== 'engineering-verification-failure') continue
+    const key = JSON.stringify([value.candidateDigest,value.checkId,value.checkVersion,value.logSha256])
+    const group = groups.get(key) ?? [];group.push(value);groups.set(key,group)
+  }
+  for (const group of groups.values()) {
+    group.sort((a,b)=>a.part-b.part)
+    if (group.length !== group[0].parts || group.some((part,index)=>part.part!==index || part.parts!==group.length || part.encoding!=='base64')) continue
+    const bytes = Buffer.concat(group.map(part=>Buffer.from(part.data,'base64')))
+    if (bytes.length !== group[0].logBytes || createHash('sha256').update(bytes).digest('hex') !== group[0].logSha256) continue
+    let log;try { log=JSON.parse(bytes.toString('utf8')) } catch { continue }
+    for (const step of log.steps ?? []) {
+      if (!Array.isArray(step.args) || step.exitCode !== 1) continue
+      const at=step.args.indexOf('--test'), paths=step.args.slice(at+1)
+      if (at < 0 || !paths.length || paths.some(path=>typeof path!=='string'||!path.startsWith('tests/')||!path.endsWith('.test.cjs'))) continue
+      if (step.stderr?.trim() === `Could not find '${paths.join(', ')}'`)
+        return { reason:'ENGINEERING_CHECK_INPUT_MISSING', checkId:group[0].checkId, missingPaths:paths,
+          evidenceRefs:[...waiting[0].evidenceRefs] }
+    }
+  }
+  return null
+}
 
 /** 业务准备合同由各领域提供；只接纳受信函数，不解释模型生成的执行代码。 */
 export function createTaskStageContracts({ contracts, controller, artifacts,
@@ -104,6 +135,8 @@ async function inspectRepair(context) {
   const contract = repairPolicyFor(context)
   if (!contract?.inspectRepair) return null
   const inspected = await contract.inspectRepair(context)
+  const prerequisite = await inspectEngineeringCheckPrerequisite(context)
+  if (prerequisite) return { ...inspected, ...prerequisite, repairable:false }
   const known = new Set(state.nodes.flatMap(node => [node.outputRef, ...(node.evidenceRefs ?? [])].filter(Boolean)))
   if (!Array.isArray(inspected?.evidenceRefs) || inspected.evidenceRefs.some(ref => !known.has(ref)))
     throw executionError('WORKFLOW_OWNER_ARTIFACT_SCOPE_MISMATCH')
@@ -209,6 +242,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
   }
   async function inspectCurrentStage(context) {
     const domain = await inspectRepair(context)
+    if (domain?.reason === 'ENGINEERING_CHECK_INPUT_MISSING') return domain
     if (domain?.repairable) return domain
     const recovery = await controller.inspectNodeRecovery?.(context.stage.runId, context.state)
     if (!recovery) return domain

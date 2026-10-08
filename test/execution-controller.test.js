@@ -845,3 +845,44 @@ test('内部受管准备复用冻结workflow及CAS，维护下不调度并保留
   assert.equal(result.state.nodes[1].sessionId,'execution-child');assert.equal(result.state.nodes[1].status,'ready')
   assert.equal(f.calls.length,1)
 })
+
+test('检查checkpoint Controller同代仅重验，成功准备只执行一次',async t=>{
+ let prepares=0,verifies=0
+ const old={id:'engineering-old',version:'18',nodes:[
+  {id:'prepare',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({requirement})=>requirement,execute:async({input})=>{prepares++;return input+1}},
+  {id:'verify-candidate',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({previousOutput})=>previousOutput,execute:async()=>{verifies++;throw Object.assign(new Error('bad-check'),{code:'ENGINEERING_VERIFICATION_FAILED'})}},
+ ]}
+ const next={...old,id:'engineering-next',nodes:[old.nodes[0],{...old.nodes[1],execute:async({input})=>{verifies++;return input*2}}]}
+ const f=await setup(t,old),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next),requirement=await f.artifacts.put(3)
+ const send=(kind,args,id=kind)=>f.store.command({id,kind,args})
+ const config={kind:'engineering',runId:'run',taskId:'task',repoId:'repo',ownerActorId:'owner',sourceCommandId:'source'}
+ await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
+ await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,checkpoint:{kind:'checks',fromDigest:oldDef.digest,requestId:'repair'},checkpointChecks:[{id:'check',version:'2'}]}},'next')
+ await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:['检查'],sourceKey:'source',eventKey:'source'})
+ await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
+ await f.controller.createRun({commandId:'create',runId:'run',taskId:'task',workflowId:old.id,input:3,stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
+ const before=await f.controller.whenIdle('run');assert.equal(before.run.status,'waiting')
+ f.controller.registerWorkflow(next)
+ await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'修正检查'})
+ const args={maintenance:{maintenanceId:'checks',revision:1},commandId:'checkpoint',runId:'run',expectedRevision:before.run.revision,kind:'checks',workflowId:next.id,workflowDigest:nextDef.digest}
+ await f.controller.updateEngineeringCheckpoint(args)
+ assert.equal((await f.controller.state('run')).nodes[1].status,'ready');assert.equal(verifies,1)
+ await send('runtime.maintenance.change',{active:false,expectedRevision:1,maintenanceId:'checks',actorId:'owner',reason:'修正完成'},'leave-maintenance')
+ await f.controller.recover({commandId:'recover-check',runId:'run'})
+ const after=await f.controller.whenIdle('run')
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,1);assert.equal(prepares,1);assert.equal(verifies,2);assert.equal(after.nodes[0].outputRef,before.nodes[0].outputRef);assert.equal(await f.artifacts.read(after.nodes[1].outputRef),8)
+ await f.controller.updateEngineeringCheckpoint(args);assert.equal(verifies,2)
+})
+
+test('工程旧越界读取失败由Owner同节点同代续行，通用恢复不得绕过',async t=>{
+ const f=await agentRecoveryFixture(t,({recoveryContext,input})=>recoveryContext?input+1:{status:'no_submission',reason:'execution_tool_failed',failure:{code:'execution_tool_failed',phase:'execution'}})
+ const before=await f.controller.state(f.runId),node=before.nodes[1]
+ assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable,false)
+ const evidence=await f.artifacts.put({kind:'legacy-turn-failure-classification',failure:{code:'ENGINEERING_READ_PATH_INVALID'}})
+ await f.store.command({id:'scope-reclassify',kind:'node.failure.reclassify',args:{runId:f.runId,runRevision:before.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,evidenceRef:evidence.ref,previousCode:'execution_tool_failed',code:'ENGINEERING_READ_PATH_INVALID'}})
+ const recovery=await f.controller.inspectNodeRecovery(f.runId)
+ assert.equal(recovery.repairable,true)
+ await assert.rejects(f.controller.recover({commandId:'bypass-path',runId:f.runId}),{code:'NODE_RECOVERY_REQUIRES_OWNER'})
+ await f.controller.resumeNode(await f.resumeArgs());const after=await f.controller.whenIdle(f.runId)
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].leaseEpoch,before.nodes[1].leaseEpoch+1)
+})

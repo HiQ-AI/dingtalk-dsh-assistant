@@ -6946,3 +6946,33 @@ for (const recovery of [false, true]) test(`业务等待的有效补充resume唤
  }
  assert.deepEqual(await execution.store.query({kind:'run.list',taskId}),[])
 })
+
+test('真实当前节点运行仅覆盖旧系统等待，业务等待及控制状态保留',async t=>{
+ let projectedOwner, control, stalePlan=false, nodeRunning=true, controllerError, runStatus='running'
+ const gate=Promise.withResolvers(), started=Promise.withResolvers()
+ t.after(()=>gate.resolve())
+ const {service,execution,startCodeTask}=await fixture(t,'owner',undefined,{
+  config:{webActorId:'owner'},execute:async()=>{started.resolve();await gate.promise;return {summary:'完成'}},
+  storeQuery:async(request,query)=>request.kind==='task.owner'&&request.taskId==='fixture-code-task'&&projectedOwner?projectedOwner:query(request),
+ })
+ const {taskId,runId}=await startCodeTask();await started.promise
+ const originalPlan=execution.controller.taskPlan.bind(execution.controller), originalState=execution.controller.state.bind(execution.controller)
+ const plan=await originalPlan(taskId)
+ execution.controller.taskPlan=async id=>{const p=await originalPlan(id);return id===taskId?{...p,task:{...p.task,...(control?{controlState:control}:{}),...(stalePlan?{planRequirementRevision:p.task.requirementRevision-1}:{})}}:p}
+ execution.controller.state=async id=>{const state=await originalState(id);return id===runId?{...state,run:{...state.run,status:runStatus},controllerError,nodes:state.nodes.map(node=>({...node,status:nodeRunning?node.status:'ready'}))}:state}
+ try{
+  for(const kind of ['execution','capability','business-input','permission','approval']){
+   const condition={kind,missing:'待处理事项',responsibleParty:'负责方',resumeWhen:'处理后继续',evidenceRefs:[]}
+   projectedOwner={sessionId:'owner',status:'blocked',applicationStatus:'applied',requirementRevision:plan.task.requirementRevision,eventWatermark:1,processedWatermark:1,decision:{action:'block',summary:'旧等待',condition}}
+   const view=(await service.tasks({taskId}))[0],resumed=['execution','capability'].includes(kind)
+   assert.equal(view.state,resumed?'running':'waiting',kind);assert.deepEqual(view.waitingCondition,resumed?null:condition)
+   if(resumed)assert.equal(view.waitingReason,undefined)
+  }
+  projectedOwner.decision.condition.kind='execution'
+  for(const scenario of ['queued','no-running-node','controller-error','stale-plan','paused','pausing','cancelling','cancelled']){
+   runStatus=scenario==='queued'?'queued':'running';nodeRunning=scenario!=='no-running-node';controllerError=scenario==='controller-error'?'fixture-error':null;stalePlan=scenario==='stale-plan';control=['paused','pausing','cancelling','cancelled'].includes(scenario)?scenario:null
+   const view=(await service.tasks({taskId}))[0]
+   assert.equal(view.state,scenario==='cancelled'?'completed':'waiting',scenario)
+  }
+ }finally{gate.resolve();await execution.controller.whenIdle(runId)}
+})

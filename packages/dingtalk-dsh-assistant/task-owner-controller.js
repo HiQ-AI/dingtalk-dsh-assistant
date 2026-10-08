@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createTaskOwnerSessions } from './task-owner-session.js'
-import { executionDigest } from './execution-artifacts.js'
+import { executionDigest, readTaskMaterials, readTaskMaterialValue, parseArtifactReference } from './execution-artifacts.js'
 
 const error = (code, message = code) => Object.assign(new Error(message), { code })
 const key = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex')
@@ -151,6 +151,8 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       result.currentExecution = await inspectCurrentExecution(taskId, plan, { signal })
       if (result.currentExecution?.evidenceRefs?.length && !repairedStages.has(result.currentExecution.stageId)) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
     }
+    const directories = await artifacts.getTaskDirectories?.(taskId)
+    if (directories) result.sharedMaterials = await readTaskMaterials({ directories, artifacts, requirementRevision: plan.task.requirementRevision, requirementRef: plan.task.requirementRef })
     result.capabilities = capabilityCatalog
     result.workflowCatalog = workflowCatalog
     signal.throwIfAborted()
@@ -232,7 +234,14 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             return page
           },
           readArtifact: async artifactRef => {
-            if (!readableArtifacts.has(artifactRef)) throw error('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
+            if (input.sharedMaterials && artifactRef === 'task-materials-index') return readTaskMaterials({
+              directories: await artifacts.getTaskDirectories(taskId), artifacts, requirementRevision: input.task.requirementRevision, requirementRef: input.task.requirementRef })
+            if (input.sharedMaterials && /^(work|tmp|outputs)\//u.test(artifactRef)) {
+              const value = await readTaskMaterialValue({ directories: await artifacts.getTaskDirectories(taskId), artifacts, artifactRef })
+              readArtifacts.set(artifactRef, value)
+              return value
+            }
+            if (!readableArtifacts.has(artifactRef) && (!input.sharedMaterials || parseArtifactReference(artifactRef).logicalTaskId !== input.sharedMaterials.logicalTaskId)) throw error('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
             const value = await artifacts.read(artifactRef)
             readArtifacts.set(artifactRef, value)
             return value?.encoding === 'base64' && typeof value.data === 'string'

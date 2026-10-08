@@ -592,3 +592,16 @@ test('文档六类实际读取失败可交给Owner继续判断，未知错误仍
  for(const code of ['DWS_DOC_AUTH_REQUIRED','DWS_DOC_PERMISSION_DENIED','DWS_DOC_NOT_FOUND','DWS_DOC_INCOMPLETE','DWS_DOC_TEMPORARY','DWS_DOC_READ_FAILED'])assert.equal(classifyAgentQueryError({code}),'correctable')
  for(const code of ['DWS_DOC_UNKNOWN','DWS_DOC_SCOPE_CHANGED','QUERY_VERIFICATION_FAILED','QUERY_SCOPE_CHANGED',undefined])assert.equal(classifyAgentQueryError({code}),'fatal')
 })
+
+test('Owner同会话刷新共享索引并读取未在当前版本清单中的历史材料，跨Task拒绝',async t=>{
+ for(const foreign of [false,true]){
+  const root=await mkdtemp(join(tmpdir(),'owner-shared-material-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const ref=`tasks/${foreign?'other-task':'shared-task'}/sha256-${'7'.repeat(64)}.json`
+  const h=await host(root,null,step=>step===1?'task-materials-index':ref,decision,undefined,2);t.after(()=>h.close())
+  const reads=[]
+  await h.sessions.run({binding:{taskId:'shared-task',sessionId:'shared-owner',turnId:'turn-1',leaseEpoch:1,ownerEpoch:1,sessionBound:false},
+   input:{sharedMaterials:{logicalTaskId:'shared-task',entries:[]}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{},
+   readArtifact:async value=>{reads.push(value);return value==='task-materials-index'?{entries:[{artifactRef:ref,status:'history'}]}:{result:{markdown:'历史原文'}}}})
+  assert.deepEqual(reads,foreign?['task-materials-index']:['task-materials-index',ref])
+ }
+})

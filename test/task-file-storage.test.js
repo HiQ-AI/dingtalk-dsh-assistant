@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, symlink, unlink, rm } from 'node:f
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
-import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { openExecutionArtifacts, readTaskMaterials } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskDirectoryResolver } from '../packages/dingtalk-dsh-assistant/execution.js'
 import { createTaskArtifactFiles } from '../packages/dingtalk-dsh-assistant/task-artifact-files.js'
@@ -120,4 +120,32 @@ test('真实任务resolver连接Markdown和交付文件，旧任务保留旧输�
     const prepared = markdown.prepare({ input: { content: '# 内容' }, binding: { taskId, runId: 'file-run', nodeRunId: 'file-node', generation: 1, requirementDigest: 'a'.repeat(64) } })
     assert.equal((await markdown.execute(prepared)).result.path, join(base, taskId, `${prepared.operationId}.md`))
   }
+})
+
+test('共享材料索引回填历史正文并即时发现新材料，不跨逻辑Task或公开内部账',async t=>{
+ const f=await fixture(t),app=await f.open()
+ const old=await app.artifacts.put({kind:'agent-query-evidence',execution:{taskId:'task-a',requirementRevision:1},result:{resource:{type:'doc',resourceId:'original-document'},markdown:'历史正文'.repeat(5000)}},{taskId:'task-a'})
+ const hidden=await app.artifacts.put({kind:'node-dispatch-diagnostic',privateDiagnostic:'内部账'},{taskId:'task-a'})
+ const foreign=await app.artifacts.put({id:'other',text:'其他任务材料'},{taskId:'task-b'})
+ const directories=await app.getTaskDirectories('task-a')
+ await writeFile(join(directories.outputs,'result.md'),'已生成产物')
+ const options={directories,artifacts:app.artifacts,requirementRevision:2}
+ let index=await readTaskMaterials(options)
+ assert.deepEqual(index.entries.map(e=>e.artifactRef),[old.ref]);assert.equal(index.entries[0].status,'history');assert.equal(index.entries[0].resource.resourceId,'original-document')
+ assert.equal(index.files[0].relativePath,'outputs/result.md')
+ assert.equal(JSON.parse((await readTaskMaterials({...options,artifactRef:'outputs/result.md'})).artifact).text,'已生成产物')
+ await assert.rejects(readTaskMaterials({...options,artifactRef:'outputs/../secret'}),{code:'TASK_MATERIAL_SCOPE_INVALID'})
+ for(const path of ['work/engineering/repository/package.json','work/engineering/repository/.env','work/task/owner/session/context.json','tmp/internal/secret']) await assert.rejects(readTaskMaterials({...options,artifactRef:path}),{code:'TASK_MATERIAL_SCOPE_INVALID'})
+ assert.ok((await readTaskMaterials({...options,artifactRef:`work/artifacts/${basename(old.ref)}`})).totalLength > 16000)
+ assert.ok(!JSON.stringify(index).includes('历史正文'))
+ let text='',offset=0
+ do{const page=await readTaskMaterials({...options,artifactRef:old.ref,offset});text+=page.artifact;offset=page.nextOffset}while(offset!==null)
+ assert.equal(JSON.parse(text).result.markdown,'历史正文'.repeat(5000))
+ const next=await app.artifacts.put({kind:'agent-query-evidence',execution:{taskId:'task-a',requirementRevision:2},result:{markdown:'新增材料'}},{taskId:'task-a'})
+ index=await readTaskMaterials(options);assert.equal(index.entries.length,2)
+ assert.equal(index.entries.find(e=>e.artifactRef===next.ref).status,'current')
+ assert.deepEqual(JSON.parse(await readFile(join(directories.work,'materials-index.json'),'utf8')),index)
+ await assert.rejects(readTaskMaterials({...options,artifactRef:foreign.ref}),{code:'TASK_MATERIAL_SCOPE_INVALID'})
+ await assert.rejects(readTaskMaterials({...options,artifactRef:'tasks/task-a/../secret'}),{code:'ARTIFACT_REFERENCE_INVALID'})
+ assert.ok(!index.entries.some(e=>e.artifactRef===hidden.ref))
 })

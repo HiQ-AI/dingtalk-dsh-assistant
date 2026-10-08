@@ -803,3 +803,13 @@ test('直接查询必须经过共享语义验收，查询成功不代表业务�
   await assert.rejects(createTaskWorkflowContracts({ ...options, verifyAcceptance: async () => false }).authorizeCompletion(args),
     { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
 })
+
+test('工程检查缺文件以完整Host日志识别为配置前提，损坏日志不冒认',async()=>{
+ const {inspectEngineeringCheckPrerequisite}=await import('../packages/dingtalk-dsh-assistant/task-workflow-contracts.js')
+ const {createHash}=await import('node:crypto')
+ const paths=['tests/a.test.cjs','tests/b.test.cjs'],bytes=Buffer.from(JSON.stringify({steps:[{args:['--test',...paths],exitCode:1,stderr:`Could not find '${paths.join(', ')}'\n`}]}))
+ const part={kind:'engineering-verification-failure',candidateDigest:'candidate',checkId:'dataset-build',checkVersion:'1',encoding:'base64',part:0,parts:1,data:bytes.toString('base64'),logBytes:bytes.length,logSha256:createHash('sha256').update(bytes).digest('hex')}
+ const context={state:{nodes:[{nodeId:'verify-candidate',status:'waiting',waitReason:{reference:'ENGINEERING_VERIFICATION_FAILED'},evidenceRefs:['log']}]},artifacts:{read:async()=>part}}
+ assert.deepEqual((await inspectEngineeringCheckPrerequisite(context)).missingPaths,paths)
+ part.logSha256='0'.repeat(64);assert.equal(await inspectEngineeringCheckPrerequisite(context),null)
+})

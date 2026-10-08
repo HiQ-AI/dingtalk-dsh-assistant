@@ -20,7 +20,7 @@ const failure = (code, detail) => Object.assign(new Error(detail ? `${code}: ${d
 const notDrained = code => Object.assign(failure(code), { executionDrained: false })
 const copy = value => structuredClone(value)
 const identityOf = binding => Object.fromEntries(keysFor(binding).map(key => [key, binding[key]]))
-const providerTransient = cause => cause?.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.'
+const providerTransient = cause => cause?.code === 'TRANSPORT' && String(cause.message).split('\n')[0].trim() === 'fetch failed' || cause?.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.'
 
 // 只读核验旧分类；不恢复会话，不向模型投递输入。
 export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'execution_no_submission') {
@@ -35,15 +35,16 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   if (input?.data.source.executionSession?.sessionId !== binding.sessionId || input.data.source.executionSession.leaseEpoch !== binding.leaseEpoch) return null
   const end = events.findLast(event => event.type === 'turn/end')
   if (!end || end.seq <= input.seq) return null
-  const overloaded = previousCode === 'execution_no_submission' && end.data.reason?.kind === 'error' && providerTransient(end.data.reason.error)
+  const overloaded = ['execution_no_submission', 'EXECUTION_PROVIDER_FAILED'].includes(previousCode) && end.data.reason?.kind === 'error' && providerTransient(end.data.reason.error)
   const interrupted = previousCode === 'execution_tool_failed' && end.data.reason?.kind === 'aborted' && end.data.reason.reason?.kind === 'user'
-  if (!overloaded && !interrupted) return null
-  if (interrupted) {
+  const scopeFailure = previousCode === 'execution_tool_failed' && end.data.reason?.kind === 'blocked'
+  if (!overloaded && !interrupted && !scopeFailure) return null
+  if (interrupted || scopeFailure) {
     const errors = events.filter(event => event.seq > input.seq && event.type === 'tool/result' && event.data.message?.content?.some(block => block.type === 'tool-result' && block.isError))
     if (errors.length !== 1 || errors[0].data.message.content.length !== 1) return null
     const result = errors[0].data.message.content[0]
     const call = events.findLast(event => event.seq < errors[0].seq && event.type === 'tool/call')
-    if (result.content?.length !== 1 || result.content[0].type !== 'text' || result.content[0].text !== 'Error: [object Object]'
+    if (result.content?.length !== 1 || result.content[0].type !== 'text' || result.content[0].text !== (scopeFailure ? 'Error: ENGINEERING_READ_PATH_INVALID' : 'Error: [object Object]')
       || call?.data.name !== 'engineering_repo_inspect' || call.data.callId !== result.toolCallId
       || events.some(event => event.seq > errors[0].seq && event.seq < end.seq && event.type !== 'step/end')) return null
   }
@@ -53,7 +54,8 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   const inbox = events.filter(event => event.type === 'agent/inbox/spliced').flatMap(event => event.data.inserted ?? [])
   if (inbox.some(message => message.source?.kind !== 'coordinator' && !(message.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt' && message.source.form === 'snapshot'))) return null
   if (inbox.some(message => message.source?.kind === 'coordinator' && (message.source.executionSession?.sessionId !== binding.sessionId || message.source.executionSession.leaseEpoch > binding.leaseEpoch))) return null
-  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: interrupted
+  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: scopeFailure
+    ? { code: 'ENGINEERING_READ_PATH_INVALID', phase: 'execution', message: '原生本轮仓库读取路径被拒绝；需Owner指示使用准入路径和Task共享材料继续。' } : interrupted
     ? { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留失败工具历史，需Owner核对后受管续行。' }
     : { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', message: String(end.data.reason.error.message).slice(0, 2000) } }
 }
@@ -329,9 +331,9 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       }
       if (definition.allowedTools.includes('engineering_repo_inspect') && !registry.has('engineering_repo_inspect')) agentCtx.tools.register({
         name: 'engineering_repo_inspect',
-        description: '在本任务受管仓库中列出路径、搜索文本或分段读取文件；read 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。返回完整文件 SHA256 用于修改校验。status=not_found 或 invalid_limit 时按 suggestedCall 纠正后继续，不代表节点失败。',
+        description: '先用 materials 查看本 Task 共享材料与产物索引；materials 带 path=artifactRef 可分段读取原工件，历史来源仅作背景不代表当前授权。尚未读取完整材料不能据此断言需求已满足或无需修改。仓库用 list/search/read；read/materials 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。仓库读取返回完整文件 SHA256 用于修改校验。status=not_found 或 invalid_limit 时按 suggestedCall 纠正后继续，不代表节点失败。',
         parameters: { type: 'object', properties: {
-          operation: { type: 'string', enum: ['list', 'search', 'read', 'repair'] }, query: { type: 'string' }, path: { type: 'string' },
+          operation: { type: 'string', enum: ['list', 'search', 'read', 'repair', 'materials'] }, query: { type: 'string' }, path: { type: 'string' },
           source: { type: 'string', enum: ['current', 'previous'] }, offset: { type: 'integer' }, limit: { type: 'integer' },
         }, required: ['operation'], additionalProperties: false },
         output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },

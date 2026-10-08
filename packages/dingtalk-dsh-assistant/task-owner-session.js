@@ -127,7 +127,7 @@ queryEvidence是Host保存的当前需求查询证据；成功工具返回的evi
 complete必须对每项acceptanceItem提交satisfied的assessment，引用已读取且真正证明该项的查询或受管操作证据，summary给出真实结果；Host核验身份、版本、客观效果及一次最终业务验收。阶段成功不是整个任务完成，文件投递不能证明内容自述为真。无需重复提交独立调查成果或criterionReviews。wait/block必须有condition，区分business-input/approval/capability/permission/execution并说明具体缺失、责任方和可验证恢复条件；内部实现失败由你继续诊断与纠正，不机械转成人工业务前置。过程不发群进度，只有必要业务问题、插件私聊审批和最终结果。
 ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretationInstructions}${groupReplyInstructions}最后仅调用 ${SUBMIT}。` })
       agentCtx.tools.restrict({ allow: [] })
-      agentCtx.systemPrompt.section({ name: 'task:owner-input', order: 1, text: 'goal 是当前权威需求；materials 中 artifactRef 指向完整材料，events 中 payloadRef 指向完整原始事件。对照当前 sourceInstructions 和 currentSources 判断变化，不反复展开事件内重复的旧需求。需要正文时调用 task_owner_read_artifact，按 nextOffset 继续到 null 才能称完整读取；没有读取不得声称核验过。材料和事件引用不是阶段成功证明。群聊进度只说当前处理状态和真正需要人工行动的事项，详细分析保留在阶段产物，不复述原文或说“已收到”。' })
+      agentCtx.systemPrompt.section({ name: 'task:owner-input', order: 1, text: 'goal 是当前权威需求；sharedMaterials提供本任务共享目录与材料索引，先核对已有材料再判断缺失。用task_owner_read_artifact读取artifactRef；传task-materials-index刷新新增材料，也可传索引中的work/tmp/outputs相对路径读取本任务产物。history可参考但不替代当前授权或验收事实。无需重跑已完成步骤取得新材料；materials 中 artifactRef 指向完整材料，events 中 payloadRef 指向完整原始事件。对照当前 sourceInstructions 和 currentSources 判断变化，不反复展开事件内重复的旧需求。需要正文时调用 task_owner_read_artifact，按 nextOffset 继续到 null 才能称完整读取；没有读取不得声称核验过。材料和事件引用不是阶段成功证明。群聊进度只说当前处理状态和真正需要人工行动的事项，详细分析保留在阶段产物，不复述原文或说“已收到”。' })
       agentCtx.tools.guard(exec => {
         if (!entry.queryTools.has(exec.name) && exec.name !== SUBMIT && exec.name !== 'task_owner_read_events'
           && exec.name !== 'task_owner_read_artifact') return 'task_owner_tool_not_allowed'
@@ -244,7 +244,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
           return { page: JSON.stringify(page) }
         },
       })
-      if (entry.readableArtifacts.size || entry.queryTools.size) agentCtx.tools.register({
+      if (entry.readableArtifacts.size || entry.queryTools.size || entry.sharedMaterialPrefix) agentCtx.tools.register({
         name: 'task_owner_read_artifact',
         description: '按字符分页读取本任务已登记的原始材料、事件或阶段证据。返回nextOffset；完整阅读时继续读取直至null。',
         parameters: { type: 'object', properties: { artifactRef: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 16000 } },
@@ -253,7 +253,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
           required: ['artifact', 'totalLength', 'nextOffset'], additionalProperties: false },
           render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute({ artifactRef, offset = 0, limit = 16000 }, exec) {
-          if (!await current(entry) || !entry.readableArtifacts.has(artifactRef)) throw fail('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
+          if (!await current(entry) || !entry.readableArtifacts.has(artifactRef) && !(entry.sharedMaterialPrefix && (artifactRef === 'task-materials-index' || artifactRef.startsWith(entry.sharedMaterialPrefix) || /^(work|tmp|outputs)\//u.test(artifactRef)))) throw fail('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
           exec.signal.throwIfAborted()
           const artifact = JSON.stringify(await readArtifact(artifactRef))
           return { artifact: artifact.slice(offset, offset + limit), totalLength: artifact.length,
@@ -287,6 +287,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
     const entry = { binding, queryTools, queryInput: copy(queryInput), onQueryEvidence,
       queryBinding: Object.freeze(Object.fromEntries(['taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(key => [key, binding[key]]).concat([['kind', 'task-owner']]))),
       repairBinding: input.currentExecution?.repairable === true ? copy(input.currentExecution.repairBinding) : null,
+      sharedMaterialPrefix: input.sharedMaterials?.logicalTaskId ? `tasks/${input.sharedMaterials.logicalTaskId}/` : null,
       snapshots: new Map(), cancelled: false, stale: false, attempted: false, accepted: false,
       writeCapabilities: new Set((input.capabilities ?? []).filter(item => item.effectClass === 'file.write').map(item => item.id)),
       unreadPages: new Set((input.eventPages ?? []).map(page => page.ref)),

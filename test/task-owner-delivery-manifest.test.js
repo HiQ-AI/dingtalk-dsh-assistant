@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -10,12 +10,18 @@ import { createExecutionController } from '../packages/dingtalk-dsh-assistant/ex
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 
-async function fixture(t, { mutateFinal, action = 'complete', domainProof = false, mutateDecision, staleBinding = false } = {}) {
+async function fixture(t, { mutateFinal, action = 'complete', domainProof = false, mutateDecision, staleBinding = false, sharedOutput = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'owner-manifest-')), dbPath = join(directory, 'control.sqlite')
   const store = await openExecutionStore({ dbPath, instanceId: 'manifest', initialize: true })
   let owner, controller
   t.after(async () => { await owner?.close(); await controller?.close(); await store.close() })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
+  if (sharedOutput) {
+    const directories = { logicalTaskId: 'task', ...Object.fromEntries(['work', 'tmp', 'outputs'].map(area => [area, join(directory, area)])) }
+    for (const area of ['work', 'tmp', 'outputs']) await mkdir(directories[area])
+    await writeFile(join(directories.outputs, 'report.md'), '已验证的报告')
+    artifacts.getTaskDirectories = async () => directories
+  }
   const workflow = { id: 'report', version: '1', ownerContract: { id: 'report-result', version: '1',
     resultContract: { id: 'report', version: '1', requiredFields: ['summary'] }, validateCompletion: () => true },
     nodes: [{ id: 'report', version: '1', executor: 'code', allowedEffects: ['pure'],
@@ -51,6 +57,10 @@ async function fixture(t, { mutateFinal, action = 'complete', domainProof = fals
       const snapshot = await readArtifact(snapshotRef)
       assert.equal(snapshot.complete, false)
       assert.equal(snapshot.acceptance[0].status, 'pending')
+      if (sharedOutput) {
+        assert.ok((await readArtifact('task-materials-index')).files.some(file => file.relativePath === 'outputs/report.md'))
+        assert.equal((await readArtifact('outputs/report.md')).text, '已验证的报告')
+      }
       const outputRef = input.stages[0].outputRef
       if (domainProof) {
         const proof = input.stageArtifacts[0]
@@ -158,4 +168,10 @@ test('Owner事件、清单快照和正式清单使用当前任务归属', async 
   assert.ok(writes.some(entry => entry.value?.kind === 'task-delivery-manifest' && entry.value.complete === false))
   assert.ok(writes.some(entry => entry.value?.kind === 'task-delivery-manifest' && entry.value.complete === true))
   for (const entry of writes) assert.deepEqual(entry.options, { taskId: 'task' })
+})
+
+test('Owner读取共享outputs后仍沿当前阶段业务验收完成，索引不作为完成证明', async t => {
+  const f = await fixture(t, { sharedOutput: true })
+  await f.owner.drive('task')
+  assert.equal((await f.store.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' })).taskId, 'task')
 })

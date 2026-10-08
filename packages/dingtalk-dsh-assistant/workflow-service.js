@@ -3138,7 +3138,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const taskCancelled = plan?.task.controlState === 'cancelled'
       const taskStopping = ['cancelling', 'pausing', 'paused'].includes(plan?.task.controlState)
       const taskComplete = !taskStopping && !taskCancelled && (ownerComplete || !owner && planState === 'succeeded')
-      const taskState = taskCancelled || taskComplete ? 'completed' : taskStopping ? 'waiting' : ownerWaiting || owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
+      const executionResumed = ownerWaiting && ['execution', 'capability'].includes(waitingCondition?.kind)
+        && requirementCurrent && currentRun && currentStage?.status === 'running' && planState === 'active'
+        && run?.status === 'running' && state?.run.status === 'running' && !state.controllerError
+        && !state.pendingInputCount && state.nodes.some(node => node.status === 'running')
+      if (executionResumed && !taskStopping && !taskCancelled) waitingCondition = null
+      const taskState = taskCancelled || taskComplete ? 'completed' : taskStopping ? 'waiting' : executionResumed ? 'running' : ownerWaiting || owner?.status === 'blocked' || planState === 'blocked' || planState === 'waiting_confirmation'
         || planState === 'succeeded' ? 'waiting' : owner?.status === 'running' ? 'running' : !run ? 'queued'
         : terminal(run.status) && !plan ? 'completed' : state.controllerError ? 'waiting'
           : run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting'
@@ -3298,7 +3303,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const state = await store.query({ kind: 'run', runId: run.runId })
           const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
-          if (node.waitReason?.kind === 'recovery' && ['execution_no_submission','execution_tool_failed'].includes(node.waitReason.reference)
+          if (node.waitReason?.kind === 'recovery' && ['execution_no_submission','execution_tool_failed','EXECUTION_PROVIDER_FAILED'].includes(node.waitReason.reference)
             && ctx?.sessionPersistence && state.nodes.every(item => item.drained) && node.sessionBound && !node.outputRef) {
             const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
             const frozen = definition.nodes.find(item => item.id === node.nodeId)

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -339,7 +339,9 @@ for (const barrier of ['future-retry', 'pending-message']) test(`真实控制账
 test('候选修复先拒绝缺失及旧版本查询，当前原生查询后同Owner同turn继续',async t=>{
  const directory=await mkdtemp(join(tmpdir(),'owner-current-query-repair-'))
  const store=await openExecutionStore({dbPath:join(directory,'control.sqlite'),instanceId:'query-repair',initialize:true})
- const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true,taskWorkspaceRoot:join(directory,'tasks'),getTaskDirectories:async()=>({logicalTaskId:'task'})})
+ const directories={logicalTaskId:'task',...Object.fromEntries(['work','tmp','outputs'].map(area=>[area,join(directory,'tasks','tasks','task',area)]))}
+ for(const area of ['work','tmp','outputs'])await mkdir(directories[area],{recursive:true})
+ const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true,taskWorkspaceRoot:join(directory,'tasks'),getTaskDirectories:async()=>directories})
  const workflow={id:'blocked-query',version:'1',nodes:[{id:'inspect',version:'1',executor:'code',allowedEffects:['read'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({requirement})=>requirement,execute:async()=>({reason:'QUERY_PARAMETER_INVALID'}),admitOutput:()=>({outcome:'failed',waitReason:{kind:'recovery',reference:'QUERY_PARAMETER_INVALID'}})}]}
  const controller=createExecutionController({store,artifacts,workflows:[workflow]})
  let owner,phase='old',runs=0,repairs=0,oldEvidence,currentEvidence

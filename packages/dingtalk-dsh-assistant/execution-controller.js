@@ -384,6 +384,25 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   return {
     isCurrent,
     inspectNodeRecovery,
+    async updateEngineeringCheckpoint({commandId,runId,expectedRevision,kind,workflowId,workflowDigest,maintenance}) {
+      if(closed||flights.has(runId))throw executionError('EXECUTOR_STILL_ACTIVE')
+      const replay=await store.query({kind:'receipt',commandId})
+      if(replay){if(replay.result.toDigest!==workflowDigest)throw executionError('ENGINEERING_CHECKPOINT_CONFLICT');return replay}
+      const state=await query(runId),definition=definitionOf({workflowId,workflowDigest}),plan=await store.query({kind:'task.plan',taskId:state.run.taskId})
+      const start=kind==='checks'?'verify-candidate':null
+      const index=definition.nodes.findIndex(node=>node.id===start),node=definition.nodes[index]
+      if(index<0||state.nodes.length!==definition.nodes.length||state.nodes.some((item,i)=>item.nodeId!==definition.nodes[i].id))throw executionError('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+      const dependencies={}
+      for(const id of node.inputDependencies??[]){const prior=state.nodes.find(item=>item.nodeId===id);if(prior?.status!=='succeeded'||!prior.outputRef)throw executionError('NODE_PREDECESSOR_INCOMPLETE');dependencies[id]=await artifacts.read(prior.outputRef)}
+      const previous=state.nodes[index-1],input=await prepareInput(definition,node,state.run.requirementRef,previous?.outputRef?await artifacts.read(previous.outputRef):undefined,dependencies)
+      const evidence=await artifacts.put({kind:'engineering-checkpoint',mode:kind,runId,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,
+        invalidated:state.nodes.slice(index).map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
+      const receipt=await command(commandId,'run.workflow.checkpoint',{runId,expectedRevision,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,toWorkflowId:workflowId,
+        kind,startNodeId:start,inputRef:input.ref,inputDigest:input.digest,evidenceRef:evidence.ref,maintenance,
+        expectedRequirementRevision:plan.task.requirementRevision,expectedControlRevision:plan.task.controlRevision,
+        nodes:definition.nodes.map(item=>({nodeId:item.id,nodeVersion:item.version,executor:item.executor}))})
+      return receipt
+    },
     async resumeNode({ commandId, runId, expectedRevision, nodeRunId, generation, leaseEpoch, inputDigest, contextRef }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const replay = await store.query({ kind: 'receipt', commandId })

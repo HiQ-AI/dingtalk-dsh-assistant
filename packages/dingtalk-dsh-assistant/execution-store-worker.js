@@ -95,7 +95,7 @@ function assertTaskDispatchAllowed(r) {
       AND run_id=? AND status='running'`).get(r.task_id, task.plan_revision, r.run_id)) fail('TASK_DISPATCH_BLOCKED')
 }
 // 续行只针对已定位的 agent 可纠正问题；未知工具、身份和存储故障不能自动重放。
-function inspectNodeRecovery(runId, { reclassifyInterrupted = false } = {}) {
+function inspectNodeRecovery(runId, { reclassifyInterrupted = false, reclassifyProvider = false } = {}) {
   const r = getRun(runId), current = nodes(runId), candidate = current.find(n => ['waiting', 'failed'].includes(n.status))
   const base = { repairable: false, mode: 'resume-agent', reason: 'node-not-recoverable',
     runRevision: r.revision, generation: r.generation, evidenceRefs: [] }
@@ -109,12 +109,13 @@ function inspectNodeRecovery(runId, { reclassifyInterrupted = false } = {}) {
   const problemKey = executionDigest({ nodeRunId: n.node_run_id, inputDigest: n.input_digest,
     code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId })
   detail.problemKey = problemKey
-  const correctable = reclassifyInterrupted && failure.code === 'execution_tool_failed' || ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'EXECUTION_TURN_INTERRUPTED', 'execution_step_budget_exhausted', 'execution_timeout',
-    'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY'].includes(failure.code)
+  const correctable = reclassifyInterrupted && failure.code === 'execution_tool_failed' || reclassifyProvider && failure.code === 'EXECUTION_PROVIDER_FAILED' || ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'EXECUTION_TURN_INTERRUPTED', 'execution_step_budget_exhausted', 'execution_timeout',
+    'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY', 'ENGINEERING_READ_PATH_INVALID'].includes(failure.code)
     || ['output-validation', 'output-admission'].includes(failure.phase)
       && ['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT', 'AGENT_WORK_RESULT_INVALID',
         'AGENT_WORK_EVIDENCE_INVALID', 'AGENT_WORK_COVERAGE_INCOMPLETE', 'QUERY_EVIDENCE_INVALID', 'GROUP_REPLY_INTERNAL_DETAILS'].includes(failure.code)
   if (!correctable) return { ...detail, reason: 'failure-requires-implementation-repair' }
+  if (failure.code === 'ENGINEERING_READ_PATH_INVALID' && n.output_ref) return detail
   if (n.executor !== 'agent' || !n.session_bound || !n.session_id || !n.input_digest || !n.input_ref
     || !['failed', 'waiting'].includes(r.status) || wait?.kind !== 'recovery' || failure.code !== wait.reference
     || r.pause_requested || r.stop_requested || pendingInputs(runId).length || current.some(node => !node.drained)
@@ -456,13 +457,13 @@ function coreCommand(command, now, consumption = {}) {
   if (command.kind === 'node.failure.reclassify') {
     object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','evidenceRef','previousCode','code'])
     const { previousCode, code } = a
-    if (!(previousCode === 'execution_no_submission' && code === 'EXECUTION_PROVIDER_TRANSIENT')
-      && !(previousCode === 'execution_tool_failed' && code === 'EXECUTION_TURN_INTERRUPTED')) fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
+    if (!(['execution_no_submission', 'EXECUTION_PROVIDER_FAILED'].includes(previousCode) && code === 'EXECUTION_PROVIDER_TRANSIENT')
+      && !(previousCode === 'execution_tool_failed' && ['EXECUTION_TURN_INTERRUPTED','ENGINEERING_READ_PATH_INVALID'].includes(code))) fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
     const r = activeRun(a), current = nodes(r.run_id), waiting = current.filter(n => n.status === 'waiting'), n = waiting[0]
     assertTaskDispatchAllowed(r)
     if (maintenanceStatus(db, workerData.processIncarnation).active) fail('RUNTIME_MAINTENANCE_ACTIVE')
     if (db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(r.task_id)) {
-      const recovery = inspectNodeRecovery(r.run_id, { reclassifyInterrupted: previousCode === 'execution_tool_failed' })
+      const recovery = inspectNodeRecovery(r.run_id, { reclassifyInterrupted: previousCode === 'execution_tool_failed', reclassifyProvider: previousCode === 'EXECUTION_PROVIDER_FAILED' })
       if (!recovery.repairable && recovery.reason !== 'strategy-change-required') fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
     }
     if (r.status !== 'waiting' || r.revision !== a.runRevision || r.generation !== a.generation || waiting.length !== 1
@@ -503,7 +504,7 @@ function coreCommand(command, now, consumption = {}) {
     const r = activeRun(a)
     const recovering = nodes(r.run_id).filter(n => n.status === 'waiting' && n.wait_reason && JSON.parse(n.wait_reason).kind === 'recovery')
     if (!recovering.length) fail('RUN_NOT_RECOVERING')
-    if (recovering.some(n => JSON.parse(n.wait_reason).reference === 'EXECUTION_TURN_INTERRUPTED')) fail('NODE_RECOVERY_REQUIRES_OWNER')
+    if (recovering.some(n => ['EXECUTION_TURN_INTERRUPTED', 'ENGINEERING_READ_PATH_INVALID'].includes(JSON.parse(n.wait_reason).reference))) fail('NODE_RECOVERY_REQUIRES_OWNER')
     if (recovering.some(n => !n.drained)) fail('NODE_NOT_DRAINED')
     assertRunEffectsDrained(db, r.run_id)
     for (const n of recovering) {
@@ -582,6 +583,46 @@ function coreCommand(command, now, consumption = {}) {
     db.prepare("UPDATE execution_runs SET workflow_digest=?,revision=revision+1,generation=generation+1,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
       .run(a.toDigest, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
+  }
+  if (command.kind === 'run.workflow.checkpoint') {
+    object(a,['runId','expectedRevision','fromDigest','toDigest','toWorkflowId','kind','startNodeId','inputRef','inputDigest','evidenceRef','expectedRequirementRevision','expectedControlRevision','nodes','maintenance'])
+    object(a.maintenance,['maintenanceId','revision'])
+    const maintenance=maintenanceStatus(db,workerData.processIncarnation)
+    if(!maintenance.active||!maintenance.drained||maintenance.maintenanceId!==a.maintenance.maintenanceId||maintenance.revision!==a.maintenance.revision)fail('RUNTIME_MAINTENANCE_STALE')
+    digest(a.fromDigest,'fromDigest');digest(a.toDigest,'toDigest');ref(a.inputRef,'inputRef');digest(a.inputDigest,'inputDigest');ref(a.evidenceRef,'evidenceRef')
+    const r=activeRun(a),current=nodes(r.run_id),index=current.findIndex(n=>n.node_id==='verify-candidate'),n=current[index]
+    assertTaskDispatchAllowed(r)
+    const oldRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.fromDigest),nextRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.toDigest)
+    const old=oldRow&&JSON.parse(oldRow.body),next=nextRow&&JSON.parse(nextRow.body)
+    const task=db.prepare('SELECT t.*,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
+    const stage=task&&db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=?').get(r.task_id,task.plan_revision,r.run_id)
+    if(a.kind!=='checks'||a.startNodeId!=='verify-candidate'||r.status!=='waiting'||r.revision!==a.expectedRevision||r.workflow_digest!==a.fromDigest
+      ||a.fromDigest===a.toDigest||!old||!next||old.definitionVersion!=='18'||next.definitionVersion!=='18'||next.workflowId!==a.toWorkflowId
+      ||old.config.kind!=='engineering'||next.config.kind!=='engineering'||old.config.runId!==r.run_id||old.config.taskId!==r.task_id
+      ||!task||!stage||stage.output_ref||stage.workflow_digest!==a.fromDigest||task.requirement_revision!==a.expectedRequirementRevision
+      ||task.control_revision!==a.expectedControlRevision||task.plan_requirement_revision!==task.requirement_revision
+      ||index<0||n.status!=='waiting'||JSON.parse(n.wait_reason??'null')?.reference!=='ENGINEERING_VERIFICATION_FAILED'
+      ||current.some(v=>!v.drained)||current.slice(0,index).some(v=>v.status!=='succeeded')
+      ||current.slice(index+1).some(v=>v.status!=='blocked'||v.lease_epoch!==0||v.output_ref)
+      ||next.config.checkpoint?.kind!=='checks'||next.config.checkpoint?.fromDigest!==a.fromDigest
+      ||!Array.isArray(next.config.checkpointChecks)||!next.config.checkpointChecks.length)fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+    const before=structuredClone(old),after=structuredClone(next)
+    for(const value of [before,after]){delete value.digest;delete value.workflowId;delete value.config.checkpoint;delete value.config.checkpointChecks}
+    if(executionDigest(before)!==executionDigest(after)||executionDigest(old.config.checkpointChecks??null)===executionDigest(next.config.checkpointChecks))fail('ENGINEERING_CHECKPOINT_SCOPE_CHANGED')
+    if(stage.source_condition){const condition=JSON.parse(stage.source_condition),source=readCurrentTaskSource(db,condition.sourceKey,{taskId:r.task_id})
+      if(!source||source.status==='superseded'||source.sourceVersion!==condition.sourceVersion||!source.body.includes(condition.sourceQuote)
+        ||!condition.sourceQuote.includes(condition.objective)||condition.requiredActorId&&source.actorId!==condition.requiredActorId)fail('ENGINEERING_CHECKPOINT_SOURCE_CHANGED')}
+    if(!Array.isArray(a.nodes)||a.nodes.length!==current.length)fail('INVALID_NODE_PLAN')
+    a.nodes.forEach((value,i)=>{object(value,['nodeId','nodeVersion','executor']);text(value.nodeVersion,'nodeVersion')
+      if(value.nodeId!==current[i].node_id||value.executor!==current[i].executor||i<index&&value.nodeVersion!==current[i].node_version)fail('INVALID_NODE_PLAN')})
+    assertRunEffectsDrained(db,r.run_id)
+    if(db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? AND node_id IN (SELECT node_id FROM execution_nodes WHERE run_id=? AND current=1 AND position>=?) LIMIT 1').get(r.run_id,r.run_id,n.position))fail('ENGINEERING_CHECKPOINT_EFFECTS_PRESENT')
+    current.slice(index).forEach((value,j)=>db.prepare('UPDATE execution_nodes SET node_version=? WHERE node_run_id=?').run(a.nodes[index+j].nodeVersion,value.node_run_id))
+    db.prepare("UPDATE execution_nodes SET status='ready',input_ref=?,input_digest=?,wait_reason=NULL WHERE node_run_id=?").run(a.inputRef,a.inputDigest,n.node_run_id)
+    db.prepare("UPDATE execution_runs SET workflow_id=?,workflow_digest=?,status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(a.toWorkflowId,a.toDigest,now,r.run_id)
+    db.prepare('UPDATE task_plan_stages SET workflow_id=?,workflow_digest=? WHERE task_id=? AND plan_revision=? AND run_id=?').run(a.toWorkflowId,a.toDigest,r.task_id,task.plan_revision,r.run_id)
+    emitEvent(command.id,'run.workflow.checkpoint',a,now)
+    return {runId:r.run_id,kind:a.kind,fromDigest:a.fromDigest,toDigest:a.toDigest,generation:r.generation,evidenceRef:a.evidenceRef}
   }
   if (command.kind === 'run.workflow.reissue-repository') {
     object(a, ['runId', 'expectedRevision', 'fromDigest', 'toDigest', 'toWorkflowId', 'requirementRef', 'inputRef', 'inputDigest', 'nodes'])
@@ -958,10 +999,16 @@ function command(value) {
         }
         return true
       })()
+      const blockedBeforeQuery=db.prepare(`SELECT 1 FROM task_owner_turns WHERE task_id=? AND lease_epoch=?
+        AND requirement_revision=? AND plan_revision=? AND control_revision=? AND authorization_revision=? AND input_fence_revision=?
+        AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action') IN ('wait','block')
+        AND json_extract(decision_json,'$.condition.kind') IN ('capability','permission','execution')
+        AND NOT EXISTS(SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?)`)
+        .get(a.taskId,owner.lease_epoch,task.requirement_revision,task.plan_revision,task.control_revision,owner.authorization_revision,owner.input_fence_revision,a.taskId)
       if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
         ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,rejectedAction?.turn_id??'')
         ||rejectedSourcePlan&&db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${rejectedSourcePlan.turn_id}`)
-        ||!rejectedPreparation&&!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
+        ||!rejectedPreparation&&!blockedBeforeQuery&&!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
         ||db.prepare('SELECT * FROM execution_runs WHERE task_id=?').all(a.taskId).some(run=>!handedOffRuns.has(run.run_id)
           &&(!['failed','waiting','succeeded'].includes(run.status)||run.workflow_id!=='task-investigation'&&!completedExternal))
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)

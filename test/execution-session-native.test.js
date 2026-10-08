@@ -708,11 +708,14 @@ test('只读范围拒绝保留拒绝后可调整合法查询，不终止整个�
   assert.match(JSON.stringify(h.requests[1]), /QUERY_SCOPE_DENIED/u)
 })
 
-for (const [message, expected] of [
+for (const [message, expected, code = 'PI_AI_ERROR'] of [
   ['Codex error: Our servers are currently overloaded. Please try again later.\n[Codex diagnostics: {"httpStatus":200}]', 'EXECUTION_PROVIDER_TRANSIENT'],
   ['Codex error: authentication failed', 'EXECUTION_PROVIDER_FAILED'],
+  ['fetch failed\n[Codex diagnostics: {}]', 'EXECUTION_PROVIDER_TRANSIENT', 'TRANSPORT'],
+  ['authentication failed', 'EXECUTION_PROVIDER_FAILED', 'TRANSPORT'],
+  ['fetch failed', 'EXECUTION_PROVIDER_FAILED', 'PI_AI_ERROR'],
 ]) test(`原生执行保留本轮provider错误并区分暂态：${expected}`, async t => {
-  const h = await host({ script: [{ providerFailure: { code: 'PI_AI_ERROR', message } }, { text: '正常结束未提交' }] })
+  const h = await host({ script: [{ providerFailure: { code, message } }, { text: '正常结束未提交' }] })
   t.after(() => h.close())
   const first = await drive(h)
   assert.equal(first.reason, expected)
@@ -736,14 +739,15 @@ test('已接纳节点提交优先于稍后的provider错误', async t => {
   assert.equal(completed, 1)
 })
 
-test('旧provider失败只读重分类核对原生身份、本轮租约及未提交', async t => {
-  const message = 'Codex error: Our servers are currently overloaded. Please try again later.'
-  const h = await host({ script: [{ providerFailure: { code: 'PI_AI_ERROR', message } }] }); t.after(() => h.close())
+for (const transport of [false,true]) test(`旧provider失败只读重分类核对原生身份、本轮租约及未提交 transport=${transport}`, async t => {
+  const previousCode=transport?'EXECUTION_PROVIDER_FAILED':'execution_no_submission'
+  const message = transport?'fetch failed':'Codex error: Our servers are currently overloaded. Please try again later.'
+  const h = await host({ script: [{ providerFailure: { code: transport?'TRANSPORT':'PI_AI_ERROR', message } }] }); t.after(() => h.close())
   await drive(h)
-  const b = binding({ sessionBound: true }), proof = await inspectLegacyTurnFailure(h.ctx, b)
+  const b = binding({ sessionBound: true }), proof = await inspectLegacyTurnFailure(h.ctx, b, previousCode)
   assert.equal(proof.failure.code, 'EXECUTION_PROVIDER_TRANSIENT')
-  await assert.rejects(inspectLegacyTurnFailure(h.ctx, { ...b, inputDigest: 'forged' }), { code: 'execution_session_identity_mismatch' })
-  assert.equal(await inspectLegacyTurnFailure(h.ctx, { ...b, leaseEpoch: 2 }), null)
+  await assert.rejects(inspectLegacyTurnFailure(h.ctx, { ...b, inputDigest: 'forged' }, previousCode), { code: 'execution_session_identity_mismatch' })
+  assert.equal(await inspectLegacyTurnFailure(h.ctx, { ...b, leaseEpoch: 2 }, previousCode), null)
   const stored = await h.ctx.sessionPersistence.inspect(b.sessionId)
   for (const extra of [
     { type: 'user/message', data: { source: { kind: 'web' } } },
@@ -751,9 +755,9 @@ test('旧provider失败只读重分类核对原生身份、本轮租约及未提
     { type: 'tool/result', data: { name: 'execution_node_submit' } },
   ]) {
     const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events: [...stored.events, { ...extra, seq: stored.events.at(-1).seq + 1 }] }) } }
-    assert.equal(await inspectLegacyTurnFailure(ctx, b), null)
+    assert.equal(await inspectLegacyTurnFailure(ctx, b, previousCode), null)
   }
-  assert.equal(await inspectLegacyTurnFailure({ ...h.ctx, agents: { get: () => ({}) } }, b), null)
+  assert.equal(await inspectLegacyTurnFailure({ ...h.ctx, agents: { get: () => ({}) } }, b, previousCode), null)
 })
 
 test('原生用户中断正在执行的只读工具保留中断类型而非工具失败', async t => {
@@ -831,4 +835,19 @@ for (const scenario of ['current-lease','identity','external-observer','cas-retr
     assert.equal(proof.sessionId,id);return
   }
   await assert.rejects(h.manager.prepareManagedSession(b,definition(),async()=>assert.fail('must not bind')))
+})
+
+test('历史scope工具错误按真实blocked尾部重分类，拒绝别的工具和额外输入',async()=>{
+ const b=binding({sessionBound:true}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]))
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},
+ {seq:1,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId:b.sessionId,leaseEpoch:1}}}},
+ {seq:79,type:'tool/call',data:{name:'engineering_repo_inspect',callId:'call'}},
+ {seq:80,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'call',isError:true,content:[{type:'text',text:'Error: ENGINEERING_READ_PATH_INVALID'}]}]}}},
+ {seq:81,type:'step/end',data:{}},{seq:82,type:'turn/end',data:{reason:{kind:'blocked'}}}]
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ assert.equal((await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')).failure.code,'ENGINEERING_READ_PATH_INVALID')
+ events[2].data.name='other';assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null);events[2].data.name='engineering_repo_inspect'
+ events[3].data.message.content[0].content[0].text='Error: other';assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
+ events[3].data.message.content[0].content[0].text='Error: ENGINEERING_READ_PATH_INVALID'
+ events.push({seq:83,type:'user/message',data:{source:{kind:'user'}}});assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
 })

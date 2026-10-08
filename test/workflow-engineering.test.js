@@ -292,6 +292,12 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
     inputDigest: state.nodes[0].inputDigest, requirementDigest: executionDigest(currentRequirement) }, { operation: 'list', query: 'value' }, undefined,
   currentRequirement)
   assert.deepEqual(inspection.paths, ['src/value.txt'])
+  const readBinding = { taskId: 'task', runId: prepared.runId, generation: 2,
+    inputDigest: state.nodes[0].inputDigest, requirementDigest: executionDigest(currentRequirement) }
+  const denied = await registry.repositoryInspect(readBinding, { operation: 'read', path: 'package.json' }, undefined, currentRequirement)
+  assert.equal(denied.status, 'scope_denied'); assert.deepEqual(denied.allowedPrefixes, ['src/'])
+  assert.deepEqual(denied.suggestedCall, { operation: 'list', source: 'current' })
+  await assert.rejects(registry.repositoryInspect(readBinding, { operation: 'read', path: '../package.json' }, undefined, currentRequirement), { code: 'ENGINEERING_READ_ARGUMENT_INVALID' })
   const apply = workflow.nodes.find(node => node.id === 'apply-changes')
   const binding = { runId: prepared.runId, generation: 2, requirementDigest: executionDigest(currentRequirement) }
   const proposal = { changeDisposition: 'modify', reviewedPaths: ['src/value.txt'], reason: '更新要求值', document: { name: '修改方案.md', markdown: '修改 src/value.txt 并验收' }, changes: [], replacements: [{ path: 'src/value.txt',
@@ -585,4 +591,37 @@ test('工程源仓库缺失在git与工作区准备前明确拒绝且零执行�
   assert.equal(registered, 0)
   assert.deepEqual(await store.query({ kind: 'workflow.list' }), [])
   assert.equal((await readdir(directory)).some(name => ['managed', 'absent'].includes(name)), false)
+})
+
+
+test('工程共享材料读取不依赖节点正文，检查修订保留旧注册定义可恢复',async t=>{
+ const {taskDirectories}=await import('../packages/dingtalk-dsh-assistant/session-workspaces.js')
+ const directory=await mkdtemp(join(tmpdir(),'dsh-shared-')),source=join(directory,'source');await mkdir(source)
+ const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
+ await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid');await writeFile(join(source,'file.txt'),'base');await git('add','.');await git('commit','-m','base');await git('branch','feature/uat1-base')
+ const directories=await taskDirectories(directory,'task'),getTaskDirectories=async()=>directories
+ const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true,taskWorkspaceRoot:directory,getTaskDirectories})
+ const actual=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'shared',initialize:true});t.after(()=>actual.close())
+ let state,workflow,checkpoint
+ const store={command:v=>actual.command(v),query:v=>v.kind==='run'?state??{}:v.kind==='task.plan'?{task:{requirementRevision:2}}:actual.query(v)}
+ const options={getTaskDirectories,ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},repositories:[{id:'repo',sourceRepository:source,managedRoot:join(directory,'managed'),remote:source,baseRef:'main',githubRepository:'example/repo',editablePaths:[],discovery:{allowedPrefixes:['src/']},checks:[{id:'build',version:'1',executable:process.execPath,args:['--test','tests/missing.cjs']}]}]}
+ const registry=createEngineeringRegistry(options);await registry.restore(store,artifacts)
+ const controller={registerWorkflow:value=>{workflow=value},updateEngineeringCheckpoint:async args=>{checkpoint=args;return {result:{toDigest:args.workflowDigest}}}}
+ const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'按共享材料开发'}},{commandId:'source',run:{actorId:'owner'},unit:{}},controller)
+ const old=(await actual.query({kind:'workflow.list'}))[0]
+ state={run:{runId:prepared.runId,taskId:'task',generation:1,revision:7,workflowDigest:old.digest,status:'waiting'}}
+ const material=await artifacts.put({kind:'agent-query-evidence',execution:{requirementRevision:1},markdown:'完整材料'.repeat(8000)},{taskId:'task'})
+ await writeFile(join(directories.outputs,'result.md'),'共享产物')
+ const binding={taskId:'task',runId:prepared.runId,generation:1}
+ const index=await registry.repositoryInspect(binding,{operation:'materials'})
+ assert.equal(index.entries.find(e=>e.artifactRef===material.ref).status,'history');assert.ok(index.files.some(f=>f.relativePath==='outputs/result.md'))
+ assert.ok((await registry.repositoryInspect(binding,{operation:'materials',path:material.ref,limit:16000})).nextOffset>0)
+ assert.ok((await registry.repositoryInspect(binding,{operation:'materials',path:'outputs/result.md'})).artifact.includes('共享产物'))
+ await assert.rejects(registry.repositoryInspect({...binding,taskId:'other'},{operation:'materials'}),{code:'ENGINEERING_READ_SCOPE_INVALID'})
+ await actual.command({id:'maintenance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'修正检查'}})
+ await registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-v2',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['--test']}],maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts)
+ assert.equal(checkpoint.expectedRevision,7);assert.equal(checkpoint.kind,'checks');assert.notEqual(checkpoint.workflowDigest,old.digest)
+ assert.deepEqual((await actual.query({kind:'workflow.list'})).find(r=>r.digest===old.digest),old)
+ const restored=createEngineeringRegistry(options);await restored.restore(store,artifacts)
+ assert.equal(state.run.generation,1)
 })

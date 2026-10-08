@@ -769,3 +769,11 @@ Owner 候选提交和最终接纳共用状态校验，候选拒绝在同一轮�
 工程执行节点的新原生会话使用 `origin=subagent`，避免普通 Web 历史跟随取得其执行归属。旧会话仅在正式维护并卸载 Resident/API Session Controller 后，自行恢复冷会话验证身份、无额外输入与节点效果后，以完整历史派生受管子会话，并 CAS 换绑原节点；Task、Run 和成功前缀不变。内部维护准备接口只写换绑与排空证据，不运行模型，要求当前维护 id/revision；活跃会话、来源变化或已有输出均拒绝。详见 `docs/spec/managed-execution-session-ownership.md`。
 
 任务等待通知以当前缺项类别为准：内部工具缺失或执行故障不会因历史审批事件而转成“需要你确认”；只有当前确需业务补充或权限确认时才请求用户行动。
+
+同一逻辑任务的材料和产物共用 `tasks/<logicalTaskId>/work`、`tmp`、`outputs`，保持已有原生会话 cwd。`work/materials-index.json` 按需从本任务原工件重建，仅列材料、需求来源和产物，不复制正文。Owner 使用 `task_owner_read_artifact` 的 `task-materials-index` 刷新索引，工程通过 `engineering_repo_inspect` 的 `materials` 操作读取；按原 artifactRef 或任务相对路径分页读取。历史材料标记 history，仍可参考，不替代当前授权或验收证明。新增材料下次访问即可发现，无需提升需求代次或重跑成功步骤。
+
+原生执行仅将精确 `TRANSPORT` 且首行 `fetch failed` 的错误归入既有暂态恢复，最多三次退避；其他错误不泛化重试。已等待回合的受管重分类和实际恢复工具调用须另行回读。只读重评在当前来源、版本 CAS、无外部效果且属于当前能力等待时，可在尚无成功查询的情况下进行，避免“先成功读取才允许修复读取”的循环。
+
+工程检查引用不存在的测试文件时，保留失败日志并等待维护修正检查配置，避免从头重做需求准备和源码修改。维护检查 checkpoint 只重验原 Run 同一代的失败验证步骤，保留成功前缀、工作区及候选。仓库读取超出准入路径返回 scope_denied 和可用路径提示，路径穿越仍拒绝；已持久的旧读取错误仅凭最后原生回合的精确证据重分类，再由 Owner 原节点续行。缺少或尚未读取材料不能作为已满足需求的依据。
+
+共享读取目录约定：work/tmp仅允许顶层共享文件，work/artifacts精确SHA引用沿原摘要校验读取；outputs可读取嵌套产物。engineering仓库及原生session内部目录仍通过原工具访问，不经共享材料入口绕过仓库范围限制。

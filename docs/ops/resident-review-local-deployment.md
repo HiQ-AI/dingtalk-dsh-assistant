@@ -703,3 +703,19 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 临时 profile 修改逐步先 `--check`；执行期间保持 profile CAS，桥关闭 worker/自有原生句柄后独立读取控制账及新原生 header。按精确尾块反序移除桥、恢复 session-controller、bootstrap enable，确认 profile 回到原摘要。随后走普通部署 Check/安装/Readback/Resume，并以新 lease 的原生输入及实际工具调用证明续行，不能以 running 投影代替。临时维护脚本及含真实身份的 manifest 留在 docs/tmp；不向版本库提交私人任务内容，不创建历史备份副本。
 
 任务目录含大型验证检出时，文件枚举逐项合并子树，避免数组展开为函数实参触发 Maximum call stack size exceeded；已有依赖排除规则和普通文件/链接核验保持不变，不靠扩大忽略范围绕过预检。
+
+### 共享任务材料与恢复核验
+
+本次复用原Task目录与artifact引用，无控制库schema迁移，不移动原生cwd、不复制私有正文入验收文件。部署后按Task共享索引核验旧版本文档可发现、按原引用读到完整正文以及outputs产物可按相对路径读取；新材料出现不得要求重跑成功节点。history材料只作参考，当前授权与验收仍用原合同。原Task的实际模型材料读取与新执行效果另行验收，单测和索引存在不等于业务完成。
+
+精确原生TRANSPORT/首行fetch failed复用最多三次退避；部署后的旧waiting重分类、当前租约真实工具调用分别回读。当前能力wait的只读重评沿既有来源/CAS/零效果门禁，即使尚未成功query也可恢复；不得伪造查询成功或用户补充。对应已保存round38/39证据分别保留。
+
+### 工程检查配置的同代维护修正
+
+检查路径不存在属于检查配置前提，不能驱动业务代码整代重跑。仅在正式 maintenance 排空、封存并停止 Resident 后，以控制库独占方式调用内部 `engineering.updateCheckpoint({runId,requestId,kind:'checks',checks,maintenance:{maintenanceId,revision}},controller,artifacts)`。`checks` 必须是已审阅的完整注册配置（本次只把固定缺失文件参数改为 `node --test` 并提高检查版本）；用当前安装绝对路径的真实工程工厂恢复定义，不伪造摘要或函数。调用返回 receipt.result 中的原 runId/generation、旧新 digest 和 evidenceRef；不启动模型、不执行检查、不创建新 Task/Run/generation。恢复 Resident 后才调度 ready 的 verify-candidate。先前成功节点、工作区、候选和旧失败证据均保留。调用失败不能跳过门禁改库。
+
+此入口只接纳 verify-candidate 的明确工程验证失败、全部排空、后继从未执行且无后继效果；来源、Task控制和版本需仍匹配。83c 的仓库读取失败应先由严格原生证据重分类，再由 Owner 调用现有 node.resume；不得用检查checkpoint冒充读取恢复。
+
+当前 profile 的全局检查配置尚未修改。先对两个现存 dataset-web Task 在各自到达 verify-candidate 时维护修正；待所有使用旧配置的非终态 Run 结束，并确认不存在未绑定 Run 的工程注册记录后，再统一修改 profile 为检查 v2。restore 明确跳过已终态 Run 和非当前定义；当前活跃 Run 仍校验原 repositoryDigest，提前修改 profile 会导致配置漂移。未来 Task 使用新配置，历史成功 Run 不重建。
+
+共享读取目录约定：work/tmp仅允许顶层共享文件，work/artifacts精确SHA引用沿原摘要校验读取；outputs可读取嵌套产物。engineering仓库及原生session内部目录仍通过原工具访问，不经共享材料入口绕过仓库范围限制。
