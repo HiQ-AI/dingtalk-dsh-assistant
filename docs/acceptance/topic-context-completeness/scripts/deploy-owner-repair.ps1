@@ -149,6 +149,49 @@ function Restore-EnrollmentAutostart($record) {
   if((Get-ScheduledTask -TaskName $enrollmentTaskName).Settings.Enabled-ne $true){throw '接入后自启任务未恢复'}
  }
 }
+function Assert-ScheduledWebStart([bool]$AllowRestore=$false) {
+ $tasks=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
+ if($tasks.Count-ne 1 -or @($tasks[0].Actions).Count-ne 1){throw 'Web启动计划任务或动作不唯一'}
+ if($tasks[0].Principal.UserId-ne '64554' -or [string]$tasks[0].Principal.LogonType-ne 'Interactive' -or [string]$tasks[0].Principal.RunLevel-ne 'Limited'){throw 'Web启动计划任务运行身份不匹配'}
+ $action=$tasks[0].Actions[0]
+ $expectedArguments='-NoProfile -WindowStyle Hidden -Command "$env:DSH_HOME=''D:\dsh_home''; & ''D:\dsh_home\launchers\start-web.ps1'' -ProjectRoot ''D:\project\dingtalk-dsh-assistant'' *> ''D:\project\dingtalk-dsh-assistant\docs\tmp\dsh-web-local\web.log''"'
+ if($action.Execute-ne 'C:\Program Files\PowerShell\7\pwsh.exe' -or $action.Arguments-cne $expectedArguments -or
+    $action.WorkingDirectory-ne 'D:\project\dingtalk-dsh-assistant' -or $starter.Replace('\','/')-ne 'D:/dsh_home/launchers/start-web.ps1' -or $profile-ne 'D:/dsh_home/profiles/web'){
+  throw 'Web启动计划任务Action、DSH_HOME或profile不匹配'
+ }
+ if($tasks[0].Settings.Enabled-ne $true -and -not $AllowRestore){throw 'Web启动任务未启用且无原流程恢复许可'}
+ return $tasks[0]
+}
+function Start-DeployedWeb($record) {
+ [void](Assert-ScheduledWebStart ([bool]$record.enrollmentAutostartRestore))
+ $existing=@(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Replace('\','/').Contains("$profile/node_modules/@deepseek-ai/dsh/lib/bin.js") })
+ if($existing.Count -or @(Listeners).Count){throw '启动前仍存在Web实例或监听端口'}
+ Restore-EnrollmentAutostart $record
+ $task=Assert-ScheduledWebStart
+ if([string]$task.State-eq 'Running'){throw 'Web启动计划任务仍在运行，禁止重复启动'}
+ $startedAt=Get-Date
+ Start-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop
+ return @{Id=$null;StartTime=$startedAt;Method='scheduled-task';TaskName=$enrollmentTaskName}
+}
+function Assert-DeploymentLaunchProcess($candidate,$launchRecord) {
+ $startedAt=([datetime]$launchRecord.startedAt).ToUniversalTime()
+ if($candidate.CreationDate.ToUniversalTime()-lt $startedAt){throw '监听进程并非此次启动实例'}
+ if($launchRecord.launchMethod-eq 'scheduled-task'){
+  $task=Assert-ScheduledWebStart
+  $parent=Get-CimInstance Win32_Process -Filter "ProcessId=$($candidate.ParentProcessId)"
+  $info=Get-ScheduledTaskInfo -TaskName $enrollmentTaskName -ErrorAction Stop
+  if($launchRecord.launchTaskName-ne $enrollmentTaskName -or [string]$task.State-ne 'Running' -or
+     $info.LastRunTime.ToUniversalTime()-lt $startedAt.AddSeconds(-1) -or
+     -not $parent -or $parent.ExecutablePath-ne $task.Actions[0].Execute -or
+     -not $parent.CommandLine.Contains($task.Actions[0].Arguments) -or $parent.CreationDate.ToUniversalTime()-lt $startedAt){throw '计划任务与此次启动父进程不匹配'}
+ }elseif($candidate.ParentProcessId-ne $launchRecord.launcherPid){throw '监听进程并非此次启动实例'}
+}
+function Get-DeploymentWebLog($launchRecord,$fresh) {
+ $path=if($launchRecord.launchMethod-eq 'scheduled-task'){'D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/web.log'}else{"$EvidenceDirectory/start.stdout.log"}
+ $file=Get-Item -LiteralPath $path -ErrorAction Stop
+ if($file.LastWriteTimeUtc-lt $fresh.CreationDate.ToUniversalTime()){throw 'Web认证日志不属于此次新进程'}
+ return $path
+}
 function Acquire-OwnerLock {
  $deadline=(Get-Date).AddSeconds($WaitSeconds)
  do {
@@ -331,7 +374,7 @@ function Read-Deployment($launchRecord) {
  do {
   if(@(Listeners).Count-eq 2){
    $candidate=Instance
-   if($candidate.CreationDate.ToUniversalTime()-lt ([datetime]$launchRecord.startedAt).ToUniversalTime() -or $candidate.ParentProcessId-ne $launchRecord.launcherPid){throw '监听进程并非此次启动实例'}
+   Assert-DeploymentLaunchProcess $candidate $launchRecord
    $fresh=$candidate;break
   }
   Start-Sleep -Milliseconds 1000
@@ -365,7 +408,8 @@ function Read-Deployment($launchRecord) {
   if((Get-FileHash -LiteralPath $launchRecord.retainedObserverPackage).Hash-ne $launchRecord.retainedObserverPackageSha256){throw '原Observer包摘要漂移'}
   $observerReadback=Run-Node @($checker,'package',$launchRecord.retainedObserverPackage,$observerSource,$observerInstalled)|ConvertFrom-Json
  }
- $webProof=Run-Node @($checker,'web',"$EvidenceDirectory/start.stdout.log")|ConvertFrom-Json
+ $webLog=Get-DeploymentWebLog $launchRecord $fresh
+ $webProof=Run-Node @($checker,'web',$webLog)|ConvertFrom-Json
  $maintenance=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
  if($maintenance.maintenanceId-ne $launchRecord.maintenanceId){throw '启动后维护许可漂移'}
  return @{status='ready';ready=$true;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;tasks=$tasks.Count;history=$history;messageImpact=$messageImpactProof;package=$packageReadback;observer=$observerReadback;web=$webProof;maintenance=$maintenance;dispatchResumed=(-not $maintenance.active);logs=@($logs);scheduledTaskChanged=[bool]$launchRecord.enrollmentAutostartRestore;businessAcceptancePassed=$false}
@@ -421,7 +465,7 @@ function Assert-StoppedRepairPermit($record,$sealed,$before,$backupRecord,$curre
      $backupRecord.sourceProfileSha256-ne $record.sourceProfileSha256 -or $backupRecord.oldPid-le 0 -or
      $record.taskMigrationPlan -or $record.taskMigrationJournalSha256 -or $record.taskMigrationBackupManifest -or $record.taskMigrationBackupSha256 -or
      $backupRecord.taskMigrationBackupManifest -or $backupRecord.taskMigrationBackupSha256){throw '无备份修复仅允许普通部署的精确包替换'}
- }elseif($record.enrollmentAutostartRestore -or $record.sourceProfileSha256-ne (Get-FileHash -LiteralPath "$($record.backup)/profile/cordis.patch.yml").Hash){throw '原备份部署记录不允许本次离线修复'}
+ }elseif(($record.enrollmentAutostartRestore -and $record.launchMethod-ne 'scheduled-task') -or $record.sourceProfileSha256-ne (Get-FileHash -LiteralPath "$($record.backup)/profile/cordis.patch.yml").Hash){throw '原备份部署记录不允许本次离线修复'}
  if($record.messageImpactMigrationSha256 -or $record.executionEventsIndexMigrationSha256 -or $record.mode-ne 'maintenance' -or $record.profileSha256-ne $ExpectedProfileSha256 -or
     $backupRecord.backup-ne $record.backup -or $backupRecord.packageSha256-ne $record.packageSha256 -or
     ($record.checkpoint-ne 'sealed-before-launch' -and $record.packageSha256-eq $ExpectedPackageSha256) -or ([string]$record.directQueriesProposal).Replace('\','/')-ne ([string]$DirectQueriesProposal).Replace('\','/')){throw '原部署记录不允许本次离线修复'}
@@ -481,12 +525,14 @@ if($RepairStoppedLaunch){
  if($record.inputPaths-contains $Package){throw '修复包必须使用新的唯一路径'}
  if($DirectQueriesProposal -and (Get-FileHash -LiteralPath $DirectQueriesProposal).Hash-ne $record.inputHashes.($record.directQueriesProposal)){throw '原查询配置提案已变化'}
  function Test-StoppedRepair {
+  [void](Assert-ScheduledWebStart ([bool]$record.enrollmentAutostartRestore))
   Assert-InputHashes
   Assert-LocalPackageSources $profile $Package $observerSourceReplacement
   foreach($path in $evidenceHashes.Keys){if((Get-FileHash -LiteralPath $path).Hash-ne $evidenceHashes[$path]){throw '修复输入或原证据已变化'}}
-  if($noBackupRepair -and $record.enrollmentAutostartRestore){
+  if($record.enrollmentAutostartRestore){
    $scheduled=@(Get-ScheduledTask -TaskName $enrollmentTaskName -ErrorAction Stop)
-   if($scheduled.Count-ne 1 -or $scheduled[0].Settings.Enabled-ne $false){throw '离线修复要求原自启任务仍禁用'}
+   $expectedEnabled=$record.launchMethod-eq 'scheduled-task'
+   if($scheduled.Count-ne 1 -or $scheduled[0].Settings.Enabled-ne $expectedEnabled){throw '离线修复自启状态与原启动记录不一致'}
   }
   Assert-StoppedRepairProcesses $record $backupRecord
   $current=Run-Node @($checker,'maintenance')|ConvertFrom-Json
@@ -536,9 +582,9 @@ if($RepairStoppedLaunch){
  }
  Assert-StoppedRepairProcesses $record $backupRecord
  $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
- $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter,'-ProjectRoot','D:/project/dingtalk-dsh-assistant') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
+ $launch=Start-DeployedWeb @{enrollmentAutostartRestore=[bool]$record.enrollmentAutostartRestore}
  $inputHashes=@{};foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
- $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];retainedObserverPackage=$retainedObserverPackage;retainedObserverPackageSha256=$retainedObserverPackageSha256;observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=[bool]$record.enrollmentAutostartRestore}
+ $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];retainedObserverPackage=$retainedObserverPackage;retainedObserverPackageSha256=$retainedObserverPackageSha256;observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;launchMethod=$launch.Method;launchTaskName=$launch.TaskName;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=[bool]$record.enrollmentAutostartRestore}
  if($noBackupRepair){
   $newControlPath="$EvidenceDirectory/deployment-control.json"
   @{backupCreated=$false;backup='';oldPid=$backupRecord.oldPid;sourceProfileSha256=$ExpectedProfileSha256;packageSha256=$ExpectedPackageSha256;inputHashes=$inputHashes;repairOfControl=$controlPath;repairOfControlSha256=$evidenceHashes[$controlPath];originalEvidenceHashes=$evidenceHashes}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath $newControlPath
@@ -596,6 +642,7 @@ $children=if($old){@(Get-CimInstance Win32_Process|Where-Object {$_.ParentProces
 # 较重的在线读取和JSON序列化放在排空等待之前。
 $beforeTasksJson=if($beforeTasks){$beforeTasks|ConvertTo-Json -Depth 100}else{$null}
 $snapshot=Wait-DrainedSnapshot
+[void](Assert-ScheduledWebStart)
 if($Check -and $MigrateExecutionEventsIndex){$eventsIndexCheck=Run-Node @("$workspace/scripts/migrate-execution-events-index.mjs",'--check',"$runtime/control.sqlite")|ConvertFrom-Json; if($eventsIndexCheck.writes-ne 0){throw '事件索引自检不得写入'}}
 if($Check){@{mode='check';writes=0;historicalBackupRequired=$historicalBackupRequired;executionEventsIndexMigration=@{proof=$eventsIndexCheck;requested=[bool]$MigrateExecutionEventsIndex;offlineCheckRequired=[bool]$MigrateExecutionEventsIndex;fromVersion=7;toVersion=8};messageImpactMigration=@{requested=[bool]$MigrateMessageImpact;offlineCheckRequired=[bool]$MigrateMessageImpact;condition='停止原实例、禁用自启、持owner锁并checkpoint后执行零写检查'};online=[bool]$old;disk=@{freeBytes=$freeBytes;requiredBytes=$requiredBytes;backupBytes=$backupBytes};package=($packageProof|ConvertFrom-Json);tasks=($snapshot|ConvertFrom-Json).tasks.Count}|ConvertTo-Json -Depth 4;exit 0}
 # 只有所有预检通过后才开始写证据和停止精确已核实进程。
@@ -729,11 +776,11 @@ if($Bootstrap){
 }
 # 启动前核对本次离线迁移证明；失败保持停机，不自动恢复自启。
 [void](Assert-MessageImpactReadback @{messageImpactMigrationSha256=$messageImpactMigrationSha256})
-# 用既有启动脚本，不创建或改写计划任务；仅当前进程树使用D盘TEMP。
+# 通过既有计划任务进入固定服务环境，不继承部署调用者的启动环境。
 $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
 if($MigrateExecutionEventsIndex){[void](Run-Node @($checker,'execution-events-index-verify',"$EvidenceDirectory/execution-events-index-migration.json",'offline'))}
-$launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter,'-ProjectRoot','D:/project/dingtalk-dsh-assistant') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
-$launchRecord=@{backupCreated=$historicalBackupRequired;deploymentControlPath=$deploymentControlPath;deploymentControlSha256=(Get-FileHash -LiteralPath $deploymentControlPath).Hash;executionEventsIndexMigrationSha256=$executionEventsIndexMigrationSha256;messageImpactMigrationSha256=$messageImpactMigrationSha256;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256;taskMigrationPlan=$TaskMigrationPlan;taskMigrationJournalSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$EvidenceDirectory/task-file-migration.json").Hash}else{''};observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
+$launch=Start-DeployedWeb @{enrollmentAutostartRestore=[bool]$enrollmentAutostartRestore}
+$launchRecord=@{backupCreated=$historicalBackupRequired;deploymentControlPath=$deploymentControlPath;deploymentControlSha256=(Get-FileHash -LiteralPath $deploymentControlPath).Hash;executionEventsIndexMigrationSha256=$executionEventsIndexMigrationSha256;messageImpactMigrationSha256=$messageImpactMigrationSha256;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256;taskMigrationPlan=$TaskMigrationPlan;taskMigrationJournalSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$EvidenceDirectory/task-file-migration.json").Hash}else{''};observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;launchMethod=$launch.Method;launchTaskName=$launch.TaskName;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
 $launchRecord|ConvertTo-Json|Set-Content -LiteralPath "$EvidenceDirectory/launch.json" -Encoding utf8
 $result=Read-Deployment $launchRecord
 if($result.ready -and -not $HoldMaintenance){$result=Resume-Deployment $result $launchRecord}

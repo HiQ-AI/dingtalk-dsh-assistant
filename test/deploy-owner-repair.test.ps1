@@ -40,6 +40,8 @@ if(-not $rejected){throw '接续维护不得缺失revision'}
 Write-Output 'PASS 8/8: 接续许可匹配通过；版本/ID/排空/阶段/active/PID漂移及缺少revision拒绝'
 $function=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Read-Deployment'},$true)
 Invoke-Expression $function.Extent.Text
+$launchIdentityFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-DeploymentLaunchProcess'},$true)
+Invoke-Expression $launchIdentityFunction.Extent.Text
 $WaitSeconds=1
 $EvidenceDirectory=Join-Path $PSScriptRoot ('../docs/tmp/readback-fixture-'+[guid]::NewGuid())
 function Listeners { @() }
@@ -394,6 +396,77 @@ $MigrateMessageImpact=$false
 $failed=$false;try{Assert-MessageImpactReadback $record}catch{$failed=$true}
 if(-not $failed){throw '接续不允许丢失迁移标志'}
 $launchGate=$ast.Extent.Text.IndexOf('[void](Assert-MessageImpactReadback @{messageImpactMigrationSha256=')
-$start=$ast.Extent.Text.IndexOf('$launch=Start-Process', $launchGate)
+$start=$ast.Extent.Text.IndexOf('$launch=Start-DeployedWeb', $launchGate)
 if($launchGate-lt 0 -or $start-le $launchGate){throw '启动前必须存在迁移回读门禁'}
 Write-Output 'PASS 6/6: schema迁移丢锁零写、固定锁内动作、独立回读、摘要漂移、模式漂移、启动前门禁'
+
+foreach($name in @('Assert-ScheduledWebStart','Start-DeployedWeb','Restore-EnrollmentAutostart')) {
+ $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$enrollmentTaskName='DSH Web Local';$starter='D:/dsh_home/launchers/start-web.ps1';$profile='D:/dsh_home/profiles/web'
+$script:startCalls=0;$script:enableCalls=0;$script:existing=@();$script:ports=@()
+$script:scheduled=@{State='Ready';Settings=@{Enabled=$true};Principal=@{UserId='64554';LogonType='Interactive';RunLevel='Limited'};Actions=@(@{
+ Execute='C:\Program Files\PowerShell\7\pwsh.exe';WorkingDirectory='D:\project\dingtalk-dsh-assistant'
+ Arguments='-NoProfile -WindowStyle Hidden -Command "$env:DSH_HOME=''D:\dsh_home''; & ''D:\dsh_home\launchers\start-web.ps1'' -ProjectRoot ''D:\project\dingtalk-dsh-assistant'' *> ''D:\project\dingtalk-dsh-assistant\docs\tmp\dsh-web-local\web.log''"'
+})}
+function Get-ScheduledTask { $script:scheduled }
+function Enable-ScheduledTask { $script:enableCalls++;$script:scheduled.Settings.Enabled=$true }
+function Start-ScheduledTask { $script:startCalls++ }
+function Get-CimInstance { $script:existing }
+function Listeners { $script:ports }
+[void](Assert-ScheduledWebStart)
+if($script:startCalls -or $script:enableCalls){throw '计划任务Check不得产生启动或enable'}
+foreach($mode in @('ordinary','repair')) {
+ $launch=Start-DeployedWeb @{enrollmentAutostartRestore=$false}
+ if($launch.Method-ne 'scheduled-task' -or $launch.TaskName-ne 'DSH Web Local' -or $null-ne $launch.Id){throw "$mode 启动回执不可伪造launcher PID"}
+}
+$script:scheduled.Settings.Enabled=$false
+$failed=$false;try{Start-DeployedWeb @{enrollmentAutostartRestore=$false}}catch{$failed=$true}
+if(-not $failed -or $script:enableCalls){throw '没有恢复许可不能启用计划任务'}
+[void](Assert-ScheduledWebStart $true)
+if($script:enableCalls){throw '有恢复许可的Check也不能enable'}
+$launch=Start-DeployedWeb @{enrollmentAutostartRestore=$true}
+if($script:enableCalls-ne 1 -or $script:startCalls-ne 3){throw 'Enrollment必须先恢复原启用状态再按调度入口启动'}
+$originalArguments=$script:scheduled.Actions[0].Arguments
+foreach($changed in @($originalArguments.Replace('D:\dsh_home','D:\other_home'),($originalArguments+'; Write-Output injected'))) {
+ $script:scheduled.Actions[0].Arguments=$changed
+ $failed=$false;try{Start-DeployedWeb @{enrollmentAutostartRestore=$true}}catch{$failed=$true}
+ if(-not $failed -or $script:startCalls-ne 3 -or $script:enableCalls-ne 1){throw 'Action漂移必须在enable或start前拒绝'}
+}
+$script:scheduled.Actions[0].Arguments=$originalArguments
+$script:scheduled.State='Running'
+$failed=$false;try{Start-DeployedWeb @{}}catch{$failed=$true}
+if(-not $failed -or $script:startCalls-ne 3){throw '运行中计划任务不得重复启动'}
+$script:scheduled.State='Ready';$script:ports=@(@{LocalPort=3080})
+$failed=$false;try{Start-DeployedWeb @{}}catch{$failed=$true}
+if(-not $failed -or $script:startCalls-ne 3){throw '既有端口不得重复启动'}
+Write-Output 'PASS: 普通/repair统一计划任务；Check零写、原许可Enrollment恢复、Action漂移、运行中与端口冲突拒绝'
+foreach($field in @('UserId','LogonType','RunLevel')) {
+ $saved=$script:scheduled.Principal[$field];$script:scheduled.Principal[$field]='wrong'
+ $failed=$false;try{Assert-ScheduledWebStart}catch{$failed=$true}
+ if(-not $failed){throw '计划任务运行身份漂移必须拒绝'}
+ $script:scheduled.Principal[$field]=$saved
+}
+foreach($name in @('Assert-DeploymentLaunchProcess','Get-DeploymentWebLog')) {
+ $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$started=[datetime]::UtcNow.AddSeconds(-10)
+$fresh=@{ParentProcessId=10;CreationDate=$started.AddSeconds(2)}
+$launchRecord=@{launchMethod='scheduled-task';launchTaskName='DSH Web Local';startedAt=$started.ToString('o');launcherPid=$null}
+$script:scheduled.State='Running'
+$script:parent=@{ExecutablePath=$script:scheduled.Actions[0].Execute;CommandLine=$script:scheduled.Actions[0].Arguments;CreationDate=$started.AddSeconds(1)}
+function Get-CimInstance { $script:parent }
+function Get-ScheduledTaskInfo { @{LastRunTime=$started.AddMilliseconds(500)} }
+Assert-DeploymentLaunchProcess $fresh $launchRecord
+$script:parent.CommandLine='other.ps1'
+$failed=$false;try{Assert-DeploymentLaunchProcess $fresh $launchRecord}catch{$failed=$true}
+if(-not $failed){throw '新Node仍必须绑定计划任务的真实父进程入口'}
+$script:logTime=$started.AddSeconds(3)
+function Get-Item { @{LastWriteTimeUtc=$script:logTime} }
+if((Get-DeploymentWebLog $launchRecord $fresh)-ne 'D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/web.log'){throw '计划任务启动必须从正式日志认证Web'}
+$script:logTime=$started.AddSeconds(-1)
+$failed=$false;try{Get-DeploymentWebLog $launchRecord $fresh}catch{$failed=$true}
+if(-not $failed){throw '旧启动日志不得作为新进程认证证明'}
+Write-Output 'PASS: 运行身份/登录类型/级别、计划任务父进程入口及新进程日志时点严格校验'

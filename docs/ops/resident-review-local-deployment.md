@@ -14,7 +14,7 @@
 
 本次 round14 沿现有参数：`-Package <D:/dsh_home/packages/唯一Assistant包>`、`-ExpectedPackageSha256 <包摘要>`、`-ExpectedProfileSha256 <当前profile摘要>`、`-DirectQueriesProposal <保持当前查询配置的既有提案>`、`-TaskDirectory <真实Agent任务根>`、`-EvidenceDirectory <当前worktree/docs/tmp/新目录>`；先加 `-Check`。通过后同参数去掉 `-Check` 执行，可用 `-HoldMaintenance` 保持维护待独立核验，再使用同参数 `-Readback` / `-Resume`。本轮不传任何迁移、Bootstrap、RepairStoppedLaunch 或 Observer 参数。
 
-`-Resume` 先恢复原生派发，再恢复 Windows 自启；若后一步因磁盘空间等环境问题失败，应分别读取 `/runtime/maintenance` 与 `Get-ScheduledTask`，不要用恢复前的 Readback 快照判断当前派发。环境恢复后沿原参数再次 `-Resume`，现有入口会保持已恢复派发并补齐自启，无需重装或重跑任务。
+部署启动统一通过已配置的 `DSH Web Local`。原流程临时禁用且保存了恢复许可时，在启动前恢复原 Enabled 状态；`-Resume` 继续幂等核对自启并恢复原生派发。分别回读 `/runtime/maintenance` 与 `Get-ScheduledTask`，不能把任务 Running 当作业务已恢复。
 
 仍要求原生维护排空/封存、精确旧PID退出、禁用并按原状态恢复计划任务自启、持续owner独占锁、停机checkpoint、源/包/安装文件比对、控制历史独立回读、新PID与健康核验后恢复派发。Launch 记录 `backupCreated=false`，绑定部署控制证据摘要；回读及恢复拒绝包/profile/证据身份漂移。
 
@@ -155,7 +155,7 @@ pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp
 1. 停止已核实的 DSH Web PID 及仅属于该进程的 DWS 监听子进程，避免遗留重复监听；将新 tgz 绝对路径传给 profile 内的原生 CLI：`node "$profileDirectory/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add <assistant.tgz> <observer.tgz>`。
 2. 回读 profile 的两个依赖，逐一比较安装目录与工作区源码及 patch 文件的 SHA256，确认原有 profile patch 未变。`pnpm pack` 可能移除 `package.json` 末尾换行：manifest 按 JSON 内容或仅去除末尾空白后比较，其他差异仍必须调查，不能一律忽略哈希不一致。
 3. 若启用了任务表格同步，重启后回读 `/state/task-sheet-sync`，确认配置中的 nodeId/sheetId 未漂移、启动同步成功，并用 `dws sheet +read` 完整回读托管范围。`/health`、CLI 退出码或设置页提示均不能替代表格内容核对。
-4. 按现有 `scripts/start-web.ps1` 启动；后台 PowerShell 进程使用 `Start-Process -WindowStyle Hidden`。若使用 `DSH Web Local` 计划任务，先确认其输出重定向目标 `D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/` 已存在，否则 PowerShell 在启动脚本前退出（本机曾返回 LastTaskResult=1）。stdout/stderr 只存本地 `docs/tmp/`，日志可能含登录链接，不进入 Git。
+4. 通过已配置的 `DSH Web Local` 计划任务调用持久 `start-web.ps1`，不从部署调用者环境另起 PowerShell。先确认其输出重定向目标 `D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/` 已存在，否则 PowerShell 在启动脚本前退出（本机曾返回 LastTaskResult=1）。stdout/stderr 只存本地 `docs/tmp/`，日志可能含登录链接，不进入 Git。
 5. 启动地址在 loader 完成后才输出，端口出现不代表地址已可读取；先确认日志包含地址再做认证访问，不把空日志当作启动失败。确认两个端口属于新进程，检查 `/health`、`/state/agent-config` 与 Web 认证访问。配置摘要应保持一致；health 的组织权限错误需单独说明，不能将其写成插件测试失败或真实投递通过。
 
 ## 验收与回退
@@ -266,7 +266,7 @@ C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和
 
 新增空群可随本次部署提供 `-EnrollmentProposal <绝对 JSON 路径>`，内容只包含非空 `groupId`、`name`、`responsibility`。先确认真实群身份和成员，再执行零写 `-Check`。执行阶段进入正式维护后通过原生订阅接口登记空群，随后排空、封存、停机、备份和安装；释放部署 owner 锁后，由原生 `cutover-message-workflow.mjs --enroll-empty-group` 再次检查停机及锁，先检查后接管并 CAS 更新 profile。接入保留原封存快照和旧群历史。新实例回读并恢复派发之前不发送测试输入。
 
-该路径临时禁用精确的 `DSH Web Local` 自启任务，原来已禁用则保持禁用；只有新实例验证和恢复派发完成后才恢复原来的启用状态。接入或启动失败保留停机/维护及证据，按 `enrollment-autostart.json` 和原生接入 journal 恢复，禁止删除 journal 后重来。`-HoldMaintenance` 会保留维护及临时禁用状态，后续使用原部署参数 `-Resume` 完成回读、恢复派发和自启。
+该路径临时禁用精确的 `DSH Web Local` 自启任务，原来已禁用且无恢复许可时，部署 Check 拒绝启动。原来启用的任务在启动前按保存的许可恢复启用。接入或启动失败保留停机/维护及证据，按 `enrollment-autostart.json` 和原生接入 journal 恢复，禁止删除 journal 后重来。`-HoldMaintenance` 会保留维护及临时禁用状态，后续使用原部署参数 `-Resume` 完成回读、恢复派发和自启。
 
 先把同一正式版本的 Assistant 与 Observer 发行 tgz 存入 `D:/dsh_home/packages`，文件名包含版本和摘要前缀；分别核对下载来源及完整 SHA-256，发现同名异内容立即停止，不能覆盖。该目录是 profile `file:` 依赖的持久来源，不能用工作树 `docs/tmp/` 包路径安装；只在确认 profile、锁文件和部署证据均不再引用后清理旧包。部署工具的预检拒绝不在该目录直接子级的包及链接。
 
@@ -325,7 +325,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 1. 核对旧 PID、创建时间和 3080/18998 归属。备份原 profile 到本次证据目录，以 SHA CAS 追加固定 `disabled:true` patch，保留其他配置及 `!!js` 原文；与 configure 工具共用 `.local-acceptance.lock`。
 2. 由现有 DSH live profile reload 正式卸载 Resident。等待 18998 关闭且 3080 仍属于旧 PID，再持续取得 `control.sqlite.owner.sqlite` 的 SQLite EXCLUSIVE 锁。端口关闭本身不是排空证明。锁内核验控制账 busy=0，核对旧 PID 后停止旧 DSH；至备份、安装、配置及哈希验证完成一直持锁。
 3. 保持 Resident profile 禁用。释放外部 guard 后，通过已安装新版 `openExecutionStore` 正式命令依次 enter、seal；该 CLI 自身取得 owner 锁、持有真实进程 nonce，并在 `finally` 关闭。此为首次升级的离线维护记录，不声称旧 Host 取得过 seal，也不 SQL 修改运行库。
-4. 仅精确移除本工具追加的禁用块，保留新配置，启动新 Host。持久维护状态使恢复与领取保持禁止；新进程健康、历史、安装包和本次 `start.stdout.log` 中认证 Web 入口核验后，按既有 `/resume` 正式恢复。
+4. 仅精确移除本工具追加的禁用块，保留新配置，启动新 Host。持久维护状态使恢复与领取保持禁止；新进程健康、历史、安装包和本次计划任务 `web.log` 中认证 Web 入口核验后，按既有 `/resume` 正式恢复。
 
 任一步失败保持对应禁用或停机状态，不自动还原配置、不重复安装/启动。副本备份中的 profile 含禁用块，原始未修改 profile 另在证据目录 `profile-original.yml`；恢复时必须逐项核对哈希并先证明没有另一个 Host。离线 seal CLI 仅供此受控部署路径使用，不作为在线维护接口；其 `--check` 不模拟或签发许可，整体零写预检由部署 `-Bootstrap -Check` 提供。禁止对旧 DSH 发送 SIGTERM 后把退出当排空证明：其 disposer 有 5 秒强退上限。
 
@@ -427,7 +427,7 @@ Web重执行群名修复：不迁移数据。安装后只读核对/state/tasks�
 
 仅在原部署已取得 `stopping` 封存许可、原进程及 launcher 已退出、3080/18998 均无监听时，使用同一脚本的 `-RepairStoppedLaunch <原 launch.json 绝对路径>`。必须提供新的唯一修复 tgz、该包 SHA、原 profile SHA、新 `EvidenceDirectory`，以及原 `DirectQueriesProposal`（原部署使用时）；禁止同时改变工程配置、Observer、接入群或维护许可。
 
-先运行以上参数加 `-Check`：零写核对原 launch/封存记录/control-before、当前维护 ID/revision/incarnation、历史控制记录以及源码与包字节。普通无备份部署使用原 `deployment-control.json`，核对 launch 绑定的控制证据 SHA、原包和 profile 身份、原输入摘要；仅允许未迁移且尚未恢复派发的 launch 检查点。该路径只替换 Assistant 包，不创建或读取历史备份，不回滚历史数据。原 Observer 包及安装结果继续独立回查，不通过 `-ObserverPackage` 再次安装。原 `enrollmentAutostartRestore` 及相应自启证据随新 launch 保留，在后续 `-Resume` 成功后幂等恢复原有自启。
+先运行以上参数加 `-Check`：零写核对原 launch/封存记录/control-before、当前维护 ID/revision/incarnation、历史控制记录以及源码与包字节。普通无备份部署使用原 `deployment-control.json`，核对 launch 绑定的控制证据 SHA、原包和 profile 身份、原输入摘要；仅允许未迁移且尚未恢复派发的 launch 检查点。该路径只替换 Assistant 包，不创建或读取历史备份，不回滚历史数据。原 Observer 包及安装结果继续独立回查，不通过 `-ObserverPackage` 再次安装。原 `enrollmentAutostartRestore` 及相应自启证据随新 launch 保留，在启动前按原许可恢复 Enabled，后续 `-Resume` 幂等核对。
 
 原部署确有完整备份时仍走原备份专用路径：额外核对备份的清单/摘要/SQLite 全表与工件闭包、当前业务文件和工件全集。原生安装改变的 profile 依赖文件不与安装前备份比较，但原 profile 配置 SHA 必须不变。备份一致性副本仅允许原只读连接留下的空 WAL 与固定 32768 字节 SHM，其他新增文件拒绝。
 
@@ -471,7 +471,7 @@ IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sha
 
 `message-impact-migration.json` 保存 schema 版本、来源数量、原表摘要及迁移备份路径；摘要进入 `launch.json`。启动前、`-Readback` 和 `-Resume` 均核对证明摘要、schema 6 结构与每条来源的影响账完整性；在线仍执行既有旧终态历史核验。离线全量历史不变证明与在线当前态校验是不同门禁：启动后维护事件及当前工作流状态可以合法变化，不用迁移前全表摘要误判这些状态。接续命令必须保留 `-MigrateMessageImpact`。
 
-迁移、安装或回读失败不自动恢复派发或自启，保留停机/维护状态与证据；禁止通过旧的简化离线修复入口跳过迁移证明。正常恢复只有通过 `-Resume` 门禁后才还原本次保存的自启状态。上述流程测试使用隔离库与模拟启动，不代表真实实例已部署。
+迁移、安装或回读失败不自动恢复派发或自启，保留停机/维护状态与证据；禁止通过旧的简化离线修复入口跳过迁移证明。启动前只按本次保存的许可还原自启状态，派发仍须通过 `-Resume` 门禁。上述流程测试使用隔离库与模拟启动，不代表真实实例已部署。
 
 通知滞留排障：prepared 没有 claim 不等于模型恢复阻塞。检查该 run 的 `notificationDiagnostics` 及既有 recovery 诊断，核对同一 Owner 报告的稳定 eventKey 是否已有通知；不得重发旧已送达报告或删除旧通知。当前扫描隔离单条事实失败，保留可回读诊断，其他待发通知和 unknown 回查仍继续；同一错误不按定时器重复写账。
 
@@ -590,7 +590,7 @@ Owner直接使用现有directQueries登记资源及Task工件目录；查询scop
 
 本次直查切换的新工程目录采用 v18，以 Host 核验的当前 Task 查询 taskContext 准备工程方案；v17 及已有工程定义保留冻结恢复。周期恢复只扫描持久待办并派发，不等待模型完成；独立回读新任务可在已有任务调查期间派发、同一任务动作串行应用及停机排空。插件审批、受控写入与未知外部效果对账边界不变，查询成功不能替代变更批准或业务最终验收。
 
-自启任务是否禁用以 `Get-ScheduledTask.Settings.Enabled` 独立回读为准；任务仍在运行时 State 可以继续为 Running，不能据此误判禁用失败。停机前先保存原 Enabled 对应的恢复意图，再禁用。Resume 恢复后再次读取 Enabled。
+自启任务是否禁用以 `Get-ScheduledTask.Settings.Enabled` 独立回读为准；任务仍在运行时 State 可以继续为 Running，不能据此误判禁用失败。停机前先保存原 Enabled 对应的恢复意图，再禁用。启动前恢复及 Resume 后分别读取 Enabled。
 
 停机前被检查中断而旧进程仍存活时，可使用既有 ContinueMaintenanceId 和 ExpectedMaintenanceRevision 接续原封存维护；要求同一进程 incarnation、准确 revision、drained=true、stopPermitted=true 和 sealedIncarnation 一致。已封存状态不重复 seal；任何身份或版本漂移均拒绝。进程已停止时仍按原离线恢复规则，不冒用此接续路径。
 
@@ -649,3 +649,13 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 
 
 历史 coordinator 错误澄清恢复：仅当原消息没有任何业务命令，当前 pending 澄清对应已送达通知已由原生撤回流程核验为 recalled 并保存 recallEvidenceRef 时，可使用本机 `POST /workflows/<runId>/reprocess`。其他未知、未撤回通知仍阻止恢复。重处理保留原来源、作者、正文和旧请求审计，递增 sourceVersion，并用当前群规则重建 compactPolicy；不伪造用户答复。先读回撤回证据和零命令，再逐条操作，最后读回新来源版本、旧请求 superseded、新任务数量及当前等待。此入口会启动正常协调与业务派发，操作授权须覆盖原业务承接。
+
+### 部署启动环境一致性
+
+普通部署与离线 repair 都只触发现有 `DSH Web Local`，固定核对单一 Action、PowerShell 7 路径、显式 `DSH_HOME=D:/dsh_home`、web profile、主检出工作目录，以及本机已配置 Principal `64554` / `Interactive` / `Limited`；不修改 Action、Principal 或其他持久设置。Check 只读核验；Enrollment 仅可恢复先前保存的 Enabled 许可，不启用原本禁用的任务。
+
+`launch.json` 记录 `launchMethod=scheduled-task`、任务名、调度时间；`launcherPid=null` 不冒充已知进程。回读继续核对双端口单进程、新 Node 创建时间，并核对其真实父 PowerShell 的入口参数/创建时间及任务 LastRunTime。认证 Web 使用固定 `docs/tmp/dsh-web-local/web.log`，日志更新时间须晚于新 Node 创建时间，然后仍由原 Web checker 验证访问；日志陈旧或认证失败不能跳过。
+
+现场已观察到从部署调用者直接启动与计划任务启动的 DWS 认证表现不同，本修复只固定服务启动环境；Windows 底层凭据隔离原因仍未确认。测试与只读预检不表示本轮已再次部署或重启。
+
+计划任务启动失败后的离线精确包续修按原 launchMethod 校验自启状态：scheduled-task 记录必须仍为 enabled，旧启动记录必须保持原 disabled 状态；恢复许可仍须匹配原 enrollment-autostart.json 并经摘要冻结。有备份记录仅在已知 scheduled-task 启动时接受原恢复许可，原迁移修复范围不变。

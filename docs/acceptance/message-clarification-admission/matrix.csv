@@ -46,3 +46,15 @@ dws-cli-upgrade-readback,15,PASS,round-15.md
 dws-fresh-login,15,BLOCKED_AUTH,round-15.md
 explicit-two-notification-recall,15,PREPARED_NOT_EXECUTED,round-15.md
 original-source-task-recovery,15,BLOCKED_AUTH,round-15.md
+dws-scheduled-start-recovery,16,PASS,round-16.md
+explicit-two-notification-recall,16,PASS,round-16.md
+original-source-request-supersede,16,PASS,round-16.md
+original-source-task-recovery,16,BLOCKED_PROVIDER,round-16.md
+coordinator-provider-error-contract,17,PASS,round-17.md
+coordinator-previous-condition-recovery,17,PASS,round-17.md
+coordinator-late-error-watermark,17,PASS,round-17.md
+provider-package-source-check,17,PASS,round-17.md
+scheduled-start-recovery-tests,17,PASS,round-17.md
+deployment-auth-inbound-resume,17,PASS,round-17.md
+provider-live-dependency-retry,17,PASS,round-17.md
+original-source-task-recovery,17,BLOCKED_PROVIDER,round-17.md

@@ -83,6 +83,8 @@ function Get-ScheduledTask { @{State=$script:taskState;Settings=@{Enabled=$scrip
 function Listeners { $script:ports }
 function Get-CimInstance { $script:live }
 function Assert-LocalPackageSources {}
+# 启动身份由 deploy-owner-repair.test.ps1 独立覆盖；此处仅隔离封存修复状态门禁。
+function Assert-ScheduledWebStart {}
 function Run-Node([string[]]$Arguments){
  $script:commands+=,$Arguments
  switch($Arguments[1]){'maintenance' {$state|ConvertTo-Json -Depth 10} 'verify' {'{"verified":true}'} 'package' {'{"verified":true}'} default {throw '不得访问备份或执行维护写入'}}
@@ -90,8 +92,15 @@ function Run-Node([string[]]$Arguments){
 $proof=Test-StoppedRepair
 if(-not $proof.history.verified -or $proof.backup -or @($script:commands|Where-Object {$_[1]-eq 'package' -and $_[2]-eq $retainedObserverPackage}).Count-ne 1){throw '须回查历史及原Observer，不能访问备份'}
 $script:taskEnabled=$true;$rejected=$false
-try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复要求原自启任务仍禁用'}
+try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复自启状态与原启动记录不一致'}
 if(-not $rejected){throw '自启重新启用时不得进入离线安装'}
+$record|Add-Member -NotePropertyName launchMethod -NotePropertyValue 'scheduled-task'
+$proof=Test-StoppedRepair
+if(-not $proof.history.verified){throw '受管启动合法恢复 enabled 后失败必须允许同许可续修'}
+$script:taskEnabled=$false;$rejected=$false
+try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复自启状态与原启动记录不一致'}
+if(-not $rejected){throw 'scheduled 记录的 enabled 状态漂移必须拒绝'}
+$record.PSObject.Properties.Remove('launchMethod')
 $script:taskState='Running';$script:taskEnabled=$false
 foreach($liveCase in @(@{ports=@(3080);live=@()},@{ports=@();live=@([pscustomobject]@{ProcessId=123})},@{ports=@();live=@([pscustomobject]@{ProcessId=456})})){
  $script:ports=$liveCase.ports;$script:live=$liveCase.live;$rejected=$false
@@ -100,7 +109,7 @@ foreach($liveCase in @(@{ports=@(3080);live=@()},@{ports=@();live=@([pscustomobj
 $script:ports=@();$script:live=@()
 Add-Content -LiteralPath $retainedObserverPackage 'drift'
 $rejected=$false;try{Test-StoppedRepair}catch{$rejected=$true};if(-not $rejected){throw '原Observer漂移必须拒绝'}
-Write-Output 'PASS 6/6: 实际预检回查历史/原Observer且不访问备份；自启/端口/旧PID/launcher/Observer漂移拒绝'
+Write-Output 'PASS 8/8: 实际预检允许受管启动失败后续修且拒绝状态漂移；回查历史/原Observer且不访问备份；自启/端口/旧PID/launcher/Observer漂移拒绝'
 $RepairStoppedLaunch=Join-Path $origin 'launch.json';$record|ConvertTo-Json|Set-Content -LiteralPath $RepairStoppedLaunch
 $evidenceHashes[$RepairStoppedLaunch]=(Get-FileHash -LiteralPath $RepairStoppedLaunch).Hash
 $inputHashes=@{$Package=$ExpectedPackageSha256};$launch=@{Id=789;StartTime=Get-Date}
@@ -119,3 +128,16 @@ if($script:enabled-ne 1){throw '精确包修复必须幂等恢复原自启'}
 Add-Content -LiteralPath $RepairStoppedLaunch ' '
 $rejected=$false;try{Assert-DeploymentControlRecord $launchRecord}catch{$rejected=$true};if(-not $rejected){throw '修复readback须拒绝原证据漂移'}
 Write-Output 'PASS 3/3: 实际launch/control生成保留原身份与自启；恢复幂等；原证据漂移在readback拒绝'
+
+# 原备份路径也必须允许本流程已合法恢复自启后的精确包续修；旧记录不能扩大权限。
+$backupLaunch=$record|ConvertTo-Json|ConvertFrom-Json -AsHashtable
+$backupLaunch.backupCreated=$true;$backupLaunch.backup=$fixture;$backupLaunch.launchMethod='scheduled-task'
+$backupIdentity=@{backup=$fixture;oldPid=123;packageSha256='old-package'}
+Assert-StoppedRepairPermit $backupLaunch $sealed $before $backupIdentity $state
+$backupLaunch.launchMethod='';$rejected=$false
+try{Assert-StoppedRepairPermit $backupLaunch $sealed $before $backupIdentity $state}catch{$rejected=$true}
+if(-not $rejected){throw '历史备份记录不能新增自启恢复许可'}
+$backupLaunch.launchMethod='scheduled-task';$backupLaunch.executionEventsIndexMigrationSha256='migration';$rejected=$false
+try{Assert-StoppedRepairPermit $backupLaunch $sealed $before $backupIdentity $state}catch{$rejected=$true}
+if(-not $rejected){throw '受管启动不能放宽原迁移修复限制'}
+Write-Output 'PASS 3/3: 备份部署受管恢复允许；旧记录及迁移范围保持拒绝'
