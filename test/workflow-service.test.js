@@ -6837,3 +6837,112 @@ for(const variant of ['unknown','version','quote','topic','explicit'])test(`语�
  assert.equal((await f.service.messages.state(answer.runId)).commands.length,0)
  assert.equal((await f.execution.controller.taskPlan(taskId)).task.requirementRevision,before)
 })
+
+test('旧provider未提交通过受管证据重分类后同Run同Session恢复', async t => {
+  let calls = 0, events = []
+  const { service, execution } = await fixture(t, 'owner', undefined, {
+    ctx: { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events }) } },
+    executionSessions: { async run({ binding, onSessionBound, onResult }) {
+      calls++; await onSessionBound()
+      if (calls === 1) {
+        const identity = Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key => [key, binding[key]]))
+        events = [{ seq: 0, type: 'dingtalk/execution-session', data: { version: 1, identity, creationLease: binding.leaseEpoch } },
+          { seq: 1, type: 'user/message', data: { source: { kind: 'coordinator', executionSession: { sessionId: binding.sessionId, leaseEpoch: binding.leaseEpoch } } } },
+          { seq: 2, type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.' } } } }]
+        return { status: 'no_submission', reason: 'execution_no_submission' }
+      }
+      await onResult({ ok: true }); return { status: 'submitted' }
+    }, assertDrained() { return true }, async cancel() {}, async close() {} },
+  })
+  execution.controller.registerWorkflow({ id: 'provider-legacy-test', version: '1', nodes: [{ id: 'inspect', version: '1', executor: 'agent', allowedEffects: ['read'], allowedTools: [], provider: 'fixture', model: 'fixture', prompt: 'inspect', inputSchema: schema, outputSchema: schema, mapInput: ({ requirement }) => requirement }] })
+  const { runId } = await execution.controller.createRun({ commandId: 'provider-legacy', taskId: 'provider-legacy', workflowId: 'provider-legacy-test', input: {} })
+  await execution.controller.whenIdle(runId)
+  const before = await execution.controller.state(runId)
+  assert.equal(before.nodes[0].waitReason.reference, 'execution_no_submission')
+  await service.recoverExecutionTasks()
+  const classified = await execution.controller.state(runId)
+  assert.equal(classified.nodes[0].waitReason.reference, 'EXECUTION_PROVIDER_TRANSIENT'); assert.equal(calls, 1)
+  await service.recoverExecutionTasks(); await execution.controller.whenIdle(runId)
+  const after = await execution.controller.state(runId)
+  assert.equal(after.run.status, 'succeeded'); assert.equal(calls, 2)
+  assert.equal(after.nodes[0].sessionId, before.nodes[0].sessionId); assert.equal(after.nodes[0].leaseEpoch, before.nodes[0].leaseEpoch + 1)
+})
+
+for (const recovery of [false, true]) test(`业务等待的有效补充resume唤醒原Owner而不修改暂停控制状态 recovery=${recovery}`, async t => {
+ let turns=0
+ const sessions={async close(){},async run(args){
+  await args.onSessionBound();turns++
+  const refs=await queryOwnerSources(args)
+  const decision={action:'wait',summary:'等待业务资料核对',evidenceRefs:refs,condition:{kind:'business-input',missing:'核对资料',responsibleParty:'交办人',resumeWhen:'资料到达继续',evidenceRefs:refs}}
+  await args.onCandidate(decision);return {status:'submitted',decision}
+ }}
+ const judge=async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?input.source.text==='初始调查'
+  ?{kind:'binding',disposition:'new',candidateId:null,evidence:['原始目标']}
+  :{kind:'binding',disposition:'existing',candidateId:input.candidates[0].candidateId,evidence:['补充原任务']}
+  :{kind:'intent',actions:[{intent:input.text==='初始调查'?'create':'resume',arguments:input.text==='初始调查'?{objective:input.text}:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}
+ const {service,execution,message}=await fixture(t,'owner',undefined,{judge,taskOwnerSessions:sessions})
+ const first=await service.ingest({...message,text:'初始调查'})
+ const initial=await service.messages.process(first.runId),taskId=initial.commands[0].result.taskId
+ await settleTaskOwners(service,execution)
+ const before=await execution.controller.taskPlan(taskId)
+ assert.equal(before.task.controlState,'active');assert.equal(turns,1)
+ const next=await service.ingest({...message,messageId:'resume-business-info',text:'补充UAT2数据集信息，请继续核查'})
+ const originalCommand=execution.store.command.bind(execution.store)
+ let state=await service.messages.process(next.runId)
+ if(recovery){
+  // 构造旧版本已消费但 control.resume 事务拒绝的历史账；仅测试临时库。
+  const db=new DatabaseSync(join(execution.artifacts.root,'..','control.db'))
+  const command={...state.commands[0],status:'unknown',error:'TASK_CONTROL_CONFLICT',result:null}
+  db.prepare("UPDATE message_items SET body=? WHERE kind='command' AND json_extract(body,'$.commandId')=?").run(JSON.stringify(command),command.commandId)
+  db.prepare("UPDATE message_items SET body=json_set(body,'$.status','accepted') WHERE kind='unit' AND run_id=?").run(next.runId)
+  db.prepare("UPDATE message_runs SET body=json_set(body,'$.status','pending') WHERE run_id=?").run(next.runId)
+  db.prepare('DELETE FROM task_events WHERE event_key=?').run(`intent:${command.commandId}`)
+  db.close()
+  state=await service.messages.state(next.runId)
+  assert.equal(state.commands[0].status,'unknown')
+  const historical=state.commands[0],plan=await execution.controller.taskPlan(taskId),owner=await execution.store.query({kind:'task.owner',taskId})
+  const proof=await execution.artifacts.put({sourceRunId:next.runId,actorId:'owner'},{taskId})
+  const args={commandId:command.commandId,expectedCommandDigest:executionDigest(historical),sourceVersion:state.run.sourceVersion,ownerActorId:'owner',controlRevision:plan.task.controlRevision,requirementRevision:plan.task.requirementRevision,ownerRevision:owner.revision,evidenceRef:proof.ref}
+  for(const change of [{sourceVersion:99},{controlRevision:99},{ownerRevision:99},{expectedCommandDigest:'stale'}])
+   await assert.rejects(originalCommand({id:`stale-resume-${Object.keys(change)[0]}`,kind:'message.command.recover-business-resume',args:{...args,...change}}),{code:'MESSAGE_RESUME_RECOVERY_STALE'})
+  const historicDb=new DatabaseSync(join(execution.artifacts.root,'..','control.db'))
+  for(const controlState of ['paused','cancelled']){
+   historicDb.prepare('UPDATE task_controls SET state=? WHERE task_id=?').run(controlState,taskId)
+   await assert.rejects(originalCommand({id:`forbidden-resume-${controlState}`,kind:'message.command.recover-business-resume',args}),{code:'MESSAGE_RESUME_RECOVERY_STALE'})
+  }
+  historicDb.prepare("UPDATE task_controls SET state='active' WHERE task_id=?").run(taskId)
+  const status=historicDb.prepare('SELECT status FROM business_tasks WHERE task_id=?').get(taskId).status
+  historicDb.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id=?").run(taskId)
+  await assert.rejects(originalCommand({id:'forbidden-resume-succeeded',kind:'message.command.recover-business-resume',args}),{code:'MESSAGE_RESUME_RECOVERY_STALE'})
+  historicDb.prepare('UPDATE business_tasks SET status=? WHERE task_id=?').run(status,taskId)
+  historicDb.prepare('INSERT INTO execution_receipts VALUES(?,?,?,?)').run(`task-control:${command.commandId}`,'0'.repeat(64),'{}',new Date().toISOString())
+  await assert.rejects(originalCommand({id:'forbidden-resume-receipt',kind:'message.command.recover-business-resume',args}),{code:'MESSAGE_RESUME_RECOVERY_STALE'})
+  historicDb.prepare('DELETE FROM execution_receipts WHERE command_id=?').run(`task-control:${command.commandId}`)
+  historicDb.close()
+  await service.recover()
+  state=await service.messages.state(next.runId)
+ }
+ assert.equal(state.commands[0].status,'applied',JSON.stringify(state.commands[0]))
+ assert.equal(state.run.status,'settled')
+ assert.equal((await execution.controller.taskPlan(taskId)).task.controlRevision,before.task.controlRevision)
+ assert.equal(await execution.store.query({kind:'receipt',commandId:`task-control:${state.commands[0].commandId}`}),null)
+ await settleTaskOwners(service,execution)
+ assert.equal(turns,2)
+ if(!recovery){
+  let plan=await execution.controller.taskPlan(taskId)
+  await execution.controller.controlTask({commandId:'test-pause-business',taskId,intent:'pause',expectedControlRevision:plan.task.controlRevision})
+  const paused=(await execution.controller.taskPlan(taskId)).task.controlRevision
+  const received=await service.ingest({...message,messageId:'resume-paused-business',text:'继续原任务'})
+  const resumed=await service.messages.process(received.runId)
+  assert.equal(resumed.commands[0].status,'applied')
+  plan=await execution.controller.taskPlan(taskId)
+  assert.equal(plan.task.controlState,'active');assert.equal(plan.task.controlRevision,paused+1)
+  assert.ok(await execution.store.query({kind:'receipt',commandId:`task-control:${resumed.commands[0].commandId}`}))
+  await execution.controller.controlTask({commandId:'test-cancel-business',taskId,intent:'cancel',expectedControlRevision:plan.task.controlRevision})
+  const cancelled=await service.ingest({...message,messageId:'resume-cancelled-business',text:'继续已取消任务'})
+  const rejected=await service.messages.process(cancelled.runId)
+  assert.equal(rejected.commands[0].error,'TASK_CONTROL_CONFLICT')
+  assert.equal((await execution.controller.taskPlan(taskId)).task.controlState,'cancelled')
+ }
+ assert.deepEqual(await execution.store.query({kind:'run.list',taskId}),[])
+})

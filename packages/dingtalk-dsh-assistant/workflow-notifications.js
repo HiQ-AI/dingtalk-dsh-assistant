@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 
-export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务首次接纳后只发一次开始通知；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
+export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：先说结论或需要对方做什么，再给必要背景；突出重点，不堆分析过程。需要业务人员补充时明确列出每项信息及要回答的问题，多项逐行列出，清单项之间留空行以保持渠道渲染清晰，保留业务名称、选项和必要链接；不要只说“请补充信息”或“需要确认”。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务首次接纳后只发一次开始通知；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
 
 // 只识别明确的插件运行标签与机制，避免把业务代码、普通编号当成内部数据。
 export function assertGroupReply(text, internalIds = []) {
@@ -37,10 +37,26 @@ export function sameDeliveredText(observed, expected, quoted = false) {
   const actual = normalize(observed), wanted = normalize(expected)
   if (actual === null || wanted === null) return false
   // 钉钉回读把单行 inline-code 表示成粗体；只变换期望的成对单反引号，保留正文。
-  const rendered = normalize(typeof expected === 'string' ? expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**') : expected)
+  const inlineRendered = expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**')
+  // 已实证 DWS 将连续有序列表的项间单换行移除；只变换期望正文，保留编号和每个字符。
+  const listRendered = text => {
+    const lines = text.split(/\r?\n/u), rendered = []
+    let fence = null
+    for (let index = 0; index < lines.length; index++) {
+      const marker = lines[index].match(/^\s*(`{3,}|~{3,})/u)?.[1]
+      if (marker) { if (!fence) fence = marker; else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null }
+      if (!fence && /^1\. .+/u.test(lines[index])) {
+        let end = index + 1
+        while (end < lines.length && lines[end].startsWith(`${end - index + 1}. `) && lines[end].length > `${end - index + 1}. `.length) end++
+        if (end > index + 1) { rendered.push(lines.slice(index, end).join('')); index = end - 1; continue }
+      }
+      rendered.push(lines[index])
+    }
+    return normalize(rendered.join('\n'))
+  }
   const prefix = typeof quoted === 'object' && quoted?.sender ? normalize(`@${quoted.sender} `) + ' ' : null
   const body = prefix && actual.startsWith(prefix) ? actual.slice(prefix.length) : actual
-  return [wanted, rendered].some(candidate => body === candidate)
+  return [wanted, normalize(inlineRendered), listRendered(expected), listRendered(inlineRendered)].some(candidate => body === candidate)
 }
 export function notificationOpenTaskId(ack) {
   return ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
@@ -254,7 +270,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
           for (const report of reports) {
             if (!taskNotificationAllowed({ phase: `owner:${report.reportId}`, report })) continue
             const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
-              : `需要你确认：${Array.from(String(report.facts.summary).replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`
+              : report.facts.condition?.kind === 'business-input' ? `请补充以下信息：\n${report.facts.condition.missing.trim()}`
+              : `需要你确认：\n${String(report.facts.summary).trim()}`
             await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text,
               report.reportType === 'complete' ? 'result' : 'required_action', report))
           }

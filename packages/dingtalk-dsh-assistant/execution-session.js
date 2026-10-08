@@ -19,6 +19,29 @@ const failure = (code, detail) => Object.assign(new Error(detail ? `${code}: ${d
 const notDrained = code => Object.assign(failure(code), { executionDrained: false })
 const copy = value => structuredClone(value)
 const identityOf = binding => Object.fromEntries(keysFor(binding).map(key => [key, binding[key]]))
+const providerTransient = cause => cause?.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.'
+
+// 只读核验旧分类；不恢复会话，不向模型投递输入。
+export async function inspectLegacyProviderFailure(ctx, binding) {
+  validateBinding(binding)
+  if (binding.kind || !binding.sessionBound || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) return null
+  const stored = await ctx.sessionPersistence.inspect(binding.sessionId), events = stored.events
+  validateHistory(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
+  const inputs = events.filter(event => event.type === 'user/message')
+  if (inputs.some(event => event.data.source?.kind !== 'coordinator' && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt' && event.data.source.form === 'snapshot'))) return null
+  if (inputs.some(event => event.data.source?.kind === 'coordinator' && event.data.source.executionSession?.sessionId !== binding.sessionId)) return null
+  const input = inputs.findLast(event => event.data.source?.kind === 'coordinator')
+  if (input?.data.source.executionSession?.sessionId !== binding.sessionId || input.data.source.executionSession.leaseEpoch !== binding.leaseEpoch) return null
+  const end = events.findLast(event => event.type === 'turn/end')
+  if (!end || end.seq <= input.seq || end.data.reason?.kind !== 'error' || !providerTransient(end.data.reason.error)) return null
+  if (events.some(event => event.seq > end.seq && event.type !== 'session/end-seed')
+    || events.some(event => event.seq > input.seq && /^(assistant\/|tool\/)/u.test(event.type) && JSON.stringify(event.data).includes(SUBMIT))) return null
+  // 未消费的额外 inbox 输入也不得被当作旧错误续行。
+  const inbox = events.filter(event => event.type === 'agent/inbox/spliced').flatMap(event => event.data.inserted ?? [])
+  if (inbox.some(message => message.source?.kind !== 'coordinator' && !(message.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt' && message.source.form === 'snapshot'))) return null
+  if (inbox.some(message => message.source?.kind === 'coordinator' && (message.source.executionSession?.sessionId !== binding.sessionId || message.source.executionSession.leaseEpoch > binding.leaseEpoch))) return null
+  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', message: String(end.data.reason.error.message).slice(0, 2000) } }
+}
 
 function validateBinding(binding) {
   if (binding?.kind !== undefined && !['task-node', 'message-unit'].includes(binding.kind)) throw failure('execution_binding_invalid', 'kind')
@@ -295,6 +318,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         await onSessionBound()
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
         if (entry.haltCode) return { status: 'no_submission', reason: entry.haltCode }
+        const startSeq = session.snapshotEvents().at(-1)?.seq ?? -1
         // 租约是 Host 的来源元数据，正常 inbox/user-message 持久化保留，不是模型参数。
         entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', executionSession: { sessionId: binding.sessionId, leaseEpoch: binding.leaseEpoch, ...(versionedInput(binding) ? { inputVersion: binding.inputVersion, inputDigest: binding.inputDigest } : {}) } }, content: [
           { type: 'text', text: JSON.stringify(entry.input) },
@@ -304,7 +328,15 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         await drain(entry)
         if (entry.cancelled || closed) return { status: 'cancelled' }
         if (!await current(entry)) return { status: 'stale' }
-        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? 'execution_no_submission', ...(entry.failure ? { failure: entry.failure } : {}) }
+        if (!entry.accepted && !entry.haltCode && !entry.failure) {
+          const end = session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
+          if (end?.data?.reason?.kind === 'error') {
+            const cause = end.data.reason.error, message = String(cause?.message ?? 'Native execution provider failed')
+            const transient = providerTransient(cause)
+            entry.failure = { code: transient ? 'EXECUTION_PROVIDER_TRANSIENT' : 'EXECUTION_PROVIDER_FAILED', phase: 'provider', message: message.slice(0, 2000) }
+          }
+        }
+        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? (entry.failure?.phase === 'provider' ? entry.failure.code : 'execution_no_submission'), ...(entry.failure ? { failure: entry.failure } : {}) }
         await onResult(copy(entry.output))
         return { status: 'submitted', output: copy(entry.output) }
       } catch (error) {

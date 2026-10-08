@@ -85,3 +85,11 @@ engineering-preplan-reassessment,23,PASS,round-23.md
 original-task-engineering-started,23,PASS,round-23.md
 stale-notice-correction-tests,24,PASS,round-24.md
 stale-notice-correction-live,24,PASS,round-24.md
+group-reply-actionable-content,25,PASS,round-25.md
+group-reply-request-content,25,PASS,round-25.md
+ordered-list-readback,25,PASS,round-25.md
+task-capability-boundary-audit,26,PASS,round-26.md
+engineering-provider-recovery,27,PASS,round-27.md
+source-repository-restored,27,PASS,round-27.md
+business-resume-and-recovery,28,PASS,round-28.md
+message-ledger-full-regression,28,PASS,round-28.md

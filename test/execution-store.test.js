@@ -849,3 +849,46 @@ for(const variant of ['clean','receipt','stage','run','undrained','effect','sour
   assert.deepEqual(await f.store.query({kind:'run.list',taskId:'task'}),[])
  }
 })
+
+test('provider暂态恢复沿用退避且重启后最多三次', async t => {
+  const f = await fixture(t), n = await f.claim(); await f.drain(n)
+  await f.store.command(command('node.commit', { ...identity(n), inputDigest: d, outcome: 'waiting', evidenceRefs: [], waitReason: { kind: 'recovery', reference: 'EXECUTION_PROVIDER_TRANSIENT' } }))
+  const state = await f.query(), args = { runId: 'run', runRevision: state.run.revision, nodeRunId: n.nodeRunId, generation: n.generation, leaseEpoch: n.leaseEpoch, inputDigest: d, errorCode: 'EXECUTION_PROVIDER_TRANSIENT' }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const admitted = (await f.store.command(command('run.recovery.admit', args))).result
+    assert.equal(admitted.attempt, attempt)
+    assert.ok(Date.parse(admitted.nextRetryAt) > Date.now())
+    if (attempt < 3) await rejects(f.store.command(command('run.recovery.admit', args)), 'RECOVERY_RETRY_DEFERRED')
+    await f.store.close()
+    const db = new DatabaseSync(f.dbPath)
+    try { db.prepare("UPDATE execution_events SET payload=json_set(payload,'$.nextRetryAt','2000-01-01T00:00:00.000Z') WHERE kind='run.recovery.admitted'").run() } finally { db.close() }
+    await f.open()
+  }
+  await rejects(f.store.command(command('run.recovery.admit', args)), 'RECOVERY_RETRY_LIMIT')
+  assert.equal((await f.query()).run.status, 'waiting')
+})
+
+for (const variant of ['valid', 'revision', 'lease', 'digest', 'session', 'output', 'undrained', 'effect']) test(`旧未提交错误受管重分类CAS：${variant}`, async t => {
+  const f = await fixture(t, creation([plan('one', 'agent')])), n = await f.claim()
+  await f.store.command(command('node.sessionBound', { ...identity(n), sessionId: n.sessionId })); await f.drain(n)
+  await f.store.command(command('node.commit', { ...identity(n), inputDigest: d, outcome: 'waiting', evidenceRefs: [], waitReason: { kind: 'recovery', reference: 'execution_no_submission' } }))
+  const state = await f.query(), args = { runId: 'run', runRevision: state.run.revision, nodeRunId: n.nodeRunId, generation: n.generation, leaseEpoch: n.leaseEpoch, inputDigest: d, sessionId: n.sessionId, evidenceRef: 'sha256/provider-proof.json' }
+  if (variant === 'revision') args.runRevision--
+  if (variant === 'lease') args.leaseEpoch++
+  if (variant === 'digest') args.inputDigest = changedDigest
+  if (variant === 'session') args.sessionId = 'foreign'
+  if (['output', 'undrained', 'effect'].includes(variant)) {
+    const db = new DatabaseSync(f.dbPath)
+    try {
+      if (variant === 'output') db.prepare("UPDATE execution_nodes SET output_ref='sha256/submitted.json' WHERE node_run_id=?").run(n.nodeRunId)
+      if (variant === 'undrained') db.prepare('UPDATE execution_nodes SET drained=0 WHERE node_run_id=?').run(n.nodeRunId)
+      if (variant === 'effect') db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('prior-effect','operation','run',?,'one',1,?,'digest','{}','[]','fixture','succeeded','now','now')").run(n.nodeRunId,d)
+    } finally { db.close() }
+  }
+  const cmd = command('node.failure.reclassify', args)
+  if (variant !== 'valid') { await rejects(f.store.command(cmd), 'NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED'); assert.equal((await f.query()).nodes[0].waitReason.reference, 'execution_no_submission'); return }
+  assert.equal((await f.store.command(cmd)).result.reclassified, true)
+  const after = await f.query(); assert.equal(after.nodes[0].waitReason.reference, 'EXECUTION_PROVIDER_TRANSIENT')
+  assert.equal(after.nodes[0].leaseEpoch, n.leaseEpoch); assert.equal(after.run.revision, state.run.revision + 1)
+  assert.equal((await f.store.command(cmd)).result.reclassified, true)
+})

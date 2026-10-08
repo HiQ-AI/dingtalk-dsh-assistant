@@ -1,3 +1,4 @@
+import { reduceTaskOwnerCommand } from './task-owner-store.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 import { taskNotificationAllowed, notificationSilence } from './workflow-notifications.js'
@@ -1206,6 +1207,27 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       const u=get(db,'unit',c.unitId),all=rows(db,r.runId,'command').filter(x=>x.unitId===u.id)
       if(all.every(x=>['applied','rejected','cancelled'].includes(x.status))){u.status='rejected';put(db,r.runId,'unit',u)}
       settle(db,r);return {result:{command:c,run:r}}
+    }
+    if(kind==='message.command.recover-business-resume') {
+      current(db,r,c.revision)
+      const taskId=c.args?.taskId??c.args?.binding?.taskId
+      const origin=queryMessages(db,{kind:'message.task',taskId})
+      const task=db.prepare('SELECT * FROM business_tasks WHERE task_id=?').get(taskId)
+      const control=db.prepare('SELECT * FROM task_controls WHERE task_id=?').get(taskId)
+      const owner=db.prepare('SELECT * FROM task_owners WHERE task_id=?').get(taskId)
+      if(c.kind!=='resume'||c.status!=='unknown'||c.error!=='TASK_CONTROL_CONFLICT'
+        ||executionDigest(c)!==a.expectedCommandDigest||r.sourceVersion!==a.sourceVersion
+        ||!origin||origin.run.conversationId!==r.conversationId||![origin.run.actorId,a.ownerActorId].includes(r.actorId)
+        ||!task||!owner||control?.state!=='active'||['succeeded','cancelled'].includes(task.status)
+        ||control.control_revision!==a.controlRevision||task.requirement_revision!==a.requirementRevision
+        ||owner.revision!==a.ownerRevision
+        ||db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`task-control:${c.commandId}`)) fail('MESSAGE_RESUME_RECOVERY_STALE')
+      reduceTaskOwnerCommand(db,{kind:'task.owner.event',args:{taskId,eventKey:`intent:${c.commandId}`,eventType:'intent.received',payloadRef:str(a.evidenceRef)}},{now})
+      c.status='applied';c.result={taskId,status:'accepted',recoveredBusinessResume:true};c.evidenceRef=a.evidenceRef
+      put(db,r.runId,'command',c)
+      const u=get(db,'unit',c.unitId)
+      if(rows(db,r.runId,'command').filter(x=>x.unitId===u.id).every(x=>x.status==='applied')){u.status='applied';put(db,r.runId,'unit',u)}
+      settle(db,r);return {result:{command:c}}
     }
     if(kind==='message.command.reconcile') {if(c.status!=='unknown')fail('MESSAGE_COMMAND_NOT_UNKNOWN');if(!['applied','failed'].includes(a.status)||!a.evidenceRef)fail('MESSAGE_RECONCILE_EVIDENCE_REQUIRED');c.status=a.status;c.result=a.result??null;c.evidenceRef=a.evidenceRef;put(db,r.runId,'command',c);const u=get(db,'unit',c.unitId);if(rows(db,r.runId,'command').filter(x=>x.unitId===u.id).every(x=>x.status==='applied')){u.status='applied';put(db,r.runId,'unit',u)}settle(db,r);return {result:{command:c}}}
     if(kind==='message.command.retry.readonly') {

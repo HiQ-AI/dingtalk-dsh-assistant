@@ -420,6 +420,29 @@ function coreCommand(command, now, consumption = {}) {
     db.prepare("UPDATE execution_runs SET status='cancelled',updated_at=? WHERE run_id=?").run(now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
+  if (command.kind === 'node.failure.reclassify') {
+    object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','evidenceRef'])
+    const r = activeRun(a), current = nodes(r.run_id), waiting = current.filter(n => n.status === 'waiting'), n = waiting[0]
+    assertTaskDispatchAllowed(r)
+    if (maintenanceStatus(db, workerData.processIncarnation).active) fail('RUNTIME_MAINTENANCE_ACTIVE')
+    if (db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(r.task_id)) {
+      const recovery = inspectNodeRecovery(r.run_id)
+      if (!recovery.repairable && recovery.reason !== 'strategy-change-required') fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
+    }
+    if (r.status !== 'waiting' || r.revision !== a.runRevision || r.generation !== a.generation || waiting.length !== 1
+      || n.node_run_id !== a.nodeRunId || n.lease_epoch !== a.leaseEpoch || n.input_digest !== a.inputDigest
+      || n.session_id !== a.sessionId || !n.session_bound || n.executor !== 'agent' || n.output_ref
+      || JSON.parse(n.wait_reason ?? 'null')?.kind !== 'recovery' || JSON.parse(n.wait_reason).reference !== 'execution_no_submission'
+      || current.some(node => !node.drained) || pendingInputs(r.run_id).length
+      || db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)
+      || typeof a.evidenceRef !== 'string' || !a.evidenceRef) fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
+    assertRunEffectsDrained(db, r.run_id)
+    const failure = { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', evidenceRef: a.evidenceRef }
+    db.prepare('UPDATE execution_nodes SET wait_reason=? WHERE node_run_id=?').run(JSON.stringify({kind:'recovery',reference:failure.code}),n.node_run_id)
+    db.prepare('UPDATE execution_runs SET recovery_reason=?,revision=revision+1,updated_at=? WHERE run_id=?').run(failure.code,now,r.run_id)
+    emitEvent(command.id, 'node.failure', { ...a, failure, previousCode: 'execution_no_submission' }, now)
+    return { reclassified: true, code: failure.code }
+  }
   if (command.kind === 'run.recovery.admit') {
     object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','errorCode'])
     const r = activeRun(a), current = nodes(r.run_id), waiting = current.filter(n => n.status === 'waiting'), n = waiting[0]
@@ -432,6 +455,7 @@ function coreCommand(command, now, consumption = {}) {
     const key = createHash('sha256').update(canonical({runId:r.run_id,generation:r.generation,nodeRunId:n.node_run_id,inputDigest:n.input_digest,errorCode:a.errorCode})).digest('hex')
     const prior = db.prepare("SELECT payload FROM execution_events WHERE kind='run.recovery.admitted' AND json_extract(payload,'$.key')=? ORDER BY seq DESC LIMIT 1").get(key)
     const last = prior ? JSON.parse(prior.payload) : null, attempt = (last?.attempt ?? 0) + 1
+    if (a.errorCode === 'EXECUTION_PROVIDER_TRANSIENT' && attempt > 3) fail('RECOVERY_RETRY_LIMIT')
     if (last && Date.parse(now) < Date.parse(last.nextRetryAt)) fail('RECOVERY_RETRY_DEFERRED')
     const nextRetryAt = new Date(Date.parse(now) + recoveryRetryDelayMs(attempt)).toISOString()
     emitEvent(command.id, 'run.recovery.admitted', {...a,key,attempt,nextRetryAt}, now)

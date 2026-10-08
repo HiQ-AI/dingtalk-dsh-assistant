@@ -606,6 +606,12 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (!entry) fail('ENGINEERING_REPOSITORY_NOT_ADMITTED')
     const uatEnvironment = action.arguments.uatEnvironment, uatBranch = uatBranchFor(uatEnvironment)
     if (!uatBranch) fail('ENGINEERING_UAT_ENVIRONMENT_REQUIRED')
+    try {
+      if (!(await lstat(entry.config.sourceRepository)).isDirectory()) fail('ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE')
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes(error.code)) fail('ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE')
+      throw error
+    }
     await git(entry.config.sourceRepository, ['check-ref-format', '--branch', uatBranch])
     const remoteBranch = await git(entry.config.sourceRepository, ['ls-remote', '--exit-code', entry.config.remote, `refs/heads/${uatBranch}`])
     if (!/^[a-f0-9]{40}\s+/.test(remoteBranch)) fail('ENGINEERING_UAT_BRANCH_NOT_FOUND')

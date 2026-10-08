@@ -1,6 +1,6 @@
 # 群消息澄清与准入实施
 
-> 状态：COMPLETED
+> 状态：ACTIVE
 > Goal ID：message-clarification-admission
 > 最近维护：2026-10-08T15:09:05.8894568+08:00
 > 权威目标：D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/acceptance/message-clarification-admission/goal.md
@@ -40,11 +40,18 @@
 
 | SG10 | 已发过时通知更正 | 指定索要UAT消息撤回并回读，按真实UAT2状态补发更正文且去重 | 已完成 | round-24两条旧通知recalled，单条更正送达且DWS回读工件独立核验 |
 
+| SG11 | 回复清晰及完整呈现 | 补充请求明确列出缺失信息，消息不按160字符硬截断，定向测试通过 | 进行中 | 待核验 |
+| SG12 | 浏览器和部署溯源能力核实 | 核实Owner与执行会话能力边界，明确现有能力与接入方案 | 已完成 | round-26真实查询/代码边界；本轮不扩建浏览器系统 |
+| SG13 | 两项真实任务恢复 | 查明异常及无提交根因，修复后原Task继续且独立回读 | 进行中 | 前端缺源已恢复，原Task进入stage1；模型过载旧误分类待恢复 |
+| SG14 | 集成部署及现场闭环 | 定向验证、部署、消息与Task状态独立读回，更新PR | 待开始 | 待核验 |
+
+| SG15 | 补充信息后继续原Task | active业务等待不误走暂停恢复，旧控制冲突经来源和状态CAS恢复且不丢Owner输入 | 进行中 | 新消息已消费，resume发生TASK_CONTROL_CONFLICT，正修复正式对账 |
+
 ## 当前检查点
 
-- 当前子目标：SG10
-- 唯一下一步：本轮已完成；业务Task继续，PR保持待合并。
-- 未闭环项：本轮范围内无；PR #155保持OPEN未合并，四项既有服务基线失败及原业务开发完成均为本轮边界。
+- 当前子目标：SG11
+- 唯一下一步：修复回复合同并并行核对能力误判和两项Task受阻根因。
+- 未闭环项：SG11、SG13至SG15；PR保持待合并，业务开发完成另行核验。
 
 ## 进展
 
@@ -59,6 +66,9 @@
 
 ## 重大决策
 
+- 2026-10-08 SG15：清晰补充通知后反馈人已给出实际编号、环境、账号及时间。原生fact已应用，但resume将业务等待混同人为暂停而冲突，unknown命令持有消息屏障。只修active续行语义及精确旧命令原子对账，保留paused/cancelled/终态和来源权限门禁，不重放来源。
+
+
 - 2026-10-08 SG9：真实节点为FILE/html，原生下载57222字节且真实适配器重放通过。首版Task重评已接纳，但四条路由积压因群会话被观察恢复占用而挡住Owner；不绕过门禁、不强行dispose外部Agent，采用公开idle维护锁和既有原生派生/CAS机制。详见spec/document-session-recovery.md。
 
 - 不增加第二个意图模型；复用协调候选接纳、message request、Owner 和通知账。
@@ -67,4 +77,4 @@
 ## 重要信息
 
 - 主检出 D:/project/dingtalk-dsh-assistant 保持原样；当前工作分支 worktree-message-clarification-admission。
-- 子代理仅修改分配文件，主代理负责最终集成；最终源码已部署，PR #155的正文、base/head及OPEN状态已独立回读。
+- 子代理仅修改分配文件，主代理负责最终集成；前轮源码已部署，本轮修复待集成部署。PR #155保持OPEN。

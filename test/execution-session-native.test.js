@@ -16,7 +16,7 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { createExecutionSessions } from '../packages/dingtalk-dsh-assistant/execution-session.js'
+import { createExecutionSessions, inspectLegacyProviderFailure } from '../packages/dingtalk-dsh-assistant/execution-session.js'
 import { createAgentQueryTools, verifyAgentEvidence, readExecutedAgentQueryRefs } from '../packages/dingtalk-dsh-assistant/agent-query-tools.js'
 import { createAgentResourceReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-resources.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -54,6 +54,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
       requests.push(JSON.parse(JSON.stringify(options)))
       const next = typeof script === 'function' ? script(requests.length) : script[requests.length - 1]
       if (!next) throw new Error('unexpected model continuation')
+      if (next.providerFailure) { yield { type: 'finish', reason: { kind: 'error', failure: next.providerFailure } }; return }
       if (Array.isArray(next)) {
         for(const [index,call] of next.entries()) {
           const id=`call-${requests.length}-${index}`,args=JSON.stringify(call.args??{})
@@ -705,4 +706,52 @@ test('只读范围拒绝保留拒绝后可调整合法查询，不终止整个�
   assert.equal((await drive(h, { definition: definition({ allowedTools: ['query'] }) })).status, 'submitted')
   assert.deepEqual(seen, ['allowed'])
   assert.match(JSON.stringify(h.requests[1]), /QUERY_SCOPE_DENIED/u)
+})
+
+for (const [message, expected] of [
+  ['Codex error: Our servers are currently overloaded. Please try again later.\n[Codex diagnostics: {"httpStatus":200}]', 'EXECUTION_PROVIDER_TRANSIENT'],
+  ['Codex error: authentication failed', 'EXECUTION_PROVIDER_FAILED'],
+]) test(`原生执行保留本轮provider错误并区分暂态：${expected}`, async t => {
+  const h = await host({ script: [{ providerFailure: { code: 'PI_AI_ERROR', message } }, { text: '正常结束未提交' }] })
+  t.after(() => h.close())
+  const first = await drive(h)
+  assert.equal(first.reason, expected)
+  assert.equal(first.failure.phase, 'provider')
+  assert.equal(first.failure.message, message)
+  const second = await drive(h, { binding: binding({ leaseEpoch: 2, sessionBound: true }) })
+  assert.equal(second.reason, 'execution_no_submission')
+  assert.equal(second.failure, undefined)
+})
+test('已接纳节点提交优先于稍后的provider错误', async t => {
+  const h = await host({ script: [submit('accepted')] }); t.after(() => h.close())
+  let completed = 0
+  const result = await drive(h, { onSessionBound() {
+    const session = h.ctx.sessions.get(binding().sessionId), snapshot = session.snapshotEvents.bind(session)
+    session.snapshotEvents = () => {
+      const events = snapshot()
+      return events.some(event => event.type === 'turn/end') ? [...events, { seq: events.at(-1).seq + 1, type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.' } } } }] : events
+    }
+  }, onResult() { completed++ } })
+  assert.deepEqual(result, { status: 'submitted', output: { answer: 'accepted' } })
+  assert.equal(completed, 1)
+})
+
+test('旧provider失败只读重分类核对原生身份、本轮租约及未提交', async t => {
+  const message = 'Codex error: Our servers are currently overloaded. Please try again later.'
+  const h = await host({ script: [{ providerFailure: { code: 'PI_AI_ERROR', message } }] }); t.after(() => h.close())
+  await drive(h)
+  const b = binding({ sessionBound: true }), proof = await inspectLegacyProviderFailure(h.ctx, b)
+  assert.equal(proof.failure.code, 'EXECUTION_PROVIDER_TRANSIENT')
+  await assert.rejects(inspectLegacyProviderFailure(h.ctx, { ...b, inputDigest: 'forged' }), { code: 'execution_session_identity_mismatch' })
+  assert.equal(await inspectLegacyProviderFailure(h.ctx, { ...b, leaseEpoch: 2 }), null)
+  const stored = await h.ctx.sessionPersistence.inspect(b.sessionId)
+  for (const extra of [
+    { type: 'user/message', data: { source: { kind: 'web' } } },
+    { type: 'agent/inbox/spliced', data: { inserted: [{ source: { kind: 'coordinator', executionSession: { sessionId: b.sessionId, leaseEpoch: 1 } } }] } },
+    { type: 'tool/result', data: { name: 'execution_node_submit' } },
+  ]) {
+    const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events: [...stored.events, { ...extra, seq: stored.events.at(-1).seq + 1 }] }) } }
+    assert.equal(await inspectLegacyProviderFailure(ctx, b), null)
+  }
+  assert.equal(await inspectLegacyProviderFailure({ ...h.ctx, agents: { get: () => ({}) } }, b), null)
 })

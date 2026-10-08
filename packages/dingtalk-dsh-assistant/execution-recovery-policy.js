@@ -1,8 +1,8 @@
 // Host服务与控制事务共用分类；未列入暂态白名单的错误不能自动重领。
 export const engineeringPatchRepairReasons = Object.freeze(['ENGINEERING_PATCH_AMBIGUOUS', 'ENGINEERING_PATCH_CONFLICT', 'ENGINEERING_PATCH_BASE_CONFLICT'])
 export const transientRecoveryReasons = Object.freeze(['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'PLATFORM_REQUEST_FAILED',
-  'PLATFORM_HTTP_429', 'PLATFORM_HTTP_502', 'PLATFORM_HTTP_503', 'PLATFORM_HTTP_504', 'ENGINEERING_REMOTE_READ_TRANSIENT', 'GIT_CONNECTION_FAILED', 'PR_CONNECTION_FAILED', 'controller-restarted'])
-// 探测间隔退避到一分钟；次数只作观察，不终止恢复，指数不会溢出。
+  'PLATFORM_HTTP_429', 'PLATFORM_HTTP_502', 'PLATFORM_HTTP_503', 'PLATFORM_HTTP_504', 'ENGINEERING_REMOTE_READ_TRANSIENT', 'EXECUTION_PROVIDER_TRANSIENT', 'GIT_CONNECTION_FAILED', 'PR_CONNECTION_FAILED', 'controller-restarted'])
+// 探测间隔退避到一分钟；provider暂态由持久控制账限制三次，其余次数只作观察，指数不会溢出。
 export const recoveryRetryDelayMs = attempt => Math.min(60_000, 1000 * 2 ** Math.min(6, Math.max(0, attempt - 1)))
 export const correctableOwnerReasons = Object.freeze(['TASK_OWNER_NO_DECISION', 'TASK_OWNER_ADVANCE_CONFLICT',
   'TASK_OWNER_DECISION_INVALID', 'TASK_OWNER_REPAIR_BINDING_INVALID', 'TASK_OWNER_COMPLETION_UNVERIFIED',
@@ -28,6 +28,7 @@ const classifiedReasons = new Map([
   ['AGENT_WORK_NEEDS_INPUT', 'missing-input'],
   ['AGENT_WORK_BLOCKED', 'task-blocked'],
   ['ENGINEERING_UAT_ENVIRONMENT_REQUIRED', 'missing-environment'],
+  ['ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE', 'missing-environment'],
   ['SESSION_ADAPTER_UNAVAILABLE', 'missing-environment'],
   ['DELIVERY_RECONCILIATION_REQUIRED', 'external-uncertain'],
   ...transientRecoveryReasons.map(code => [code, 'transient-execution']),

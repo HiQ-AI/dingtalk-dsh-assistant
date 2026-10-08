@@ -5,6 +5,7 @@ import { sessionWorkspace, taskFilePath, checkedTaskDirectory } from './session-
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { join } from 'node:path'
 import { transientRecoveryReasons } from './execution-recovery-policy.js'
+import { inspectLegacyProviderFailure } from './execution-session.js'
 import { openExecutionRuntime, closeExecutionResources } from './execution.js'
 import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
@@ -1875,6 +1876,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           eventKey: `acceptance-event-${executionDigest([info.commandId, index]).slice(0, 32)}` },
       })
     }
+    if (currentPlan && action.intent === 'resume' && currentPlan.task.controlState === 'active'
+      && !['succeeded', 'cancelled'].includes(currentPlan.task.status)) {
+      await recordIntent()
+      return { taskId, runId: currentPlan.stages.findLast(stage => stage.runId)?.runId ?? null,
+        status: 'accepted', reply: '补充信息已交由原任务继续核查。' }
+    }
     if (currentPlan && ['pause', 'cancel', 'resume'].includes(action.intent)) {
       const controlled = await controller.controlTask({ commandId: `task-control:${info.commandId}`, taskId,
         intent: action.intent, expectedControlRevision: currentPlan.task.controlRevision })
@@ -3291,6 +3298,24 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const state = await store.query({ kind: 'run', runId: run.runId })
           const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
+          if (node.waitReason?.kind === 'recovery' && node.waitReason.reference === 'execution_no_submission'
+            && ctx?.sessionPersistence && state.nodes.every(item => item.drained) && node.sessionBound && !node.outputRef) {
+            const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
+            const frozen = definition.nodes.find(item => item.id === node.nodeId)
+            const effects = await store.query({ kind: 'effect.list', runId: run.runId })
+            if (frozen?.executor !== 'agent' || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect))
+              || effects.some(effect => effect.nodeRunId === node.nodeRunId || !['succeeded','failed'].includes(effect.state))) continue
+            const input = await artifacts.read(node.inputRef)
+            if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId) continue
+            const proof = await inspectLegacyProviderFailure(ctx, { taskId: run.taskId, runId: run.runId, nodeRunId: node.nodeRunId,
+              generation: state.run.generation, inputDigest: node.inputDigest, sessionId: node.sessionId, leaseEpoch: node.leaseEpoch, sessionBound: true })
+            if (!proof) continue
+            const evidence = await artifacts.put({ kind: 'legacy-provider-failure-classification', ...proof }, { taskId: run.taskId })
+            await store.command({ id: `provider-reclassify:${node.nodeRunId}:${node.leaseEpoch}`, kind: 'node.failure.reclassify', args: {
+              runId: run.runId, runRevision: state.run.revision, nodeRunId: node.nodeRunId, generation: state.run.generation,
+              leaseEpoch: node.leaseEpoch, inputDigest: node.inputDigest, sessionId: node.sessionId, evidenceRef: evidence.ref } })
+            continue
+          }
           if (node.waitReason?.reference === 'AGENT_WORK_NEEDS_INPUT') { await ensureInvestigationMessageRequest(run.runId); continue }
           if (run.workflowId === 'task-data-change' && node.nodeId === 'readback-issue'
             && node.waitReason?.kind === 'recovery') {
@@ -3383,6 +3408,32 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     await taskOwner.dispatch()
     return failures
   }
+  async function recoverBusinessResumeCommands() {
+    const failures = []
+    for (const run of await store.query({ kind: 'message.pending' })) {
+      const data = await messages.state(run.runId)
+      for (const command of data.commands.filter(item => item.kind === 'resume' && item.status === 'unknown' && item.error === 'TASK_CONTROL_CONFLICT')) {
+        const taskId = command.args.taskId ?? command.args.binding?.taskId
+        try {
+          await taskAccess(taskId, run.actorId, run.conversationId)
+          const plan = await controller.taskPlan(taskId), owner = await store.query({ kind: 'task.owner', taskId })
+          if (!plan || !owner || plan.task.controlState !== 'active' || ['succeeded', 'cancelled'].includes(plan.task.status)
+            || await store.query({ kind: 'receipt', commandId: `task-control:${command.commandId}` })) continue
+          const proof = await artifacts.put({ kind: 'business-resume-recovery', taskId, commandId: command.commandId,
+            action: 'resume', sourceRunId: run.runId, sourceKey: run.sourceKey, sourceVersion: run.sourceVersion,
+            actorId: run.actorId, arguments: command.args.arguments, controlReceiptAbsent: true,
+            controlRevision: plan.task.controlRevision, requirementRevision: plan.task.requirementRevision }, { taskId })
+          await store.command({ id: `recover-business-resume:${command.commandId}`, kind: 'message.command.recover-business-resume', args: {
+            commandId: command.commandId, expectedCommandDigest: executionDigest(command), sourceVersion: run.sourceVersion,
+            ownerActorId, controlRevision: plan.task.controlRevision, requirementRevision: plan.task.requirementRevision,
+            ownerRevision: owner.revision, evidenceRef: proof.ref } })
+        } catch (error) {
+          if (!['MESSAGE_RESUME_RECOVERY_STALE', 'MESSAGE_STALE', 'WORKFLOW_TASK_FORBIDDEN'].includes(error.code)) failures.push({ scope: 'business-resume', commandId: command.commandId, code: error.code ?? error.message })
+        }
+      }
+    }
+    return failures
+  }
   async function recoverAll() {
     await messageAgent.reconcile()
     if ((await store.query({ kind: 'runtime.maintenance' })).active) return { failures: [] }
@@ -3392,10 +3443,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       recoverExecutionTasks(),
       notifier.flush(),
       reconcileFoldedAnswers(),
+      recoverBusinessResumeCommands(),
     ])
     const failures = results.flatMap((result, index) => result.status === 'rejected'
-      ? [{ scope: ['messages', 'tasks', 'notifications', 'clarification-link'][index], code: result.reason.code ?? result.reason.message }]
-      : index === 1 || index === 3 ? result.value : [])
+      ? [{ scope: ['messages', 'tasks', 'notifications', 'clarification-link', 'business-resume'][index], code: result.reason.code ?? result.reason.message }]
+      : index === 1 || index === 3 || index === 4 ? result.value : [])
     return { failures }
   }
   function recoverExecutionTasks() {

@@ -573,3 +573,16 @@ for(const ownerConfirmed of [true,false])test(`工程阶段保留已核验任务
  assert.equal(prepared.authorizedGroupRequest,ownerConfirmed)
  assert.equal(checks,ownerConfirmed?0:1)
 })
+
+test('工程源仓库缺失在git与工作区准备前明确拒绝且零执行副作用', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-missing-source-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'missing-source', initialize: true }); t.after(() => store.close())
+  const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), author: { name: 'Test', email: 'test@example.invalid' },
+    repositories: [{ id: 'repo', sourceRepository: join(directory, 'absent'), managedRoot: join(directory, 'managed'), remote: 'https://github.com/example/repo.git', baseRef: 'main', githubRepository: 'example/repo', editablePaths: ['value.txt'], checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }] })
+  await registry.restore(store)
+  let registered = 0
+  await assert.rejects(registry.prepareTask({ taskId: 'task', arguments: { repositoryId: 'repo', uatEnvironment: 'uat2', objective: '修改代码' } }, { commandId: 'missing', run: { actorId: 'owner' }, unit: {} }, { registerWorkflow() { registered++ } }), { code: 'ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE' })
+  assert.equal(registered, 0)
+  assert.deepEqual(await store.query({ kind: 'workflow.list' }), [])
+  assert.equal((await readdir(directory)).some(name => ['managed', 'absent'].includes(name)), false)
+})
