@@ -1,0 +1,7 @@
+case,round,status,evidence
+cheap-startup-poll,1,PASS,round-1.md
+startup-identity-fail-closed,1,PASS,round-1.md
+module-semantics-worker,1,PASS,round-1.md
+full-boot-controlled-comparison,1,PASS,round-1.md
+formal-launcher-deployment,1,PASS,round-1.md
+formal-restart-persistent-health,1,PASS,round-1.md

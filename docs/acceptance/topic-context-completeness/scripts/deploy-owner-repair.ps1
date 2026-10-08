@@ -35,7 +35,7 @@ $source="$workspace/packages/dingtalk-dsh-assistant"
 $installed="$profile/node_modules/@zzusp/dingtalk-dsh-assistant"
 $tempDirectory="$runtime/local-acceptance/temp"
 $domain='D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116'
-$starter='D:/project/dingtalk-dsh-assistant/scripts/start-web.ps1'
+$starter='D:/dsh_home/launchers/start-web.ps1'
 $enrollmentTaskName='DSH Web Local'
 function Assert-DeploymentMode {
  if($MigrateExecutionEventsIndex -and ($Bootstrap -or $RepairStoppedLaunch -or $MigrateMessageImpact -or $TaskMigrationPlan)){throw '事件索引迁移要求独立完整维护部署'}
@@ -536,7 +536,7 @@ if($RepairStoppedLaunch){
  }
  Assert-StoppedRepairProcesses $record $backupRecord
  $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
- $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
+ $launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter,'-ProjectRoot','D:/project/dingtalk-dsh-assistant') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
  $inputHashes=@{};foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
  $launchRecord=@{repairOfLaunch=$RepairStoppedLaunch;repairOfLaunchSha256=$evidenceHashes[$RepairStoppedLaunch];retainedObserverPackage=$retainedObserverPackage;retainedObserverPackageSha256=$retainedObserverPackageSha256;observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode='maintenance';launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=$ExpectedPackageSha256;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=$ExpectedProfileSha256;backup=$record.backup;maintenanceId=$record.maintenanceId;enrollmentAutostartRestore=[bool]$record.enrollmentAutostartRestore}
  if($noBackupRepair){
@@ -732,7 +732,7 @@ if($Bootstrap){
 # 用既有启动脚本，不创建或改写计划任务；仅当前进程树使用D盘TEMP。
 $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
 if($MigrateExecutionEventsIndex){[void](Run-Node @($checker,'execution-events-index-verify',"$EvidenceDirectory/execution-events-index-migration.json",'offline'))}
-$launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
+$launch=Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-File',$starter,'-ProjectRoot','D:/project/dingtalk-dsh-assistant') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$EvidenceDirectory/start.stdout.log" -RedirectStandardError "$EvidenceDirectory/start.stderr.log"
 $launchRecord=@{backupCreated=$historicalBackupRequired;deploymentControlPath=$deploymentControlPath;deploymentControlSha256=(Get-FileHash -LiteralPath $deploymentControlPath).Hash;executionEventsIndexMigrationSha256=$executionEventsIndexMigrationSha256;messageImpactMigrationSha256=$messageImpactMigrationSha256;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256;taskMigrationPlan=$TaskMigrationPlan;taskMigrationJournalSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$EvidenceDirectory/task-file-migration.json").Hash}else{''};observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;directQueriesProposal=$DirectQueriesProposal;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
 $launchRecord|ConvertTo-Json|Set-Content -LiteralPath "$EvidenceDirectory/launch.json" -Encoding utf8
 $result=Read-Deployment $launchRecord

@@ -12,6 +12,14 @@
 
 每次模型调用的执行窗口由当前 Host 显式传入并从该次节点实际领取开始，不沿用旧消息 policy 的调用时限，维护和重试排队不消耗执行窗口；真实失败按 lease 计入有界恢复次数，重复扫描不重复扣次数。无业务命令且纯状态通知已独立确认送达时，也可保留通知审计后重处理。旧消息可通过本机受控接口逐条重处理。没有业务命令、全消息澄清通知已独立确认送达且答复已接纳时，恢复会保留原通知并继承答复，不重复询问；发送结果未确认或已有业务命令时仍拒绝重处理。操作及回读要求见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
 
+## 本地安全重启
+
+Windows 正式启动通过 Node 原生同步模块加载，保持原始模块解析和内容；不使用诊断采样。`scripts/start-web.ps1` 支持显式 `-ProjectRoot`，持久启动文件统一部署到 `DSH_HOME/launchers`。
+
+Windows 本地重启使用 `scripts/restart-web.ps1 -ProjectRoot <实际主检出路径>`，先加 `-Check` 做零副作用预检。桌面 `restart-dsh-web.ps1` 委托 `DSH_HOME/launchers/restart-web.ps1`，独立工作树交付后将正式脚本部署到该持久位置，不让桌面入口绑定临时工作树。
+
+等待阶段先用原生监听快照和 HTTP；就绪时仍独立核验新 PID、双端口归属与健康。脚本显示初始化等待，并输出初查、排空、停机、服务就绪、恢复与总耗时；超时保留失败及维护状态，不重复启动。操作与诊断边界见[本地部署说明](docs/ops/resident-review-local-deployment.md#桌面安全重启及耗时)。
+
 ## 从群聊机器人到数字员工
 
 常见的群聊机器人或 Agent 接入方式通常需要被 `@` 才会唤醒，只能获得当前消息附近的片段上下文，更适合问答、检索等单次工作。`dingtalk-dsh-assistant` 通过 DSH 原生 Session、subagent 与 Goal，把群聊协作变成可持续、可并行、可追踪的任务闭环。
