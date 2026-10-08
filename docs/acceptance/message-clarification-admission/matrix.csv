@@ -37,3 +37,4 @@ final-package-process-web-readback,13,PASS,round-13.md
 four-message-live-topic-repair,13,PASS,round-13/live-topic-readback.json
 original-business-history-preserved,13,PASS,round-13.md
 live-dingtalk-inbound,13,BLOCKED_AUTH,round-13.md
+pull-request-readback,13,PASS,round-13.md

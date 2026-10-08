@@ -18,3 +18,7 @@
 历史澄清请求及已送达通知保留，未把修复话题当作业务补充或授权回复。本轮验证不代表原业务任务已开发，也不代表消息通道已重新认证。
 
 本地原始日志和配置放 `docs/tmp/clarification-deployment-inputs/topic-*` 与 `docs/tmp/topic-evolution-deployment/`，不入库。复现依次使用同一包参数 `deploy-owner-repair.ps1 -Check / -HoldMaintenance / -Readback`、受管话题 CLI 和 `-Resume`；不要原样重放已应用的历史修复。
+
+延时独立读回：`round-13/delayed-runtime-readback.json`，10:39:16 双端口仍由 PID 146180 持有，maintenanceActive=false、drained=true，自启已恢复；通道仍受登录阻塞。
+
+交付：`https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/155`，`gh pr view --json url,number,state,headRefName,headRefOid` 返回 number=155、state=OPEN、代码提交=7ec1435b0617114c5764a15678e4fdea17587f6f。`gh pr checks` 返回 no checks reported，不代表 CI 已通过。PR 正文结构检查 feature PASS；未合并。
