@@ -12,7 +12,7 @@ const hash = value => createHash('sha256').update(value).digest('hex')
 const plain = value => value && typeof value === 'object' && !Array.isArray(value)
 
 /** 精确更新双项目验收及显式 UAT 策略，保留 !!js 和无关配置原文。 */
-export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate = false, mergePolicy, checksProposal } = {}) {
+export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate = false, mergePolicy, checksProposal, repositoryPatches } = {}) {
   if (!plain(bundle) || !isDeepStrictEqual(Object.keys(bundle).sort(), [...ids].sort())) fail('LOCAL_CONFIG_BUNDLE_INVALID')
   const schema = yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: value => value })])
   const parse = text => {
@@ -115,6 +115,29 @@ export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate =
     if (!isDeepStrictEqual(before.workflow.platforms.uatMerge, mergePolicy)) replaceProperty(before.workflow.platforms, 'uatMerge', mergePolicy)
     if (before.hosts[0].uatMergeWritesEnabled !== true) replaceProperty(before.hosts[0], 'uatMergeWritesEnabled', true)
   }
+  if(repositoryPatches!==undefined){
+    if(!allowUpdate||!Array.isArray(repositoryPatches)||!repositoryPatches.length||new Set(repositoryPatches.map(p=>p?.id)).size!==repositoryPatches.length)fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+    for(const patch of repositoryPatches){
+      if(!plain(patch)||!ids.includes(patch.id)||Object.keys(patch).some(k=>!['id','dependencyRepositories','taskLocalAcceptance','checks'].includes(k)))fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+      const repo=before.repositories.find(r=>r.id===patch.id)
+      if(patch.dependencyRepositories!==undefined){
+        if(!Array.isArray(patch.dependencyRepositories)||patch.dependencyRepositories.length!==1||patch.dependencyRepositories[0]!==ids.find(id=>id!==patch.id))fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+        if(!isDeepStrictEqual(repo.dependencyRepositories,patch.dependencyRepositories))replaceProperty(repo,'dependencyRepositories',patch.dependencyRepositories)
+      }
+      if(patch.taskLocalAcceptance!==undefined){
+        if(!Array.isArray(patch.taskLocalAcceptance)||patch.taskLocalAcceptance.some(item=>!plain(item)||Object.keys(item).sort().join(',')!=='localAcceptance,scope'||!plain(item.scope)||Object.keys(item.scope).sort().join(',')!=='requestDigest,taskId,uatEnvironment'||!/^task-[a-f0-9]+$/.test(item.scope.taskId)||!/^uat[1-9]$/.test(item.scope.uatEnvironment)||!/^[a-f0-9]{64}$/.test(item.scope.requestDigest)))fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+        for(const item of patch.taskLocalAcceptance)try{createLocalAcceptanceRunner({root:repo.managedRoot,config:item.localAcceptance})}catch{fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')}
+        if(!isDeepStrictEqual(repo.taskLocalAcceptance,patch.taskLocalAcceptance))replaceProperty(repo,'taskLocalAcceptance',patch.taskLocalAcceptance)
+      }
+      if(patch.checks!==undefined){
+        const expected=structuredClone(repo.checks);let changed=0
+        if(patch.id!=='dataset-web')fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+        for(const check of expected)for(const step of check.steps??[])if(step.args?.[0]==='--test'){step.args=['--test'];check.version=String(Number(check.version)+1);changed++}
+        if(!isDeepStrictEqual(repo.checks,patch.checks)&&(!changed||!isDeepStrictEqual(expected,patch.checks)))fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+        if(!isDeepStrictEqual(repo.checks,patch.checks))replaceProperty(repo,'checks',patch.checks)
+      }
+    }
+  }
   if (checksProposal !== undefined) {
     const repo = before.repositories.find(item => item.id === 'dataset')
     if (!allowUpdate || !plain(checksProposal) || Object.keys(checksProposal).some(key => !['repository','checks','sourceChecksSha256'].includes(key))
@@ -125,9 +148,10 @@ export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate =
     if (!isDeepStrictEqual(repo.checks, checksProposal.checks)) {
       if (hash(JSON.stringify(repo.checks)) !== checksProposal.sourceChecksSha256) fail('LOCAL_CONFIG_CHECKS_CHANGED')
       const old = repo.checks.find(item => item.id === 'dataset-package'), next = checksProposal.checks.find(item => item.id === 'dataset-package')
-      if (!old || !next || old.version !== '1' || next.version !== '2' || old.steps?.length !== 1 || next.steps?.length !== 2
-        || !isDeepStrictEqual({ ...old, version: '2', steps: next.steps }, next)
-        || !isDeepStrictEqual(next.steps.slice(1), old.steps)
+      const upgraded=old?.steps?.length===2
+      if (!old || !next || !/^\d+$/.test(old.version) || next.version !== String(Number(old.version)+1) || ![1,2].includes(old.steps?.length) || next.steps?.length !== 2
+        || !isDeepStrictEqual({ ...old, version: next.version, steps: next.steps }, next)
+        || !isDeepStrictEqual(next.steps.slice(1), upgraded?old.steps.slice(1):old.steps)
         || !isDeepStrictEqual(repo.checks.filter(item => item.id !== old.id), checksProposal.checks.filter(item => item.id !== old.id))
         || repo.checks.length !== checksProposal.checks.length
         || !isAbsolute(next.steps[0].executable ?? '') || !Array.isArray(next.steps[0].args)
@@ -145,17 +169,19 @@ export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate =
   const strip = parsed => {
     for (const repo of parsed.repositories) if (ids.includes(repo.id)) delete repo.localAcceptance
     if (checksProposal !== undefined) delete parsed.repositories.find(repo => repo.id === 'dataset').checks
+    for(const patch of repositoryPatches??[])for(const key of Object.keys(patch).filter(key=>key!=='id'))delete parsed.repositories.find(repo=>repo.id===patch.id)[key]
     if (mergePolicy !== undefined) { delete parsed.workflow.platforms.uatMerge; delete parsed.hosts[0].uatMergeWritesEnabled }
     return parsed.document
   }
   for (const id of ids) if (!isDeepStrictEqual(after.repositories.find(repo => repo.id === id).localAcceptance, bundle[id])) fail('LOCAL_CONFIG_ROUNDTRIP_MISMATCH')
   if (checksProposal !== undefined && !isDeepStrictEqual(after.repositories.find(repo => repo.id === 'dataset').checks, checksProposal.checks)) fail('LOCAL_CONFIG_ROUNDTRIP_MISMATCH')
+  for(const patch of repositoryPatches??[])for(const key of Object.keys(patch).filter(key=>key!=='id'))if(!isDeepStrictEqual(after.repositories.find(repo=>repo.id===patch.id)[key],patch[key]))fail('LOCAL_CONFIG_ROUNDTRIP_MISMATCH')
   if (mergePolicy !== undefined && (!isDeepStrictEqual(after.workflow.platforms.uatMerge, mergePolicy) || after.hosts[0].uatMergeWritesEnabled !== true)) fail('LOCAL_CONFIG_ROUNDTRIP_MISMATCH')
   if (!isDeepStrictEqual(strip(before), strip(after))) fail('LOCAL_CONFIG_UNRELATED_CHANGE')
   return { updated, changed: insertions.length > 0 }
 }
 
-export async function configureProjectLocalAcceptance({ profile, bundle, mode, expectedSha256, mergePolicy, checksProposal }) {
+export async function configureProjectLocalAcceptance({ profile, bundle, mode, expectedSha256, mergePolicy, checksProposal, repositoryPatches }) {
   if (!isAbsolute(profile ?? '') || !isAbsolute(bundle ?? '') || !['check', 'apply'].includes(mode)) fail('LOCAL_CONFIG_ARGUMENTS_INVALID')
   if ((expectedSha256 !== undefined && !/^[a-f0-9]{64}$/.test(expectedSha256))
     || (mode === 'apply' && !expectedSha256) || (mergePolicy !== undefined && !isAbsolute(mergePolicy))
@@ -168,7 +194,9 @@ export async function configureProjectLocalAcceptance({ profile, bundle, mode, e
   if (mergePolicy) { try { policy = JSON.parse(await readFile(mergePolicy, 'utf8')) } catch { fail('LOCAL_CONFIG_MERGE_POLICY_JSON_INVALID') } }
   let checks
   if (checksProposal) { try { checks = JSON.parse(await readFile(checksProposal, 'utf8')) } catch { fail('LOCAL_CONFIG_CHECKS_PROPOSAL_JSON_INVALID') } }
-  const plan = planProjectLocalAcceptance(source, supplied, yaml, { allowUpdate: !!expectedSha256, mergePolicy: policy, checksProposal: checks })
+  let patches
+  if(repositoryPatches){try{patches=JSON.parse(await readFile(repositoryPatches,'utf8'))}catch{fail('LOCAL_CONFIG_REPOSITORY_PATCH_JSON_INVALID')}}
+  const plan = planProjectLocalAcceptance(source, supplied, yaml, { allowUpdate: !!expectedSha256, mergePolicy: policy, checksProposal: checks, repositoryPatches:patches })
   const result = { mode, changed: plan.changed, repositories: ids, beforeSha256: hash(source), afterSha256: hash(plan.updated), writes: 0 }
   if (mode === 'check' || !plan.changed) return result
   const lockPath = `${profile}.local-acceptance.lock`
@@ -195,8 +223,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     for (let i = 0; i < args.length; i++) {
       const arg = args[i]
       if (['--check', '--apply'].includes(arg) && !values.mode) values.mode = arg.slice(2)
-      else if (['--profile', '--bundle', '--expected-sha256', '--merge-policy', '--checks-proposal'].includes(arg) && args[i + 1]) {
-        const key = arg === '--expected-sha256' ? 'expectedSha256' : arg === '--merge-policy' ? 'mergePolicy' : arg === '--checks-proposal' ? 'checksProposal' : arg.slice(2)
+      else if (['--profile', '--bundle', '--expected-sha256', '--merge-policy', '--checks-proposal','--repository-patches'].includes(arg) && args[i + 1]) {
+        const key = arg === '--expected-sha256' ? 'expectedSha256' : arg === '--merge-policy' ? 'mergePolicy' : arg === '--checks-proposal' ? 'checksProposal' : arg==='--repository-patches'?'repositoryPatches':arg.slice(2)
         if (values[key]) fail('LOCAL_CONFIG_ARGUMENTS_INVALID')
         values[key] = args[++i]
       }

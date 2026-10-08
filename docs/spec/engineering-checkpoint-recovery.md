@@ -22,3 +22,17 @@ Controller/store的节点恢复边界、task-workflow-contracts的工程检查�
 用户确认材料采用现有 Task 共享目录。正文继续只存 work/artifacts 的原 SHA JSON，共享索引列出来源版本与 current/history；工程读取工具按 Task 绑定按需读取。历史材料明确标注历史，不冒充最新授权。撤销材料全文 taskContext 复制与 materials checkpoint。新增材料只更新索引，不改变 generation 或冻结节点定义。
 
 检查配置采用唯一内部 checks checkpoint：注册实际新检查配置生成的完整 workflow，保存 checkpointChecks 与原摘要/请求号；Controller 准备 verify-candidate 新输入，Store 对 Task 控制/来源、Run revision、旧新注册记录及排空状态做 CAS。只允许旧新记录除检查配置/审计字段外完全一致；当前 verify-candidate 必须为工程验证失败且后继完全未执行。保持原 Task/Run/generation、全部成功前缀、工作区与候选；仅更新该失败验证节点及后继的节点版本，不清除旧失败证据（审计 artifact 保存原输入/输出/证据引用）。不得直接改全局 profile 造成其他已注册 Run 摘要漂移。
+
+## SG20：候选校验退回原提案节点
+
+现场83c generation4的原提案有13条替换，其中11条有效、2条from===to。validate-proposal正确拒绝含空操作的候选；问题是现有node.resume只接受失败agent，不能把紧邻纯校验节点的明确候选错误退回已提交的agent。因此不修改冻结v18工厂，不删除模型条目，不重开Task/Run/generation。
+
+复用Owner的inspectNodeRecovery/node.resume，限定已登记工程v18、inspect-and-propose成功且紧邻validate-proposal等待、4类明确候选语义校验错误（无效修改、修改类型、no-change证据、方案文档）。Controller核冻结validator纯效果、无输出；Store核Task/来源/输入/租约/CAS、全链排空、无提案和下游效果、其后节点从未执行。原agent的input/session保持不变，原提案及校验失败引用记录到正式恢复事件；agent设ready，validator设blocked等待新提案。仅agent纠正及validator重验，所有先前节点不重领。
+
+原validator已用过的lease不归零；仅正式node.resume审计明确退回的紧邻validator允许保持blocked非零lease，避免租约碰撞。重复同一候选错误仍按原problemKey一次恢复门禁拒绝，不能无限重试。未知错误、下游已执行/效果、新来源/暂停/未排空不放行。
+
+## Owner诊断身份的闭环
+
+纯validator失败时，恢复目标是其前置Agent，但失败工件身份仍是validator，不能要求两者nodeRunId、lease和inputDigest相同。Host恢复快照显式携带validationNodeRunId、validationLeaseEpoch、validationInputDigest，ExecutionController先与当前validator节点复核；Owner仅读取并引用完全匹配该身份的原失败工件。普通Agent失败仍匹配Agent自身身份，不放宽输入、来源、CAS或一次续行规则。
+
+检查失败的候选源码修复：原 changeInput 全量计划导致整代准备重复；在已准入 repair 事务内对明确 verify-candidate 失败保持原需求/代次/工作区，重入 inspect 后缀，保留原候选差异并重新验证。只允许后续未执行且无外部效果，配置checkpoint仍独立处理。证据见 round-56。

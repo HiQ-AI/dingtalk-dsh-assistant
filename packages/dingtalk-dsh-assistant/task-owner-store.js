@@ -60,8 +60,12 @@ const decision = value => {
   if (value.planChange !== undefined) {
     if (value.action !== 'advance' || value.appendStages !== undefined) fail('TASK_OWNER_DECISION_INVALID')
     exact(value.planChange, ['kind', 'stages', 'affectedFrom'], ['kind', 'stages'])
-    if (!['initialize', 'append', 'replaceSuffix'].includes(value.planChange.kind)
+    if (!['initialize', 'append', 'replaceSuffix', 'insertDependency'].includes(value.planChange.kind)
       || !Array.isArray(value.planChange.stages) || !value.planChange.stages.length) fail('TASK_OWNER_DECISION_INVALID')
+    if (value.planChange.kind === 'insertDependency' && (value.planChange.stages.length !== 1
+      || value.planChange.stages[0].workflowId !== 'task-engineering'
+      || value.planChange.stages[0].gate !== 'none' || !value.planChange.stages[0].sourceCondition?.repositoryId))
+      fail('TASK_OWNER_DECISION_INVALID')
     if (value.planChange.kind === 'replaceSuffix') {
       if (!Number.isSafeInteger(value.planChange.affectedFrom) || value.planChange.affectedFrom < 0)
         fail('TASK_OWNER_DECISION_INVALID')
@@ -86,7 +90,9 @@ const decision = value => {
       exact(stage, ['workflowId', 'gate', 'capabilityStep', 'sourceCondition'], ['workflowId', 'gate'])
       if (stage.sourceCondition !== undefined) {
         const condition = stage.sourceCondition
-        exact(condition, ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective', 'requiredActorId'], ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective'])
+        exact(condition, ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective', 'requiredActorId', 'repositoryId', 'acceptanceCriteria'], ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective'])
+        if (condition.repositoryId !== undefined && (typeof condition.repositoryId !== 'string' || !condition.repositoryId.trim()
+          || !acceptanceCriteriaSchema.safeParse(condition.acceptanceCriteria).success)) fail('TASK_OWNER_DECISION_INVALID')
         if (!Number.isSafeInteger(condition.sourceVersion) || condition.sourceVersion < 1
           || ['sourceKey', 'sourceQuote', 'objective'].some(key => typeof condition[key] !== 'string' || !condition[key].trim())
           || !condition.sourceQuote.includes(condition.objective)

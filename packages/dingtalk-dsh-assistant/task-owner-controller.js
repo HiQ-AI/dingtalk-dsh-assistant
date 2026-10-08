@@ -279,9 +279,11 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                 throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD', '须在本轮读取并引用 currentExecution.evidenceRefs 的全部诊断；额外证据须已通过本轮受信查询或允许的工件读取。')
               if (input.currentExecution.mode === 'resume-agent' && !decision.evidenceRefs.some(ref => {
                 const diagnostic = readArtifacts.get(ref), current = input.currentExecution
+                const failed = current.validationNodeRunId ? { nodeRunId: current.validationNodeRunId,
+                  leaseEpoch: current.validationLeaseEpoch, inputDigest: current.validationInputDigest } : current
                 return diagnostic?.kind === 'execution-failure' && diagnostic.runId === current.runId
-                  && diagnostic.nodeRunId === current.nodeRunId && diagnostic.generation === current.generation
-                  && diagnostic.leaseEpoch === current.leaseEpoch && diagnostic.inputDigest === current.inputDigest
+                  && diagnostic.nodeRunId === failed.nodeRunId && diagnostic.generation === current.generation
+                  && diagnostic.leaseEpoch === failed.leaseEpoch && diagnostic.inputDigest === failed.inputDigest
               })) throw error('TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD')
             }
             const proposed = decision.planChange?.stages ?? decision.appendStages
@@ -412,11 +414,17 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                 stageId: `stage-${stageIdBase + index + 1}` }))
               if (!priorPlanReceipt) {
                 if (mode === 'replaceSuffix' && plan.stages.some(stage => stage.status === 'running')) continue
-                const prepared = mode === 'initialize' || mode === 'replaceSuffix' && affectedFrom === 0
-                  ? await (prepareInitialStage?.({ taskId, stage: proposedStages[0], decision, plan })
+                const prepared = mode === 'initialize' || mode === 'insertDependency' || mode === 'replaceSuffix' && affectedFrom === 0
+                  ? await (prepareInitialStage?.({ taskId, stage: { ...proposedStages[0], stageId: stages[0].stageId }, decision, plan })
                     ?? artifacts.read(plan.task.requirementRef).then(input => ({ input }))) : null
                 const initial = prepared ? { ...stages[0], ...prepared } : null
-                if (mode === 'initialize') await controller.initializeTaskPlan({
+                if (mode === 'insertDependency') {
+                  const current = plan.stages.find(stage => !['succeeded', 'invalidated'].includes(stage.status))
+                  await controller.insertTaskDependency({ commandId: `owner-plan:${turnId}`, ownerTurnId: turnId,
+                    taskId, expectedPlanRevision: action.planRevision, expectedControlRevision: action.controlRevision,
+                    requirementRevision: action.requirementRevision, beforeStageId: current?.stageId, stage: initial })
+                }
+                else if (mode === 'initialize') await controller.initializeTaskPlan({
                   commandId: `owner-plan:${turnId}`, ownerTurnId: turnId, taskId, expectedPlanRevision: 0,
                   expectedRequirementRevision: action.requirementRevision,
                   expectedControlRevision: action.controlRevision,

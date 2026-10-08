@@ -1,10 +1,20 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { testArguments } from '../scripts/verify-dataset-unit-tests.mjs'
+import { testArguments, runCaptured } from '../scripts/verify-dataset-unit-tests.mjs'
+
+test('长检查输出完整落盘，尾部失败可见且保持真实退出码',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'dataset-log-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const result=runCaptured(process.execPath,['-e',"process.stdout.write('DEBUG '.repeat(12000)+'\\n[ERROR] real-tail-failure\\n');process.stderr.write('stderr-proof');process.exitCode=1"],root,root,'tests')
+ assert.equal(result.exitCode,1);assert.equal(result.error,null)
+ assert.ok(result.stdoutBytes>32768);assert.match(result.stdoutTail,/real-tail-failure/)
+ assert.deepEqual(result.firstErrors,['[ERROR] real-tail-failure'])
+ assert.equal(await readFile(result.stdoutPath,'utf8'),result.stdout)
+ assert.equal(await readFile(result.stderrPath,'utf8'),'stderr-proof')
+})
 
 const bin=process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin'):''
 const java=join(bin,process.platform==='win32'?'java.exe':'java'),javac=join(bin,process.platform==='win32'?'javac.exe':'javac')
@@ -15,7 +25,7 @@ test('检查采用Maven原生单测发现并禁止跳过，报告目录独立',(
  assert.equal(args.at(-1),'org.apache.maven.plugins:maven-surefire-plugin:2.22.2:test')
  assert.ok(args.includes('-Dsurefire.reportNameSuffix=host-unit-00000000-0000-0000-0000-000000000000'))
 })
-test('JDK原生报告校验拒绝零用例、跳过、失败、缺失和伪造suite计数', {skip:process.platform!=='win32'}, async()=>{
+test('JDK报告记录跳过但拒绝全跳过、零用例、失败、缺失和伪造计数', {skip:process.platform!=='win32'}, async()=>{
  const root=await mkdtemp(join(tmpdir(),'host-junit-proof-')),classes=join(root,'classes');await mkdir(classes)
  const compile=spawnSync(javac,['-encoding','UTF-8','-d',classes,resolve('scripts/LocalAcceptanceBackground.java')],{encoding:'utf8',windowsHide:true});assert.equal(compile.status,0,compile.stderr)
  const names=['ProcessImportTemplateSheetTest','ImportControllerTaskStatusTest'],suffix='host-unit-00000000-0000-0000-0000-000000000000'
@@ -23,6 +33,10 @@ test('JDK原生报告校验拒绝零用例、跳过、失败、缺失和伪造su
  const run=()=>spawnSync(java,['-cp',classes,'LocalAcceptanceBackground','junit',root,suffix],{encoding:'utf8',windowsHide:true})
  assert.notEqual(run().status,0)
  await write();const good=run();assert.equal(good.status,0,good.stderr);assert.match(good.stdout,/"tests":2/)
+ await write();await writeFile(join(root,`TEST-com.ecdigit.ecdata.service.merge.${names[0]}-${suffix}.xml`),`<testsuite name="com.ecdigit.ecdata.service.merge.${names[0]}(${suffix})" tests="1" failures="0" errors="0" skipped="1"><testcase><skipped message="Requires integration context"/></testcase></testsuite>`)
+ const mixed=run();assert.equal(mixed.status,0,mixed.stderr);assert.match(mixed.stdout,/"executed":1/);assert.match(mixed.stdout,/"skipped":1/)
+ await writeFile(join(root,`TEST-com.ecdigit.ecdata.service.merge.${names[1]}-${suffix}.xml`),`<testsuite name="com.ecdigit.ecdata.service.merge.${names[1]}(${suffix})" tests="1" failures="0" errors="0" skipped="1"><testcase><skipped/></testcase></testsuite>`)
+ assert.notEqual(run().status,0,'全部跳过不能通过检查')
  const stale=spawnSync(java,['-cp',classes,'LocalAcceptanceBackground','junit',root,'host-unit-11111111-1111-1111-1111-111111111111'],{encoding:'utf8',windowsHide:true})
  assert.notEqual(stale.status,0,'其他执行的成功报告不能复用')
  await write();await writeFile(join(root,`TEST-com.ecdigit.ecdata.service.merge.${names[0]}-${suffix}.xml`),'<testsuite name="forged" tests="1" failures="0" errors="0" skipped="0"><testcase/></testsuite>');assert.notEqual(run().status,0,'suite身份伪造拒绝')

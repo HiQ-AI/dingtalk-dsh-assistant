@@ -15,6 +15,7 @@ export const agentResourceReadParameters = { type:'object', properties:{resource
 export function createAgentResourceReadCapability({ resources }) {
  if(!Array.isArray(resources)||!resources.length||new Set(resources.map(r=>r.id)).size!==resources.length)fail('QUERY_RESOURCE_CONFIG_INVALID')
  for(const r of resources)if(!r.id||!isAbsolute(r.root??'')||!Array.isArray(r.paths)||!r.paths.length||r.paths.some(p=>!safePath(p)||denied(p))||r.kind==='repository'&&!/^[a-f0-9]{40}$/.test(r.commit??'')||!['repository','files'].includes(r.kind))fail('QUERY_RESOURCE_CONFIG_INVALID')
+ for(const r of resources)if(r.hostReceipts!==undefined&&(!Array.isArray(r.hostReceipts)||r.kind!=='files'||new Set(r.hostReceipts.map(x=>x?.path)).size!==r.hostReceipts.length||r.hostReceipts.some(x=>!x||Object.keys(x).sort().join(',')!=='digest,path,requirementRevision,taskId'||!allowed(r,x.path)||!/^[a-f0-9]{64}$/.test(x.digest)||typeof x.taskId!=='string'||!x.taskId||!Number.isSafeInteger(x.requirementRevision)||x.requirementRevision<1)))fail('QUERY_RESOURCE_CONFIG_INVALID')
  const registry=new Map(resources.map(r=>[r.id,structuredClone(r)]))
  const produced=new WeakSet()
  const authorize=async({input,scope})=>registry.has(input.resourceId)&&Array.isArray(scope.resourceIds)&&scope.resourceIds.includes(input.resourceId)
@@ -96,8 +97,11 @@ export function createAgentResourceReadCapability({ resources }) {
    if(input.operation==='read'){
     if(!input.path)fail('QUERY_ARGUMENT_INVALID')
     const content=await read(resource,input.path,signal),digest=executionDigest(content)
+    const receipt=resource.hostReceipts?.find(x=>x.path===input.path)
+    if(receipt&&receipt.digest!==digest)fail('QUERY_RECEIPT_CONTENT_CHANGED')
     const visible=redact(content)
     value={path:input.path,content:visible.slice(offset,offset+limit),offset,nextOffset:offset+limit<visible.length?offset+limit:null,digest}
+    if(receipt)value.hostReceipt={...receipt}
     coverage={kind:'resource',operation:'read',queryDigest:executionDigest([resource.id,input.path,digest]),offset,endOffset:Math.min(offset+limit,visible.length),nextOffset:value.nextOffset,path:input.path,fileDigest:digest}
     sources=[`${resource.id}:${resource.commit??digest}:${input.path}`]
    }else{

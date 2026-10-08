@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
+import { readFile, writeFile, rename, unlink, mkdir } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import yaml from 'js-yaml'
 import { join, isAbsolute } from 'node:path'
@@ -16,6 +16,7 @@ export const name='dsh-bootstrap-dispose-witness'
 export const inject=['loader']
 export async function apply(ctx,config){
   if(!witnessValid(config) || config.expectedPid!==process.pid)fail('BOOTSTRAP_WITNESS_IDENTITY_INVALID')
+  await mkdir(config.evidenceDirectory,{recursive:true})
   let ready=false, disposed=false
   const publish=async(kind)=>{
     const output=join(config.evidenceDirectory,`bootstrap-${kind}.json`),temporary=output+'.'+randomUUID()+'.tmp'
@@ -41,7 +42,12 @@ export function bootstrapProfile(source, mode, yaml, witness) {
   walk(document)
   if(residents.length!==1 || residents[0].id!=='dingtalk-dsh-assistant' || residents[0].disabled) fail('BOOTSTRAP_RESIDENT_IDENTITY_INVALID')
   if(mode==='witness'){
-    if(!witnessValid(witness) || source.includes('# dsh-bootstrap-witness:'))fail('BOOTSTRAP_WITNESS_INVALID')
+    if(!witnessValid(witness))fail('BOOTSTRAP_WITNESS_INVALID')
+    if(source.includes('# dsh-bootstrap-witness:')){
+      const entries=document.flatMap(row=>Array.isArray(row.insert)?row.insert:[]).filter(row=>row.id==='dsh-bootstrap-dispose-witness')
+      if(entries.length!==1||entries[0].name!==import.meta.url||!witnessValid(entries[0].config)||!source.endsWith(witnessBlock(entries[0].config))||entries[0].config.expectedPid!==witness.expectedPid||entries[0].config.evidenceDirectory!==witness.evidenceDirectory)fail('BOOTSTRAP_WITNESS_CHANGED')
+      source=source.slice(0,-witnessBlock(entries[0].config).length)
+    }
     return source+witnessBlock(witness)
   }
   if(mode==='disable') {

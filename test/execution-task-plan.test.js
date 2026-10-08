@@ -728,3 +728,109 @@ test('同Task两条测试后等待指定发送人验收，精确阶段条件与�
   assert.equal(await artifacts.read(plan.stages[1].outputRef), 70)
   assert.equal((await store.query({ kind: 'run.list', taskId: 'condition-task' })).length, 2)
 })
+
+for (const viaOwner of [false, true]) test(`必要工程依赖插入保留等待Run和成功前缀，完成后返回原阶段 owner=${viaOwner}`, async t => {
+  let { controller, store, artifacts, dbPath, instanceId } = await setup(t)
+  const frontend = { ...workflow('task-engineering-frontend'), nodes: [
+    { ...workflow('unused').nodes[0], id: 'prepare' },
+    { ...workflow('unused').nodes[0], id: 'accept', execute: async () => { throw Object.assign(new Error('backend missing'), { code: 'LOCAL_ACCEPTANCE_PLAN_INVALID' }) } },
+  ] }
+  controller.registerWorkflow(frontend)
+  controller.registerWorkflow(workflow('task-engineering-backend'))
+  const body = '开发生产活动合并结果和失败明细下载，提测UAT3'
+  await store.command({ id: 'dependency-source', kind: 'message.receive', args: { runId: 'dependency-source', sourceKey: 'dependency-source', sourceVersion: 1,
+    actorId: 'requester', conversationId: 'group', body, context: {}, policy: {} } })
+  await controller.createTaskPlan({ commandId: 'dependency-plan', taskId: 'dependency-task', stages: [
+    { stageId: 'frontend', workflowId: frontend.id, input: 2 },
+  ] })
+  let plan = await controller.advanceTaskPlan('dependency-task')
+  const originalRunId = plan.stages[0].runId
+  await controller.whenIdle(originalRunId)
+  const original = await controller.state(originalRunId)
+  assert.equal(original.run.status, 'waiting')
+  assert.equal(original.nodes[0].status, 'succeeded')
+  const request = { commandId: 'insert-backend', taskId: 'dependency-task', expectedPlanRevision: 1, expectedControlRevision: 1,
+    requirementRevision: 1, beforeStageId: 'frontend', stage: { stageId: 'backend', workflowId: 'task-engineering-backend', input: 2,
+      sourceCondition: { sourceKey: 'dependency-source', sourceVersion: 1, sourceQuote: body, objective: '失败明细下载', repositoryId: 'dataset', acceptanceCriteria: ['真实导出API返回失败组明细Excel'] } } }
+  await assert.rejects(controller.insertTaskDependency({ ...request, commandId: 'stale-dependency', requirementRevision: 2 }), { code: 'TASK_PLAN_STALE' })
+  await assert.rejects(controller.insertTaskDependency({ ...request, commandId: 'foreign-source', stage: { ...request.stage,
+    sourceCondition: { ...request.stage.sourceCondition, sourceVersion: 2 } } }), { code: 'TASK_STAGE_SOURCE_CONDITION_INVALID' })
+  if (viaOwner) {
+    const decision = { action: 'advance', summary: '原需求失败明细下载需要真实后端导出实现，先完成此必要依赖再继续原前端', evidenceRefs: [],
+      planChange: { kind: 'insertDependency', stages: [{ workflowId: 'task-engineering', gate: 'none', sourceCondition: request.stage.sourceCondition }] } }
+    const owner = createTaskOwnerController({ctx:{},store,artifacts,controller,modelConfig:()=>({}),advanceTask:id=>controller.advanceTaskPlan(id),
+      authorizeStages:async({stages})=>stages[0].sourceCondition.repositoryId==='dataset',
+      prepareInitialStage:async()=>({workflowId:'task-engineering-backend',input:2}),
+      sessionRunner:{async run({onSessionBound,onCandidate}){await onSessionBound();await onCandidate(decision);return {status:'submitted',decision}},async close(){}}})
+    t.after(()=>owner.close())
+    await owner.ensure({taskId:'dependency-task',sourceKey:'dependency-source',criteria:['真实前后端完成'],origin:{actorId:'requester'}})
+    await owner.drive('dependency-task')
+    assert.deepEqual(await owner.applyPending(),[])
+    // Owner 使用自动分配stage-2，测试后续按持久身份读取，不假设模型指定ID。
+    request.stage.stageId='stage-2'
+  } else {
+    await controller.insertTaskDependency(request)
+    assert.deepEqual((await controller.insertTaskDependency(request)).result, await store.query({ kind: 'receipt', commandId: 'insert-backend' }).then(receipt => receipt.result))
+  }
+  plan = await controller.taskPlan('dependency-task')
+  assert.equal(plan.stages[0].stageId,request.stage.stageId)
+  assert.equal(plan.stages[1].status,'blocked')
+  assert.equal(plan.stages[1].runId, originalRunId)
+  await assert.rejects(controller.insertTaskDependency({ ...request, commandId: 'duplicate-dependency', stage: { ...request.stage, stageId: 'another-backend' } }), { code: 'TASK_DEPENDENCY_INVALID' })
+  await assert.rejects(controller.recover({ commandId: 'resume-suspended-frontend', runId: originalRunId }), { code: 'TASK_DEPENDENCY_PENDING' })
+  assert.deepEqual((await controller.state(originalRunId)).nodes, original.nodes)
+  assert.deepEqual((await controller.state(originalRunId)).nodes, original.nodes)
+  if (!viaOwner) {
+    await controller.close();await store.close()
+    store=await openExecutionStore({dbPath,instanceId})
+    controller=createExecutionController({store,artifacts,workflows:[frontend,workflow('task-engineering-backend')]})
+    const reopenedController=controller,reopenedStore=store
+    t.after(async()=>{await reopenedController.close();await reopenedStore.close()})
+    assert.equal((await controller.state(originalRunId)).run.recoveryReason,'stage-dependency')
+  }
+  plan = await controller.advanceTaskPlan('dependency-task')
+  await controller.whenIdle(plan.stages[0].runId)
+  await controller.advanceTaskPlan('dependency-task')
+  plan = await controller.taskPlan('dependency-task')
+  assert.equal(plan.stages[1].status, 'running')
+  assert.equal(plan.stages[1].runId, originalRunId)
+  assert.deepEqual((await controller.state(originalRunId)).nodes, original.nodes)
+  await controller.recover({commandId:'continue-original-after-backend',runId:originalRunId})
+  await controller.whenIdle(originalRunId)
+  const continued=await controller.state(originalRunId)
+  assert.deepEqual(continued.nodes[0],original.nodes[0])
+  assert.equal(continued.nodes[1].leaseEpoch,original.nodes[1].leaseEpoch+1)
+  assert.equal(continued.run.generation,original.run.generation)
+  if (!viaOwner) { await controller.close();await store.close() }
+})
+
+test('必要依赖拒绝活跃节点与新输入，未改原Run或阶段', async t => {
+ const {controller,store,artifacts,dbPath}=await setup(t)
+ let release, entered
+ const gate=new Promise(resolve=>{release=resolve}), started=new Promise(resolve=>{entered=resolve})
+ t.after(()=>release())
+ controller.registerWorkflow({...workflow('task-engineering-busy'),nodes:[{...workflow('x').nodes[0],execute:async()=>{entered();await gate;throw Error('needs backend')}}]})
+ controller.registerWorkflow(workflow('task-engineering-needed'))
+ const body='实现失败明细下载'
+ await store.command({id:'busy-source',kind:'message.receive',args:{runId:'busy-source',sourceKey:'busy-source',sourceVersion:1,actorId:'human',conversationId:'group',body,context:{},policy:{}}})
+ await controller.createTaskPlan({commandId:'busy-plan',taskId:'busy-task',stages:[{stageId:'frontend',workflowId:'task-engineering-busy',input:1}]})
+ const plan=await controller.advanceTaskPlan('busy-task');await started
+ const runId=plan.stages[0].runId
+ const request={commandId:'insert-busy',taskId:'busy-task',expectedPlanRevision:1,expectedControlRevision:1,requirementRevision:1,beforeStageId:'frontend',stage:{stageId:'dependency',workflowId:'task-engineering-needed',input:1,sourceCondition:{sourceKey:'busy-source',sourceVersion:1,sourceQuote:body,objective:body,repositoryId:'dataset',acceptanceCriteria:['真实下载']}}}
+ await assert.rejects(controller.insertTaskDependency(request),{code:'TASK_DEPENDENCY_NOT_DRAINED'})
+ release();await controller.whenIdle(runId)
+ // 仅隔离fixture模拟曾发出但尚未对账的效果，生产路径不写SQL。
+ const node=(await controller.state(runId)).nodes[0], fixtureDb=new DatabaseSync(dbPath)
+ try {
+  fixtureDb.prepare(`INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at)
+   VALUES('unknown-effect','operation',?,?,?,?,?,'digest','{}','[]','auth','unknown','now','now')`).run(runId,node.nodeRunId,node.nodeId,node.generation,node.inputDigest)
+  await assert.rejects(controller.insertTaskDependency({...request,commandId:'insert-unknown-effect'}),{code:'run_effects_not_drained'})
+  fixtureDb.prepare("DELETE FROM execution_effects WHERE effect_id='unknown-effect'").run()
+ } finally {fixtureDb.close()}
+
+ const replacement=await artifacts.put(2)
+ await store.command({id:'new-business-input',kind:'input.accept',args:{runId,inputId:'new-input',sourceKey:'web:change',requirementRef:replacement.ref}})
+ await assert.rejects(controller.insertTaskDependency({...request,commandId:'insert-pending'}),{code:'TASK_DEPENDENCY_NOT_DRAINED'})
+ assert.equal((await controller.taskPlan('busy-task')).stages.length,1)
+ assert.notEqual((await controller.state(runId)).run.recoveryReason,'stage-dependency')
+})

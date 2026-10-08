@@ -145,6 +145,18 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     const node = state.nodes.find(item => item.nodeRunId === recovery.nodeRunId), frozen = node && definition.nodes[node.position]
     if (!frozen || frozen.executor !== 'agent' || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect)))
       return { ...recovery, repairable: false, reason: 'node-effects-not-readonly' }
+    if (recovery.validationNodeRunId) {
+      const validation = state.nodes.find(item => item.nodeRunId === recovery.validationNodeRunId)
+      const validator = validation && definition.nodes[validation.position]
+      if (validation?.position !== node.position + 1 || validation.leaseEpoch !== recovery.validationLeaseEpoch
+        || validation.inputDigest !== recovery.validationInputDigest || validator?.executor !== 'code'
+        || validator.allowedEffects.some(effect => effect !== 'pure'))
+        return { ...recovery, repairable: false, reason: 'proposal-validation-not-pure' }
+      const validationInput = await artifacts.read(validation.inputRef), proposal = await artifacts.read(node.outputRef)
+      if (executionDigest(validationInput) !== validation.inputDigest || validationInput.workflowDigest !== definition.digest
+        || validationInput.nodeId !== validation.nodeId || executionDigest(validationInput.data) !== executionDigest(proposal))
+        return { ...recovery, repairable: false, reason: 'proposal-validation-input-mismatch' }
+    }
     const input = await artifacts.read(node.inputRef)
     if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId)
       return { ...recovery, repairable: false, reason: 'node-input-identity-mismatch' }
@@ -233,6 +245,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     while (!closed) {
       const state = await query(runId)
       if (!state.run) throw executionError('RUN_NOT_FOUND')
+      if (state.run.recoveryReason === 'stage-dependency') return
       const definition = definitionOf(state.run)
       if (state.run.stopRequested) {
         await command(`stopped:${runId}`, 'run.stopped', { runId }); return
@@ -348,7 +361,16 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           }
           if (disposition?.outcome !== 'succeeded') throw executionError('NODE_ADMISSION_INVALID')
         }
-        const next = definition.nodes[ready.position + 1]
+        let nextState = state.nodes[ready.position + 1], retainedSuccessor = false
+        if (ready.nodeId === 'plan-local-acceptance' && nextState?.status === 'succeeded') {
+          const record = (await store.query({ kind: 'workflow.list' })).find(item => item.digest === state.run.workflowDigest)
+          const checkpoint = record?.config?.checkpoint
+          const receipt = checkpoint?.kind === 'local-acceptance' && await store.query({ kind: 'receipt', commandId: `engineering-checkpoint:${runId}:${checkpoint.requestId}` })
+          if (receipt?.result.toDigest !== state.run.workflowDigest) throw executionError('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+          retainedSuccessor = true
+          nextState = state.nodes.find(item => item.position > ready.position && item.status !== 'succeeded')
+        }
+        const next = nextState && (!retainedSuccessor || nextState.status === 'blocked') ? definition.nodes[nextState.position] : undefined
         const dependencies = {}
         for (const id of next?.inputDependencies ?? []) {
           if (id === ready.nodeId) dependencies[id] = output
@@ -358,7 +380,8 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             dependencies[id] = await artifacts.read(source.outputRef)
           }
         }
-        const nextInput = next ? await prepareInput(definition, next, state.run.requirementRef, output, dependencies) : null
+        const priorOutput = next && nextState.position > ready.position + 1 ? await artifacts.read(state.nodes[nextState.position - 1].outputRef) : output
+        const nextInput = next ? await prepareInput(definition, next, state.run.requirementRef, priorOutput, dependencies) : null
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
           ...identity, outcome: 'succeeded', outputRef: result.ref, evidenceRefs: [result.ref],
           ...(next ? { nextInput: { nodeId: next.id, inputRef: nextInput.ref, inputDigest: nextInput.digest } } : {}),
@@ -389,14 +412,14 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const replay=await store.query({kind:'receipt',commandId})
       if(replay){if(replay.result.toDigest!==workflowDigest)throw executionError('ENGINEERING_CHECKPOINT_CONFLICT');return replay}
       const state=await query(runId),definition=definitionOf({workflowId,workflowDigest}),plan=await store.query({kind:'task.plan',taskId:state.run.taskId})
-      const start=kind==='checks'?'verify-candidate':null
+      const start=kind==='checks'?'verify-candidate':kind==='local-acceptance'?'define-local-acceptance':null
       const index=definition.nodes.findIndex(node=>node.id===start),node=definition.nodes[index]
       if(index<0||state.nodes.length!==definition.nodes.length||state.nodes.some((item,i)=>item.nodeId!==definition.nodes[i].id))throw executionError('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
       const dependencies={}
       for(const id of node.inputDependencies??[]){const prior=state.nodes.find(item=>item.nodeId===id);if(prior?.status!=='succeeded'||!prior.outputRef)throw executionError('NODE_PREDECESSOR_INCOMPLETE');dependencies[id]=await artifacts.read(prior.outputRef)}
       const previous=state.nodes[index-1],input=await prepareInput(definition,node,state.run.requirementRef,previous?.outputRef?await artifacts.read(previous.outputRef):undefined,dependencies)
       const evidence=await artifacts.put({kind:'engineering-checkpoint',mode:kind,runId,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,
-        invalidated:state.nodes.slice(index).map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
+        invalidated:state.nodes.slice(index).filter(item=>kind!=='local-acceptance'||item.position<=index+1||item.status==='ready').map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
       const receipt=await command(commandId,'run.workflow.checkpoint',{runId,expectedRevision,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,toWorkflowId:workflowId,
         kind,startNodeId:start,inputRef:input.ref,inputDigest:input.digest,evidenceRef:evidence.ref,maintenance,
         expectedRequirementRevision:plan.task.requirementRevision,expectedControlRevision:plan.task.controlRevision,
@@ -544,6 +567,16 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       return command(commandId, 'task.plan.revise',
         { taskId, expectedPlanRevision, expectedControlRevision: expectedControlRevision ?? previous.task.controlRevision,
           requirementRevision, affectedFrom, stages: stored }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
+    },
+    async insertTaskDependency({ ownerTurnId, commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, stage, beforeStageId }) {
+      if (closed) throw executionError('CONTROLLER_CLOSED')
+      const definition = definitions.get(stage.workflowId)
+      if (!definition || !Object.hasOwn(stage, 'input')) throw executionError('TASK_STAGE_INPUT_NOT_BOUND')
+      const input = await artifacts.put(stage.input, { taskId })
+      return command(commandId, 'task.plan.insertDependency', { taskId, expectedPlanRevision, expectedControlRevision,
+        requirementRevision, beforeStageId, stage: { stageId: stage.stageId, workflowId: definition.id,
+          workflowDigest: definition.digest, requirementRef: input.ref, unavailableReason: null,
+          gate: 'none', sourceCondition: stage.sourceCondition } }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
     },
     async extendTaskPlan({ ownerTurnId, commandId, taskId, expectedPlanRevision, expectedControlRevision, requirementRevision, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
@@ -709,8 +742,18 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           definition: definitionOf(state.run), repair, input, expectedRevision, store, artifacts, repairAdmission })
         repair = { ...repair, workflowDigest }
       }
+      let candidateRepair
+      if (repair && state.run.workflowId.startsWith('task-engineering-') && state.nodes.some(node => node.nodeId === 'verify-candidate' && node.status === 'waiting' && node.waitReason?.reference === 'ENGINEERING_VERIFICATION_FAILED')) {
+        const node = state.nodes.find(node => node.nodeId === 'inspect-and-propose')
+        const previous = node?.inputRef && await artifacts.read(node.inputRef)
+        if (!previous?.data || !Array.isArray(previous.data.constraints)) throw executionError('ENGINEERING_REPAIR_CONTEXT_UNAVAILABLE')
+        const data = { ...previous.data, constraints: [...input.constraints.map(value => value.replace('当前目录仍为冻结基线，请重新应用完整有效修改并修复失败。', '当前工作区已保留上一轮全部修改，只提交失败所需增量，不重复应用已存在补丁。')), '先读取本Task最新共享诊断与完整检查日志；修复后必须重新执行修改校验和真实构建检查。'] }
+        await validate(definitionOf(state.run).nodes.find(item => item.id === node.nodeId).inputSchema, data)
+        const saved = await artifacts.put({ ...previous, data }, { reference: state.run.requirementRef })
+        candidateRepair = { inputRef: saved.ref, inputDigest: saved.digest }
+      }
       const requirement = await artifacts.put(input, { reference: state.run.requirementRef })
-      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}), ...(readonlyRecovery ? { readonlyRecovery } : {}) })
+      const receipt = await command(commandId, 'input.accept', { runId, inputId, sourceKey, requirementRef: requirement.ref, ...(expectedRevision === undefined ? {} : { expectedRevision }), ...(repair ? { repair } : {}), ...(candidateRepair ? { candidateRepair } : {}), ...(readonlyRecovery ? { readonlyRecovery } : {}) })
       if (!receipt.replayed && receipt.result.accepted !== false) { interrupt(runId); schedule(runId) }
       return receipt
     },
@@ -731,6 +774,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const currentMaintenance = await store.query({ kind: 'runtime.maintenance' })
       if (!currentMaintenance.active || !maintenance || maintenance.maintenanceId !== currentMaintenance.maintenanceId || maintenance.revision !== currentMaintenance.revision) throw executionError('RUNTIME_MAINTENANCE_STALE')
       const state = await query(runId), definition = definitionOf(state.run)
+      if (state.run.recoveryReason === 'stage-dependency') throw executionError('TASK_DEPENDENCY_PENDING')
       const candidates = state.nodes.filter(node => node.executor === 'agent' && node.sessionBound
         && (['ready','running'].includes(node.status) || node.status === 'waiting' && node.waitReason?.reference === 'controller-restarted'))
       if (candidates.length !== 1) throw executionError('NODE_SESSION_REBIND_NOT_ADMITTED')
@@ -739,6 +783,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     async recover({ commandId, runId }) {
       if (flights.has(runId)) throw executionError('EXECUTOR_STILL_ACTIVE')
       const state = await query(runId), definition = definitionOf(state.run)
+      if (state.run.recoveryReason === 'stage-dependency') throw executionError('TASK_DEPENDENCY_PENDING')
       await sessions?.cancel(runId)
       // 独占Store已排除旧Controller；这里只排空纯/read原生句柄，不释放外部效果hold。
       for (const node of state.nodes) if (!node.drained && node.leaseEpoch > 0) {

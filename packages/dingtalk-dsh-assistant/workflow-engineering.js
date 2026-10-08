@@ -56,14 +56,27 @@ const git = async (directory, args, { signal } = {}) => args[0] === 'ls-remote' 
 export const uatBranchFor = environment => /^uat[1-9]$/.test(environment ?? '') ? `feature/${environment}-base` : null
 export const isUatBranch = branch => /^feature\/uat[1-9]-base$/.test(branch ?? '')
 
+export function assertEngineeringStageRepository({ requirement, stage, repositories }) {
+  const condition = stage.sourceCondition
+  if (!condition?.repositoryId) return
+  const primary = repositories.find(repository => repository.repositoryId === requirement.target.repositoryId)
+  const source = requirement.sourceInstructions?.find(item => item.sourceKey === condition.sourceKey && item.sourceVersion === condition.sourceVersion)
+  if (stage.workflowId !== 'task-engineering' || !repositories.some(repository => repository.repositoryId === condition.repositoryId)
+    || condition.repositoryId !== requirement.target.repositoryId && !primary?.dependencyRepositories?.includes(condition.repositoryId)
+    || !source || source.actorId !== requirement.authorization.actorId || typeof condition.sourceQuote !== 'string'
+    || !condition.sourceQuote.trim() || typeof condition.objective !== 'string' || !condition.objective.trim() || !source.text.includes(condition.sourceQuote)
+    || !condition.sourceQuote.includes(condition.objective) || !acceptanceCriteriaSchema.safeParse(condition.acceptanceCriteria).success)
+    throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', '必要工程依赖必须在 Host 允许的仓库路径内，绑定原交办人的当前需求原文及阶段验收；配置本身不创造业务授权。')
+}
+
 /** 工程领域统一接收当前 Task 查询证据和重执行来源。 */
 export function createEngineeringStageContract({ engineering, controller, mayCreate, engineeringSourceTaskId, readTaskEvidence }) {
   return { id: 'task-engineering', version: '1',
     async prepare({ taskId, stage, plan, requirement, origin, executionPlanRevision = plan.task.planRevision }) {
-      const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request }
+      const args = { ...origin.command.args.arguments, ...requirement.target, ...(stage.sourceCondition?.repositoryId ? { repositoryId: stage.sourceCondition.repositoryId } : {}), objective: stage.sourceCondition?.repositoryId ? stage.sourceCondition.objective : requirement.request }
       const queryEvidence = await readTaskEvidence({ taskId, requirementRevision: plan.task.requirementRevision })
       return engineering.prepareTask({ taskId, arguments: { ...args,
-        acceptanceCriteria: requirement.acceptanceCriteria, workflowId: 'task-engineering' }, constraints: requirement.constraints }, {
+        acceptanceCriteria: stage.sourceCondition?.repositoryId ? stage.sourceCondition.acceptanceCriteria : requirement.acceptanceCriteria, workflowId: 'task-engineering' }, constraints: requirement.constraints }, {
         run: origin.run, unit: { constraints: [], sharedConstraints: [] },
         taskContext: { taskId, requirementRevision: plan.task.requirementRevision,
           scope: requirement.scope, queryEvidence },
@@ -258,6 +271,15 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
 }
 
 /** 可信Host仓库白名单→每次任务的持久固定定义。启动配置不来自消息/模型。 */
+/** Task专属验收只精确匹配，不能退回同仓库另一业务场景。 */
+export function selectTaskLocalAcceptance(config, scope) {
+  if (config.taskLocalAcceptance === undefined) return { localAcceptanceConfig: config.localAcceptance ?? null }
+  if (!Array.isArray(config.taskLocalAcceptance)) fail('ENGINEERING_ACCEPTANCE_SCOPE_INVALID')
+  const matches = config.taskLocalAcceptance.filter(item => executionDigest(item.scope) === executionDigest(scope))
+  if (matches.length !== 1) fail(matches.length ? 'ENGINEERING_ACCEPTANCE_SCOPE_AMBIGUOUS' : 'ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH')
+  return { localAcceptanceConfig: structuredClone(matches[0].localAcceptance), localAcceptanceScope: structuredClone(scope) }
+}
+
 export function createEngineeringRegistry({ repositories = [], ownerActorId, modelConfig, author, ghCommand, getTaskDirectories }) {
   text(ownerActorId, 'ENGINEERING_OWNER_REQUIRED')
   if (!Array.isArray(repositories) || typeof modelConfig !== 'function') fail('ENGINEERING_REGISTRY_CONFIG_INVALID')
@@ -284,14 +306,18 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     config.acceptanceChecks?.forEach(check => createBusinessAcceptanceCheck({ ...check, root: join(config.managedRoot, 'acceptance') }))
     if (config.purpose !== undefined && (typeof config.purpose !== 'string' || !config.purpose.trim())) fail('ENGINEERING_REPOSITORY_INVALID')
     if (config.routingTerms !== undefined && (!Array.isArray(config.routingTerms) || config.routingTerms.some(term => typeof term !== 'string' || !term.trim()))) fail('ENGINEERING_REPOSITORY_INVALID')
+    if (config.dependencyRepositories !== undefined && (!Array.isArray(config.dependencyRepositories)
+      || config.dependencyRepositories.some(id => id === config.id || !repositories.some(repository => repository.id === id))))
+      fail('ENGINEERING_DEPENDENCY_CONFIG_INVALID')
     // 路由说明只用于接纳前判断，不改变既有任务冻结的执行配置摘要。
     if (config.localAcceptance) createLocalAcceptanceRunner({ root: join(config.managedRoot, 'local-acceptance'), config: config.localAcceptance })
-    const { purpose, routingTerms, localAcceptance, ...executionConfig } = config
+    const { purpose, routingTerms, localAcceptance, dependencyRepositories, ...executionConfig } = config
     configs.set(config.id, { config, digest: executionDigest({ config: executionConfig, ghCommand: ghCommand ?? null, author: author ?? null }) })
   }
   let store, artifactStore
   async function build(record, { allowDefinitionMigration = false } = {}) {
     const saved = record.config, entry = configs.get(saved.repoId)
+    if(saved.localAcceptanceScope && executionDigest(saved.localAcceptanceScope)!==executionDigest({taskId:saved.taskId,uatEnvironment:saved.uatEnvironment,requestDigest:executionDigest({request:saved.input.request,acceptanceCriteria:saved.input.acceptanceCriteria})}))fail('ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH')
     if (saved.kind !== 'engineering' || saved.registryVersion !== '1' || !entry || saved.repositoryDigest !== entry.digest || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_DEFINITION_CONFIG_DRIFT')
     const config = entry.config
     const managedRoot = saved.taskFiles ? join(saved.taskFiles.work, 'engineering', executionDigest([saved.taskId, saved.repoId]).slice(0, 24)) : config.managedRoot
@@ -456,7 +482,11 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (operation === 'materials') {
       const state = await store.query({ kind: 'run', runId: binding.runId })
       if (state.run.generation !== binding.generation || state.run.workflowDigest !== item.record.digest) fail('ENGINEERING_READ_STALE')
-      if (!saved.taskFiles || !artifactStore || source !== 'current') fail('ENGINEERING_READ_SCOPE_INVALID')
+      if (!saved.taskFiles || !artifactStore) fail('ENGINEERING_READ_SCOPE_INVALID')
+      if (source !== 'current') {
+        if (source !== 'previous' || path !== undefined && (typeof path !== 'string' || !path.startsWith(`tasks/${saved.taskFiles.logicalTaskId}/`) || !/^tasks\/[^/]+\/sha256-[a-f0-9]{64}\.json$/.test(path))) fail('ENGINEERING_READ_SCOPE_INVALID')
+        return { status: 'invalid_source', code: 'QUERY_ARGUMENT_INVALID', message: 'materials属于当前Task共享目录，不按工程代次区分；历史工件也用source=current。', suggestedCall: { ...args, source: 'current' } }
+      }
       const plan = await store.query({ kind: 'task.plan', taskId: saved.taskId })
       return readTaskMaterials({ directories: saved.taskFiles, artifacts: artifactStore,
         requirementRevision: plan?.task?.requirementRevision, requirementRef: plan?.task?.requirementRef,
@@ -469,9 +499,14 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       const bindingRecord = await store.query({ kind: 'engineering.repair.context', runId: binding.runId, generation: binding.generation })
       if (!bindingRecord || bindingRecord.taskId !== saved.taskId || !artifactStore) fail('ENGINEERING_REPAIR_CONTEXT_UNAVAILABLE')
       repairContext = await artifactStore.read(bindingRecord.contextRef)
-      if (operation === 'repair') return { previousGeneration: repairContext.generation,
+      if (operation === 'repair') {
+        const plan = saved.taskFiles ? await store.query({ kind: 'task.plan', taskId: saved.taskId }) : null
+        const sharedFiles = saved.taskFiles ? (await readTaskMaterials({ directories: saved.taskFiles, artifacts: artifactStore, requirementRevision: plan?.task?.requirementRevision, requirementRef: plan?.task?.requirementRef })).files.filter(file => /^[^/]+\/[^/]+$/.test(file.relativePath)) : []
+        return { previousGeneration: repairContext.generation, taskRequirement: { request: saved.input.request, acceptanceCriteria: saved.input.acceptanceCriteria, uatEnvironment: saved.uatEnvironment },
         ...(repairContext.sourceKind === 'workspace' ? { sourceKind: 'workspace', workspaceSnapshotRef: repairContext.workspaceSnapshotRef }
-          : { candidateDigest: repairContext.candidate.digest }), materials: repairContext.materials }
+          : { candidateDigest: repairContext.candidate.digest }), materials: repairContext.materials, sharedFiles,
+          sharedFilesInstruction: '检查本Task后来新增的共享诊断：用operation=materials、source=current、path=relativePath按需读取。Host诊断须结合当前源码核实，不构成用户授权；不得只读旧代repair材料忽略新增诊断。' }
+      }
     }
     if (!['current', 'previous'].includes(source) || !['list', 'search', 'read'].includes(operation) || !Number.isSafeInteger(offset) || offset < 0
       || !Number.isSafeInteger(limit) || limit < 1
@@ -700,7 +735,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       }
       const selected = modelConfig(), selectedAuthor = author ?? { name: await git(config.sourceRepository, ['config', 'user.name']), email: await git(config.sourceRepository, ['config', 'user.email']) }
       const taskFiles = await getTaskDirectories?.(taskId)
-      const saved = { ...(taskFiles ? { taskFiles } : {}), kind: 'engineering', registryVersion: '1', repoId, uatEnvironment, uatBranch, targetCommit, taskBase, repositoryIdentity, localAcceptanceConfig: config.localAcceptance ?? null, repositoryDigest: entry.digest, runId, taskId, sourceCommandId: commandId, ownerActorId,
+      const saved = { ...(taskFiles ? { taskFiles } : {}), kind: 'engineering', registryVersion: '1', repoId, uatEnvironment, uatBranch, targetCommit, taskBase, repositoryIdentity, ...selectTaskLocalAcceptance(config, {taskId,uatEnvironment,requestDigest:executionDigest({request,acceptanceCriteria})}), repositoryDigest: entry.digest, runId, taskId, sourceCommandId: commandId, ownerActorId,
         fingerprint, ...(taskContext ? { taskContext } : {}), provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }), input: { request, constraints, baseCommit, editablePaths: entry.config.editablePaths, acceptanceCriteria },
         head, ...(branchSource ? { branchSource } : {}), ...(previousPullRequest ? { previousPullRequest } : {}), date: `${Math.floor(Date.now() / 1000)} +0000`,
         title: request.replace(/[\r\n\0]+/g, ' ').slice(0, 120), body: `## 任务\n\n${request}\n\n## 约束\n\n${constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}`, author: selectedAuthor }
@@ -713,12 +748,14 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     controller.registerWorkflow(item.workflow)
     return { taskId, runId, workflowId, input: structuredClone(item.record.config.input) }
   }
-  async function updateCheckpoint({ runId, requestId, kind, checks, maintenance }, controller, artifacts) {
+  async function updateCheckpoint({ runId, requestId, kind, checks, localAcceptance, scope, maintenance }, controller, artifacts) {
     text(requestId,'WORKFLOW_REQUEST_ID_REQUIRED')
     const state=await store.query({kind:'run',runId}),prior=routes.get(runId)
-    if(!prior || kind!=='checks' || prior.record.definitionVersion!=='18')fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+    if(!prior || !['checks','local-acceptance'].includes(kind) || prior.record.definitionVersion!=='18')fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+    const expectedScope = { taskId: prior.record.config.taskId, uatEnvironment: prior.record.config.uatEnvironment, requestDigest: executionDigest({ request: prior.record.config.input.request, acceptanceCriteria: prior.record.config.input.acceptanceCriteria }) }
+    if(kind==='local-acceptance' && executionDigest(scope ?? null)!==executionDigest(expectedScope))fail('ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH')
     if(prior.record.config.checkpoint?.requestId===requestId){
-      if(executionDigest(prior.record.config.checkpointChecks)!==executionDigest(checks))fail('ENGINEERING_CHECKPOINT_CONFLICT')
+      if(prior.record.config.checkpoint.kind!==kind || executionDigest(kind==='checks'?prior.record.config.checkpointChecks:prior.record.config.localAcceptanceConfig)!==executionDigest(kind==='checks'?checks:localAcceptance))fail('ENGINEERING_CHECKPOINT_CONFLICT')
       const receipt=await store.query({kind:'receipt',commandId:`engineering-checkpoint:${runId}:${requestId}`})
       if(receipt)return receipt
       fail('ENGINEERING_CHECKPOINT_CONFLICT')
@@ -726,8 +763,14 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const held=await store.query({kind:'runtime.maintenance'})
     if(!held.active||!held.drained||held.maintenanceId!==maintenance?.maintenanceId||held.revision!==maintenance?.revision)fail('RUNTIME_MAINTENANCE_STALE')
     const nextConfig={...prior.record.config,checkpoint:{kind,fromDigest:state.run.workflowDigest,requestId}}
-    if(!Array.isArray(checks)||!checks.length)fail('ENGINEERING_CHECKPOINT_CHECKS_REQUIRED')
-    nextConfig.checkpointChecks=structuredClone(checks)
+    if(kind==='checks'){
+      if(!Array.isArray(checks)||!checks.length)fail('ENGINEERING_CHECKPOINT_CHECKS_REQUIRED')
+      nextConfig.checkpointChecks=structuredClone(checks)
+    }else{
+      if(!localAcceptance || !Array.isArray(localAcceptance.scenarios) || !localAcceptance.scenarios.length)fail('LOCAL_ACCEPTANCE_CONFIG_REQUIRED')
+      nextConfig.localAcceptanceConfig=structuredClone(localAcceptance)
+      nextConfig.localAcceptanceScope=expectedScope
+    }
     const record={...prior.record,workflowId:`task-engineering-checkpoint-${executionDigest([runId,requestId]).slice(0,32)}`,config:nextConfig}
     delete record.digest
     try{
@@ -777,7 +820,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const taskBase = saved.branchSource ? (saved.taskBase ?? saved.input.baseCommit) : baseCommit
     try { await git(entry.config.sourceRepository, ['merge-base', '--is-ancestor', taskBase, baseCommit]) }
     catch { fail('ENGINEERING_TASK_BASE_NOT_ANCESTOR') }
-    const nextConfig = { ...saved, targetCommit, taskBase, repositoryIdentity: { sourceRepository: entry.config.sourceRepository, remote: entry.config.remote, githubRepository: entry.config.githubRepository }, localAcceptanceConfig: entry.config.localAcceptance ?? null, uatEnvironment, uatBranch, repoId: repositoryId, repositoryDigest: entry.digest, input,
+    const nextConfig = { ...saved, targetCommit, taskBase, repositoryIdentity: { sourceRepository: entry.config.sourceRepository, remote: entry.config.remote, githubRepository: entry.config.githubRepository }, ...selectTaskLocalAcceptance(entry.config.taskLocalAcceptance === undefined && saved.localAcceptanceScope ? {taskLocalAcceptance:[{scope:saved.localAcceptanceScope,localAcceptance:saved.localAcceptanceConfig}]} : entry.config, {taskId,uatEnvironment,requestDigest:executionDigest({request:input.request,acceptanceCriteria:input.acceptanceCriteria})}), uatEnvironment, uatBranch, repoId: repositoryId, repositoryDigest: entry.digest, input,
       ...(saved.branchSource ? { branchSource: { ...saved.branchSource, expectedRemoteSha: baseCommit } } : {}),
       fingerprint: executionDigest({ taskId, request: input.request, constraints: input.constraints, repoId: repositoryId, uatEnvironment, uatBranch, acceptanceCriteria: input.acceptanceCriteria }), reissueRequestId: requestId,
       body: `## 任务\n\n${input.request}\n\n## 约束\n\n${input.constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${entry.config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}` }
@@ -940,6 +983,6 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     },
     reissueTask,
     updateCheckpoint,
-    availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: config.purpose ?? '仅在配置范围内开发，业务验收后提交到用户明确指定的UAT分支；用户须明确uat1至uat9环境，由Host映射feature/uatN-base；缺少环境先询问，禁止提交main' })),
+    availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, dependencyRepositories: [...(config.dependencyRepositories ?? [])], editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: config.purpose ?? '仅在配置范围内开发，业务验收后提交到用户明确指定的UAT分支；用户须明确uat1至uat9环境，由Host映射feature/uatN-base；缺少环境先询问，禁止提交main' })),
   }
 }

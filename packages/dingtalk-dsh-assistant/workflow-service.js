@@ -23,7 +23,7 @@ import { createMessageCoordinator } from './message-coordinator.js'
 import { isPassiveTaskProgress } from './message-ledger.js'
 import { taskWorkflowCatalog, messageAnswerArguments, candidateCards, referencedResourceIds } from './message-context.js'
 import { createWorkflowNotifications, executeNotificationOperation, workflowResultText, groupStatusText, groupActionText, taskDecisionConditionText } from './workflow-notifications.js'
-import { createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
+import { assertEngineeringStageRepository, createEngineeringStageContract, createEngineeringRegistry, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy, readEngineeringDeliveryProof, uatBranchFor } from './workflow-engineering.js'
 import { createDataChangeTaskWorkflow, createDataChangeApprovalResumeWorkflow, createDataChangeTaskWorkflowV6, createDataChangeTaskWorkflowV5, createDataChangeTaskWorkflowV4, createLegacyDataChangeTaskWorkflow, simpleDroppedColumnDefinition, columnDeletionImpact, dataChangeProposalRepairConstraints, assertDataChangeProposalRepairInput } from './workflow-data-change.js'
 import { createExternalStageContracts, createReleaseTaskWorkflow, createLegacyReleaseTaskWorkflow, releaseWorkflowKinds, externalWorkflowOwnerContract, legacyExternalWorkflowOwnerContract, nativeDataChangeOwnerContract, createNativeDataChangeCompletionPolicy, createScopedNativeDataChangeCompletionPolicy } from './task-release-workflows.js'
 import { createUatPrMergeTaskWorkflow, createUatPrMergeTaskWorkflowV2, createLegacyUatPrMergeTaskWorkflow, createMainPrMergeTaskWorkflow } from './task-uat-pr-merge.js'
@@ -1480,8 +1480,21 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const requirement = await artifacts.read(plan.task.requirementRef)
     const origin = await store.query({ kind: 'task.origin', taskId })
     if (!origin || !requirement?.request) throw executionError('TASK_REQUIREMENT_MISSING')
-    return stageContracts.prepare({ taskId, stage: { ...stage, stageId: 'stage-1' }, stageIndex: 0,
-      executionPlanRevision: plan.task.planRevision + 1, decision, plan, requirement, origin })
+    const dependency = decision.planChange?.kind === 'insertDependency'
+    if (dependency) {
+      if (!stage.sourceCondition?.repositoryId || stage.sourceCondition.repositoryId === requirement.target.repositoryId)
+        throw executionError('TASK_DEPENDENCY_INVALID')
+      const current = plan.stages.find(item => !['succeeded', 'invalidated'].includes(item.status))
+      const state = current?.runId ? await controller.state(current.runId) : null
+      if (current?.status !== 'running' || !current.workflowId.startsWith('task-engineering-')
+        || state?.run.status !== 'waiting' || state.pendingInputCount || state.nodes.some(node => !node.drained))
+        throw executionError('TASK_DEPENDENCY_NOT_DRAINED')
+      const effects = await store.query({ kind: 'effect.list', runId: current.runId })
+      if (effects.some(effect => ['starting', 'executing', 'unknown'].includes(effect.state)))
+        throw executionError('TASK_DEPENDENCY_NOT_DRAINED')
+    }
+    return stageContracts.prepare({ taskId, stage: { ...stage, stageId: dependency ? stage.stageId : 'stage-1' }, stageIndex: 0,
+      executionPlanRevision: plan.task.planRevision + (dependency ? 0 : 1), decision, plan, requirement, origin })
   }
   const withAcceptanceIdentity = policy => ({ ...policy,
     rulesDigest: executionDigest({ domain: policy.rulesDigest ?? null, acceptanceVerifier: completionIdentity,
@@ -1538,6 +1551,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       effectClass: item.effectClass })),
     workflowCatalog: taskWorkflowCatalog.filter(item => !['task-general', 'task-analysis'].includes(item.id))
       .map(item => ({ id: item.id, purpose: item.purpose, mode: item.mode,
+        ...(item.mode === 'engineering' ? { repositories: engineering.availableWorkflows() } : {}),
         ...(stageContracts.descriptors.find(contract => contract.id === item.id)
           ? { contract: stageContracts.descriptors.find(contract => contract.id === item.id) } : {}),
         available: item.mode === 'delivery' ? Boolean(fileWorkflow) : item.mode !== 'external' || selectedExternal.byId.has(item.id),
@@ -1593,10 +1607,13 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           continue
         }
         const item = catalogById.get(stage.workflowId)
+        assertEngineeringStageRepository({ requirement, stage, repositories: engineering.availableWorkflows() })
         if (stage.sourceCondition) {
           const condition = stage.sourceCondition
           const source = (requirement.sourceInstructions ?? []).find(item => item.sourceKey === condition.sourceKey && item.sourceVersion === condition.sourceVersion)
           if (!source || !source.text.includes(condition.sourceQuote)) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'sourceCondition.sourceQuote/sourceKey/sourceVersion 未绑定当前原文来源；请复制 goal.stageAuthorizations 中本阶段的来源。')
+          if (condition.repositoryId && source.actorId !== requirement.authorization.actorId)
+            throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', '必要工程依赖必须绑定原交办人的当前需求来源。')
           if (!condition.sourceQuote.includes(condition.objective)) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'sourceCondition.objective 必须逐字复制 goal.stageAuthorizations 的 objective，且是 sourceQuote 的连续原文片段；实现方案和 SQL 写入 summary 或执行参数。')
           if (condition.requiredActorId && condition.requiredActorId !== source.actorId
             || stage.gate === 'confirmation' && !condition.requiredActorId) throw executionError('TASK_OWNER_STAGE_NOT_AUTHORIZED', 'gate confirmation 必须绑定原来源 requiredActorId；不能替真人确认或删除原文验证门槛。')

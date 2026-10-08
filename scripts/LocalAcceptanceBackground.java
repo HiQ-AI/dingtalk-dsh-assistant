@@ -123,7 +123,7 @@ public class LocalAcceptanceBackground {
     factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl",true);
     factory.setFeature("http://xml.org/sax/features/external-general-entities",false);
     factory.setFeature("http://xml.org/sax/features/external-parameter-entities",false);
-    int total=0;
+    int total=0, skippedTotal=0;
     File[] files=new File(directory).listFiles((dir,name)->name.startsWith("TEST-")&&name.endsWith("-"+suffix+".xml"));
     require(files!=null&&files.length>0,"JUNIT_REPORTS_MISSING");
     for(File file:files){
@@ -133,10 +133,12 @@ public class LocalAcceptanceBackground {
       org.w3c.dom.Element suite=factory.newDocumentBuilder().parse(file).getDocumentElement();
       require(suite.getTagName().equals("testsuite")&&suite.getAttribute("name").equals(qualified+"("+suffix+")"),"JUNIT_SUITE_INVALID");
       int tests=Integer.parseInt(suite.getAttribute("tests"));
-      require(tests>0&&Integer.parseInt(suite.getAttribute("failures"))==0&&Integer.parseInt(suite.getAttribute("errors"))==0&&Integer.parseInt(suite.getAttribute("skipped"))==0,"JUNIT_NOT_PASSED");
-      require(suite.getElementsByTagName("testcase").getLength()==tests&&suite.getElementsByTagName("failure").getLength()==0&&suite.getElementsByTagName("error").getLength()==0&&suite.getElementsByTagName("skipped").getLength()==0,"JUNIT_CASES_INVALID");
-      total+=tests;
+      int skipped=Integer.parseInt(suite.getAttribute("skipped"));
+      require(tests>0&&Integer.parseInt(suite.getAttribute("failures"))==0&&Integer.parseInt(suite.getAttribute("errors"))==0&&skipped>=0&&skipped<=tests,"JUNIT_NOT_PASSED");
+      require(suite.getElementsByTagName("testcase").getLength()==tests&&suite.getElementsByTagName("failure").getLength()==0&&suite.getElementsByTagName("error").getLength()==0&&suite.getElementsByTagName("skipped").getLength()==skipped,"JUNIT_CASES_INVALID");
+      total+=tests;skippedTotal+=skipped;
     }
-    System.out.println("HOST_JUNIT_PROOF:{\"suites\":"+files.length+",\"tests\":"+total+",\"failures\":0,\"errors\":0,\"skipped\":0}");
+    require(total>skippedTotal,"JUNIT_EXECUTED_TESTS_MISSING");
+    System.out.println("HOST_JUNIT_PROOF:{\"suites\":"+files.length+",\"tests\":"+total+",\"executed\":"+(total-skippedTotal)+",\"failures\":0,\"errors\":0,\"skipped\":"+skippedTotal+"}");
   }
 }

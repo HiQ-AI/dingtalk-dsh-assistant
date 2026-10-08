@@ -12,6 +12,8 @@ export const ownerRetryableReason = code => transientRecoveryReasons.includes(co
   || correctableOwnerReasons.includes(code) || ['TASK_OWNER_SESSION_MISSING', 'TASK_OWNER_TIMEOUT'].includes(code)
 
 // 诊断描述恢复责任；暂态重领由控制账、排空证明和持久退避共同决定。
+export const engineeringProposalCorrectionReasons = Object.freeze(['ENGINEERING_NO_EFFECT_MODIFICATION', 'ENGINEERING_CHANGE_DISPOSITION_INVALID',
+  'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED', 'ENGINEERING_PROPOSAL_DOCUMENT_INVALID'])
 const failurePolicies = Object.freeze({
   'correctable-output': ['node-executor', 'correct-output-and-continue'],
   'business-validation': ['task-owner', 'repair-artifact-and-revalidate'],
@@ -23,6 +25,7 @@ const failurePolicies = Object.freeze({
   'implementation-error': ['maintainer', 'inspect-and-fix-implementation'],
 })
 const classifiedReasons = new Map([
+  ...engineeringProposalCorrectionReasons.map(code => [code, 'correctable-output']),
   ...['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_FAILED', 'LOCAL_ACCEPTANCE_FAILED',
     'RELEASE_PIPELINE_FAILED', ...engineeringPatchRepairReasons].map(code => [code, 'business-validation']),
   ['AGENT_WORK_NEEDS_INPUT', 'missing-input'],

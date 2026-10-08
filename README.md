@@ -783,3 +783,37 @@ Owner 候选提交和最终接纳共用状态校验，候选拒绝在同一轮�
 后端单测检查按 Maven 单测命名发现实际测试，排除 `*IT`、`*ITCase`、`*E2ETest` 集成测试；逐份核验本轮随机后缀的 JUnit XML 并保存摘要，不绑定其他需求的测试类名。无测试报告、零用例或失败不得记为通过，业务集成验收仍独立执行。
 
 共享读取目录约定：work/tmp仅允许顶层共享文件，work/artifacts精确SHA引用沿原摘要校验读取；outputs可读取嵌套产物。engineering仓库及原生session内部目录仍通过原工具访问，不经共享材料入口绕过仓库范围限制。
+
+候选纯校验失败可由 Owner 在原节点纠正：保留已经提交的提案及失败证据，让原提案 Agent 修改无效条目，再只重验紧邻校验步骤。Task、Run、generation、原会话及成功准备/工作区保持不变；不会替模型删除条目，也不把含有效修改的候选误称为完全无修改。此路径复用原有 node.resume，无需人工维护入口。
+
+固定 UAT2 审核页面取证可通过已登记的 `query_runtime_status` 资源 `kind=uat-review-observation` 调用，返回独立测试账号的布局和截图证据，业务写入被拦截；配置及证据边界见 `docs/ops/trusted-platform-workflows.md`。
+
+工程验收场景修正使用受管local-acceptance checkpoint，在维护排空与版本校验下绑定当前Task、UAT和需求摘要；重算场景定义/计划，保留已完成候选检查。共享诊断材料不构成用户授权，静态API前置检查不等于真实业务验收。
+
+本地验收场景配置若冻结到其他Task，可在排空维护中对原Run调用内部`local-acceptance`检查点：精确绑定Task、UAT及当前需求/验收条件摘要，仅重算`define-local-acceptance`和`plan-local-acceptance`；成功工作区、提案及候选检查保留，后续本地验收必须尚未领取且无effects。新规划失败仍由原Owner正常`node.resume`纠正，只有检查点审计中的成功中段身份、lease、输入和输出均未变化时才可保留；不重做整代。
+
+### 生产活动合并结果 UI 验收
+
+`scripts/local-acceptance-activity-merge.mjs` 针对已绑定的生产活动合并结果Task/UAT3，使用候选原始Vue组件、父页面绑定/方法及状态机，在独立无头浏览器中验证失败弹窗、取消/继续、原确认和下载请求/Blob。`--check --config <绝对配置路径>`只读检查完整候选语法；运行入口为`initialize|execute|cleanup|verify-cleanup --config <路径>`，通过标准输入接收原验收runner上下文。配置需`taskId`、`uatEnvironment`、`evidenceRoot`、`playwrightModule`；从候选仓库cwd运行，不修改候选。
+
+固定API响应仅证明UI契约，返回明确`backendVerified:false`；不证明真实后端路由、权限、结果可信性或Excel内容。部分/全部失败与正常成功分别留截图和ledger，关闭浏览器后才允许cleanup通过。当前真实候选语法失败及后端接口缺口须由原工程任务修复，不以隔离测试夹具PASS替代交付。
+
+Owner纠正纯校验失败时，恢复目标仍为原Agent；Host明确提供原validator的节点/lease/输入身份，Owner须读取并引用该原失败工件。不会把恢复目标与失败节点混为一谈，普通Agent失败的同身份门禁保持不变。
+
+engineering_repo_inspect的materials读取当前Task共享目录；历史材料同样用source=current。source=previous仅用于上一代仓库。合法材料调用误用previous时按suggestedCall纠正即可，不应等待业务人员补充；跨Task或真实目录缺失仍拒绝。
+
+工程repair返回同时列出当前Task共享目录顶层文件元信息，帮助发现旧代诊断之后新增的Host材料；按提示调用materials读取正文。Host诊断须源码核实，不增加授权，也不重跑全流程。
+
+宿主历史操作回执可沿已登记 files 资源以 hostReceipts 精确绑定文件摘要、Task 和需求版本；读取及完成时核验来源，领域验收仍独立判断业务结果。配置与边界见 docs/ops/trusted-platform-workflows.md。
+
+仓库可配置 `taskLocalAcceptance: [{scope:{taskId,uatEnvironment,requestDigest},localAcceptance:{...}}]`；requestDigest沿用Task当前request+acceptanceCriteria的executionDigest。配置该列表后必须唯一精确匹配，不能回退同仓库默认场景；需求或环境改变需Host准备匹配的真实场景，不能复用旧业务证据。历史冻结Run仍用正式local-acceptance checkpoint更新，不随profile变化漂移。
+
+工程 verify-candidate 明确检查失败后的源码修复保留成功准备、场景和工作区，在同代候选上从 inspect-and-propose 重入并重新修改/检查；外部效果或后续已执行不走此路径。
+
+### 必要跨仓库工程依赖（schema 9）
+
+Owner 可在原工程 Run 已等待且排空时，以 `planChange.kind=insertDependency` 插入一个必要工程阶段。来源条件绑定原交办人当前 `sourceKey/sourceVersion/sourceQuote/objective`；`repositoryId` 必须属于原仓库显式配置的 `dependencyRepositories`，并给出只针对该阶段的 `acceptanceCriteria`。阶段继承原 UAT，Task 总体验收不改变。配置只限定实现路径，不能创造新业务授权或放开生产发布。
+
+原阶段、Run、generation、候选与成功节点保留。依赖完成后原阶段恢复，可沿原节点纠正和重新验收；不将前端 UI fixture 当成真实后端下载通过。Owner 不应为完成原目标必需的后端或前端实现重复索要交办授权。库升级须先执行正式 8→9 迁移，见部署说明。
+
+数据集合并七项交互使用独立 `scripts/local-acceptance-dataset-merge-ui.mjs`，绑定对应 Task/UAT3；配置与活动合并 UI runner 相同，支持 `--check|initialize|execute|cleanup|verify-cleanup --config <绝对路径>`。从真实候选 cwd 运行，编译实际 SFC/SCSS，记录七项浏览器断言与源码 SHA256。列表/API 输入明确为 fixture，报告 `backendVerified:false`；它不能替代后端 UAT 业务验收，也不能用于其他数据集需求。

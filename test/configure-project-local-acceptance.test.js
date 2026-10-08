@@ -10,6 +10,17 @@ import { configureProjectLocalAcceptance, planProjectLocalAcceptance } from '../
 const hash = value => createHash('sha256').update(value).digest('hex')
 const command = { executable: process.execPath, args: ['-e', 'process.exit(0)'] }
 const configuration = root => ({ version: 'test-v1', sharedDataProfilePath: join(root, 'shared.json'), prepareSteps: [command], service: { executable: process.execPath, args: ['server.js', '--host', '127.0.0.1', '--port', '{port}'], readyPath: '/ready' }, scenarios: [{ ...command, id: 'read-only', description: '读取任务数据' }], cleanup: command, verifyCleanup: command })
+test('必要仓库依赖及Task场景精确更新保留无关字段，越界拒绝',async t=>{
+ const f=await fixture(t),source=planProjectLocalAcceptance(f.source,f.supplied,yaml).updated
+ const scope={taskId:'task-abc123',uatEnvironment:'uat3',requestDigest:'a'.repeat(64)}
+ const patches=[{id:'dataset-web',dependencyRepositories:['dataset'],taskLocalAcceptance:[{scope,localAcceptance:f.supplied['dataset-web']}]},{id:'dataset',dependencyRepositories:['dataset-web']}]
+ const plan=planProjectLocalAcceptance(source,f.supplied,yaml,{allowUpdate:true,repositoryPatches:patches})
+ assert.match(plan.updated,/dependencyRepositories:/);assert.match(plan.updated,/task-abc123/);assert.match(plan.updated,/# 保留注释/)
+ assert.equal(planProjectLocalAcceptance(plan.updated,f.supplied,yaml,{allowUpdate:true,repositoryPatches:patches}).changed,false)
+ for(const invalid of [[{id:'dataset-web',dependencyRepositories:['other']}],[{id:'dataset-web',managedRoot:'D:/other'}],[{id:'other',dependencyRepositories:['dataset']}],[{id:'dataset',dependencyRepositories:['dataset']}],[{id:'dataset',taskLocalAcceptance:[{scope:{...scope,requestDigest:'wrong'},localAcceptance:f.supplied.dataset}]}]])
+  assert.throws(()=>planProjectLocalAcceptance(source,f.supplied,yaml,{allowUpdate:true,repositoryPatches:invalid}),/LOCAL_CONFIG_REPOSITORY_PATCH_INVALID/)
+})
+
 test('后端专项检查精确CAS：check零写、apply保留构建和其他仓库、重复零写及漂移拒绝',async t=>{
  const f=await fixture(t)
  const checks=[{id:'dataset-package',version:'1',steps:[{executable:process.execPath,args:['-DskipTests','package']}]}]

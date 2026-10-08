@@ -276,3 +276,25 @@ PowerShell Phase依次check、offline、reconcile、install、start、readback�
 后端单测检查采用 Surefire 标准命名 `Test*/*Test/*Tests/*TestCase`，显式排除 `*IT/*ITCase/*E2ETest`；不再绑定其他需求的两个 Merge 类。每次随机 `host-unit-UUID` 仅读取本轮全部 `TEST-*-<suffix>.xml`，至少一份报告，每份 tests>0、failures/errors/skipped=0、testcase计数与suite身份一致；旧报告、空报告、伪造suite、跳过不能当成通过。此规则仅是普通单测范围，业务E2E和需要服务的集成测试须走独立验收。变更候选时继续审阅普通命名测试的外部依赖，不能把命名过滤当作网络隔离。
 
 `prepare-backend-unit-checks.mjs <绝对request.json> <绝对output.json>` 的request为 `{checks,toolsDirectory,nodeExecutable,javaExecutable,mavenHome}`，它只支持为原单一package检查首次添加单测。已有双步骤的活动任务应克隆完整checks，只提高dataset-package版本并替换第一步受信工具快照路径，保留其余argv及package步骤，经原生checks checkpoint接纳；不修改全局profile来绕过活动定义摘要。工具快照同时冻结JS和Java源的SHA。
+
+### UAT2 审核页面只读观察
+
+`directQueries.statusResources` 可登记 `kind: uat-review-observation`，字段为 `id/accountKey/accountsFile/playwrightModule/evidenceDirectory`；路径均为 Host 绝对路径，账号仅现有 `editor_uat_admin` 或 `editor_uat_sunpeng`。沿已有 `permissions.statusIds` 和 `configure-agent-query-resources.mjs` 的 check/CAS apply 登记，不改变运行中配置文件或旧 Task 账。
+
+查询固定访问 `https://editor2.hiqdat.dev/audit/dataset/received?tab=0`，独立 headless Edge 上下文、关闭 service worker/下载/WebSocket，拦截未登记 API 和外部请求，仅允许审核/消息列表及其页面依赖读取。只点击本地折叠按钮，不提交、撤回、标已读或修改权限。结果含观察时间、账号键、布局与截图 SHA/路径；原图保留在受信证据目录，不包含登录凭据。账号视角与日志覆盖范围必须在结论中说明，不将管理员列表当成其他用户送达证明。资源注册后用现有只读任务重评恢复，不能直接改 Task 状态。
+
+### 宿主历史操作回执的正式来源登记
+
+`directQueries.resources` 的 files 资源可选 `hostReceipts: [{path,digest,taskId,requirementRevision}]`。仅由 Host 对确由宿主执行生成的历史操作回执显式登记；普通报告、模型摘要不得登记为原始操作来源。digest 为 `executionDigest(完整UTF8文本)`，不是文件字节 SHA256。仍走既有 configure 的 profile SHA CAS，不增加模型参数或业务执行接口。
+
+读取时校验精确路径与全文摘要，漂移返回 QUERY_RECEIPT_CONTENT_CHANGED；完成时校验 Task/需求版本，只有匹配项注入 `hostQuery.hostReceipt`。领域评审仍需判断原始步骤、真实结果和 DB/API 交叉核验，不自动验收成功，也不将正文自报属性当作 Host 来源。普通 files 行为不变。文件更新后需要重新审阅并登记摘要，不能用旧信任覆盖新内容。
+
+工程检查失败由 Owner 正式 repairCurrentStage 承接时，满足排空、当前Task/需求/CAS及无外部效果条件会保留同代成功准备前缀和候选差异，从 inspect 重新修正和检查；不是跳过失败检查。其他失败仍按各自原生路径恢复，禁止手改节点状态。
+
+## 必要工程依赖索引 8→9
+
+`insertDependency` 保留原等待 Run，因此 schema 9 将唯一活动 Task 索引精确排除 `waiting + recovery_reason=stage-dependency`。普通 waiting（含 NULL reason）仍受唯一约束。原恢复原因保存在正式 `task.plan.insertDependency` 事件，依赖完成恢复；原节点失败工件不变。不能伪造终态腾出索引位置。
+
+使用 `scripts/migrate-execution-dependency-index.mjs --check <控制库绝对路径>` 取得零写基线。正式维护 enter→排空→seal→旧进程退出并取得 owner 独占锁后，调用导出 `migrateExecutionDependencyIndex(db,{mode:'execute'})`，或独立 CLI `--execute <控制库绝对路径> <已退出PID>`。迁移在事务内只改索引与 schema_version，并比较所有表（除版本列）完整摘要。重复迁移零写。必须迁移成功后才启动 schema 9 包；不得先启动新包再修旧库。
+
+Host 仓库配置仅显式两向 `dataset-web.dependencyRepositories: [dataset]`、`dataset.dependencyRepositories: [dataset-web]`，无通配。配置不改变旧工程冻结 digest，不改原检查或本地验收配置；Owner 仍必须核原人类需求直接需要该阶段。原 Task 的必要阶段后续还需绑定正确的真实业务验收场景，不能复用其他任务场景充数。

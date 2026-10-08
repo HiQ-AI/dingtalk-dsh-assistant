@@ -187,6 +187,34 @@ test('schema6部署在同一owner锁内迁移，其他owner拒绝且历史证明
   rival.exec('BEGIN EXCLUSIVE; ROLLBACK');rival.close()
 })
 
+test('必要依赖索引部署持owner锁迁移并独立回读原数据',async t=>{
+ const {PassThrough}=await import('node:stream')
+ const {openExecutionStore}=await import('../packages/dingtalk-dsh-assistant/execution-store.js')
+ const {holdDeploymentOwnerLock}=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')
+ const {verifyExecutionDependencyIndex}=await import('../scripts/migrate-execution-dependency-index.mjs')
+ const root=await mkdtemp(join(tmpdir(),'deploy-dependency-')),dbPath=join(root,'control.sqlite')
+ t.after(async()=>{const {rm}=await import('node:fs/promises');await rm(root,{recursive:true,force:true})})
+ const store=await openExecutionStore({dbPath,instanceId:'deploy-dependency',initialize:true})
+ await store.command({id:'enter',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'test',actorId:'owner',reason:'test'}})
+ await store.command({id:'seal',kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'test',actorId:'owner',reason:'test'}})
+ await store.close()
+ const setup=new DatabaseSync(dbPath)
+ setup.exec("DROP INDEX execution_one_active_task; CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id) WHERE status NOT IN ('succeeded','failed','cancelled'); PRAGMA user_version=8; UPDATE execution_meta SET schema_version=8")
+ setup.close()
+ const input=new PassThrough(),lines=[];let received
+ const ready=new Promise(resolve=>{received=resolve})
+ const running=holdDeploymentOwnerLock({dbPath,input,writeLine:line=>{lines.push(line);if(line!=='LOCKED')received()}})
+ const rival=new DatabaseSync(dbPath+'.owner.sqlite')
+ assert.throws(()=>rival.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE'),/locked/)
+ input.write(JSON.stringify({command:'migrate-execution-dependency-index',expectedStoppedPid:2147483647})+'\n')
+ await ready
+ const proof=JSON.parse(lines[1]);assert.equal(proof.version,9);assert.equal(proof.verified,true)
+ const readback=new DatabaseSync(dbPath,{readOnly:true})
+ assert.equal(verifyExecutionDependencyIndex(readback,{baseline:proof.baseline}).verified,true)
+ readback.close();assert.throws(()=>rival.exec('BEGIN EXCLUSIVE'),/locked/)
+ input.end();await running;rival.exec('BEGIN EXCLUSIVE; ROLLBACK');rival.close()
+})
+
 test('Adapter专用包检查零写并核对provider实际解析，旧副本与源漂移拒绝',async()=>{
   const {execFileSync}=await import('node:child_process')
   const {verifyAdapterPackage}=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')

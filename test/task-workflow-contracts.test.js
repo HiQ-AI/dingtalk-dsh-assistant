@@ -813,3 +813,24 @@ test('工程检查缺文件以完整Host日志识别为配置前提，损坏日�
  assert.deepEqual((await inspectEngineeringCheckPrerequisite(context)).missingPaths,paths)
  part.logSha256='0'.repeat(64);assert.equal(await inspectEngineeringCheckPrerequisite(context),null)
 })
+
+test('工程检查失败同代候选重入保留成功准备与工作区，重做修改和验证',async t=>{
+ const calls={};let input,artifactStore;
+ const contract={id:'engineering-fixture',version:'1',validateCompletion:()=>true,inspectRepair:({state})=>({repairable:state.nodes.some(n=>n.waitReason?.reference==='ENGINEERING_VERIFICATION_FAILED'),evidenceRefs:state.nodes.flatMap(n=>n.evidenceRefs??[])}),prepareRepair:async({state,artifacts})=>({contextRef:(await artifactStore.put({taskId:'task',runId:state.run.runId,generation:state.run.generation})).ref,input:{...input,constraints:['结合最新共享诊断修复']}})};
+ const ids=['prepare-generation','define-local-acceptance','plan-local-acceptance','prepare-workspace','inspect-and-propose','validate-proposal','apply-changes','verify-candidate'];
+ const workflow={id:'task-engineering-fixture',version:'1',ownerContract:contract,nodes:ids.map(id=>({id,version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({requirement,previousOutput})=>id==='inspect-and-propose'?requirement:previousOutput??requirement,execute:async({input})=>{calls[id]=(calls[id]??0)+1;if(id==='verify-candidate'&&calls[id]===1)throw Object.assign(Error('真实测试失败'),{code:'ENGINEERING_VERIFICATION_FAILED',evidence:[{failed:true}]});return input}}))};
+ input={constraints:[],request:'修复'};const f=await fixture(t,workflow,input);artifactStore=f.artifacts;const goal=await f.artifacts.put(requirement);await f.store.command({id:'bind-goal',kind:'task.requirement.bind-legacy',args:{taskId:'task',expectedRequirementRevision:1,requirementRef:goal.ref,sessionId:'owner-session',criteria:requirement.acceptanceCriteria,sourceKey:'source',eventKey:'bound'}});
+ const plan=await f.controller.advanceTaskPlan('task'),runId=plan.stages[0].runId,before=await f.controller.whenIdle(runId);assert.equal(before.run.status,'waiting');
+ const facade=createTaskWorkflowContracts({store:f.store,artifacts:f.artifacts,controller:f.controller}),observed=await facade.inspectCurrentExecution('task');
+ await assert.rejects(f.store.command({id:'unbound-candidate',kind:'input.accept',args:{runId,inputId:'unbound',sourceKey:'unbound',requirementRef:before.run.requirementRef,candidateRepair:{inputRef:before.nodes[4].inputRef,inputDigest:before.nodes[4].inputDigest}}}),/WORKFLOW_REPAIR_NOT_ADMITTED/);
+ const db=new DatabaseSync(join(f.artifacts.root,'..','control.db'));
+ try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('external-proof','operation',?,?,?,?,?,'digest','{\"action\":\"external\"}','[]','fixture','succeeded','now','now')").run(runId,before.nodes[4].nodeRunId,before.nodes[4].nodeId,before.run.generation,before.nodes[4].inputDigest);
+ await assert.rejects(facade.repairCurrentStage({taskId:'task',commandId:'external-deny',decision:{repair:observed.repairBinding,evidenceRefs:observed.evidenceRefs}}),/WORKFLOW_REPAIR_NOT_ADMITTED/);
+ assert.equal((await f.controller.state(runId)).nodes[4].status,'succeeded');
+ db.prepare("DELETE FROM execution_effects WHERE effect_id='external-proof'").run();}finally{db.close()}
+ await facade.repairCurrentStage({taskId:'task',commandId:'repair-candidate',decision:{repair:observed.repairBinding,evidenceRefs:observed.evidenceRefs}});
+ const after=await f.controller.whenIdle(runId);assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.equal(after.run.requirementRef,before.run.requirementRef);
+ for(const id of ids.slice(0,4))assert.equal(calls[id],1);for(const id of ids.slice(4))assert.equal(calls[id],2);
+ for(let i=0;i<4;i++){assert.equal(after.nodes[i].outputRef,before.nodes[i].outputRef);assert.equal(after.nodes[i].leaseEpoch,before.nodes[i].leaseEpoch)}
+ assert.equal((await f.store.query({kind:'workflow.repair.context',runId,generation:after.run.generation})).mode,'candidate-in-place');
+});

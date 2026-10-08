@@ -725,3 +725,21 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 当前 profile 的全局检查配置尚未修改。先对两个现存 dataset-web Task 在各自到达 verify-candidate 时维护修正；待所有使用旧配置的非终态 Run 结束，并确认不存在未绑定 Run 的工程注册记录后，再统一修改 profile 为检查 v2。restore 明确跳过已终态 Run 和非当前定义；当前活跃 Run 仍校验原 repositoryDigest，提前修改 profile 会导致配置漂移。未来 Task 使用新配置，历史成功 Run 不重建。
 
 共享读取目录约定：work/tmp仅允许顶层共享文件，work/artifacts精确SHA引用沿原摘要校验读取；outputs可读取嵌套产物。engineering仓库及原生session内部目录仍通过原工具访问，不经共享材料入口绕过仓库范围限制。
+
+候选校验错误（无效替换、类型、no-change证据或方案文档）由既有Owner恢复：先读取原提案与紧邻validate-proposal失败证据，再repairCurrentStage/node.resume纠正原提案。必须为已登记工程纯validator，原来源/版本/控制有效、全链排空、无提案及下游效果；重复同问题按原一次续行门禁拒绝。原validator lease递增不归零，原提案和失败证据保留在恢复事件；不是checks维护操作，不需要停机或人工装桥。
+
+### 原Run的本地验收场景检查点
+
+沿用内部`engineering.updateCheckpoint`的维护封存与CAS流程，`kind:'local-acceptance'`传入完整`localAcceptance`及`scope:{taskId,uatEnvironment,requestDigest}`，摘要为`executionDigest({request:saved.input.request,acceptanceCriteria:saved.input.acceptanceCriteria})`。不得改仓库、checks或业务授权；`prepare-local-acceptance`及以后必须零领取、无输出和效果。原define/plan产物保留审计，真实重算这两个节点，保留成功workspace/inspect/verify；等待中的verify不会因场景修订冒充成功。恢复维护后按原Controller调度，不另建Task、Run或generation。新planner可纠正失败沿既有Owner一次续行规则处理；成功中段必须与checkpoint审计逐项相符，任何漂移仍拒绝。
+
+生产活动合并UI组件检查脚本的离线提案在round53记载；其`backendVerified:false`是覆盖边界，不是可绕过的错误。配置仍复用原`prepare-web/serve-web`与固定SHA的dataset companion，必须先得到包含结果导出接口且业务验收通过的后端jar，才对原Task做local-acceptance checkpoint。不能把review伴随后端、候选导出或固定API fixture当作真实结果Excel验证。
+
+若Owner已读取诊断仍报TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD，纯validator纠正路径应核Host currentExecution的validationNodeRunId/validationLeaseEpoch/validationInputDigest与原失败工件，不应拿前置Agent身份匹配validator失败。round54含真实SG20副本和Owner完整集成证据；正常原Owner恢复入口不变，无需手动改业务状态或重建Run。
+
+历史materials/source=previous误用恢复：只读核验原生错误调用为同Task精确SHA引用、sole ENGINEERING_READ_SCOPE_INVALID、blocked且未提交/无其他错误；正式重分类为QUERY_ARGUMENT_INVALID后沿原node.resume续同会话。不能将任意scope错误重分类，亦不重新创建Task/Run。
+
+见证器在通过PID/nonce及绝对路径校验后创建证据目录，避免全新部署目录导致ready写入失败。重试仅允许替换工具追加的唯一末尾witness块，且模块、PID、证据目录保持一致；只更新nonce。目录、PID或块内容漂移时拒绝，不通过重复追加插件绕过。每次先执行 --check，再执行相同参数，独立回读本次nonce的ready/disposed。
+
+必要后端依赖部署需要控制库存储版本8→9：沿 deploy-owner-repair.ps1 增加 -MigrateRequiredDependency，先 -Check 零写。仅完整正式维护部署，不能与Bootstrap、离线RepairStoppedLaunch、其他迁移合用。排空并原生seal后停止旧PID，持续owner独占锁中调用 migrate-execution-dependency-index.mjs；事务只更新索引和schema版本，全部业务表摘要保持一致。该迁移需要历史数据备份；独立offline baseline回读通过后才安装启动，launch.json保存迁移证明摘要，Readback/Resume再次核对工具/备份/收据及版本9。若迁移失败保持停机，不把旧包直接运行在版本9上；回退须按迁移前备份恢复整套数据。
+
+后端单测报告核验如实记录skipped/实际执行数，不把已明确禁用的集成用例当普通单测失败。失败或错误、伪造计数、无报告、零用例、全部跳过仍拒绝。业务验收独立覆盖未执行的业务范围，不宣称skip项已通过。检查器完整stdout/stderr写入本Task共享dataset-check-host-unit-<uuid>.json，控制台只输出步骤退出码与首个错误，材料工具分页读取完整正文；旧截断日志不能倒推为完整日志。新工具以新摘要目录冻结并提升check版本，经正式checkpoint生效。

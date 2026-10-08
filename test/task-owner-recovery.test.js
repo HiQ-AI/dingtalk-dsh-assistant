@@ -395,3 +395,39 @@ test('候选修复先拒绝缺失及旧版本查询，当前原生查询后同Ow
  assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision.action,'repairCurrentStage')
  assert.notEqual(currentEvidence,oldEvidence)
 })
+
+test('Owner读取纯validator真实失败身份后纠正原agent，错node/lease/input/generation拒绝', async t => {
+ const directory=await mkdtemp(join(tmpdir(),'owner-validator-identity-')),store=await openExecutionStore({dbPath:join(directory,'control.sqlite'),instanceId:'owner-validator',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ let owner,prefixCalls=0,proposalCalls=0,validatorCalls=0,tamper=null
+ const object={type:'object'},workflow={id:'owner-engineering',version:'18',nodes:[
+  {id:'prepare-workspace',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:object,outputSchema:object,mapInput:({requirement})=>requirement,execute:async({input})=>{prefixCalls++;return input}},
+  {id:'inspect-and-propose',version:'1',executor:'agent',allowedEffects:['read'],allowedTools:[],provider:'test',model:'test',prompt:'纠正提案',inputSchema:object,outputSchema:object,mapInput:({previousOutput})=>previousOutput},
+  {id:'validate-proposal',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:object,outputSchema:object,mapInput:({previousOutput})=>previousOutput,execute:async({input})=>{validatorCalls++;if(!input.valid)throw Object.assign(Error('ENGINEERING_NO_EFFECT_MODIFICATION'),{code:'ENGINEERING_NO_EFFECT_MODIFICATION'});return input}},
+  {id:'finish',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:object,outputSchema:object,mapInput:({previousOutput})=>previousOutput,execute:async({input})=>input}
+ ]}
+ const controller=createExecutionController({store,artifacts,workflows:[workflow],sessions:{async close(){},async cancel(){},async assertDrained(){},async run({recoveryContext,onSessionBound,onResult}){proposalCalls++;await onSessionBound();await onResult({valid:!!recoveryContext});return{status:'submitted'}}}})
+ t.after(async()=>{await owner?.close();await controller.close();await store.close()})
+ await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:workflow.id,input:{request:'修复候选'}}]})
+ const started=await controller.advanceTaskPlan('task'),runId=started.stages[0].runId,before=await controller.whenIdle(runId)
+ await store.command({id:'register',kind:'workflow.register',args:{workflowId:workflow.id,digest:before.run.workflowDigest,definitionVersion:'18',config:{kind:'engineering',taskId:'task',runId}}})
+ await controller.advanceTaskPlan('task')
+ const helpers=createTaskWorkflowContracts({controller,store,artifacts})
+ const ownerArtifacts={...artifacts,async read(ref){const value=await artifacts.read(ref);return value.kind==='execution-failure'&&tamper?{...value,...tamper}:value}}
+ owner=createTaskOwnerController({ctx:{},store,artifacts:ownerArtifacts,controller,modelConfig:()=>({}),advanceTask:async()=>{},authorizeStages:async()=>false,inspectCurrentExecution:helpers.inspectCurrentExecution,repairCurrentStage:helpers.repairCurrentStage,sessionRunner:{async close(){},async run({input,readArtifact,onSessionBound,onCandidate}){
+  await onSessionBound();const current=input.currentExecution
+  assert.equal(current.repairable,true);assert.equal(current.nodeRunId,before.nodes[1].nodeRunId)
+  assert.equal(current.validationNodeRunId,before.nodes[2].nodeRunId);assert.equal(current.validationLeaseEpoch,before.nodes[2].leaseEpoch);assert.equal(current.validationInputDigest,before.nodes[2].inputDigest)
+  const decision={action:'repairCurrentStage',summary:'阅读原校验诊断并纠正提案',repair:current.repairBinding,evidenceRefs:current.evidenceRefs}
+  for(const change of [{nodeRunId:current.nodeRunId},{leaseEpoch:current.validationLeaseEpoch+1},{inputDigest:'0'.repeat(64)},{generation:current.generation+1},{runId:'other'}]){
+   tamper=change;for(const ref of current.evidenceRefs)await readArtifact(ref)
+   await assert.rejects(onCandidate(decision),{code:'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD'})
+  }
+  tamper=null;for(const ref of current.evidenceRefs)await readArtifact(ref)
+  await onCandidate(decision);return{status:'submitted',decision}
+ }}})
+ await owner.ensure({taskId:'task',criteria:['修复候选'],sourceKey:'source',origin:{}});await owner.observe('task');await owner.drive('task');assert.deepEqual(await owner.applyPending(),[])
+ const after=await controller.whenIdle(runId)
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.equal(prefixCalls,1);assert.equal(proposalCalls,2);assert.equal(validatorCalls,2)
+ assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].sessionId,before.nodes[1].sessionId);assert.deepEqual(after.nodes[0],before.nodes[0])
+ assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision.action,'repairCurrentStage')
+})

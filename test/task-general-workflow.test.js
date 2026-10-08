@@ -310,3 +310,20 @@ test('Markdown 新任务统一落点，旧任务及重启对账保持原路径�
   const linked = createTaskMarkdownFileAdapter({ root, getTaskDirectories: async () => ({ outputs: join(link, 'outputs') }) })
   await assert.rejects(linked.execute(prepared), { code: 'TASK_MARKDOWN_SCOPE_DENIED' })
 })
+
+test('宿主历史回执精确摘要读取和Task需求绑定，普通文件不升级，领域仍独立判定',async()=>{
+ const {mkdtemp,writeFile}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const {createAgentResourceReadCapability}=await import('../packages/dingtalk-dsh-assistant/agent-query-resources.js');
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js');
+ const {verifyTaskAcceptance}=await import('../packages/dingtalk-dsh-assistant/task-general-workflow.js');
+ const root=await mkdtemp(join(tmpdir(),'host-receipt-')),content=JSON.stringify({steps:[{http:200}],sourceBeforeDigest:'original'});await writeFile(join(root,'receipt.json'),content);
+ const receipt={path:'receipt.json',digest:executionDigest(content),taskId:'task-a',requirementRevision:2};
+ const resource={id:'files',kind:'files',root,paths:['receipt.json'],hostReceipts:[receipt]};
+ const capability=createAgentResourceReadCapability({resources:[resource]}),input={resourceId:'files',operation:'read',path:'receipt.json'},scope={resourceIds:['files']};
+ const output=await capability.execute({input,scope});assert.deepEqual(output.hostReceipt,receipt);
+ const plain=createAgentResourceReadCapability({resources:[{id:'files',kind:'files',root,paths:['receipt.json']}]});assert.equal((await plain.execute({input,scope})).hostReceipt,undefined);
+ let calls=0;const args={requirement:{request:'走一遍并定位'},decision:{summary:'结果',evidenceRefs:['e']},stages:[],acceptanceItems:[{itemId:'a',criterion:'走一遍并定位',evidenceRefs:['e']}],directEvidence:[{taskId:'task-a',requirementRevision:2,queryId:'query_project_resource',evidenceRef:'e',evidence:{result:output}}],check:async x=>{calls++;assert.deepEqual(x.evidence[0].hostQuery.hostReceipt,receipt);return{status:'unverified',resultVerified:false,criteria:[]}}};
+ assert.equal(await verifyTaskAcceptance(args),false);assert.equal(calls,1);
+ for(const drift of [{taskId:'task-b'},{requirementRevision:3}])assert.equal(await verifyTaskAcceptance({...args,directEvidence:[{...args.directEvidence[0],...drift}]}),false);
+ assert.equal(calls,1);await writeFile(join(root,'receipt.json'),content+' ');await assert.rejects(capability.execute({input,scope}),{code:'QUERY_RECEIPT_CONTENT_CHANGED'});
+});

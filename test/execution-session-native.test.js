@@ -867,3 +867,46 @@ for(const variant of ['valid','foreign','parent-after-rebind','parent-new-lease'
  const proof=await inspectLegacyTurnFailure(ctx,b,'EXECUTION_PROVIDER_FAILED')
  if(variant==='valid'){assert.equal(proof.failure.code,'EXECUTION_PROVIDER_TRANSIENT');assert.equal(proof.inputSeq,98);assert.equal(proof.endSeq,153)}else assert.equal(proof,null)
 })
+
+test('已提交候选经纯校验退回后原生同会话续行，保留旧提交历史',async t=>{
+ const root=await temp(),first=await host({root,script:[submit('original-proposal')]})
+ assert.equal((await drive(first)).status,'submitted')
+ const before=await first.ctx.sessionPersistence.inspect(binding().sessionId);await first.close()
+ const next=await host({root,script:[submit('corrected-proposal')]});t.after(()=>next.close())
+ const result=await drive(next,{binding:binding({leaseEpoch:2,sessionBound:true}),recoveryContext:{kind:'execution-recovery-context',taskId:'task',runId:'run',nodeRunId:'node',diagnosis:'候选纯校验拒绝',strategy:'保留有效改动，纠正无效替换后重新提交',evidenceRefs:['proof/original-proposal','proof/validation']}})
+ assert.equal(result.status,'submitted')
+ const after=await next.ctx.sessionPersistence.inspect(binding().sessionId)
+ assert.deepEqual(after.events.slice(0,before.events.length),before.events)
+ assert.match(JSON.stringify(next.requests[0]),/original-proposal/)
+ assert.match(JSON.stringify(next.requests[0]),/纠正无效替换/)
+})
+
+
+test('共享材料previous参数反馈后原生同会话自行纠正并提交',async t=>{
+ const calls=[],ref='tasks/task/sha256-'+ 'a'.repeat(64)+'.json'
+ const h=await host({script:[{name:'engineering_repo_inspect',args:{operation:'materials',source:'previous',path:ref}},{name:'engineering_repo_inspect',args:{operation:'materials',source:'current',path:ref}},submit('read')],repositoryInspect:async(_binding,args)=>{calls.push(args);return args.source==='previous'?{status:'invalid_source',code:'QUERY_ARGUMENT_INVALID',suggestedCall:{...args,source:'current'}}:{artifact:'真实同Task材料'}}})
+ t.after(()=>h.close())
+ const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
+ assert.equal(result.status,'submitted');assert.equal(calls.length,2)
+ assert.ok(JSON.stringify(h.requests[1]).includes('invalid_source'))
+ assert.match(JSON.stringify(h.requests[0]),/不能替换业务需求或改变UAT/);assert.match(JSON.stringify(h.requests[0]),/自行追加真人审批/)
+ const events=(await h.ctx.sessionPersistence.inspect(binding().sessionId)).events
+ assert.equal(events.filter(e=>e.type==='dingtalk/execution-session').length,1)
+})
+for(const variant of ['valid','foreign','current','read','malformed','extra-error','submitted','missing-args'])test(`历史materials代次误用精确重分类：${variant}`,async()=>{
+ const b=binding({sessionBound:true}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]))
+ const args={operation:'materials',source:'previous',path:'tasks/task/sha256-'+ 'a'.repeat(64)+'.json',limit:16000}
+ if(variant==='foreign')args.path=args.path.replace('tasks/task/','tasks/other/')
+ if(variant==='current')args.source='current'
+ if(variant==='read')args.operation='read'
+ if(variant==='malformed')args.path='tasks/task/../secret'
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},{seq:1,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId:b.sessionId,leaseEpoch:1}}}},
+ {seq:2,type:'tool/call',data:{name:'engineering_repo_inspect',callId:'call',arguments:variant==='missing-args'?undefined:JSON.stringify(args)}},
+ {seq:3,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'call',isError:true,content:[{type:'text',text:'Error: ENGINEERING_READ_SCOPE_INVALID'}]}]}}},
+ {seq:5,type:'step/end',data:{}},{seq:6,type:'turn/end',data:{reason:{kind:'blocked'}}}]
+ if(variant==='extra-error')events.splice(2,0,{...structuredClone(events[3]),seq:1.5})
+ if(variant==='submitted')events.splice(2,0,{seq:1.5,type:'tool/call',data:{name:'execution_node_submit'}})
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const proof=await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')
+ if(variant==='valid')assert.equal(proof.failure.code,'QUERY_ARGUMENT_INVALID');else assert.equal(proof,null)
+})

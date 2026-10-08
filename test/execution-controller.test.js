@@ -886,3 +886,86 @@ test('工程旧越界读取失败由Owner同节点同代续行，通用恢复不
  await f.controller.resumeNode(await f.resumeArgs());const after=await f.controller.whenIdle(f.runId)
  assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].leaseEpoch,before.nodes[1].leaseEpoch+1)
 })
+
+for(const variant of ['valid','repeat','validator-read','foreign-workflow','paused','maintenance','document-invalid','no-change-evidence'])test(`工程候选纯校验退回原agent同代纠正 ${variant}`,async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'dsh-proposal-correction-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'proposal-correction',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ let preparations=0,proposals=0,validations=0
+ const failureCode=variant==='document-invalid'?'ENGINEERING_PROPOSAL_DOCUMENT_INVALID':variant==='no-change-evidence'?'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED':'ENGINEERING_NO_EFFECT_MODIFICATION'
+ const schema={type:'object',properties:{valid:{type:'boolean'}},required:['valid'],additionalProperties:false}
+ const definition={id:'engineering-fixture',version:'18',nodes:[
+ {id:'prepare-workspace',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({requirement})=>requirement,execute:async({input})=>{preparations++;return input}},
+ {id:'inspect-and-propose',version:'1',executor:'agent',allowedEffects:['read'],allowedTools:[],provider:'fixture',model:'fixture',prompt:'纠正候选',inputSchema:number,outputSchema:schema,mapInput:({previousOutput})=>previousOutput},
+ {id:'validate-proposal',version:'1',executor:'code',allowedEffects:variant==='validator-read'?['read']:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({previousOutput})=>previousOutput,execute:async({input})=>{validations++;if(!input.valid)throw Object.assign(new Error(failureCode),{code:failureCode});return input}},
+ {id:'apply-changes',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({previousOutput})=>previousOutput,execute:async({input})=>input},]}
+ const sessions={async run(args){proposals++;await args.onSessionBound();await args.onResult({valid:!!args.recoveryContext&&variant!=='repeat'});return{status:'submitted'}},async assertDrained(){},async cancel(){},async close(){}}
+ const controller=createExecutionController({store,artifacts,workflows:[definition],sessions});t.after(async()=>{await controller.close();await store.close()})
+ await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:definition.id,input:1}]})
+ const plan=await controller.advanceTaskPlan('task'),runId=plan.stages[0].runId
+ const before=await controller.whenIdle(runId),frozen=defineExecutionWorkflow(definition)
+ await store.command({id:'register',kind:'workflow.register',args:{workflowId:definition.id,digest:frozen.digest,definitionVersion:'18',config:{kind:variant==='foreign-workflow'?'other':'engineering',taskId:'task',runId}}})
+ if(variant==='paused')await controller.pause({commandId:'pause',runId,reason:'测试暂停'})
+ let recovery=await controller.inspectNodeRecovery(runId)
+ if(['validator-read','foreign-workflow','paused'].includes(variant)){assert.equal(recovery.repairable,false);return}
+ if(variant==='maintenance'){await store.command({id:'maintenance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'hold',actorId:'owner',reason:'busy'}});assert.equal((await controller.inspectNodeRecovery(runId)).repairable,false);return}
+ assert.equal(recovery.repairable,true);assert.equal(recovery.nodeId,'inspect-and-propose');assert.equal(recovery.validationNodeRunId,before.nodes[2].nodeRunId)
+ const taskPlan=await controller.taskPlan('task'),context=await artifacts.put({kind:'execution-recovery-context',taskId:'task',runId,requirementRevision:taskPlan.task.requirementRevision,planRevision:taskPlan.task.planRevision,controlRevision:taskPlan.task.controlRevision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,diagnosis:'候选含无效条目',strategy:'读取原提案并纠正，保留有效修改',evidenceRefs:recovery.evidenceRefs,problemKey:recovery.problemKey})
+ const receipt=await controller.resumeNode({commandId:'correct-proposal',runId,expectedRevision:recovery.runRevision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,leaseEpoch:recovery.leaseEpoch,inputDigest:recovery.inputDigest,contextRef:context.ref})
+ const after=await controller.whenIdle(runId)
+ assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(preparations,1);assert.equal(proposals,2);assert.equal(validations,2);assert.equal(after.nodes[1].sessionId,before.nodes[1].sessionId);assert.equal(after.nodes[2].leaseEpoch,2)
+ assert.equal(receipt.result.previousOutputRef,before.nodes[1].outputRef);assert.equal(receipt.result.validationInputRef,before.nodes[2].inputRef);assert.deepEqual(await artifacts.read(before.nodes[1].outputRef),{valid:false})
+ if(variant==='repeat'){recovery=await controller.inspectNodeRecovery(runId);assert.equal(recovery.repairable,false);assert.equal(recovery.reason,'strategy-change-required')}else assert.equal(after.run.status,'succeeded')
+})
+
+for(const variant of ['verified','verify-waiting','wrong-scope','stale-maintenance','stale-revision','planner-timeout','planner-invalid','local-started'])test(`本地验收checkpoint仅重算方案并保留候选 ${variant}`,async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'dsh-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'local-checkpoint',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ const calls={prepare:0,workspace:0,inspect:0,verify:0,plan:0,local:0};let hold=variant!=='local-started'
+ const str={type:'string'},make=correct=>({id:correct?'new-local':'old-local',version:'18',nodes:[
+ {id:'prepare-generation',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({requirement})=>requirement,execute:async({input})=>{calls.prepare++;return input}},
+ {id:'define-local-acceptance',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({requirement})=>requirement,execute:correct?async()=> 'right':async()=> 'wrong'},
+ {id:'plan-local-acceptance',version:'1',executor:'agent',provider:'test',model:'test',prompt:'plan',allowedEffects:['read'],allowedTools:[],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput},
+ {id:'prepare-workspace',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.workspace++;return 'workspace'}},
+ {id:'inspect-and-propose',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.inspect++;return 'candidate'}},
+ {id:'verify-candidate',version:'1',executor:'code',allowedEffects:['read'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.verify++;if(variant==='verify-waiting')throw Object.assign(new Error('check'),{code:'ENGINEERING_VERIFICATION_FAILED'});return 'verified-candidate'}},
+ {id:'prepare-local-acceptance',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:str,inputDependencies:['plan-local-acceptance'],mapInput:({previousOutput,dependencyOutputs})=>({candidate:previousOutput,plan:dependencyOutputs['plan-local-acceptance']}),execute:async({input})=>{calls.local++;assert.equal(input.candidate,'verified-candidate');assert.equal(input.plan,'right');return 'done'}},]})
+ const old=make(false),next=make(true),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next)
+ const sessions={async run(args){calls.plan++;await args.onSessionBound();if(calls.plan===2&&variant==='planner-timeout')return{status:'no_submission',reason:'execution_timeout',failure:{code:'execution_timeout',phase:'execution'}};await args.onResult(calls.plan===2&&variant==='planner-invalid'?42:args.input);return{status:'submitted'}},async cancel(){},async assertDrained(){},async close(){}}
+ const controller=createExecutionController({store:{query:q=>store.query(q),command:c=>{if(hold&&c.kind==='node.claim'&&c.args.nodeId==='prepare-local-acceptance')throw Error('fixture-stop-before-local');return store.command(c)}},artifacts,workflows:[old],sessions});t.after(async()=>{await controller.close();await store.close()})
+ const send=(kind,args,id=kind)=>store.command({id,kind,args}),config={kind:'engineering',taskId:'task',runId:'run',uatEnvironment:'uat2',input:{request:'business',acceptanceCriteria:['criterion']},localAcceptanceConfig:{id:'wrong'}}
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
+ await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,localAcceptanceConfig:{id:'right'},localAcceptanceScope:{taskId:variant==='wrong-scope'?'foreign':'task',uatEnvironment:'uat2',requestDigest:executionDigest(config.input)},checkpoint:{kind:'local-acceptance',fromDigest:oldDef.digest,requestId:'local-fix'}}},'new')
+ const requirement=await artifacts.put('request')
+ await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:['criterion'],sourceKey:'source',eventKey:'source'})
+ await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
+ await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input:'request',stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
+ if(['verify-waiting','local-started'].includes(variant))await controller.whenIdle('run');else await assert.rejects(controller.whenIdle('run'),/fixture-stop-before-local/)
+ const before=await controller.state('run');await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'local',actorId:'owner',reason:'修正场景'})
+ controller.registerWorkflow(next)
+ const args={commandId:'engineering-checkpoint:run:local-fix',runId:'run',expectedRevision:before.run.revision,kind:'local-acceptance',workflowId:next.id,workflowDigest:nextDef.digest,maintenance:{maintenanceId:'local',revision:1}}
+ if(variant==='stale-maintenance'){args.maintenance.revision=0;await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'RUNTIME_MAINTENANCE_STALE'});return}
+ if(variant==='stale-revision')args.expectedRevision--
+ if(['wrong-scope','stale-revision','local-started'].includes(variant)){await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'ENGINEERING_CHECKPOINT_NOT_ADMITTED'});return}
+ await controller.updateEngineeringCheckpoint(args);const checkpoint=await controller.state('run');assert.deepEqual(checkpoint.nodes.slice(3,6),before.nodes.slice(3,6));assert.equal(checkpoint.nodes[2].sessionId,null)
+ await send('runtime.maintenance.change',{active:false,expectedRevision:1,maintenanceId:'local',actorId:'owner',reason:'恢复'},'leave');hold=false
+ await controller.recover({commandId:'continue',runId:'run'});let after=await controller.whenIdle('run')
+ if(variant.startsWith('planner-')){
+  const recovery=await controller.inspectNodeRecovery('run');assert.equal(recovery.repairable,true,JSON.stringify(recovery))
+  const plan=await controller.taskPlan('task'),context=await artifacts.put({kind:'execution-recovery-context',taskId:'task',runId:'run',requirementRevision:plan.task.requirementRevision,planRevision:plan.task.planRevision,controlRevision:plan.task.controlRevision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,diagnosis:'本轮规划失败',strategy:'按正确场景重新提交合法方案',evidenceRefs:recovery.evidenceRefs,problemKey:recovery.problemKey})
+  await controller.resumeNode({commandId:'resume-planner',runId:'run',expectedRevision:after.run.revision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,leaseEpoch:recovery.leaseEpoch,inputDigest:recovery.inputDigest,contextRef:context.ref});after=await controller.whenIdle('run')
+ }
+
+ assert.equal(after.run.generation,1);assert.equal(calls.prepare,1);assert.equal(calls.workspace,1);assert.equal(calls.inspect,1);assert.equal(calls.verify,1);assert.equal(calls.plan,variant.startsWith('planner-')?3:2);assert.equal(calls.local,variant==='verify-waiting'?0:1)
+ assert.equal(after.run.status,variant==='verify-waiting'?'waiting':'succeeded');assert.deepEqual(after.nodes.slice(3,6),before.nodes.slice(3,6))
+})
+
+test('历史materials参数重分类保留同节点同代并由Owner纠正',async t=>{
+ const f=await agentRecoveryFixture(t,({recoveryContext,input})=>recoveryContext?input+1:{status:'no_submission',reason:'execution_tool_failed',failure:{code:'execution_tool_failed',phase:'execution'}})
+ const before=await f.controller.state(f.runId),node=before.nodes[1]
+ assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable,false)
+ const evidence=await f.artifacts.put({kind:'legacy-turn-failure-classification',failure:{code:'QUERY_ARGUMENT_INVALID'}})
+ await f.store.command({id:'scope-reclassify',kind:'node.failure.reclassify',args:{runId:f.runId,runRevision:before.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,evidenceRef:evidence.ref,previousCode:'execution_tool_failed',code:'QUERY_ARGUMENT_INVALID'}})
+ const recovery=await f.controller.inspectNodeRecovery(f.runId)
+ assert.equal(recovery.repairable,true)
+ await f.controller.resumeNode(await f.resumeArgs());const after=await f.controller.whenIdle(f.runId)
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].leaseEpoch,before.nodes[1].leaseEpoch+1)
+})

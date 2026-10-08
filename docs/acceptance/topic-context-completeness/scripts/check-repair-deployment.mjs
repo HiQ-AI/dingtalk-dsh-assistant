@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { createInterface } from 'node:readline'
 import { migrateMessageImpact, verifyMessageImpact } from '../../../../scripts/migrate-message-impact.js'
 import { migrateExecutionEventsIndex, verifyExecutionEventsIndex, assertStoppedMigrationPid } from '../../../../scripts/migrate-execution-events-index.mjs'
+import { migrateExecutionDependencyIndex, verifyExecutionDependencyIndex } from '../../../../scripts/migrate-execution-dependency-index.mjs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { maintenanceStatus } from '../../../../packages/dingtalk-dsh-assistant/execution-maintenance.js'
@@ -52,15 +53,16 @@ export async function holdDeploymentOwnerLock({dbPath,input=process.stdin,writeL
    for await(const line of createInterface({input})){
     const indexRequest=line.startsWith('{')?JSON.parse(line):null
     const indexMigration=indexRequest?.command==='migrate-execution-events-index'&&Object.keys(indexRequest).length===2
-    if((line!=='migrate-message-impact'&&!indexMigration)||migrated)throw Error('DEPLOY_LOCK_COMMAND_INVALID')
-    if(indexMigration)assertStoppedMigrationPid(indexRequest.expectedStoppedPid)
+    const dependencyMigration=indexRequest?.command==='migrate-execution-dependency-index'&&Object.keys(indexRequest).length===2
+    if((line!=='migrate-message-impact'&&!indexMigration&&!dependencyMigration)||migrated)throw Error('DEPLOY_LOCK_COMMAND_INVALID')
+    if(indexMigration||dependencyMigration)assertStoppedMigrationPid(indexRequest.expectedStoppedPid)
     const state=maintenanceStatus(db)
     if(!state.active||state.phase!=='stopping'||!state.drained)throw Error('MIGRATION_MAINTENANCE_REQUIRED')
     const writeDb=new DatabaseSync(dbPath)
     try{
-     const proof=indexMigration?migrateExecutionEventsIndex(writeDb,{mode:'execute'}):migrateMessageImpact(writeDb,{path:dbPath,mode:'execute'})
+     const proof=dependencyMigration?migrateExecutionDependencyIndex(writeDb,{mode:'execute'}):indexMigration?migrateExecutionEventsIndex(writeDb,{mode:'execute'}):migrateMessageImpact(writeDb,{path:dbPath,mode:'execute'})
      const readback=new DatabaseSync(dbPath,{readOnly:true})
-     try{if(indexMigration)verifyExecutionEventsIndex(readback,{baseline:proof.baseline});else verifyMessageImpact(readback,{baseline:proof.baseline})}finally{readback.close()}
+     try{if(dependencyMigration)verifyExecutionDependencyIndex(readback,{baseline:proof.baseline});else if(indexMigration)verifyExecutionEventsIndex(readback,{baseline:proof.baseline});else verifyMessageImpact(readback,{baseline:proof.baseline})}finally{readback.close()}
      writeLine(JSON.stringify(proof));migrated=true
     }finally{writeDb.close()}
    }
@@ -101,6 +103,10 @@ try {
   const receipt=JSON.parse(readFileSync(arg,'utf8'))
   if(!receipt.verified||receipt.version!==8||receipt.indexName!=='execution_events_kind_seq'||!receipt.baseline)throw Error('MIGRATION_RECEIPT_INVALID')
   db.exec('BEGIN');try{console.log(JSON.stringify(verifyExecutionEventsIndex(db,source==='offline'?{baseline:receipt.baseline}:{})))}finally{db.exec('ROLLBACK')}
+ }else if(mode==='execution-dependency-index-verify'){
+  const receipt=JSON.parse(readFileSync(arg,'utf8'))
+  if(!receipt.verified||receipt.version!==9||receipt.indexName!=='execution_one_active_task'||!receipt.baseline)throw Error('MIGRATION_RECEIPT_INVALID')
+  db.exec('BEGIN');try{console.log(JSON.stringify(verifyExecutionDependencyIndex(db,source==='offline'?{baseline:receipt.baseline}:{})))}finally{db.exec('ROLLBACK')}
  }else if(mode==='message-impact-verify'){
   const receipt=JSON.parse(readFileSync(arg,'utf8'))
   if(!receipt.verified||receipt.version!==6||!receipt.baseline)throw Error('MIGRATION_RECEIPT_INVALID')

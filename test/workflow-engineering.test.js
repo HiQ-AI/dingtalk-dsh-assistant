@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, writeFile, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createEngineeringStageContract, createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
+import { assertEngineeringStageRepository, selectTaskLocalAcceptance, createEngineeringStageContract, createEngineeringRegistry, readEngineeringDeliveryProof, readEngineeringRemoteRefs, uatBranchFor, isUatBranch, engineeringWorkflowOwnerContract, createEngineeringCompletionPolicy } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
@@ -602,8 +602,8 @@ test('工程共享材料读取不依赖节点正文，检查修订保留旧注�
  const directories=await taskDirectories(directory,'task'),getTaskDirectories=async()=>directories
  const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true,taskWorkspaceRoot:directory,getTaskDirectories})
  const actual=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'shared',initialize:true});t.after(()=>actual.close())
- let state,workflow,checkpoint
- const store={command:v=>actual.command(v),query:v=>v.kind==='run'?state??{}:v.kind==='task.plan'?{task:{requirementRevision:2}}:actual.query(v)}
+ let state,workflow,checkpoint,repairRef
+ const store={command:v=>actual.command(v),query:v=>v.kind==='engineering.repair.context'?{taskId:'task',contextRef:repairRef}:v.kind==='run'?state??{}:v.kind==='task.plan'?{task:{requirementRevision:2}}:actual.query(v)}
  const options={getTaskDirectories,ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},repositories:[{id:'repo',sourceRepository:source,managedRoot:join(directory,'managed'),remote:source,baseRef:'main',githubRepository:'example/repo',editablePaths:[],discovery:{allowedPrefixes:['src/']},checks:[{id:'build',version:'1',executable:process.execPath,args:['--test','tests/missing.cjs']}]}]}
  const registry=createEngineeringRegistry(options);await registry.restore(store,artifacts)
  const controller={registerWorkflow:value=>{workflow=value},updateEngineeringCheckpoint:async args=>{checkpoint=args;return {result:{toDigest:args.workflowDigest}}}}
@@ -616,12 +616,77 @@ test('工程共享材料读取不依赖节点正文，检查修订保留旧注�
  const index=await registry.repositoryInspect(binding,{operation:'materials'})
  assert.equal(index.entries.find(e=>e.artifactRef===material.ref).status,'history');assert.ok(index.files.some(f=>f.relativePath==='outputs/result.md'))
  assert.ok((await registry.repositoryInspect(binding,{operation:'materials',path:material.ref,limit:16000})).nextOffset>0)
+ const correction=await registry.repositoryInspect(binding,{operation:'materials',source:'previous',path:material.ref,limit:16000})
+ assert.equal(correction.code,'QUERY_ARGUMENT_INVALID');assert.equal(correction.suggestedCall.source,'current')
+ assert.ok((await registry.repositoryInspect(binding,correction.suggestedCall)).nextOffset>0)
+ await assert.rejects(registry.repositoryInspect(binding,{operation:'materials',source:'previous',path:`tasks/other/${material.ref.split('/').at(-1)}`}),{code:'ENGINEERING_READ_SCOPE_INVALID'})
  assert.ok((await registry.repositoryInspect(binding,{operation:'materials',path:'outputs/result.md'})).artifact.includes('共享产物'))
+ repairRef=(await artifacts.put({generation:0,sourceKind:'workspace',workspaceSnapshotRef:material.ref,materials:[]},{taskId:'task'})).ref
+ await writeFile(join(directories.work,'new-host-diagnostic.json'),JSON.stringify({text:'新增诊断正文不可灌入repair'}))
+ const repair=await registry.repositoryInspect(binding,{operation:'repair'})
+ assert.equal(repair.taskRequirement.uatEnvironment,'uat1');assert.equal(repair.taskRequirement.request,old.config.input.request)
+ assert.ok(repair.sharedFiles.some(file=>file.relativePath==='work/new-host-diagnostic.json'));assert.match(repair.sharedFilesInstruction,/source=current/);assert.match(repair.sharedFilesInstruction,/不构成用户授权/)
+ assert.ok(!JSON.stringify(repair).includes('新增诊断正文不可灌入repair'));assert.equal(repair.entries,undefined)
  await assert.rejects(registry.repositoryInspect({...binding,taskId:'other'},{operation:'materials'}),{code:'ENGINEERING_READ_SCOPE_INVALID'})
  await actual.command({id:'maintenance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'修正检查'}})
  await registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-v2',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['--test']}],maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts)
  assert.equal(checkpoint.expectedRevision,7);assert.equal(checkpoint.kind,'checks');assert.notEqual(checkpoint.workflowDigest,old.digest)
  assert.deepEqual((await actual.query({kind:'workflow.list'})).find(r=>r.digest===old.digest),old)
+ const current=(await actual.query({kind:'workflow.list'})).find(r=>r.digest===checkpoint.workflowDigest)
+ const scope={taskId:'task',uatEnvironment:current.config.uatEnvironment,requestDigest:executionDigest({request:current.config.input.request,acceptanceCriteria:current.config.input.acceptanceCriteria})}
+ const command={executable:process.execPath,args:['--version']}
+ const localAcceptance={version:'task-specific',sharedDataProfilePath:join(directory,'profile.json'),prepareSteps:[],service:{...command,args:['{port}','127.0.0.1'],readyPath:'/'},scenarios:[{id:'task-business',description:'当前任务真实业务条件',...command}],cleanup:command,verifyCleanup:command}
+ for(const invalid of [{...scope,taskId:'other'},{...scope,uatEnvironment:'uat9'},{...scope,requestDigest:'0'.repeat(64)}])await assert.rejects(registry.updateCheckpoint({runId:prepared.runId,requestId:'local-v1',kind:'local-acceptance',localAcceptance,scope:invalid,maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts),{code:'ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH'})
+ await registry.updateCheckpoint({runId:prepared.runId,requestId:'local-v1',kind:'local-acceptance',localAcceptance,scope,maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts)
+ const scoped=(await actual.query({kind:'workflow.list'})).find(r=>r.digest===checkpoint.workflowDigest)
+ assert.deepEqual(scoped.config.localAcceptanceScope,scope);assert.deepEqual(scoped.config.localAcceptanceConfig,localAcceptance)
+ assert.deepEqual(scoped.config.checkpointChecks,current.config.checkpointChecks);assert.equal(checkpoint.kind,'local-acceptance')
+
  const restored=createEngineeringRegistry(options);await restored.restore(store,artifacts)
  assert.equal(state.run.generation,1)
+})
+
+
+test('导入导出前置核验保留真实API缺口，不把源码或新映射冒充业务PASS', async t => {
+ const {inspectDatasetTransferContract}=await import('../docs/acceptance/message-clarification-admission/scripts/check-dataset-transfer-contract.mjs')
+ const root=await mkdtemp(join(tmpdir(),'transfer-preflight-')),directory=join(root,'src/main/java/com/ecdigit/ecdata/controller')
+ await mkdir(directory,{recursive:true})
+ await writeFile(join(directory,'ProcessDraftController.java'),'@PostMapping("/import")')
+ await writeFile(join(directory,'ProcessCoreController.java'),'@PostMapping("/excelImportUpr/{id}")')
+ const first=await inspectDatasetTransferContract(root)
+ assert.equal(first.ready,false);assert.equal(first.passed,false);assert.ok(first.blockers.includes('FR02_DRAFT_UPR_EXPORT_API_MISSING'));assert.ok(first.blockers.includes('FR04_DRAFT_UPR_REPLACE_API_MISSING'))
+ await writeFile(join(directory,'ProcessDraftController.java'),'@PostMapping("/upr/export") @PostMapping("/upr/import")')
+ const changed=await inspectDatasetTransferContract(root)
+ assert.deepEqual(changed.blockers,['FR01_FR06_RUNTIME_TRANSFER_SUITE_NOT_VERIFIED']);assert.equal(changed.passed,false)
+})
+
+
+test('Task专属验收不按仓库默认回退，拒绝错UAT、旧需求及另一Task',()=>{
+ const scope={taskId:'transfer',uatEnvironment:'uat2',requestDigest:'a'.repeat(64)}
+ const localAcceptance={version:'transfer-fr01-fr06'},config={localAcceptance:{version:'wrong-merge'},taskLocalAcceptance:[{scope,localAcceptance}]}
+ assert.deepEqual(selectTaskLocalAcceptance(config,scope),{localAcceptanceConfig:localAcceptance,localAcceptanceScope:scope})
+ for(const bad of [{...scope,taskId:'merge'},{...scope,uatEnvironment:'uat3'},{...scope,requestDigest:'b'.repeat(64)}])assert.throws(()=>selectTaskLocalAcceptance(config,bad),{code:'ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH'})
+ assert.throws(()=>selectTaskLocalAcceptance({...config,taskLocalAcceptance:[...config.taskLocalAcceptance,...config.taskLocalAcceptance]},scope),{code:'ENGINEERING_ACCEPTANCE_SCOPE_AMBIGUOUS'})
+})
+
+test('必要后端阶段仅替换阶段仓库与阶段验收，保留Task授权和同UAT', async () => {
+ let action, context
+ const contract=createEngineeringStageContract({engineering:{prepareTask:async(a,c)=>{action=a;context=c;return {input:a}}},controller:{plannedTaskStageRunId:()=> 'dependency-run'},readTaskEvidence:async()=>[],mayCreate:async()=>true})
+ const requirement={request:'前端提示和失败明细下载',target:{repositoryId:'dataset-web',uatEnvironment:'uat3'},acceptanceCriteria:['全部UI与真实下载完成'],scope:{taskId:'task'},authorization:{ownerConfirmed:true}}
+ await contract.prepare({taskId:'task',stage:{stageId:'stage-2',sourceCondition:{repositoryId:'dataset',objective:'失败明细下载',acceptanceCriteria:['真实API返回Excel']}},plan:{task:{planRevision:1,requirementRevision:1}},requirement,origin:{run:{actorId:'human'},command:{id:'source',kind:'create',args:{arguments:{},binding:{}}}}})
+ assert.equal(action.arguments.repositoryId,'dataset');assert.equal(action.arguments.uatEnvironment,'uat3')
+ assert.equal(action.arguments.objective,'失败明细下载');assert.deepEqual(action.arguments.acceptanceCriteria,['真实API返回Excel'])
+ assert.equal(context.authorizedGroupRequest,true);assert.equal(context.taskContext.requirementRevision,1)
+ assert.deepEqual(requirement.acceptanceCriteria,['全部UI与真实下载完成']);assert.equal(requirement.target.repositoryId,'dataset-web')
+})
+
+test('必要工程仓库绑定拒绝无关仓库、他人/旧版来源和无阶段验收',()=>{
+ const requirement={target:{repositoryId:'dataset-web',uatEnvironment:'uat3'},authorization:{actorId:'human'},sourceInstructions:[{sourceKey:'request',sourceVersion:2,actorId:'human',text:'开发失败明细下载'}]}
+ const repositories=[{repositoryId:'dataset-web',dependencyRepositories:['dataset']},{repositoryId:'dataset'},{repositoryId:'unrelated'}]
+ const stage={workflowId:'task-engineering',sourceCondition:{repositoryId:'dataset',sourceKey:'request',sourceVersion:2,sourceQuote:'开发失败明细下载',objective:'明细下载',acceptanceCriteria:['真实API下载Excel']}}
+ assert.doesNotThrow(()=>assertEngineeringStageRepository({requirement,stage,repositories}))
+ for(const change of [{repositoryId:'unrelated'},{sourceVersion:1},{sourceKey:'foreign'},{objective:'额外业务'},{acceptanceCriteria:[]}])
+  assert.throws(()=>assertEngineeringStageRepository({requirement,stage:{...stage,sourceCondition:{...stage.sourceCondition,...change}},repositories}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+ assert.throws(()=>assertEngineeringStageRepository({requirement:{...requirement,authorization:{actorId:'other'}},stage,repositories}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+ assert.throws(()=>assertEngineeringStageRepository({requirement,stage,repositories:repositories.map(r=>({...r,dependencyRepositories:[]}))}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
 })
