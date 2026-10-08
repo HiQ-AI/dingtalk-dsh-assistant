@@ -40,3 +40,5 @@
 不在Resume后重复整个Read-Deployment的任务/工件/包遍历，不增加观察时长、轮询或Assistant状态。`test/deploy-owner-repair.test.ps1` 全文件实跑通过，新增恢复后health degraded与store不可用2/2 PASS，日志 `docs/tmp/deploy-runtime-readback-helper.log`。原restore一次不重装3/3及同秒失败身份4/4继续通过。
 
 编码与本次恢复确认变更后的入口定向回归：`node --test --test-name-pattern='Check实际|fail-check|fail-readback|resume-not-ready|独立Resume' test/deploy-local.test.js`，5/5 PASS（33.33秒），日志 `docs/tmp/deploy-runtime-readback-canonical.log`。包含恢复返回dispatchResumed=true但ready=false时拒绝成功。配置restore 11/11由负责代理实跑并回报（原工具输出chunk3c021f、1140.5ms；未另存日志），此处不冒称独立日志回读；其精确现场恢复另由主线程记录。
+
+独立恢复回读：同PID15188，health=ok、inboundProcessing=true、bridgehealthy；maintenance inactive revision510，profile3b5c精确恢复、自启enabled。证据 five-store-resident-reload。Resident重开未重启Host、未写业务账；首次worker失效根因未收敛。部署脚本完成时通过health与真实maintenance查询，不保证之后永久运行正常。
