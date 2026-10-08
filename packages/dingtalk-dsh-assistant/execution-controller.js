@@ -418,7 +418,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const localPreparation=kind==='local-acceptance'&&state.nodes.find(item=>item.nodeId==='prepare-local-acceptance'&&item.status==='waiting')
       if(localPreparation){
         const current=definitionOf(state.run).nodes.find(item=>item.id===localPreparation.nodeId),next=definition.nodes.find(item=>item.id===localPreparation.nodeId)
-        if(localPreparation.waitReason?.reference!=='LOCAL_ACCEPTANCE_PLAN_INVALID'||[current,next].some(item=>item?.executor!=='code'||item.allowedEffects.some(effect=>!['pure','read'].includes(effect))))throw executionError('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+        if(localPreparation.waitReason?.reference!=='LOCAL_ACCEPTANCE_PLAN_INVALID'||[current,next].some(item=>item?.executor!=='code'||!(item.allowedEffects.every(effect=>['pure','read'].includes(effect))||item.id==='prepare-local-acceptance'&&item.version==='1'&&item.allowedEffects.length===1&&item.allowedEffects[0]==='workspace.prepare')))throw executionError('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
       }
       const dependencies={}
       for(const id of node.inputDependencies??[]){const prior=state.nodes.find(item=>item.nodeId===id);if(prior?.status!=='succeeded'||!prior.outputRef)throw executionError('NODE_PREDECESSOR_INCOMPLETE');dependencies[id]=await artifacts.read(prior.outputRef)}

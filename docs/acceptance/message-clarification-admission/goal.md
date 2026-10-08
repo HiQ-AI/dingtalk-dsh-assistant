@@ -63,7 +63,7 @@
 ## 当前检查点
 
 - 当前子目标：SG20
-- 唯一下一步：SG19已正式只读重评event411；执行SG18/SG20原Run同代检查点与SG18/SG22 Host诊断事件，恢复派发后由原Owner及工程会话实现并完成真实验收。SG23脚本已完成。
+- 唯一下一步：SG19与SG21已完成；SG20真实原factory声明workspace.prepare而checkpoint门禁只允许pure/read，现场拒绝未改变原Run/8前缀/events0，maintenance512已退出且health正常。真实v18定义窄修与14/14回归已完成（round60），待用统一脚本部署新包并重试原checkpoint；SG18另定位同gen编辑效果input冲突，再由原Owner推进SG18/20/22。SG23已完成。
 - 未闭环项：五条业务Task的实际完成及SG16全局检查配置收口；禁止伪造验收或只修改状态。
 
 ## 本轮关键决策

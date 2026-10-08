@@ -93,3 +93,13 @@ for (const [phase, mode] of [['Readback', 'pending'], ['Resume', 'not-resumed']]
   assert.equal(result.code, 1); assert.equal(summary(result).ok, false)
   assert.equal((await f.calls()).filter(x => x === 'deploy').length, 1)
 })
+
+test('最小Package JSON默认生成证据目录且Check保持profile原字节', async () => {
+  const f = await fixture()
+  await writeFile(f.argumentsFile, JSON.stringify({ Package: f.packagePath }))
+  const before = await snapshot(f.root)
+  const result = await f.run('Check')
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(await snapshot(f.root), before)
+  assert.deepEqual(await f.calls(), [])
+})

@@ -978,3 +978,46 @@ test('历史materials参数重分类保留同节点同代并由Owner纠正',asyn
  await f.controller.resumeNode(await f.resumeArgs());const after=await f.controller.whenIdle(f.runId)
  assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].leaseEpoch,before.nodes[1].leaseEpoch+1)
 })
+
+for(const variant of ['factory','declared-external','actual-effect'])test(`v18真实factory本地准备checkpoint ${variant}`,async t=>{
+ const {createEngineeringTaskContextWorkflow}=await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ const directory=await mkdtemp(join(tmpdir(),'real-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'real-local',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ t.after(()=>store.close());let plans=0,prepares=0;const calls={}
+ const make=id=>{
+  const workflow=createEngineeringTaskContextWorkflow({workflowId:id,provider:'test',model:'test',prepareGeneration:async()=>({}),discovery:{allowedPrefixes:['src/']},project:{uatEnvironment:'uat3',targetCommit:'a'.repeat(40),taskBase:'a'.repeat(40)},workspaceAdapter:{},editAdapter:{},checks:[{id:'check',version:'1',run:async()=>({passed:true})}],adapterIdentity:'test',localAcceptance:{identity:id,scenarios:[{id:'scenario'}],prepare:async()=>{prepares++;return{prepared:true}}}})
+  assert.equal(workflow.version,'18');const local=workflow.nodes.find(n=>n.id==='prepare-local-acceptance');assert.deepEqual(local.allowedEffects,['workspace.prepare'])
+  if(variant==='declared-external')local.allowedEffects=['workspace.prepare','external.operation']
+  // 外部业务前缀在本测试中是隔离边界；真实factory节点身份、executor、version/effects保留。
+  for(const node of workflow.nodes.slice(0,8))if(!['define-local-acceptance','plan-local-acceptance'].includes(node.id)){
+   node.inputSchema={type:'object'};node.outputSchema={type:'object'};node.mapInput=({requirement})=>requirement
+   if(node.executor==='code')node.execute=async()=>{calls[node.id]=(calls[node.id]??0)+1;return{candidate:{identity:'frozen'}}}
+  }
+  return workflow
+ }
+ const old=make('real-old'),next=make('real-next'),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next)
+ const sessions={async run(args){await args.onSessionBound();if(args.binding.nodeId==='plan-local-acceptance'){plans++;await args.onResult({cases:plans===1?[]:[{criterionId:'criterion-1',scenarioId:'scenario',steps:['核对业务'],expected:'目标正确',parameters:{}}]})}else{calls[args.binding.nodeId]=(calls[args.binding.nodeId]??0)+1;await args.onResult({})}return{status:'submitted'}},async assertDrained(){},async close(){},async cancel(){}}
+ const controller=createExecutionController({delivery:{},readTools:['engineering_repo_inspect'],store:{query:q=>store.query(q),command:c=>{if(c.kind==='node.claim'&&c.args.nodeId==='run-local-acceptance')throw Error('fixture-stop-before-external');return store.command(c)}},artifacts,workflows:[old],sessions});t.after(async()=>{await controller.close()})
+ const send=(kind,args,id=kind)=>store.command({id,kind,args}),input={request:'当前任务',acceptanceCriteria:['业务要求']},config={kind:'engineering',taskId:'task',runId:'run',uatEnvironment:'uat3',input,localAcceptanceConfig:{id:'old'}}
+ await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
+ await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,localAcceptanceConfig:{id:'new'},localAcceptanceScope:{taskId:'task',uatEnvironment:'uat3',requestDigest:executionDigest(input)},checkpoint:{kind:'local-acceptance',fromDigest:oldDef.digest,requestId:'fix'}}},'next')
+ const requirement=await artifacts.put(input)
+ await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:input.acceptanceCriteria,sourceKey:'source',eventKey:'source'})
+ await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
+ await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input,stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
+ const before=await controller.whenIdle('run');assert.equal(before.nodes[8].waitReason.reference,'LOCAL_ACCEPTANCE_PLAN_INVALID');assert.equal(before.nodes.slice(0,8).filter(n=>n.status==='succeeded').length,8);assert.equal(prepares,0)
+ await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'local',actorId:'owner',reason:'修正场景'});controller.registerWorkflow(next)
+ const args={commandId:'engineering-checkpoint:run:fix',runId:'run',expectedRevision:before.run.revision,kind:'local-acceptance',workflowId:next.id,workflowDigest:nextDef.digest,maintenance:{maintenanceId:'local',revision:1}}
+ if(variant==='actual-effect'){
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db')),node=before.nodes[8]
+  try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('fixture-effect','operation',?,?,?,?,?,'digest','{}','[]','fixture','succeeded','now','now')").run('run',node.nodeRunId,node.nodeId,node.generation,node.inputDigest)}finally{db.close()}
+ }
+ if(variant!=='factory'){await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:variant==='actual-effect'?'ENGINEERING_CHECKPOINT_EFFECTS_PRESENT':'ENGINEERING_CHECKPOINT_NOT_ADMITTED'});assert.deepEqual((await controller.state('run')).nodes,before.nodes);return}
+ await controller.updateEngineeringCheckpoint(args)
+ await send('runtime.maintenance.change',{active:false,expectedRevision:1,maintenanceId:'local',actorId:'owner',reason:'恢复'},'leave')
+ await assert.rejects(async()=>{await controller.recover({commandId:'continue',runId:'run'});await controller.whenIdle('run')},/fixture-stop-before-external/)
+ const after=await controller.state('run');assert.equal(after.run.runId,before.run.runId);assert.equal(after.run.generation,before.run.generation)
+ for(const i of [0,3,4,5,6,7])assert.deepEqual(after.nodes[i],before.nodes[i])
+ assert.equal(after.nodes[1].leaseEpoch,2);assert.equal(after.nodes[2].leaseEpoch,2);assert.equal(after.nodes[8].status,'succeeded');assert.equal(plans,2);assert.equal(prepares,1)
+ for(const value of Object.values(calls))assert.equal(value,1)
+})

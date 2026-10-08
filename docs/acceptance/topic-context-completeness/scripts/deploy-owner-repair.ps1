@@ -59,7 +59,7 @@ function Assert-DeploymentMode {
  }
  if($DirectQueriesProposal){
   if($Bundle -or $MergePolicy -or $ChecksProposal -or $RepositoryPatches -or $Bootstrap){throw '查询配置模式与工程配置及Bootstrap互斥'}
- }elseif(-not $Bundle -or -not $MergePolicy -or -not $ChecksProposal){throw '工程模式需要Bundle、MergePolicy和ChecksProposal'}
+ }elseif(($Bundle -or $MergePolicy -or $ChecksProposal -or $RepositoryPatches) -and (-not $Bundle -or -not $MergePolicy -or -not $ChecksProposal)){throw '工程模式需要Bundle、MergePolicy和ChecksProposal'}
  if([bool]$ObserverPackage-ne [bool]$ExpectedObserverPackageSha256){throw 'Observer包及摘要须同时提供'}
 }
 Assert-DeploymentMode
@@ -724,10 +724,10 @@ if($freeBytes-lt $requiredBytes){throw "D盘空间不足：可用 $freeBytes，�
 $inputHashes=@{}
 foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
 $packageProof=Run-Node @($checker,'package',$Package,$source)
-$configArgs=if($DirectQueriesProposal){@("$workspace/scripts/configure-agent-query-resources.mjs",'--profile',"$profile/cordis.patch.yml",'--proposal',$DirectQueriesProposal,'--expected-sha256',$ExpectedProfileSha256)}else{@("$workspace/scripts/configure-project-local-acceptance.mjs",'--profile',"$profile/cordis.patch.yml",'--bundle',$Bundle,'--merge-policy',$MergePolicy,'--checks-proposal',$ChecksProposal)+@(if($RepositoryPatches){'--repository-patches';$RepositoryPatches})+@('--expected-sha256',$ExpectedProfileSha256)}
+$configArgs=if($DirectQueriesProposal){@("$workspace/scripts/configure-agent-query-resources.mjs",'--profile',"$profile/cordis.patch.yml",'--proposal',$DirectQueriesProposal,'--expected-sha256',$ExpectedProfileSha256)}elseif($Bundle){@("$workspace/scripts/configure-project-local-acceptance.mjs",'--profile',"$profile/cordis.patch.yml",'--bundle',$Bundle,'--merge-policy',$MergePolicy,'--checks-proposal',$ChecksProposal)+@(if($RepositoryPatches){'--repository-patches';$RepositoryPatches})+@('--expected-sha256',$ExpectedProfileSha256)}
 if($ObserverPackage){$observerProof=Run-Node @($checker,'package',$ObserverPackage,$observerSource)}
-$configProof=Run-Node ($configArgs+@('--check'))
-if(-not $DirectQueriesProposal){$repositoryProof=Run-Node (@($checker,'engineering-config-check',"$profile/cordis.patch.yml",$Bundle,$MergePolicy,$ChecksProposal)+@(if($RepositoryPatches){$RepositoryPatches}))}
+if($configArgs){$configProof=Run-Node ($configArgs+@('--check'))}
+if($Bundle){$repositoryProof=Run-Node (@($checker,'engineering-config-check',"$profile/cordis.patch.yml",$Bundle,$MergePolicy,$ChecksProposal)+@(if($RepositoryPatches){$RepositoryPatches}))}
 $storageProof=Run-Node @("$workspace/scripts/check-resident-storage.mjs",'--check','--source',"$domain/dingtalk_dsh_assistant.json")
 $old=Instance
 if(-not $old){throw '维护部署要求原实例可通过正式维护接口排空；离线安装须使用独立恢复runbook'}
@@ -772,7 +772,7 @@ if($Bootstrap){
  # 端口关闭只是起点，只有拿到仍持续持有的owner锁才证明控制器退出。
  $lockProcess=Acquire-OwnerLock
  $snapshot=Wait-DrainedSnapshot
- $configArgs[$configArgs.Count-1]=$disabled.afterSha256
+ if($configArgs){$configArgs[$configArgs.Count-1]=$disabled.afterSha256}
 }else{
 $entered=if($ContinueMaintenanceId){
  $currentMaintenance=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
@@ -863,10 +863,12 @@ $migrationBackupSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath $migrat
 $deploymentControlPath=if($historicalBackupRequired){"$EvidenceDirectory/backup.json"}else{"$EvidenceDirectory/deployment-control.json"}
 @{backupCreated=$historicalBackupRequired;backupScope=$backupScope;backupManifestSha256=$backupManifestSha256;backup=$backup;oldPid=$old.ProcessId;sourceProfileSha256=$ExpectedProfileSha256;packageSha256=(Get-FileHash -LiteralPath $Package).Hash;inputHashes=$inputHashes;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256}|ConvertTo-Json -Depth 10|Set-Content $deploymentControlPath
 Assert-LocalPackageSources $profile $Package $observerSourceReplacement
+$profileShaBeforePackage=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()
 $installPackages=@("@zzusp/dingtalk-dsh-assistant@file:$Package")+@(if($ObserverPackage){"@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"})
 & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add @installPackages *> "$EvidenceDirectory/install.log"
 if($LASTEXITCODE){throw '安装失败，保持停机并保留本次控制证据'}
-Run-Node ($configArgs+@('--apply'))|Set-Content "$EvidenceDirectory/config-applied.json"
+if($configArgs){Run-Node ($configArgs+@('--apply'))|Set-Content "$EvidenceDirectory/config-applied.json"}
+else{if((Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()-ne $profileShaBeforePackage){throw '无配置提案部署的profile摘要已变化'}}
 Run-Node @($checker,'package',$Package,$source,$installed)|Set-Content "$EvidenceDirectory/installed.json"
 if($ObserverPackage){Run-Node @($checker,'package',$ObserverPackage,$observerSource,$observerInstalled)|Set-Content "$EvidenceDirectory/observer-installed.json"}
 } finally {

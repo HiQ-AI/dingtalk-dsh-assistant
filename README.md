@@ -822,8 +822,16 @@ Owner 可在原工程 Run 已等待且排空时，以 `planChange.kind=insertDep
 
 SG20 托管组件服务入口为 `serve --config <path> --host 127.0.0.1 --port <Hostport>`；`prepare` 在 runner 物化候选中按 lockfile 安装依赖，配置增加受信 `nodeExecutable`、`yarnCli`。execute 访问 Host 服务 URL 本身并核验就绪的 Task/UAT/namespace/PID 和源码 proof；不以另一个浏览器拦截站点替代实际服务。依赖安装前至少保留 1.6 GiB 可用空间。
 
-本地验收配置修订可在原代重评精确的 LOCAL_ACCEPTANCE_PLAN_INVALID 纯准备失败，保留成功候选/构建；须维护封存、前缀成功、零本地效果，失败原始引用留审计。
+本地验收配置修订可在原代重评精确的 LOCAL_ACCEPTANCE_PLAN_INVALID 纯准备失败，保留成功候选/构建；须维护封存、前缀成功、零本地效果，失败原始引用留审计。真实v18准备节点的唯一workspace.prepare声明可沿此路径处理，但已有实际效果或其他声明效果仍拒绝。
 
 部署脚本现支持必要依赖索引迁移仅备份控制库和固定 profile；普通部署及 Readback/Resume 不扫描全部任务目录。工程配置提案通过 `-RepositoryPatches` 原生转发并绑定输入 SHA，操作边界见 `docs/ops/resident-review-local-deployment.md`。
 
 Owner 提交完成时，已配置 Host 完成验收的路径直接重新读取持久查询证据并核对当前 Task、需求版本、来源和结果摘要，再执行领域验收；不因未在本轮重复调用 readArtifact 拒绝原会话已知的不可变证据。未配置 Host 回调的路径保留原读取检查。旧版本、跨任务、未知或已丢失的证据仍不能用于完成；领域拒绝诊断仅接受当前已验证查询引用，不自动将任务完成。
+
+普通代码包替换不需要配置提案。将以下最小 JSON 保存到 `docs/tmp/deploy-arguments.json`（Package 使用本轮实际包绝对路径），运行上述统一入口；先加 `-Check` 零写核验：
+
+```json
+{"Package":"D:/dsh_home/packages/current-assistant.tgz"}
+```
+
+未提供配置提案时不调用配置编辑器，全部 profile 字段保留，并在安装后核对原字节摘要。工程配置变更仍须同时提供 Bundle、MergePolicy、ChecksProposal；只给其中部分或仅 RepositoryPatches 会拒绝，不能默默忽略。

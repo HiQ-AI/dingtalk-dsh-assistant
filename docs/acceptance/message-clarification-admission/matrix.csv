@@ -172,3 +172,7 @@ deploy-canonical-nonzero-check-rejected,59,PASS,round-59.md
 deploy-planned-active-run-digest-native,59,PASS,round-59.md
 deploy-resume-runtime-health-store,59,PASS,round-59.md
 deploy-resume-ready-confirmation,59,PASS,round-59.md
+sg20-real-v18-local-prepare-checkpoint,60,PASS,round-60.md
+sg20-local-prepare-declared-effects-denied,60,PASS,round-60.md
+sg20-local-prepare-actual-effects-denied,60,PASS,round-60.md
+sg20-local-checkpoint-cas-regression,60,PASS,round-60.md

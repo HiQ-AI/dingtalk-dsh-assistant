@@ -61,7 +61,7 @@ Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runti
 历史切换曾把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。当前普通调查由 Task Owner 直接使用 Host 查询工具，不再注册独立调查定义。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
 
 1. 在本次检出运行 `node docs/acceptance/agent-direct-execution/scripts/inventory-legacy-workflows.mjs --check --db <控制库路径> --instance <实例ID>`；不传 `--output` 只读输出，保存证据时使用全新 `--output <路径>`（拒绝覆盖）。正式维护排空后再次执行，保存两次清点。确认旧流程活动运行、当前阶段、未排空节点及未确认效果为零。旧 `answer.text` 未完成命令须在旧合同下收尾或明确停止，不能交给新 Agent 猜测其含义。
-2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。旧 grants 不再接受，部署必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；不能只升级包而保留旧配置。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
+2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。仅从旧 grants 配置迁移时，必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；已迁移实例的普通代码部署默认仅提供 Package，保持现有配置。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
 3. 仓库资源冻结完整提交；状态资源限定固定 GET URL 和返回字段；数据库资源限定表、列。默认使用专用只读账号；用户明确指定使用现有 UAT 账号时，配置 UAT 专属 Host 强制只读事务模式，并实测写入拒绝。账号凭据始终只由 Host 读取，不交给模型，也不登记生产连接。
 4. 安装后独立回读包摘要、进程、健康、流程目录及旧历史。新目录不包含 `task-investigation`，Task Owner 直接查询；工程与外部交付仍可按原权限发起；旧成功任务可读且没有重放通知。
 5. 在已授权的独立测试群分别验证材料问答、真实资料/代码/数据库读取、调查交付、补充、取消、重启和权限反例。核对真实工具工件、会话、Task 增量与钉钉独立回读；健康正常及原生本地会话通过不能代替渠道验收。
@@ -279,7 +279,7 @@ C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和
 
 先把同一正式版本的 Assistant 与 Observer 发行 tgz 存入 `D:/dsh_home/packages`，文件名包含版本和摘要前缀；分别核对下载来源及完整 SHA-256，发现同名异内容立即停止，不能覆盖。该目录是 profile `file:` 依赖的持久来源，不能用工作树 `docs/tmp/` 包路径安装；只在确认 profile、锁文件和部署证据均不再引用后清理旧包。部署工具的预检拒绝不在该目录直接子级的包及链接。
 
-使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供上述持久目录中的精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
+使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，普通代码部署参数提供上述持久目录中的精确新包 `-Package`（工程配置变更才另需完整 Bundle/MergePolicy/ChecksProposal）、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
 
 允许已排空的 waiting 任务留待新版本恢复，但 running 节点/Owner、未排空节点或 starting/executing/unknown 效果一律阻断。准备失败遗留 unknown 先按专用单次对账规程处理，不能靠部署放宽门禁。脚本要求原实例具备正式维护接口；已离线或尚无维护接口的旧实例拒绝使用此自动部署路径，须先完成独立停机与恢复方案，不能退回“读取排空后强停”的有竞争路径。
 
@@ -755,7 +755,7 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 
 ### 单命令部署入口
 
-日常执行 `pwsh -NoProfile -File scripts/deploy-local.ps1 -ArgumentsFile <绝对 arguments.json 路径>`。JSON 沿用原 helper 参数名；Package 必填，工程模式保留 Bundle/MergePolicy/ChecksProposal，可附 RepositoryPatches，或按原规则使用 DirectQueriesProposal。包/profile/Observer SHA 由入口读取，不需手算；EvidenceDirectory 省略时自动生成在本检出 docs/tmp。入口只编排原 helper，不维护第二套安装逻辑。
+日常执行 `pwsh -NoProfile -File scripts/deploy-local.ps1 -ArgumentsFile <绝对 arguments.json 路径>`。JSON 沿用原 helper 参数名；普通代码部署仅 Package 必填，不运行配置编辑器；只有明确变更工程配置时才提供 Bundle/MergePolicy/ChecksProposal，可附 RepositoryPatches，或按原规则使用 DirectQueriesProposal。包/profile/Observer SHA 由入口读取，不需手算；EvidenceDirectory 省略时自动生成在本检出 docs/tmp。入口只编排原 helper，不维护第二套安装逻辑。
 
 同命令加 `-Check` 为零写预检；正式命令依次执行 Check、原生维护排空/封存、停机、安装、计划任务启动、Readback、Resume，输出阶段及 JSON 汇总。详细 stdout/stderr 与冻结实参写入 `<EvidenceDirectory>-runner/`，控制/启动/读回收据仍在原 EvidenceDirectory。子进程和 Node JSON 固定 UTF-8，避免无控制台 Windows 默认 CP936 破坏中文维护原因。
 
@@ -764,3 +764,5 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 失败在当前阶段停止，不自动重装或反复重启；已发起部署用同实参文件加 `-Readback` 或 `-Resume` 接续，入口读取原 launch 的 source pin。Readback 未 ready、Resume 未 dispatchResumed 均返回失败，不能以子进程 exit0 代替完成。
 
 已安装包因本次仓库配置漂移而退出的精确续接：arguments 指定原 `RepairStoppedLaunch`、同一原 Package 和 `RestoreConfigurationProposal`，不带工程更新/query/Observer提案。入口检查原计划任务同秒启动且退出码1、无Host和监听、原维护封存/排空/控制快照及包安装证明；在owner独占锁内调用原生配置恢复器，不执行plugin add。新的 recovery evidence/launch 绑定旧launch SHA、恢复提案/来源证明/前后profile SHA，Readback重验链后才Resume；旧失败收据保留。提案不匹配、迁移未完成或原任务控制数据漂移均停止，不通过改库或伪造成功续接。
+
+普通仅换代码包的参数文件最小为 `{"Package":"D:/dsh_home/packages/current-assistant.tgz"}`。不提供配置提案时，统一入口不运行配置编辑器，维护/安装/原profile摘要/readback/恢复派发保持；部分工程提案明确拒绝。不得拿查询提案充当无操作配置以绕过参数要求。

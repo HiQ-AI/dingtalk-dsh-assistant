@@ -35,7 +35,7 @@ foreach($change in @(@{deploymentControlSha256='bad'},@{packageSha256='bad'},@{s
 }
 Write-Output 'PASS 5/5: 控制证据通过；摘要/包/profile/路径漂移拒绝'
 $text=[IO.File]::ReadAllText($helper)
-foreach($needle in @('$snapshot|Set-Content -LiteralPath "$EvidenceDirectory/control-before.json"','if(-not $lockProcess){$lockProcess=Acquire-OwnerLock}',"'checkpoint',[string]`$old.ProcessId",'backupCreated=$historicalBackupRequired;deploymentControlPath=$deploymentControlPath','Assert-DeploymentControlRecord $launchRecord')){
+foreach($needle in @('$snapshot|Set-Content -LiteralPath "$EvidenceDirectory/control-before.json"','if(-not $lockProcess){$lockProcess=Acquire-OwnerLock}',"'checkpoint',[string]`$old.ProcessId",'backupCreated=$historicalBackupRequired;backupScope=$backupScope;backupManifestSha256=$backupManifestSha256;deploymentControlPath=$deploymentControlPath','Assert-DeploymentControlRecord $launchRecord')){
  if(-not $text.Contains($needle)){throw "普通部署缺失原生门禁$needle"}
 }
 Write-Output 'PASS 5/5: 控制快照、owner锁、停机检查、Launch绑定、Readback门禁保留'
@@ -141,3 +141,24 @@ $backupLaunch.launchMethod='scheduled-task';$backupLaunch.executionEventsIndexMi
 try{Assert-StoppedRepairPermit $backupLaunch $sealed $before $backupIdentity $state}catch{$rejected=$true}
 if(-not $rejected){throw '受管启动不能放宽原迁移修复限制'}
 Write-Output 'PASS 3/3: 备份部署受管恢复允许；旧记录及迁移范围保持拒绝'
+# Package-only 必须执行真实模式函数和配置分支，不能靠入口替身掩盖core拒绝。
+& {
+ $RepairStoppedLaunch='';$RestoreConfigurationProposal='';$DirectQueriesProposal='';$ObserverPackage='';$ExpectedObserverPackageSha256='';$MigrateRequiredDependency=$false;$MigrateMessageImpact=$false;$MigrateExecutionEventsIndex=$false;$TaskMigrationPlan='';$Bootstrap=$false;$Bundle='';$MergePolicy='';$ChecksProposal='';$RepositoryPatches=''
+ $mode=$ast.Find({param($n)$n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name-eq 'Assert-DeploymentMode'},$true)
+ Invoke-Expression $mode.Extent.Text
+ Assert-DeploymentMode
+ foreach($name in @('Bundle','MergePolicy','ChecksProposal','RepositoryPatches')){
+  Set-Variable $name 'partial';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '部分工程提案须拒绝'};Set-Variable $name ''
+ }
+ $config=$ast.Find({param($n)$n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text-eq '$configArgs'},$true)
+ Invoke-Expression $config.Extent.Text
+ if($configArgs){throw '仅Package不得生成配置命令'}
+ $script:configCalls=0;function Run-Node {$script:configCalls++;throw '不应运行配置工具'}
+ $guards=$ast.FindAll({param($n)$n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text-eq '$configArgs' -and $n.Extent.Text-match 'configProof|config-applied'},$true)
+ if($guards.Count-ne 2){throw '配置check/apply须各有明确门禁'}
+ $profileShaBeforePackage='same';function Get-FileHash {@{Hash='same'}}
+ foreach($guard in $guards){Invoke-Expression $guard.Extent.Text}
+ if($script:configCalls){throw 'Package-only调用配置工具'}
+ $profileShaBeforePackage='drift';$rejected=$false;try{Invoke-Expression $guards[-1].Extent.Text}catch{$rejected=$true};if(-not $rejected){throw '安装后profile漂移须拒绝'}
+ Write-Output 'PASS 8/8: Package-only准入/零配置命令；四部分提案拒绝；安装profile漂移拒绝'
+}

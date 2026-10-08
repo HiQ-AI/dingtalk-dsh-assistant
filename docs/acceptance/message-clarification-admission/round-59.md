@@ -42,3 +42,11 @@
 编码与本次恢复确认变更后的入口定向回归：`node --test --test-name-pattern='Check实际|fail-check|fail-readback|resume-not-ready|独立Resume' test/deploy-local.test.js`，5/5 PASS（33.33秒），日志 `docs/tmp/deploy-runtime-readback-canonical.log`。包含恢复返回dispatchResumed=true但ready=false时拒绝成功。配置restore 11/11由负责代理实跑并回报（原工具输出chunk3c021f、1140.5ms；未另存日志），此处不冒称独立日志回读；其精确现场恢复另由主线程记录。
 
 独立恢复回读：同PID15188，health=ok、inboundProcessing=true、bridgehealthy；maintenance inactive revision510，profile3b5c精确恢复、自启enabled。证据 five-store-resident-reload。Resident重开未重启Host、未写业务账；首次worker失效根因未收敛。部署脚本完成时通过health与真实maintenance查询，不保证之后永久运行正常。
+
+## 追加：Package-only真实core路径
+
+修复core默认强制工程三项提案的问题。没有配置输入时configArgs为空、配置check/apply均不执行，包安装前后profile SHA精确一致；部分Bundle/MergePolicy/ChecksProposal或单独RepositoryPatches拒绝。无新模式开关，普通维护/包SHA/启动/Readback/Resume保持。
+
+实跑 `pwsh -NoProfile -File test/deploy-local-no-backup.test.ps1` 全文件通过，新增8/8使用真实helper AST执行模式函数、configArgs和check/apply分支：Package-only通过、四种部分提案拒绝、零配置调用、profile漂移拒绝。同步修正既有字符串断言以包含当前backupScope/backupManifestSha256字段，未改变备份行为。未执行现场部署。
+
+入口既有全文件实跑 `node --test test/deploy-local.test.js`：12/12 PASS，92.78秒（启动时文件快照，不含随后追加的最小JSON用例）；新增 `node --test --test-name-pattern='最小Package' test/deploy-local.test.js`：1/1 PASS，3.31秒。合计本轮13个入口用例实跑通过。`git diff --check`通过，仅Windows行尾提示。

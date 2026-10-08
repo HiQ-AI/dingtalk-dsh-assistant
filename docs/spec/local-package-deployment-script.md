@@ -24,3 +24,7 @@
 ## 验证
 
 定向测试覆盖Check零写、一调用完整流程、错误时不误恢复、失败启动只修当前配置、重复回读/恢复不重复部署、输入/配置漂移和外来证据拒绝、汇总不泄露秘密。最后使用同一入口实际恢复当前安装，独立回读101文件、新PID双端口、health、maintenance inactive和自启；另核原Task/Run/代次/成功节点没有被重建或重放。
+
+## 普通包替换不隐式修改配置
+
+无工程或查询提案时，直接走维护、包安装、原profile摘要核验、启动、Readback、Resume。configArgs为空，不执行配置check/apply或计划工程配置编辑；安装前后profile必须逐字摘要一致。若提供任何工程字段，Bundle/MergePolicy/ChecksProposal必须齐全，RepositoryPatches不能单独生效。无需新增mode开关；既有查询/完整工程/失败恢复分支不变。
