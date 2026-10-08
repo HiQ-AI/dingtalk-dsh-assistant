@@ -1,3 +1,5 @@
+import yaml from 'js-yaml'
+import { planProjectLocalAcceptance } from './configure-project-local-acceptance.mjs'
 import { readFile, readdir, lstat, mkdir, copyFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -194,13 +196,43 @@ export async function verifyDeploymentBackup({ runtime, domain, profile, backupR
     sha256: hash(await readFile(restoredPath)), tables: restored.tables, ...closure } }
 }
 
+/** 仅 schema 8→9 索引迁移：不变更/复制业务工件；调用方已持停机 owner 锁。 */
+export async function verifyRequiredDependencyBackup({ runtime, profile, backupRoot }) {
+  const manifest = []
+  for (const name of profileFiles) {
+    let bytes; try { bytes = await readFile(join(profile, name)) } catch (error) { if (error.code === 'ENOENT') continue; throw error }
+    const target = join(backupRoot, 'profile', name)
+    await copyFile(join(profile, name), target)
+    if (hash(await readFile(target)) !== hash(bytes)) fail('BACKUP_COPY_MISMATCH')
+    manifest.push({ path: 'profile/' + name, bytes: bytes.length, sha256: hash(bytes) })
+  }
+  const source = new DatabaseSync(join(runtime, 'control.sqlite'), { readOnly: true })
+  let original
+  const restoreFile = 'runtime/verified-control.sqlite'
+  try {
+    const state = maintenanceStatus(source)
+    if (!state.active || state.phase !== 'stopping' || !state.drained) fail('CHECKPOINT_MAINTENANCE_REQUIRED')
+    if (source.prepare('SELECT schema_version FROM execution_meta WHERE singleton=1').get()?.schema_version !== 8) fail('BACKUP_SCHEMA_INVALID')
+    original = databaseProof(source)
+    await backup(source, join(backupRoot, restoreFile))
+    if (JSON.stringify(databaseProof(source)) !== JSON.stringify(original)) fail('BACKUP_SOURCE_CHANGED')
+  } finally { source.close() }
+  const restored = new DatabaseSync(join(backupRoot, restoreFile), { readOnly: true })
+  try { if (JSON.stringify(databaseProof(restored)) !== JSON.stringify(original)) fail('BACKUP_DATABASE_READBACK_MISMATCH') } finally { restored.close() }
+  return { verified: true, scope: 'required-dependency-control-only', manifest,
+    database: { restoreFile, sha256: hash(await readFile(join(backupRoot, restoreFile))), tables: original.tables } }
+}
+
 /** 失败启动后只读复核原备份；安装后的 profile 依赖文件不再与安装前备份比较。 */
 export async function reverifyDeploymentBackup({ backupRoot, domain, runtime, taskDirectory }) {
   const proof = JSON.parse(await readFile(join(backupRoot, 'manifest.json'), 'utf8'))
   if (proof.verified !== true || !Array.isArray(proof.manifest) || proof.database?.restoreFile !== 'runtime/verified-control.sqlite') fail('BACKUP_MANIFEST_INVALID')
+  const controlOnly = proof.scope === 'required-dependency-control-only'
+  if (proof.scope && !controlOnly) fail('BACKUP_MANIFEST_INVALID')
+  if (controlOnly && (proof.taskDirectory || proof.manifest.some(item => !/^profile\/[^/]+$/.test(item.path) || !profileFiles.includes(item.path.slice(8))))) fail('BACKUP_MANIFEST_INVALID')
   if (proof.taskDirectory && JSON.stringify(proof.taskBackupExclusions) !== JSON.stringify(taskBackupExclusions)) fail('BACKUP_MANIFEST_INVALID')
   if (proof.taskDirectory && (!taskDirectory || relative(resolve(taskDirectory), proof.taskDirectory) !== '')) fail('BACKUP_TASK_DIRECTORY_REQUIRED')
-  if (taskDirectory) await checkedDirectory(taskDirectory)
+  if (taskDirectory && !controlOnly) await checkedDirectory(taskDirectory)
   const expected = new Set(['manifest.json', proof.database.restoreFile])
   for (const item of proof.manifest) {
     if (!/^(domain|runtime|profile|tasks)\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\\]+$/.test(item.path) || expected.has(item.path)) fail('BACKUP_MANIFEST_INVALID')
@@ -223,7 +255,7 @@ export async function reverifyDeploymentBackup({ backupRoot, domain, runtime, ta
     expected.add(wal); expected.add(shm)
   }
   if (JSON.stringify(actual) !== JSON.stringify([...expected].sort())) fail('BACKUP_FILE_SET_MISMATCH')
-  for (const [prefix, current] of [['domain/', domain], ['runtime/artifacts/', join(runtime, 'artifacts')], ...(proof.taskDirectory ? [['tasks/', taskDirectory]] : [])]) {
+  for (const [prefix, current] of (controlOnly ? [] : [['domain/', domain], ['runtime/artifacts/', join(runtime, 'artifacts')], ...(proof.taskDirectory ? [['tasks/', taskDirectory]] : [])])) {
     const recorded = proof.manifest.filter(item => item.path.startsWith(prefix)).map(item => item.path.slice(prefix.length)).sort()
     if (JSON.stringify(await files(current, '', prefix === 'tasks/')) !== JSON.stringify(recorded)) fail('BACKUP_SOURCE_FILE_SET_CHANGED')
   }
@@ -233,7 +265,7 @@ export async function reverifyDeploymentBackup({ backupRoot, domain, runtime, ta
   let restored
   try { restored = databaseProof(db) } finally { db.close() }
   if (JSON.stringify(restored.tables) !== JSON.stringify(proof.database.tables)) fail('BACKUP_DATABASE_READBACK_MISMATCH')
-  const closure = await verifyArtifactClosure(join(backupRoot, 'runtime/artifacts'), restored.refs, { taskDirectory: proof.taskDirectory ? join(backupRoot, 'tasks') : undefined, purgedTasks: restored.purgedTasks })
+  const closure = controlOnly ? {} : await verifyArtifactClosure(join(backupRoot, 'runtime/artifacts'), restored.refs, { taskDirectory: proof.taskDirectory ? join(backupRoot, 'tasks') : undefined, purgedTasks: restored.purgedTasks })
   return { verified: true, files: proof.manifest.length, tables: restored.tables.length, ...closure, writes: 0 }
 }
 
@@ -256,4 +288,44 @@ export async function verifyDeploymentWeb(logPath, fetchImpl = fetch) {
   if (web.status !== 200 || !(await web.text()).match(/<!doctype html|<html[\s>]/i)) fail('DEPLOY_WEB_READBACK_FAILED')
   return { recoveryIssueCount: 0, authenticatedWebStatus: 200, tokenExchangeStatus: 303,
     controlHealth: health.status, inboundProcessing: health.inboundProcessing === true, credentialPrinted: false }
+}
+
+/** 停机前只比较计划配置与恢复器实际会加载的持久定义；不创建工作区或执行节点。 */
+export function verifyEngineeringRepositoryDigests({ db, config }) {
+  const digests = new Map((config.repositories ?? []).map(repository => {
+    const normalized = structuredClone(repository)
+    normalized.editablePaths ??= []
+    normalized.githubRepository ??= /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(normalized.remote)?.[1]
+    normalized.baseBranch ??= normalized.baseRef.startsWith('refs/heads/') ? normalized.baseRef.slice(11)
+      : /^(?:origin\/|refs\/remotes\/)/.test(normalized.baseRef) ? null : normalized.baseRef
+    const { purpose, routingTerms, localAcceptance, dependencyRepositories, ...executionConfig } = normalized
+    return [normalized.id, executionDigest({ config: executionConfig, ghCommand: null, author: config.gitAuthor ?? null })]
+  }))
+  const checked = []
+  for (const row of db.prepare('SELECT body,digest FROM message_workflows').all()) {
+    const record = JSON.parse(row.body), saved = record.config
+    if (saved?.kind !== 'engineering') continue
+    const run = db.prepare('SELECT workflow_digest,status FROM execution_runs WHERE run_id=?').get(saved.runId)
+    if (run && (run.workflow_digest !== row.digest || ['succeeded', 'failed', 'cancelled'].includes(run.status))) continue
+    checked.push({ taskId: saved.taskId, runId: saved.runId, repositoryId: saved.repoId,
+      matches: digests.get(saved.repoId) === saved.repositoryDigest })
+  }
+  return { compatible: checked.every(item => item.matches), checkedRuns: checked.length,
+    mismatches: checked.filter(item => !item.matches), writes: 0 }
+}
+export async function verifyPlannedEngineeringConfig({ db, profile, bundle, mergePolicy, checksProposal, repositoryPatches }) {
+  const source = await readFile(profile, 'utf8')
+  const json = async path => path ? JSON.parse(await readFile(path, 'utf8')) : undefined
+  const plan = planProjectLocalAcceptance(source, await json(bundle), yaml, { allowUpdate: true,
+    mergePolicy: await json(mergePolicy), checksProposal: await json(checksProposal), repositoryPatches: await json(repositoryPatches) })
+  const schema = yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: value => value })])
+  const configs = []
+  const visit = value => {
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value.repositories) && value.repositories.some(repository => repository.id === 'dataset')) configs.push(value)
+    for (const child of Object.values(value)) visit(child)
+  }
+  visit(yaml.load(plan.updated, { schema }))
+  if (configs.length !== 1) fail('DEPLOY_ENGINEERING_CONFIG_AMBIGUOUS')
+  return { ...verifyEngineeringRepositoryDigests({ db, config: configs[0] }), plannedProfileSha256: hash(plan.updated) }
 }

@@ -740,6 +740,27 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 
 见证器在通过PID/nonce及绝对路径校验后创建证据目录，避免全新部署目录导致ready写入失败。重试仅允许替换工具追加的唯一末尾witness块，且模块、PID、证据目录保持一致；只更新nonce。目录、PID或块内容漂移时拒绝，不通过重复追加插件绕过。每次先执行 --check，再执行相同参数，独立回读本次nonce的ready/disposed。
 
-必要后端依赖部署需要控制库存储版本8→9：沿 deploy-owner-repair.ps1 增加 -MigrateRequiredDependency，先 -Check 零写。仅完整正式维护部署，不能与Bootstrap、离线RepairStoppedLaunch、其他迁移合用。排空并原生seal后停止旧PID，持续owner独占锁中调用 migrate-execution-dependency-index.mjs；事务只更新索引和schema版本，全部业务表摘要保持一致。该迁移需要历史数据备份；独立offline baseline回读通过后才安装启动，launch.json保存迁移证明摘要，Readback/Resume再次核对工具/备份/收据及版本9。若迁移失败保持停机，不把旧包直接运行在版本9上；回退须按迁移前备份恢复整套数据。
+必要后端依赖部署需要控制库存储版本8→9：沿 deploy-owner-repair.ps1 增加 -MigrateRequiredDependency，先 -Check 零写。仅完整正式维护部署，不能与Bootstrap、离线RepairStoppedLaunch、其他迁移合用。排空并原生seal后停止旧PID，持续owner独占锁中调用 migrate-execution-dependency-index.mjs；事务只更新索引和schema版本，全部业务表摘要保持一致。该迁移仅备份 control.sqlite 的原生一致性副本及固定 profile 恢复文件，不复制 domain、任务工作区、历史构建或 artifact。独立打开恢复库验证完整性和逐表 baseline 后才安装启动，launch.json保存迁移证明摘要，Readback/Resume再次核对工具/备份/收据及版本9。若迁移失败保持停机，不把旧包直接运行在版本9上；回退须在停机且持 owner 锁时按迁移前控制库副本及固定 profile 恢复；不得回滚未参与迁移的任务产物。
 
 后端单测报告核验如实记录skipped/实际执行数，不把已明确禁用的集成用例当普通单测失败。失败或错误、伪造计数、无报告、零用例、全部跳过仍拒绝。业务验收独立覆盖未执行的业务范围，不宣称skip项已通过。检查器完整stdout/stderr写入本Task共享dataset-check-host-unit-<uuid>.json，控制台只输出步骤退出码与首个错误，材料工具分页读取完整正文；旧截断日志不能倒推为完整日志。新工具以新摘要目录冻结并提升check版本，经正式checkpoint生效。
+
+
+### 部署核验按实际变更范围执行
+
+普通无迁移部署不创建历史备份，也不扫描任务目录容量。Readback/Resume 不再重复全任务树扫描，保留包/profile/input SHA、进程身份、维护许可、在线控制账历史快照核验。仅新建 Bootstrap、message-impact、events-index 或 task-file 迁移完整备份时沿用原历史范围；失败启动修复按原 manifest 的范围重验，不重新估算容量。
+
+必要依赖索引迁移使用 scope=required-dependency-control-only，launch/backup 收据绑定 manifest SHA，恢复副本 SHA 和逐表摘要独立核验。RepairStoppedLaunch 继承原 scope/摘要及已完成的迁移收据；未完成迁移不能伪装安装失败续接。运行中的旧全范围部署不能热改脚本或清单缩减范围，须完成原轮或按正式失败流程处理。
+
+工程配置可添加 PowerShell 参数 `-RepositoryPatches <绝对 JSON 路径>`，转发原生配置器 `--repository-patches`。仍必须提供 Bundle、MergePolicy、ChecksProposal；与 DirectQueriesProposal、RepairStoppedLaunch 互斥。提案纳入部署输入 SHA，Readback/Resume 必须保持同路径和内容。配置器以 expected-sha256 的存在允许精确更新，没有 `--allow-update` CLI 参数；停机 disable profile 后只更新 CAS 摘要，不改变提案。
+
+### 单命令部署入口
+
+日常执行 `pwsh -NoProfile -File scripts/deploy-local.ps1 -ArgumentsFile <绝对 arguments.json 路径>`。JSON 沿用原 helper 参数名；Package 必填，工程模式保留 Bundle/MergePolicy/ChecksProposal，可附 RepositoryPatches，或按原规则使用 DirectQueriesProposal。包/profile/Observer SHA 由入口读取，不需手算；EvidenceDirectory 省略时自动生成在本检出 docs/tmp。入口只编排原 helper，不维护第二套安装逻辑。
+
+同命令加 `-Check` 为零写预检；正式命令依次执行 Check、原生维护排空/封存、停机、安装、计划任务启动、Readback、Resume，输出阶段及 JSON 汇总。详细 stdout/stderr 与冻结实参写入 `<EvidenceDirectory>-runner/`，控制/启动/读回收据仍在原 EvidenceDirectory。子进程和 Node JSON 固定 UTF-8，避免无控制台 Windows 默认 CP936 破坏中文维护原因。
+
+停机前预检将计划工程配置与恢复器将加载的当前非终态工程定义逐一比较 repositoryDigest。检查配置或 taskLocalAcceptance 导致旧Run漂移时，当场拒绝，不先停服务再发现启动失败。配置所需修订沿正式 Task checkpoint，不跳过旧定义。
+
+失败在当前阶段停止，不自动重装或反复重启；已发起部署用同实参文件加 `-Readback` 或 `-Resume` 接续，入口读取原 launch 的 source pin。Readback 未 ready、Resume 未 dispatchResumed 均返回失败，不能以子进程 exit0 代替完成。
+
+已安装包因本次仓库配置漂移而退出的精确续接：arguments 指定原 `RepairStoppedLaunch`、同一原 Package 和 `RestoreConfigurationProposal`，不带工程更新/query/Observer提案。入口检查原计划任务同秒启动且退出码1、无Host和监听、原维护封存/排空/控制快照及包安装证明；在owner独占锁内调用原生配置恢复器，不执行plugin add。新的 recovery evidence/launch 绑定旧launch SHA、恢复提案/来源证明/前后profile SHA，Readback重验链后才Resume；旧失败收据保留。提案不匹配、迁移未完成或原任务控制数据漂移均停止，不通过改库或伪造成功续接。

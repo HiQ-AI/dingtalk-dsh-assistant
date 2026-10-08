@@ -20,7 +20,7 @@ test('合并结果UI独立namespace初始化、关闭证明及重复执行保护
   await assert.rejects(executeActivityMerge('cleanup', f.config, f.input), { code: 'ACTIVITY_MERGE_LEDGER_MISSING' })
   await executeActivityMerge('initialize', f.config, f.input)
   await assert.rejects(executeActivityMerge('initialize', f.config, f.input), { code: 'ACTIVITY_MERGE_ALREADY_INITIALIZED' })
-  assert.equal((await executeActivityMerge('verify-cleanup', f.config, f.input)).empty, true)
+  assert.deepEqual(await executeActivityMerge('verify-cleanup', f.config, f.input),{namespace:f.input.namespace,empty:true,createdResources:0,mode:'read-only'})
   const file = join(f.root, f.input.namespace, 'activity-merge-ledger.json'), ledger = JSON.parse(await readFile(file, 'utf8'))
   ledger.browserClosed = false; await writeFile(file, JSON.stringify(ledger))
   await assert.rejects(executeActivityMerge('verify-cleanup', f.config, f.input), { code: 'ACTIVITY_MERGE_CLEANUP_UNCONFIRMED' })

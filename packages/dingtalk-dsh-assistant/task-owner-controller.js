@@ -289,7 +289,8 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
             const proposed = decision.planChange?.stages ?? decision.appendStages
             if (proposed && !await authorizeStages({ taskId, stages: proposed, signal })) throw error('TASK_OWNER_STAGE_NOT_AUTHORIZED')
             if (decision.action === 'complete') {
-              if ([...(decision.evidenceRefs ?? []), ...(decision.assessments ?? []).flatMap(item => item.evidenceRefs ?? [])].some(ref => (input.queryEvidence.some(item => item.artifactRef === ref) || readArtifacts.get(ref)?.kind === 'agent-query-evidence') && !readArtifacts.has(ref))) throw error('TASK_OWNER_COMPLETION_EVIDENCE_UNREAD')
+              // Host 完成验收会重新读取并验证持久查询证据；本轮工具读取记录不是证据有效期。
+              if (typeof authorizeCompletion !== 'function' && [...(decision.evidenceRefs ?? []), ...(decision.assessments ?? []).flatMap(item => item.evidenceRefs ?? [])].some(ref => (input.queryEvidence.some(item => item.artifactRef === ref) || readArtifacts.get(ref)?.kind === 'agent-query-evidence') && !readArtifacts.has(ref))) throw error('TASK_OWNER_COMPLETION_EVIDENCE_UNREAD')
               try {
                 if (!input.stages.length && typeof authorizeCompletion !== 'function' || authorizeCompletion && !await authorizeCompletion({ taskId, decision, signal })) throw error('TASK_OWNER_COMPLETION_UNVERIFIED')
               } catch (cause) {
@@ -301,6 +302,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                     || diagnostic.evidence.some(item => item.hostQuery
                       ? item.hostQuery.taskId !== taskId || item.hostQuery.requirementRevision !== binding.requirementRevision
                         || readArtifacts.get(item.evidenceId)?.kind !== 'agent-query-evidence'
+                          && !input.queryEvidence.some(evidence => evidence.artifactRef === item.evidenceId)
                       : item.hostExecution?.taskId !== taskId
                         || !input.stages.some(stage => stage.runId === item.hostExecution.runId && stage.outputRef === item.evidenceId)))
                     throw error('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')

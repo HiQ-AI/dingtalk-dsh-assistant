@@ -603,6 +603,8 @@ Windows 本地验收以 PID 与创建时间共同核对进程归属和停止结�
 
 后端专项 Host 检查使用 `scripts/verify-dataset-unit-tests.mjs --java <JDK11/java.exe> --maven-home <Maven目录>`，在当前候选目录运行 `MergePreviewCalculatorTest`、`MergeWeightAllocatorTest`。固定 Surefire 2.22.2，使用原生 `surefire.reportNameSuffix` 为每次执行分配唯一报告后缀；JDK XML 校验要求两类均有实际用例、零失败/错误/跳过。准备工具 `docs/acceptance/topic-context-completeness/scripts/prepare-backend-unit-checks.mjs <请求JSON绝对路径> <新提案JSON绝对路径>` 只生成 dataset-package 的新版本 steps 提案；请求含 checks、toolsDirectory、nodeExecutable、javaExecutable、mavenHome。提案必须经正式冻结配置流程接纳，旧任务检查不被改写。
 
+常规本地部署统一使用 `pwsh -NoProfile -File scripts/deploy-local.ps1 -ArgumentsFile <部署参数JSON绝对路径>`，一次执行预检、安装、独立回读和恢复派发，终端只输出阶段与汇总，详细日志位于证据目录旁的 `-runner` 目录。先加 `-Check` 可零写预检；已有部署仅加 `-Readback` 或 `-Resume` 接续，不重复安装。 恢复派发后再做一次轻量 health 与控制库维护状态回读，均通过才报告成功；不重复扫描全部任务，也不保证部署结束后的持续可用性。参数及已安装失败后的受控配置恢复见[部署规程](docs/ops/resident-review-local-deployment.md)。
+
 受控本地部署使用持久维护屏障和封存停机许可；新实例完成恢复、备份与认证 Web 回读后才恢复派发。包摘要和 profile 摘要分别核验，详情见 [部署规程](docs/ops/resident-review-local-deployment.md#维护屏障与部署许可)。
 
 工程 v15 支持“已有实现符合要求，重新验收”：方案明确选择无需修改，Host 核实实际读取、工作区与冻结树后继续完整构建和本地验收，任务步骤会明确显示无需修改的结论。旧工作流不原地改变。
@@ -817,3 +819,11 @@ Owner 可在原工程 Run 已等待且排空时，以 `planChange.kind=insertDep
 原阶段、Run、generation、候选与成功节点保留。依赖完成后原阶段恢复，可沿原节点纠正和重新验收；不将前端 UI fixture 当成真实后端下载通过。Owner 不应为完成原目标必需的后端或前端实现重复索要交办授权。库升级须先执行正式 8→9 迁移，见部署说明。
 
 数据集合并七项交互使用独立 `scripts/local-acceptance-dataset-merge-ui.mjs`，绑定对应 Task/UAT3；配置与活动合并 UI runner 相同，支持 `--check|initialize|execute|cleanup|verify-cleanup --config <绝对路径>`。从真实候选 cwd 运行，编译实际 SFC/SCSS，记录七项浏览器断言与源码 SHA256。列表/API 输入明确为 fixture，报告 `backendVerified:false`；它不能替代后端 UAT 业务验收，也不能用于其他数据集需求。
+
+SG20 托管组件服务入口为 `serve --config <path> --host 127.0.0.1 --port <Hostport>`；`prepare` 在 runner 物化候选中按 lockfile 安装依赖，配置增加受信 `nodeExecutable`、`yarnCli`。execute 访问 Host 服务 URL 本身并核验就绪的 Task/UAT/namespace/PID 和源码 proof；不以另一个浏览器拦截站点替代实际服务。依赖安装前至少保留 1.6 GiB 可用空间。
+
+本地验收配置修订可在原代重评精确的 LOCAL_ACCEPTANCE_PLAN_INVALID 纯准备失败，保留成功候选/构建；须维护封存、前缀成功、零本地效果，失败原始引用留审计。
+
+部署脚本现支持必要依赖索引迁移仅备份控制库和固定 profile；普通部署及 Readback/Resume 不扫描全部任务目录。工程配置提案通过 `-RepositoryPatches` 原生转发并绑定输入 SHA，操作边界见 `docs/ops/resident-review-local-deployment.md`。
+
+Owner 提交完成时，已配置 Host 完成验收的路径直接重新读取持久查询证据并核对当前 Task、需求版本、来源和结果摘要，再执行领域验收；不因未在本轮重复调用 readArtifact 拒绝原会话已知的不可变证据。未配置 Host 回调的路径保留原读取检查。旧版本、跨任务、未知或已丢失的证据仍不能用于完成；领域拒绝诊断仅接受当前已验证查询引用，不自动将任务完成。

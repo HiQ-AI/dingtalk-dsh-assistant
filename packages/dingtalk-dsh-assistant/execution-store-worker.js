@@ -658,6 +658,9 @@ function coreCommand(command, now, consumption = {}) {
     const local=a.kind==='local-acceptance'
     const r=activeRun(a),current=nodes(r.run_id),index=current.findIndex(n=>n.node_id===(local?'define-local-acceptance':'verify-candidate')),n=current[index]
     const localStart=current.findIndex(n=>n.node_id==='prepare-local-acceptance'),planner=current[index+1]
+    const localPrepareRetry=local&&current[localStart]?.status==='waiting'&&current[localStart].executor==='code'
+      &&JSON.parse(current[localStart].wait_reason??'null')?.reference==='LOCAL_ACCEPTANCE_PLAN_INVALID'
+      &&!current[localStart].output_ref&&current.slice(0,localStart).every(v=>v.status==='succeeded')
     assertTaskDispatchAllowed(r)
     const oldRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.fromDigest),nextRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.toDigest)
     const old=oldRow&&JSON.parse(oldRow.body),next=nextRow&&JSON.parse(nextRow.body)
@@ -675,7 +678,7 @@ function coreCommand(command, now, consumption = {}) {
       ||next.config.checkpoint?.kind!==a.kind||next.config.checkpoint?.fromDigest!==a.fromDigest
       ||(!local&&(!Array.isArray(next.config.checkpointChecks)||!next.config.checkpointChecks.length)))fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
     if(local&&(n.status!=='succeeded'||planner?.node_id!=='plan-local-acceptance'||planner.status!=='succeeded'||localStart<=index+1
-      ||current.slice(localStart).some(v=>!['blocked','ready'].includes(v.status)||v.lease_epoch!==0||v.output_ref)
+      ||current.slice(localStart).some((v,i)=>!(localPrepareRetry&&i===0)&&(!['blocked','ready'].includes(v.status)||v.lease_epoch!==0||v.output_ref))
       ||current.slice(index+2,localStart).some(v=>v.status!=='succeeded'&&!(v.node_id==='verify-candidate'&&['waiting','ready'].includes(v.status)))
       ||!next.config.localAcceptanceConfig||next.config.localAcceptanceScope?.taskId!==r.task_id
       ||next.config.localAcceptanceScope?.uatEnvironment!==old.config.uatEnvironment
@@ -694,6 +697,11 @@ function coreCommand(command, now, consumption = {}) {
     if(local&&db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id IN (?,?) LIMIT 1').get(n.node_run_id,planner.node_run_id))fail('ENGINEERING_CHECKPOINT_EFFECTS_PRESENT')
     current.slice(index).forEach((value,j)=>db.prepare('UPDATE execution_nodes SET node_version=? WHERE node_run_id=?').run(a.nodes[index+j].nodeVersion,value.node_run_id))
     if(local){
+      if(localPrepareRetry){
+        const prior=current[localStart]
+        emitEvent(command.id,'run.workflow.checkpoint.local-prepare-reset',{runId:r.run_id,generation:r.generation,nodeRunId:prior.node_run_id,leaseEpoch:prior.lease_epoch,inputRef:prior.input_ref,inputDigest:prior.input_digest,waitReason:JSON.parse(prior.wait_reason),evidenceRef:a.evidenceRef},now)
+        db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,output_ref=NULL,wait_reason=NULL WHERE node_run_id=?").run(prior.node_run_id)
+      }
       db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,output_ref=NULL,session_id=NULL,session_bound=0,wait_reason=NULL WHERE node_run_id=?").run(planner.node_run_id)
       for(const pending of current.slice(index+2).filter(v=>v.status==='ready'))db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL WHERE node_run_id=?").run(pending.node_run_id)
     }

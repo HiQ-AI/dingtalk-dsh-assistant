@@ -46,3 +46,33 @@ repair可发现新增共享材料：复用readTaskMaterials，仅返回顶层sha
 最终脚本冻结复跑：补齐浏览器实际关闭状态后，完整五阶段生命周期再次通过。日志 `docs/tmp/clarification-tests/sg20-ui-freeze.log`；7/7 和 browserClosed=true 的结果在 `docs/tmp/sg20-ui-round52-freeze/acceptance-52aabbcc001122334455667788990033/result.json`。最终 Node 定向 2/2 PASS（153.6ms）。未部署、未更改 Assistant 冻结源码或业务候选。
 
 SG18 未完成边界：现有 `/process/excelImportUpr/{dataAttribution}/{processId}` 可作为工作区覆盖入口、`/processDraft/saveOrSubmit` 有整份快照/CAS；当前没有证据证明草稿 UPR 文件导入/导出的最终调用合同，且 UPR 既有导出由前端 ProcessData.exportProcessData 浏览器 XLSX 生成单个当前工序 Sheet，不能假定是后端 URL。不能将缺失合同硬编成新 URL 反向约束业务实现。本轮没有新增假接口/假 PASS 的 SG18 完整 runner，FR01–06 完整场景仍未收敛，必须待原 Owner 交付实际实现与调用合同后继续。
+
+### SG20 接入正式 local runner（空间门禁暂停，尚未宣称通过）
+
+脚本新增 `prepare`（候选锁文件依赖安装）与 `serve`，由 Host 指定 loopback 端口启动实际候选组件 HTML/JS/CSS/assets。execute 现在访问该同一 baseUrl，回读 service PID/Task/UAT/namespace/source proof 后测试；禁止用占位服务加另一个 URL 代替。正式复现脚本：`scripts/verify-sg20-hosted-runner.mjs`（本验收目录内），生成 config、精确 scope 和 fixture-only profile，并调用 `createLocalAcceptanceRunner.prepare/execute`；完成后还验证只读收据幂等和错误上下文拒绝。
+
+- scope：Task83、uat3、requestDigest `f0c20efb6c92a88655205fa19d7cb8186a15cf5b8743b71d798f12bf39f314cc`。
+- `--check` 配置准入已实际通过；定向测试新增 loopback/context 反例后 3/3 PASS。
+- 首轮目录 `docs/tmp/sg20-hosted-runner-1`：readCandidate 尚未完成，未物化 candidate、未安装依赖、未启动服务。按主线程磁盘门禁停止自有验证进程；独立回读 3 个文件、4099 字节，prepared.json 不存在。此次不是业务失败或验收通过。
+- 完整托管生命周期和源码清单验证待空间恢复后继续；先前 7/7 证明是前一版真实组件的隔离 route fixture 浏览器实测，不能冒充本次 Host 服务接入已验收。
+
+### SG20 正式 runner 首次实跑（保留失败）
+
+空间恢复后使用原 gen4 candidate 完成全部物化与依赖安装。`docs/tmp/sg20-hosted-runner-1/result.json`：prepare、start、cases、cleanup、stop 均 succeeded，真实服务 `127.0.0.1:50580` / PID 72852，浏览器七项 7/7；post-source manifest 未报错。verify-cleanup 因脚本 `mode:'fixture-only'` 不符合现有 runner 只读清理合同而失败，`failureCode=LOCAL_ACCEPTANCE_CLEANUP_UNCONFIRMED`。已窄改为真实零业务写入语义的 `mode:'read-only',createdResources:0`，测试明确比较完整收据；3/3 PASS。独立 PID/端口回读均消失，证据 `docs/tmp/sg20-hosted-runner-1/independent-stop-proof.json`。
+
+完整新轮使用 `docs/tmp/sg20-hosted-runner-2`，不能覆盖首轮失败收据。日志 `docs/tmp/clarification-tests/sg20-hosted-runner-3.log`。助手源码未改。
+
+### SG20 正式 Hosted runner 最终冻结：PASS
+
+本轮不新增后端需求：原七项均为 UI 交互，真实候选组件 + 明确 API/list fixture 属于该 Task 的 UI 交付范围；`backendVerified:false` 如实保留。
+
+- 完整日志：`docs/tmp/clarification-tests/sg20-hosted-runner-3.log`。
+- `docs/tmp/sg20-hosted-runner-2/result.json`：prepare 172552ms、start 27789ms、cases 8241ms、cleanup 2494ms、stop 6364ms、verify-cleanup 2535ms，全部 succeeded；passed=true。
+- 真正托管页面为 `http://127.0.0.1:55608/`，PID 98252；浏览器访问该服务而非另一个拦截站点。候选源码 proof 与本地冻结文件一致，Task/UAT/namespace 一致，7/7、pageErrors=[]。
+- `runner.assertPassed` 再核源码清单通过；第二次 execute 只读同收据、内容完全一致；改 prepared.uatEnvironment 为 uat2 被 PREPARED_MISMATCH 拒绝。
+- cleanup：dataCleaned=true、processStopped=true、mode=read-only、createdResources=0。独立回读 PID/监听均消失：`docs/tmp/sg20-hosted-runner-2/independent-stop-proof.json`。
+- 最终定向测试 3/3，173.2ms：`docs/tmp/clarification-tests/sg20-hosted-tests-frozen.log`。
+- 可用绑定配置：`docs/tmp/sg20-hosted-runner-2/task-local-acceptance.json`。scope 为 Task83 / uat3 / requestDigest `f0c20efb6c92a88655205fa19d7cb8186a15cf5b8743b71d798f12bf39f314cc`。
+- 原生计划在 `prepared.json`，一个 scenario 单次覆盖全部七项；expected 精确为 `{"uiContract":true,"coverage":"candidate-ui-with-explicit-api-and-list-fixtures","backendVerified":false}`。现有 runner 用字符串比较，不能改成泛化中文期待值或在同 namespace 重复调用同场景。
+- 冻结文件清单 `docs/tmp/sg20-hosted-runner-2/freeze.json`；主脚本 SHA256 `2e7aadf8c58d5afd56aaafcb63e6523b9629c714163c3fb8771e81025aa08b33`。复用依赖只有 readonly 的 localOrigin 和 merge 的 runMergeCommand，不调用 merge 业务函数、不连接旧 JAR/DB/SSO。
+- 没有修改 Assistant 已冻结源码、原 Task 候选或控制库；由主线程按正式同代 localAcceptance checkpoint 接入。

@@ -11,7 +11,7 @@ import { migrateExecutionDependencyIndex, verifyExecutionDependencyIndex } from 
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { maintenanceStatus } from '../../../../packages/dingtalk-dsh-assistant/execution-maintenance.js'
-import { copyDeploymentTaskDirectory, checkDeploymentTaskDirectory, verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, checkpointDeploymentDatabase } from '../../../../scripts/deployment-integrity.mjs'
+import { verifyPlannedEngineeringConfig, verifyRequiredDependencyBackup, copyDeploymentTaskDirectory, checkDeploymentTaskDirectory, verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, checkpointDeploymentDatabase } from '../../../../scripts/deployment-integrity.mjs'
 const adapterName='@deepseek-ai/dsh-llm-pi-ai'
 const fileHash=bytes=>createHash('sha256').update(bytes).digest('hex')
 export function adapterResolution(profileRoot) {
@@ -76,7 +76,11 @@ const root='D:/dsh_home/workflows/runtime-v2',db=new DatabaseSync(root+'/control
 const hash=b=>createHash('sha256').update(b).digest('hex'),digest=v=>hash(JSON.stringify(v))
 const [mode,arg,source,installed]=process.argv.slice(2)
 try {
- if(mode==='adapter-package'){
+ if(mode==='engineering-config-check'){
+  const [profile,bundle,mergePolicy,checksProposal,repositoryPatches]=process.argv.slice(3)
+  const proof=await verifyPlannedEngineeringConfig({db,profile,bundle,mergePolicy,checksProposal,repositoryPatches:repositoryPatches||undefined})
+  console.log(JSON.stringify(proof));if(!proof.compatible)process.exitCode=1
+ }else if(mode==='adapter-package'){
   console.log(JSON.stringify(verifyAdapterPackage({packagePath:arg,sourceRoot:source,profileRoot:installed||undefined})))
  }else if(mode==='adapter-current'){
   console.log(JSON.stringify(adapterResolution(arg)))
@@ -91,6 +95,8 @@ try {
    return JSON.parse(result.stdout)
   }
   console.log(JSON.stringify(await checkpointDeploymentDatabase({dbPath:root+'/control.sqlite',instanceId:'dsh-web-runtime-v2-20260924',probeStopped:probe})))
+ }else if(mode==='dependency-control-backup'){
+  console.log(JSON.stringify(await verifyRequiredDependencyBackup({runtime:root,profile:'D:/dsh_home/profiles/web',backupRoot:arg})))
  }else if(mode==='backup-verify'){
   console.log(JSON.stringify(await verifyDeploymentBackup({ runtime:root,domain:'D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116',profile:'D:/dsh_home/profiles/web',backupRoot:arg,taskDirectory:source||undefined })))
  }else if(mode==='backup-reverify'){

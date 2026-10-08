@@ -6976,3 +6976,55 @@ test('真实当前节点运行仅覆盖旧系统等待，业务等待及控制�
   }
  }finally{gate.resolve();await execution.controller.whenIdle(runId)}
 })
+
+for (const mode of ['known', 'unsatisfied', 'diagnostic', 'foreign', 'stale', 'missing']) test(`Owner历史查询不强制本轮重读，Host仍验真实证据：${mode}`, async t => {
+  const server=createServer((_req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({status:'ok'}))})
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
+  let evidenceRef,initialBinding,turns=0,checks=0,hostRejection,diagnosticRead=false,f
+  const sessions={async close(){},async run(args){
+    const {binding,input,tools,queryInput,onQueryEvidence,onCandidate,onSessionBound,readArtifact}=args
+    await onSessionBound();turns++
+    const waiting={action:'wait',summary:'保留实际查询事实等待下一轮核验',evidenceRefs:[],condition:{kind:'business-input',missing:'测试续行',responsibleParty:'测试',resumeWhen:'测试事件触发',evidenceRefs:[]}}
+    if(!evidenceRef){
+      const result=await tools.find(item=>item.name==='query_runtime_status').execute({binding,input:queryInput,args:{resourceId:'known-query'}})
+      evidenceRef=result.evidenceRef;initialBinding=binding
+      await onQueryEvidence({binding:Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(k=>[k,binding[k]])),evidenceRef})
+      await readArtifact(evidenceRef)
+      await onCandidate(waiting);return{status:'submitted',decision:waiting}
+    }
+    assert.equal(binding.sessionId,initialBinding.sessionId);assert.notEqual(binding.turnId,initialBinding.turnId)
+    assert.equal(input.queryEvidence[0].artifactRef,evidenceRef)
+    let ref=evidenceRef
+    if(['foreign','stale'].includes(mode)){
+      const value=await f.execution.artifacts.read(evidenceRef)
+      value.execution={...value.execution,...(mode==='foreign'?{taskId:'another-task'}:{requirementRevision:0})}
+      ref=(await f.execution.artifacts.put(value)).ref
+    }
+    if(mode==='missing')await rm(await f.execution.artifacts.locate(evidenceRef))
+    const decision={action:'complete',summary:'按已持久查询事实完成验收',evidenceRefs:[ref],assessments:input.acceptanceItems.map(item=>({itemId:item.itemId,status:'satisfied',evidenceRefs:[ref]}))}
+    // 本轮不调用 readArtifact(evidenceRef)，应由 Host 重新读已登记证据而不是临时 Map 判定。
+    if(mode==='known'){await onCandidate(decision);return{status:'submitted',decision}}
+    await assert.rejects(onCandidate(decision),asyncError=>{
+      hostRejection=asyncError;assert.notEqual(asyncError.code,'TASK_OWNER_COMPLETION_EVIDENCE_UNREAD');assert.notEqual(asyncError.code,'TASK_OWNER_ARTIFACT_SCOPE_MISMATCH');return true
+    })
+    if(mode==='diagnostic'){
+      assert.equal(hostRejection.code,'TASK_OWNER_COMPLETION_UNVERIFIED');assert.ok(hostRejection.ownerDiagnosticRef)
+      const diagnostic=await readArtifact(hostRejection.ownerDiagnosticRef);assert.equal(diagnostic.kind,'domain-acceptance-rejection');diagnosticRead=true
+    }
+    if(mode==='missing')throw hostRejection
+    await onCandidate(waiting);return{status:'submitted',decision:waiting}
+  }}
+  f=await fixture(t,'owner',undefined,{taskOwnerSessions:sessions,config:{directQueries:{resources:[],databases:[],statusResources:[{id:'known-query',url:`http://127.0.0.1:${server.address().port}/status`,fields:['status']}],permissions:{resourceIds:[],databaseIds:[],statusIds:['known-query']}}},
+    judge:async({stage,input})=>stage==='S'?splitOne(input.source.text):stage==='R'?{kind:'binding',disposition:'new',candidateId:null,evidence:['原消息']}:{kind:'intent',actions:[{intent:'create',arguments:{objective:'验证已知状态'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'},
+    generalCompletionCheck:async input=>{checks++;assert.equal(input.evidence.length,1);assert.equal(input.evidence[0].result.values.status,'ok');assert.equal(input.evidence[0].hostQuery.taskId,initialBinding.taskId);if(mode==='diagnostic'){const diagnostic=await f.execution.artifacts.put({kind:'domain-acceptance-rejection',taskId:initialBinding.taskId,evidence:input.evidence,assessment:{status:'unverified'}});throw Object.assign(Error('领域事实仍不足'),{code:'TASK_OWNER_COMPLETION_UNVERIFIED',diagnosticRef:diagnostic.ref})}return{status:mode==='unsatisfied'?'unsatisfied':'satisfied',resultVerified:mode!=='unsatisfied',criteria:input.acceptanceItems.map(item=>({criterion:item.criterion,passed:mode!=='unsatisfied',evidenceIds:item.evidenceRefs}))}}})
+  const received=await f.service.ingest({...f.message,text:'验证已知状态'}),state=await f.service.messages.process(received.runId),taskId=state.commands[0].result.taskId
+  assert.deepEqual((await settleTaskOwners(f.service,f.execution)).failures,[])
+  await f.execution.store.command({id:'known-evidence-next',kind:'task.owner.event',args:{taskId,eventKey:'known-evidence-next',eventType:'system.recovery'}})
+  await settleTaskOwners(f.service,f.execution)
+  const owner=await f.execution.store.query({kind:'task.owner',taskId})
+  assert.equal(turns,2)
+  if(mode==='known'){assert.equal(owner.decision.action,'complete');assert.equal(checks,1)}
+  else {assert.notEqual(owner.decision?.action,'complete');assert.ok(hostRejection);assert.equal(checks,['unsatisfied','diagnostic'].includes(mode)?1:0)}
+  if(mode==='diagnostic')assert.equal(diagnosticRead,true)
+  assert.deepEqual(await f.execution.store.query({kind:'run.list',taskId}),[])
+})

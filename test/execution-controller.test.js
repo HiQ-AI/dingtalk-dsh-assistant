@@ -916,9 +916,9 @@ for(const variant of ['valid','repeat','validator-read','foreign-workflow','paus
  if(variant==='repeat'){recovery=await controller.inspectNodeRecovery(runId);assert.equal(recovery.repairable,false);assert.equal(recovery.reason,'strategy-change-required')}else assert.equal(after.run.status,'succeeded')
 })
 
-for(const variant of ['verified','verify-waiting','wrong-scope','stale-maintenance','stale-revision','planner-timeout','planner-invalid','local-started'])test(`本地验收checkpoint仅重算方案并保留候选 ${variant}`,async t=>{
+for(const variant of ['verified','verify-waiting','wrong-scope','stale-maintenance','stale-revision','planner-timeout','planner-invalid','local-started','local-plan-invalid','local-other-error','local-plan-effect'])test(`本地验收checkpoint仅重算方案并保留候选 ${variant}`,async t=>{
  const directory=await mkdtemp(join(tmpdir(),'dsh-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'local-checkpoint',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
- const calls={prepare:0,workspace:0,inspect:0,verify:0,plan:0,local:0};let hold=variant!=='local-started'
+ const calls={prepare:0,workspace:0,inspect:0,verify:0,plan:0,local:0};let hold=!['local-started','local-plan-invalid','local-other-error','local-plan-effect'].includes(variant)
  const str={type:'string'},make=correct=>({id:correct?'new-local':'old-local',version:'18',nodes:[
  {id:'prepare-generation',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({requirement})=>requirement,execute:async({input})=>{calls.prepare++;return input}},
  {id:'define-local-acceptance',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({requirement})=>requirement,execute:correct?async()=> 'right':async()=> 'wrong'},
@@ -926,7 +926,7 @@ for(const variant of ['verified','verify-waiting','wrong-scope','stale-maintenan
  {id:'prepare-workspace',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.workspace++;return 'workspace'}},
  {id:'inspect-and-propose',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.inspect++;return 'candidate'}},
  {id:'verify-candidate',version:'1',executor:'code',allowedEffects:['read'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.verify++;if(variant==='verify-waiting')throw Object.assign(new Error('check'),{code:'ENGINEERING_VERIFICATION_FAILED'});return 'verified-candidate'}},
- {id:'prepare-local-acceptance',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:str,inputDependencies:['plan-local-acceptance'],mapInput:({previousOutput,dependencyOutputs})=>({candidate:previousOutput,plan:dependencyOutputs['plan-local-acceptance']}),execute:async({input})=>{calls.local++;assert.equal(input.candidate,'verified-candidate');assert.equal(input.plan,'right');return 'done'}},]})
+ {id:'prepare-local-acceptance',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:str,inputDependencies:['plan-local-acceptance'],mapInput:({previousOutput,dependencyOutputs})=>({candidate:previousOutput,plan:dependencyOutputs['plan-local-acceptance']}),execute:async({input})=>{calls.local++;if(!correct&&variant.startsWith('local-'))throw Object.assign(Error('plan failed'),{code:['local-plan-invalid','local-plan-effect'].includes(variant)?'LOCAL_ACCEPTANCE_PLAN_INVALID':'LOCAL_OTHER_ERROR'});assert.equal(input.candidate,'verified-candidate');assert.equal(input.plan,'right');return 'done'}},]})
  const old=make(false),next=make(true),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next)
  const sessions={async run(args){calls.plan++;await args.onSessionBound();if(calls.plan===2&&variant==='planner-timeout')return{status:'no_submission',reason:'execution_timeout',failure:{code:'execution_timeout',phase:'execution'}};await args.onResult(calls.plan===2&&variant==='planner-invalid'?42:args.input);return{status:'submitted'}},async cancel(){},async assertDrained(){},async close(){}}
  const controller=createExecutionController({store:{query:q=>store.query(q),command:c=>{if(hold&&c.kind==='node.claim'&&c.args.nodeId==='prepare-local-acceptance')throw Error('fixture-stop-before-local');return store.command(c)}},artifacts,workflows:[old],sessions});t.after(async()=>{await controller.close();await store.close()})
@@ -938,14 +938,23 @@ for(const variant of ['verified','verify-waiting','wrong-scope','stale-maintenan
  await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:['criterion'],sourceKey:'source',eventKey:'source'})
  await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
  await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input:'request',stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
- if(['verify-waiting','local-started'].includes(variant))await controller.whenIdle('run');else await assert.rejects(controller.whenIdle('run'),/fixture-stop-before-local/)
+ if(['verify-waiting','local-started','local-plan-invalid','local-other-error','local-plan-effect'].includes(variant))await controller.whenIdle('run');else await assert.rejects(controller.whenIdle('run'),/fixture-stop-before-local/)
  const before=await controller.state('run');await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'local',actorId:'owner',reason:'修正场景'})
  controller.registerWorkflow(next)
  const args={commandId:'engineering-checkpoint:run:local-fix',runId:'run',expectedRevision:before.run.revision,kind:'local-acceptance',workflowId:next.id,workflowDigest:nextDef.digest,maintenance:{maintenanceId:'local',revision:1}}
+ if(variant==='local-plan-effect'){
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db')),node=before.nodes.find(n=>n.nodeId==='prepare-local-acceptance');
+  try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('fixture-effect','operation',?,?,?,?,?,'digest','{}','[]','fixture','succeeded','now','now')").run('run',node.nodeRunId,node.nodeId,node.generation,node.inputDigest)}finally{db.close()}
+  await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'ENGINEERING_CHECKPOINT_EFFECTS_PRESENT'});assert.equal((await controller.state('run')).nodes.at(-1).status,'waiting');return
+ }
  if(variant==='stale-maintenance'){args.maintenance.revision=0;await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'RUNTIME_MAINTENANCE_STALE'});return}
  if(variant==='stale-revision')args.expectedRevision--
- if(['wrong-scope','stale-revision','local-started'].includes(variant)){await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'ENGINEERING_CHECKPOINT_NOT_ADMITTED'});return}
- await controller.updateEngineeringCheckpoint(args);const checkpoint=await controller.state('run');assert.deepEqual(checkpoint.nodes.slice(3,6),before.nodes.slice(3,6));assert.equal(checkpoint.nodes[2].sessionId,null)
+ if(['wrong-scope','stale-revision','local-started','local-other-error'].includes(variant)){await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'ENGINEERING_CHECKPOINT_NOT_ADMITTED'});return}
+ await controller.updateEngineeringCheckpoint(args);
+ if(variant==='local-plan-invalid'){
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db'),{readOnly:true});try{const row=db.prepare("SELECT payload FROM execution_events WHERE kind='run.workflow.checkpoint.local-prepare-reset'").get(),audit=JSON.parse(row.payload),prior=before.nodes.at(-1);assert.equal(audit.inputRef,prior.inputRef);assert.equal(audit.leaseEpoch,prior.leaseEpoch);assert.equal(audit.waitReason.reference,'LOCAL_ACCEPTANCE_PLAN_INVALID');assert.ok(audit.evidenceRef)}finally{db.close()}
+ }
+ const checkpoint=await controller.state('run');assert.deepEqual(checkpoint.nodes.slice(3,6),before.nodes.slice(3,6));assert.equal(checkpoint.nodes[2].sessionId,null)
  await send('runtime.maintenance.change',{active:false,expectedRevision:1,maintenanceId:'local',actorId:'owner',reason:'恢复'},'leave');hold=false
  await controller.recover({commandId:'continue',runId:'run'});let after=await controller.whenIdle('run')
  if(variant.startsWith('planner-')){
@@ -954,7 +963,7 @@ for(const variant of ['verified','verify-waiting','wrong-scope','stale-maintenan
   await controller.resumeNode({commandId:'resume-planner',runId:'run',expectedRevision:after.run.revision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,leaseEpoch:recovery.leaseEpoch,inputDigest:recovery.inputDigest,contextRef:context.ref});after=await controller.whenIdle('run')
  }
 
- assert.equal(after.run.generation,1);assert.equal(calls.prepare,1);assert.equal(calls.workspace,1);assert.equal(calls.inspect,1);assert.equal(calls.verify,1);assert.equal(calls.plan,variant.startsWith('planner-')?3:2);assert.equal(calls.local,variant==='verify-waiting'?0:1)
+ assert.equal(after.run.generation,1);assert.equal(calls.prepare,1);assert.equal(calls.workspace,1);assert.equal(calls.inspect,1);assert.equal(calls.verify,1);assert.equal(calls.plan,variant.startsWith('planner-')?3:2);assert.equal(calls.local,variant==='verify-waiting'?0:variant==='local-plan-invalid'?2:1)
  assert.equal(after.run.status,variant==='verify-waiting'?'waiting':'succeeded');assert.deepEqual(after.nodes.slice(3,6),before.nodes.slice(3,6))
 })
 

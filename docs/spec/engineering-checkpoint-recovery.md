@@ -36,3 +36,5 @@ Controller/store的节点恢复边界、task-workflow-contracts的工程检查�
 纯validator失败时，恢复目标是其前置Agent，但失败工件身份仍是validator，不能要求两者nodeRunId、lease和inputDigest相同。Host恢复快照显式携带validationNodeRunId、validationLeaseEpoch、validationInputDigest，ExecutionController先与当前validator节点复核；Owner仅读取并引用完全匹配该身份的原失败工件。普通Agent失败仍匹配Agent自身身份，不放宽输入、来源、CAS或一次续行规则。
 
 检查失败的候选源码修复：原 changeInput 全量计划导致整代准备重复；在已准入 repair 事务内对明确 verify-candidate 失败保持原需求/代次/工作区，重入 inspect 后缀，保留原候选差异并重新验证。只允许后续未执行且无外部效果，配置checkpoint仍独立处理。证据见 round-56。
+
+本地验收配置 checkpoint 允许精确重评 `prepare-local-acceptance` 的 `LOCAL_ACCEPTANCE_PLAN_INVALID`：该节点必须 code、已排空、无输出，前缀全成功，后续只能未执行 ready/blocked，本地准备及后续无任何效果；Controller同时核对新旧定义只允许 pure/read。维护与Task/Run/需求/配置CAS仍保留。事务记录原节点inputRef/inputDigest/lease/waitReason和失败工件引用，再清理纯准备失败以重评方案。成功工作区、代码候选、构建检查保持；define/plan因配置变化重评。其他错误、外部效果不适用。

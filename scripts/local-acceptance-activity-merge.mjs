@@ -74,7 +74,7 @@ export async function executeActivityMerge(mode, config, input, repository = pro
     await writeFile(ledgerPath, JSON.stringify(ledger, null, 2), { flag: 'wx' }); return { initialized: true, namespace: input.namespace }
   }
   if (!ledger) fail('LEDGER_MISSING')
-  if (mode !== 'execute') { if (!ledger.browserClosed || ledger.businessWrites !== 0) fail('CLEANUP_UNCONFIRMED'); return { namespace: input.namespace, empty: true, createdResources: 0, mode: 'fixture-only' } }
+  if (mode !== 'execute') { if (!ledger.browserClosed || ledger.businessWrites !== 0) fail('CLEANUP_UNCONFIRMED'); return { namespace: input.namespace, empty: true, createdResources: 0, mode: 'read-only' } }
   if (ledger.started || Object.keys(input.case?.parameters ?? {}).length) fail('EXECUTION_INVALID')
   ledger.started = true; await persist()
   let browser, page

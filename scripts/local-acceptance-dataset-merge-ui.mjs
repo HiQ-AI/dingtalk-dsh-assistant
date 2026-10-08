@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, statfs } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 import { join, resolve, isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createServer } from 'node:http'
+import { runMergeCommand } from './local-acceptance-merge.mjs'
 import { localOrigin } from './local-acceptance-readonly.mjs'
 
 // SG20 的七项 UI 交互使用真实候选 SFC；列表/API 输入是显式 fixture，不代表后端验收。
@@ -53,7 +55,7 @@ window.root=new Vue({el:'#app',render:h=>h(Create)});window.component=name=>{con
   return { proof, js, assets, html: `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/element.css"><style>html,body,#app{height:100%;margin:0}.flex-column{display:flex;flex-direction:column}.flex-1{flex:1;min-width:0}.flex-none{flex:none}${styles.join('\n')}</style><div id="app"></div><script src="/vue.js"></script><script src="/element.js"></script><script src="/big.js"></script><script src="/app.js"></script>` }
 }
 
-export async function verifyDatasetMergeUI({ repository, playwrightModule, evidenceRoot }) {
+export async function verifyDatasetMergeUI({ repository, playwrightModule, evidenceRoot, baseUrl, namespace }) {
   await mkdir(evidenceRoot, { recursive: true })
   const report = { taskId:'task-83c651ebdbdb77584a06d1fcb6b9e255',uatEnvironment:'uat3',coverage:'candidate-ui-with-explicit-api-and-list-fixtures',backendVerified:false,browserClosed:true,cases:[],pageErrors:[] }
   let browser
@@ -62,8 +64,12 @@ export async function verifyDatasetMergeUI({ repository, playwrightModule, evide
     const { chromium } = await import(pathToFileURL(playwrightModule).href)
     browser=await chromium.launch({channel:'msedge',headless:true});report.browserClosed=false
     const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'})
-    await context.route('**/*',async route=>{const path=new URL(route.request().url()).pathname;const body=path==='/'?candidate.html:path==='/app.js'?candidate.js:candidate.assets[path];if(body===undefined)return route.abort();return route.fulfill({body,contentType:path.endsWith('.js')?'application/javascript':path.endsWith('.css')?'text/css':'text/html'})})
-    const page=await context.newPage();page.on('pageerror',e=>report.pageErrors.push(e.message));await page.goto('http://candidate.test/');await page.waitForFunction(()=>window.component?.('FormOne'),{},{timeout:10000})
+    const origin=localOrigin(baseUrl)
+    const ready=await (await fetch(origin+'/ready',{redirect:'error'})).json()
+    assert.equal(ready.taskId,report.taskId);assert.equal(ready.uatEnvironment,report.uatEnvironment);assert.deepEqual(ready.proof,candidate.proof);assert.equal(ready.namespace,namespace);assert.ok(Number.isSafeInteger(ready.pid)&&ready.pid>0)
+    report.service={baseUrl:origin,pid:ready.pid,proof:ready.proof}
+    await context.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort())
+    const page=await context.newPage();page.on('pageerror',e=>report.pageErrors.push(e.message));await page.goto(origin+'/');assert.equal(new URL(page.url()).origin,origin);await page.waitForFunction(()=>window.component?.('FormOne'),{},{timeout:10000})
     const run=async(id,fn)=>{try{await fn();report.cases.push({id,status:'PASS'})}catch(e){report.cases.push({id,status:'FAIL',error:e.message});await page.screenshot({path:join(evidenceRoot,id+'.png'),fullPage:true})}}
     await run('SG20-01-selection',async()=>{
       await page.evaluate(()=>component('FormOne').handleFilterChange({prop:'name',value:'保留过滤',label:'名称'}));await page.click('#select-0')
@@ -81,7 +87,7 @@ export async function verifyDatasetMergeUI({ repository, playwrightModule, evide
     })
     await page.evaluate(()=>component('Create').handleNext(window.rows));await page.waitForFunction(()=>component('Create').curStep===2)
     await run('SG20-02-columns',async()=>{
-      const labels=await page.locator('.form-two-wrap .el-table__header-wrapper th').allTextContents();const prod=labels.findIndex(x=>x.includes('产量')&&!x.includes('权重'));assert.ok(prod>=0);assert.ok(labels[prod+1].includes('权重'));assert.ok(labels[prod+2].includes('声明单位'))
+      const labels=await page.locator('.form-two-wrap .el-table__header-wrapper th').allTextContents();const prod=labels.findIndex(x=>x.includes('产量')&&!x.includes('权重'));assert.ok(prod>=0);assert.ok(labels[prod+1].includes('权重'));assert.ok(labels[prod+2].includes('声明单位'));assert.ok(labels[prod-1].includes('物料'));assert.ok(labels[prod-2].includes('参考产品'));assert.ok(labels[prod+3].includes('地理'));assert.ok(labels[prod+4].includes('操作'))
       assert.deepEqual(await page.evaluate(()=>component('Create').checkNodes.map(x=>x.x)),[0.25,0.75])
       await page.locator('.form-two-wrap .el-input-number input').first().fill('0.4');await page.locator('.form-two-wrap .el-input-number input').first().blur()
       await page.getByRole('button',{name:'产量权重恢复初始'}).click();assert.deepEqual(await page.evaluate(()=>component('Create').checkNodes.map(x=>x.x)),[0.25,0.75])
@@ -97,7 +103,7 @@ export async function verifyDatasetMergeUI({ repository, playwrightModule, evide
       const widths=await page.locator('.common-filters .el-select').evaluateAll(xs=>xs.map(x=>x.getBoundingClientRect().width));await page.setViewportSize({width:420,height:900})
       for(const tab of ['merged','unmerged']){await page.evaluate(tab=>component('FormThree').activeTab=tab,tab);await page.waitForTimeout(50)
         const dimensions=await page.locator('.common-filters .el-select').evaluateAll(xs=>xs.map(x=>x.getBoundingClientRect().width));assert.deepEqual(dimensions,widths)
-        const scroll=await page.locator('.common-filters').evaluate(x=>({overflow:getComputedStyle(x).overflowX,scroll:x.scrollWidth,width:x.clientWidth}));assert.ok(['auto','scroll'].includes(scroll.overflow));assert.ok(scroll.scroll>scroll.width)
+        const scroll=await page.locator('.common-filters').evaluate(x=>({overflow:getComputedStyle(x).overflowX,scroll:x.scrollWidth,width:x.clientWidth}));assert.ok(['auto','scroll'].includes(scroll.overflow));assert.ok(scroll.scroll>scroll.width);assert.ok(await page.locator('.common-filters .filter-button').evaluateAll(xs=>xs.every(x=>getComputedStyle(x).whiteSpace==='nowrap')))
         await page.locator('.common-filters').evaluate(x=>x.scrollLeft=x.scrollWidth);assert.ok(await page.locator('.common-filters').evaluate(x=>x.scrollLeft>0))}
       await page.setViewportSize({width:1440,height:1000});await page.evaluate(()=>component('FormThree').activeTab='merged')
     })
@@ -109,7 +115,7 @@ export async function verifyDatasetMergeUI({ repository, playwrightModule, evide
       for(const text of ['短描述','较长描述'.repeat(35),'第一行\n第二行\n第三行']){
         await page.locator('.result-description-field textarea').last().fill(text)
         const positions=await page.locator('.merged-card').last().evaluate(x=>{const r=s=>x.querySelector(s).getBoundingClientRect();return {unit:r('.unit-field .summary-label').top,description:r('.result-description-field .summary-label').top,valueRight:r('.value-field').right,unitLeft:r('.unit-field').left,unitRight:r('.unit-field').right,descriptionLeft:r('.result-description-field').left,split:r('.split-button').right,right:r('.result-summary').right}})
-        assert.ok(Math.abs(positions.unit-positions.description)<=2,JSON.stringify(positions));assert.ok(Math.abs((positions.unitLeft-positions.valueRight)-(positions.descriptionLeft-positions.unitRight))<=2,JSON.stringify(positions))
+        assert.ok(Math.abs(positions.split-positions.right)<=2,JSON.stringify(positions));assert.ok(Math.abs(positions.unit-positions.description)<=2,JSON.stringify(positions));assert.ok(Math.abs((positions.unitLeft-positions.valueRight)-(positions.descriptionLeft-positions.unitRight))<=2,JSON.stringify(positions))
       }
       assert.equal(await page.locator('.reference-product-card .split-button').count(),0);assert.equal(await page.locator('.merged-card:not(.reference-product-card) .split-button').count(),1)
     })
@@ -121,7 +127,8 @@ export async function executeDatasetMergeUI(mode,config,input={},repository=proc
   assert.equal(config.taskId,'task-83c651ebdbdb77584a06d1fcb6b9e255','TASK_SCOPE_INVALID')
   assert.equal(config.uatEnvironment,'uat3','UAT_SCOPE_INVALID')
   assert.ok(isAbsolute(config.playwrightModule??'')&&isAbsolute(config.evidenceRoot??''),'CONFIG_INVALID')
-  assert.ok(['--check','initialize','execute','cleanup','verify-cleanup'].includes(mode),'MODE_INVALID')
+  assert.ok(['--check','prepare','initialize','execute','cleanup','verify-cleanup'].includes(mode),'MODE_INVALID')
+  if(mode==='prepare'){assert.equal(input.uatEnvironment,'uat3');assert.ok(/^acceptance-[a-f0-9]{32}$/.test(input.namespace??''));assert.ok(isAbsolute(config.yarnCli??'')&&isAbsolute(config.nodeExecutable??''),'INSTALL_RUNTIME_INVALID');const capacity=await statfs(repository);assert.ok(capacity.bavail*capacity.bsize>=1.6*1024**3,'INSTALL_DISK_CAPACITY_REQUIRED');await runMergeCommand(config.nodeExecutable,[config.yarnCli,'install','--frozen-lockfile','--ignore-scripts','--non-interactive','--production=false'],{cwd:repository});return {prepared:true}}
   if(mode==='--check')return {checked:true,proof:(await readDatasetMergeCandidate(repository)).proof,backendVerified:false}
   assert.equal(input.uatEnvironment,'uat3','INPUT_UAT_INVALID');assert.ok(/^acceptance-[a-f0-9]{32}$/.test(input.namespace??''),'NAMESPACE_INVALID')
   if(input.taskId)assert.equal(input.taskId,config.taskId,'INPUT_TASK_INVALID')
@@ -129,18 +136,36 @@ export async function executeDatasetMergeUI(mode,config,input={},repository=proc
   await mkdir(directory,{recursive:true})
   if(mode==='initialize'){await writeFile(path,JSON.stringify({taskId:config.taskId,namespace:input.namespace,baseUrl,started:false,browserClosed:true,businessWrites:0}),{flag:'wx'});return {initialized:true,namespace:input.namespace}}
   const ledger=JSON.parse(await readFile(path,'utf8'));assert.equal(ledger.taskId,config.taskId);assert.equal(ledger.namespace,input.namespace);assert.equal(ledger.baseUrl,baseUrl)
-  if(mode==='cleanup'||mode==='verify-cleanup'){assert.equal(ledger.browserClosed,true);assert.equal(ledger.businessWrites,0);return {namespace:input.namespace,empty:true,createdResources:0,mode:'fixture-only'}}
+  if(mode==='cleanup'||mode==='verify-cleanup'){assert.equal(ledger.browserClosed,true);assert.equal(ledger.businessWrites,0);return {namespace:input.namespace,empty:true,createdResources:0,mode:'read-only'}}
   assert.equal(ledger.started,false,'ALREADY_EXECUTED');assert.equal(Object.keys(input.case?.parameters??{}).length,0,'CASE_PARAMETERS_INVALID')
   ledger.started=true;ledger.browserClosed=false;await writeFile(path,JSON.stringify(ledger))
   let report
-  try{report=await verifyDatasetMergeUI({repository,playwrightModule:config.playwrightModule,evidenceRoot:directory})}
+  try{report=await verifyDatasetMergeUI({repository,playwrightModule:config.playwrightModule,evidenceRoot:directory,baseUrl,namespace:input.namespace})}
   finally{ledger.browserClosed=report?.browserClosed===true;ledger.passed=report?.passed===true;await writeFile(path,JSON.stringify(ledger))}
   assert.equal(report.passed,true,'DATASET_MERGE_UI_ASSERTION_FAILED: '+report.cases.filter(x=>x.status==='FAIL').map(x=>x.id).join(','))
   return {namespace:input.namespace,baseUrl,actual:JSON.stringify({uiContract:true,coverage:report.coverage,backendVerified:false})}
 }
+export async function serveDatasetMergeUI(config,input,{host,port,repository=process.cwd()}) {
+  assert.equal(host,'127.0.0.1');assert.ok(Number.isInteger(port)&&port>0&&port<65536)
+  assert.equal(config.taskId,'task-83c651ebdbdb77584a06d1fcb6b9e255');assert.equal(config.uatEnvironment,'uat3');assert.equal(input.uatEnvironment,'uat3')
+  assert.equal(localOrigin(input.baseUrl),`http://${host}:${port}`)
+  assert.ok(/^acceptance-[a-f0-9]{32}$/.test(input.namespace??''))
+  const candidate=await readDatasetMergeCandidate(repository)
+  const server=createServer((request,response)=>{
+    if(request.method!=='GET'){response.writeHead(405);response.end();return}
+    const path=new URL(request.url,input.baseUrl).pathname
+    const body=path==='/ready'?JSON.stringify({status:'UP',taskId:config.taskId,uatEnvironment:config.uatEnvironment,namespace:input.namespace,pid:process.pid,proof:candidate.proof}):path==='/'?candidate.html:path==='/app.js'?candidate.js:candidate.assets[path]
+    if(body===undefined){response.writeHead(404);response.end();return}
+    response.writeHead(200,{'Content-Type':path==='/ready'?'application/json':path.endsWith('.js')?'application/javascript':path.endsWith('.css')?'text/css':path.endsWith('.woff')?'font/woff':'text/html','Cache-Control':'no-store'});response.end(body)
+  })
+  await new Promise((accept,reject)=>{server.once('error',reject);server.listen(port,host,accept)})
+  return server
+}
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
   const [mode,flag,configPath,...extra]=process.argv.slice(2)
-  try{assert.equal(flag,'--config');assert.ok(isAbsolute(configPath??'')&&extra.length===0);let raw='';if(mode!=='--check')for await(const chunk of process.stdin){raw+=chunk;assert.ok(raw.length<64000)}
-    console.log(JSON.stringify(await executeDatasetMergeUI(mode,JSON.parse(await readFile(configPath,'utf8')),raw?JSON.parse(raw):{})))}
+  try{assert.equal(flag,'--config');assert.ok(isAbsolute(configPath??''));let raw='';if(mode!=='--check')for await(const chunk of process.stdin){raw+=chunk;assert.ok(raw.length<64000)}
+    const config=JSON.parse(await readFile(configPath,'utf8')),input=raw?JSON.parse(raw):{}
+    if(mode==='serve'){assert.equal(extra[0],'--host');assert.equal(extra[2],'--port');assert.equal(extra.length,4);await serveDatasetMergeUI(config,input,{host:extra[1],port:Number(extra[3])})}
+    else{assert.equal(extra.length,0);console.log(JSON.stringify(await executeDatasetMergeUI(mode,config,input)))}}
   catch(error){console.error(JSON.stringify({code:'DATASET_MERGE_UI_FAILED',message:error.message}));process.exitCode=1}
 }

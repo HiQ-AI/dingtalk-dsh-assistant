@@ -298,3 +298,19 @@ PowerShell Phase依次check、offline、reconcile、install、start、readback�
 使用 `scripts/migrate-execution-dependency-index.mjs --check <控制库绝对路径>` 取得零写基线。正式维护 enter→排空→seal→旧进程退出并取得 owner 独占锁后，调用导出 `migrateExecutionDependencyIndex(db,{mode:'execute'})`，或独立 CLI `--execute <控制库绝对路径> <已退出PID>`。迁移在事务内只改索引与 schema_version，并比较所有表（除版本列）完整摘要。重复迁移零写。必须迁移成功后才启动 schema 9 包；不得先启动新包再修旧库。
 
 Host 仓库配置仅显式两向 `dataset-web.dependencyRepositories: [dataset]`、`dataset.dependencyRepositories: [dataset-web]`，无通配。配置不改变旧工程冻结 digest，不改原检查或本地验收配置；Owner 仍必须核原人类需求直接需要该阶段。原 Task 的必要阶段后续还需绑定正确的真实业务验收场景，不能复用其他任务场景充数。
+
+本地验收配置 checkpoint 允许精确重评 `prepare-local-acceptance` 的 `LOCAL_ACCEPTANCE_PLAN_INVALID`：该节点必须 code、已排空、无输出，前缀全成功，后续只能未执行 ready/blocked，本地准备及后续无任何效果；Controller同时核对新旧定义只允许 pure/read。维护与Task/Run/需求/配置CAS仍保留。事务记录原节点inputRef/inputDigest/lease/waitReason和失败工件引用，再清理纯准备失败以重评方案。成功工作区、代码候选、构建检查保持；define/plan因配置变化重评。其他错误、外部效果不适用。
+
+Owner 历史查询证据修复只改变候选验收入口，不修改既有任务账本或自动完成任务。部署后沿现有受管重评恢复原 Owner：Host 会重新读取当前任务/需求的持久证据并真实执行领域验收，无需要求模型为临时本轮读取记录重复读全部不可变工件。缺失、陈旧、跨任务证据仍拒绝；现场完成必须另查原 Task 的真实验收结果。
+
+## 仓库摘要漂移的受控配置恢复
+
+仅当前部署改动全局 checks/taskLocalAcceptance 导致已登记活动工程定义无法恢复时，使用原配置器的 `--restore-proposal`；不恢复整份旧profile，不重置业务Run或效果。它与 `--bundle/--checks-proposal/--repository-patches/--merge-policy` 互斥。
+
+```powershell
+node scripts/configure-project-local-acceptance.mjs --profile <当前profile绝对路径> --restore-proposal <绑定提案绝对路径> --expected-sha256 <当前SHA256> --check
+```
+
+check零写，返回恢复前后SHA、精确字段和knownActiveRuns摘要匹配。由正式部署入口确认维护/停机后，原参数改为 `--apply`；它沿既有配置锁、二次CAS、临时文件rename、独立回读，仅写profile及配置器自身备份，不写业务/control数据库。
+
+提案需包含profile/expectedProfileSha256、sourceProfile/sourceProfileSha256、deploymentReceipt及beforeConfigProof的{path,sha256}、精确dataset与dataset-web repositories。每项只接受id/restoreChecks/removeTaskLocalAcceptance/dependencyRepositories，checks必须与固定旧profile一致；旧profile不可已有taskmap，当前依赖必须保持相同。当前部署配置apply回执须绑定当前profile SHA及其真实before备份；beforeConfigProof须绑定旧profile与活动Run。再次只读核对当前活动定义repositoryDigest，全部匹配才允许恢复。无关仓库字段差异、未知仓库、来源篡改、活动Run漂移均拒绝。恢复后仍用Task checkpoint单独升级检查/验收，不再次全局改旧Run依赖配置。

@@ -415,11 +415,16 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const start=kind==='checks'?'verify-candidate':kind==='local-acceptance'?'define-local-acceptance':null
       const index=definition.nodes.findIndex(node=>node.id===start),node=definition.nodes[index]
       if(index<0||state.nodes.length!==definition.nodes.length||state.nodes.some((item,i)=>item.nodeId!==definition.nodes[i].id))throw executionError('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+      const localPreparation=kind==='local-acceptance'&&state.nodes.find(item=>item.nodeId==='prepare-local-acceptance'&&item.status==='waiting')
+      if(localPreparation){
+        const current=definitionOf(state.run).nodes.find(item=>item.id===localPreparation.nodeId),next=definition.nodes.find(item=>item.id===localPreparation.nodeId)
+        if(localPreparation.waitReason?.reference!=='LOCAL_ACCEPTANCE_PLAN_INVALID'||[current,next].some(item=>item?.executor!=='code'||item.allowedEffects.some(effect=>!['pure','read'].includes(effect))))throw executionError('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+      }
       const dependencies={}
       for(const id of node.inputDependencies??[]){const prior=state.nodes.find(item=>item.nodeId===id);if(prior?.status!=='succeeded'||!prior.outputRef)throw executionError('NODE_PREDECESSOR_INCOMPLETE');dependencies[id]=await artifacts.read(prior.outputRef)}
       const previous=state.nodes[index-1],input=await prepareInput(definition,node,state.run.requirementRef,previous?.outputRef?await artifacts.read(previous.outputRef):undefined,dependencies)
       const evidence=await artifacts.put({kind:'engineering-checkpoint',mode:kind,runId,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,
-        invalidated:state.nodes.slice(index).filter(item=>kind!=='local-acceptance'||item.position<=index+1||item.status==='ready').map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
+        invalidated:state.nodes.slice(index).filter(item=>kind!=='local-acceptance'||item.position<=index+1||item.status==='ready'||item.nodeId==='prepare-local-acceptance'&&item.status==='waiting').map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
       const receipt=await command(commandId,'run.workflow.checkpoint',{runId,expectedRevision,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,toWorkflowId:workflowId,
         kind,startNodeId:start,inputRef:input.ref,inputDigest:input.digest,evidenceRef:evidence.ref,maintenance,
         expectedRequirementRevision:plan.task.requirementRevision,expectedControlRevision:plan.task.controlRevision,
