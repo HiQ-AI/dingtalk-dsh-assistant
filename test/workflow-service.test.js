@@ -6608,3 +6608,45 @@ test('本机Web显式撤回绑定Host身份和快照摘要，重复执行不重�
  const after=await execution.store.query({kind:'message.notification',notificationId:notice.id})
  assert.equal(after.recallStatus,'recalled');assert.ok(after.recallEvidenceRef)
 })
+
+
+for(const scenario of ['改写授权目标','跨消息借用','跨作者借用'])test(`工程授权原文回归：${scenario}拒绝且零副作用，当前原文证据可承接`,async t=>{
+ let f,rejected=false
+ const sourceText=scenario==='改写授权目标'?'按文档开发':'整理当前材料'
+ const sessions={async close(){},async run({input,onSessionBound,onCandidate}){
+  await onSessionBound()
+  if(!input.sources.length){await onCandidate({decisions:[]});return {status:'submitted'}}
+  const source=input.sources.find(item=>item.body===sourceText)
+  assert.ok(source,JSON.stringify(input.sources.map(item=>({body:item.body,runId:item.runId}))))
+  const proposal=(quote,objective)=>({decisions:[coordinatorUnit(source,'create',{
+   objective:'按数据集过程导入导出规则文档开发相关功能。',workflowId:'task-engineering',
+   stageAuthorizations:[{workflowId:'task-engineering',sourceQuote:quote,objective,gate:'none'}]
+  })]})
+  await assert.rejects(onCandidate(proposal('按文档开发',scenario==='改写授权目标'?'按数据集过程导入导出规则文档开发相关功能。':'按文档开发')),{code:'TASK_STAGE_AUTHORIZATION_SOURCE_INVALID'})
+  rejected=true
+  assert.deepEqual(await f.service.tasks(),[])
+  const state=await f.service.messages.state(source.runId)
+  assert.deepEqual(state.commands,[]);assert.deepEqual(state.requests,[])
+  if(scenario==='改写授权目标')await onCandidate(proposal('按文档开发','按文档开发'))
+  else await onCandidate({decisions:[{runId:source.runId,reason:'无有效外部授权',units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding:{disposition:'new',candidateId:null},intent:{kind:'intent',actions:[{intent:'fact',arguments:{kind:'fact',text:source.body},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}]}]})
+  return {status:'submitted'}
+ }}
+ f=await fixture(t,'owner',undefined,{coordinatorSessions:sessions})
+ if(scenario!=='改写授权目标'){
+  const donor=await f.service.messages.receive({sourceKey:'other-development-source',sourceVersion:1,actorId:scenario==='跨作者借用'?'guest':'owner',conversationId:'g',body:'按文档开发',context:{}},{process:false})
+  await f.execution.store.command({id:'donor-split',kind:'message.split',args:{runId:donor.run.runId,units:[{unitId:'donor-unit'}]}})
+  await f.execution.store.command({id:'donor-ignore',kind:'message.accept',args:{runId:donor.run.runId,unitId:'donor-unit',commands:[],outcome:'ignored'}})
+ }
+ const received=await f.service.ingest({...f.message,text:sourceText})
+ const state=await f.service.messages.process(received.runId)
+ assert.equal(rejected,true)
+ if(scenario==='改写授权目标'){
+  assert.equal(state.commands.length,1);assert.equal(state.commands[0].status,'applied')
+  assert.equal((await f.service.tasks()).length,1)
+  const taskId=state.commands[0].args.taskId
+  const plan=await f.execution.controller.taskPlan(taskId)
+  const requirement=await f.execution.artifacts.read(plan.task.requirementRef)
+  assert.equal(requirement.stageAuthorizations[0].objective,'按文档开发')
+  assert.equal(requirement.stageAuthorizations[0].sourceQuote,'按文档开发')
+ }else{assert.deepEqual(await f.service.tasks(),[]);assert.equal(state.commands.filter(item=>item.kind==='create').length,0)}
+})

@@ -2319,7 +2319,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
               && (typeof item.objective !== 'string' || !item.objective.trim() || !['none', 'confirmation'].includes(item.gate))))
             throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID', '外部阶段授权必须包含当前原文 sourceQuote、逐字 objective 和明确 gate；不能只指定 workflowId。')
           if (authorizations.some(item => !run.body.includes(item.sourceQuote) || item.objective && !item.sourceQuote.includes(item.objective)))
-            throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID')
+            throw executionError('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID', 'stageAuthorizations.sourceQuote 必须逐字引用当前 runId 原文，stageAuthorizations.objective 必须是该 sourceQuote 的连续原文片段；完整业务目标写入 arguments.objective，不得改写授权证据或借用其他作者消息。请修正候选后重新提交。')
         }
         for (const action of intent.actions.filter(item => item.intent === 'cancel_answer')) {
           const targets = await cancellableAnswers(run)

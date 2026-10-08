@@ -659,3 +659,5 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 现场已观察到从部署调用者直接启动与计划任务启动的 DWS 认证表现不同，本修复只固定服务启动环境；Windows 底层凭据隔离原因仍未确认。测试与只读预检不表示本轮已再次部署或重启。
 
 计划任务启动失败后的离线精确包续修按原 launchMethod 校验自启状态：scheduled-task 记录必须仍为 enabled，旧启动记录必须保持原 disabled 状态；恢复许可仍须匹配原 enrollment-autostart.json 并经摘要冻结。有备份记录仅在已知 scheduled-task 启动时接受原恢复许可，原迁移修复范围不变。
+
+阶段授权候选纠正补丁不迁移账，不重复 reprocess：部署恢复后由原协调会话重新处理 pending 来源。独立核对原 sourceVersion、唯一 Task 和授权 sourceQuote/objective；校验拒绝应停留在模型同轮反馈，不能转成新的用户澄清。

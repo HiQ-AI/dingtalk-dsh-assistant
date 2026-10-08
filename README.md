@@ -742,3 +742,5 @@ Owner 候选提交和最终接纳共用状态校验，候选拒绝在同一轮�
 
 
 群协调原生模型失败保留本轮结束原因；明确的 Codex 服务过载沿现有退避机制重试原 pending 来源，其他未提交或非暂态错误仍等待条件变化，已接纳决定不被晚到错误撤销。实现版本改变后，已有 condition 等待由常规恢复扫描重新核验，无需再次重处理消息。设计与边界见 [模型过载恢复](docs/spec/message-coordinator-provider-recovery.md)。
+
+阶段授权的 sourceQuote 与 stageAuthorizations.objective 是逐字来源证据，完整业务描述使用 arguments.objective；候选违反该约束时，协调器返回具体字段反馈并在同会话修正，不要求交办人重复解释，也不由 Host 自动改写授权。

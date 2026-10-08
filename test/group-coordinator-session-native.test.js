@@ -55,7 +55,7 @@ async function host(root, options = {}) {
       if(failure){yield {type:'finish',reason:{kind:'error',failure}};return}
       if (optionsForHost.noSubmission) { yield { type: 'finish', reason: { kind: 'stop' } }; return }
       const id = `call-${requests.length}`, name = requests.length === 1 ? 'read_material' : 'group_coordinator_submit'
-      const args = JSON.stringify(name === 'read_material' ? { ref: 'file' } : { decision })
+      const args = JSON.stringify(name === 'read_material' ? { ref: 'file' } : { decision: optionsForHost.decision?.(requests.length, options) ?? decision })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -289,4 +289,28 @@ test('上一轮原生错误不污染本轮正常无提交',async t=>{
  h.setLease(2)
  const result=await h.sessions.run({...args,binding:{...args.binding,turnId:'second',leaseEpoch:2,sessionBound:true}})
  assert.equal(result.status,'no_submission');assert.equal(h.requests.length,2)
+})
+
+
+test('阶段授权原文不匹配在同会话反馈修正，不改写来源或转澄清',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-authorization-source-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const original={sourceKey:'source-user',actorId:'requester',sourceQuote:'按文档开发'}
+ const h=await host(root,{decision:(n,request)=>{
+  if(n===3)assert.match(JSON.stringify(request.messages),/授权objective必须是该sourceQuote中的逐字来源片段/u)
+  return {kind:'create',objective:'依据所分享文档实现数据集导入导出功能',stageAuthorizations:[{...original,objective:n===2?'实现数据集导入导出功能':'按文档开发'}]}
+ }});t.after(()=>h.close())
+ const schema={type:'object',properties:{kind:{type:'string'},objective:{type:'string'},stageAuthorizations:{type:'array',items:{type:'object',properties:{sourceKey:{type:'string'},actorId:{type:'string'},sourceQuote:{type:'string'},objective:{type:'string'}},required:['sourceKey','actorId','sourceQuote','objective'],additionalProperties:false}}},required:['kind','objective','stageAuthorizations'],additionalProperties:false}
+ let calls=0,accepted=0
+ const result=await h.sessions.run({binding:{conversationId:'g',sessionId:'source-session',turnId:'t',leaseEpoch:1,sessionBound:false},input:{source:original},provider:'group-fixture',model:'scripted',decisionSchema:schema,
+  readTools:[{name:'read_material',effectClass:'read',description:'读取',parameters:{type:'object',properties:{ref:{type:'string'}},required:['ref'],additionalProperties:false},output:{schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},render:(_a,v)=>[{type:'text',text:v.text}]},execute:async()=>({text:'按文档开发'})}],
+  onSessionBound:async()=>{},onCandidate:async candidate=>{
+   calls++;const authorization=candidate.stageAuthorizations[0]
+   for(const key of Object.keys(original))assert.equal(authorization[key],original[key])
+   assert.equal(candidate.kind,'create')
+   if(!authorization.sourceQuote.includes(authorization.objective))throw Object.assign(Error('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID'),{code:'TASK_STAGE_AUTHORIZATION_SOURCE_INVALID'})
+   accepted++
+  }})
+ assert.equal(result.status,'submitted');assert.equal(calls,2);assert.equal(accepted,1)
+ assert.equal(result.decision.stageAuthorizations[0].objective,'按文档开发')
+ assert.equal(h.requests.length,3)
 })
