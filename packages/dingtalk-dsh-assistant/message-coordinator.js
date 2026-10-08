@@ -25,6 +25,7 @@ const transientFailure = error => {
   const seen = new Set()
   for (let cause = error; cause && !seen.has(cause); cause = cause.cause) {
     seen.add(cause)
+    if (cause.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.') return true
     if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'CONNECTOR_TIMEOUT'].includes(cause.code)
       || [408, 429, 500, 502, 503, 504].includes(cause.status ?? cause.statusCode)) return true
   }

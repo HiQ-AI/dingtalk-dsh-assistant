@@ -55,6 +55,8 @@ async function fixture(t, action = false, hooks = {}) {
       assert.ok(input, '原生会话收到当前完整协调输入')
       inputs.push(input)
       await hooks.onModel?.(input, requests.length)
+      const failure = hooks.providerFailure?.(requests.length)
+      if (failure) { yield { type: 'finish', reason: { kind: 'error', failure } }; return }
       const decision = { decisions: input.sources.map(source => ({ runId: source.runId, reason: action ? '明确交办' : '仅提供背景无需回复', units: action ? [{ spans: [{ start: 0, end: source.body.length }], goalText: source.body,
         binding: { disposition: 'new', candidateId: null }, intent: { kind: 'intent', actions: [{ intent: 'answer', arguments: { objective: source.body }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'result' } }] : [] })) }
       hooks.transformDecision?.(decision, requests.length)
@@ -754,4 +756,44 @@ test('原生协调材料加点名保持同话题fact，不把权限谨慎规则�
  const state = await f.workflow.state('mention-only')
  assert.deepEqual(state.commands.map(command => command.kind), ['fact'])
  assert.equal(state.requests.length, 0)
+})
+
+
+for (const transient of [true,false]) test(`原生provider${transient?'明确过载原来源退避恢复':'其他错误保持条件等待'}`,async t=>{
+ let now=Date.now()
+ const f=await fixture(t,false,{clock:()=>now,providerFailure:n=>n===1?{code:'PI_AI_ERROR',message:transient?'Codex error: Our servers are currently overloaded. Please try again later.\n[Codex diagnostics: HTTP 200]':'Codex error: authentication failed'}:null})
+ await f.workflow.receive({runId:'provider',sourceKey:'provider-source',sourceVersion:1,conversationId:'group',actorId:'user',body:'背景记录'},{process:false})
+ await assert.rejects(f.workflow.process('provider'),e=>e.code==='GROUP_COORDINATOR_PROVIDER_FAILED'&&e.cause.code==='PI_AI_ERROR')
+ const group=(await f.store.query({kind:'message.coordinator',conversationId:'group'})).coordinator
+ assert.equal(group.recovery.kind,transient?'dependency':'condition')
+ await f.workflow.recover()
+ assert.equal(f.requests.length,1)
+ now+=60000
+ await f.workflow.recover()
+ assert.equal(f.requests.length,transient?2:1)
+ const data=await f.workflow.state('provider')
+ assert.equal(data.run.sourceVersion,1);assert.equal(data.commands.length,0)
+ assert.equal(Boolean(data.run.coordinatorConsumed),transient)
+})
+
+
+test('旧实现condition摘要变化后仅恢复原pending来源，不增加版本',async t=>{
+ let previousImplementation=false
+ const f=await fixture(t,false,{providerFailure:n=>n===1?{code:'PI_AI_ERROR',message:'old non-transient error'}:null,
+  coordinatorQuery:(args,value)=>{
+   if(previousImplementation&&args.kind==='message.coordinator'&&value.coordinator?.recovery){
+    const old=structuredClone(value);old.coordinator.recovery.inputDigest='previous-implementation-digest';return old
+   }
+   return value
+  }})
+ await f.workflow.receive({runId:'original-pending',sourceKey:'original-source',sourceVersion:2,conversationId:'group',actorId:'user',body:'工作方式'},{process:false})
+ await assert.rejects(f.workflow.process('original-pending'),{code:'GROUP_COORDINATOR_PROVIDER_FAILED'})
+ await f.workflow.recover();assert.equal(f.requests.length,1)
+ previousImplementation=true
+ await f.workflow.recover();assert.equal(f.requests.length,2)
+ const data=await f.workflow.state('original-pending')
+ assert.equal(data.run.sourceVersion,2);assert.equal(data.run.sourceKey,'original-source');assert.ok(data.run.coordinatorConsumed)
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'original-source'})).runId,'original-pending')
+ assert.equal((await f.store.query({kind:'message.list'})).length,1)
+ await f.workflow.recover();assert.equal(f.requests.length,2)
 })

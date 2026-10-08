@@ -47,9 +47,13 @@ async function host(root, options = {}) {
   })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
+  const optionsForHost = options
   class Scripted extends LlmAdapter {
     async *stream(options) {
       requests.push(options)
+      const failure=optionsForHost.providerFailure?.(requests.length)
+      if(failure){yield {type:'finish',reason:{kind:'error',failure}};return}
+      if (optionsForHost.noSubmission) { yield { type: 'finish', reason: { kind: 'stop' } }; return }
       const id = `call-${requests.length}`, name = requests.length === 1 ? 'read_material' : 'group_coordinator_submit'
       const args = JSON.stringify(name === 'read_material' ? { ref: 'file' } : { decision })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
@@ -255,3 +259,34 @@ test('常驻空闲挂接保留原生投影、拒绝任意模型步进，关闭�
  const agent=h.ctx.agents.get('visible-group');agent.steer(createUserMessage({source:{kind:'user'},content:[{type:'text',text:'用户误触发送'}]}));await agent.whenIdle();assert.equal(h.requests.length,calls);
  await h.sessions.close();assert.equal(h.ctx.agents.get('visible-group'),undefined);assert.equal(h.ctx.sessions.get('visible-group'),undefined);
 });
+
+
+test('原生正常结束但不提交仍保持no_submission，接纳后晚到错误不否定决定',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-finish-'))
+ t.after(()=>rm(root,{recursive:true,force:true}))
+ for(const noSubmission of [true,false]){
+  const h=await host(join(root,String(noSubmission)),{noSubmission});t.after(()=>h.close())
+  let accepted=false
+  const result=await h.sessions.run({binding:{conversationId:'g',sessionId:'finish-session',turnId:'turn',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,
+   readTools:[{name:'read_material',effectClass:'read',description:'读取',parameters:{type:'object',properties:{ref:{type:'string'}},required:['ref'],additionalProperties:false},output:{schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},render:(_a,v)=>[{type:'text',text:v.text}]},execute:async()=>({text:'材料'})}],
+   onSessionBound:async()=>{},onCandidate:async()=>{
+    accepted=true
+    const session=h.ctx.sessions.get('finish-session'),snapshot=session.snapshotEvents.bind(session)
+    session.snapshotEvents=()=>{const events=snapshot();return [...events,{seq:(events.at(-1)?.seq??0)+1,type:'turn/end',data:{reason:{kind:'error',error:{code:'PI_AI_ERROR',message:'Codex error: Our servers are currently overloaded. Please try again later.'}}}}]}
+   }})
+  assert.equal(result.status,noSubmission?'no_submission':'submitted')
+  assert.equal(accepted,!noSubmission)
+  if(accepted)assert.equal(h.ctx.sessions.get('finish-session').snapshotEvents().at(-1).data.reason.kind,'error')
+ }
+})
+
+
+test('上一轮原生错误不污染本轮正常无提交',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-error-watermark-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const h=await host(root,{noSubmission:true,providerFailure:n=>n===1?{code:'PI_AI_ERROR',message:'authentication failed'}:null});t.after(()=>h.close())
+ const args={binding:{conversationId:'g',sessionId:'watermark-session',turnId:'first',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,readTools:[],onSessionBound:async()=>{},onCandidate:async()=>{assert.fail('不得提交')}}
+ await assert.rejects(h.sessions.run(args),{code:'GROUP_COORDINATOR_PROVIDER_FAILED'})
+ h.setLease(2)
+ const result=await h.sessions.run({...args,binding:{...args.binding,turnId:'second',leaseEpoch:2,sessionBound:true}})
+ assert.equal(result.status,'no_submission');assert.equal(h.requests.length,2)
+})

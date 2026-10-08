@@ -739,3 +739,6 @@ Owner 候选提交和最终接纳共用状态校验，候选拒绝在同一轮�
 历史 coordinator 错误澄清恢复：仅当原消息没有任何业务命令，当前 pending 澄清对应已送达通知已由原生撤回流程核验为 recalled 并保存 recallEvidenceRef 时，可使用本机 `POST /workflows/<runId>/reprocess`。其他未知、未撤回通知仍阻止恢复。重处理保留原来源、作者、正文和旧请求审计，递增 sourceVersion，并用当前群规则重建 compactPolicy；不伪造用户答复。先读回撤回证据和零命令，再逐条操作，最后读回新来源版本、旧请求 superseded、新任务数量及当前等待。此入口会启动正常协调与业务派发，操作授权须覆盖原业务承接。
 
 本机显式撤回/补发通知也可使用现有 `/workflows/notifications/operations`：prepare 使用 `reason: explicit_user` 并省略 `authorizationRef`，由 Host 配置的 `webActorId` 记录 `host-web:<编码actor>` 授权来源。execute 继续提交预检的 `expectedFactDigest`，execute/reconcile 同样省略 `authorizationRef`；身份不可由正文传入。此路径仍逐条调用 DWS 并回读后记账，未知结果仅 reconcile，不重新发送。原群负责人消息授权路径保持。
+
+
+群协调原生模型失败保留本轮结束原因；明确的 Codex 服务过载沿现有退避机制重试原 pending 来源，其他未提交或非暂态错误仍等待条件变化，已接纳决定不被晚到错误撤销。实现版本改变后，已有 condition 等待由常规恢复扫描重新核验，无需再次重处理消息。设计与边界见 [模型过载恢复](docs/spec/message-coordinator-provider-recovery.md)。

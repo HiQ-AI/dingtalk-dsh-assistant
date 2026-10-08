@@ -240,13 +240,21 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       if (!await current(entry)) return { status: 'stale' }
       await onSessionBound(binding)
       if (!await current(entry)) return { status: 'stale' }
+      const startSeq = entry.handle.agent.session.snapshotEvents().at(-1)?.seq ?? -1
       entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', groupCoordinator: entry.binding }, content: [{ type: 'text', text: JSON.stringify(input) }] }))
       await entry.handle.agent.whenIdle()
       await drain(entry)
       if (entry.cancelled || closed) return { status: 'cancelled' }
       if (entry.staleReason) return { status: 'stale', reason: entry.staleReason }
       if (!await current(entry)) return { status: 'stale' }
-      return entry.accepted ? { status: 'submitted', decision: structuredClone(entry.decision) } : { status: 'no_submission' }
+      if (entry.accepted) return { status: 'submitted', decision: structuredClone(entry.decision) }
+      const end = entry.handle.agent.session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
+      if (end?.data?.reason?.kind === 'error') {
+        const failure = end.data.reason.error
+        const cause = Object.assign(new Error(failure?.message ?? 'Native coordinator turn failed'), failure)
+        throw Object.assign(fail('GROUP_COORDINATOR_PROVIDER_FAILED'), { cause })
+      }
+      return { status: 'no_submission' }
     } catch (error) {
       if (entry.cancelled || closed) return { status: 'cancelled' }
       throw error
