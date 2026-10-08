@@ -227,6 +227,38 @@ function approvalNoticeCommand(db, args, context, action) {
   return { result: { notice, applied: true }, dispatchEligible: action === 'send' }
 }
 
+// 仅正式同代候选修复可为同一节点产生下一次增量编辑；审计身份由账本导出，调用方不能指定。
+function incrementalEdit(db, binding) {
+  const denied = () => fail('EDIT_REPAIR_NOT_ADMITTED')
+  const run = db.prepare('SELECT * FROM execution_runs WHERE run_id=?').get(binding.runId)
+  const node = db.prepare('SELECT * FROM execution_nodes WHERE node_run_id=? AND current=1').get(binding.nodeRunId)
+  if (!run || !node || !run.workflow_id.startsWith('task-engineering-') || node.node_id !== 'apply-changes'
+    || node.run_id !== run.run_id || run.generation !== binding.generation || node.generation !== binding.generation
+    || node.input_digest !== binding.inputDigest || node.lease_epoch !== binding.leaseEpoch) denied()
+  const event = db.prepare("SELECT seq,command_id,payload FROM execution_events WHERE kind='workflow.repair.accepted' AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(run.run_id, run.generation)
+  const repair = event && JSON.parse(event.payload), invalidated = repair?.invalidated?.find(item => item.nodeRunId === node.node_run_id)
+  if (repair?.mode !== 'candidate-in-place' || repair.taskId !== run.task_id || repair.workflowDigest !== run.workflow_digest
+    || repair.generation !== run.generation || !invalidated?.inputRef || !invalidated.outputRef || invalidated.leaseEpoch >= node.lease_epoch) denied()
+  const claim = db.prepare("SELECT payload FROM execution_events WHERE kind='node.claim' AND seq<? AND json_extract(payload,'$.binding.nodeRunId')=? AND json_extract(payload,'$.binding.leaseEpoch')=? ORDER BY seq DESC LIMIT 1").get(event.seq,node.node_run_id,invalidated.leaseEpoch)
+  const oldBinding = claim && JSON.parse(claim.payload).binding
+  if (oldBinding?.inputRef !== invalidated.inputRef || oldBinding.inputDigest === binding.inputDigest) denied()
+  const previous = db.prepare("SELECT * FROM execution_effects WHERE node_run_id=? AND input_digest=? AND state='succeeded'").all(node.node_run_id,oldBinding.inputDigest)
+    .filter(row => JSON.parse(row.definition_json).action === 'edit')
+  if (previous.length !== 1) denied()
+  const prior = previous[0], definition = JSON.parse(prior.definition_json)
+  const observed = db.prepare("SELECT seq FROM execution_events WHERE kind='effect.observed' AND json_extract(payload,'$.effectId')=? AND json_extract(payload,'$.state')='succeeded' AND seq<? LIMIT 1").get(prior.effect_id,event.seq)
+  if (!observed || definition.adapterId !== 'managed-edit' || definition.adapterVersion !== '1' || prior.generation !== run.generation) denied()
+  const audit = { repairEventSeq:event.seq,repairCommandId:event.command_id,previousEffectId:prior.effect_id,inputDigest:binding.inputDigest }
+  const effectId = `edit-${digest({nodeRunId:node.node_run_id,action:'edit',repair:audit})}`
+  for (const effect of db.prepare('SELECT * FROM execution_effects WHERE run_id=?').all(run.run_id)) {
+    if (effect.effect_id === effectId) continue
+    const d = JSON.parse(effect.definition_json)
+    if (effect.state !== 'succeeded' || !['workspace','edit'].includes(d.action)
+      || d.action === 'edit' && effect.generation === run.generation && effect.node_run_id !== node.node_run_id) denied()
+  }
+  return {effectId,audit,previous:effectDto(prior)}
+}
+
 function prepare(db, args, context) {
   const effectId = text(args.effectId, 'effectId')
   if (!['operation', 'job'].includes(args.kind)) fail('effect_invalid_argument', 'kind')
@@ -243,6 +275,20 @@ function prepare(db, args, context) {
     effectId, kind: args.kind, runId: text(args.runId, 'runId'), nodeId: text(args.nodeId, 'nodeId'),
     generation: integer(args.generation, 'generation'), inputDigest: text(args.inputDigest, 'inputDigest'),
     definition, resourceKeys: strings(args.resourceKeys, 'resourceKeys'), approval, authorizationRef,
+  }
+  const priorEdit = definition.action === 'edit' && db.prepare("SELECT 1 FROM execution_effects WHERE run_id=? AND node_id=? AND generation=? AND input_digest<>? LIMIT 1").get(identity.runId,identity.nodeId,identity.generation,identity.inputDigest)
+  if (priorEdit && !definition.editRepair) fail('EDIT_REPAIR_NOT_ADMITTED')
+  if (definition.editRepair) {
+    const node = db.prepare('SELECT node_run_id FROM execution_nodes WHERE run_id=? AND node_id=? AND generation=? AND current=1').get(identity.runId,identity.nodeId,identity.generation)
+    const proof = incrementalEdit(db,{...identity,nodeRunId:node?.node_run_id,leaseEpoch:args.leaseEpoch})
+    if (definition.action !== 'edit' || effectId !== proof.effectId || digest(definition.editRepair) !== digest(proof.audit)) fail('EDIT_REPAIR_NOT_ADMITTED')
+    const previous = proof.previous.definition.payload, next = definition.payload
+    const target = value => value === null ? null : createHash('sha256').update(value).digest('hex')
+    if (next?.directory !== previous.directory || next.requirementDigest !== previous.requirementDigest
+      || !Array.isArray(next.changes) || !next.changes.length || next.changes.some(change => {
+        const old = previous.changes.find(item => item.path.toLowerCase() === change.path.toLowerCase())
+        return target(change.content) === change.expectedHash || old && (change.expectedHash !== target(old.content) || target(change.content) === target(old.content))
+      })) fail('EDIT_REPAIR_REPLAY_FORBIDDEN')
   }
   const identityDigest = digest(identity)
   const existing = db.prepare('SELECT * FROM execution_effects WHERE effect_id=?').get(effectId)
@@ -438,6 +484,7 @@ export function reduceEffectCommand(db, command, context) {
 
 export function queryEffects(db, query) {
   const args = query.args ?? query
+  if (query.kind === 'effect.edit-repair') return incrementalEdit(db,args.binding)
   if (query.kind === 'effect.get') return effectDto(effectRow(db, args.effectId))
   if (query.kind === 'effect.list') return db.prepare('SELECT * FROM execution_effects WHERE run_id=? ORDER BY created_at,effect_id').all(text(args.runId, 'runId')).map(effectDto)
   if (query.kind === 'approval.get') return approvalDto(approvalRow(db, args.requestId))

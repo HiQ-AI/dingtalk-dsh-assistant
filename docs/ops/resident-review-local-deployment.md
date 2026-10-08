@@ -766,3 +766,9 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 已安装包因本次仓库配置漂移而退出的精确续接：arguments 指定原 `RepairStoppedLaunch`、同一原 Package 和 `RestoreConfigurationProposal`，不带工程更新/query/Observer提案。入口检查原计划任务同秒启动且退出码1、无Host和监听、原维护封存/排空/控制快照及包安装证明；在owner独占锁内调用原生配置恢复器，不执行plugin add。新的 recovery evidence/launch 绑定旧launch SHA、恢复提案/来源证明/前后profile SHA，Readback重验链后才Resume；旧失败收据保留。提案不匹配、迁移未完成或原任务控制数据漂移均停止，不通过改库或伪造成功续接。
 
 普通仅换代码包的参数文件最小为 `{"Package":"D:/dsh_home/packages/current-assistant.tgz"}`。不提供配置提案时，统一入口不运行配置编辑器，维护/安装/原profile摘要/readback/恢复派发保持；部分工程提案明确拒绝。不得拿查询提案充当无操作配置以绕过参数要求。
+
+### 同代候选增量编辑的历史冲突恢复
+
+安装含增量编辑身份修复的包后，旧 `apply-changes` 若仍等待 `DELIVERY_IDENTITY_CONFLICT`，先只读核原 Task/Run/generation/node/input/lease 与 `effect.edit-repair` 返回的正式修复事件及原成功 edit。错误码本身不构成许可；未知、外部或未决效果、缺少修复审计均不得恢复。既有受信 `controller.recover({commandId,runId})` 使用原生 `run.recover` 续行原节点；常规来源/控制/维护门禁保留，不修改控制库、不新建 Run、不改代次，也不将此错误加入无限自动重试名单。
+
+回读新效果的 `definition.editRepair`（repairEventSeq、repairCommandId、previousEffectId、inputDigest）、原效果仍 succeeded、新增效果只执行一次，并确认后续验证节点实际前进。此检查只证明该时点的恢复和效果身份，不等同后续业务验收或最终交付成功。

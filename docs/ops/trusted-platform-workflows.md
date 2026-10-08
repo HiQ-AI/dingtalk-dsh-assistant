@@ -299,7 +299,7 @@ PowerShell Phase依次check、offline、reconcile、install、start、readback�
 
 Host 仓库配置仅显式两向 `dataset-web.dependencyRepositories: [dataset]`、`dataset.dependencyRepositories: [dataset-web]`，无通配。配置不改变旧工程冻结 digest，不改原检查或本地验收配置；Owner 仍必须核原人类需求直接需要该阶段。原 Task 的必要阶段后续还需绑定正确的真实业务验收场景，不能复用其他任务场景充数。
 
-本地验收配置 checkpoint 允许精确重评 `prepare-local-acceptance` 的 `LOCAL_ACCEPTANCE_PLAN_INVALID`：该节点必须 code、已排空、无输出，前缀全成功，后续只能未执行 ready/blocked，本地准备及后续无任何效果；Controller同时核对新旧定义只允许 pure/read。维护与Task/Run/需求/配置CAS仍保留。事务记录原节点inputRef/inputDigest/lease/waitReason和失败工件引用，再清理纯准备失败以重评方案。成功工作区、代码候选、构建检查保持；define/plan因配置变化重评。其他错误、外部效果不适用。
+本地验收配置 checkpoint 允许精确重评 `prepare-local-acceptance` 的 `LOCAL_ACCEPTANCE_PLAN_INVALID`：该节点必须 code、已排空、无输出，前缀全成功，后续只能未执行 ready/blocked，本地准备及后续无任何效果；Controller核对新旧定义仅为pure/read，或精确v18原节点version1的唯一workspace.prepare声明；该声明不替代零实际效果检查，混入其他效果仍拒绝。维护与Task/Run/需求/配置CAS仍保留。事务记录原节点inputRef/inputDigest/lease/waitReason和失败工件引用，再清理纯准备失败以重评方案。成功工作区、代码候选、构建检查保持；define/plan因配置变化重评。其他错误、外部效果不适用。
 
 Owner 历史查询证据修复只改变候选验收入口，不修改既有任务账本或自动完成任务。部署后沿现有受管重评恢复原 Owner：Host 会重新读取当前任务/需求的持久证据并真实执行领域验收，无需要求模型为临时本轮读取记录重复读全部不可变工件。缺失、陈旧、跨任务证据仍拒绝；现场完成必须另查原 Task 的真实验收结果。
 

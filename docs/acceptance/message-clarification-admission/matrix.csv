@@ -176,3 +176,7 @@ sg20-real-v18-local-prepare-checkpoint,60,PASS,round-60.md
 sg20-local-prepare-declared-effects-denied,60,PASS,round-60.md
 sg20-local-prepare-actual-effects-denied,60,PASS,round-60.md
 sg20-local-checkpoint-cas-regression,60,PASS,round-60.md
+sg18-incremental-effect-identity,61,PASS,round-61.md
+sg18-incremental-repair-rejections,61,PASS,round-61.md
+sg18-second-incremental-repair,61,PASS,round-61.md
+sg18-original-snapshot-incremental,61,PASS,round-61.md
