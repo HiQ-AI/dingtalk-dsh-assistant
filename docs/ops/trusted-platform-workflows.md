@@ -272,3 +272,7 @@ PowerShell Phase依次check、offline、reconcile、install、start、readback�
 钉钉消息回读会将文本软换行显示为空格，审批确认只归一段落回读产生的 Markdown 硬换行和 CRLF/LF 软换行显示差异；其他空格、SQL及标点必须保持。已有 openTaskId 只查发送状态并读取原消息，显示差异不得触发重新发送。
 
 审批私聊使用 Markdown 标题、空行和明确字段，私聊正文不包含执行SQL，完整SQL保留在工单及审批详情；避免堆放重复目标、resourceKey和长摘要。短审批编号用于消息定位，未知发送仍须完整正文及权威收件人匹配，不能仅凭编号认领。已送达消息可原位编辑展示，审批仍绑定原请求、冻结执行内容和同一引用消息ID，不新建审批或补发。
+
+后端单测检查采用 Surefire 标准命名 `Test*/*Test/*Tests/*TestCase`，显式排除 `*IT/*ITCase/*E2ETest`；不再绑定其他需求的两个 Merge 类。每次随机 `host-unit-UUID` 仅读取本轮全部 `TEST-*-<suffix>.xml`，至少一份报告，每份 tests>0、failures/errors/skipped=0、testcase计数与suite身份一致；旧报告、空报告、伪造suite、跳过不能当成通过。此规则仅是普通单测范围，业务E2E和需要服务的集成测试须走独立验收。变更候选时继续审阅普通命名测试的外部依赖，不能把命名过滤当作网络隔离。
+
+`prepare-backend-unit-checks.mjs <绝对request.json> <绝对output.json>` 的request为 `{checks,toolsDirectory,nodeExecutable,javaExecutable,mavenHome}`，它只支持为原单一package检查首次添加单测。已有双步骤的活动任务应克隆完整checks，只提高dataset-package版本并替换第一步受信工具快照路径，保留其余argv及package步骤，经原生checks checkpoint接纳；不修改全局profile来绕过活动定义摘要。工具快照同时冻结JS和Java源的SHA。

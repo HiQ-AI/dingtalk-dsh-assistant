@@ -10,3 +10,13 @@
 本轮不取消业务Task，不修改候选源码，不伪造检查通过。后端检查工具的单独修复与验证见round49；检查恢复点及恢复派发结果在本轮后续记录。
 
 私有证据：stage-deployment、stage-deployment-independent-proof.json、stage-checks-before-proof.json。尚未把部署健康视为业务交付完成。
+
+## 正式检查恢复点
+
+首轮维护桥因未连接原生delivery组件而返回DELIVERY_ADAPTER_REQUIRED，closed=true、results为空，没有接纳任何checkpoint。移除桥并恢复原profile后，补齐真实installed delivery；隔离全路径验证使用真实工程定义、失败verify、维护及checkpoint，证明无派发/效果、同代及成功前缀保留。第二轮以新模块URL加载，避免同Host原生ESM缓存旧版本；保留首轮失败报告。
+
+第二轮两项均有正式receipt，report status=complete、closed=true。19:48独立只读SQLite核对：f559仍generation5、1edb仍generation1，两者各七个成功节点的nodeRunId/outputRef/lease全部一致，verify-candidate原nodeRunId保持且仅恢复ready；候选及apply工件均保留。新的检查定义分别采用前端自动测试发现、后端v3真实单测发现及动态JUnit证据。
+
+桥及witness精确移除，profile独立SHA恢复b6c386735c67d91a2fc3d7a8014973dc2def130cfea4a943c3bc8935f3a6a261。独立证据checks-checkpoint-retry-manifest-report.json、checkpoint-independent-readback.json；旧失败证据checks-checkpoint-manifest-report.json不覆盖。检查节点恢复不等于检查已经通过。
+
+19:50正式Resume及独立HTTP确认maintenance495 inactive、PID146784健康、收信启用。两条原verify节点已领取lease2，Run分别仍gen5/gen1，七个成功前缀再次核验一致。83旧路径错误已正式重分类为ENGINEERING_READ_PATH_INVALID，Stage历史引用对账通过；实际Owner续行另外核验。
