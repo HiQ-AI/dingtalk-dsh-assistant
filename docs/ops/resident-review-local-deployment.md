@@ -661,3 +661,9 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 计划任务启动失败后的离线精确包续修按原 launchMethod 校验自启状态：scheduled-task 记录必须仍为 enabled，旧启动记录必须保持原 disabled 状态；恢复许可仍须匹配原 enrollment-autostart.json 并经摘要冻结。有备份记录仅在已知 scheduled-task 启动时接受原恢复许可，原迁移修复范围不变。
 
 阶段授权候选纠正补丁不迁移账，不重复 reprocess：部署恢复后由原协调会话重新处理 pending 来源。独立核对原 sourceVersion、唯一 Task 和授权 sourceQuote/objective；校验拒绝应停留在模型同轮反馈，不能转成新的用户澄清。
+
+旧澄清阻塞已接纳创建命令时，不再次 reprocess 或直接写库。先核验真实后续答复及原创建命令，部署时 -HoldMaintenance 保持排空，调用 `/workflows/clarifications/recover` 的 dryRun:true（零写），审阅来源、作者、话题、Task/效果不存在证据，再使用原 expectedDigest 和唯一 recoveryKey 执行。原答复正文、身份和版本由 Host 从已存在来源读取；Web身份仅作为维护操作者审计。执行后独立核验旧request resolved、原create pending、来源版本及taskId保持，使用原部署参数 -Resume，最后读回唯一Task、Owner与#124不再等待补充。未知副作用、其他作者、版本漂移或真实授权请求均拒绝。
+
+### 控制存储不可用时原生重载
+
+维护接口返回 STORE_UNAVAILABLE 时，不能把它当404使用部署 -Bootstrap，也不能直接强停Host。先只读控制库 quick_check 和 maintenanceStatus，确认 busy=0，并核对现有PID/双端口；保留unknown命令原状。使用现有 bootstrap-workflow-maintenance.mjs 的 witness/disable/enable profile CAS 原语，每步先 --check：取得同PID/nonce的ready，禁用Resident后必须取得真实disposed见证、18998关闭且3080仍原PID，持有owner SQLite独占锁并以snapshot再证实排空。释放锁后只删除工具追加的精确末尾块，核对profile恢复原摘要。原生Loader在同Host重开Resident/Store；独立核对maintenance API、健康和收信后重新走普通部署Check。此路径不调用seal-offline、不改控制账、不迁移数据；无法取得见证/锁/零busy时停止，不能用端口关闭冒充排空。

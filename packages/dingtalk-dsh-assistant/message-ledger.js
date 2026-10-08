@@ -373,6 +373,47 @@ export function recoverMessages(db) {
     }
   }
 }
+function inspectClarificationRecovery(db,a) {
+ for(const key of ['targetRunId','requestId','answerRunId','commandId','actorId','reason','maintenanceId'])str(a[key])
+ const maintenance=maintenanceStatus(db)
+ if(!maintenance.active||!maintenance.drained||maintenance.maintenanceId!==a.maintenanceId||maintenance.revision!==a.maintenanceRevision)fail('MESSAGE_CLARIFICATION_RECOVERY_MAINTENANCE_REQUIRED')
+ const targetRun=run(db,a.targetRunId),answerRun=run(db,a.answerRunId),request=get(db,'request',a.requestId),command=get(db,'command',a.commandId)
+ current(db,targetRun);current(db,answerRun)
+ const targetUnits=rows(db,targetRun.runId,'unit'),answerUnits=rows(db,answerRun.runId,'unit')
+ const targetUnit=targetUnits[0],answerUnit=answerUnits.find(unit=>unit.id===command.unitId)
+ const targetTime=Date.parse(targetRun.context?.occurredAt),answerTime=Date.parse(answerRun.context?.occurredAt)
+ if(targetRun.runId===answerRun.runId||targetRun.conversationId!==answerRun.conversationId||targetRun.sourceKey===answerRun.sourceKey
+  ||!Number.isFinite(targetTime)||!Number.isFinite(answerTime)||answerTime<=targetTime
+  ||request.runId!==targetRun.runId||request.kind!=='needs_clarification'||request.nodeId!=='coordinator'||request.status!=='pending'
+  ||request.revision!==targetRun.revision||!request.permittedActors?.includes(answerRun.actorId)
+  ||targetUnits.length!==1||targetUnit.id!==request.unitId||targetUnit.status!=='pending'||!answerUnit
+  ||!targetRun.coordinatorConsumed||!answerRun.coordinatorConsumed
+  ||rows(db,targetRun.runId,'command').length||rows(db,answerRun.runId,'command').length!==1
+  ||rows(db,targetRun.runId,'request').some(q=>q.status==='pending'&&q.id!==request.id)
+  ||rows(db,answerRun.runId,'request').some(q=>q.status==='pending')
+  ||command.runId!==answerRun.runId||command.kind!=='create'||command.status!=='unknown'||command.error!=='MESSAGE_INPUT_PENDING'
+  ||command.result!=null||command.revision!==answerRun.revision||answerUnit.status!=='accepted')fail('MESSAGE_CLARIFICATION_RECOVERY_SCOPE')
+ const bindings=db.prepare('SELECT * FROM message_topic_bindings WHERE unit_id IN (?,?) ORDER BY unit_id').all(targetUnit.id,answerUnit.id)
+ if(bindings.length!==2||bindings[0].topic_id!==bindings[1].topic_id||bindings.some(b=>b.source_version!==(b.run_id===targetRun.runId?targetRun.sourceVersion:answerRun.sourceVersion)))fail('MESSAGE_CLARIFICATION_RECOVERY_SCOPE')
+ const topic=queryMessageTopics(db,{kind:'message.topic',topicId:bindings[0].topic_id})
+ if(!topic||topic.conversationId!==targetRun.conversationId||topic.mergedIntoTopicId||command.topicId!==topic.topicId||command.topicInputRevision!==topic.inputRevision)fail('MESSAGE_CLARIFICATION_RECOVERY_STALE')
+ for(const source of [targetRun,answerRun]){
+  if(rows(db,source.runId,'barrier').some(b=>b.status==='pending')||rows(db,source.runId,'agent-execution').length
+   ||rows(db,source.runId,'notification').some(n=>!['prepared','delivered','superseded'].includes(n.status)))fail('MESSAGE_CLARIFICATION_RECOVERY_EFFECT_PRESENT')
+ }
+ if(db.prepare('SELECT 1 FROM execution_effects WHERE run_id IN (?,?) LIMIT 1').get(targetRun.runId,answerRun.runId)
+  ||db.prepare(`SELECT 1 FROM message_topic_bindings b JOIN message_items i ON i.run_id=b.run_id AND i.kind='command'
+    JOIN business_tasks t ON t.task_id=json_extract(i.body,'$.args.taskId') WHERE b.topic_id=? LIMIT 1`).get(topic.topicId))fail('MESSAGE_CLARIFICATION_RECOVERY_EFFECT_PRESENT')
+ const taskId=str(command.args?.taskId)
+ if(db.prepare('SELECT 1 FROM business_tasks WHERE task_id=? UNION ALL SELECT 1 FROM execution_runs WHERE task_id=? UNION ALL SELECT 1 FROM task_owners WHERE task_id=?').get(taskId,taskId,taskId)
+  ||db.prepare("SELECT 1 FROM execution_events WHERE kind IN ('task.accept','task.plan.accept','task.plan.create','task.web-rerun.accept','task.owner.init','run.create') AND (json_extract(payload,'$.taskId')=? OR json_extract(payload,'$.task.taskId')=?) LIMIT 1").get(taskId,taskId)
+  ||db.prepare("SELECT 1 FROM execution_receipts WHERE json_extract(result,'$.taskId')=? OR json_extract(result,'$.task.taskId')=? LIMIT 1").get(taskId,taskId)
+  ||notificationTaskDeleted(db,taskId))fail('MESSAGE_CLARIFICATION_RECOVERY_EFFECT_PRESENT')
+ const snapshot={targetRun,answerRun,request,targetUnit,answerUnit,command,topic,bindings,maintenanceRevision:maintenance.revision,
+  targetItems:db.prepare('SELECT kind,body FROM message_items WHERE run_id=? ORDER BY item_id').all(targetRun.runId),
+  answerItems:db.prepare('SELECT kind,body FROM message_items WHERE run_id=? ORDER BY item_id').all(answerRun.runId)}
+ return {expectedDigest:digest({snapshot,actorId:a.actorId,reason:a.reason,maintenanceId:a.maintenanceId}),snapshot,targetRunId:targetRun.runId,answerRunId:answerRun.runId,taskId,requestId:request.id,commandId:command.id}
+}
 function topicReconciliationView(checked) {
   const pick=topic=>Object.fromEntries(['topicId','title','summary','revision','inputRevision','contextRevision','mergedIntoTopicId'].filter(key=>topic[key]!==undefined).map(key=>[key,topic[key]]))
   return {expectedDigest:checked.expectedDigest,sourceTopicId:checked.sourceTopicId,targetTopicId:checked.targetTopicId,
@@ -643,6 +684,20 @@ function ownerReleasedWait(db,taskId) {
   return fact
 }
 export function reduceMessageCommand(db,{kind,args:a},ctx) {
+  if(kind==='message.clarification.recover'){
+    const checked=inspectClarificationRecovery(db,a)
+    if(a.expectedDigest!==checked.expectedDigest)fail('MESSAGE_CLARIFICATION_RECOVERY_STALE')
+    str(a.evidenceRef)
+    const {targetRun,answerRun,request,targetUnit,command}=checked.snapshot,now=ctx.now
+    const recovery={operatorActorId:a.actorId,reason:a.reason,evidenceRef:a.evidenceRef,expectedDigest:a.expectedDigest,answerRunId:answerRun.runId,answerSourceKey:answerRun.sourceKey,answerSourceVersion:answerRun.sourceVersion,recoveredAt:now}
+    request.status='resolved';request.answer=answerRun.body;request.eventId=answerRun.sourceKey;request.resolvedByActorId=answerRun.actorId;request.resolvedAt=now;request.clarificationRecovery=recovery
+    put(db,targetRun.runId,'request',request)
+    targetUnit.status='applied';targetUnit.clarificationRecovery=recovery;put(db,targetRun.runId,'unit',targetUnit)
+    settle(db,targetRun)
+    command.clarificationRecovery=[...(command.clarificationRecovery??[]),{...recovery,priorStatus:command.status,priorError:command.error,priorLeaseEpoch:command.leaseEpoch}]
+    command.status='pending';command.error=null;put(db,answerRun.runId,'command',command);settle(db,answerRun)
+    return {result:{targetRunId:targetRun.runId,answerRunId:answerRun.runId,taskId:checked.taskId,requestId:request.id,command}}
+  }
   if(kind==='message.topic.reconcile'){
     const checked=inspectTopicReconciliation(db,a)
     if(a.expectedDigest!==checked.expectedDigest)fail('MESSAGE_TOPIC_RECONCILE_STALE')
@@ -1188,6 +1243,9 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       current(db,r,c.revision)
       if(c.status!=='pending') fail('MESSAGE_COMMAND_NOT_READY')
       if(c.topicId){
+        if(['create','research'].includes(c.kind)&&db.prepare(`SELECT 1 FROM message_topic_bindings b JOIN message_items i ON i.item_id='unit:'||b.unit_id
+          JOIN message_runs source ON source.run_id=b.run_id WHERE b.topic_id=? AND json_extract(i.body,'$.status')='pending'
+          AND json_extract(source.body,'$.status')!='superseded' LIMIT 1`).get(c.topicId))fail('MESSAGE_INPUT_PENDING')
         if(queryMessages(db,{kind:'message.routing.pending',conversationId:r.conversationId,topicId:c.topicId}).length
           && !authorizedPriorityControl(db,c.priorityControl,get(db,'unit',c.unitId),r))fail('MESSAGE_INPUT_PENDING')
         const topic=queryMessageTopics(db,{kind:'message.topic',topicId:c.topicId})
@@ -1611,6 +1669,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   fail('MESSAGE_UNKNOWN_COMMAND')
 }
 export function queryMessages(db,a) {
+  if(a.kind==='message.clarification.recover.check')return inspectClarificationRecovery(db,a)
   if(a.kind==='message.topic.reconcile.check')return topicReconciliationView(inspectTopicReconciliation(db,a))
   if(a.kind==='message.batch.cleanup.check')return inspectMessageBatchCleanup(db,a)
   if(a.kind==='message.coordinator')return coordinatorState(db,a.conversationId)

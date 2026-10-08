@@ -375,3 +375,5 @@ Owner已接受但尚未落地的决定，仅当它准确替换当前后缀为一
 数据变更候选修复：Host策略独立于冻结v7 ownerContract，只匹配validate-package的DATA_CHANGE_PROPOSAL_INVALID且effect.list为空、后续工单/审批/执行节点未开展。currentExecution提供queryContextRequired与repairBinding；Owner先读失败证据并准备当前Task查询，候选前使用与正式阶段相同的零写准备函数及纯修复检查。准入后沿原repairCurrentStage/changeInput生成新generation，票据应用前重复核验原文、目标、版本及零效果；不改旧定义、数据库schema或效果账。只换ref/重复查询同事实及重复策略均不能机械重试。
 
 候选恢复的 evidenceRefs 必须包含已读的全部失败/候选诊断，可附带当前 Task/需求版本原生查询和精确当前阶段恢复包装。Host 在候选、领域准备及准入分别核验；不把额外查询视为失败诊断，也不允许旧版本、其他Task或阶段资料绕过绑定。普通只读节点恢复仍沿原有诊断白名单。
+
+`POST /workflows/clarifications/recover` 仅本机受信 Origin 和配置的 Web 操作者可用。请求为 `{targetRunId,requestId,answerRunId,commandId,recoveryKey,reason,dryRun,maintenanceId,maintenanceRevision,expectedDigest?}`。`dryRun:true` 返回 200 和 expectedDigest/原文快照且零写；执行以相同字段及 expectedDigest 返回 202。必须在维护排空状态：目标仅有 coordinator 的 needs_clarification、无命令，答复为当前同群同话题 permittedActor 的更晚原消息；其唯一 create 必须 unknown/MESSAGE_INPUT_PENDING 且真实 Task/Run/效果未落地。原子关联真实答复并恢复原 create，不接受 actorId/answer/evidenceRef 注入。相同 recoveryKey/输入幂等，输入变化拒绝；不撤回通知或发测试消息。

@@ -6650,3 +6650,56 @@ for(const scenario of ['改写授权目标','跨消息借用','跨作者借用']
   assert.equal(requirement.stageAuthorizations[0].sourceQuote,'按文档开发')
  }else{assert.deepEqual(await f.service.tasks(),[]);assert.equal(state.commands.filter(item=>item.kind==='create').length,0)}
 })
+
+test('历史澄清恢复服务零写预检、幂等恢复后原来源创建唯一Task', async t => {
+  const f = await fixture(t, 'owner', undefined, { config: { webActorId: 'operator' } })
+  const store = f.execution.store, identity = { channel: 'web', actorId: 'operator' }
+  let sequence = 0
+  const call = (kind, args) => store.command({ id: `clarification-fixture-${++sequence}`, kind: `message.${kind}`, args })
+  for (const [runId, body, occurredAt] of [['question', '整理规则材料还是开发？', '2026-10-08T01:23:00Z'], ['answer', '整理规则材料', '2026-10-08T01:23:43Z']]) {
+    await call('receive', { runId, sourceKey: runId, sourceVersion: 1, actorId: 'owner', conversationId: 'g', body, context: { occurredAt }, policy: { initialWindowMs: 45000 } })
+  }
+  const sources = ['question', 'answer'].map(runId => ({ runId, sourceVersion: 1 }))
+  const binding = (await call('coordinator.claim', { conversationId: 'g', expectedLeaseEpoch: 0, turnId: 'historical-clarification', sourceRuns: sources })).result.binding
+  await call('coordinator.commit', { ...binding, decisions: sources.map((source, index) => ({ ...source, units: [{ unitId: `${source.runId}-unit`, spans: [{ start: 0, end: index ? 6 : 12 }], goalText: '整理规则材料', constraints: [], contextNeeds: [], topic: { topicId: 'recovery-topic', title: '规则材料' },
+    commands: index ? [{ commandId: 'recover-create', kind: 'create', args: { taskId: 'recovered-task', arguments: { objective: '整理规则材料' }, binding: { disposition: 'new' }, replyPolicy: 'none' } }] : [],
+    ...(!index ? { request: { requestId: 'old-question', kind: 'needs_clarification', question: '整理还是开发？', permittedActors: ['owner'] } } : {}),
+  }] })) })
+  await call('coordinator.release', { ...binding, drained: true })
+  // 仅此测试的临时隔离库还原旧版本已领取后失败的历史状态；新门禁已禁止原生制造该状态。
+  const db = new DatabaseSync(store.info.dbPath)
+  try {
+    const row = db.prepare("SELECT body FROM message_items WHERE item_id='command:recover-create'").get()
+    const command = { ...JSON.parse(row.body), status: 'unknown', error: 'MESSAGE_INPUT_PENDING', result: null, leaseEpoch: 1 }
+    db.prepare("UPDATE message_items SET body=? WHERE item_id='command:recover-create'").run(JSON.stringify(command))
+    const input = { targetRunId: 'question', requestId: 'old-question', answerRunId: 'answer', commandId: 'recover-create', recoveryKey: 'recovery-once', reason: '采用真实后续回答恢复旧澄清', dryRun: true, maintenanceId: 'recovery', maintenanceRevision: 1 }
+    await f.service.changeMaintenance({ requestId: 'recover-enter', expectedRevision: 0, maintenanceId: 'recovery', reason: input.reason, active: true }, identity)
+    assert.equal((await store.query({ kind: 'runtime.maintenance' })).drained, true)
+    const count = () => db.prepare('SELECT count(*) n FROM execution_events').get().n
+    for (const invalidIdentity of [{ channel: 'im', actorId: 'operator' }, { channel: 'web', actorId: 'other' }]) {
+      await assert.rejects(f.service.recoverClarification(input, invalidIdentity), { code: 'WORKFLOW_WEB_ACTOR_FORBIDDEN' })
+    }
+    const before = count(), checked = await f.service.recoverClarification(input, identity)
+    assert.equal(count(), before)
+    assert.deepEqual(await f.service.tasks(), [])
+    const apply = { ...input, dryRun: false, expectedDigest: checked.expectedDigest }
+    const recovered = await f.service.recoverClarification(apply, identity)
+    assert.equal(recovered.command.status, 'pending')
+    const appliedCount = count()
+    assert.deepEqual(await f.service.recoverClarification(apply, identity), recovered)
+    assert.equal(count(), appliedCount)
+    await assert.rejects(f.service.recoverClarification({ ...apply, reason: '不同输入' }, identity), { code: 'MESSAGE_CLARIFICATION_RECOVERY_CONFLICT' })
+    assert.deepEqual(await f.service.tasks(), [])
+    await f.service.changeMaintenance({ requestId: 'recover-leave', expectedRevision: 1, maintenanceId: 'recovery', reason: '恢复完成', active: false }, identity)
+    await f.service.messages.process('answer')
+    await f.service.messages.process('answer')
+    assert.equal((await f.service.tasks()).length, 1, JSON.stringify(await f.service.messages.state('answer')))
+    const answer = await f.service.messages.state('answer'), question = await f.service.messages.state('question')
+    assert.equal(answer.commands[0].status, 'applied')
+    assert.equal(question.requests[0].status, 'resolved')
+    assert.equal(question.requests[0].resolvedByActorId, 'owner')
+    assert.equal(question.requests[0].answer, '整理规则材料')
+    assert.equal(question.run.sourceVersion, 1)
+    assert.equal(answer.run.sourceVersion, 1)
+  } finally { db.close() }
+})

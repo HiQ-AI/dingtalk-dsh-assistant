@@ -229,6 +229,7 @@ export async function apply(ctx, config = {}) {
     runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.deleteWorkflowTask = args => workflow.deleteCancelledTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.recoverWorkflowClarification = args => workflow.recoverClarification(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowMaterialRequest = args => workflow.retryMaterialRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.resumeWorkflowRequest = args => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')

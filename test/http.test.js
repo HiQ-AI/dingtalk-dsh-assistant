@@ -602,3 +602,42 @@ test('通知操作拒绝非本机连接且不进入受管方法',async()=>{
   assert.equal(status,403);assert.equal(payload.error,'workflow_local_identity_required');assert.equal(calls,0)
  }
 })
+
+test('受管澄清来源恢复严格转交持久来源身份，区分预检与执行', async () => {
+  const calls = []
+  const input = { targetRunId: 'target', requestId: 'question', answerRunId: 'answer-source', commandId: 'command',
+    recoveryKey: 'recovery', reason: '恢复已存在的用户回答来源', dryRun: true, maintenanceId: 'maintenance', maintenanceRevision: 4 }
+  await withServer(false, async base => {
+    const post = (body, origin = 'http://localhost:3080') => fetch(base + '/workflows/clarifications/recover', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) })
+    const checked = await post(input)
+    assert.equal(checked.status, 200)
+    assert.deepEqual(await checked.json(), { expectedDigest: 'a'.repeat(64) })
+    const apply = { ...input, dryRun: false, expectedDigest: 'a'.repeat(64) }
+    const applied = await post(apply)
+    assert.equal(applied.status, 202)
+    assert.deepEqual(await applied.json(), { accepted: true })
+    assert.deepEqual(calls, [input, apply])
+    for (const extra of [{ actorId: 'forged' }, { answer: '伪造答案' }, { evidenceRef: 'forged' }]) {
+      assert.equal((await post({ ...input, ...extra })).status, 400)
+    }
+    for (const invalid of [{ dryRun: 'true' }, { maintenanceRevision: 1.5 }, { expectedDigest: 'not-digest' }]) {
+      assert.equal((await post({ ...input, ...invalid })).status, 400)
+    }
+    assert.equal((await post(input, 'https://untrusted.example')).status, 403)
+    assert.equal(calls.length, 2)
+  }, { overrides: { recoverWorkflowClarification: async value => {
+    calls.push(value)
+    return value.dryRun ? { expectedDigest: 'a'.repeat(64) } : { accepted: true }
+  } } })
+})
+
+test('受管澄清来源恢复拒绝非本机连接，不调用Host', async () => {
+  let status, calls = 0
+  const response = { setHeader() {}, writeHead(code) { status = code }, end() {} }
+  await handleRequest({ method: 'POST', url: '/workflows/clarifications/recover', headers: {}, socket: { remoteAddress: '192.0.2.1' } }, response, {
+    recoverWorkflowClarification: async () => { calls++; throw new Error('must not invoke') },
+  })
+  assert.equal(status, 403)
+  assert.equal(calls, 0)
+})

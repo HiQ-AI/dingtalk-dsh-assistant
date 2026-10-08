@@ -2556,6 +2556,32 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       reason: 'AGENT_WORK_NEEDS_INPUT', request: { requestId: request.requestId, kind: 'needs_clarification',
         question: request.question, permittedActors: [origin.run.actorId, ownerActorId], executionRunId: runId } } })
   }
+  async function recoverClarification(input, identity) {
+    if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')
+    const { recoveryKey, dryRun, expectedDigest, ...request } = input
+    requireText(recoveryKey, 'WORKFLOW_RECOVERY_KEY_REQUIRED')
+    requireText(request.reason, 'WORKFLOW_RECOVERY_REASON_REQUIRED')
+    if (typeof dryRun !== 'boolean') throw executionError('WORKFLOW_RECOVERY_CHECK_REQUIRED')
+    const target = await messages.state(request.targetRunId), answer = await messages.state(request.answerRunId)
+    if (!groups.has(target.run.conversationId) || target.run.conversationId !== answer.run.conversationId) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
+    const args = { ...request, actorId: identity.actorId }
+    const commandId = `clarification-recover:${recoveryKey}`
+    const inputDigest = dryRun ? null : executionDigest({ ...args, expectedDigest: expectedDigest ?? null })
+    if (!dryRun) {
+      if (!/^[a-f0-9]{64}$/u.test(expectedDigest ?? '')) throw executionError('MESSAGE_CLARIFICATION_RECOVERY_DIGEST_REQUIRED')
+      const previous = await store.query({ kind: 'receipt', commandId })
+      if (previous) {
+        const evidence = await artifacts.read(previous.result.command.clarificationRecovery.at(-1).evidenceRef)
+        if (evidence.inputDigest !== inputDigest) throw executionError('MESSAGE_CLARIFICATION_RECOVERY_CONFLICT')
+        return previous.result
+      }
+    }
+    const check = await store.query({ kind: 'message.clarification.recover.check', ...args })
+    if (dryRun) return check
+    if (check.expectedDigest !== expectedDigest) throw executionError('MESSAGE_CLARIFICATION_RECOVERY_STALE')
+    const evidence = await artifacts.put({ kind: 'clarification-source-recovery', inputDigest, operator: identity.actorId, reason: request.reason, ...check })
+    return (await store.command({ id: commandId, kind: 'message.clarification.recover', args: { ...args, expectedDigest, evidenceRef: evidence.ref } })).result
+  }
   async function resumeRequest(input, identity) {
     if (!['web', 'im'].includes(identity?.channel) || !identity.actorId) throw executionError('WORKFLOW_AUTHENTICATED_ACTOR_REQUIRED')
     if (identity.channel === 'web' && (!config.webActorId || identity.actorId !== config.webActorId)) throw executionError('WORKFLOW_ACTION_FORBIDDEN')
@@ -3609,7 +3635,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     })), nextCursor: runs.length > limit ? selected.at(-1).sequenceId : null, total: null }
   }
   return {
-    ingest, resumeRequest, handoffDataChangeApproval, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, getApprovalRequest, prepareApprovalNotice, approvalNoticeCommand, reissueApprovalNotice,
+    ingest, resumeRequest, recoverClarification, handoffDataChangeApproval, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, getApprovalRequest, prepareApprovalNotice, approvalNoticeCommand, reissueApprovalNotice,
     getApprovalNotice: requestId => store.query({ kind: 'approval.notice', requestId }), submitWebTask, mailboxes, topics, topicContext,
     maintenance: () => store.query({ kind: 'runtime.maintenance' }),
     async reconcileTopic(request, identity, check = false) {

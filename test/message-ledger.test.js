@@ -1436,3 +1436,73 @@ test('旧协调澄清恢复拒绝未撤回未知发送其他节点及业务命�
   assert.equal((await f.store.query({kind:'message.source',sourceKey:'m'})).runId,'m')
  }
 })
+
+
+async function clarificationRecoveryFixture(t){
+ const f=await fixture(t)
+ for(const [id,text,time]of [['question','@孙鹏','2026-10-08T01:23:00Z'],['answer','按文档开发','2026-10-08T01:23:43Z']])await f.call('receive',receive(id,{body:text,context:{occurredAt:time}}))
+ const sources=['question','answer'].map(runId=>({runId,sourceVersion:1}))
+ const binding=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'recover-fixture',sourceRuns:sources})).result.binding
+ await f.call('coordinator.commit',{...binding,decisions:sources.map((source,index)=>({...source,units:[{unitId:source.runId+'-unit',topic:{topicId:'topic',title:'开发'},commands:index?[{commandId:'create-task',kind:'create',args:{taskId:'planned-task',arguments:{objective:'按文档开发'}}}]:[],...(!index?{request:{requestId:'question-request',kind:'needs_clarification',question:'评审还是开发？',permittedActors:['a']}}:{})}]}))})
+ await f.call('coordinator.release',{...binding,drained:true})
+ await f.call('notification.prepare',{runId:'question',requestId:'question-request',notificationId:'old-question-notice',payload:{text:'评审还是开发？',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'question'}})
+ const notice=(await f.call('notification.claim',{notificationId:'old-question-notice'})).result.notification
+ await f.call('notification.sent',{notificationId:notice.id,leaseEpoch:notice.leaseEpoch,ack:{messageId:'old-delivered'}})
+ await f.call('notification.readback',{notificationId:notice.id,leaseEpoch:notice.leaseEpoch,evidence:{messageId:'old-delivered'}})
+ // 历史版本曾领取成功再被 task.accept 拦下；构造该已持久化历史状态。
+ await f.editSnapshot(db=>{const row=db.prepare("SELECT body FROM message_items WHERE item_id='command:create-task'").get();const c=JSON.parse(row.body);c.status='unknown';c.error='MESSAGE_INPUT_PENDING';c.result=null;c.leaseEpoch=1;db.prepare("UPDATE message_items SET body=? WHERE item_id='command:create-task'").run(JSON.stringify(c))})
+ await f.store.command({id:'maintenance',kind:'runtime.maintenance.change',args:{expectedRevision:0,active:true,maintenanceId:'recover',actorId:'operator',reason:'恢复'}})
+ return Object.assign(f,{args:{targetRunId:'question',requestId:'question-request',answerRunId:'answer',commandId:'create-task',actorId:'operator',reason:'关联真实后续答复',maintenanceId:'recover',maintenanceRevision:1}})
+}
+
+test('原文澄清恢复预检零写且原子恢复原命令，不制造Task或通知',async t=>{
+ const f=await clarificationRecoveryFixture(t),query={kind:'message.clarification.recover.check',...f.args}
+ const db=new DatabaseSync(f.store.info.dbPath,{readOnly:true})
+ const before=db.prepare('SELECT count(*) n FROM execution_events').get().n
+ const checked=await f.store.query(query)
+ assert.equal(db.prepare('SELECT count(*) n FROM execution_events').get().n,before);db.close()
+ const noticesBefore=await f.store.query({kind:'message.notifications'})
+ const topicBefore=await f.store.query({kind:'message.topic',topicId:'topic'})
+ const args={...f.args,expectedDigest:checked.expectedDigest,evidenceRef:'verified-source-artifact'}
+ const result=await f.call('clarification.recover',args,'recover-once')
+ assert.equal(result.result.command.status,'pending')
+ assert.equal(result.result.command.clarificationRecovery[0].priorError,'MESSAGE_INPUT_PENDING')
+ assert.equal((await f.call('clarification.recover',args,'recover-once')).replayed,true)
+ const target=await f.store.query({kind:'message.run',runId:'question'})
+ assert.equal(target.requests[0].answer,'按文档开发');assert.equal(target.requests[0].eventId,'answer');assert.equal(target.requests[0].resolvedByActorId,'a')
+ assert.equal(target.units[0].status,'applied');assert.ok(target.run.coordinatorConsumed)
+ assert.deepEqual(await f.store.query({kind:'message.topic',topicId:'topic'}),topicBefore)
+ assert.deepEqual(await f.store.query({kind:'task.catalog'}),[]);assert.deepEqual(await f.store.query({kind:'message.notifications'}),noticesBefore)
+ await f.reopen()
+ assert.equal((await f.store.query({kind:'message.request',requestId:'question-request'})).status,'resolved')
+})
+
+for(const variant of ['actor','authorization','time','topic','digest','task','maintenance','source','group','command'])test(`原文澄清恢复拒绝不安全来源且零部分写：${variant}`,async t=>{
+ const f=await clarificationRecoveryFixture(t),checked=await f.store.query({kind:'message.clarification.recover.check',...f.args})
+ if(variant==='maintenance')f.args.maintenanceRevision=0
+ else if(variant!=='digest')await f.editSnapshot(db=>{
+  if(variant==='source'){db.prepare("UPDATE message_sources SET current_version=2 WHERE source_key='answer'").run();return}
+  if(variant==='command'){const c=JSON.parse(db.prepare("SELECT body FROM message_items WHERE item_id='command:create-task'").get().body);c.args.arguments.objective='changed';db.prepare("UPDATE message_items SET body=? WHERE item_id='command:create-task'").run(JSON.stringify(c));return}
+  if(variant==='topic'){const row=db.prepare("SELECT body FROM message_topics WHERE topic_id='topic'").get();const x=JSON.parse(row.body);x.inputRevision++;db.prepare("UPDATE message_topics SET body=? WHERE topic_id='topic'").run(JSON.stringify(x));return}
+  if(variant==='task'){db.prepare("INSERT INTO execution_receipts(command_id,payload_digest,result,created_at) VALUES('task-accepted','digest',?,?)").run(JSON.stringify({taskId:'planned-task'}),new Date().toISOString());return}
+  const table=variant==='authorization'?'message_items':'message_runs',id=variant==='authorization'?'request:question-request':'answer',column=variant==='authorization'?'item_id':'run_id'
+  const x=JSON.parse(db.prepare(`SELECT body FROM ${table} WHERE ${column}=?`).get(id).body)
+  if(variant==='authorization')x.kind='needs_authorization'
+  if(variant==='actor')x.actorId='other'
+  if(variant==='group')x.conversationId='another-group'
+  if(variant==='time')x.context.occurredAt='2026-10-08T01:22:00Z'
+  db.prepare(`UPDATE ${table} SET body=? WHERE ${column}=?`).run(JSON.stringify(x),id)
+ })
+ await assert.rejects(f.call('clarification.recover',{...f.args,expectedDigest:variant==='digest'?'old':checked.expectedDigest,evidenceRef:'proof'}))
+ assert.equal((await f.store.query({kind:'message.request',requestId:'question-request'})).status,'pending')
+ assert.equal((await f.store.query({kind:'message.run',runId:'answer'})).commands[0].status,'unknown')
+})
+
+test('同话题旧澄清阻止create领取并保持pending，不进入unknown',async t=>{
+ const f=await clarificationRecoveryFixture(t)
+ await f.store.command({id:'leave-maintenance',kind:'runtime.maintenance.change',args:{expectedRevision:1,active:false,maintenanceId:'recover',actorId:'operator',reason:'测试领取门禁'}})
+ await f.editSnapshot(db=>{const c=JSON.parse(db.prepare("SELECT body FROM message_items WHERE item_id='command:create-task'").get().body);c.status='pending';c.error=null;db.prepare("UPDATE message_items SET body=? WHERE item_id='command:create-task'").run(JSON.stringify(c))})
+ await bad(f.call('command.claim',{commandId:'create-task'}),'MESSAGE_INPUT_PENDING')
+ assert.equal((await f.store.query({kind:'message.run',runId:'answer'})).commands[0].status,'pending')
+ assert.deepEqual(await f.store.query({kind:'task.catalog'}),[])
+})
