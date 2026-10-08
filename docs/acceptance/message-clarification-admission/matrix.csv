@@ -128,3 +128,5 @@ engineering-prior-delivery-rerun,41,PASS,round-41.md
 shared-material-native-execution,46,PASS,round-46.md
 lineage-package-deployment,46,PASS,round-46.md
 derived-stage-requirement-sync,47,PASS,round-47.md
+task-stage-package-deployment,48,PASS,round-48.md
+backend-unit-discovery-proof,49,PASS,round-49.md

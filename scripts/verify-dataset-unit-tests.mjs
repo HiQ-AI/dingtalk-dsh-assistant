@@ -8,7 +8,7 @@ export function testArguments(mavenHome, bootJar, directory, suffix) {
   return ['-classpath', join(mavenHome, 'boot', bootJar), `-Dclassworlds.conf=${join(mavenHome, 'bin/m2.conf')}`, `-Dmaven.home=${mavenHome}`,
     `-Dmaven.multiModuleProjectDirectory=${directory}`, 'org.codehaus.plexus.classworlds.launcher.Launcher', '-q',
     '-DskipTests=false', '-Dmaven.test.skip=false', '-DskipJarEncryption', '-DfailIfNoTests=true',
-    '-Dsurefire.failIfNoSpecifiedTests=true', '-Dtest=MergePreviewCalculatorTest,MergeWeightAllocatorTest',
+    '-Dsurefire.failIfNoSpecifiedTests=true', '-Dtest=Test*,*Test,*Tests,*TestCase,!*IT,!*ITCase,!*E2ETest',
     `-Dsurefire.reportNameSuffix=${suffix}`, 'test-compile', 'org.apache.maven.plugins:maven-surefire-plugin:2.22.2:test']
 }
 export async function main(args = process.argv.slice(2), directory = process.cwd()) {
@@ -22,8 +22,8 @@ export async function main(args = process.argv.slice(2), directory = process.cwd
   run(join(dirname(java),process.platform==='win32'?'javac.exe':'javac'),['-encoding','UTF-8','-d',classes,source])
   run(java,testArguments(maven,boot[0],directory,suffix))
   run(java,['-cp',classes,'LocalAcceptanceBackground','junit',reports,suffix])
-  const files=['MergePreviewCalculatorTest','MergeWeightAllocatorTest'],hashes={}
-  for(const name of files)hashes[name]=createHash('sha256').update(await readFile(join(reports,`TEST-com.ecdigit.ecdata.service.merge.${name}-${suffix}.xml`))).digest('hex')
+  const files=(await readdir(reports)).filter(name=>name.startsWith('TEST-')&&name.endsWith(`-${suffix}.xml`)).sort(),hashes={}
+  for(const name of files)hashes[name]=createHash('sha256').update(await readFile(join(reports,name))).digest('hex')
   await writeFile(join(proofDirectory,'host-proof.json'),JSON.stringify({version:1,files:hashes}),{flag:'wx'})
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(()=>{console.error('DATASET_TEST_NOT_PASSED');process.exitCode=1})
