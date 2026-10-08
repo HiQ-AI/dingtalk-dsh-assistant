@@ -337,6 +337,31 @@ test('平台附件变更、跨群回读和二次内容漂移均不能成为通�
   source.sourceVersion = 2
   assert.equal(await capability.authorize({ input, scope }), false)
 })
+test('旧消息正文中的钉钉文档由冻结来源派生，完整证据需独立回读且拒绝漂移', async () => {
+  const body = '请核对 https://alidocs.dingtalk.com/i/nodes/node123?from=chat'
+  const source = { sourceKey: 'doc-source', sourceVersion: 1, conversationId: 'g', body,
+    context: { sourceMessageId: 'doc-message', attachments: [] } }
+  const scope = { conversationId: 'g', sourceKeys: ['doc-source'], sourceVersions: { 'doc-source': 1 } }
+  const input = { sourceKey: 'doc-source', type: 'dingtalkDoc', resourceId: 'node123' }
+  let text = '完整正文与表格', complete = true, remoteBody = body, reads = 0
+  const capability = createTaskMessageResourceCapability({ store: { query: async () => source },
+    readMessage: async () => ({ conversationId: 'g', messageId: 'doc-message', text: remoteBody }),
+    readResource: async (_g, _m, ref) => { assert.equal(ref.resourceId, 'node123'); reads++; return { text, complete } } })
+  assert.equal(await capability.authorize({ input, scope }), true)
+  const output = await capability.execute({ input, scope })
+  assert.match(output.markdown, /完整正文与表格/u)
+  assert.equal((await capability.verify({ input, scope, output })).passed, true)
+  assert.equal(reads, 2)
+  text = '正文已改变'
+  assert.equal((await capability.verify({ input, scope, output })).passed, false)
+  complete = false
+  await assert.rejects(capability.execute({ input, scope }), /GENERAL_RESOURCE_READ_INCOMPLETE/u)
+  remoteBody = '改为 https://alidocs.dingtalk.com/i/nodes/other'
+  await assert.rejects(capability.execute({ input, scope }), /GENERAL_RESOURCE_SOURCE_CHANGED/u)
+  assert.equal(await capability.authorize({ input: { ...input, resourceId: 'other' }, scope }), false)
+  assert.equal(await capability.authorize({ input, scope: { ...scope, sourceVersions: { 'doc-source': 2 } } }), false)
+})
+
 test('短指代消息优先呈现紧邻来源的话题，显式引用仍优先', () => {
   const cards = Array.from({ length: 12 }, (_, index) => ({ candidateId: `old-${index}`, goal: '审核草稿排查', sourceRefs: [], explicitReferenceMatches: [], relevantTime: '2026-09-24T00:00:00Z' }))
   cards.push({ candidateId: 'account', topicId: 'account', goal: 'test3 账号创建时间为空', sourceRefs: ['previous'], explicitReferenceMatches: [], relevantTime: '2026-09-24T07:28:41Z' })
@@ -5173,6 +5198,46 @@ test('直接Task附件scope仅纳入已证明材料，拒绝无关附件和旧�
   assert.equal((await execution.store.query({kind:'task.owner',taskId})).decision.action,'wait')
 })
 
+for (const projected of [false, true]) test(`文档链接进入原Task只读范围并记录正文证据：附件投影=${projected}`, async t => {
+  const body = '规则文档 https://alidocs.dingtalk.com/i/nodes/linkedDoc?from=chat'
+  let readCount = 0, turns = 0
+  const f = await fixture(t, 'owner', undefined, {
+    readMessage: async (_group, messageId) => ({ conversationId: 'g', messageId, text: body }),
+    readResource: async () => { readCount++; return { text: '章节一：导入规则\n|列|规则|\n|a|保留|', complete: true } },
+    coordinatorSessions: coordinatorFixtureSessions((source, input) => {
+      const request = input.sources.find(item => item.body === '按文档调查')
+      const primary = source.runId === request.runId
+      return coordinatorUnit(source, primary ? 'research' : 'fact', primary ? { objective: '按文档调查' } : { kind: 'fact', text: source.body },
+        primary ? { disposition: 'new', candidateId: null } : { disposition: 'conversation', candidateId: `source:${request.runId}` })
+    }),
+    taskOwnerSessions: { async close() {}, async run({ binding, queryInput, tools, onSessionBound, onQueryEvidence, onCandidate }) {
+      await onSessionBound(); turns++
+      const resource = queryInput.context.readableMessageResources.find(item => item.type === 'dingtalkDoc')
+      assert.deepEqual(resource, { sourceKey: 'legacy-doc', sourceVersion: 1, type: 'dingtalkDoc', resourceId: 'linkedDoc', name: '' })
+      const result = await tools.find(tool => tool.name === 'read-task-message-resource').execute({ binding, input: queryInput,
+        args: { sourceKey: resource.sourceKey, type: resource.type, resourceId: resource.resourceId } })
+      await onQueryEvidence({ binding: Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(key => [key,binding[key]])), evidenceRef: result.evidenceRef })
+      const refs = [result.evidenceRef]
+      await onCandidate({ action: 'wait', summary: '正文已读取，等待业务选择', evidenceRefs: refs,
+        condition: { kind: 'business-input', missing: '业务选择', responsibleParty: '交办人', resumeWhen: '选择后继续', evidenceRefs: refs } })
+      return { status: 'submitted' }
+    } }
+  })
+  await f.service.messages.receive({ sourceKey: 'legacy-doc', sourceVersion: 1, conversationId: 'g', actorId: 'owner', body,
+    context: { sourceMessageId: 'doc-message', attachments: projected ? [{ resourceRef: 'linkedDoc', sourceMessageId: 'doc-message',
+      sourceVersion: 1, state: 'pending', source: { type: 'dingtalkDoc', resourceId: 'linkedDoc' } }] : [] } }, { process: false })
+  const received = await f.service.messages.receive({ sourceKey: 'doc-request', sourceVersion: 1, conversationId: 'g', actorId: 'owner', body: '按文档调查',
+    context: { sourceMessageId: 'request' } }, { process: false })
+  const state = await f.service.messages.process(received.runId)
+  assert.equal(state.commands[0].status, 'applied')
+  assert.equal(readCount, 0, '文档读取由Owner推进，不因链接被自动升级为Task准入门禁')
+  const taskId = state.commands[0].result.taskId
+  assert.deepEqual((await settleTaskOwners(f.service, f.execution)).failures, [])
+  assert.equal(turns, 1); assert.equal(readCount, 2)
+  assert.equal((await f.execution.store.query({ kind: 'task.owner.query-evidence', taskId })).length, 1)
+  assert.equal((await f.execution.store.query({ kind: 'task.source', sourceKey: 'legacy-doc' })).context.attachments.length, projected ? 1 : 0)
+})
+
 test('旧已排队外部workflowId简写不能绕过完整授权新建Task', async t => {
   const { service, execution } = await fixture(t, 'owner')
   const runId = 'queued-external-shorthand', unitId = 'old-unit', commandId = 'old-external-create'
@@ -6702,4 +6767,61 @@ test('历史澄清恢复服务零写预检、幂等恢复后原来源创建唯�
     assert.equal(question.run.sourceVersion, 1)
     assert.equal(answer.run.sourceVersion, 1)
   } finally { db.close() }
+})
+
+
+test('公共话题fact与需求方环境revise同批通过，第三人revise仍拒绝',async t=>{
+ let attack=false
+ const f=await fixture(t,'owner',undefined,{coordinatorSessions:coordinatorFixtureSessions((source,input)=>{
+  if(source.body==='按文档开发')return coordinatorUnit(source,'create',{objective:'按文档开发'})
+  const card=input.candidates.find(c=>c.taskId) ?? input.candidates.find(c=>c.topicId);assert.ok(card)
+  return coordinatorUnit(source,!attack&&source.body!=='那就2吧'?'fact':'revise',!attack&&source.body!=='那就2吧'?{scope:'conversation',text:source.body}:{objective:'按文档开发，使用UAT2测试',uatEnvironment:'uat2',uatSourceRefs:[{sourceKey:'public-question',sourceVersion:1,sourceQuote:'辰姐，这个放在uat几测试'},{sourceKey:'public-open',sourceVersion:1,sourceQuote:'都行吧，现在几空着呢'},{sourceKey:'public-third',sourceVersion:1,sourceQuote:'uat1先别动'},{sourceKey:source.sourceKey,sourceVersion:source.sourceVersion,sourceQuote:source.body}]}, {disposition:'existing',candidateId:card.candidateId})
+ })})
+ const original=await f.service.ingest({...f.message,messageId:'public-seed',text:'按文档开发'});await f.service.messages.process(original.runId)
+ const task=(await f.service.tasks())[0],taskId=task.taskId
+ const before=await f.execution.controller.taskPlan(taskId)
+ const question=await f.service.messages.receive({runId:'public-question',sourceKey:'public-question',sourceVersion:1,conversationId:'g',actorId:'owner',body:'辰姐，这个放在uat几测试',context:{}},{process:false})
+ const open=await f.service.messages.receive({runId:'public-open',sourceKey:'public-open',sourceVersion:1,conversationId:'g',actorId:'owner',body:'都行吧，现在几空着呢',context:{}},{process:false})
+ const third=await f.service.messages.receive({runId:'public-third',sourceKey:'public-third',sourceVersion:1,conversationId:'g',actorId:'third',body:'uat1先别动',context:{}},{process:false})
+ const choice=await f.service.messages.receive({runId:'public-choice',sourceKey:'public-choice',sourceVersion:1,conversationId:'g',actorId:'owner',body:'那就2吧',context:{}},{process:false})
+ await f.service.messages.process(choice.runId)
+ const thirdState=await f.service.messages.state(third.runId),choiceState=await f.service.messages.state(choice.runId)
+ assert.equal(thirdState.commands[0].status,'applied');assert.equal(thirdState.commands[0].args.taskId,null)
+ assert.equal(choiceState.commands[0].status,'applied')
+ const after=await f.execution.controller.taskPlan(taskId),requirement=await f.execution.artifacts.read(after.task.requirementRef)
+ assert.ok(after.task.requirementRevision>before.task.requirementRevision)
+ assert.equal(requirement.authorization.actorId,'owner')
+ assert.deepEqual(requirement.sourceInstructions.slice(-4).map(source=>source.text),['辰姐，这个放在uat几测试','都行吧，现在几空着呢','uat1先别动','那就2吧'])
+ assert.equal((await f.service.messages.state(question.runId)).commands[0].status,'applied')
+ assert.equal((await f.service.messages.state(open.runId)).commands[0].status,'applied')
+ assert.equal(requirement.target.uatEnvironment,'uat2');assert.equal((await f.service.tasks()).length,1)
+ assert.equal((await f.service.topics('g')).length,1)
+ attack=true
+ const forbidden=await f.service.messages.receive({runId:'public-attack',sourceKey:'public-attack',sourceVersion:1,conversationId:'g',actorId:'third',body:'改成UAT3',context:{}},{process:false})
+ await assert.rejects(f.service.messages.process(forbidden.runId),error=>['WORKFLOW_TASK_FORBIDDEN','TASK_UAT_SOURCE_INVALID'].includes(error.code))
+ assert.equal((await f.service.messages.state(forbidden.runId)).commands.length,0)
+ assert.equal((await f.execution.controller.taskPlan(taskId)).task.requirementRevision,after.task.requirementRevision)
+})
+
+
+for(const variant of ['unknown','version','quote','topic','explicit'])test(`语义环境来源拒绝无效证据且不更新需求：${variant}`,async t=>{
+ let question
+ const f=await fixture(t,'owner',undefined,{coordinatorSessions:coordinatorFixtureSessions((source,input)=>{
+  if(source.body==='开发')return coordinatorUnit(source,'create',{objective:'开发'})
+  const card=input.candidates.find(c=>c.taskId)
+  if(source.body==='在哪个环境测试？')return coordinatorUnit(source,'fact',{scope:'conversation',text:source.body},variant==='topic'?{disposition:'new',candidateId:null}:{disposition:'existing',candidateId:card.candidateId})
+  const ref={sourceKey:question.sourceKey,sourceVersion:question.sourceVersion,sourceQuote:question.body}
+  if(variant==='unknown')ref.sourceKey='unknown-source'
+  if(variant==='version')ref.sourceVersion++
+  if(variant==='quote')ref.sourceQuote='哪个环境'
+  return coordinatorUnit(source,'revise',{objective:'开发并使用UAT2测试',uatEnvironment:'uat2',uatSourceRefs:[ref,{sourceKey:source.sourceKey,sourceVersion:source.sourceVersion,sourceQuote:source.body}]},{disposition:'existing',candidateId:card.candidateId})
+ })})
+ const start=await f.service.ingest({...f.message,messageId:'semantic-start',text:'开发'});await f.service.messages.process(start.runId)
+ const taskId=(await f.service.tasks())[0].taskId
+ const q=await f.service.ingest({...f.message,messageId:'semantic-question',text:'在哪个环境测试？'});await f.service.messages.process(q.runId);question=(await f.service.messages.state(q.runId)).run
+ const before=(await f.execution.controller.taskPlan(taskId)).task.requirementRevision
+ const answer=await f.service.messages.receive({runId:'semantic-answer',sourceKey:'semantic-answer',sourceVersion:1,conversationId:'g',actorId:'owner',body:variant==='explicit'?'使用uat3':'选择第二个',context:{}},{process:false})
+ await assert.rejects(f.service.messages.process(answer.runId),{code:'TASK_UAT_SOURCE_INVALID'})
+ assert.equal((await f.service.messages.state(answer.runId)).commands.length,0)
+ assert.equal((await f.execution.controller.taskPlan(taskId)).task.requirementRevision,before)
 })

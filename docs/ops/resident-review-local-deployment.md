@@ -297,6 +297,12 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 ### 维护屏障与部署许可
 
+文档读取能力升级后，旧 Task 的冻结正文链接由当前来源版本派生，无需补写附件或重跑交办。对已经接纳 wait 的 Owner，应先核对新版本可读材料、来源和 Owner/需求/控制版本，再使用既有 `POST /tasks/:taskId/reassess-readonly` 触发同一 Task 的系统重评；单纯重启不代表旧等待已恢复。重评理由只描述已部署能力和可核验来源，不冒充用户答复，不填入用户未指定的 UAT。验收须独立回读文档查询证据及真实 Owner 结果；只读工具测试、健康检查或重评 accepted 均不代表正文已读成功。
+
+alidocs节点类型以同profile的`drive +inspect`为准。普通HTML文件不是adoc，不能据`doc +fetch`类型拒绝判断无权限；插件按明确类型走原生全文或文本文件下载。验收包含真实正文摘要、字节数和来源节点，不输出下载签名或凭据。
+
+若监听ready但群回补报`GROUP_COORDINATOR_SESSION_ALREADY_LIVE`且Owner仍pending，先核对路由积压与`MESSAGE_INPUT_PENDING`，不得跳过输入门禁。新版协调器仅对公开idle维护锁内已核验身份、当前lease、工作区和无新增用户输入的观察会话，使用原生历史派生及现有账本CAS接回受管会话；原观察会话保留。外部活跃会话或不明输入继续拒绝，不按ID强行dispose。回读应包含新旧parentSession关系、积压路由处理、原Task继续及监听/回补健康。
+
 正式部署先通过 `POST /runtime/maintenance` 开启持久维护模式，阻止节点、Owner、效果、消息执行及通知的新领取；入站仍可落队列。已开始的操作允许收口，未知外部效果必须先对账。排空后通过 `/runtime/maintenance/seal` 原子封存停机许可；此后旧进程不能退出维护，避免最后快照与停机之间重新派发。封存后遇到错误保持维护，不自动重复停机或重启。
 
 新实例默认继承维护模式。完成安装内容、旧账、恢复问题数和认证 Web 回读后，才通过 `/runtime/maintenance/resume` 恢复派发；Host 自己校验进程身份已改变，调用者不能指定进程身份。`-Readback` 始终零写，返回 ready 也可能仍在维护；需要恢复时以相同输入执行 `-Resume`，该模式先完整回读再恢复。原始配置摘要及所有输入必须匹配 launch.json，不能换包或换配置接续。
@@ -667,3 +673,7 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 ### 控制存储不可用时原生重载
 
 维护接口返回 STORE_UNAVAILABLE 时，不能把它当404使用部署 -Bootstrap，也不能直接强停Host。先只读控制库 quick_check 和 maintenanceStatus，确认 busy=0，并核对现有PID/双端口；保留unknown命令原状。使用现有 bootstrap-workflow-maintenance.mjs 的 witness/disable/enable profile CAS 原语，每步先 --check：取得同PID/nonce的ready，禁用Resident后必须取得真实disposed见证、18998关闭且3080仍原PID，持有owner SQLite独占锁并以snapshot再证实排空。释放锁后只删除工具追加的精确末尾块，核对profile恢复原摘要。原生Loader在同Host重开Resident/Store；独立核对maintenance API、健康和收信后重新走普通部署Check。此路径不调用seal-offline、不改控制账、不迁移数据；无法取得见证/锁/零busy时停止，不能用端口关闭冒充排空。
+
+纯会话事实误分话题的恢复也使用 `/workflows/<runId>/reprocess`：仅已 settled、全部 applied 的 conversation-scope 静默 fact，且无 Task 绑定、通知、执行/外部效果、同话题其他 Task 命令时允许。先只读核验原来源、作者、正文、来源版本和上述零副作用证据，部署 Resume 后逐条重处理，回读旧来源 superseded、新来源版本递增。维护期间可能已登记新来源、但派发返回 RUNTIME_MAINTENANCE_ACTIVE；若遇此错误先读回来源版本和命令，Resume 后只接续既有新来源，不按失败回执推断零写入。随后独立核验原 Task 要求是否更新、话题是否一致；不重放原 create，不将维护操作者当原消息作者。公共事实不产生 Task 输入事件，实际需求补充须通过合法 revise 接纳。
+
+工程准备若仅返回 Git exit128，应按配置的 `sourceRepository` 独立只读复现首条命令并核对目录；缺失源仓库不能误报用户未给UAT或GitHub未授权。恢复时使用配置的远端在原sourceRepository路径建立独立完整Git仓库，禁止浅克隆、共享alternates、symlink或改用用户主检出；核对origin/main和选定UAT远端SHA。既有Task尚无执行阶段/外部效果时，沿上述reassess-readonly门禁重评，不新建Task，不伪造需求补充。源仓库恢复不是功能代码提交、部署或业务验收完成。

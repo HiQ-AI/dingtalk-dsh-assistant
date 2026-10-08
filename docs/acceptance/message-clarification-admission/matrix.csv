@@ -70,3 +70,12 @@ store-native-reload,19,PASS,round-19.md
 clarification-recovery-deployment,19,PASS,round-19.md
 source-124-request-resolved,19,PASS,round-19.md
 original-source-task-recovery,19,PASS,round-19.md
+task-document-scope-tests,20,PASS,round-20.md
+task-document-live-body,20,FAIL,round-20.md
+task-document-typed-reader,21,PASS,round-21.md
+coordinator-observer-handoff,21,PASS,round-21.md
+task-document-live-body,21,PASS,round-21.md
+public-fact-ledger,22,PASS,round-22.md
+public-fact-coordinator,22,PASS,round-22.md
+uat-source-service,22,PASS,round-22.md
+uat-source-live-recovery,22,PASS,round-22.md

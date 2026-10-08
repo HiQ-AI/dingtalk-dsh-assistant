@@ -33,6 +33,51 @@ function commandError(prefix, result) {
   return error
 }
 
+function documentReadError(value = {}, exitCode) {
+  const detail = value.error ?? value
+  const label = [detail.category, detail.reason, detail.server_error_code, detail.code, detail.message].filter(Boolean).join(' ')
+  let code = 'DWS_DOC_READ_FAILED'
+  if (exitCode === 2 || /auth|unauthenticated|access.token|refresh.token|未登录|认证失效/iu.test(label)) code = 'DWS_DOC_AUTH_REQUIRED'
+  else if (exitCode === 4 || /permission|forbidden|access.denied|无权限|权限不足/iu.test(label)) code = 'DWS_DOC_PERMISSION_DENIED'
+  else if (/not.found|not.exist|不存在|已删除/iu.test(label)) code = 'DWS_DOC_NOT_FOUND'
+  else if (exitCode === 7 || /incomplete|partial|truncat/iu.test(label)) code = 'DWS_DOC_INCOMPLETE'
+  else if (detail.retryable === true || /timeout|timed.out|rate.limit|too.many|temporar|unavailable|ECONNRESET|ETIMEDOUT/iu.test(label)) code = 'DWS_DOC_TEMPORARY'
+  const error = new Error(code)
+  error.code = code
+  if (typeof detail.server_error_code === 'string') error.serverErrorCode = detail.server_error_code
+  return error
+}
+
+function completeDocumentReceipt(receipt, nodeId) {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) throw documentReadError({ reason: 'incomplete' })
+  if (receipt.error || receipt.status === 'failed' || receipt.success === false) throw documentReadError(receipt)
+  const layers = []
+  const visit = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    layers.push(value)
+    for (const key of ['result', 'data', 'content']) visit(value[key])
+  }
+  visit(receipt.content)
+  if (receipt.contractVersion !== 'doc.content.v1' || receipt.status !== 'success' || receipt.complete !== true
+    || receipt.target?.canonicalId !== nodeId || receipt.target?.product !== 'doc'
+    || receipt.hasMore === true || receipt.failures?.length
+    || layers.some(value => value.complete === false || value.hasMore === true || value.truncated === true || value.failures?.length))
+    throw documentReadError({ reason: 'incomplete' })
+  const failed = layers.find(value => value.error || value.success === false)
+  if (failed) throw documentReadError(failed)
+  const raw = layers.find(value => typeof value.jsonml === 'string' && value.jsonml.trim())?.jsonml
+  let tree
+  try { tree = JSON.parse(raw) } catch { throw documentReadError({ reason: 'incomplete' }) }
+  if (!Array.isArray(tree) || tree.length < 2 || tree[0] !== 'root' || !tree[1] || typeof tree[1] !== 'object' || Array.isArray(tree[1]))
+    throw documentReadError({ reason: 'incomplete' })
+  const target = Object.fromEntries(['canonicalId', 'name', 'product', 'resourceType', 'canonicalUrl', 'containerId']
+    .filter(key => receipt.target[key] !== undefined).map(key => [key, receipt.target[key]]))
+  const text = JSON.stringify({ contractVersion: receipt.contractVersion, target, content: receipt.content })
+  if (Buffer.byteLength(text, 'utf8') > 8 * 1024 * 1024) throw documentReadError({ reason: 'incomplete' })
+  return { text, mediaType: 'application/json', complete: true,
+    metadata: Object.fromEntries(Object.entries(receipt).filter(([key]) => !['contractVersion', 'target', 'content'].includes(key))) }
+}
+
 function comparableMessageText(value) {
   return String(value ?? '').replace(/[\p{P}\p{S}\s]/gu, '')
 }
@@ -302,6 +347,55 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     },
     async readMessageResource(groupId, messageId, resource) {
       requireEnabled()
+      if (resource.type === 'dingtalkDoc') {
+        const nodeId = assertStableId(resource.resourceId, 'document_node_id')
+        if (!/^[a-zA-Z0-9_-]+$/u.test(nodeId)) throw new Error('dws_document_node_id_invalid')
+        const runRead = async args => {
+          let result
+          try { result = await runner.run(withProfile([...args, '--format', 'json'])) }
+          catch (error) { throw documentReadError({ code: error.code, message: error.message }) }
+          if (result.exitCode !== 0) {
+            let failure = {}
+            try { failure = JSON.parse(result.stderr || result.stdout) } catch {}
+            throw documentReadError(failure, result.exitCode)
+          }
+          let envelope
+          try { envelope = JSON.parse(result.stdout) } catch { throw documentReadError({ reason: 'incomplete' }) }
+          if (envelope?.ok !== true || envelope.outcome !== 'success' || !envelope.data) throw documentReadError(envelope?.error ? envelope : { reason: 'incomplete' })
+          return envelope.data
+        }
+        const inspection = await runRead(['drive', '+inspect', '--node', nodeId])
+        const file = inspection.data?.file
+        if (inspection.status !== 'success' || inspection.complete !== true || inspection.failures?.length
+          || inspection.hasMore === true || file?.fileId !== nodeId) throw documentReadError({ reason: 'incomplete' })
+        if (file.extension === 'adoc') return completeDocumentReceipt(await runRead(['doc', '+fetch', '--node', nodeId, '--scope', 'full', '--detail', 'full']), nodeId)
+        if (file.type !== 'FILE' || !['txt', 'md', 'sql', 'json', 'csv', 'tsv', 'xml', 'html', 'log'].includes(file.extension)) throw new Error('coordination_resource_format_unsupported')
+        if (!Number.isSafeInteger(file.fileSize) || file.fileSize <= 0 || file.fileSize > 8 * 1024 * 1024) throw documentReadError({ reason: 'incomplete' })
+        const downloadRoot = await mkdtemp(path.join(runner.cwd, 'coordination-resource-'))
+        try {
+          const output = path.relative(runner.cwd, path.join(downloadRoot, `content.${file.extension}`))
+          const receipt = await runRead(['drive', '+download', '--node', nodeId, '--output', output])
+          if (receipt.success !== true || receipt.nodeId !== nodeId || receipt.sizeBytes !== file.fileSize
+            || typeof receipt.savedPath !== 'string' || !receipt.savedPath || path.isAbsolute(receipt.savedPath)) throw documentReadError({ reason: 'incomplete' })
+          const root = await realpath(downloadRoot)
+          const localPath = await realpath(path.resolve(runner.cwd, receipt.savedPath))
+          const relative = path.relative(root, localPath)
+          if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('dws_resource_path_outside_workspace')
+          const info = await stat(localPath)
+          if (!info.isFile() || info.size !== file.fileSize) throw documentReadError({ reason: 'incomplete' })
+          const data = await readFile(localPath)
+          if (data.length !== file.fileSize) throw documentReadError({ reason: 'incomplete' })
+          let text
+          try { text = new TextDecoder('utf-8', { fatal: true }).decode(data) }
+          catch (error) {
+            if (error.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') throw documentReadError({ reason: 'incomplete' })
+            throw error
+          }
+          return { text, mediaType: file.extension === 'html' ? 'text/html' : 'text/plain', complete: true,
+            metadata: { nodeId, name: file.name, extension: file.extension, sizeBytes: file.fileSize, modifyTime: file.modifyTime,
+              sourceSha256: createHash('sha256').update(data).digest('hex') } }
+        } finally { await rm(downloadRoot, { recursive: true, force: true }) }
+      }
       const downloadRoot = await mkdtemp(path.join(runner.cwd, 'coordination-resource-'))
       try {
       const args = this.compileMessageResourceDownload({ groupId, messageId, resourceId: resource.resourceId, type: resource.type })

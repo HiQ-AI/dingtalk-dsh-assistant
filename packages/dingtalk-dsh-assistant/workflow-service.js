@@ -384,19 +384,21 @@ export function createSourceDossierCapability(sourceRead) {
   return capability
 }
 
-/** 仅沿当前 Task 冻结的消息来源和该消息入站附件引用读取平台文本。 */
+/** 仅沿当前 Task 冻结的消息来源和该消息明确引用读取平台文本。 */
 export function createTaskMessageResourceCapability({ store, readMessage, readResource }) {
   if (typeof readMessage !== 'function' || typeof readResource !== 'function') return null
   const identify = async (input, scope) => {
     if (!input || !scope || typeof input.sourceKey !== 'string' || !Array.isArray(scope.sourceKeys)
-      || !scope.sourceKeys.includes(input.sourceKey) || !['mediaId', 'fileId'].includes(input.type)
+      || !scope.sourceKeys.includes(input.sourceKey) || !['mediaId', 'fileId', 'dingtalkDoc'].includes(input.type)
       || typeof input.resourceId !== 'string' || !input.resourceId) return null
     const source = await store.query({ kind: 'task.source', sourceKey: input.sourceKey })
     if (!source || source.status === 'superseded' || source.conversationId !== scope.conversationId
       || source.sourceVersion !== scope.sourceVersions?.[input.sourceKey]
       || typeof source.context?.sourceMessageId !== 'string') return null
-    const ref = source.context.attachments?.find(item => item.source?.type === input.type
-      && item.source.resourceId === input.resourceId)?.source
+    const ref = input.type === 'dingtalkDoc'
+      ? normalizeResourceRefs([], source.body).find(item => item.type === input.type && item.resourceId === input.resourceId)
+      : source.context.attachments?.find(item => item.source?.type === input.type
+        && item.source.resourceId === input.resourceId)?.source
     return ref ? { source, ref } : null
   }
   const load = async (input, scope) => {
@@ -407,8 +409,9 @@ export function createTaskMessageResourceCapability({ store, readMessage, readRe
     if (!remote || remote.messageId !== source.context.sourceMessageId
       || (remote.conversationId ?? remote.groupId) !== scope.conversationId
       || (remote.text !== source.body && !sameDwsFileProjection({ sourceKind: 'dingtalk', text: source.body }, remote)) || remote.complete === false || remote.hasMore === true
-      || remote.failures?.length || !Array.isArray(remote.resourceRefs)
-      || !remote.resourceRefs.some(item => item.type === input.type && item.resourceId === input.resourceId))
+      || remote.failures?.length
+      || !(input.type === 'dingtalkDoc' ? normalizeResourceRefs([], remote.text) : remote.resourceRefs ?? [])
+        .some(item => item.type === input.type && item.resourceId === input.resourceId))
       throw executionError('GENERAL_RESOURCE_SOURCE_CHANGED')
     const value = await readResource(scope.conversationId, remote.messageId, ref)
     if (!value || typeof value.text !== 'string' || value.complete === false || value.hasMore === true
@@ -416,12 +419,15 @@ export function createTaskMessageResourceCapability({ store, readMessage, readRe
       || value.failures?.length || value.mediaUnavailable?.length) throw executionError('GENERAL_RESOURCE_READ_INCOMPLETE')
     if (!await identify(input, scope)) throw executionError('GENERAL_RESOURCE_SOURCE_CHANGED')
     const markdown = `### ${input.sourceKey} / ${remote.messageId} / ${input.type}:${input.resourceId}\n\n${value.text.split('\n').map(line => `> ${line}`).join('\n')}`
+    const metadata = Object.fromEntries(['nodeId', 'name', 'extension', 'sizeBytes', 'modifyTime', 'sourceSha256']
+      .filter(key => value.metadata?.[key] !== undefined).map(key => [key, value.metadata[key]]))
     return { markdown, sourceKey: input.sourceKey, messageId: remote.messageId,
-      resource: { type: input.type, resourceId: input.resourceId }, contentDigest: executionDigest(value.text) }
+      resource: { type: input.type, resourceId: input.resourceId }, contentDigest: executionDigest(value.text),
+      ...(Object.keys(metadata).length ? { metadata } : {}) }
   }
-  return { id: 'read-task-message-resource', effectClass: 'read', identity: 'read-task-message-resource-v1',
-    parameters: { type: 'object', properties: { sourceKey: { type: 'string' }, type: { type: 'string', enum: ['mediaId', 'fileId'] }, resourceId: { type: 'string' } }, required: ['sourceKey', 'type', 'resourceId'], additionalProperties: false },
-    description: '只读当前业务任务已冻结消息明确引用的文本或工作簿附件，完整保留读取器提供的正文；返回带精确来源和内容摘要的 Markdown',
+  return { id: 'read-task-message-resource', effectClass: 'read', identity: 'read-task-message-resource-v2',
+    parameters: { type: 'object', properties: { sourceKey: { type: 'string' }, type: { type: 'string', enum: ['mediaId', 'fileId', 'dingtalkDoc'] }, resourceId: { type: 'string' } }, required: ['sourceKey', 'type', 'resourceId'], additionalProperties: false },
+    description: '只读当前业务任务已冻结消息明确引用的钉钉文档、文本或工作簿附件，完整保留正文结构与元数据；返回带精确来源和内容摘要的 Markdown。钉钉文档读取失败须按实际错误判断，不将标题或登录页视为正文。',
     authorize: async ({ input, scope }) => Boolean(await identify(input, scope)),
     execute: ({ input, scope }) => load(input, scope),
     async verify({ input, scope, output }) {
@@ -1013,6 +1019,32 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (!origin || origin.run.conversationId !== conversationId || ![origin.run.actorId, ownerActorId].includes(actorId)) throw executionError('WORKFLOW_TASK_FORBIDDEN')
     return origin
   }
+  async function verifyUatSourceRefs(action, run, binding, relatedSourceRuns = []) {
+    const refs = action.arguments.uatSourceRefs
+    if (refs === undefined) return []
+    const invalid = () => { throw executionError('TASK_UAT_SOURCE_INVALID', '环境选择证据须为同话题当前完整原文，末条是当前有权确认者；不能截断、跨话题或覆盖当前明确环境。') }
+    if (action.intent !== 'revise' || !binding.taskId || !binding.topicId || !uatBranchFor(action.arguments.uatEnvironment)
+      || refs.length < 2 || new Set(refs.map(ref => ref.sourceKey)).size !== refs.length) invalid()
+    const origin = await taskAccess(binding.taskId, run.actorId, run.conversationId)
+    if (origin.command?.topicId && origin.command.topicId !== binding.topicId) invalid()
+    const last = refs.at(-1)
+    if (last.sourceKey !== run.sourceKey || last.sourceVersion !== run.sourceVersion || last.sourceQuote !== run.body) invalid()
+    const explicit = [...new Set(run.body.toLowerCase().match(/\buat[1-9]\b/g) ?? [])]
+    if (explicit.length && (explicit.length !== 1 || explicit[0] !== action.arguments.uatEnvironment)) invalid()
+    const sources = []
+    for (const ref of refs) {
+      const source = await store.query({ kind: 'task.source', sourceKey: ref.sourceKey })
+      if (!source || source.status === 'superseded' || source.conversationId !== run.conversationId
+        || source.sourceVersion !== ref.sourceVersion || source.body !== ref.sourceQuote) invalid()
+      if (source.sourceKey !== run.sourceKey) {
+        const topics = await store.query({ kind: 'message.topic.source', sourceKey: source.sourceKey })
+        if (!topics.some(topic => topic.topicId === binding.topicId)
+          && !relatedSourceRuns.some(other => other.sourceKey === source.sourceKey && other.sourceVersion === source.sourceVersion)) invalid()
+      }
+      sources.push({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body })
+    }
+    return sources
+  }
   const readableTaskOrigin = origin => !!origin && (origin.channel === 'web'
     ? origin.run.actorId === config.webActorId && origin.run.reportChannel === 'web' && origin.run.externalMessaging === false
     : groups.has(origin.run.conversationId))
@@ -1272,7 +1304,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       || (topic?.facts.flatMap(fact => fact.sourceRefs) ?? []).some(ref => ref.sourceKey === source.sourceKey && ref.sourceVersion !== source.sourceVersion))) throw executionError('TASK_SOURCE_NOT_CURRENT')
     const references = [...new Set([...(action.requiredExecutionMaterials ?? []),
       ...referencedResourceIds([action.arguments, ...(topic?.facts.map(fact => fact.text) ?? [])],
-        sources.flatMap(source => source.context?.attachments ?? []))])]
+        sources.flatMap(source => source.context?.attachments ?? []).filter(item => item.source?.type !== 'dingtalkDoc'))])]
     const resolved = references.length ? await resolveMaterials({ run: info.run, unit: info.unit,
       needs: references.map(resourceRef => ({ resourceRef })) }) : { ready: true, data: { resources: [] } }
     if (!resolved.ready) throw executionError('WORKFLOW_REQUIRED_MATERIAL_NOT_READY')
@@ -1364,6 +1396,19 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   async function taskMessageResources(requirement, origin) {
     const run = origin.run, selected = new Map()
     const frozenSources = [{ sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, actorId: run.actorId, text: run.body, attachments: run.context?.attachments }, ...(run.snapshot?.history ?? []), ...(requirement.sourceInstructions ?? [])]
+    // 老消息也从已冻结的正文派生引用；不补写历史附件，不扩大到话题中未进入本Task的来源。
+    for (const frozen of requirement.sourceInstructions ?? []) {
+      if (!requirement.scope.sourceKeys.includes(frozen.sourceKey)
+        || requirement.scope.sourceVersions[frozen.sourceKey] !== frozen.sourceVersion) continue
+      const refs = normalizeResourceRefs([], frozen.text).filter(ref => ref.type === 'dingtalkDoc')
+      if (!refs.length) continue
+      const current = await store.query({ kind: 'task.source', sourceKey: frozen.sourceKey })
+      if (!current || current.status === 'superseded' || current.conversationId !== run.conversationId
+        || current.actorId !== frozen.actorId || current.sourceVersion !== frozen.sourceVersion || current.body !== frozen.text
+        || typeof current.context?.sourceMessageId !== 'string') throw executionError('TASK_MATERIAL_SOURCE_STALE')
+      for (const ref of refs) selected.set(executionDigest([current.sourceKey, ref.type, ref.resourceId]), {
+        sourceKey: current.sourceKey, sourceVersion: current.sourceVersion, type: ref.type, resourceId: ref.resourceId, name: ref.name ?? '' })
+    }
     for (const material of requirement.materials ?? []) {
       for (const frozen of frozenSources) {
         const candidates = (frozen.attachments ?? []).filter(attachment => material.id === frozen.sourceKey
@@ -1383,7 +1428,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         if (!proof || proof.text !== material.text) throw executionError('TASK_MATERIAL_PROOF_MISSING')
         for (const attachment of attachments) {
           const ref = attachment.source
-          if (!ref?.resourceId || !['fileId','mediaId'].includes(ref.type)) throw executionError('TASK_MATERIAL_IDENTITY_CHANGED')
+          if (!ref?.resourceId || !['fileId','mediaId','dingtalkDoc'].includes(ref.type)) throw executionError('TASK_MATERIAL_IDENTITY_CHANGED')
           selected.set(executionDigest([current.sourceKey, ref.type, ref.resourceId]), { sourceKey: current.sourceKey,
             sourceVersion: current.sourceVersion, type: ref.type, resourceId: ref.resourceId, name: attachment.name ?? '' })
         }
@@ -1891,20 +1936,22 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const objective = requireText(action.arguments.objective, 'WORKFLOW_OBJECTIVE_REQUIRED')
       const source = await store.query({ kind: 'task.source', sourceKey: info.run.sourceKey })
       if (!source || source.status === 'superseded') throw executionError('TASK_SOURCE_NOT_CURRENT')
+      const uatSources = await verifyUatSourceRefs(action, info.run, info.binding)
+      const target = engineeringTarget(Object.fromEntries(['repositoryId', 'uatEnvironment', 'targetId', 'commitSha', 'releaseTag', 'changeRef', 'pullRequestNumber', 'headCommitSha']
+        .filter(key => action.arguments[key] !== undefined).map(key => [key, action.arguments[key]])), [source.body], previous.target)
+      if (uatSources.length) target.uatEnvironment = action.arguments.uatEnvironment
       const fileDelivery = action.arguments.fileDelivery ? bindFileDelivery(action.arguments.fileDelivery, info.run.body) : previous.fileDelivery
       if (fileDelivery && !fileWorkflow) throw executionError('TASK_FILE_TRANSPORT_UNAVAILABLE')
       const next = { ...previous, request: taskSourceRequest(info), objective, title: taskTitle(action.arguments.title ?? objective),
         stageAuthorizations: [...(previous.stageAuthorizations ?? []), ...(action.arguments.stageAuthorizations ?? []).map(item => ({ ...item, sourceKey: info.run.sourceKey, sourceVersion: info.run.sourceVersion, ...(item.gate === 'confirmation' ? { requiredActorId: info.run.actorId } : {}) }))],
-        sourceInstructions: [...(previous.sourceInstructions ?? []), { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body }], ...(fileDelivery ? { fileDelivery } : {}),
+        sourceInstructions: [...new Map([...(previous.sourceInstructions ?? []), ...uatSources, { sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, text: source.body }].map(item => [item.sourceKey, item])).values()], ...(fileDelivery ? { fileDelivery } : {}),
         acceptanceCriteria: action.arguments.acceptanceCriteria ?? previous.acceptanceCriteria,
         constraints: [...new Set([...(previous.constraints ?? []), ...(action.constraints ?? [])])],
         explicitStages: [...new Set([...(previous.explicitStages ?? []), ...(action.arguments.explicitStages ?? [])])],
-        target: engineeringTarget(Object.fromEntries(['repositoryId', 'uatEnvironment', 'targetId', 'commitSha', 'releaseTag', 'changeRef', 'pullRequestNumber', 'headCommitSha']
-          .filter(key => action.arguments[key] !== undefined).map(key => [key, action.arguments[key]])),
-          [source.body], previous.target),
-        scope: { ...previous.scope, sourceKeys: [...new Set([...previous.scope.sourceKeys, info.run.sourceKey])],
+        target,
+        scope: { ...previous.scope, sourceKeys: [...new Set([...previous.scope.sourceKeys, ...uatSources.map(item => item.sourceKey), info.run.sourceKey])],
           ...(fileDelivery ? { artifactFiles: fileDelivery.files } : {}),
-          sourceVersions: { ...previous.scope.sourceVersions, [info.run.sourceKey]: source.sourceVersion },
+          sourceVersions: { ...previous.scope.sourceVersions, ...Object.fromEntries(uatSources.map(item => [item.sourceKey, item.sourceVersion])), [info.run.sourceKey]: source.sourceVersion },
           writeMarkdown: previous.scope.writeMarkdown || /(?:生成|创建|写入|输出|保存).{0,16}(?:Markdown|md文件|文档|文件)/iu.test(info.run.body) },
         authorization: { actorId: info.run.actorId, sourceKey: info.run.sourceKey,
           sourceVersion: info.run.sourceVersion, commandId: info.commandId,
@@ -2255,7 +2302,19 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           : card)
         return { cards: bounded, total: result.length, explicitOverflow: false, catalogRevision: executionDigest(bounded.map(card => [card.candidateId, card.versions])) }
       },
-      async facts({ run, binding }) {
+      async facts({ run, binding, unit, conversationFacts = false }) {
+        if (conversationFacts) {
+          const intent = unit?.intent
+          if (intent?.kind !== 'intent' || !intent.actions?.length || intent.replyPolicy !== 'none'
+            || intent.actions.some(action => action.intent !== 'fact' || action.arguments?.scope !== 'conversation')
+            || binding.taskId) throw executionError('WORKFLOW_TASK_FORBIDDEN')
+          const topic = binding.topicId ? await fullTopic(binding.topicId) : null
+          if (!topic || topic.conversationId !== run.conversationId) throw executionError('WORKFLOW_TOPIC_FORBIDDEN')
+          return { topic: { ...topic, facts: topic.facts.map(fact => ({ ...fact,
+            sourceRefs: fact.sourceRefs.map(({ text: _text, ...ref }) => ref) })),
+            sources: [...new Map(topic.facts.flatMap(fact => fact.sourceRefs)
+              .map(ref => [`${ref.sourceKey}:${ref.sourceVersion}`, ref])).values()] } }
+        }
         const clarificationRequests = []
         for (const pending of await store.query({ kind: 'message.pending' })) {
           if (pending.runId === run.runId || pending.conversationId !== run.conversationId || pending.status === 'superseded') continue
@@ -2290,7 +2349,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         return { ...cancellable, ...(topic ? { topic } : {}), task: detail,
           ...(topic ? { topicTasks: await topicTaskFacts(topic, run) } : {}) }
       },
-      async validateActions({ run, unit, binding, intent, requests, facts }) {
+      async validateActions({ run, unit, binding, intent, requests, facts, relatedSourceRuns }) {
+        for (const action of intent.actions) await verifyUatSourceRefs(action, run, binding, relatedSourceRuns)
         const acceptedAdmission = { kind: 'accepted' }
         const inheritedConstraints = (facts?.topic?.facts ?? []).filter(fact => fact.kind === 'constraint'
           && !(intent.factRevisions ?? []).some(revision => revision.factId === fact.id)).map(fact => fact.text)
@@ -2418,7 +2478,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
                 const contents = []
                 for (const attachment of selectedAttachments) {
                   const ref = attachment.source
-                  if (!ref?.resourceId || !['fileId', 'mediaId'].includes(ref.type)) throw executionError('MATERIAL_RESOURCE_IDENTITY_REQUIRED')
+                  if (!ref?.resourceId || !['fileId', 'mediaId', 'dingtalkDoc'].includes(ref.type)) throw executionError('MATERIAL_RESOURCE_IDENTITY_REQUIRED')
                   const output = await messageResourceRead.execute({ input: { sourceKey: materialSource.sourceKey, type: ref.type, resourceId: ref.resourceId },
                     scope: { conversationId: run.conversationId, sourceKeys: [materialSource.sourceKey], sourceVersions: { [materialSource.sourceKey]: materialSource.sourceVersion } } })
                   contents.push(output.markdown)

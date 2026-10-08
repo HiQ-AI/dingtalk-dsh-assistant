@@ -169,9 +169,12 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
           if (presentedTopics.has(topicId)) throw fail('GROUP_COORDINATOR_TOPIC_PRESENTATION_DUPLICATE', topicId)
           presentedTopics.add(topicId)
         }
+        const conversationFacts = Boolean(card?.topicId) && candidateUnit.intent.kind === 'intent' && candidateUnit.intent.replyPolicy === 'none'
+          && candidateUnit.intent.actions.length > 0 && candidateUnit.intent.actions.every(action => action.intent === 'fact' && action.arguments.scope === 'conversation')
+        const publicTarget = card && Object.fromEntries(['candidateId', 'topicId', 'title', 'engine'].filter(key => card[key] !== undefined).map(key => [key, card[key]]))
         const actionBinding = { kind: 'binding', ...candidateUnit.binding, engine: card?.engine ?? 'workflow',
-          target: card, ...(card?.taskId ? { taskId: card.taskId } : {}), topicId, evidence: [decision.reason], explicitReferenceMatches: card?.explicitReferenceMatches ?? [] }
-        const facts = await context.facts({ run, snapshot: input.context, unit, binding: { ...actionBinding,
+          target: conversationFacts ? publicTarget : card, ...(!conversationFacts && card?.taskId ? { taskId: card.taskId } : {}), topicId, evidence: [decision.reason], explicitReferenceMatches: card?.explicitReferenceMatches ?? [] }
+        const facts = await context.facts({ run, snapshot: input.context, unit, conversationFacts, binding: { ...actionBinding,
           topicId: card?.topicId ?? (prepared.topicVersions.has(topicId) ? topicId : undefined) } })
         for (const version of [facts.task?.factVersion, ...(facts.topicTasks?.tasks ?? []).map(t => t.factVersion)].filter(Boolean)) {
           const observed = prepared.taskVersions.get(version.taskId)
@@ -210,7 +213,10 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
           return request.status === 'resolved' && oldUnit && JSON.stringify(oldUnit.spans) === JSON.stringify(unit.spans)
             ? { ...request, authorizationUnitId: request.unitId, unitId } : request
         })
-        const admission = await context.validateActions?.({ run, unit, binding: actionBinding, intent, facts, requests })
+        const relatedSourceRuns = parsed.decisions.filter(other => other.units.some(otherUnit =>
+          prepared.cards.get(otherUnit.binding.candidateId)?.topicId === topicId))
+          .map(other => prepared.inputs.find(item => item.runId === other.runId).run)
+        const admission = await context.validateActions?.({ run, unit, binding: actionBinding, intent, facts, requests, relatedSourceRuns })
         if (['needs_clarification', 'needs_authorization'].includes(admission?.kind)) {
           units.push({ unitId, ...(unit.authorizationUnitId ? { authorizationUnitId: unit.authorizationUnitId } : {}), spans: unit.spans,
             goalText: unit.goalText, routingBinding: actionBinding, topic, commands: [],
@@ -233,7 +239,7 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
         for (const [actionIndex, action] of intent.actions.entries()) {
           if (action.intent === 'no_action') continue
           const taskId = ['create', 'research'].includes(action.intent) ? `task-${digest(ids[actionIndex]).slice(0, 32)}`
-            : ['answer', 'cancel_answer', 'clarification', 'approval', 'no_action'].includes(action.intent) ? null : card?.taskId ?? null
+            : ['answer', 'cancel_answer', 'clarification', 'approval', 'no_action'].includes(action.intent) ? null : conversationFacts ? null : card?.taskId ?? null
           const actionArguments = action.intent === 'fact' ? { ...action.arguments, kind: action.arguments.kind ?? 'fact' } : action.arguments
           commands.push({ commandId: ids[actionIndex], kind: action.intent, args: { taskId, arguments: actionArguments,
             ...(['create', 'research', 'reopen'].includes(action.intent) && admission?.authorizationRequestId ? { authorizationRequestId: admission.authorizationRequestId } : {}),

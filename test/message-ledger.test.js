@@ -1506,3 +1506,71 @@ test('同话题旧澄清阻止create领取并保持pending，不进入unknown',a
  assert.equal((await f.store.query({kind:'message.run',runId:'answer'})).commands[0].status,'pending')
  assert.deepEqual(await f.store.query({kind:'task.catalog'}),[])
 })
+
+async function appliedConversationFactFixture(t, variant = 'fact') {
+ const f=await fixture(t)
+ await f.call('receive',receive('fact-source',{body:'目标环境uat2'}))
+ const binding=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'facts',sourceRuns:[{runId:'fact-source',sourceVersion:1}]})).result.binding
+ const commands=[{commandId:'record-fact',kind:variant==='action'?'answer':'fact',args:{taskId:variant==='task'?'bound-task':null,
+  binding:{disposition:'conversation',topicId:'misrouted-topic'},replyPolicy:variant==='reply'?'result':'none',arguments:{scope:variant==='scope'?'task':'conversation',kind:'fact',text:'目标环境uat2'}}}]
+ await f.call('coordinator.commit',{...binding,decisions:[{runId:'fact-source',sourceVersion:1,units:[{unitId:'fact-unit',topic:{topicId:'misrouted-topic',title:'独立记录',facts:[{kind:'fact',text:'目标环境uat2',sourceRefs:[{sourceKey:'fact-source',sourceVersion:1,text:'目标环境uat2'}]}]},commands}]}]})
+ await f.call('coordinator.release',{...binding,drained:true})
+ const claim=(await f.call('command.claim',{commandId:'record-fact'})).result.command
+ await f.call(variant==='unknown'?'command.fail':'command.complete',{commandId:'record-fact',leaseEpoch:claim.leaseEpoch,...(variant==='unknown'?{error:'unknown'}:{result:{status:'recorded'}})})
+ if(variant==='related-task'){
+  await f.call('receive',receive('related-source'))
+  await f.call('split',{runId:'related-source',units:[{unitId:'related-unit'}]})
+  await f.call('accept',{runId:'related-source',unitId:'related-unit',topic:{topicId:'misrouted-topic',conversationId:'g',sourceRunId:'related-source',unitId:'related-unit',title:'独立记录',facts:[]},commands:[{commandId:'related-create',kind:'create',args:{taskId:'another-task'}}]})
+ }
+ if(variant==='notification')await f.call('notification.prepare',{runId:'fact-source',notificationId:'notice',commandId:'record-fact',payload:{text:'已记录',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'fact-source'}})
+ return f
+}
+
+test('已应用纯会话事实可受管重处理，失效旧事实且保留原文作者和版本审计',async t=>{
+ const f=await appliedConversationFactFixture(t)
+ const before=await f.store.query({kind:'message.run',runId:'fact-source'})
+ const next=(await f.call('reprocess',{runId:'fact-source',newRunId:'fact-replay'})).result.run
+ assert.equal(next.sourceVersion,2)
+ for(const key of ['sourceKey','actorId','conversationId','body'])assert.equal(next[key],before.run[key])
+ const previous=await f.store.query({kind:'message.run',runId:'fact-source'})
+ assert.equal(previous.run.status,'superseded')
+ assert.deepEqual(previous.commands,before.commands)
+ assert.equal((await f.store.query({kind:'message.topic',topicId:'misrouted-topic'})).facts.length,0)
+ assert.deepEqual(await f.store.query({kind:'task.catalog'}),[])
+ assert.deepEqual(await f.store.query({kind:'message.notifications'}),[])
+ await f.reopen()
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'fact-source'})).runId,'fact-replay')
+})
+
+for(const variant of ['action','task','unknown','notification','related-task','scope','reply'])test(`纯会话事实恢复拒绝业务效果或未决来源：${variant}`,async t=>{
+ const f=await appliedConversationFactFixture(t,variant)
+ const before=await f.store.query({kind:'message.run',runId:'fact-source'})
+ await bad(f.call('reprocess',{runId:'fact-source',newRunId:'forbidden-replay'}),'MESSAGE_REPROCESS_EFFECT_PENDING')
+ assert.deepEqual(await f.store.query({kind:'message.run',runId:'fact-source'}),before)
+ assert.equal((await f.store.query({kind:'message.source',sourceKey:'fact-source'})).sourceVersion,1)
+})
+
+test('公共会话事实只记话题不唤醒Owner，真实revise继续增加任务输入围栏',async t=>{
+ const f=await fixture(t)
+ await f.store.command({id:'accept-owner',kind:'task.accept',args:{taskId:'owned-task',requirementRef:'sha256-requirement',requirementRevision:1,sessionId:'owner-session',criteria:['完成目标'],sourceKey:'origin',eventKey:'created'}})
+ await f.call('receive',receive('origin'))
+ await f.call('split',{runId:'origin',units:[{unitId:'origin-unit'}]})
+ await f.call('accept',{runId:'origin',unitId:'origin-unit',topic:{topicId:'owner-topic',conversationId:'g',sourceRunId:'origin',unitId:'origin-unit',title:'原任务',facts:[]},commands:[{commandId:'origin-create',kind:'create',args:{taskId:'owned-task'}}]})
+ const claim=(await f.call('command.claim',{commandId:'origin-create'})).result.command
+ await f.call('command.complete',{commandId:'origin-create',leaseEpoch:claim.leaseEpoch,result:{taskId:'owned-task'}})
+ const before=await f.store.query({kind:'task.owner',taskId:'owned-task'})
+ for(const [index,kind] of ['fact','revise'].entries()){
+  const runId='supplement-'+index,unitId='supplement-unit-'+index
+  await f.call('receive',receive(runId,{body:kind==='fact'?'公共观点':'修改原任务'}))
+  const group=await f.store.query({kind:'message.coordinator',conversationId:'g'})
+  const binding=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:group.coordinator?.leaseEpoch??0,turnId:runId,sourceRuns:[{runId,sourceVersion:1}]})).result.binding
+  const topic=await f.store.query({kind:'message.topic',topicId:'owner-topic'})
+  const taskVersion=await f.store.query({kind:'message.task.version',taskId:'owned-task'})
+  await f.call('coordinator.commit',{...binding,topicVersions:[{topicId:topic.topicId,inputRevision:topic.inputRevision,contextRevision:topic.contextRevision}],taskFactVersions:[taskVersion],decisions:[{runId,sourceVersion:1,units:[{unitId,topic:{topicId:'owner-topic',title:'原任务',facts:[{kind:'fact',text:kind,sourceRefs:[{sourceKey:runId,sourceVersion:1,text:kind==='fact'?'公共观点':'修改原任务'}]}]},commands:[{commandId:'supplement-command-'+index,kind,args:{taskId:kind==='fact'?null:'owned-task',binding:{disposition:'existing',candidateId:'owned-task',topicId:'owner-topic'},arguments:{scope:'conversation',kind:'fact',text:kind},replyPolicy:'none'}}]}]}]})
+  await f.call('coordinator.release',{...binding,drained:true})
+  const after=await f.store.query({kind:'task.owner',taskId:'owned-task'})
+  if(kind==='fact')assert.deepEqual(after,before)
+  else {assert.equal(after.inputFenceRevision,before.inputFenceRevision+1);assert.ok(after.eventWatermark>before.eventWatermark)}
+ }
+ assert.equal((await f.store.query({kind:'message.topic',topicId:'owner-topic'})).facts.length,2)
+})

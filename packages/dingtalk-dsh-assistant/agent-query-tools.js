@@ -1,7 +1,8 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
-const correctable = new Set(['QUERY_ARGUMENT_INVALID','QUERY_NOT_FOUND','QUERY_LIMIT_INVALID','QUERY_TIMEOUT','QUERY_SCOPE_DENIED','QUERY_CAPACITY'])
+const correctable = new Set(['QUERY_ARGUMENT_INVALID','QUERY_NOT_FOUND','QUERY_LIMIT_INVALID','QUERY_TIMEOUT','QUERY_SCOPE_DENIED','QUERY_CAPACITY',
+  'DWS_DOC_AUTH_REQUIRED','DWS_DOC_PERMISSION_DENIED','DWS_DOC_NOT_FOUND','DWS_DOC_INCOMPLETE','DWS_DOC_TEMPORARY','DWS_DOC_READ_FAILED'])
 export const classifyAgentQueryError = error => correctable.has(error?.code) ? 'correctable' : 'fatal'
 const fail = code => { throw executionError(code) }
 export function agentEvidenceBinding(binding) {

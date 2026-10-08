@@ -118,7 +118,11 @@ export function registerMessageAcceptance(db,taskId,requirementRevision,now){
   put(db,origin.run.runId,'acceptance',{id,runId:origin.run.runId,commandId:origin.command.id,taskId,requirementRevision,
     sourceVersion:origin.run.sourceVersion,status:'pending',createdAt:now})
 }
+const conversationFactOnly=commands=>Array.isArray(commands)&&commands.length>0&&commands.every(item=>item.kind==='fact'
+  &&item.args?.arguments?.scope==='conversation'&&item.args?.replyPolicy==='none'
+  &&!item.args?.taskId&&!item.args?.binding?.taskId)
 function registerRelatedTaskInput(db,r,u,now){
+  if(conversationFactOnly(u.commands))return
   const targets=db.prepare(`SELECT DISTINCT o.task_id,t.requirement_ref FROM message_topic_bindings b JOIN message_items i ON i.run_id=b.run_id
     AND i.kind='command' AND json_extract(i.body,'$.unitId')=b.unit_id
     JOIN task_owners o ON o.task_id=json_extract(i.body,'$.args.taskId') JOIN business_tasks t ON t.task_id=o.task_id
@@ -1123,8 +1127,16 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     const reconciledNoEffect=oldCommands.length>0
       && oldCommands.every(item=>item.status==='superseded'&&item.priorStatus==='failed'&&item.evidenceRef)
       && oldNotifications.every(item=>['prepared','superseded'].includes(item.status))
-    if((!['waiting','needs_attention','pending'].includes(old.status) && !(old.status==='settled'&&oldUnits.length&&oldUnits.every(item=>item.status==='ignored')) && !rejectedFacts)
-      || oldCommands.length&&!rejectedFacts&&!reconciledNoEffect)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+    // 已记录的纯会话事实没有业务执行；重处理仍失效旧来源事实并保留命令审计，不重放任何外部效果。
+    const conversationFacts=old.status==='settled'&&oldUnits.length>0&&oldUnits.every(item=>item.status==='applied')
+      &&conversationFactOnly(oldCommands)&&oldCommands.every(item=>item.status==='applied'&&item.args?.binding?.disposition==='conversation')
+      &&oldNotifications.length===0&&rows(db,old.runId,'agent-execution').length===0
+      &&!db.prepare('SELECT 1 FROM execution_runs WHERE run_id=? UNION ALL SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(old.runId,old.runId)
+      &&!db.prepare(`SELECT 1 FROM message_topic_bindings own JOIN message_topic_bindings related ON related.topic_id=own.topic_id
+        JOIN message_items i ON i.run_id=related.run_id AND i.kind='command' WHERE own.run_id=?
+        AND (json_extract(i.body,'$.args.taskId') IS NOT NULL OR json_extract(i.body,'$.args.binding.taskId') IS NOT NULL) LIMIT 1`).get(old.runId)
+    if((!['waiting','needs_attention','pending'].includes(old.status) && !(old.status==='settled'&&oldUnits.length&&oldUnits.every(item=>item.status==='ignored')) && !rejectedFacts&&!conversationFacts)
+      || oldCommands.length&&!rejectedFacts&&!reconciledNoEffect&&!conversationFacts)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     if(db.prepare('SELECT 1 FROM message_runs WHERE run_id=?').get(str(a.newRunId)))fail('MESSAGE_REPROCESS_EXISTS')
     const sequence=old.context?.replayOfSequenceId??db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(old.runId).seq
     const origin=old.context?.replayOf?run(db,old.context.replayOf):old

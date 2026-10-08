@@ -797,3 +797,32 @@ test('旧实现condition摘要变化后仅恢复原pending来源，不增加版�
  assert.equal((await f.store.query({kind:'message.list'})).length,1)
  await f.workflow.recover();assert.equal(f.requests.length,2)
 })
+
+
+test('第三成员公共fact与需求方revise同批承接，不把任务权限失败扩成新话题',async t=>{
+ let revised=0
+ const f=await fixture(t,true,{context:store=>({
+  candidates:async()=>({cards:(await store.query({kind:'message.topics',conversationId:'group'})).map(topic=>({candidateId:'task-card',taskId:'existing-task',topicId:topic.topicId,title:topic.title})),total:1,catalogRevision:'one'}),
+  facts:async({run,binding,conversationFacts})=>{
+   if(binding.taskId&&run.actorId==='third')throw Object.assign(Error('WORKFLOW_TASK_FORBIDDEN'),{code:'WORKFLOW_TASK_FORBIDDEN'})
+   if(conversationFacts)assert.equal(binding.taskId,undefined)
+   return {topic:binding.topicId?await store.query({kind:'message.topic',topicId:binding.topicId}):null,...(binding.taskId?{task:{factVersion:await store.query({kind:'message.task.version',taskId:binding.taskId})}}:{})}
+  },
+ }),handlers:{fact:async()=>({status:'recorded'}),revise:async(action,info)=>{assert.equal(info.run.actorId,'owner');assert.equal(action.taskId,'existing-task');revised++;return {status:'applied'}}},
+ sessionRunner:{async close(){},async run(args){await args.onSessionBound();const decision=answerDecision(args.input)
+  for(const item of decision.decisions){const unit=item.units[0],revise=item.runId==='choice';unit.binding=item.runId==='seed'?{disposition:'new',candidateId:null}:{disposition:'existing',candidateId:'task-card'};unit.intent={kind:'intent',actions:[{intent:revise?'revise':'fact',arguments:revise?{objective:'按文档开发并使用UAT2测试',uatEnvironment:'uat2'}:{text:unit.goalText,scope:'conversation'},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}
+  if(decision.decisions.some(item=>item.runId==='third')){
+   const attack=structuredClone(decision),unit=attack.decisions.find(item=>item.runId==='third').units[0]
+   unit.intent.actions=[{intent:'revise',arguments:{objective:'越权修改'},dependsOn:[]}]
+   await assert.rejects(args.onCandidate(attack),{code:'WORKFLOW_TASK_FORBIDDEN'})
+  }
+  await args.onCandidate(decision);return {status:'submitted'}
+ }}})
+ await f.receive('seed','按文档开发')
+ await f.store.command({id:'seed-task',kind:'task.accept',args:{taskId:'existing-task',requirementRef:'sha256/requirement',requirementRevision:1,sessionId:'owner',criteria:['按文档开发'],sourceKey:'source:seed',eventKey:'created'}})
+ for(const [runId,actorId,body]of [['third','third','uat1先别动'],['choice','owner','那就2吧']])await f.workflow.receive({runId,sourceKey:runId,sourceVersion:1,conversationId:'group',actorId,body},{process:false})
+ await f.workflow.process('choice')
+ assert.equal(revised,1);assert.equal((await f.store.query({kind:'message.topics',conversationId:'group'})).length,1)
+ const third=(await f.workflow.state('third')).commands[0]
+ assert.equal(third.args.taskId,null);assert.equal(third.args.binding.taskId,undefined);assert.equal(third.args.binding.target.taskId,undefined)
+})

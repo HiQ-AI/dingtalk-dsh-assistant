@@ -1,8 +1,8 @@
 # 群消息澄清与准入实施
 
-> 状态：COMPLETE
+> 状态：ACTIVE
 > Goal ID：message-clarification-admission
-> 最近维护：2026-10-08T12:46:22.4270744+08:00
+> 最近维护：2026-10-08T14:19:57.5092916+08:00
 > 权威目标：D:/codex/worktrees/message-clarification-admission/dingtalk-dsh-assistant/docs/acceptance/message-clarification-admission/goal.md
 
 ## 总目标
@@ -32,14 +32,16 @@
 | SG5 | 集成、真实模型回放与 PR | 定向验证及真实状态读回，中文 PR | 已完成 | round-5/6/10/12；PR #155 OPEN 已独立回读 |
 | SG6 | 本地部署与现场核对 | 包/进程/健康及原消息状态独立读回，保留业务授权边界 | 已完成 | round-19 新包/进程/历史、DWS及健康均独立回读 |
 
-| SG7 | 同话题连续归属与名称摘要演进 | 四条链路同话题，当前展示随有效输入更新，版本反例通过 | 已完成 | round-10/12 模型通过；round-13 现场四条同话题 |
+| SG7 | 同话题连续归属与名称摘要演进 | 四条链路同话题，公共事实权限不拆散话题，真实UAT确认更新原Task | 已完成 | round-22四条真实来源版本2全部同原话题，revise applied，原Task需求版本2及UAT2已落盘 |
 
 | SG8 | 历史错误澄清原来源恢复 | 已核验撤回且零业务副作用可重处理，当前策略刷新，反例拒绝；#124解除等待且真实唯一Task发起 | 已完成 | round-19；#124 settled/resolved，原create applied，task-1edb9931ffe6ecd4efc0a3949376d66f已创建 |
 
+| SG9 | Task 钉钉文档正文读取 | 原消息链接进入只读材料范围，DWS正文完整证据落盘，原Task先读文档和分析再等待UAT；隔离反例通过 | 已完成 | round-21原Task实际读取57222字节HTML并保存查询证据；文档缺失等待已消除 |
+
 ## 当前检查点
 
-- 当前子目标：SG8
-- 唯一下一步：本轮发起目标完成。业务开发由已创建Task继续，当前Owner记录等待UAT环境和文档正文读取；不在本轮扩大业务范围。
+- 当前子目标：SG6
+- 唯一下一步：恢复已配置但缺失的dataset受管源仓库，系统重评原Task并核对工程阶段；完成本轮PR更新与边界回报。
 - 未闭环项：PR 未合并；四项既有服务基线失败未扩范围修复；业务开发尚未完成，不影响本轮任务发起验收。
 
 ## 进展
@@ -54,6 +56,8 @@
 - 2026-10-08 12:45：受管恢复真实#125答复关联，#124不再等待；原taskId唯一创建且Owner接手。源码、测试、部署和现场证据见round-19。
 
 ## 重大决策
+
+- 2026-10-08 SG9：真实节点为FILE/html，原生下载57222字节且真实适配器重放通过。首版Task重评已接纳，但四条路由积压因群会话被观察恢复占用而挡住Owner；不绕过门禁、不强行dispose外部Agent，采用公开idle维护锁和既有原生派生/CAS机制。详见spec/document-session-recovery.md。
 
 - 不增加第二个意图模型；复用协调候选接纳、message request、Owner 和通知账。
 - schema/请求变更仅对新候选强制，历史请求保留可解释与恢复，不能伪造通过记录。

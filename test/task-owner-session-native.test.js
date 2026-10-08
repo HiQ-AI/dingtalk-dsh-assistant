@@ -1,3 +1,4 @@
+import { classifyAgentQueryError } from '../packages/dingtalk-dsh-assistant/agent-query-tools.js'
 import { sessionWorkspace, taskDirectories, taskFilePath } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import test from 'node:test'
@@ -566,4 +567,28 @@ test('工程准备缺UAT在同一Owner会话纠正为具体等待，未接纳工
   assert.equal(h.requests.length, 2)
   assert.match(JSON.stringify(h.requests[1]), /缺少uatEnvironment/u)
   assert.match(h.requests[0].system, /补充后继续原Task/u)
+})
+
+
+test('缺UAT先读取已有材料再等待工程字段，读取权限失败独立分类',async t=>{
+ for(const denied of [false,true]){
+  const root=await mkdtemp(join(tmpdir(),'owner-material-before-uat-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const ref=`sha256-${'8'.repeat(64)}.json`
+  let read=false
+  const candidate={action:'wait',summary:denied?'资料访问被拒绝，等待修复访问权限。':'已读取文档并整理需求，工程执行还需指定环境。',evidenceRefs:denied?[]:[ref],condition:{kind:denied?'permission':'business-input',missing:denied?'文档访问权限':'target.environment',responsibleParty:denied?'系统维护方':'交办人',resumeWhen:denied?'访问权限恢复后重读原文档':'补入唯一UAT环境后继续工程阶段',evidenceRefs:denied?[]:[ref]}}
+  const h=await host(root,null,null,candidate,undefined,1,[{name:'read_document',args:{}}]);t.after(()=>h.close())
+  const result=await h.sessions.run({binding:{taskId:'material-task',sessionId:'material-owner',turnId:'turn',leaseEpoch:1,ownerEpoch:1,requirementRevision:1,inputDigest:'digest',sessionBound:false},input:{goal:{request:'按文档开发',target:{}},queryContext:{resources:[{resourceRef:'document'}]}},provider:'owner-fixture',model:'scripted',queryInput:{},
+   tools:[{name:'read_document',description:'读取已有文档',parameters:{type:'object',properties:{},additionalProperties:false},classifyError:classifyAgentQueryError,execute:async()=>{read=true;if(denied)throw Object.assign(Error('文档访问被拒绝'),{code:'DWS_DOC_PERMISSION_DENIED'});return {evidenceRef:ref,result:{text:'当前文档正文'},sourceRefs:['document']}}}],
+   onQueryEvidence:async()=>{},readArtifact:async()=>({text:'当前文档正文'}),onSessionBound:async()=>{},onCandidate:async value=>{assert.ok(read);assert.equal(value.condition.kind,denied?'permission':'business-input')}})
+  assert.equal(result.status,'submitted')
+  const prompt=JSON.stringify(h.requests[0])
+  assert.match(prompt,/缺少UAT只阻塞工程阶段/u);assert.match(prompt,/必须先调用对应工具取得实际结果/u)
+  assert.match(prompt,/不能把读取失败与缺UAT合并成用户补充问题/u)
+ }
+})
+
+
+test('文档六类实际读取失败可交给Owner继续判断，未知错误仍fatal',()=>{
+ for(const code of ['DWS_DOC_AUTH_REQUIRED','DWS_DOC_PERMISSION_DENIED','DWS_DOC_NOT_FOUND','DWS_DOC_INCOMPLETE','DWS_DOC_TEMPORARY','DWS_DOC_READ_FAILED'])assert.equal(classifyAgentQueryError({code}),'correctable')
+ for(const code of ['DWS_DOC_UNKNOWN','DWS_DOC_SCOPE_CHANGED','QUERY_VERIFICATION_FAILED','QUERY_SCOPE_CHANGED',undefined])assert.equal(classifyAgentQueryError({code}),'fatal')
 })

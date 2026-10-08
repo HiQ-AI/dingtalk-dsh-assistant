@@ -105,18 +105,57 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     if (checkedWorkspaces.get(binding.sessionId) === configuration) return null
     const idle = idleSessions.get(binding.sessionId)
     if (idle) { await idle.dispose(); idleSessions.delete(binding.sessionId) }
-    if (entries.has(binding.conversationId) || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId))
-      throw fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE')
+    if (entries.has(binding.conversationId)) throw fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE')
+    const observed = ctx.agents.get(binding.sessionId)
+    if (observed || ctx.sessions.get(binding.sessionId)) {
+      if (!observed || observed.session !== ctx.sessions.get(binding.sessionId) || observed.status !== 'idle'
+        || observed.inbox.hasPending || binding.status !== 'idle' || !binding.sessionBound)
+        throw fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE')
+      // 裸Agent没有dispose capability。仅在公开idle维护锁内验证观察恢复，保留原会话，派生受管子会话。
+      return observed.runMaintenance(async signal => {
+        const events = observed.session.snapshotEvents()
+        history(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
+        const lastTurn = events.findLastIndex(event => event.type === 'turn/end')
+        const lastInput = events.findLast(event => event.type === 'user/message' && event.data.source?.groupCoordinator)
+        if (observed.inbox.hasPending || observed.session.header.cwd !== cwd || lastTurn < 0
+          || lastInput?.data.source.groupCoordinator.leaseEpoch !== binding.leaseEpoch
+          || events.slice(lastTurn + 1).some(event => event.type !== 'session/end-seed')
+          || events.some(event => event.type === 'user/message' && !event.data.source?.groupCoordinator
+            && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt'
+              && event.data.source.form === 'snapshot')))
+          throw fail('GROUP_COORDINATOR_OBSERVER_SESSION_UNSAFE')
+        await ctx.sessions.flush(observed.session)
+        const stored = await inspect(binding.sessionId)
+        if (!stored || JSON.stringify(stored.events) !== JSON.stringify(events) || signal.aborted
+          || observed.inbox.hasPending || JSON.stringify(observed.session.snapshotEvents()) !== JSON.stringify(events))
+          throw fail('GROUP_COORDINATOR_OBSERVER_SESSION_UNSAFE')
+        const relocation = await prepareStored(binding, cwd, configuration, stored, true)
+        if (signal.aborted || observed.inbox.hasPending || JSON.stringify(observed.session.snapshotEvents()) !== JSON.stringify(events)) {
+          const owned = idleSessions.get(relocation.sessionId)
+          if (owned) { await owned.dispose(); idleSessions.delete(relocation.sessionId) }
+          checkedWorkspaces.delete(relocation.sessionId)
+          throw fail('GROUP_COORDINATOR_OBSERVER_SESSION_UNSAFE')
+        }
+        return relocation
+      })
+    }
     const stored = await inspect(binding.sessionId)
     if (!stored) { if (binding.sessionBound) throw fail('GROUP_COORDINATOR_SESSION_MISSING'); return null }
+    return prepareStored(binding, cwd, configuration, stored, false)
+  }
+  async function prepareStored(binding, cwd, configuration, stored, observedFork) {
     history(stored.events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
-    const relocating = stored.meta.cwd !== cwd
-    const sessionId = relocating ? `coordinator-${createHash('sha256').update(JSON.stringify([binding.sessionId, cwd])).digest('hex').slice(0, 40)}` : binding.sessionId
+    const relocating = observedFork || stored.meta.cwd !== cwd
+    const sessionId = relocating ? `coordinator-${createHash('sha256').update(JSON.stringify(observedFork
+      ? [binding.sessionId, cwd, 'observer-handoff', binding.leaseEpoch] : [binding.sessionId, cwd])).digest('hex').slice(0, 40)}` : binding.sessionId
     const existingIdle = idleSessions.get(sessionId)
     if (existingIdle) { await existingIdle.dispose(); idleSessions.delete(sessionId) }
     const child = relocating ? await inspect(sessionId) : stored
     if (child) {
       if (child.meta.cwd !== cwd || relocating && child.meta.parentSession !== binding.sessionId) throw fail('GROUP_COORDINATOR_SESSION_IDENTITY_MISMATCH')
+      if (observedFork && (child.inheritedEventCount !== stored.events.length
+        || JSON.stringify(child.events.slice(0, stored.events.length)) !== JSON.stringify(stored.events)))
+        throw fail('GROUP_COORDINATOR_SESSION_IDENTITY_MISMATCH')
       history(child.events, { ...binding, sessionId, leaseEpoch: binding.leaseEpoch + (relocating ? 2 : 1) })
     }
     const setup = agentCtx => {
@@ -154,7 +193,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     entries.set(binding.conversationId, entry)
     const setup = agentCtx => {
       agentCtx.systemPrompt.section({ name: 'group:coordinator', order: 0, complete: true,
-        text: `你是本群常驻协调助手。根据当前身份别名、群职责、原消息和连续上下文一次完成是否介入、任务关联、查询、补充、新建或必要澄清。群聊中的“你”不自动指助手，但明确点名助手和明确交办不得忽略。units=[]表示完全忽略来源，不会将其并入Task；需要承接的补充、附件来源和阶段条件应使用fact单元绑定同批source:<runId>且replyPolicy:none。非空units的spans合计必须覆盖sourceLength完整原文。requiredExecutionMaterials只接受真实resourceRef，待取得证据或表结构属于调查objective而不是发起前置条件。附件与后续请求结合阅读，原需求方更正应更新同一任务；同一目标的准备、审批、测试、原发送者验证、正式执行属于同一Task的阶段，不重复建任务。职责止于消息承接、事项关联和交办条件整理。请求提供任务、随后提供文档、点名和明确开发可以逐步补足同一交办链；根据语义、引用和已知话题事实续接同一topic，不因每条消息信息不完整拆成新话题，也不按时间相邻或同群强行合并无关事项。同批同一链选择一个source:<runId>为共同话题锚点，fact与create/research都用conversation绑定该锚点；跨轮复用当前已有话题candidateId。创建Task不等于新建话题：已有无Task话题可承接create，只有已有Task才禁止再次create；new/null只用于独立新话题。不同作者可以讨论同一话题，但逐条保留来源身份、分别核验授权，话题关联不继承别人的权限。只有材料加单纯点名、尚未表达要做什么时，记录为同话题fact和处理指向，等待后续明确动作；不得自行推断需要评审、调查或实施建议而创建research。“授权不明按分析”仅限制已表达动作的执行范围，不能凭空生成分析任务。初次命名或新增实质信息时，在一个unit的topicPresentation提交累计事项的title和summary（不是仅复述最新一句）；同topic每批最多一个显式更新，其他unit省略该字段。名称概括事项，摘要反映当前目标、已给材料和明确约束；不臆造文档正文，不把承接写成完成。新建任务的arguments.title用8–20字、最多30字的业务短名称，直接概括动作和对象，不以“针对某人要求”起头；完整需求放objective。业务objective可以完整概括需求；stageAuthorizations[].objective是授权依据，必须使用sourceQuote中的逐字来源片段，不得改写、扩展或借其他作者的原文补足授权。明确交办且原文与附件元数据足够时，立即提交create/research，由Task Owner继续调查、工作簿核验、SQL审核和交付；不要先在群协调会话完成这些业务工作再发起Task。“边做边修”等是工作方式约束；已有事项则关联，没有具体事项则保留对话事实，不虚构插件专项任务、不要求先提供插件bug。任务准入由Host核验，actorPermissions为空不表示无权；提出明确交办候选，不自行要求负责人确认。needs_clarification仅用于target_conflict、scope_conflict、required_parameter_missing、no_actionable_target，必须给出missingField、blockedAction和checkedSourceRefs（使用当前原消息sourceKey及实际检查的resourceRef，不使用source:<runId>候选ID）；先读已有必要材料，权限、读取故障、能力缺失不能作为需求澄清。只读材料工具仅用于确需查明的消息含义、任务关联或缺失业务条件，不把整个附件审查当成承接前置。使用本轮只读工具核验相关任务事实，不猜测数据或读取权限。仅人际闲聊静默处理，不主动追问；已经提供的材料不可重复索取。提交动作只代表候选，Host接纳后由已有任务后端执行；received:true仅表示协调决定已落账，不能据此认定Task存在或执行完成。每轮sources.processing为当前后端权威事实，旧superseded命令且taskExists=false不能作为忽略重放来源的依据；不得声称已执行或替人审批。长任务交给既有Task，不等待其完成来阻塞群消息。严格保留来源身份、版本、原文约束和授权边界；历史工具结果是当时事实，当前版本冲突时重新读取相关任务。不要重复通知或自行发送群消息，所有通知由唯一出口处理。${groupReplyInstructions}最后调用 ${SUBMIT} 提交协调决定。` })
+        text: `你是本群常驻协调助手。根据当前身份别名、群职责、原消息和连续上下文一次完成是否介入、任务关联、查询、补充、新建或必要澄清。群聊中的“你”不自动指助手，但明确点名助手和明确交办不得忽略。units=[]表示完全忽略来源，不会将其并入Task；需要承接的补充、附件来源和阶段条件应使用fact单元绑定同批source:<runId>且replyPolicy:none。非空units的spans合计必须覆盖sourceLength完整原文。requiredExecutionMaterials只接受真实resourceRef，待取得证据或表结构属于调查objective而不是发起前置条件。附件与后续请求结合阅读，原需求方更正应更新同一任务；同一目标的准备、审批、测试、原发送者验证、正式执行属于同一Task的阶段，不重复建任务。职责止于消息承接、事项关联和交办条件整理。请求提供任务、随后提供文档、点名和明确开发可以逐步补足同一交办链；根据语义、引用和已知话题事实续接同一topic，不因每条消息信息不完整拆成新话题，也不按时间相邻或同群强行合并无关事项。同批同一链选择一个source:<runId>为共同话题锚点，fact与create/research都用conversation绑定该锚点；跨轮复用当前已有话题candidateId。创建Task不等于新建话题：已有无Task话题可承接create，只有已有Task才禁止再次create；new/null只用于独立新话题。不同作者可以讨论同一话题，但逐条保留来源身份、分别核验授权，话题关联不继承别人的权限。公共讨论补充用fact且scope=conversation、replyPolicy=none关联当前已有话题，不读取或控制Task。需求方明确补齐已有Task缺少的执行字段时，用revise携带对应结构化参数更新原需求，不仅记fact；依据连续问答解释省略表达，不新增任务或部署授权。若当前确认省略环境全名，revise填写uatEnvironment及uatSourceRefs，按问答顺序引用同话题当前sourceKey/sourceVersion/sourceQuote，sourceQuote必须是完整原文、末条必须是当前有权确认消息；上下文仅作解释不授予权限，不覆盖当前明确不同环境。只有材料加单纯点名、尚未表达要做什么时，记录为同话题fact和处理指向，等待后续明确动作；不得自行推断需要评审、调查或实施建议而创建research。“授权不明按分析”仅限制已表达动作的执行范围，不能凭空生成分析任务。初次命名或新增实质信息时，在一个unit的topicPresentation提交累计事项的title和summary（不是仅复述最新一句）；同topic每批最多一个显式更新，其他unit省略该字段。名称概括事项，摘要反映当前目标、已给材料和明确约束；不臆造文档正文，不把承接写成完成。新建任务的arguments.title用8–20字、最多30字的业务短名称，直接概括动作和对象，不以“针对某人要求”起头；完整需求放objective。业务objective可以完整概括需求；stageAuthorizations[].objective是授权依据，必须使用sourceQuote中的逐字来源片段，不得改写、扩展或借其他作者的原文补足授权。明确交办且原文与附件元数据足够时，立即提交create/research，由Task Owner继续调查、工作簿核验、SQL审核和交付；不要先在群协调会话完成这些业务工作再发起Task。“边做边修”等是工作方式约束；已有事项则关联，没有具体事项则保留对话事实，不虚构插件专项任务、不要求先提供插件bug。任务准入由Host核验，actorPermissions为空不表示无权；提出明确交办候选，不自行要求负责人确认。needs_clarification仅用于target_conflict、scope_conflict、required_parameter_missing、no_actionable_target，必须给出missingField、blockedAction和checkedSourceRefs（使用当前原消息sourceKey及实际检查的resourceRef，不使用source:<runId>候选ID）；先读已有必要材料，权限、读取故障、能力缺失不能作为需求澄清。只读材料工具仅用于确需查明的消息含义、任务关联或缺失业务条件，不把整个附件审查当成承接前置。使用本轮只读工具核验相关任务事实，不猜测数据或读取权限。仅人际闲聊静默处理，不主动追问；已经提供的材料不可重复索取。提交动作只代表候选，Host接纳后由已有任务后端执行；received:true仅表示协调决定已落账，不能据此认定Task存在或执行完成。每轮sources.processing为当前后端权威事实，旧superseded命令且taskExists=false不能作为忽略重放来源的依据；不得声称已执行或替人审批。长任务交给既有Task，不等待其完成来阻塞群消息。严格保留来源身份、版本、原文约束和授权边界；历史工具结果是当时事实，当前版本冲突时重新读取相关任务。不要重复通知或自行发送群消息，所有通知由唯一出口处理。${groupReplyInstructions}最后调用 ${SUBMIT} 提交协调决定。` })
       agentCtx.tools.restrict({ allow: [] })
       agentCtx.systemPrompt.section({ name: 'group:progress', order: 1, text: '已有任务的催促或进度询问不启动新的调查回答：确需回复时使用 status/result 查询已有任务当前事实；只含情绪反馈且没有查询或交办时作为 fact 静默关联。answer.objective 填真正要调查的问题，不能填你拟发送的回复。群里仅通知简洁的实际进度，详细业务分析留在任务产物，不复述原文、不道歉铺垫、不说“已收到”或“不用重复提交材料”。' })
       const allowed = new Set([SUBMIT, ...readTools.map(t => t.name)])
@@ -185,6 +224,10 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
           try { acceptance = await onCandidate(structuredClone(decision), entry.binding) }
           catch (error) {
             const code = error.code ?? error.message
+            if (code === 'TASK_UAT_SOURCE_INVALID')
+              return { received: false, feedback: error.message + ' 请核对完整原文与当前版本，保留原Task并修正环境来源引用；不得猜环境或借第三人授权。' }
+            if (code === 'WORKFLOW_TASK_FORBIDDEN')
+              return { received: false, feedback: '当前来源没有读取或操作该Task的权限。不得改绑新话题规避权限；公共事实可用原话题候选提交仅fact、scope=conversation、replyPolicy=none，不读取Task详情、不改变需求。其他合法来源的明确需求补充仍在原Task用revise更新，不能把整批退为新话题；禁止借别人的身份或授权执行。' }
             if (code === 'TASK_STAGE_AUTHORIZATION_SOURCE_INVALID')
               return { received: false, feedback: `${code}：请核对stageAuthorizations[].sourceQuote和objective；授权objective必须是该sourceQuote中的逐字来源片段，业务动作arguments.objective可以完整概括。保留真实来源、作者和授权范围，不自动扩权，不改成向用户澄清；修正完整候选后在本会话重新提交，Host仍会校验。` }
             if (code === 'GROUP_COORDINATOR_CLARIFICATION_INVALID')

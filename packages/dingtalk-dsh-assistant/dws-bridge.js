@@ -2,9 +2,27 @@ import { dispatchOutbox, matchesOutbound } from './dws-adapter.js'
 
 const meaningful = (value) => typeof value === 'string' && value.trim() !== '' && value.trim().toLowerCase() !== 'null'
 
+export function parseDingtalkDocUrl(value) {
+  if (typeof value !== 'string') return null
+  let url
+  try { url = new URL(value) } catch { return null }
+  if (url.protocol !== 'https:' || url.hostname !== 'alidocs.dingtalk.com' || url.port || url.username || url.password) return null
+  const match = /^\/i\/nodes\/([A-Za-z0-9_-]+)$/u.exec(url.pathname)
+  return match ? { type: 'dingtalkDoc', resourceId: match[1] } : null
+}
+
 export function normalizeResourceRefs(value, text) {
   const supplied = Array.isArray(value) ? value.filter((item) => ['mediaId', 'fileId'].includes(item?.type) && typeof item.resourceId === 'string') : []
+  for (const item of Array.isArray(value) ? value : []) {
+    const doc = item?.type === 'url' ? parseDingtalkDocUrl(item.resourceId)
+      : item?.type === 'dingtalkDoc' && typeof item.resourceId === 'string' && /^[A-Za-z0-9_-]+$/u.test(item.resourceId ?? '') ? { type: 'dingtalkDoc', resourceId: item.resourceId } : null
+    if (doc) supplied.push(doc)
+  }
   const found = [...String(text ?? '').matchAll(/\[图片消息\]\(mediaId=([^\)]+)\)/gu)].map((match) => ({ type: 'mediaId', resourceId: match[1] }))
+  for (const match of String(text ?? '').matchAll(/https:\/\/[^\s<>"）)]+/gu)) {
+    const doc = parseDingtalkDocUrl(match[0])
+    if (doc) found.push(doc)
+  }
   const file = /^\[文件\] (.+) fileId: ([^\s]+)(?: 注意：如需下载使用dws drive download命令下载)?$/u.exec(String(text ?? ''))
   if (file) found.push({ type: 'fileId', resourceId: file[2], name: file[1] })
   return [...new Map([...found, ...supplied].map((item) => [`${item.type}:${item.resourceId}`, item])).values()]
