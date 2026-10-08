@@ -420,6 +420,39 @@ function coreCommand(command, now, consumption = {}) {
     db.prepare("UPDATE execution_runs SET status='cancelled',updated_at=? WHERE run_id=?").run(now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
+  if (command.kind === 'node.session.rebind') {
+    const fields = ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','nextSessionId','lastInputLease','evidenceRef']
+    object(a, [...fields,'maintenance'], fields)
+    const r = activeRun(a), n = nodes(r.run_id).find(node => node.node_run_id === a.nodeRunId)
+    assertTaskDispatchAllowed(r)
+    const maintenance = maintenanceStatus(db, workerData.processIncarnation)
+    if (a.maintenance !== undefined) object(a.maintenance,['maintenanceId','revision'])
+    if (!maintenance.active || !a.maintenance || a.maintenance.maintenanceId !== maintenance.maintenanceId || a.maintenance.revision !== maintenance.revision) fail('RUNTIME_MAINTENANCE_STALE')
+    if (!n || r.revision !== a.runRevision || r.generation !== a.generation || n.lease_epoch !== a.leaseEpoch
+      || n.input_digest !== a.inputDigest || n.session_id !== a.sessionId || n.executor !== 'agent' || !n.session_bound || n.output_ref
+      || !['ready','running','waiting'].includes(n.status)
+      || n.status === 'waiting' && JSON.parse(n.wait_reason ?? 'null')?.reference !== 'controller-restarted'
+      || !Number.isSafeInteger(a.lastInputLease) || a.lastInputLease < 1 || a.lastInputLease > n.lease_epoch
+      || n.status === 'running' && a.lastInputLease >= n.lease_epoch
+      || a.nextSessionId === a.sessionId || typeof a.nextSessionId !== 'string' || !a.nextSessionId.startsWith('execution-')
+      || nodes(r.run_id).some(other => other.node_run_id !== n.node_run_id && (other.status === 'running' || !other.drained))
+      || db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)) fail('NODE_SESSION_REBIND_NOT_ADMITTED')
+    ref(a.evidenceRef,'evidenceRef');assertRunEffectsDrained(db,r.run_id)
+    const task = db.prepare('SELECT * FROM business_tasks WHERE task_id=?').get(r.task_id)
+    if (task) {
+      const stage = db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=?').get(r.task_id,task.plan_revision,r.run_id)
+      if (task.plan_requirement_revision !== task.requirement_revision || !stage || stage.output_ref) fail('NODE_SESSION_REBIND_NOT_ADMITTED')
+      if (stage.source_condition) {
+        const condition=JSON.parse(stage.source_condition),source=readCurrentTaskSource(db,condition.sourceKey,{taskId:r.task_id})
+        if (!source || source.status === 'superseded' || source.sourceVersion !== condition.sourceVersion || !source.body.includes(condition.sourceQuote)
+          || !condition.sourceQuote.includes(condition.objective) || condition.requiredActorId && source.actorId !== condition.requiredActorId) fail('NODE_SESSION_REBIND_NOT_ADMITTED')
+      }
+    }
+    db.prepare("UPDATE execution_nodes SET session_id=?,status='ready',drained=1,wait_reason=NULL,drain_evidence_ref=? WHERE node_run_id=?").run(a.nextSessionId,a.evidenceRef,n.node_run_id)
+    db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now,r.run_id)
+    emitEvent(command.id,'node.session.rebound',a,now)
+    return { sessionId:a.nextSessionId }
+  }
   if (command.kind === 'node.failure.reclassify') {
     object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','evidenceRef','previousCode','code'])
     const { previousCode, code } = a

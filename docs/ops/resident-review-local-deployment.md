@@ -693,3 +693,11 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 上述工程前置恢复也要求当前 Owner 的 blocked advance 仅包含有来源条件的 task-engineering 初始化候选、计划版本0，且全Task无任何计划阶段/接纳收据/执行Run/效果；原来源与Owner/租约/需求/控制版本均须匹配。只有这个未生效工程准备分支不要求当前需求已产生查询证据，其他只读重评规则不变。恢复废弃旧候选并产生system.recovery审计，再由同一Owner重新决策；不按128或任意错误码自动重领。
 
 已发过时通知更正：先按原通知ID和完整正文唯一定位，核对当前业务事实；用notification operation的recall/explicit_user撤回，独立核验recallStatus及证据。再用同一notificationId准备restore/correction和简洁更正文，通过受信host-web身份执行并独立读取notification-replacement及DWS回读工件。保持同一profile/会话/原引用，未知投递仅reconcile，不重复send；不把旧正文直接补回，不伪造群内授权消息。
+
+### 历史工程会话归属的一次维护修复
+
+工程原生会话已被普通历史观察接管、原节点领取新租约但没有对应原生输入时，先区分实际活跃执行与闲置观察。新建工程会话直接使用原生 `origin=subagent`；历史 header 不手写修改，也不增加在线自动派生路径。
+
+本次维护复用 bootstrap witness/profile CAS：进入正式 maintenance，让其他实际工作自然排空；witness 证明 Resident 完整 Loader dispose 后，单独禁用 `session-controller`。维护桥须再次核对两个精确模块 disabled、fiber 已释放及两个旧 Agent/Session 均不存在，取得原生控制库独占，并按当前配置恢复真实工程定义。仅调用内部 `controller.prepareManagedSession`，核对精确维护 id/revision、原 Task/Run/node/input/lease、完成历史与零节点效果，完整 seed 派生受管子会话后正式 CAS 换绑排空；不启动模型、不重做成功步骤、不取消业务任务。
+
+临时 profile 修改逐步先 `--check`；执行期间保持 profile CAS，桥关闭 worker/自有原生句柄后独立读取控制账及新原生 header。按精确尾块反序移除桥、恢复 session-controller、bootstrap enable，确认 profile 回到原摘要。随后走普通部署 Check/安装/Readback/Resume，并以新 lease 的原生输入及实际工具调用证明续行，不能以 running 投影代替。临时维护脚本及含真实身份的 manifest 留在 docs/tmp；不向版本库提交私人任务内容，不创建历史备份副本。

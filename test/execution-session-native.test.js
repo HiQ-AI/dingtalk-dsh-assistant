@@ -785,3 +785,50 @@ test('历史中断证据仅接纳最后本轮精确只读工具取消形态', as
   events[5].data.reason.reason.kind = 'shutdown'
   assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
 })
+
+test('受管工程新会话声明原生子会话归属', async t => {
+  const h=await host();t.after(()=>h.close())
+  await drive(h)
+  assert.equal((await h.ctx.sessionPersistence.inspect(binding().sessionId)).meta.origin,'subagent')
+})
+
+test('旧工程冷会话在维护桥派生受管子会话', async t => {
+  const h=await host({script:[{text:'temporary stop'},submit('continued')]});t.after(()=>h.close())
+  const originalCreate=h.ctx.agents.create.bind(h.ctx.agents)
+  h.ctx.agents.create=options=>{const meta={...options.meta};delete meta.origin;return originalCreate({...options,meta})}
+  await drive(h)
+  h.ctx.agents.create=originalCreate
+  const before=await h.ctx.sessionPersistence.inspect(binding().sessionId)
+  let saved
+  const proof=await h.manager.prepareManagedSession(binding({status:'running',sessionBound:true,leaseEpoch:2}),definition(),async p=>{saved=p})
+  assert.equal(proof,saved)
+  assert.equal(h.ctx.agents.get(binding().sessionId),undefined)
+  const child=await h.ctx.sessionPersistence.inspect(proof.sessionId)
+  assert.equal(child.meta.origin,'subagent');assert.equal(child.meta.parentSession,binding().sessionId)
+  assert.equal(child.events.filter(e=>e.type==='user/message').length,before.events.filter(e=>e.type==='user/message').length)
+  const result=await drive(h,{binding:binding({sessionId:proof.sessionId,sessionBound:true,leaseEpoch:3})})
+  assert.equal(result.status,'submitted')
+})
+
+for (const scenario of ['current-lease','identity','external-observer','cas-retry']) test(`旧工程受管派生安全门禁 ${scenario}`, async t=>{
+  const h=await host({script:[{text:'stop'}]});t.after(()=>h.close())
+  const create=h.ctx.agents.create.bind(h.ctx.agents)
+  h.ctx.agents.create=options=>{const meta={...options.meta};delete meta.origin;return create({...options,meta})}
+  await drive(h);h.ctx.agents.create=create
+  const b=binding({status:'running',sessionBound:true,leaseEpoch:2})
+  if(scenario==='current-lease')b.leaseEpoch=1
+  if(scenario==='identity')b.inputDigest='other'
+  if(scenario==='external-observer') {
+    const observer=await h.ctx.agents.resume({resumeSessionId:binding().sessionId,agentOptions:{provider:'execution-fixture',model:'scripted'}})
+    t.after(()=>observer.dispose())
+    await assert.rejects(h.manager.prepareManagedSession(b,definition(),async()=>assert.fail('must not bind')))
+    assert.equal(h.ctx.agents.get(binding().sessionId),observer.agent);return
+  }
+  if(scenario==='cas-retry') {
+    let id
+    await assert.rejects(h.manager.prepareManagedSession(b,definition(),async p=>{id=p.sessionId;throw new Error('CAS rejected')}),/CAS rejected/)
+    const proof=await h.manager.prepareManagedSession(b,definition(),async()=>{})
+    assert.equal(proof.sessionId,id);return
+  }
+  await assert.rejects(h.manager.prepareManagedSession(b,definition(),async()=>assert.fail('must not bind')))
+})

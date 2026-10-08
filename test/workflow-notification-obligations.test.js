@@ -168,6 +168,7 @@ for (const revised of [false, true]) test(`Owner ${kind} 通知及原生领取�
   await send('task.accept', { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`, requirementRevision: 1,
     sessionId: 'owner', criteria: ['交付结果'], sourceKey: 'source', eventKey: 'created' })
   await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task' } })
+  await send('task.owner.event', {taskId:'task',eventKey:'prior-confirmation',eventType:'workflow.confirmation.required',payloadRef:`sha256-${'b'.repeat(64)}.json`})
   await send('task.owner.claim', { taskId: 'task', turnId: 'turn', expectedLeaseEpoch: 0 })
   await send('task.owner.sessionBound', { taskId: 'task', turnId: 'turn', leaseEpoch: 1, sessionId: 'owner' })
   await send('task.owner.candidate', { taskId: 'task', turnId: 'turn', leaseEpoch: 1,
@@ -181,6 +182,7 @@ for (const revised of [false, true]) test(`Owner ${kind} 通知及原生领取�
     assert.equal(notice, undefined)
     const [report] = await f.store.query({ kind: 'task.owner.reports', taskId: 'task' })
     assert.equal(report.facts.condition.kind, kind)
+    assert.ok(report.triggerTypes.includes('workflow.confirmation.required'))
     // 模拟部署前已有的待发报告，必须由原生领取判定失效。
     await f.call('notification.prepare', { runId: 'm', commandId: 'c', notificationId: 'legacy-progress',
       eventKey: `task.owner.report:${report.reportId}`, payload: { phase: `owner:${report.reportId}`, text: '处理暂时受阻', fact: { taskId: 'task' } },

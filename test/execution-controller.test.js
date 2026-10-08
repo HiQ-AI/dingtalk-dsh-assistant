@@ -244,7 +244,7 @@ async function agentRecoveryFixture(t, response = ({ input, recoveryContext }) =
       generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest, contextRef: saved.ref }
   }
   t.after(async () => { await controller.close();await store.close() })
-  return { get store() { return store }, get controller() { return controller }, artifacts, calls, runId, resumeArgs,
+  return { get store() { return store }, get controller() { return controller }, artifacts, calls, runId, resumeArgs, sessions,
     beforeCommand(callback) { beforeCommand = callback },
     async reopen() { await controller.close();await store.close();store = await openExecutionStore({ dbPath, instanceId });controller = makeController() } }
 }
@@ -825,4 +825,23 @@ test('历史原生中断重分类仍只允许Owner同一问题续行一次并保
   assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].sessionId,n.sessionId)
   assert.equal(repeated.problemKey,recovery.problemKey);assert.equal(repeated.reason,'strategy-change-required');assert.equal(repeated.repairable,false)
   await assert.rejects(f.controller.recover({ commandId: 'bypass-repeat-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+})
+
+test('内部受管准备复用冻结workflow及CAS，维护下不调度并保留成功前缀',async t=>{
+  const f=await agentRecoveryFixture(t),before=await f.controller.state(f.runId)
+  f.beforeCommand(value=>{if(value.kind==='node.claim')throw new Error('fixture stops before dispatch')})
+  await f.controller.resumeNode(await f.resumeArgs());await assert.rejects(f.controller.whenIdle(f.runId),/fixture stops/)
+  f.beforeCommand(null)
+  await f.store.command({id:'maintenance-prepare',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'repair',actorId:'owner',reason:'session归属'}})
+  let preparations=0
+  f.sessions.prepareManagedSession=async(binding,frozen,accept)=>{
+    preparations++;assert.equal(frozen.executor,'agent');assert.equal(binding.nodeId,'analyze')
+    const proof={sessionId:'execution-child',parentSessionId:binding.sessionId,lastInputLease:1,inheritedEventCount:10,eventsDigest:'a'.repeat(64)}
+    await accept(proof);return proof
+  }
+  const result=await f.controller.prepareManagedSession(f.runId,{maintenance:{maintenanceId:'repair',revision:1}})
+  assert.equal(result.prepared,true);assert.equal(preparations,1)
+  assert.deepEqual(result.state.nodes[0],before.nodes[0])
+  assert.equal(result.state.nodes[1].sessionId,'execution-child');assert.equal(result.state.nodes[1].status,'ready')
+  assert.equal(f.calls.length,1)
 })

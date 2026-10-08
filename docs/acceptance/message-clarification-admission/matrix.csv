@@ -99,3 +99,9 @@ business-reply-command-reconciliation,29,PASS,round-29.md
 original-engineering-tasks-resumed,29,FAIL,round-29.md
 zero-action-barrier-settlement,30,PASS,round-30.md
 native-interruption-recovery,31,PASS,round-31.md
+stable-task-package-deployed,32,PASS,round-32.md
+resolved-source-fences-live,32,PASS,round-32.md
+engineering-native-turn-started,32,FAIL,round-32.md
+readonly-short-table-arguments,33,PASS,round-33.md
+managed-engineering-session-ownership,34,PASS,round-34.md
+internal-block-not-user-confirmation,35,PASS,round-35.md

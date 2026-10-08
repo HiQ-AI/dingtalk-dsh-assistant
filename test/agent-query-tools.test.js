@@ -230,3 +230,22 @@ test('任务会话查询证据精确绑定需求、轮次和租约，历史绑�
  await verifyAgentEvidence({ artifacts: f.artifacts, refs: [value.evidenceRef], binding: { ...owner, turnId: 'turn-2' }, allowedBindings: [owner], scope })
  await assert.rejects(tool.execute({ binding: { ...owner, requirementRevision: 0 }, args: { resourceId: 'docs', operation: 'list' } }), { code: 'QUERY_BINDING_INVALID' })
 })
+
+test('数据库唯一登记短表名正常查询，歧义是参数错误且不扩大表列权限',async()=>{
+ let connections=0;const calls=[]
+ const resource={id:'uat',connectionId:'alias',environment:'uat',identityPolicy:'host-enforced-readonly',tables:[{schema:'public',table:'sample',columns:['id']}]}
+ const connectDatabase=async()=>{connections++;return {query:async q=>{calls.push(q);return {rows:typeof q==='string'&&q==='SHOW transaction_read_only'?[{transaction_read_only:'on'}]:[]}},end:async()=>{}}}
+ const capability=createAgentDatabaseReadCapability({resources:[resource],connectDatabase}),scope={databaseIds:['uat']}
+ const input={resourceId:'uat',operation:'columns',table:'sample'}
+ const output=await capability.execute({input,scope})
+ assert.equal(output.table,'public.sample');assert.equal(input.table,'sample')
+ assert.deepEqual(calls.find(c=>c?.text?.includes('column_name=ANY')).values,['public','sample',['id']])
+ assert.equal((await capability.verify({input,scope,output})).passed,true)
+ const before=connections
+ await assert.rejects(capability.execute({input:{...input,table:'missing'},scope}),{code:'QUERY_ARGUMENT_INVALID'})
+ await assert.rejects(capability.execute({input:{...input,table:'private.sample'},scope}),{code:'QUERY_SCOPE_DENIED'})
+ await assert.rejects(capability.execute({input:{...input,operation:'select',columns:['password']},scope}),{code:'QUERY_SCOPE_DENIED'})
+ const ambiguous=createAgentDatabaseReadCapability({resources:[{...resource,tables:[...resource.tables,{schema:'other',table:'sample',columns:['id']}]}],connectDatabase})
+ await assert.rejects(ambiguous.execute({input,scope}),{code:'QUERY_ARGUMENT_INVALID'})
+ assert.equal(connections,before)
+})

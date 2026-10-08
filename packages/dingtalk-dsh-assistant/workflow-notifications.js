@@ -83,10 +83,10 @@ export function taskNotificationAllowed({ phase = '', action, report } = {}) {
   if (!phase.startsWith('owner:')) return true
   if (report?.applicationStatus !== 'applied') return false
   if (report.reportType === 'repairCurrentStage') return false
-  if (report.reportType === 'complete' || report.triggerTypes?.includes('workflow.confirmation.required')) return true
+  if (report.reportType === 'complete') return true
   if (['wait', 'block'].includes(report.reportType)) return ['business-input', 'permission'].includes(report.facts?.condition?.kind)
     && Boolean(taskDecisionConditionText(report.facts.condition))
-  return false
+  return report.triggerTypes?.includes('workflow.confirmation.required') === true
 }
 export function formatGroupReply(text, responsibility = '') {
   if (typeof text !== 'string' || !text.trim()) throw new Error('WORKFLOW_REPLY_TEXT_REQUIRED')

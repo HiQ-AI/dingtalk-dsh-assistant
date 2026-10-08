@@ -892,3 +892,39 @@ for (const variant of ['valid', 'revision', 'lease', 'digest', 'session', 'outpu
   assert.equal(after.nodes[0].leaseEpoch, n.leaseEpoch); assert.equal(after.run.revision, state.run.revision + 1)
   assert.equal((await f.store.command(cmd)).result.reclassified, true)
 })
+
+for(const scenario of ['restarted','running-reserved','stale-revision','same-lease']) test(`受管工程会话换绑CAS ${scenario}`,async t=>{
+  const f=await fixture(t,creation([plan('one','agent')]))
+  let n=await f.claim()
+  await f.store.command(command('node.sessionBound',{...identity(n),sessionId:n.sessionId}))
+  await f.store.close();await f.open()
+  if(scenario==='running-reserved'||scenario==='same-lease'){
+    await f.drain(n);await f.store.command(command('run.recover',{runId:'run'}));n=await f.claim('one',1,1)
+  }
+  await f.store.command(command('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'repair',actorId:'owner',reason:'migration'}))
+  const state=await f.query(),node=state.nodes[0]
+  const args={runId:'run',runRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,nextSessionId:'execution-child',lastInputLease:1,evidenceRef:'sha256/ownership.json',maintenance:{maintenanceId:'repair',revision:1}}
+  if(scenario==='stale-revision')args.runRevision--
+  if(scenario==='same-lease')args.lastInputLease=node.leaseEpoch
+  if(['stale-revision','same-lease'].includes(scenario)){await rejects(f.store.command(command('node.session.rebind',args)),'NODE_SESSION_REBIND_NOT_ADMITTED');return}
+  const cmd=command('node.session.rebind',args)
+  await f.store.command(cmd)
+  assert.equal((await f.store.command(cmd)).replayed,true)
+  const after=await f.query()
+  assert.equal(after.nodes[0].sessionId,'execution-child');assert.equal(after.nodes[0].status,'ready');assert.equal(after.nodes[0].drained,true)
+  assert.equal(after.nodes[0].nodeRunId,node.nodeRunId);assert.equal(after.run.generation,state.run.generation)
+})
+
+test('维护中受管会话换绑要求维护CAS且不放行业务claim',async t=>{
+  const f=await fixture(t,creation([plan('one','agent')])),n=await f.claim()
+  await f.store.command(command('node.sessionBound',{...identity(n),sessionId:n.sessionId}))
+  await f.store.close();await f.open()
+  await f.store.command(command('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'repair',actorId:'owner',reason:'归属修复'}))
+  const state=await f.query(),node=state.nodes[0]
+  const args={runId:'run',runRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,nextSessionId:'execution-child',lastInputLease:1,evidenceRef:'sha256/ownership.json'}
+  await rejects(f.store.command(command('node.session.rebind',args)),'RUNTIME_MAINTENANCE_STALE')
+  await rejects(f.store.command(command('node.session.rebind',{...args,maintenance:{maintenanceId:'repair',revision:0}})),'RUNTIME_MAINTENANCE_STALE')
+  await f.store.command(command('node.session.rebind',{...args,maintenance:{maintenanceId:'repair',revision:1}}))
+  assert.equal((await f.query()).nodes[0].drained,true)
+  await rejects(f.claim('one',1,1),'RUNTIME_MAINTENANCE_ACTIVE')
+})

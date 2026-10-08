@@ -169,6 +169,22 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     // 排空由drive等待run()结算，不能在abort()时宣称已经停止。
     Promise.resolve(sessions?.cancel(runId)).catch(error => errors.set(runId, error))
   }
+  async function prepareManagedSession(state, node, definition, maintenance) {
+    const frozen = definition.nodes.find(item => item.id === node.nodeId)
+    if (!sessions?.prepareManagedSession || node.executor !== 'agent' || !node.sessionBound
+      || frozen.allowInputContinuation || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect))) return false
+    const input = await artifacts.read(node.inputRef)
+    if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId) throw executionError('NODE_INPUT_IDENTITY_MISMATCH')
+    const effects = await store.query({kind:'effect.list',runId:state.run.runId})
+    if (node.outputRef || effects.some(effect=>effect.nodeRunId===node.nodeRunId || !['succeeded','failed'].includes(effect.state))) return false
+    return !!await sessions.prepareManagedSession({...node,taskId:state.run.taskId},frozen,async proof=>{
+      const saved=await artifacts.put({kind:'managed-execution-session-rebind',...proof},{reference:node.inputRef})
+      await command(`session-rebind:${node.nodeRunId}:${node.leaseEpoch}:${node.sessionId}`,'node.session.rebind',{
+        runId:state.run.runId,runRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,
+        leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,nextSessionId:proof.sessionId,
+        lastInputLease:proof.lastInputLease,evidenceRef:saved.ref,...(maintenance ? {maintenance} : {})})
+    })
+  }
   function schedule(runId) {
     if (closed) return Promise.resolve()
     if (flights.has(runId)) { dirty.add(runId); return flights.get(runId) }
@@ -691,9 +707,19 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const receipt = await command(commandId, 'run.resume', { runId })
       schedule(runId); return receipt
     },
+    async prepareManagedSession(runId, { maintenance } = {}) {
+      if (closed || flights.has(runId)) throw executionError('EXECUTOR_STILL_ACTIVE')
+      const currentMaintenance = await store.query({ kind: 'runtime.maintenance' })
+      if (!currentMaintenance.active || !maintenance || maintenance.maintenanceId !== currentMaintenance.maintenanceId || maintenance.revision !== currentMaintenance.revision) throw executionError('RUNTIME_MAINTENANCE_STALE')
+      const state = await query(runId), definition = definitionOf(state.run)
+      const candidates = state.nodes.filter(node => node.executor === 'agent' && node.sessionBound
+        && (['ready','running'].includes(node.status) || node.status === 'waiting' && node.waitReason?.reference === 'controller-restarted'))
+      if (candidates.length !== 1) throw executionError('NODE_SESSION_REBIND_NOT_ADMITTED')
+      return { prepared: await prepareManagedSession(state,candidates[0],definition,maintenance), state: await query(runId) }
+    },
     async recover({ commandId, runId }) {
       if (flights.has(runId)) throw executionError('EXECUTOR_STILL_ACTIVE')
-      const state = await query(runId); const definition = definitionOf(state.run)
+      const state = await query(runId), definition = definitionOf(state.run)
       await sessions?.cancel(runId)
       // 独占Store已排除旧Controller；这里只排空纯/read原生句柄，不释放外部效果hold。
       for (const node of state.nodes) if (!node.drained && node.leaseEpoch > 0) {
