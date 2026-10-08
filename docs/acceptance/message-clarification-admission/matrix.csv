@@ -116,6 +116,10 @@ shared-task-material-directory,40,PASS,round-40.md
 live-shared-task-material-discovery,42,PASS,round-42.md
 shared-task-package-preflight,42,PASS,round-42.md
 shared-task-package-deployment,42,FAIL,round-42.md
+shared-task-package-deployment,43,PASS,round-43.md
+readonly-owner-live-reassessment,43,PASS,round-43.md
+historical-engineering-node-recovery,43,FAIL,round-43.md
+inherited-native-history-recovery,45,PASS,round-45.md
 verification-directory-dependency-exclusion,44,PASS,round-44.md
 engineering-checks-checkpoint,41,PASS,round-41.md
 engineering-shared-material-read,41,PASS,round-41.md

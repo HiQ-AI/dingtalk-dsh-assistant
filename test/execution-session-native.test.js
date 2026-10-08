@@ -851,3 +851,19 @@ test('历史scope工具错误按真实blocked尾部重分类，拒绝别的工�
  events[3].data.message.content[0].content[0].text='Error: ENGINEERING_READ_PATH_INVALID'
  events.push({seq:83,type:'user/message',data:{source:{kind:'user'}}});assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
 })
+for(const variant of ['valid','foreign','parent-after-rebind','parent-new-lease','inbox-parent-after','current-submit','current-lease'])test(`旧provider可信rebind已消费父历史：${variant}`,async()=>{
+ const b=binding({sessionBound:true,sessionId:'child',leaseEpoch:4}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]));identity.sessionId='parent'
+ const input=(seq,sessionId,leaseEpoch)=>({seq,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId,leaseEpoch}}}})
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},input(10,'parent',1),input(85,'parent',2),
+ {seq:92,type:'dingtalk/execution-session-rebind',data:{parentSessionId:'parent',sessionId:'child',inputDigest:b.inputDigest,leaseEpoch:3}},input(98,'child',4),
+ {seq:153,type:'turn/end',data:{reason:{kind:'error',error:{code:'TRANSPORT',message:'fetch failed'}}}}]
+ if(variant==='foreign')events[1].data.source.executionSession.sessionId='other'
+ if(variant==='parent-after-rebind')events.splice(4,0,input(94,'parent',2))
+ if(variant==='parent-new-lease')events[2].data.source.executionSession.leaseEpoch=3
+ if(variant==='inbox-parent-after')events.splice(4,0,{seq:94,type:'agent/inbox/spliced',data:{inserted:[input(94,'parent',2).data]}})
+ if(variant==='current-submit')events.splice(-1,0,{seq:150,type:'tool/call',data:{name:'execution_node_submit'}})
+ if(variant==='current-lease')events[4].data.source.executionSession.leaseEpoch=3
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const proof=await inspectLegacyTurnFailure(ctx,b,'EXECUTION_PROVIDER_FAILED')
+ if(variant==='valid'){assert.equal(proof.failure.code,'EXECUTION_PROVIDER_TRANSIENT');assert.equal(proof.inputSeq,98);assert.equal(proof.endSeq,153)}else assert.equal(proof,null)
+})

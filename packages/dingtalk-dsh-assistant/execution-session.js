@@ -28,9 +28,13 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   if (binding.kind || !binding.sessionBound || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) return null
   const stored = await ctx.sessionPersistence.inspect(binding.sessionId), events = stored.events
   validateHistory(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
+  const rebind = events.find(event => event.type === 'dingtalk/execution-session-rebind')
+  const consumedParent = (source, seq) => rebind && seq < rebind.seq
+    && source?.executionSession?.sessionId === rebind.data.parentSessionId
+    && source.executionSession.leaseEpoch < rebind.data.leaseEpoch
   const inputs = events.filter(event => event.type === 'user/message')
   if (inputs.some(event => event.data.source?.kind !== 'coordinator' && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt' && event.data.source.form === 'snapshot'))) return null
-  if (inputs.some(event => event.data.source?.kind === 'coordinator' && event.data.source.executionSession?.sessionId !== binding.sessionId)) return null
+  if (inputs.some(event => event.data.source?.kind === 'coordinator' && event.data.source.executionSession?.sessionId !== binding.sessionId && !consumedParent(event.data.source, event.seq))) return null
   const input = inputs.findLast(event => event.data.source?.kind === 'coordinator')
   if (input?.data.source.executionSession?.sessionId !== binding.sessionId || input.data.source.executionSession.leaseEpoch !== binding.leaseEpoch) return null
   const end = events.findLast(event => event.type === 'turn/end')
@@ -53,7 +57,8 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   // 未消费的额外 inbox 输入也不得被当作旧错误续行。
   const inbox = events.filter(event => event.type === 'agent/inbox/spliced').flatMap(event => event.data.inserted ?? [])
   if (inbox.some(message => message.source?.kind !== 'coordinator' && !(message.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt' && message.source.form === 'snapshot'))) return null
-  if (inbox.some(message => message.source?.kind === 'coordinator' && (message.source.executionSession?.sessionId !== binding.sessionId || message.source.executionSession.leaseEpoch > binding.leaseEpoch))) return null
+  if (events.filter(event => event.type === 'agent/inbox/spliced').some(event => (event.data.inserted ?? []).some(message => message.source?.kind === 'coordinator'
+    && (message.source.executionSession?.sessionId !== binding.sessionId && !consumedParent(message.source, event.seq) || message.source.executionSession.leaseEpoch > binding.leaseEpoch)))) return null
   return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: scopeFailure
     ? { code: 'ENGINEERING_READ_PATH_INVALID', phase: 'execution', message: '原生本轮仓库读取路径被拒绝；需Owner指示使用准入路径和Task共享材料继续。' } : interrupted
     ? { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留失败工具历史，需Owner核对后受管续行。' }

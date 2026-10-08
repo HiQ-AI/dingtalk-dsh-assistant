@@ -712,6 +712,8 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 
 精确原生TRANSPORT/首行fetch failed复用最多三次退避；部署后的旧waiting重分类、当前租约真实工具调用分别回读。当前能力wait的只读重评沿既有来源/CAS/零效果门禁，即使尚未成功query也可恢复；不得伪造查询成功或用户补充。对应已保存round38/39证据分别保留。
 
+换绑会话的恢复核验先验证原生rebind链，只承认rebind之前、精确父session且旧lease的已消费输入；不删除父历史以通过检查。离线回放通过仍需回查在线重分类回执和新lease实际执行。
+
 ### 工程检查配置的同代维护修正
 
 检查路径不存在属于检查配置前提，不能驱动业务代码整代重跑。仅在正式 maintenance 排空、封存并停止 Resident 后，以控制库独占方式调用内部 `engineering.updateCheckpoint({runId,requestId,kind:'checks',checks,maintenance:{maintenanceId,revision}},controller,artifacts)`。`checks` 必须是已审阅的完整注册配置（本次只把固定缺失文件参数改为 `node --test` 并提高检查版本）；用当前安装绝对路径的真实工程工厂恢复定义，不伪造摘要或函数。调用返回 receipt.result 中的原 runId/generation、旧新 digest 和 evidenceRef；不启动模型、不执行检查、不创建新 Task/Run/generation。恢复 Resident 后才调度 ready 的 verify-candidate。先前成功节点、工作区、候选和旧失败证据均保留。调用失败不能跳过门禁改库。
