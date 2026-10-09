@@ -9,3 +9,7 @@ SG18 已有两个成功 managed-edit；正式同代修复后模型选择 no-chan
 证明通过后产出正常 no-change 节点结果，summary明确本轮无新增修改、保留既有候选继续验证，不声称业务需求完成。独立 engineering-no-additional-change-proof 工件含当前身份、修复审计、旧效果链、原 mergeTree、实际 tree/candidate digest，随正常 node.commit evidenceRefs 原生事件持久化。提交仍走原 CAS/来源/控制/维护检查。
 
 验证用真实 Git+managed-edit：初次 no-change无修复拒绝、正确修复保留全部diff、tracked额外变化/untracked新文件拒绝；另读取真实原账快照及复制工作区到docs/tmp隔离证明。业务验收仍待实际实现和验证，不把noop当FR完成。
+
+## 已等待节点的恢复入口
+
+旧 v18 已持久等待 `ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT` 时，仅部署新执行边界还不会再次领取节点。恢复扫描精确识别 apply-changes/version6：全部节点排空、无待接纳输入、无未知/进行中效果，并使用同一完整树验证器证明原 candidate-in-place 审计与当前 binding。证明成功后重读 Run revision/generation/node input/lease，再调用既有 controller.recover；下一次执行重新证明并正常提交证据。每个 nodeRunId/inputDigest 在当前服务进程仅尝试一次证明，失败保留等待，不加入通用暂态重试。不改原 Run、generation、成功前缀和编辑效果，未核验业务验收仍不可完成任务。

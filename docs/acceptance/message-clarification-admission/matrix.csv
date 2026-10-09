@@ -198,3 +198,15 @@ sg18-no-additional-original-snapshot,63,PASS,round-63.md
 store-first-failure-native-ack-and-full,65,PASS,round-65.md
 store-first-failure-normal-close-and-bounded-queue,65,PASS,round-65.md
 store-first-failure-http-health,65,PASS,round-65.md
+v19-technical-plan-factory-and-real-edit-chain,66,PASS,round-66.md
+v19-controller-real-edit-and-plan-revision,66,PASS,round-66.md
+v19-native-edit-tool-and-current-baseline,66,PASS,round-66.md
+v18-plan-correction-regression,66,PASS,round-66.md
+v19-shared-material-registry-and-restore,66,PASS,round-66.md
+v19-task-output-and-observer-preview,66,PASS,round-66.md
+v19-registry-existing-windows-spawn,66,BLOCKED,round-66.md
+v19-registry-real-two-generation-delivery,66,PASS,round-66.md
+sg18-proof-driven-native-recovery,67,PASS,round-67.md
+sg18-proof-recovery-negative-once,67,PASS,round-67.md
+sg22-blocked-dependency-native-retry,67,PASS,round-67.md
+sg22-owner-store-regression,67,PASS,round-67.md

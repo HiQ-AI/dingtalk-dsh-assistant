@@ -6,6 +6,12 @@ import { canonicalExecutionJson, executionDigest, executionError } from './execu
 import { validateWorkflowRepairAdmission } from './task-workflow-contracts.js'
 import { classifyExecutionFailure } from './execution-recovery-policy.js'
 
+const isEngineeringEditAgent = (definition, node) => definition.version === '19' && definition.id.startsWith('task-engineering-')
+  && node.id === 'apply-changes' && node.version === '7' && node.executor === 'agent'
+  && node.allowedEffects?.length === 2 && node.allowedEffects.includes('read') && node.allowedEffects.includes('workspace.edit')
+  && node.allowedTools?.length === 2 && node.allowedTools.includes('engineering_repo_inspect') && node.allowedTools.includes('engineering_apply_edits')
+  && typeof node.execute === 'function'
+
 const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)
 const requireId = value => { if (!identifier(value)) throw executionError('INVALID_IDENTIFIER'); return value }
 export const plannedStageRunId = (taskId, planRevision, stageId, attempt) =>
@@ -70,7 +76,7 @@ export function defineExecutionWorkflow(definition) {
     if (!['code', 'agent'].includes(node.executor)) throw executionError('EXECUTOR_NOT_ADMITTED')
     if (node.drainPolicy !== undefined && (node.drainPolicy !== 'external-process' || node.executor !== 'code')) throw executionError('NODE_DRAIN_POLICY_INVALID')
     if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit', 'external.operation', 'file.write', 'message.send'].includes(e))
-      || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('EFFECT_NOT_ADMITTED')
+      || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)) && !isEngineeringEditAgent(definition, node))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
     if (node.allowInputContinuation !== undefined && (node.allowInputContinuation !== true || node.executor !== 'agent' || typeof node.admitOutput !== 'function')) throw executionError('NODE_CONTINUATION_INVALID')
     if (node.admitOutput !== undefined && typeof node.admitOutput !== 'function') throw executionError('NODE_ADMISSION_INVALID')
@@ -120,7 +126,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       throw executionError('DUPLICATE_WORKFLOW')
     }
     if (!delivery && definition.nodes.some(node => node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('DELIVERY_ADAPTER_REQUIRED')
-    for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
+    for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => name === 'engineering_apply_edits' ? !isEngineeringEditAgent(definition, node) : !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
     if (!historical) definitions.set(definition.id, definition)
     for (const digest of [definition.digest, ...definition.legacyDigests]) byDigest.set(digest, definition)
     return definition
@@ -136,12 +142,12 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
     return run.workflowDigest === definition.digest ? definition : { ...definition, digest: run.workflowDigest }
   }
-  async function inspectNodeRecovery(runId, suppliedState) {
+  async function inspectNodeRecovery(runId, suppliedState, automaticPlanRevision = false) {
     const state = suppliedState ?? await query(runId, { includeRecovery: true })
     const recovery = state.nodeRecovery
     if (!recovery) throw executionError('WORKFLOW_RECOVERY_SNAPSHOT_MISSING')
     if (!recovery.repairable) return recovery
-    if (closed || flights.has(runId)) return { ...recovery, repairable: false, reason: 'executor-still-active' }
+    if (closed || flights.has(runId) && !(automaticPlanRevision && recovery.technicalPlanRevision === true && !active.has(runId))) return { ...recovery, repairable: false, reason: 'executor-still-active' }
     const definition = definitionOf(state.run)
     const node = state.nodes.find(item => item.nodeRunId === recovery.nodeRunId), frozen = node && definition.nodes[node.position]
     if (!frozen || frozen.executor !== 'agent' || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect)))
@@ -150,12 +156,14 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const validation = state.nodes.find(item => item.nodeRunId === recovery.validationNodeRunId)
       const validator = validation && definition.nodes[validation.position]
       if (validation?.position !== node.position + 1 || validation.leaseEpoch !== recovery.validationLeaseEpoch
-        || validation.inputDigest !== recovery.validationInputDigest || validator?.executor !== 'code'
-        || validator.allowedEffects.some(effect => effect !== 'pure'))
+        || validation.inputDigest !== recovery.validationInputDigest || (recovery.technicalPlanRevision === true
+          ? !isEngineeringEditAgent(definition, validator ?? {}) : validator?.executor !== 'code' || validator.allowedEffects.some(effect => effect !== 'pure')))
         return { ...recovery, repairable: false, reason: 'proposal-validation-not-pure' }
       const validationInput = await artifacts.read(validation.inputRef), proposal = await artifacts.read(node.outputRef)
       if (executionDigest(validationInput) !== validation.inputDigest || validationInput.workflowDigest !== definition.digest
-        || validationInput.nodeId !== validation.nodeId || executionDigest(validationInput.data) !== executionDigest(proposal))
+        || validationInput.nodeId !== validation.nodeId || (recovery.technicalPlanRevision === true
+          ? validationInput.data.plan?.ref !== node.outputRef || validationInput.data.plan?.digest !== executionDigest(proposal)
+          : executionDigest(validationInput.data) !== executionDigest(proposal)))
         return { ...recovery, repairable: false, reason: 'proposal-validation-input-mismatch' }
     }
     const input = await artifacts.read(node.inputRef)
@@ -163,10 +171,50 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       return { ...recovery, repairable: false, reason: 'node-input-identity-mismatch' }
     return recovery
   }
-  async function prepareInput(definition, node, requirementRef, previousOutput, dependencyOutputs = {}) {
+  async function resumeAgent({ commandId, runId, expectedRevision, nodeRunId, generation, leaseEpoch, inputDigest, contextRef }, automaticPlanRevision = false) {
+      if (closed) throw executionError('CONTROLLER_CLOSED')
+      const replay = await store.query({ kind: 'receipt', commandId })
+      if (replay) {
+        const prior = replay.result
+        if (prior.runId !== runId || prior.nodeRunId !== nodeRunId || prior.generation !== generation
+          || prior.inputDigest !== inputDigest || prior.contextRef !== contextRef || prior.nextLeaseEpoch !== leaseEpoch + 1
+          || prior.previousRunRevision !== expectedRevision) throw executionError('NODE_RECOVERY_CONFLICT')
+        if (!automaticPlanRevision) schedule(runId); return replay
+      }
+      const recovery = await inspectNodeRecovery(runId, undefined, automaticPlanRevision)
+      if (!recovery.repairable || recovery.nodeRunId !== nodeRunId || recovery.runRevision !== expectedRevision
+        || recovery.generation !== generation || recovery.leaseEpoch !== leaseEpoch || recovery.inputDigest !== inputDigest)
+        throw executionError('NODE_RECOVERY_NOT_ADMITTED', recovery.reason)
+      const state = await query(runId), context = await artifacts.read(contextRef)
+      if (context?.kind !== 'execution-recovery-context' || context.taskId !== state.run.taskId || context.runId !== runId
+        || context.nodeRunId !== nodeRunId || context.generation !== generation
+        || typeof context.diagnosis !== 'string' || !context.diagnosis.trim() || typeof context.strategy !== 'string' || !context.strategy.trim()
+        || !Array.isArray(context.evidenceRefs) || !context.evidenceRefs.length
+        || context.evidenceRefs.some(ref => !recovery.evidenceRefs.includes(ref))
+        || context.problemKey !== undefined && context.problemKey !== recovery.problemKey)
+        throw executionError('NODE_RECOVERY_CONTEXT_INVALID')
+      await Promise.all(context.evidenceRefs.map(ref => artifacts.read(ref)))
+      const plan = await store.query({ kind: 'task.plan', taskId: state.run.taskId })
+      if (context.requirementRevision !== plan.task.requirementRevision || context.planRevision !== plan.task.planRevision
+        || context.controlRevision !== plan.task.controlRevision) throw executionError('NODE_RECOVERY_CONTEXT_STALE')
+      const requirement = plan.task.requirementRef ? await artifacts.read(plan.task.requirementRef) : {}
+      const sources = []
+      for (const frozen of requirement.sourceInstructions ?? []) {
+        const source = await store.query({ kind: 'task.source', sourceKey: frozen.sourceKey })
+        if (!source || source.status === 'superseded' || source.sourceVersion !== frozen.sourceVersion
+          || source.actorId !== frozen.actorId || source.body !== frozen.text) throw executionError('NODE_RECOVERY_SOURCE_INVALID')
+        sources.push({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, bodyDigest: executionDigest(source.body) })
+      }
+      const receipt = await command(commandId, 'node.resume', { runId, expectedRevision, nodeRunId, generation, leaseEpoch,
+        inputDigest, contextRef, problemKey: recovery.problemKey, workflowDigest: state.run.workflowDigest, sources,
+        expectedRequirementRevision: context.requirementRevision, expectedPlanRevision: context.planRevision,
+        expectedControlRevision: context.controlRevision })
+      errors.delete(runId); if (!automaticPlanRevision) schedule(runId); return receipt
+  }
+  async function prepareInput(definition, node, requirementRef, previousOutput, dependencyOutputs = {}, artifactRefs = {}) {
     const requirement = await artifacts.read(requirementRef)
     const data = await admitResult('input-mapping', node.id,
-      () => node.mapInput({ requirement, previousOutput, dependencyOutputs }))
+      () => node.mapInput({ requirement, previousOutput, dependencyOutputs, artifactRefs }))
     await admitResult('input-validation', node.id, () => validate(node.inputSchema, data))
     return artifacts.put({ workflowDigest: definition.digest, nodeId: node.id, nodeVersion: node.version, requirementRef, data }, { reference: requirementRef })
   }
@@ -270,7 +318,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         Object.assign(binding, { kind: 'task-node', inputVersion: history.inputVersion, inputHistory: history.inputHistory })
       }
       const abort = new AbortController(); active.set(runId, abort)
-      let input, engineeringProofRef, output, submitted = false, failure, outcome
+      let input, engineeringProofRef, noChangeProof, editBatchReceipt, output, submitted = false, failure, outcome
       try {
         input = await artifacts.read(binding.inputRef)
         if (executionDigest(input) !== binding.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== ready.nodeId) throw executionError('NODE_INPUT_IDENTITY_MISMATCH')
@@ -297,10 +345,60 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
           const recovery = await store.query({ kind: 'node.recovery-context', nodeRunId: binding.nodeRunId,
             inputDigest: binding.inputDigest, leaseEpoch: binding.leaseEpoch })
+          const managedEdit = isEngineeringEditAgent(definition, nodeDefinition)
+          const currentEdits = async () => (await store.query({ kind: 'effect.list', runId })).filter(effect => effect.nodeRunId === binding.nodeRunId)
+          const validateAgentOutput = async value => {
+            if (nodeDefinition.validateOutput) await nodeDefinition.validateOutput({ output: value, input: input.data, binding })
+            if (!managedEdit) return
+            const effects = await currentEdits()
+            if (value.planRef !== input.data.plan.ref || (value.status === 'plan-revision-needed'
+              ? effects.length !== 0 || value.effectRefs?.length !== 0
+              : value.status !== 'succeeded' || !(effects.length === 0 && noChangeProof && value.effectRefs?.length === 0) && (effects.length !== 1 || effects[0].state !== 'succeeded'
+                || effects[0].inputDigest !== binding.inputDigest || effects[0].generation !== binding.generation
+                || effects[0].definition.action !== 'edit' || value.effectRefs?.length !== 1 || value.effectRefs[0] !== effects[0].effectId)))
+              throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID')
+          }
           outcome = await sessions.run({ binding, input: input.data, definition: agentDefinition,
+            ...(managedEdit ? { applyEdits: async (edits, signal) => {
+              if (!await isCurrent(binding)) throw executionError('NODE_STALE')
+              signal.throwIfAborted()
+              const batchDigest = executionDigest(edits)
+              if (editBatchReceipt) {
+                if (editBatchReceipt.digest !== batchDigest) throw executionError('DELIVERY_IDENTITY_CONFLICT')
+                return structuredClone(editBatchReceipt.result)
+              }
+              let applied, dispatchStarted = false, result
+              try { result = await nodeDefinition.execute({ input: structuredClone(input.data), edits, signal, runId,
+                taskId: binding.taskId, nodeRunId: binding.nodeRunId, generation: binding.generation, requirementDigest: binding.requirementDigest,
+                perform: async ({ action, prepared }) => {
+                  if (action !== 'edit' || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
+                  if (!await isCurrent(binding)) throw executionError('NODE_STALE')
+                  signal.throwIfAborted()
+                  dispatchStarted = true
+                  applied = await delivery.execute({ binding, action, prepared }, { signal })
+                  if (applied.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
+                  return applied.result.result
+                } })
+              } catch (error) {
+                if (!await isCurrent(binding)) throw executionError('NODE_STALE')
+                signal.throwIfAborted()
+                if (!dispatchStarted && !(await currentEdits()).length && ['EDIT_BASE_CONFLICT', 'ENGINEERING_CHANGE_DISPOSITION_INVALID', 'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED', 'ENGINEERING_CONFLICT_NOT_READ', 'ENGINEERING_NO_CHANGES_PROPOSED', 'ENGINEERING_PATCH_CONFLICT', 'ENGINEERING_PATCH_BASE_CONFLICT', 'ENGINEERING_PATCH_AMBIGUOUS'].includes(error.code))
+                  return { received: false, error: { code: error.code, message: '文件修改参数与当前文件不符。重新读取文件取得完整 hash 和唯一原文，修正同一批次后重试；未派发编辑。' } }
+                throw error
+              }
+              if (!applied && result?.status === 'succeeded' && result.changeDisposition === 'no-change' && !(await currentEdits()).length) {
+                noChangeProof = result
+                engineeringProofRef = (await artifacts.put(result, { reference: binding.inputRef })).ref
+                return { status: 'succeeded', changeDisposition: 'no-change', evidenceRef: engineeringProofRef, planRef: input.data.plan.ref }
+              }
+              if (!applied) throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID')
+              const receipt = { status: 'succeeded', effectId: applied.effectId, planRef: input.data.plan.ref }
+              editBatchReceipt = { digest: batchDigest, result: receipt }
+              return receipt
+            } } : {}),
             ...(recovery ? { recoveryContext: await artifacts.read(recovery.contextRef) } : {}),
-            ...(nodeDefinition.validateOutput ? { validateOutput: value => nodeDefinition.validateOutput({ output: value, input: input.data, binding }),
-              classifyOutputError: nodeDefinition.classifyOutputError } : {}),
+            ...((nodeDefinition.validateOutput || managedEdit) ? { validateOutput: validateAgentOutput,
+              classifyOutputError: error => managedEdit && error.code === 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' ? 'correctable' : nodeDefinition.classifyOutputError?.(error) } : {}),
             onSessionBound: () => command(`bound:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.sessionBound', {
               runId, nodeId: ready.nodeId, generation: binding.generation, leaseEpoch: binding.leaseEpoch, sessionId: binding.sessionId,
             }),
@@ -368,6 +466,22 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', { ...identity,
               outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref, diagnosis.ref], waitReason: disposition.waitReason,
               failure: { code, phase: 'output-admission', targetNodeId: ready.nodeId } })
+            if (isEngineeringEditAgent(definition, nodeDefinition) && code === 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED') {
+              const snapshot = await query(runId, { includeRecovery: true })
+              const recovery = await inspectNodeRecovery(runId, snapshot, true)
+              if (recovery.repairable && recovery.technicalPlanRevision === true) {
+                const plan = await store.query({ kind: 'task.plan', taskId: binding.taskId })
+                const context = await artifacts.put({ kind: 'execution-recovery-context', taskId: binding.taskId, runId,
+                  nodeRunId: recovery.nodeRunId, generation: recovery.generation, requirementRevision: plan.task.requirementRevision,
+                  planRevision: plan.task.planRevision, controlRevision: plan.task.controlRevision, problemKey: recovery.problemKey,
+                  diagnosis: output.summary, strategy: '依据实施节点指出的具体设计缺陷修订技术方案，先核原需求与当前代码；不重复准备工作，不请求额外人工审批。',
+                  evidenceRefs: recovery.evidenceRefs }, { reference: binding.inputRef })
+                await resumeAgent({ commandId: `plan-revision:${binding.nodeRunId}:${binding.leaseEpoch}`, runId,
+                  expectedRevision: recovery.runRevision, nodeRunId: recovery.nodeRunId, generation: recovery.generation,
+                  leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest, contextRef: context.ref }, true)
+                continue
+              }
+            }
             return
           }
           if (disposition?.outcome !== 'succeeded') throw executionError('NODE_ADMISSION_INVALID')
@@ -382,17 +496,17 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           nextState = state.nodes.find(item => item.position > ready.position && item.status !== 'succeeded')
         }
         const next = nextState && (!retainedSuccessor || nextState.status === 'blocked') ? definition.nodes[nextState.position] : undefined
-        const dependencies = {}
+        const dependencies = {}, dependencyRefs = {}
         for (const id of next?.inputDependencies ?? []) {
-          if (id === ready.nodeId) dependencies[id] = output
+          if (id === ready.nodeId) { dependencies[id] = output; dependencyRefs[id] = result.ref }
           else {
             const source = state.nodes.find(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef)
             if (!source) throw new ResultAdmissionError(executionError('NODE_DEPENDENCY_UNAVAILABLE'), 'input-dependencies', next.id)
-            dependencies[id] = await artifacts.read(source.outputRef)
+            dependencies[id] = await artifacts.read(source.outputRef); dependencyRefs[id] = source.outputRef
           }
         }
         const priorOutput = next && nextState.position > ready.position + 1 ? await artifacts.read(state.nodes[nextState.position - 1].outputRef) : output
-        const nextInput = next ? await prepareInput(definition, next, state.run.requirementRef, priorOutput, dependencies) : null
+        const nextInput = next ? await prepareInput(definition, next, state.run.requirementRef, priorOutput, dependencies, { previousOutput: nextState.position > ready.position + 1 ? state.nodes[nextState.position - 1].outputRef : result.ref, dependencies: dependencyRefs }) : null
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
           ...identity, outcome: 'succeeded', outputRef: result.ref, evidenceRefs: [result.ref, ...(engineeringProofRef ? [engineeringProofRef] : [])],
           ...(next ? { nextInput: { nodeId: next.id, inputRef: nextInput.ref, inputDigest: nextInput.digest } } : {}),
@@ -442,46 +556,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         nodes:definition.nodes.map(item=>({nodeId:item.id,nodeVersion:item.version,executor:item.executor}))})
       return receipt
     },
-    async resumeNode({ commandId, runId, expectedRevision, nodeRunId, generation, leaseEpoch, inputDigest, contextRef }) {
-      if (closed) throw executionError('CONTROLLER_CLOSED')
-      const replay = await store.query({ kind: 'receipt', commandId })
-      if (replay) {
-        const prior = replay.result
-        if (prior.runId !== runId || prior.nodeRunId !== nodeRunId || prior.generation !== generation
-          || prior.inputDigest !== inputDigest || prior.contextRef !== contextRef || prior.nextLeaseEpoch !== leaseEpoch + 1
-          || prior.previousRunRevision !== expectedRevision) throw executionError('NODE_RECOVERY_CONFLICT')
-        schedule(runId); return replay
-      }
-      const recovery = await inspectNodeRecovery(runId)
-      if (!recovery.repairable || recovery.nodeRunId !== nodeRunId || recovery.runRevision !== expectedRevision
-        || recovery.generation !== generation || recovery.leaseEpoch !== leaseEpoch || recovery.inputDigest !== inputDigest)
-        throw executionError('NODE_RECOVERY_NOT_ADMITTED', recovery.reason)
-      const state = await query(runId), context = await artifacts.read(contextRef)
-      if (context?.kind !== 'execution-recovery-context' || context.taskId !== state.run.taskId || context.runId !== runId
-        || context.nodeRunId !== nodeRunId || context.generation !== generation
-        || typeof context.diagnosis !== 'string' || !context.diagnosis.trim() || typeof context.strategy !== 'string' || !context.strategy.trim()
-        || !Array.isArray(context.evidenceRefs) || !context.evidenceRefs.length
-        || context.evidenceRefs.some(ref => !recovery.evidenceRefs.includes(ref))
-        || context.problemKey !== undefined && context.problemKey !== recovery.problemKey)
-        throw executionError('NODE_RECOVERY_CONTEXT_INVALID')
-      await Promise.all(context.evidenceRefs.map(ref => artifacts.read(ref)))
-      const plan = await store.query({ kind: 'task.plan', taskId: state.run.taskId })
-      if (context.requirementRevision !== plan.task.requirementRevision || context.planRevision !== plan.task.planRevision
-        || context.controlRevision !== plan.task.controlRevision) throw executionError('NODE_RECOVERY_CONTEXT_STALE')
-      const requirement = plan.task.requirementRef ? await artifacts.read(plan.task.requirementRef) : {}
-      const sources = []
-      for (const frozen of requirement.sourceInstructions ?? []) {
-        const source = await store.query({ kind: 'task.source', sourceKey: frozen.sourceKey })
-        if (!source || source.status === 'superseded' || source.sourceVersion !== frozen.sourceVersion
-          || source.actorId !== frozen.actorId || source.body !== frozen.text) throw executionError('NODE_RECOVERY_SOURCE_INVALID')
-        sources.push({ sourceKey: source.sourceKey, sourceVersion: source.sourceVersion, actorId: source.actorId, bodyDigest: executionDigest(source.body) })
-      }
-      const receipt = await command(commandId, 'node.resume', { runId, expectedRevision, nodeRunId, generation, leaseEpoch,
-        inputDigest, contextRef, problemKey: recovery.problemKey, workflowDigest: state.run.workflowDigest, sources,
-        expectedRequirementRevision: context.requirementRevision, expectedPlanRevision: context.planRevision,
-        expectedControlRevision: context.controlRevision })
-      errors.delete(runId); schedule(runId); return receipt
-    },
+    resumeNode: args => resumeAgent(args),
     workflowDefinition(workflowId, digest) {
       if (digest !== undefined) return definitionOf({ workflowId, workflowDigest: digest })
       const definition = definitions.get(workflowId)

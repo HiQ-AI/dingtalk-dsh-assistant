@@ -46,3 +46,33 @@ Controller/store的节点恢复边界、task-workflow-contracts的工程检查�
 ## SG22 必要依赖候选与自然语言仓库路由冲突
 
 现场已授权必要dataset依赖仍在prepareTask被原需求唯一命中dataset-web的routingTerms拒绝。insertDependency先准备候选定义再提交计划，故不能要求尚未存在的已接纳依赖stage。最小修复沿原StageContract传递候选stage、当前beforeStageId/planRevision；registry从当前Task计划和需求独立回读，重新核来源作者/版本/原文、配置dependencyRepositories、原UAT及精确候选objective/验收。仅此已核候选可优先于自然语言路由；首次任务选仓和普通prepare仍拒绝冲突，不增加自选跨仓能力。真实Run/计划插入继续由原事务CAS完成。
+
+## v19 三节点分离：旧Run接入预研（只读，尚未实现）
+
+目标三ID不变：inspect-and-propose仅技术方案；validate-proposal做语义评审；apply-changes独立Agent通过受信编辑工具执行。v18 factory文本必须保持，v19独立工厂。此节不表示迁移已实现或已执行。
+
+### 已有接口能力与不能复用的边界
+
+- `execution-store-worker.js input.apply`（约402）：保留成功前缀，但后缀generation+1，沿旧nodeVersion/executor；不能用它假装同代executor升级。
+- `run.workflow.checkpoint`（约652）：原Run/gen同步Stage摘要，具维护、来源、Task/控制/CAS、排空和effect检查；只允许checks/localAcceptance配置差异，节点数量/顺序/executor必须保持。不能把v19放进checks提案。
+- `run.workflow.migrate-index/migrate-read`（约582/602）：特定旧code节点版本升级，可保Run/gen；只接固定旧节点/错误/状态，不能套三节点。
+- `run.workflow.replan-direct`（约621）：gen+1且仅workspace效果，不能套已有编辑候选。
+- 未发现通用definition.revise API；workflow.register只保存新定义，不会更新Run/Stage。
+
+### 最小正式接入建议
+
+新增明确v18→19原生定义迁移，复用checkpoint现有维护/Task/来源/版本CAS，不增加通用迁移框架。只接原Task、同Run、同generation、当前定义18、排空、无pending input/未知或在途效果，保留全部仓库/需求/UAT/授权参数；校验两工厂除三节点及必要版本标识外保持相同。
+
+`execution_nodes`有UNIQUE(run_id,node_id,generation)（worker约224），故同代不能将旧row标superseded后插同ID新row。事务应先保存旧三节点executor/version/input/output/session/lease审计，再更新原row的三节点定义元数据、清失效session/input/output绑定，lease不归零。Controller输入envelope绑定workflowDigest（约190/276），受影响输入必须由新工厂mapInput创建；Run与当前Stage同事务切新digest。旧原生会话停止且排空后新节点接新会话，不伪造旧会话归属。
+
+已成功的旧inspect/validate输出含补丁，不能直接冒称v19设计/语义评审成功。若必须接v19，从inspect重新执行三节点的必要语义工作，保留前4准备节点、真实工作区与已完成编辑候选；新编辑工具仅追加当前必要差异，旧effect不得重投。将既有编辑/verify/失败工件作为受信历史材料而非新的技术方案输出。
+
+### 现场三个Task的不同处理（读取时快照，部署后必须再读）
+
+- SG20：v18/gen6/rev10，inspect waiting execution_tool_failed，已drained。若新需求仍要求修代码，可从inspect接v19并保留前4成功准备节点。
+- SG18：v18/gen4/rev13，apply waiting ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT。不能从新apply直接吃旧proposal；先沿当前卡点修复稳定运行，后续若迁v19，从技术方案起重验，保留已有候选及成功编辑效果。
+- SG22：v18/gen7/rev10，prepare-local waiting LOCAL_ACCEPTANCE_PLAN_INVALID。三编辑节点已成功，当前优先原v18必要后端依赖/本地验收；不应仅为定义升级重做成功编辑，确需新修复时再接v19。
+
+反例必须覆盖：另Task/旧req/UAT/原stage漂移、非18、活跃会话/未排空、未知效果、已推送等发布效果、三节点之外改变、旧补丁冒充新设计、旧编辑重投、任意Agent编辑tool扩权。Agent目前仅pure/read（Controller约73）；新受信编辑工具必须沿managed-edit原授权/effect账，不能通过将executor改agent同时泛放workspace.edit规避门禁。
+
+此次仅完成接口源码和现场状态只读核验，未修改Assistant、未live迁移，待v19设计与测试明确后实施。

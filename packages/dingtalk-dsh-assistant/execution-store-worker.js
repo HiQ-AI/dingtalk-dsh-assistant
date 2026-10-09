@@ -122,7 +122,12 @@ function inspectNodeRecovery(runId, { reclassifyInterrupted = false, reclassifyP
   const wait = JSON.parse(candidate.wait_reason ?? 'null'), previous = current[candidate.position - 1]
   const workflowRecord = db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(r.workflow_digest)
   const workflow = workflowRecord && JSON.parse(workflowRecord.body)
-  const proposalCorrection = workflow?.config?.kind === 'engineering' && workflow.definitionVersion === '18'
+  const technicalPlanRevision = workflow?.config?.kind === 'engineering' && workflow.definitionVersion === '19'
+    && workflow.config.taskId === r.task_id && workflow.config.runId === runId
+    && candidate.node_id === 'apply-changes' && candidate.executor === 'agent' && !!candidate.output_ref
+    && previous?.node_id === 'inspect-and-propose' && previous.status === 'succeeded' && !!previous.output_ref
+    && wait?.reference === 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED'
+  const proposalCorrection = technicalPlanRevision || workflow?.config?.kind === 'engineering' && workflow.definitionVersion === '18'
     && workflow.config.taskId === r.task_id && workflow.config.runId === runId
     && candidate.node_id === 'validate-proposal' && candidate.executor === 'code' && !candidate.output_ref
     && previous?.node_id === 'inspect-and-propose' && previous.status === 'succeeded' && !!previous.output_ref
@@ -134,13 +139,15 @@ function inspectNodeRecovery(runId, { reclassifyInterrupted = false, reclassifyP
   const retainedNode = node => retained.some(saved => saved.nodeRunId===node.node_run_id && saved.leaseEpoch===node.lease_epoch
     && saved.inputDigest===node.input_digest && saved.outputRef===node.output_ref && node.status==='succeeded')
   const record = db.prepare("SELECT payload FROM execution_events WHERE kind='node.failure' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.leaseEpoch')=? ORDER BY seq DESC LIMIT 1").get(candidate.node_run_id, candidate.lease_epoch)
-  const failure = record ? JSON.parse(record.payload).failure : { code: wait?.reference, phase: 'execution', targetNodeId: candidate.node_id }
+  const failure = record ? JSON.parse(record.payload).failure : { code: wait?.reference, phase: technicalPlanRevision ? 'output-admission' : 'execution', targetNodeId: candidate.node_id }
   const detail = { ...base, nodeId: n.node_id, nodeRunId: n.node_run_id, leaseEpoch: n.lease_epoch, inputDigest: n.input_digest,
     ...(proposalCorrection ? { validationNodeRunId: candidate.node_run_id, validationLeaseEpoch: candidate.lease_epoch, validationInputDigest: candidate.input_digest } : {}),
-    evidenceRefs: [...new Set([n.output_ref, ...JSON.parse(n.evidence_refs), ...(proposalCorrection ? JSON.parse(candidate.evidence_refs) : [])].filter(Boolean))], failure }
+    ...(technicalPlanRevision ? { technicalPlanRevision: true } : {}),
+    evidenceRefs: [...new Set([n.output_ref, ...(technicalPlanRevision ? [candidate.output_ref] : []), ...JSON.parse(n.evidence_refs), ...(proposalCorrection ? JSON.parse(candidate.evidence_refs) : [])].filter(Boolean))], failure }
   if (typeof failure?.code !== 'string') return detail
   const problemKey = executionDigest({ nodeRunId: n.node_run_id, inputDigest: n.input_digest,
-    code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId })
+    code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId,
+    ...(technicalPlanRevision ? { reviewInputDigest: candidate.input_digest } : {}) })
   detail.problemKey = problemKey
   const correctable = reclassifyInterrupted && failure.code === 'execution_tool_failed' || reclassifyProvider && failure.code === 'EXECUTION_PROVIDER_FAILED' || ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'EXECUTION_TURN_INTERRUPTED', 'execution_step_budget_exhausted', 'execution_timeout',
     'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY', 'ENGINEERING_READ_PATH_INVALID'].includes(failure.code)
@@ -148,14 +155,14 @@ function inspectNodeRecovery(runId, { reclassifyInterrupted = false, reclassifyP
       && ['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT', 'AGENT_WORK_RESULT_INVALID',
         'AGENT_WORK_EVIDENCE_INVALID', 'AGENT_WORK_COVERAGE_INCOMPLETE', 'QUERY_EVIDENCE_INVALID', 'GROUP_REPLY_INTERNAL_DETAILS'].includes(failure.code)
   if (!correctable && !proposalCorrection) return { ...detail, reason: 'failure-requires-implementation-repair' }
-  if (proposalCorrection && (failure.phase !== 'execution' || failure.targetNodeId !== candidate.node_id)) return detail
+  if (proposalCorrection && (failure.phase !== (technicalPlanRevision ? 'output-admission' : 'execution') || failure.targetNodeId !== candidate.node_id)) return detail
   if (failure.code === 'ENGINEERING_READ_PATH_INVALID' && n.output_ref) return detail
   if (n.executor !== 'agent' || !n.session_bound || !n.session_id || !n.input_digest || !n.input_ref
     || !['failed', 'waiting'].includes(r.status) || wait?.kind !== 'recovery' || failure.code !== wait.reference
     || r.pause_requested || r.stop_requested || pendingInputs(runId).length || current.some(node => !node.drained)
     || current.slice(0, n.position).some(node => node.status !== 'succeeded')
     || current.slice(n.position + 1).some(node => retainedNode(node) ? false : proposalCorrection && node.node_run_id === candidate.node_run_id ? false
-      : node.status !== 'blocked' || node.lease_epoch !== 0 && !(node.node_id === 'validate-proposal' && node.position === n.position + 1
+      : node.status !== 'blocked' || node.lease_epoch !== 0 && !((node.node_id === 'validate-proposal' || workflow?.definitionVersion === '19' && node.node_id === 'apply-changes') && node.position === n.position + 1
         && db.prepare("SELECT 1 FROM execution_events WHERE kind='node.resume' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.validationNodeRunId')=? LIMIT 1").get(n.node_run_id,node.node_run_id)))
     || current.filter(node=>node.position>=n.position&&!retainedNode(node)).some(node=>db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(node.node_run_id))
     || db.prepare("SELECT 1 FROM execution_effects WHERE run_id=? AND state NOT IN ('succeeded','failed') LIMIT 1").get(runId)) return detail
@@ -569,7 +576,7 @@ function coreCommand(command, now, consumption = {}) {
     if (r.recovery_reason === 'stage-dependency') fail('TASK_DEPENDENCY_PENDING')
     const recovering = nodes(r.run_id).filter(n => n.status === 'waiting' && n.wait_reason && JSON.parse(n.wait_reason).kind === 'recovery')
     if (!recovering.length) fail('RUN_NOT_RECOVERING')
-    if (recovering.some(n => ['EXECUTION_TURN_INTERRUPTED', 'ENGINEERING_READ_PATH_INVALID', ...engineeringProposalCorrectionReasons].includes(JSON.parse(n.wait_reason).reference))) fail('NODE_RECOVERY_REQUIRES_OWNER')
+    if (recovering.some(n => ['EXECUTION_TURN_INTERRUPTED', 'ENGINEERING_READ_PATH_INVALID', 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED', ...engineeringProposalCorrectionReasons].includes(JSON.parse(n.wait_reason).reference))) fail('NODE_RECOVERY_REQUIRES_OWNER')
     if (recovering.some(n => !n.drained)) fail('NODE_NOT_DRAINED')
     assertRunEffectsDrained(db, r.run_id)
     for (const n of recovering) {
@@ -787,7 +794,7 @@ function coreCommand(command, now, consumption = {}) {
     }
     const n = nodes(a.runId).find(node => node.node_run_id === a.nodeRunId)
     const validation = recovery.validationNodeRunId && nodes(a.runId).find(node => node.node_run_id === recovery.validationNodeRunId)
-    if (validation) db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,wait_reason=NULL WHERE node_run_id=?").run(validation.node_run_id)
+    if (validation) db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,output_ref=NULL,wait_reason=NULL WHERE node_run_id=?").run(validation.node_run_id)
     db.prepare("UPDATE execution_nodes SET status='ready',output_ref=NULL,evidence_refs='[]',wait_reason=NULL WHERE node_run_id=?").run(n.node_run_id)
     db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now, r.run_id)
     db.prepare("UPDATE task_plan_stages SET status='running' WHERE task_id=? AND plan_revision=(SELECT plan_revision FROM business_tasks WHERE task_id=?) AND run_id=?").run(r.task_id, r.task_id, r.run_id)
@@ -796,7 +803,7 @@ function coreCommand(command, now, consumption = {}) {
       inputDigest: n.input_digest, nextLeaseEpoch: n.lease_epoch + 1, previousRunRevision: r.revision, contextRef: a.contextRef, problemKey: recovery.problemKey,
       failure: recovery.failure, previousOutputRef: n.output_ref, evidenceRefs: recovery.evidenceRefs,
       ...(validation ? { validationNodeRunId: validation.node_run_id, validationLeaseEpoch: validation.lease_epoch,
-        validationInputRef: validation.input_ref, validationEvidenceRefs: JSON.parse(validation.evidence_refs) } : {}) }
+        validationInputRef: validation.input_ref, validationOutputRef: validation.output_ref, validationEvidenceRefs: JSON.parse(validation.evidence_refs) } : {}) }
   }
   if (command.kind === 'node.claim') {
     object(a, ['runId', 'nodeId', 'expectedGeneration', 'expectedLeaseEpoch'])

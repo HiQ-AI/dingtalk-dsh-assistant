@@ -938,3 +938,46 @@ test('共享材料短引用反馈后原生同会话查索引再用完整引用�
  const events=(await h.ctx.sessionPersistence.inspect(binding().sessionId)).events
  assert.equal(events.filter(e=>e.type==='dingtalk/execution-session').length,1)
 })
+
+
+test('v19 原生编辑工具仅委托 Host 当前 binding，真实回执可提交且不开放原生写', async t => {
+  let edits = 0, accepted
+  const h = await host({ script: [
+    { name: 'engineering_apply_edits', args: { replacements: [], changes: [{ path: 'src/a.js', expectedHash: null, content: 'new' }] } },
+    submit('effect-actual'),
+  ] }); t.after(() => h.close())
+  const result = await drive(h, { definition: definition({ allowedTools: ['engineering_apply_edits'] }),
+    applyEdits: async args => { edits++; assert.deepEqual(args, { replacements: [], changes: [{ path: 'src/a.js', expectedHash: null, content: 'new' }] }); return { effectId: 'effect-actual' } },
+    onResult: value => { accepted = value },
+  })
+  assert.equal(result.status, 'submitted'); assert.equal(edits, 1); assert.deepEqual(accepted, { answer: 'effect-actual' })
+  assert.equal(h.effects.length, 0)
+  assert.ok(JSON.stringify(h.requests[1]).includes('effect-actual'))
+})
+
+test('v19 原生编辑工具没有 Host executor 不可仅靠工具名获得写能力', async t => {
+  const h = await host(); t.after(() => h.close())
+  await assert.rejects(drive(h, { definition: definition({ allowedTools: ['engineering_apply_edits'] }) }), { code: 'execution_edit_executor_required' })
+  assert.equal(h.requests.length, 0)
+})
+
+test('v19 原生编辑参数带身份或截短hash仅回合纠正不调用编辑', async t => {
+  let edits = 0
+  const h = await host({ script: [
+    { name: 'engineering_apply_edits', args: { taskId: 'foreign', replacements: [], changes: [{ path: 'a', expectedHash: 'abc', content: 'bad' }] } },
+    { name: 'engineering_apply_edits', args: { replacements: [], changes: [{ path: 'a', expectedHash: null, content: 'good' }] } },
+    submit('done'),
+  ] }); t.after(() => h.close())
+  const result = await drive(h, { definition: definition({ allowedTools: ['engineering_apply_edits'] }), applyEdits: async () => { edits++; return { effectId: 'real' } } })
+  assert.equal(result.status, 'submitted'); assert.equal(edits, 1); assert.equal(h.requests.length, 3)
+})
+
+
+test('v19 实施节点仓库读取使用原requirement基线而非plan封装', async t => {
+  let received
+  const h = await host({ script: [{ name: 'engineering_repo_inspect', args: { operation: 'read', path: 'src/a.js' } }, submit('done')],
+    repositoryInspect: async (_binding, _args, _signal, input) => { received = input; return { text: 'source' } } }); t.after(() => h.close())
+  const requirement = { baseCommit: 'a'.repeat(40), request: '原要求' }
+  const result = await drive(h, { input: { requirement, plan: { ref: 'plan', digest: 'digest' } }, definition: definition({ allowedTools: ['engineering_repo_inspect', 'engineering_apply_edits'] }), applyEdits: async () => ({}) })
+  assert.equal(result.status, 'submitted'); assert.deepEqual(received, requirement)
+})

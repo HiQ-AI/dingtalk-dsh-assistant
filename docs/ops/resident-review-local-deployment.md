@@ -243,14 +243,14 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 
 任务详情使用紧凑编号时间线：标题与耗时同排、产出按标签展开、进度条表示已完成步骤比例。节点产出补充材料正文、文件清单、变更和已记录检查结果；此次需同时安装 Assistant 与 Observer，沿用只读分页接口及既有备份/回读流程，无 schema 变更。
 
-新工程任务采用交付物契约 v9：确认项目与修改起点、创建独立 Git 工作目录、编写修改方案、检查修改方案、按方案修改文件、构建与检查修改结果。方案节点持久化可下载的 `修改方案.md` 文档工件和可应用补丁；应用前检查文档非空、长度和变更文件覆盖，这不等于证明方案技术正确。工作目录回执包含实际位置和来源仓库，当前使用独立 Git 仓库而非 git worktree。检查报告明确打包、构建、测试及跳过测试的范围，不把命令成功当成业务验收通过。历史节点保留原定义；未保存方案说明时仅提供由实际补丁整理的 `修改记录.md`，不补造理由或重跑任务。
+新工程任务采用 v19：确认项目与修改起点、创建独立 Git 工作目录、编写修改方案、按方案修改文件、构建与检查修改结果。方案节点产出技术文档，说明需求、设计、影响范围和验证方法，可含示意代码，不要求逐文件修改前后补丁。取消独立“检查修改方案”节点；实施节点先核对方案与当前代码，再通过受管编辑工具执行修改，实际修改回执与方案文档分别保存。设计问题在未编辑前回到原方案节点修订；构建、测试和业务验收核对真实结果。工作目录回执包含实际位置和来源仓库，当前使用独立 Git 仓库而非 git worktree。检查报告明确打包、构建、测试及跳过测试的范围，不把命令成功当成业务验收通过。历史节点保留原定义；未保存方案说明时仅提供由实际补丁整理的 `修改记录.md`，不补造理由或重跑任务。
 
 节点产出统一核对当前分析/工程链：只读分页附带 overview，文件数量依据完整工件去重；默认显示读取、修改、索引或方案涉及数量，展开后才渲染正文与清单。提交/推送准备、执行回执、PR 草稿/创建/回读分别呈现，不相互冒充。未知结构标明“已保存节点产出，暂未提供可读展示”。
 
 
 交付物契约 v9 同时安装 Assistant 与 Observer；无控制库 schema 迁移。已有登记定义继续按其版本恢复，新任务才使用 v9。安装前核对旧定义摘要保持不变；安装后逐页回读现存工件和可下载文档，检查旧目录回执与节点轮次一致。沿用停机、稳定存储备份和精确包核对流程；不能回放历史任务生成缺失方案。
 
-方案编写及方案检查节点只显示实际方案工件路径，不展示正文、文件数量、展开或下载入口。当前文档与补丁持久化在 JSON 工件中，因此显示真实 JSON 路径，不虚构独立 Markdown 文件路径；其余节点保持原展示。
+方案节点显示实际技术文档工件；实施节点显示实际编辑回执和修改摘要。工件保存在 Task 共享目录，后续节点按引用读取。历史方案和补丁仍按旧定义展示，不虚构独立 Markdown 文件路径。
 
 新工程流程 v10 将“构建检查”和“业务验收”拆成两个节点。构建成功只允许进入业务验收；缺少受信验收用例、没有实际值或实际与预期不符时，业务验收保持等待，阻止后续提交，不自动循环重试。验收通过展示验收项、预期、实际和结论。既有 v1–v9 记录保持原定义，不补造历史业务验收节点；v10 用于新任务与受管重发。部署仍需双包更新、备份及独立回读，无 schema 迁移。
 
@@ -778,3 +778,9 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 同代候选选择 no-change 后若历史节点因 `ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT` 等待，新 Host 仅在正式 candidate-in-place 审计、成功 managed-edit 链和完整树比较同时成立时承接无新增修改结果。正常 node.commit 的 evidenceRefs 包含 `engineering-no-additional-change-proof`，须回读其 binding、repair、effects、sourceTree、tree 和完整 candidate。任何额外 tracked/untracked 变化仍阻断，不删除这些文件凑验证通过。节点恢复继续使用既有精确原 Run 的受信恢复入口；总体验收与任务完成条件不变。
 
 控制库再次STORE_UNAVAILABLE时先读health.executionStore.failure及control.sqlite同目录execution-store-failures.jsonl的最近首因；只读取机器码/action/kind/sqliteCode/at/requestDigest，不能打印业务参数或把重开恢复当根修。诊断无法落盘时stderr只报FAILURE_TRACE_WRITE_FAILED，进程内首因仍可回读。未ready的启动失败不写该文件，保持零写预检边界；正常关闭不创建文件。后续仍按本规程的原命令对账及同Host受管恢复，不绕SQLite或提交未知保护。
+
+### 原工程证明恢复与未应用依赖重评
+
+冻结v18的apply-changes若因ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT等待，部署后的现有恢复扫描仅在正式candidate-in-place审计及当前完整候选树证明通过后继续原Run；同输入证明失败不循环重试，历史成功编辑不删除。v19按自己的两节点流程运行，不套此旧定义恢复。
+
+已接纳insertDependency在ENGINEERING_REPOSITORY_SCOPE_MISMATCH应用失败且未生成owner-plan回执时，部署后用现有 `/tasks/<taskId>/retry-owner`，传当前Owner/lease/requirement/control版本及原expectedLastFailure。Host核来源、原工程等待/排空、无pending输入或未决效果后，保存旧决定与失败审计并由原会话重评。此动作不是重新执行工程Run，也不撤销成功候选或扩大仓库权限。

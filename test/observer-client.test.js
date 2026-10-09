@@ -546,6 +546,20 @@ test('任务正文分页绑定当前详情版本，失败保留正文且旧版�
   assert.match(source, /key: `\$\{taskId\}:\$\{node\.runId\}:\$\{node\.nodeRunId\}:\$\{node\.outputRef\}`/)
 })
 
+test('技术方案沿原组件展开正文并下载，修订意见保持可读标签', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const view = stepOutputHarness(source, { taskId: 'task', node: { runId: 'run', nodeRunId: 'plan', outputRef: 'ref' }, detailRevision: 'v1' })
+  view.render()
+  view.requests[0].resolve({ text: '# 技术方案\n\n方案修订意见\n补充边界条件', overview: '修改方案.md', documentName: '修改方案.md', nextCursor: null }); await settle()
+  let tree = view.render()
+  assert.ok(flattenElements(tree).some(item => item.type === 'a' && item.children.includes('下载 修改方案.md')))
+  flattenElements(tree).find(item => item.type === 'details').props.onToggle({ currentTarget: { open: true } })
+  tree = view.render()
+  assert.ok(flattenElements(tree).some(item => item.children.includes('# 技术方案')))
+  assert.ok(flattenElements(tree).some(item => item.type === 'strong' && item.children.includes('方案修订意见')))
+  assert.ok(flattenElements(tree).some(item => item.children.includes('补充边界条件')))
+})
+
 test('未变产物的详情版本推进保留已读正文与分页，新页使用新版本', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const props = { taskId: 'task', node: { runId: 'run', nodeRunId: 'node', outputRef: 'ref' }, detailRevision: 'v1' }

@@ -215,6 +215,11 @@ export function describeTaskNodeOutput(node, output, context = {}) {
   if (typeof output === 'string') add('正文', output)
   add('正文', output?.markdown)
   add('任务要求', output?.request)
+  if (node.nodeId === 'apply-changes' && output?.status === 'plan-revision-needed') {
+    add('方案修订意见', output.summary)
+    add('技术方案引用', output.planRef)
+    overview = '技术方案待修订，尚未编辑'
+  }
   for (const [label, values] of [['发现', output?.findings], ['限制与未确认事项', output?.limitations], ['执行范围', output?.constraints], ['相关文件', output?.paths], ['已有文件', output?.existingPaths], ['新建文件', output?.newPaths]]) {
     if (Array.isArray(values)) add(label, values.map(item => typeof item === 'string' ? item : item?.statement).filter(item => typeof item === 'string').join('\n'))
     if (Array.isArray(values) && ['相关文件', '已有文件', '新建文件'].includes(label)) summarizeFiles(({ '相关文件': '已选择', '已有文件': '选择已有', '新建文件': '计划新建' })[label], values)
@@ -3269,6 +3274,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return { rootTaskId: family.rootTaskId, latestTaskId: family.latestTaskId, total: family.taskIds.length,
       executions, nextOffset: offset + limit < family.taskIds.length ? offset + limit : null }
   }
+  const noAdditionalRecoveryAttempts = new Set()
   let messageRecoveryFlight, taskRecoveryFlight, taskRecoveryCursor
   async function reconcileFoldedAnswers() {
     const failures = []
@@ -3320,6 +3326,31 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const state = await store.query({ kind: 'run', runId: run.runId })
           const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
+          if (node.waitReason?.kind === 'recovery' && node.waitReason.reference === 'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT') {
+            const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
+            const frozen = definition.nodes.find(item => item.id === node.nodeId)
+            const attempt = `${node.nodeRunId}:${node.inputDigest}`
+            if (definition.version !== '18' || !definition.id.startsWith('task-engineering-')
+              || node.nodeId !== 'apply-changes' || node.nodeVersion !== '6' || frozen?.executor !== 'code'
+              || node.outputRef || state.pendingInputCount || state.nodes.some(item => !item.drained || item.status === 'running')
+              || noAdditionalRecoveryAttempts.has(attempt)) continue
+            const effects = await store.query({ kind: 'effect.list', runId: run.runId })
+            if (effects.some(effect => !['succeeded', 'failed'].includes(effect.state))) continue
+            const input = await artifacts.read(node.inputRef)
+            if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId) continue
+            // 此输入只核一次；证明失败保留等待和错误，不当作暂态故障循环重试。
+            noAdditionalRecoveryAttempts.add(attempt)
+            const { proveEngineeringNoAdditionalChange } = await import('./task-workflow.js')
+            await proveEngineeringNoAdditionalChange({ store, input: input.data, binding: { ...node, taskId: run.taskId,
+              runId: run.runId, requirementDigest: executionDigest(await artifacts.read(run.requirementRef)) } })
+            const current = await store.query({ kind: 'run', runId: run.runId })
+            if (current.run.revision !== state.run.revision || current.run.generation !== state.run.generation
+              || current.pendingInputCount || current.nodes.some(item => !item.drained || item.status === 'running')
+              || !current.nodes.some(item => item.nodeRunId === node.nodeRunId && item.status === 'waiting'
+                && item.inputDigest === node.inputDigest && item.leaseEpoch === node.leaseEpoch)) continue
+            await controller.recover({ commandId: `no-additional-recover:${node.nodeRunId}:${node.inputDigest}`, runId: run.runId })
+            continue
+          }
           if (node.waitReason?.kind === 'recovery' && ['execution_no_submission','execution_tool_failed','EXECUTION_PROVIDER_FAILED'].includes(node.waitReason.reference)
             && ctx?.sessionPersistence && state.nodes.every(item => item.drained) && node.sessionBound && !node.outputRef) {
             const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
@@ -3747,7 +3778,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     // 工件读取期间发生修订也不能把旧正文交给当前页面。
     if (before !== await store.query({ kind: 'task.viewRevision', taskId })) throw executionError('TASK_OUTPUT_CHANGED')
     if (document) return result.document ?? null
-    if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
+    if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)
+      && !(node.nodeId === 'inspect-and-propose' && output?.document?.markdown && Array.isArray(output.scopePaths) && Array.isArray(output.criteria))) {
       const pathText = `方案工件路径\n${artifacts.locate ? artifacts.locate(node.outputRef) : join(artifacts.root, node.outputRef)}`
       return { text: pathText, overview: '', nextCursor: null, totalLength: pathText.length }
     }

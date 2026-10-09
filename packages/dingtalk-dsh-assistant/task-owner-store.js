@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { maintenanceStatus } from './execution-maintenance.js'
 import { parseArtifactReference } from './execution-artifacts.js'
 import { transientRecoveryReasons, correctableOwnerReasons, ownerRetryableReason, recoveryRetryDelayMs } from './execution-recovery-policy.js'
-import { readCurrentTaskSource } from './message-ledger.js'
+import { readCurrentTaskSource, assertMessageTaskUnfenced } from './message-ledger.js'
 
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
 const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -204,6 +204,38 @@ export function isUnstartedEngineeringPreparation(db, o, t) {
     && !db.prepare("SELECT 1 FROM execution_receipts r JOIN task_owner_turns t ON r.command_id='owner-plan:'||t.turn_id WHERE t.task_id=?").get(o.task_id)
     && !db.prepare("SELECT 1 FROM execution_events WHERE kind IN ('task.plan.initialize','task.plan.create','task.plan.extend','task.plan.revise') AND json_extract(payload,'$.taskId')=?").get(o.task_id)
 }
+// 只废弃尚未应用且范围失败的必要依赖决定；保留原工程历史效果。
+function rejectedDependencyDecision(db, o, currentTask) {
+  if (o.status !== 'blocked' || o.current_turn_id || o.last_failure !== 'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'
+    || currentTask.plan_status !== 'active' || currentTask.plan_requirement_revision !== currentTask.requirement_revision) return null
+  const t = db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked'").get(o.task_id, o.lease_epoch)
+  if (!t) return null
+  const decision = JSON.parse(t.decision_json), v = versions(db, o), stages = decision.planChange?.stages
+  if (decision.action !== 'advance' || decision.planChange?.kind !== 'insertDependency' || !Array.isArray(stages) || !stages.length
+    || stages.some(stage => stage.workflowId !== 'task-engineering' || !stage.sourceCondition)
+    || v.requirementRevision !== t.requirement_revision || v.planRevision !== t.plan_revision || v.controlRevision !== t.control_revision
+    || v.authorizationRevision !== t.authorization_revision || v.inputFenceRevision !== t.input_fence_revision
+    || db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${t.turn_id}`)) return null
+  const active = db.prepare("SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND status='running'").all(o.task_id, v.planRevision)
+  if (active.length !== 1 || !active[0].run_id) return null
+  const stage = active[0], run = db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(stage.run_id, o.task_id)
+  const record = run && db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(run.workflow_digest)
+  if (!run || JSON.parse(record?.body ?? '{}').config?.kind !== 'engineering' || run.status !== 'waiting' || run.pause_requested || run.stop_requested
+    || stage.workflow_digest !== run.workflow_digest || stage.requirement_ref !== run.requirement_ref || stage.output_ref
+    || db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(o.task_id)
+    || db.prepare("SELECT 1 FROM execution_inputs i JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND i.status='pending'").get(o.task_id)
+    || db.prepare("SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND e.state NOT IN ('succeeded','failed')").get(o.task_id)) return null
+  try { assertMessageTaskUnfenced(db, o.task_id) } catch { return null }
+  for (const condition of [...stages.map(stage => stage.sourceCondition), JSON.parse(stage.source_condition ?? 'null')]) {
+    if (!condition) return null
+    const source = readCurrentTaskSource(db, condition.sourceKey, { taskId: o.task_id })
+    if (!source || source.status === 'superseded' || source.sourceVersion !== condition.sourceVersion
+      || typeof condition.sourceQuote !== 'string' || !condition.sourceQuote || !source.body.includes(condition.sourceQuote)
+      || typeof condition.objective !== 'string' || !condition.objective || !condition.sourceQuote.includes(condition.objective)
+      || condition.requiredActorId && source.actorId !== condition.requiredActorId) return null
+  }
+  return t
+}
 const turn = (db, args) => {
   const o = owner(db, args.taskId)
   const t = db.prepare('SELECT * FROM task_owner_turns WHERE turn_id=? AND task_id=?').get(id(args.turnId), o.task_id)
@@ -384,19 +416,22 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     if (o.revision !== a.expectedOwnerRevision || o.lease_epoch !== a.expectedLeaseEpoch
       || currentTask.requirement_revision !== a.expectedRequirementRevision || currentTask.control_revision !== a.expectedControlRevision
       || o.last_failure !== a.expectedLastFailure) fail('TASK_OWNER_RETRY_STALE')
+    const rejectedDependency = rejectedDependencyDecision(db, o, currentTask)
     if (currentTask.control_state !== 'active' || !['pending', 'blocked'].includes(o.status) || o.current_turn_id
-      || !['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT', 'TASK_OWNER_ADVANCE_CONFLICT'].includes(o.last_failure)
-      || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked')) LIMIT 1").get(a.taskId))
+      || !rejectedDependency && !['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT', 'TASK_OWNER_ADVANCE_CONFLICT'].includes(o.last_failure)
+      || db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked')) LIMIT 1").get(a.taskId, rejectedDependency?.turn_id ?? ''))
       fail('TASK_OWNER_RETRY_FORBIDDEN')
     if (o.last_failure === 'TASK_OWNER_ADVANCE_CONFLICT') {
       const last = db.prepare('SELECT status,decision_json,application_status FROM task_owner_turns WHERE task_id=? AND lease_epoch=?').get(o.task_id, o.lease_epoch)
       if (!last || last.status !== 'released' || last.decision_json !== null || last.application_status !== null) fail('TASK_OWNER_RETRY_FORBIDDEN')
     }
+    if (rejectedDependency) db.prepare("UPDATE task_owner_turns SET application_status='discarded',updated_at=? WHERE turn_id=?").run(now, rejectedDependency.turn_id)
     const eventSeq = Number(db.prepare("INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at) VALUES(?,?,'system.recovery',?,?)")
       .run(a.taskId, a.eventKey, a.payloadRef, now).lastInsertRowid)
     db.prepare("UPDATE task_owners SET status='pending',failure_count=0,last_failure=NULL,event_watermark=?,revision=revision+1,updated_at=? WHERE task_id=?")
       .run(eventSeq, now, a.taskId)
-    return { status: 'pending', taskId: a.taskId, eventSeq, ownerRevision: o.revision + 1, sessionId: o.session_id }
+    return { status: 'pending', taskId: a.taskId, eventSeq, ownerRevision: o.revision + 1, sessionId: o.session_id,
+      ...(rejectedDependency ? { discardedTurnId: rejectedDependency.turn_id, previousFailure: o.last_failure } : {}) }
   }
   if (command.kind === 'task.owner.event') {
     exact(a, ['taskId', 'eventKey', 'eventType', 'payloadRef'], ['taskId', 'eventKey', 'eventType'])

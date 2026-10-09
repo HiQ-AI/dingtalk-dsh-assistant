@@ -1043,3 +1043,113 @@ test('Host无新增修改证明正常提交独立审计，缺原修复仍拒绝'
     else{assert.equal(state.run.status,'waiting');assert.equal(node.waitReason.reference,'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')}
   })
 })
+
+
+for (const variant of ['edit', 'revise', 'same-plan-repeat', 'no-change', 'prepared']) test(`v19 真实受管编辑网关与原方案自动纠正 ${variant}`, async t => {
+  const { createEngineeringTechnicalPlanWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  const { createManagedEdits } = await import('../packages/dingtalk-dsh-assistant/execution-edit.js')
+  const { createExecutionDelivery } = await import('../packages/dingtalk-dsh-assistant/execution-delivery.js')
+  const { executionDigest } = await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+  const { mkdir } = await import('node:fs/promises')
+  const root = await mkdtemp(join(tmpdir(), 'dsh-v19-gateway-')), directory = join(root, 'workspace')
+  await mkdir(directory)
+  const { execFile } = await import('node:child_process'), { promisify } = await import('node:util')
+  const git = async (...args) => (await promisify(execFile)('git', ['-C', directory, ...args], { windowsHide: true })).stdout.trim()
+  let baseCommit = 'a'.repeat(40), mergeTree, confirmedRead = false
+  if (variant === 'no-change') {
+    await mkdir(join(directory, 'src')); await writeFile(join(directory, 'src/a.js'), 'already correct')
+    await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
+    await git('add', '.'); await git('commit', '-m', 'base'); baseCommit = await git('rev-parse', 'HEAD'); mergeTree = await git('rev-parse', 'HEAD^{tree}')
+  }
+  const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'v19', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const workspaceAdapter = { prepare: async scope => ({ ...scope, directory, conflictPaths: [], ...(mergeTree ? { mergeTree } : {}) }), reconcile: async () => ({ status: 'succeeded' }) }
+  const managed = createManagedEdits({ workspaceAdapter }); let writes = 0, plans = 0, preparations = 0, calls = 0
+  const delivery = createExecutionDelivery({ store: { query: value => store.query(value), command: value => { if (variant === 'prepared' && value.kind === 'effect.begin') throw Object.assign(new Error('fixture interruption before dispatch'), { code: 'FIXTURE_BEFORE_DISPATCH' }); return store.command(value) } }, artifacts, authorize: async () => ({ principalId: 'host', authorizationRef: 'original-task' }),
+    editAdapter: { execute: async value => { writes++; return managed.execute(value) }, reconcile: managed.reconcile } })
+  const flow = createEngineeringTechnicalPlanWorkflow({ workflowId: 'task-engineering-v19-test', provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] },
+    assertConflictReads: async ({ paths }) => { assert.equal(confirmedRead, true); assert.deepEqual(paths, ['src/a.js']) },
+    project: { targetCommit: baseCommit, taskBase: baseCommit }, workspaceAdapter, editAdapter: managed,
+    checks: [{ id: 'check', version: '1', run: async () => ({ passed: true, log: 'fixture' }) }], adapterIdentity: 'v19' })
+  const apply = flow.nodes.find(n => n.id === 'apply-changes')
+  const shape = { type: 'object' }
+  apply.inputSchema = shape
+  apply.inputDependencies = ['inspect-and-propose']
+  apply.mapInput = ({ requirement, dependencyOutputs, artifactRefs }) => ({ requirement,
+    plan: { ref: artifactRefs.dependencies['inspect-and-propose'], digest: executionDigest(dependencyOutputs['inspect-and-propose']) } })
+  const definition = { id: 'task-engineering-v19-test', version: '19', nodes: [
+    { id: 'prepare-workspace', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: shape, outputSchema: shape,
+      mapInput: ({ requirement }) => requirement, execute: async ({ input }) => { preparations++; return input } },
+    { id: 'inspect-and-propose', version: '7', executor: 'agent', provider: 'test', model: 'test', prompt: '技术方案', allowedTools: [], allowedEffects: ['read'], inputSchema: shape, outputSchema: shape, mapInput: ({ requirement }) => requirement }, apply,
+  ] }
+  const sessions = { async run(args) {
+    await args.onSessionBound()
+    if (args.binding.nodeId === 'inspect-and-propose') {
+      plans++; if (plans > 1) assert.ok(args.recoveryContext.diagnosis.includes('遗漏'))
+      await args.onResult({ document: { markdown: variant === 'same-plan-repeat' ? 'same' : `plan ${plans}` } }); return { status: 'submitted' }
+    }
+    calls++
+    const value = { status: 'succeeded', summary: '修改完成', planRef: args.input.plan.ref, effectRefs: ['forged'] }
+    await assert.rejects(args.validateOutput(value), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+    if (['revise', 'same-plan-repeat'].includes(variant) && (calls === 1 || variant === 'same-plan-repeat')) {
+      const revision = { ...value, status: 'plan-revision-needed', summary: '设计遗漏事务范围', effectRefs: [] }
+      await args.validateOutput(revision); await args.onResult(revision); return { status: 'submitted' }
+    }
+    const signal = new AbortController().signal
+    if (variant === 'no-change') {
+      await assert.rejects(args.validateOutput({ ...value, effectRefs: [] }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+      assert.equal(await readFile(join(directory, 'src/a.js'), 'utf8'), 'already correct'); confirmedRead = true
+      const proof = await args.applyEdits({ changes: [], replacements: [], noChange: { reason: '已读取实现符合要求', reviewedPaths: ['src/a.js'] } }, signal)
+      assert.equal(proof.changeDisposition, 'no-change'); assert.ok(proof.evidenceRef)
+      assert.equal((await artifacts.read(proof.evidenceRef)).tree, mergeTree)
+      const valid = { ...value, effectRefs: [] }; await args.validateOutput(valid); await args.onResult(valid); return { status: 'submitted' }
+    }
+    const bad = await args.applyEdits({ changes: [{ path: 'src/a.js', expectedHash: 'b'.repeat(64), content: 'new' }], replacements: [] }, signal)
+    assert.equal(bad.received, false); assert.equal(bad.error.code, 'EDIT_BASE_CONFLICT'); assert.equal(writes, 0)
+    const edits = { changes: [{ path: 'src/a.js', expectedHash: null, content: 'new' }], replacements: [] }
+    if (variant === 'prepared') {
+      await assert.rejects(args.applyEdits(edits, signal), { code: 'FIXTURE_BEFORE_DISPATCH' })
+      const effects = await store.query({ kind: 'effect.list', runId: args.binding.runId })
+      assert.equal(effects[0].state, 'prepared'); assert.equal(writes, 0)
+      await assert.rejects(args.validateOutput({ ...value, status: 'plan-revision-needed', effectRefs: [] }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+      return { status: 'no_submission' }
+    }
+    const receipt = await args.applyEdits(edits, signal)
+    assert.deepEqual(await args.applyEdits(edits, signal), receipt); assert.equal(writes, 1)
+    await assert.rejects(args.applyEdits({ changes: [{ path: 'src/b.js', expectedHash: null, content: 'other' }], replacements: [] }, signal), { code: 'DELIVERY_IDENTITY_CONFLICT' })
+    await assert.rejects(args.validateOutput({ ...value, status: 'plan-revision-needed', effectRefs: [] }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+    const valid = { ...value, effectRefs: [receipt.effectId] }
+    await assert.rejects(args.validateOutput({ ...valid, planRef: 'foreign' }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+    await args.validateOutput(valid); await args.onResult(valid); return { status: 'submitted' }
+  }, async assertDrained() {}, async cancel() {}, async close() {} }
+  const controller = createExecutionController({ store, artifacts, delivery, sessions, workflows: [definition], readTools: ['engineering_repo_inspect'] })
+  t.after(async () => { await controller.close(); await store.close() })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'engineering', workflowId: definition.id, input: { request: '实现校验', baseCommit } }] })
+  const taskPlan = await controller.taskPlan('task')
+  const { plannedStageRunId } = await import('../packages/dingtalk-dsh-assistant/execution-controller.js')
+  const runId = plannedStageRunId('task', taskPlan.task.planRevision, 'engineering', 1)
+  await store.command({ id: 'register', kind: 'workflow.register', args: { workflowId: definition.id, digest: defineExecutionWorkflow(definition).digest, definitionVersion: '19', config: { kind: 'engineering', taskId: 'task', runId } } })
+  await controller.advanceTaskPlan('task')
+  const state = await controller.whenIdle(runId)
+  assert.equal(preparations, 1); assert.equal(state.run.generation, 1)
+  if (variant === 'same-plan-repeat') { assert.equal(state.run.status, 'waiting'); assert.equal(plans, 2); assert.equal(writes, 0) }
+  else if (variant === 'prepared') { assert.equal(state.run.status, 'waiting'); assert.equal(plans, 1); assert.equal(writes, 0); assert.equal((await controller.inspectNodeRecovery(runId)).repairable, false) }
+  else if (variant === 'no-change') { assert.equal(state.run.status, 'succeeded', JSON.stringify(state.controllerError)); assert.equal(writes, 0); assert.equal(state.nodes.at(-1).evidenceRefs.length, 2); assert.equal((await store.query({ kind: 'effect.list', runId })).length, 0) }
+  else { assert.equal(state.run.status, 'succeeded', JSON.stringify(state.controllerError)); assert.equal(plans, variant === 'edit' ? 1 : 2); assert.equal(writes, 1); assert.equal(await readFile(join(directory, 'src/a.js'), 'utf8'), 'new') }
+})
+
+
+test('v19 编辑工具登记只接受精确工程apply节点，不因readTools白名单扩大写权限', async () => {
+  const { createEngineeringTechnicalPlanWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  const flow = createEngineeringTechnicalPlanWorkflow({ workflowId: 'task-engineering-v19-test', provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] },
+    project: { targetCommit: 'a'.repeat(40), taskBase: 'a'.repeat(40) }, workspaceAdapter: {}, editAdapter: {},
+    checks: [{ id: 'check', version: '1', run: async () => ({ passed: true, log: 'fixture' }) }], adapterIdentity: 'v19' })
+  assert.doesNotThrow(() => defineExecutionWorkflow(flow))
+  for (const change of [node => { node.id = 'other' }, node => { node.version = '6' }, node => { node.allowedEffects.push('git.push') }, node => { node.execute = undefined }]) {
+    const node = { ...flow.nodes.find(n => n.id === 'apply-changes'), inputDependencies: [], allowedEffects: ['read', 'workspace.edit'] }
+    change(node)
+    assert.throws(() => defineExecutionWorkflow({ id: flow.id, version: '19', nodes: [node] }), { code: 'EFFECT_NOT_ADMITTED' })
+  }
+  const node = { ...flow.nodes.find(n => n.id === 'apply-changes'), inputDependencies: [], allowedEffects: ['read'] }
+  assert.throws(() => createExecutionController({ workflows: [{ id: flow.id, version: '18', nodes: [node] }], readTools: ['engineering_repo_inspect', 'engineering_apply_edits'] }), { code: 'TOOL_NOT_ADMITTED' })
+})

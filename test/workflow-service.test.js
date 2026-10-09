@@ -3456,6 +3456,17 @@ test('UAT补充绑定同一开发Task并更新目标，不新建澄清请求或�
   assert.equal(plan.stages.length, 0)
   assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), [])
 })
+test('技术方案正文与编辑前修订意见按真实产物展示', () => {
+  const output = { document: { name: '修改方案.md', markdown: '# 技术方案\n\n先核对需求再修改。' }, scopePaths: ['src/a.js'], criteria: [{ criterion: '正确计算', design: '统一计算入口', verification: '边界测试' }] }
+  const plan = describeTaskNodeOutput({ nodeId: 'inspect-and-propose' }, output)
+  assert.equal(plan.document.content, output.document.markdown)
+  assert.equal(plan.text, output.document.markdown)
+  assert.doesNotMatch(plan.overview, /已修改/)
+  const revise = describeTaskNodeOutput({ nodeId: 'apply-changes' }, { status: 'plan-revision-needed', summary: '缺少边界条件设计', planRef: 'artifact:plan', effectRefs: [] })
+  assert.match(revise.text, /方案修订意见\n缺少边界条件设计/)
+  assert.equal(revise.overview, '技术方案待修订，尚未编辑')
+})
+
 test('本地验收产出：条件、方案与目录准确展示且不泄漏执行参数', () => {
   const hidden = 'secret-acceptance-parameter'
   const project = (nodeId, output) => describeTaskNodeOutput({ nodeId }, output)
@@ -7027,4 +7038,21 @@ for (const mode of ['known', 'unsatisfied', 'diagnostic', 'foreign', 'stale', 'm
   else {assert.notEqual(owner.decision?.action,'complete');assert.ok(hostRejection);assert.equal(checks,['unsatisfied','diagnostic'].includes(mode)?1:0)}
   if(mode==='diagnostic')assert.equal(diagnosticRead,true)
   assert.deepEqual(await f.execution.store.query({kind:'run.list',taskId}),[])
+})
+
+test('v18无新增修改自动恢复只接受真实修复证明，失败同input不循环且普通版本不准入',async t=>{
+  for(const version of ['18','19']){
+    let proofs=0,executions=0
+    const {service,execution}=await fixture(t,'owner',undefined,{storeQuery:async(q,next)=>{if(q.kind==='effect.edit-repair')proofs++;return next(q)}})
+    const workflow={id:`task-engineering-no-additional-${version}`,version,nodes:[{id:'apply-changes',version:'6',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({requirement})=>requirement,execute:async()=>{executions++;throw Object.assign(Error('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'),{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})}}]}
+    execution.controller.registerWorkflow(workflow)
+    const {runId}=await execution.controller.createRun({commandId:`no-additional-${version}`,taskId:`no-additional-${version}`,workflowId:workflow.id,input:{requirement:{baseCommit:'a'.repeat(40)},proposal:{changeDisposition:'no-change',changes:[],replacements:[]}}})
+    await execution.controller.whenIdle(runId)
+    const before=await execution.controller.state(runId)
+    const first=await service.recoverExecutionTasks(),second=await service.recoverExecutionTasks()
+    assert.equal(proofs,version==='18'?1:0);assert.equal(first.length,version==='18'?1:0);assert.deepEqual(second,[])
+    const after=await execution.controller.state(runId)
+    assert.equal(executions,1);assert.equal(after.run.revision,before.run.revision);assert.equal(after.nodes[0].leaseEpoch,before.nodes[0].leaseEpoch)
+    assert.equal(after.nodes[0].waitReason.reference,'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
+  }
 })

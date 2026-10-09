@@ -42,6 +42,9 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   assert.deepEqual(await readdir(outside), [])
   const original = await prepare('original', 'first')
   const oldRecord = (await store.query({ kind: 'workflow.list' }))[0], head = oldRecord.config.head
+  assert.equal(oldRecord.definitionVersion, '19')
+  assert.equal(workflow.nodes.some(node => node.id === 'validate-proposal'), false)
+  assert.equal(workflow.nodes.find(node => node.id === 'apply-changes').executor, 'agent')
   await git('push', remote, `HEAD:refs/heads/${head}`)
   await writeFile(join(source, 'value.txt'), 'latest'); await git('commit', '-am', 'latest'); await git('push', remote, `HEAD:refs/heads/${head}`)
   const latest = await git('rev-parse', 'HEAD'), sourceBranch = await git('symbolic-ref', 'HEAD')
@@ -67,7 +70,13 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   assert.equal(workspaceOutput.workspace.targetBranch, 'feature/uat2-base')
   assert.equal((await exec('git', ['-C', workspaceOutput.workspace.directory, 'rev-parse', '--abbrev-ref', 'HEAD'], { windowsHide: true })).stdout.trim(), 'HEAD')
   assert.deepEqual((await store.query({ kind: 'workflow.list' })).find(item => item.workflowId === oldRecord.workflowId), oldRecord)
-  const restored = createEngineeringRegistry(options); await restored.restore(store)
+  const restored = createEngineeringRegistry(options); const restoredWorkflows = await restored.restore(store)
+  assert.equal(restoredWorkflows.length, 2)
+  for (const restoredWorkflow of restoredWorkflows) {
+    assert.equal(restoredWorkflow.version, '19')
+    assert.equal(restoredWorkflow.nodes.some(node => node.id === 'validate-proposal'), false)
+    assert.equal(defineExecutionWorkflow(restoredWorkflow).digest, (await store.query({ kind: 'workflow.list' })).find(record => record.workflowId === restoredWorkflow.id).digest)
+  }
   await assert.rejects(prepare('missing-source', 'missing-source', 'unknown-task'), { code: 'ENGINEERING_BRANCH_SOURCE_INVALID' })
   const legacy = structuredClone(oldRecord)
   delete legacy.config.repositoryIdentity
@@ -356,6 +365,7 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   assert.deepEqual(await registry.prepareTask(action, info, controller), prepared)
   assert.equal(admitted[0], admitted[1])
   const [record] = await store.query({ kind: 'workflow.list' })
+  assert.equal(record.definitionVersion, '19')
   assert.equal(record.config.provider, 'test'); assert.equal(record.config.model, 'v1')
   assert.equal(record.config.reasoningEffort, 'low')
   assert.equal(record.config.uatEnvironment, 'uat1'); assert.equal(record.config.uatBranch, 'feature/uat1-base')
@@ -364,7 +374,11 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   await store.close()
   const reopened = await openExecutionStore({ ...options, initialize: false }); t.after(() => reopened.close())
   const second = createEngineeringRegistry({ ...config, modelConfig: () => ({ provider: 'other', model: 'v2' }) })
-  assert.equal(defineExecutionWorkflow((await second.restore(reopened))[0]).digest, record.digest)
+  const recoveredWorkflow = (await second.restore(reopened))[0]
+  assert.equal(recoveredWorkflow.version, '19')
+  assert.equal(recoveredWorkflow.nodes.some(node => node.id === 'validate-proposal'), false)
+  assert.equal(recoveredWorkflow.nodes.find(node => node.id === 'apply-changes').executor, 'agent')
+  assert.equal(defineExecutionWorkflow(recoveredWorkflow).digest, record.digest)
   assert.deepEqual(await second.prepareTask(action, info, controller), prepared)
   await assert.rejects(second.prepareTask(action, { ...info, run: { actorId: 'outsider' } }, controller), { code: 'WORKFLOW_ACTION_FORBIDDEN' })
   await assert.rejects(second.prepareTask({ ...action, arguments: { ...action.arguments, repositoryId: 'unlisted' } }, info, controller), { code: 'ENGINEERING_REPOSITORY_NOT_ADMITTED' })
@@ -401,9 +415,19 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance,acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
   await registry.restore(store)
   const reached=Promise.withResolvers(),release=Promise.withResolvers();let firstCommit
-  const sessions={async run({input,onSessionBound,onResult}){await onSessionBound();if(input.criteria){onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取候选服务 value'],expected:input.request==='first'?'one':'two',parameters:{}}))});return}assert.equal(input.files[0].text,input.request==='first'?'old':'one');onResult({changeDisposition:'modify',reviewedPaths:['value.txt'],reason:'按本轮要求更新',document:{name:'修改方案.md',markdown:'# 修改方案\n将 value.txt 更新为本轮需要的值，使用配置检查核对文件内容。'},changes:[{path:'value.txt',expectedHash:input.files[0].expectedHash,content:input.request==='first'?'one':'two'}]})},async cancel(){},async close(){}}
-  const controller=createExecutionController({store,artifacts,sessions,delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:[],changeQuietMs:0,maxChangeDelayMs:0});t.after(()=>controller.close())
-  const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'first',acceptanceCriteria:['候选服务返回本轮修改值']}},{commandId:'revision-command',run:{actorId:'owner'},unit:{}},{registerWorkflow(workflow){const node=workflow.nodes.at(-1),original=node.execute;node.execute=async args=>{const result=await original(args);if(args.generation===1){firstCommit=result.commitId;reached.resolve();await release.promise}return result};controller.registerWorkflow(workflow)}})
+  const sessions={async run({input,binding,applyEdits,onSessionBound,onResult}){
+    await onSessionBound()
+    if(input.criteria){await onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取候选服务 value'],expected:input.request==='first'?'one':'two',parameters:{}}))});return}
+    const requirement=input.requirement??input
+    const file=await registry.repositoryInspect(binding,{operation:'read',path:'value.txt'},undefined,requirement)
+    assert.equal(file.text,requirement.request==='first'?'old':'one')
+    if(!applyEdits){await onResult({document:{name:'修改方案.md',markdown:'# 技术方案\n修改 value.txt 并核验候选服务返回值。'},scopePaths:['value.txt'],criteria:[{criterion:'候选服务返回本轮修改值',design:'更新 value.txt 内容',verification:'读取候选服务 value'}]});return}
+    const plan=await artifacts.read(input.plan.ref);assert.match(plan.document.markdown,/value.txt/)
+    const receipt=await applyEdits({changes:[{path:'value.txt',expectedHash:file.expectedHash,content:requirement.request==='first'?'one':'two'}],replacements:[]},new AbortController().signal)
+    await onResult({status:'succeeded',summary:'已按方案修改',planRef:input.plan.ref,effectRefs:[receipt.effectId]})
+  },async cancel(){},async close(){}}
+  const controller=createExecutionController({store:{query:q=>store.query(q),command:async c=>{if(c.kind==='node.drained'&&c.args.nodeId==='finalize'&&c.args.generation===1){firstCommit=await git(remote,'rev-parse',head);reached.resolve();await release.promise}return store.command(c)}},artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:[],changeQuietMs:0,maxChangeDelayMs:0});t.after(()=>controller.close())
+  const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'first',acceptanceCriteria:['候选服务返回本轮修改值']}},{commandId:'revision-command',run:{actorId:'owner'},unit:{}},controller)
   await controller.createRun({commandId:'create',...prepared})
   await Promise.race([reached.promise, controller.whenIdle(prepared.runId).then(state => { if(state.run.status !== 'running') throw new Error(JSON.stringify(state)) })])
   await controller.changeInput({commandId:'revise',runId:prepared.runId,inputId:'revision',sourceKey:'revision',input:{...prepared.input,request:'second'}});release.resolve()
@@ -418,9 +442,9 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   assert.deepEqual(localOutput.localAcceptance.cleanup, { dataCleaned: true, processStopped: true })
   assert.equal(localOutput.localPrepared.resourceKey, 'external:local-acceptance:shared-uat')
   assert.equal(localOutput.localAcceptance.checks[0].actual, 'two')
-  const planOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'propose-changes').outputRef)
+  const planOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'inspect-and-propose').outputRef)
   assert.match(planOutput.document.markdown, /value.txt/)
-  assert.equal(state.nodes.find(node => node.nodeId === 'validate-proposal').status, 'succeeded')
+  assert.equal(state.nodes.some(node => node.nodeId === 'validate-proposal'), false)
   const startOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'prepare-generation').outputRef)
   assert.equal(startOutput.startingPoint.mode, 'continue')
   assert.equal(startOutput.startingPoint.repository, 'test/repo')
@@ -594,7 +618,7 @@ test('工程源仓库缺失在git与工作区准备前明确拒绝且零执行�
 })
 
 
-test('工程共享材料读取不依赖节点正文，检查修订保留旧注册定义可恢复',async t=>{
+test('v19工程共享材料读取不依赖节点正文，18专属检查修订不改新定义',async t=>{
  const {taskDirectories}=await import('../packages/dingtalk-dsh-assistant/session-workspaces.js')
  const directory=await mkdtemp(join(tmpdir(),'dsh-shared-')),source=join(directory,'source');await mkdir(source)
  const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
@@ -633,19 +657,10 @@ test('工程共享材料读取不依赖节点正文，检查修订保留旧注�
  assert.ok(!JSON.stringify(repair).includes('新增诊断正文不可灌入repair'));assert.equal(repair.entries,undefined)
  await assert.rejects(registry.repositoryInspect({...binding,taskId:'other'},{operation:'materials'}),{code:'ENGINEERING_READ_SCOPE_INVALID'})
  await actual.command({id:'maintenance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'修正检查'}})
- await registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-v2',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['--test']}],maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts)
- assert.equal(checkpoint.expectedRevision,7);assert.equal(checkpoint.kind,'checks');assert.notEqual(checkpoint.workflowDigest,old.digest)
- assert.deepEqual((await actual.query({kind:'workflow.list'})).find(r=>r.digest===old.digest),old)
- const current=(await actual.query({kind:'workflow.list'})).find(r=>r.digest===checkpoint.workflowDigest)
- const scope={taskId:'task',uatEnvironment:current.config.uatEnvironment,requestDigest:executionDigest({request:current.config.input.request,acceptanceCriteria:current.config.input.acceptanceCriteria})}
- const command={executable:process.execPath,args:['--version']}
- const localAcceptance={version:'task-specific',sharedDataProfilePath:join(directory,'profile.json'),prepareSteps:[],service:{...command,args:['{port}','127.0.0.1'],readyPath:'/'},scenarios:[{id:'task-business',description:'当前任务真实业务条件',...command}],cleanup:command,verifyCleanup:command}
- for(const invalid of [{...scope,taskId:'other'},{...scope,uatEnvironment:'uat9'},{...scope,requestDigest:'0'.repeat(64)}])await assert.rejects(registry.updateCheckpoint({runId:prepared.runId,requestId:'local-v1',kind:'local-acceptance',localAcceptance,scope:invalid,maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts),{code:'ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH'})
- await registry.updateCheckpoint({runId:prepared.runId,requestId:'local-v1',kind:'local-acceptance',localAcceptance,scope,maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts)
- const scoped=(await actual.query({kind:'workflow.list'})).find(r=>r.digest===checkpoint.workflowDigest)
- assert.deepEqual(scoped.config.localAcceptanceScope,scope);assert.deepEqual(scoped.config.localAcceptanceConfig,localAcceptance)
- assert.deepEqual(scoped.config.checkpointChecks,current.config.checkpointChecks);assert.equal(checkpoint.kind,'local-acceptance')
-
+ assert.equal(old.definitionVersion,'19')
+ await assert.rejects(registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-v2',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['--test']}],maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts),{code:'ENGINEERING_CHECKPOINT_NOT_ADMITTED'})
+ assert.equal(checkpoint,undefined)
+ assert.deepEqual(await actual.query({kind:'workflow.list'}),[old])
  const restored=createEngineeringRegistry(options);await restored.restore(store,artifacts)
  assert.equal(state.run.generation,1)
 })
