@@ -1,3 +1,4 @@
+import { proveEngineeringNoAdditionalChange } from './task-workflow.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
@@ -269,9 +270,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         Object.assign(binding, { kind: 'task-node', inputVersion: history.inputVersion, inputHistory: history.inputHistory })
       }
       const abort = new AbortController(); active.set(runId, abort)
-      let output, submitted = false, failure, outcome
+      let input, engineeringProofRef, output, submitted = false, failure, outcome
       try {
-        const input = await artifacts.read(binding.inputRef)
+        input = await artifacts.read(binding.inputRef)
         if (executionDigest(input) !== binding.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== ready.nodeId) throw executionError('NODE_INPUT_IDENTITY_MISMATCH')
         validate(nodeDefinition.inputSchema, input.data)
         if (nodeDefinition.executor === 'code') {
@@ -306,7 +307,17 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             onResult: value => { output = value; submitted = true },
           })
         }
-      } catch (error) { failure = error }
+      } catch (error) {
+        failure = error
+        if (error?.code === 'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT' && nodeDefinition.executor === 'code'
+          && definition.id.startsWith('task-engineering-') && binding.nodeId === 'apply-changes') {
+          try {
+            const proven = await proveEngineeringNoAdditionalChange({ store, binding, input: input.data, signal: abort.signal })
+            const evidence = await artifacts.put(proven.proof, { reference: binding.inputRef })
+            output = proven.output; submitted = true; failure = null; engineeringProofRef = evidence.ref
+          } catch (proofError) { failure = proofError }
+        }
+      }
       finally { active.delete(runId) }
       if (failure?.executionDrained === false) throw failure
       await drained(binding, 'executor-settled')
@@ -383,7 +394,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         const priorOutput = next && nextState.position > ready.position + 1 ? await artifacts.read(state.nodes[nextState.position - 1].outputRef) : output
         const nextInput = next ? await prepareInput(definition, next, state.run.requirementRef, priorOutput, dependencies) : null
         await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', {
-          ...identity, outcome: 'succeeded', outputRef: result.ref, evidenceRefs: [result.ref],
+          ...identity, outcome: 'succeeded', outputRef: result.ref, evidenceRefs: [result.ref, ...(engineeringProofRef ? [engineeringProofRef] : [])],
           ...(next ? { nextInput: { nodeId: next.id, inputRef: nextInput.ref, inputDigest: nextInput.digest } } : {}),
         })
       } catch (error) {

@@ -1,0 +1,9 @@
+# 控制库首次故障可追溯
+
+现状：同一Host先后两次STORE_UNAVAILABLE，quick_check正确、无unknown命令/效果且busy为0，原生Resident重开恢复收信。执行Store会在SQLite错误、worker退出或10秒RPC回执超时时封闭；后续请求只返回STORE_UNAVAILABLE，首次code/action/SQLite扩展码丢失。现有证据不足以将某一候选认作根因。
+
+候选：SQLite语句/约束错误；真实写入/磁盘错误；RPC超时或worker退出。当前无首因证据，不能凭quick_check正确排除瞬时写失败，也不能放宽未知提交保护。
+
+先复用execution-store父进程错误接收边界，保留第一次失败的时点、来源、code、SQLite码、RPC action/kind及请求内容SHA256。诊断不记录原消息、SQL、错误正文、凭据、命令参数或请求ID原文。存于控制库同目录execution-store-failures.jsonl，跨Resident重开可核验；Store公开只读failure，正常关闭不产生故障。工作流健康将可用性/首次failure纳入既有health，避免bridge健康而控制库已失效仍报ok。
+
+不修改现有10秒提交未知语义、SQLite封闭边界或自动重试。定向测试用原生SQLITE_FULL及真实COMMIT ACK丢失证实原错误存活且不泄密/不覆盖，并验证正常close零误报。部署后真实原任务续行及下一故障证据再定位根因；观测改动本身不算SG25完成。

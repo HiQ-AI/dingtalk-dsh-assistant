@@ -3806,6 +3806,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     boardTasks, taskDetail, taskExecutions,
     isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),
+    executionHealth: () => ({ healthy: store.healthy, failure: store.failure ?? null }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
     recover: recoverAll, recoverExecutionTasks, deleteCancelledTask,

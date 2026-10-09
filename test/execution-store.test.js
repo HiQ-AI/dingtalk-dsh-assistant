@@ -712,9 +712,15 @@ test('真实COMMIT后ACK丢失：调用器超时封闭写，重开按原ID读回
     const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});let code,after;
     try{await s.command({id:'lost-claim',kind:'node.claim',args:{runId:'run',nodeId:'one',expectedGeneration:1,expectedLeaseEpoch:0}})}catch(e){code=e.code}
     try{await s.command({id:'offline-stop',kind:'run.stop',args:{runId:'run',reason:'x'}})}catch(e){after=e.code}
-    await s.close();process.send({type:'result',code,after});`, [f.dbPath, f.instanceId])
+    await s.close();process.send({type:'result',code,after,failure:s.failure});`, [f.dbPath, f.instanceId])
   await probe.message('dropped')
-  assert.deepEqual(await probe.message('result'), { type: 'result', code: 'COMMIT_ACK_UNKNOWN', after: 'STORE_UNAVAILABLE' })
+  const failed = await probe.message('result')
+  assert.equal(failed.code, 'COMMIT_ACK_UNKNOWN'); assert.equal(failed.after, 'STORE_UNAVAILABLE')
+  assert.equal(failed.failure.origin, 'rpc-timeout'); assert.equal(failed.failure.action, 'command')
+  assert.equal(failed.failure.kind, 'node.claim'); assert.equal(failed.failure.code, 'COMMIT_ACK_UNKNOWN')
+  assert.match(failed.failure.requestDigest, /^[a-f0-9]{64}$/)
+  const trace = (await readFile(join(f.root, 'execution-store-failures.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  assert.deepEqual(trace, [failed.failure])
   assert.equal((await probe.exited).code, 0)
   await f.open()
   const replay = await f.store.command(command('node.claim', { runId: 'run', nodeId: 'one', expectedGeneration: 1, expectedLeaseEpoch: 0 }, 'lost-claim'))
@@ -726,6 +732,13 @@ test('真实COMMIT后ACK丢失：调用器超时封闭写，重开按原ID读回
   assert.equal(state.nodes[0].leaseEpoch, 1)
   assert.equal(state.nodes[0].status, 'waiting')
   assert.equal(state.nodes[0].drained, false)
+})
+
+test('正常关闭不记录存储故障，也不创建诊断文件', async t => {
+  const f = await fixture(t)
+  await f.store.close()
+  assert.equal(f.store.failure, null)
+  await assert.rejects(readFile(join(f.root, 'execution-store-failures.jsonl')), { code: 'ENOENT' })
 })
 
 test('RPC队列有界，拒绝超额请求且已接纳查询可完成', async t => {
@@ -750,10 +763,16 @@ test('测试进程限额触发原生SQLITE_FULL：整条命令回滚且封闭写
         const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value}})}}`
   const probe = child(t, `const{openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
     const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});let code,sqliteCode,after;
-    try{await s.command({id:'full-stop',kind:'run.stop',args:{runId:'run',reason:'synthetic'}})}catch(e){code=e.code;sqliteCode=e.sqliteCode}
+    try{await s.command({id:'full-stop',kind:'run.stop',args:{runId:'run',reason:'synthetic-private-secret'}})}catch(e){code=e.code;sqliteCode=e.sqliteCode}
     try{await s.command({id:'after-full',kind:'run.stop',args:{runId:'run',reason:'blocked'}})}catch(e){after=e.code}
-    await s.close();process.send({type:'result',code,sqliteCode,after});`, [f.dbPath, f.instanceId], preload)
-  assert.deepEqual(await probe.message('result'), { type: 'result', code: 'ERR_SQLITE_ERROR', sqliteCode: 13, after: 'STORE_UNAVAILABLE' })
+    await s.close();process.send({type:'result',code,sqliteCode,after,failure:s.failure});`, [f.dbPath, f.instanceId], preload)
+  const failed = await probe.message('result')
+  assert.equal(failed.code, 'ERR_SQLITE_ERROR'); assert.equal(failed.sqliteCode, 13); assert.equal(failed.after, 'STORE_UNAVAILABLE')
+  assert.equal(failed.failure.origin, 'worker-response'); assert.equal(failed.failure.code, 'ERR_SQLITE_ERROR')
+  assert.equal(failed.failure.sqliteCode, 13); assert.equal(failed.failure.action, 'command'); assert.equal(failed.failure.kind, 'run.stop')
+  const trace = await readFile(join(f.root, 'execution-store-failures.jsonl'), 'utf8')
+  assert.deepEqual(trace.trim().split('\n').map(JSON.parse), [failed.failure])
+  assert.ok(!trace.includes('synthetic-private-secret')); assert.ok(!trace.includes('full-stop'))
   assert.equal((await probe.exited).code, 0)
   await f.open()
   assert.equal((await f.query()).run.stopRequested, false)

@@ -359,10 +359,12 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const dwsBridge = inboundConfigured ? store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] } : undefined
     const inboundProcessing = inboundConfigured && dwsBridge.healthy === true
     const activityAudit = store.getActivityAuditStatus?.()
+    const executionStore = store.getWorkflowExecutionHealth?.()
     return send(response, 200, {
-      status: recoveryIssues.length === 0 && (!inboundConfigured || inboundProcessing) ? 'ok' : 'degraded', transport,
+      status: recoveryIssues.length === 0 && (!executionStore || executionStore.healthy) && (!inboundConfigured || inboundProcessing) ? 'ok' : 'degraded', transport,
       inboundConfigured, inboundProcessing, outboundAuthorized, modelMode,
       recoveryIssueCount: recoveryIssues.length,
+      ...(executionStore ? { executionStore } : {}),
       ...(activityAudit ? { activityAudit: { total: activityAudit.total, pending: activityAudit.pending, audited: activityAudit.audited, unavailableCount: activityAudit.unavailable.length } } : {}),
       ...(dwsBridge !== undefined ? { dwsBridge } : {}),
     })

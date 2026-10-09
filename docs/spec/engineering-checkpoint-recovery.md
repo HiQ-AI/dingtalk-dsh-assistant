@@ -42,3 +42,7 @@ Controller/store的节点恢复边界、task-workflow-contracts的工程检查�
 ## v18 本地准备效果声明与实际效果
 
 真实v18 factory的 prepare-local-acceptance/version1/code 声明唯一 workspace.prepare；其validatePlan在local.prepare之前执行，计划错误并未发生准备效果。此前Controller仅接受pure/read使真实定义无法沿受管checkpoint恢复。仅对该精确节点允许原factory唯一workspace.prepare集合，不允许混入其他effect；Store现有无output、全drained、全部前缀成功、local起实际effect零记录与维护/任务CAS保持不变。测试使用真实v18 factory保留define/plan/prepare-local实现及效果元数据，隔离业务执行边界，不以手造pure节点代替。
+
+## SG22 必要依赖候选与自然语言仓库路由冲突
+
+现场已授权必要dataset依赖仍在prepareTask被原需求唯一命中dataset-web的routingTerms拒绝。insertDependency先准备候选定义再提交计划，故不能要求尚未存在的已接纳依赖stage。最小修复沿原StageContract传递候选stage、当前beforeStageId/planRevision；registry从当前Task计划和需求独立回读，重新核来源作者/版本/原文、配置dependencyRepositories、原UAT及精确候选objective/验收。仅此已核候选可优先于自然语言路由；首次任务选仓和普通prepare仍拒绝冲突，不增加自选跨仓能力。真实Run/计划插入继续由原事务CAS完成。

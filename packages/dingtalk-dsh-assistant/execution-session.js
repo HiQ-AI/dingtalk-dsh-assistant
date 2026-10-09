@@ -43,7 +43,7 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   const interrupted = previousCode === 'execution_tool_failed' && end.data.reason?.kind === 'aborted' && end.data.reason.reason?.kind === 'user'
   const scopeFailure = previousCode === 'execution_tool_failed' && end.data.reason?.kind === 'blocked'
   if (!overloaded && !interrupted && !scopeFailure) return null
-  let materialSourceFailure = false
+  let materialSourceFailure = false, materialReferenceFailure = false
   if (interrupted || scopeFailure) {
     const errors = events.filter(event => event.seq > input.seq && event.type === 'tool/result' && event.data.message?.content?.some(block => block.type === 'tool-result' && block.isError))
     if (errors.length !== 1 || errors[0].data.message.content.length !== 1) return null
@@ -57,7 +57,14 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
       && Object.keys(args).every(key => ['operation','source','path','offset','limit'].includes(key))
       && (args.offset === undefined || Number.isSafeInteger(args.offset) && args.offset >= 0)
       && (args.limit === undefined || Number.isSafeInteger(args.limit) && args.limit >= 1 && args.limit <= 16000)
-    if (result.content?.length !== 1 || result.content[0].type !== 'text' || !materialSourceFailure && result.content[0].text !== (scopeFailure ? 'Error: ENGINEERING_READ_PATH_INVALID' : 'Error: [object Object]')
+    materialReferenceFailure = scopeFailure && result.content?.[0]?.text === 'Error: ARTIFACT_REFERENCE_INVALID'
+      && args?.operation === 'materials' && (args.source === undefined || args.source === 'current') && typeof args.path === 'string'
+      && args.path.startsWith(`tasks/${binding.taskId}/`) && /^tasks\/[^/]+\/sha256-[a-f0-9]{1,63}\.json$/.test(args.path)
+      && Object.keys(args).every(key => ['operation','source','path','offset','limit'].includes(key))
+      && (args.offset === undefined || Number.isSafeInteger(args.offset) && args.offset >= 0)
+      && (args.limit === undefined || Number.isSafeInteger(args.limit) && args.limit >= 1 && args.limit <= 16000)
+      && !events.some(event => event.seq > input.seq && event.type === 'tool/call' && event.data.name !== 'engineering_repo_inspect')
+    if (result.content?.length !== 1 || result.content[0].type !== 'text' || !materialSourceFailure && !materialReferenceFailure && result.content[0].text !== (scopeFailure ? 'Error: ENGINEERING_READ_PATH_INVALID' : 'Error: [object Object]')
       || call?.data.name !== 'engineering_repo_inspect' || call.data.callId !== result.toolCallId
       || events.some(event => event.seq > errors[0].seq && event.seq < end.seq && event.type !== 'step/end')) return null
   }
@@ -68,7 +75,8 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   if (inbox.some(message => message.source?.kind !== 'coordinator' && !(message.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt' && message.source.form === 'snapshot'))) return null
   if (events.filter(event => event.type === 'agent/inbox/spliced').some(event => (event.data.inserted ?? []).some(message => message.source?.kind === 'coordinator'
     && (message.source.executionSession?.sessionId !== binding.sessionId && !consumedParent(message.source, event.seq) || message.source.executionSession.leaseEpoch > binding.leaseEpoch)))) return null
-  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: materialSourceFailure
+  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: materialReferenceFailure
+    ? { code: 'QUERY_ARGUMENT_INVALID', phase: 'execution', message: '本轮Task工件引用被截短；先用materials/source=current读取索引，再复制完整artifactRef，不得猜测SHA。' } : materialSourceFailure
     ? { code: 'QUERY_ARGUMENT_INVALID', phase: 'execution', message: '本轮materials误用source=previous；Task共享材料不按代次区分，请在原会话用source=current读取同一工件。' } : scopeFailure
     ? { code: 'ENGINEERING_READ_PATH_INVALID', phase: 'execution', message: '原生本轮仓库读取路径被拒绝；需Owner指示使用准入路径和Task共享材料继续。' } : interrupted
     ? { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留失败工具历史，需Owner核对后受管续行。' }
@@ -346,7 +354,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       }
       if (definition.allowedTools.includes('engineering_repo_inspect') && !registry.has('engineering_repo_inspect')) agentCtx.tools.register({
         name: 'engineering_repo_inspect',
-        description: '先用 materials 查看本 Task 共享材料与产物索引；materials 始终使用 source=current（包括历史工件），source=previous只用于上一代仓库文件；materials 带 path=artifactRef 可分段读取原工件，历史来源仅作背景不代表当前授权。尚未读取完整材料不能据此断言需求已满足或无需修改。仓库用 list/search/read；read/materials 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。仓库读取返回完整文件 SHA256 用于修改校验。status=not_found、invalid_source 或 invalid_limit 时按 suggestedCall 纠正后继续，不代表节点失败。',
+        description: '先用 materials 查看本 Task 共享材料与产物索引；materials 始终使用 source=current（包括历史工件），source=previous只用于上一代仓库文件；materials 带 path=artifactRef 可分段读取原工件，历史来源仅作背景不代表当前授权。尚未读取完整材料不能据此断言需求已满足或无需修改。仓库用 list/search/read；read/materials 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。仓库读取返回完整文件 SHA256 用于修改校验。error.code=QUERY_ARGUMENT_INVALID或status=not_found、invalid_source、invalid_limit时按 suggestedCall 纠正后继续，不代表节点失败。',
         parameters: { type: 'object', properties: {
           operation: { type: 'string', enum: ['list', 'search', 'read', 'repair', 'materials'] }, query: { type: 'string' }, path: { type: 'string' },
           source: { type: 'string', enum: ['current', 'previous'] }, offset: { type: 'integer' }, limit: { type: 'integer' },

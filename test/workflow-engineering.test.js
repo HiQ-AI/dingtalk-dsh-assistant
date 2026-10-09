@@ -616,6 +616,10 @@ test('工程共享材料读取不依赖节点正文，检查修订保留旧注�
  const index=await registry.repositoryInspect(binding,{operation:'materials'})
  assert.equal(index.entries.find(e=>e.artifactRef===material.ref).status,'history');assert.ok(index.files.some(f=>f.relativePath==='outputs/result.md'))
  assert.ok((await registry.repositoryInspect(binding,{operation:'materials',path:material.ref,limit:16000})).nextOffset>0)
+ const shortened=material.ref.replace(/sha256-([a-f0-9]{12})[a-f0-9]+/, 'sha256-$1')
+ const argument=await registry.repositoryInspect(binding,{operation:'materials',path:shortened})
+ assert.equal(argument.error.code,'QUERY_ARGUMENT_INVALID');assert.equal(argument.error.reference,shortened);assert.deepEqual(argument.suggestedCall,{operation:'materials',source:'current'})
+ await assert.rejects(registry.repositoryInspect(binding,{operation:'materials',path:shortened.replace('tasks/task/','tasks/foreign/')}),{code:'ENGINEERING_READ_SCOPE_INVALID'})
  const correction=await registry.repositoryInspect(binding,{operation:'materials',source:'previous',path:material.ref,limit:16000})
  assert.equal(correction.code,'QUERY_ARGUMENT_INVALID');assert.equal(correction.suggestedCall.source,'current')
  assert.ok((await registry.repositoryInspect(binding,correction.suggestedCall)).nextOffset>0)
@@ -689,4 +693,26 @@ test('必要工程仓库绑定拒绝无关仓库、他人/旧版来源和无阶�
   assert.throws(()=>assertEngineeringStageRepository({requirement,stage:{...stage,sourceCondition:{...stage.sourceCondition,...change}},repositories}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
  assert.throws(()=>assertEngineeringStageRepository({requirement:{...requirement,authorization:{actorId:'other'}},stage,repositories}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
  assert.throws(()=>assertEngineeringStageRepository({requirement,stage,repositories:repositories.map(r=>({...r,dependencyRepositories:[]}))}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+})
+
+test('必要依赖StageContract到真实registry优先显式来源仓库，普通路由和跨Task/UAT仍拒绝', async () => {
+ const root=await mkdtemp(join(tmpdir(),'dependency-routing-')),source=join(root,'source'),remote=join(root,'remote.git')
+ await mkdir(source);const run=promisify(execFile),git=async(...args)=>(await run('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
+ await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'base');await git('add','.');await git('commit','-m','base');await git('init','--bare',remote);await git('push',remote,'HEAD:refs/heads/feature/uat3-base');await git('push',remote,'HEAD:refs/heads/feature/uat2-base')
+ const requirement={request:'前端失败明细下载',scope:{kind:'engineering'},target:{repositoryId:'frontend',uatEnvironment:'uat3'},authorization:{actorId:'human',ownerConfirmed:true},sourceInstructions:[{sourceKey:'source',sourceVersion:2,actorId:'human',text:'前端失败明细下载'}],constraints:[],acceptanceCriteria:['真实导出']}
+ const plan={task:{taskId:'task',planRevision:1,requirementRevision:2,requirementRef:'requirement'},stages:[{stageId:'stage-1',status:'running',workflowId:'task-engineering-existing',runId:'current'}]}
+ const stage={workflowId:'task-engineering',stageId:'stage-2',sourceCondition:{repositoryId:'backend',sourceKey:'source',sourceVersion:2,sourceQuote:requirement.request,objective:requirement.request,acceptanceCriteria:['后端真实导出']}}
+ const records=[];const store={query:async q=>q.kind==='task.plan'?(q.taskId==='task'?plan:null):q.kind==='task.owner.query-evidence'?[]:q.kind==='workflow.list'?records:q.kind==='run'?{run:{taskId:'task',status:'waiting'},pendingInputCount:0,nodes:[]}:null,command:async c=>{if(c.kind==='workflow.register')records.push(c.args);return {result:c.args}}}
+ const base={sourceRepository:source,managedRoot:join(root,'managed'),remote,baseRef:'main',githubRepository:'example/repo',editablePaths:['value.txt'],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e','process.exit(0)']}]}
+ const engineering=createEngineeringRegistry({repositories:[{...base,id:'frontend',routingTerms:['前端'],dependencyRepositories:['backend']},{...base,id:'backend'}],ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},getTaskDirectories:async()=>({work:join(root,'tasks/task/work'),tmp:join(root,'tasks/task/tmp')})})
+ await engineering.restore(store,{read:async()=>requirement})
+ const controller={registerWorkflow(){},plannedTaskStageRunId:()=> 'dependency-run'}
+ const contract=createEngineeringStageContract({engineering,controller,readTaskEvidence:async()=>[],mayCreate:async()=>true})
+ const origin={run:{actorId:'human'},command:{kind:'create',id:'source-command',args:{arguments:{}}}}
+ const prepare=(s=stage,r=requirement,taskId='task',decision={planChange:{kind:'insertDependency'}})=>contract.prepare({taskId,stage:s,plan,requirement:r,origin,decision})
+ await assert.rejects(prepare(stage,requirement,'task',null),{code:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'})
+ await assert.rejects(prepare(stage,{...requirement,target:{...requirement.target,uatEnvironment:'uat2'}}),{code:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'})
+ await assert.rejects(prepare(stage,requirement,'foreign'),{code:'ENGINEERING_TASK_CONTEXT_INVALID'})
+ await assert.rejects(prepare({...stage,sourceCondition:{...stage.sourceCondition,sourceVersion:1}}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+ const result=await prepare();assert.equal(result.runId,'dependency-run');assert.equal(records.at(-1).config.repoId,'backend');assert.equal(records.at(-1).config.uatEnvironment,'uat3')
 })

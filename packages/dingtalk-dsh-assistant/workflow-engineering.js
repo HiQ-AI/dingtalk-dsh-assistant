@@ -72,12 +72,13 @@ export function assertEngineeringStageRepository({ requirement, stage, repositor
 /** 工程领域统一接收当前 Task 查询证据和重执行来源。 */
 export function createEngineeringStageContract({ engineering, controller, mayCreate, engineeringSourceTaskId, readTaskEvidence }) {
   return { id: 'task-engineering', version: '1',
-    async prepare({ taskId, stage, plan, requirement, origin, executionPlanRevision = plan.task.planRevision }) {
+    async prepare({ taskId, stage, plan, requirement, origin, decision, executionPlanRevision = plan.task.planRevision }) {
       const args = { ...origin.command.args.arguments, ...requirement.target, ...(stage.sourceCondition?.repositoryId ? { repositoryId: stage.sourceCondition.repositoryId } : {}), objective: stage.sourceCondition?.repositoryId ? stage.sourceCondition.objective : requirement.request }
       const queryEvidence = await readTaskEvidence({ taskId, requirementRevision: plan.task.requirementRevision })
       return engineering.prepareTask({ taskId, arguments: { ...args,
         acceptanceCriteria: stage.sourceCondition?.repositoryId ? stage.sourceCondition.acceptanceCriteria : requirement.acceptanceCriteria, workflowId: 'task-engineering' }, constraints: requirement.constraints }, {
         run: origin.run, unit: { constraints: [], sharedConstraints: [] },
+        ...(decision?.planChange?.kind === 'insertDependency' ? { dependencyStage: { stage, planRevision: plan.task.planRevision, beforeStageId: plan.stages.find(item => !['succeeded', 'invalidated'].includes(item.status))?.stageId } } : {}),
         taskContext: { taskId, requirementRevision: plan.task.requirementRevision,
           scope: requirement.scope, queryEvidence },
         ...(origin.channel === 'web' ? { rerunOfTaskId: await engineeringSourceTaskId(origin.rerunOfTaskId, args.repositoryId) } : {}),
@@ -487,6 +488,10 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         if (source !== 'previous' || path !== undefined && (typeof path !== 'string' || !path.startsWith(`tasks/${saved.taskFiles.logicalTaskId}/`) || !/^tasks\/[^/]+\/sha256-[a-f0-9]{64}\.json$/.test(path))) fail('ENGINEERING_READ_SCOPE_INVALID')
         return { status: 'invalid_source', code: 'QUERY_ARGUMENT_INVALID', message: 'materials属于当前Task共享目录，不按工程代次区分；历史工件也用source=current。', suggestedCall: { ...args, source: 'current' } }
       }
+      if (typeof path === 'string' && /^tasks\/[^/]+\/sha256-[a-f0-9]{1,63}\.json$/.test(path)) {
+        if (!path.startsWith(`tasks/${saved.taskFiles.logicalTaskId}/`)) fail('ENGINEERING_READ_SCOPE_INVALID')
+        return { error: { code: 'QUERY_ARGUMENT_INVALID', reference: path, message: '工件引用被截短；先读取共享材料索引，再逐字复制完整artifactRef。不得猜测或补全SHA。' }, suggestedCall: { operation: 'materials', source: 'current' } }
+      }
       const plan = await store.query({ kind: 'task.plan', taskId: saved.taskId })
       return readTaskMaterials({ directories: saved.taskFiles, artifacts: artifactStore,
         requirementRevision: plan?.task?.requirementRevision, requirementRef: plan?.task?.requirementRef,
@@ -662,7 +667,22 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (!/^[a-f0-9]{40}\s+/.test(remoteBranch)) fail('ENGINEERING_UAT_BRANCH_NOT_FOUND')
     const targetCommit = remoteBranch.split(/\s+/)[0]
     const matches = [...configs.values()].filter(item => item.config.routingTerms?.some(term => request.includes(term)))
-    if (matches.length === 1 && matches[0].config.id !== repoId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
+    let dependencyAdmitted = false
+    if (info.dependencyStage) {
+      const candidate = info.dependencyStage, plan = await store.query({ kind: 'task.plan', taskId })
+      const requirement = plan?.task?.requirementRef ? await artifactStore.read(plan.task.requirementRef) : null
+      const current = plan?.stages.find(stage => !['succeeded', 'invalidated'].includes(stage.status))
+      if (!taskContext || !requirement || plan.task.planRevision !== candidate.planRevision || current?.stageId !== candidate.beforeStageId
+        || current.status !== 'running' || !current.workflowId.startsWith('task-engineering-')
+        || requirement.target.repositoryId === repoId || requirement.target.uatEnvironment !== uatEnvironment
+        || candidate.stage.sourceCondition?.repositoryId !== repoId || candidate.stage.sourceCondition.objective !== request
+        || executionDigest(candidate.stage.sourceCondition.acceptanceCriteria) !== executionDigest(action.arguments.acceptanceCriteria)) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
+      assertEngineeringStageRepository({ requirement, stage: candidate.stage, repositories: [...configs.values()].map(item => ({ repositoryId: item.config.id, dependencyRepositories: item.config.dependencyRepositories })) })
+      const state = await store.query({ kind: 'run', runId: current.runId })
+      if (state?.run.taskId !== taskId || state.run.status !== 'waiting' || state.pendingInputCount || state.nodes.some(node => !node.drained)) fail('TASK_DEPENDENCY_NOT_DRAINED')
+      dependencyAdmitted = true
+    }
+    if (!dependencyAdmitted && matches.length === 1 && matches[0].config.id !== repoId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
     const constraints = [...new Set([...(action.constraints ?? []), ...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])]
     if (constraints.some(item => typeof item !== 'string')) fail('ENGINEERING_INPUT_LIMIT')
     const acceptanceCriteria = action.arguments.acceptanceCriteria === undefined ? [request] : action.arguments.acceptanceCriteria

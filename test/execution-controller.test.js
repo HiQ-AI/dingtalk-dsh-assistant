@@ -1021,3 +1021,25 @@ for(const variant of ['factory','declared-external','actual-effect'])test(`v18�
  assert.equal(after.nodes[1].leaseEpoch,2);assert.equal(after.nodes[2].leaseEpoch,2);assert.equal(after.nodes[8].status,'succeeded');assert.equal(plans,2);assert.equal(prepares,1)
  for(const value of Object.values(calls))assert.equal(value,1)
 })
+
+test('Host无新增修改证明正常提交独立审计，缺原修复仍拒绝',async t=>{
+  const {execFileSync}=await import('node:child_process'),{mkdir}=await import('node:fs/promises'),{createHash}=await import('node:crypto')
+  for(const admitted of [true,false])await t.test(String(admitted),async child=>{
+    const schema={type:'object'},definition={id:'task-engineering-no-additional-test',version:'18',nodes:[{id:'apply-changes',version:'6',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({requirement})=>requirement,execute:async()=>{throw Object.assign(new Error('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'),{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})}}]}
+    const f=await setup(child,definition),repo=join(f.directory,'repository');await mkdir(repo)
+    const git=(...a)=>execFileSync('git',['-C',repo,...a],{windowsHide:true,encoding:'utf8'}).trim()
+    git('init','-q');git('config','user.name','Fixture');git('config','user.email','test@example.invalid');await writeFile(join(repo,'code.txt'),'before');git('add','.');git('commit','-qm','base')
+    const baseCommit=git('rev-parse','HEAD'),mergeTree=git('rev-parse','HEAD^{tree}');await writeFile(join(repo,'code.txt'),'after')
+    const actualQuery=f.store.query;let lastBinding
+    const scopedStore={...f.store,query:async q=>{
+      if(q.kind==='effect.edit-repair'){if(!admitted)throw Object.assign(new Error('EDIT_REPAIR_NOT_ADMITTED'),{code:'EDIT_REPAIR_NOT_ADMITTED'});lastBinding=q.binding;return{audit:{repairEventSeq:10,previousEffectId:'edit-success'},previous:{effectId:'edit-success'}}}
+      if(q.kind==='effect.list'&&lastBinding){const workspace={runId:'run',generation:1,directory:repo,requirementDigest:lastBinding.requirementDigest,baseCommit,mergeTree};return[{effectId:'workspace-success',generation:1,state:'succeeded',definition:{action:'workspace',payload:workspace}},{effectId:'edit-success',nodeRunId:lastBinding.nodeRunId,generation:1,state:'succeeded',inputDigest:'b'.repeat(64),result:{evidenceRef:'success.json'},definition:{action:'edit',payload:{workspace,directory:repo,requirementDigest:lastBinding.requirementDigest,changes:[{path:'code.txt',expectedHash:createHash('sha256').update('before').digest('hex'),content:'after'}]}}}]}
+      return actualQuery(q)
+    }}
+    const controller=createExecutionController({store:scopedStore,artifacts:f.artifacts,workflows:[definition]});child.after(()=>controller.close())
+    await controller.createRun({commandId:'create',runId:'run',taskId:'task',workflowId:definition.id,input:{requirement:{baseCommit},proposal:{changeDisposition:'no-change',changes:[],replacements:[],reason:'本轮不重复原补丁',reviewedPaths:['code.txt']}}})
+    const state=await controller.whenIdle('run'),node=state.nodes[0]
+    if(admitted){assert.equal(state.run.status,'succeeded');assert.equal(node.evidenceRefs.length,2);const proof=await f.artifacts.read(node.evidenceRefs[1]);assert.equal(proof.kind,'engineering-no-additional-change-proof');assert.notEqual(proof.tree,proof.sourceTree);assert.equal(proof.binding.inputDigest,node.inputDigest)}
+    else{assert.equal(state.run.status,'waiting');assert.equal(node.waitReason.reference,'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')}
+  })
+})

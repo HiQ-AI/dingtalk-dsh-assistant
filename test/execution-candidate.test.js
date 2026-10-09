@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, writeFile, readFile, unlink } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
-import { freezeCandidate, readCandidate, verifyCandidate, assertVerifiedCandidate } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
+import { freezeCandidate, readCandidate, verifyCandidate, assertVerifiedCandidate, assertCandidateManagedEdits } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
 
 const root = resolve('docs/tmp/execution-candidate-tests')
 const git = (repo, ...args) => execFileSync('git', ['-C', repo, ...args], { windowsHide: true, encoding: 'utf8' }).trim()
@@ -185,4 +185,18 @@ test('超过16MiB文件可冻结且按需读取时独立核验完整blob摘要',
   assert.equal(verification.passed,true)
   const cancelled=new AbortController();cancelled.abort()
   await assert.rejects(readCandidate(candidate,{signal:cancelled.signal}),{name:'AbortError'})
+})
+
+
+for (const drift of ['none','tracked','untracked','old-baseline']) test(`无新增修改完整树证明拒绝未审计变化：${drift}`, async () => {
+  const args=await fixture(), sourceTree=git(args.repository,'rev-parse','HEAD^{tree}')
+  const before=await readFile(join(args.repository,'kept.txt')), expectedHash=createHash('sha256').update(before).digest('hex')
+  await writeFile(join(args.repository,'kept.txt'),'managed change')
+  const edits=[{changes:[{path:'kept.txt',expectedHash,content:'managed change'}]}]
+  if(drift==='tracked')await writeFile(join(args.repository,'deleted.txt'),'unmanaged change')
+  if(drift==='untracked')await writeFile(join(args.repository,'extra.txt'),'unmanaged new file')
+  const candidate=await freezeCandidate(args)
+  const verify=assertCandidateManagedEdits({candidate,sourceTree,edits:drift==='old-baseline'?[]:edits})
+  if(drift==='none'){const proof=await verify;assert.equal(proof.tree,candidate.tree);assert.notEqual(proof.tree,sourceTree);assert.equal((await readCandidate(candidate)).files.length,3)}
+  else await assert.rejects(verify,{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})
 })

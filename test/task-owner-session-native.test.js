@@ -567,6 +567,9 @@ test('工程准备缺UAT在同一Owner会话纠正为具体等待，未接纳工
   assert.equal(h.requests.length, 2)
   assert.match(JSON.stringify(h.requests[1]), /缺少uatEnvironment/u)
   assert.match(h.requests[0].system, /补充后继续原Task/u)
+  assert.match(h.requests[0].system, /summary仍为string.*【结论】.*【结果】.*【下一步】/u)
+  assert.match(h.requests[0].system, /排查完成（尚未修复）/u)
+  assert.match(h.requests[0].system, /2–3条短重点/u)
 })
 
 

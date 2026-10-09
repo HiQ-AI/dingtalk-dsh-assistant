@@ -772,3 +772,9 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 安装含增量编辑身份修复的包后，旧 `apply-changes` 若仍等待 `DELIVERY_IDENTITY_CONFLICT`，先只读核原 Task/Run/generation/node/input/lease 与 `effect.edit-repair` 返回的正式修复事件及原成功 edit。错误码本身不构成许可；未知、外部或未决效果、缺少修复审计均不得恢复。既有受信 `controller.recover({commandId,runId})` 使用原生 `run.recover` 续行原节点；常规来源/控制/维护门禁保留，不修改控制库、不新建 Run、不改代次，也不将此错误加入无限自动重试名单。
 
 回读新效果的 `definition.editRepair`（repairEventSeq、repairCommandId、previousEffectId、inputDigest）、原效果仍 succeeded、新增效果只执行一次，并确认后续验证节点实际前进。此检查只证明该时点的恢复和效果身份，不等同后续业务验收或最终交付成功。
+
+必要依赖候选被ENGINEERING_REPOSITORY_SCOPE_MISMATCH拒绝时，应核当前Task sourceCondition及dependencyRepositories，不通过改写交办原文避开关键词。修复后仍由原Owner重评提交insertDependency，保持原Task/需求/UAT及原前端成功Run；配置可达性不等于业务授权，也不直接创建后端阶段。
+
+同代候选选择 no-change 后若历史节点因 `ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT` 等待，新 Host 仅在正式 candidate-in-place 审计、成功 managed-edit 链和完整树比较同时成立时承接无新增修改结果。正常 node.commit 的 evidenceRefs 包含 `engineering-no-additional-change-proof`，须回读其 binding、repair、effects、sourceTree、tree 和完整 candidate。任何额外 tracked/untracked 变化仍阻断，不删除这些文件凑验证通过。节点恢复继续使用既有精确原 Run 的受信恢复入口；总体验收与任务完成条件不变。
+
+控制库再次STORE_UNAVAILABLE时先读health.executionStore.failure及control.sqlite同目录execution-store-failures.jsonl的最近首因；只读取机器码/action/kind/sqliteCode/at/requestDigest，不能打印业务参数或把重开恢复当根修。诊断无法落盘时stderr只报FAILURE_TRACE_WRITE_FAILED，进程内首因仍可回读。未ready的启动失败不写该文件，保持零写预检边界；正常关闭不创建文件。后续仍按本规程的原命令对账及同Host受管恢复，不绕SQLite或提交未知保护。

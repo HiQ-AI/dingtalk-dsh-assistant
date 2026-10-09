@@ -910,3 +910,31 @@ for(const variant of ['valid','foreign','current','read','malformed','extra-erro
  const proof=await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')
  if(variant==='valid')assert.equal(proof.failure.code,'QUERY_ARGUMENT_INVALID');else assert.equal(proof,null)
 })
+
+for(const variant of ['valid','foreign','previous','read','malformed','extra-error','submitted','missing-args'])test(`历史materials截短引用精确重分类：${variant}`,async()=>{
+ const b=binding({sessionBound:true}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]))
+ const args={operation:'materials',source:'current',path:'tasks/task/sha256-'+ 'a'.repeat(12)+'.json',limit:16000}
+ if(variant==='foreign')args.path=args.path.replace('tasks/task/','tasks/other/')
+ if(variant==='previous')args.source='previous'
+ if(variant==='read')args.operation='read'
+ if(variant==='malformed')args.path='tasks/task/../secret'
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},{seq:1,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId:b.sessionId,leaseEpoch:1}}}},
+ {seq:2,type:'tool/call',data:{name:'engineering_repo_inspect',callId:'call',arguments:variant==='missing-args'?undefined:JSON.stringify(args)}},
+ {seq:3,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'call',isError:true,content:[{type:'text',text:'Error: ARTIFACT_REFERENCE_INVALID'}]}]}}},
+ {seq:5,type:'step/end',data:{}},{seq:6,type:'turn/end',data:{reason:{kind:'blocked'}}}]
+ if(variant==='extra-error')events.splice(2,0,{...structuredClone(events[3]),seq:1.5})
+ if(variant==='submitted')events.splice(2,0,{seq:1.5,type:'tool/call',data:{name:'execution_node_submit'}})
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const proof=await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')
+ if(variant==='valid')assert.equal(proof.failure.code,'QUERY_ARGUMENT_INVALID');else assert.equal(proof,null)
+})
+
+test('共享材料短引用反馈后原生同会话查索引再用完整引用提交',async t=>{
+ const calls=[],short='tasks/task/sha256-'+ 'a'.repeat(12)+'.json',ref='tasks/task/sha256-'+ 'a'.repeat(64)+'.json'
+ const h=await host({script:[{name:'engineering_repo_inspect',args:{operation:'materials',path:short}},{name:'engineering_repo_inspect',args:{operation:'materials',source:'current'}},{name:'engineering_repo_inspect',args:{operation:'materials',source:'current',path:ref}},submit('read')],repositoryInspect:async(_binding,args)=>{calls.push(args);return args.path===short?{error:{code:'QUERY_ARGUMENT_INVALID',reference:short},suggestedCall:{operation:'materials',source:'current'}}:args.path?{artifact:'真实同Task材料'}:{entries:[{artifactRef:ref}]}}})
+ t.after(()=>h.close())
+ const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
+ assert.equal(result.status,'submitted');assert.equal(calls.length,3);assert.ok(JSON.stringify(h.requests[1]).includes('QUERY_ARGUMENT_INVALID'))
+ const events=(await h.ctx.sessionPersistence.inspect(binding().sessionId)).events
+ assert.equal(events.filter(e=>e.type==='dingtalk/execution-session').length,1)
+})

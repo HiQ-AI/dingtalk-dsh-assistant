@@ -177,6 +177,13 @@ test('通知恢复仅使用路径身份，受阻或过期意图返回冲突', as
   }, { overrides: { retryCompletionNotification: async args => { if (args.intentId === 'stale') throw new Error('notification_retry_stale'); calls.push(args) } } })
 })
 
+test('控制账失效时健康状态降级并保留首因，不能只看群桥', async () => withServer(false, async base => {
+  const response = await fetch(`${base}/health`), result = await response.json()
+  assert.equal(result.dwsBridge.healthy, true)
+  assert.equal(result.status, 'degraded')
+  assert.deepEqual(result.executionStore, { healthy: false, failure: { code: 'ERR_SQLITE_ERROR', sqliteCode: 13, kind: 'run.stop' } })
+}, { transport: 'dws', overrides: { getWorkflowExecutionHealth: () => ({ healthy: false, failure: { code: 'ERR_SQLITE_ERROR', sqliteCode: 13, kind: 'run.stop' } }) } }))
+
 test('生产HTTP开放只读状态与明确的本机群配置接口，测试控制面仍关闭', async () => withServer(false, async (baseUrl) => {
   const health = await fetch(`${baseUrl}/health`)
   assert.equal(health.status, 200)

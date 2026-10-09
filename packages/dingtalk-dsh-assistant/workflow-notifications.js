@@ -26,6 +26,20 @@ export function workflowResultText(output) {
   if (output?.deliveryStatus === 'pr_verified' && typeof output.url === 'string') return `代码已验证并提交 PR${output.number ? ` #${output.number}` : ''}：${output.url}。当前状态：${({ OPEN: '待合并', MERGED: '已合并', CLOSED: '已关闭' })[output.state] ?? '已核验'}。`
   return null
 }
+// 仅按作者明确换行排版，不拆句、推断结论或截断旧报告。
+export const notificationParagraphs = text => String(text ?? '').trim().split(/\r?\n+/u).map(line => line.trim()).filter(Boolean).join('\n\n')
+export function ownerReportNotificationText(report) {
+  const facts = report.facts
+  if (report.reportType === 'complete') {
+    const summary = notificationParagraphs(facts.summary)
+    return (summary.startsWith('【结论】') ? summary : `【结论】\n\n${summary}`)
+      + '\n\n【详情】\n\n完整结果与证据请查看原事项的任务详情。'
+  }
+  const condition = facts.condition
+  if (!condition) return `【需要确认】\n\n${notificationParagraphs(facts.summary)}`
+  const heading = condition?.kind === 'business-input' ? '【需补充】' : '【需授权】'
+  return `${heading}\n\n请${condition.responsibleParty}${condition.kind === 'business-input' ? '补充以下信息' : '处理以下授权'}：\n\n${notificationParagraphs(condition.missing)}\n\n【下一步】\n\n${notificationParagraphs(condition.resumeWhen)}`
+}
 export function taskDecisionConditionText(condition) {
   if (!condition || !['business-input', 'approval', 'capability', 'permission', 'execution'].includes(condition.kind)
     || ['missing', 'responsibleParty', 'resumeWhen'].some(key => typeof condition[key] !== 'string' || !condition[key].trim())) return null
@@ -252,7 +266,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         const responsibility = groupResponsibility(run.conversationId)
         if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
         await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId, eventKey:`request.${phase}:${request.id}:${request.revision}`,
-          payload: { text: formatGroupReply(request.question ?? request.reason, responsibility), phase, conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
+          payload: { text: formatGroupReply(`${phase === 'authorization' ? '【需授权】' : '【需补充】'}\n\n${notificationParagraphs(request.question ?? request.reason)}`, responsibility), phase, conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
           disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
         }, `prepare:${notificationId}`)
         })
@@ -269,9 +283,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
           const reports = await store.query({ kind: 'task.owner.reports', taskId: action.result.taskId })
           for (const report of reports) {
             if (!taskNotificationAllowed({ phase: `owner:${report.reportId}`, report })) continue
-            const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
-              : report.facts.condition?.kind === 'business-input' ? `请补充以下信息：\n${report.facts.condition.missing.trim()}`
-              : `需要你确认：\n${String(report.facts.summary).trim()}`
+            const text = ownerReportNotificationText(report)
             await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text,
               report.reportType === 'complete' ? 'result' : 'required_action', report))
           }
@@ -285,7 +297,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         const output = last ? await artifacts.read(last.outputRef) : null
         const text = task.run.status === 'succeeded' ? workflowResultText(output) ?? '已完成处理。'
           : task.run.status === 'cancelled' ? '已取消处理。' : '这次处理没有完成，需要先排查原因。'
-        await prepare(run, action, `terminal:${task.run.runId}:${task.run.revision}`, text)
+        await prepare(run, action, `terminal:${task.run.runId}:${task.run.revision}`, task.run.status === 'succeeded'
+          ? ownerReportNotificationText({ reportType: 'complete', facts: { summary: text } }) : text)
         })
       }
       })
