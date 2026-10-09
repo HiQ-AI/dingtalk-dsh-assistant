@@ -1,0 +1,7 @@
+# 群协调模型过载恢复
+
+现场同一原生会话 turn25/26 均以 PI_AI_ERROR 结束，文本为 Codex error: Our servers are currently overloaded. Please try again later.，usage=0。session将失败折叠成no_submission，coordinator记录condition并停止同输入重试。
+
+从本轮steer前事件水位起读取最新turn/end：无已接纳决定时将原生error作为GROUP_COORDINATOR_PROVIDER_FAILED的cause传播；已接纳决定优先，不能被晚到error否定。没有原生error仍保留no_submission。仅PI_AI_ERROR且正文首行精确等于已证实的Codex过载文本归入既有dependency退避；其他错误不泛化。
+
+既有implementationRevision摘要包含createGroupCoordinatorSessions与transientFailure函数源码；部署后摘要变化使旧condition输入摘要失效，已有recover扫描会重新领取同一pending来源。无需新入口、改控制库或再次reprocess；若仍过载使用同来源退避，非暂态继续condition。保持业务效果与通知边界不变。

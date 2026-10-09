@@ -1,5 +1,20 @@
 # 常驻通知修复本地部署
 
+## 群消息澄清与任务准入切换
+
+本次同时修改 Assistant 与 Observer，无数据库 schema 迁移，按下文普通双包部署并保留既有请求。新协调候选必须提供澄清类别、具体缺项、阻塞动作和已核对来源；历史澄清不自动改判或重发。任务准入不足由 Host 生成 `needs_authorization`，授权仅绑定当前来源、话题版本和动作，不能代替执行阶段审批。开发任务可先承接，仓库和 UAT 在 Owner 工程准备前补齐；不默认环境或分支。
+
+切换前运行本特性验收目录中的定向回归和隔离模型回放；后者不派发业务或发送群消息。切换后独立核对双包摘要、新进程、健康、收信箱授权状态及实际新消息的来源/话题/任务链。旧错误澄清仍保留历史证据；未经明确授权不重处理原消息、不撤回或补发通知、不替原业务任务开始开发。授权请求只允许配置的任务所有者通过原请求明确同意或拒绝，来源或话题变化后旧授权不可复用。
+
+## 回复完整性与执行过载恢复
+
+群内业务补充请求使用已验证的具体缺项，完整保留换行与链接，不再截取排查摘要前160字符。部署后对已发送的错误消息使用已有撤回/更正操作，发送结果未知时只对账原操作，不重复发送。编号清单的钉钉回读格式按精确渲染差异核验，正文、编号或引用变化仍拒绝。
+
+工程准备前核验配置的sourceRepository实际存在；缺失应恢复配置指向的独立完整受管源仓库，核对origin、main与用户指定UAT分支、无浅克隆/alternates/链接及工作树干净后，沿原Task重评入口继续，不重建Task。模型服务过载必须以原生会话终止证据识别，使用持久退避及有限重试；不要把未拿到提交结果当业务资料缺失。
+业务信息补充后的继续请求与人为暂停恢复分别处理：active任务只接纳原来源并唤醒Owner；paused仍走控制恢复。旧TASK_CONTROL_CONFLICT未知命令只有在来源、任务身份、Owner/需求/控制版本一致且原控制事务未执行时，才可原子对账并保留同一Task；取消或终态不得恢复。
+
+维护只停止新派发，不主动取消已开始的Agent回合。当前节点仅有pure/read、无外部效果且需要部署排空时，可使用已安装DSH公开 `session.cancel({sessionId})` 中断精确原生回合（不是业务Task取消）；通过当前Web正式Cookie认证，不输出登录凭据。先零写核对维护身份、Task/node/session及效果账，调用后必须独立看到turn/end、Host节点drained和维护busy全零，才使用ContinueMaintenanceId及当前revision重新Check并接续。没有这些证据不得停机；后续沿原Task正式恢复，不新增Task或重放成功步骤。原生aborted/user独立分类为EXECUTION_TURN_INTERRUPTED，旧窄证据只更正诊断并交Owner一次续行，不推断工具错误必由取消引起、不进入provider自动重试。
+
 ## 普通本地部署不备份历史副本
 
 数据库变更验收证据交接修复无 schema 迁移，沿本页普通部署。切换后先只读核对原成功 Run 的节点工件、插件批准与执行事件序号、工单原始 SQL、Task/TaskRun DONE 及生产列定义；再按当前 Owner/需求/控制版本调用原 Task 的 `reassess-readonly`。成功外部阶段仅在节点排空、效果成功、批准有效且当前来源未变时允许重评。旧定义不改写，不新建工单、不再次执行 DDL；独立回读业务验收、任务完成和群消息后才算恢复完成。
@@ -8,7 +23,7 @@
 
 本次 round14 沿现有参数：`-Package <D:/dsh_home/packages/唯一Assistant包>`、`-ExpectedPackageSha256 <包摘要>`、`-ExpectedProfileSha256 <当前profile摘要>`、`-DirectQueriesProposal <保持当前查询配置的既有提案>`、`-TaskDirectory <真实Agent任务根>`、`-EvidenceDirectory <当前worktree/docs/tmp/新目录>`；先加 `-Check`。通过后同参数去掉 `-Check` 执行，可用 `-HoldMaintenance` 保持维护待独立核验，再使用同参数 `-Readback` / `-Resume`。本轮不传任何迁移、Bootstrap、RepairStoppedLaunch 或 Observer 参数。
 
-`-Resume` 先恢复原生派发，再恢复 Windows 自启；若后一步因磁盘空间等环境问题失败，应分别读取 `/runtime/maintenance` 与 `Get-ScheduledTask`，不要用恢复前的 Readback 快照判断当前派发。环境恢复后沿原参数再次 `-Resume`，现有入口会保持已恢复派发并补齐自启，无需重装或重跑任务。
+部署启动统一通过已配置的 `DSH Web Local`。原流程临时禁用且保存了恢复许可时，在启动前恢复原 Enabled 状态；`-Resume` 继续幂等核对自启并恢复原生派发。分别回读 `/runtime/maintenance` 与 `Get-ScheduledTask`，不能把任务 Running 当作业务已恢复。
 
 仍要求原生维护排空/封存、精确旧PID退出、禁用并按原状态恢复计划任务自启、持续owner独占锁、停机checkpoint、源/包/安装文件比对、控制历史独立回读、新PID与健康核验后恢复派发。Launch 记录 `backupCreated=false`，绑定部署控制证据摘要；回读及恢复拒绝包/profile/证据身份漂移。
 
@@ -46,7 +61,7 @@ Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runti
 历史切换曾把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。当前普通调查由 Task Owner 直接使用 Host 查询工具，不再注册独立调查定义。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
 
 1. 在本次检出运行 `node docs/acceptance/agent-direct-execution/scripts/inventory-legacy-workflows.mjs --check --db <控制库路径> --instance <实例ID>`；不传 `--output` 只读输出，保存证据时使用全新 `--output <路径>`（拒绝覆盖）。正式维护排空后再次执行，保存两次清点。确认旧流程活动运行、当前阶段、未排空节点及未确认效果为零。旧 `answer.text` 未完成命令须在旧合同下收尾或明确停止，不能交给新 Agent 猜测其含义。
-2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。旧 grants 不再接受，部署必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；不能只升级包而保留旧配置。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
+2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。仅从旧 grants 配置迁移时，必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；已迁移实例的普通代码部署默认仅提供 Package，保持现有配置。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
 3. 仓库资源冻结完整提交；状态资源限定固定 GET URL 和返回字段；数据库资源限定表、列。默认使用专用只读账号；用户明确指定使用现有 UAT 账号时，配置 UAT 专属 Host 强制只读事务模式，并实测写入拒绝。账号凭据始终只由 Host 读取，不交给模型，也不登记生产连接。
 4. 安装后独立回读包摘要、进程、健康、流程目录及旧历史。新目录不包含 `task-investigation`，Task Owner 直接查询；工程与外部交付仍可按原权限发起；旧成功任务可读且没有重放通知。
 5. 在已授权的独立测试群分别验证材料问答、真实资料/代码/数据库读取、调查交付、补充、取消、重启和权限反例。核对真实工具工件、会话、Task 增量与钉钉独立回读；健康正常及原生本地会话通过不能代替渠道验收。
@@ -92,7 +107,7 @@ S 保留完整当前消息和已提供背景，R 逐页累积候选及排除证�
 
 话题看板同时列出旧引擎话题和新工作流话题；收信箱的新消息从持久 `message_topic_bindings` 读取话题引用，不能填空数组。尚停在 R 节点取材料、没有确定话题绑定的消息继续显示待关联；不得凭相似标题硬挂旧话题。已确认的历史无命令消息可经 `docs/acceptance/message-reprocess/scripts/backfill-topics.mjs --check` 先校验，再在实例停止和备份后用 `--apply` 写入确定的话题事实；完成后独立回读话题列表和消息引用。
 
-消息接纳在同一 SQLite 事务中保存话题版本、带源消息版本和原文的事实、单元归属及命令。纯话题事实也可成为后续关联候选；有效话题限制由 Host 加入任务输入，不依赖模型再次复述。S 使用代码计算的 UTF-16 片段边界和全文长度，I 参数为严格命名合同（创建/调研要求 objective，工程要求 repositoryId；I 不提交 workflowPlan）。Task 与 Owner 原子接纳后由 Owner 依据受信目录初始化计划。字段校验失败只重试原节点并提供错误位置；必需上下文超限明确进入 needs_attention，不能制造无法补齐的空材料等待。执行材料就绪前不接纳业务命令，材料恢复不重跑已成功 I。
+消息接纳在同一 SQLite 事务中保存话题版本、带源消息版本和原文的事实、单元归属及命令。纯话题事实也可成为后续关联候选；有效话题限制由 Host 加入任务输入，不依赖模型再次复述。S 使用代码计算的 UTF-16 片段边界和全文长度，I 参数为严格命名合同（创建/调研要求 objective，工程准备前由 Owner 补齐 repositoryId 与 UAT；I 不提交 workflowPlan）。Task 与 Owner 原子接纳后由 Owner 依据受信目录初始化计划。字段校验失败只重试原节点并提供错误位置；必需上下文超限明确进入 needs_attention，不能制造无法补齐的空材料等待。执行材料就绪前不接纳业务命令，材料恢复不重跑已成功 I。
 
 业务命令领取前执行 Host 只读准入检查：主体、工作流、仓库、目标任务和执行版本。不满足条件时持久 `rejected` 并生成拒绝事实通知，依赖动作同时拒绝；没有外部调用的已知拒绝不归 `unknown`。开始执行之后的异常仍按未知效果对账。旧已完成任务以 `engine=legacy` 的只读候选提供状态/结果，不能交给新 Controller 恢复，也不能因询问历史结果创建新任务。
 
@@ -149,7 +164,7 @@ pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp
 1. 停止已核实的 DSH Web PID 及仅属于该进程的 DWS 监听子进程，避免遗留重复监听；将新 tgz 绝对路径传给 profile 内的原生 CLI：`node "$profileDirectory/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add <assistant.tgz> <observer.tgz>`。
 2. 回读 profile 的两个依赖，逐一比较安装目录与工作区源码及 patch 文件的 SHA256，确认原有 profile patch 未变。`pnpm pack` 可能移除 `package.json` 末尾换行：manifest 按 JSON 内容或仅去除末尾空白后比较，其他差异仍必须调查，不能一律忽略哈希不一致。
 3. 若启用了任务表格同步，重启后回读 `/state/task-sheet-sync`，确认配置中的 nodeId/sheetId 未漂移、启动同步成功，并用 `dws sheet +read` 完整回读托管范围。`/health`、CLI 退出码或设置页提示均不能替代表格内容核对。
-4. 按现有 `scripts/start-web.ps1` 启动；后台 PowerShell 进程使用 `Start-Process -WindowStyle Hidden`。若使用 `DSH Web Local` 计划任务，先确认其输出重定向目标 `D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/` 已存在，否则 PowerShell 在启动脚本前退出（本机曾返回 LastTaskResult=1）。stdout/stderr 只存本地 `docs/tmp/`，日志可能含登录链接，不进入 Git。
+4. 通过已配置的 `DSH Web Local` 计划任务调用持久 `start-web.ps1`，不从部署调用者环境另起 PowerShell。先确认其输出重定向目标 `D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/` 已存在，否则 PowerShell 在启动脚本前退出（本机曾返回 LastTaskResult=1）。stdout/stderr 只存本地 `docs/tmp/`，日志可能含登录链接，不进入 Git。
 5. 启动地址在 loader 完成后才输出，端口出现不代表地址已可读取；先确认日志包含地址再做认证访问，不把空日志当作启动失败。确认两个端口属于新进程，检查 `/health`、`/state/agent-config` 与 Web 认证访问。配置摘要应保持一致；health 的组织权限错误需单独说明，不能将其写成插件测试失败或真实投递通过。
 
 ## 验收与回退
@@ -228,14 +243,14 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 
 任务详情使用紧凑编号时间线：标题与耗时同排、产出按标签展开、进度条表示已完成步骤比例。节点产出补充材料正文、文件清单、变更和已记录检查结果；此次需同时安装 Assistant 与 Observer，沿用只读分页接口及既有备份/回读流程，无 schema 变更。
 
-新工程任务采用交付物契约 v9：确认项目与修改起点、创建独立 Git 工作目录、编写修改方案、检查修改方案、按方案修改文件、构建与检查修改结果。方案节点持久化可下载的 `修改方案.md` 文档工件和可应用补丁；应用前检查文档非空、长度和变更文件覆盖，这不等于证明方案技术正确。工作目录回执包含实际位置和来源仓库，当前使用独立 Git 仓库而非 git worktree。检查报告明确打包、构建、测试及跳过测试的范围，不把命令成功当成业务验收通过。历史节点保留原定义；未保存方案说明时仅提供由实际补丁整理的 `修改记录.md`，不补造理由或重跑任务。
+新工程任务采用 v19：确认项目与修改起点、创建独立 Git 工作目录、编写修改方案、按方案修改文件、构建与检查修改结果。方案节点产出技术文档，说明需求、设计、影响范围和验证方法，可含示意代码，不要求逐文件修改前后补丁。取消独立“检查修改方案”节点；实施节点先核对方案与当前代码，再通过受管编辑工具执行修改，实际修改回执与方案文档分别保存。设计问题在未编辑前回到原方案节点修订；构建、测试和业务验收核对真实结果。工作目录回执包含实际位置和来源仓库，当前使用独立 Git 仓库而非 git worktree。检查报告明确打包、构建、测试及跳过测试的范围，不把命令成功当成业务验收通过。历史节点保留原定义；未保存方案说明时仅提供由实际补丁整理的 `修改记录.md`，不补造理由或重跑任务。
 
 节点产出统一核对当前分析/工程链：只读分页附带 overview，文件数量依据完整工件去重；默认显示读取、修改、索引或方案涉及数量，展开后才渲染正文与清单。提交/推送准备、执行回执、PR 草稿/创建/回读分别呈现，不相互冒充。未知结构标明“已保存节点产出，暂未提供可读展示”。
 
 
 交付物契约 v9 同时安装 Assistant 与 Observer；无控制库 schema 迁移。已有登记定义继续按其版本恢复，新任务才使用 v9。安装前核对旧定义摘要保持不变；安装后逐页回读现存工件和可下载文档，检查旧目录回执与节点轮次一致。沿用停机、稳定存储备份和精确包核对流程；不能回放历史任务生成缺失方案。
 
-方案编写及方案检查节点只显示实际方案工件路径，不展示正文、文件数量、展开或下载入口。当前文档与补丁持久化在 JSON 工件中，因此显示真实 JSON 路径，不虚构独立 Markdown 文件路径；其余节点保持原展示。
+方案节点显示实际技术文档工件；实施节点显示实际编辑回执和修改摘要。工件保存在 Task 共享目录，后续节点按引用读取。历史方案和补丁仍按旧定义展示，不虚构独立 Markdown 文件路径。
 
 新工程流程 v10 将“构建检查”和“业务验收”拆成两个节点。构建成功只允许进入业务验收；缺少受信验收用例、没有实际值或实际与预期不符时，业务验收保持等待，阻止后续提交，不自动循环重试。验收通过展示验收项、预期、实际和结论。既有 v1–v9 记录保持原定义，不补造历史业务验收节点；v10 用于新任务与受管重发。部署仍需双包更新、备份及独立回读，无 schema 迁移。
 
@@ -260,11 +275,11 @@ C 盘空间不足时，本轮保留计划任务定义，以原 start-web.ps1 和
 
 新增空群可随本次部署提供 `-EnrollmentProposal <绝对 JSON 路径>`，内容只包含非空 `groupId`、`name`、`responsibility`。先确认真实群身份和成员，再执行零写 `-Check`。执行阶段进入正式维护后通过原生订阅接口登记空群，随后排空、封存、停机、备份和安装；释放部署 owner 锁后，由原生 `cutover-message-workflow.mjs --enroll-empty-group` 再次检查停机及锁，先检查后接管并 CAS 更新 profile。接入保留原封存快照和旧群历史。新实例回读并恢复派发之前不发送测试输入。
 
-该路径临时禁用精确的 `DSH Web Local` 自启任务，原来已禁用则保持禁用；只有新实例验证和恢复派发完成后才恢复原来的启用状态。接入或启动失败保留停机/维护及证据，按 `enrollment-autostart.json` 和原生接入 journal 恢复，禁止删除 journal 后重来。`-HoldMaintenance` 会保留维护及临时禁用状态，后续使用原部署参数 `-Resume` 完成回读、恢复派发和自启。
+该路径临时禁用精确的 `DSH Web Local` 自启任务，原来已禁用且无恢复许可时，部署 Check 拒绝启动。原来启用的任务在启动前按保存的许可恢复启用。接入或启动失败保留停机/维护及证据，按 `enrollment-autostart.json` 和原生接入 journal 恢复，禁止删除 journal 后重来。`-HoldMaintenance` 会保留维护及临时禁用状态，后续使用原部署参数 `-Resume` 完成回读、恢复派发和自启。
 
 先把同一正式版本的 Assistant 与 Observer 发行 tgz 存入 `D:/dsh_home/packages`，文件名包含版本和摘要前缀；分别核对下载来源及完整 SHA-256，发现同名异内容立即停止，不能覆盖。该目录是 profile `file:` 依赖的持久来源，不能用工作树 `docs/tmp/` 包路径安装；只在确认 profile、锁文件和部署证据均不再引用后清理旧包。部署工具的预检拒绝不在该目录直接子级的包及链接。
 
-使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，参数必须提供上述持久目录中的精确新包 `-Package`、双项目配置 `-Bundle`、合并策略 `-MergePolicy`、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
+使用验收目录 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1`，先 `-Check`，普通代码部署参数提供上述持久目录中的精确新包 `-Package`（工程配置变更才另需完整 Bundle/MergePolicy/ChecksProposal）、当前 profile 摘要 `-ExpectedProfileSha256`、包摘要 `-ExpectedPackageSha256`、新的 `docs/tmp/` 证据目录 `-EvidenceDirectory`。自检不创建证据目录，不改配置或启动实例。去掉 `-Check` 才部署；仅维护人员执行。
 
 允许已排空的 waiting 任务留待新版本恢复，但 running 节点/Owner、未排空节点或 starting/executing/unknown 效果一律阻断。准备失败遗留 unknown 先按专用单次对账规程处理，不能靠部署放宽门禁。脚本要求原实例具备正式维护接口；已离线或尚无维护接口的旧实例拒绝使用此自动部署路径，须先完成独立停机与恢复方案，不能退回“读取排空后强停”的有竞争路径。
 
@@ -290,6 +305,12 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 历史迁移专用部署前按实际备份范围统计空间，要求 D 盘至少容纳备份体积 + 包体积×10 + 1 GiB 余量；空间不足拒绝，不删文件。2026-09-27 本轮只读测量备份约 553 MB、D 剩余约 3.42 GB，未含新包时基线所需约 1.63 GB；新包准备后仍须执行完整 `-Check`。启动回读隔离测试 `pwsh -NoProfile -File test/deploy-owner-repair.test.ps1` 2/2 通过。
 
 ### 维护屏障与部署许可
+
+文档读取能力升级后，旧 Task 的冻结正文链接由当前来源版本派生，无需补写附件或重跑交办。对已经接纳 wait 的 Owner，应先核对新版本可读材料、来源和 Owner/需求/控制版本，再使用既有 `POST /tasks/:taskId/reassess-readonly` 触发同一 Task 的系统重评；单纯重启不代表旧等待已恢复。重评理由只描述已部署能力和可核验来源，不冒充用户答复，不填入用户未指定的 UAT。验收须独立回读文档查询证据及真实 Owner 结果；只读工具测试、健康检查或重评 accepted 均不代表正文已读成功。
+
+alidocs节点类型以同profile的`drive +inspect`为准。普通HTML文件不是adoc，不能据`doc +fetch`类型拒绝判断无权限；插件按明确类型走原生全文或文本文件下载。验收包含真实正文摘要、字节数和来源节点，不输出下载签名或凭据。
+
+若监听ready但群回补报`GROUP_COORDINATOR_SESSION_ALREADY_LIVE`且Owner仍pending，先核对路由积压与`MESSAGE_INPUT_PENDING`，不得跳过输入门禁。新版协调器仅对公开idle维护锁内已核验身份、当前lease、工作区和无新增用户输入的观察会话，使用原生历史派生及现有账本CAS接回受管会话；原观察会话保留。外部活跃会话或不明输入继续拒绝，不按ID强行dispose。回读应包含新旧parentSession关系、积压路由处理、原Task继续及监听/回补健康。
 
 正式部署先通过 `POST /runtime/maintenance` 开启持久维护模式，阻止节点、Owner、效果、消息执行及通知的新领取；入站仍可落队列。已开始的操作允许收口，未知外部效果必须先对账。排空后通过 `/runtime/maintenance/seal` 原子封存停机许可；此后旧进程不能退出维护，避免最后快照与停机之间重新派发。封存后遇到错误保持维护，不自动重复停机或重启。
 
@@ -319,7 +340,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 1. 核对旧 PID、创建时间和 3080/18998 归属。备份原 profile 到本次证据目录，以 SHA CAS 追加固定 `disabled:true` patch，保留其他配置及 `!!js` 原文；与 configure 工具共用 `.local-acceptance.lock`。
 2. 由现有 DSH live profile reload 正式卸载 Resident。等待 18998 关闭且 3080 仍属于旧 PID，再持续取得 `control.sqlite.owner.sqlite` 的 SQLite EXCLUSIVE 锁。端口关闭本身不是排空证明。锁内核验控制账 busy=0，核对旧 PID 后停止旧 DSH；至备份、安装、配置及哈希验证完成一直持锁。
 3. 保持 Resident profile 禁用。释放外部 guard 后，通过已安装新版 `openExecutionStore` 正式命令依次 enter、seal；该 CLI 自身取得 owner 锁、持有真实进程 nonce，并在 `finally` 关闭。此为首次升级的离线维护记录，不声称旧 Host 取得过 seal，也不 SQL 修改运行库。
-4. 仅精确移除本工具追加的禁用块，保留新配置，启动新 Host。持久维护状态使恢复与领取保持禁止；新进程健康、历史、安装包和本次 `start.stdout.log` 中认证 Web 入口核验后，按既有 `/resume` 正式恢复。
+4. 仅精确移除本工具追加的禁用块，保留新配置，启动新 Host。持久维护状态使恢复与领取保持禁止；新进程健康、历史、安装包和本次计划任务 `web.log` 中认证 Web 入口核验后，按既有 `/resume` 正式恢复。
 
 任一步失败保持对应禁用或停机状态，不自动还原配置、不重复安装/启动。副本备份中的 profile 含禁用块，原始未修改 profile 另在证据目录 `profile-original.yml`；恢复时必须逐项核对哈希并先证明没有另一个 Host。离线 seal CLI 仅供此受控部署路径使用，不作为在线维护接口；其 `--check` 不模拟或签发许可，整体零写预检由部署 `-Bootstrap -Check` 提供。禁止对旧 DSH 发送 SIGTERM 后把退出当排空证明：其 disposer 有 5 秒强退上限。
 
@@ -345,7 +366,7 @@ $profileSha=(Get-FileHash D:/dsh_home/profiles/web/cordis.patch.yml).Hash.ToLowe
 
 正常部署脚本 `docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1` 增加显式参数 `-TaskDirectory <Agent工作区绝对路径>/tasks`。升级后已出现新引用时，该参数为必填；沿既有部署流程，先以完整参数加 `-Check` 零写预检，核对目录、容量和引用闭包后再执行。尚未有新任务且目录不存在时可暂不传；不要为自检创建虚假根。`-Resume`、`-Readback` 及部署复核须沿用原任务根。
 
-备份将任务文件复制到 `backup/tasks`，清单绑定源任务根并校验文件摘要；闭包检查直接查找限定引用，不扫描猜归属。唯一依赖排除规则为 `<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules`，包括仓库根和嵌套依赖目录，显式保存于 `taskBackupExclusions`。容量统计、复制和源清单校验共用该规则，复制不进入依赖链接；备份目标意外出现额外文件仍拒绝。恢复后按源码锁文件重新安装依赖，不声称恢复了依赖缓存。
+备份将任务文件复制到 `backup/tasks`，清单绑定源任务根并校验文件摘要；闭包检查直接查找限定引用，不扫描猜归属。依赖排除仅限 `<logicalTaskId>/work/engineering/<24-hex>/ws-<64-hex>/repository/**/node_modules` 和 Host 检查目录 `<logicalTaskId>/work/engineering/<24-hex>/checks/verify-<6-alphanumeric>/**/node_modules`，包括仓库根和嵌套依赖目录，显式保存于 `taskBackupExclusions`。容量统计、复制和源清单校验共用该规则，复制不进入依赖链接；备份目标意外出现额外文件仍拒绝。恢复后按源码锁文件重新安装依赖，不声称恢复了依赖缓存。
 
 控制库、共享工件、Session 和任务根必须来自同一停稳检查点。缺根、坏摘要或排除范围外的链接均停止；不能仅备份原 `artifactDirectory` 后声称可恢复。恢复时保留原 Agent 工作区绝对路径，先验证完整备份再启动唯一写者。启用 workflow 后在线修改工作区会返回 `workflow_task_workspace_change_requires_offline_migration`，配置不写入；同根更新与模型修改仍可用。不要绕过此保护仅修改磁盘根配置，已有相对任务引用会失去原位置；换根须另行设计包含工程绝对路径绑定的停机迁移，本轮不迁移。
 
@@ -417,11 +438,14 @@ Web重执行群名修复：不迁移数据。安装后只读核对/state/tasks�
 
 消息工作流的拆分节点允许以语义判断 `no_action` 结束无待办消息（闲聊、问候、无执行请求的收信测试等），必须完整覆盖原文并有成功节点记录，不创建话题、任务或澄清通知。明确的测试操作请求仍走正常事项流程。合法终态 `no_action` 不再占用未归类屏障；后续新消息可继续派发，真正尚未归类的消息仍阻断话题执行，无需改写历史状态。收信箱等待状态细分为“等待澄清”“等待补充材料”，提示显示当前待补充问题；真正失败仍显示“关联受阻”。
 
+协调器已消费且判定零事项的消息，在同一提交事务结清本来源拥有的输入屏障。历史零事项遗留屏障由恢复扫描核对当前来源、协调器消费记录及无待执行事项后，以完整快照摘要 CAS 结算；未判定、来源过期、存在待处理请求或命令时保持屏障，不重放消息、不伪造用户答复。
+
+
 ### 封存后启动失败的离线修复
 
 仅在原部署已取得 `stopping` 封存许可、原进程及 launcher 已退出、3080/18998 均无监听时，使用同一脚本的 `-RepairStoppedLaunch <原 launch.json 绝对路径>`。必须提供新的唯一修复 tgz、该包 SHA、原 profile SHA、新 `EvidenceDirectory`，以及原 `DirectQueriesProposal`（原部署使用时）；禁止同时改变工程配置、Observer、接入群或维护许可。
 
-先运行以上参数加 `-Check`：零写核对原 launch/封存记录/control-before、当前维护 ID/revision/incarnation、历史控制记录以及源码与包字节。普通无备份部署使用原 `deployment-control.json`，核对 launch 绑定的控制证据 SHA、原包和 profile 身份、原输入摘要；仅允许未迁移且尚未恢复派发的 launch 检查点。该路径只替换 Assistant 包，不创建或读取历史备份，不回滚历史数据。原 Observer 包及安装结果继续独立回查，不通过 `-ObserverPackage` 再次安装。原 `enrollmentAutostartRestore` 及相应自启证据随新 launch 保留，在后续 `-Resume` 成功后幂等恢复原有自启。
+先运行以上参数加 `-Check`：零写核对原 launch/封存记录/control-before、当前维护 ID/revision/incarnation、历史控制记录以及源码与包字节。普通无备份部署使用原 `deployment-control.json`，核对 launch 绑定的控制证据 SHA、原包和 profile 身份、原输入摘要；仅允许未迁移且尚未恢复派发的 launch 检查点。该路径只替换 Assistant 包，不创建或读取历史备份，不回滚历史数据。原 Observer 包及安装结果继续独立回查，不通过 `-ObserverPackage` 再次安装。原 `enrollmentAutostartRestore` 及相应自启证据随新 launch 保留，在启动前按原许可恢复 Enabled，后续 `-Resume` 幂等核对。
 
 原部署确有完整备份时仍走原备份专用路径：额外核对备份的清单/摘要/SQLite 全表与工件闭包、当前业务文件和工件全集。原生安装改变的 profile 依赖文件不与安装前备份比较，但原 profile 配置 SHA 必须不变。备份一致性副本仅允许原只读连接留下的空 WAL 与固定 32768 字节 SHM，其他新增文件拒绝。
 
@@ -465,7 +489,7 @@ IB 话题来源身份使用无损引用：`sourceIndexes` 按原顺序指向 sha
 
 `message-impact-migration.json` 保存 schema 版本、来源数量、原表摘要及迁移备份路径；摘要进入 `launch.json`。启动前、`-Readback` 和 `-Resume` 均核对证明摘要、schema 6 结构与每条来源的影响账完整性；在线仍执行既有旧终态历史核验。离线全量历史不变证明与在线当前态校验是不同门禁：启动后维护事件及当前工作流状态可以合法变化，不用迁移前全表摘要误判这些状态。接续命令必须保留 `-MigrateMessageImpact`。
 
-迁移、安装或回读失败不自动恢复派发或自启，保留停机/维护状态与证据；禁止通过旧的简化离线修复入口跳过迁移证明。正常恢复只有通过 `-Resume` 门禁后才还原本次保存的自启状态。上述流程测试使用隔离库与模拟启动，不代表真实实例已部署。
+迁移、安装或回读失败不自动恢复派发或自启，保留停机/维护状态与证据；禁止通过旧的简化离线修复入口跳过迁移证明。启动前只按本次保存的许可还原自启状态，派发仍须通过 `-Resume` 门禁。上述流程测试使用隔离库与模拟启动，不代表真实实例已部署。
 
 通知滞留排障：prepared 没有 claim 不等于模型恢复阻塞。检查该 run 的 `notificationDiagnostics` 及既有 recovery 诊断，核对同一 Owner 报告的稳定 eventKey 是否已有通知；不得重发旧已送达报告或删除旧通知。当前扫描隔离单条事实失败，保留可回读诊断，其他待发通知和 unknown 回查仍继续；同一错误不按定时器重复写账。
 
@@ -584,7 +608,7 @@ Owner直接使用现有directQueries登记资源及Task工件目录；查询scop
 
 本次直查切换的新工程目录采用 v18，以 Host 核验的当前 Task 查询 taskContext 准备工程方案；v17 及已有工程定义保留冻结恢复。周期恢复只扫描持久待办并派发，不等待模型完成；独立回读新任务可在已有任务调查期间派发、同一任务动作串行应用及停机排空。插件审批、受控写入与未知外部效果对账边界不变，查询成功不能替代变更批准或业务最终验收。
 
-自启任务是否禁用以 `Get-ScheduledTask.Settings.Enabled` 独立回读为准；任务仍在运行时 State 可以继续为 Running，不能据此误判禁用失败。停机前先保存原 Enabled 对应的恢复意图，再禁用。Resume 恢复后再次读取 Enabled。
+自启任务是否禁用以 `Get-ScheduledTask.Settings.Enabled` 独立回读为准；任务仍在运行时 State 可以继续为 Running，不能据此误判禁用失败。停机前先保存原 Enabled 对应的恢复意图，再禁用。启动前恢复及 Resume 后分别读取 Enabled。
 
 停机前被检查中断而旧进程仍存活时，可使用既有 ContinueMaintenanceId 和 ExpectedMaintenanceRevision 接续原封存维护；要求同一进程 incarnation、准确 revision、drained=true、stopPermitted=true 和 sealedIncarnation 一致。已封存状态不重复 seal；任何身份或版本漂移均拒绝。进程已停止时仍按原离线恢复规则，不冒用此接续路径。
 
@@ -609,3 +633,184 @@ TimingSeconds输出InitialCheckSeconds、DrainAndSealSeconds、StopSeconds、Ser
 交付时将scripts/start-web.ps1、restart-web.ps1、web-module-loader.cjs三文件统一复制到DSH_HOME/launchers并独立核对SHA256。DSH Web Local仅改Action到该目录start-web.ps1，传入真实主检出ProjectRoot，保留UserId/触发器/Settings/日志位置及DSH_HOME。桌面入口仍是restart-dsh-web.ps1 -Check/正常重启；正式包部署工具也指向同一持久启动脚本并显式传ProjectRoot，避免后续部署重新走旧慢入口。
 
 本机完整对照：不带同步hook的ServiceReady171.18秒/总181.54秒；只启用同步load透传为17.65/29.91秒；正式三文件入口无诊断为17.64/29.43秒。小9库import对照均约1.6秒，不能用其代替完整profile boot。主结论范围是当前完整启动路径，未把操作系统/磁盘的底层延迟细分为已证实原因。运行明细见docs/acceptance/web-restart-startup-speed/round-1.md。
+
+## 历史话题归属与展示修复
+
+仅用于已核对的同事项历史误拆。脚本 `docs/acceptance/message-clarification-admission/scripts/reconcile-topic.mjs` 复用本机受管 HTTP 接口，不直接修改数据库；源话题的来源绑定并入目标话题并更新名称摘要，保留历史请求/通知，不重跑业务命令、不新建 Task、不发送消息。新建此脚本是因为既有重处理脚本会进入业务调度，不能承载零业务副作用的归属修复。
+
+1. 先只读核对源/目标话题、消息来源版本、已有 Task/命令/请求。本次已确认的四条交办链是 #122“边做边修插件”作为源，#123 文档、#124 点名、#125“按文档开发”已有话题作为目标；具体 topicId 必须从当前 Runtime 回读，不能仅凭序号执行。
+2. 按本 runbook 标准部署/维护流程进入维护并排空；脚本不会自动进入或退出维护。随部署处理时可使用部署 helper 的 `-HoldMaintenance` 保持维护，安装回读通过后再做下述检查。
+3. 用 PowerShell 参数数组固定检查和执行的全部输入。`--check` 只 GET 维护状态并 POST 零写检查接口，返回 `expectedDigest` 与待变更快照。源/目标、名称摘要、原因或状态发生变化必须重新检查。
+
+```powershell
+$topicRepairScript = 'docs/acceptance/message-clarification-admission/scripts/reconcile-topic.mjs'
+$topicRepairArgs = @(
+  '--source-topic', '<当前源topicId>',
+  '--target-topic', '<当前目标topicId>',
+  '--title', '数据集过程导入导出开发',
+  '--summary', '按已提供的导入导出规则文档开发，在执行过程中发现并修复插件问题；原始交办和阶段授权分别核验。',
+  '--reason', '已核对四条消息属于同一交办链，修复历史归属与展示，不重跑业务'
+)
+node $topicRepairScript @topicRepairArgs --check
+```
+
+4. 核对快照后，以检查返回的摘要和本次唯一 requestId 执行；脚本再次只读检查当前维护身份及摘要，变化时拒绝写入。`--apply` 必须显式提供这两个字段，不能凭新检查结果自动替换用户指定摘要。
+
+```powershell
+node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回的expectedDigest>' --request-id '<本次唯一修复编号>'
+```
+
+5. 脚本在写入回执后独立 GET 目标话题上下文；再从 `/state/groups` 和 `/state/topics` 核对四条消息归属、名称摘要以及原请求保留。原请求的解决需另走其正式恢复路径，不把元数据修复当成澄清已解除。
+6. 标准部署 helper 的历史回读核对 Task、Run、Node，不替代上述话题回读。确认本次话题与原业务状态均符合预期后，使用同一部署输入执行 helper 的 `-Resume`；维护身份、版本、活动执行或摘要冲突都应保留阻塞并重新核对，不跳过校验。
+
+脚本默认仅访问 `http://127.0.0.1:18998`，可用 `--endpoint` 指定其他本机回环 HTTP 端口用于隔离验证。检查/执行的权限、排空、来源版本和摘要最终均由 Host 校验。
+
+
+历史 coordinator 错误澄清恢复：仅当原消息没有任何业务命令，当前 pending 澄清对应已送达通知已由原生撤回流程核验为 recalled 并保存 recallEvidenceRef 时，可使用本机 `POST /workflows/<runId>/reprocess`。其他未知、未撤回通知仍阻止恢复。重处理保留原来源、作者、正文和旧请求审计，递增 sourceVersion，并用当前群规则重建 compactPolicy；不伪造用户答复。先读回撤回证据和零命令，再逐条操作，最后读回新来源版本、旧请求 superseded、新任务数量及当前等待。此入口会启动正常协调与业务派发，操作授权须覆盖原业务承接。
+
+### 部署启动环境一致性
+
+普通部署与离线 repair 都只触发现有 `DSH Web Local`，固定核对单一 Action、PowerShell 7 路径、显式 `DSH_HOME=D:/dsh_home`、web profile、主检出工作目录，以及本机已配置 Principal `64554` / `Interactive` / `Limited`；不修改 Action、Principal 或其他持久设置。Check 只读核验；Enrollment 仅可恢复先前保存的 Enabled 许可，不启用原本禁用的任务。
+
+`launch.json` 记录 `launchMethod=scheduled-task`、任务名、调度时间；`launcherPid=null` 不冒充已知进程。回读继续核对双端口单进程、新 Node 创建时间，并核对其真实父 PowerShell 的入口参数/创建时间及任务 LastRunTime。认证 Web 使用固定 `docs/tmp/dsh-web-local/web.log`，日志更新时间须晚于新 Node 创建时间，然后仍由原 Web checker 验证访问；日志陈旧或认证失败不能跳过。
+
+现场已观察到从部署调用者直接启动与计划任务启动的 DWS 认证表现不同，本修复只固定服务启动环境；Windows 底层凭据隔离原因仍未确认。测试与只读预检不表示本轮已再次部署或重启。
+
+计划任务启动失败后的离线精确包续修按原 launchMethod 校验自启状态：scheduled-task 记录必须仍为 enabled，旧启动记录必须保持原 disabled 状态；恢复许可仍须匹配原 enrollment-autostart.json 并经摘要冻结。有备份记录仅在已知 scheduled-task 启动时接受原恢复许可，原迁移修复范围不变。
+
+阶段授权候选纠正补丁不迁移账，不重复 reprocess：部署恢复后由原协调会话重新处理 pending 来源。独立核对原 sourceVersion、唯一 Task 和授权 sourceQuote/objective；校验拒绝应停留在模型同轮反馈，不能转成新的用户澄清。
+
+旧澄清阻塞已接纳创建命令时，不再次 reprocess 或直接写库。先核验真实后续答复及原创建命令，部署时 -HoldMaintenance 保持排空，调用 `/workflows/clarifications/recover` 的 dryRun:true（零写），审阅来源、作者、话题、Task/效果不存在证据，再使用原 expectedDigest 和唯一 recoveryKey 执行。原答复正文、身份和版本由 Host 从已存在来源读取；Web身份仅作为维护操作者审计。执行后独立核验旧request resolved、原create pending、来源版本及taskId保持，使用原部署参数 -Resume，最后读回唯一Task、Owner与#124不再等待补充。未知副作用、其他作者、版本漂移或真实授权请求均拒绝。
+
+### 控制存储不可用时原生重载
+
+维护接口返回 STORE_UNAVAILABLE 时，不能把它当404使用部署 -Bootstrap，也不能直接强停Host。先只读控制库 quick_check 和 maintenanceStatus，确认 busy=0，并核对现有PID/双端口；保留unknown命令原状。使用现有 bootstrap-workflow-maintenance.mjs 的 witness/disable/enable profile CAS 原语，每步先 --check：取得同PID/nonce的ready，禁用Resident后必须取得真实disposed见证、18998关闭且3080仍原PID，持有owner SQLite独占锁并以snapshot再证实排空。释放锁后只删除工具追加的精确末尾块，核对profile恢复原摘要。原生Loader在同Host重开Resident/Store；独立核对maintenance API、健康和收信后重新走普通部署Check。此路径不调用seal-offline、不改控制账、不迁移数据；无法取得见证/锁/零busy时停止，不能用端口关闭冒充排空。
+
+纯会话事实误分话题的恢复也使用 `/workflows/<runId>/reprocess`：仅已 settled、全部 applied 的 conversation-scope 静默 fact，且无 Task 绑定、通知、执行/外部效果、同话题其他 Task 命令时允许。先只读核验原来源、作者、正文、来源版本和上述零副作用证据，部署 Resume 后逐条重处理，回读旧来源 superseded、新来源版本递增。维护期间可能已登记新来源、但派发返回 RUNTIME_MAINTENANCE_ACTIVE；若遇此错误先读回来源版本和命令，Resume 后只接续既有新来源，不按失败回执推断零写入。随后独立核验原 Task 要求是否更新、话题是否一致；不重放原 create，不将维护操作者当原消息作者。公共事实不产生 Task 输入事件，实际需求补充须通过合法 revise 接纳。
+
+工程准备若仅返回 Git exit128，应按配置的 `sourceRepository` 独立只读复现首条命令并核对目录；缺失源仓库不能误报用户未给UAT或GitHub未授权。恢复时使用配置的远端在原sourceRepository路径建立独立完整Git仓库，禁止浅克隆、共享alternates、symlink或改用用户主检出；核对origin/main和选定UAT远端SHA。既有Task尚无执行阶段/外部效果时，沿上述reassess-readonly门禁重评，不新建Task，不伪造需求补充。源仓库恢复不是功能代码提交、部署或业务验收完成。
+
+上述工程前置恢复也要求当前 Owner 的 blocked advance 仅包含有来源条件的 task-engineering 初始化候选、计划版本0，且全Task无任何计划阶段/接纳收据/执行Run/效果；原来源与Owner/租约/需求/控制版本均须匹配。只有这个未生效工程准备分支不要求当前需求已产生查询证据，其他只读重评规则不变。恢复废弃旧候选并产生system.recovery审计，再由同一Owner重新决策；不按128或任意错误码自动重领。
+
+已发过时通知更正：先按原通知ID和完整正文唯一定位，核对当前业务事实；用notification operation的recall/explicit_user撤回，独立核验recallStatus及证据。再用同一notificationId准备restore/correction和简洁更正文，通过受信host-web身份执行并独立读取notification-replacement及DWS回读工件。保持同一profile/会话/原引用，未知投递仅reconcile，不重复send；不把旧正文直接补回，不伪造群内授权消息。
+
+### 历史工程会话归属的一次维护修复
+
+工程原生会话已被普通历史观察接管、原节点领取新租约但没有对应原生输入时，先区分实际活跃执行与闲置观察。新建工程会话直接使用原生 `origin=subagent`；历史 header 不手写修改，也不增加在线自动派生路径。
+
+本次维护复用 bootstrap witness/profile CAS：进入正式 maintenance，让其他实际工作自然排空；witness 证明 Resident 完整 Loader dispose 后，单独禁用 `session-controller`。维护桥须再次核对两个精确模块 disabled、fiber 已释放及两个旧 Agent/Session 均不存在，取得原生控制库独占，并按当前配置恢复真实工程定义。仅调用内部 `controller.prepareManagedSession`，核对精确维护 id/revision、原 Task/Run/node/input/lease、完成历史与零节点效果，完整 seed 派生受管子会话后正式 CAS 换绑排空；不启动模型、不重做成功步骤、不取消业务任务。
+
+临时 profile 修改逐步先 `--check`；执行期间保持 profile CAS，桥关闭 worker/自有原生句柄后独立读取控制账及新原生 header。按精确尾块反序移除桥、恢复 session-controller、bootstrap enable，确认 profile 回到原摘要。随后走普通部署 Check/安装/Readback/Resume，并以新 lease 的原生输入及实际工具调用证明续行，不能以 running 投影代替。临时维护脚本及含真实身份的 manifest 留在 docs/tmp；不向版本库提交私人任务内容，不创建历史备份副本。
+
+任务目录含大型验证检出时，文件枚举逐项合并子树，避免数组展开为函数实参触发 Maximum call stack size exceeded；已有依赖排除规则和普通文件/链接核验保持不变，不靠扩大忽略范围绕过预检。
+
+正在执行的仓库读取会创建并删除临时候选文件，不能把在线文件枚举的ENOENT当成持久材料损坏。任务可能自动续行时，先通过正式maintenance接口停止新派发，回读busy全零、drained=true后，再携带同一ContinueMaintenanceId与ExpectedMaintenanceRevision运行Check和部署。排空前不删临时目录或忽略校验错误；正在执行的回合自然结束，成功结果保留。
+
+### 共享任务材料与恢复核验
+
+本次复用原Task目录与artifact引用，无控制库schema迁移，不移动原生cwd、不复制私有正文入验收文件。部署后按Task共享索引核验旧版本文档可发现、按原引用读到完整正文以及outputs产物可按相对路径读取；新材料出现不得要求重跑成功节点。history材料只作参考，当前授权与验收仍用原合同。原Task的实际模型材料读取与新执行效果另行验收，单测和索引存在不等于业务完成。
+
+精确原生TRANSPORT/首行fetch failed复用最多三次退避；部署后的旧waiting重分类、当前租约真实工具调用分别回读。当前能力wait的只读重评沿既有来源/CAS/零效果门禁，即使尚未成功query也可恢复；不得伪造查询成功或用户补充。对应已保存round38/39证据分别保留。
+
+换绑会话的恢复核验先验证原生rebind链，只承认rebind之前、精确父session且旧lease的已消费输入；不删除父历史以通过检查。离线回放通过仍需回查在线重分类回执和新lease实际执行。
+
+旧工程任务在已接纳输入后Stage/Run引用不一致，由既有输入或恢复事务核验正式逐代input.apply链并同步Stage。切换后独立回读task.stage.requirement.reconciled事件、原Run代际和实际新租约工具调用；不得手改Stage引用，也不删除当前计划一致性检查。
+
+### 工程检查配置的同代维护修正
+
+检查路径不存在属于检查配置前提，不能驱动业务代码整代重跑。仅在正式 maintenance 排空、封存并停止 Resident 后，以控制库独占方式调用内部 `engineering.updateCheckpoint({runId,requestId,kind:'checks',checks,maintenance:{maintenanceId,revision}},controller,artifacts)`。`checks` 必须是已审阅的完整注册配置（本次只把固定缺失文件参数改为 `node --test` 并提高检查版本）；用当前安装绝对路径的真实工程工厂恢复定义，不伪造摘要或函数。调用返回 receipt.result 中的原 runId/generation、旧新 digest 和 evidenceRef；不启动模型、不执行检查、不创建新 Task/Run/generation。恢复 Resident 后才调度 ready 的 verify-candidate。先前成功节点、工作区、候选和旧失败证据均保留。调用失败不能跳过门禁改库。
+
+此入口只接纳 verify-candidate 的明确工程验证失败、全部排空、后继从未执行且无后继效果；来源、Task控制和版本需仍匹配。83c 的仓库读取失败应先由严格原生证据重分类，再由 Owner 调用现有 node.resume；不得用检查checkpoint冒充读取恢复。
+
+当前 profile 的全局检查配置尚未修改。先对两个现存 dataset-web Task 在各自到达 verify-candidate 时维护修正；待所有使用旧配置的非终态 Run 结束，并确认不存在未绑定 Run 的工程注册记录后，再统一修改 profile 为检查 v2。restore 明确跳过已终态 Run 和非当前定义；当前活跃 Run 仍校验原 repositoryDigest，提前修改 profile 会导致配置漂移。未来 Task 使用新配置，历史成功 Run 不重建。
+
+共享读取目录约定：work/tmp仅允许顶层共享文件，work/artifacts精确SHA引用沿原摘要校验读取；outputs可读取嵌套产物。engineering仓库及原生session内部目录仍通过原工具访问，不经共享材料入口绕过仓库范围限制。
+
+候选校验错误（无效替换、类型、no-change证据或方案文档）由既有Owner恢复：先读取原提案与紧邻validate-proposal失败证据，再repairCurrentStage/node.resume纠正原提案。必须为已登记工程纯validator，原来源/版本/控制有效、全链排空、无提案及下游效果；重复同问题按原一次续行门禁拒绝。原validator lease递增不归零，原提案和失败证据保留在恢复事件；不是checks维护操作，不需要停机或人工装桥。
+
+### 原Run的本地验收场景检查点
+
+沿用内部`engineering.updateCheckpoint`的维护封存与CAS流程，`kind:'local-acceptance'`传入完整`localAcceptance`及`scope:{taskId,uatEnvironment,requestDigest}`，摘要为`executionDigest({request:saved.input.request,acceptanceCriteria:saved.input.acceptanceCriteria})`。不得改仓库、checks或业务授权；`prepare-local-acceptance`及以后必须零领取、无输出和效果。原define/plan产物保留审计，真实重算这两个节点，保留成功workspace/inspect/verify；等待中的verify不会因场景修订冒充成功。恢复维护后按原Controller调度，不另建Task、Run或generation。新planner可纠正失败沿既有Owner一次续行规则处理；成功中段必须与checkpoint审计逐项相符，任何漂移仍拒绝。
+
+生产活动合并UI组件检查脚本的离线提案在round53记载；其`backendVerified:false`是覆盖边界，不是可绕过的错误。配置仍复用原`prepare-web/serve-web`与固定SHA的dataset companion，必须先得到包含结果导出接口且业务验收通过的后端jar，才对原Task做local-acceptance checkpoint。不能把review伴随后端、候选导出或固定API fixture当作真实结果Excel验证。
+
+若Owner已读取诊断仍报TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD，纯validator纠正路径应核Host currentExecution的validationNodeRunId/validationLeaseEpoch/validationInputDigest与原失败工件，不应拿前置Agent身份匹配validator失败。round54含真实SG20副本和Owner完整集成证据；正常原Owner恢复入口不变，无需手动改业务状态或重建Run。
+
+历史materials/source=previous误用恢复：只读核验原生错误调用为同Task精确SHA引用、sole ENGINEERING_READ_SCOPE_INVALID、blocked且未提交/无其他错误；正式重分类为QUERY_ARGUMENT_INVALID后沿原node.resume续同会话。不能将任意scope错误重分类，亦不重新创建Task/Run。
+
+见证器在通过PID/nonce及绝对路径校验后创建证据目录，避免全新部署目录导致ready写入失败。重试仅允许替换工具追加的唯一末尾witness块，且模块、PID、证据目录保持一致；只更新nonce。目录、PID或块内容漂移时拒绝，不通过重复追加插件绕过。每次先执行 --check，再执行相同参数，独立回读本次nonce的ready/disposed。
+
+必要后端依赖部署需要控制库存储版本8→9：沿 deploy-owner-repair.ps1 增加 -MigrateRequiredDependency，先 -Check 零写。仅完整正式维护部署，不能与Bootstrap、离线RepairStoppedLaunch、其他迁移合用。排空并原生seal后停止旧PID，持续owner独占锁中调用 migrate-execution-dependency-index.mjs；事务只更新索引和schema版本，全部业务表摘要保持一致。该迁移仅备份 control.sqlite 的原生一致性副本及固定 profile 恢复文件，不复制 domain、任务工作区、历史构建或 artifact。独立打开恢复库验证完整性和逐表 baseline 后才安装启动，launch.json保存迁移证明摘要，Readback/Resume再次核对工具/备份/收据及版本9。若迁移失败保持停机，不把旧包直接运行在版本9上；回退须在停机且持 owner 锁时按迁移前控制库副本及固定 profile 恢复；不得回滚未参与迁移的任务产物。
+
+后端单测报告核验如实记录skipped/实际执行数，不把已明确禁用的集成用例当普通单测失败。失败或错误、伪造计数、无报告、零用例、全部跳过仍拒绝。业务验收独立覆盖未执行的业务范围，不宣称skip项已通过。检查器完整stdout/stderr写入本Task共享dataset-check-host-unit-<uuid>.json，控制台只输出步骤退出码与首个错误，材料工具分页读取完整正文；旧截断日志不能倒推为完整日志。新工具以新摘要目录冻结并提升check版本，经正式checkpoint生效。
+
+
+### 部署核验按实际变更范围执行
+
+普通无迁移部署不创建历史备份，也不扫描任务目录容量。Readback/Resume 不再重复全任务树扫描，保留包/profile/input SHA、进程身份、维护许可、在线控制账历史快照核验。仅新建 Bootstrap、message-impact、events-index 或 task-file 迁移完整备份时沿用原历史范围；失败启动修复按原 manifest 的范围重验，不重新估算容量。
+
+必要依赖索引迁移使用 scope=required-dependency-control-only，launch/backup 收据绑定 manifest SHA，恢复副本 SHA 和逐表摘要独立核验。RepairStoppedLaunch 继承原 scope/摘要及已完成的迁移收据；未完成迁移不能伪装安装失败续接。运行中的旧全范围部署不能热改脚本或清单缩减范围，须完成原轮或按正式失败流程处理。
+
+工程配置可添加 PowerShell 参数 `-RepositoryPatches <绝对 JSON 路径>`，转发原生配置器 `--repository-patches`。仍必须提供 Bundle、MergePolicy、ChecksProposal；与 DirectQueriesProposal、RepairStoppedLaunch 互斥。提案纳入部署输入 SHA，Readback/Resume 必须保持同路径和内容。配置器以 expected-sha256 的存在允许精确更新，没有 `--allow-update` CLI 参数；停机 disable profile 后只更新 CAS 摘要，不改变提案。
+
+### 单命令部署入口
+
+日常执行 `pwsh -NoProfile -File scripts/deploy-local.ps1 -ArgumentsFile <绝对 arguments.json 路径>`。JSON 沿用原 helper 参数名；普通代码部署仅 Package 必填，不运行配置编辑器；只有明确变更工程配置时才提供 Bundle/MergePolicy/ChecksProposal，可附 RepositoryPatches，或按原规则使用 DirectQueriesProposal。包/profile/Observer SHA 由入口读取，不需手算；EvidenceDirectory 省略时自动生成在本检出 docs/tmp。入口只编排原 helper，不维护第二套安装逻辑。
+
+同命令加 `-Check` 为零写预检；正式命令依次执行 Check、原生维护排空/封存、停机、安装、计划任务启动、Readback、Resume，输出阶段及 JSON 汇总。详细 stdout/stderr 与冻结实参写入 `<EvidenceDirectory>-runner/`，控制/启动/读回收据仍在原 EvidenceDirectory。子进程和 Node JSON 固定 UTF-8，避免无控制台 Windows 默认 CP936 破坏中文维护原因。
+
+停机前预检将计划工程配置与恢复器将加载的当前非终态工程定义逐一比较 repositoryDigest。检查配置或 taskLocalAcceptance 导致旧Run漂移时，当场拒绝，不先停服务再发现启动失败。配置所需修订沿正式 Task checkpoint，不跳过旧定义。
+
+失败在当前阶段停止，不自动重装或反复重启；已发起部署用同实参文件加 `-Readback` 或 `-Resume` 接续，入口读取原 launch 的 source pin。Readback 未 ready、Resume 未 dispatchResumed 均返回失败，不能以子进程 exit0 代替完成。
+
+已安装包因本次仓库配置漂移而退出的精确续接：arguments 指定原 `RepairStoppedLaunch`、同一原 Package 和 `RestoreConfigurationProposal`，不带工程更新/query/Observer提案。入口检查原计划任务同秒启动且退出码1、无Host和监听、原维护封存/排空/控制快照及包安装证明；在owner独占锁内调用原生配置恢复器，不执行plugin add。新的 recovery evidence/launch 绑定旧launch SHA、恢复提案/来源证明/前后profile SHA，Readback重验链后才Resume；旧失败收据保留。提案不匹配、迁移未完成或原任务控制数据漂移均停止，不通过改库或伪造成功续接。
+
+普通仅换代码包的参数文件最小为 `{"Package":"D:/dsh_home/packages/current-assistant.tgz"}`。不提供配置提案时，统一入口不运行配置编辑器，维护/安装/原profile摘要/readback/恢复派发保持；部分工程提案明确拒绝。不得拿查询提案充当无操作配置以绕过参数要求。
+
+### 同代候选增量编辑的历史冲突恢复
+
+安装含增量编辑身份修复的包后，旧 `apply-changes` 若仍等待 `DELIVERY_IDENTITY_CONFLICT`，先只读核原 Task/Run/generation/node/input/lease 与 `effect.edit-repair` 返回的正式修复事件及原成功 edit。错误码本身不构成许可；未知、外部或未决效果、缺少修复审计均不得恢复。既有受信 `controller.recover({commandId,runId})` 使用原生 `run.recover` 续行原节点；常规来源/控制/维护门禁保留，不修改控制库、不新建 Run、不改代次，也不将此错误加入无限自动重试名单。
+
+回读新效果的 `definition.editRepair`（repairEventSeq、repairCommandId、previousEffectId、inputDigest）、原效果仍 succeeded、新增效果只执行一次，并确认后续验证节点实际前进。此检查只证明该时点的恢复和效果身份，不等同后续业务验收或最终交付成功。
+
+必要依赖候选被ENGINEERING_REPOSITORY_SCOPE_MISMATCH拒绝时，应核当前Task sourceCondition及dependencyRepositories，不通过改写交办原文避开关键词。修复后仍由原Owner重评提交insertDependency，保持原Task/需求/UAT及原前端成功Run；配置可达性不等于业务授权，也不直接创建后端阶段。
+
+同代候选选择 no-change 后若历史节点因 `ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT` 等待，新 Host 仅在正式 candidate-in-place 审计、成功 managed-edit 链和完整树比较同时成立时承接无新增修改结果。正常 node.commit 的 evidenceRefs 包含 `engineering-no-additional-change-proof`，须回读其 binding、repair、effects、sourceTree、tree 和完整 candidate。任何额外 tracked/untracked 变化仍阻断，不删除这些文件凑验证通过。节点恢复继续使用既有精确原 Run 的受信恢复入口；总体验收与任务完成条件不变。
+
+控制库再次STORE_UNAVAILABLE时先读health.executionStore.failure及control.sqlite同目录execution-store-failures.jsonl的最近首因；只读取机器码/action/kind/sqliteCode/at/requestDigest，不能打印业务参数或把重开恢复当根修。诊断无法落盘时stderr只报FAILURE_TRACE_WRITE_FAILED，进程内首因仍可回读。未ready的启动失败不写该文件，保持零写预检边界；正常关闭不创建文件。后续仍按本规程的原命令对账及同Host受管恢复，不绕SQLite或提交未知保护。
+
+### 原工程证明恢复与未应用依赖重评
+
+冻结v18的apply-changes若因ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT等待，部署后的现有恢复扫描仅在正式candidate-in-place审计及当前完整候选树证明通过后继续原Run；同输入证明失败不循环重试，历史成功编辑不删除。v19按自己的两节点流程运行，不套此旧定义恢复。
+
+已接纳insertDependency在ENGINEERING_REPOSITORY_SCOPE_MISMATCH应用失败且未生成owner-plan回执时，部署后用现有 `/tasks/<taskId>/retry-owner`，传当前Owner/lease/requirement/control版本及原expectedLastFailure。Host核来源、原工程等待/排空、无pending输入或未决效果后，保存旧决定与失败审计并由原会话重评。此动作不是重新执行工程Run，也不撤销成功候选或扩大仓库权限。
+
+### 外部检查重启后的排空
+
+不要直接修改 drained 位，也不要因 effect 为空就认定子进程退出。正式恢复读取本 Task 检查生命周期记录；历史节点须有原命令、claim/recovery 窗口内候选目录和原生进程快照证明。仅命中本检查身份的未知或存活进程阻挡，不以任意外来 shell 形成全局屏障。
+
+排空核验成立后原 Run 保持 waiting 并保存 external-check-interrupted 诊断，由 Owner 选择后续检查配置或继续；没有恢复成功输出，不自动重复旧命令，不杀其他进程。验收边界见 message-clarification-admission/round-71.md。
+
+旧版 Resident 不认识检查进程排空证明、导致无法安装修复包时，统一 `scripts/deploy-local.ps1` 沿现有维护桥处理本次已审计 SG20 原节点。`-Check` 保持零写，返回 `eligibleRecovery=true`、`coreCheckComplete=false`；这只证明可进行前置修复，不代表部署完整预检通过。默认正式执行先进入维护，重新读取原 Task/Run/lease/input、包与源码 SHA、当前 OS 检查进程事实；复用 Loader witness 等待 Resident 完整 dispose，原生 store 独占后仅提交 `node.drained`。恢复 profile 原字节、Resident 与维护 busy0 后，重新执行完整 Check，再按原流程 seal、安装、回读、Resume。已有维护必须由参数明确提供相同 continuation 身份。任何其他节点或未知效果仍拒绝；不直接写 SQLite、不修改已安装源码、不强停 Host、不自动重跑旧检查。
+
+前置修复证据位于 `<EvidenceDirectory>-verification-drain`，清单位于 `<EvidenceDirectory>-runner/verification-drain-manifest.json`；不保存 profile 正文。中断时先读该目录 `recovery.json`，使用现有 `recover-quarantined-echo.ps1 -Scope verification -IncidentManifest <清单> -ExpectedProfileSha256 <原SHA> -EvidenceDirectory <修复目录> -Resume` 接续原 witness，不重新创建事故清单。恢复完成后沿原维护 ID/revision 接正式部署。
+
+### Task 验收配置选择和数据依赖重规划
+
+Host 的 `taskLocalAcceptance` 是能力目录，按 Task/UAT/原 request 与 acceptanceCriteria 摘要精确绑定。Owner 使用 `localAcceptanceProfileDigest` 选择已登记配置；旧 Run 的冻结配置不会自动变动。新 define/plan 可通过 `dependencyBindings` 重定向 code 原声明依赖，用 `previousOutputNodeId` 保留已验证候选。只允许前序同职责/同 schema，不能把任意工件冒充验收输出。修订后仍执行实际验收/清理和完整交付证明。
+
+SG22 UI 草案在 `docs/tmp/sg22-ui-host-profile/proposal.json`，`readyToApply=false`。须先修 runner 对当前候选真实父字段/方法的读取（旧 harness 不适配），然后重新内容寻址生成工具与配置；不能用 UI fixture 覆盖真实 Excel 后端。后端由同 Task 的原依赖 Run 产出真实接口后接入。登记时使用现有 `configure-project-local-acceptance.mjs --profile <绝对profile> --bundle <保留两repo当前localAcceptance的bundle> --repository-patches <保留已有taskLocalAcceptance并追加精确SG22 entry的patch> --expected-sha256 <当前profile摘要> --check`；先 check 零写，正式受管登记用相同输入 `--apply`。不要使用旧全局 checks 提案或覆盖其他 Task entries。Owner 随后从真实能力目录选择配置并重写计划，不能将 `backendVerified:false` 认作完整交付。
+
+SG22 当前组件验收 runner 已完成真实字段适配（`activityMergeResults`、`handleActivityMergeResult`），父数据/相关 computed 从候选 AST 原文提取；模板常量只在候选真实实例暴露时可用，不由测试注入。脚本的 `serve` 提供实际候选 HTML/JS；执行前核对 `/ready` 的 Task/namespace/六文件 SHA，浏览器只将业务 API 明确替换为 fixture，真实 HTTP 页面和资产不被拦截替换。导出请求不可把客户端 `status` 当可信结果；没有后端契约前不猜测结果 ID。
+
+本轮可登记提案改为 `docs/tmp/sg22-ui-host-profile-ready/proposal.json`（替代此前 readyToApply=false 草案）。其中完整清单包含源路径、持久 `D:/dsh_home/tools/<SHA>` 目标与逐文件 SHA；复制回读一致后按上一节原生配置器登记，保留其它 Task entries。`readyToApply=true` 表示验收工具可用，不代表候选通过。当前真实 gen7 仍因 `RELEASE_PHASE` 未暴露失败；原Task共享 `work/activity-merge-current-ui-host-proof.json` 含六源码SHA、实际HTTP渲染错误与outputs截图/ledger，明示人工Host诊断而非执行节点回执。由原Owner/工程会话修复业务代码，Host不改候选。完整后端Excel验收仍待原后端工程契约，不以 `backendVerified:false` 完成全部目标。
+
+旧 SG20 检查排空事故桥仅适用于原事故节点仍 waiting/controller-restarted/undrained、gen6/lease1，且无其他 busy 节点或 Owner。普通活跃会话导致 DEPLOY_NOT_DRAINED 时，统一入口保留原检查结果并等待自然排空；不会尝试旧事故恢复或将新工作流副本误报为旧修复基础缺失。
+
+SG22 最终登记输入目录为 `docs/tmp/sg22-ui-host-profile-final/`（取代本轮前述ready目录）：同UI套件支持多个criterion读取一次真实成功回执，必须同namespace、当前候选SHA、configDigest和实际服务身份；未完成/失败不能缓存通过。四部署JSON与最终零写证明均在该目录，原profile无额外变更。完整Excel边界仍不变。
+
+固定工程恢复：部署后回读原 Run、成功 verify 的 outputRef/verification.digest 和真实检查进程日志；相同候选及检查配置的 prepare-commit 应复用原回执，不再因重建 registry 丢失内存缓存而重跑。恢复票据必须来自当前控制账的真实成功节点，不能用模型输入或手写 JSON 代替。原流程的业务验收和最终交付证明仍必须通过。本轮只推进 SG20，其余业务任务不随部署恢复。
+
+统一入口 scripts/deploy-local.ps1 尊重 ArgumentsFile 中已有 HoldMaintenance=true：完成安装与独立Readback后保留维护，不自动Resume。单任务核验时，在新实例中通过正式 /tasks/:id/pause 控制接口暂停其余任务并独立回读，再以原ArgumentsFile显式 -Resume 继续派发；不会重装或启动其它暂停任务。默认未提供HoldMaintenance仍完成全流程。
+
+维护退出健康回读：封存后的新实例若仅 DWS 回补报告 `RUNTIME_MAINTENANCE_ACTIVE`，统一部署入口允许继续原许可的 Resume。必须同时满足维护 ID 匹配、stopping/drained、busy 全零、新 incarnation 的 resumePermitted、控制库健康、recoveryIssueCount=0、全部 listener 和 humanReplies ready；真实 DWS 认证/网络错误仍拒绝。前置记录标记 maintenanceBackfillPaused，不声称回补成功。Resume 只提交一次，最多等待 60 秒真实回补，随后必须独立读到 health=ok、inboundProcessing=true、dwsBridge.healthy=true，才记录恢复成功。无需重装或重启；超时保留实际状态，修复真实收信问题后继续回读。

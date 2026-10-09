@@ -83,6 +83,17 @@ test('完整dispose见证必须ready后精确nonce/PID/entry且确已完成，�
  assert.deepEqual(JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-disposed.json'),'utf8')),receipt)
 })
 
+test('见证自动创建新证据目录；重试仅更新同目录同PID的精确末尾见证',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'bootstrap-new-evidence-')),evidenceDirectory=join(root,'new'),config={evidenceDirectory,expectedPid:process.pid,nonce:randomUUID()}
+ await apply({on(){}},config)
+ assert.equal(JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-ready.json'))).nonce,config.nonce)
+ const first=bootstrapProfile(source,'witness',yaml,config),retry={...config,nonce:randomUUID()},second=bootstrapProfile(first,'witness',yaml,retry)
+ assert.equal((second.match(/# dsh-bootstrap-witness:/g)??[]).length,1)
+ assert.ok(second.includes(retry.nonce));assert.ok(!second.includes(config.nonce))
+ for(const changed of [{...retry,expectedPid:process.pid+1},{...retry,evidenceDirectory:root}])assert.throws(()=>bootstrapProfile(first,'witness',yaml,changed),/BOOTSTRAP_WITNESS_CHANGED/)
+ assert.throws(()=>bootstrapProfile(first+'# drift','witness',yaml,retry),/BOOTSTRAP_WITNESS_CHANGED/)
+})
+
 test('真实Cordis Loader等待完整disposer后才发指定entry见证',async t=>{
  const {Context}=await import('@deepseek-ai/cordis')
  const {default:Loader}=await import('@deepseek-ai/cordis-plugin-loader')

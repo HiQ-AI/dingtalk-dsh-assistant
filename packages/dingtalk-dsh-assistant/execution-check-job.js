@@ -1,7 +1,77 @@
-import { spawn, execFile } from 'node:child_process'
+import { spawn as nativeSpawn, execFile } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { appendFileSync, lstatSync, openSync, fsyncSync, closeSync } from 'node:fs'
+import { acceptanceProcessTree } from './execution-local-acceptance.js'
+import { checkedTaskDirectory } from './session-workspaces.js'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { join, dirname, isAbsolute } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
+
+// 生命周期位于适配器外层；历史 check.run 的源码摘要保持不变。
+const verificationLifecycle = new AsyncLocalStorage()
+export async function withVerificationProcessJournal({ path, binding }, execute) {
+  await checkedTaskDirectory(dirname(path), true)
+  try { const entry=lstatSync(path);if(!entry.isFile()||entry.isSymbolicLink())throw executionError('VERIFY_PROCESS_JOURNAL_INVALID') } catch(error) {if(error.code!=='ENOENT')throw error}
+  let failure
+  const record = event => {
+    try {
+      appendFileSync(path, JSON.stringify({ binding, ...event, at: new Date().toISOString() }) + '\n')
+      const fd = openSync(path, 'a'); try { fsyncSync(fd) } finally { closeSync(fd) }
+    } catch (error) { failure ??= Object.assign(executionError('VERIFY_PROCESS_JOURNAL_FAILED',error.message),{executionDrained:false}) }
+  }
+  record({ phase: 'entered' })
+  if(failure)throw failure
+  try { return await verificationLifecycle.run({ record, assertRecorded(){if(failure)throw failure} }, execute) }
+  finally { if(failure)throw failure }
+}
+function spawn(executable, args, options) {
+  const lifecycle = verificationLifecycle.getStore()
+  if (!lifecycle) return nativeSpawn(executable, args, options)
+  const launchedAt = Date.now(), commandDigest = executionDigest({ executable, args, cwd: options.cwd })
+  lifecycle.record({ phase: 'launching', launchedAt, commandDigest, directory: options.cwd })
+  lifecycle.assertRecorded()
+  const child = nativeSpawn(executable, args, options)
+  lifecycle.record({ phase: 'started', launchedAt, commandDigest, pid: child.pid ?? null })
+  child.once('error', error => lifecycle.record({ phase: 'spawn-error', launchedAt, commandDigest, code: error.code }))
+  child.once('close', (exitCode, signal) => lifecycle.record({ phase: 'closed', launchedAt, commandDigest, pid: child.pid ?? null, exitCode, signal }))
+  return child
+}
+
+export async function verificationProcessSnapshot() {
+  if (process.platform !== 'win32') throw executionError('VERIFY_PROCESS_INSPECTION_UNSUPPORTED')
+  const launchedAt=Date.now()
+  return new Promise((resolve, reject) => { const inspection=execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{pid=[int]$_.ProcessId;parent=[int]$_.ParentProcessId;name=$_.Name;born=$(if($_.CreationDate){([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()}else{$null});executable=$_.ExecutablePath;command=$_.CommandLine} }) -Compress"],
+    { windowsHide: true, maxBuffer: 4 * 1024 * 1024, timeout: 20000 }, (error, stdout) => {
+      if (error) return reject(executionError('VERIFY_PROCESS_INSPECTION_FAILED'))
+      try { const rows=JSON.parse(stdout),own=new Set(acceptanceProcessTree(rows,inspection.pid,launchedAt).map(row=>row.pid));resolve(rows.filter(row=>!own.has(row.pid))) } catch { reject(executionError('VERIFY_PROCESS_INSPECTION_FAILED')) }
+    }) })
+}
+
+export function inspectVerificationProcessJournal(records, binding, processes) {
+  const exact = records.filter(record => executionDigest(record.binding) === executionDigest(binding))
+  if (!exact.length) return { drained: false, reason: 'missing-process-journal', processes: [] }
+  const pending = exact.filter(record => record.phase === 'launching' && !exact.some(other => other.phase === 'started' && other.launchedAt === record.launchedAt && other.commandDigest === record.commandDigest))
+  if (pending.length) return { drained: false, reason: 'launch-identity-unconfirmed', processes: [] }
+  if(exact.some(record=>record.phase==='started'&&!record.pid&&!exact.some(other=>['closed','spawn-error'].includes(other.phase)&&other.launchedAt===record.launchedAt&&other.commandDigest===record.commandDigest)))return {drained:false,reason:'launch-identity-unconfirmed',processes:[]}
+  const alive = new Map()
+  for (const start of exact.filter(record => record.phase === 'started' && record.pid)) {
+    const closed = exact.find(record => record.phase === 'closed' && record.launchedAt === start.launchedAt && record.commandDigest === start.commandDigest)
+    for (const row of acceptanceProcessTree(processes, start.pid, start.launchedAt, closed ? Date.parse(closed.at) : Infinity)) alive.set(row.pid, row)
+  }
+  return { drained: alive.size === 0, reason: alive.size ? 'check-process-still-alive' : 'native-processes-absent', processes: [...alive.values()] }
+}
+
+export function historicalVerificationProcesses({ processes, commands, root, claimedAt, hostPid=process.pid }) {
+  const normalize=value=>String(value??'').replaceAll('\\','/').toLowerCase(),born=Date.parse(claimedAt)
+  if(!Number.isFinite(born)||!Array.isArray(processes)||!commands.length)throw executionError('VERIFY_PROCESS_INSPECTION_FAILED')
+  const possibleNames=new Set(commands.map(command=>normalize(command.executable).split('/').at(-1)))
+  return processes.filter(row=>row.pid!==hostPid&&row.pid>4&&(row.born===null||row.born>=born)&&(
+    ((!Number.isSafeInteger(row.born)||!row.command||!row.executable)&&possibleNames.has(normalize(row.name??row.executable).split('/').at(-1)))
+    || normalize(row.command).includes(normalize(root))
+    || commands.some(command=>normalize(row.executable)===normalize(command.executable))
+    || /(?:^|[\s"\\/])(?:yarn|vue-cli-service|webpack|mvn|surefire)(?:[\s".]|$)/i.test(row.command)))
+    .map(({pid,parent,born})=>({pid,parent,born}))
+}
 
 /** 只解释已保存的执行记录，不把检查器内部名称当作业务结论。 */
 export function describeVerificationChecks(verification) {

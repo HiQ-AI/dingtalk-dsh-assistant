@@ -52,3 +52,11 @@ node scripts/configure-project-local-acceptance.mjs --profile D:/dsh_home/profil
 ## UAT2 正式 Runner 接入结果
 
 上述手动启动记录之后，已完成正式 runner 的真实登录页、UAT2 登录、单位管理页面读取以及会话/双服务清理，且将两个项目的配置启用到本地 web profile。浏览器核对本地后端 origin 与固定 JAR SHA，未注入页面数据或权限，未创建业务数据。最终运行前端冷编译及就绪耗时约 15 分 36 秒；准备阶段只安装冻结依赖，工程构建检查仍保留。详见[本轮完整证据](../acceptance/topic-context-completeness/round-24.md)。写入类需求仍须相应可信场景和清理方案，不能用页面读取代替。
+
+### 数据集合并七项交互
+
+此需求使用 `scripts/local-acceptance-dataset-merge-ui.mjs`，不能继续套用评审草稿或活动合并结果脚本。按精确 Task/requestDigest/UAT3 绑定后，将原 prepare/service 生命周期与本脚本 initialize/execute/cleanup/verify-cleanup 对接；`--check` 必须在候选 cwd 先运行。配置包含 taskId、uatEnvironment、playwrightModule、evidenceRoot，stdin 沿用验收 namespace/baseUrl 上下文。
+
+脚本在独立无头浏览器中渲染真实组件、只以 fixture 提供列表/API 数据，全部请求被隔离拦截且不写业务；本地 ledger 记录实际浏览器关闭后才允许 cleanup 通过。7/7 仅证明对应候选 UI，`backendVerified:false` 必须保留；实际后端写入和 UAT 业务另需真实场景证据。
+
+托管方式：新增 `prepare` 仅在 runner 物化后的候选目录安装锁定依赖（frozen lockfile，不执行依赖安装脚本）；`serve --config <path> --host 127.0.0.1 --port <Hostport>` 启动同一候选组件页面及静态资源。execute 必须访问 stdin.baseUrl，核验就绪响应的 PID、Task、UAT、namespace、源码摘要后再执行七项断言，不再在浏览器中生成另一个测试站点。prepare 之前确认有足够磁盘空间；不足暂停，不能把 ENOSPC 当成功或业务缺陷。

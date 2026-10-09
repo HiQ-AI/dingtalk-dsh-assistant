@@ -1,0 +1,27 @@
+{
+  "provider": "openai-codex",
+  "model": "gpt-6-sol",
+  "reasoningEffort": "low",
+  "externalEffects": 0,
+  "results": [
+    {
+      "elapsedMs": 35369,
+      "error": {
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "message": "四条交办链应复用同话题，不在末轮人为合并\n\n3 !== 1\n"
+      },
+      "passed": false,
+      "id": "topic-chain-batch"
+    },
+    {
+      "status": "blocked",
+      "error": {
+        "code": "SOURCE_EDIT_IN_PROGRESS",
+        "message": "message-topics.js SQL字符串编辑中语法错误阻止新worker加载；未进行该例模型推理，随后独立node --check验证修复。"
+      },
+      "passed": false,
+      "id": "topic-chain-sequential"
+    }
+  ]
+}

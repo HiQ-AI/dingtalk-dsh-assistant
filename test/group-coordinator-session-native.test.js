@@ -47,11 +47,15 @@ async function host(root, options = {}) {
   })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
+  const optionsForHost = options
   class Scripted extends LlmAdapter {
     async *stream(options) {
       requests.push(options)
+      const failure=optionsForHost.providerFailure?.(requests.length)
+      if(failure){yield {type:'finish',reason:{kind:'error',failure}};return}
+      if (optionsForHost.noSubmission) { yield { type: 'finish', reason: { kind: 'stop' } }; return }
       const id = `call-${requests.length}`, name = requests.length === 1 ? 'read_material' : 'group_coordinator_submit'
-      const args = JSON.stringify(name === 'read_material' ? { ref: 'file' } : { decision })
+      const args = JSON.stringify(name === 'read_material' ? { ref: 'file' } : { decision: optionsForHost.decision?.(requests.length, options) ?? decision })
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -255,3 +259,119 @@ test('常驻空闲挂接保留原生投影、拒绝任意模型步进，关闭�
  const agent=h.ctx.agents.get('visible-group');agent.steer(createUserMessage({source:{kind:'user'},content:[{type:'text',text:'用户误触发送'}]}));await agent.whenIdle();assert.equal(h.requests.length,calls);
  await h.sessions.close();assert.equal(h.ctx.agents.get('visible-group'),undefined);assert.equal(h.ctx.sessions.get('visible-group'),undefined);
 });
+
+
+test('原生正常结束但不提交仍保持no_submission，接纳后晚到错误不否定决定',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-finish-'))
+ t.after(()=>rm(root,{recursive:true,force:true}))
+ for(const noSubmission of [true,false]){
+  const h=await host(join(root,String(noSubmission)),{noSubmission});t.after(()=>h.close())
+  let accepted=false
+  const result=await h.sessions.run({binding:{conversationId:'g',sessionId:'finish-session',turnId:'turn',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,
+   readTools:[{name:'read_material',effectClass:'read',description:'读取',parameters:{type:'object',properties:{ref:{type:'string'}},required:['ref'],additionalProperties:false},output:{schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},render:(_a,v)=>[{type:'text',text:v.text}]},execute:async()=>({text:'材料'})}],
+   onSessionBound:async()=>{},onCandidate:async()=>{
+    accepted=true
+    const session=h.ctx.sessions.get('finish-session'),snapshot=session.snapshotEvents.bind(session)
+    session.snapshotEvents=()=>{const events=snapshot();return [...events,{seq:(events.at(-1)?.seq??0)+1,type:'turn/end',data:{reason:{kind:'error',error:{code:'PI_AI_ERROR',message:'Codex error: Our servers are currently overloaded. Please try again later.'}}}}]}
+   }})
+  assert.equal(result.status,noSubmission?'no_submission':'submitted')
+  assert.equal(accepted,!noSubmission)
+  if(accepted)assert.equal(h.ctx.sessions.get('finish-session').snapshotEvents().at(-1).data.reason.kind,'error')
+ }
+})
+
+
+test('上一轮原生错误不污染本轮正常无提交',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-error-watermark-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const h=await host(root,{noSubmission:true,providerFailure:n=>n===1?{code:'PI_AI_ERROR',message:'authentication failed'}:null});t.after(()=>h.close())
+ const args={binding:{conversationId:'g',sessionId:'watermark-session',turnId:'first',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,readTools:[],onSessionBound:async()=>{},onCandidate:async()=>{assert.fail('不得提交')}}
+ await assert.rejects(h.sessions.run(args),{code:'GROUP_COORDINATOR_PROVIDER_FAILED'})
+ h.setLease(2)
+ const result=await h.sessions.run({...args,binding:{...args.binding,turnId:'second',leaseEpoch:2,sessionBound:true}})
+ assert.equal(result.status,'no_submission');assert.equal(h.requests.length,2)
+})
+
+
+test('阶段授权原文不匹配在同会话反馈修正，不改写来源或转澄清',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-authorization-source-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const original={sourceKey:'source-user',actorId:'requester',sourceQuote:'按文档开发'}
+ const h=await host(root,{decision:(n,request)=>{
+  if(n===3)assert.match(JSON.stringify(request.messages),/授权objective必须是该sourceQuote中的逐字来源片段/u)
+  return {kind:'create',objective:'依据所分享文档实现数据集导入导出功能',stageAuthorizations:[{...original,objective:n===2?'实现数据集导入导出功能':'按文档开发'}]}
+ }});t.after(()=>h.close())
+ const schema={type:'object',properties:{kind:{type:'string'},objective:{type:'string'},stageAuthorizations:{type:'array',items:{type:'object',properties:{sourceKey:{type:'string'},actorId:{type:'string'},sourceQuote:{type:'string'},objective:{type:'string'}},required:['sourceKey','actorId','sourceQuote','objective'],additionalProperties:false}}},required:['kind','objective','stageAuthorizations'],additionalProperties:false}
+ let calls=0,accepted=0
+ const result=await h.sessions.run({binding:{conversationId:'g',sessionId:'source-session',turnId:'t',leaseEpoch:1,sessionBound:false},input:{source:original},provider:'group-fixture',model:'scripted',decisionSchema:schema,
+  readTools:[{name:'read_material',effectClass:'read',description:'读取',parameters:{type:'object',properties:{ref:{type:'string'}},required:['ref'],additionalProperties:false},output:{schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},render:(_a,v)=>[{type:'text',text:v.text}]},execute:async()=>({text:'按文档开发'})}],
+  onSessionBound:async()=>{},onCandidate:async candidate=>{
+   calls++;const authorization=candidate.stageAuthorizations[0]
+   for(const key of Object.keys(original))assert.equal(authorization[key],original[key])
+   assert.equal(candidate.kind,'create')
+   if(!authorization.sourceQuote.includes(authorization.objective))throw Object.assign(Error('TASK_STAGE_AUTHORIZATION_SOURCE_INVALID'),{code:'TASK_STAGE_AUTHORIZATION_SOURCE_INVALID'})
+   accepted++
+  }})
+ assert.equal(result.status,'submitted');assert.equal(calls,2);assert.equal(accepted,1)
+ assert.equal(result.decision.stageAuthorizations[0].objective,'按文档开发')
+ assert.equal(h.requests.length,3)
+})
+
+for (const variant of ['idle', 'active', 'running', 'foreign-input', 'identity', 'lease', 'changed-during-fork']) test(`外部观察会话受管派生保留原实例并核验边界：${variant}`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'group-observer-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root, { getWorkspaceDir: () => root }); t.after(() => h.close())
+  await h.sessions.run({ binding: { conversationId: 'g', sessionId: 'observed', turnId: 'first', leaseEpoch: 1, sessionBound: false },
+    input: {}, provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {} })
+  await h.sessions.close()
+  const external = await h.ctx.agents.resume({ resumeSessionId: 'observed' }); t.after(() => external.dispose())
+  await external.agent.whenIdle()
+  const sessions = createGroupCoordinatorSessions({ ctx: h.ctx, isCurrent: async () => true, getWorkspaceDir: () => root })
+  t.after(() => sessions.close())
+  const binding = { conversationId: variant === 'identity' ? 'other' : 'g', sessionId: 'observed', status: 'idle', sessionBound: true, leaseEpoch: variant === 'lease' ? 2 : 1 }
+  let release, busy
+  if (variant === 'active') busy = external.agent.runMaintenance(() => new Promise(resolve => { release = resolve }))
+  if (variant === 'running') {
+    const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
+    external.agent.steer(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '活动输入' }] }))
+    assert.equal(external.agent.status, 'running')
+  }
+  if (variant === 'foreign-input') external.agent.session.append('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '额外输入' }] }, { surfaceOp: 'append' })
+  if (variant === 'changed-during-fork') {
+    const create = h.ctx.agents.create.bind(h.ctx.agents)
+    h.ctx.agents.create = async options => {
+      const handle = await create(options)
+      external.agent.session.append('test/input-changed', {}, { ignorable: true })
+      return handle
+    }
+  }
+  const before = external.agent.session.snapshotEvents(), calls = h.requests.length
+  if (variant !== 'idle') {
+    try { await assert.rejects(sessions.prepare(binding)) } finally { release?.(); await busy; await external.agent.whenIdle() }
+    assert.equal(h.ctx.agents.get('observed'), external.agent)
+    return
+  }
+  const relocated = await sessions.prepare(binding)
+  assert.equal(relocated.previousSessionId, 'observed')
+  assert.equal(relocated.expectedLeaseEpoch, 1)
+  assert.notEqual(relocated.sessionId, 'observed')
+  assert.equal(h.ctx.agents.get('observed'), external.agent)
+  assert.deepEqual(external.agent.session.snapshotEvents(), before)
+  assert.equal(h.requests.length, calls)
+  assert.deepEqual(await sessions.prepare(binding), relocated)
+  const child = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
+  assert.equal(child.meta.parentSession, 'observed')
+  assert.deepEqual(child.events.slice(0, child.inheritedEventCount), before)
+  assert.equal((await sessions.run({ binding: { ...binding, sessionId: relocated.sessionId, leaseEpoch: 3, turnId: 'next' }, input: {},
+    provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {} })).status, 'submitted')
+})
+
+
+test('Task权限拒绝反馈保持原话题并区分公共fact与合法revise',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'group-public-fact-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const h=await host(root);t.after(()=>h.close());let attempts=0
+ const result=await h.sessions.run({binding:{conversationId:'g',sessionId:'public-session',turnId:'t',leaseEpoch:1,sessionBound:false},input:{},provider:'group-fixture',model:'scripted',decisionSchema,
+  readTools:[{name:'read_material',effectClass:'read',description:'读取',parameters:{type:'object',properties:{ref:{type:'string'}},required:['ref'],additionalProperties:false},output:{schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},render:(_a,v)=>[{type:'text',text:v.text}]},execute:async()=>({text:'公共事实'})}],
+  onSessionBound:async()=>{},onCandidate:async()=>{if(++attempts===1)throw Object.assign(Error('WORKFLOW_TASK_FORBIDDEN'),{code:'WORKFLOW_TASK_FORBIDDEN'})}})
+ assert.equal(result.status,'submitted');assert.equal(attempts,2)
+ const feedback=JSON.stringify(h.requests[2].messages)
+ assert.match(feedback,/不得改绑新话题规避权限/u);assert.match(feedback,/scope=conversation/u);assert.match(feedback,/原Task用revise更新/u)
+})

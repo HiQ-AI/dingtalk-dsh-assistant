@@ -167,3 +167,98 @@ test('SQL附件经精确受管下载仅按UTF8读取，保留正文且拒绝坏�
   await assert.rejects(adapter.readMessageResource('g', 'm', { type: 'fileId', resourceId: 'sql-file' }), { code: 'ERR_ENCODING_INVALID_ENCODED_DATA' })
   assert.equal(calls, 2); assert.deepEqual(await readdir(cwd), [])
 })
+
+test('新旧消息钉钉文档共用canonical引用且只经DWS读取，普通URL仍走公网读取', async () => {
+  const url = 'https://alidocs.dingtalk.com/i/nodes/Node123'
+  for (const resourceRefs of [undefined, [{ type: 'url', resourceId: url + '?source=old' }], [{ type: 'dingtalkDoc', resourceId: 'Node123' }]]) {
+    const reads = [], publicReads = []
+    const h = harness({ request: { requestId: 'r', groupId: 'g', messages: [{ sourceKind: 'web', messageId: 'a', text: `${url}?from=message https://example.com/manual`, resourceRefs }] },
+      readResource: async (...args) => { reads.push(args); return { text: '文档正文', complete: true } },
+      readUrl: async value => { publicReads.push(value); return { text: '普通网页' } } })
+    const message = await h.call('group_message_get', { messageId: 'a' })
+    assert.deepEqual(message.resourceRefs, [{ type: 'dingtalkDoc', resourceId: 'Node123' }, { type: 'url', resourceId: 'https://example.com/manual' }])
+    assert.equal((await h.call('group_resource_get', { messageId: 'a', type: 'dingtalkDoc', resourceId: 'Node123' })).text, '文档正文')
+    assert.deepEqual(reads, [['g', 'a', { type: 'dingtalkDoc', resourceId: 'Node123' }]])
+    await assert.rejects(h.call('group_resource_get', { messageId: 'a', type: 'url', resourceId: url + '?from=message' }), /outside_request/)
+    await assert.rejects(h.call('group_resource_get', { messageId: 'a', type: 'dingtalkDoc', resourceId: 'other' }), /outside_request/)
+    assert.deepEqual(publicReads, [])
+    assert.equal((await h.call('group_resource_get', { messageId: 'a', type: 'url', resourceId: 'https://example.com/manual' })).text, '普通网页')
+  }
+})
+
+test('钉钉文档DWS读取失败不退回公网HTML', async () => {
+  let publicReads = 0
+  const h = harness({ request: { groupId: 'g', messages: [{ messageId: 'a', sourceKind: 'web', text: 'https://alidocs.dingtalk.com/i/nodes/Node123' }] },
+    readResource: async () => { throw new Error('dws_denied') }, readUrl: async () => { publicReads++; return { text: '登录页' } } })
+  await assert.rejects(h.call('group_resource_get', { messageId: 'a', type: 'dingtalkDoc', resourceId: 'Node123' }), /dws_denied/)
+  assert.equal(publicReads, 0)
+})
+
+
+const documentEnvelope = data => ({ok:true,outcome:'success',data})
+const documentInspection = () => documentEnvelope({status:'success',complete:true,data:{file:{fileId:'document-node',extension:'adoc',type:'FILE'}}})
+const fullDocument = () => ({contractVersion:'doc.content.v1',status:'success',complete:true,
+ target:{canonicalId:'document-node',product:'doc',name:'规则文档'},
+ content:{data:{revision:7,markdown:'标题\n正文',jsonml:JSON.stringify(['root',{},['h1',{uuid:'h'},'标题'],['table',{uuid:'t'},['tr',{},['td',{},'数据集']]],['p',{uuid:'p'},'正文']])}}})
+
+test('钉钉文档使用已绑定profile原生全文命令并保留JSONML结构与稳定元数据',async()=>{
+ const calls=[];let read=0
+ const adapter=createDwsAdapter({enabled:true,profile:'corp:actor',runner:{run:async args=>{calls.push(args);return {exitCode:0,stdout:JSON.stringify(args[1]==='+inspect'?documentInspection():documentEnvelope({...fullDocument(),readAt:`read-${++read}`,requestId:`request-${read}`}))}}}})
+ const a=await adapter.readMessageResource('g','m',{type:'dingtalkDoc',resourceId:'document-node'})
+ const b=await adapter.readMessageResource('g','m',{type:'dingtalkDoc',resourceId:'document-node'})
+ assert.deepEqual(calls[1],['doc','+fetch','--node','document-node','--scope','full','--detail','full','--format','json','--profile','corp:actor'])
+ assert.equal(a.text,b.text);assert.notEqual(a.metadata.readAt,b.metadata.readAt)
+ assert.equal(a.complete,true);assert.equal(a.mediaType,'application/json')
+ const parsed=JSON.parse(a.text);assert.deepEqual(parsed.content,fullDocument().content);assert.equal(parsed.target.name,'规则文档')
+})
+
+for(const [name,exitCode,error,expected]of [
+ ['认证',2,{category:'auth'},'DWS_DOC_AUTH_REQUIRED'],
+ ['旧进程认证封装',5,{category:'internal',message:'[UNCLASSIFIED] resolve access token: profile retained'},'DWS_DOC_AUTH_REQUIRED'],
+ ['权限',4,{reason:'permission_denied'},'DWS_DOC_PERMISSION_DENIED'],
+ ['缺失',1,{reason:'not_found'},'DWS_DOC_NOT_FOUND'],
+ ['暂时故障',1,{retryable:true,server_error_code:'busy'},'DWS_DOC_TEMPORARY'],
+ ['未知故障',5,{category:'internal'},'DWS_DOC_READ_FAILED'],
+ ['部分内容',7,{category:'partial_failure'},'DWS_DOC_INCOMPLETE'],
+])test(`钉钉文档错误分类：${name}`,async()=>{
+ const adapter=createDwsAdapter({enabled:true,runner:{run:async()=>({exitCode,stderr:JSON.stringify({error})})}})
+ await assert.rejects(adapter.readMessageResource('g','m',{type:'dingtalkDoc',resourceId:'document-node'}),{code:expected})
+})
+
+for(const variant of ['incomplete','fragment','no-body','wrong-node','nested-partial','invalid-json'])test(`钉钉文档拒绝不完整或身份错误正文：${variant}`,async()=>{
+ const value=fullDocument()
+ if(variant==='incomplete')value.complete=false
+ if(variant==='fragment')value.content.data.jsonml='["fragment",{},"局部"]'
+ if(variant==='no-body')delete value.content.data.jsonml
+ if(variant==='wrong-node')value.target.canonicalId='another-node'
+ if(variant==='nested-partial')value.content.data.complete=false
+ const adapter=createDwsAdapter({enabled:true,runner:{run:async args=>({exitCode:0,stdout:args[1]==='+inspect'?JSON.stringify(documentInspection()):variant==='invalid-json'?'not json':JSON.stringify(documentEnvelope(value))})}})
+ await assert.rejects(adapter.readMessageResource('g','m',{type:'dingtalkDoc',resourceId:'document-node'}),{code:'DWS_DOC_INCOMPLETE'})
+})
+
+for (const variant of ['success', 'wrong-node', 'partial', 'unknown-type', 'wrong-receipt-node', 'wrong-size', 'outside', 'invalid-utf8', 'bare-envelope']) test(`原生HTML文档检查下载：${variant}`, async t => {
+ const cwd=await mkdtemp(path.join(tmpdir(),'native-document-'));t.after(()=>rm(cwd,{recursive:true,force:true}))
+ const body=variant==='invalid-utf8'?Buffer.from([0xff]):Buffer.from('<html><script>neverExecute()</script><body>完整正文</body></html>')
+ const calls=[]
+ const adapter=createDwsAdapter({enabled:true,profile:'corp:actor',runner:{cwd,run:async args=>{
+  calls.push(args)
+  assert.deepEqual(args.slice(-2),['--profile','corp:actor'])
+  assert.equal(args[args.indexOf('--node')+1],'document-node')
+  let data
+  if(args[1]==='+inspect')data={status:'success',complete:variant!=='partial',data:{file:{fileId:variant==='wrong-node'?'other':'document-node',type:variant==='unknown-type'?'UNKNOWN':'FILE',extension:'html',fileSize:body.length,name:'document.html',modifyTime:123}}}
+  else {
+   assert.equal(args[1],'+download')
+   const output=variant==='outside'?'outside.html':args[args.indexOf('--output')+1]
+   await writeFile(path.join(cwd,output),body)
+   data={success:true,nodeId:variant==='wrong-receipt-node'?'other':'document-node',savedPath:output,sizeBytes:body.length+(variant==='wrong-size'?1:0)}
+  }
+  return {exitCode:0,stdout:JSON.stringify(variant==='bare-envelope'?data:documentEnvelope(data))}
+ }}})
+ const read=()=>adapter.readMessageResource('g','m',{type:'dingtalkDoc',resourceId:'document-node'})
+ if(variant==='success'){
+  const result=await read();assert.equal(result.text,body.toString());assert.equal(result.mediaType,'text/html');assert.equal(result.complete,true);assert.equal(result.metadata.nodeId,'document-node');assert.equal(calls.length,2)
+ }else if(variant==='invalid-utf8')await assert.rejects(read,{code:'DWS_DOC_INCOMPLETE'})
+ else await assert.rejects(read)
+ assert.equal((await readdir(cwd)).filter(name=>name.startsWith('coordination-resource-')).length,0)
+ if(['wrong-node','partial','unknown-type','bare-envelope'].includes(variant))assert.equal(calls.length,1)
+})

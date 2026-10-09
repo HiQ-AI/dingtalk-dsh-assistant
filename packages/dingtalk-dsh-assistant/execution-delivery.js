@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
 /** 只有与冻结普通 UAT 构建身份一致的明确终态收据允许节点失败收口。 */
@@ -79,6 +80,22 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     return action === 'pr' && observed.state === 'failed' ? reconcile(effectId) : observed
   }
   async function dispatch({ binding, action, prepared }, effectId, { signal } = {}) {
+    let editRepair
+    const original = action === 'edit' ? await lookup(effectId) : null
+    if (original && original.inputDigest !== binding.inputDigest) {
+      const proof = await store.query({kind:'effect.edit-repair',binding})
+      effectId = proof.effectId; editRepair = proof.audit
+      if (!await lookup(effectId)) {
+        const previous = proof.previous.definition.payload
+        if (previous.directory !== prepared.directory || previous.requirementDigest !== prepared.requirementDigest
+          || (await editAdapter.reconcile(previous))?.status !== 'succeeded') throw executionError('EDIT_CURRENT_IDENTITY_UNCONFIRMED')
+        const targetHash = content => content === null ? null : createHash('sha256').update(content).digest('hex')
+        if (!Array.isArray(prepared.changes) || !prepared.changes.length || prepared.changes.some(change => {
+          const old = previous.changes.find(item => item.path.toLowerCase() === change.path.toLowerCase())
+          return targetHash(change.content) === change.expectedHash || old && (change.expectedHash !== targetHash(old.content) || targetHash(change.content) === targetHash(old.content))
+        })) throw executionError('EDIT_REPAIR_REPLAY_FORBIDDEN')
+      }
+    }
     const route = methods[action]
     let effect = await lookup(effectId)
     if (effect) {
@@ -115,7 +132,7 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       await command(`prepare:${effectId}`, 'effect.prepare', {
         effectId, kind: 'operation', runId: binding.runId, nodeId: binding.nodeId, generation: binding.generation,
         leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
-        definition: { adapterId: route.id, adapterVersion: '1', principalId: grant.principalId, action, payload: prepared },
+        definition: { adapterId: route.id, adapterVersion: '1', principalId: grant.principalId, action, payload: prepared, ...(editRepair ? {editRepair} : {}) },
         resourceKeys: [['external', 'file', 'artifact', 'message'].includes(action) ? prepared.resourceKey : ['workspace', 'edit'].includes(action) ? `workspace:${prepared.directory}` : action === 'pr' ? `github:${prepared.repo}:${prepared.head}` : `git:${action === 'push' ? prepared.remote : prepared.repository}:${prepared.ref}`],
         ...(grant.approval ? { approval: grant.approval } : { authorizationRef: grant.authorizationRef }),
       })

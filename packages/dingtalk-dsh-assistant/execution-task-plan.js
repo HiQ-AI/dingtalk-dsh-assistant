@@ -125,7 +125,10 @@ function validateStages(stages, db, taskId) {
     name(stage.stageId); name(stage.workflowId)
     if (stage.sourceCondition) {
       const condition = stage.sourceCondition
-      exact(condition, ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective', 'requiredActorId'])
+      exact(condition, ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective', 'requiredActorId', 'repositoryId', 'acceptanceCriteria'])
+      if (condition.repositoryId !== undefined && (typeof condition.repositoryId !== 'string' || !condition.repositoryId.trim()
+        || !Array.isArray(condition.acceptanceCriteria) || !condition.acceptanceCriteria.length
+        || condition.acceptanceCriteria.some(item => typeof item !== 'string' || !item.trim() || item.length > 2000))) fail('TASK_STAGE_SOURCE_CONDITION_INVALID')
       natural(condition.sourceVersion)
       if (['sourceKey', 'sourceQuote', 'objective'].some(key => typeof condition[key] !== 'string' || !condition[key].trim())
         || !condition.sourceQuote.includes(condition.objective)
@@ -259,6 +262,41 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     return { status: 'applied', taskId, controlRevision, controlState: state,
       taskStatus, runningRunId: running?.run_id ?? null }
   }
+  if (command.kind === 'task.plan.insertDependency') {
+    exact(a, ['taskId', 'expectedPlanRevision', 'expectedControlRevision', 'requirementRevision', 'beforeStageId', 'stage'])
+    const taskId = name(a.taskId), task = taskRow(db, taskId)
+    if (!task || task.control_state !== 'active' || task.control_revision !== natural(a.expectedControlRevision)
+      || task.plan_revision !== natural(a.expectedPlanRevision) || task.requirement_revision !== natural(a.requirementRevision)
+      || task.plan_requirement_revision !== task.requirement_revision) fail('TASK_PLAN_STALE')
+    const rows = stageRows(db, taskId, task.plan_revision), before = activeStage(rows)
+    if (!before || before.stage_id !== a.beforeStageId || before.status !== 'running'
+      || !before.workflow_id.startsWith('task-engineering-') || !a.stage.workflowId.startsWith('task-engineering-')
+      || a.stage.gate !== 'none' || !a.stage.requirementRef || !a.stage.sourceCondition?.repositoryId
+      || rows.some(row => row.stage_id === a.stage.stageId || row.source_condition
+        && JSON.parse(row.source_condition).repositoryId === a.stage.sourceCondition.repositoryId)) fail('TASK_DEPENDENCY_INVALID')
+    validateStages([a.stage], db, taskId)
+    const run = db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(before.run_id, taskId)
+    if (!run || run.status !== 'waiting'
+      || db.prepare('SELECT 1 FROM execution_nodes WHERE run_id=? AND drained=0').get(run.run_id)
+      || db.prepare("SELECT 1 FROM execution_inputs WHERE run_id=? AND status='pending'").get(run.run_id)) fail('TASK_DEPENDENCY_NOT_DRAINED')
+    assertRunEffectsDrained(db, run.run_id)
+    if (run.recovery_reason === 'stage-dependency') fail('TASK_DEPENDENCY_INVALID')
+    db.prepare("UPDATE execution_runs SET recovery_reason='stage-dependency',revision=revision+1,updated_at=? WHERE run_id=?")
+      .run(now, run.run_id)
+    // 只改变线性阶段位置，原 Run 和每一个成功节点保持原身份。
+    for (const row of rows.filter(row => row.position >= before.position).reverse())
+      db.prepare('UPDATE task_plan_stages SET position=position+1 WHERE task_id=? AND plan_revision=? AND stage_id=?')
+        .run(taskId, task.plan_revision, row.stage_id)
+    db.prepare("UPDATE task_plan_stages SET status='blocked' WHERE task_id=? AND plan_revision=? AND stage_id=?")
+      .run(taskId, task.plan_revision, before.stage_id)
+    const stage = a.stage
+    db.prepare(`INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,workflow_digest,unavailable_reason,requirement_ref,predecessor_output_ref,gate,status,attempt,source_condition)
+      VALUES(?,?,?,?,?,?,NULL,?,?,'none','ready',1,?)`).run(taskId, task.plan_revision, stage.stageId, before.position,
+      stage.workflowId, stage.workflowDigest, stage.requirementRef, rows[before.position - 1]?.output_ref ?? null, JSON.stringify(stage.sourceCondition))
+    db.prepare("UPDATE business_tasks SET status='active',updated_at=? WHERE task_id=?").run(now, taskId)
+    return { status: 'applied', taskId, planRevision: task.plan_revision, insertedStageId: stage.stageId,
+      retainedStageId: before.stage_id, retainedRunId: before.run_id, retainedRecoveryReason: run.recovery_reason }
+  }
   if (command.kind === 'task.plan.extend') {
     exact(a, ['taskId', 'expectedPlanRevision', 'expectedControlRevision', 'requirementRevision', 'stages'])
     const taskId = name(a.taskId), task = taskRow(db, taskId)
@@ -388,7 +426,14 @@ export function reduceTaskPlanCommand(db, command, { now }) {
       .run(last.output_ref, last.evidence_refs, taskId, task.plan_revision, row.stage_id)
     const next = rows[row.position + 1]
     if (next) {
-      const status = next.unavailable_reason ? 'blocked' : next.gate === 'confirmation' ? 'waiting_confirmation' : 'ready'
+      if (next.run_id) {
+        const suspended = db.prepare("SELECT * FROM execution_runs WHERE run_id=? AND status='waiting' AND recovery_reason='stage-dependency'").get(next.run_id)
+        const insertion = db.prepare("SELECT payload FROM execution_events WHERE kind='task.plan.insertDependency' AND json_extract(payload,'$.retainedRunId')=? AND json_extract(payload,'$.insertedStageId')=? ORDER BY seq DESC LIMIT 1").get(next.run_id, row.stage_id)
+        if (!suspended || !insertion) fail('TASK_DEPENDENCY_INVALID')
+        db.prepare('UPDATE execution_runs SET recovery_reason=?,revision=revision+1,updated_at=? WHERE run_id=?')
+          .run(JSON.parse(insertion.payload).retainedRecoveryReason, now, next.run_id)
+      }
+      const status = next.run_id ? 'running' : next.unavailable_reason ? 'blocked' : next.gate === 'confirmation' ? 'waiting_confirmation' : 'ready'
       db.prepare('UPDATE task_plan_stages SET status=? WHERE task_id=? AND plan_revision=? AND stage_id=?')
         .run(status, taskId, task.plan_revision, next.stage_id)
       db.prepare('UPDATE business_tasks SET status=?,updated_at=? WHERE task_id=?')

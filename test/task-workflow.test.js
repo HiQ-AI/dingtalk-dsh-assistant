@@ -406,3 +406,63 @@ test('v15无需修改保留源码并重新检查；缺读取、冲突、工作�
   await writeFile(join(workspace.directory,'src/value.txt'),'drift')
   await assert.rejects(node('apply-changes').execute(context),{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})
 })
+
+test('v19技术方案无需补丁，实施节点内审查且只传共享方案引用，v18保持冻结', async () => {
+  const { createEngineeringTechnicalPlanWorkflow, createEngineeringTaskContextWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  const { validateJsonSchemaValue } = await import('@deepseek-ai/dsh-tools')
+  const { executionDigest } = await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+  const options={workflowId:'task-engineering-v19-factory',provider:'test',model:'test',discovery:{allowedPrefixes:['src/']},project:{targetCommit:'a'.repeat(40),taskBase:'a'.repeat(40)},workspaceAdapter:{},editAdapter:{},checks:[{id:'build',version:'1',run:async()=>({passed:true,log:'fixture'})}],adapterIdentity:'technical-plan'}
+  const old=defineExecutionWorkflow(createEngineeringTaskContextWorkflow(options)),flow=createEngineeringTechnicalPlanWorkflow(options)
+  assert.equal(flow.version,'19');assert.ok(defineExecutionWorkflow(flow).digest);assert.ok(!flow.nodes.some(node=>node.id==='validate-proposal'))
+  const proposal=flow.nodes.find(n=>n.id==='inspect-and-propose'),apply=flow.nodes.find(n=>n.id==='apply-changes')
+  assert.equal(proposal.executor,'agent');assert.equal(apply.executor,'agent')
+  assert.deepEqual(apply.allowedTools,['engineering_repo_inspect','engineering_apply_edits'])
+  const plan={document:{name:'修改方案.md',markdown:'# 设计\n新增输入校验，错误时保持原数据。\n```js\nif (!valid) return error\n```'},scopePaths:['src/input.js'],criteria:[{criterion:'无效输入零写',design:'先校验后提交',verification:'无效输入后核数据库不变'}]}
+  assert.deepEqual(validateJsonSchemaValue(proposal.outputSchema,plan),[])
+  assert.ok(validateJsonSchemaValue(proposal.outputSchema,{...plan,changes:[]}).length > 0)
+  const ref=`tasks/task/sha256-${executionDigest(plan)}.json`,requirement={request:'实现输入校验',baseCommit:'a'.repeat(40)}
+  const mapped=apply.mapInput({requirement,dependencyOutputs:{'inspect-and-propose':plan,'prepare-workspace':{workspace:{directory:'test',mergeTree:'b'.repeat(40),conflictPaths:[]}}},artifactRefs:{dependencies:{'inspect-and-propose':ref}}})
+  assert.deepEqual(mapped.plan,{ref,digest:executionDigest(plan)})
+  assert.equal(JSON.stringify(mapped).includes(plan.document.markdown),false)
+  assert.throws(()=>apply.mapInput({requirement,dependencyOutputs:{'inspect-and-propose':plan,'prepare-workspace':{workspace:{directory:'test',mergeTree:'b'.repeat(40),conflictPaths:[]}}}}),{code:'ENGINEERING_TECHNICAL_PLAN_REFERENCE_REQUIRED'})
+  const revision={status:'plan-revision-needed',summary:'设计遗漏事务范围，请补充',planRef:ref,effectRefs:[]}
+  assert.deepEqual(apply.validateOutput({input:mapped,output:revision}),revision)
+  assert.deepEqual(apply.admitOutput({output:revision}),{outcome:'waiting',waitReason:{kind:'recovery',reference:'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED'}})
+  assert.throws(()=>apply.validateOutput({input:mapped,output:{...revision,planRef:'foreign-plan'}}),{code:'ENGINEERING_TECHNICAL_EXECUTION_INVALID'})
+  assert.equal(defineExecutionWorkflow(createEngineeringTaskContextWorkflow(options)).digest,old.digest)
+  assert.deepEqual(flow.nodes.filter(n=>!['inspect-and-propose','apply-changes'].includes(n.id)).map(n=>[n.id,n.version]),old.nodes.filter(n=>!['inspect-and-propose','apply-changes','validate-proposal'].includes(n.id)).map(n=>[n.id,n.version]))
+})
+
+test('v19按技术方案读取当前文件后实际受管编辑，不消费方案补丁且拒绝过期hash',async()=>{
+  const { createEngineeringTechnicalPlanWorkflow }=await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  const {createHash}=await import('node:crypto'),{executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+  const root=await mkdtemp(join(tmpdir(),'dsh-technical-edit-')),source=join(root,'source')
+  await mkdir(join(source,'src'),{recursive:true});await mkdir(join(root,'work'))
+  const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
+  await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid')
+  await writeFile(join(source,'src/value.js'),'export const value = 1\n');await git('add','.');await git('commit','-m','base')
+  const baseCommit=await git('rev-parse','HEAD'),workspaceAdapter=await createManagedWorkspaces({root:join(root,'work'),sourceRepository:source,targetCommit:baseCommit,taskBase:baseCommit})
+  const scope={runId:'run',generation:1,requirementDigest:'a'.repeat(64),baseCommit},workspace=await workspaceAdapter.prepare(scope);await workspaceAdapter.execute(workspace)
+  const editAdapter=createManagedEdits({workspaceAdapter}),flow=createEngineeringTechnicalPlanWorkflow({workflowId:'task-engineering-v19-real',provider:'test',model:'test',project:{targetCommit:baseCommit,taskBase:baseCommit},workspaceAdapter,editAdapter,assertConflictReads:async({paths})=>assert.deepEqual(paths,['src/value.js']),localAcceptance:{scenarios:[{id:'value'}],prepare:async value=>({candidateDigest:value.candidate.digest})},checks:[{id:'build',version:'1',run:async view=>({passed:(await view.readFile('src/value.js')).toString()==='export const value = 2\n',log:'actual candidate checked'})}],adapterIdentity:'technical-edit'})
+  const apply=flow.nodes.find(n=>n.id==='apply-changes'),bytes=await readFile(join(workspace.directory,'src/value.js'))
+  const input={requirement:{request:'value改为2',constraints:[],editablePaths:['src/value.js'],baseCommit,acceptanceCriteria:['value为2']},plan:{ref:'tasks/task/sha256-'+ 'b'.repeat(64)+'.json',digest:'b'.repeat(64)}}
+  const edits={changes:[],replacements:[{path:'src/value.js',expectedHash:createHash('sha256').update(bytes).digest('hex'),from:'value = 1',to:'value = 2'}]}
+  assert.equal(flow.nodes.some(node=>node.id==='validate-proposal'),false)
+  assert.ok(flow.nodes.some(node=>node.id==='inspect-and-propose'))
+  assert.equal(defineExecutionWorkflow(flow).digest,defineExecutionWorkflow(flow).digest)
+  await assert.rejects(apply.execute({input,edits:{changes:[{path:'other.js',expectedHash:null,content:'not allowed'}],replacements:[]},...scope}),{code:'ENGINEERING_EDIT_SCOPE_MISMATCH'})
+  let calls=0
+  const noChange=await apply.execute({input,edits:{changes:[],replacements:[],noChange:{reason:'当前基线读回一致',reviewedPaths:['src/value.js']}},...scope,perform:async()=>{calls++}})
+  assert.equal(noChange.changeDisposition,'no-change');assert.equal(noChange.tree,workspace.mergeTree);assert.equal(calls,0)
+  const result=await apply.execute({input,edits,...scope,perform:async({action,prepared})=>{assert.equal(action,'edit');calls++;return editAdapter.execute(prepared)}})
+  assert.equal(result.status,'succeeded');assert.equal(calls,1);assert.equal(await readFile(join(workspace.directory,'src/value.js'),'utf8'),'export const value = 2\n')
+  await assert.rejects(apply.execute({input,edits,...scope,perform:async()=>{calls++}}),{code:'ENGINEERING_PATCH_BASE_CONFLICT'})
+  assert.equal(calls,1)
+  await assert.rejects(apply.execute({input,edits:{changes:[],replacements:[],noChange:{reason:'不重复',reviewedPaths:['src/value.js']}},...scope}),{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})
+  const verify=flow.nodes.find(n=>n.id==='verify-candidate'),verified=await verify.execute({...scope,input:verify.mapInput({requirement:input.requirement,previousOutput:{status:'succeeded',summary:'实际改为2',planRef:input.plan.ref,effectRefs:['edit-real']}})})
+  assert.equal(verified.verification.passed,true)
+  const defined=await flow.nodes.find(n=>n.id==='define-local-acceptance').execute({input:input.requirement})
+  const local=flow.nodes.find(n=>n.id==='prepare-local-acceptance'),mapped=local.mapInput({previousOutput:verified,dependencyOutputs:{'define-local-acceptance':defined,'plan-local-acceptance':{cases:[{criterionId:'criterion-1',scenarioId:'value',steps:['读取value'],expected:'2',parameters:{}}]}}})
+  const localResult=await local.execute({input:mapped,...scope,taskId:'task'})
+  assert.equal(localResult.localPrepared.candidateDigest,verified.candidate.digest)
+})

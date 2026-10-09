@@ -204,16 +204,18 @@ export async function apply(ctx, config = {}) {
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     runtime.getWorkflowMailboxes = () => workflow.mailboxes()
-    runtime.prepareWorkflowNotificationOperation = args => workflow.prepareWorkflowNotificationOperation(args)
-    runtime.executeWorkflowNotificationOperation = args => workflow.executeWorkflowNotificationOperation(args)
-    runtime.reconcileWorkflowNotificationOperation = args => workflow.reconcileWorkflowNotificationOperation(args)
+    runtime.prepareWorkflowNotificationOperation = args => workflow.prepareWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.executeWorkflowNotificationOperation = args => workflow.executeWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.reconcileWorkflowNotificationOperation = args => workflow.reconcileWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.listWorkflowTopics = groupId => workflow.topics(groupId)
     runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
     runtime.getWorkflowCatalog = () => workflow.catalog()
     runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
     runtime.getWorkflowMaintenance = () => workflow.maintenance()
+    runtime.getWorkflowExecutionHealth = () => workflow.executionHealth()
     runtime.getCompletedWorkflowObservations = taskId => workflow.completedObservations(taskId)
     runtime.reconcileCompletedWorkflowObservations = args => workflow.reconcileCompletedObservations(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.reconcileWorkflowTopic = (args, check) => workflow.reconcileTopic(args, { channel: 'web', actorId: workflowConfig.webActorId }, check)
     runtime.changeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.sealWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'seal')
     runtime.resumeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'resume')
@@ -228,6 +230,7 @@ export async function apply(ctx, config = {}) {
     runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.deleteWorkflowTask = args => workflow.deleteCancelledTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.recoverWorkflowClarification = args => workflow.recoverClarification(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowMaterialRequest = args => workflow.retryMaterialRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.resumeWorkflowRequest = args => {
       if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
@@ -261,8 +264,10 @@ export async function apply(ctx, config = {}) {
     runtime.listAuthorizationRequests = async () => [...legacyListAuthorizations(), ...await workflow.listApprovalRequests()]
     const legacyCreateTask = runtime.createTask
     runtime.createTask = args => workflow.isGroup(args.groupId) ? Promise.reject(new Error('workflow_group_use_message_input')) : legacyCreateTask(args)
-    const taskFailures = await workflow.recoverExecutionTasks()
-    for (const failure of taskFailures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
+    // 恢复可能包含长外部对账；不能阻止同一实例注册正常监视 timer。
+    void workflow.recoverExecutionTasks().then(taskFailures => {
+      for (const failure of taskFailures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
+    }).catch(error => ctx.logger.warn(error.message))
   }
   const recoverWorkflow = () => workflow.recover().then(result => {
     for (const failure of result.failures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)

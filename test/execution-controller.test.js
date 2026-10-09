@@ -244,7 +244,7 @@ async function agentRecoveryFixture(t, response = ({ input, recoveryContext }) =
       generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest, contextRef: saved.ref }
   }
   t.after(async () => { await controller.close();await store.close() })
-  return { get store() { return store }, get controller() { return controller }, artifacts, calls, runId, resumeArgs,
+  return { get store() { return store }, get controller() { return controller }, artifacts, calls, runId, resumeArgs, sessions,
     beforeCommand(callback) { beforeCommand = callback },
     async reopen() { await controller.close();await store.close();store = await openExecutionStore({ dbPath, instanceId });controller = makeController() } }
 }
@@ -805,4 +805,458 @@ test('超过32个节点的完整Run持续执行并保留全部成功产物', asy
   assert.equal(result.run.status,'succeeded');assert.equal(result.run.claimCount,80)
   assert.equal(result.nodes.length,80);assert.ok(result.nodes.every(node=>node.status==='succeeded'&&node.outputRef))
   assert.equal(await artifacts.read(result.nodes.at(-1).outputRef),80)
+})
+
+test('历史原生中断重分类仍只允许Owner同一问题续行一次并保留成功前缀', async t => {
+  let count = 0
+  const f = await agentRecoveryFixture(t, () => ({ status: 'no_submission', reason: ++count === 1 ? 'execution_tool_failed' : 'EXECUTION_TURN_INTERRUPTED', failure: { code: count === 1 ? 'execution_tool_failed' : 'EXECUTION_TURN_INTERRUPTED', phase: 'execution' } }))
+  const before = await f.controller.state(f.runId), n = before.nodes[1]
+  assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable,false)
+  const proof = await f.artifacts.put({ kind: 'legacy-interruption-proof', endSeq: 566 })
+  await f.store.command({ id: 'reclassify-interruption', kind: 'node.failure.reclassify', args: { runId:f.runId,runRevision:before.run.revision,nodeRunId:n.nodeRunId,generation:n.generation,leaseEpoch:n.leaseEpoch,inputDigest:n.inputDigest,sessionId:n.sessionId,evidenceRef:proof.ref,previousCode:'execution_tool_failed',code:'EXECUTION_TURN_INTERRUPTED' } })
+  const recovery = await f.controller.inspectNodeRecovery(f.runId)
+  assert.equal(recovery.repairable,true);assert.ok(recovery.evidenceRefs.includes(proof.ref))
+  await assert.rejects(f.store.command({ id: 'bypass-store-interruption', kind: 'run.recover', args: { runId: f.runId } }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+  await assert.rejects(f.controller.recover({ commandId: 'bypass-controller-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+  const held = await f.controller.state(f.runId)
+  assert.equal(held.run.status, 'waiting');assert.equal(held.nodes[1].leaseEpoch,n.leaseEpoch)
+  await f.controller.resumeNode(await f.resumeArgs());await f.controller.whenIdle(f.runId)
+  const after = await f.controller.state(f.runId), repeated = await f.controller.inspectNodeRecovery(f.runId)
+  assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].sessionId,n.sessionId)
+  assert.equal(repeated.problemKey,recovery.problemKey);assert.equal(repeated.reason,'strategy-change-required');assert.equal(repeated.repairable,false)
+  await assert.rejects(f.controller.recover({ commandId: 'bypass-repeat-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+})
+
+test('内部受管准备复用冻结workflow及CAS，维护下不调度并保留成功前缀',async t=>{
+  const f=await agentRecoveryFixture(t),before=await f.controller.state(f.runId)
+  f.beforeCommand(value=>{if(value.kind==='node.claim')throw new Error('fixture stops before dispatch')})
+  await f.controller.resumeNode(await f.resumeArgs());await assert.rejects(f.controller.whenIdle(f.runId),/fixture stops/)
+  f.beforeCommand(null)
+  await f.store.command({id:'maintenance-prepare',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'repair',actorId:'owner',reason:'session归属'}})
+  let preparations=0
+  f.sessions.prepareManagedSession=async(binding,frozen,accept)=>{
+    preparations++;assert.equal(frozen.executor,'agent');assert.equal(binding.nodeId,'analyze')
+    const proof={sessionId:'execution-child',parentSessionId:binding.sessionId,lastInputLease:1,inheritedEventCount:10,eventsDigest:'a'.repeat(64)}
+    await accept(proof);return proof
+  }
+  const result=await f.controller.prepareManagedSession(f.runId,{maintenance:{maintenanceId:'repair',revision:1}})
+  assert.equal(result.prepared,true);assert.equal(preparations,1)
+  assert.deepEqual(result.state.nodes[0],before.nodes[0])
+  assert.equal(result.state.nodes[1].sessionId,'execution-child');assert.equal(result.state.nodes[1].status,'ready')
+  assert.equal(f.calls.length,1)
+})
+
+test('检查checkpoint Controller同代仅重验，成功准备只执行一次',async t=>{
+ let prepares=0,verifies=0
+ const old={id:'engineering-old',version:'18',nodes:[
+  {id:'prepare',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({requirement})=>requirement,execute:async({input})=>{prepares++;return input+1}},
+  {id:'verify-candidate',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({previousOutput})=>previousOutput,execute:async()=>{verifies++;throw Object.assign(new Error('bad-check'),{code:'ENGINEERING_VERIFICATION_FAILED'})}},
+ ]}
+ const next={...old,id:'engineering-next',nodes:[old.nodes[0],{...old.nodes[1],execute:async({input})=>{verifies++;return input*2}}]}
+ const f=await setup(t,old),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next),requirement=await f.artifacts.put(3)
+ const send=(kind,args,id=kind)=>f.store.command({id,kind,args})
+ const config={kind:'engineering',runId:'run',taskId:'task',repoId:'repo',ownerActorId:'owner',sourceCommandId:'source'}
+ await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
+ await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,checkpoint:{kind:'checks',fromDigest:oldDef.digest,requestId:'repair'},checkpointChecks:[{id:'check',version:'2'}]}},'next')
+ await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:['检查'],sourceKey:'source',eventKey:'source'})
+ await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
+ await f.controller.createRun({commandId:'create',runId:'run',taskId:'task',workflowId:old.id,input:3,stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
+ const before=await f.controller.whenIdle('run');assert.equal(before.run.status,'waiting')
+ f.controller.registerWorkflow(next)
+ await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'修正检查'})
+ const args={maintenance:{maintenanceId:'checks',revision:1},commandId:'checkpoint',runId:'run',expectedRevision:before.run.revision,kind:'checks',workflowId:next.id,workflowDigest:nextDef.digest}
+ await f.controller.updateEngineeringCheckpoint(args)
+ assert.equal((await f.controller.state('run')).nodes[1].status,'ready');assert.equal(verifies,1)
+ await send('runtime.maintenance.change',{active:false,expectedRevision:1,maintenanceId:'checks',actorId:'owner',reason:'修正完成'},'leave-maintenance')
+ await f.controller.recover({commandId:'recover-check',runId:'run'})
+ const after=await f.controller.whenIdle('run')
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,1);assert.equal(prepares,1);assert.equal(verifies,2);assert.equal(after.nodes[0].outputRef,before.nodes[0].outputRef);assert.equal(await f.artifacts.read(after.nodes[1].outputRef),8)
+ await f.controller.updateEngineeringCheckpoint(args);assert.equal(verifies,2)
+})
+
+test('工程旧越界读取失败由Owner同节点同代续行，通用恢复不得绕过',async t=>{
+ const f=await agentRecoveryFixture(t,({recoveryContext,input})=>recoveryContext?input+1:{status:'no_submission',reason:'execution_tool_failed',failure:{code:'execution_tool_failed',phase:'execution'}})
+ const before=await f.controller.state(f.runId),node=before.nodes[1]
+ assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable,false)
+ const evidence=await f.artifacts.put({kind:'legacy-turn-failure-classification',failure:{code:'ENGINEERING_READ_PATH_INVALID'}})
+ await f.store.command({id:'scope-reclassify',kind:'node.failure.reclassify',args:{runId:f.runId,runRevision:before.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,evidenceRef:evidence.ref,previousCode:'execution_tool_failed',code:'ENGINEERING_READ_PATH_INVALID'}})
+ const recovery=await f.controller.inspectNodeRecovery(f.runId)
+ assert.equal(recovery.repairable,true)
+ await assert.rejects(f.controller.recover({commandId:'bypass-path',runId:f.runId}),{code:'NODE_RECOVERY_REQUIRES_OWNER'})
+ await f.controller.resumeNode(await f.resumeArgs());const after=await f.controller.whenIdle(f.runId)
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].leaseEpoch,before.nodes[1].leaseEpoch+1)
+})
+
+for(const variant of ['valid','repeat','validator-read','foreign-workflow','paused','maintenance','document-invalid','no-change-evidence','retained-edits','retained-failed-edit','retained-foreign-audit','retained-lease-drift'])test(`工程候选纯校验退回原agent同代纠正 ${variant}`,async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'dsh-proposal-correction-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'proposal-correction',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ let preparations=0,proposals=0,validations=0
+ const failureCode=variant==='document-invalid'?'ENGINEERING_PROPOSAL_DOCUMENT_INVALID':variant==='no-change-evidence'?'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED':'ENGINEERING_NO_EFFECT_MODIFICATION'
+ const schema={type:'object',properties:{valid:{type:'boolean'}},required:['valid'],additionalProperties:false}
+ const definition={id:'engineering-fixture',version:'18',nodes:[
+ {id:'prepare-workspace',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({requirement})=>requirement,execute:async({input})=>{preparations++;return input}},
+ {id:'inspect-and-propose',version:'1',executor:'agent',allowedEffects:['read'],allowedTools:[],provider:'fixture',model:'fixture',prompt:'纠正候选',inputSchema:number,outputSchema:schema,mapInput:({previousOutput})=>previousOutput},
+ {id:'validate-proposal',version:'1',executor:'code',allowedEffects:variant==='validator-read'?['read']:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({previousOutput})=>previousOutput,execute:async({input})=>{validations++;if(!input.valid)throw Object.assign(new Error(failureCode),{code:failureCode});return input}},
+ {id:'apply-changes',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({previousOutput})=>previousOutput,execute:async({input})=>input},]}
+ const sessions={async run(args){proposals++;await args.onSessionBound();await args.onResult({valid:!!args.recoveryContext&&variant!=='repeat'});return{status:'submitted'}},async assertDrained(){},async cancel(){},async close(){}}
+ const controller=createExecutionController({store,artifacts,workflows:[definition],sessions});t.after(async()=>{await controller.close();await store.close()})
+ await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:definition.id,input:1}]})
+ const plan=await controller.advanceTaskPlan('task'),runId=plan.stages[0].runId
+ const before=await controller.whenIdle(runId),frozen=defineExecutionWorkflow(definition)
+ await store.command({id:'register',kind:'workflow.register',args:{workflowId:definition.id,digest:frozen.digest,definitionVersion:'18',config:{kind:variant==='foreign-workflow'?'other':'engineering',taskId:'task',runId}}})
+
+ if(variant.startsWith('retained-')){
+  // 仅隔离测试库重建旧 candidate-in-place 审计；恢复仍走原生 controller/store。
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db')),apply=before.nodes[3],oldInput='a'.repeat(64),oldOutput='b'.repeat(64)
+  try{
+   db.prepare("UPDATE execution_nodes SET lease_epoch=2 WHERE node_run_id=?").run(apply.nodeRunId)
+   for(let i=0;i<2;i++)db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES(?,'operation',?,?,?,?,?,'digest',?,'[]','fixture',?,'now','now')").run('retained-edit-'+i,runId,apply.nodeRunId,apply.nodeId,1,oldInput,JSON.stringify({action:'edit'}),variant==='retained-failed-edit'&&i===1?'failed':'succeeded')
+   db.prepare("INSERT INTO execution_events(command_id,kind,payload,created_at) VALUES('historical-fixture','workflow.repair.accepted',?,'now')").run(JSON.stringify({runId,taskId:variant==='retained-foreign-audit'?'other':'task',workflowDigest:frozen.digest,requirementRevision:1,nextGeneration:1,mode:'candidate-in-place',contextRef:'artifacts/sha256-'+oldOutput+'.json',invalidated:[{nodeRunId:apply.nodeRunId,leaseEpoch:variant==='retained-lease-drift'?1:2,inputRef:'artifacts/sha256-'+oldInput+'.json',outputRef:'artifacts/sha256-'+oldOutput+'.json'}]}))
+  }finally{db.close()}
+ }
+ if(variant==='paused')await controller.pause({commandId:'pause',runId,reason:'测试暂停'})
+ let recovery=await controller.inspectNodeRecovery(runId)
+ if(['validator-read','foreign-workflow','paused','retained-failed-edit','retained-foreign-audit','retained-lease-drift'].includes(variant)){assert.equal(recovery.repairable,false);return}
+ if(variant==='maintenance'){await store.command({id:'maintenance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'hold',actorId:'owner',reason:'busy'}});assert.equal((await controller.inspectNodeRecovery(runId)).repairable,false);return}
+ assert.equal(recovery.repairable,true);assert.equal(recovery.nodeId,'inspect-and-propose');assert.equal(recovery.validationNodeRunId,before.nodes[2].nodeRunId)
+ const taskPlan=await controller.taskPlan('task'),context=await artifacts.put({kind:'execution-recovery-context',taskId:'task',runId,requirementRevision:taskPlan.task.requirementRevision,planRevision:taskPlan.task.planRevision,controlRevision:taskPlan.task.controlRevision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,diagnosis:'候选含无效条目',strategy:'读取原提案并纠正，保留有效修改',evidenceRefs:recovery.evidenceRefs,problemKey:recovery.problemKey})
+ const receipt=await controller.resumeNode({commandId:'correct-proposal',runId,expectedRevision:recovery.runRevision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,leaseEpoch:recovery.leaseEpoch,inputDigest:recovery.inputDigest,contextRef:context.ref})
+ const after=await controller.whenIdle(runId)
+ assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(preparations,1);assert.equal(proposals,2);assert.equal(validations,2);assert.equal(after.nodes[1].sessionId,before.nodes[1].sessionId);assert.equal(after.nodes[2].leaseEpoch,2)
+ if(variant==='retained-edits')assert.equal((await store.query({kind:'effect.list',runId})).filter(e=>e.state==='succeeded').length,2)
+ assert.equal(receipt.result.previousOutputRef,before.nodes[1].outputRef);assert.equal(receipt.result.validationInputRef,before.nodes[2].inputRef);assert.deepEqual(await artifacts.read(before.nodes[1].outputRef),{valid:false})
+ if(variant==='repeat'){recovery=await controller.inspectNodeRecovery(runId);assert.equal(recovery.repairable,false);assert.equal(recovery.reason,'strategy-change-required')}else assert.equal(after.run.status,'succeeded')
+})
+
+for(const variant of ['verified','verify-waiting','wrong-scope','stale-maintenance','stale-revision','planner-timeout','planner-invalid','local-started','local-plan-invalid','local-other-error','local-plan-effect'])test(`本地验收checkpoint仅重算方案并保留候选 ${variant}`,async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'dsh-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'local-checkpoint',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ const calls={prepare:0,workspace:0,inspect:0,verify:0,plan:0,local:0};let hold=!['local-started','local-plan-invalid','local-other-error','local-plan-effect'].includes(variant)
+ const str={type:'string'},make=correct=>({id:correct?'new-local':'old-local',version:'18',nodes:[
+ {id:'prepare-generation',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({requirement})=>requirement,execute:async({input})=>{calls.prepare++;return input}},
+ {id:'define-local-acceptance',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({requirement})=>requirement,execute:correct?async()=> 'right':async()=> 'wrong'},
+ {id:'plan-local-acceptance',version:'1',executor:'agent',provider:'test',model:'test',prompt:'plan',allowedEffects:['read'],allowedTools:[],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput},
+ {id:'prepare-workspace',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.workspace++;return 'workspace'}},
+ {id:'inspect-and-propose',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.inspect++;return 'candidate'}},
+ {id:'verify-candidate',version:'1',executor:'code',allowedEffects:['read'],inputSchema:str,outputSchema:str,mapInput:({previousOutput})=>previousOutput,execute:async()=>{calls.verify++;if(variant==='verify-waiting')throw Object.assign(new Error('check'),{code:'ENGINEERING_VERIFICATION_FAILED'});return 'verified-candidate'}},
+ {id:'prepare-local-acceptance',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:str,inputDependencies:['plan-local-acceptance'],mapInput:({previousOutput,dependencyOutputs})=>({candidate:previousOutput,plan:dependencyOutputs['plan-local-acceptance']}),execute:async({input})=>{calls.local++;if(!correct&&variant.startsWith('local-'))throw Object.assign(Error('plan failed'),{code:['local-plan-invalid','local-plan-effect'].includes(variant)?'LOCAL_ACCEPTANCE_PLAN_INVALID':'LOCAL_OTHER_ERROR'});assert.equal(input.candidate,'verified-candidate');assert.equal(input.plan,'right');return 'done'}},]})
+ const old=make(false),next=make(true),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next)
+ const sessions={async run(args){calls.plan++;await args.onSessionBound();if(calls.plan===2&&variant==='planner-timeout')return{status:'no_submission',reason:'execution_timeout',failure:{code:'execution_timeout',phase:'execution'}};await args.onResult(calls.plan===2&&variant==='planner-invalid'?42:args.input);return{status:'submitted'}},async cancel(){},async assertDrained(){},async close(){}}
+ const controller=createExecutionController({store:{query:q=>store.query(q),command:c=>{if(hold&&c.kind==='node.claim'&&c.args.nodeId==='prepare-local-acceptance')throw Error('fixture-stop-before-local');return store.command(c)}},artifacts,workflows:[old],sessions});t.after(async()=>{await controller.close();await store.close()})
+ const send=(kind,args,id=kind)=>store.command({id,kind,args}),config={kind:'engineering',taskId:'task',runId:'run',uatEnvironment:'uat2',input:{request:'business',acceptanceCriteria:['criterion']},localAcceptanceConfig:{id:'wrong'}}
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
+ await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,localAcceptanceConfig:{id:'right'},localAcceptanceScope:{taskId:variant==='wrong-scope'?'foreign':'task',uatEnvironment:'uat2',requestDigest:executionDigest(config.input)},checkpoint:{kind:'local-acceptance',fromDigest:oldDef.digest,requestId:'local-fix'}}},'new')
+ const requirement=await artifacts.put('request')
+ await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:['criterion'],sourceKey:'source',eventKey:'source'})
+ await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
+ await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input:'request',stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
+ if(['verify-waiting','local-started','local-plan-invalid','local-other-error','local-plan-effect'].includes(variant))await controller.whenIdle('run');else await assert.rejects(controller.whenIdle('run'),/fixture-stop-before-local/)
+ const before=await controller.state('run');await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'local',actorId:'owner',reason:'修正场景'})
+ controller.registerWorkflow(next)
+ const args={commandId:'engineering-checkpoint:run:local-fix',runId:'run',expectedRevision:before.run.revision,kind:'local-acceptance',workflowId:next.id,workflowDigest:nextDef.digest,maintenance:{maintenanceId:'local',revision:1}}
+ if(variant==='local-plan-effect'){
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db')),node=before.nodes.find(n=>n.nodeId==='prepare-local-acceptance');
+  try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('fixture-effect','operation',?,?,?,?,?,'digest','{}','[]','fixture','succeeded','now','now')").run('run',node.nodeRunId,node.nodeId,node.generation,node.inputDigest)}finally{db.close()}
+  await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'ENGINEERING_CHECKPOINT_EFFECTS_PRESENT'});assert.equal((await controller.state('run')).nodes.at(-1).status,'waiting');return
+ }
+ if(variant==='stale-maintenance'){args.maintenance.revision=0;await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'RUNTIME_MAINTENANCE_STALE'});return}
+ if(variant==='stale-revision')args.expectedRevision--
+ if(['wrong-scope','stale-revision','local-started','local-other-error'].includes(variant)){await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:'ENGINEERING_CHECKPOINT_NOT_ADMITTED'});return}
+ await controller.updateEngineeringCheckpoint(args);
+ if(variant==='local-plan-invalid'){
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db'),{readOnly:true});try{const row=db.prepare("SELECT payload FROM execution_events WHERE kind='run.workflow.checkpoint.local-prepare-reset'").get(),audit=JSON.parse(row.payload),prior=before.nodes.at(-1);assert.equal(audit.inputRef,prior.inputRef);assert.equal(audit.leaseEpoch,prior.leaseEpoch);assert.equal(audit.waitReason.reference,'LOCAL_ACCEPTANCE_PLAN_INVALID');assert.ok(audit.evidenceRef)}finally{db.close()}
+ }
+ const checkpoint=await controller.state('run');assert.deepEqual(checkpoint.nodes.slice(3,6),before.nodes.slice(3,6));assert.equal(checkpoint.nodes[2].sessionId,null)
+ await send('runtime.maintenance.change',{active:false,expectedRevision:1,maintenanceId:'local',actorId:'owner',reason:'恢复'},'leave');hold=false
+ await controller.recover({commandId:'continue',runId:'run'});let after=await controller.whenIdle('run')
+ if(variant.startsWith('planner-')){
+  const recovery=await controller.inspectNodeRecovery('run');assert.equal(recovery.repairable,true,JSON.stringify(recovery))
+  const plan=await controller.taskPlan('task'),context=await artifacts.put({kind:'execution-recovery-context',taskId:'task',runId:'run',requirementRevision:plan.task.requirementRevision,planRevision:plan.task.planRevision,controlRevision:plan.task.controlRevision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,diagnosis:'本轮规划失败',strategy:'按正确场景重新提交合法方案',evidenceRefs:recovery.evidenceRefs,problemKey:recovery.problemKey})
+  await controller.resumeNode({commandId:'resume-planner',runId:'run',expectedRevision:after.run.revision,nodeRunId:recovery.nodeRunId,generation:recovery.generation,leaseEpoch:recovery.leaseEpoch,inputDigest:recovery.inputDigest,contextRef:context.ref});after=await controller.whenIdle('run')
+ }
+
+ assert.equal(after.run.generation,1);assert.equal(calls.prepare,1);assert.equal(calls.workspace,1);assert.equal(calls.inspect,1);assert.equal(calls.verify,1);assert.equal(calls.plan,variant.startsWith('planner-')?3:2);assert.equal(calls.local,variant==='verify-waiting'?0:variant==='local-plan-invalid'?2:1)
+ assert.equal(after.run.status,variant==='verify-waiting'?'waiting':'succeeded');assert.deepEqual(after.nodes.slice(3,6),before.nodes.slice(3,6))
+})
+
+test('历史materials参数重分类保留同节点同代并由Owner纠正',async t=>{
+ const f=await agentRecoveryFixture(t,({recoveryContext,input})=>recoveryContext?input+1:{status:'no_submission',reason:'execution_tool_failed',failure:{code:'execution_tool_failed',phase:'execution'}})
+ const before=await f.controller.state(f.runId),node=before.nodes[1]
+ assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable,false)
+ const evidence=await f.artifacts.put({kind:'legacy-turn-failure-classification',failure:{code:'QUERY_ARGUMENT_INVALID'}})
+ await f.store.command({id:'scope-reclassify',kind:'node.failure.reclassify',args:{runId:f.runId,runRevision:before.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,evidenceRef:evidence.ref,previousCode:'execution_tool_failed',code:'QUERY_ARGUMENT_INVALID'}})
+ const recovery=await f.controller.inspectNodeRecovery(f.runId)
+ assert.equal(recovery.repairable,true)
+ await f.controller.resumeNode(await f.resumeArgs());const after=await f.controller.whenIdle(f.runId)
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].leaseEpoch,before.nodes[1].leaseEpoch+1)
+})
+
+for(const variant of ['factory','declared-external','actual-effect'])test(`v18真实factory本地准备checkpoint ${variant}`,async t=>{
+ const {createEngineeringTaskContextWorkflow}=await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ const directory=await mkdtemp(join(tmpdir(),'real-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'real-local',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ t.after(()=>store.close());let plans=0,prepares=0;const calls={}
+ const make=id=>{
+  const workflow=createEngineeringTaskContextWorkflow({workflowId:id,provider:'test',model:'test',prepareGeneration:async()=>({}),discovery:{allowedPrefixes:['src/']},project:{uatEnvironment:'uat3',targetCommit:'a'.repeat(40),taskBase:'a'.repeat(40)},workspaceAdapter:{},editAdapter:{},checks:[{id:'check',version:'1',run:async()=>({passed:true})}],adapterIdentity:'test',localAcceptance:{identity:id,scenarios:[{id:'scenario'}],prepare:async()=>{prepares++;return{prepared:true}}}})
+  assert.equal(workflow.version,'18');const local=workflow.nodes.find(n=>n.id==='prepare-local-acceptance');assert.deepEqual(local.allowedEffects,['workspace.prepare'])
+  if(variant==='declared-external')local.allowedEffects=['workspace.prepare','external.operation']
+  // 外部业务前缀在本测试中是隔离边界；真实factory节点身份、executor、version/effects保留。
+  for(const node of workflow.nodes.slice(0,8))if(!['define-local-acceptance','plan-local-acceptance'].includes(node.id)){
+   node.inputSchema={type:'object'};node.outputSchema={type:'object'};node.mapInput=({requirement})=>requirement
+   if(node.executor==='code')node.execute=async()=>{calls[node.id]=(calls[node.id]??0)+1;return{candidate:{identity:'frozen'}}}
+  }
+  return workflow
+ }
+ const old=make('real-old'),next=make('real-next'),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next)
+ const sessions={async run(args){await args.onSessionBound();if(args.binding.nodeId==='plan-local-acceptance'){plans++;await args.onResult({cases:plans===1?[]:[{criterionId:'criterion-1',scenarioId:'scenario',steps:['核对业务'],expected:'目标正确',parameters:{}}]})}else{calls[args.binding.nodeId]=(calls[args.binding.nodeId]??0)+1;await args.onResult({})}return{status:'submitted'}},async assertDrained(){},async close(){},async cancel(){}}
+ const controller=createExecutionController({delivery:{},readTools:['engineering_repo_inspect'],store:{query:q=>store.query(q),command:c=>{if(c.kind==='node.claim'&&c.args.nodeId==='run-local-acceptance')throw Error('fixture-stop-before-external');return store.command(c)}},artifacts,workflows:[old],sessions});t.after(async()=>{await controller.close()})
+ const send=(kind,args,id=kind)=>store.command({id,kind,args}),input={request:'当前任务',acceptanceCriteria:['业务要求']},config={kind:'engineering',taskId:'task',runId:'run',uatEnvironment:'uat3',input,localAcceptanceConfig:{id:'old'}}
+ await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
+ await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,localAcceptanceConfig:{id:'new'},localAcceptanceScope:{taskId:'task',uatEnvironment:'uat3',requestDigest:executionDigest(input)},checkpoint:{kind:'local-acceptance',fromDigest:oldDef.digest,requestId:'fix'}}},'next')
+ const requirement=await artifacts.put(input)
+ await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:input.acceptanceCriteria,sourceKey:'source',eventKey:'source'})
+ await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
+ await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input,stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
+ const before=await controller.whenIdle('run');assert.equal(before.nodes[8].waitReason.reference,'LOCAL_ACCEPTANCE_PLAN_INVALID');assert.equal(before.nodes.slice(0,8).filter(n=>n.status==='succeeded').length,8);assert.equal(prepares,0)
+ await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'local',actorId:'owner',reason:'修正场景'});controller.registerWorkflow(next)
+ const args={commandId:'engineering-checkpoint:run:fix',runId:'run',expectedRevision:before.run.revision,kind:'local-acceptance',workflowId:next.id,workflowDigest:nextDef.digest,maintenance:{maintenanceId:'local',revision:1}}
+ if(variant==='actual-effect'){
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db')),node=before.nodes[8]
+  try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('fixture-effect','operation',?,?,?,?,?,'digest','{}','[]','fixture','succeeded','now','now')").run('run',node.nodeRunId,node.nodeId,node.generation,node.inputDigest)}finally{db.close()}
+ }
+ if(variant!=='factory'){await assert.rejects(controller.updateEngineeringCheckpoint(args),{code:variant==='actual-effect'?'ENGINEERING_CHECKPOINT_EFFECTS_PRESENT':'ENGINEERING_CHECKPOINT_NOT_ADMITTED'});assert.deepEqual((await controller.state('run')).nodes,before.nodes);return}
+ await controller.updateEngineeringCheckpoint(args)
+ await send('runtime.maintenance.change',{active:false,expectedRevision:1,maintenanceId:'local',actorId:'owner',reason:'恢复'},'leave')
+ await assert.rejects(async()=>{await controller.recover({commandId:'continue',runId:'run'});await controller.whenIdle('run')},/fixture-stop-before-external/)
+ const after=await controller.state('run');assert.equal(after.run.runId,before.run.runId);assert.equal(after.run.generation,before.run.generation)
+ for(const i of [0,3,4,5,6,7])assert.deepEqual(after.nodes[i],before.nodes[i])
+ assert.equal(after.nodes[1].leaseEpoch,2);assert.equal(after.nodes[2].leaseEpoch,2);assert.equal(after.nodes[8].status,'succeeded');assert.equal(plans,2);assert.equal(prepares,1)
+ for(const value of Object.values(calls))assert.equal(value,1)
+})
+
+test('Host无新增修改证明正常提交独立审计，缺原修复仍拒绝',async t=>{
+  const {execFileSync}=await import('node:child_process'),{mkdir}=await import('node:fs/promises'),{createHash}=await import('node:crypto')
+  for(const admitted of [true,false])await t.test(String(admitted),async child=>{
+    const schema={type:'object'},definition={id:'task-engineering-no-additional-test',version:'18',nodes:[{id:'apply-changes',version:'6',executor:'code',allowedEffects:['pure'],inputSchema:schema,outputSchema:schema,mapInput:({requirement})=>requirement,execute:async()=>{throw Object.assign(new Error('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'),{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})}}]}
+    const f=await setup(child,definition),repo=join(f.directory,'repository');await mkdir(repo)
+    const git=(...a)=>execFileSync('git',['-C',repo,...a],{windowsHide:true,encoding:'utf8'}).trim()
+    git('init','-q');git('config','user.name','Fixture');git('config','user.email','test@example.invalid');await writeFile(join(repo,'code.txt'),'before');git('add','.');git('commit','-qm','base')
+    const baseCommit=git('rev-parse','HEAD'),mergeTree=git('rev-parse','HEAD^{tree}');await writeFile(join(repo,'code.txt'),'after')
+    const actualQuery=f.store.query;let lastBinding
+    const scopedStore={...f.store,query:async q=>{
+      if(q.kind==='effect.edit-repair'){if(!admitted)throw Object.assign(new Error('EDIT_REPAIR_NOT_ADMITTED'),{code:'EDIT_REPAIR_NOT_ADMITTED'});lastBinding=q.binding;return{audit:{repairEventSeq:10,previousEffectId:'edit-success'},previous:{effectId:'edit-success'}}}
+      if(q.kind==='effect.list'&&lastBinding){const workspace={runId:'run',generation:1,directory:repo,requirementDigest:lastBinding.requirementDigest,baseCommit,mergeTree};return[{effectId:'workspace-success',generation:1,state:'succeeded',definition:{action:'workspace',payload:workspace}},{effectId:'edit-success',nodeRunId:lastBinding.nodeRunId,generation:1,state:'succeeded',inputDigest:'b'.repeat(64),result:{evidenceRef:'success.json'},definition:{action:'edit',payload:{workspace,directory:repo,requirementDigest:lastBinding.requirementDigest,changes:[{path:'code.txt',expectedHash:createHash('sha256').update('before').digest('hex'),content:'after'}]}}}]}
+      return actualQuery(q)
+    }}
+    const controller=createExecutionController({store:scopedStore,artifacts:f.artifacts,workflows:[definition]});child.after(()=>controller.close())
+    await controller.createRun({commandId:'create',runId:'run',taskId:'task',workflowId:definition.id,input:{requirement:{baseCommit},proposal:{changeDisposition:'no-change',changes:[],replacements:[],reason:'本轮不重复原补丁',reviewedPaths:['code.txt']}}})
+    const state=await controller.whenIdle('run'),node=state.nodes[0]
+    if(admitted){assert.equal(state.run.status,'succeeded');assert.equal(node.evidenceRefs.length,2);const proof=await f.artifacts.read(node.evidenceRefs[1]);assert.equal(proof.kind,'engineering-no-additional-change-proof');assert.notEqual(proof.tree,proof.sourceTree);assert.equal(proof.binding.inputDigest,node.inputDigest)}
+    else{assert.equal(state.run.status,'waiting');assert.equal(node.waitReason.reference,'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')}
+  })
+})
+
+
+for (const variant of ['edit', 'revise', 'same-plan-repeat', 'no-change', 'prepared']) test(`v19 真实受管编辑网关与原方案自动纠正 ${variant}`, async t => {
+  const { createEngineeringTechnicalPlanWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  const { createManagedEdits } = await import('../packages/dingtalk-dsh-assistant/execution-edit.js')
+  const { createExecutionDelivery } = await import('../packages/dingtalk-dsh-assistant/execution-delivery.js')
+  const { executionDigest } = await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+  const { mkdir } = await import('node:fs/promises')
+  const root = await mkdtemp(join(tmpdir(), 'dsh-v19-gateway-')), directory = join(root, 'workspace')
+  await mkdir(directory)
+  const { execFile } = await import('node:child_process'), { promisify } = await import('node:util')
+  const git = async (...args) => (await promisify(execFile)('git', ['-C', directory, ...args], { windowsHide: true })).stdout.trim()
+  let baseCommit = 'a'.repeat(40), mergeTree, confirmedRead = false
+  if (variant === 'no-change') {
+    await mkdir(join(directory, 'src')); await writeFile(join(directory, 'src/a.js'), 'already correct')
+    await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
+    await git('add', '.'); await git('commit', '-m', 'base'); baseCommit = await git('rev-parse', 'HEAD'); mergeTree = await git('rev-parse', 'HEAD^{tree}')
+  }
+  const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'v19', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const workspaceAdapter = { prepare: async scope => ({ ...scope, directory, conflictPaths: [], ...(mergeTree ? { mergeTree } : {}) }), reconcile: async () => ({ status: 'succeeded' }) }
+  const managed = createManagedEdits({ workspaceAdapter }); let writes = 0, plans = 0, preparations = 0, calls = 0
+  const delivery = createExecutionDelivery({ store: { query: value => store.query(value), command: value => { if (variant === 'prepared' && value.kind === 'effect.begin') throw Object.assign(new Error('fixture interruption before dispatch'), { code: 'FIXTURE_BEFORE_DISPATCH' }); return store.command(value) } }, artifacts, authorize: async () => ({ principalId: 'host', authorizationRef: 'original-task' }),
+    editAdapter: { execute: async value => { writes++; return managed.execute(value) }, reconcile: managed.reconcile } })
+  const flow = createEngineeringTechnicalPlanWorkflow({ workflowId: 'task-engineering-v19-test', provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] },
+    assertConflictReads: async ({ paths }) => { assert.equal(confirmedRead, true); assert.deepEqual(paths, ['src/a.js']) },
+    project: { targetCommit: baseCommit, taskBase: baseCommit }, workspaceAdapter, editAdapter: managed,
+    checks: [{ id: 'check', version: '1', run: async () => ({ passed: true, log: 'fixture' }) }], adapterIdentity: 'v19' })
+  const apply = flow.nodes.find(n => n.id === 'apply-changes')
+  const shape = { type: 'object' }
+  apply.inputSchema = shape
+  apply.inputDependencies = ['inspect-and-propose']
+  apply.mapInput = ({ requirement, dependencyOutputs, artifactRefs }) => ({ requirement,
+    plan: { ref: artifactRefs.dependencies['inspect-and-propose'], digest: executionDigest(dependencyOutputs['inspect-and-propose']) } })
+  const definition = { id: 'task-engineering-v19-test', version: '19', nodes: [
+    { id: 'prepare-workspace', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: shape, outputSchema: shape,
+      mapInput: ({ requirement }) => requirement, execute: async ({ input }) => { preparations++; return input } },
+    { id: 'inspect-and-propose', version: '7', executor: 'agent', provider: 'test', model: 'test', prompt: '技术方案', allowedTools: [], allowedEffects: ['read'], inputSchema: shape, outputSchema: shape, mapInput: ({ requirement }) => requirement }, apply,
+  ] }
+  const sessions = { async run(args) {
+    await args.onSessionBound()
+    if (args.binding.nodeId === 'inspect-and-propose') {
+      plans++; if (plans > 1) assert.ok(args.recoveryContext.diagnosis.includes('遗漏'))
+      await args.onResult({ document: { markdown: variant === 'same-plan-repeat' ? 'same' : `plan ${plans}` } }); return { status: 'submitted' }
+    }
+    calls++
+    const value = { status: 'succeeded', summary: '修改完成', planRef: args.input.plan.ref, effectRefs: ['forged'] }
+    await assert.rejects(args.validateOutput(value), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+    if (['revise', 'same-plan-repeat'].includes(variant) && (calls === 1 || variant === 'same-plan-repeat')) {
+      const revision = { ...value, status: 'plan-revision-needed', summary: '设计遗漏事务范围', effectRefs: [] }
+      await args.validateOutput(revision); await args.onResult(revision); return { status: 'submitted' }
+    }
+    const signal = new AbortController().signal
+    if (variant === 'no-change') {
+      await assert.rejects(args.validateOutput({ ...value, effectRefs: [] }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+      assert.equal(await readFile(join(directory, 'src/a.js'), 'utf8'), 'already correct'); confirmedRead = true
+      const proof = await args.applyEdits({ changes: [], replacements: [], noChange: { reason: '已读取实现符合要求', reviewedPaths: ['src/a.js'] } }, signal)
+      assert.equal(proof.changeDisposition, 'no-change'); assert.ok(proof.evidenceRef)
+      assert.equal((await artifacts.read(proof.evidenceRef)).tree, mergeTree)
+      const valid = { ...value, effectRefs: [] }; await args.validateOutput(valid); await args.onResult(valid); return { status: 'submitted' }
+    }
+    const bad = await args.applyEdits({ changes: [{ path: 'src/a.js', expectedHash: 'b'.repeat(64), content: 'new' }], replacements: [] }, signal)
+    assert.equal(bad.received, false); assert.equal(bad.error.code, 'EDIT_BASE_CONFLICT'); assert.equal(writes, 0)
+    const edits = { changes: [{ path: 'src/a.js', expectedHash: null, content: 'new' }], replacements: [] }
+    if (variant === 'prepared') {
+      await assert.rejects(args.applyEdits(edits, signal), { code: 'FIXTURE_BEFORE_DISPATCH' })
+      const effects = await store.query({ kind: 'effect.list', runId: args.binding.runId })
+      assert.equal(effects[0].state, 'prepared'); assert.equal(writes, 0)
+      await assert.rejects(args.validateOutput({ ...value, status: 'plan-revision-needed', effectRefs: [] }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+      return { status: 'no_submission' }
+    }
+    const receipt = await args.applyEdits(edits, signal)
+    assert.deepEqual(await args.applyEdits(edits, signal), receipt); assert.equal(writes, 1)
+    await assert.rejects(args.applyEdits({ changes: [{ path: 'src/b.js', expectedHash: null, content: 'other' }], replacements: [] }, signal), { code: 'DELIVERY_IDENTITY_CONFLICT' })
+    await assert.rejects(args.validateOutput({ ...value, status: 'plan-revision-needed', effectRefs: [] }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+    const valid = { ...value, effectRefs: [receipt.effectId] }
+    await assert.rejects(args.validateOutput({ ...valid, planRef: 'foreign' }), { code: 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' })
+    await args.validateOutput(valid); await args.onResult(valid); return { status: 'submitted' }
+  }, async assertDrained() {}, async cancel() {}, async close() {} }
+  const controller = createExecutionController({ store, artifacts, delivery, sessions, workflows: [definition], readTools: ['engineering_repo_inspect'] })
+  t.after(async () => { await controller.close(); await store.close() })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'engineering', workflowId: definition.id, input: { request: '实现校验', baseCommit } }] })
+  const taskPlan = await controller.taskPlan('task')
+  const { plannedStageRunId } = await import('../packages/dingtalk-dsh-assistant/execution-controller.js')
+  const runId = plannedStageRunId('task', taskPlan.task.planRevision, 'engineering', 1)
+  await store.command({ id: 'register', kind: 'workflow.register', args: { workflowId: definition.id, digest: defineExecutionWorkflow(definition).digest, definitionVersion: '19', config: { kind: 'engineering', taskId: 'task', runId } } })
+  await controller.advanceTaskPlan('task')
+  const state = await controller.whenIdle(runId)
+  assert.equal(preparations, 1); assert.equal(state.run.generation, 1)
+  if (variant === 'same-plan-repeat') { assert.equal(state.run.status, 'waiting'); assert.equal(plans, 2); assert.equal(writes, 0) }
+  else if (variant === 'prepared') { assert.equal(state.run.status, 'waiting'); assert.equal(plans, 1); assert.equal(writes, 0); assert.equal((await controller.inspectNodeRecovery(runId)).repairable, false) }
+  else if (variant === 'no-change') { assert.equal(state.run.status, 'succeeded', JSON.stringify(state.controllerError)); assert.equal(writes, 0); assert.equal(state.nodes.at(-1).evidenceRefs.length, 2); assert.equal((await store.query({ kind: 'effect.list', runId })).length, 0) }
+  else { assert.equal(state.run.status, 'succeeded', JSON.stringify(state.controllerError)); assert.equal(plans, variant === 'edit' ? 1 : 2); assert.equal(writes, 1); assert.equal(await readFile(join(directory, 'src/a.js'), 'utf8'), 'new') }
+})
+
+
+test('v19 编辑工具登记只接受精确工程apply节点，不因readTools白名单扩大写权限', async () => {
+  const { createEngineeringTechnicalPlanWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+  const flow = createEngineeringTechnicalPlanWorkflow({ workflowId: 'task-engineering-v19-test', provider: 'test', model: 'test', discovery: { allowedPrefixes: ['src/'] },
+    project: { targetCommit: 'a'.repeat(40), taskBase: 'a'.repeat(40) }, workspaceAdapter: {}, editAdapter: {},
+    checks: [{ id: 'check', version: '1', run: async () => ({ passed: true, log: 'fixture' }) }], adapterIdentity: 'v19' })
+  assert.doesNotThrow(() => defineExecutionWorkflow(flow))
+  for (const change of [node => { node.id = 'other' }, node => { node.version = '6' }, node => { node.allowedEffects.push('git.push') }, node => { node.execute = undefined }]) {
+    const node = { ...flow.nodes.find(n => n.id === 'apply-changes'), inputDependencies: [], allowedEffects: ['read', 'workspace.edit'] }
+    change(node)
+    assert.throws(() => defineExecutionWorkflow({ id: flow.id, version: '19', nodes: [node] }), { code: 'EFFECT_NOT_ADMITTED' })
+  }
+  const node = { ...flow.nodes.find(n => n.id === 'apply-changes'), inputDependencies: [], allowedEffects: ['read'] }
+  assert.throws(() => createExecutionController({ workflows: [{ id: flow.id, version: '18', nodes: [node] }], readTools: ['engineering_repo_inspect', 'engineering_apply_edits'] }), { code: 'TOOL_NOT_ADMITTED' })
+})
+
+test('外部检查重启只结算已核排空和真实中断诊断，不重跑旧检查', async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'dsh-check-drain-proof-')),options={dbPath:join(directory,'control.db'),instanceId:'drain-proof',initialize:true}
+ const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});let store=await openExecutionStore(options),controller,calls=0
+ const flow=workflow(async()=>{calls++;throw Object.assign(Error('interrupted'),{executionDrained:false})});flow.nodes[0].drainPolicy='external-process'
+ controller=createExecutionController({store,artifacts,workflows:[flow]});t.after(async()=>{await controller.close();await store.close()})
+ await controller.createRun({commandId:'create',runId:'run',taskId:'task',workflowId:flow.id,input:1});await assert.rejects(controller.whenIdle('run'))
+ await controller.close();await store.close();store=await openExecutionStore({...options,initialize:false})
+ let alive=true
+ controller=createExecutionController({store,artifacts,workflows:[flow],externalProcessScope:async({node})=>({binding:{nodeRunId:node.nodeRunId,leaseEpoch:node.leaseEpoch},inspect:async()=>({drained:!alive,processes:alive?[{pid:123}]:[],method:'fixture-native-process-readback'})})})
+ await assert.rejects(controller.recover({commandId:'live',runId:'run'}),{code:'EXECUTOR_DRAIN_EVIDENCE_REQUIRED'})
+ const before=await controller.state('run');assert.equal(before.nodes[0].drained,false)
+ await assert.rejects(store.command({id:'wrong',kind:'node.drained',args:{runId:'run',nodeId:before.nodes[0].nodeId,generation:1,leaseEpoch:1,evidenceRef:'proof.json',expectedInputDigest:'b'.repeat(64)}}),{code:'DRAIN_EVIDENCE_CONFLICT'})
+ alive=false;await controller.recover({commandId:'gone',runId:'run'});const after=await controller.whenIdle('run')
+ assert.equal(after.run.status,'waiting');assert.equal(after.run.recoveryReason,null);assert.equal(after.nodes[0].drained,true);assert.equal(after.nodes[0].waitReason.reference,'external-check-interrupted');assert.equal(calls,1)
+ const proof=await artifacts.read(after.nodes[0].evidenceRefs[0]);assert.equal(proof.kind,'external-check-drain-proof');assert.equal(proof.drained,true)
+})
+
+for (const variant of ['restart','foreign-task','stale','principle','prefix','effect']) test(`Task流程副本修订原Run隔离与历史保留 ${variant}`,async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'dsh-task-revision-')),options={dbPath:join(directory,'control.db'),instanceId:'task-revision',initialize:true}
+ let store=await openExecutionStore(options),controller;const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});let preparations=0
+ const prefix={id:'prepare',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({requirement})=>requirement,execute:async({input})=>{preparations++;return input}}
+ const agent={id:'inspect',version:'1',executor:'agent',provider:'test',model:'test',prompt:'inspect',allowedEffects:['read'],allowedTools:[],inputSchema:number,outputSchema:number,mapInput:({previousOutput})=>previousOutput}
+ const verify={id:'verify',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:number,outputSchema:number,mapInput:({previousOutput})=>previousOutput,execute:async({input})=>input}
+ const old=id=>({id,version:'1',nodes:[prefix,agent,{...verify,id:'optional'},verify]})
+ const a=old('task-a-workflow'),b=old('task-b-workflow')
+ const sessions={async run(args){await args.onSessionBound();if(args.binding.nodeVersion==='1')return{status:'no_submission',reason:'fixture-diagnostic',failure:{code:'fixture-diagnostic',phase:'execution'}};await args.onResult(args.input.length);return{status:'submitted'}},async assertDrained(){},async cancel(){},async close(){}}
+ controller=createExecutionController({store,artifacts,workflows:[a,b],sessions});t.after(async()=>{await controller.close();await store.close()})
+ const runs={}
+ for(const [taskId,w]of [['a',a],['b',b]]){await controller.createTaskPlan({commandId:'plan-'+taskId,taskId,stages:[{stageId:'stage',workflowId:w.id,input:2}]});const plan=await controller.advanceTaskPlan(taskId);runs[taskId]=plan.stages[0].runId;await controller.whenIdle(runs[taskId]);await store.command({id:'register-'+taskId,kind:'workflow.register',args:{workflowId:w.id,digest:defineExecutionWorkflow(w).digest,definitionVersion:'1',config:{kind:'fixture',taskId,runId:runs[taskId]}}})}
+ const before=await controller.state(runs.a),other=await controller.state(runs.b)
+ const next={id:'task-a-revision',version:'2',ownerContract:{id:'fixture-principles',version:'1',async validateCompletion(){return true},async validateRevision({next}){if(!next.nodes.some(n=>n.id==='verify'))throw Object.assign(Error('required verification'),{code:'WORKFLOW_PRINCIPLE_REQUIRED'})}},nodes:[prefix,{...verify,id:'read-context',outputSchema:{type:'string'},execute:async()=> 'context'}, {...agent,version:'2',inputSchema:{type:'string'}},verify]}
+ if(variant==='principle')next.nodes.pop()
+ if(variant==='prefix')next.nodes[0]={...prefix,version:'2'}
+ controller.registerWorkflow(next);const definition=defineExecutionWorkflow(next),reason='调整输入合同并替换不适用的纯步骤'
+ await store.command({id:'register-next',kind:'workflow.register',args:{workflowId:next.id,digest:definition.digest,definitionVersion:'2',config:{kind:'fixture',taskId:'a',runId:runs.a,taskRevision:{fromDigest:before.run.workflowDigest,startNodeId:'inspect',reason,nodePlan:next.nodes.map(n=>({nodeId:n.id,nodeVersion:n.version,executor:n.executor}))}}}})
+ if(['effect','restart'].includes(variant)){const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(options.dbPath),n=before.nodes[variant==='restart'?0:1];try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('existing','operation',?,?,?,?,?,'digest','{}','[]','fixture','succeeded','now','now')").run(runs.a,n.nodeRunId,n.nodeId,n.generation,n.inputDigest)}finally{db.close()}}
+ const args={commandId:'revise',taskId:variant==='foreign-task'?'b':'a',runId:runs.a,expectedRevision:before.run.revision-(variant==='stale'?1:0),workflowId:next.id,workflowDigest:definition.digest,startNodeId:'inspect',reason}
+ if(variant!=='restart'){await assert.rejects(controller.reviseTaskWorkflow(args));assert.deepEqual((await controller.state(runs.a)).nodes,before.nodes);assert.deepEqual(await controller.state(runs.b),other);return}
+ const receipt=await controller.reviseTaskWorkflow(args),queued=await controller.state(runs.a)
+ assert.equal(receipt.result.generation,before.run.generation);assert.deepEqual(queued.nodes[0],before.nodes[0]);assert.equal(queued.nodes.some(n=>n.nodeId==='optional'),false);assert.equal(queued.nodes[1].nodeId,'read-context');assert.deepEqual(await controller.state(runs.b),other)
+ const audit=await artifacts.read(receipt.result.evidenceRef);assert.equal(audit.previousNodes[1].nodeRunId,before.nodes[1].nodeRunId)
+ await controller.close();await store.close();store=await openExecutionStore({...options,initialize:false});controller=createExecutionController({store,artifacts,workflows:[a,b,next],sessions})
+ await controller.recover({commandId:'recover',runId:runs.a});const after=await controller.whenIdle(runs.a)
+ assert.equal(after.run.status,'succeeded');assert.equal(after.run.runId,before.run.runId);assert.equal(after.run.generation,before.run.generation);assert.equal(preparations,2);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal((await controller.state(runs.b)).run.status,'waiting')
+ const retainedEffects=await store.query({kind:'effect.list',runId:runs.a});assert.equal(retainedEffects.length,1);assert.equal(retainedEffects[0].effectId,'existing');assert.equal(retainedEffects[0].state,'succeeded');assert.equal(retainedEffects[0].nodeRunId,before.nodes[0].nodeRunId)
+})
+
+
+for(const boundary of ['normal','paused','unknown-effect','prepare-effect'])test(`原规划会话纠正本地准备失败且成功前缀不重跑 ${boundary}`,async t=>{
+ const variant='factory';
+ const {createEngineeringTaskContextWorkflow}=await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ const directory=await mkdtemp(join(tmpdir(),'real-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'real-local',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ t.after(()=>store.close());let plans=0,prepares=0;const calls={}
+ const make=id=>{
+  const workflow=createEngineeringTaskContextWorkflow({workflowId:id,provider:'test',model:'test',prepareGeneration:async()=>({}),discovery:{allowedPrefixes:['src/']},project:{uatEnvironment:'uat3',targetCommit:'a'.repeat(40),taskBase:'a'.repeat(40)},workspaceAdapter:{},editAdapter:{},checks:[{id:'check',version:'1',run:async()=>({passed:true})}],adapterIdentity:'test',localAcceptance:{identity:id,scenarios:[{id:'scenario'}],prepare:async()=>{prepares++;return{prepared:true}}}})
+  assert.equal(workflow.version,'18');const local=workflow.nodes.find(n=>n.id==='prepare-local-acceptance');assert.deepEqual(local.allowedEffects,['workspace.prepare'])
+  if(variant==='declared-external')local.allowedEffects=['workspace.prepare','external.operation']
+  // 外部业务前缀在本测试中是隔离边界；真实factory节点身份、executor、version/effects保留。
+  for(const node of workflow.nodes.slice(0,8))if(!['define-local-acceptance','plan-local-acceptance'].includes(node.id)){
+   node.inputSchema={type:'object'};node.outputSchema={type:'object'};node.mapInput=({requirement})=>requirement
+   if(node.executor==='code')node.execute=async()=>{calls[node.id]=(calls[node.id]??0)+1;return{candidate:{identity:'frozen'}}}
+  }
+  return workflow
+ }
+ const old=make('real-old'),next=make('real-next'),oldDef=defineExecutionWorkflow(old),nextDef=defineExecutionWorkflow(next)
+ const sessions={async run(args){await args.onSessionBound();if(args.binding.nodeId==='plan-local-acceptance'){plans++;await args.onResult({cases:plans===1?[]:[{criterionId:'criterion-1',scenarioId:'scenario',steps:['核对业务'],expected:'目标正确',parameters:{}}]})}else{calls[args.binding.nodeId]=(calls[args.binding.nodeId]??0)+1;await args.onResult({})}return{status:'submitted'}},async assertDrained(){},async close(){},async cancel(){}}
+ const controller=createExecutionController({delivery:{},readTools:['engineering_repo_inspect'],store:{query:q=>store.query(q),command:c=>{if(c.kind==='node.claim'&&c.args.nodeId==='run-local-acceptance')throw Error('fixture-stop-before-external');return store.command(c)}},artifacts,workflows:[old],sessions});t.after(async()=>{await controller.close()})
+ const send=(kind,args,id=kind)=>store.command({id,kind,args}),input={request:'当前任务',acceptanceCriteria:['业务要求']},config={kind:'engineering',taskId:'task',runId:'run',uatEnvironment:'uat3',input,localAcceptanceConfig:{id:'old'}}
+ await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
+ await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,localAcceptanceConfig:{id:'new'},localAcceptanceScope:{taskId:'task',uatEnvironment:'uat3',requestDigest:executionDigest(input)},checkpoint:{kind:'local-acceptance',fromDigest:oldDef.digest,requestId:'fix'}}},'next')
+ const requirement=await artifacts.put(input)
+ await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:input.acceptanceCriteria,sourceKey:'source',eventKey:'source'})
+ await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
+ await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input,stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
+ const before=await controller.whenIdle('run');assert.equal(before.nodes[8].waitReason.reference,'LOCAL_ACCEPTANCE_PLAN_INVALID');assert.equal(before.nodes.slice(0,8).filter(n=>n.status==='succeeded').length,8);assert.equal(prepares,0)
+
+ if(boundary!=='normal'){
+  if(boundary==='paused')await controller.controlTask({commandId:'pause-fixture',taskId:'task',intent:'pause',expectedControlRevision:1})
+  else{
+   const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(directory,'control.db')),node=before.nodes[boundary==='prepare-effect'?8:6]
+   try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('correction-effect','operation',?,?,?,?,?,'digest','{}','[]','fixture',?,'now','now')").run('run',node.nodeRunId,node.nodeId,node.generation,node.inputDigest,boundary==='unknown-effect'?'unknown':'succeeded')}finally{db.close()}
+  }
+  assert.equal((await controller.inspectNodeRecovery('run')).repairable,false);assert.equal(plans,1);return
+ }
+ assert.equal((await controller.inspectNodeRecovery('run')).repairable,true,JSON.stringify(await controller.inspectNodeRecovery('run')))
+ await controller.recover({commandId:'fixed-plan-continue',runId:'run'});await controller.whenIdle('run').catch(error=>{assert.match(error.message,/fixture-stop-before-external/)})
+ const after=await controller.state('run')
+ assert.equal(plans,2,JSON.stringify({state:after,recovery:await controller.inspectNodeRecovery('run')}));assert.equal(prepares,1);assert.equal(after.run.generation,before.run.generation)
+ const prior=before.nodes.find(n=>n.nodeId==='plan-local-acceptance'),current=after.nodes.find(n=>n.nodeId===prior.nodeId)
+ assert.equal(current.sessionId,prior.sessionId);assert.equal(current.leaseEpoch,prior.leaseEpoch+1)
+ for(const node of before.nodes.slice(0,8).filter(n=>n.nodeId!=='plan-local-acceptance'))assert.deepEqual(after.nodes.find(n=>n.nodeRunId===node.nodeRunId),node)
+ for(const value of Object.values(calls))assert.equal(value,1)
+ assert.equal((await store.query({kind:'effect.list',runId:'run'})).length,0)
 })

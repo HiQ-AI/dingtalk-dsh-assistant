@@ -68,3 +68,9 @@ test('生产元数据schema授权提案保留数据表范围，非法schema拒�
  assert.deepEqual(p.directQueries.databases[0].tables,databaseProposal().directQueries.databases[0].tables);
  db.metadataSchemas=['public;DROP'];await assert.rejects(planAgentQueryResources(source,p),/QUERY_CONFIG_RESOURCE_INVALID/);
 });
+
+test('固定UAT2浏览器配置沿现有status登记；不允许模型URL与自选脚本字段',async()=>{
+ const p=proposal();p.directQueries.statusResources=[{id:'uat2-browser',kind:'uat-review-observation',accountKey:'editor_uat_admin',accountsFile:resolve('docs/tmp/accounts.json'),playwrightModule:resolve('docs/tmp/playwright/index.mjs'),evidenceDirectory:resolve('docs/tmp/browser-proofs')}];p.directQueries.permissions.statusIds=['uat2-browser'];
+ assert.equal((await planAgentQueryResources(source,p)).changed,true)
+ for(const field of ['url','selector','script']){const bad=structuredClone(p);bad.directQueries.statusResources[0][field]='untrusted';await assert.rejects(planAgentQueryResources(source,bad),/QUERY_CONFIG_RESOURCE_INVALID/)}
+})

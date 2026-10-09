@@ -1,0 +1,11 @@
+# 第32轮：部署后继续核对真实执行
+
+源码2283ed7、Assistant SHA256 08bf31317a02cff1f2922e866151faf9b76a718ff7f5b6705c7624e292fe5d91，普通部署Check零写通过；新PID109616持有3080/18998，health ok，maintenance inactive/revision483。历史5个Task、30个旧节点和1个旧Run保留，UI认证访问与包回读通过。
+
+两个已结算零事项消息的遗留屏障均resolved，resolution=coordinator_no_action_consumed。数据集过载被正确识别并自动领取lease3；生产活动节点经Owner受控续行领取lease2；撤回通知排查Owner已消费真实补充并实际查询数据库。
+
+但两工程节点的running投影不代表已启动模型：独立原生JSONL没有新lease输入，当前普通会话已attached且inbox/jobs为空。原生API session history follow有promote→resolveObservedAgent→agents.resume路径，与观察会话占用相符；未取得实际发起方网络轨迹，不把推测当确定调用证据。真实JSONL副本在隔离原生SDK可正常resume，排除历史必然损坏。继续修复受管执行会话归属，当前两任务执行验收FAIL。
+
+撤回排查另有可纠正参数问题：两次columns传tw_process_drafts而未带public，工具在连接数据库之前报QUERY_SCOPE_DENIED，不能据此断言数据库拒绝访问。已登记UAT连接确只有草稿少量列；原排查所需审核表范围需按实际UAT配置核验后登记，业务人员的排查授权无需重复取得。
+
+私有证据：docs/tmp/sg14-stable-task-deployment、sg14-live-stable-proof.json、sg14-native-registry-proof.json、sg14-real-resume-production.log及sg14-real-resume-dataset.log。未以状态投影、包部署或隔离测试冒充真实业务完成。

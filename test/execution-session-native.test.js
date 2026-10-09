@@ -16,7 +16,7 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { createExecutionSessions } from '../packages/dingtalk-dsh-assistant/execution-session.js'
+import { createExecutionSessions, inspectLegacyTurnFailure } from '../packages/dingtalk-dsh-assistant/execution-session.js'
 import { createAgentQueryTools, verifyAgentEvidence, readExecutedAgentQueryRefs } from '../packages/dingtalk-dsh-assistant/agent-query-tools.js'
 import { createAgentResourceReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-resources.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -54,6 +54,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
       requests.push(JSON.parse(JSON.stringify(options)))
       const next = typeof script === 'function' ? script(requests.length) : script[requests.length - 1]
       if (!next) throw new Error('unexpected model continuation')
+      if (next.providerFailure) { yield { type: 'finish', reason: { kind: 'error', failure: next.providerFailure } }; return }
       if (Array.isArray(next)) {
         for(const [index,call] of next.entries()) {
           const id=`call-${requests.length}-${index}`,args=JSON.stringify(call.args??{})
@@ -705,4 +706,278 @@ test('只读范围拒绝保留拒绝后可调整合法查询，不终止整个�
   assert.equal((await drive(h, { definition: definition({ allowedTools: ['query'] }) })).status, 'submitted')
   assert.deepEqual(seen, ['allowed'])
   assert.match(JSON.stringify(h.requests[1]), /QUERY_SCOPE_DENIED/u)
+})
+
+for (const [message, expected, code = 'PI_AI_ERROR'] of [
+  ['Codex error: Our servers are currently overloaded. Please try again later.\n[Codex diagnostics: {"httpStatus":200}]', 'EXECUTION_PROVIDER_TRANSIENT'],
+  ['Codex error: authentication failed', 'EXECUTION_PROVIDER_FAILED'],
+  ['fetch failed\n[Codex diagnostics: {}]', 'EXECUTION_PROVIDER_TRANSIENT', 'TRANSPORT'],
+  ['authentication failed', 'EXECUTION_PROVIDER_FAILED', 'TRANSPORT'],
+  ['fetch failed', 'EXECUTION_PROVIDER_FAILED', 'PI_AI_ERROR'],
+]) test(`原生执行保留本轮provider错误并区分暂态：${expected}`, async t => {
+  const h = await host({ script: [{ providerFailure: { code, message } }, { text: '正常结束未提交' }] })
+  t.after(() => h.close())
+  const first = await drive(h)
+  assert.equal(first.reason, expected)
+  assert.equal(first.failure.phase, 'provider')
+  assert.equal(first.failure.message, message)
+  const second = await drive(h, { binding: binding({ leaseEpoch: 2, sessionBound: true }) })
+  assert.equal(second.reason, 'execution_no_submission')
+  assert.equal(second.failure, undefined)
+})
+test('已接纳节点提交优先于稍后的provider错误', async t => {
+  const h = await host({ script: [submit('accepted')] }); t.after(() => h.close())
+  let completed = 0
+  const result = await drive(h, { onSessionBound() {
+    const session = h.ctx.sessions.get(binding().sessionId), snapshot = session.snapshotEvents.bind(session)
+    session.snapshotEvents = () => {
+      const events = snapshot()
+      return events.some(event => event.type === 'turn/end') ? [...events, { seq: events.at(-1).seq + 1, type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.' } } } }] : events
+    }
+  }, onResult() { completed++ } })
+  assert.deepEqual(result, { status: 'submitted', output: { answer: 'accepted' } })
+  assert.equal(completed, 1)
+})
+
+for (const transport of [false,true]) test(`旧provider失败只读重分类核对原生身份、本轮租约及未提交 transport=${transport}`, async t => {
+  const previousCode=transport?'EXECUTION_PROVIDER_FAILED':'execution_no_submission'
+  const message = transport?'fetch failed':'Codex error: Our servers are currently overloaded. Please try again later.'
+  const h = await host({ script: [{ providerFailure: { code: transport?'TRANSPORT':'PI_AI_ERROR', message } }] }); t.after(() => h.close())
+  await drive(h)
+  const b = binding({ sessionBound: true }), proof = await inspectLegacyTurnFailure(h.ctx, b, previousCode)
+  assert.equal(proof.failure.code, 'EXECUTION_PROVIDER_TRANSIENT')
+  await assert.rejects(inspectLegacyTurnFailure(h.ctx, { ...b, inputDigest: 'forged' }, previousCode), { code: 'execution_session_identity_mismatch' })
+  assert.equal(await inspectLegacyTurnFailure(h.ctx, { ...b, leaseEpoch: 2 }, previousCode), null)
+  const stored = await h.ctx.sessionPersistence.inspect(b.sessionId)
+  for (const extra of [
+    { type: 'user/message', data: { source: { kind: 'web' } } },
+    { type: 'agent/inbox/spliced', data: { inserted: [{ source: { kind: 'coordinator', executionSession: { sessionId: b.sessionId, leaseEpoch: 1 } } }] } },
+    { type: 'tool/result', data: { name: 'execution_node_submit' } },
+  ]) {
+    const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events: [...stored.events, { ...extra, seq: stored.events.at(-1).seq + 1 }] }) } }
+    assert.equal(await inspectLegacyTurnFailure(ctx, b, previousCode), null)
+  }
+  assert.equal(await inspectLegacyTurnFailure({ ...h.ctx, agents: { get: () => ({}) } }, b, previousCode), null)
+})
+
+test('原生用户中断正在执行的只读工具保留中断类型而非工具失败', async t => {
+  const entered = Promise.withResolvers()
+  const h = await host({ tools: [{ name: 'query', description: 'read', parameters: { type: 'object' }, async execute({ signal }) {
+    entered.resolve(); await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  } }], script: [{ name: 'query' }] }); t.after(() => h.close())
+  const running = drive(h, { definition: definition({ allowedTools: ['query'] }) })
+  await entered.promise
+  h.handles[0].cancel({ kind: 'user' }, { keepInbox: true })
+  const result = await running
+  assert.equal(result.reason, 'EXECUTION_TURN_INTERRUPTED'); assert.equal(result.failure.code, 'EXECUTION_TURN_INTERRUPTED')
+})
+
+test('历史中断证据仅接纳最后本轮精确只读工具取消形态', async () => {
+  const b = binding({ sessionBound: true })
+  const identity = Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key => [key,b[key]]))
+  const events = [{ seq: 0, type: 'dingtalk/execution-session', data: { version: 1, identity, creationLease: 1 } },
+    { seq: 1, type: 'user/message', data: { source: { kind: 'coordinator', executionSession: { sessionId: b.sessionId, leaseEpoch: 1 } } } },
+    { seq: 2, type: 'tool/call', data: { name: 'engineering_repo_inspect', callId: 'call' } },
+    { seq: 3, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'call', isError: true, content: [{ type: 'text', text: 'Error: [object Object]' }] }] } } },
+    { seq: 4, type: 'step/end', data: {} }, { seq: 5, type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } }]
+  const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events }) } }
+  assert.equal((await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')).failure.code,'EXECUTION_TURN_INTERRUPTED')
+  assert.equal(await inspectLegacyTurnFailure(ctx,b),null)
+  events[3].data.message.content[0].content[0].text = 'Error: real failure'
+  assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
+  events[3].data.message.content[0].content[0].text = 'Error: [object Object]'
+  events[5].data.reason.reason.kind = 'shutdown'
+  assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
+})
+
+test('受管工程新会话声明原生子会话归属', async t => {
+  const h=await host();t.after(()=>h.close())
+  await drive(h)
+  assert.equal((await h.ctx.sessionPersistence.inspect(binding().sessionId)).meta.origin,'subagent')
+})
+
+test('旧工程冷会话在维护桥派生受管子会话', async t => {
+  const h=await host({script:[{text:'temporary stop'},submit('continued')]});t.after(()=>h.close())
+  const originalCreate=h.ctx.agents.create.bind(h.ctx.agents)
+  h.ctx.agents.create=options=>{const meta={...options.meta};delete meta.origin;return originalCreate({...options,meta})}
+  await drive(h)
+  h.ctx.agents.create=originalCreate
+  const before=await h.ctx.sessionPersistence.inspect(binding().sessionId)
+  let saved
+  const proof=await h.manager.prepareManagedSession(binding({status:'running',sessionBound:true,leaseEpoch:2}),definition(),async p=>{saved=p})
+  assert.equal(proof,saved)
+  assert.equal(h.ctx.agents.get(binding().sessionId),undefined)
+  const child=await h.ctx.sessionPersistence.inspect(proof.sessionId)
+  assert.equal(child.meta.origin,'subagent');assert.equal(child.meta.parentSession,binding().sessionId)
+  assert.equal(child.events.filter(e=>e.type==='user/message').length,before.events.filter(e=>e.type==='user/message').length)
+  const result=await drive(h,{binding:binding({sessionId:proof.sessionId,sessionBound:true,leaseEpoch:3})})
+  assert.equal(result.status,'submitted')
+})
+
+for (const scenario of ['current-lease','identity','external-observer','cas-retry']) test(`旧工程受管派生安全门禁 ${scenario}`, async t=>{
+  const h=await host({script:[{text:'stop'}]});t.after(()=>h.close())
+  const create=h.ctx.agents.create.bind(h.ctx.agents)
+  h.ctx.agents.create=options=>{const meta={...options.meta};delete meta.origin;return create({...options,meta})}
+  await drive(h);h.ctx.agents.create=create
+  const b=binding({status:'running',sessionBound:true,leaseEpoch:2})
+  if(scenario==='current-lease')b.leaseEpoch=1
+  if(scenario==='identity')b.inputDigest='other'
+  if(scenario==='external-observer') {
+    const observer=await h.ctx.agents.resume({resumeSessionId:binding().sessionId,agentOptions:{provider:'execution-fixture',model:'scripted'}})
+    t.after(()=>observer.dispose())
+    await assert.rejects(h.manager.prepareManagedSession(b,definition(),async()=>assert.fail('must not bind')))
+    assert.equal(h.ctx.agents.get(binding().sessionId),observer.agent);return
+  }
+  if(scenario==='cas-retry') {
+    let id
+    await assert.rejects(h.manager.prepareManagedSession(b,definition(),async p=>{id=p.sessionId;throw new Error('CAS rejected')}),/CAS rejected/)
+    const proof=await h.manager.prepareManagedSession(b,definition(),async()=>{})
+    assert.equal(proof.sessionId,id);return
+  }
+  await assert.rejects(h.manager.prepareManagedSession(b,definition(),async()=>assert.fail('must not bind')))
+})
+
+test('历史scope工具错误按真实blocked尾部重分类，拒绝别的工具和额外输入',async()=>{
+ const b=binding({sessionBound:true}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]))
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},
+ {seq:1,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId:b.sessionId,leaseEpoch:1}}}},
+ {seq:79,type:'tool/call',data:{name:'engineering_repo_inspect',callId:'call'}},
+ {seq:80,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'call',isError:true,content:[{type:'text',text:'Error: ENGINEERING_READ_PATH_INVALID'}]}]}}},
+ {seq:81,type:'step/end',data:{}},{seq:82,type:'turn/end',data:{reason:{kind:'blocked'}}}]
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ assert.equal((await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')).failure.code,'ENGINEERING_READ_PATH_INVALID')
+ events[2].data.name='other';assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null);events[2].data.name='engineering_repo_inspect'
+ events[3].data.message.content[0].content[0].text='Error: other';assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
+ events[3].data.message.content[0].content[0].text='Error: ENGINEERING_READ_PATH_INVALID'
+ events.push({seq:83,type:'user/message',data:{source:{kind:'user'}}});assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
+})
+for(const variant of ['valid','foreign','parent-after-rebind','parent-new-lease','inbox-parent-after','current-submit','current-lease'])test(`旧provider可信rebind已消费父历史：${variant}`,async()=>{
+ const b=binding({sessionBound:true,sessionId:'child',leaseEpoch:4}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]));identity.sessionId='parent'
+ const input=(seq,sessionId,leaseEpoch)=>({seq,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId,leaseEpoch}}}})
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},input(10,'parent',1),input(85,'parent',2),
+ {seq:92,type:'dingtalk/execution-session-rebind',data:{parentSessionId:'parent',sessionId:'child',inputDigest:b.inputDigest,leaseEpoch:3}},input(98,'child',4),
+ {seq:153,type:'turn/end',data:{reason:{kind:'error',error:{code:'TRANSPORT',message:'fetch failed'}}}}]
+ if(variant==='foreign')events[1].data.source.executionSession.sessionId='other'
+ if(variant==='parent-after-rebind')events.splice(4,0,input(94,'parent',2))
+ if(variant==='parent-new-lease')events[2].data.source.executionSession.leaseEpoch=3
+ if(variant==='inbox-parent-after')events.splice(4,0,{seq:94,type:'agent/inbox/spliced',data:{inserted:[input(94,'parent',2).data]}})
+ if(variant==='current-submit')events.splice(-1,0,{seq:150,type:'tool/call',data:{name:'execution_node_submit'}})
+ if(variant==='current-lease')events[4].data.source.executionSession.leaseEpoch=3
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const proof=await inspectLegacyTurnFailure(ctx,b,'EXECUTION_PROVIDER_FAILED')
+ if(variant==='valid'){assert.equal(proof.failure.code,'EXECUTION_PROVIDER_TRANSIENT');assert.equal(proof.inputSeq,98);assert.equal(proof.endSeq,153)}else assert.equal(proof,null)
+})
+
+test('已提交候选经纯校验退回后原生同会话续行，保留旧提交历史',async t=>{
+ const root=await temp(),first=await host({root,script:[submit('original-proposal')]})
+ assert.equal((await drive(first)).status,'submitted')
+ const before=await first.ctx.sessionPersistence.inspect(binding().sessionId);await first.close()
+ const next=await host({root,script:[submit('corrected-proposal')]});t.after(()=>next.close())
+ const result=await drive(next,{binding:binding({leaseEpoch:2,sessionBound:true}),recoveryContext:{kind:'execution-recovery-context',taskId:'task',runId:'run',nodeRunId:'node',diagnosis:'候选纯校验拒绝',strategy:'保留有效改动，纠正无效替换后重新提交',evidenceRefs:['proof/original-proposal','proof/validation']}})
+ assert.equal(result.status,'submitted')
+ const after=await next.ctx.sessionPersistence.inspect(binding().sessionId)
+ assert.deepEqual(after.events.slice(0,before.events.length),before.events)
+ assert.match(JSON.stringify(next.requests[0]),/original-proposal/)
+ assert.match(JSON.stringify(next.requests[0]),/纠正无效替换/)
+})
+
+
+test('共享材料previous参数反馈后原生同会话自行纠正并提交',async t=>{
+ const calls=[],ref='tasks/task/sha256-'+ 'a'.repeat(64)+'.json'
+ const h=await host({script:[{name:'engineering_repo_inspect',args:{operation:'materials',source:'previous',path:ref}},{name:'engineering_repo_inspect',args:{operation:'materials',source:'current',path:ref}},submit('read')],repositoryInspect:async(_binding,args)=>{calls.push(args);return args.source==='previous'?{status:'invalid_source',code:'QUERY_ARGUMENT_INVALID',suggestedCall:{...args,source:'current'}}:{artifact:'真实同Task材料'}}})
+ t.after(()=>h.close())
+ const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
+ assert.equal(result.status,'submitted');assert.equal(calls.length,2)
+ assert.ok(JSON.stringify(h.requests[1]).includes('invalid_source'))
+ assert.match(JSON.stringify(h.requests[0]),/不能替换业务需求或改变UAT/);assert.match(JSON.stringify(h.requests[0]),/自行追加真人审批/)
+ const events=(await h.ctx.sessionPersistence.inspect(binding().sessionId)).events
+ assert.equal(events.filter(e=>e.type==='dingtalk/execution-session').length,1)
+})
+for(const variant of ['valid','foreign','current','read','malformed','extra-error','submitted','missing-args'])test(`历史materials代次误用精确重分类：${variant}`,async()=>{
+ const b=binding({sessionBound:true}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]))
+ const args={operation:'materials',source:'previous',path:'tasks/task/sha256-'+ 'a'.repeat(64)+'.json',limit:16000}
+ if(variant==='foreign')args.path=args.path.replace('tasks/task/','tasks/other/')
+ if(variant==='current')args.source='current'
+ if(variant==='read')args.operation='read'
+ if(variant==='malformed')args.path='tasks/task/../secret'
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},{seq:1,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId:b.sessionId,leaseEpoch:1}}}},
+ {seq:2,type:'tool/call',data:{name:'engineering_repo_inspect',callId:'call',arguments:variant==='missing-args'?undefined:JSON.stringify(args)}},
+ {seq:3,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'call',isError:true,content:[{type:'text',text:'Error: ENGINEERING_READ_SCOPE_INVALID'}]}]}}},
+ {seq:5,type:'step/end',data:{}},{seq:6,type:'turn/end',data:{reason:{kind:'blocked'}}}]
+ if(variant==='extra-error')events.splice(2,0,{...structuredClone(events[3]),seq:1.5})
+ if(variant==='submitted')events.splice(2,0,{seq:1.5,type:'tool/call',data:{name:'execution_node_submit'}})
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const proof=await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')
+ if(variant==='valid')assert.equal(proof.failure.code,'QUERY_ARGUMENT_INVALID');else assert.equal(proof,null)
+})
+
+for(const variant of ['valid','foreign','previous','read','malformed','extra-error','submitted','missing-args'])test(`历史materials截短引用精确重分类：${variant}`,async()=>{
+ const b=binding({sessionBound:true}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]))
+ const args={operation:'materials',source:'current',path:'tasks/task/sha256-'+ 'a'.repeat(12)+'.json',limit:16000}
+ if(variant==='foreign')args.path=args.path.replace('tasks/task/','tasks/other/')
+ if(variant==='previous')args.source='previous'
+ if(variant==='read')args.operation='read'
+ if(variant==='malformed')args.path='tasks/task/../secret'
+ const events=[{seq:0,type:'dingtalk/execution-session',data:{version:1,identity,creationLease:1}},{seq:1,type:'user/message',data:{source:{kind:'coordinator',executionSession:{sessionId:b.sessionId,leaseEpoch:1}}}},
+ {seq:2,type:'tool/call',data:{name:'engineering_repo_inspect',callId:'call',arguments:variant==='missing-args'?undefined:JSON.stringify(args)}},
+ {seq:3,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'call',isError:true,content:[{type:'text',text:'Error: ARTIFACT_REFERENCE_INVALID'}]}]}}},
+ {seq:5,type:'step/end',data:{}},{seq:6,type:'turn/end',data:{reason:{kind:'blocked'}}}]
+ if(variant==='extra-error')events.splice(2,0,{...structuredClone(events[3]),seq:1.5})
+ if(variant==='submitted')events.splice(2,0,{seq:1.5,type:'tool/call',data:{name:'execution_node_submit'}})
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const proof=await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')
+ if(variant==='valid')assert.equal(proof.failure.code,'QUERY_ARGUMENT_INVALID');else assert.equal(proof,null)
+})
+
+test('共享材料短引用反馈后原生同会话查索引再用完整引用提交',async t=>{
+ const calls=[],short='tasks/task/sha256-'+ 'a'.repeat(12)+'.json',ref='tasks/task/sha256-'+ 'a'.repeat(64)+'.json'
+ const h=await host({script:[{name:'engineering_repo_inspect',args:{operation:'materials',path:short}},{name:'engineering_repo_inspect',args:{operation:'materials',source:'current'}},{name:'engineering_repo_inspect',args:{operation:'materials',source:'current',path:ref}},submit('read')],repositoryInspect:async(_binding,args)=>{calls.push(args);return args.path===short?{error:{code:'QUERY_ARGUMENT_INVALID',reference:short},suggestedCall:{operation:'materials',source:'current'}}:args.path?{artifact:'真实同Task材料'}:{entries:[{artifactRef:ref}]}}})
+ t.after(()=>h.close())
+ const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
+ assert.equal(result.status,'submitted');assert.equal(calls.length,3);assert.ok(JSON.stringify(h.requests[1]).includes('QUERY_ARGUMENT_INVALID'))
+ const events=(await h.ctx.sessionPersistence.inspect(binding().sessionId)).events
+ assert.equal(events.filter(e=>e.type==='dingtalk/execution-session').length,1)
+})
+
+
+test('v19 原生编辑工具仅委托 Host 当前 binding，真实回执可提交且不开放原生写', async t => {
+  let edits = 0, accepted
+  const h = await host({ script: [
+    { name: 'engineering_apply_edits', args: { replacements: [], changes: [{ path: 'src/a.js', expectedHash: null, content: 'new' }] } },
+    submit('effect-actual'),
+  ] }); t.after(() => h.close())
+  const result = await drive(h, { definition: definition({ allowedTools: ['engineering_apply_edits'] }),
+    applyEdits: async args => { edits++; assert.deepEqual(args, { replacements: [], changes: [{ path: 'src/a.js', expectedHash: null, content: 'new' }] }); return { effectId: 'effect-actual' } },
+    onResult: value => { accepted = value },
+  })
+  assert.equal(result.status, 'submitted'); assert.equal(edits, 1); assert.deepEqual(accepted, { answer: 'effect-actual' })
+  assert.equal(h.effects.length, 0)
+  assert.ok(JSON.stringify(h.requests[1]).includes('effect-actual'))
+})
+
+test('v19 原生编辑工具没有 Host executor 不可仅靠工具名获得写能力', async t => {
+  const h = await host(); t.after(() => h.close())
+  await assert.rejects(drive(h, { definition: definition({ allowedTools: ['engineering_apply_edits'] }) }), { code: 'execution_edit_executor_required' })
+  assert.equal(h.requests.length, 0)
+})
+
+test('v19 原生编辑参数带身份或截短hash仅回合纠正不调用编辑', async t => {
+  let edits = 0
+  const h = await host({ script: [
+    { name: 'engineering_apply_edits', args: { taskId: 'foreign', replacements: [], changes: [{ path: 'a', expectedHash: 'abc', content: 'bad' }] } },
+    { name: 'engineering_apply_edits', args: { replacements: [], changes: [{ path: 'a', expectedHash: null, content: 'good' }] } },
+    submit('done'),
+  ] }); t.after(() => h.close())
+  const result = await drive(h, { definition: definition({ allowedTools: ['engineering_apply_edits'] }), applyEdits: async () => { edits++; return { effectId: 'real' } } })
+  assert.equal(result.status, 'submitted'); assert.equal(edits, 1); assert.equal(h.requests.length, 3)
+})
+
+
+test('v19 实施节点仓库读取使用原requirement基线而非plan封装', async t => {
+  let received
+  const h = await host({ script: [{ name: 'engineering_repo_inspect', args: { operation: 'read', path: 'src/a.js' } }, submit('done')],
+    repositoryInspect: async (_binding, _args, _signal, input) => { received = input; return { text: 'source' } } }); t.after(() => h.close())
+  const requirement = { baseCommit: 'a'.repeat(40), request: '原要求' }
+  const result = await drive(h, { input: { requirement, plan: { ref: 'plan', digest: 'digest' } }, definition: definition({ allowedTools: ['engineering_repo_inspect', 'engineering_apply_edits'] }), applyEdits: async () => ({}) })
+  assert.equal(result.status, 'submitted'); assert.deepEqual(received, requirement)
 })

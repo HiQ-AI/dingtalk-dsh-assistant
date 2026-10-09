@@ -1,0 +1,24 @@
+# 第48轮：阶段引用修复部署与同候选检查配置恢复
+
+40da8e5f包SHA256为40da8e5f8fc8e1e2af4fffe3de691fdb35fabba8b69c9a578110cec2044edacf，729992字节。新PID146784，100文件回读一致，认证Web200、健康ok，6条Task与156旧节点历史核验通过。部署保持maintenance494、busy全零，用于既有checks checkpoint操作。
+
+## 检查失败原因独立回读
+
+- f559 generation5：依赖安装exit0、197980ms；三个不存在的固定测试路径导致下一步exit1、158ms，构建尚未执行。候选9997461d44c27427cdc894ef0e63baa613e8657b2a8390a18bb0ec782faba40c，七个成功节点及其工件保留。
+- 1edb generation1：2698个源码文件全部展开后启动测试，67014ms退出。Host固定筛选两个不存在的Merge测试类，Surefire报No tests were executed，后续打包未执行。该错误不能证明候选缺少本需求测试；先修Host检查选择与报告核验。
+
+本轮不取消业务Task，不修改候选源码，不伪造检查通过。后端检查工具的单独修复与验证见round49；检查恢复点及恢复派发结果在本轮后续记录。
+
+私有证据：stage-deployment、stage-deployment-independent-proof.json、stage-checks-before-proof.json。尚未把部署健康视为业务交付完成。
+
+## 正式检查恢复点
+
+首轮维护桥因未连接原生delivery组件而返回DELIVERY_ADAPTER_REQUIRED，closed=true、results为空，没有接纳任何checkpoint。移除桥并恢复原profile后，补齐真实installed delivery；隔离全路径验证使用真实工程定义、失败verify、维护及checkpoint，证明无派发/效果、同代及成功前缀保留。第二轮以新模块URL加载，避免同Host原生ESM缓存旧版本；保留首轮失败报告。
+
+第二轮两项均有正式receipt，report status=complete、closed=true。19:48独立只读SQLite核对：f559仍generation5、1edb仍generation1，两者各七个成功节点的nodeRunId/outputRef/lease全部一致，verify-candidate原nodeRunId保持且仅恢复ready；候选及apply工件均保留。新的检查定义分别采用前端自动测试发现、后端v3真实单测发现及动态JUnit证据。
+
+桥及witness精确移除，profile独立SHA恢复b6c386735c67d91a2fc3d7a8014973dc2def130cfea4a943c3bc8935f3a6a261。独立证据checks-checkpoint-retry-manifest-report.json、checkpoint-independent-readback.json；旧失败证据checks-checkpoint-manifest-report.json不覆盖。检查节点恢复不等于检查已经通过。
+
+19:50正式Resume及独立HTTP确认maintenance495 inactive、PID146784健康、收信启用。两条原verify节点已领取lease2，Run分别仍gen5/gen1，七个成功前缀再次核验一致。83旧路径错误已正式重分类为ENGINEERING_READ_PATH_INVALID，Stage历史引用对账通过；实际Owner续行另外核验。
+
+19:52最终原生回读：83同session97c9d965、同generation4，inspect-and-propose lease2/inputSeq88；seq100读取共享索引，seq181/267分页读取当前需求正文6922f336，随后seq289及308/310/312/314/353实际读取仓库组件。由此确认正式原节点续行、共享材料读取均发生，而非仅状态投影running。两条检查仍执行中，未宣称测试、构建或业务E2E通过。

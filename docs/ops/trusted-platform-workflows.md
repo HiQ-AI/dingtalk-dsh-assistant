@@ -272,3 +272,45 @@ PowerShell Phase依次check、offline、reconcile、install、start、readback�
 钉钉消息回读会将文本软换行显示为空格，审批确认只归一段落回读产生的 Markdown 硬换行和 CRLF/LF 软换行显示差异；其他空格、SQL及标点必须保持。已有 openTaskId 只查发送状态并读取原消息，显示差异不得触发重新发送。
 
 审批私聊使用 Markdown 标题、空行和明确字段，私聊正文不包含执行SQL，完整SQL保留在工单及审批详情；避免堆放重复目标、resourceKey和长摘要。短审批编号用于消息定位，未知发送仍须完整正文及权威收件人匹配，不能仅凭编号认领。已送达消息可原位编辑展示，审批仍绑定原请求、冻结执行内容和同一引用消息ID，不新建审批或补发。
+
+后端单测检查采用 Surefire 标准命名 `Test*/*Test/*Tests/*TestCase`，显式排除 `*IT/*ITCase/*E2ETest`；不再绑定其他需求的两个 Merge 类。每次随机 `host-unit-UUID` 仅读取本轮全部 `TEST-*-<suffix>.xml`，至少一份报告，每份 tests>0、failures/errors/skipped=0、testcase计数与suite身份一致；旧报告、空报告、伪造suite、跳过不能当成通过。此规则仅是普通单测范围，业务E2E和需要服务的集成测试须走独立验收。变更候选时继续审阅普通命名测试的外部依赖，不能把命名过滤当作网络隔离。
+
+`prepare-backend-unit-checks.mjs <绝对request.json> <绝对output.json>` 的request为 `{checks,toolsDirectory,nodeExecutable,javaExecutable,mavenHome}`，它只支持为原单一package检查首次添加单测。已有双步骤的活动任务应克隆完整checks，只提高dataset-package版本并替换第一步受信工具快照路径，保留其余argv及package步骤，经原生checks checkpoint接纳；不修改全局profile来绕过活动定义摘要。工具快照同时冻结JS和Java源的SHA。
+
+### UAT2 审核页面只读观察
+
+`directQueries.statusResources` 可登记 `kind: uat-review-observation`，字段为 `id/accountKey/accountsFile/playwrightModule/evidenceDirectory`；路径均为 Host 绝对路径，账号仅现有 `editor_uat_admin` 或 `editor_uat_sunpeng`。沿已有 `permissions.statusIds` 和 `configure-agent-query-resources.mjs` 的 check/CAS apply 登记，不改变运行中配置文件或旧 Task 账。
+
+查询固定访问 `https://editor2.hiqdat.dev/audit/dataset/received?tab=0`，独立 headless Edge 上下文、关闭 service worker/下载/WebSocket，拦截未登记 API 和外部请求，仅允许审核/消息列表及其页面依赖读取。只点击本地折叠按钮，不提交、撤回、标已读或修改权限。结果含观察时间、账号键、布局与截图 SHA/路径；原图保留在受信证据目录，不包含登录凭据。账号视角与日志覆盖范围必须在结论中说明，不将管理员列表当成其他用户送达证明。资源注册后用现有只读任务重评恢复，不能直接改 Task 状态。
+
+### 宿主历史操作回执的正式来源登记
+
+`directQueries.resources` 的 files 资源可选 `hostReceipts: [{path,digest,taskId,requirementRevision}]`。仅由 Host 对确由宿主执行生成的历史操作回执显式登记；普通报告、模型摘要不得登记为原始操作来源。digest 为 `executionDigest(完整UTF8文本)`，不是文件字节 SHA256。仍走既有 configure 的 profile SHA CAS，不增加模型参数或业务执行接口。
+
+读取时校验精确路径与全文摘要，漂移返回 QUERY_RECEIPT_CONTENT_CHANGED；完成时校验 Task/需求版本，只有匹配项注入 `hostQuery.hostReceipt`。领域评审仍需判断原始步骤、真实结果和 DB/API 交叉核验，不自动验收成功，也不将正文自报属性当作 Host 来源。普通 files 行为不变。文件更新后需要重新审阅并登记摘要，不能用旧信任覆盖新内容。
+
+工程检查失败由 Owner 正式 repairCurrentStage 承接时，满足排空、当前Task/需求/CAS及无外部效果条件会保留同代成功准备前缀和候选差异，从 inspect 重新修正和检查；不是跳过失败检查。其他失败仍按各自原生路径恢复，禁止手改节点状态。
+
+## 必要工程依赖索引 8→9
+
+`insertDependency` 保留原等待 Run，因此 schema 9 将唯一活动 Task 索引精确排除 `waiting + recovery_reason=stage-dependency`。普通 waiting（含 NULL reason）仍受唯一约束。原恢复原因保存在正式 `task.plan.insertDependency` 事件，依赖完成恢复；原节点失败工件不变。不能伪造终态腾出索引位置。
+
+使用 `scripts/migrate-execution-dependency-index.mjs --check <控制库绝对路径>` 取得零写基线。正式维护 enter→排空→seal→旧进程退出并取得 owner 独占锁后，调用导出 `migrateExecutionDependencyIndex(db,{mode:'execute'})`，或独立 CLI `--execute <控制库绝对路径> <已退出PID>`。迁移在事务内只改索引与 schema_version，并比较所有表（除版本列）完整摘要。重复迁移零写。必须迁移成功后才启动 schema 9 包；不得先启动新包再修旧库。
+
+Host 仓库配置仅显式两向 `dataset-web.dependencyRepositories: [dataset]`、`dataset.dependencyRepositories: [dataset-web]`，无通配。配置不改变旧工程冻结 digest，不改原检查或本地验收配置；Owner 仍必须核原人类需求直接需要该阶段。原 Task 的必要阶段后续还需绑定正确的真实业务验收场景，不能复用其他任务场景充数。
+
+本地验收配置 checkpoint 允许精确重评 `prepare-local-acceptance` 的 `LOCAL_ACCEPTANCE_PLAN_INVALID`：该节点必须 code、已排空、无输出，前缀全成功，后续只能未执行 ready/blocked，本地准备及后续无任何效果；Controller核对新旧定义仅为pure/read，或精确v18原节点version1的唯一workspace.prepare声明；该声明不替代零实际效果检查，混入其他效果仍拒绝。维护与Task/Run/需求/配置CAS仍保留。事务记录原节点inputRef/inputDigest/lease/waitReason和失败工件引用，再清理纯准备失败以重评方案。成功工作区、代码候选、构建检查保持；define/plan因配置变化重评。其他错误、外部效果不适用。
+
+Owner 历史查询证据修复只改变候选验收入口，不修改既有任务账本或自动完成任务。部署后沿现有受管重评恢复原 Owner：Host 会重新读取当前任务/需求的持久证据并真实执行领域验收，无需要求模型为临时本轮读取记录重复读全部不可变工件。缺失、陈旧、跨任务证据仍拒绝；现场完成必须另查原 Task 的真实验收结果。
+
+## 仓库摘要漂移的受控配置恢复
+
+仅当前部署改动全局 checks/taskLocalAcceptance 导致已登记活动工程定义无法恢复时，使用原配置器的 `--restore-proposal`；不恢复整份旧profile，不重置业务Run或效果。它与 `--bundle/--checks-proposal/--repository-patches/--merge-policy` 互斥。
+
+```powershell
+node scripts/configure-project-local-acceptance.mjs --profile <当前profile绝对路径> --restore-proposal <绑定提案绝对路径> --expected-sha256 <当前SHA256> --check
+```
+
+check零写，返回恢复前后SHA、精确字段和knownActiveRuns摘要匹配。由正式部署入口确认维护/停机后，原参数改为 `--apply`；它沿既有配置锁、二次CAS、临时文件rename、独立回读，仅写profile及配置器自身备份，不写业务/control数据库。
+
+提案需包含profile/expectedProfileSha256、sourceProfile/sourceProfileSha256、deploymentReceipt及beforeConfigProof的{path,sha256}、精确dataset与dataset-web repositories。每项只接受id/restoreChecks/removeTaskLocalAcceptance/dependencyRepositories，checks必须与固定旧profile一致；旧profile不可已有taskmap，当前依赖必须保持相同。当前部署配置apply回执须绑定当前profile SHA及其真实before备份；beforeConfigProof须绑定旧profile与活动Run。再次只读核对当前活动定义repositoryDigest，全部匹配才允许恢复。无关仓库字段差异、未知仓库、来源篡改、活动Run漂移均拒绝。恢复后仍用Task checkpoint单独升级检查/验收，不再次全局改旧Run依赖配置。

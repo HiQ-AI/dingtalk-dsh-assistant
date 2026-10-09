@@ -35,7 +35,7 @@ foreach($change in @(@{deploymentControlSha256='bad'},@{packageSha256='bad'},@{s
 }
 Write-Output 'PASS 5/5: 控制证据通过；摘要/包/profile/路径漂移拒绝'
 $text=[IO.File]::ReadAllText($helper)
-foreach($needle in @('$snapshot|Set-Content -LiteralPath "$EvidenceDirectory/control-before.json"','if(-not $lockProcess){$lockProcess=Acquire-OwnerLock}',"'checkpoint',[string]`$old.ProcessId",'backupCreated=$historicalBackupRequired;deploymentControlPath=$deploymentControlPath','Assert-DeploymentControlRecord $launchRecord')){
+foreach($needle in @('$snapshot|Set-Content -LiteralPath "$EvidenceDirectory/control-before.json"','if(-not $lockProcess){$lockProcess=Acquire-OwnerLock}',"'checkpoint',[string]`$old.ProcessId",'backupCreated=$historicalBackupRequired;backupScope=$backupScope;backupManifestSha256=$backupManifestSha256;deploymentControlPath=$deploymentControlPath','Assert-DeploymentControlRecord $launchRecord')){
  if(-not $text.Contains($needle)){throw "普通部署缺失原生门禁$needle"}
 }
 Write-Output 'PASS 5/5: 控制快照、owner锁、停机检查、Launch绑定、Readback门禁保留'
@@ -83,6 +83,8 @@ function Get-ScheduledTask { @{State=$script:taskState;Settings=@{Enabled=$scrip
 function Listeners { $script:ports }
 function Get-CimInstance { $script:live }
 function Assert-LocalPackageSources {}
+# 启动身份由 deploy-owner-repair.test.ps1 独立覆盖；此处仅隔离封存修复状态门禁。
+function Assert-ScheduledWebStart {}
 function Run-Node([string[]]$Arguments){
  $script:commands+=,$Arguments
  switch($Arguments[1]){'maintenance' {$state|ConvertTo-Json -Depth 10} 'verify' {'{"verified":true}'} 'package' {'{"verified":true}'} default {throw '不得访问备份或执行维护写入'}}
@@ -90,8 +92,15 @@ function Run-Node([string[]]$Arguments){
 $proof=Test-StoppedRepair
 if(-not $proof.history.verified -or $proof.backup -or @($script:commands|Where-Object {$_[1]-eq 'package' -and $_[2]-eq $retainedObserverPackage}).Count-ne 1){throw '须回查历史及原Observer，不能访问备份'}
 $script:taskEnabled=$true;$rejected=$false
-try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复要求原自启任务仍禁用'}
+try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复自启状态与原启动记录不一致'}
 if(-not $rejected){throw '自启重新启用时不得进入离线安装'}
+$record|Add-Member -NotePropertyName launchMethod -NotePropertyValue 'scheduled-task'
+$proof=Test-StoppedRepair
+if(-not $proof.history.verified){throw '受管启动合法恢复 enabled 后失败必须允许同许可续修'}
+$script:taskEnabled=$false;$rejected=$false
+try{Test-StoppedRepair}catch{$rejected=$_.Exception.Message-eq '离线修复自启状态与原启动记录不一致'}
+if(-not $rejected){throw 'scheduled 记录的 enabled 状态漂移必须拒绝'}
+$record.PSObject.Properties.Remove('launchMethod')
 $script:taskState='Running';$script:taskEnabled=$false
 foreach($liveCase in @(@{ports=@(3080);live=@()},@{ports=@();live=@([pscustomobject]@{ProcessId=123})},@{ports=@();live=@([pscustomobject]@{ProcessId=456})})){
  $script:ports=$liveCase.ports;$script:live=$liveCase.live;$rejected=$false
@@ -100,7 +109,7 @@ foreach($liveCase in @(@{ports=@(3080);live=@()},@{ports=@();live=@([pscustomobj
 $script:ports=@();$script:live=@()
 Add-Content -LiteralPath $retainedObserverPackage 'drift'
 $rejected=$false;try{Test-StoppedRepair}catch{$rejected=$true};if(-not $rejected){throw '原Observer漂移必须拒绝'}
-Write-Output 'PASS 6/6: 实际预检回查历史/原Observer且不访问备份；自启/端口/旧PID/launcher/Observer漂移拒绝'
+Write-Output 'PASS 8/8: 实际预检允许受管启动失败后续修且拒绝状态漂移；回查历史/原Observer且不访问备份；自启/端口/旧PID/launcher/Observer漂移拒绝'
 $RepairStoppedLaunch=Join-Path $origin 'launch.json';$record|ConvertTo-Json|Set-Content -LiteralPath $RepairStoppedLaunch
 $evidenceHashes[$RepairStoppedLaunch]=(Get-FileHash -LiteralPath $RepairStoppedLaunch).Hash
 $inputHashes=@{$Package=$ExpectedPackageSha256};$launch=@{Id=789;StartTime=Get-Date}
@@ -119,3 +128,37 @@ if($script:enabled-ne 1){throw '精确包修复必须幂等恢复原自启'}
 Add-Content -LiteralPath $RepairStoppedLaunch ' '
 $rejected=$false;try{Assert-DeploymentControlRecord $launchRecord}catch{$rejected=$true};if(-not $rejected){throw '修复readback须拒绝原证据漂移'}
 Write-Output 'PASS 3/3: 实际launch/control生成保留原身份与自启；恢复幂等；原证据漂移在readback拒绝'
+
+# 原备份路径也必须允许本流程已合法恢复自启后的精确包续修；旧记录不能扩大权限。
+$backupLaunch=$record|ConvertTo-Json|ConvertFrom-Json -AsHashtable
+$backupLaunch.backupCreated=$true;$backupLaunch.backup=$fixture;$backupLaunch.launchMethod='scheduled-task'
+$backupIdentity=@{backup=$fixture;oldPid=123;packageSha256='old-package'}
+Assert-StoppedRepairPermit $backupLaunch $sealed $before $backupIdentity $state
+$backupLaunch.launchMethod='';$rejected=$false
+try{Assert-StoppedRepairPermit $backupLaunch $sealed $before $backupIdentity $state}catch{$rejected=$true}
+if(-not $rejected){throw '历史备份记录不能新增自启恢复许可'}
+$backupLaunch.launchMethod='scheduled-task';$backupLaunch.executionEventsIndexMigrationSha256='migration';$rejected=$false
+try{Assert-StoppedRepairPermit $backupLaunch $sealed $before $backupIdentity $state}catch{$rejected=$true}
+if(-not $rejected){throw '受管启动不能放宽原迁移修复限制'}
+Write-Output 'PASS 3/3: 备份部署受管恢复允许；旧记录及迁移范围保持拒绝'
+# Package-only 必须执行真实模式函数和配置分支，不能靠入口替身掩盖core拒绝。
+& {
+ $RepairStoppedLaunch='';$RestoreConfigurationProposal='';$DirectQueriesProposal='';$ObserverPackage='';$ExpectedObserverPackageSha256='';$MigrateRequiredDependency=$false;$MigrateMessageImpact=$false;$MigrateExecutionEventsIndex=$false;$TaskMigrationPlan='';$Bootstrap=$false;$Bundle='';$MergePolicy='';$ChecksProposal='';$RepositoryPatches=''
+ $mode=$ast.Find({param($n)$n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name-eq 'Assert-DeploymentMode'},$true)
+ Invoke-Expression $mode.Extent.Text
+ Assert-DeploymentMode
+ foreach($name in @('Bundle','MergePolicy','ChecksProposal','RepositoryPatches')){
+  Set-Variable $name 'partial';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '部分工程提案须拒绝'};Set-Variable $name ''
+ }
+ $config=$ast.Find({param($n)$n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text-eq '$configArgs'},$true)
+ Invoke-Expression $config.Extent.Text
+ if($configArgs){throw '仅Package不得生成配置命令'}
+ $script:configCalls=0;function Run-Node {$script:configCalls++;throw '不应运行配置工具'}
+ $guards=$ast.FindAll({param($n)$n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text-eq '$configArgs' -and $n.Extent.Text-match 'configProof|config-applied'},$true)
+ if($guards.Count-ne 2){throw '配置check/apply须各有明确门禁'}
+ $profileShaBeforePackage='same';function Get-FileHash {@{Hash='same'}}
+ foreach($guard in $guards){Invoke-Expression $guard.Extent.Text}
+ if($script:configCalls){throw 'Package-only调用配置工具'}
+ $profileShaBeforePackage='drift';$rejected=$false;try{Invoke-Expression $guards[-1].Extent.Text}catch{$rejected=$true};if(-not $rejected){throw '安装后profile漂移须拒绝'}
+ Write-Output 'PASS 8/8: Package-only准入/零配置命令；四部分提案拒绝；安装profile漂移拒绝'
+}

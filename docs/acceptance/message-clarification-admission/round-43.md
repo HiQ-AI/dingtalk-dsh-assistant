@@ -1,0 +1,9 @@
+# 第43轮：共享目录包部署与现场恢复
+
+24093461包已安装，新PID47172；100文件摘要回读一致，正式Web认证200、控制健康ok、收信处理启用、恢复问题数0。正式Resume后维护revision489、active=false，保留6条任务。部署证据在私有shared-task-deployment与shared-task-deploy-resume.log。
+
+原只读排查任务正式reassess-readonly返回202/accepted，event350、Owner revision15；独立回读随后lease4、revision17、processedWatermark350，原Task继续处理。最新等待为尚未接入的UAT2页面操作与通知查看能力，不冒称业务复现完成。
+
+两个旧工程失败尚未恢复：数据集仍PROVIDER_FAILED，交互任务仍tool_failed。只读回放查明前者被已继承父会话输入误拦截，进入round45修复；后者离线原生证据通过，仍核对正式扫描条件。生产活动原生generation4正常提交，部署后从validate/apply继续，实际补丁基线冲突后Owner又进入generation5；未把这类代码冲突当成检查配置成功，也未执行不符合当前节点状态的checks checkpoint。
+
+共享索引及读工具已部署，但业务功能交付、构建和原生模型实际读取共享正文仍分别核验。无手改SQLite、原生历史或业务Task取消。

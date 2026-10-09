@@ -145,10 +145,35 @@ async function readCandidateImpl(candidate) {
     for (let i = 2; i < attributes.length; i += 3) if (!['unspecified', 'unset'].includes(attributes[i])) fail('CANDIDATE_UNSUPPORTED_GIT_EXTENSION')
   } finally { await unlink(index).catch(error => { if (error.code !== 'ENOENT') throw error }); await rmdir(directory) }
   const operation = gitOperation.getStore()
-  return Object.freeze({ candidate: Object.freeze({ ...payload, digest }), files, async readFile(path) {
+  return Object.freeze({ candidate: Object.freeze({ ...payload, digest }), files, async searchFiles(paths, query, { signal = operation?.signal } = {}) {
+    const selected = paths.map(path => { const file = byPath.get(path); if (!file) fail('CANDIDATE_FILE_NOT_FOUND'); return file })
+    const matches = [], needle = query.toLowerCase()
+    for (let start = 0; start < selected.length;) {
+      signal?.throwIfAborted()
+      let end = start, size = 0
+      do { size += selected[end++].size + 128 } while (end < selected.length && size + selected[end].size + 128 <= 4 * 1024 * 1024)
+      const batch = selected.slice(start, end)
+      const bytes = await gitOperation.run({ signal }, () => git(repo.repository, ['cat-file', '--batch'], { input: Buffer.from(batch.map(file => file.oid).join('\n') + '\n') }))
+      let cursor = 0
+      for (const file of batch) {
+        signal?.throwIfAborted()
+        const newline = bytes.indexOf(10, cursor)
+        if (newline < cursor || bytes.subarray(cursor, newline).toString('ascii') !== `${file.oid} blob ${file.size}`) fail('CANDIDATE_BLOB_INVALID')
+        cursor = newline + 1
+        const content = bytes.subarray(cursor, cursor + file.size)
+        const actual = createHash(file.oid.length === 40 ? 'sha1' : 'sha256').update(`blob ${file.size}\0`).update(content).digest('hex')
+        if (content.length !== file.size || actual !== file.oid || bytes[cursor + file.size] !== 10) fail('CANDIDATE_BLOB_INVALID')
+        if (content.toString('utf8').toLowerCase().includes(needle)) matches.push(file.path)
+        cursor += file.size + 1
+      }
+      if (cursor !== bytes.length) fail('CANDIDATE_BLOB_INVALID')
+      start = end
+    }
+    return matches
+  }, async readFile(path, { signal = operation?.signal } = {}) {
     const file = byPath.get(path); if (!file) fail('CANDIDATE_FILE_NOT_FOUND')
     // 按需读取单个已冻结 blob，不先把整棵候选树汇入内存。
-    const bytes = await gitOperation.run(operation, () => git(repo.repository, ['cat-file', 'blob', file.oid]))
+    const bytes = await gitOperation.run({ signal }, () => git(repo.repository, ['cat-file', 'blob', file.oid]))
     const actual = createHash(file.oid.length === 40 ? 'sha1' : 'sha256').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
     if (bytes.length !== file.size || actual !== file.oid) fail('CANDIDATE_BLOB_INVALID')
     // 调用方不能修改下一检查器读到的冻结字节。
@@ -176,9 +201,48 @@ export async function verifyCandidate({ candidate, checks, signal }) {
   verifiedReceipts.add(receipt)
   return receipt
 }
+// 仅供Host从本Run成功节点工件恢复可信检查票据；不接受模型节点输入作为来源。
+export async function restoreVerifiedCandidate({ candidate, verification, requiredChecks, signal }) {
+  const { digest, ...body } = verification ?? {}
+  if (!digest || executionDigest(body) !== digest || body.version !== 1 || body.passed !== true
+    || body.candidateDigest !== candidate?.digest || !Array.isArray(body.checks)
+    || body.checks.some(check => check.passed !== true || typeof check.log !== 'string')
+    || executionDigest(body.checks.map(({id,version})=>({id,version}))) !== executionDigest(requiredChecks)) fail('CANDIDATE_VERIFICATION_UNTRUSTED')
+  await readCandidate(candidate, { signal })
+  const restored=Object.freeze({...body,checks:Object.freeze(body.checks.map(check=>Object.freeze({...check}))),digest})
+  verifiedReceipts.add(restored)
+  return restored
+}
 export async function assertVerifiedCandidate({ candidate, verification, requiredChecks, signal }) {
   if (!verification || !verifiedReceipts.has(verification) || !verification.passed || verification.candidateDigest !== candidate?.digest) fail('CANDIDATE_VERIFICATION_UNTRUSTED')
   if (!Array.isArray(requiredChecks) || !requiredChecks.length || requiredChecks.length !== verification.checks.length || new Set(requiredChecks.map(check => check.id)).size !== requiredChecks.length) fail('CANDIDATE_REQUIRED_CHECKS_MISMATCH')
   for (const check of requiredChecks) if (!verification.checks.some(actual => actual.id === check.id && actual.version === check.version && actual.passed)) fail('CANDIDATE_REQUIRED_CHECKS_MISMATCH')
   return readCandidate(candidate, { signal })
+}
+
+/** 核对完整候选恰好等于基线加已成功受管编辑；不写工作区、不忽略额外文件。 */
+export async function assertCandidateManagedEdits({ candidate, sourceTree, edits, signal }) {
+  const snapshot = await readCandidate(candidate, { signal })
+  const { digest: ignored, ...baseline } = candidate
+  baseline.tree = sourceTree
+  const source = await readCandidate({ ...baseline, digest: executionDigest(baseline) }, { signal })
+  const expected = new Map(source.files.map(file => [file.path, { ...file }]))
+  const bytesByPath = new Map()
+  for (const edit of edits) for (const change of edit.changes) {
+    if (!pathValid(change.path)) fail('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
+    const old = expected.get(change.path)
+    const before = old ? bytesByPath.has(change.path) ? bytesByPath.get(change.path) : await source.readFile(change.path) : null
+    const hash = before === null ? null : createHash('sha256').update(before).digest('hex')
+    if (hash !== change.expectedHash) fail('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
+    if (change.content === null) { expected.delete(change.path); bytesByPath.delete(change.path); continue }
+    const bytes = Buffer.from(change.content, 'utf8')
+    expected.set(change.path, { path: change.path, mode: old?.mode ?? '100644', size: bytes.length,
+      oid: createHash(candidate.tree.length === 40 ? 'sha1' : 'sha256').update(`blob ${bytes.length}\0`).update(bytes).digest('hex') })
+    bytesByPath.set(change.path, bytes)
+  }
+  if (snapshot.files.length !== expected.size || snapshot.files.some(file => {
+    const target = expected.get(file.path)
+    return !target || file.mode !== target.mode || file.oid !== target.oid || file.size !== target.size
+  })) fail('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
+  return { sourceTree, tree: candidate.tree, candidateDigest: candidate.digest, files: snapshot.files.length }
 }

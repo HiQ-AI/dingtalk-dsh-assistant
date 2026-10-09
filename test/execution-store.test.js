@@ -290,14 +290,14 @@ test('磁盘配置读回、显式初始化、正常开启及身份/schema严格�
   assert.equal((await f.query()).nodes[0].generation, 1)
   await f.store.close()
   const raw = new DatabaseSync(f.dbPath)
-  raw.exec('PRAGMA user_version=9')
+  raw.exec('PRAGMA user_version=10')
   raw.close()
   await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
 })
 
-for (const variant of ['missing', 'reversed', 'partial', 'unique', 'expression']) test(`schema8事件索引结构严格检查：${variant}`, async t => {
+for (const variant of ['missing', 'reversed', 'partial', 'unique', 'expression']) test(`事件索引结构严格检查：${variant}`, async t => {
   const f = await fixture(t, null)
-  assert.equal(f.store.info.schemaVersion, 8)
+  assert.equal(f.store.info.schemaVersion, 9)
   await f.store.close()
   const raw = new DatabaseSync(f.dbPath)
   raw.exec('DROP INDEX execution_events_kind_seq')
@@ -308,7 +308,7 @@ for (const variant of ['missing', 'reversed', 'partial', 'unique', 'expression']
   raw.close()
   await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
   const readback = new DatabaseSync(f.dbPath, { readOnly: true })
-  assert.equal(readback.prepare('PRAGMA user_version').get().user_version, 8)
+  assert.equal(readback.prepare('PRAGMA user_version').get().user_version, 9)
   const indexes = readback.prepare("PRAGMA index_list('execution_events')").all()
   assert.equal(indexes.length, variant === 'missing' ? 0 : 1, '启动拒绝后不能偷偷修复索引')
   readback.close()
@@ -712,9 +712,15 @@ test('真实COMMIT后ACK丢失：调用器超时封闭写，重开按原ID读回
     const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});let code,after;
     try{await s.command({id:'lost-claim',kind:'node.claim',args:{runId:'run',nodeId:'one',expectedGeneration:1,expectedLeaseEpoch:0}})}catch(e){code=e.code}
     try{await s.command({id:'offline-stop',kind:'run.stop',args:{runId:'run',reason:'x'}})}catch(e){after=e.code}
-    await s.close();process.send({type:'result',code,after});`, [f.dbPath, f.instanceId])
+    await s.close();process.send({type:'result',code,after,failure:s.failure});`, [f.dbPath, f.instanceId])
   await probe.message('dropped')
-  assert.deepEqual(await probe.message('result'), { type: 'result', code: 'COMMIT_ACK_UNKNOWN', after: 'STORE_UNAVAILABLE' })
+  const failed = await probe.message('result')
+  assert.equal(failed.code, 'COMMIT_ACK_UNKNOWN'); assert.equal(failed.after, 'STORE_UNAVAILABLE')
+  assert.equal(failed.failure.origin, 'rpc-timeout'); assert.equal(failed.failure.action, 'command')
+  assert.equal(failed.failure.kind, 'node.claim'); assert.equal(failed.failure.code, 'COMMIT_ACK_UNKNOWN')
+  assert.match(failed.failure.requestDigest, /^[a-f0-9]{64}$/)
+  const trace = (await readFile(join(f.root, 'execution-store-failures.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  assert.deepEqual(trace, [failed.failure])
   assert.equal((await probe.exited).code, 0)
   await f.open()
   const replay = await f.store.command(command('node.claim', { runId: 'run', nodeId: 'one', expectedGeneration: 1, expectedLeaseEpoch: 0 }, 'lost-claim'))
@@ -726,6 +732,13 @@ test('真实COMMIT后ACK丢失：调用器超时封闭写，重开按原ID读回
   assert.equal(state.nodes[0].leaseEpoch, 1)
   assert.equal(state.nodes[0].status, 'waiting')
   assert.equal(state.nodes[0].drained, false)
+})
+
+test('正常关闭不记录存储故障，也不创建诊断文件', async t => {
+  const f = await fixture(t)
+  await f.store.close()
+  assert.equal(f.store.failure, null)
+  await assert.rejects(readFile(join(f.root, 'execution-store-failures.jsonl')), { code: 'ENOENT' })
 })
 
 test('RPC队列有界，拒绝超额请求且已接纳查询可完成', async t => {
@@ -750,10 +763,16 @@ test('测试进程限额触发原生SQLITE_FULL：整条命令回滚且封闭写
         const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value}})}}`
   const probe = child(t, `const{openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
     const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});let code,sqliteCode,after;
-    try{await s.command({id:'full-stop',kind:'run.stop',args:{runId:'run',reason:'synthetic'}})}catch(e){code=e.code;sqliteCode=e.sqliteCode}
+    try{await s.command({id:'full-stop',kind:'run.stop',args:{runId:'run',reason:'synthetic-private-secret'}})}catch(e){code=e.code;sqliteCode=e.sqliteCode}
     try{await s.command({id:'after-full',kind:'run.stop',args:{runId:'run',reason:'blocked'}})}catch(e){after=e.code}
-    await s.close();process.send({type:'result',code,sqliteCode,after});`, [f.dbPath, f.instanceId], preload)
-  assert.deepEqual(await probe.message('result'), { type: 'result', code: 'ERR_SQLITE_ERROR', sqliteCode: 13, after: 'STORE_UNAVAILABLE' })
+    await s.close();process.send({type:'result',code,sqliteCode,after,failure:s.failure});`, [f.dbPath, f.instanceId], preload)
+  const failed = await probe.message('result')
+  assert.equal(failed.code, 'ERR_SQLITE_ERROR'); assert.equal(failed.sqliteCode, 13); assert.equal(failed.after, 'STORE_UNAVAILABLE')
+  assert.equal(failed.failure.origin, 'worker-response'); assert.equal(failed.failure.code, 'ERR_SQLITE_ERROR')
+  assert.equal(failed.failure.sqliteCode, 13); assert.equal(failed.failure.action, 'command'); assert.equal(failed.failure.kind, 'run.stop')
+  const trace = await readFile(join(f.root, 'execution-store-failures.jsonl'), 'utf8')
+  assert.deepEqual(trace.trim().split('\n').map(JSON.parse), [failed.failure])
+  assert.ok(!trace.includes('synthetic-private-secret')); assert.ok(!trace.includes('full-stop'))
   assert.equal((await probe.exited).code, 0)
   await f.open()
   assert.equal((await f.query()).run.stopRequested, false)
@@ -801,6 +820,256 @@ test('v6到v7移除领取截止，检查零写并完整保留来源和执行数�
   const indexCheck = migrateExecutionEventsIndex(indexMigration, { mode: 'check' })
   assert.equal(indexCheck.writes, 0)
   assert.equal(migrateExecutionEventsIndex(indexMigration, { mode: 'execute' }).verified, true)
+  const { migrateExecutionDependencyIndex } = await import('../scripts/migrate-execution-dependency-index.mjs')
+  assert.equal(migrateExecutionDependencyIndex(indexMigration, { mode: 'execute' }).verified, true)
   indexMigration.close()
   await f.open();assert.equal((await f.query()).run.claimCount,500)
+})
+
+for(const variant of ['clean','receipt','stage','run','undrained','effect','source','lease','requirement','authorization','control','condition','external','fence'])test(`工程准备未落计划的Owner受管重评：${variant}`,async t=>{
+ const f=await fixture(t,null),send=(kind,args,id)=>f.store.command(command(kind,args,id))
+ await send('task.accept',{taskId:'task',requirementRef:'sha256/requirement.json',requirementRevision:1,sessionId:'owner',criteria:['按文档开发'],sourceKey:'source',eventKey:'created'})
+ await send('message.receive',{runId:'source-run',sourceKey:'source',sourceVersion:1,actorId:'requester',conversationId:'g',body:'按文档开发'})
+ await send('message.split',{runId:'source-run',units:[{unitId:'unit'}]})
+ await send('message.accept',{runId:'source-run',unitId:'unit',commands:[{commandId:'create-task',kind:'create',args:{taskId:'task'}}]})
+ const msg=(await send('message.command.claim',{commandId:'create-task'})).result.command
+ await send('message.command.complete',{commandId:'create-task',leaseEpoch:msg.leaseEpoch,result:{taskId:'task'}})
+ const claim=(await send('task.owner.claim',{taskId:'task',turnId:'prepare',expectedLeaseEpoch:0})).result
+ const binding={taskId:'task',turnId:'prepare',leaseEpoch:claim.leaseEpoch}
+ await send('task.owner.sessionBound',{...binding,sessionId:'owner'},variant==='receipt'?'owner-plan:prepare':undefined)
+ await send('task.owner.candidate',{...binding,decision:{action:'advance',summary:'准备工程',evidenceRefs:[],planChange:{kind:'initialize',stages:[{workflowId:variant==='external'?'task-data-change':'task-engineering',gate:'none',sourceCondition:{sourceKey:'source',sourceVersion:1,sourceQuote:variant==='condition'?'错误原文':'按文档开发',objective:variant==='condition'?'错误原文':'按文档开发'}}]}}})
+ await send('task.owner.accept',binding)
+ await send('task.owner.action.fail',{...binding,reason:'128'})
+ if(['stage','run','undrained','effect','authorization','fence'].includes(variant)){
+  await f.store.close()
+  const db=new DatabaseSync(f.dbPath)
+  try{
+   if(variant==='stage')db.prepare("INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,gate,status,attempt) VALUES('task',1,'old',0,'task-investigation','none','invalidated',1)").run()
+   if(variant==='fence')db.prepare("UPDATE task_owners SET input_fence_revision=input_fence_revision+1 WHERE task_id='task'").run()
+   if(variant==='authorization')db.prepare("UPDATE task_owners SET authorization_revision=authorization_revision+1 WHERE task_id='task'").run()
+   if(['run','undrained','effect'].includes(variant)){
+    const now=new Date().toISOString()
+    db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,status,created_at,updated_at) VALUES('prior','task','task-investigation',?,'sha256/requirement.json','succeeded',?,?)").run(d,now,now)
+    if(['undrained','effect'].includes(variant))db.prepare("INSERT INTO execution_nodes(node_run_id,run_id,node_id,node_version,executor,position,generation,input_ref,input_digest,status,drained) VALUES('prior-node','prior','n','1','code',0,1,'sha256/requirement.json',?,'succeeded',0)").run(d)
+    if(variant==='effect')db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('effect','operation','prior','prior-node','n',1,?,?,'{}','[]','test','succeeded',?,?)").run(d,d,now,now)
+   }
+  }finally{db.close()}
+  await f.open()
+ }
+ const owner=await f.store.query({kind:'task.owner',taskId:'task'})
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ const args={taskId:'task',eventKey:'reassess',payloadRef:'sha256/recovery.json',expectedOwnerRevision:owner.revision,expectedLeaseEpoch:owner.leaseEpoch+(variant==='lease'?1:0),expectedRequirementRevision:variant==='requirement'?2:1,expectedControlRevision:(await f.store.query({kind:'task.plan',taskId:'task'})).task.controlRevision+(variant==='control'?1:0),sources:[{sourceKey:'source',sourceVersion:variant==='source'?2:1,actorId:'requester',bodyDigest:executionDigest('按文档开发')}],requestDigest:d}
+ if(variant!=='clean'){
+  await assert.rejects(send('task.owner.reassess',args,'reassess'),/TASK_OWNER_REASSESS|TASK_AUTHORIZATION_SOURCE_STALE|TASK_OWNER_DISCARD_UNSAFE/)
+  assert.equal((await f.store.query({kind:'task.owner',taskId:'task'})).status,'blocked')
+ }else{
+  const result=await send('task.owner.reassess',args,'reassess')
+  assert.equal(result.result.discardedTurnId,'prepare')
+  assert.equal((await f.store.query({kind:'task.owner',taskId:'task'})).status,'pending')
+  assert.equal((await send('task.owner.reassess',args,'reassess')).replayed,true)
+  assert.deepEqual(await f.store.query({kind:'run.list',taskId:'task'}),[])
+ }
+})
+
+test('provider暂态恢复沿用退避且重启后最多三次', async t => {
+  const f = await fixture(t), n = await f.claim(); await f.drain(n)
+  await f.store.command(command('node.commit', { ...identity(n), inputDigest: d, outcome: 'waiting', evidenceRefs: [], waitReason: { kind: 'recovery', reference: 'EXECUTION_PROVIDER_TRANSIENT' } }))
+  const state = await f.query(), args = { runId: 'run', runRevision: state.run.revision, nodeRunId: n.nodeRunId, generation: n.generation, leaseEpoch: n.leaseEpoch, inputDigest: d, errorCode: 'EXECUTION_PROVIDER_TRANSIENT' }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const admitted = (await f.store.command(command('run.recovery.admit', args))).result
+    assert.equal(admitted.attempt, attempt)
+    assert.ok(Date.parse(admitted.nextRetryAt) > Date.now())
+    if (attempt < 3) await rejects(f.store.command(command('run.recovery.admit', args)), 'RECOVERY_RETRY_DEFERRED')
+    await f.store.close()
+    const db = new DatabaseSync(f.dbPath)
+    try { db.prepare("UPDATE execution_events SET payload=json_set(payload,'$.nextRetryAt','2000-01-01T00:00:00.000Z') WHERE kind='run.recovery.admitted'").run() } finally { db.close() }
+    await f.open()
+  }
+  await rejects(f.store.command(command('run.recovery.admit', args)), 'RECOVERY_RETRY_LIMIT')
+  assert.equal((await f.query()).run.status, 'waiting')
+})
+
+for (const previousCode of ['execution_no_submission', 'EXECUTION_PROVIDER_FAILED'])
+for (const variant of ['valid', 'revision', 'lease', 'digest', 'session', 'output', 'undrained', 'effect']) test(`旧未提交错误受管重分类CAS：${previousCode}/${variant}`, async t => {
+  const f = await fixture(t, creation([plan('one', 'agent')])), n = await f.claim()
+  await f.store.command(command('node.sessionBound', { ...identity(n), sessionId: n.sessionId })); await f.drain(n)
+  await f.store.command(command('node.commit', { ...identity(n), inputDigest: d, outcome: 'waiting', evidenceRefs: [], waitReason: { kind: 'recovery', reference: previousCode } }))
+  const state = await f.query(), args = { runId: 'run', runRevision: state.run.revision, nodeRunId: n.nodeRunId, generation: n.generation, leaseEpoch: n.leaseEpoch, inputDigest: d, sessionId: n.sessionId, evidenceRef: 'sha256/provider-proof.json' }
+  if (variant === 'revision') args.runRevision--
+  if (variant === 'lease') args.leaseEpoch++
+  if (variant === 'digest') args.inputDigest = changedDigest
+  if (variant === 'session') args.sessionId = 'foreign'
+  if (['output', 'undrained', 'effect'].includes(variant)) {
+    const db = new DatabaseSync(f.dbPath)
+    try {
+      if (variant === 'output') db.prepare("UPDATE execution_nodes SET output_ref='sha256/submitted.json' WHERE node_run_id=?").run(n.nodeRunId)
+      if (variant === 'undrained') db.prepare('UPDATE execution_nodes SET drained=0 WHERE node_run_id=?').run(n.nodeRunId)
+      if (variant === 'effect') db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('prior-effect','operation','run',?,'one',1,?,'digest','{}','[]','fixture','succeeded','now','now')").run(n.nodeRunId,d)
+    } finally { db.close() }
+  }
+  const cmd = command('node.failure.reclassify', { ...args, previousCode, code: 'EXECUTION_PROVIDER_TRANSIENT' })
+  if (variant !== 'valid') { await rejects(f.store.command(cmd), 'NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED'); assert.equal((await f.query()).nodes[0].waitReason.reference, previousCode); return }
+  assert.equal((await f.store.command(cmd)).result.reclassified, true)
+  const after = await f.query(); assert.equal(after.nodes[0].waitReason.reference, 'EXECUTION_PROVIDER_TRANSIENT')
+  assert.equal(after.nodes[0].leaseEpoch, n.leaseEpoch); assert.equal(after.run.revision, state.run.revision + 1)
+  assert.equal((await f.store.command(cmd)).result.reclassified, true)
+})
+
+for(const scenario of ['restarted','running-reserved','stale-revision','same-lease']) test(`受管工程会话换绑CAS ${scenario}`,async t=>{
+  const f=await fixture(t,creation([plan('one','agent')]))
+  let n=await f.claim()
+  await f.store.command(command('node.sessionBound',{...identity(n),sessionId:n.sessionId}))
+  await f.store.close();await f.open()
+  if(scenario==='running-reserved'||scenario==='same-lease'){
+    await f.drain(n);await f.store.command(command('run.recover',{runId:'run'}));n=await f.claim('one',1,1)
+  }
+  await f.store.command(command('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'repair',actorId:'owner',reason:'migration'}))
+  const state=await f.query(),node=state.nodes[0]
+  const args={runId:'run',runRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,nextSessionId:'execution-child',lastInputLease:1,evidenceRef:'sha256/ownership.json',maintenance:{maintenanceId:'repair',revision:1}}
+  if(scenario==='stale-revision')args.runRevision--
+  if(scenario==='same-lease')args.lastInputLease=node.leaseEpoch
+  if(['stale-revision','same-lease'].includes(scenario)){await rejects(f.store.command(command('node.session.rebind',args)),'NODE_SESSION_REBIND_NOT_ADMITTED');return}
+  const cmd=command('node.session.rebind',args)
+  await f.store.command(cmd)
+  assert.equal((await f.store.command(cmd)).replayed,true)
+  const after=await f.query()
+  assert.equal(after.nodes[0].sessionId,'execution-child');assert.equal(after.nodes[0].status,'ready');assert.equal(after.nodes[0].drained,true)
+  assert.equal(after.nodes[0].nodeRunId,node.nodeRunId);assert.equal(after.run.generation,state.run.generation)
+})
+
+test('维护中受管会话换绑要求维护CAS且不放行业务claim',async t=>{
+  const f=await fixture(t,creation([plan('one','agent')])),n=await f.claim()
+  await f.store.command(command('node.sessionBound',{...identity(n),sessionId:n.sessionId}))
+  await f.store.close();await f.open()
+  await f.store.command(command('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'repair',actorId:'owner',reason:'归属修复'}))
+  const state=await f.query(),node=state.nodes[0]
+  const args={runId:'run',runRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,nextSessionId:'execution-child',lastInputLease:1,evidenceRef:'sha256/ownership.json'}
+  await rejects(f.store.command(command('node.session.rebind',args)),'RUNTIME_MAINTENANCE_STALE')
+  await rejects(f.store.command(command('node.session.rebind',{...args,maintenance:{maintenanceId:'repair',revision:0}})),'RUNTIME_MAINTENANCE_STALE')
+  await f.store.command(command('node.session.rebind',{...args,maintenance:{maintenanceId:'repair',revision:1}}))
+  assert.equal((await f.query()).nodes[0].drained,true)
+  await rejects(f.claim('one',1,1),'RUNTIME_MAINTENANCE_ACTIVE')
+})
+
+for(const variant of ['capability','permission','execution','business-input','approval','old-version','effect'])test(`未查询能力阻塞沿原Task受管重评：${variant}`,async t=>{
+ const f=await fixture(t,null),send=(kind,args,id)=>f.store.command(command(kind,args,id))
+ await send('task.accept',{taskId:'task',requirementRef:'sha256/requirement.json',requirementRevision:1,sessionId:'owner',criteria:['只读排查'],sourceKey:'source',eventKey:'created'})
+ await send('message.receive',{runId:'source-run',sourceKey:'source',sourceVersion:1,actorId:'requester',conversationId:'g',body:'只读排查'})
+ await send('message.split',{runId:'source-run',units:[{unitId:'unit'}]})
+ await send('message.accept',{runId:'source-run',unitId:'unit',commands:[{commandId:'create-task',kind:'create',args:{taskId:'task'}}]})
+ const message=(await send('message.command.claim',{commandId:'create-task'})).result.command
+ await send('message.command.complete',{commandId:'create-task',leaseEpoch:message.leaseEpoch,result:{taskId:'task'}})
+ await send('task.requirement.update',{taskId:'task',expectedRequirementRevision:1,requirementRef:'sha256/requirement-2.json',eventKey:'revision-2'})
+ const claimed=(await send('task.owner.claim',{taskId:'task',turnId:'blocked-before-query',expectedLeaseEpoch:0})).result
+ const binding={taskId:'task',turnId:'blocked-before-query',leaseEpoch:claimed.leaseEpoch}
+ await send('task.owner.sessionBound',{...binding,sessionId:'owner'})
+ const kind=['old-version','effect'].includes(variant)?'capability':variant
+ await send('task.owner.candidate',{...binding,decision:{action:variant==='execution'?'wait':'block',summary:'等待查询能力恢复',evidenceRefs:[],condition:{kind,missing:'查询能力',responsibleParty:'维护者',resumeWhen:'查询能力恢复',evidenceRefs:[]}}})
+ await send('task.owner.accept',binding);await send('task.owner.applied',binding)
+ if(variant==='old-version')await send('task.requirement.update',{taskId:'task',expectedRequirementRevision:2,requirementRef:'sha256/requirement-3.json',eventKey:'revision-3'})
+ if(variant==='effect'){
+  await f.store.close();const db=new DatabaseSync(f.dbPath),now=new Date().toISOString()
+  try{
+   db.prepare("INSERT INTO execution_runs(run_id,task_id,workflow_id,workflow_digest,requirement_ref,status,created_at,updated_at) VALUES('prior','task','task-investigation',?,'sha256/requirement-2.json','succeeded',?,?)").run(d,now,now)
+   db.prepare("INSERT INTO execution_nodes(node_run_id,run_id,node_id,node_version,executor,position,generation,input_ref,input_digest,status,drained) VALUES('prior-node','prior','n','1','code',0,1,'sha256/requirement-2.json',?,'succeeded',1)").run(d)
+   db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('effect','operation','prior','prior-node','n',1,?,?,'{}','[]','test','succeeded',?,?)").run(d,d,now,now)
+  }finally{db.close()}await f.open()
+ }
+ const owner=await f.store.query({kind:'task.owner',taskId:'task'}),plan=await f.store.query({kind:'task.plan',taskId:'task'})
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ const args={taskId:'task',eventKey:'reassess-before-query',payloadRef:'sha256/recovery.json',expectedOwnerRevision:owner.revision,expectedLeaseEpoch:owner.leaseEpoch,expectedRequirementRevision:plan.task.requirementRevision,expectedControlRevision:plan.task.controlRevision,sources:[{sourceKey:'source',sourceVersion:1,actorId:'requester',bodyDigest:executionDigest('只读排查')}],requestDigest:d}
+ if(['capability','permission','execution'].includes(variant)){
+  await send('task.owner.reassess',args,'reassess-before-query')
+  const after=await f.store.query({kind:'task.owner',taskId:'task'})
+  assert.equal(after.status,'pending');assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).task.requirementRevision,2)
+  assert.deepEqual(await f.store.query({kind:'run.list',taskId:'task'}),[])
+  assert.equal((await send('task.owner.reassess',args,'reassess-before-query')).replayed,true)
+ }else await assert.rejects(send('task.owner.reassess',args,'reassess-before-query'),{code:'TASK_OWNER_REASSESS_FORBIDDEN'})
+})
+
+for (const variant of ['valid','revision','control','scope','undrained','node-plan','maintenance','history','invalid-history']) test(`工程检查checkpoint保留同代成功前缀 ${variant}`,async t=>{
+ const f=await fixture(t,null),nextDigest='b'.repeat(64),old={workflowId:'engineering',digest:d,definitionVersion:'18',config:{kind:'engineering',runId:'run',taskId:'task',repoId:'repo',ownerActorId:'owner',sourceCommandId:'source'}}
+ const next={...old,workflowId:'engineering-checkpoint',digest:nextDigest,config:{...old.config,checkpoint:{kind:'checks',fromDigest:d,requestId:'fix-check'},checkpointChecks:[{id:'build',version:'2'}]}}
+ const send=f.store.command.bind(f.store);f.store={...f.store,command:async value=>{try{return await send(value)}catch(error){error.message=`${value.kind}: ${error.message}`;throw error}}}
+ if(variant==='scope')next.config.repoId='other'
+ for(const record of [old,next])await f.store.command(command('workflow.register',record))
+ await f.store.command(command('task.accept',{taskId:'task',requirementRevision:1,requirementRef:'sha256/requirement.json',sessionId:'owner',criteria:['完成'],sourceKey:'source',eventKey:'source'}))
+ await f.store.command(command('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:'engineering',workflowDigest:d,unavailableReason:null,requirementRef:'sha256/requirement.json',gate:'none'}]}))
+ const nodes=[plan('prepare'),plan('verify-candidate','code',false),plan('deliver','code',false)]
+ await f.store.command(command('run.create',creation(nodes,{workflowId:'engineering',stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})))
+ const historical=['history','invalid-history'].includes(variant),generation=historical?2:1
+ if(historical){
+  await f.store.command(command('input.accept',{runId:'run',inputId:'repair-check',sourceKey:'repair-check',requirementRef:'sha256/repair-check.json'}))
+  await f.store.command(command('input.apply',{runId:'run',inputIds:['repair-check'],expectedRevision:0,requirementRef:'sha256/repair-check.json',nodes:nodes.map(({nodeId,inputRef,inputDigest})=>({nodeId,inputRef,inputDigest}))}))
+ }
+ const prefix=await f.claim('prepare',generation);await f.drain(prefix)
+ await f.store.command(command('node.commit',{...identity(prefix),inputDigest:d,outcome:'succeeded',outputRef:'sha256/candidate.json',evidenceRefs:[],nextInput:{nodeId:'verify-candidate',inputRef:'sha256/verify.json',inputDigest:d}}))
+ const verify=await f.claim('verify-candidate',generation);await f.drain(verify)
+ await f.store.command(command('node.commit',{...identity(verify),inputDigest:d,outcome:'waiting',evidenceRefs:['sha256/failure.json'],waitReason:{kind:'recovery',reference:'ENGINEERING_VERIFICATION_FAILED'}}))
+ if(historical){await f.store.close();const db=new DatabaseSync(f.dbPath);try{
+  db.prepare("UPDATE task_plan_stages SET requirement_ref='sha256/requirement.json' WHERE task_id='task'").run()
+  if(variant==='invalid-history')db.prepare("DELETE FROM execution_events WHERE kind='input.apply'").run()
+ }finally{db.close()}await f.open()}
+ const before=await f.query(),args={runId:'run',expectedRevision:before.run.revision,fromDigest:d,toDigest:nextDigest,toWorkflowId:next.workflowId,kind:'checks',startNodeId:'verify-candidate',inputRef:'sha256/new-verify.json',inputDigest:nextDigest,evidenceRef:'sha256/checkpoint.json',expectedRequirementRevision:1,expectedControlRevision:1,nodes:nodes.map(({nodeId,nodeVersion,executor})=>({nodeId,nodeVersion,executor}))}
+ if(variant==='revision')args.expectedRevision--
+ if(variant==='control')args.expectedControlRevision++
+ if(variant==='node-plan')args.nodes[2].nodeId='different'
+ if(variant==='undrained'){await f.store.close();const db=new DatabaseSync(f.dbPath);try{db.prepare(variant==='undrained'?"UPDATE execution_nodes SET drained=0 WHERE node_id='verify-candidate'":"UPDATE execution_nodes SET lease_epoch=1 WHERE node_id='deliver'").run()}finally{db.close()}await f.open()}
+ await f.store.command(command('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'检查配置修正'}))
+ args.maintenance={maintenanceId:'checks',revision:variant==='maintenance'?2:1}
+ const cmd=command('run.workflow.checkpoint',args,'checkpoint')
+ if(!['valid','history'].includes(variant)){await assert.rejects(f.store.command(cmd));assert.equal((await f.query()).run.workflowDigest,d);return}
+ const result=await f.store.command(cmd),after=await f.query()
+ assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,after.run.requirementRef)
+ assert.equal(result.result.generation,generation);assert.equal(after.run.generation,generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].status,'ready');assert.equal(after.nodes[1].leaseEpoch,1);assert.deepEqual(after.nodes[1].evidenceRefs,['sha256/failure.json']);assert.equal(after.nodes[2].status,'blocked')
+ assert.deepEqual((await f.store.command(cmd)).result,result.result)
+ assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].workflowDigest,nextDigest)
+})
+for(const variant of ['current','history','missing-event','foreign-ref','unapplied','plan-drift','lease-drift','history-next-input','invalid-next-input'])test(`派生输入Stage引用同步与历史恢复：${variant}`,async t=>{
+ const f=await fixture(t,null)
+ await f.store.command(command('task.accept',{taskId:'task',requirementRevision:1,requirementRef:'sha256/requirement.json',sessionId:'owner',criteria:['完成'],sourceKey:'source',eventKey:'source'}))
+ await f.store.command(command('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:'sequential',workflowDigest:d,unavailableReason:null,requirementRef:'sha256/requirement.json',gate:'none'}]}))
+ await f.store.command(command('run.create',creation([plan('one','agent')],{stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})))
+ for(let generation=1;generation<=3;generation++){
+  await f.store.command(command('input.accept',{runId:'run',inputId:`repair-${generation}`,sourceKey:`repair-${generation}`,requirementRef:'sha256/repair.json'}))
+  await f.store.command(command('input.apply',{runId:'run',inputIds:[`repair-${generation}`],expectedRevision:generation-1,requirementRef:'sha256/repair.json',nodes:[{nodeId:'one',inputRef:'sha256/repaired-input.json',inputDigest:d}]}))
+ }
+ assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/repair.json')
+ const n=await f.claim('one',4,0);await f.store.command(command('node.sessionBound',{...identity(n),sessionId:n.sessionId}));await f.drain(n)
+ await f.store.command(command('node.commit',{...identity(n),inputDigest:d,outcome:'waiting',evidenceRefs:[],waitReason:{kind:'recovery',reference:'execution_tool_failed'}}))
+ if(variant!=='current'){
+  await f.store.close();const db=new DatabaseSync(f.dbPath)
+  try{
+   db.prepare("UPDATE task_plan_stages SET requirement_ref=? WHERE task_id='task'").run(variant==='foreign-ref'?'sha256/foreign.json':'sha256/requirement.json')
+   if(['missing-event','invalid-next-input'].includes(variant))db.prepare("DELETE FROM execution_events WHERE kind='input.apply'").run()
+   if(variant==='unapplied')db.prepare("UPDATE execution_inputs SET status='pending'").run()
+   if(variant==='plan-drift')db.prepare("UPDATE business_tasks SET requirement_revision=2").run()
+  }finally{db.close()}await f.open()
+ }
+ if(['history-next-input','invalid-next-input'].includes(variant)){
+  await f.store.command(command('input.accept',{runId:'run',inputId:'next',sourceKey:'next',requirementRef:'sha256/next.json'}))
+  const state=await f.query(),next=command('input.apply',{runId:'run',inputIds:['next'],expectedRevision:state.run.revision,requirementRef:'sha256/next.json',nodes:[{nodeId:'one',inputRef:'sha256/next-input.json',inputDigest:d}]})
+  if(variant==='history-next-input'){
+   await f.store.command(next)
+   assert.equal((await f.query()).run.generation,5)
+   assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/next.json')
+  }else{
+   await rejects(f.store.command(next),'TASK_STAGE_REQUIREMENT_LINEAGE_INVALID')
+   assert.equal((await f.query()).run.generation,4)
+   assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/requirement.json')
+  }
+  return
+ }
+ const state=await f.query(),args={runId:'run',runRevision:state.run.revision,nodeRunId:n.nodeRunId,generation:4,leaseEpoch:n.leaseEpoch+(variant==='lease-drift'?1:0),inputDigest:d,sessionId:n.sessionId,evidenceRef:'sha256/scope-proof.json',previousCode:'execution_tool_failed',code:'ENGINEERING_READ_PATH_INVALID'}
+ const operation=command('node.failure.reclassify',args)
+ if(['current','history'].includes(variant)){
+  await f.store.command(operation)
+  assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,'sha256/repair.json')
+  assert.equal((await f.query()).nodes[0].waitReason.reference,'ENGINEERING_READ_PATH_INVALID')
+  assert.equal((await f.store.command(operation)).replayed,true)
+ }else{
+  await assert.rejects(f.store.command(operation))
+  assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,variant==='foreign-ref'?'sha256/foreign.json':'sha256/requirement.json')
+  assert.equal((await f.query()).nodes[0].waitReason.reference,'execution_tool_failed')
+ }
 })

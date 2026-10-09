@@ -2,6 +2,7 @@ import { lookup } from 'node:dns/promises'
 import { BlockList } from 'node:net'
 import { request as httpsRequest } from 'node:https'
 import { createHash } from 'node:crypto'
+import { normalizeResourceRefs, parseDingtalkDocUrl } from './dws-bridge.js'
 
 const MAX_BYTES = 2 * 1024 * 1024
 const PAGE_CHARS = 8_000
@@ -31,8 +32,9 @@ export async function readPublicResource(url, { resolve = lookup } = {}) {
 }
 
 const refsFor = message => {
-  const refs = [...(message.resourceRefs ?? []), ...(message.imageRefs ?? []).map(attachment => ({ type: 'attachment', resourceId: attachment.attachmentId ?? attachment.id, attachment }))]
-  for (const match of String(message._sourceMessageText ?? message.text ?? '').matchAll(/https:\/\/[^\s<>"）)]+/gu)) refs.push({ type: 'url', resourceId: match[0] })
+  const text = message._sourceMessageText ?? message.text ?? ''
+  const refs = [...normalizeResourceRefs(message.resourceRefs, text), ...(message.resourceRefs ?? []).filter(ref => ref.type !== 'dingtalkDoc' && !parseDingtalkDocUrl(ref.resourceId)), ...(message.imageRefs ?? []).map(attachment => ({ type: 'attachment', resourceId: attachment.attachmentId ?? attachment.id, attachment }))]
+  for (const match of String(text).matchAll(/https:\/\/[^\s<>"）)]+/gu)) if (!parseDingtalkDocUrl(match[0])) refs.push({ type: 'url', resourceId: match[0] })
   return [...new Map(refs.filter(ref => typeof ref.resourceId === 'string').map(ref => [ref.type + ':' + ref.resourceId, ref])).values()]
 }
 
@@ -92,8 +94,8 @@ export function createCoordinationResourceTools({ request, assertCurrent, readMe
       const slice = page(message.text, offset, 'message:' + messageId)
       return { ...slice, message: { ...projection, text: slice.text }, resourceRefs: refsFor(message).map(({ attachment, ...ref }) => ref), resourcesRead: false }
     },
-  }, { name: 'group_resource_get', description: '只读本请求消息明确引用的附件或公网HTTPS文本；不能读取任意ID/URL。文本按offset分页，图片通过原生附件返回，其他格式明确失败。',
-    parameters: { type: 'object', properties: { messageId: { type: 'string' }, type: { type: 'string', enum: ['mediaId', 'fileId', 'attachment', 'url'] }, resourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }, required: ['messageId', 'type', 'resourceId'], additionalProperties: false }, output,
+  }, { name: 'group_resource_get', description: '只读本请求消息明确引用的钉钉文档、附件或公网HTTPS文本；钉钉文档经DWS读取，不能读取任意ID/URL。文本按offset分页，图片通过原生附件返回，其他格式明确失败。',
+    parameters: { type: 'object', properties: { messageId: { type: 'string' }, type: { type: 'string', enum: ['mediaId', 'fileId', 'dingtalkDoc', 'attachment', 'url'] }, resourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }, required: ['messageId', 'type', 'resourceId'], additionalProperties: false }, output,
     async execute({ messageId, type, resourceId, offset = 0 }, exec) {
       const message = await getMessage(messageId, exec)
       const ref = refsFor(message).find(item => item.type === type && item.resourceId === resourceId)

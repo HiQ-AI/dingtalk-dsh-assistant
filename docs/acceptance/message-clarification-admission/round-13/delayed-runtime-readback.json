@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-08T10:39:16.1702158+08:00",
+  "maintenanceActive": false,
+  "drained": true,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 146180
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 146180
+    }
+  ],
+  "healthStatus": "degraded",
+  "inboundProcessing": false,
+  "scheduledTaskEnabled": true
+}

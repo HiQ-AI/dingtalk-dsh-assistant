@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, writeFile, readFile, unlink } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
-import { freezeCandidate, readCandidate, verifyCandidate, assertVerifiedCandidate } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
+import { freezeCandidate, readCandidate, verifyCandidate, assertVerifiedCandidate, assertCandidateManagedEdits } from '../packages/dingtalk-dsh-assistant/execution-candidate.js'
 
 const root = resolve('docs/tmp/execution-candidate-tests')
 const git = (repo, ...args) => execFileSync('git', ['-C', repo, ...args], { windowsHide: true, encoding: 'utf8' }).trim()
@@ -185,4 +185,47 @@ test('超过16MiB文件可冻结且按需读取时独立核验完整blob摘要',
   assert.equal(verification.passed,true)
   const cancelled=new AbortController();cancelled.abort()
   await assert.rejects(readCandidate(candidate,{signal:cancelled.signal}),{name:'AbortError'})
+})
+
+
+for (const drift of ['none','tracked','untracked','old-baseline']) test(`无新增修改完整树证明拒绝未审计变化：${drift}`, async () => {
+  const args=await fixture(), sourceTree=git(args.repository,'rev-parse','HEAD^{tree}')
+  const before=await readFile(join(args.repository,'kept.txt')), expectedHash=createHash('sha256').update(before).digest('hex')
+  await writeFile(join(args.repository,'kept.txt'),'managed change')
+  const edits=[{changes:[{path:'kept.txt',expectedHash,content:'managed change'}]}]
+  if(drift==='tracked')await writeFile(join(args.repository,'deleted.txt'),'unmanaged change')
+  if(drift==='untracked')await writeFile(join(args.repository,'extra.txt'),'unmanaged new file')
+  const candidate=await freezeCandidate(args)
+  const verify=assertCandidateManagedEdits({candidate,sourceTree,edits:drift==='old-baseline'?[]:edits})
+  if(drift==='none'){const proof=await verify;assert.equal(proof.tree,candidate.tree);assert.notEqual(proof.tree,sourceTree);assert.equal((await readCandidate(candidate)).files.length,3)}
+  else await assert.rejects(verify,{code:'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT'})
+})
+
+test('冻结OID批量搜索保持多批Unicode跨行二进制语义并拒绝取消及丢失对象',async()=>{
+ const args=await fixture()
+ for(let i=0;i<3;i++)await writeFile(join(args.repository,`large-${i}.txt`),'x'.repeat(2*1024*1024)+'Ä中文\nNEXT\0tail'+i)
+ const candidate=await freezeCandidate(args),snapshot=await readCandidate(candidate),paths=snapshot.files.map(f=>f.path)
+ for(const query of ['ä中文\nnext','\0tail','不存在','']){
+  const expected=[];for(const path of paths)if((await snapshot.readFile(path)).toString('utf8').toLowerCase().includes(query.toLowerCase()))expected.push(path)
+  assert.deepEqual(await snapshot.searchFiles(paths,query),expected)
+ }
+ await assert.rejects(snapshot.searchFiles(['foreign-path'],'x'),{code:'CANDIDATE_FILE_NOT_FOUND'})
+ const cancel=new AbortController();cancel.abort(Error('cancelled-read'))
+ await assert.rejects(snapshot.searchFiles(paths,'x',{signal:cancel.signal}),/cancelled-read/)
+ const running=new AbortController(),pending=snapshot.searchFiles(paths,'x',{signal:running.signal});running.abort()
+ await assert.rejects(pending,/abort/i)
+ const file=snapshot.files.find(f=>f.path==='large-1.txt')
+ await unlink(join(args.repository,'.git','objects',file.oid.slice(0,2),file.oid.slice(2)))
+ await assert.rejects(snapshot.searchFiles(['large-1.txt'],'x'),{code:'CANDIDATE_BLOB_INVALID'})
+})
+
+test('Host恢复检查票据保留真实摘要，拒绝改检查版本或伪工件', async()=>{
+  const {restoreVerifiedCandidate}=await import('../packages/dingtalk-dsh-assistant/execution-candidate.js')
+  const candidate=await freezeCandidate(await fixture()),requiredChecks=[{id:'read',version:'1'}]
+  const original=await verifyCandidate({candidate,checks:[{...requiredChecks[0],run:async view=>({passed:(await view.readFile('kept.txt')).toString()==='base',log:'actual bytes'})}]})
+  const restored=await restoreVerifiedCandidate({candidate,verification:structuredClone(original),requiredChecks})
+  assert.equal(restored.digest,original.digest)
+  await assertVerifiedCandidate({candidate,verification:restored,requiredChecks})
+  for(const changed of [{verification:{...original,passed:false}},{verification:{...original,digest:'f'.repeat(64)}},{requiredChecks:[{id:'read',version:'2'}]},{candidate:{...candidate,generation:2}}])
+    await assert.rejects(restoreVerifiedCandidate({candidate,verification:structuredClone(original),requiredChecks,...changed}))
 })

@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-08T02:36:39.3Z",
+  "sourceTopicId": "topic-f3193e8f8dcc38c6506a9c19b48c12d6",
+  "targetTopicId": "topic-d1f6126976fbbbf1fb0ccc56e79ed1cb",
+  "title": "数据集过程导入导出开发",
+  "summary": "本话题承接“来个任务，边做边修插件”的工作意向，已提供数据集过程导入导出规则文档并点名孙鹏，随后明确“按文档开发”。文档涉及统一工作区与待入库草稿的 UPR 全量导入导出、系统过程结果导出及 UPR 变更后的结果清理；以上范围来自所提供文档标题，正文尚未核验，实际开发尚未执行。",
+  "sourceMessages": 4,
+  "currentTopicReferences": 1,
+  "oldLinkRedirects": true,
+  "originalRunsUnchanged": true,
+  "taskCount": 1,
+  "tasksUnchanged": true,
+  "traceKindCounts": {
+    "coordinator": 4,
+    "command": 1
+  },
+  "traceItemCountsAndCommandsUnchanged": true
+}

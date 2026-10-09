@@ -17,8 +17,8 @@ export async function planAgentQueryResources(source, proposal) {
   if (!keys(q, ['resources','databases','statusResources','permissions', ...(q?.databases?.length ? ['credentialsPath'] : [])]) || !Array.isArray(q.databases)
     || !Array.isArray(q.resources) || !Array.isArray(q.statusResources) || !(q.resources.length + q.databases.length + q.statusResources.length)
     || !keys(q.permissions, ['resourceIds','databaseIds','statusIds'])) fail('QUERY_CONFIG_PROPOSAL_INVALID')
-  for (const r of q.resources) if (!keys(r, r.kind === 'repository' ? ['id','kind','root','commit','paths'] : ['id','kind','root','paths'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
-  for (const r of q.statusResources) if (!keys(r,r.kind === 'kubernetes' ? ['id','kind','kubeconfig','server','namespace','deployment','skipTlsVerify'] : ['id','url','fields'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
+  for (const r of q.resources) if (!keys(r, r.kind === 'repository' ? ['id','kind','root','commit','paths'] : ['id','kind','root','paths',...(r.hostReceipts===undefined?[]:['hostReceipts'])])) fail('QUERY_CONFIG_RESOURCE_INVALID')
+  for (const r of q.statusResources) if (!keys(r,r.kind === 'uat-review-observation' ? ['id','kind','accountKey','accountsFile','playwrightModule','evidenceDirectory'] : r.kind === 'kubernetes' ? ['id','kind','kubeconfig','server','namespace','deployment','skipTlsVerify'] : ['id','url','fields'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
   // 配置登记不读取凭据、不连接数据库；运行时按资源身份策略检查事务及角色。
   if (q.databases.length && (typeof q.credentialsPath !== 'string' || !isAbsolute(q.credentialsPath) || q.credentialsPath.includes('\0'))) fail('QUERY_CONFIG_CREDENTIALS_PATH_INVALID')
   for (const r of q.databases) {

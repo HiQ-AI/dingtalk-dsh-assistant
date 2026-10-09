@@ -10,12 +10,12 @@ import { installEffectsSchema, validateEffectsSchema, reduceEffectCommand, recov
 import { installMessageSchema, validateMessageSchema, reduceMessageCommand, recoverMessages, queryMessages, assertMessageTaskUnfenced, registerMessageAcceptance, isBusinessTaskTerminal, readCurrentTaskSource } from './message-ledger.js'
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
-  queryTaskOwner, recoverTaskOwners } from './task-owner-store.js'
-import { transientRecoveryReasons, recoveryRetryDelayMs } from './execution-recovery-policy.js'
+  queryTaskOwner, recoverTaskOwners, isUnstartedEngineeringPreparation } from './task-owner-store.js'
+import { transientRecoveryReasons, recoveryRetryDelayMs, engineeringProposalCorrectionReasons } from './execution-recovery-policy.js'
 import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { executionDigest, parseArtifactReference } from './execution-artifacts.js'
 
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
 const APPLICATION_ID = 0x44534845
 let db, owner, healthy = true
 const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
@@ -94,39 +94,105 @@ function assertTaskDispatchAllowed(r) {
     || !db.prepare(`SELECT 1 FROM task_plan_stages WHERE task_id=? AND plan_revision=?
       AND run_id=? AND status='running'`).get(r.task_id, task.plan_revision, r.run_id)) fail('TASK_DISPATCH_BLOCKED')
 }
+// 历史 input.apply 已正式接纳而遗漏 Stage 投影时，只在恢复命令事务内对账。
+function reconcileAppliedStageRequirement(r, commandId, now) {
+  const stage = db.prepare(`SELECT s.* FROM task_plan_stages s JOIN business_tasks t USING(task_id)
+    WHERE s.task_id=? AND s.plan_revision=t.plan_revision AND s.run_id=?`).get(r.task_id, r.run_id)
+  if (!stage || stage.requirement_ref === r.requirement_ref) return
+  const chain = db.prepare("SELECT kind,payload FROM execution_events WHERE kind IN ('run.create','input.apply') AND json_extract(payload,'$.run.runId')=? ORDER BY seq").all(r.run_id)
+    .map(row => ({ kind: row.kind, run: JSON.parse(row.payload).run }))
+  if (stage.workflow_digest !== r.workflow_digest || !['running','blocked'].includes(stage.status) || stage.output_ref
+    || chain.length !== r.generation || chain[0]?.kind !== 'run.create'
+    || chain.some((entry,index) => entry.run.generation !== index + 1 || entry.run.taskId !== r.task_id
+      || entry.run.workflowDigest !== r.workflow_digest || index > 0 && (entry.kind !== 'input.apply'
+        || !db.prepare("SELECT 1 FROM execution_inputs WHERE run_id=? AND requirement_ref=? AND status='applied'").get(r.run_id,entry.run.requirementRef)))
+    || !chain.slice(0,-1).some(entry => entry.run.requirementRef === stage.requirement_ref)
+    || chain.at(-1)?.run.requirementRef !== r.requirement_ref) fail('TASK_STAGE_REQUIREMENT_LINEAGE_INVALID')
+  db.prepare('UPDATE task_plan_stages SET requirement_ref=? WHERE task_id=? AND plan_revision=? AND stage_id=?')
+    .run(r.requirement_ref,r.task_id,stage.plan_revision,stage.stage_id)
+  emitEvent(commandId,'task.stage.requirement.reconciled',{taskId:r.task_id,runId:r.run_id,planRevision:stage.plan_revision,
+    stageId:stage.stage_id,fromRef:stage.requirement_ref,toRef:r.requirement_ref,generation:r.generation},now)
+}
 // 续行只针对已定位的 agent 可纠正问题；未知工具、身份和存储故障不能自动重放。
-function inspectNodeRecovery(runId) {
+function inspectNodeRecovery(runId, { reclassifyInterrupted = false, reclassifyProvider = false } = {}) {
   const r = getRun(runId), current = nodes(runId), candidate = current.find(n => ['waiting', 'failed'].includes(n.status))
   const base = { repairable: false, mode: 'resume-agent', reason: 'node-not-recoverable',
     runRevision: r.revision, generation: r.generation, evidenceRefs: [] }
   if (!candidate) return base
-  const n = candidate, wait = JSON.parse(n.wait_reason ?? 'null')
-  const record = db.prepare("SELECT payload FROM execution_events WHERE kind='node.failure' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.leaseEpoch')=? ORDER BY seq DESC LIMIT 1").get(n.node_run_id, n.lease_epoch)
-  const failure = record ? JSON.parse(record.payload).failure : { code: wait?.reference, phase: 'execution', targetNodeId: n.node_id }
+  const wait = JSON.parse(candidate.wait_reason ?? 'null'), previous = current[candidate.position - 1]
+  const workflowRecord = db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(r.workflow_digest)
+  const workflow = workflowRecord && JSON.parse(workflowRecord.body)
+  const technicalPlanRevision = workflow?.config?.kind === 'engineering' && workflow.definitionVersion === '19'
+    && workflow.config.taskId === r.task_id && workflow.config.runId === runId
+    && candidate.node_id === 'apply-changes' && candidate.executor === 'agent' && !!candidate.output_ref
+    && previous?.node_id === 'inspect-and-propose' && previous.status === 'succeeded' && !!previous.output_ref
+    && wait?.reference === 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED'
+  const planner = current.find(node => node.node_id === 'plan-local-acceptance')
+  const localPlanCorrection = workflow?.config?.kind === 'engineering' && ['18','19'].includes(workflow.definitionVersion)
+    && workflow.config.taskId === r.task_id && workflow.config.runId === runId
+    && candidate.node_id === 'prepare-local-acceptance' && candidate.executor === 'code' && !candidate.output_ref
+    && planner?.status === 'succeeded' && !!planner.output_ref && planner.position < candidate.position
+    && current.slice(planner.position + 1, candidate.position).every(node => node.status === 'succeeded')
+  const proposalCorrection = localPlanCorrection || technicalPlanRevision || workflow?.config?.kind === 'engineering' && workflow.definitionVersion === '18'
+    && workflow.config.taskId === r.task_id && workflow.config.runId === runId
+    && candidate.node_id === 'validate-proposal' && candidate.executor === 'code' && !candidate.output_ref
+    && previous?.node_id === 'inspect-and-propose' && previous.status === 'succeeded' && !!previous.output_ref
+    && engineeringProposalCorrectionReasons.includes(wait?.reference)
+  const n = localPlanCorrection ? planner : proposalCorrection ? previous : candidate
+  // 原候选修复已经保留编辑回执；纠正新方案只续行原Agent，不再次派发这些编辑。
+  const repairedRow = proposalCorrection && !technicalPlanRevision && db.prepare("SELECT payload FROM execution_events WHERE kind='workflow.repair.accepted' AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(runId,r.generation)
+  const repaired = repairedRow && JSON.parse(repairedRow.payload)
+  const retainedCandidate = repaired?.mode === 'candidate-in-place' && repaired.taskId === r.task_id && repaired.workflowDigest === r.workflow_digest
+  const invalidatedNode = node => retainedCandidate && node.status === 'blocked' && !node.input_ref && !node.output_ref
+    && repaired.invalidated?.find(old => old.nodeRunId === node.node_run_id && old.leaseEpoch === node.lease_epoch)
+  const retainedEdits = node => {
+    const old = invalidatedNode(node)
+    if (!old?.outputRef || node.node_id !== 'apply-changes') return false
+    const effects = db.prepare('SELECT * FROM execution_effects WHERE node_run_id=? ORDER BY created_at').all(node.node_run_id)
+    return effects.length > 0 && effects.every(effect => effect.state === 'succeeded' && effect.generation === node.generation
+      && JSON.parse(effect.definition_json).action === 'edit') && effects.some(effect => old.inputRef?.endsWith(`sha256-${effect.input_digest}.json`))
+  }
+  const checkpointRow = n.node_id === 'plan-local-acceptance' && workflow?.config?.checkpoint?.kind === 'local-acceptance'
+    && db.prepare("SELECT payload FROM execution_events WHERE kind='run.workflow.checkpoint' AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.toDigest')=? AND json_type(payload,'$.retained')='array' ORDER BY seq DESC LIMIT 1").get(runId,r.workflow_digest)
+  const retained = checkpointRow ? JSON.parse(checkpointRow.payload).retained ?? [] : []
+  const retainedNode = node => localPlanCorrection && node.position > n.position && node.position < candidate.position && node.status === 'succeeded' || retained.some(saved => saved.nodeRunId===node.node_run_id && saved.leaseEpoch===node.lease_epoch
+    && saved.inputDigest===node.input_digest && saved.outputRef===node.output_ref && node.status==='succeeded')
+  const record = db.prepare("SELECT payload FROM execution_events WHERE kind='node.failure' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.leaseEpoch')=? ORDER BY seq DESC LIMIT 1").get(candidate.node_run_id, candidate.lease_epoch)
+  const failure = record ? JSON.parse(record.payload).failure : { code: wait?.reference, phase: technicalPlanRevision ? 'output-admission' : 'execution', targetNodeId: candidate.node_id }
   const detail = { ...base, nodeId: n.node_id, nodeRunId: n.node_run_id, leaseEpoch: n.lease_epoch, inputDigest: n.input_digest,
-    evidenceRefs: [...new Set([n.output_ref, ...JSON.parse(n.evidence_refs)].filter(Boolean))], failure }
+    ...(proposalCorrection ? { validationNodeRunId: candidate.node_run_id, validationLeaseEpoch: candidate.lease_epoch, validationInputDigest: candidate.input_digest } : {}),
+    ...(technicalPlanRevision ? { technicalPlanRevision: true } : {}),
+    ...(localPlanCorrection ? { localPlanCorrection: true } : {}),
+    ...(retainedCandidate ? { retainedCandidate: { repairContextRef: repaired.contextRef,
+      instruction: '原候选已保留成功编辑。本次只纠正原方案会话：先实际读取当前文件，若没有新增修改提交真实no-change，不重复旧补丁；后续Host仍核完整受管候选和真实检查。' } } : {}),
+    evidenceRefs: [...new Set([n.output_ref, ...(technicalPlanRevision ? [candidate.output_ref] : []), ...JSON.parse(n.evidence_refs), ...(proposalCorrection ? JSON.parse(candidate.evidence_refs) : [])].filter(Boolean))], failure }
   if (typeof failure?.code !== 'string') return detail
   const problemKey = executionDigest({ nodeRunId: n.node_run_id, inputDigest: n.input_digest,
-    code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId })
+    code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId,
+    ...(technicalPlanRevision || localPlanCorrection ? { reviewInputDigest: candidate.input_digest } : {}) })
   detail.problemKey = problemKey
-  const correctable = ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'execution_step_budget_exhausted', 'execution_timeout',
-    'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY'].includes(failure.code)
+  const correctable = reclassifyInterrupted && failure.code === 'execution_tool_failed' || reclassifyProvider && failure.code === 'EXECUTION_PROVIDER_FAILED' || ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'EXECUTION_TURN_INTERRUPTED', 'execution_step_budget_exhausted', 'execution_timeout',
+    'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY', 'ENGINEERING_READ_PATH_INVALID'].includes(failure.code)
     || ['output-validation', 'output-admission'].includes(failure.phase)
       && ['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT', 'AGENT_WORK_RESULT_INVALID',
         'AGENT_WORK_EVIDENCE_INVALID', 'AGENT_WORK_COVERAGE_INCOMPLETE', 'QUERY_EVIDENCE_INVALID', 'GROUP_REPLY_INTERNAL_DETAILS'].includes(failure.code)
-  if (!correctable) return { ...detail, reason: 'failure-requires-implementation-repair' }
+  if (!correctable && !proposalCorrection) return { ...detail, reason: 'failure-requires-implementation-repair' }
+  if (proposalCorrection && (failure.phase !== (technicalPlanRevision ? 'output-admission' : 'execution') || failure.targetNodeId !== candidate.node_id)) return detail
+  if (failure.code === 'ENGINEERING_READ_PATH_INVALID' && n.output_ref) return detail
   if (n.executor !== 'agent' || !n.session_bound || !n.session_id || !n.input_digest || !n.input_ref
     || !['failed', 'waiting'].includes(r.status) || wait?.kind !== 'recovery' || failure.code !== wait.reference
     || r.pause_requested || r.stop_requested || pendingInputs(runId).length || current.some(node => !node.drained)
     || current.slice(0, n.position).some(node => node.status !== 'succeeded')
-    || current.slice(n.position + 1).some(node => node.status !== 'blocked' || node.lease_epoch !== 0)
-    || db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)
+    || current.slice(n.position + 1).some(node => retainedNode(node) || invalidatedNode(node) ? false : proposalCorrection && node.node_run_id === candidate.node_run_id ? false
+      : node.status !== 'blocked' || node.lease_epoch !== 0 && !((node.node_id === 'validate-proposal' || workflow?.definitionVersion === '19' && node.node_id === 'apply-changes') && node.position === n.position + 1
+        && db.prepare("SELECT 1 FROM execution_events WHERE kind='node.resume' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.validationNodeRunId')=? LIMIT 1").get(n.node_run_id,node.node_run_id)))
+    || current.filter(node=>node.position>=n.position&&!retainedNode(node)&&!retainedEdits(node)).some(node=>db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(node.node_run_id))
     || db.prepare("SELECT 1 FROM execution_effects WHERE run_id=? AND state NOT IN ('succeeded','failed') LIMIT 1").get(runId)) return detail
   const task = db.prepare('SELECT t.*,c.state AS control_state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
   const stages = task && db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? ORDER BY position').all(r.task_id, task.plan_revision)
   const stage = stages?.find(item => item.run_id === runId)
   if (!task || task.control_state !== 'active' || !['active', 'blocked'].includes(task.status)
-    || task.plan_requirement_revision !== task.requirement_revision || !stage || !['running', 'blocked'].includes(stage.status)
+    || task.plan_requirement_revision !== task.requirement_revision || retainedCandidate && repaired.requirementRevision !== task.requirement_revision || !stage || !['running', 'blocked'].includes(stage.status)
     || stage.workflow_digest !== r.workflow_digest || stage.requirement_ref !== r.requirement_ref || stage.output_ref
     || stages.slice(0, stage.position).some(item => item.status !== 'succeeded')
     || stages.slice(stage.position + 1).some(item => item.run_id || !['ready','waiting_confirmation','blocked'].includes(item.status))) return { ...detail, reason: 'task-plan-not-current' }
@@ -171,7 +237,7 @@ function install() {
       pause_requested INTEGER NOT NULL DEFAULT 0 CHECK(pause_requested IN (0,1)),
       created_at TEXT NOT NULL,updated_at TEXT NOT NULL) STRICT;
     CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id)
-      WHERE status NOT IN ('succeeded','failed','cancelled');
+      WHERE status NOT IN ('succeeded','failed','cancelled') AND NOT (status='waiting' AND COALESCE(recovery_reason,'')='stage-dependency');
     CREATE TABLE execution_nodes(node_run_id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
       node_id TEXT NOT NULL,node_version TEXT NOT NULL,executor TEXT NOT NULL CHECK(executor IN ('code','agent','wait','operation')),
       position INTEGER NOT NULL CHECK(position>=0),generation INTEGER NOT NULL CHECK(generation>0),
@@ -206,6 +272,9 @@ function validate(connection) {
   const meta = connection.prepare('SELECT instance_id,schema_version,safety_epoch FROM execution_meta WHERE singleton=1').get()
   if (!meta || meta.instance_id !== workerData.instanceId) fail('STORE_INSTANCE_MISMATCH')
   if (meta.schema_version !== SCHEMA_VERSION) fail('STORE_SCHEMA_MISMATCH')
+  const activeIndex = connection.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='execution_one_active_task'").get()?.sql
+  if (activeIndex?.replace(/\s+/g, ' ').trim() !== "CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id) WHERE status NOT IN ('succeeded','failed','cancelled') AND NOT (status='waiting' AND COALESCE(recovery_reason,'')='stage-dependency')")
+    fail('STORE_SCHEMA_MISMATCH')
   const integrity = connection.prepare('PRAGMA integrity_check').all()
   if (integrity.length !== 1 || scalar(integrity[0]) !== 'ok') fail('STORE_INTEGRITY_FAILED')
   if (connection.prepare('PRAGMA foreign_key_check').all().length) fail('STORE_FOREIGN_KEY_FAILED')
@@ -278,7 +347,7 @@ function coreCommand(command, now, consumption = {}) {
       ids.add(n.nodeId); inputPair(n, i === 0)
     })
     if (db.prepare('SELECT run_id FROM execution_runs WHERE run_id=?').get(a.runId)) fail('RUN_EXISTS')
-    if (db.prepare("SELECT run_id FROM execution_runs WHERE task_id=? AND status NOT IN ('succeeded','failed','cancelled')").get(a.taskId)) fail('TASK_ALREADY_RUNNING')
+    if (db.prepare("SELECT run_id FROM execution_runs WHERE task_id=? AND status NOT IN ('succeeded','failed','cancelled') AND NOT (status='waiting' AND COALESCE(recovery_reason,'')='stage-dependency')").get(a.taskId)) fail('TASK_ALREADY_RUNNING')
     const plannedTask = db.prepare('SELECT task_id FROM business_tasks WHERE task_id=?').get(a.taskId)
     if (plannedTask && !a.stageBinding) fail('TASK_STAGE_BINDING_REQUIRED')
     if (!plannedTask && a.stageBinding) fail('TASK_PLAN_NOT_FOUND')
@@ -292,8 +361,9 @@ function coreCommand(command, now, consumption = {}) {
     return { status: 'applied', run: runDto(getRun(a.runId)) }
   }
   if (command.kind === 'input.accept') {
-    object(a, ['runId', 'inputId', 'sourceKey', 'requirementRef', 'expectedRevision', 'repair', 'readonlyRecovery'], ['runId', 'inputId', 'sourceKey', 'requirementRef'])
+    object(a, ['runId', 'inputId', 'sourceKey', 'requirementRef', 'expectedRevision', 'repair', 'readonlyRecovery', 'candidateRepair'], ['runId', 'inputId', 'sourceKey', 'requirementRef'])
     text(a.inputId, 'inputId'); text(a.sourceKey, 'sourceKey'); ref(a.requirementRef, 'requirementRef')
+    if(a.candidateRepair&&!a.repair)fail('WORKFLOW_REPAIR_NOT_ADMITTED')
     const old = db.prepare('SELECT * FROM execution_inputs WHERE run_id=? AND source_key=?').get(a.runId, a.sourceKey)
     if (old) {
       if (old.requirement_ref !== a.requirementRef) fail('INPUT_SOURCE_CONFLICT')
@@ -336,6 +406,20 @@ function coreCommand(command, now, consumption = {}) {
         || stage.workflow_id !== r.workflow_id || stage.workflow_digest !== r.workflow_digest || a.repair.workflowDigest !== r.workflow_digest
         || nodes(r.run_id).some(node => !node.drained)
         || db.prepare("SELECT effect_id FROM execution_effects WHERE run_id=? AND state NOT IN ('succeeded','failed') LIMIT 1").get(r.run_id)) fail('WORKFLOW_REPAIR_NOT_ADMITTED')
+      if (a.candidateRepair) {
+        object(a.candidateRepair, ['inputRef','inputDigest']);ref(a.candidateRepair.inputRef,'inputRef');digest(a.candidateRepair.inputDigest,'inputDigest')
+        const current=nodes(r.run_id), start=current.findIndex(n=>n.node_id==='inspect-and-propose'), failed=current.findIndex(n=>n.node_id==='verify-candidate')
+        if(!r.workflow_id.startsWith('task-engineering-')||start<0||failed<=start||current.slice(0,failed).some(n=>n.status!=='succeeded')
+          ||current[failed].status!=='waiting'||JSON.parse(current[failed].wait_reason??'null')?.reference!=='ENGINEERING_VERIFICATION_FAILED'
+          ||current.slice(failed+1).some(n=>n.status!=='blocked'||n.lease_epoch!==0||n.output_ref)
+          ||db.prepare("SELECT 1 FROM execution_effects WHERE run_id=? AND (state NOT IN ('succeeded','failed') OR COALESCE(json_extract(definition_json,'$.action'),'') NOT IN ('workspace','edit')) LIMIT 1").get(r.run_id))fail('WORKFLOW_REPAIR_NOT_ADMITTED')
+        const invalidated=current.slice(start).map(n=>({nodeRunId:n.node_run_id,leaseEpoch:n.lease_epoch,inputRef:n.input_ref,outputRef:n.output_ref}))
+        for(const n of current.slice(start))db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,output_ref=NULL,session_id=NULL,session_bound=0,wait_reason=NULL WHERE node_run_id=?").run(n.node_run_id)
+        db.prepare("UPDATE execution_nodes SET status='ready',input_ref=?,input_digest=? WHERE node_run_id=?").run(a.candidateRepair.inputRef,a.candidateRepair.inputDigest,current[start].node_run_id)
+        db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now,r.run_id)
+        emitEvent(command.id,'workflow.repair.accepted',{...a.repair,runId:r.run_id,nextGeneration:r.generation,mode:'candidate-in-place',invalidated},now)
+        return {status:'applied',accepted:true,generation:r.generation,mode:'candidate-in-place'}
+      }
       emitEvent(command.id, 'workflow.repair.accepted', { ...a.repair, runId: r.run_id, nextGeneration: r.generation + 1 }, now)
       db.prepare('UPDATE business_tasks SET plan_requirement_revision=requirement_revision WHERE task_id=?').run(a.repair.taskId)
     }
@@ -349,6 +433,7 @@ function coreCommand(command, now, consumption = {}) {
     ref(a.requirementRef, 'requirementRef')
     const r = activeRun(a, { allowFence: true })
     if (r.revision !== integer(a.expectedRevision, 'expectedRevision')) fail('REVISION_CONFLICT')
+    reconcileAppliedStageRequirement(r, command.id, now)
     const inputs = pendingInputs(r.run_id)
     if (!Array.isArray(a.inputIds) || !a.inputIds.length || a.inputIds.length > inputs.length
       || a.inputIds.some((id, i) => id !== inputs[i].input_id) || a.requirementRef !== inputs[a.inputIds.length - 1].requirement_ref) fail('INPUT_BATCH_CONFLICT')
@@ -368,6 +453,14 @@ function coreCommand(command, now, consumption = {}) {
       const n = current[i], replacement = a.nodes[i - first]
       db.prepare("UPDATE execution_nodes SET current=0,status='superseded' WHERE node_run_id=?").run(n.node_run_id)
       addNode(r.run_id, { nodeId: n.node_id, nodeVersion: n.node_version, executor: n.executor, ...replacement }, n.position, generation, i === first ? 'ready' : 'blocked')
+    }
+    const stage = db.prepare(`SELECT s.* FROM task_plan_stages s JOIN business_tasks t USING(task_id)
+      WHERE s.task_id=? AND s.plan_revision=t.plan_revision AND s.run_id=?`).get(r.task_id,r.run_id)
+    if (stage) {
+      if (stage.workflow_digest !== r.workflow_digest || stage.requirement_ref !== r.requirement_ref
+        || !['running','blocked'].includes(stage.status) || stage.output_ref) fail('TASK_STAGE_REQUIREMENT_STALE')
+      db.prepare('UPDATE task_plan_stages SET requirement_ref=? WHERE task_id=? AND plan_revision=? AND stage_id=?')
+        .run(a.requirementRef,r.task_id,stage.plan_revision,stage.stage_id)
     }
     for (const id of a.inputIds) db.prepare("UPDATE execution_inputs SET status='applied',applied_at=? WHERE run_id=? AND input_id=?").run(now, r.run_id, id)
     db.prepare("UPDATE execution_runs SET requirement_ref=?,revision=revision+1,generation=?,status='queued',recovery_reason=NULL,updated_at=? WHERE run_id=?")
@@ -420,6 +513,67 @@ function coreCommand(command, now, consumption = {}) {
     db.prepare("UPDATE execution_runs SET status='cancelled',updated_at=? WHERE run_id=?").run(now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
+  if (command.kind === 'node.session.rebind') {
+    const fields = ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','nextSessionId','lastInputLease','evidenceRef']
+    object(a, [...fields,'maintenance'], fields)
+    const r = activeRun(a), n = nodes(r.run_id).find(node => node.node_run_id === a.nodeRunId)
+    assertTaskDispatchAllowed(r)
+    const maintenance = maintenanceStatus(db, workerData.processIncarnation)
+    if (a.maintenance !== undefined) object(a.maintenance,['maintenanceId','revision'])
+    if (!maintenance.active || !a.maintenance || a.maintenance.maintenanceId !== maintenance.maintenanceId || a.maintenance.revision !== maintenance.revision) fail('RUNTIME_MAINTENANCE_STALE')
+    if (!n || r.revision !== a.runRevision || r.generation !== a.generation || n.lease_epoch !== a.leaseEpoch
+      || n.input_digest !== a.inputDigest || n.session_id !== a.sessionId || n.executor !== 'agent' || !n.session_bound || n.output_ref
+      || !['ready','running','waiting'].includes(n.status)
+      || n.status === 'waiting' && JSON.parse(n.wait_reason ?? 'null')?.reference !== 'controller-restarted'
+      || !Number.isSafeInteger(a.lastInputLease) || a.lastInputLease < 1 || a.lastInputLease > n.lease_epoch
+      || n.status === 'running' && a.lastInputLease >= n.lease_epoch
+      || a.nextSessionId === a.sessionId || typeof a.nextSessionId !== 'string' || !a.nextSessionId.startsWith('execution-')
+      || nodes(r.run_id).some(other => other.node_run_id !== n.node_run_id && (other.status === 'running' || !other.drained))
+      || db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)) fail('NODE_SESSION_REBIND_NOT_ADMITTED')
+    ref(a.evidenceRef,'evidenceRef');assertRunEffectsDrained(db,r.run_id)
+    const task = db.prepare('SELECT * FROM business_tasks WHERE task_id=?').get(r.task_id)
+    if (task) {
+      const stage = db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=?').get(r.task_id,task.plan_revision,r.run_id)
+      if (task.plan_requirement_revision !== task.requirement_revision || !stage || stage.output_ref) fail('NODE_SESSION_REBIND_NOT_ADMITTED')
+      if (stage.source_condition) {
+        const condition=JSON.parse(stage.source_condition),source=readCurrentTaskSource(db,condition.sourceKey,{taskId:r.task_id})
+        if (!source || source.status === 'superseded' || source.sourceVersion !== condition.sourceVersion || !source.body.includes(condition.sourceQuote)
+          || !condition.sourceQuote.includes(condition.objective) || condition.requiredActorId && source.actorId !== condition.requiredActorId) fail('NODE_SESSION_REBIND_NOT_ADMITTED')
+      }
+    }
+    db.prepare("UPDATE execution_nodes SET session_id=?,status='ready',drained=1,wait_reason=NULL,drain_evidence_ref=? WHERE node_run_id=?").run(a.nextSessionId,a.evidenceRef,n.node_run_id)
+    db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now,r.run_id)
+    emitEvent(command.id,'node.session.rebound',a,now)
+    return { sessionId:a.nextSessionId }
+  }
+  if (command.kind === 'node.failure.reclassify') {
+    object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','sessionId','evidenceRef','previousCode','code'])
+    const { previousCode, code } = a
+    if (!(['execution_no_submission', 'EXECUTION_PROVIDER_FAILED'].includes(previousCode) && code === 'EXECUTION_PROVIDER_TRANSIENT')
+      && !(previousCode === 'execution_tool_failed' && ['EXECUTION_TURN_INTERRUPTED','ENGINEERING_READ_PATH_INVALID','QUERY_ARGUMENT_INVALID'].includes(code))) fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
+    const r = activeRun(a), current = nodes(r.run_id), waiting = current.filter(n => n.status === 'waiting'), n = waiting[0]
+    assertTaskDispatchAllowed(r)
+    if (maintenanceStatus(db, workerData.processIncarnation).active) fail('RUNTIME_MAINTENANCE_ACTIVE')
+    if (db.prepare('SELECT 1 FROM business_tasks WHERE task_id=?').get(r.task_id)) {
+      reconcileAppliedStageRequirement(r, command.id, now)
+      const recovery = inspectNodeRecovery(r.run_id, { reclassifyInterrupted: previousCode === 'execution_tool_failed', reclassifyProvider: previousCode === 'EXECUTION_PROVIDER_FAILED' })
+      if (!recovery.repairable && recovery.reason !== 'strategy-change-required') fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
+    }
+    if (r.status !== 'waiting' || r.revision !== a.runRevision || r.generation !== a.generation || waiting.length !== 1
+      || n.node_run_id !== a.nodeRunId || n.lease_epoch !== a.leaseEpoch || n.input_digest !== a.inputDigest
+      || n.session_id !== a.sessionId || !n.session_bound || n.executor !== 'agent' || n.output_ref
+      || JSON.parse(n.wait_reason ?? 'null')?.kind !== 'recovery' || JSON.parse(n.wait_reason).reference !== previousCode
+      || current.some(node => !node.drained) || pendingInputs(r.run_id).length
+      || db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)
+      || typeof a.evidenceRef !== 'string' || !a.evidenceRef) fail('NODE_FAILURE_RECLASSIFICATION_NOT_ADMITTED')
+    assertRunEffectsDrained(db, r.run_id)
+    const failure = { code, phase: code === 'EXECUTION_PROVIDER_TRANSIENT' ? 'provider' : 'execution', targetNodeId: n.node_id, evidenceRef: a.evidenceRef }
+    const evidenceRefs = [...new Set([...JSON.parse(n.evidence_refs), a.evidenceRef])]
+    db.prepare('UPDATE execution_nodes SET wait_reason=?,evidence_refs=? WHERE node_run_id=?').run(JSON.stringify({kind:'recovery',reference:failure.code}),JSON.stringify(evidenceRefs),n.node_run_id)
+    db.prepare('UPDATE execution_runs SET recovery_reason=?,revision=revision+1,updated_at=? WHERE run_id=?').run(failure.code,now,r.run_id)
+    emitEvent(command.id, 'node.failure', { ...a, failure, previousCode }, now)
+    return { reclassified: true, code: failure.code }
+  }
   if (command.kind === 'run.recovery.admit') {
     object(a, ['runId','runRevision','nodeRunId','generation','leaseEpoch','inputDigest','errorCode'])
     const r = activeRun(a), current = nodes(r.run_id), waiting = current.filter(n => n.status === 'waiting'), n = waiting[0]
@@ -432,6 +586,7 @@ function coreCommand(command, now, consumption = {}) {
     const key = createHash('sha256').update(canonical({runId:r.run_id,generation:r.generation,nodeRunId:n.node_run_id,inputDigest:n.input_digest,errorCode:a.errorCode})).digest('hex')
     const prior = db.prepare("SELECT payload FROM execution_events WHERE kind='run.recovery.admitted' AND json_extract(payload,'$.key')=? ORDER BY seq DESC LIMIT 1").get(key)
     const last = prior ? JSON.parse(prior.payload) : null, attempt = (last?.attempt ?? 0) + 1
+    if (a.errorCode === 'EXECUTION_PROVIDER_TRANSIENT' && attempt > 3) fail('RECOVERY_RETRY_LIMIT')
     if (last && Date.parse(now) < Date.parse(last.nextRetryAt)) fail('RECOVERY_RETRY_DEFERRED')
     const nextRetryAt = new Date(Date.parse(now) + recoveryRetryDelayMs(attempt)).toISOString()
     emitEvent(command.id, 'run.recovery.admitted', {...a,key,attempt,nextRetryAt}, now)
@@ -440,8 +595,10 @@ function coreCommand(command, now, consumption = {}) {
   if (command.kind === 'run.recover') {
     object(a, ['runId'])
     const r = activeRun(a)
+    if (r.recovery_reason === 'stage-dependency') fail('TASK_DEPENDENCY_PENDING')
     const recovering = nodes(r.run_id).filter(n => n.status === 'waiting' && n.wait_reason && JSON.parse(n.wait_reason).kind === 'recovery')
     if (!recovering.length) fail('RUN_NOT_RECOVERING')
+    if (recovering.some(n => ['EXECUTION_TURN_INTERRUPTED', 'ENGINEERING_READ_PATH_INVALID', 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED', ...engineeringProposalCorrectionReasons].includes(JSON.parse(n.wait_reason).reference))) fail('NODE_RECOVERY_REQUIRES_OWNER')
     if (recovering.some(n => !n.drained)) fail('NODE_NOT_DRAINED')
     assertRunEffectsDrained(db, r.run_id)
     for (const n of recovering) {
@@ -521,6 +678,104 @@ function coreCommand(command, now, consumption = {}) {
       .run(a.toDigest, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
+  if (command.kind === 'run.workflow.revise') {
+    object(a,['taskId','runId','expectedRevision','fromDigest','toDigest','toWorkflowId','startNodeId','reason','inputRef','inputDigest','evidenceRef','expectedRequirementRevision','expectedPlanRevision','expectedControlRevision','nodes'])
+    digest(a.fromDigest,'fromDigest');digest(a.toDigest,'toDigest');ref(a.inputRef,'inputRef');digest(a.inputDigest,'inputDigest');ref(a.evidenceRef,'evidenceRef');text(a.reason,'reason')
+    const r=activeRun(a),current=nodes(r.run_id),index=current.findIndex(n=>n.node_id===a.startNodeId)
+    assertTaskDispatchAllowed(r)
+    const oldRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.fromDigest),nextRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.toDigest)
+    const old=oldRow&&JSON.parse(oldRow.body),next=nextRow&&JSON.parse(nextRow.body)
+    const task=db.prepare('SELECT t.*,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
+    reconcileAppliedStageRequirement(r,command.id,now)
+    const stage=task&&db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=?').get(r.task_id,task.plan_revision,r.run_id)
+    if(r.task_id!==a.taskId||!['waiting','failed','queued'].includes(r.status)||r.revision!==a.expectedRevision||r.workflow_digest!==a.fromDigest||a.fromDigest===a.toDigest
+      ||!old||!next||next.workflowId!==a.toWorkflowId||[old,next].some(w=>w.config?.taskId!==r.task_id||w.config?.runId!==r.run_id)
+      ||next.config.taskRevision?.fromDigest!==a.fromDigest||next.config.taskRevision?.startNodeId!==a.startNodeId||next.config.taskRevision?.reason!==a.reason
+      ||!task||!stage||!['running','blocked'].includes(stage.status)||stage.output_ref||stage.requirement_ref!==r.requirement_ref||stage.workflow_digest!==a.fromDigest||task.requirement_revision!==a.expectedRequirementRevision||task.plan_revision!==a.expectedPlanRevision||task.control_revision!==a.expectedControlRevision||task.plan_requirement_revision!==task.requirement_revision
+      ||index<0||current.some(n=>!n.drained)||pendingInputs(r.run_id).length||current.slice(0,index).some(n=>n.status!=='succeeded')||current.slice(index).some(n=>!['waiting','failed','ready','blocked'].includes(n.status)))fail('WORKFLOW_REVISION_NOT_ADMITTED')
+    if(stage.source_condition){const c=JSON.parse(stage.source_condition),source=readCurrentTaskSource(db,c.sourceKey,{taskId:r.task_id});if(!source||source.status==='superseded'||source.sourceVersion!==c.sourceVersion||!source.body.includes(c.sourceQuote)||!c.sourceQuote.includes(c.objective)||c.requiredActorId&&source.actorId!==c.requiredActorId)fail('WORKFLOW_REVISION_SOURCE_CHANGED')}
+    if(!Array.isArray(a.nodes)||a.nodes.length<=index||new Set(a.nodes.map(n=>n.nodeId)).size!==a.nodes.length||executionDigest(a.nodes)!==executionDigest(next.config.taskRevision.nodePlan??null))fail('INVALID_NODE_PLAN')
+    a.nodes.forEach((n,i)=>{object(n,['nodeId','nodeVersion','executor']);text(n.nodeId,'nodeId');text(n.nodeVersion,'nodeVersion');if(!['code','agent'].includes(n.executor)||i<index&&(n.nodeId!==current[i].node_id||n.nodeVersion!==current[i].node_version||n.executor!==current[i].executor))fail('WORKFLOW_REVISION_PREFIX_CHANGED')})
+    assertRunEffectsDrained(db,r.run_id)
+    const suffix=current.slice(index)
+    if(suffix.some(n=>db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)))fail('WORKFLOW_REVISION_EFFECTS_PRESENT')
+    // 旧行及工件保持可审计；同代同ID沿现有checkpoint复用行，完整旧快照进入修订事件。
+    suffix.forEach(n=>db.prepare("UPDATE execution_nodes SET current=0,status='superseded' WHERE node_run_id=?").run(n.node_run_id))
+    for(let i=index;i<a.nodes.length;i++){
+      const n=a.nodes[i],existing=db.prepare('SELECT * FROM execution_nodes WHERE run_id=? AND node_id=? AND generation=?').get(r.run_id,n.nodeId,r.generation)
+      if(existing&&db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(existing.node_run_id))fail('WORKFLOW_REVISION_EFFECTS_PRESENT')
+      if(existing)db.prepare("UPDATE execution_nodes SET current=1,node_version=?,executor=?,position=?,status=?,input_ref=?,input_digest=?,output_ref=NULL,evidence_refs='[]',wait_reason=NULL,session_id=NULL,session_bound=0 WHERE node_run_id=?").run(n.nodeVersion,n.executor,i,i===index?'ready':'blocked',i===index?a.inputRef:null,i===index?a.inputDigest:null,existing.node_run_id)
+      else addNode(r.run_id,{...n,inputRef:i===index?a.inputRef:null,inputDigest:i===index?a.inputDigest:null},i,r.generation,i===index?'ready':'blocked')
+    }
+    db.prepare("UPDATE execution_runs SET workflow_id=?,workflow_digest=?,status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(a.toWorkflowId,a.toDigest,now,r.run_id)
+    db.prepare('UPDATE task_plan_stages SET workflow_id=?,workflow_digest=? WHERE task_id=? AND plan_revision=? AND run_id=?').run(a.toWorkflowId,a.toDigest,r.task_id,task.plan_revision,r.run_id)
+    db.prepare("UPDATE task_plan_stages SET status='running' WHERE task_id=? AND plan_revision=? AND run_id=?").run(r.task_id,task.plan_revision,r.run_id)
+    db.prepare("UPDATE business_tasks SET status='active',updated_at=? WHERE task_id=?").run(now,r.task_id)
+    emitEvent(command.id,'run.workflow.revise',{...a,previousNodes:suffix},now)
+    return {taskId:r.task_id,runId:r.run_id,fromDigest:a.fromDigest,toDigest:a.toDigest,generation:r.generation,revision:r.revision+1,evidenceRef:a.evidenceRef}
+  }
+  if (command.kind === 'run.workflow.checkpoint') {
+    object(a,['runId','expectedRevision','fromDigest','toDigest','toWorkflowId','kind','startNodeId','inputRef','inputDigest','evidenceRef','expectedRequirementRevision','expectedControlRevision','nodes','maintenance'])
+    object(a.maintenance,['maintenanceId','revision'])
+    const maintenance=maintenanceStatus(db,workerData.processIncarnation)
+    if(!maintenance.active||!maintenance.drained||maintenance.maintenanceId!==a.maintenance.maintenanceId||maintenance.revision!==a.maintenance.revision)fail('RUNTIME_MAINTENANCE_STALE')
+    digest(a.fromDigest,'fromDigest');digest(a.toDigest,'toDigest');ref(a.inputRef,'inputRef');digest(a.inputDigest,'inputDigest');ref(a.evidenceRef,'evidenceRef')
+    const local=a.kind==='local-acceptance'
+    const r=activeRun(a),current=nodes(r.run_id),index=current.findIndex(n=>n.node_id===(local?'define-local-acceptance':'verify-candidate')),n=current[index]
+    const localStart=current.findIndex(n=>n.node_id==='prepare-local-acceptance'),planner=current[index+1]
+    const localPrepareRetry=local&&current[localStart]?.status==='waiting'&&current[localStart].executor==='code'
+      &&JSON.parse(current[localStart].wait_reason??'null')?.reference==='LOCAL_ACCEPTANCE_PLAN_INVALID'
+      &&!current[localStart].output_ref&&current.slice(0,localStart).every(v=>v.status==='succeeded')
+    assertTaskDispatchAllowed(r)
+    const oldRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.fromDigest),nextRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.toDigest)
+    const old=oldRow&&JSON.parse(oldRow.body),next=nextRow&&JSON.parse(nextRow.body)
+    const task=db.prepare('SELECT t.*,c.control_revision FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
+    reconcileAppliedStageRequirement(r,command.id,now)
+    const stage=task&&db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=?').get(r.task_id,task.plan_revision,r.run_id)
+    if(!['checks','local-acceptance'].includes(a.kind)||a.startNodeId!==(local?'define-local-acceptance':'verify-candidate')||!(local?['waiting','queued']:['waiting']).includes(r.status)||r.revision!==a.expectedRevision||r.workflow_digest!==a.fromDigest
+      ||a.fromDigest===a.toDigest||!old||!next||old.definitionVersion!=='18'||next.definitionVersion!=='18'||next.workflowId!==a.toWorkflowId
+      ||old.config.kind!=='engineering'||next.config.kind!=='engineering'||old.config.runId!==r.run_id||old.config.taskId!==r.task_id
+      ||!task||!stage||stage.output_ref||stage.workflow_digest!==a.fromDigest||task.requirement_revision!==a.expectedRequirementRevision
+      ||task.control_revision!==a.expectedControlRevision||task.plan_requirement_revision!==task.requirement_revision
+      ||index<0||(!local&&(n.status!=='waiting'||JSON.parse(n.wait_reason??'null')?.reference!=='ENGINEERING_VERIFICATION_FAILED'))
+      ||current.some(v=>!v.drained)||current.slice(0,index).some(v=>v.status!=='succeeded')
+      ||(!local&&current.slice(index+1).some(v=>v.status!=='blocked'||v.lease_epoch!==0||v.output_ref))
+      ||next.config.checkpoint?.kind!==a.kind||next.config.checkpoint?.fromDigest!==a.fromDigest
+      ||(!local&&(!Array.isArray(next.config.checkpointChecks)||!next.config.checkpointChecks.length)))fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+    if(local&&(n.status!=='succeeded'||planner?.node_id!=='plan-local-acceptance'||planner.status!=='succeeded'||localStart<=index+1
+      ||current.slice(localStart).some((v,i)=>!(localPrepareRetry&&i===0)&&(!['blocked','ready'].includes(v.status)||v.lease_epoch!==0||v.output_ref))
+      ||current.slice(index+2,localStart).some(v=>v.status!=='succeeded'&&!(v.node_id==='verify-candidate'&&['waiting','ready'].includes(v.status)))
+      ||!next.config.localAcceptanceConfig||next.config.localAcceptanceScope?.taskId!==r.task_id
+      ||next.config.localAcceptanceScope?.uatEnvironment!==old.config.uatEnvironment
+      ||next.config.localAcceptanceScope?.requestDigest!==executionDigest({request:old.config.input.request,acceptanceCriteria:old.config.input.acceptanceCriteria})))fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+    const before=structuredClone(old),after=structuredClone(next)
+    for(const value of [before,after]){delete value.digest;delete value.workflowId;delete value.config.checkpoint;if(local){delete value.config.localAcceptanceConfig;delete value.config.localAcceptanceScope}else delete value.config.checkpointChecks}
+    if(executionDigest(before)!==executionDigest(after)||executionDigest(local?old.config.localAcceptanceConfig??null:old.config.checkpointChecks??null)===executionDigest(local?next.config.localAcceptanceConfig:next.config.checkpointChecks))fail('ENGINEERING_CHECKPOINT_SCOPE_CHANGED')
+    if(stage.source_condition){const condition=JSON.parse(stage.source_condition),source=readCurrentTaskSource(db,condition.sourceKey,{taskId:r.task_id})
+      if(!source||source.status==='superseded'||source.sourceVersion!==condition.sourceVersion||!source.body.includes(condition.sourceQuote)
+        ||!condition.sourceQuote.includes(condition.objective)||condition.requiredActorId&&source.actorId!==condition.requiredActorId)fail('ENGINEERING_CHECKPOINT_SOURCE_CHANGED')}
+    if(!Array.isArray(a.nodes)||a.nodes.length!==current.length)fail('INVALID_NODE_PLAN')
+    a.nodes.forEach((value,i)=>{object(value,['nodeId','nodeVersion','executor']);text(value.nodeVersion,'nodeVersion')
+      if(value.nodeId!==current[i].node_id||value.executor!==current[i].executor||i<index&&value.nodeVersion!==current[i].node_version)fail('INVALID_NODE_PLAN')})
+    assertRunEffectsDrained(db,r.run_id)
+    if(db.prepare('SELECT 1 FROM execution_effects WHERE run_id=? AND node_id IN (SELECT node_id FROM execution_nodes WHERE run_id=? AND current=1 AND position>=?) LIMIT 1').get(r.run_id,r.run_id,local?current[localStart].position:n.position))fail('ENGINEERING_CHECKPOINT_EFFECTS_PRESENT')
+    if(local&&db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id IN (?,?) LIMIT 1').get(n.node_run_id,planner.node_run_id))fail('ENGINEERING_CHECKPOINT_EFFECTS_PRESENT')
+    current.slice(index).forEach((value,j)=>db.prepare('UPDATE execution_nodes SET node_version=? WHERE node_run_id=?').run(a.nodes[index+j].nodeVersion,value.node_run_id))
+    if(local){
+      if(localPrepareRetry){
+        const prior=current[localStart]
+        emitEvent(command.id,'run.workflow.checkpoint.local-prepare-reset',{runId:r.run_id,generation:r.generation,nodeRunId:prior.node_run_id,leaseEpoch:prior.lease_epoch,inputRef:prior.input_ref,inputDigest:prior.input_digest,waitReason:JSON.parse(prior.wait_reason),evidenceRef:a.evidenceRef},now)
+        db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,output_ref=NULL,wait_reason=NULL WHERE node_run_id=?").run(prior.node_run_id)
+      }
+      db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,output_ref=NULL,session_id=NULL,session_bound=0,wait_reason=NULL WHERE node_run_id=?").run(planner.node_run_id)
+      for(const pending of current.slice(index+2).filter(v=>v.status==='ready'))db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL WHERE node_run_id=?").run(pending.node_run_id)
+    }
+    db.prepare("UPDATE execution_nodes SET status='ready',input_ref=?,input_digest=?,output_ref=NULL,wait_reason=NULL WHERE node_run_id=?").run(a.inputRef,a.inputDigest,n.node_run_id)
+    db.prepare("UPDATE execution_runs SET workflow_id=?,workflow_digest=?,status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(a.toWorkflowId,a.toDigest,now,r.run_id)
+    db.prepare('UPDATE task_plan_stages SET workflow_id=?,workflow_digest=? WHERE task_id=? AND plan_revision=? AND run_id=?').run(a.toWorkflowId,a.toDigest,r.task_id,task.plan_revision,r.run_id)
+    emitEvent(command.id,'run.workflow.checkpoint',{...a,...(local?{retained:current.slice(index+2,localStart).filter(v=>v.status==='succeeded').map(v=>({nodeRunId:v.node_run_id,leaseEpoch:v.lease_epoch,inputDigest:v.input_digest,outputRef:v.output_ref}))}:{})},now)
+    return {runId:r.run_id,kind:a.kind,fromDigest:a.fromDigest,toDigest:a.toDigest,generation:r.generation,evidenceRef:a.evidenceRef}
+  }
   if (command.kind === 'run.workflow.reissue-repository') {
     object(a, ['runId', 'expectedRevision', 'fromDigest', 'toDigest', 'toWorkflowId', 'requirementRef', 'inputRef', 'inputDigest', 'nodes'])
     digest(a.fromDigest, 'fromDigest'); digest(a.toDigest, 'toDigest'); text(a.toWorkflowId, 'toWorkflowId')
@@ -596,13 +851,18 @@ function coreCommand(command, now, consumption = {}) {
         || source.actorId !== frozen.actorId || executionDigest(source.body) !== frozen.bodyDigest) fail('NODE_RECOVERY_SOURCE_INVALID')
     }
     const n = nodes(a.runId).find(node => node.node_run_id === a.nodeRunId)
+    const validation = recovery.validationNodeRunId && nodes(a.runId).find(node => node.node_run_id === recovery.validationNodeRunId)
+    if (validation) db.prepare("UPDATE execution_nodes SET status='blocked',input_ref=NULL,input_digest=NULL,output_ref=NULL,wait_reason=NULL WHERE node_run_id=?").run(validation.node_run_id)
     db.prepare("UPDATE execution_nodes SET status='ready',output_ref=NULL,evidence_refs='[]',wait_reason=NULL WHERE node_run_id=?").run(n.node_run_id)
     db.prepare("UPDATE execution_runs SET status='queued',revision=revision+1,recovery_reason=NULL,updated_at=? WHERE run_id=?").run(now, r.run_id)
     db.prepare("UPDATE task_plan_stages SET status='running' WHERE task_id=? AND plan_revision=(SELECT plan_revision FROM business_tasks WHERE task_id=?) AND run_id=?").run(r.task_id, r.task_id, r.run_id)
     db.prepare("UPDATE business_tasks SET status='active',updated_at=? WHERE task_id=?").run(now, r.task_id)
     return { status: 'applied', runId: r.run_id, taskId: r.task_id, nodeRunId: n.node_run_id, generation: n.generation,
       inputDigest: n.input_digest, nextLeaseEpoch: n.lease_epoch + 1, previousRunRevision: r.revision, contextRef: a.contextRef, problemKey: recovery.problemKey,
-      failure: recovery.failure, previousOutputRef: n.output_ref, evidenceRefs: recovery.evidenceRefs }
+      failure: recovery.failure, previousOutputRef: n.output_ref, evidenceRefs: recovery.evidenceRefs,
+      ...(recovery.localPlanCorrection ? { localPlanCorrection: true } : {}),
+      ...(validation ? { validationNodeRunId: validation.node_run_id, validationLeaseEpoch: validation.lease_epoch,
+        validationInputRef: validation.input_ref, validationOutputRef: validation.output_ref, validationEvidenceRefs: JSON.parse(validation.evidence_refs) } : {}) }
   }
   if (command.kind === 'node.claim') {
     object(a, ['runId', 'nodeId', 'expectedGeneration', 'expectedLeaseEpoch'])
@@ -625,10 +885,18 @@ function coreCommand(command, now, consumption = {}) {
     return { status: 'applied' }
   }
   if (command.kind === 'node.drained') {
-    object(a, ['runId', 'nodeId', 'generation', 'leaseEpoch', 'evidenceRef'])
+    object(a, ['runId', 'nodeId', 'generation', 'leaseEpoch', 'evidenceRef', 'expectedInputDigest'], ['runId', 'nodeId', 'generation', 'leaseEpoch', 'evidenceRef'])
     ref(a.evidenceRef, 'evidenceRef')
     const n = currentNode(a)
     if (n.lease_epoch === 0) fail('NODE_NOT_CLAIMED')
+    if (a.expectedInputDigest !== undefined) {
+      if (n.executor !== 'code' || n.status !== 'waiting' || n.input_digest !== a.expectedInputDigest
+        || JSON.parse(n.wait_reason ?? 'null')?.reference !== 'controller-restarted') fail('DRAIN_EVIDENCE_CONFLICT')
+      assertRunEffectsDrained(db, n.run_id)
+      if (db.prepare('SELECT 1 FROM execution_effects WHERE node_run_id=? LIMIT 1').get(n.node_run_id)) fail('DRAIN_EVIDENCE_CONFLICT')
+      db.prepare('UPDATE execution_nodes SET wait_reason=?,evidence_refs=? WHERE node_run_id=?').run(JSON.stringify({kind:'execution',reference:'external-check-interrupted'}),JSON.stringify([...new Set([...JSON.parse(n.evidence_refs),a.evidenceRef])]),n.node_run_id)
+      db.prepare('UPDATE execution_runs SET recovery_reason=NULL WHERE run_id=?').run(n.run_id)
+    }
     if (n.drained && n.drain_evidence_ref !== a.evidenceRef) fail('DRAIN_EVIDENCE_CONFLICT')
     db.prepare('UPDATE execution_nodes SET drained=1,drain_evidence_ref=? WHERE node_run_id=?').run(a.evidenceRef, n.node_run_id)
     return { status: 'applied' }
@@ -660,8 +928,14 @@ function coreCommand(command, now, consumption = {}) {
       if (a.outcome === 'succeeded' || a.failure.code !== a.waitReason.reference) fail('INVALID_NODE_FAILURE')
       emitEvent(command.id, 'node.failure', { nodeRunId: n.node_run_id, leaseEpoch: n.lease_epoch, failure: a.failure }, now)
     }
-    const next = nodes(r.run_id).find(other => other.position === n.position + 1)
-    if (a.outcome === 'succeeded' && next) {
+    let next = nodes(r.run_id).find(other => other.position === n.position + 1), retainedSuccessor = false
+    if (n.node_id === 'plan-local-acceptance' && next?.status === 'succeeded') {
+      if (!db.prepare("SELECT 1 FROM execution_events WHERE kind='run.workflow.checkpoint' AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.kind')='local-acceptance' AND json_extract(payload,'$.toDigest')=? LIMIT 1").get(r.run_id,r.workflow_digest)
+        && !db.prepare("SELECT 1 FROM execution_events WHERE kind='node.resume' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.inputDigest')=? AND json_extract(payload,'$.nextLeaseEpoch')=? AND json_extract(payload,'$.localPlanCorrection')=1 LIMIT 1").get(n.node_run_id,n.input_digest,n.lease_epoch)) fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
+      retainedSuccessor = true
+      next = nodes(r.run_id).find(other => other.position > n.position && other.status !== 'succeeded')
+    }
+    if (a.outcome === 'succeeded' && next && (!retainedSuccessor || next.status === 'blocked')) {
       object(a.nextInput, ['nodeId', 'inputRef', 'inputDigest'])
       if (a.nextInput.nodeId !== next.node_id || next.status !== 'blocked') fail('NEXT_NODE_CONFLICT')
       inputPair(a.nextInput, true)
@@ -670,7 +944,7 @@ function coreCommand(command, now, consumption = {}) {
     if ((a.outcome === 'succeeded' && !next) || a.outcome === 'failed') assertRunEffectsDrained(db, r.run_id)
     db.prepare('UPDATE execution_nodes SET status=?,output_ref=?,evidence_refs=?,wait_reason=? WHERE node_run_id=?')
       .run(a.outcome, a.outputRef ?? null, JSON.stringify(a.evidenceRefs), a.waitReason ? JSON.stringify(a.waitReason) : null, n.node_run_id)
-    const status = a.outcome === 'succeeded' ? (next ? 'queued' : 'succeeded') : a.outcome
+    const status = a.outcome === 'succeeded' ? (next ? next.status === 'waiting' ? 'waiting' : 'queued' : 'succeeded') : a.outcome
     db.prepare('UPDATE execution_runs SET status=?,updated_at=? WHERE run_id=?').run(status, now, r.run_id)
     return { status: 'applied', run: runDto(getRun(r.run_id)) }
   }
@@ -684,7 +958,7 @@ function command(value) {
   if (!value.args || Object.getPrototypeOf(value.args) !== Object.prototype) fail('INVALID_ARGUMENT')
   if (value.kind === 'task.plan.accept') fail('UNKNOWN_COMMAND')
   const consumption=Object.fromEntries(['inputCommandId','ownerTurnId'].filter(key=>value[key]!==undefined).map(key=>[key,text(value[key],key)]))
-  if(Object.keys(consumption).length&&!['run.create','task.owner.accept','task.owner.applied','task.plan.initialize','task.plan.extend','task.plan.create',
+  if(Object.keys(consumption).length&&!['run.create','task.owner.accept','task.owner.applied','task.plan.initialize','task.plan.extend','task.plan.insertDependency','task.plan.create',
     'task.plan.confirm','task.plan.revise','task.stage.input.bind'].includes(value.kind))fail('MESSAGE_INPUT_CONSUMPTION_FORBIDDEN')
   const hash = createHash('sha256').update(canonical({ kind: value.kind, args: value.args,...consumption })).digest('hex')
   const now = new Date().toISOString()
@@ -698,7 +972,7 @@ function command(value) {
     }
     assertMaintenanceDispatch(db, value.kind)
     // 与 message 的接纳和 command 领取使用同一持久输入守卫；读取和取消本身不被拦住。
-    if (['task.accept','task.owner.accept','task.owner.applied','task.plan.initialize','task.plan.extend',
+    if (['task.accept','task.owner.accept','task.owner.applied','task.plan.initialize','task.plan.extend','task.plan.insertDependency',
       'task.plan.create','task.plan.confirm','task.plan.revise','task.stage.input.bind','task.stage.complete'].includes(value.kind)) {
       let taskId=value.args.taskId
       if(!taskId&&value.args.turnId)taskId=db.prepare('SELECT task_id FROM task_owner_turns WHERE turn_id=?').get(value.args.turnId)?.task_id
@@ -831,7 +1105,9 @@ function command(value) {
       ref(a.payloadRef,'payloadRef');digest(a.requestDigest,'requestDigest')
       const invalidRepair=owner.last_failure==='WORKFLOW_REPAIR_NOT_ADMITTED' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='repairCurrentStage'").get(a.taskId,owner.lease_epoch) : null
       const rejectedSourcePlan=owner.last_failure==='TASK_STAGE_SOURCE_CONDITION_INVALID' ? db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='advance'").get(a.taskId,owner.lease_epoch) : null
-      const rejectedAction=invalidRepair??rejectedSourcePlan
+      const blockedAdvance=db.prepare("SELECT * FROM task_owner_turns WHERE task_id=? AND lease_epoch=? AND status='accepted' AND application_status='blocked' AND json_extract(decision_json,'$.action')='advance'").get(a.taskId,owner.lease_epoch)
+      const rejectedPreparation=isUnstartedEngineeringPreparation(db,owner,blockedAdvance)?blockedAdvance:null
+      const rejectedAction=invalidRepair??rejectedSourcePlan??rejectedPreparation
       const externalRuns=db.prepare("SELECT * FROM execution_runs WHERE task_id=? AND workflow_id<>'task-investigation'").all(a.taskId)
       const handedOffRuns=new Set()
       for(const run of externalRuns.filter(run=>run.workflow_id==='task-data-change'&&run.status==='cancelled'&&run.stop_requested)){
@@ -894,10 +1170,16 @@ function command(value) {
         }
         return true
       })()
+      const blockedBeforeQuery=db.prepare(`SELECT 1 FROM task_owner_turns WHERE task_id=? AND lease_epoch=?
+        AND requirement_revision=? AND plan_revision=? AND control_revision=? AND authorization_revision=? AND input_fence_revision=?
+        AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action') IN ('wait','block')
+        AND json_extract(decision_json,'$.condition.kind') IN ('capability','permission','execution')
+        AND NOT EXISTS(SELECT 1 FROM execution_effects e JOIN execution_runs r USING(run_id) WHERE r.task_id=?)`)
+        .get(a.taskId,owner.lease_epoch,task.requirement_revision,task.plan_revision,task.control_revision,owner.authorization_revision,owner.input_fence_revision,a.taskId)
       if(task.state!=='active'||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND requirement_revision=? AND plan_revision=? AND status='accepted' AND application_status='applied' AND json_extract(decision_json,'$.action')='complete' LIMIT 1").get(a.taskId,task.requirement_revision,task.plan_revision)||!['idle','blocked'].includes(owner.status)||owner.current_turn_id
         ||db.prepare("SELECT 1 FROM task_owner_turns WHERE task_id=? AND turn_id<>? AND (status IN ('running','candidate') OR application_status IN ('pending','blocked'))").get(a.taskId,rejectedAction?.turn_id??'')
         ||rejectedSourcePlan&&db.prepare('SELECT 1 FROM execution_receipts WHERE command_id=?').get(`owner-plan:${rejectedSourcePlan.turn_id}`)
-        ||!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
+        ||!rejectedPreparation&&!blockedBeforeQuery&&!db.prepare("SELECT 1 FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND e.handled_at IS NOT NULL AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").get(a.taskId,task.requirement_revision,owner.authorization_revision,owner.input_fence_revision)
         ||db.prepare('SELECT * FROM execution_runs WHERE task_id=?').all(a.taskId).some(run=>!handedOffRuns.has(run.run_id)
           &&(!['failed','waiting','succeeded'].includes(run.status)||run.workflow_id!=='task-investigation'&&!completedExternal))
         ||db.prepare("SELECT 1 FROM execution_nodes n JOIN execution_runs r USING(run_id) WHERE r.task_id=? AND (n.drained=0 OR n.status IN ('running','unknown'))").get(a.taskId)
@@ -1143,6 +1425,12 @@ function query(value) {
   }))
   if(value?.kind==='node.input-history')return nodeInputHistory(text(value.nodeRunId,'nodeRunId'))
   if(value?.kind==='node.binding-history')return db.prepare("SELECT payload FROM execution_events WHERE kind='node.claim' AND json_extract(payload,'$.binding.nodeRunId')=? ORDER BY seq").all(text(value.nodeRunId,'nodeRunId')).map(row=>JSON.parse(row.payload).binding)
+  if(value?.kind==='node.process-claim') {
+    const row=db.prepare("SELECT seq,payload,created_at FROM execution_events WHERE kind='node.claim' AND json_extract(payload,'$.binding.nodeRunId')=? AND json_extract(payload,'$.binding.leaseEpoch')=? ORDER BY seq DESC LIMIT 1").get(text(value.nodeRunId,'nodeRunId'),value.leaseEpoch)
+    if(!row)return null
+    const recovered=db.prepare("SELECT created_at FROM execution_events WHERE kind='node.recovery' AND seq>? AND json_extract(payload,'$.nodeRunId')=? ORDER BY seq LIMIT 1").get(row.seq,value.nodeRunId)
+    return {binding:JSON.parse(row.payload).binding,claimedAt:row.created_at,recoveredAt:recovered?.created_at??null}
+  }
   if (value?.kind === 'runtime.maintenance') return maintenanceStatus(db, workerData.processIncarnation)
   if (['workflow.repair.context', 'engineering.repair.context'].includes(value?.kind)) {
     const row = db.prepare("SELECT payload FROM execution_events WHERE kind IN ('workflow.repair.accepted','engineering.repair.accepted') AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.nextGeneration')=? ORDER BY seq DESC LIMIT 1").get(value.runId, value.generation)
@@ -1202,7 +1490,7 @@ function query(value) {
     const limit = integer(value.limit ?? 100, 'limit', 1); if (limit > 200) fail('INVALID_ARGUMENT')
     const before = integer(value.beforeSequenceId ?? Number.MAX_SAFE_INTEGER, 'beforeSequenceId', 1)
     if (value.activeOnly !== undefined && typeof value.activeOnly !== 'boolean') fail('INVALID_ARGUMENT')
-    return db.prepare("SELECT rowid AS sequence_id,* FROM execution_runs WHERE rowid<? AND (? IS NULL OR task_id=?) AND (?=0 OR (status NOT IN ('succeeded','failed','cancelled') AND pause_requested=0)) ORDER BY rowid DESC LIMIT ?")
+    return db.prepare("SELECT rowid AS sequence_id,* FROM execution_runs WHERE rowid<? AND (? IS NULL OR task_id=?) AND (?=0 OR (status NOT IN ('succeeded','failed','cancelled') AND pause_requested=0 AND COALESCE(recovery_reason,'')<>'stage-dependency')) ORDER BY rowid DESC LIMIT ?")
       .all(before, value.taskId ? text(value.taskId, 'taskId') : null, value.taskId ?? null, value.activeOnly ? 1 : 0, limit)
       .map(row => ({ ...runDto(row), sequenceId: row.sequence_id }))
   }

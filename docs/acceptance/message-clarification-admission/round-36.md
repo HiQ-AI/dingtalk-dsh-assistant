@@ -1,0 +1,7 @@
+# 第36轮：现场旧会话迁移与部署预检
+
+两条原Task通过正式维护、Loader卸载和控制账独占完成会话换绑；独立只读控制账确认原inspect-and-propose节点ready/drained，原Task/Run及四个成功前缀的租约不变。新原生JSONL header均origin=subagent并保留parentSession，数据集继承94事件，生产活动继承570事件。维护桥模型请求为零，report.complete且closed=true，临时profile块全部移除后摘要回到e026ce9c9f7447968a6a2c8c7b13486d96134031e1b6d07f6f96e877e6f87e6f。
+
+首轮桥因ENGINEERING_DEFINITION_DRIFT拒绝且results为空。真实工厂的检查配置摘要含execution-task-command.js绝对路径，开发目录不能代替已安装工厂；v2桥改用当前安装工厂，新Controller对两真实定义均匹配，未放宽摘要。失败报告与成功报告均保留在私有sg14-managed-session-maintenance目录。
+
+标准部署预检又在真实大任务目录触发RangeError，独立堆栈定位deployment-integrity.mjs:86的push(...子树文件)：文件数量超过JavaScript实参数量限制。只改为逐项push，不扩大排除目录或省略核验；deployment-integrity整文件33/33 PASS。真实部署Check与新执行回合仍待下一轮确认。

@@ -33,7 +33,7 @@ const columnAttributes='column_name,ordinal_position,column_default,is_nullable,
 const columnCatalog=`information_schema.columns c JOIN pg_namespace n ON n.nspname=c.table_schema
  JOIN pg_class t ON t.relnamespace=n.oid AND t.relname=c.table_name JOIN pg_attribute a ON a.attrelid=t.oid AND a.attname=c.column_name`
 const columnProjection=`${columnAttributes},format_type(a.atttypid,a.atttypmod) AS formatted_type,col_description(t.oid,a.attnum) AS column_comment`
-export const agentDatabaseParameters={type:'object',properties:{resourceId:{type:'string'},operation:{type:'string',enum:['tables','columns',...metadataOperations,'select']},table:{type:'string'},columns:{type:'array',items:{type:'string'}},filters:{type:'array',items:{type:'object',properties:{column:{type:'string'},operator:{type:'string',enum:['eq','ne','lt','lte','gt','gte','like']},value:{oneOf:[{type:'string'},{type:'number'},{type:'boolean'},{type:'null'}]}},required:['column','operator','value'],additionalProperties:false}},limit:{type:'integer'},offset:{type:'integer'}},required:['resourceId','operation'],additionalProperties:false}
+export const agentDatabaseParameters={type:'object',properties:{resourceId:{type:'string'},operation:{type:'string',enum:['tables','columns',...metadataOperations,'select']},table:{type:'string',description:'表名使用 schema.table，例如 public.tw_process_drafts；仅已登记且唯一的短表名可省略 schema。'},columns:{type:'array',items:{type:'string'}},filters:{type:'array',items:{type:'object',properties:{column:{type:'string'},operator:{type:'string',enum:['eq','ne','lt','lte','gt','gte','like']},value:{oneOf:[{type:'string'},{type:'number'},{type:'boolean'},{type:'null'}]}},required:['column','operator','value'],additionalProperties:false}},limit:{type:'integer'},offset:{type:'integer'}},required:['resourceId','operation'],additionalProperties:false}
 /** 凭据仅Host读取；不将连接配置或数据库错误正文交给模型。 */
 export function createRegisteredPostgresConnector({credentialsPath}){
  return async resource=>{
@@ -52,13 +52,18 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
   ||(r.environment!==undefined&&!['uat','production'].includes(r.environment)))fail('QUERY_DATABASE_CONFIG_INVALID')
  const registry=new Map(resources.map(r=>[r.id,structuredClone(r)])),produced=new WeakSet()
  const authorize=async({input,scope})=>registry.has(input.resourceId)&&scope.databaseIds?.includes(input.resourceId)===true
- return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v3:'+executionDigest(resources),description:'通过Host登记连接查询数据库：tables/columns返回列的类型长度、默认值、可空、identity及generated定义；metadataSchemas内可用constraints/indexes/dependencies/table_stats读取约束、索引、直接目录依赖和估算规模（不是精确行数）。select仍只读取登记表/列。结果按offset/nextOffset分页，最多100行；不接受SQL、连接串或表达式。每次核验只读事务和生产副本身份。缺少operation是工具能力问题，不等于数据库权限不足。',parameters:agentDatabaseParameters,authorize,
+ return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v4:'+executionDigest(resources),description:'通过Host登记连接查询数据库：tables/columns返回列的类型长度、默认值、可空、identity及generated定义；metadataSchemas内可用constraints/indexes/dependencies/table_stats读取约束、索引、直接目录依赖和估算规模（不是精确行数）。table使用schema.table，唯一已登记短表名会解析为该登记全名，不扩大范围。select仍只读取登记表/列。结果按offset/nextOffset分页，最多100行；不接受SQL、连接串或表达式。每次核验只读事务和生产副本身份。缺少operation是工具能力问题，不等于数据库权限不足。',parameters:agentDatabaseParameters,authorize,
   available: scope => resources.some(resource => scope?.databaseIds?.includes(resource.id)),
   async execute({input,scope,signal}){
    if(!await authorize({input,scope}))fail('QUERY_SCOPE_DENIED')
    if(!['tables','columns',...metadataOperations,'select'].includes(input.operation))fail('QUERY_ARGUMENT_INVALID')
    const resource=registry.get(input.resourceId),limit=input.limit??30,offset=input.offset??0
    if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0||offset>10000)fail('QUERY_LIMIT_INVALID')
+   if(input.operation!=='tables'&&typeof input.table==='string'&&!input.table.includes('.')){
+    const matches=resource.tables.filter(table=>table.table===input.table)
+    if(matches.length!==1)throw executionError('QUERY_ARGUMENT_INVALID','table须使用schema.table；请根据tables返回的table_schema与table_name填写完整表名。')
+    input={...input,table:`${matches[0].schema}.${matches[0].table}`}
+   }
    const metadataTable=typeof input.table==='string'?input.table.split('.'):[]
    const metadataAllowed=metadataTable.length===2&&metadataTable.every(identifier)&&resource.metadataSchemas?.includes(metadataTable[0])
    const table=resource.tables.find(t=>`${t.schema}.${t.table}`===input.table)

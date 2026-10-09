@@ -3,6 +3,10 @@ $errors=$null;$tokens=$null
 $path=Join-Path $PSScriptRoot '../docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1'
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw '脚本解析失败'}
+$dependencyReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-RequiredDependencyReadback'},$true)
+Invoke-Expression $dependencyReadbackFunction.Extent.Text
+$restoreReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-ConfigurationRestoreReadback'},$true)
+Invoke-Expression $restoreReadbackFunction.Extent.Text
 $MigrateMessageImpact=$false
  $MigrateExecutionEventsIndex=$false
  $indexReadbackFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-ExecutionEventsIndexReadback'},$true)
@@ -40,6 +44,8 @@ if(-not $rejected){throw '接续维护不得缺失revision'}
 Write-Output 'PASS 8/8: 接续许可匹配通过；版本/ID/排空/阶段/active/PID漂移及缺少revision拒绝'
 $function=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Read-Deployment'},$true)
 Invoke-Expression $function.Extent.Text
+$launchIdentityFunction=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq 'Assert-DeploymentLaunchProcess'},$true)
+Invoke-Expression $launchIdentityFunction.Extent.Text
 $WaitSeconds=1
 $EvidenceDirectory=Join-Path $PSScriptRoot ('../docs/tmp/readback-fixture-'+[guid]::NewGuid())
 function Listeners { @() }
@@ -96,10 +102,28 @@ try {Assert-InputHashes}catch{$failed=$_.Exception.Message-eq 'profile CAS不匹
 if(-not $failed){throw '配置摘要错误必须在零写阶段拒绝'}
 Write-Output 'PASS 3/3: 双摘要正确通过；包摘要错误拒绝；配置摘要错误拒绝'
 
-foreach($name in @('Change-MaintenancePhase','Resume-Deployment','Assert-LaunchInputs','Restore-EnrollmentAutostart','Read-EnrollmentProposal','Ensure-EnrollmentSubscription')){
+foreach($name in @('Test-MaintenanceBackfillPause','Change-MaintenancePhase','Read-DeploymentRuntime','Resume-Deployment','Assert-LaunchInputs','Restore-EnrollmentAutostart','Read-EnrollmentProposal','Ensure-EnrollmentSubscription')){
  $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
  Invoke-Expression $fn.Extent.Text
 }
+$pauseHealth=@{status='degraded';transport='dws';inboundConfigured=$true;executionStore=@{healthy=$true};recoveryIssueCount=0;dwsBridge=@{humanReplies=@{state='ready'};groups=@(@{listener=@{state='ready'};backfill=@{state='failed';lastError='RUNTIME_MAINTENANCE_ACTIVE'}})}}
+$pauseMaintenance=@{active=$true;phase='stopping';drained=$true;resumePermitted=$true;sealedIncarnation='old';processIncarnation='new';busy=@{nodes=0;owners=0;effects=0;messages=0}}
+if(-not (Test-MaintenanceBackfillPause $pauseHealth $pauseMaintenance)){throw '维护暂停应可恢复'}
+foreach($fault in @('auth','listener','store','recovery','busy','incarnation','inactive')){
+ $h=$pauseHealth|ConvertTo-Json -Depth 10|ConvertFrom-Json -AsHashtable
+ $m=$pauseMaintenance|ConvertTo-Json -Depth 10|ConvertFrom-Json -AsHashtable
+ switch($fault){
+ auth {$h.dwsBridge.groups[0].backfill.lastError='AUTH_FAILED'}
+ listener {$h.dwsBridge.groups[0].listener.state='failed'}
+ store {$h.executionStore.healthy=$false}
+ recovery {$h.recoveryIssueCount=1}
+ busy {$m.busy.nodes=1}
+ incarnation {$m.processIncarnation='old'}
+ inactive {$m.active=$false}
+ }
+ if(Test-MaintenanceBackfillPause $h $m){throw "错误放行: $fault"}
+}
+Write-Output 'PASS 8/8: maintenance-only backfill predicate and seven rejection cases'
 $script:requests=@();$script:maintenance=@{active=$true;resumePermitted=$false;maintenanceId='deploy';revision=2}
 function Invoke-RestMethod {
  param($Uri,$Method,$ContentType,$Headers,$Body,$TimeoutSec,[switch]$NoProxy)
@@ -108,6 +132,8 @@ function Invoke-RestMethod {
   if($Uri.EndsWith('/resume')){$script:maintenance=@{active=$false;maintenanceId='deploy';revision=3}}
   return @{state=$script:maintenance}
  }
+ if($Uri.EndsWith('/health')){if($script:healthFailure){return @{status='degraded'}};return @{status='ok'}}
+ if($script:storeFailure -and -not $script:maintenance.active){throw 'STORE_UNAVAILABLE'}
  return $script:maintenance
 }
 $failed=$false
@@ -116,6 +142,15 @@ if(-not $failed -or $script:requests.Count){throw '旧进程不得提交恢复'}
 $script:maintenance.resumePermitted=$true
 $result=Resume-Deployment @{ready=$true} @{maintenanceId='deploy'}
 if(-not $result.dispatchResumed -or $script:requests.Count-ne 1 -or -not $script:requests[0].uri.EndsWith('/resume') -or $script:requests[0].body.PSObject.Properties.Name-contains 'active'){throw '必须走封存许可恢复接口'}
+foreach($fault in @('health','store')) {
+ $script:maintenance=@{active=$true;resumePermitted=$true;maintenanceId='deploy';revision=2}
+ $script:healthFailure=$fault-eq 'health';$script:storeFailure=$fault-eq 'store'
+ $candidate=@{ready=$true};$failed=$false
+ try{Resume-Deployment $candidate @{maintenanceId='deploy'}}catch{$failed=$_.Exception.Message-in @('部署运行健康检查失败','STORE_UNAVAILABLE')}
+ if(-not $failed -or $candidate.dispatchResumed){throw '恢复后health/store故障不得报告派发确认'}
+}
+$script:healthFailure=$false;$script:storeFailure=$false
+Write-Output 'PASS 2/2: 恢复后健康异常或store不可用拒绝成功，不重试恢复'
 $ExpectedProfileSha256='a'*64;$ExpectedPackageSha256='b'*64;$Bundle='bundle.json';$MergePolicy='policy.json';$ChecksProposal='checks.json'
 $record=@{sourceProfileSha256='a'*64;packageSha256='b'*64;inputPaths=@($Bundle,$MergePolicy,$ChecksProposal);inputHashes=@{'bundle.json'='a'*64;'policy.json'='a'*64;'checks.json'='a'*64}}
 Assert-LaunchInputs $record
@@ -176,13 +211,13 @@ $DirectQueriesProposal='proposal.json';$Bundle='';$MergePolicy='';$ChecksProposa
 Assert-DeploymentMode
 $Bundle='old.json';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '模式必须互斥'}
 $Bundle='';$ExpectedObserverPackageSha256='';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw 'Observer摘要不可省略'}
-$ObserverPackage='';$DirectQueriesProposal='';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '旧模式参数仍必填'}
+$ObserverPackage='';$DirectQueriesProposal='';Assert-DeploymentMode
 $DirectQueriesProposal='proposal.json';$ObserverPackage='observer.tgz';$ExpectedObserverPackageSha256='c'*64
 $Package='candidate.tgz';$ExpectedPackageSha256='b'*64;$ExpectedProfileSha256='a'*64
 function Get-FileHash {param($LiteralPath) @{Hash=if($LiteralPath-eq 'candidate.tgz'){'b'*64}elseif($LiteralPath-eq 'observer.tgz'){'c'*64}else{'a'*64}}}
 Assert-InputHashes
 $ExpectedObserverPackageSha256='d'*64;$rejected=$false;try{Assert-InputHashes}catch{$rejected=$true};if(-not $rejected){throw 'Observer摘要漂移必须拒绝'}
-Write-Output 'PASS 6/6: 查询模式、工程互斥、Observer配对、旧必填与Observer摘要门禁'
+Write-Output 'PASS 6/6: 查询模式、工程互斥、Observer配对、Package-only与Observer摘要门禁'
 
 # 看板已按逻辑任务合并：旧物理ID必须指向看板内的当前任务，不能只放宽身份检查。
 $identityLoop=$function.Body.Find({param($item) $item -is [System.Management.Automation.Language.ForEachStatementAst] -and $item.Variable.VariablePath.UserPath-eq 'id'},$true)
@@ -216,7 +251,8 @@ foreach($change in @(@{active=$false},@{phase='draining'},@{drained=$false},@{re
 }
 Write-Output 'PASS 8/8: 原封存许可通过；active/phase/drained/revision/ID/incarnation/busy变化拒绝'
 
-# TaskDirectory 检查通过正式只读 checker 传递；拒绝时不进入备份写入。
+# 只有新完整历史备份进入容量扫描；其它模式保留控制快照/原清单核验。
+$fullHistoryBackupScan=$true
 $taskProofAssignment=$ast.Find({param($item) $item -is [System.Management.Automation.Language.AssignmentStatementAst] -and $item.Left.Extent.Text-eq '$taskDirectoryProof'},$true)
 $TaskDirectory='D:/fixture-agent/tasks';$checker='checker.mjs';$script:taskCheckCalls=0
 function Run-Node([string[]]$Arguments){
@@ -394,6 +430,153 @@ $MigrateMessageImpact=$false
 $failed=$false;try{Assert-MessageImpactReadback $record}catch{$failed=$true}
 if(-not $failed){throw '接续不允许丢失迁移标志'}
 $launchGate=$ast.Extent.Text.IndexOf('[void](Assert-MessageImpactReadback @{messageImpactMigrationSha256=')
-$start=$ast.Extent.Text.IndexOf('$launch=Start-Process', $launchGate)
+$start=$ast.Extent.Text.IndexOf('$launch=Start-DeployedWeb', $launchGate)
 if($launchGate-lt 0 -or $start-le $launchGate){throw '启动前必须存在迁移回读门禁'}
 Write-Output 'PASS 6/6: schema迁移丢锁零写、固定锁内动作、独立回读、摘要漂移、模式漂移、启动前门禁'
+
+foreach($name in @('Assert-ScheduledWebStart','Start-DeployedWeb','Restore-EnrollmentAutostart')) {
+ $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$enrollmentTaskName='DSH Web Local';$starter='D:/dsh_home/launchers/start-web.ps1';$profile='D:/dsh_home/profiles/web'
+$script:startCalls=0;$script:enableCalls=0;$script:existing=@();$script:ports=@()
+$script:scheduled=@{State='Ready';Settings=@{Enabled=$true};Principal=@{UserId='64554';LogonType='Interactive';RunLevel='Limited'};Actions=@(@{
+ Execute='C:\Program Files\PowerShell\7\pwsh.exe';WorkingDirectory='D:\project\dingtalk-dsh-assistant'
+ Arguments='-NoProfile -WindowStyle Hidden -Command "$env:DSH_HOME=''D:\dsh_home''; & ''D:\dsh_home\launchers\start-web.ps1'' -ProjectRoot ''D:\project\dingtalk-dsh-assistant'' *> ''D:\project\dingtalk-dsh-assistant\docs\tmp\dsh-web-local\web.log''"'
+})}
+function Get-ScheduledTask { $script:scheduled }
+function Enable-ScheduledTask { $script:enableCalls++;$script:scheduled.Settings.Enabled=$true }
+function Start-ScheduledTask { $script:startCalls++ }
+function Get-CimInstance { $script:existing }
+function Listeners { $script:ports }
+[void](Assert-ScheduledWebStart)
+if($script:startCalls -or $script:enableCalls){throw '计划任务Check不得产生启动或enable'}
+foreach($mode in @('ordinary','repair')) {
+ $launch=Start-DeployedWeb @{enrollmentAutostartRestore=$false}
+ if($launch.Method-ne 'scheduled-task' -or $launch.TaskName-ne 'DSH Web Local' -or $null-ne $launch.Id){throw "$mode 启动回执不可伪造launcher PID"}
+}
+$script:scheduled.Settings.Enabled=$false
+$failed=$false;try{Start-DeployedWeb @{enrollmentAutostartRestore=$false}}catch{$failed=$true}
+if(-not $failed -or $script:enableCalls){throw '没有恢复许可不能启用计划任务'}
+[void](Assert-ScheduledWebStart $true)
+if($script:enableCalls){throw '有恢复许可的Check也不能enable'}
+$launch=Start-DeployedWeb @{enrollmentAutostartRestore=$true}
+if($script:enableCalls-ne 1 -or $script:startCalls-ne 3){throw 'Enrollment必须先恢复原启用状态再按调度入口启动'}
+$originalArguments=$script:scheduled.Actions[0].Arguments
+foreach($changed in @($originalArguments.Replace('D:\dsh_home','D:\other_home'),($originalArguments+'; Write-Output injected'))) {
+ $script:scheduled.Actions[0].Arguments=$changed
+ $failed=$false;try{Start-DeployedWeb @{enrollmentAutostartRestore=$true}}catch{$failed=$true}
+ if(-not $failed -or $script:startCalls-ne 3 -or $script:enableCalls-ne 1){throw 'Action漂移必须在enable或start前拒绝'}
+}
+$script:scheduled.Actions[0].Arguments=$originalArguments
+$script:scheduled.State='Running'
+$failed=$false;try{Start-DeployedWeb @{}}catch{$failed=$true}
+if(-not $failed -or $script:startCalls-ne 3){throw '运行中计划任务不得重复启动'}
+$script:scheduled.State='Ready';$script:ports=@(@{LocalPort=3080})
+$failed=$false;try{Start-DeployedWeb @{}}catch{$failed=$true}
+if(-not $failed -or $script:startCalls-ne 3){throw '既有端口不得重复启动'}
+Write-Output 'PASS: 普通/repair统一计划任务；Check零写、原许可Enrollment恢复、Action漂移、运行中与端口冲突拒绝'
+foreach($field in @('UserId','LogonType','RunLevel')) {
+ $saved=$script:scheduled.Principal[$field];$script:scheduled.Principal[$field]='wrong'
+ $failed=$false;try{Assert-ScheduledWebStart}catch{$failed=$true}
+ if(-not $failed){throw '计划任务运行身份漂移必须拒绝'}
+ $script:scheduled.Principal[$field]=$saved
+}
+foreach($name in @('Assert-DeploymentLaunchProcess','Get-DeploymentWebLog')) {
+ $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$started=[datetime]::UtcNow.AddSeconds(-10)
+$fresh=@{ParentProcessId=10;CreationDate=$started.AddSeconds(2)}
+$launchRecord=@{launchMethod='scheduled-task';launchTaskName='DSH Web Local';startedAt=$started.ToString('o');launcherPid=$null}
+$script:scheduled.State='Running'
+$script:parent=@{ExecutablePath=$script:scheduled.Actions[0].Execute;CommandLine=$script:scheduled.Actions[0].Arguments;CreationDate=$started.AddSeconds(1)}
+function Get-CimInstance { $script:parent }
+function Get-ScheduledTaskInfo { @{LastRunTime=$started.AddMilliseconds(500)} }
+Assert-DeploymentLaunchProcess $fresh $launchRecord
+$script:parent.CommandLine='other.ps1'
+$failed=$false;try{Assert-DeploymentLaunchProcess $fresh $launchRecord}catch{$failed=$true}
+if(-not $failed){throw '新Node仍必须绑定计划任务的真实父进程入口'}
+$script:logTime=$started.AddSeconds(3)
+function Get-Item { @{LastWriteTimeUtc=$script:logTime} }
+if((Get-DeploymentWebLog $launchRecord $fresh)-ne 'D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/web.log'){throw '计划任务启动必须从正式日志认证Web'}
+$script:logTime=$started.AddSeconds(-1)
+$failed=$false;try{Get-DeploymentWebLog $launchRecord $fresh}catch{$failed=$true}
+if(-not $failed){throw '旧启动日志不得作为新进程认证证明'}
+Write-Output 'PASS: 运行身份/登录类型/级别、计划任务父进程入口及新进程日志时点严格校验'
+
+$MigrateRequiredDependency=$false;$RepairStoppedLaunch='';$EvidenceDirectory='fixture';$workspace='fixture';$script:calls=0
+function Test-Path {return $true}
+function Get-FileHash {param($LiteralPath) @{Hash=if($LiteralPath.EndsWith('manifest.json')){'manifest'}elseif($LiteralPath.EndsWith('.mjs')){'tool'}else{'receipt'}}}
+function Get-Content {return '{"migrationToolSha256":"tool","backupManifestSha256":"manifest"}'}
+function Run-Node {$script:calls++;return '{"verified":true}'}
+Assert-RequiredDependencyReadback @{}
+if($script:calls-ne 0){throw 'ordinary called migration'}
+$r=@{backupScope='required-dependency-control-only';requiredDependencyMigrationSha256='receipt';repairOfLaunch='old/launch.json';backup='backup'}
+Assert-RequiredDependencyReadback $r | Out-Null
+if($script:calls-ne 1){throw 'inherited receipt not verified'}
+$r.requiredDependencyMigrationSha256='wrong';$rejected=$false;try{Assert-RequiredDependencyReadback $r}catch{$rejected=$true};if(-not $rejected){throw 'receipt drift allowed'}
+$r.requiredDependencyMigrationSha256='receipt';$r.backupScope='full-history';$rejected=$false;try{Assert-RequiredDependencyReadback $r}catch{$rejected=$true};if(-not $rejected){throw 'wrong scope allowed'}
+Write-Output 'PASS 4/4: ordinary zero migration; exact control-only repair inherited receipt; receipt drift and scope drift rejected'
+
+$scanAssignment=$ast.Find({param($a)$a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left.Extent.Text-eq '$fullHistoryBackupScan'},$true)
+foreach($case in @('ordinary','dependency','readback','resume','repair','bootstrap','message','events','task-files')){
+ $Readback=$false;$Resume=$false;$RepairStoppedLaunch='';$Bootstrap=$false;$MigrateMessageImpact=$false;$MigrateExecutionEventsIndex=$false;$TaskMigrationPlan='';$MigrateRequiredDependency=$false
+ switch($case){'dependency'{$MigrateRequiredDependency=$true};'readback'{$Readback=$true;$MigrateMessageImpact=$true};'resume'{$Resume=$true;$MigrateExecutionEventsIndex=$true};'repair'{$RepairStoppedLaunch='old/launch.json'};'bootstrap'{$Bootstrap=$true};'message'{$MigrateMessageImpact=$true};'events'{$MigrateExecutionEventsIndex=$true};'task-files'{$TaskMigrationPlan='plan.json'}}
+ Invoke-Expression $scanAssignment.Extent.Text
+ if($fullHistoryBackupScan-ne ($case -in @('bootstrap','message','events','task-files'))){throw "错误历史扫描范围: $case"}
+ if(-not $fullHistoryBackupScan){function Run-Node {throw '禁止扫描'};Invoke-Expression $taskProofAssignment.Extent.Text;if($taskDirectoryProof.taskBytes-ne 0){throw '普通部署不应计算历史容量'}}
+}
+$Readback=$false;$Resume=$false;$RepairStoppedLaunch='';$Bootstrap=$false;$MigrateMessageImpact=$false;$MigrateExecutionEventsIndex=$false;$MigrateRequiredDependency=$false;$TaskMigrationPlan='';$EnrollmentProposal='';$ContinueMaintenanceId='';$ExpectedMaintenanceRevision=$null
+$ObserverPackage='';$ExpectedObserverPackageSha256='';$DirectQueriesProposal='';$Bundle='bundle.json';$MergePolicy='policy.json';$ChecksProposal='checks.json';$RepositoryPatches='patches.json';$ExpectedProfileSha256='profile';$profile='profile';$workspace='workspace'
+Assert-DeploymentMode
+$argsAssignment=$ast.Find({param($a)$a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left.Extent.Text-eq '$configArgs'},$true)
+Invoke-Expression $argsAssignment.Extent.Text
+if(($configArgs -join '|')-notmatch '--repository-patches\|patches.json' -or $configArgs[-2]-ne '--expected-sha256' -or $configArgs[-1]-ne 'profile'){throw '配置器转发或停机后profile CAS位置错误'}
+$inputsAssignment=$ast.Find({param($a)$a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left.Extent.Text-eq '$deploymentInputs'},$true)
+Invoke-Expression $inputsAssignment.Extent.Text
+if($deploymentInputs-notcontains 'patches.json'){throw 'patches未绑定输入hash'}
+$DirectQueriesProposal='query.json';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw 'query与patches应互斥'}
+$DirectQueriesProposal='';$RepairStoppedLaunch='old/launch.json';$Bundle='';$MergePolicy='';$ChecksProposal='';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw 'repair不得追加patches'}
+Write-Output 'PASS 13/13: 九种部署模式扫描边界、RepositoryPatches原生转发/CAS/hash与query/repair互斥'
+# 完整原生 permit 链：限定已完成control-only迁移，保留原停机/CAS/包/profile要求。
+$RepairStoppedLaunch='D:/fixture/launch.json';$ExpectedProfileSha256='profile';$ExpectedPackageSha256='new';$DirectQueriesProposal=''
+function Get-FileHash {param($LiteralPath) @{Hash=if($LiteralPath.EndsWith('manifest.json')){'manifest'}elseif($LiteralPath.EndsWith('migration.json')){'receipt'}else{'profile'}}}
+function Get-Content {return '{"scope":"required-dependency-control-only"}'}
+function Test-Path {return $true}
+function Run-Node {return '{"verified":true}'}
+$r=[pscustomobject]@{mode='maintenance';profileSha256='profile';sourceProfileSha256='profile';backup='backup';packageSha256='old';directQueriesProposal='';maintenanceId='maintenance';backupScope='required-dependency-control-only';backupManifestSha256='manifest';requiredDependencyMigrationSha256='receipt'}
+$br=[pscustomobject]@{backup='backup';packageSha256='old';oldPid=123;backupScope='required-dependency-control-only';backupManifestSha256='manifest'}
+$state=[pscustomobject]@{active=$true;phase='stopping';drained=$true;maintenanceId='maintenance';revision=110;sealedIncarnation='123:identity';stopPermitted=$true;busy=[pscustomobject]@{nodes=0;owners=0;effects=0;messages=0}}
+$sealed=[pscustomobject]@{state=$state};$before=[pscustomobject]@{maintenance=$state}
+Assert-StoppedRepairPermit $r $sealed $before $br $state
+foreach($change in @(@{backupScope='full-history'},@{backupManifestSha256='bad'},@{requiredDependencyMigrationSha256='bad'},@{requiredDependencyMigrationSha256=''})){
+ $changed=$r.PSObject.Copy();foreach($key in $change.Keys){$changed.$key=$change[$key]};$rejected=$false;try{Assert-StoppedRepairPermit $changed $sealed $before $br $state}catch{$rejected=$true};if(-not $rejected){throw '精确control-only permit不得放行漂移或未完成迁移'}
+}
+Write-Output 'PASS 5/5: 完整repair permit精确继承、旧范围/manifest/收据漂移和未完成迁移拒绝'
+# 配置恢复分支实执行AST：只调用原生restore，不执行plugin add。
+$restoreBlock=$ast.Find({param($a)$a -is [System.Management.Automation.Language.IfStatementAst] -and $a.Extent.Text.Contains('$repairPackages=@(') -and $a.Extent.Text.Contains("'--apply'") -and $a.Clauses[0].Item1.Extent.Text-eq '$RestoreConfigurationProposal'},$true)
+if(-not $restoreBlock){throw '恢复分支不可定位'}
+$RestoreConfigurationProposal='restore.json';$workspace='workspace';$profile='profile';$ExpectedProfileSha256='before';$EvidenceDirectory='evidence';$script:restoreCalls=@()
+function Run-Node([string[]]$Arguments){$script:restoreCalls+=,@($Arguments);return '{"mode":"apply"}'}
+function Set-Content {[CmdletBinding()]param([Parameter(Position=0)]$Path,[Parameter(ValueFromPipeline)]$Value) process {}}
+$node='must-not-run-plugin-installer'
+Invoke-Expression $restoreBlock.Extent.Text
+if($script:restoreCalls.Count-ne 1 -or $script:restoreCalls[0]-notcontains '--restore-proposal' -or $script:restoreCalls[0]-notcontains '--apply'){throw '已安装配置恢复必须仅执行一次原生restore'}
+$RestoreConfigurationProposal='';$RepairStoppedLaunch='';$Bundle='bundle';$MergePolicy='merge';$ChecksProposal='checks';$RepositoryPatches='';$DirectQueriesProposal='';$ObserverPackage='';$ExpectedObserverPackageSha256='';$TaskMigrationPlan='';$Bootstrap=$false;$MigrateRequiredDependency=$false;$MigrateExecutionEventsIndex=$false;$MigrateMessageImpact=$false
+$RestoreConfigurationProposal='restore.json';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '不得没有原launch而恢复配置'}
+$RepairStoppedLaunch='oldlaunch';$Bundle='';$MergePolicy='';$ChecksProposal='';$DirectQueriesProposal='query';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '恢复配置不得混入新的query配置'}
+Write-Output 'PASS 3/3: 原生restore一次、不重装；无原launch及混入其他配置拒绝'
+# 新精度门禁使用计划任务秒精度；同秒允许、此前启动与错误退出码拒绝。
+$timeGuard=$ast.Find({param($a)$a -is [System.Management.Automation.Language.IfStatementAst] -and $a.Clauses[0].Item1.Extent.Text.Contains('TaskResult-ne 1')},$true)
+$record=[pscustomobject]@{launchMethod='scheduled-task';startedAt='2026-10-08T17:00:41.1530584Z'};$started=[datetime]$record.startedAt
+$taskInfo=[pscustomobject]@{LastTaskResult=1;LastRunTime=[datetime]'2026-10-08T17:00:41Z'}
+Invoke-Expression $timeGuard.Extent.Text
+foreach($case in @('earlier','later','exit')){
+ $taskInfo.LastRunTime=[datetime]'2026-10-08T17:00:41Z';$taskInfo.LastTaskResult=1
+ if($case-eq 'earlier'){$taskInfo.LastRunTime=$taskInfo.LastRunTime.AddSeconds(-1)}
+ if($case-eq 'later'){$taskInfo.LastRunTime=$taskInfo.LastRunTime.AddSeconds(1)}
+ if($case-eq 'exit'){$taskInfo.LastTaskResult=0}
+ $rejected=$false;try{Invoke-Expression $timeGuard.Extent.Text}catch{$rejected=$true};if(-not $rejected){throw '计划任务失败身份不精确'}
+}
+Write-Output 'PASS 4/4: 计划任务同秒失败允许，前后其他启动及成功退出拒绝'

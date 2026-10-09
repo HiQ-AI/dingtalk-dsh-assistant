@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 
-export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：说明做了什么、结果、实际限制、下一步和需要确认的问题。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务首次接纳后只发一次开始通知；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
+export const groupReplyInstructions = '发给群成员的回复、summary 和 question 使用直白的业务语言：先说结论或需要对方做什么，再给必要背景；突出重点，不堆分析过程。需要业务人员补充时明确列出每项信息及要回答的问题，多项逐行列出，清单项之间留空行以保持渠道渲染清晰，保留业务名称、选项和必要链接；不要只说“请补充信息”或“需要确认”。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务首次接纳后只发一次开始通知；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
 
 // 只识别明确的插件运行标签与机制，避免把业务代码、普通编号当成内部数据。
 export function assertGroupReply(text, internalIds = []) {
@@ -26,6 +26,20 @@ export function workflowResultText(output) {
   if (output?.deliveryStatus === 'pr_verified' && typeof output.url === 'string') return `代码已验证并提交 PR${output.number ? ` #${output.number}` : ''}：${output.url}。当前状态：${({ OPEN: '待合并', MERGED: '已合并', CLOSED: '已关闭' })[output.state] ?? '已核验'}。`
   return null
 }
+// 仅按作者明确换行排版，不拆句、推断结论或截断旧报告。
+export const notificationParagraphs = text => String(text ?? '').trim().split(/\r?\n+/u).map(line => line.trim()).filter(Boolean).join('\n\n')
+export function ownerReportNotificationText(report) {
+  const facts = report.facts
+  if (report.reportType === 'complete') {
+    const summary = notificationParagraphs(facts.summary)
+    return (summary.startsWith('【结论】') ? summary : `【结论】\n\n${summary}`)
+      + '\n\n【详情】\n\n完整结果与证据请查看原事项的任务详情。'
+  }
+  const condition = facts.condition
+  if (!condition) return `【需要确认】\n\n${notificationParagraphs(facts.summary)}`
+  const heading = condition?.kind === 'business-input' ? '【需补充】' : '【需授权】'
+  return `${heading}\n\n请${condition.responsibleParty}${condition.kind === 'business-input' ? '补充以下信息' : '处理以下授权'}：\n\n${notificationParagraphs(condition.missing)}\n\n【下一步】\n\n${notificationParagraphs(condition.resumeWhen)}`
+}
 export function taskDecisionConditionText(condition) {
   if (!condition || !['business-input', 'approval', 'capability', 'permission', 'execution'].includes(condition.kind)
     || ['missing', 'responsibleParty', 'resumeWhen'].some(key => typeof condition[key] !== 'string' || !condition[key].trim())) return null
@@ -37,10 +51,26 @@ export function sameDeliveredText(observed, expected, quoted = false) {
   const actual = normalize(observed), wanted = normalize(expected)
   if (actual === null || wanted === null) return false
   // 钉钉回读把单行 inline-code 表示成粗体；只变换期望的成对单反引号，保留正文。
-  const rendered = normalize(typeof expected === 'string' ? expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**') : expected)
+  const inlineRendered = expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**')
+  // 已实证 DWS 将连续有序列表的项间单换行移除；只变换期望正文，保留编号和每个字符。
+  const listRendered = text => {
+    const lines = text.split(/\r?\n/u), rendered = []
+    let fence = null
+    for (let index = 0; index < lines.length; index++) {
+      const marker = lines[index].match(/^\s*(`{3,}|~{3,})/u)?.[1]
+      if (marker) { if (!fence) fence = marker; else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null }
+      if (!fence && /^1\. .+/u.test(lines[index])) {
+        let end = index + 1
+        while (end < lines.length && lines[end].startsWith(`${end - index + 1}. `) && lines[end].length > `${end - index + 1}. `.length) end++
+        if (end > index + 1) { rendered.push(lines.slice(index, end).join('')); index = end - 1; continue }
+      }
+      rendered.push(lines[index])
+    }
+    return normalize(rendered.join('\n'))
+  }
   const prefix = typeof quoted === 'object' && quoted?.sender ? normalize(`@${quoted.sender} `) + ' ' : null
   const body = prefix && actual.startsWith(prefix) ? actual.slice(prefix.length) : actual
-  return [wanted, rendered].some(candidate => body === candidate)
+  return [wanted, normalize(inlineRendered), listRendered(expected), listRendered(inlineRendered)].some(candidate => body === candidate)
 }
 export function notificationOpenTaskId(ack) {
   return ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
@@ -67,10 +97,10 @@ export function taskNotificationAllowed({ phase = '', action, report } = {}) {
   if (!phase.startsWith('owner:')) return true
   if (report?.applicationStatus !== 'applied') return false
   if (report.reportType === 'repairCurrentStage') return false
-  if (report.reportType === 'complete' || report.triggerTypes?.includes('workflow.confirmation.required')) return true
+  if (report.reportType === 'complete') return true
   if (['wait', 'block'].includes(report.reportType)) return ['business-input', 'permission'].includes(report.facts?.condition?.kind)
     && Boolean(taskDecisionConditionText(report.facts.condition))
-  return false
+  return report.triggerTypes?.includes('workflow.confirmation.required') === true
 }
 export function formatGroupReply(text, responsibility = '') {
   if (typeof text !== 'string' || !text.trim()) throw new Error('WORKFLOW_REPLY_TEXT_REQUIRED')
@@ -223,10 +253,11 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         if (!(await store.query({kind:'message.impact',runId:run.runId})).impact?.coordinatorManaged)
         await attempt(run.runId, 'reply_obligation', () => prepareState(run, 'reply_obligation', /在不在|在[吗嘛么]/u.test(run.body ?? '') ? '在的，请说。' : '已收到。'))
       }
-      for (const request of state.requests.filter(item => item.status === 'pending' && item.kind === 'needs_clarification')) {
+      for (const request of state.requests.filter(item => item.status === 'pending' && ['needs_clarification', 'needs_authorization'].includes(item.kind))) {
         await attempt(run.runId, request.id, async () => {
-        if (notificationSilence(run, 'clarification')) return
-        const notificationId = `clarify-${executionDigest([run.runId, request.id, request.revision])}`
+        const phase = request.kind === 'needs_authorization' ? 'authorization' : 'clarification'
+        if (notificationSilence(run, phase)) return
+        const notificationId = `${phase === 'authorization' ? 'authorize' : 'clarify'}-${executionDigest([run.runId, request.id, request.revision])}`
         const existing = await store.query({ kind: 'message.notification', notificationId })
         if (existing) {
           if (existing.runId !== run.runId || existing.requestId !== request.id) throw new Error('MESSAGE_NOTIFICATION_CONFLICT')
@@ -234,8 +265,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         }
         const responsibility = groupResponsibility(run.conversationId)
         if (responsibility.includes('引用回复') && (!run.context?.sourceMessageId || !run.actorId)) throw new Error('WORKFLOW_REPLY_SOURCE_REQUIRED')
-        await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId, eventKey:`request.clarification:${request.id}:${request.revision}`,
-          payload: { text: formatGroupReply(request.question ?? request.reason, responsibility), phase: 'clarification', conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
+        await command('message.notification.prepare', { runId: run.runId, requestId: request.id, notificationId, eventKey:`request.${phase}:${request.id}:${request.revision}`,
+          payload: { text: formatGroupReply(`${phase === 'authorization' ? '【需授权】' : '【需补充】'}\n\n${notificationParagraphs(request.question ?? request.reason)}`, responsibility), phase, conversationId: run.conversationId, sourceMessageId: run.context?.sourceMessageId, actorId: run.actorId },
           disclosure: { conversationId: run.conversationId, authorizationRef: run.sourceKey },
         }, `prepare:${notificationId}`)
         })
@@ -252,8 +283,7 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
           const reports = await store.query({ kind: 'task.owner.reports', taskId: action.result.taskId })
           for (const report of reports) {
             if (!taskNotificationAllowed({ phase: `owner:${report.reportId}`, report })) continue
-            const text = report.reportType === 'complete' ? `任务已完成：${report.facts.summary}`
-              : `需要你确认：${Array.from(String(report.facts.summary).replace(/\s+/gu, ' ').trim()).slice(0, 160).join('')}`
+            const text = ownerReportNotificationText(report)
             await attempt(run.runId, report.reportId, () => prepare(run, action, `owner:${report.reportId}`, text,
               report.reportType === 'complete' ? 'result' : 'required_action', report))
           }
@@ -267,7 +297,8 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
         const output = last ? await artifacts.read(last.outputRef) : null
         const text = task.run.status === 'succeeded' ? workflowResultText(output) ?? '已完成处理。'
           : task.run.status === 'cancelled' ? '已取消处理。' : '这次处理没有完成，需要先排查原因。'
-        await prepare(run, action, `terminal:${task.run.runId}:${task.run.revision}`, text)
+        await prepare(run, action, `terminal:${task.run.runId}:${task.run.revision}`, task.run.status === 'succeeded'
+          ? ownerReportNotificationText({ reportType: 'complete', facts: { summary: text } }) : text)
         })
       }
       })

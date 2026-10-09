@@ -1,6 +1,7 @@
 import { nameSession } from './session-workspaces.js'
 import { sourceInterpretationInstructions } from './agent-work.js'
 import { isAbsolute } from 'node:path'
+import { createHash } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
@@ -19,6 +20,68 @@ const failure = (code, detail) => Object.assign(new Error(detail ? `${code}: ${d
 const notDrained = code => Object.assign(failure(code), { executionDrained: false })
 const copy = value => structuredClone(value)
 const identityOf = binding => Object.fromEntries(keysFor(binding).map(key => [key, binding[key]]))
+const providerTransient = cause => cause?.code === 'TRANSPORT' && String(cause.message).split('\n')[0].trim() === 'fetch failed' || cause?.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.'
+
+// 只读核验旧分类；不恢复会话，不向模型投递输入。
+export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'execution_no_submission') {
+  validateBinding(binding)
+  if (binding.kind || !binding.sessionBound || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) return null
+  const stored = await ctx.sessionPersistence.inspect(binding.sessionId), events = stored.events
+  validateHistory(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
+  const rebind = events.find(event => event.type === 'dingtalk/execution-session-rebind')
+  const consumedParent = (source, seq) => rebind && seq < rebind.seq
+    && source?.executionSession?.sessionId === rebind.data.parentSessionId
+    && source.executionSession.leaseEpoch < rebind.data.leaseEpoch
+  const inputs = events.filter(event => event.type === 'user/message')
+  if (inputs.some(event => event.data.source?.kind !== 'coordinator' && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt' && event.data.source.form === 'snapshot'))) return null
+  if (inputs.some(event => event.data.source?.kind === 'coordinator' && event.data.source.executionSession?.sessionId !== binding.sessionId && !consumedParent(event.data.source, event.seq))) return null
+  const input = inputs.findLast(event => event.data.source?.kind === 'coordinator')
+  if (input?.data.source.executionSession?.sessionId !== binding.sessionId || input.data.source.executionSession.leaseEpoch !== binding.leaseEpoch) return null
+  const end = events.findLast(event => event.type === 'turn/end')
+  if (!end || end.seq <= input.seq) return null
+  const overloaded = ['execution_no_submission', 'EXECUTION_PROVIDER_FAILED'].includes(previousCode) && end.data.reason?.kind === 'error' && providerTransient(end.data.reason.error)
+  const interrupted = previousCode === 'execution_tool_failed' && end.data.reason?.kind === 'aborted' && end.data.reason.reason?.kind === 'user'
+  const scopeFailure = previousCode === 'execution_tool_failed' && end.data.reason?.kind === 'blocked'
+  if (!overloaded && !interrupted && !scopeFailure) return null
+  let materialSourceFailure = false, materialReferenceFailure = false
+  if (interrupted || scopeFailure) {
+    const errors = events.filter(event => event.seq > input.seq && event.type === 'tool/result' && event.data.message?.content?.some(block => block.type === 'tool-result' && block.isError))
+    if (errors.length !== 1 || errors[0].data.message.content.length !== 1) return null
+    const result = errors[0].data.message.content[0]
+    const call = events.findLast(event => event.seq < errors[0].seq && event.type === 'tool/call')
+    let args
+    try { args = JSON.parse(call?.data.arguments) } catch {}
+    materialSourceFailure = scopeFailure && result.content?.[0]?.text === 'Error: ENGINEERING_READ_SCOPE_INVALID'
+      && args?.operation === 'materials' && args.source === 'previous' && typeof args.path === 'string'
+      && args.path.startsWith(`tasks/${binding.taskId}/`) && /^tasks\/[^/]+\/sha256-[a-f0-9]{64}\.json$/.test(args.path)
+      && Object.keys(args).every(key => ['operation','source','path','offset','limit'].includes(key))
+      && (args.offset === undefined || Number.isSafeInteger(args.offset) && args.offset >= 0)
+      && (args.limit === undefined || Number.isSafeInteger(args.limit) && args.limit >= 1 && args.limit <= 16000)
+    materialReferenceFailure = scopeFailure && result.content?.[0]?.text === 'Error: ARTIFACT_REFERENCE_INVALID'
+      && args?.operation === 'materials' && (args.source === undefined || args.source === 'current') && typeof args.path === 'string'
+      && args.path.startsWith(`tasks/${binding.taskId}/`) && /^tasks\/[^/]+\/sha256-[a-f0-9]{1,63}\.json$/.test(args.path)
+      && Object.keys(args).every(key => ['operation','source','path','offset','limit'].includes(key))
+      && (args.offset === undefined || Number.isSafeInteger(args.offset) && args.offset >= 0)
+      && (args.limit === undefined || Number.isSafeInteger(args.limit) && args.limit >= 1 && args.limit <= 16000)
+      && !events.some(event => event.seq > input.seq && event.type === 'tool/call' && event.data.name !== 'engineering_repo_inspect')
+    if (result.content?.length !== 1 || result.content[0].type !== 'text' || !materialSourceFailure && !materialReferenceFailure && result.content[0].text !== (scopeFailure ? 'Error: ENGINEERING_READ_PATH_INVALID' : 'Error: [object Object]')
+      || call?.data.name !== 'engineering_repo_inspect' || call.data.callId !== result.toolCallId
+      || events.some(event => event.seq > errors[0].seq && event.seq < end.seq && event.type !== 'step/end')) return null
+  }
+  if (events.some(event => event.seq > end.seq && event.type !== 'session/end-seed')
+    || events.some(event => event.seq > input.seq && /^(assistant\/|tool\/)/u.test(event.type) && JSON.stringify(event.data).includes(SUBMIT))) return null
+  // 未消费的额外 inbox 输入也不得被当作旧错误续行。
+  const inbox = events.filter(event => event.type === 'agent/inbox/spliced').flatMap(event => event.data.inserted ?? [])
+  if (inbox.some(message => message.source?.kind !== 'coordinator' && !(message.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt' && message.source.form === 'snapshot'))) return null
+  if (events.filter(event => event.type === 'agent/inbox/spliced').some(event => (event.data.inserted ?? []).some(message => message.source?.kind === 'coordinator'
+    && (message.source.executionSession?.sessionId !== binding.sessionId && !consumedParent(message.source, event.seq) || message.source.executionSession.leaseEpoch > binding.leaseEpoch)))) return null
+  return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: materialReferenceFailure
+    ? { code: 'QUERY_ARGUMENT_INVALID', phase: 'execution', message: '本轮Task工件引用被截短；先用materials/source=current读取索引，再复制完整artifactRef，不得猜测SHA。' } : materialSourceFailure
+    ? { code: 'QUERY_ARGUMENT_INVALID', phase: 'execution', message: '本轮materials误用source=previous；Task共享材料不按代次区分，请在原会话用source=current读取同一工件。' } : scopeFailure
+    ? { code: 'ENGINEERING_READ_PATH_INVALID', phase: 'execution', message: '原生本轮仓库读取路径被拒绝；需Owner指示使用准入路径和Task共享材料继续。' } : interrupted
+    ? { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留失败工具历史，需Owner核对后受管续行。' }
+    : { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', message: String(end.data.reason.error.message).slice(0, 2000) } }
+}
 
 function validateBinding(binding) {
   if (binding?.kind !== undefined && !['task-node', 'message-unit'].includes(binding.kind)) throw failure('execution_binding_invalid', 'kind')
@@ -44,9 +107,15 @@ function validateBinding(binding) {
 
 function validateHistory(events, binding) {
   const identities = events.filter(event => event.type === IDENTITY_EVENT)
+  const moves = events.filter(event => event.type === 'dingtalk/execution-session-rebind')
+  if (moves.length > 1 || moves.length && (moves[0].data.sessionId !== binding.sessionId
+    || moves[0].data.parentSessionId !== identities[0]?.data.identity.sessionId
+    || !Number.isSafeInteger(moves[0].data.leaseEpoch) || moves[0].data.leaseEpoch > binding.leaseEpoch
+    || moves[0].data.inputDigest !== binding.inputDigest)) throw failure('execution_session_identity_mismatch')
+  const originalSessionId = moves[0]?.data.parentSessionId ?? binding.sessionId
   if (identities.length !== 1 || identities[0].data.version !== (binding.kind ? 2 : 1)
     || Object.hasOwn(identities[0].data.identity ?? {}, 'inputVersion') !== versionedInput(binding)
-    || keysFor(binding).filter(key => !versionedInput(binding) || !['inputVersion', 'inputDigest'].includes(key)).some(key => identities[0].data.identity?.[key] !== binding[key])) {
+    || keysFor(binding).filter(key => !versionedInput(binding) || !['inputVersion', 'inputDigest'].includes(key)).some(key => identities[0].data.identity?.[key] !== (key === 'sessionId' ? originalSessionId : binding[key]))) {
     throw failure('execution_session_identity_mismatch')
   }
   if (versionedInput(binding)) {
@@ -70,7 +139,7 @@ function validateHistory(events, binding) {
   }
   const leases = [identities[0].data.creationLease, ...events.flatMap(event => event.type === 'user/message' ? [event.data]
     : event.type === 'agent/inbox/spliced' ? event.data.inserted ?? [] : [])
-    .filter(message => message.source?.kind === 'coordinator' && message.source.executionSession?.sessionId === binding.sessionId)
+    .filter(message => message.source?.kind === 'coordinator' && [originalSessionId,binding.sessionId].includes(message.source.executionSession?.sessionId))
     .map(message => message.source.executionSession.leaseEpoch)]
   if (leases.some(lease => !Number.isSafeInteger(lease) || lease < 1 || lease >= binding.leaseEpoch)) {
     throw failure('execution_session_lease_not_advanced')
@@ -99,6 +168,62 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
   const entries = new Map(), sessions = new Map()
   let closed = false
 
+  async function prepareManagedSession(binding, definition, onPrepared) {
+    if (binding.kind || !binding.sessionBound || !binding.sessionId) return null
+    const held = entries.get(executionKey(binding))
+    if (held && (held.handle || !held.drainError)) throw notDrained('execution_run_busy')
+    let stored = await ctx.sessionPersistence.inspect(binding.sessionId)
+    if (stored.meta.origin === 'subagent') return null
+    // 历史迁移仅由卸载输入入口后的维护桥执行；不能借用仍可接收 Web 输入的观察句柄。
+    if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw notDrained('execution_session_already_live')
+    const owned = await ctx.agents.resume({ resumeSessionId: binding.sessionId,
+      agentOptions: { provider: definition.provider, model: definition.model }, setup: agentCtx => { agentCtx.tools.restrict({ allow: [] }) } })
+    const observed = owned.agent
+    try {
+      if (observed.status !== 'idle' || observed.inbox.hasPending || observed.session !== ctx.sessions.get(binding.sessionId)) throw notDrained('execution_session_already_live')
+      return await observed.runMaintenance(async signal => {
+        const events = observed.session.snapshotEvents(), lastEnd = events.findLast(event => event.type === 'turn/end')
+        validateHistory(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
+        const inputs = events.filter(event => event.type === 'user/message')
+        const lastInput = inputs.findLast(event => event.data.source?.executionSession)
+        if (!lastEnd || !lastInput || lastEnd.seq < lastInput.seq || observed.inbox.hasPending
+          || binding.status === 'running' && lastInput.data.source.executionSession.leaseEpoch >= binding.leaseEpoch
+          || inputs.some(event => event.data.source?.kind !== 'coordinator' && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt' && event.data.source.form === 'snapshot'))
+          || inputs.some(event => event.data.source?.kind === 'coordinator' && event.data.source.executionSession?.sessionId !== binding.sessionId)
+          || events.some(event => event.seq > lastEnd.seq && event.type !== 'session/end-seed')) throw failure('execution_observer_session_unsafe')
+        await ctx.sessions.flush(observed.session)
+        stored = await ctx.sessionPersistence.inspect(binding.sessionId)
+        const unchanged = () => !signal.aborted && !observed.inbox.hasPending && JSON.stringify(observed.session.snapshotEvents()) === JSON.stringify(events)
+        if (!unchanged() || JSON.stringify(stored.events) !== JSON.stringify(events)) throw failure('execution_observer_session_unsafe')
+        const sessionId = `execution-${createHash('sha256').update(JSON.stringify([binding.sessionId,binding.nodeRunId,binding.inputDigest,binding.leaseEpoch])).digest('hex').slice(0,40)}`
+        const event = { type: 'dingtalk/execution-session-rebind', seq: events.length, time: Date.now(), ignorable: true,
+          data: { parentSessionId: binding.sessionId, sessionId, inputDigest: binding.inputDigest, leaseEpoch: binding.leaseEpoch } }
+        let previous
+        try { previous = await ctx.sessionPersistence.inspect(sessionId) } catch (error) {
+          if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== sessionId) throw error
+        }
+        if (ctx.agents.get(sessionId) || ctx.sessions.get(sessionId)) throw failure('execution_observer_session_unsafe')
+        if (previous && (previous.meta.origin !== 'subagent' || previous.meta.parentSession !== binding.sessionId || previous.meta.cwd !== stored.meta.cwd
+          || JSON.stringify(previous.events.slice(0,events.length)) !== JSON.stringify(events)
+          || previous.events[events.length]?.type !== event.type || JSON.stringify(previous.events[events.length]?.data) !== JSON.stringify(event.data)
+          || previous.events.slice(events.length+1).some(item => item.type !== 'session/end-seed'))) throw failure('execution_observer_session_unsafe')
+        const options = { agentOptions: { provider: definition.provider, model: definition.model }, setup: agentCtx => { agentCtx.tools.restrict({ allow: [] }) } }
+        const child = previous ? await ctx.agents.resume({ ...options, resumeSessionId: sessionId })
+          : await ctx.agents.create({ ...options, sessionId, meta: { cwd: stored.meta.cwd, parentSession: binding.sessionId, origin: 'subagent', isSeeded: true },
+            seed: [...events,event], inheritedEventCount: events.length })
+        try {
+          await ctx.sessions.flush(child.agent.session)
+          if (!unchanged()) throw failure('execution_observer_session_unsafe')
+          const proof = { sessionId, parentSessionId: binding.sessionId, lastInputLease: lastInput.data.source.executionSession.leaseEpoch,
+            inheritedEventCount: events.length, eventsDigest: createHash('sha256').update(JSON.stringify(events)).digest('hex') }
+          await onPrepared(proof)
+          if (held) { entries.delete(executionKey(binding)); sessions.delete(binding.sessionId) }
+          return proof
+        } finally { await child.dispose() }
+      })
+    } finally { await owned?.dispose() }
+  }
+
   async function current(entry) {
     if (closed || entry.cancelled) return false
     if (!await isCurrent(entry.binding)) { entry.stale = true; return false }
@@ -126,8 +251,8 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
   function setup(entry, definition) {
     return agentCtx => {
       const allowed = new Set([...definition.allowedTools, SUBMIT])
-      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${sourceInterpretationInstructions}`, complete: true })
-      agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => name !== 'engineering_repo_inspect' && !registry.has(name)) })
+      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${sourceInterpretationInstructions}${definition.allowedTools.includes('engineering_repo_inspect') ? '\n工程需求优先级：当前Task原始request、已读取需求正文及Host锁定的UAT环境决定目标；旧repair计划、项目本地验收说明和默认场景仅是待核实的测试方法，不能替换业务需求或改变UAT。发现冲突时按当前Task需求实现并报告场景不适用，不照错场景改业务。已有明确交办不得因测试说明自行追加真人审批、确认或用户补充；只有真实Host权限结果才能形成授权等待。构建通过或补齐后台隔离不代表业务功能已实现。' : ''}`, complete: true })
+      agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => !['engineering_repo_inspect', 'engineering_apply_edits'].includes(name) && !registry.has(name)) })
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。
       agentCtx.tools.guard(exec => {
         if (!allowed.has(exec.name)) { halt(entry, 'execution_tool_not_allowed'); return 'execution_tool_not_allowed' }
@@ -159,6 +284,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       agentCtx.on('tools/result', (exec, result) => {
         const feedback = entry.correctableCalls.get(exec.token)
         entry.correctableCalls.delete(exec.token)
+        if (result.isError && exec.signal.aborted) { entry.interruptedTool = true; return }
         if (result.isError && !(feedback && result.error?.message === feedback && !entry.attempted
           && !entry.haltCode && !entry.stale && !entry.cancelled && !exec.signal.aborted)) {
           entry.failure ??= { code: result.error?.code ?? 'execution_tool_failed', tool: exec.name,
@@ -186,7 +312,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
                 entry.failure = { code: error.code ?? 'execution_submission_rejected', tool: SUBMIT, phase: 'output-validation', message: String(error.message).slice(0, 2000) }
                 throw error
               }
-              return { received: false, feedback: error.code === 'GROUP_REPLY_INTERNAL_DETAILS' ? error.message : 'execution_output_needs_correction: 请核对输出合同；证据引用必须原样复制当前工具返回的完整 evidenceRef，包括 tasks/.../ 前缀，不可截短为文件名、使用 sourceRefs 或自行构造引用。修正后重新提交。' }
+              return { received: false, feedback: error.code === 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' ? '方案引用必须使用输入 plan.ref；成功需引用当前工具真实成功 effectId。已派发编辑后不可退回方案；没有编辑收据时必须先取得 Host 的 no-change 实证，才能空 effectRefs 提交成功。请核对后重新提交。' : error.code === 'GROUP_REPLY_INTERNAL_DETAILS' ? error.message : 'execution_output_needs_correction: 请核对输出合同；证据引用必须原样复制当前工具返回的完整 evidenceRef，包括 tasks/.../ 前缀，不可截短为文件名、使用 sourceRefs 或自行构造引用。修正后重新提交。' }
             }
             if (!await current(entry)) throw failure('execution_binding_stale')
             exec.signal.throwIfAborted()
@@ -226,11 +352,29 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           },
         })
       }
+      if (definition.allowedTools.includes('engineering_apply_edits')) agentCtx.tools.register({
+        name: 'engineering_apply_edits',
+        description: '按已核对的技术方案执行一次受管文件修改批次。expectedHash 必须来自当前文件读取；成功后原样引用返回的 effectId，不得更换批次重发。参数只包含文件修改，禁止传任务或目录身份。',
+        parameters: { type: 'object', properties: {
+          noChange: { type: 'object', properties: { reason: { type: 'string', minLength: 1 }, reviewedPaths: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } } }, required: ['reason', 'reviewedPaths'], additionalProperties: false },
+          changes: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', minLength: 1 }, expectedHash: { oneOf: [{ type: 'string', pattern: '^[a-f0-9]{64}$' }, { type: 'null' }] }, content: { oneOf: [{ type: 'string' }, { type: 'null' }] } }, required: ['path', 'expectedHash', 'content'], additionalProperties: false } },
+          replacements: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', minLength: 1 }, expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' }, from: { type: 'string', minLength: 1 }, to: { type: 'string' } }, required: ['path', 'expectedHash', 'from', 'to'], additionalProperties: false } },
+        }, required: ['changes', 'replacements'], additionalProperties: false },
+        output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+        async execute(args, exec) {
+          if (!await current(entry)) throw failure('execution_binding_stale')
+          exec.signal.throwIfAborted()
+          const value = await entry.applyEdits(copy(args), exec.signal)
+          if (!await current(entry)) throw failure('execution_binding_stale')
+          exec.signal.throwIfAborted()
+          return value
+        },
+      })
       if (definition.allowedTools.includes('engineering_repo_inspect') && !registry.has('engineering_repo_inspect')) agentCtx.tools.register({
         name: 'engineering_repo_inspect',
-        description: '在本任务受管仓库中列出路径、搜索文本或分段读取文件；read 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。返回完整文件 SHA256 用于修改校验。status=not_found 或 invalid_limit 时按 suggestedCall 纠正后继续，不代表节点失败。',
+        description: '先用 materials 查看本 Task 共享材料与产物索引；materials 始终使用 source=current（包括历史工件），source=previous只用于上一代仓库文件；materials 带 path=artifactRef 可分段读取原工件，历史来源仅作背景不代表当前授权。尚未读取完整材料不能据此断言需求已满足或无需修改。仓库用 list/search/read；read/materials 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。仓库读取返回完整文件 SHA256 用于修改校验。error.code=QUERY_ARGUMENT_INVALID或status=not_found、invalid_source、invalid_limit时按 suggestedCall 纠正后继续，不代表节点失败。',
         parameters: { type: 'object', properties: {
-          operation: { type: 'string', enum: ['list', 'search', 'read', 'repair'] }, query: { type: 'string' }, path: { type: 'string' },
+          operation: { type: 'string', enum: ['list', 'search', 'read', 'repair', 'materials'] }, query: { type: 'string' }, path: { type: 'string' },
           source: { type: 'string', enum: ['current', 'previous'] }, offset: { type: 'integer' }, limit: { type: 'integer' },
         }, required: ['operation'], additionalProperties: false },
         output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
@@ -238,25 +382,26 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           if (typeof repositoryInspect !== 'function') throw failure('execution_repository_inspector_unavailable')
           if (!await current(entry)) throw failure('execution_binding_stale')
           exec.signal.throwIfAborted()
-          return repositoryInspect(entry.binding, args, exec.signal, entry.input)
+          return repositoryInspect(entry.binding, args, exec.signal, entry.applyEdits ? entry.input.requirement : entry.input)
         },
       })
     }
   }
 
-  async function run({ binding, input, definition, onSessionBound, onResult, validateOutput, classifyOutputError, recoveryContext }) {
+  async function run({ binding, input, definition, onSessionBound, onResult, validateOutput, classifyOutputError, recoveryContext, applyEdits }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
       if (!definition || typeof definition.prompt !== 'string' || !definition.provider || !definition.model
         || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || name === SUBMIT)) throw failure('execution_definition_invalid')
       assertSupportedJsonSchema(definition.outputSchema)
+      if (definition.allowedTools.includes('engineering_apply_edits') && (typeof applyEdits !== 'function' || registry.has('engineering_apply_edits'))) throw failure('execution_edit_executor_required')
       if (typeof onSessionBound !== 'function' || typeof onResult !== 'function') throw failure('execution_callbacks_required')
       if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function')) throw failure('execution_callbacks_invalid')
       if (entries.has(executionKey(binding)) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), validateOutput, classifyOutputError, cancelled: false, stale: false, attempted: false, accepted: false,
+    const entry = { binding, input: copy(input), validateOutput, classifyOutputError, applyEdits, cancelled: false, stale: false, attempted: false, accepted: false,
       correctableCalls: new Map(), steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })
@@ -273,6 +418,8 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         }
         if (binding.sessionBound && !stored) throw failure('execution_session_missing')
         if (stored) {
+          const move = stored.events.find(event => event.type === 'dingtalk/execution-session-rebind')
+          if (move && (stored.meta.origin !== 'subagent' || stored.meta.parentSession !== move.data.parentSessionId)) throw failure('execution_session_identity_mismatch')
           validateHistory(stored.events, entry.binding)
           entry.steps = stored.events.filter(event => event.type === 'step/start').length
         }
@@ -282,7 +429,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (!stored && getWorkspaceDir && (typeof workspaceDir !== 'string' || !isAbsolute(workspaceDir))) throw failure('execution_workspace_invalid')
         entry.handle = stored
           ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
-          : await ctx.agents.create({ ...options, sessionId: binding.sessionId, ...(workspaceDir ? { meta: { cwd: workspaceDir } } : {}),
+          : await ctx.agents.create({ ...options, sessionId: binding.sessionId, meta: { ...(workspaceDir ? { cwd: workspaceDir } : {}), ...(binding.kind === undefined ? { origin: 'subagent' } : {}) },
             // 当前原生 append 不提供 ignorable 参数；用受支持 seed 保留不参与原生投影的插件身份。
             seed: [{ type: IDENTITY_EVENT, seq: 0, time: Date.now(), ignorable: true, data: { version: binding.kind ? 2 : 1, identity: identityOf(entry.binding), creationLease: binding.leaseEpoch } }],
           })
@@ -295,6 +442,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         await onSessionBound()
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
         if (entry.haltCode) return { status: 'no_submission', reason: entry.haltCode }
+        const startSeq = session.snapshotEvents().at(-1)?.seq ?? -1
         // 租约是 Host 的来源元数据，正常 inbox/user-message 持久化保留，不是模型参数。
         entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', executionSession: { sessionId: binding.sessionId, leaseEpoch: binding.leaseEpoch, ...(versionedInput(binding) ? { inputVersion: binding.inputVersion, inputDigest: binding.inputDigest } : {}) } }, content: [
           { type: 'text', text: JSON.stringify(entry.input) },
@@ -304,7 +452,19 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         await drain(entry)
         if (entry.cancelled || closed) return { status: 'cancelled' }
         if (!await current(entry)) return { status: 'stale' }
-        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? 'execution_no_submission', ...(entry.failure ? { failure: entry.failure } : {}) }
+        const currentEnd = session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
+        if (!entry.accepted && !entry.haltCode && !entry.failure && entry.interruptedTool
+          && currentEnd?.data?.reason?.kind === 'aborted' && currentEnd.data.reason.reason?.kind === 'user')
+          entry.failure = { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；需Owner核对诊断后续行。' }
+        if (!entry.accepted && !entry.haltCode && !entry.failure) {
+          const end = session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
+          if (end?.data?.reason?.kind === 'error') {
+            const cause = end.data.reason.error, message = String(cause?.message ?? 'Native execution provider failed')
+            const transient = providerTransient(cause)
+            entry.failure = { code: transient ? 'EXECUTION_PROVIDER_TRANSIENT' : 'EXECUTION_PROVIDER_FAILED', phase: 'provider', message: message.slice(0, 2000) }
+          }
+        }
+        if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? (entry.failure?.phase === 'provider' || entry.failure?.code === 'EXECUTION_TURN_INTERRUPTED' ? entry.failure.code : 'execution_no_submission'), ...(entry.failure ? { failure: entry.failure } : {}) }
         await onResult(copy(entry.output))
         return { status: 'submitted', output: copy(entry.output) }
       } catch (error) {
@@ -343,7 +503,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     return true
   }
 
-  return { run, cancel, assertDrained, async close() {
+  return { run, cancel, assertDrained, prepareManagedSession, async close() {
     closed = true
     await Promise.all([...entries.keys()].map(cancel))
   } }

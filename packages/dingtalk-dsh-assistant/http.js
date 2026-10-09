@@ -60,7 +60,7 @@ function topicSummary(topic) {
 function workflowTopicSummary(topic) {
   return { topicId: topic.topicId, groupId: topic.conversationId, title: topic.title,
     revision: topic.revision, processedRevision: topic.revision, status: 'active',
-    summary: topic.facts.map(fact=>fact.text).join('\n').slice(0,1000), summaryRevision: topic.revision,
+    summary: String(topic.summary ?? ''), summaryRevision: topic.contextRevision ?? topic.revision,
     openQuestionCount: 0, pendingRevisionCount: 0, pendingUnitCount: 0,
     createdAt: topic.createdAt, updatedAt: topic.updatedAt, engine: 'workflow-v2' }
 }
@@ -144,6 +144,20 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, await store.reconcileCompletedWorkflowObservations({ ...body, taskId }))
     } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|NOT_DRAINED/.test(error.message) ? 409 : 400, { error: error.message }) }
   }
+  if (['/runtime/topics/reconcile/check', '/runtime/topics/reconcile'].includes(url.pathname)) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (request.method !== 'POST') return send(response, 405, { error: 'method_not_allowed' })
+    if (!store.reconcileWorkflowTopic) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
+    const check = url.pathname.endsWith('/check')
+    try {
+      const body = z.strictObject({ sourceTopicId: requiredText.max(200), targetTopicId: requiredText.max(200),
+        topicPresentation: z.strictObject({ title: requiredText.max(80), summary: requiredText.max(1200) }),
+        maintenanceId: requiredText.max(200), maintenanceRevision: z.number().int().nonnegative(), reason: requiredText.max(2000),
+        ...(check ? {} : { requestId: requiredText.max(200), expectedDigest: z.string().regex(/^[a-f0-9]{64}$/) }) }).parse(await readJson(request))
+      return send(response, 200, await store.reconcileWorkflowTopic(body, check))
+    } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|MAINTENANCE|ACTIVE/.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   if (['/runtime/maintenance','/runtime/maintenance/seal','/runtime/maintenance/resume'].includes(url.pathname)) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
       || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
@@ -183,12 +197,16 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response,200,await store.deleteWorkflowTask({...body,taskId:decodeURIComponent(deleteTask[1])}))
     } catch(error) { return send(response,/FORBIDDEN/.test(error.message)?403:409,{error:error.message}) }
   }
-  const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|confirm-stage|reopen|archive|title)$/u.exec(url.pathname)
+  const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|pause|resume|confirm-stage|reopen|archive|title)$/u.exec(url.pathname)
   if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
     const action = workflowTaskAction[2]
-    if (request.method !== 'POST' || !['cancel', 'context', 'confirm-stage', 'archive'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
+    if (request.method !== 'POST' || !['cancel', 'pause', 'resume', 'context', 'confirm-stage', 'archive'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
     try {
+      if (['pause', 'resume'].includes(action)) {
+        const body = z.strictObject({ requestId: requiredText.max(200), reason: requiredText.max(16000), expectedControlRevision: z.number().int().positive() }).parse(await readJson(request))
+        return send(response, 202, await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) }))
+      }
       if (action === 'archive') {
         z.strictObject({}).parse(await readJson(request))
         return send(response, 200, await store.submitWorkflowTask({ action, taskId: decodeURIComponent(workflowTaskAction[1]) }))
@@ -270,9 +288,20 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const body = z.strictObject({ retryKey: requiredText.max(200), reason: requiredText.max(16000),
         expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
         expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
-        expectedLastFailure: z.enum(['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT']) }).parse(await readJson(request))
+        expectedLastFailure: z.enum(['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT', 'ENGINEERING_REPOSITORY_SCOPE_MISMATCH']) }).parse(await readJson(request))
       return send(response, 202, await store.retryWorkflowOwner({ ...body, taskId: decodeURIComponent(ownerRetry[1]) }))
     } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  if (request.method === 'POST' && url.pathname === '/workflows/clarifications/recover') {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.recoverWorkflowClarification) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ targetRunId: requiredText, requestId: requiredText, answerRunId: requiredText, commandId: requiredText,
+        recoveryKey: requiredText.max(200), reason: requiredText.max(16000), dryRun: z.boolean(), maintenanceId: requiredText,
+        maintenanceRevision: z.number().int().nonnegative(), expectedDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).parse(await readJson(request))
+      return send(response, body.dryRun ? 200 : 202, await store.recoverWorkflowClarification(body))
+    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /STALE|CONFLICT|MAINTENANCE|UNSAFE/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   const answerRetry = /^\/workflows\/([^/]+)\/commands\/([^/]+)\/retry-readonly$/u.exec(url.pathname)
   if (request.method === 'POST' && answerRetry) {
@@ -304,9 +333,9 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     if(!store[method])return send(response,404,{error:'workflow_disabled'})
     try{
       const fields=action==='prepare'
-        ? z.strictObject({operationId:requiredText,notificationId:requiredText,type:z.enum(['recall','restore']),reason:z.enum(['fact_conflict','duplicate_event','explicit_user','correction']),authorizationRef:requiredText,evidenceRef:requiredText.optional(),keepNotificationId:requiredText.optional(),body:requiredText.optional()})
-        : action==='execute'?z.strictObject({expectedFactDigest:requiredText,authorizationRef:requiredText})
-          :z.strictObject({authorizationRef:requiredText})
+        ? z.strictObject({operationId:requiredText,notificationId:requiredText,type:z.enum(['recall','restore']),reason:z.enum(['fact_conflict','duplicate_event','explicit_user','correction']),authorizationRef:requiredText.optional(),evidenceRef:requiredText.optional(),keepNotificationId:requiredText.optional(),body:requiredText.optional()})
+        : action==='execute'?z.strictObject({expectedFactDigest:requiredText,authorizationRef:requiredText.optional()})
+          :z.strictObject({authorizationRef:requiredText.optional()})
       const body=fields.parse(await readJson(request))
       return send(response,action==='execute'?202:200,await store[method]({...body,...(operationId?{operationId}:{})}))
     }catch(error){return send(response,error instanceof z.ZodError?400:/AUTHORIZATION|FORBIDDEN/u.test(error.message)?403:/STALE|CONFLICT|READY|RECONCILE|RECALLED|DUPLICATE/u.test(error.message)?409:400,{error:error.message})}
@@ -334,10 +363,12 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const dwsBridge = inboundConfigured ? store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] } : undefined
     const inboundProcessing = inboundConfigured && dwsBridge.healthy === true
     const activityAudit = store.getActivityAuditStatus?.()
+    const executionStore = store.getWorkflowExecutionHealth?.()
     return send(response, 200, {
-      status: recoveryIssues.length === 0 && (!inboundConfigured || inboundProcessing) ? 'ok' : 'degraded', transport,
+      status: recoveryIssues.length === 0 && (!executionStore || executionStore.healthy) && (!inboundConfigured || inboundProcessing) ? 'ok' : 'degraded', transport,
       inboundConfigured, inboundProcessing, outboundAuthorized, modelMode,
       recoveryIssueCount: recoveryIssues.length,
+      ...(executionStore ? { executionStore } : {}),
       ...(activityAudit ? { activityAudit: { total: activityAudit.total, pending: activityAudit.pending, audited: activityAudit.audited, unavailableCount: activityAudit.unavailable.length } } : {}),
       ...(dwsBridge !== undefined ? { dwsBridge } : {}),
     })

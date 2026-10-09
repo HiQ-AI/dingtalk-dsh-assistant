@@ -1,0 +1,19 @@
+# 第29轮：本地部署与真实恢复
+
+## 部署准备与排空
+
+源码提交b962804，包SHA256=fbc072bea61919c211a9660cf38daba18dac308aba717d892db4b984df0a5a12，100文件与源码一致。首轮Check因既有inspect-and-propose未排空拒绝，未停机、未安装。
+
+进入既有原生维护，maintenanceId=deploy-reply-task-recovery-20261008、revision478。已运行的只读调查不因维护自动中断；沿已安装DSH公开session.cancel接口中断精确session 1cd4583d-71e3-4fb4-ad3d-24e56205d280。入口保留Session和inbox，不取消业务Task；本机登录链接只在内存换Cookie，无凭据输出或入库。
+
+脚本Check零写核对维护许可、精确Task/node/session及无外部效果后，正式RPC返回accepted；独立原生日志seq566 turn/end=aborted/user，随后维护drained=true、nodes/owners/effects/messages全0。以同维护ID和revision继续标准部署Check，不强制终止进程、不改数据库状态。
+
+## 安装与独立回读
+
+标准helper Check写入数0；Apply安装Assistant fbc072be，Observer保持259393ae；100个Assistant包文件与源码和安装一致。新PID12540持有3080/18998，health=ok、inboundProcessing=true，认证Web200；Resume后maintenance inactive、revision480。历史5个Task、30个旧节点和1个旧Run保留。部署证据位于私有docs/tmp/sg14-reply-task-deployment。
+
+## 真实通知与续行结果
+
+原notice-9d020c379b0ff1f677d0aabbc5ddf26013693e0fb819d5e4b5f6bdaed5659af0已撤回；更正msgud3/KmtJh003kqH2exxoCg==独立DWS回读保持四项信息及正文完整，restore操作completed，替换记录数量1，没有再次send。真实反馈人已提供所需四项信息。旧resume控制冲突通过正式对账恢复，来源msg-5f6f9fb6b3f07281e8bb3893c5ac46dd04c8319d settled。
+
+但原Task仍未完全恢复：零事项消息虽然settled，却残留pending输入屏障，Owner与工程重分类均被MESSAGE_INPUT_PENDING拦住。dataset原生只读session/control基线确认该旧会话未attached，排除观察会话占用；静态过载证据仍有效。另一个工程Task在维护期间原生aborted/user被误记为execution_tool_failed，继续修复其分类与受管恢复。部署健康不等于业务恢复，本轮两项任务续行验收FAIL，后续轮次重验。

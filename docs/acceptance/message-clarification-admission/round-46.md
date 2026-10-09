@@ -1,0 +1,13 @@
+# 第46轮：共享材料正式执行读取及父会话恢复
+
+a9c833f4包SHA256为a9c833f40280ec1234a75a9f3acf912ae67eccd87091f4fe4ce507956bd6f4b3，729395字节。Check通过，安装后新PID119416健康；正式Resume回读100文件与源码/包一致、认证Web200、controlHealth=ok、inboundProcessing=true，6条Task及156旧节点历史核验通过。
+
+本轮首次自动回读遇到正在开发的下一项worker修复与已打包源码不同，正确报PACKAGE_SOURCE_MISMATCH，未自动恢复派发。冻结协作编辑、暂存改动并以5693b68对应源码运行原脚本Resume，随后原样恢复工作文件且SHA独立比对一致。没有覆盖在开发的修复，没有重新安装或重启。尝试用独立源码快照运行Resume被原脚本证据目录范围拒绝，未修改profile/业务状态。
+
+## 正式节点证据
+
+19:16独立只读SQLite和原生session.jsonl核验，数据集task-1edb原Run仍generation1，前四个节点succeeded；inspect-and-propose lease5、新输入seq159。工具engineering_repo_inspect在seq171使用materials取得索引，seq252读取当前需求，seq334/421分页读取历史文档sha256-92a25210481fb5fac1e800819a7ec547890a738a9266338576ac8b1f436e0518.json。该文档此前已完整验证46820字符。共享目录已由真实执行会话使用，不只是离线辅助脚本可读。
+
+同次读回f559为generation5 verify-candidate运行中，七个前置节点成功；83仍generation4 inspect等待，精确根因为Stage/Run输入引用不同步，见round47。不能把共享正文读取等同于工程构建或业务交付完成。
+
+私有证据：lineage-deployment、lineage-deploy-check.log、lineage-deploy-apply.log、lineage-deploy-resume.log、lineage-independent-proof.json、shared-current-native-proof.json。未改SQLite或原生历史，未取消业务Task。

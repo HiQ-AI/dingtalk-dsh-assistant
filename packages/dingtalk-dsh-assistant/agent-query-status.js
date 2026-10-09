@@ -1,17 +1,19 @@
+import {validateBrowserResource,readBrowserResource} from './agent-query-browser.js'
 import { validateRuntimeResource, readRuntimeResource } from './agent-query-runtime.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 const fail=code=>{throw executionError(code)}
 /** 只允许Host登记的GET状态端点与字段投影，URL/请求头不由模型决定。 */
 export function createAgentStatusReadCapability({resources,fetchImpl=fetch,execFileImpl}){
  if(!Array.isArray(resources)||new Set(resources.map(r=>r.id)).size!==resources.length)fail('QUERY_STATUS_CONFIG_INVALID')
- for(const r of resources){if(r.kind==='kubernetes'){validateRuntimeResource(r);continue}const url=new URL(r.url);if(!r.id||url.username||url.password||url.search||!(url.protocol==='https:'||url.protocol==='http:'&&['127.0.0.1','localhost'].includes(url.hostname))||!Array.isArray(r.fields)||!r.fields.length||r.fields.some(f=>!/^[a-zA-Z][a-zA-Z0-9_.]*$/.test(f)))fail('QUERY_STATUS_CONFIG_INVALID')}
+ for(const r of resources){if(r.kind==='uat-review-observation'){validateBrowserResource(r);continue}if(r.kind==='kubernetes'){validateRuntimeResource(r);continue}const url=new URL(r.url);if(!r.id||url.username||url.password||url.search||!(url.protocol==='https:'||url.protocol==='http:'&&['127.0.0.1','localhost'].includes(url.hostname))||!Array.isArray(r.fields)||!r.fields.length||r.fields.some(f=>!/^[a-zA-Z][a-zA-Z0-9_.]*$/.test(f)))fail('QUERY_STATUS_CONFIG_INVALID')}
  const registry=new Map(resources.map(r=>[r.id,structuredClone(r)])),produced=new WeakSet()
  const authorize=async({input,scope})=>registry.has(input.resourceId)&&scope.statusIds?.includes(input.resourceId)===true
- return{id:'query_runtime_status',effectClass:'read',identity:'agent-runtime-status-v1:'+executionDigest(resources),description:'读取Host登记的项目运行状态/版本端点，只返回授权字段；不执行变更或任意URL访问。',parameters:{type:'object',properties:{resourceId:{type:'string'}},required:['resourceId'],additionalProperties:false},authorize,
+ return{id:'query_runtime_status',effectClass:'read',identity:'agent-runtime-status-v1:'+executionDigest(resources),description:'读取Host登记的项目运行状态/版本或固定UAT2审核页面；浏览器返回独立账号视角的折叠/展开布局与截图摘要，不代表其他接收人消息送达，不执行业务写入或任意URL。',parameters:{type:'object',properties:{resourceId:{type:'string'}},required:['resourceId'],additionalProperties:false},authorize,
   available: scope => resources.some(resource => scope?.statusIds?.includes(resource.id)),
   async execute({input,scope,signal}){
    if(!await authorize({input,scope}))fail('QUERY_SCOPE_DENIED')
    const resource=registry.get(input.resourceId)
+   if(resource.kind==='uat-review-observation'){const values=await readBrowserResource(resource,{signal,fetchImpl});const output={resourceId:resource.id,values,observedAt:new Date().toISOString()};produced.add(output);return output}
    if(resource.kind==='kubernetes'){const values=await readRuntimeResource(resource,{signal,execFileImpl});const output={resourceId:resource.id,values,observedAt:new Date().toISOString()};produced.add(output);return output}
    const response=await fetchImpl(resource.url,{method:'GET',redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000)})
    if(!response.ok)fail('QUERY_STATUS_UNAVAILABLE')

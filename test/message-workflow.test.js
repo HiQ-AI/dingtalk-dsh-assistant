@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -26,6 +27,7 @@ async function fixture(t, options = {}) {
   return {
     get store() { return store }, get workflow() { return workflow }, call,
     async reopen() { await workflow.close(); await store.close(); store = await openExecutionStore(db); workflow = build() },
+    async editSnapshot(edit) { await workflow.close(); await store.close(); const connection = new DatabaseSync(db.dbPath); try { edit(connection) } finally { connection.close() }; store = await openExecutionStore(db); workflow = build() },
     async seed(runId = 'm', commands = [{ commandId: `${runId}-answer`, kind: 'answer', args: {} }], extra = {}) {
       await workflow.receive({ runId, sourceKey: runId, sourceVersion: 1, conversationId: 'g', actorId: 'a', body: '核对审核状态', ...extra.source }, { process: false })
       await call('split', { runId, units: [{ unitId: `${runId}-unit`, goalText: '核对审核状态', contextNeeds: extra.needs ?? [] }] })
@@ -138,4 +140,39 @@ test('已独立确认的本机出站消息回声被隔离，不进入执行', as
   const echo = await f.workflow.state('echo')
   assert.equal(echo.run.status, 'superseded'); assert.equal(echo.run.reason, 'outbound_echo')
   assert.equal(echo.commands.length, 0); assert.equal(calls, 1)
+})
+
+
+test('恢复扫描自动结算已消费零事项的历史屏障且不执行任务', async t => {
+ let executed=0
+ const f=await fixture(t,{handlers:{answer:async()=>{executed++;return {}}}})
+ await f.call('receive',{runId:'zero-history',sourceKey:'zero-history',sourceVersion:1,conversationId:'g',actorId:'a',body:'无需处理',barriers:[{barrierId:'history-fence',targetSourceKey:'task-source'}]})
+ const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'zero-turn',sourceRuns:[{runId:'zero-history',sourceVersion:1}]})).binding
+ await f.call('coordinator.commit',{conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,decisions:[{runId:'zero-history',sourceVersion:1,units:[]}]})
+ await f.editSnapshot(db=>db.prepare("UPDATE message_items SET body=json_set(body,'$.status','pending') WHERE item_id='barrier:history-fence'").run())
+ await f.workflow.recover()
+ const after=await f.store.query({kind:'message.run',runId:'zero-history'})
+ assert.equal(after.barriers[0].status,'resolved');assert.equal(after.run.status,'settled');assert.equal(executed,0)
+ assert.equal(after.commands.length,0);assert.equal(after.requests.length,0)
+ await f.workflow.recover();assert.equal(executed,0)
+})
+
+
+test('新零事项提交精确通知本轮已解除屏障，普通重扫不重复通知', async t => {
+ const notified=[]
+ const f=await fixture(t)
+ const coordinator={async close(){},async process(runId,{dispatch}){
+  const b=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'new-zero-turn',sourceRuns:[{runId,sourceVersion:1}]})).binding
+  await f.call('coordinator.commit',{conversationId:'g',turnId:b.turnId,leaseEpoch:b.leaseEpoch,decisions:[{runId,sourceVersion:1,units:[]}]})
+  await dispatch(runId,{resolvedCoordinatorTurnId:b.turnId})
+  await dispatch(runId)
+  await dispatch(runId,{resolvedCoordinatorTurnId:'another-turn'})
+ }}
+ const workflow=createMessageWorkflow({store:f.store,coordinator,context:{onBarrierResolved:async barrier=>notified.push(barrier.id)}})
+ t.after(()=>workflow.close())
+ await workflow.receive({runId:'new-zero',sourceKey:'new-zero',sourceVersion:1,conversationId:'g',actorId:'a',body:'无需动作',barriers:[{barrierId:'new-fence',targetTaskId:'existing-task'}]},{process:false})
+ await workflow.process('new-zero')
+ assert.deepEqual(notified,['new-fence'])
+ const state=await f.store.query({kind:'message.run',runId:'new-zero'})
+ assert.equal(state.run.status,'settled');assert.equal(state.commands.length,0)
 })

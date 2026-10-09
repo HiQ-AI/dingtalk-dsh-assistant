@@ -1,3 +1,4 @@
+import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, cp, readFile, readdir, symlink } from 'node:fs/promises'
@@ -5,7 +6,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { copyDeploymentTaskDirectory, checkDeploymentTaskDirectory, verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, verifyArtifactClosure } from '../scripts/deployment-integrity.mjs'
+import { verifyEngineeringRepositoryDigests, verifyRequiredDependencyBackup, copyDeploymentTaskDirectory, checkDeploymentTaskDirectory, verifyDeploymentBackup, reverifyDeploymentBackup, verifyDeploymentWeb, verifyArtifactClosure } from '../scripts/deployment-integrity.mjs'
 
 async function fixture() {
   const root=await mkdtemp(join(tmpdir(),'deployment-proof-')),runtime=join(root,'runtime'),domain=join(root,'domain'),profile=join(root,'profile'),backupRoot=join(root,'backup')
@@ -136,7 +137,7 @@ test('工程源码副本的node_modules明确排除，复制不遍历链接且�
  await writeFile(join(repo,'package.json'),'{}');await writeFile(join(repo,'source.js'),'source')
  const nested=join(repo,'packages/web');await mkdir(nested,{recursive:true});await symlink(outside,join(nested,'node_modules'),'junction')
  const checked=await checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory})
- assert.equal(checked.taskBackupExclusions.length,1)
+ assert.equal(checked.taskBackupExclusions.length,2)
  const backupRoot=join(f.root,'filtered-backup');await mkdir(backupRoot)
  for(const name of ['runtime','domain','profile'])await cp(f[name],join(backupRoot,name),{recursive:true})
  const copied=await copyDeploymentTaskDirectory({taskDirectory:f.taskDirectory,destination:join(backupRoot,'tasks')})
@@ -185,6 +186,34 @@ test('schema6部署在同一owner锁内迁移，其他owner拒绝且历史证明
   readback.close()
   input.end();await running
   rival.exec('BEGIN EXCLUSIVE; ROLLBACK');rival.close()
+})
+
+test('必要依赖索引部署持owner锁迁移并独立回读原数据',async t=>{
+ const {PassThrough}=await import('node:stream')
+ const {openExecutionStore}=await import('../packages/dingtalk-dsh-assistant/execution-store.js')
+ const {holdDeploymentOwnerLock}=await import('../docs/acceptance/topic-context-completeness/scripts/check-repair-deployment.mjs')
+ const {verifyExecutionDependencyIndex}=await import('../scripts/migrate-execution-dependency-index.mjs')
+ const root=await mkdtemp(join(tmpdir(),'deploy-dependency-')),dbPath=join(root,'control.sqlite')
+ t.after(async()=>{const {rm}=await import('node:fs/promises');await rm(root,{recursive:true,force:true})})
+ const store=await openExecutionStore({dbPath,instanceId:'deploy-dependency',initialize:true})
+ await store.command({id:'enter',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'test',actorId:'owner',reason:'test'}})
+ await store.command({id:'seal',kind:'runtime.maintenance.seal',args:{expectedRevision:1,maintenanceId:'test',actorId:'owner',reason:'test'}})
+ await store.close()
+ const setup=new DatabaseSync(dbPath)
+ setup.exec("DROP INDEX execution_one_active_task; CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id) WHERE status NOT IN ('succeeded','failed','cancelled'); PRAGMA user_version=8; UPDATE execution_meta SET schema_version=8")
+ setup.close()
+ const input=new PassThrough(),lines=[];let received
+ const ready=new Promise(resolve=>{received=resolve})
+ const running=holdDeploymentOwnerLock({dbPath,input,writeLine:line=>{lines.push(line);if(line!=='LOCKED')received()}})
+ const rival=new DatabaseSync(dbPath+'.owner.sqlite')
+ assert.throws(()=>rival.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE'),/locked/)
+ input.write(JSON.stringify({command:'migrate-execution-dependency-index',expectedStoppedPid:2147483647})+'\n')
+ await ready
+ const proof=JSON.parse(lines[1]);assert.equal(proof.version,9);assert.equal(proof.verified,true)
+ const readback=new DatabaseSync(dbPath,{readOnly:true})
+ assert.equal(verifyExecutionDependencyIndex(readback,{baseline:proof.baseline}).verified,true)
+ readback.close();assert.throws(()=>rival.exec('BEGIN EXCLUSIVE'),/locked/)
+ input.end();await running;rival.exec('BEGIN EXCLUSIVE; ROLLBACK');rival.close()
 })
 
 test('Adapter专用包检查零写并核对provider实际解析，旧副本与源漂移拒绝',async()=>{
@@ -272,3 +301,51 @@ for(const purged of [true,false])test(`历史消息候选只按已清理Task排�
  if(!purged)return assert.rejects(verifyDeploymentBackup(f),/BACKUP_ARTIFACT_MISSING/);
  assert.equal((await verifyDeploymentBackup(f)).database.artifactRefs,1);
 });
+
+for(const location of ['checks/verify-Ab12cD','checks/verify-Ab12cD/packages/web'])test(`Host检查目录可再生依赖排除但源码产物保留：${location}`,async t=>{
+ const f=await taskFixture(t),base=join(f.taskDirectory,'family-1/work/engineering','a'.repeat(24)),dir=join(base,location),outside=join(f.root,'dependencies')
+ await mkdir(dir,{recursive:true});await mkdir(outside);await writeFile(join(outside,'dependency'),'regenerable')
+ await symlink(outside,join(dir,'node_modules'),'junction')
+ await writeFile(join(dir,'source.js'),'source');await writeFile(join(dir,'result.json'),'result')
+ const checked=await checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory});assert.equal(checked.writes,0)
+ const dest=join(f.root,'copied-tasks');await copyDeploymentTaskDirectory({taskDirectory:f.taskDirectory,destination:dest})
+ const paths=await readdir(dest,{recursive:true});assert.equal(paths.some(p=>p.includes('node_modules')),false)
+ assert.equal(paths.some(p=>p.endsWith('source.js')),true);assert.equal(paths.some(p=>p.endsWith('result.json')),true)
+ await writeFile(join(f.taskDirectory,'family-1/work/artifacts',f.name),'corrupt')
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory}),/BACKUP_ARTIFACT_INVALID/)
+})
+for(const location of ['checks/verify-Ab12cD/dist','checks/verify-Ab12cD/source-link','checks/verify-other/node_modules','checks/not-verify/node_modules','outputs/verify-Ab12cD/node_modules'])test(`非Host依赖路径链接仍拒绝：${location}`,async t=>{
+ const f=await taskFixture(t),path=join(f.taskDirectory,'family-1/work/engineering','a'.repeat(24),location),outside=join(f.root,'outside')
+ await mkdir(join(path,'..'),{recursive:true});await mkdir(outside);await symlink(outside,path,'junction')
+ await assert.rejects(checkDeploymentTaskDirectory({dbPath:join(f.runtime,'control.sqlite'),taskDirectory:f.taskDirectory}),/BACKUP_LINK_UNSAFE/)
+})
+
+// 索引迁移只修改控制库；不存在的历史目录和引用不属于恢复范围。
+async function controlOnlyFixture(){const root=await mkdtemp(join(tmpdir(),'dependency-control-backup-'));const runtime=join(root,'runtime'),profile=join(root,'profile'),backupRoot=join(root,'backup');for(const p of [runtime,profile,join(backupRoot,'runtime'),join(backupRoot,'profile')])await mkdir(p,{recursive:true});await writeFile(join(profile,'cordis.patch.yml'),'fixture: true');const db=new DatabaseSync(join(runtime,'control.sqlite'));db.exec(`CREATE TABLE execution_meta(singleton INTEGER,schema_version INTEGER);INSERT INTO execution_meta VALUES(1,8);CREATE TABLE execution_events(seq INTEGER,kind TEXT,payload TEXT);CREATE TABLE execution_nodes(current INTEGER,status TEXT,drained INTEGER);CREATE TABLE task_owners(status TEXT);CREATE TABLE execution_effects(state TEXT);CREATE TABLE message_items(kind TEXT,body TEXT);CREATE TABLE message_groups(body TEXT);CREATE TABLE records(id INTEGER,output_ref TEXT);INSERT INTO records VALUES(1,'sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json');`);db.prepare('INSERT INTO execution_events VALUES(1,?,?)').run('runtime.maintenance.changed',JSON.stringify({active:true,phase:'stopping',maintenanceId:'fixture',revision:1}));db.close();return {root,runtime,profile,backupRoot,domain:join(root,'never-exists'),taskDirectory:join(root,'never-exists-tasks')};}
+for(const change of ['none','scope','profile','database','table-proof'])test('control-only '+change,async()=>{const f=await controlOnlyFixture();const p=await verifyRequiredDependencyBackup(f);assert.equal(p.scope,'required-dependency-control-only');assert.equal(p.database.artifactRefs,undefined);if(change==='scope')p.scope='full-pretend';if(change==='table-proof')p.database.tables[0].digest='bad';await writeFile(join(f.backupRoot,'manifest.json'),JSON.stringify(p));if(change==='profile')await writeFile(join(f.backupRoot,'profile/cordis.patch.yml'),'bad');if(change==='database')await writeFile(join(f.backupRoot,p.database.restoreFile),'bad');if(change==='none')assert.equal((await reverifyDeploymentBackup(f)).verified,true);else await assert.rejects(reverifyDeploymentBackup(f),/BACKUP_/);});
+for(const change of ['schema','maintenance','busy'])test('reject '+change,async()=>{const f=await controlOnlyFixture();const db=new DatabaseSync(join(f.runtime,'control.sqlite'));if(change==='schema')db.exec('UPDATE execution_meta SET schema_version=9');if(change==='maintenance')db.exec('DELETE FROM execution_events');if(change==='busy')db.exec("INSERT INTO execution_nodes VALUES(1,'running',0)");db.close();await assert.rejects(verifyRequiredDependencyBackup(f),/BACKUP_SCHEMA_INVALID|CHECKPOINT_MAINTENANCE_REQUIRED/);});
+
+for (const change of ['none', 'checks', 'task-map', 'task-map-legacy', 'task-map-legacy-drift', 'dependencies', 'terminal']) test('停机前工程配置摘要: ' + change, () => {
+  const db = new DatabaseSync(':memory:')
+  try {
+    db.exec('CREATE TABLE message_workflows(digest TEXT,body TEXT); CREATE TABLE execution_runs(run_id TEXT,workflow_digest TEXT,status TEXT)')
+    const repository = { id: 'dataset', remote: 'https://github.com/example/dataset.git', baseRef: 'main', editablePaths: [], checks: [{ id: 'build', version: '1' }] }
+    const normalized = { ...repository, githubRepository: 'example/dataset', baseBranch: 'main' }
+    if (change.startsWith('task-map-legacy')) {
+      repository.taskLocalAcceptance = [{ scope: { taskId: 'task' }, localAcceptance: { cases: [] } }]
+      normalized.taskLocalAcceptance = structuredClone(repository.taskLocalAcceptance)
+    }
+    const saved = { kind: 'engineering', runId: 'run', taskId: 'task', repoId: 'dataset', repositoryDigest: executionDigest({ config: normalized, ghCommand: null, author: null }) }
+    db.prepare('INSERT INTO message_workflows VALUES(?,?)').run('current', JSON.stringify({ config: saved }))
+    db.prepare('INSERT INTO execution_runs VALUES(?,?,?)').run('run', 'current', change === 'terminal' ? 'succeeded' : 'waiting')
+    if (change === 'checks' || change === 'terminal') repository.checks[0].version = '2'
+    if (change === 'task-map') repository.taskLocalAcceptance = []
+    if (change === 'task-map-legacy-drift') repository.taskLocalAcceptance[0].scope.taskId = 'other-task'
+    if (change === 'dependencies') repository.dependencyRepositories = ['dataset-web']
+    const before = db.prepare('SELECT total_changes() n').get().n
+    const proof = verifyEngineeringRepositoryDigests({ db, config: { repositories: [repository] } })
+    assert.equal(proof.compatible, !['checks', 'task-map-legacy-drift'].includes(change))
+    assert.equal(proof.checkedRuns, change === 'terminal' ? 0 : 1)
+    assert.equal(db.prepare('SELECT total_changes() n').get().n, before)
+  } finally { db.close() }
+})

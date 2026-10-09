@@ -133,3 +133,93 @@ test('交付回执按持久 run 归属保存，不接受适配器结果伪造任
   assert.equal((await f.gateway.execute(f.request)).state, 'succeeded')
   assert.deepEqual(writes, [{ taskId: 'task', reference: f.requirementRef }])
 })
+
+// 隔离历史账夹具：旧版本 candidate-in-place 已重置节点；效果由真实网关写入，绝不接触运行账。
+async function incrementalEditFixture(t, mutate = () => {}) {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { mkdir, writeFile, readFile } = await import('node:fs/promises')
+  const { createHash } = await import('node:crypto')
+  const hash = text => createHash('sha256').update(text).digest('hex')
+  await mkdir(new URL('../docs/tmp/', import.meta.url), { recursive:true })
+  const root = await mkdtemp(new URL('../docs/tmp/incremental-edit-', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1'))
+  const dbPath = join(root,'control.db'), artifacts = await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+  let store = await openExecutionStore({dbPath,instanceId:'incremental',initialize:true}), count = 0
+  const { createManagedEdits } = await import('../packages/dingtalk-dsh-assistant/execution-edit.js')
+  const directory=join(root,'workspace');await mkdir(directory);await writeFile(join(directory,'old.txt'),'old')
+  const managed=createManagedEdits({workspaceAdapter:{reconcile:async()=>({status:'succeeded'})}})
+  const editAdapter={execute:async prepared=>{count++;return managed.execute(prepared)},reconcile:managed.reconcile}
+  const authorize = async()=>({principalId:'host',authorizationRef:'original-task-requirement'})
+  const gateway = () => createExecutionDelivery({store,artifacts,editAdapter,authorize})
+  const requirementRef = (await artifacts.put({request:'synthetic original'})).ref
+  await store.command({id:'create',kind:'run.create',args:{runId:'repair-run',taskId:'repair-task',workflowId:'task-engineering-fixture',workflowDigest:'a'.repeat(64),requirementRef,nodes:[{nodeId:'apply-changes',nodeVersion:'6',executor:'code',inputRef:'old-input.json',inputDigest:'b'.repeat(64)}]}})
+  const oldBinding=(await store.command({id:'first-claim',kind:'node.claim',args:{runId:'repair-run',nodeId:'apply-changes',expectedGeneration:1,expectedLeaseEpoch:0}})).result.binding
+  const prepared=await managed.prepare({workspace:{action:'workspace',runId:'repair-run',generation:1,requirementDigest:'a'.repeat(64),directory},changes:[{path:'old.txt',expectedHash:hash('old'),content:'first'}]})
+  const old=await gateway().execute({binding:{...oldBinding,requirementDigest:'a'.repeat(64)},action:'edit',prepared})
+  await store.close()
+  const db=new DatabaseSync(dbPath)
+  const repair={runId:'repair-run',taskId:'repair-task',generation:1,nextGeneration:1,workflowDigest:'a'.repeat(64),mode:'candidate-in-place',invalidated:[{nodeRunId:oldBinding.nodeRunId,leaseEpoch:1,inputRef:'old-input.json',outputRef:old.result.evidenceRef}]}
+  db.prepare("UPDATE execution_nodes SET status='ready',drained=1,drain_evidence_ref='drained.json',input_ref='new-input.json',input_digest=? WHERE node_run_id=?").run('c'.repeat(64),oldBinding.nodeRunId)
+  db.prepare("UPDATE execution_runs SET status='queued' WHERE run_id='repair-run'").run()
+  db.prepare("INSERT INTO execution_events(command_id,kind,payload,created_at) VALUES('formal-owner-repair','workflow.repair.accepted',?,?)").run(JSON.stringify(repair),new Date().toISOString())
+  mutate(db,{old,repair,oldBinding});db.close()
+  store=await openExecutionStore({dbPath,instanceId:'incremental'})
+  t.after(()=>store.close())
+  const binding=(await store.command({id:'next-claim',kind:'node.claim',args:{runId:'repair-run',nodeId:'apply-changes',expectedGeneration:1,expectedLeaseEpoch:1}})).result.binding
+  const request={binding:{...binding,requirementDigest:'a'.repeat(64)},action:'edit',prepared:await managed.prepare({workspace:prepared.workspace,changes:[{path:'old.txt',expectedHash:hash('first'),content:'second'}]})}
+  async function nextRepair(previous) {
+    await store.close();const db=new DatabaseSync(dbPath)
+    const audit={...repair,invalidated:[{nodeRunId:binding.nodeRunId,leaseEpoch:2,inputRef:'new-input.json',outputRef:previous.result.evidenceRef}]}
+    db.prepare("UPDATE execution_nodes SET status='ready',drained=1,drain_evidence_ref='next-drained.json',input_ref='third-input.json',input_digest=? WHERE node_run_id=?").run('d'.repeat(64),binding.nodeRunId)
+    db.prepare("UPDATE execution_runs SET status='queued' WHERE run_id='repair-run'").run()
+    db.prepare("INSERT INTO execution_events(command_id,kind,payload,created_at) VALUES('second-formal-owner-repair','workflow.repair.accepted',?,?)").run(JSON.stringify(audit),new Date().toISOString());db.close()
+    store=await openExecutionStore({dbPath,instanceId:'incremental'})
+    const next=(await store.command({id:'third-claim',kind:'node.claim',args:{runId:'repair-run',nodeId:'apply-changes',expectedGeneration:1,expectedLeaseEpoch:2}})).result.binding
+    return {gateway:gateway(),request:{binding:{...next,requirementDigest:'a'.repeat(64)},action:'edit',prepared:await managed.prepare({workspace:prepared.workspace,changes:[{path:'old.txt',expectedHash:hash('second'),content:'third'}]})}}
+  }
+  return {store,artifacts,gateway:gateway(),request,old,nextRepair,read:()=>readFile(join(directory,'old.txt'),'utf8'),count:()=>count,hash,dbPath}
+}
+
+test('同代增量编辑保留旧效果，同路径新基线只执行一次并可读审计',async t=>{
+  const f=await incrementalEditFixture(t)
+  const [a,b]=await Promise.all([f.gateway.execute(f.request),f.gateway.execute(f.request)])
+  assert.equal(a.effectId,b.effectId);assert.notEqual(a.effectId,f.old.effectId)
+  assert.equal(a.state,'succeeded');assert.equal(f.count(),2);assert.equal(await f.read(),'second')
+  assert.equal((await f.gateway.execute(f.request)).effectId,a.effectId);assert.equal(f.count(),2)
+  assert.equal(a.definition.editRepair.previousEffectId,f.old.effectId)
+  assert.equal(a.definition.editRepair.repairCommandId,'formal-owner-repair')
+  const history=await f.store.query({kind:'effect.list',runId:'repair-run'})
+  assert.equal(history.length,2);assert.equal(history.find(e=>e.effectId===f.old.effectId).inputDigest,'b'.repeat(64))
+  assert.equal(a.nodeRunId,f.old.nodeRunId);assert.equal(a.generation,f.old.generation)
+})
+
+for(const mode of ['missing-repair','forged-repair','unknown-effect','external-effect']) test(`增量编辑拒绝${mode}`,async t=>{
+  const f=await incrementalEditFixture(t,(db,{old})=>{
+    if(mode==='missing-repair')db.prepare("DELETE FROM execution_events WHERE kind='workflow.repair.accepted'").run()
+    if(mode==='forged-repair')db.prepare("UPDATE execution_events SET payload=json_set(payload,'$.taskId','foreign') WHERE kind='workflow.repair.accepted'").run()
+    if(mode==='unknown-effect'){db.prepare("UPDATE execution_effects SET state='unknown' WHERE effect_id=?").run(old.effectId);for(const key of old.resourceKeys)db.prepare('INSERT INTO execution_resource_holds VALUES(?,?)').run(key,old.effectId)}
+    if(mode==='external-effect')db.prepare("UPDATE execution_effects SET definition_json=json_set(definition_json,'$.action','external') WHERE effect_id=?").run(old.effectId)
+  })
+  await assert.rejects(f.gateway.execute(f.request),{code:'EDIT_REPAIR_NOT_ADMITTED'});assert.equal(f.count(),1)
+})
+
+test('增量编辑拒绝重放原补丁与绕网关伪造新效果身份',async t=>{
+  const f=await incrementalEditFixture(t)
+  await assert.rejects(f.gateway.execute({...f.request,prepared:f.old.definition.payload}),{code:'EDIT_REPAIR_REPLAY_FORBIDDEN'})
+  await assert.rejects(f.store.command({id:'forged-increment',kind:'effect.prepare',args:{effectId:'forged-new-edit',kind:'operation',runId:'repair-run',nodeId:'apply-changes',generation:1,leaseEpoch:2,inputDigest:f.request.binding.inputDigest,definition:{adapterId:'managed-edit',adapterVersion:'1',principalId:'host',action:'edit',payload:f.request.prepared},resourceKeys:['workspace:isolated-workspace'],authorizationRef:'original-task-requirement'}}),{code:'EDIT_REPAIR_NOT_ADMITTED'})
+  assert.equal(f.count(),1)
+})
+
+test('同旧输入异内容仍由原identity guard拒绝',async t=>{
+  const f=await incrementalEditFixture(t)
+  await assert.rejects(f.gateway.execute({...f.request,binding:{...f.request.binding,inputDigest:f.old.inputDigest}}),{code:'DELIVERY_IDENTITY_CONFLICT'})
+  assert.equal(f.count(),1)
+})
+
+
+test('第二次合法原地修复关联前一次增量成功效果且重投身份稳定',async t=>{
+  const f=await incrementalEditFixture(t),first=await f.gateway.execute(f.request),next=await f.nextRepair(first)
+  const second=await next.gateway.execute(next.request),repeated=await next.gateway.execute(next.request)
+  assert.equal(second.definition.editRepair.previousEffectId,first.effectId)
+  assert.notEqual(second.effectId,first.effectId);assert.equal(repeated.effectId,second.effectId)
+  assert.equal(f.count(),3);assert.equal(await f.read(),'third')
+})

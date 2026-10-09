@@ -1,0 +1,13 @@
+{
+  "checks": [
+    "three-distinct-status-labels",
+    "filter-等待授权",
+    "filter-等待用户补充",
+    "filter-材料读取受阻",
+    "narrow-keyboard-filter"
+  ],
+  "errors": [],
+  "writes": [],
+  "observerSha256": "0292845db789049d5aeb835d10baa79707081da40da2d84c89caadea9a5823aa",
+  "boundary": "完整 Observer/React；宿主 Menu 使用语义替身；全部 API 隔离，只验证状态与筛选回调。"
+}

@@ -1098,3 +1098,11 @@ test('Web在DWS发送过程中批复时撤回已落地申请并停止等待', as
   assert.deepEqual(recalled, ['message-race'])
   assert.equal(task.humanBlocker.recallStatus, 'recalled')
 })
+
+test('钉钉文档严格URL归一化，去query按nodeId去重并拒绝伪造域路径', async () => {
+  const { normalizeResourceRefs, parseDingtalkDocUrl } = await import('../packages/dingtalk-dsh-assistant/dws-bridge.js')
+  const url = 'https://alidocs.dingtalk.com/i/nodes/Node_123-ab'
+  assert.deepEqual(normalizeResourceRefs([{ type: 'url', resourceId: url + '?from=card' }], `${url}?from=text ${url}#heading`), [{ type: 'dingtalkDoc', resourceId: 'Node_123-ab' }])
+  for (const invalid of ['http://alidocs.dingtalk.com/i/nodes/id', 'https://alidocs.dingtalk.com.evil.test/i/nodes/id', 'https://user@alidocs.dingtalk.com/i/nodes/id', 'https://alidocs.dingtalk.com:444/i/nodes/id', 'https://alidocs.dingtalk.com/i/nodes/id/extra', 'https://alidocs.dingtalk.com/i/nodes/%2Fetc']) assert.equal(parseDingtalkDocUrl(invalid), null)
+  assert.deepEqual(normalizeResourceRefs([{ type: 'dingtalkDoc', resourceId: 'https://evil.test' }], 'https://example.com/manual'), [])
+})

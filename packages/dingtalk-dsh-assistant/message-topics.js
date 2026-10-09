@@ -3,6 +3,11 @@ const fail=code=>{throw Object.assign(new Error(code),{code})}
 const str=(v,max=4096)=>{if(typeof v!=='string'||!v.trim()||v.length>max)fail('MESSAGE_TOPIC_INVALID');return v}
 const encode=v=>JSON.stringify(v)
 const hash=v=>createHash('sha256').update(encode(v)).digest('hex')
+export function updateTopicPresentation(topic,presentation) {
+ if(!presentation||typeof presentation!=='object'||Array.isArray(presentation)||Object.keys(presentation).some(key=>!['title','summary'].includes(key)))fail('MESSAGE_TOPIC_INVALID')
+ str(presentation.title,80);str(presentation.summary,1200)
+ if(topic.title!==presentation.title||topic.summary!==presentation.summary){topic.title=presentation.title;topic.summary=presentation.summary;topic.contextRevision=(topic.contextRevision??0)+1}
+}
 export function wholeTopicFactRevision(body, change) {
  return ['当前话题','整条条件'].includes(change.scope)
   && !/仅(?:对|针对|限|任务)|只(?:对|针对|限)|其他|其余|保持|保留|部分|不变|除.{0,20}外/u.test(body)
@@ -68,6 +73,7 @@ export function reduceMessageTopic(db,{kind,args:a},ctx){
  if(topic.conversationId!==a.conversationId)fail('MESSAGE_TOPIC_SCOPE_MISMATCH')
  if(a.expectedRevision!==undefined&&a.expectedRevision!==topic.revision)fail('MESSAGE_TOPIC_STALE')
  if(!Array.isArray(a.facts)||a.facts.length>32)fail('MESSAGE_TOPIC_INVALID')
+ if(a.topicPresentation!==undefined)updateTopicPresentation(topic,a.topicPresentation)
  if(!previous)db.prepare('INSERT INTO message_topics VALUES(?,?,?)').run(topic.topicId,topic.conversationId,encode(topic))
  for(const fact of a.facts){
   str(fact.text);if(!['constraint','fact'].includes(fact.kind)||!Array.isArray(fact.sourceRefs)||!fact.sourceRefs.length||fact.sourceRefs.length>16)fail('MESSAGE_TOPIC_EVIDENCE_REQUIRED')
@@ -101,7 +107,7 @@ export function queryMessageTopics(db,a){
   const rows=db.prepare(`SELECT rowid AS seq,body FROM message_topic_facts WHERE topic_id=?${where} AND rowid>? ORDER BY rowid LIMIT ?`).all(...params,cursor,limit+1)
   return {facts:rows.slice(0,limit).map(row=>({...JSON.parse(row.body),sequenceId:row.seq})),nextCursor:rows.length>limit?rows[limit-1].seq:null,total:db.prepare(`SELECT COUNT(*) AS count FROM message_topic_facts WHERE topic_id=?${where}`).get(...params).count,contextRevision:JSON.parse(topic.body).contextRevision??0}
  }
- if(a.kind==='message.topics'){const limit=a.limit??30,before=a.beforeTopicRowId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_TOPIC_INVALID');return db.prepare('SELECT rowid AS seq,body FROM message_topics WHERE conversation_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?').all(str(a.conversationId),before,limit).map(r=>({...topicView(db,r.body),sequenceId:r.seq}))}
+ if(a.kind==='message.topics'){const limit=a.limit??30,before=a.beforeTopicRowId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_TOPIC_INVALID');return db.prepare("SELECT rowid AS seq,body FROM message_topics t WHERE conversation_id=? AND rowid<? AND NOT (json_extract(body,'$.mergedIntoTopicId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM message_topic_bindings b WHERE b.topic_id=t.topic_id)) ORDER BY rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(r=>({...topicView(db,r.body),sequenceId:r.seq}))}
  if(a.kind==='message.topic.source')return db.prepare('SELECT DISTINCT t.body FROM message_topics t JOIN message_topic_bindings b ON b.topic_id=t.topic_id WHERE b.source_key=?').all(str(a.sourceKey)).map(r=>topicView(db,r.body))
  if(a.kind==='message.topic.bindings')return db.prepare('SELECT b.source_key,b.source_version,b.unit_id,t.body FROM message_topic_bindings b JOIN message_topics t ON t.topic_id=b.topic_id WHERE t.conversation_id=? ORDER BY b.rowid').all(str(a.conversationId)).map(r=>({sourceKey:r.source_key,sourceVersion:r.source_version,unitId:r.unit_id,topic:topicView(db,r.body)}))
  if(a.kind==='message.topic.sources'){const limit=a.limit??100,cursor=a.cursor??0;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(cursor)||cursor<0)fail('MESSAGE_TOPIC_INVALID');if(a.cursor===undefined&&a.limit===undefined)return db.prepare('SELECT DISTINCT source_key FROM message_topic_bindings WHERE topic_id=?').all(str(a.topicId)).map(r=>r.source_key);const rows=db.prepare('SELECT rowid AS seq,source_key FROM message_topic_bindings WHERE topic_id=? AND rowid>? ORDER BY rowid LIMIT ?').all(str(a.topicId),cursor,limit+1);return {sourceKeys:[...new Set(rows.slice(0,limit).map(r=>r.source_key))],nextCursor:rows.length>limit?rows[limit-1].seq:null}}

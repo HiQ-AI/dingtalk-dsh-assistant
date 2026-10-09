@@ -1,0 +1,20 @@
+{
+  "baselineCommit": "806ef59714fbc7e899574c1dfd44500e7054c0b1",
+  "archiveTestBlob": "015fa2a71e9c281f73bdb3d015a8a8ce643054b7",
+  "headTestBlob": "015fa2a71e9c281f73bdb3d015a8a8ce643054b7",
+  "archiveCoordinatorBlob": "d8e33900abe7fd8216ad88a333aa939bca2eb1f9",
+  "headCoordinatorBlob": "d8e33900abe7fd8216ad88a333aa939bca2eb1f9",
+  "isolatedDependency": "D:\\codex\\worktrees\\message-clarification-admission\\dingtalk-dsh-assistant\\docs\\tmp\\clarification-baseline-20261008095725\\repo\\packages\\dingtalk-dsh-assistant",
+  "command": "node --test --test-name-pattern '受信外部适配器齐备|C13 渠道读回挂起|任务直接调查真实登记状态查询入账' test/workflow-service.test.js",
+  "tests": 4,
+  "pass": 0,
+  "fail": 4,
+  "exitCode": 1,
+  "failureKinds": [
+    "stageAuthorizations schema missing",
+    "C13 notifications 2 != 1",
+    "direct query same-session notifications 2 != 1",
+    "direct query restart notifications 2 != 1"
+  ],
+  "log": "baseline-service.log"
+}
