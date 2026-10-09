@@ -511,7 +511,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return checkedTaskDirectory(taskFilePath(root, directories.logicalTaskId, 'work', binding.taskId,
       purpose, binding.sessionId), true)
   }
-  const engineering = createEngineeringRegistry({ repositories: config.repositories ?? [], ownerActorId, modelConfig, author: config.gitAuthor, ghCommand: engineeringGhCommand, getTaskDirectories })
+  const engineering = createEngineeringRegistry({ repositories: config.repositories ?? [], ownerActorId, modelConfig, author: config.gitAuthor, ghCommand: engineeringGhCommand, getTaskDirectories,
+    readSessionEvents: ctx?.sessionPersistence ? async sessionId => (await ctx.sessionPersistence.inspect(sessionId)).events : undefined })
   const selectedExternal = createExternalRegistry(external, modelConfig())
   const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id],
     ...(external?.availableTargets ? { targetIds: external.availableTargets.filter(item => item.workflowId === id).map(item => item.targetId) } : {}) }))
@@ -831,7 +832,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         } })
       }
       for (const record of selectedExternal.records.values()) await store.command({ id: `workflow:${record.digest}`, kind: 'workflow.register', args: record })
-      return { workflows: [...workflows, ...engineeringWorkflows, ...selectedExternal.workflows], historicalWorkflows }
+      return { workflows: [...workflows, ...engineeringWorkflows, ...selectedExternal.workflows], historicalWorkflows, externalProcessScope: engineering.externalProcessScope }
     },
   })
   let closed = false, resolveMaterials
@@ -1527,6 +1528,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   }
   const ownerContracts = createTaskWorkflowContracts({ store, artifacts, controller,
     readTaskEvidence: args => taskOwner.readTaskEvidence(args), prepareRepairContext: engineering.prepareRepairContext,
+    inspectWorkflowRevision: engineering.taskRevisionCapabilities, reviseWorkflow: engineering.reviseTaskWorkflow,
     prepareDataChangeRepairInput: async context => {
       const input = await prepareCurrentDataChangeInput({ taskId: context.taskId, stageId: context.stage.stageId, decision: context.decision })
       const evidence = await taskOwner.readTaskEvidence({ taskId: context.taskId, requirementRevision: context.plan.task.requirementRevision })
@@ -1798,6 +1800,16 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const origin=await store.query({kind:'task.origin',taskId:request.taskId})
     if(!origin)throw executionError('WORKFLOW_TASK_NOT_FOUND')
     await taskAccess(request.taskId,identity.actorId,origin.run.conversationId)
+    if (['pause', 'resume'].includes(request.action)) {
+      requireText(request.reason, 'WORKFLOW_CONTROL_REASON_REQUIRED')
+      if (!Number.isSafeInteger(request.expectedControlRevision) || request.expectedControlRevision < 1) throw executionError('TASK_CONTROL_INVALID')
+      const commandId = `web-control:${executionDigest([identity.actorId, request.taskId, requireText(request.requestId, 'WORKFLOW_WEB_EVENT_REQUIRED')])}`
+      const controlled = await controller.controlTask({ commandId, taskId: request.taskId, intent: request.action, expectedControlRevision: request.expectedControlRevision })
+      if (request.action === 'pause') await taskOwner.cancel(request.taskId)
+      await taskOwner.event({ taskId: request.taskId, eventKey: commandId, eventType: 'control.changed',
+        payload: { intent: request.action, reason: request.reason, actorId: identity.actorId, channel: 'web', controlRevision: controlled.receipt.result.controlRevision } })
+      return controlled
+    }
     if (request.action === 'archive') {
       const family = await readableTaskFamily(request.taskId)
       if (!family || family.latestTaskId !== request.taskId) throw executionError('TASK_EXECUTION_STALE')
@@ -3081,9 +3093,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         if (!states.has(stage.runId)) states.set(stage.runId, controller.state(stage.runId))
         const state = await states.get(stage.runId)
         if (state.run?.taskId !== taskId) throw executionError('TASK_PLAN_RUN_INVALID')
+        const definition = controller.workflowDefinition(state.run.workflowId, state.run.workflowDigest)
+        const revisionRoles = definition?.ownerContract?.rulesDigest?.revisionRoles ?? {}
         for (const node of state.nodes) {
           const current = requirementCurrent && stage.status !== 'invalidated' && state.pendingInputCount === 0
-          result.push({ ...node, ...context, stepKey: `${taskId}:${stage.stageId}:${state.run.workflowId}:${node.nodeId}`,
+          result.push({ ...node, ...context, templateNodeId: revisionRoles[node.nodeId] ?? node.nodeId,
+            stepKey: `${taskId}:${stage.stageId}:${state.run.workflowId}:${node.nodeId}`,
             ...(current ? {} : { status: 'blocked', waitReason: { kind: 'input', reference: '需求已更新，等待重新确认执行方案' } }),
             outputRef: current ? await taskNodeReadoutRef(node) : null })
         }
@@ -3274,8 +3289,30 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return { rootTaskId: family.rootTaskId, latestTaskId: family.latestTaskId, total: family.taskIds.length,
       executions, nextOffset: offset + limit < family.taskIds.length ? offset + limit : null }
   }
-  const noAdditionalRecoveryAttempts = new Set()
-  let messageRecoveryFlight, taskRecoveryFlight, taskRecoveryCursor
+  let messageRecoveryFlight, taskRecoveryFlight, ownerObservationFlight, taskRecoveryCursor
+  const recoveryProgress = { tasks: null, owners: null }
+  const recoveryPhase = (lane, phase, taskId = null) => { recoveryProgress[lane] = { phase, taskId, since: new Date().toISOString() } }
+  function observeTaskOwners() {
+    if (closed) return Promise.resolve([])
+    return ownerObservationFlight ??= (async () => {
+      const failures = []
+      recoveryPhase('owners', 'maintenance')
+      if ((await store.query({ kind: 'runtime.maintenance' })).active) return failures
+      let cursor
+      do {
+        const owners = await store.query({ kind: 'task.owners.list', limit: 100, ...(cursor ? { beforeSequenceId: cursor } : {}) })
+        for (const owner of owners) {
+          if (closed) return failures
+          recoveryPhase('owners', 'observe', owner.taskId)
+          try { await taskOwner.observe(owner.taskId) }
+          catch (error) { failures.push({ scope: 'task-observe', taskId: owner.taskId, code: error.code ?? error.message }) }
+        }
+        cursor = owners.length === 100 ? owners.at(-1).sequenceId : undefined
+      } while (cursor && !closed)
+      if (!closed) { recoveryPhase('owners', 'dispatch'); await taskOwner.dispatch() }
+      return failures
+    })().finally(() => { ownerObservationFlight = undefined; recoveryProgress.owners = null })
+  }
   async function reconcileFoldedAnswers() {
     const failures = []
     for (const answer of await store.query({ kind: 'message.clarifications.unlinked', limit: 100 })) {
@@ -3289,20 +3326,23 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return failures
   }
   async function recoverTasks() {
+    recoveryPhase('tasks', 'maintenance')
     if ((await store.query({ kind: 'runtime.maintenance' })).active) return []
     const failures = []
-    for (const event of await store.query({ kind: 'task.web-inputs.pending' })) try { await executeWebEvent(event) }
+    recoveryPhase('tasks', 'web-inputs')
+    for (const event of await store.query({ kind: 'task.web-inputs.pending' })) try { if (closed) return failures; await executeWebEvent(event) }
     catch (error) { failures.push({ scope: 'web-task', eventId: event.id, code: error.code ?? error.message }) }
-    for(const event of await store.query({kind:'message.web-tasks.pending'}))try{await executeWebEvent(event)}catch(error){failures.push({scope:'web-task',eventId:event.id,code:error.code??error.message})}
+    for(const event of await store.query({kind:'message.web-tasks.pending'}))try{if(closed)return failures;await executeWebEvent(event)}catch(error){failures.push({scope:'web-task',eventId:event.id,code:error.code??error.message})}
     let ownerCursor
     do {
       const owners = await store.query({ kind: 'task.owners.list', limit: 100,
         ...(ownerCursor ? { beforeSequenceId: ownerCursor } : {}) })
       for (const item of owners) try {
+        if (closed) return failures
+        recoveryPhase('tasks', 'advance-plan', item.taskId)
         const plan = await ensureLegacyTaskRequirement(item.taskId)
         const advanced = plan?.stages.some(stage => stage.status === 'running') ? await controller.advanceTaskPlan(item.taskId) : plan
         await continueFailedUatStage({ taskId: item.taskId, plan: advanced, store, controller, external })
-        await taskOwner.observe(item.taskId)
       }
       catch (error) { failures.push({ scope: 'task-plan', taskId: item.taskId, code: error.code ?? error.message }) }
       ownerCursor = owners.length === 100 ? owners.at(-1).sequenceId : undefined
@@ -3320,35 +3360,17 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const page = await store.query({ kind: 'run.list', limit: 200, activeOnly: true, ...(taskRecoveryCursor ? { beforeSequenceId: taskRecoveryCursor } : {}) })
     taskRecoveryCursor = page.length === 200 ? page.at(-1).sequenceId : undefined
     for (const run of page) {
+      if (closed) return failures
+      recoveryPhase('tasks', 'recover-run', run.taskId)
       if (terminal(run.status) || run.pauseRequested || run.stopRequested || run.status === 'running') continue
       try {
         if (run.status === 'waiting') {
           const state = await store.query({ kind: 'run', runId: run.runId })
           const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
-          if (node.waitReason?.kind === 'recovery' && node.waitReason.reference === 'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT') {
-            const definition = controller.workflowDefinition(run.workflowId, run.workflowDigest)
-            const frozen = definition.nodes.find(item => item.id === node.nodeId)
-            const attempt = `${node.nodeRunId}:${node.inputDigest}`
-            if (definition.version !== '18' || !definition.id.startsWith('task-engineering-')
-              || node.nodeId !== 'apply-changes' || node.nodeVersion !== '6' || frozen?.executor !== 'code'
-              || node.outputRef || state.pendingInputCount || state.nodes.some(item => !item.drained || item.status === 'running')
-              || noAdditionalRecoveryAttempts.has(attempt)) continue
-            const effects = await store.query({ kind: 'effect.list', runId: run.runId })
-            if (effects.some(effect => !['succeeded', 'failed'].includes(effect.state))) continue
-            const input = await artifacts.read(node.inputRef)
-            if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId) continue
-            // 此输入只核一次；证明失败保留等待和错误，不当作暂态故障循环重试。
-            noAdditionalRecoveryAttempts.add(attempt)
-            const { proveEngineeringNoAdditionalChange } = await import('./task-workflow.js')
-            await proveEngineeringNoAdditionalChange({ store, input: input.data, binding: { ...node, taskId: run.taskId,
-              runId: run.runId, requirementDigest: executionDigest(await artifacts.read(run.requirementRef)) } })
-            const current = await store.query({ kind: 'run', runId: run.runId })
-            if (current.run.revision !== state.run.revision || current.run.generation !== state.run.generation
-              || current.pendingInputCount || current.nodes.some(item => !item.drained || item.status === 'running')
-              || !current.nodes.some(item => item.nodeRunId === node.nodeRunId && item.status === 'waiting'
-                && item.inputDigest === node.inputDigest && item.leaseEpoch === node.leaseEpoch)) continue
-            await controller.recover({ commandId: `no-additional-recover:${node.nodeRunId}:${node.inputDigest}`, runId: run.runId })
+          const correction = await controller.inspectNodeRecovery(run.runId)
+          if (correction.repairable && correction.localPlanCorrection) {
+            await controller.recover({ commandId: `local-plan:${run.runId}:${run.revision}`, runId: run.runId })
             continue
           }
           if (node.waitReason?.kind === 'recovery' && ['execution_no_submission','execution_tool_failed','EXECUTION_PROVIDER_FAILED'].includes(node.waitReason.reference)
@@ -3459,8 +3481,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       }
       catch (error) { if (error.code !== 'EXECUTOR_STILL_ACTIVE') failures.push({ scope: 'task', runId: run.runId, code: error.code ?? error.message }) }
     }
-    failures.push(...await taskOwner.applyPending())
-    await taskOwner.dispatch()
+    if (!closed) { recoveryPhase('tasks', 'apply-owner-actions'); failures.push(...await taskOwner.applyPending()) }
     return failures
   }
   async function recoverBusinessResumeCommands() {
@@ -3490,11 +3511,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return failures
   }
   async function recoverAll() {
-    await messageAgent.reconcile()
+    if (closed) return { failures: [] }
     if ((await store.query({ kind: 'runtime.maintenance' })).active) return { failures: [] }
     // 三条恢复通路独立：消息等模型或投递等连接器时，不占住其它通路下一轮恢复。
     const results = await Promise.allSettled([
-      messageRecoveryFlight ??= messages.recover().finally(() => { messageRecoveryFlight = undefined }),
+      messageRecoveryFlight ??= (async () => { await messageAgent.reconcile(); return messages.recover() })().finally(() => { messageRecoveryFlight = undefined }),
       recoverExecutionTasks(),
       notifier.flush(),
       reconcileFoldedAnswers(),
@@ -3506,7 +3527,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     return { failures }
   }
   function recoverExecutionTasks() {
-    return taskRecoveryFlight ??= recoverTasks().finally(() => { taskRecoveryFlight = undefined })
+    if (closed) return Promise.resolve([])
+    const observations = observeTaskOwners()
+    const execution = taskRecoveryFlight ??= recoverTasks().finally(() => { taskRecoveryFlight = undefined; recoveryProgress.tasks = null })
+    return Promise.allSettled([observations, execution]).then(results => results.flatMap(result => result.status === 'fulfilled' ? result.value : [{ scope: 'tasks', code: result.reason.code ?? result.reason.message }]))
   }
   function workflowCatalogState() {
     const repositories = engineering.availableWorkflows().map(item => item.repositoryId)
@@ -3838,14 +3862,15 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     boardTasks, taskDetail, taskExecutions,
     isGroup: id => groups.has(id), flushNotifications: () => notifier.flush(),
     catalog: () => ({ engine: 'workflow-v2', groupIds: [...groups], messageStages, builtInWorkflows: [taskProgressQueryDefinition], workflows: workflowCatalogState() }),
-    executionHealth: () => ({ healthy: store.healthy, failure: store.failure ?? null }),
+    executionHealth: () => ({ healthy: store.healthy, failure: store.failure ?? null, recovery: structuredClone(recoveryProgress) }),
     async state(runId) { return runId ? messages.state(runId) : { engine: 'workflow-v2', groupIds: [...groups], store: store.info,
       messages: await store.query({ kind: 'message.list', limit: 100 }), tasks: await tasks() } },
     recover: recoverAll, recoverExecutionTasks, deleteCancelledTask,
     async close() {
       closed = true
       await closeExecutionResources([['messageAgent', () => messageAgent.close()], ['messages', () => messages.close()],
-        ['taskOwner', () => taskOwner.close()], ['execution', () => !suppliedExecution && execution.close()]])
+        ['taskOwner', () => taskOwner.close()], ['recovery', () => Promise.allSettled([ownerObservationFlight, taskRecoveryFlight, messageRecoveryFlight].filter(Boolean))],
+        ['execution', () => !suppliedExecution && execution.close()]])
     },
   }
 }

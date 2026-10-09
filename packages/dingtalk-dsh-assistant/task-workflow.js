@@ -18,17 +18,18 @@ function verificationFailure(verification) {
   return Object.assign(executionError('ENGINEERING_VERIFICATION_FAILED'), { evidence })
 }
 /** 工程候选链：文件白名单和检查器由Host明确提供；Agent只产数据。 */
-export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort, workspaceAdapter, editAdapter, checks, adapterIdentity, deliveryPlan, discovery, prepareGeneration, workflowId = 'task-engineering' }) {
+export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort, workspaceAdapter, editAdapter, checks, adapterIdentity, deliveryPlan, discovery, prepareGeneration, verifiedCandidates = [], workflowId = 'task-engineering' }) {
   if (!workspaceAdapter || !editAdapter || !Array.isArray(checks) || !checks.length || typeof adapterIdentity !== 'string' || !adapterIdentity) throw executionError('ENGINEERING_ADAPTER_REQUIRED')
   if (deliveryPlan && (!deliveryPlan.identity || typeof deliveryPlan.gitAdapterFor !== 'function' || typeof deliveryPlan.prAdapterFor !== 'function'
     || !/^\d{10} \+0000$/.test(deliveryPlan.date) || ![deliveryPlan.commitMessage, deliveryPlan.title, deliveryPlan.body].every(value => typeof value === 'string' && value))) throw executionError('ENGINEERING_DELIVERY_PLAN_INVALID')
   if (discovery && (!Array.isArray(discovery.allowedPrefixes) || !discovery.allowedPrefixes.length || discovery.allowedPrefixes.some(prefix => typeof prefix !== 'string' || (prefix !== '' && (!prefix.endsWith('/') || /[\\:\0\r\n]/.test(prefix) || prefix.slice(0, -1).split('/').some(part => !part || ['.', '..', '.git'].includes(part.toLowerCase()))))))) throw executionError('ENGINEERING_DISCOVERY_CONFIG_INVALID')
   discovery = discovery ? structuredClone(discovery) : null
   checks = checks.map(check => Object.freeze({ ...check }))
-  // 只保存本进程真正执行检查产生的WeakSet票据；持久JSON不能进入此缓存。
+  // 保存真实检查票据；重启时仅由Host核验本Run成功节点工件后恢复，节点输入JSON不具备票据身份。
   const verificationTickets = new Map()
   const rulesDigest = executionDigest({ adapterIdentity, discovery, verificationFailure: verificationFailure.toString(), prepareGeneration: prepareGeneration?.toString() ?? null, checks: checks.map(check => ({ id: check.id, version: check.version, implementation: check.run.toString(), configurationDigest: check.configurationDigest ?? null })),
     delivery: deliveryPlan ? { identity: deliveryPlan.identity, date: deliveryPlan.date, commitMessage: deliveryPlan.commitMessage, title: deliveryPlan.title, body: deliveryPlan.body, expectedRemoteSha: deliveryPlan.expectedRemoteSha } : null })
+  for (const {candidate, verification} of verifiedCandidates) verificationTickets.set(executionDigest({ candidateDigest:candidate.digest, rulesDigest, generation:candidate.generation, requirementDigest:candidate.requirementDigest }), verification)
   const requirement = { type: 'object', properties: {
     request: text, constraints: { type: 'array', items: text }, baseCommit: text,
     editablePaths: { type: 'array', items: text }, expectedRemoteSha: { oneOf: [text, { type: 'null' }] },

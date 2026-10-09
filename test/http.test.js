@@ -501,7 +501,9 @@ test('Owner恢复API仅接纳本地版本化系统修复请求，不接受新需
   assert.equal((await post({...request,requirement:{}})).status,400)
   assert.equal((await post({...request,sessionId:'replacement'})).status,400)
   assert.equal((await post(request)).status,202)
-  assert.deepEqual(calls,[{...request,taskId:'t'}])
+  assert.equal((await post({...request,expectedLastFailure:'UNKNOWN_FAILURE'})).status,400)
+  assert.equal((await post({...request,expectedLastFailure:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'})).status,202)
+  assert.deepEqual(calls,[{...request,taskId:'t'},{...request,taskId:'t',expectedLastFailure:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'}])
  },{overrides:{retryWorkflowOwner:async value=>{calls.push(value);return{accepted:true}}}})
 })
 
@@ -647,4 +649,17 @@ test('受管澄清来源恢复拒绝非本机连接，不调用Host', async () =
   })
   assert.equal(status, 403)
   assert.equal(calls, 0)
+})
+
+test('正式暂停恢复HTTP仅接受本机配置身份和控制版本',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  for(const action of ['pause','resume']){
+   const body={requestId:action,reason:'用户要求',expectedControlRevision:1}
+   assert.equal((await fetch(`${base}/tasks/task-1/${action}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).status,202)
+   assert.equal((await fetch(`${base}/tasks/task-1/${action}`,{method:'POST',headers:{'content-type':'application/json',origin:'https://other.invalid'},body:JSON.stringify(body)})).status,403)
+   assert.equal((await fetch(`${base}/tasks/task-1/${action}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,actorId:'owner'})})).status,400)
+  }
+ },{overrides:{isWorkflowTask:async()=>true,submitWorkflowTask:async value=>{calls.push(value);return{accepted:true}}}})
+ assert.deepEqual(calls.map(x=>x.action),['pause','resume'])
 })

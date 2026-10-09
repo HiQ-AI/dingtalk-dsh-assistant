@@ -325,21 +325,26 @@ async function controlOnlyFixture(){const root=await mkdtemp(join(tmpdir(),'depe
 for(const change of ['none','scope','profile','database','table-proof'])test('control-only '+change,async()=>{const f=await controlOnlyFixture();const p=await verifyRequiredDependencyBackup(f);assert.equal(p.scope,'required-dependency-control-only');assert.equal(p.database.artifactRefs,undefined);if(change==='scope')p.scope='full-pretend';if(change==='table-proof')p.database.tables[0].digest='bad';await writeFile(join(f.backupRoot,'manifest.json'),JSON.stringify(p));if(change==='profile')await writeFile(join(f.backupRoot,'profile/cordis.patch.yml'),'bad');if(change==='database')await writeFile(join(f.backupRoot,p.database.restoreFile),'bad');if(change==='none')assert.equal((await reverifyDeploymentBackup(f)).verified,true);else await assert.rejects(reverifyDeploymentBackup(f),/BACKUP_/);});
 for(const change of ['schema','maintenance','busy'])test('reject '+change,async()=>{const f=await controlOnlyFixture();const db=new DatabaseSync(join(f.runtime,'control.sqlite'));if(change==='schema')db.exec('UPDATE execution_meta SET schema_version=9');if(change==='maintenance')db.exec('DELETE FROM execution_events');if(change==='busy')db.exec("INSERT INTO execution_nodes VALUES(1,'running',0)");db.close();await assert.rejects(verifyRequiredDependencyBackup(f),/BACKUP_SCHEMA_INVALID|CHECKPOINT_MAINTENANCE_REQUIRED/);});
 
-for (const change of ['none', 'checks', 'task-map', 'dependencies', 'terminal']) test('停机前工程配置摘要: ' + change, () => {
+for (const change of ['none', 'checks', 'task-map', 'task-map-legacy', 'task-map-legacy-drift', 'dependencies', 'terminal']) test('停机前工程配置摘要: ' + change, () => {
   const db = new DatabaseSync(':memory:')
   try {
     db.exec('CREATE TABLE message_workflows(digest TEXT,body TEXT); CREATE TABLE execution_runs(run_id TEXT,workflow_digest TEXT,status TEXT)')
     const repository = { id: 'dataset', remote: 'https://github.com/example/dataset.git', baseRef: 'main', editablePaths: [], checks: [{ id: 'build', version: '1' }] }
     const normalized = { ...repository, githubRepository: 'example/dataset', baseBranch: 'main' }
+    if (change.startsWith('task-map-legacy')) {
+      repository.taskLocalAcceptance = [{ scope: { taskId: 'task' }, localAcceptance: { cases: [] } }]
+      normalized.taskLocalAcceptance = structuredClone(repository.taskLocalAcceptance)
+    }
     const saved = { kind: 'engineering', runId: 'run', taskId: 'task', repoId: 'dataset', repositoryDigest: executionDigest({ config: normalized, ghCommand: null, author: null }) }
     db.prepare('INSERT INTO message_workflows VALUES(?,?)').run('current', JSON.stringify({ config: saved }))
     db.prepare('INSERT INTO execution_runs VALUES(?,?,?)').run('run', 'current', change === 'terminal' ? 'succeeded' : 'waiting')
     if (change === 'checks' || change === 'terminal') repository.checks[0].version = '2'
     if (change === 'task-map') repository.taskLocalAcceptance = []
+    if (change === 'task-map-legacy-drift') repository.taskLocalAcceptance[0].scope.taskId = 'other-task'
     if (change === 'dependencies') repository.dependencyRepositories = ['dataset-web']
     const before = db.prepare('SELECT total_changes() n').get().n
     const proof = verifyEngineeringRepositoryDigests({ db, config: { repositories: [repository] } })
-    assert.equal(proof.compatible, !['checks', 'task-map'].includes(change))
+    assert.equal(proof.compatible, !['checks', 'task-map-legacy-drift'].includes(change))
     assert.equal(proof.checkedRuns, change === 'terminal' ? 0 : 1)
     assert.equal(db.prepare('SELECT total_changes() n').get().n, before)
   } finally { db.close() }

@@ -7040,7 +7040,7 @@ for (const mode of ['known', 'unsatisfied', 'diagnostic', 'foreign', 'stale', 'm
   assert.deepEqual(await f.execution.store.query({kind:'run.list',taskId}),[])
 })
 
-test('v18无新增修改自动恢复只接受真实修复证明，失败同input不循环且普通版本不准入',async t=>{
+test('无新增修改失败交回Owner，不由扫描按错误码抢先自动重试',async t=>{
   for(const version of ['18','19']){
     let proofs=0,executions=0
     const {service,execution}=await fixture(t,'owner',undefined,{storeQuery:async(q,next)=>{if(q.kind==='effect.edit-repair')proofs++;return next(q)}})
@@ -7050,9 +7050,145 @@ test('v18无新增修改自动恢复只接受真实修复证明，失败同input
     await execution.controller.whenIdle(runId)
     const before=await execution.controller.state(runId)
     const first=await service.recoverExecutionTasks(),second=await service.recoverExecutionTasks()
-    assert.equal(proofs,version==='18'?1:0);assert.equal(first.length,version==='18'?1:0);assert.deepEqual(second,[])
+    assert.equal(proofs,0);assert.deepEqual(first,[]);assert.deepEqual(second,[])
     const after=await execution.controller.state(runId)
     assert.equal(executions,1);assert.equal(after.run.revision,before.run.revision);assert.equal(after.nodes[0].leaseEpoch,before.nodes[0].leaseEpoch)
     assert.equal(after.nodes[0].waitReason.reference,'ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
   }
+})
+
+for(const evidenceMode of ['current','foreign','old-plan']) test(`Owner经真实service拒绝旧运行时改图且不调用工程修复：${evidenceMode}`, {timeout:120000}, async t=>{
+ const {createEngineeringRegistry}=await import('../packages/dingtalk-dsh-assistant/workflow-engineering.js')
+ const root=await mkdtemp(join(tmpdir(),'owner-service-revision-')),source=join(root,'source');await mkdir(source)
+ const exec=promisify(execFile),git=async(...args)=>exec('git',['-C',source,...args],{windowsHide:true})
+ await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'one');await git('add','.');await git('commit','-m','base');await git('branch','feature/uat2-base')
+ const profile=join(root,'profile.json');await writeFile(profile,JSON.stringify({environment:'uat',env:{FIXTURE:'isolated'}}))
+ const command={executable:process.execPath,args:['-e',"console.log('{}')"]}
+ const localAcceptance={version:'1',sharedDataProfilePath:profile,prepareSteps:[],service:{...command,args:[...command.args,'{port}','127.0.0.1'],readyPath:'/'},scenarios:[{id:'check',description:'原业务核验',...command}],cleanup:command,verifyCleanup:command}
+ const repositories=[{id:'repo',sourceRepository:source,managedRoot:join(root,'managed'),remote:source,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],checks:[{id:'unit',version:'1',...command}],localAcceptance}]
+ const store=await openExecutionStore({dbPath:join(root,'control.db'),instanceId:'service-revision',initialize:true})
+ const artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+ const registry=createEngineeringRegistry({repositories,ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'})});await registry.restore(store,artifacts)
+ let visits=0,service,ownerTurns=0,decisionRef
+ const controller=createExecutionController({store,artifacts,workflows:[],readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),sessions:{async close(){},async cancel(){},async run(){visits++;return{status:'no_submission',failure:{code:'READ_ARGUMENT_INVALID',phase:'execution'}}}}})
+ t.after(async()=>{await service?.close();await controller.close();await store.close()})
+ const runId=controller.plannedTaskStageRunId({taskId:'task',planRevision:1,stageId:'engineering',attempt:1})
+ const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat2',objective:'保留原业务验收',acceptanceCriteria:['真实业务结果']}},{stageRunId:runId,commandId:'source',run:{actorId:'owner'},unit:{}},controller)
+ await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:prepared.workflowId,input:prepared.input}]});await controller.advanceTaskPlan('task');const before=await controller.whenIdle(runId)
+ assert.equal(before.nodes.find(n=>n.status==='waiting').nodeId,'plan-local-acceptance')
+ const goal=await artifacts.put({request:'保留原业务验收',materials:[],sourceInstructions:[],scope:{conversationId:'g',sourceKeys:['source'],sourceVersions:{source:1},resourceIds:[],databaseIds:[],statusIds:[]},target:{}});
+ const initialPlan=await controller.taskPlan('task');await store.command({id:'bind-goal',kind:'task.requirement.bind-legacy',args:{taskId:'task',expectedRequirementRevision:1,requirementRef:goal.ref,sessionId:'same-owner',criteria:['真实业务结果'],sourceKey:'source',eventKey:'bound'}})
+ const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+ repositories[0].taskLocalAcceptance=[{scope:{taskId:'task',uatEnvironment:'uat2',requestDigest:executionDigest({request:'保留原业务验收',acceptanceCriteria:['真实业务结果']})},localAcceptance}]
+ const plan=await controller.taskPlan('task'),failure=await artifacts.put({kind:'owner-action-failure',taskId:evidenceMode==='foreign'?'other-task':'task',turnId:'historical',plan:evidenceMode==='old-plan'?{...plan,task:{...plan.task,planRevision:0}}:plan,receipts:[],errors:[{code:'OLD_CONFIGURATION_FAILURE',message:'读取原产物后重评未完成流程'}],executions:[]},{taskId:'task'})
+ await store.command({id:'owner-init',kind:'task.owner.init',args:{taskId:'task',sessionId:'same-owner',criteria:['真实业务结果'],sourceKey:'source'}})
+ await store.command({id:'feedback',kind:'task.owner.event',args:{taskId:'task',eventKey:'feedback',eventType:'system.recovery',payloadRef:failure.ref}})
+ const sessions={async close(){},async run({input,readArtifact,onSessionBound,onCandidate}){
+  await onSessionBound();ownerTurns++
+  if(ownerTurns>1)throw Object.assign(Error('本例只验证一次正式修订应用'),{code:'TASK_OWNER_TIMEOUT'})
+  const current=input.currentExecution;assert.equal(current.repairable,false);assert.equal(current.workflowRevisionCapabilities,undefined)
+  const refs=[...new Set([...current.evidenceRefs,input.task.requirementRef,failure.ref,...input.stageArtifacts.flatMap(s=>s.evidenceRefs??[])])]
+  for(const ref of refs)await readArtifact(ref)
+  const decision={action:'repairCurrentStage',summary:'读取原需求和失败反馈后，重评原未完成规划，保留成功准备与验收',repair:current.repairBinding,evidenceRefs:refs,workflowRevision:{startNodeId:'plan-local-acceptance'}}
+  await onCandidate(decision);decisionRef=decision;return{status:'submitted',decision}
+ }}
+ service=await openWorkflowService({ctx:{sessions:{get:()=>({snapshotEvents:()=>[]})}},config:{groupIds:['g'],ownerActorId:'owner',repositories},legacy:{getAgentConfig:()=>({provider:'test',model:'test'})},execution:{store:{...store,query:request=>request.kind==='task.origin'?Promise.resolve({run:{actorId:'owner',conversationId:'g',sourceKey:'source',sourceVersion:1,body:'保留原业务验收',context:{},snapshot:{history:[]}}}):store.query(request)},artifacts,controller},taskOwnerSessions:sessions})
+ await service.recoverExecutionTasks()
+ const deadline=Date.now()+15000
+ let saved
+ do{saved=await store.query({kind:'task.owner',taskId:'task'});if(saved.applicationStatus==='applied'||saved.lastFailure)break;await new Promise(r=>setTimeout(r,10))}while(Date.now()<deadline)
+ assert.equal(saved.lastFailure,'TASK_OWNER_EXECUTION_REPAIR_DISABLED');assert.equal((await controller.state(runId)).run.workflowDigest,before.run.workflowDigest);assert.equal(visits,1)
+})
+
+test('执行恢复被 Web 输入阻塞时原 Owner 仍观察真实节点失败且同轮幂等', async t => {
+  let block = false, release, entered
+  const gate = new Promise(resolve => { release = resolve }), blocked = new Promise(resolve => { entered = resolve })
+  t.after(() => release())
+  const f = await fixture(t, 'owner', undefined, {
+    execute: async () => { throw Object.assign(Error('真实隔离检查失败'), { code: 'FIXTURE_CHECK_FAILED' }) },
+    storeQuery: async (request, query) => {
+      if (block && request.kind === 'task.web-inputs.pending') { entered(); await gate }
+      return query(request)
+    },
+  })
+  const task = await f.startCodeTask()
+  await f.execution.controller.whenIdle(task.runId)
+  const state = await f.execution.controller.state(task.runId)
+  assert.equal(state.nodes[0].status, 'waiting')
+  assert.ok(await f.execution.store.query({ kind: 'task.owner', taskId: task.taskId }))
+  block = true
+  const first = f.service.recoverExecutionTasks()
+  await blocked
+  const events = async () => (await f.execution.store.query({ kind: 'task.owner.events', taskId: task.taskId, limit: 200 })).filter(event => event.eventType === 'workflow.failed')
+  for (let i = 0; i < 100 && !(await events()).length; i++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal((await events()).length, 1)
+  const event = (await events())[0], evidence = await f.execution.artifacts.read(event.payloadRef)
+  assert.equal(evidence.diagnostics[0].leaseEpoch, state.nodes[0].leaseEpoch)
+  assert.equal(evidence.diagnostics[0].nodeRunId, state.nodes[0].nodeRunId)
+  assert.equal(f.service.executionHealth().recovery.tasks.phase, 'web-inputs')
+  const second = f.service.recoverExecutionTasks()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal((await events()).length, 1)
+  release()
+  await Promise.all([first, second])
+  assert.equal(f.service.executionHealth().recovery.tasks, null)
+})
+
+test('关闭等待既有恢复结束且关闭后不再启动观察', async t => {
+  let release, entered, block = false, calls = 0
+  const gate = new Promise(resolve => { release = resolve }), blocked = new Promise(resolve => { entered = resolve })
+  t.after(() => release())
+  const f = await fixture(t, 'owner', undefined, { storeQuery: async (request, query) => {
+    if (request.kind === 'task.web-inputs.pending') { calls++; if (block) { entered(); await gate } }
+    return query(request)
+  } })
+  block = true
+  const recovering = f.service.recoverExecutionTasks()
+  await blocked
+  let closed = false
+  const closing = f.service.close().then(() => { closed = true })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(closed, false)
+  release(); await Promise.all([recovering, closing])
+  const before = calls
+  assert.deepEqual(await f.service.recoverExecutionTasks(), [])
+  assert.deepEqual(await f.service.recover(), { failures: [] })
+  assert.equal(calls, before)
+})
+
+test('Web暂停恢复复用原Task控制且拒绝旧版本与外来身份',async t=>{
+ const f=await fixture(t,'owner',undefined,{config:{webActorId:'owner'}})
+ const source=await f.service.ingest(f.message),state=await f.service.messages.process(source.runId),taskId=state.commands[0].result.taskId
+ const before=await f.execution.controller.taskPlan(taskId),identity={channel:'web',actorId:'owner'}
+ const request={taskId,action:'pause',requestId:'pause-original',reason:'用户暂停',expectedControlRevision:before.task.controlRevision}
+ await assert.rejects(f.service.submitWebTask(request,{channel:'web',actorId:'foreign'}),{code:'WORKFLOW_WEB_ACTOR_FORBIDDEN'})
+ const paused=await f.service.submitWebTask(request,identity)
+ assert.equal(paused.plan.task.controlState,'paused');assert.notEqual(paused.plan.task.status,'cancelled')
+ assert.equal((await f.service.submitWebTask(request,identity)).plan.task.controlRevision,paused.plan.task.controlRevision)
+ await assert.rejects(f.service.submitWebTask({...request,action:'resume',requestId:'stale'},identity),/TASK_CONTROL_STALE/)
+ const resumed=await f.service.submitWebTask({...request,action:'resume',requestId:'resume-original',expectedControlRevision:paused.plan.task.controlRevision},identity)
+ assert.equal(resumed.plan.task.controlState,'active')
+ assert.equal(resumed.plan.task.requirementRef,before.task.requirementRef)
+})
+
+test('HoldMaintenance封存时Web正式暂停等待Task保持原结果且不恢复派发',async t=>{
+ const f=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},execute:async()=>{throw Object.assign(Error('等待原会话纠正'),{code:'FIXTURE_WAIT'})}})
+ const task=await f.startCodeTask();await f.execution.controller.whenIdle(task.runId)
+ const before=await f.execution.controller.state(task.runId),plan=await f.execution.controller.taskPlan(task.taskId)
+ assert.equal(before.run.status,'waiting');assert.ok(before.nodes.every(n=>n.drained))
+ const args={maintenanceId:'hold-deployment',actorId:'owner',reason:'部署保持维护',expectedRevision:0}
+ await f.execution.store.command({id:'hold-enter',kind:'runtime.maintenance.change',args:{...args,active:true}})
+ await f.execution.store.command({id:'hold-seal',kind:'runtime.maintenance.seal',args:{...args,expectedRevision:1}})
+ const maintenance=await f.execution.store.query({kind:'runtime.maintenance'});assert.equal(maintenance.phase,'stopping');assert.equal(maintenance.drained,true)
+ const request={taskId:task.taskId,action:'pause',requestId:'pause-under-hold',reason:'只推进其它指定任务',expectedControlRevision:plan.task.controlRevision}
+ const pending=await f.service.submitWebTask(request,{channel:'web',actorId:'owner'})
+ assert.equal(pending.plan.task.controlState,'pausing')
+ await f.execution.controller.whenIdle(task.runId)
+ const result=await f.service.submitWebTask(request,{channel:'web',actorId:'owner'})
+ assert.equal(result.plan.task.controlState,'paused');assert.equal(result.plan.task.requirementRef,plan.task.requirementRef)
+ const after=await f.execution.controller.state(task.runId)
+ assert.equal(after.run.generation,before.run.generation);assert.equal(after.run.claimCount,before.run.claimCount)
+ assert.deepEqual(after.nodes,before.nodes)
+ await assert.rejects(f.service.submitWebTask({...request,requestId:'stale-control'},{channel:'web',actorId:'owner'}),{code:'TASK_CONTROL_STALE'})
+ const final=await f.execution.store.query({kind:'runtime.maintenance'});assert.equal(final.active,true);assert.equal(final.phase,'stopping');assert.equal(final.revision,maintenance.revision);assert.equal(final.drained,true)
 })

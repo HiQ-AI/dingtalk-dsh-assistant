@@ -784,3 +784,33 @@ node $topicRepairScript @topicRepairArgs --apply --expected-digest '<check返回
 冻结v18的apply-changes若因ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT等待，部署后的现有恢复扫描仅在正式candidate-in-place审计及当前完整候选树证明通过后继续原Run；同输入证明失败不循环重试，历史成功编辑不删除。v19按自己的两节点流程运行，不套此旧定义恢复。
 
 已接纳insertDependency在ENGINEERING_REPOSITORY_SCOPE_MISMATCH应用失败且未生成owner-plan回执时，部署后用现有 `/tasks/<taskId>/retry-owner`，传当前Owner/lease/requirement/control版本及原expectedLastFailure。Host核来源、原工程等待/排空、无pending输入或未决效果后，保存旧决定与失败审计并由原会话重评。此动作不是重新执行工程Run，也不撤销成功候选或扩大仓库权限。
+
+### 外部检查重启后的排空
+
+不要直接修改 drained 位，也不要因 effect 为空就认定子进程退出。正式恢复读取本 Task 检查生命周期记录；历史节点须有原命令、claim/recovery 窗口内候选目录和原生进程快照证明。仅命中本检查身份的未知或存活进程阻挡，不以任意外来 shell 形成全局屏障。
+
+排空核验成立后原 Run 保持 waiting 并保存 external-check-interrupted 诊断，由 Owner 选择后续检查配置或继续；没有恢复成功输出，不自动重复旧命令，不杀其他进程。验收边界见 message-clarification-admission/round-71.md。
+
+旧版 Resident 不认识检查进程排空证明、导致无法安装修复包时，统一 `scripts/deploy-local.ps1` 沿现有维护桥处理本次已审计 SG20 原节点。`-Check` 保持零写，返回 `eligibleRecovery=true`、`coreCheckComplete=false`；这只证明可进行前置修复，不代表部署完整预检通过。默认正式执行先进入维护，重新读取原 Task/Run/lease/input、包与源码 SHA、当前 OS 检查进程事实；复用 Loader witness 等待 Resident 完整 dispose，原生 store 独占后仅提交 `node.drained`。恢复 profile 原字节、Resident 与维护 busy0 后，重新执行完整 Check，再按原流程 seal、安装、回读、Resume。已有维护必须由参数明确提供相同 continuation 身份。任何其他节点或未知效果仍拒绝；不直接写 SQLite、不修改已安装源码、不强停 Host、不自动重跑旧检查。
+
+前置修复证据位于 `<EvidenceDirectory>-verification-drain`，清单位于 `<EvidenceDirectory>-runner/verification-drain-manifest.json`；不保存 profile 正文。中断时先读该目录 `recovery.json`，使用现有 `recover-quarantined-echo.ps1 -Scope verification -IncidentManifest <清单> -ExpectedProfileSha256 <原SHA> -EvidenceDirectory <修复目录> -Resume` 接续原 witness，不重新创建事故清单。恢复完成后沿原维护 ID/revision 接正式部署。
+
+### Task 验收配置选择和数据依赖重规划
+
+Host 的 `taskLocalAcceptance` 是能力目录，按 Task/UAT/原 request 与 acceptanceCriteria 摘要精确绑定。Owner 使用 `localAcceptanceProfileDigest` 选择已登记配置；旧 Run 的冻结配置不会自动变动。新 define/plan 可通过 `dependencyBindings` 重定向 code 原声明依赖，用 `previousOutputNodeId` 保留已验证候选。只允许前序同职责/同 schema，不能把任意工件冒充验收输出。修订后仍执行实际验收/清理和完整交付证明。
+
+SG22 UI 草案在 `docs/tmp/sg22-ui-host-profile/proposal.json`，`readyToApply=false`。须先修 runner 对当前候选真实父字段/方法的读取（旧 harness 不适配），然后重新内容寻址生成工具与配置；不能用 UI fixture 覆盖真实 Excel 后端。后端由同 Task 的原依赖 Run 产出真实接口后接入。登记时使用现有 `configure-project-local-acceptance.mjs --profile <绝对profile> --bundle <保留两repo当前localAcceptance的bundle> --repository-patches <保留已有taskLocalAcceptance并追加精确SG22 entry的patch> --expected-sha256 <当前profile摘要> --check`；先 check 零写，正式受管登记用相同输入 `--apply`。不要使用旧全局 checks 提案或覆盖其他 Task entries。Owner 随后从真实能力目录选择配置并重写计划，不能将 `backendVerified:false` 认作完整交付。
+
+SG22 当前组件验收 runner 已完成真实字段适配（`activityMergeResults`、`handleActivityMergeResult`），父数据/相关 computed 从候选 AST 原文提取；模板常量只在候选真实实例暴露时可用，不由测试注入。脚本的 `serve` 提供实际候选 HTML/JS；执行前核对 `/ready` 的 Task/namespace/六文件 SHA，浏览器只将业务 API 明确替换为 fixture，真实 HTTP 页面和资产不被拦截替换。导出请求不可把客户端 `status` 当可信结果；没有后端契约前不猜测结果 ID。
+
+本轮可登记提案改为 `docs/tmp/sg22-ui-host-profile-ready/proposal.json`（替代此前 readyToApply=false 草案）。其中完整清单包含源路径、持久 `D:/dsh_home/tools/<SHA>` 目标与逐文件 SHA；复制回读一致后按上一节原生配置器登记，保留其它 Task entries。`readyToApply=true` 表示验收工具可用，不代表候选通过。当前真实 gen7 仍因 `RELEASE_PHASE` 未暴露失败；原Task共享 `work/activity-merge-current-ui-host-proof.json` 含六源码SHA、实际HTTP渲染错误与outputs截图/ledger，明示人工Host诊断而非执行节点回执。由原Owner/工程会话修复业务代码，Host不改候选。完整后端Excel验收仍待原后端工程契约，不以 `backendVerified:false` 完成全部目标。
+
+旧 SG20 检查排空事故桥仅适用于原事故节点仍 waiting/controller-restarted/undrained、gen6/lease1，且无其他 busy 节点或 Owner。普通活跃会话导致 DEPLOY_NOT_DRAINED 时，统一入口保留原检查结果并等待自然排空；不会尝试旧事故恢复或将新工作流副本误报为旧修复基础缺失。
+
+SG22 最终登记输入目录为 `docs/tmp/sg22-ui-host-profile-final/`（取代本轮前述ready目录）：同UI套件支持多个criterion读取一次真实成功回执，必须同namespace、当前候选SHA、configDigest和实际服务身份；未完成/失败不能缓存通过。四部署JSON与最终零写证明均在该目录，原profile无额外变更。完整Excel边界仍不变。
+
+固定工程恢复：部署后回读原 Run、成功 verify 的 outputRef/verification.digest 和真实检查进程日志；相同候选及检查配置的 prepare-commit 应复用原回执，不再因重建 registry 丢失内存缓存而重跑。恢复票据必须来自当前控制账的真实成功节点，不能用模型输入或手写 JSON 代替。原流程的业务验收和最终交付证明仍必须通过。本轮只推进 SG20，其余业务任务不随部署恢复。
+
+统一入口 scripts/deploy-local.ps1 尊重 ArgumentsFile 中已有 HoldMaintenance=true：完成安装与独立Readback后保留维护，不自动Resume。单任务核验时，在新实例中通过正式 /tasks/:id/pause 控制接口暂停其余任务并独立回读，再以原ArgumentsFile显式 -Resume 继续派发；不会重装或启动其它暂停任务。默认未提供HoldMaintenance仍完成全流程。
+
+维护退出健康回读：封存后的新实例若仅 DWS 回补报告 `RUNTIME_MAINTENANCE_ACTIVE`，统一部署入口允许继续原许可的 Resume。必须同时满足维护 ID 匹配、stopping/drained、busy 全零、新 incarnation 的 resumePermitted、控制库健康、recoveryIssueCount=0、全部 listener 和 humanReplies ready；真实 DWS 认证/网络错误仍拒绝。前置记录标记 maintenanceBackfillPaused，不声称回补成功。Resume 只提交一次，最多等待 60 秒真实回补，随后必须独立读到 health=ok、inboundProcessing=true、dwsBridge.healthy=true，才记录恢复成功。无需重装或重启；超时保留实际状态，修复真实收信问题后继续回读。

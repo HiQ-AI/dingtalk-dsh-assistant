@@ -307,7 +307,7 @@ test('只有已绑定会话被确认缺失后才能换代，原任务和事件�
   } finally { f.db.close() }
 })
 
-test('已接纳动作实现错误立即等待修复，不原样重试', () => {
+test('旧已接纳动作实现错误进入诊断回收队列，不原样重试', () => {
   const f = fixture()
   try {
     f.send('task.owner.event', { taskId: 'task-1', eventKey: 'created', eventType: 'task.created' })
@@ -321,7 +321,8 @@ test('已接纳动作实现错误立即等待修复，不原样重试', () => {
         leaseEpoch: 1, reason: 'DOWNSTREAM_UNAVAILABLE' }).failureCount, attempt)
     assert.equal(f.read('task.owner').status, 'blocked')
     assert.equal(f.read('task.owner').lastFailure, 'DOWNSTREAM_UNAVAILABLE')
-    assert.deepEqual(queryTaskOwner(f.db, { kind: 'task.owner.actions.pending' }), [])
+    const queued = queryTaskOwner(f.db, { kind: 'task.owner.actions.pending' }); assert.equal(queued.length, 1)
+    assert.equal(queued[0].applicationStatus, 'blocked'); assert.equal(queued[0].lastFailure, 'DOWNSTREAM_UNAVAILABLE')
   } finally { f.db.close() }
 })
 
@@ -638,3 +639,63 @@ test('无阶段调查以原生查询证明完成；隔离任务、需求版本�
     assert.deepEqual(f.read('task.owner.query-evidence'),[])
   } finally {f.db.close()}
 })
+
+for (const mode of ['pending', 'applied', 'paused', 'cancelled']) test(`完整应用诊断交回原Owner保留真实决定状态：${mode}`, () => {
+  const f = fixture()
+  try {
+    f.send('task.owner.event', { taskId: 'task-1', eventKey: 'application', eventType: 'task.created' })
+    f.send('task.owner.claim', { taskId: 'task-1', turnId: 'application', expectedLeaseEpoch: 0 })
+    f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'application', leaseEpoch: 1, sessionId: 'session-1' })
+    f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'application', leaseEpoch: 1,
+      decision: { action: 'advance', summary: '继续当前目标', evidenceRefs: [] } })
+    f.send('task.owner.accept', { taskId: 'task-1', turnId: 'application', leaseEpoch: 1 })
+    if (mode === 'applied') f.send('task.owner.applied', { taskId: 'task-1', turnId: 'application', leaseEpoch: 1 })
+    if (['paused', 'cancelled'].includes(mode)) f.db.prepare('UPDATE task_controls SET state=? WHERE task_id=?').run(mode, 'task-1')
+    const diagnosticRef = `tasks/task-1/sha256-${'f'.repeat(64)}.json`
+    const result = f.send('task.owner.action.fail', { taskId: 'task-1', turnId: 'application', leaseEpoch: 1,
+      reason: 'UNLISTED_HOST_FAILURE', diagnosticRef })
+    assert.equal(result.status, 'correct')
+    const row = f.db.prepare('SELECT * FROM task_owner_turns WHERE turn_id=?').get('application')
+    assert.equal(row.application_status, mode === 'applied' ? 'applied' : 'discarded')
+    assert.ok(row.decision_json)
+    assert.equal(f.read('task.owner').sessionId, 'session-1')
+    assert.equal(f.read('task.owner').status, ['paused', 'cancelled'].includes(mode) ? 'idle' : 'pending')
+    assert.equal(queryTaskOwner(f.db, { kind: 'task.owner.actions.pending' }).length, 0)
+    assert.equal(f.db.prepare("SELECT payload_ref FROM task_events WHERE event_type='system.recovery'").get().payload_ref, diagnosticRef)
+  } finally { f.db.close() }
+})
+
+test('旧Owner动态流程候选全部拒绝而非保留运行时改图能力', () => {
+  for (const change of [
+    { startNodeId: 'inspect', nodes: [{ nodeId: 'inspect', templateNodeId: 'inspect-proposal', inputBindings: { objective: { requirement: true, field: 'request' } } }] },
+    { startNodeId: 'verify', checkProfileDigest: 'a'.repeat(64) },
+    { startNodeId: 'prepare', localAcceptanceProfileDigest: 'b'.repeat(64), nodes: [{nodeId:'prepare',templateNodeId:'prepare-local-acceptance',dependencyBindings:{plan:'new-plan'},previousOutputNodeId:'verify'}] },
+    { startNodeId: 'read', resumeCurrent: true, localAcceptanceProfileDigest: 'b'.repeat(64) },
+    { startNodeId: 'read', resumeCurrent: true },
+    { startNodeId: 'edit', settleManagedCandidate: true },
+    { startNodeId: 'edit', resumeCurrent: true, settleManagedCandidate: true },
+    { startNodeId: 'read', resumeCurrent: true, nodes: [] },
+    { startNodeId: 'read', localAcceptanceProfileDigest:'invalid' },
+    { startNodeId: 'edit', settleManagedCandidate:true, localAcceptanceProfileDigest:'b'.repeat(64) },
+    { startNodeId: 'prepare', nodes:[{nodeId:'prepare',templateNodeId:'prepare-local-acceptance',dependencyBindings:{plan:'new-plan'},dependencyArtifacts:{plan:'sha256-old.json'}}] },
+  ]) {
+    const f = fixture()
+    try {
+      f.send('task.owner.event', { taskId: 'task-1', eventKey: 'revise', eventType: 'system.recovery' })
+      f.send('task.owner.claim', { taskId: 'task-1', turnId: 'revise', expectedLeaseEpoch: 0 })
+      f.send('task.owner.sessionBound', { taskId: 'task-1', turnId: 'revise', leaseEpoch: 1, sessionId: 'session-1' })
+      const decision = { action: 'repairCurrentStage', summary: '按当前诊断调整未完成部分', evidenceRefs: [],
+        repair: { stageId: 'stage-1', runId: 'r', generation: 1, runRevision: 0, requirementRevision: 1 }, workflowRevision: change }
+      const send = () => f.send('task.owner.candidate', { taskId: 'task-1', turnId: 'revise', leaseEpoch: 1, decision })
+      assert.throws(send, {code:'TASK_OWNER_EXECUTION_REPAIR_DISABLED'})
+    } finally { f.db.close() }
+  }
+})
+
+test('Owner不得提交执行修复或在同需求下修改已建立计划',()=>{const f=fixture();try{
+ f.send('task.owner.event',{taskId:'task-1',eventKey:'new-policy',eventType:'system.recovery'});f.send('task.owner.claim',{taskId:'task-1',turnId:'policy',expectedLeaseEpoch:0})
+ const send=decision=>f.send('task.owner.candidate',{taskId:'task-1',turnId:'policy',leaseEpoch:1,decision})
+ for(const extra of [{action:'repairCurrentStage'},{action:'advance',workflowRevision:{startNodeId:'x'}}])assert.throws(()=>send({summary:'观察',evidenceRefs:[],...extra}),{code:'TASK_OWNER_EXECUTION_REPAIR_DISABLED'})
+ assert.throws(()=>send({action:'advance',summary:'重排',evidenceRefs:[],appendStages:[{workflowId:'task-analysis',gate:'none'}]}),{code:'TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED'})
+ send({action:'advance',summary:'按既有计划继续',evidenceRefs:[]})
+ }finally{f.db.close()}})

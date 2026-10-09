@@ -210,7 +210,7 @@ Run 不设累计领取上限；`claimCount` 仅为统计。已删除 `continue-b
 
 `GET /state/tasks` 对原生工作流任务按持久化的 `task.web-rerun.accept` 关联树汇总，每项只返回一张卡片；已有卡片字段来自最新可读执行。已有历史并发分叉仍取活动执行，避免隐藏未结束工作。仅分析任务及同标题但无明确关联的任务保持独立。旧版任务沿用原有记录模型。
 
-- `GET /state/tasks/{taskId}/detail`：旧链接和当前链接均返回最新可读执行，`requestedTaskId` 为请求的入口，`taskId/latestTaskId` 为当前物理执行，`logicalTaskId` 为可读逻辑任务。`executionNodes` 按当前计划全部阶段及节点顺序返回；每步带稳定 `stepKey`、`stageId/stageTitle` 和真实执行/产物引用。仅取各运行当前有效节点，不拼历史代次；计划移除的阶段不再出现。尚未绑定定义的阶段返回 `definitionPending=true` 占位，`plan.stepsResolved=false`；无计划或尚未初始化时没有杜撰步骤。
+- `GET /state/tasks/{taskId}/detail`：旧链接和当前链接均返回最新可读执行，`requestedTaskId` 为请求的入口，`taskId/latestTaskId` 为当前物理执行，`logicalTaskId` 为可读逻辑任务。`executionNodes` 按当前计划全部阶段及节点顺序返回；每步带稳定 `stepKey`、`stageId/stageTitle` 和真实执行/产物引用。任务副本修订节点另带 Host 可信职责映射 `templateNodeId`，页面沿现有中文职责名称展示，不能将动态 `nodeId` 当成业务标题。仅取各运行当前有效节点，不拼历史代次；计划移除的阶段不再出现。尚未绑定定义的阶段返回 `definitionPending=true` 占位，`plan.stepsResolved=false`；无计划或尚未初始化时没有杜撰步骤。
 - 详情带 `detailRevision`，依据计划、需求、Owner、运行/当前节点及效果账生成，累计时钟不改变版本。投影前后版本变化重读，持续变化返回 409 `TASK_DETAIL_STALE`。需求尚未被当前计划接纳时，`plan.requirementCurrent=false`，旧步骤显示待确认且不暴露旧结果正文；后续未执行阶段也不会将前段旧成功作为当前结果。
 - `GET /state/tasks/{taskId}/executions?offset=0&limit=20`：按执行接受顺序倒序分页，返回 `{rootTaskId,latestTaskId,total,executions,nextOffset}`。每项含 `taskId`、`executionNumber`、状态、目标、时间、结果、归档时间及 `stageOutcomes`。阶段结果来自该次全部运行，失败后重建不会覆盖失败记录。结束时 `nextOffset=null`。
 - 原有 `/state/tasks/{taskId}/runs` 仍为单次执行内部的运行历史，不等于整项任务的历次执行。
@@ -306,9 +306,9 @@ offset 必须为非负整数，limit 为 1–100 的整数；参数错误返回 
 
 ### 只读 Owner 再评估
 
-#### Owner 驱动的节点续行
+#### 原执行会话负责节点纠正
 
-Host 的 `Controller.inspectNodeRecovery(runId)` 返回 `mode=resume-agent`、当前节点身份、原始失败、诊断引用及准入结果；`reason=strategy-change-required` 表示同一节点/输入/问题已有受管续行，不能原样重放。该能力由既有 `repairCurrentStage` 决定驱动，不增加 Web 接口或模型写控制账工具。
+Host 的 `Controller.inspectNodeRecovery(runId)` 返回 `mode=resume-agent`、当前节点身份、原始失败、诊断引用及准入结果；`reason=strategy-change-required` 表示同一节点/输入/问题已有受管续行，不能原样重放。固定工程职责的故障由原执行会话纠正，不要求 TaskOwner 先修订流程。当前本地验收准备失败与其真实输入中的原 plan-local-acceptance 输出绑定后，Controller 将完整诊断送回该原 session；成功准备、编辑、候选验证及效果回执保持。原有其它人工/受管调用不构成自动重跑许可。
 
 `Controller.resumeNode` 接受 commandId/runId/expectedRevision/nodeRunId/generation/leaseEpoch/inputDigest/contextRef。上下文来自已读诊断，绑定 task/run/node/generation、诊断时 requirementRevision/planRevision/controlRevision、修复方向及证据；Controller 读冻结定义和工件，Store 同事务核对版本、来源、维护、排空、输入围栏和效果。仅当前可纠正的 pure/read Agent 节点准入；原node/session/generation/输入及成功前缀保留，下一领取递增lease。`node.resume` 保存旧诊断与上下文；接管到更高lease仍可读取该上下文，直到输入或节点替代。审批、code外部动作、未知效果及真实权限拒绝不经此入口。
 
@@ -377,3 +377,10 @@ Owner已接受但尚未落地的决定，仅当它准确替换当前后缀为一
 候选恢复的 evidenceRefs 必须包含已读的全部失败/候选诊断，可附带当前 Task/需求版本原生查询和精确当前阶段恢复包装。Host 在候选、领域准备及准入分别核验；不把额外查询视为失败诊断，也不允许旧版本、其他Task或阶段资料绕过绑定。普通只读节点恢复仍沿原有诊断白名单。
 
 `POST /workflows/clarifications/recover` 仅本机受信 Origin 和配置的 Web 操作者可用。请求为 `{targetRunId,requestId,answerRunId,commandId,recoveryKey,reason,dryRun,maintenanceId,maintenanceRevision,expectedDigest?}`。`dryRun:true` 返回 200 和 expectedDigest/原文快照且零写；执行以相同字段及 expectedDigest 返回 202。必须在维护排空状态：目标仅有 coordinator 的 needs_clarification、无命令，答复为当前同群同话题 permittedActor 的更晚原消息；其唯一 create 必须 unknown/MESSAGE_INPUT_PENDING 且真实 Task/Run/效果未落地。原子关联真实答复并恢复原 create，不接受 actorId/answer/evidenceRef 注入。相同 recoveryKey/输入幂等，输入变化拒绝；不撤回通知或发测试消息。
+
+
+`POST /tasks/:taskId/pause` 和 `/resume` 复用原生 `controller.controlTask`。仅本机合法 Origin 和配置 webActor 身份、原 Task 访问权可调用；body={requestId,reason,expectedControlRevision}，不接受自报 actor。pause 中断该 Task 原执行会话并保留已有结果，状态为 paused，不等同 cancel；resume 核对 controlRevision 后恢复原任务。未知外部效果仍须对账，不因 resume 重发。
+
+原 planner 纠正使用既有 node.resume 原子事务：真实准备输入的 plan 必须等于原 planner 输出，planner 为 pure/read、原 session 已绑定，失败准备无 effect，下游未执行、全Run无未知 effect、全部排空且控制态active。中间成功节点不清空、不重新领取；新计划只重组失败准备的输入并保留原候选 build。暂停/维护/来源漂移继续拒绝。相同 input/problemKey 已纠正仍失败则要求真正不同策略，不盲目重复。
+
+HoldMaintenance 下 pause 可先回 `pausing`；此为已接纳、正在原生排空，不是失败。回读原Run已 `user_pause` 后，用完全相同 requestId/body 再投 pause，复用原控制收据并完成 `paused` 结算。无需先退出维护；不可改用新requestId搭配旧controlRevision。

@@ -580,3 +580,22 @@ schema8 增加唯一指定的非唯一、非部分索引 `execution_events_kind_
 ### 单列删除送审验收
 
 数据变更v7支持严格单列DROP候选，Host目录预检拒绝依赖、继承、identity/generated和非普通表。准确目录回查用rows空数组表示列消失，同时确认表仍存在。检查新工单、私聊不可恢复影响说明、精确插件批准与执行先后、TaskRun DONE和最终验收；旧加列工单及批准不能复用。无需新增数据库读取白名单、迁移或历史副本。原Task若持有模型追加的冗余前提，经既有Web context明确记录当前操作者的系统修正并由Owner重评，不伪造群消息或清除实际用户确认门禁。
+
+### 任务流程副本与部署后恢复核验
+
+部署前以只读控制账回读所有非终态工程 Run 的当前 workflowDigest，使用本次源 factory 恢复并逐项比较完整摘要；工厂代码执行路径须对应实际安装位置，不以 worktree 绝对命令路径的假漂移替代检查。不修改旧登记定义，也不触发 dispatch。新版能力只在 Owner 明确选择后修订本 Task 后缀；无需为普通任务调整进入全局维护。
+
+复验至少包含：原 Run/generation、成功前缀输出与 lease 未变；旧 effects 全部保留；删除零效果冗余实施后真实检查及业务验收仍执行；最终交付证明按正式 revision 收据核验。依赖工件只能取同 Run/同代 succeeded 输出，跨任务或伪引用拒绝。新源通过不代表线上五项任务完成，部署、原 Owner 决策、真实业务交付和钉钉送达分别记录。
+
+旧 NO_CHANGE 扫描自动重试已移除。重启后读取证明从同绑定原生工具成功结果与当前文件完整 SHA 重建；缺证时保留原失败，由 Owner 请求原会话补读或选择其他正确路径，不伪造已读状态。
+
+已有同代受管编辑后的方案纠正仍通过 Owner 原 repairCurrentStage：Host 仅在原生 candidate-in-place 审计与当前绑定吻合时保留 blocked 后继及成功 edit 回执，续行原方案会话。Agent 应先读当前文件、删除等值修改建议或如实提交无新增修改；Host 仍核完整候选和后续构建、业务验收。不要删除效果记录或人工重跑全部阶段。Owner 可引用已读原需求、当前阶段工件、当前版本 system.recovery 反馈，全部失败诊断仍须读取引用。
+
+### Owner 观察恢复进度
+
+检查失败已落执行账但 Owner 未收到时，读 `/health` 的 `executionStore.recovery` 和原 Task 事件时间。`tasks` 长时间停留不再阻断独立 `owners` 观察；两者复用既有 5 秒周期，无新增 Agent。Resident 启动不等待长执行恢复才注册 timer；正常 dispose 仍等待在途恢复结束后关闭控制库。`phase/taskId/since` 只提供定位证据，不应据此强停检查、重发效果或认定业务成功。
+
+### 固定任务暂停与恢复
+在正常维护已停新派发的窗口，按任务当前 controlRevision 调用 `POST /tasks/:taskId/pause`，body 为 requestId、reason、expectedControlRevision；独立回读控制态 paused。不要以cancel替代pause，不直接改库。安装后只恢复获准推进的任务；其余保持paused，已完成任务不操作。`/resume`使用同结构及最新controlRevision。SG20本地验收准备计划缺陷由原planner session经原生node.resume纠正，保留已成功编辑/验证；维护退出后正常恢复扫描触发，不需要重建Run或动态修改工作流。
+
+维护封存中暂停首次可能返回pausing。等待原Run原生user_pause后，同requestId和原body重投pause即可settle为paused；期间不Resume维护、不取消Task。以最终控制态paused及busy0读回为准。

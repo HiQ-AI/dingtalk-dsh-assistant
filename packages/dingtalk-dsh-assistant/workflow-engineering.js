@@ -1,16 +1,18 @@
 import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { spawn } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { mkdir, realpath, lstat, readFile } from 'node:fs/promises'
+import { mkdir, realpath, lstat, readFile, readdir, stat } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { executionDigest, executionError, readTaskMaterials } from './execution-artifacts.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { createManagedWorkspaces } from './execution-workspace.js'
+import { restoreVerifiedCandidate } from './execution-candidate.js'
 import { createManagedEdits } from './execution-edit.js'
 import { createGitDelivery } from './execution-git.js'
 import { createGithubPullRequests } from './execution-pr.js'
-import { createVerificationJobCheck, createBusinessAcceptanceCheck } from './execution-check-job.js'
-import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow, createEngineeringLocalAcceptanceWorkflow, createEngineeringBranchReuseWorkflow, createEngineeringUatBaselineWorkflow, createEngineeringMappedBaselineWorkflow, createEngineeringRevalidationWorkflow, createEngineeringInvestigationHandoffWorkflow, createEngineeringTaskContextWorkflow, createEngineeringTechnicalPlanWorkflow } from './task-workflow.js'
+import { createVerificationJobCheck, createBusinessAcceptanceCheck, verificationProcessSnapshot, inspectVerificationProcessJournal, historicalVerificationProcesses } from './execution-check-job.js'
+import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow, createEngineeringScopedWorkflow, createEngineeringPatchWorkflow, createEngineeringDeliverableWorkflow, createEngineeringAcceptanceWorkflow, createEngineeringLocalAcceptanceWorkflow, createEngineeringBranchReuseWorkflow, createEngineeringUatBaselineWorkflow, createEngineeringMappedBaselineWorkflow, createEngineeringRevalidationWorkflow, createEngineeringInvestigationHandoffWorkflow, createEngineeringTaskContextWorkflow, createEngineeringTechnicalPlanWorkflow, proveEngineeringNoAdditionalChange } from './task-workflow.js'
 import { createLocalAcceptanceRunner } from './execution-local-acceptance.js'
 import { createTaskLocalAcceptanceRunner } from './execution-task-local-acceptance.js'
 import { fileURLToPath } from 'node:url'
@@ -51,7 +53,8 @@ export async function readEngineeringRemoteRefs(directory, args, { execImpl = ex
     fail('ENGINEERING_REMOTE_READ_TRANSIENT')
   }
 }
-const git = async (directory, args, { signal } = {}) => args[0] === 'ls-remote' ? readEngineeringRemoteRefs(directory, args, { signal })
+const repositoryReadOperation = new AsyncLocalStorage()
+const git = async (directory, args, { signal = repositoryReadOperation.getStore()?.signal } = {}) => args[0] === 'ls-remote' ? readEngineeringRemoteRefs(directory, args, { signal })
   : (await exec('git', ['-C', directory, ...args], { signal })).stdout.trim()
 export const uatBranchFor = environment => /^uat[1-9]$/.test(environment ?? '') ? `feature/${environment}-base` : null
 export const isUatBranch = branch => /^feature\/uat[1-9]-base$/.test(branch ?? '')
@@ -180,10 +183,24 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
     || !saved.sourceCommandId || (saved.reissueRequestId !== undefined
       && (typeof saved.reissueRequestId !== 'string' || !saved.reissueRequestId)))
     fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
-  const expectedId = saved?.reissueRequestId
+  const expectedId = saved.taskRevision
+    ? `task-engineering-revision-${executionDigest([state.run.runId, saved.taskRevision.requestId]).slice(0,32)}`
+    : saved.checkpoint
+    ? `task-engineering-checkpoint-${executionDigest([state.run.runId, saved.checkpoint.requestId]).slice(0,32)}`
+    : saved?.reissueRequestId
     ? `task-engineering-reissue-${executionDigest([state.run.runId, saved.reissueRequestId]).slice(0, 40)}`
     : `task-engineering-${executionDigest(saved.sourceCommandId).slice(0, 40)}`
   if (state.run.workflowId !== expectedId) fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+  const change = saved.taskRevision ?? saved.checkpoint
+  if (change) {
+    const commandId = saved.taskRevision ? change.requestId : `engineering-checkpoint:${state.run.runId}:${change.requestId}`
+    const receipt = await store.query({ kind: 'receipt', commandId })
+    const original = records.find(value => value.digest === change.fromDigest && value.config?.taskId === taskId
+      && value.config.runId === state.run.runId && value.config.sourceCommandId === saved.sourceCommandId)
+    if (!original || receipt?.result?.toDigest !== state.run.workflowDigest || receipt.result.runId !== state.run.runId
+      || receipt.result.fromDigest !== change.fromDigest || (saved.taskRevision ? receipt.result.taskId !== taskId : receipt.result.kind !== change.kind)) fail('ENGINEERING_DELIVERY_PROOF_UNAVAILABLE')
+    if (saved.taskRevision) state = { ...state, nodes: state.nodes.map(node => ({ ...node, originalNodeId:node.nodeId, nodeId: saved.taskRevision.nodeRoles[node.nodeId] ?? node.nodeId })) }
+  }
   const refs = [], outputs = {}
   for (const id of ['verify-candidate', 'prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize']) {
     const matches = state.nodes.filter(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef)
@@ -202,7 +219,7 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
     || !hex40(commit?.commitId) || commit.candidateDigest !== verified.candidate.digest
     || commit.verification?.digest !== verified.verification.digest || commit.tree !== verified.candidate.tree
     || committed?.prepared?.commitId !== commit.commitId || committed.receipt?.status !== 'succeeded'
-    || preparedPush?.commitId !== commit.commitId || preparedPush.verificationDigest !== verified.verification.digest
+    || preparedPush?.commitId !== commit.commitId || preparedPush.verificationDigest !== commit.verification.digest
     || pushed?.prepared?.commitId !== commit.commitId || pushed.receipt?.status !== 'succeeded'
     || preparedPr?.commitId !== commit.commitId || createdPr?.prepared?.commitId !== commit.commitId
     || createdPr.receipt?.status !== 'succeeded' || final?.deliveryStatus !== 'pr_verified'
@@ -226,7 +243,9 @@ export async function readEngineeringDeliveryProof({ state, artifacts, store, ta
     refs.push(node.outputRef)
     acceptance.checks.forEach(check => checks.add(check.scenarioId))
     const output = await artifacts.read(node.outputRef), prepared = output.localPrepared
-    const definitionNode = state.nodes.find(item => item.nodeId === 'define-local-acceptance' && item.status === 'succeeded' && item.outputRef)
+    const prepareSpec = saved.taskRevision?.nodes?.find(spec => saved.taskRevision.nodeRoles[spec.nodeId] === 'prepare-local-acceptance')
+    const contextNodeId = prepareSpec?.dependencyBindings?.['define-local-acceptance'] ?? 'define-local-acceptance'
+    const definitionNode = state.nodes.find(item => (item.originalNodeId ?? item.nodeId) === contextNodeId && item.nodeId === 'define-local-acceptance' && item.status === 'succeeded' && item.outputRef)
     const context = definitionNode && (await artifacts.read(definitionNode.outputRef))?.localContext
     const cases = prepared?.plan?.cases, criteria = context?.criteria
     if (!prepared || prepared.taskId !== taskId || prepared.runId !== state.run.runId
@@ -281,7 +300,132 @@ export function selectTaskLocalAcceptance(config, scope) {
   return { localAcceptanceConfig: structuredClone(matches[0].localAcceptance), localAcceptanceScope: structuredClone(scope) }
 }
 
-export function createEngineeringRegistry({ repositories = [], ownerActorId, modelConfig, author, ghCommand, getTaskDirectories }) {
+/** 从原生工具回执恢复读事实；当前文件必须仍为工具返回的完整 SHA，不制造已读记录。 */
+export async function restoreEngineeringReadEvidence({ events, binding, paths, directory, allowedPrefixes }) {
+  const read = new Set()
+  const identity = events.find(event => event.type === 'dingtalk/execution-session')?.data?.identity
+  if (!identity || ['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].some(key => identity[key] !== binding[key])) return []
+  for (const call of events.filter(event => event.type === 'tool/call' && event.data.name === 'engineering_repo_inspect')) {
+    let args; try { args = JSON.parse(call.data.arguments) } catch { continue }
+    if (args.operation !== 'read' || args.source && args.source !== 'current' || !paths.includes(args.path)) continue
+    const result = events.find(event => event.seq > call.seq && event.type === 'tool/result'
+      && event.data.message?.content?.some(block => block.type === 'tool-result' && block.toolCallId === call.data.callId && !block.isError))
+    const blocks = result?.data.message.content.find(block => block.toolCallId === call.data.callId)?.content
+    let value; try { value = JSON.parse(blocks?.find(block => block.type === 'text')?.text) } catch { continue }
+    if (value.path !== args.path || !value.text || !/^[a-f0-9]{64}$/.test(value.expectedHash)
+      || /[\\:\0\r\n]/.test(args.path) || args.path.split('/').some(part => !part || ['.', '..', '.git'].includes(part.toLowerCase()))
+      || !allowedPrefixes.some(prefix => args.path.startsWith(prefix))) continue
+    const full = join(directory, args.path)
+    if (!(await lstat(full)).isFile() || resolve(await realpath(full)).toLowerCase() !== resolve(full).toLowerCase()) continue
+    const bytes = await readFile(full)
+    if (createHash('sha256').update(bytes).digest('hex') === value.expectedHash
+      && value.text === new TextDecoder('utf-8', { fatal: true }).decode(bytes).slice(value.offset ?? 0, (value.offset ?? 0) + value.text.length)) read.add(args.path)
+  }
+  return [...read]
+}
+
+const engineeringRequiredNodes = ['verify-candidate', 'run-local-acceptance', 'finalize-local-acceptance', 'commit', 'push', 'create-pr', 'finalize']
+async function applyEngineeringTaskRevision(workflow, previous, revision, artifacts) {
+  const start = previous.nodes.findIndex(node => node.id === revision.startNodeId)
+  if (start < 0 || !revision.reason?.trim()) fail('ENGINEERING_REVISION_INVALID')
+  const templates = new Map([...previous.nodes, ...workflow.nodes].map(node => [node.id, node]))
+  const suffix = revision.nodes ?? previous.nodes.slice(start).map(node => ({ nodeId: node.id, templateNodeId: node.id }))
+  const prefix = previous.nodes.slice(0, start)
+  const oldRoles = previous.ownerContract?.rulesDigest?.revisionRoles ?? Object.fromEntries(previous.nodes.map(node => [node.id,node.id]))
+  const nodes = await Promise.all(suffix.map(async spec => {
+    const original = templates.get(spec.templateNodeId)
+    if (!original || !/^[a-z][a-z0-9-]{0,100}$/.test(spec.nodeId)) fail('ENGINEERING_REVISION_NODE_INVALID')
+    const node = { ...original, id: spec.nodeId }
+    if (original.allowedEffects.some(effect => !['pure', 'read'].includes(effect))
+      && suffix.filter(value => value.templateNodeId === spec.templateNodeId).length !== 1) fail('ENGINEERING_REVISION_EFFECT_DUPLICATE')
+    if (spec.inputSchema || spec.outputSchema || spec.inputBindings) {
+      if (original.executor !== 'agent') fail('ENGINEERING_REVISION_CONTRACT_INVALID')
+      for (const field of ['inputSchema', 'outputSchema']) if (spec[field]) {
+        const schema = spec[field], prior = original[field]
+        if (schema.type !== 'object' || (prior.required ?? []).some(key => !schema.required?.includes(key)
+          || executionDigest(schema.properties?.[key] ?? null) !== executionDigest(prior.properties?.[key] ?? null))) fail('ENGINEERING_REVISION_CONTRACT_INVALID')
+        node[field] = structuredClone(schema)
+      }
+      if (spec.inputBindings) {
+        const bindings = structuredClone(spec.inputBindings), mapper = original.mapInput
+        if (Object.keys(bindings).some(key => ['requirement','plan','authorization','source','baseCommit','editablePaths','__proto__','constructor','prototype'].includes(key))) fail('ENGINEERING_REVISION_INPUT_INVALID')
+        node.inputDependencies = [...new Set([...(original.inputDependencies ?? []), ...Object.values(bindings).flatMap(value => value.nodeId ? [value.nodeId] : [])])]
+        node.mapInput = args => {
+          const input = { ...mapper(args) }
+          for (const [key, value] of Object.entries(bindings)) {
+            if (typeof value.field !== 'string' || ['__proto__','constructor','prototype'].includes(value.field)
+              || (value.requirement === true) === (typeof value.nodeId === 'string')) fail('ENGINEERING_REVISION_INPUT_INVALID')
+            const source = value.requirement ? args.requirement : args.dependencyOutputs[value.nodeId]
+            if (!source || !Object.hasOwn(source, value.field)) fail('ENGINEERING_REVISION_INPUT_MISSING')
+            input[key] = structuredClone(source[value.field])
+          }
+          return input
+        }
+      }
+      node.rulesDigest = executionDigest({ previous: original.rulesDigest, spec })
+    }
+    if (spec.dependencyBindings || spec.previousOutputNodeId) {
+      const redirects = structuredClone(spec.dependencyBindings ?? {}), mapper = node.mapInput
+      const index = suffix.indexOf(spec), predecessors = [...prefix, ...suffix.slice(0,index).map(item => ({...templates.get(item.templateNodeId),id:item.nodeId,templateNodeId:item.templateNodeId}))]
+      const role = value => oldRoles[value.templateNodeId ?? value.id] ?? value.templateNodeId ?? value.id
+      const target = (id, expected) => {
+        const found = predecessors.find(value => value.id === id)
+        if (!expected || !found || role(found) !== (oldRoles[expected.id] ?? expected.id)
+          || executionDigest(found.outputSchema) !== executionDigest(expected.outputSchema)) fail('ENGINEERING_REVISION_DEPENDENCY_INVALID')
+        return found
+      }
+      for (const [id, source] of Object.entries(redirects)) {
+        if (!original.inputDependencies?.includes(id) || spec.dependencyArtifacts?.[id] || typeof source !== 'string') fail('ENGINEERING_REVISION_DEPENDENCY_INVALID')
+        target(source, templates.get(id))
+      }
+      if (spec.previousOutputNodeId) {
+        const previousIndex = previous.nodes.findIndex(value => value.id === spec.templateNodeId)
+        if (previousIndex < 1) fail('ENGINEERING_REVISION_DEPENDENCY_INVALID')
+        target(spec.previousOutputNodeId, previous.nodes[previousIndex-1])
+      }
+      node.inputDependencies = [...new Set([...(node.inputDependencies ?? []).map(id => redirects[id] ?? id), ...Object.values(redirects), ...(spec.previousOutputNodeId ? [spec.previousOutputNodeId] : [])])]
+      node.mapInput = args => {
+        const dependencyOutputs = {...args.dependencyOutputs}
+        for (const [id, source] of Object.entries(redirects)) {
+          if (!Object.hasOwn(dependencyOutputs, source)) fail('ENGINEERING_REVISION_INPUT_MISSING')
+          dependencyOutputs[id] = dependencyOutputs[source]
+        }
+        if (spec.previousOutputNodeId && !Object.hasOwn(dependencyOutputs,spec.previousOutputNodeId)) fail('ENGINEERING_REVISION_INPUT_MISSING')
+        return mapper({...args,dependencyOutputs,...(spec.previousOutputNodeId ? {previousOutput:dependencyOutputs[spec.previousOutputNodeId]} : {})})
+      }
+      node.rulesDigest = executionDigest({previous:node.rulesDigest,dependencyBindings:redirects,previousOutputNodeId:spec.previousOutputNodeId??null})
+    }
+    if (spec.dependencyArtifacts) {
+      const frozen = {}, mapper = node.mapInput
+      for (const [id, ref] of Object.entries(spec.dependencyArtifacts)) {
+        if (!original.inputDependencies?.includes(id) || revision.dependencyEvidence?.[id] !== ref) fail('ENGINEERING_REVISION_ARTIFACT_INVALID')
+        frozen[id] = await artifacts.read(ref)
+      }
+      node.inputDependencies = (node.inputDependencies ?? []).filter(id => !Object.hasOwn(frozen, id))
+      node.mapInput = args => mapper({ ...args, dependencyOutputs: { ...args.dependencyOutputs, ...structuredClone(frozen) } })
+      node.rulesDigest = executionDigest({ previous: node.rulesDigest, dependencies: spec.dependencyArtifacts })
+    }
+    return node
+  }))
+  workflow.nodes = [...prefix, ...nodes]
+  if (new Set(workflow.nodes.map(node => node.id)).size !== workflow.nodes.length) fail('ENGINEERING_REVISION_NODE_DUPLICATE')
+  const roles = new Map([...prefix.map(node => [node.id,oldRoles[node.id]]), ...suffix.map(node => [node.nodeId,oldRoles[node.templateNodeId] ?? node.templateNodeId])])
+  for (const id of engineeringRequiredNodes.filter(id => Object.values(oldRoles).includes(id))) {
+    if ([...roles.values()].filter(role => role === id).length !== 1) fail('ENGINEERING_REVISION_RESPONSIBILITY_MISSING')
+  }
+  if (executionDigest(previous.nodes.map(node => oldRoles[node.id]).filter(id => engineeringRequiredNodes.includes(id)))
+    !== executionDigest(workflow.nodes.map(node => roles.get(node.id)).filter(id => engineeringRequiredNodes.includes(id)))) fail('ENGINEERING_REVISION_RESPONSIBILITY_ORDER')
+  workflow.ownerContract = { ...workflow.ownerContract, rulesDigest: { base: workflow.ownerContract.rulesDigest ?? null, revisionRoles: Object.fromEntries(roles) }, validateRevision: validateEngineeringTaskRevision }
+  return workflow
+}
+function validateEngineeringTaskRevision({ previous, next, startNodeId }) {
+  if (previous.ownerContract?.id !== next.ownerContract?.id || !next.id.startsWith('task-engineering-revision-')
+    || !previous.nodes.some(node => node.id === startNodeId)) fail('ENGINEERING_REVISION_INVALID')
+  // 职责由受信工厂在构造阶段按 templateNodeId 核验；节点名称本身不是权限。
+  return true
+}
+
+export function createEngineeringRegistry({ repositories = [], ownerActorId, modelConfig, author, ghCommand, getTaskDirectories, readSessionEvents }) {
   text(ownerActorId, 'ENGINEERING_OWNER_REQUIRED')
   if (!Array.isArray(repositories) || typeof modelConfig !== 'function') fail('ENGINEERING_REGISTRY_CONFIG_INVALID')
   const configs = new Map(), routes = new Map(), preparing = new Map(), snapshots = new Map(), conflictReads = new Map()
@@ -312,14 +456,14 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       fail('ENGINEERING_DEPENDENCY_CONFIG_INVALID')
     // 路由说明只用于接纳前判断，不改变既有任务冻结的执行配置摘要。
     if (config.localAcceptance) createLocalAcceptanceRunner({ root: join(config.managedRoot, 'local-acceptance'), config: config.localAcceptance })
-    const { purpose, routingTerms, localAcceptance, dependencyRepositories, ...executionConfig } = config
-    configs.set(config.id, { config, digest: executionDigest({ config: executionConfig, ghCommand: ghCommand ?? null, author: author ?? null }) })
+    const { purpose, routingTerms, localAcceptance, dependencyRepositories, taskLocalAcceptance, ...executionConfig } = config
+    configs.set(config.id, { config, digest: executionDigest({ config: executionConfig, ghCommand: ghCommand ?? null, author: author ?? null }), legacyDigest: executionDigest({ config: { ...executionConfig, ...(taskLocalAcceptance === undefined ? {} : {taskLocalAcceptance}) }, ghCommand: ghCommand ?? null, author: author ?? null }) })
   }
   let store, artifactStore
   async function build(record, { allowDefinitionMigration = false } = {}) {
     const saved = record.config, entry = configs.get(saved.repoId)
     if(saved.localAcceptanceScope && executionDigest(saved.localAcceptanceScope)!==executionDigest({taskId:saved.taskId,uatEnvironment:saved.uatEnvironment,requestDigest:executionDigest({request:saved.input.request,acceptanceCriteria:saved.input.acceptanceCriteria})}))fail('ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH')
-    if (saved.kind !== 'engineering' || saved.registryVersion !== '1' || !entry || saved.repositoryDigest !== entry.digest || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_DEFINITION_CONFIG_DRIFT')
+    if (saved.kind !== 'engineering' || saved.registryVersion !== '1' || !entry || ![entry.digest,entry.legacyDigest].includes(saved.repositoryDigest) || saved.ownerActorId !== ownerActorId) fail('ENGINEERING_DEFINITION_CONFIG_DRIFT')
     const config = entry.config
     const managedRoot = saved.taskFiles ? join(saved.taskFiles.work, 'engineering', executionDigest([saved.taskId, saved.repoId]).slice(0, 24)) : config.managedRoot
     const baseline = !record.definitionVersion || ['13', '14', '15', '16', '17', '18', '19'].includes(record.definitionVersion)
@@ -344,7 +488,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       if (baseCommit !== prior.commitId) fail('ENGINEERING_DERIVED_BASE_INVALID')
       return createManagedWorkspaces({ root: managedRoot, sourceRepository: prior.repository, ...targetOptions })
     }
-    const workspaceAdapter = Object.fromEntries(['prepare', 'execute', 'reconcile'].map(method => [method, async value => (await workspaceFor(value))[method](value)]))
+    const workspaceAdapter = Object.fromEntries(['prepare', 'execute', 'reconcile'].map(method => [method, async value => (await workspaceFor(value))[method](value, { signal: repositoryReadOperation.getStore()?.signal })]))
     if (saved.branchSource) for (const method of ['prepare', 'execute']) {
       const operation = workspaceAdapter[method]
       workspaceAdapter[method] = async value => {
@@ -457,17 +601,57 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
           if (paths.some(path => !config.editablePaths.includes(path))) fail('ENGINEERING_CONFLICT_NOT_READ')
           return
         }
-        const read = conflictReads.get(`${runId}:${generation}:${requirementDigest}`)
-        if (paths.some(path => !read?.has(path))) fail('ENGINEERING_CONFLICT_NOT_READ')
+        const key = `${runId}:${generation}:${requirementDigest}`
+        const read = conflictReads.get(key) ?? new Map()
+        const state = await store.query({ kind: 'run', runId })
+        const workspace = await workspaceAdapter.prepare({ runId, generation, requirementDigest, baseCommit: (await artifactStore.read(state.run.requirementRef)).baseCommit })
+        for (const path of paths.filter(path => read.has(path))) {
+          const full = join(workspace.directory, path)
+          if (createHash('sha256').update(await readFile(full)).digest('hex') !== read.get(path)) read.delete(path)
+        }
+        if (paths.some(path => !read.has(path)) && readSessionEvents) {
+          for (const node of state.nodes.filter(node => node.executor === 'agent' && node.sessionBound && node.sessionId && node.generation === generation)) {
+            const events = await readSessionEvents(node.sessionId)
+            for (const path of await restoreEngineeringReadEvidence({ events, binding: { ...node, taskId: saved.taskId, runId },
+              paths, directory: workspace.directory, allowedPrefixes: config.discovery.allowedPrefixes }))
+              read.set(path, createHash('sha256').update(await readFile(join(workspace.directory, path))).digest('hex'))
+          }
+          conflictReads.set(key, read)
+        }
+        if (paths.some(path => !read.has(path))) fail('ENGINEERING_CONFLICT_NOT_READ')
+      }
+    }
+    // 只从本Run当前成功verify工件恢复；检查配置来自对应注册定义，不信任节点任意input.verification。
+    if(store && artifactStore && record.digest){
+      const current=await store.query({kind:'run',runId:saved.runId})
+      if(current.run?.workflowDigest===record.digest && Array.isArray(current.nodes)){
+        const verify=current.nodes.find(node=>(saved.taskRevision?.nodeRoles?.[node.nodeId]??node.nodeId)==='verify-candidate'&&node.status==='succeeded'&&node.drained&&node.outputRef&&node.inputRef)
+        if(verify){
+          const input=await artifactStore.read(verify.inputRef),output=await artifactStore.read(verify.outputRef)
+          const original=(await store.query({kind:'workflow.list'})).find(item=>item.digest===input.workflowDigest&&item.config?.runId===saved.runId&&item.config?.taskId===saved.taskId)
+          if(original && current.run.taskId===saved.taskId && input.nodeId===verify.nodeId && input.nodeVersion===verify.nodeVersion
+            && output.candidate?.generation===current.run.generation && output.candidate.requirementDigest===executionDigest(await artifactStore.read(current.run.requirementRef))
+            && executionDigest(original.config.checkpointChecks??config.checks)===executionDigest(saved.checkpointChecks??config.checks)
+            && original.config.repoId===saved.repoId && original.config.repositoryDigest===saved.repositoryDigest){
+            const verification=await restoreVerifiedCandidate({candidate:output.candidate,verification:output.verification,requiredChecks:checks.map(({id,version})=>({id,version}))})
+            workflowOptions.verifiedCandidates=[{candidate:output.candidate,verification}]
+          }
+        }
       }
     }
     const workflow = workflowFactory(workflowOptions)
     if (!record.definitionVersion || ['16', '17', '18', '19'].includes(record.definitionVersion)) { workflow.version = record.definitionVersion ?? '18'; workflow.ownerContract = engineeringWorkflowOwnerContract }
+    if (saved.taskRevision) {
+      const prior = (await store.query({ kind: 'workflow.list' })).find(value => value.digest === saved.taskRevision.fromDigest && value.config?.runId === saved.runId)
+      if (!prior || prior.digest === record.digest) fail('ENGINEERING_REVISION_BASE_MISSING')
+      const previous = await build(prior)
+      await applyEngineeringTaskRevision(workflow, previous.workflow, saved.taskRevision, artifactStore)
+    }
     const definition = defineExecutionWorkflow(workflow)
     const sameDefinition = !record.digest || [definition.digest, ...definition.legacyDigests].includes(record.digest)
     if (!sameDefinition && !allowDefinitionMigration) fail('ENGINEERING_DEFINITION_DRIFT')
     routes.set(saved.runId, { record: { ...record, digest: sameDefinition ? record.digest ?? definition.digest : definition.digest,
-      definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, runner, signals, drainFailures, localAcceptance, root: canonicalRoot })
+      definitionVersion: workflow.version }, workflow, workspaceAdapter, editAdapter, gitAdapterFor, prAdapterFor, runner, signals, drainFailures, localAcceptance, assertConflictReads: workflowOptions.assertConflictReads, root: canonicalRoot, managedRoot })
     return { workflow, definition }
   }
   function route(prepared) {
@@ -476,7 +660,11 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (found.length !== 1) fail('ENGINEERING_DELIVERY_SCOPE_INVALID')
     return found[0]
   }
-  async function repositoryInspect(binding, args, signal, input) {
+  function repositoryInspect(binding, args, signal, input) {
+    return repositoryReadOperation.run({ signal }, () => inspectRepository(binding, args, signal, input))
+  }
+  async function inspectRepository(binding, args, signal, input) {
+    signal?.throwIfAborted()
     const item = routes.get(binding.runId), saved = item?.record.config, config = configs.get(saved?.repoId)?.config
     if (!saved || !config || (!config.discovery && item.record.definitionVersion !== '19') || !['6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19'].includes(item.record.definitionVersion) || binding.taskId !== saved.taskId) fail('ENGINEERING_READ_SCOPE_INVALID')
     const { operation, query = '', path, offset = 0, source = 'current', limit = operation === 'read' ? 8000 : 100 } = args
@@ -519,6 +707,8 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       || (operation === 'read' && (typeof path !== 'string' || !path || path.split('/').some(part => !part)))
       || (path !== undefined && (typeof path !== 'string' || /[\\:\0\r\n]/.test(path) || path.split('/').some(part => ['.', '..', '.git'].includes(part.toLowerCase()))))) fail('ENGINEERING_READ_ARGUMENT_INVALID')
     const key = `${binding.runId}:${binding.generation}:${binding.inputDigest}:${source}`
+    // 当前工作树可在同一输入内被编辑；历史候选可缓存，当前读取必须重新冻结。
+    if (source === 'current') snapshots.delete(key)
     let snapshot = snapshots.get(key)
     if (!snapshot) {
       const state = await store.query({ kind: 'run', runId: binding.runId })
@@ -537,13 +727,13 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
           const stored = await artifactStore.read(file.ref)
           return Buffer.from(stored.data, 'base64')
         } }
-      } else if (source === 'previous') snapshot = await readCandidate(repairContext.candidate)
+      } else if (source === 'previous') snapshot = await readCandidate(repairContext.candidate, { signal })
       else {
       const workspace = await item.workspaceAdapter.prepare({ runId: binding.runId, generation: binding.generation,
         requirementDigest: binding.requirementDigest, baseCommit: input.baseCommit })
       if ((await item.workspaceAdapter.reconcile(workspace)).status !== 'succeeded') fail('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
       snapshot = await readCandidate(await freezeCandidate({ repository: workspace.directory, baseCommit: input.baseCommit,
-        generation: binding.generation, requirementDigest: binding.requirementDigest }))
+        generation: binding.generation, requirementDigest: binding.requirementDigest }, { signal }), { signal })
       }
       snapshots.set(key, snapshot)
       if (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value)
@@ -563,20 +753,24 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       if (!file) return { status: 'not_found', code: 'ENGINEERING_READ_NOT_FOUND', path, source,
         message: '该路径不在当前受信文件快照中；请先用 list/search 确认实际路径再读取。',
         suggestedCall: { operation: 'list', query: path.split('/').at(-1), source } }
-      const bytes = await snapshot.readFile(path), content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+      const bytes = await snapshot.readFile(path, { signal }), content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
       const text = content.slice(offset, offset + limit)
       if (source === 'current' && ['13', '14', '15', '16', '17', '18', '19'].includes(item.record.definitionVersion) && text.length) {
         const readKey = `${binding.runId}:${binding.generation}:${binding.requirementDigest}`
-        if (!conflictReads.has(readKey)) conflictReads.set(readKey, new Set())
-        conflictReads.get(readKey).add(path)
+        if (!conflictReads.has(readKey)) conflictReads.set(readKey, new Map())
+        conflictReads.get(readKey).set(path, createHash('sha256').update(bytes).digest('hex'))
       }
       return { path, text, expectedHash: createHash('sha256').update(bytes).digest('hex'), offset, nextOffset: offset + text.length < content.length ? offset + text.length : null, totalChars: content.length }
+    }
+    if (operation === 'search' && snapshot.searchFiles) {
+      const matches = await snapshot.searchFiles(files.map(file => file.path), query, { signal })
+      return { paths: matches.slice(offset, offset + limit), total: matches.length, nextOffset: offset + limit < matches.length ? offset + limit : null }
     }
     const matches = []
     for (const file of files) {
       signal?.throwIfAborted()
       if (operation === 'list' ? file.path.toLowerCase().includes(query.toLowerCase())
-        : (await snapshot.readFile(file.path)).toString('utf8').toLowerCase().includes(query.toLowerCase())) matches.push(file.path)
+        : (await snapshot.readFile(file.path, { signal })).toString('utf8').toLowerCase().includes(query.toLowerCase())) matches.push(file.path)
     }
     return { paths: matches.slice(offset, offset + limit), total: matches.length, nextOffset: offset + limit < matches.length ? offset + limit : null }
   }
@@ -767,6 +961,139 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (item.record.config.fingerprint !== fingerprint) fail('ENGINEERING_TASK_COMMAND_CONFLICT')
     controller.registerWorkflow(item.workflow)
     return { taskId, runId, workflowId, input: structuredClone(item.record.config.input) }
+  }
+  async function externalProcessScope({ state, node }) {
+    const route = routes.get(state.run.runId), saved = route?.record.config
+    const role = route?.workflow.ownerContract?.rulesDigest?.revisionRoles?.[node.nodeId] ?? node.nodeId
+    if (!saved || saved.taskId !== state.run.taskId || route.record.digest !== state.run.workflowDigest
+      || !['verify-candidate','prepare-commit'].includes(role) || node.executor !== 'code') return null
+    const config = configs.get(saved.repoId)?.config
+    if (!config) return null
+    // 使用build实际登记根，不根据输入路径猜任务目录。
+    const checkRoot = route.managedRoot
+    const binding = Object.fromEntries(['runId','nodeRunId','nodeId','generation','leaseEpoch','inputDigest'].map(key=>[key,node[key]]))
+    const path = join(checkRoot, 'check-processes', `${node.nodeRunId}-${node.leaseEpoch}.jsonl`)
+    return { path, binding, async inspect() {
+      const claim = await store.query({kind:'node.process-claim',nodeRunId:node.nodeRunId,leaseEpoch:node.leaseEpoch})
+      if (!claim || claim.binding.inputDigest !== node.inputDigest || claim.binding.runId !== state.run.runId) return {drained:false,reason:'claim-identity-unconfirmed',processes:[]}
+      const effects = await store.query({kind:'effect.list',runId:state.run.runId})
+      if (effects.some(effect=>effect.nodeRunId===node.nodeRunId) || effects.some(effect=>!['succeeded','failed'].includes(effect.state))) return {drained:false,reason:'unsettled-effects',processes:[]}
+      const processes = await verificationProcessSnapshot()
+      let records
+      try { records=(await readFile(path,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)) } catch(error) { if(error.code!=='ENOENT')throw error }
+      if(records)return {...inspectVerificationProcessJournal(records,binding,processes),method:'native-child-journal',claimedAt:claim.claimedAt}
+      // 旧版本没有PID日志：只接受原生检查职责、原登记命令及本轮候选目录的完整OS回读。
+      const commands=(saved.checkpointChecks??config.checks).flatMap(check=>check.steps??[{executable:check.executable,args:check.args}])
+      const born=Date.parse(claim.claimedAt), recovered=Date.parse(claim.recoveredAt), directories=[]
+      if(!Number.isFinite(recovered)||recovered<born)return {drained:false,reason:'historical-recovery-window-unconfirmed',processes:[]}
+      for(const name of await readdir(join(checkRoot,'checks')).catch(error=>{if(error.code==='ENOENT')return[];throw error})) {
+        if(!/^verify-[a-z0-9]+$/i.test(name))continue
+        const directory=join(checkRoot,'checks',name),info=await stat(directory)
+        if(info.isDirectory()&&info.birthtimeMs>=born&&info.birthtimeMs<=recovered)directories.push({directory,createdAt:info.birthtime.toISOString()})
+      }
+      if(!directories.length)return {drained:false,reason:'historical-candidate-directory-unconfirmed',processes:[]}
+      const possible=historicalVerificationProcesses({processes,commands,root:checkRoot,claimedAt:claim.claimedAt})
+      return {drained:possible.length===0,method:'historical-command-process-snapshot',reason:possible.length?'possible-check-process-alive':'registered-check-processes-absent',
+        processes:possible.map(({pid,parent,born})=>({pid,parent,born})),claimedAt:claim.claimedAt,directories,commandsDigest:executionDigest(commands),workflowDigest:state.run.workflowDigest,
+        snapshotDigest:executionDigest(processes.map(({pid,parent,born,executable,command})=>({pid,parent,born,identity:executionDigest({executable,command})})))}
+    } }
+  }
+  async function taskRevisionCapabilities({ runId }) {
+    const route = routes.get(runId)
+    if (!route) return null
+    const entry = configs.get(route.record.config.repoId), profiles = new Map()
+    for (const checks of [entry.config.checks, ...(await store.query({ kind: 'workflow.list' })).filter(record => record.config?.repoId === entry.config.id).map(record => record.config.checkpointChecks)].filter(Boolean))
+      profiles.set(executionDigest(checks), { digest: executionDigest(checks), checks: structuredClone(checks) })
+    const scope = {taskId:route.record.config.taskId,uatEnvironment:route.record.config.uatEnvironment,requestDigest:executionDigest({request:route.record.config.input.request,acceptanceCriteria:route.record.config.input.acceptanceCriteria})}
+    const localProfiles = new Map()
+    const registered = (await store.query({kind:'workflow.list'})).filter(record => record.config?.repoId === entry.config.id).map(record => ({scope:record.config.localAcceptanceScope,localAcceptance:record.config.localAcceptanceConfig}))
+    for (const item of [...(entry.config.taskLocalAcceptance ?? []),...registered]) if (item.localAcceptance && executionDigest(item.scope??null) === executionDigest(scope)) {
+      const profile = {scope:structuredClone(scope),localAcceptance:structuredClone(item.localAcceptance)}
+      localProfiles.set(executionDigest(profile),{digest:executionDigest(profile),...profile})
+    }
+    return { settleManagedCandidate: '仅已有正式managed-edit链、原生读取凭据和当前完整树证明吻合，才能结算原no-additional-change；缺证先让原会话实际读取。', resumeCurrent: '仅当前pure/read节点且无节点效果；写入必须先按领域回执结算。', checkProfiles: [...profiles.values()], localAcceptanceProfiles:[...localProfiles.values()], templates: route.workflow.nodes.map(node => ({ templateNodeId: node.id,
+      executor: node.executor, allowedEffects: node.allowedEffects, inputSchema: node.inputSchema, outputSchema: node.outputSchema, inputDependencies: node.inputDependencies ?? [],
+      requiredResponsibility: engineeringRequiredNodes.includes(route.workflow.ownerContract.rulesDigest?.revisionRoles?.[node.id] ?? node.id) })),
+      instruction: '阅读真实失败和命令后选择恢复策略。Host检查不适用应选择checkProfileDigest修订本Task检查，不为错误命令修改业务代码。nodes为完整未完成后缀；受信templateNodeId可复用，真实验证/验收/交付职责必须保留。可删除零效果的冗余实施步骤，让真实verify检查现有候选；dependencyArtifacts可将原依赖绑定本Run同代成功节点的真实outputRef，不填造数据。dependencyBindings将受信mapper原依赖重定向同职责前驱，previousOutputNodeId可保留真实verified build；localAcceptanceProfileDigest仅选本Task精确scope的Host配置，无匹配场景不得套其他任务。已发生效果不得删除重派；原节点信息已修复可resumeCurrent，执行仍核原合同。' }
+  }
+  async function reviseTaskWorkflow({ taskId, runId, commandId, expectedRevision, revision, reason, evidenceRefs }, controller) {
+    const prior = routes.get(runId), state = await store.query({ kind: 'run', runId })
+    if (!prior || prior.record.config.taskId !== taskId || state.run.revision !== expectedRevision) fail('ENGINEERING_REVISION_STALE')
+    if (revision.settleManagedCandidate) {
+      if (revision.nodes || revision.checkProfileDigest || revision.localAcceptanceProfileDigest || revision.resumeCurrent) fail('ENGINEERING_REVISION_INVALID')
+      const waiting = state.nodes.filter(node => node.status === 'waiting'), node = waiting[0]
+      if (waiting.length !== 1 || node.nodeId !== revision.startNodeId || node.nodeId !== 'apply-changes'
+        || state.pendingInputCount || state.nodes.some(node => !node.drained) || !prior.assertConflictReads) fail('ENGINEERING_REVISION_RESUME_UNSAFE')
+      const input = await artifactStore.read(node.inputRef)
+      if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== state.run.workflowDigest) fail('ENGINEERING_REVISION_STALE')
+      const binding = { ...node, taskId, runId, requirementDigest: executionDigest(await artifactStore.read(state.run.requirementRef)) }
+      await prior.assertConflictReads({ ...binding, paths: input.data.proposal?.reviewedPaths ?? [] })
+      await proveEngineeringNoAdditionalChange({ store, binding, input: input.data })
+      const current = await store.query({ kind: 'run', runId })
+      if (current.run.revision !== expectedRevision || current.pendingInputCount || current.nodes.some(node => !node.drained)) fail('ENGINEERING_REVISION_STALE')
+      return controller.recover({ commandId, runId })
+    }
+    if (revision.resumeCurrent) {
+      if (revision.nodes || revision.checkProfileDigest || revision.localAcceptanceProfileDigest || state.nodes.filter(node => node.status === 'waiting').length !== 1
+        || revision.startNodeId !== state.nodes.find(node => node.status === 'waiting')?.nodeId) fail('ENGINEERING_REVISION_INVALID')
+      const node = prior.workflow.nodes.find(node => node.id === revision.startNodeId)
+      const current = state.nodes.find(value => value.nodeId === revision.startNodeId)
+      const effects = await store.query({ kind: 'effect.list', runId })
+      if (state.run.status !== 'waiting' || state.pendingInputCount || state.nodes.some(value => !value.drained)
+        || !node || node.executor !== 'code' || node.allowedEffects.some(effect => !['pure','read'].includes(effect))
+        || effects.some(effect => effect.nodeRunId === current.nodeRunId)) fail('ENGINEERING_REVISION_RESUME_UNSAFE')
+      return controller.recover({ commandId, runId })
+    }
+    const config = { ...prior.record.config, taskRevision: { fromDigest: state.run.workflowDigest, startNodeId: revision.startNodeId, reason, requestId: commandId,
+      ...(revision.nodes ? { nodes: structuredClone(revision.nodes) } : {}) } }
+    for (const spec of revision.nodes ?? []) for (const [id, ref] of Object.entries(spec.dependencyArtifacts ?? {})) {
+      const source = state.nodes.find(node => node.nodeId === id && node.status === 'succeeded' && node.outputRef === ref)
+      if (!source || source.generation !== state.run.generation) fail('ENGINEERING_REVISION_ARTIFACT_INVALID')
+      await artifactStore.read(ref)
+      config.taskRevision.dependencyEvidence ??= {}
+      config.taskRevision.dependencyEvidence[id] = ref
+    }
+    if (revision.checkProfileDigest) {
+      const selected = (await taskRevisionCapabilities({ runId })).checkProfiles.find(profile => profile.digest === revision.checkProfileDigest)
+      if (!selected) fail('ENGINEERING_REVISION_CHECK_PROFILE_INVALID')
+      config.checkpointChecks = selected.checks
+    }
+    if (revision.localAcceptanceProfileDigest) {
+      const selected = (await taskRevisionCapabilities({runId})).localAcceptanceProfiles.find(profile => profile.digest === revision.localAcceptanceProfileDigest)
+      if (!selected) fail('ENGINEERING_REVISION_LOCAL_PROFILE_INVALID')
+      config.localAcceptanceConfig = selected.localAcceptance
+      config.localAcceptanceScope = selected.scope
+      config.taskRevision.localAcceptanceProfileDigest = selected.digest
+    }
+    const start = prior.workflow.nodes.findIndex(node => node.id === revision.startNodeId)
+    if (start < 0) fail('ENGINEERING_REVISION_INVALID')
+    const planned = [...prior.workflow.nodes.slice(0,start), ...(revision.nodes ?? prior.workflow.nodes.slice(start).map(node => ({nodeId:node.id,templateNodeId:node.id}))).map(spec => {
+      const node = prior.workflow.nodes.find(node => node.id === spec.templateNodeId)
+      if (!node) fail('ENGINEERING_REVISION_NODE_INVALID')
+      return { ...node, id: spec.nodeId }
+    })]
+    config.taskRevision.nodePlan = planned.map(node => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor }))
+    const previousRoles = prior.workflow.ownerContract.rulesDigest?.revisionRoles ?? Object.fromEntries(prior.workflow.nodes.map(node => [node.id,node.id]))
+    config.taskRevision.nodeRoles = Object.fromEntries(planned.map(node => {
+      const spec = revision.nodes?.find(value => value.nodeId === node.id)
+      return [node.id,previousRoles[spec?.templateNodeId ?? node.id] ?? spec?.templateNodeId ?? node.id]
+    }))
+    const record = { ...prior.record, workflowId: `task-engineering-revision-${executionDigest([runId,commandId]).slice(0,32)}`, config }
+    delete record.digest
+    let applied = false
+    try {
+      const next = await build(record)
+      if (executionDigest(record.config.taskRevision.nodePlan) !== executionDigest(next.definition.nodes.map(node => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor })))) fail('ENGINEERING_REVISION_NODE_PLAN_MISMATCH')
+      const persisted = { ...routes.get(runId).record, config: record.config }
+      await store.command({ id: `workflow:${next.definition.digest}`, kind: 'workflow.register', args: persisted })
+      routes.get(runId).record = persisted
+      controller.registerWorkflow(next.workflow)
+      const receipt = await controller.reviseTaskWorkflow({ commandId, taskId, runId, expectedRevision, workflowId: next.definition.id,
+        workflowDigest: next.definition.digest, startNodeId: revision.startNodeId, reason, evidenceRefs })
+      applied = true
+      await controller.recover({ commandId: `revision-drive:${commandId}`, runId })
+      return receipt
+    } catch (error) { if (!applied) routes.set(runId, prior); throw error }
   }
   async function updateCheckpoint({ runId, requestId, kind, checks, localAcceptance, scope, maintenance }, controller, artifacts) {
     text(requestId,'WORKFLOW_REQUEST_ID_REQUIRED')
@@ -1002,7 +1329,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       preparing.set(key, { digest, promise }); return promise
     },
     reissueTask,
-    updateCheckpoint,
+    updateCheckpoint, externalProcessScope,
     availableWorkflows: () => [...configs.values()].map(({ config }) => ({ id: 'task-engineering', repositoryId: config.id, dependencyRepositories: [...(config.dependencyRepositories ?? [])], editablePaths: [...config.editablePaths], ...(config.discovery ? { discovery: structuredClone(config.discovery) } : {}), purpose: config.purpose ?? '仅在配置范围内开发，业务验收后提交到用户明确指定的UAT分支；用户须明确uat1至uat9环境，由Host映射feature/uatN-base；缺少环境先询问，禁止提交main' })),
   }
 }

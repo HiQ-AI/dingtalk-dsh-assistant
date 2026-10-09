@@ -378,12 +378,26 @@ function Assert-LaunchInputs($launchRecord) {
   if($path-notin $launchRecord.inputPaths -or (Get-FileHash -LiteralPath $path).Hash-ne $launchRecord.inputHashes.$path){throw '接续配置输入漂移'}
  }
 }
-function Read-DeploymentRuntime($launchRecord) {
+function Test-MaintenanceBackfillPause($health,$maintenance) {
+ if($health.status-ne 'degraded' -or $health.transport-ne 'dws' -or $health.inboundConfigured-ne $true -or $health.executionStore.healthy-ne $true -or $health.executionStore.failure -or $health.recoveryIssueCount-ne 0){return $false}
+ if($maintenance.active-ne $true -or $maintenance.phase-ne 'stopping' -or $maintenance.drained-ne $true -or $maintenance.resumePermitted-ne $true -or -not $maintenance.sealedIncarnation -or -not $maintenance.processIncarnation -or $maintenance.sealedIncarnation-eq $maintenance.processIncarnation){return $false}
+ foreach($kind in @('nodes','owners','effects','messages')){if($maintenance.busy.$kind-ne 0){return $false}}
+ if($health.dwsBridge.humanReplies.state-ne 'ready' -or @($health.dwsBridge.groups).Count-eq 0){return $false}
+ $paused=$false
+ foreach($group in $health.dwsBridge.groups){
+  if($group.listener.state-ne 'ready'){return $false}
+  if($group.backfill.state-eq 'failed' -and $group.backfill.lastError-eq 'RUNTIME_MAINTENANCE_ACTIVE'){$paused=$true}
+  elseif($group.backfill.state-ne 'ok' -or $group.backfill.lastError){return $false}
+ }
+ return $paused
+}
+function Read-DeploymentRuntime($launchRecord,[switch]$AllowMaintenancePause) {
  $health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 20
- if($health.status-ne 'ok'){throw '部署运行健康检查失败'}
  $maintenance=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 20
  if($maintenance.maintenanceId-ne $launchRecord.maintenanceId){throw '启动后维护许可漂移'}
- return @{health=$health;maintenance=$maintenance;checkedAt=(Get-Date).ToUniversalTime().ToString('o')}
+ $paused=$AllowMaintenancePause -and (Test-MaintenanceBackfillPause $health $maintenance)
+ if($health.status-ne 'ok' -and -not $paused){throw '部署运行健康检查失败'}
+ return @{health=$health;maintenance=$maintenance;maintenanceBackfillPaused=[bool]$paused;checkedAt=(Get-Date).ToUniversalTime().ToString('o')}
 }
 function Resume-Deployment($result,$launchRecord) {
  if(-not $result.ready){return $result}
@@ -396,7 +410,14 @@ function Resume-Deployment($result,$launchRecord) {
   if(-not $state.resumePermitted){throw '当前实例不具备封存许可恢复资格'}
   [void](Change-MaintenancePhase $state 'resume' $launchRecord.maintenanceId)
  }
+ # Resume只提交一次，等待真实回补消除维护暂停。
+ for($attempt=0;$attempt-lt 30;$attempt++){
+  $health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 20
+  if(-not (Test-MaintenanceBackfillPause $health $state)){break}
+  Start-Sleep -Seconds 2
+ }
  $runtimeReadback=Read-DeploymentRuntime $launchRecord
+ if($runtimeReadback.health.transport-eq 'dws' -and ($runtimeReadback.health.inboundProcessing-ne $true -or $runtimeReadback.health.dwsBridge.healthy-ne $true)){throw '恢复后DWS收信尚未健康'}
  $after=$runtimeReadback.maintenance
  if($after.active -or $after.maintenanceId-ne $launchRecord.maintenanceId){throw '恢复派发回读失败'}
  $result.runtimeReadback=$runtimeReadback;$result.maintenance=$after;$result.dispatchResumed=$true
@@ -479,7 +500,7 @@ function Read-Deployment($launchRecord) {
  }
  $webLog=Get-DeploymentWebLog $launchRecord $fresh
  $webProof=Run-Node @($checker,'web',$webLog)|ConvertFrom-Json
- $runtimeReadback=Read-DeploymentRuntime $launchRecord
+ $runtimeReadback=Read-DeploymentRuntime $launchRecord -AllowMaintenancePause
  $maintenance=$runtimeReadback.maintenance
  return @{runtimeReadback=$runtimeReadback;status='ready';ready=$true;pid=$fresh.ProcessId;launcherPid=$launchRecord.launcherPid;tasks=$tasks.Count;history=$history;messageImpact=$messageImpactProof;package=$packageReadback;observer=$observerReadback;web=$webProof;maintenance=$maintenance;dispatchResumed=(-not $maintenance.active);logs=@($logs);scheduledTaskChanged=[bool]$launchRecord.enrollmentAutostartRestore;businessAcceptancePassed=$false}
 }

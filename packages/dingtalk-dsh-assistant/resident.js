@@ -264,8 +264,10 @@ export async function apply(ctx, config = {}) {
     runtime.listAuthorizationRequests = async () => [...legacyListAuthorizations(), ...await workflow.listApprovalRequests()]
     const legacyCreateTask = runtime.createTask
     runtime.createTask = args => workflow.isGroup(args.groupId) ? Promise.reject(new Error('workflow_group_use_message_input')) : legacyCreateTask(args)
-    const taskFailures = await workflow.recoverExecutionTasks()
-    for (const failure of taskFailures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
+    // 恢复可能包含长外部对账；不能阻止同一实例注册正常监视 timer。
+    void workflow.recoverExecutionTasks().then(taskFailures => {
+      for (const failure of taskFailures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
+    }).catch(error => ctx.logger.warn(error.message))
   }
   const recoverWorkflow = () => workflow.recover().then(result => {
     for (const failure of result.failures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)

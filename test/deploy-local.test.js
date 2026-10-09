@@ -62,6 +62,58 @@ test('统一入口Check实际核SHA且目录零写', async () => {
   assert.equal(result.code, 0); assert.equal(summary(result).writes, 0)
   assert.deepEqual(await snapshot(f.root), before)
 })
+test('统一入口显式保留维护时不自动恢复其它任务，只有Resume才派发', async () => {
+  const f = await fixture()
+  const args = JSON.parse(await readFile(f.argumentsFile, 'utf8'))
+  args.HoldMaintenance = true
+  await writeFile(f.argumentsFile, JSON.stringify(args))
+  const result = await f.run()
+  assert.equal(result.code, 0)
+  assert.equal(summary(result).stage, 'readback')
+  assert.equal(summary(result).dispatchResumed, false)
+  assert.deepEqual(await f.calls(), ['deploy', 'readback'])
+  const resumed = await f.run('Resume')
+  assert.equal(resumed.code, 0)
+  assert.equal(summary(resumed).dispatchResumed, true)
+  assert.deepEqual(await f.calls(), ['deploy', 'readback', 'resume'])
+})
+async function drainFixture(active=false){
+ const f=await fixture(),scripts=join(f.root,'docs/acceptance/topic-context-completeness/scripts')
+ const wrapper=join(f.root,'scripts/deploy-local.ps1'),source=await readFile(wrapper,'utf8')
+ const mock=`function Invoke-RestMethod { param($Uri,$Method,$ContentType,$Headers,$Body,[switch]$NoProxy,$TimeoutSec)
+ $path='${join(f.root,'state.json').replaceAll('\\','/')}'
+ $state=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
+ if($Method-eq'Post'){$b=$Body|ConvertFrom-Json;$state.active=$true;$state.phase='draining';$state.revision++;$state.maintenanceId=$b.maintenanceId;$state|ConvertTo-Json -Depth 4|Set-Content $path}
+ return $state
+}
+`
+ await writeFile(wrapper,source.replace("$ErrorActionPreference='Stop'","$ErrorActionPreference='Stop'\n"+mock))
+ const core=join(scripts,'deploy-owner-repair.ps1')
+ await writeFile(core,(await readFile(core,'utf8')).replace('[string]$RepairStoppedLaunch)','[string]$RepairStoppedLaunch,[string]$ContinueMaintenanceId,[int]$ExpectedMaintenanceRevision)').replace("$stage=if($Check)","if($Check-and-not(Test-Path (Join-Path $root 'drained'))){throw 'DEPLOY_NOT_DRAINED：fixture'}\n$stage=if($Check)"))
+ await writeFile(join(f.root,'state.json'),JSON.stringify({active,phase:active?'draining':'inactive',revision:520,maintenanceId:'old',drained:false,busy:{nodes:1,owners:0,effects:0,messages:0}}))
+ await writeFile(join(scripts,'recover-verification-drain.mjs'),`import{readFile,writeFile}from'node:fs/promises';import{createHash}from'node:crypto';const root=${JSON.stringify(f.root)},mode=process.argv[2],manifest=process.argv[3];const state=JSON.parse(await readFile(root+'/state.json'));if(mode==='capture')await writeFile(manifest,'{}');console.log(JSON.stringify({eligibleRecovery:true,needsMaintenance:!state.active,writes:0,maintenanceId:state.maintenanceId,maintenanceRevision:state.revision,profileSha256:createHash('sha256').update(await readFile(root+'/profile.yml')).digest('hex')}));`)
+ await writeFile(join(scripts,'recover-quarantined-echo.ps1'),`param([string]$Scope,[string]$IncidentManifest,[string]$ExpectedProfileSha256,[string]$EvidenceDirectory,[switch]$Check)
+ $root='${f.root.replaceAll('\\','/')}'
+ $s=Get-Content "$root/state.json" -Raw|ConvertFrom-Json
+ if(-not$Check){'bridge'|Add-Content "$root/calls.log";'drained'|Set-Content "$root/drained";$s.drained=$true;$s.busy.nodes=0;$s|ConvertTo-Json -Depth 4|Set-Content "$root/state.json"}
+ @{ContinueMaintenanceId=$s.maintenanceId;ExpectedMaintenanceRevision=$s.revision}|ConvertTo-Json
+ `)
+ return f
+}
+test('统一入口旧检查排空预览零写且不冒称完整部署Check通过',async()=>{
+ const f=await drainFixture(),before=await snapshot(f.root),result=await f.run('Check'),report=summary(result)
+ assert.equal(result.code,0);assert.equal(report.eligibleRecovery,true);assert.equal(report.needsMaintenance,true);assert.equal(report.coreCheckComplete,false);assert.equal(report.writes,0)
+ assert.deepEqual(await snapshot(f.root),before)
+})
+test('统一入口旧检查先受管排空再完整部署且profile原字节不变',async()=>{
+ const f=await drainFixture(),before=await readFile(join(f.root,'profile.yml')),result=await f.run()
+ assert.equal(result.code,0,JSON.stringify(result));assert.equal(summary(result).dispatchResumed,true)
+ assert.deepEqual(await f.calls(),['bridge','deploy','readback','resume']);assert.deepEqual(await readFile(join(f.root,'profile.yml')),before)
+})
+test('统一入口不能占用未指定的已有维护',async()=>{
+ const f=await drainFixture(true),result=await f.run('Check')
+ assert.equal(result.code,1);assert.deepEqual(await f.calls(),[])
+})
 test('统一入口单调用顺序完成并仅输出汇总；重复Readback/Resume不安装', async () => {
   const f = await fixture(), result = await f.run()
   assert.equal(result.code, 0); assert.equal(summary(result).dispatchResumed, true)
@@ -102,4 +154,14 @@ test('最小Package JSON默认生成证据目录且Check保持profile原字节',
   assert.equal(result.code, 0, result.stderr)
   assert.deepEqual(await snapshot(f.root), before)
   assert.deepEqual(await f.calls(), [])
+})
+
+test('统一入口普通活跃节点不进入旧事故桥且保留未排空原因',async()=>{
+ const f=await drainFixture(),helper=join(f.root,'docs/acceptance/topic-context-completeness/scripts/recover-verification-drain.mjs')
+ const core=join(f.root,'docs/acceptance/topic-context-completeness/scripts/deploy-owner-repair.ps1')
+ await writeFile(core,(await readFile(core,'utf8')).replace('DEPLOY_NOT_DRAINED：fixture','DEPLOY_NOT_DRAINED'))
+ await writeFile(helper,"console.log(JSON.stringify({eligibleRecovery:false,writes:0,reason:'DRAIN_INCIDENT_NOT_CURRENT'}))")
+ const before=await snapshot(f.root),result=await f.run('Check'),report=summary(result)
+ assert.equal(result.code,1);assert.equal(report.ok,false);assert.match(report.reason??JSON.stringify(report),/DEPLOY_NOT_DRAINED/)
+ assert.deepEqual(await f.calls(),[]);assert.deepEqual(await snapshot(f.root),before)
 })

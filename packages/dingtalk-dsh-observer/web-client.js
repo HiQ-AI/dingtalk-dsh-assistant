@@ -949,7 +949,7 @@ window.__ModuleLoader__.load({
               React.createElement('div', { style: { minWidth: 0 } },
                 React.createElement('div', { className: 'observer-task-step-heading' },
                   React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '4px 10px' } },
-                    React.createElement('strong', { style: { fontSize: 14, lineHeight: 1.6 } }, node.title || nodeTitle[node.nodeId] || '执行步骤'),
+                    React.createElement('strong', { style: { fontSize: 14, lineHeight: 1.6 } }, node.title || nodeTitle[node.templateNodeId ?? node.nodeId] || '执行步骤'),
                     React.createElement('span', { style: { color: tone, fontSize: 12 } }, nodeState[node.status] || '状态未记录')),
                   React.createElement('div', { style: { marginLeft: 'auto', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, React.createElement(TaskStepElapsed, { node }))),
                 React.createElement('span', { style: { display: 'block', marginBottom: 6, color: colors.muted, fontSize: 12, fontVariantNumeric: 'tabular-nums' } },

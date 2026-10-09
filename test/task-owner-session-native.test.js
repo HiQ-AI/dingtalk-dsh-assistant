@@ -15,11 +15,12 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { createTaskOwnerSessions } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
+import { createTaskOwnerSessions, previouslyReadOwnerArtifacts, ownerDecisionSchema } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
+import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
@@ -426,7 +427,7 @@ test('Owner引用可在第十步纠正提交，旧lease仍不能继续', async t
   }
 })
 
-test('Owner原生修复仅接受当前绑定，错误动作可在同轮纠正',async t=>{
+test('Owner原生旧修复动作无论绑定是否有效均拒绝并回到业务观察',async t=>{
  for(const mode of ['absent','stale','valid']){
   const root=await mkdtemp(join(tmpdir(),'owner-repair-binding-'));t.after(()=>rm(root,{recursive:true,force:true}))
   const repair={stageId:'stage-1',runId:'run-1',generation:1,runRevision:0,requirementRevision:2}
@@ -435,8 +436,8 @@ test('Owner原生修复仅接受当前绑定，错误动作可在同轮纠正',a
   const result=await h.sessions.run({binding:{taskId:'task-repair',sessionId:'owner-repair',turnId:'turn-1',leaseEpoch:1,ownerEpoch:1,sessionBound:false},
    input:{goal:{request:'调查'},currentExecution:mode==='absent'?null:{repairable:true,repairBinding:repair}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>submitted.push(value)})
   assert.equal(result.status,'submitted');assert.equal(submitted.length,1)
-  assert.equal(submitted[0].action,mode==='valid'?'repairCurrentStage':decision.action)
-  assert.equal(h.requests.length,mode==='valid'?1:2)
+  assert.equal(submitted[0].action,decision.action)
+  assert.equal(h.requests.length,2)
  }
 })
 
@@ -607,4 +608,135 @@ test('Owner同会话刷新共享索引并读取未在当前版本清单中的历
    readArtifact:async value=>{reads.push(value);return value==='task-materials-index'?{entries:[{artifactRef:ref,status:'history'}]}:{result:{markdown:'历史原文'}}}})
   assert.deepEqual(reads,foreign?['task-materials-index']:['task-materials-index',ref])
  }
+})
+
+
+for (const mode of ['new', 'partial', 'legacy']) test(`原生Owner动作应用未知错误完整反馈后换策略并推进原Task，不重apply旧决定 mode=${mode}`, async t => {
+  const partial = mode === 'partial'
+  const root = await mkdtemp(join(tmpdir(), 'owner-action-feedback-'))
+  const store = await openExecutionStore({ dbPath: join(root, 'control.sqlite'), instanceId: 'owner-action-feedback', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  let executionCalls = 0, applicationCalls = 0, feedbackRef, owner
+  const workflow = { id: 'actual-work', version: '1', nodes: [{ id: 'work', version: '1', executor: 'code', allowedEffects: ['pure'],
+    inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement,
+    execute: async ({ input }) => { executionCalls++; return { result: input.request, verified: true } } }] }
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow] })
+  const h = await host(root, null, step => step === 2 ? feedbackRef : null,
+    step => ({ action: 'advance', summary: step === 1 ? '先尝试当前配置' : '完整错误证明配置已修正，使用当前计划继续', evidenceRefs: step === 1 ? [] : [feedbackRef], ...(partial && step === 1 ? { appendStages: [{ workflowId: workflow.id, gate: 'none' }] } : {}) }), undefined, 2)
+  t.after(async () => { await owner?.close(); await h.close(); await controller.close(); await store.close() })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'one', workflowId: workflow.id, input: { request: '原业务目标' } }] })
+  let legacyFailure = mode === 'legacy'
+  const ownerStore = { ...store, async command(value) {
+    if (legacyFailure && value.kind === 'task.owner.action.fail') { legacyFailure = false; const args = { ...value.args }; delete args.diagnosticRef; return store.command({ ...value, args }) }
+    return store.command(value)
+  } }
+  owner = createTaskOwnerController({ ctx: h.ctx, store: ownerStore, artifacts, controller, modelConfig: () => ({ provider: 'owner-fixture', model: 'scripted' }),
+    authorizeStages: async () => true,
+    advanceTask: async taskId => { applicationCalls++; if (applicationCalls === 1) throw Object.assign(new Error('实际命令 check --suite missing-suite，注册候选却是 correct-suite'), { code: 'ARBITRARY_HOST_CONFIGURATION_ERROR', cause: new Error('底层选择不存在；业务代码尚未执行') }); return controller.advanceTaskPlan(taskId) },
+    sessionRunner: { async run(args) { h.setLease(args.binding.leaseEpoch); if (args.binding.leaseEpoch === 2) {
+      const event = args.input.events.find(item => item.eventType === 'system.recovery'); assert.ok(event?.payloadRef); feedbackRef = event.payloadRef
+      const diagnostic = await artifacts.read(feedbackRef); assert.equal(diagnostic.kind, 'owner-action-failure')
+      assert.equal(diagnostic.errors[0].code, 'ARBITRARY_HOST_CONFIGURATION_ERROR'); assert.match(diagnostic.errors[0].message, mode === 'legacy' ? /历史决定应用失败/ : /check --suite missing-suite/)
+      if (mode !== 'legacy') assert.match(diagnostic.errors[1].message, /业务代码尚未执行/); assert.equal(diagnostic.receipts.length, partial ? 1 : 0); assert.equal(diagnostic.plan.stages.length, partial ? 2 : 1); assert.equal(diagnostic.plan.stages[0].status, 'ready')
+    } return h.sessions.run(args) }, async close() {} } })
+  await owner.ensure({ taskId: 'task', criteria: ['原业务目标'], sourceKey: 'source', origin: {} })
+  await owner.drive('task'); const initial = await store.query({ kind: 'task.owner', taskId: 'task' })
+  assert.equal((await owner.applyPending()).length, 1)
+  if (mode === 'legacy') { assert.equal((await store.query({kind:'task.owner',taskId:'task'})).status,'blocked'); assert.deepEqual(await owner.applyPending(),[]); assert.equal(applicationCalls,1) }
+  const failed = await store.query({ kind: 'task.owner', taskId: 'task' }); assert.equal(failed.status, 'pending'); assert.equal(failed.sessionId, initial.sessionId)
+  assert.equal((await store.query({ kind: 'task.owner.actions.pending' })).length, 0)
+  assert.deepEqual(await owner.applyPending(), []); assert.equal(applicationCalls, 1)
+  await owner.drive('task'); assert.deepEqual(await owner.applyPending(), [])
+  const plan = await controller.taskPlan('task'), state = await controller.whenIdle(plan.stages[0].runId)
+  assert.equal(state.run.status, 'succeeded'); assert.equal(plan.stages.length, partial ? 2 : 1); assert.ok(executionCalls >= 1)
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'task' })).sessionId, initial.sessionId)
+  const native = await h.ctx.sessionPersistence.inspect(initial.sessionId)
+  assert.equal(native.events.filter(e => e.type === 'dingtalk/task-owner-session').length, 1)
+  assert.ok(JSON.stringify(native.events).includes(mode === 'legacy' ? '历史决定应用失败' : '底层选择不存在'))
+})
+
+ test('未决真实效果拒绝Owner新派发并在原生同轮转为对账等待', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-effect-feedback-'))
+  const store = await openExecutionStore({ dbPath: join(root, 'control.sqlite'), instanceId: 'owner-effect', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  let sends = 0, advances = 0
+  const delivery = createExecutionDelivery({ store, artifacts,
+    authorize: async () => null, authorizeExternal: async () => ({ principalId: 'owner', authorizationRef: 'original-grant' }),
+    externalAdapter: { execute: async () => { sends++; return { status: 'unknown', reason: 'ACK_LOST' } } } })
+  const workflow = { id: 'external-work', version: '1', nodes: [{ id: 'send', version: '1', executor: 'code', allowedEffects: ['external.operation'],
+    inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement,
+    execute: async ({ perform, runId, generation, requirementDigest }) => perform({ action: 'external', prepared: {
+      action: 'external', workflowKind: 'test', stage: 'send', runId, generation, requirementDigest, resourceKey: 'external:test', intent: { request: 'original' } } }) }] }
+  const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow] })
+  const h = await host(root, null, null, step => step === 1 ? { action: 'advance', summary: '尝试继续', evidenceRefs: [] }
+    : { action: 'wait', summary: '原操作回执未确认，等待系统对账', evidenceRefs: [], condition: {
+      kind: 'execution', missing: '原操作真实回执', responsibleParty: '系统', resumeWhen: '原效果对账确认', evidenceRefs: [] } })
+  const owner = createTaskOwnerController({ ctx: h.ctx, store, artifacts, controller,
+    modelConfig: () => ({ provider: 'owner-fixture', model: 'scripted' }), sessionRunner: h.sessions,
+    authorizeStages: async () => true, advanceTask: async () => { advances++ } })
+  t.after(async () => { await owner.close(); await h.close(); await controller.close(); await store.close() })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'one', workflowId: workflow.id, input: { request: '真实写目标' } }] })
+  const plan = await controller.advanceTaskPlan('task'), runId = plan.stages[0].runId
+  await controller.whenIdle(runId)
+  const before = await store.query({ kind: 'effect.list', runId }); assert.equal(before.length, 1, JSON.stringify(await controller.state(runId))); assert.equal(before[0].state, 'unknown')
+  await owner.ensure({ taskId: 'task', criteria: ['核验原效果'], sourceKey: 'source', origin: {} })
+  await owner.drive('task'); await owner.applyPending()
+  assert.equal(sends, 1); assert.equal(advances, 0)
+  assert.deepEqual(await store.query({ kind: 'effect.list', runId }), before)
+  assert.equal((await store.query({ kind: 'task.owner', taskId: 'task' })).decision.action, 'wait')
+  assert.match(JSON.stringify(h.requests[1]), /DELIVERY_RECONCILIATION_REQUIRED/)
+ })
+
+for (const mode of ['current','resume-agent','restart','foreign','stale']) test(`旧Owner流程修订不再因证据或模式而获得执行权限：${mode}`,async t=>{
+ const root=await mkdtemp(join(tmpdir(),'owner-old-revision-'));const h=await host(root,null,null,step=>step===1?{action:'repairCurrentStage',summary:'旧修订',evidenceRefs:[],workflowRevision:{startNodeId:'check',resumeCurrent:true}}:decision);t.after(()=>h.close())
+ let accepted=0;const result=await h.sessions.run({binding:{taskId:'task',sessionId:'owner-'+mode,turnId:'turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{currentExecution:{repairable:true,mode}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>{assert.notEqual(value.action,'repairCurrentStage');accepted++}})
+ assert.equal(result.status,'submitted');assert.equal(accepted,1);assert.equal(h.requests.length,2)
+})
+
+test('原生相同候选补读新诊断可继续；重复读同一工件不算进展',async t=>{
+ for(const repeat of [false,true]){
+  const root=await mkdtemp(join(tmpdir(),'owner-read-progress-')),refs=[`sha256-${'a'.repeat(64)}.json`,`sha256-${'b'.repeat(64)}.json`],read=new Set()
+  const h=await host(root,null,step=>step===2?refs[0]:step===4?refs[repeat?0:1]:null,{action:'advance',summary:'依据真实诊断继续',evidenceRefs:refs},undefined,4)
+  t.after(()=>h.close())
+  const run=()=>h.sessions.run({binding:{taskId:'task',sessionId:'owner-progress',turnId:'turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{stageArtifacts:[{evidenceRefs:refs}]},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},readArtifact:async ref=>{read.add(ref);return{ref}},onCandidate:async()=>{if(read.size<2)throw Object.assign(Error('尚缺具体诊断'),{code:'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD'})}})
+  if(repeat){const value=await run();assert.equal(value.reason,'TASK_OWNER_REPEATED_INVALID_DECISION')}
+  else assert.equal((await run()).status,'submitted')
+ }
+})
+test('历史原生读取只复用同任务同需求完整成功分页，不信失败与部分正文',()=>{
+ const ref=`tasks/task/sha256-${'a'.repeat(64)}.json`,binding={taskId:'task',sessionId:'owner',requirementRevision:2}
+ const input=(taskId='task',revision=2)=>({type:'user/message',data:{source:{taskOwner:{taskId,sessionId:'owner'}},content:[{type:'text',text:JSON.stringify({task:{requirementRevision:revision}})}]}})
+ const call=(id,offset)=>({type:'tool/call',data:{name:'task_owner_read_artifact',callId:id,arguments:JSON.stringify({artifactRef:ref,offset})}})
+ const result=(id,text,error=false)=>({type:'tool/result',data:{message:{content:[{toolCallId:id,isError:error,content:[{type:'text',text:JSON.stringify({artifact:text,totalLength:4,nextOffset:text.length===4?null:2})}]}]}}})
+ assert.deepEqual(previouslyReadOwnerArtifacts([input(),call('a',0),result('a','ab'),call('b',2),result('b','cd')],binding),[ref])
+ for(const events of [[input('other'),call('a',0),result('a','abcd')],[input('task',1),call('a',0),result('a','abcd')],[input(),call('a',0),result('a','abcd',true)],[input(),call('a',2),result('a','cd')]])assert.deepEqual(previouslyReadOwnerArtifacts(events,binding),[])
+})
+
+for(const status of ['pending','blocked','applied']) test(`收回Owner执行修复后封存历史决定且不重放：${status}`,async t=>{
+ const {DatabaseSync}=await import('node:sqlite');const root=await mkdtemp(join(tmpdir(),'owner-withdraw-')),dbPath=join(root,'control.sqlite')
+ const store=await openExecutionStore({dbPath,instanceId:'withdraw',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+ const controller=createExecutionController({store,artifacts,workflows:[{id:'historical',version:'1',nodes:[{id:'work',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({requirement})=>requirement,execute:async()=>({})}]}]});let calls=0
+ const owner=createTaskOwnerController({ctx:{},store,artifacts,controller,modelConfig:()=>({}),authorizeStages:async()=>false,advanceTask:async()=>{calls++},repairCurrentStage:async()=>{calls++},sessionRunner:{async close(){}}})
+ t.after(async()=>{await owner.close();await controller.close();await store.close()})
+ await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'one',workflowId:'historical',input:{request:'原业务目标'}}]})
+ await owner.ensure({taskId:'task',criteria:['原业务目标'],sourceKey:'source',origin:{}})
+ await store.command({id:'claim',kind:'task.owner.claim',args:{taskId:'task',turnId:'old',expectedLeaseEpoch:0}})
+ await store.command({id:'bind',kind:'task.owner.sessionBound',args:{taskId:'task',turnId:'old',leaseEpoch:1,sessionId:(await store.query({kind:'task.owner',taskId:'task'})).sessionId}})
+ const db=new DatabaseSync(dbPath);const old={action:'repairCurrentStage',summary:'旧工程修复',evidenceRefs:[],workflowRevision:{startNodeId:'inspect'}}
+ db.prepare("UPDATE task_owner_turns SET status='accepted',decision_json=?,application_status=? WHERE turn_id='old'").run(JSON.stringify(old),status)
+ db.prepare("UPDATE task_owners SET current_turn_id=NULL,status=? WHERE task_id='task'").run(status==='blocked'?'blocked':'idle');db.close()
+ await owner.applyPending();await owner.applyPending();assert.equal(calls,0)
+ const check=new DatabaseSync(dbPath,{readOnly:true});const row=check.prepare("SELECT application_status,decision_json FROM task_owner_turns WHERE turn_id='old'").get();check.close()
+ assert.equal(row.application_status,status==='applied'?'applied':'discarded');assert.deepEqual(JSON.parse(row.decision_json),old)
+ const events=await store.query({kind:'task.owner.events',taskId:'task',afterSequenceId:0,limit:100})
+ if(status!=='applied'){const event=events.find(e=>e.eventType==='system.recovery');assert.ok(event?.payloadRef);const proof=await artifacts.read(event.payloadRef);assert.equal(proof.errors[0].code,'TASK_OWNER_EXECUTION_REPAIR_DISABLED');assert.deepEqual(proof.decision,old)}
+})
+
+test('Owner原生工具只公开业务协调并可按既有计划继续',async t=>{
+ assert.equal(ownerDecisionSchema.properties.action.enum.includes('repairCurrentStage'),false)
+ assert.equal(Object.hasOwn(ownerDecisionSchema.properties,'workflowRevision'),false)
+ assert.equal(Object.hasOwn(ownerDecisionSchema.properties,'repair'),false)
+ const root=await mkdtemp(join(tmpdir(),'owner-observe-only-'));const h=await host(root,null,null,()=>({action:'advance',summary:'按既有计划继续',evidenceRefs:[]}));t.after(()=>h.close())
+ let accepted=0;const result=await h.sessions.run({binding:{taskId:'task',sessionId:'owner-observe',turnId:'turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{currentExecution:{repairable:false,responsibility:'execution-session'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{accepted++}})
+ assert.equal(result.status,'submitted');assert.equal(accepted,1)
 })

@@ -298,8 +298,10 @@ export function verifyEngineeringRepositoryDigests({ db, config }) {
     normalized.githubRepository ??= /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(normalized.remote)?.[1]
     normalized.baseBranch ??= normalized.baseRef.startsWith('refs/heads/') ? normalized.baseRef.slice(11)
       : /^(?:origin\/|refs\/remotes\/)/.test(normalized.baseRef) ? null : normalized.baseRef
-    const { purpose, routingTerms, localAcceptance, dependencyRepositories, ...executionConfig } = normalized
-    return [normalized.id, executionDigest({ config: executionConfig, ghCommand: null, author: config.gitAuthor ?? null })]
+    const { purpose, routingTerms, localAcceptance, dependencyRepositories, taskLocalAcceptance, ...executionConfig } = normalized
+    const context = { ghCommand: null, author: config.gitAuthor ?? null }
+    return [normalized.id, [executionDigest({ config: executionConfig, ...context }),
+      executionDigest({ config: { ...executionConfig, ...(taskLocalAcceptance === undefined ? {} : { taskLocalAcceptance }) }, ...context })]]
   }))
   const checked = []
   for (const row of db.prepare('SELECT body,digest FROM message_workflows').all()) {
@@ -308,7 +310,7 @@ export function verifyEngineeringRepositoryDigests({ db, config }) {
     const run = db.prepare('SELECT workflow_digest,status FROM execution_runs WHERE run_id=?').get(saved.runId)
     if (run && (run.workflow_digest !== row.digest || ['succeeded', 'failed', 'cancelled'].includes(run.status))) continue
     checked.push({ taskId: saved.taskId, runId: saved.runId, repositoryId: saved.repoId,
-      matches: digests.get(saved.repoId) === saved.repositoryDigest })
+      matches: digests.get(saved.repoId)?.includes(saved.repositoryDigest) === true })
   }
   return { compatible: checked.every(item => item.matches), checkedRuns: checked.length,
     mismatches: checked.filter(item => !item.matches), writes: 0 }

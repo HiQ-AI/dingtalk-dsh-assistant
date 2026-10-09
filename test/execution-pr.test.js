@@ -5,6 +5,28 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createGithubPullRequests } from '../packages/dingtalk-dsh-assistant/execution-pr.js'
 import { createVerificationJobCheck, createBusinessAcceptanceCheck } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
+import { withVerificationProcessJournal, inspectVerificationProcessJournal, historicalVerificationProcesses } from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
+
+test('历史检查排空保留未知进程责任，按实际命令和候选路径拒绝存活进程',()=>{
+ const options={commands:[{executable:'D:/node22/node.exe',args:['yarn.js','run','build']}],root:'D:/tasks/exact/checks',claimedAt:'2026-10-09T00:00:00Z',hostPid:100},born=Date.parse(options.claimedAt)+100
+ const unrelated={pid:101,parent:1,born,executable:'D:/codex/node.exe',command:'D:/codex/browser.mjs'}
+ assert.deepEqual(historicalVerificationProcesses({...options,processes:[unrelated]}),[])
+ assert.deepEqual(historicalVerificationProcesses({...options,processes:[{...unrelated,name:'powershell.exe',command:null,executable:null}]}),[])
+ for(const row of [{...unrelated,executable:'D:/node22/node.exe'}, {...unrelated,command:'node D:/tasks/exact/checks/verify-a/build.js'}, {...unrelated,command:'node vue-cli-service build'}, {...unrelated,command:null}, {...unrelated,born:null}])assert.equal(historicalVerificationProcesses({...options,processes:[row]}).length,1)
+ assert.deepEqual(historicalVerificationProcesses({...options,processes:[{...unrelated,executable:'D:/node22/node.exe',born:born-1000}]}),[])
+})
+
+test('检查子进程真实启动关闭日志绑定lease，存活子孙和未知launch不排空', async () => {
+  const root=await mkdtemp(join(tmpdir(),'dsh-check-journal-')),path=join(root,'journal.jsonl'),binding={runId:'r',nodeRunId:'n',nodeId:'verify',generation:1,leaseEpoch:2,inputDigest:'a'.repeat(64)}
+  const check=createVerificationJobCheck({id:'test',version:'1',root,executable:process.execPath,args:['-e','process.stdout.write("done")']})
+  const result=await withVerificationProcessJournal({path,binding},()=>check.run({files:[],candidateDigest:'c',readFile:async()=>Buffer.alloc(0)}))
+  assert.equal(result.passed,true)
+  const records=(await readFile(path,'utf8')).trim().split('\n').map(JSON.parse),started=records.find(r=>r.phase==='started')
+  assert.ok(started.pid);assert.ok(records.some(r=>r.phase==='closed'));assert.equal(inspectVerificationProcessJournal(records,binding,[]).drained,true)
+  assert.equal(inspectVerificationProcessJournal(records,{...binding,leaseEpoch:3},[]).drained,false)
+  assert.equal(inspectVerificationProcessJournal(records,binding,[{pid:started.pid+1,parent:started.pid,born:started.launchedAt+1}]).drained,false)
+  assert.equal(inspectVerificationProcessJournal(records.filter(r=>r.phase!=='started'),binding,[]).reason,'launch-identity-unconfirmed')
+})
 
 test('受信旧 PR 原位改 UAT base，未知回执独立回读；身份、并发与歧义不改远端', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-pr-retarget-')), script = join(directory, 'gh.cjs'), state = join(directory, 'state.json')

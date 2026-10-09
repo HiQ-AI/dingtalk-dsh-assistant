@@ -253,6 +253,21 @@ test('冻结SQL校验只在当前Host纯只读预检通过后恢复，静态证�
 })
 
 const schema = { type: 'object' }
+
+test('Owner根据真实Host检查事实选择任务副本修订，未知错误不强迫修改业务',async()=>{
+ const stage={stageId:'engineering',runId:'run',workflowId:'task-engineering-test',workflowDigest:'digest',status:'running'}
+ const plan={task:{controlState:'active',requirementRevision:2,planRequirementRevision:2},stages:[stage]}
+ const state={run:{taskId:'task',runId:'run',workflowId:stage.workflowId,workflowDigest:'digest',status:'waiting',generation:4,revision:8},pendingInputCount:0,nodes:[{nodeId:'verify-candidate',status:'waiting',drained:true,evidenceRefs:['real-log'],waitReason:{reference:'ARBITRARY_HOST_FAILURE'}}]}
+ const caps={checkProfiles:[{digest:'trusted',checks:[{id:'test',args:['--test']}]}]};let received,effects=[]
+ const facade=createTaskWorkflowContracts({controller:{taskPlan:async()=>plan,state:async()=>state,workflowDefinition:()=>({})},store:{query:async q=>q.kind==='effect.list'?effects:null},artifacts:{read:async()=>({})},inspectWorkflowRevision:async()=>caps,reviseWorkflow:async args=>{received=args;return {queued:true}}})
+ const observed=await facade.inspectCurrentExecution('task')
+ assert.equal(observed.repairable,true);assert.equal(observed.mode,'workflow-revision');assert.deepEqual(observed.evidenceRefs,['real-log'])
+ const decision={repair:observed.repairBinding,summary:'原配置选择不存在的测试；选择Host已登记的自动发现检查',evidenceRefs:['real-log'],workflowRevision:{startNodeId:'verify-candidate',checkProfileDigest:'trusted'}}
+ assert.deepEqual(await facade.repairCurrentStage({taskId:'task',commandId:'revise',decision}),{queued:true})
+ assert.equal(received.expectedRevision,8);assert.deepEqual(received.revision,decision.workflowRevision)
+ await assert.rejects(facade.repairCurrentStage({taskId:'task',commandId:'foreign',decision:{...decision,evidenceRefs:['other-task']}}),/WORKFLOW_REPAIR_NOT_ADMITTED/)
+ effects=[{state:'unknown'}];assert.equal((await facade.inspectCurrentExecution('task')).repairable,false)
+})
 const requirement = { request: '按现有材料回答问题', acceptanceCriteria: ['给出有依据的调查结论'], constraints: [], scope: {} }
 const synthetic = (ownerContract, version = '1') => ({ id: 'task-inventory-count', version, ...(ownerContract ? { ownerContract } : {}), nodes: [
   { id: 'count', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: schema, outputSchema: schema,
@@ -834,3 +849,15 @@ test('工程检查失败同代候选重入保留成功准备与工作区，重�
  for(let i=0;i<4;i++){assert.equal(after.nodes[i].outputRef,before.nodes[i].outputRef);assert.equal(after.nodes[i].leaseEpoch,before.nodes[i].leaseEpoch)}
  assert.equal((await f.store.query({kind:'workflow.repair.context',runId,generation:after.run.generation})).mode,'candidate-in-place');
 });
+
+for(const variant of ['current','foreign-task','old-requirement','old-plan','old-control','unregistered','missing-diagnostic'])test(`实际修复合同统一当前Task证据范围 ${variant}`,async()=>{
+ const stage={stageId:'engineering',runId:'run',workflowId:'task-engineering-test',workflowDigest:'digest',status:'running'}
+ const task={taskId:'task',controlState:'active',requirementRevision:2,planRequirementRevision:2,planRevision:3,controlRevision:4,requirementRef:'requirement'}
+ const plan={task,stages:[stage]},state={run:{taskId:'task',runId:'run',workflowId:stage.workflowId,workflowDigest:'digest',status:'waiting',generation:4,revision:8},pendingInputCount:0,nodes:[{nodeId:'inspect',status:'succeeded',outputRef:'candidate',drained:true},{nodeId:'verify',status:'waiting',drained:true,evidenceRefs:['real-log'],waitReason:{reference:'HOST_FAILURE'}}]}
+ const diagnostic={kind:'owner-action-failure',taskId:variant==='foreign-task'?'other':'task',plan:{task:{...task,requirementRevision:variant==='old-requirement'?1:2,planRevision:variant==='old-plan'?2:3,controlRevision:variant==='old-control'?3:4}}}
+ const events=variant==='unregistered'?[]:[{eventType:'system.recovery',eventSeq:1,payloadRef:'feedback'}];let invoked=0
+ const facade=createTaskWorkflowContracts({controller:{taskPlan:async()=>plan,state:async()=>state,workflowDefinition:()=>({})},store:{query:async q=>q.kind==='effect.list'?[]:q.kind==='task.owner.events'?events:null},artifacts:{read:async ref=>ref==='feedback'?diagnostic:{}},inspectWorkflowRevision:async()=>({checkProfiles:[]}),reviseWorkflow:async()=>{invoked++;return{queued:true}}})
+ const observed=await facade.inspectCurrentExecution('task'),decision={repair:observed.repairBinding,summary:'读取原需求、候选和当前Host反馈后调整策略',evidenceRefs:[...(variant==='missing-diagnostic'?[]:['real-log']),'requirement','candidate','feedback'],workflowRevision:{startNodeId:'verify',resumeCurrent:true}}
+ if(variant==='current'){assert.deepEqual(await facade.repairCurrentStage({taskId:'task',decision,commandId:'recover'}),{queued:true});assert.equal(invoked,1)}
+ else{await assert.rejects(facade.repairCurrentStage({taskId:'task',decision,commandId:'reject'}),/WORKFLOW_REPAIR_NOT_ADMITTED/);assert.equal(invoked,0)}
+})

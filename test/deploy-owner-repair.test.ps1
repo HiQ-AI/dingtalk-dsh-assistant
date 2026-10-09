@@ -102,10 +102,28 @@ try {Assert-InputHashes}catch{$failed=$_.Exception.Message-eq 'profile CAS不匹
 if(-not $failed){throw '配置摘要错误必须在零写阶段拒绝'}
 Write-Output 'PASS 3/3: 双摘要正确通过；包摘要错误拒绝；配置摘要错误拒绝'
 
-foreach($name in @('Change-MaintenancePhase','Read-DeploymentRuntime','Resume-Deployment','Assert-LaunchInputs','Restore-EnrollmentAutostart','Read-EnrollmentProposal','Ensure-EnrollmentSubscription')){
+foreach($name in @('Test-MaintenanceBackfillPause','Change-MaintenancePhase','Read-DeploymentRuntime','Resume-Deployment','Assert-LaunchInputs','Restore-EnrollmentAutostart','Read-EnrollmentProposal','Ensure-EnrollmentSubscription')){
  $fn=$ast.Find({param($item) $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $item.Name-eq $name},$true)
  Invoke-Expression $fn.Extent.Text
 }
+$pauseHealth=@{status='degraded';transport='dws';inboundConfigured=$true;executionStore=@{healthy=$true};recoveryIssueCount=0;dwsBridge=@{humanReplies=@{state='ready'};groups=@(@{listener=@{state='ready'};backfill=@{state='failed';lastError='RUNTIME_MAINTENANCE_ACTIVE'}})}}
+$pauseMaintenance=@{active=$true;phase='stopping';drained=$true;resumePermitted=$true;sealedIncarnation='old';processIncarnation='new';busy=@{nodes=0;owners=0;effects=0;messages=0}}
+if(-not (Test-MaintenanceBackfillPause $pauseHealth $pauseMaintenance)){throw '维护暂停应可恢复'}
+foreach($fault in @('auth','listener','store','recovery','busy','incarnation','inactive')){
+ $h=$pauseHealth|ConvertTo-Json -Depth 10|ConvertFrom-Json -AsHashtable
+ $m=$pauseMaintenance|ConvertTo-Json -Depth 10|ConvertFrom-Json -AsHashtable
+ switch($fault){
+ auth {$h.dwsBridge.groups[0].backfill.lastError='AUTH_FAILED'}
+ listener {$h.dwsBridge.groups[0].listener.state='failed'}
+ store {$h.executionStore.healthy=$false}
+ recovery {$h.recoveryIssueCount=1}
+ busy {$m.busy.nodes=1}
+ incarnation {$m.processIncarnation='old'}
+ inactive {$m.active=$false}
+ }
+ if(Test-MaintenanceBackfillPause $h $m){throw "错误放行: $fault"}
+}
+Write-Output 'PASS 8/8: maintenance-only backfill predicate and seven rejection cases'
 $script:requests=@();$script:maintenance=@{active=$true;resumePermitted=$false;maintenanceId='deploy';revision=2}
 function Invoke-RestMethod {
  param($Uri,$Method,$ContentType,$Headers,$Body,$TimeoutSec,[switch]$NoProxy)
@@ -193,13 +211,13 @@ $DirectQueriesProposal='proposal.json';$Bundle='';$MergePolicy='';$ChecksProposa
 Assert-DeploymentMode
 $Bundle='old.json';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '模式必须互斥'}
 $Bundle='';$ExpectedObserverPackageSha256='';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw 'Observer摘要不可省略'}
-$ObserverPackage='';$DirectQueriesProposal='';$rejected=$false;try{Assert-DeploymentMode}catch{$rejected=$true};if(-not $rejected){throw '旧模式参数仍必填'}
+$ObserverPackage='';$DirectQueriesProposal='';Assert-DeploymentMode
 $DirectQueriesProposal='proposal.json';$ObserverPackage='observer.tgz';$ExpectedObserverPackageSha256='c'*64
 $Package='candidate.tgz';$ExpectedPackageSha256='b'*64;$ExpectedProfileSha256='a'*64
 function Get-FileHash {param($LiteralPath) @{Hash=if($LiteralPath-eq 'candidate.tgz'){'b'*64}elseif($LiteralPath-eq 'observer.tgz'){'c'*64}else{'a'*64}}}
 Assert-InputHashes
 $ExpectedObserverPackageSha256='d'*64;$rejected=$false;try{Assert-InputHashes}catch{$rejected=$true};if(-not $rejected){throw 'Observer摘要漂移必须拒绝'}
-Write-Output 'PASS 6/6: 查询模式、工程互斥、Observer配对、旧必填与Observer摘要门禁'
+Write-Output 'PASS 6/6: 查询模式、工程互斥、Observer配对、Package-only与Observer摘要门禁'
 
 # 看板已按逻辑任务合并：旧物理ID必须指向看板内的当前任务，不能只放宽身份检查。
 $identityLoop=$function.Body.Find({param($item) $item -is [System.Management.Automation.Language.ForEachStatementAst] -and $item.Variable.VariablePath.UserPath-eq 'id'},$true)

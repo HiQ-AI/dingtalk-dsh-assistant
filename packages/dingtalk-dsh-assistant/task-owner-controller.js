@@ -129,7 +129,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     }))) } : goal
     const result = { taskId, eventWatermark: claim.eventWatermark, goal: modelGoal,
       ...(owner.lastFailure ? { correction: { reason: owner.lastFailure,
-        instruction: '此前动作未能执行；根据当前状态修正参数或计划后继续，不要原样重复失败动作。' } } : {}),
+        instruction: '此前动作未完整应用；先读取system.recovery事件中的完整诊断、已发生回执及当前状态，仅观察并如实报告；执行故障交原执行会话纠正，不修改既有流程。不得原样重发已执行部分，未知效果先对账，不把内部故障转给业务用户。' } } : {}),
       ...(readCurrentSources ? { currentSources: await readCurrentSources({ taskId, plan, signal }) } : {}),
       acceptanceItems, versions: claim.versions, task: plan.task, stages: plan.stages, events }
     if (plan.task.planRevision > 0 && plan.task.planRequirementRevision !== plan.task.requirementRevision) result.planReview = {
@@ -149,6 +149,11 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
     }
     if (inspectCurrentExecution) {
       result.currentExecution = await inspectCurrentExecution(taskId, plan, { signal })
+      if (result.currentExecution) {
+        result.currentExecution = { ...result.currentExecution, repairable: false, responsibility: 'execution-session' }
+        delete result.currentExecution.repairBinding
+        delete result.currentExecution.workflowRevisionCapabilities
+      }
       if (result.currentExecution?.evidenceRefs?.length && !repairedStages.has(result.currentExecution.stageId)) result.stageArtifacts.push({ stageId: result.currentExecution.stageId, outputRef: null, evidenceRefs: result.currentExecution.evidenceRefs })
     }
     const directories = await artifacts.getTaskDirectories?.(taskId)
@@ -210,12 +215,22 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
           [stage.outputRef, ...stage.evidenceRefs, ...(stage.nodeArtifacts ?? []).map(node => node.artifactRef)].filter(Boolean)))
+        if (input.task.requirementRef) readableArtifacts.add(input.task.requirementRef)
         for (const item of input.queryEvidence) readableArtifacts.add(item.artifactRef)
         const readArtifacts = new Map()
         if (input.deliveryManifest) readableArtifacts.add(input.deliveryManifest.ref)
         for (const ref of [...input.events.map(event => event.payloadRef), ...(input.goal?.materials ?? []).map(material => material.artifactRef)].filter(Boolean)) readableArtifacts.add(ref)
         let acceptedCompletion
         const result = await sessions.run({ binding, input, tools, queryInput, ...modelConfig(), signal,
+          onPreviouslyReadArtifacts: async refs => {
+            const currentRefs = new Set([input.task.requirementRef, ...input.stageArtifacts.flatMap(stage =>
+              [stage.outputRef, ...(stage.evidenceRefs ?? []), ...(stage.nodeArtifacts ?? []).map(node => node.artifactRef)])].filter(Boolean))
+            for (const ref of refs) if (currentRefs.has(ref)) {
+              const parsed = parseArtifactReference(ref)
+              if (parsed.logicalTaskId && parsed.logicalTaskId !== (input.sharedMaterials?.logicalTaskId ?? taskId)) continue
+              readArtifacts.set(ref, await artifacts.read(ref))
+            }
+          },
           onQueryEvidence: async ({binding: queryBinding,evidenceRef}) => {
             const evidence = await artifacts.read(evidenceRef)
             const expected = Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(name => [name,binding[name]]))
@@ -250,7 +265,18 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
           onCandidate: async decision => {
+            if (decision.action === 'repairCurrentStage' || decision.workflowRevision !== undefined) throw error('TASK_OWNER_EXECUTION_REPAIR_DISABLED')
+            if (input.task.planRevision > 0 && input.task.planRequirementRevision === input.task.requirementRevision
+              && (decision.planChange || decision.appendStages?.length)) throw error('TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED')
             if (unreadPages.size) throw error('TASK_OWNER_EVENTS_UNREAD')
+            if (['advance', 'repairCurrentStage'].includes(decision.action)) {
+              for (const stage of input.stages.filter(stage => stage.runId)) {
+                const effects = await store.query({ kind: 'effect.list', runId: stage.runId })
+                if (effects.some(effect => !['succeeded', 'failed'].includes(effect.state)))
+                  throw error('DELIVERY_RECONCILIATION_REQUIRED', '当前Task仍有未决效果。先回读原effect，不能新建阶段、换身份重发或恢复执行。')
+              }
+            }
+
             if (input.currentExecution?.repairable === true && ['wait', 'block'].includes(decision.action))
               throw error('TASK_OWNER_RECOVERY_AVAILABLE')
             if (decision.action === 'repairCurrentStage') {
@@ -266,6 +292,16 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
               const requiredDiagnostics = input.currentExecution.evidenceRefs
               const allowedRepairEvidence = ref => {
                 if (requiredDiagnostics.includes(ref)) return readArtifacts.has(ref)
+                if (readArtifacts.has(ref)) {
+                  if (ref === input.task.requirementRef || input.stageArtifacts.some(stage =>
+                    stage.outputRef === ref || stage.evidenceRefs?.includes(ref) || stage.nodeArtifacts?.some(node => node.artifactRef === ref))) return true
+                  const diagnostic = readArtifacts.get(ref)
+                  if (input.events.some(event => event.eventType === 'system.recovery' && event.payloadRef === ref)
+                    && diagnostic?.kind === 'owner-action-failure' && diagnostic.taskId === taskId
+                    && diagnostic.plan?.task?.requirementRevision === binding.requirementRevision
+                    && diagnostic.plan?.task?.planRevision === input.task.planRevision
+                    && diagnostic.plan?.task?.controlRevision === input.task.controlRevision) return true
+                }
                 if (input.currentExecution.mode !== 'repair-proposal') return false
                 const evidence = readArtifacts.get(ref)
                 return evidence?.kind === 'agent-query-evidence'
@@ -374,12 +410,45 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
       return failures
     })().finally(() => { applicationFlight = undefined })
   }
+  async function feedbackApplicationFailure(action, cause) {
+    const plan = await controller.taskPlan(action.taskId)
+    const receipts = await Promise.all(['owner-plan', 'owner-repair'].map(prefix => store.query({ kind: 'receipt', commandId: `${prefix}:${action.turnId}` })))
+    const executions = await Promise.all(plan.stages.filter(stage => stage.runId).map(async stage => ({
+      stageId: stage.stageId, state: await controller.state(stage.runId),
+      effects: (await store.query({ kind: 'effect.list', runId: stage.runId })).map(effect => ({ effectId: effect.effectId,
+        nodeRunId: effect.nodeRunId, inputDigest: effect.inputDigest, state: effect.state, action: effect.definition?.action ?? null,
+        evidenceRef: effect.result?.evidenceRef ?? null })),
+    })))
+    const causes = []
+    for (let item = cause; item && !causes.some(saved => saved.original === item); item = item.cause)
+      causes.push({ original: item, code: item.code ?? null, message: String(item.message ?? item), stack: item.stack ?? null })
+    const diagnostic = await artifacts.put({ kind: 'owner-action-failure', taskId: action.taskId, turnId: action.turnId,
+      decision: action.decision, applicationStatus: action.applicationStatus ?? 'pending', errors: causes.map(({ original, ...saved }) => saved), plan,
+      receipts: receipts.filter(Boolean), executions,
+      instruction: '旧决定已停止应用；先读真实回执和当前状态。已发生的步骤不能重发，未知效果先对账；纠正原因后提出新的具体策略，不把内部故障变成业务补充。' }, { taskId: action.taskId })
+    await command(`owner-action-fail:${action.turnId}:${randomUUID()}`, 'task.owner.action.fail', {
+      taskId: action.taskId, turnId: action.turnId, leaseEpoch: action.leaseEpoch,
+      reason: String(cause.code ?? cause.message).slice(0, 200), diagnosticRef: diagnostic.ref })
+  }
+
   async function applyPendingActions() {
     let afterSequenceId = 0
     const failures = []
     for (;;) {
       const page = await store.query({ kind: 'task.owner.actions.pending', limit: 100, afterSequenceId })
       for (const action of page) {
+        const actionPlan = await controller.taskPlan(action.taskId)
+        if (action.decision.action === 'repairCurrentStage' || action.decision.workflowRevision !== undefined
+          || actionPlan.task.planRevision > 0 && actionPlan.task.planRequirementRevision === actionPlan.task.requirementRevision
+            && (action.decision.planChange || action.decision.appendStages?.length)) {
+          await feedbackApplicationFailure(action, error('TASK_OWNER_EXECUTION_REPAIR_DISABLED', '旧未应用的执行修复/动态流程决定已封存；由原执行会话继续，既有成功效果和已应用历史保持。'))
+          continue
+        }
+        if (action.applicationStatus === 'blocked') {
+          await feedbackApplicationFailure(action, error(action.lastFailure ?? 'TASK_OWNER_APPLICATION_FAILED',
+            '历史决定应用失败；以下原错误码来自持久Owner记录，旧版未保存完整调用栈。不得据此重放旧决定。'))
+          continue
+        }
         try {
           const { taskId, turnId, decision } = action
           const proposedStages = decision.planChange?.stages ?? decision.appendStages
@@ -455,9 +524,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           await command(`owner-applied:${turnId}`, 'task.owner.applied', { taskId, turnId, leaseEpoch: action.leaseEpoch })
           if (decision.action === 'advance' && (await controller.taskPlan(taskId)).stages.some(stage => stage.status === 'running' && stage.runId)) await advanceTask(taskId)
         } catch (cause) {
-          await command(`owner-action-fail:${action.turnId}:${randomUUID()}`, 'task.owner.action.fail', {
-            taskId: action.taskId, turnId: action.turnId, leaseEpoch: action.leaseEpoch,
-            reason: String(cause.code ?? cause.message).slice(0, 200) }).catch(() => {})
+          await feedbackApplicationFailure(action, cause)
           failures.push({ scope: 'owner-action', taskId: action.taskId, turnId: action.turnId, code: cause.code ?? cause.message })
         }
       }

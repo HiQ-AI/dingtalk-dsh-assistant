@@ -5,7 +5,7 @@ import { groupReplyInstructions, assertGroupReply } from './workflow-notificatio
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
-const ownerExecutionInstructions = '原工程因必要后端实现缺失而等待时，可用advance/planChange.kind=insertDependency插入一个task-engineering阶段；仅限availableWorkflows中原仓库dependencyRepositories允许的仓库，sourceCondition.repositoryId指定该仓库，acceptanceCriteria只列该必要阶段要证明的结果（后端阶段不冒充前端UI完成），其他来源字段逐字绑定原交办人当前需求。summary和已读取诊断证据必须说明该依赖如何直接满足原验收目标，不得扩大到无关功能。继承原UAT；不要求用户为实现原目标的必要依赖重复授权。Host仅在原Run已排空时插入，保留原前端Run/候选/成功节点，后端完成后继续原阶段。缺少配置是Host能力配置问题，不是业务用户缺需求。你是这个Task持续负责推进与解决问题的执行负责人。阶段是可调用的受管操作，不是遇到失败就结束责任的固定路线。先判断失败是否影响用户目标；工具能力不足不是用户缺资料。currentExecution给出Host核验的当前恢复能力：repairable=true时，先用task_owner_read_artifact读诊断，再提交repairCurrentStage及原样repairBinding，summary写具体原因和改变后的做法，不能只写重试。resume-agent会带着该方向在原节点会话继续；domain修复按领域合同准备产物。reason=strategy-change-required表示同一输入和同一错误已恢复过，应结合原目标换可行路径或重规划未完成部分，不能改措辞原样重试。没有可用修复动作时诊断真实实现/依赖缺口，保留系统责任；只在确需业务选择、真实权限或人工批准时请求用户。重复无效候选只结束当前思考轮，退避后仍由你在同一会话修正；下轮先读此前拒绝，不再提交相同动作。审批与未知外部效果等待既有事件/对账，不换身份重发。无需为每次阅读、搜索或思考增加阶段；只安排实际需要的受管操作，最终完成仍逐项用真实证据验收。'
+const ownerExecutionInstructions = 'Owner负责原任务目标、业务协调、观察和如实报告；执行故障由原执行会话自行读取诊断、纠正和继续，保留成功节点。不得提交repairCurrentStage或workflowRevision，也不得因内部工程错误新增、替换或重排已启动任务的流程。允许初始化任务计划和按既有计划advance；真实用户目标变更须沿显式需求更新处理。读取system.recovery诊断仅供观察，不得重放旧修复动作；applied历史不回滚，未知效果继续原身份对账。工具或执行错误不是业务用户缺资料；仅真正缺业务信息、权限或批准时明确列出需谁补什么。完成必须基于真实业务验收证据，不把排查完成当修复完成。'
 
 const IDENTITY_EVENT = 'dingtalk/task-owner-session'
 const SUBMIT = 'task_owner_submit'
@@ -32,9 +32,46 @@ const planChangeSchema = { type: 'object', properties: {
   kind: { type: 'string', enum: ['initialize', 'append', 'replaceSuffix', 'insertDependency'] },
   stages: { type: 'array', items: stageSchema }, affectedFrom: { type: 'integer' },
 }, required: ['kind', 'stages'], additionalProperties: false }
+// 只回放原生工具成功回执；历史快照限定同需求，SHA 引用的完整分页才算已读。
+export function previouslyReadOwnerArtifacts(events, binding) {
+  let admitted = false
+  const calls = new Map(), ranges = new Map()
+  for (const event of events) {
+    if (event.type === 'user/message' && event.data.source?.taskOwner) {
+      const source = event.data.source.taskOwner
+      admitted = false
+      if (source.taskId === binding.taskId && source.sessionId === binding.sessionId) {
+        try { const input = JSON.parse(event.data.content.find(item => item.type === 'text').text)
+          admitted = input.task?.requirementRevision === binding.requirementRevision
+        } catch {}
+      }
+    }
+    if (event.type === 'tool/call' && admitted && event.data.name === 'task_owner_read_artifact') {
+      try { const args = typeof event.data.arguments === 'string' ? JSON.parse(event.data.arguments) : event.data.arguments
+        if (/^(?:tasks\/[a-zA-Z0-9_.-]+\/)?sha256-[a-f0-9]{64}\.json$/.test(args.artifactRef)) calls.set(event.data.callId, args)
+      } catch {}
+    }
+    if (event.type !== 'tool/result') continue
+    for (const result of event.data.message?.content ?? []) {
+      const call = calls.get(result.toolCallId)
+      if (!call || result.isError) continue
+      calls.delete(result.toolCallId)
+      try { const page = JSON.parse(result.content.find(item => item.type === 'text').text), start = call.offset ?? 0
+        if (typeof page.artifact !== 'string' || !Number.isSafeInteger(page.totalLength) || page.totalLength < 0) continue
+        const list = ranges.get(call.artifactRef) ?? []
+        list.push({ start, end: start + page.artifact.length, total: page.totalLength }); ranges.set(call.artifactRef, list)
+      } catch {}
+    }
+  }
+  return [...ranges].filter(([,pages]) => {
+    pages.sort((a,b) => a.start-b.start); let end=0
+    for (const page of pages) { if (page.start>end || page.total!==pages[0].total) return false; end=Math.max(end,page.end) }
+    return end===pages[0].total
+  }).map(([ref]) => ref)
+}
+
 export const ownerDecisionSchema = { type: 'object', properties: {
-  action: { type: 'string', enum: ['advance', 'wait', 'complete', 'block', 'repairCurrentStage'] },
-  repair: { type: 'object', properties: { stageId: { type: 'string' }, runId: { type: 'string' }, generation: { type: 'integer' }, runRevision: { type: 'integer' }, requirementRevision: { type: 'integer' } }, required: ['stageId', 'runId', 'generation', 'runRevision', 'requirementRevision'], additionalProperties: false },
+  action: { type: 'string', enum: ['advance', 'wait', 'complete', 'block'] },
   condition: { type: 'object', properties: {
     kind: { type: 'string', enum: ['business-input', 'approval', 'capability', 'permission', 'execution'] },
     missing: { type: 'string' }, responsibleParty: { type: 'string' }, resumeWhen: { type: 'string' },
@@ -105,7 +142,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
     if (operation.condition) operation.condition = {
       kind: operation.condition.kind ?? null, evidenceRefs: operation.condition.evidenceRefs ?? [],
     }
-    const identity = executionDigest([code, operation])
+    const identity = executionDigest([code, operation, [...entry.readProgress].sort()])
     if (entry.rejectedCandidates.has(identity)) { entry.submissionFailure = 'TASK_OWNER_REPEATED_INVALID_DECISION'; throw fail(entry.submissionFailure) }
     entry.rejectedCandidates.add(identity)
     entry.attempted = false
@@ -153,6 +190,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
           render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute(args, exec) {
           entry.attempted = true
+          if (args.decision?.action === 'repairCurrentStage' || args.decision?.workflowRevision !== undefined) return rejectCandidate(entry, args.decision, 'TASK_OWNER_EXECUTION_REPAIR_DISABLED', '执行故障由原执行会话自行纠正；Owner仅观察报告，不得修复或动态修改流程。')
           if (args.decision?.action === 'repairCurrentStage' && (!entry.repairBinding
             || Object.keys(args.decision.repair ?? {}).length !== Object.keys(entry.repairBinding).length
             || Object.entries(entry.repairBinding).some(([key, value]) => args.decision.repair?.[key] !== value))) {
@@ -174,6 +212,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
             entry.attempted = false
             return { received: false, feedback: error.message }
           }
+          if (args.decision.action === 'repairCurrentStage' && entry.repairMode === 'workflow-revision' && !args.decision.workflowRevision) return rejectCandidate(entry, args.decision, 'TASK_OWNER_DECISION_INVALID', '当前只能调整任务流程。请在 repairCurrentStage 中提供 workflowRevision.startNodeId，并依据 currentExecution.workflowRevisionCapabilities 选择 nodes/checkProfileDigest 或公布的续行能力；不能直接恢复旧输入。')
           const proposed = [...(args.decision.appendStages ?? []), ...(args.decision.planChange?.stages ?? [])]
           if (proposed.some(stage => stage.workflowId === 'task-general-capability' && !entry.writeCapabilities.has(stage.capabilityStep?.capabilityId))) throw fail('TASK_OWNER_CAPABILITY_STAGE_NOT_ALLOWED')
           if (!await current(entry)) throw fail('TASK_OWNER_STALE')
@@ -183,7 +222,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
             if (!await current(entry)) throw fail('TASK_OWNER_STALE')
             exec.signal.throwIfAborted()
             // 这些拒绝发生于候选事务写入之前；未知持久化错误不能当作可重试。
-            const correctable = ['TASK_OWNER_DECISION_INVALID', 'TASK_OWNER_CONDITION_REQUIRED', 'TASK_OWNER_CONDITION_INVALID',
+            const correctable = ['DELIVERY_RECONCILIATION_REQUIRED', 'TASK_OWNER_DECISION_INVALID', 'TASK_OWNER_CONDITION_REQUIRED', 'TASK_OWNER_CONDITION_INVALID',
               'TASK_OWNER_ADVANCE_CONFLICT', 'TASK_OWNER_WAIT_CONFLICT', 'TASK_OWNER_BLOCK_CONFLICT', 'TASK_OWNER_COMPLETION_UNPROVEN', 'TASK_OWNER_STAGE_NOT_AUTHORIZED', 'TASK_OWNER_ENGINEERING_INPUT_REQUIRED', 'TASK_OWNER_COMPLETION_UNVERIFIED', 'TASK_OWNER_RECOVERY_AVAILABLE', 'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD', 'DATA_CHANGE_REPAIR_INPUT_UNCHANGED', 'DATA_CHANGE_REPAIR_STRATEGY_REPEATED']
             if (correctable.includes(error.code)) {
               if (error.ownerDiagnosticRef) entry.readableArtifacts.add(error.ownerDiagnosticRef)
@@ -256,6 +295,17 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
           if (!await current(entry) || !entry.readableArtifacts.has(artifactRef) && !(entry.sharedMaterialPrefix && (artifactRef === 'task-materials-index' || artifactRef.startsWith(entry.sharedMaterialPrefix) || /^(work|tmp|outputs)\//u.test(artifactRef)))) throw fail('TASK_OWNER_ARTIFACT_NOT_ALLOWED')
           exec.signal.throwIfAborted()
           const artifact = JSON.stringify(await readArtifact(artifactRef))
+          const coverageKey = JSON.stringify([artifactRef, executionDigest(artifact)])
+          const previous = entry.readCoverage.get(coverageKey) ?? [], end = Math.min(offset + limit, artifact.length)
+          if (offset < end) {
+            const intervals = [...previous, [offset, end]].sort((a,b) => a[0]-b[0]), merged = []
+            for (const interval of intervals) {
+              if (merged.length && interval[0] <= merged.at(-1)[1]) merged.at(-1)[1] = Math.max(merged.at(-1)[1], interval[1])
+              else merged.push([...interval])
+            }
+            if (JSON.stringify(previous) !== JSON.stringify(merged)) entry.readProgress.add(JSON.stringify([coverageKey, merged]))
+            entry.readCoverage.set(coverageKey, merged)
+          }
           return { artifact: artifact.slice(offset, offset + limit), totalLength: artifact.length,
             nextOffset: offset + limit < artifact.length ? offset + limit : null }
         },
@@ -264,7 +314,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
   }
 
   async function run({ binding, input, provider, model, reasoningEffort, onSessionBound, onCandidate,
-    readPage, readArtifact, tools = [], queryInput, onQueryEvidence }) {
+    readPage, readArtifact, onPreviouslyReadArtifacts, tools = [], queryInput, onQueryEvidence }) {
     assertBinding(binding)
     if (!provider || !model || typeof onSessionBound !== 'function' || typeof onCandidate !== 'function'
       || input?.eventPages?.length && typeof readPage !== 'function'
@@ -286,6 +336,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
     binding = Object.freeze(copy(binding))
     const entry = { binding, queryTools, queryInput: copy(queryInput), onQueryEvidence,
       queryBinding: Object.freeze(Object.fromEntries(['taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(key => [key, binding[key]]).concat([['kind', 'task-owner']]))),
+      repairMode: input.currentExecution?.mode, readProgress: new Set(), readCoverage: new Map(),
       repairBinding: input.currentExecution?.repairable === true ? copy(input.currentExecution.repairBinding) : null,
       sharedMaterialPrefix: input.sharedMaterials?.logicalTaskId ? `tasks/${input.sharedMaterials.logicalTaskId}/` : null,
       snapshots: new Map(), cancelled: false, stale: false, attempted: false, accepted: false,
@@ -294,7 +345,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
       readableArtifacts: new Set([...(input.stageArtifacts ?? []).flatMap(stage =>
         [stage.outputRef, ...(stage.evidenceRefs ?? []), ...(stage.nodeArtifacts ?? []).map(node => node.artifactRef)]), ...(input.events ?? []).map(event => event.payloadRef),
         ...(input.goal?.materials ?? []).map(material => material.artifactRef),
-        ...(input.queryEvidence ?? []).map(item => item.artifactRef), input.deliveryManifest?.ref].filter(Boolean)),
+        ...(input.queryEvidence ?? []).map(item => item.artifactRef), input.task?.requirementRef, input.deliveryManifest?.ref].filter(Boolean)),
       rejectedCandidates: new Set(), abort: new AbortController(), drained: Promise.withResolvers() }
     entries.set(binding.taskId, entry)
     try {
@@ -308,6 +359,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
       if (binding.sessionBound && !stored) throw fail('TASK_OWNER_SESSION_MISSING')
       if (stored) {
         validateHistory(stored.events, binding)
+        await onPreviouslyReadArtifacts?.(previouslyReadOwnerArtifacts(stored.events, binding))
         for (const event of stored.events) {
           if (event.type === 'user/message' && event.surfaceOp === 'append'
             && event.data.source?.taskOwner?.taskId === binding.taskId

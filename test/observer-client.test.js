@@ -629,6 +629,9 @@ test('卡片原生步骤复用中文名称和本次节点耗时，不从历史�
   assert.equal(titles['execute-build'], '执行构建')
   assert.equal(titles['inspect-runtime'], '核对运行版本')
   assert.equal(titles['accept-result'], '校验调查结果')
+  const labelExpression = source.match(/node\.title \|\| nodeTitle\[node\.templateNodeId \?\? node\.nodeId\] \|\| '执行步骤'/)[0]
+  assert.equal(runInNewContext(labelExpression, { nodeTitle: titles,
+    node: { nodeId: 'task-specific-check', templateNodeId: 'verify-candidate' } }), '构建检查')
   assert.deepEqual(['prepare-delivery', 'send-files', 'verify-delivery'].map(id => titles[id]),
     ['核对待交付文件', '发送群文件', '回读并核验文件'])
   assert.match(source, /const node = \(task.executionNodes \|\| \[\]\).find/)

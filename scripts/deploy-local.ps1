@@ -64,6 +64,38 @@ function Invoke-CoreStage([string]$stage,[hashtable]$values){
  try{$result=$stdout|ConvertFrom-Json}catch{throw "DEPLOY_STAGE_RESULT_INVALID:$stage"}
  return $result
 }
+function Invoke-VerificationDrainRecovery {
+ $helper=Join-Path $workspace 'docs/acceptance/topic-context-completeness/scripts/recover-verification-drain.mjs'
+ $bridge=Join-Path $workspace 'docs/acceptance/topic-context-completeness/scripts/recover-quarantined-echo.ps1'
+ $nativeNode='D:/soft/node-v24.19.0/node.exe'
+ $manifest=Join-Path ($evidence+'-runner') 'verification-drain-manifest.json'
+ $recoveryDirectory=$evidence+'-verification-drain'
+ $raw=& $nativeNode $helper preview $manifest $a.Package $a.ExpectedPackageSha256
+ if($LASTEXITCODE){throw 'DEPLOY_DRAIN_PREVIEW_REJECTED'}
+ $preview=($raw-join "`n")|ConvertFrom-Json
+ if($preview.eligibleRecovery-eq$false-and$preview.writes-eq0){return $preview}
+ if(-not$preview.eligibleRecovery-or$preview.writes-ne0-or$preview.profileSha256-ne$a.ExpectedProfileSha256){throw 'DEPLOY_DRAIN_PREVIEW_INVALID'}
+ $state=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 15
+ if($state.revision-ne$preview.maintenanceRevision-or$state.maintenanceId-ne$preview.maintenanceId){throw 'DEPLOY_DRAIN_MAINTENANCE_CHANGED'}
+ if($state.active-and($a.ContinueMaintenanceId-ne$state.maintenanceId-or$a.ExpectedMaintenanceRevision-ne$state.revision)){throw 'DEPLOY_DRAIN_CONTINUATION_REQUIRED'}
+ if($Check){return $preview}
+ if(-not$state.active){
+  $id='deploy-drain-'+[guid]::NewGuid().ToString()
+  $body=@{requestId=$id;active=$true;expectedRevision=$state.revision;maintenanceId=$id;reason='受控部署：原检查进程已退出，仅核验并排空原节点'}|ConvertTo-Json
+  $null=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
+ }
+ $raw=& $nativeNode $helper capture $manifest $a.Package $a.ExpectedPackageSha256
+ if($LASTEXITCODE){throw 'DEPLOY_DRAIN_CAPTURE_REJECTED'}
+ $raw=& $bridge -Scope verification -IncidentManifest $manifest -ExpectedProfileSha256 $a.ExpectedProfileSha256 -EvidenceDirectory $recoveryDirectory -Check
+ if(-not$?){throw 'DEPLOY_DRAIN_CHECK_REJECTED'}
+ $raw=& $bridge -Scope verification -IncidentManifest $manifest -ExpectedProfileSha256 $a.ExpectedProfileSha256 -EvidenceDirectory $recoveryDirectory
+ if(-not$?){throw 'DEPLOY_DRAIN_RECOVERY_REJECTED'}
+ $recovered=($raw-join "`n")|ConvertFrom-Json
+ $state=Invoke-RestMethod http://127.0.0.1:18998/runtime/maintenance -NoProxy -TimeoutSec 15
+ if(-not$state.drained-or-not$state.active-or$state.phase-ne'draining'-or$state.maintenanceId-ne$recovered.ContinueMaintenanceId-or$state.revision-ne$recovered.ExpectedMaintenanceRevision-or(Get-FileHash -LiteralPath $profile).Hash.ToLowerInvariant()-ne$a.ExpectedProfileSha256){throw 'DEPLOY_DRAIN_READBACK_CHANGED'}
+ $a.ContinueMaintenanceId=$state.maintenanceId;$a.ExpectedMaintenanceRevision=$state.revision
+ return $recovered
+}
 $stage='check';$logDirectory=$evidence+'-runner'
 try{
  if(-not $Check){
@@ -77,7 +109,13 @@ try{
   if($Readback -and -not $result.ready){throw 'DEPLOY_READBACK_NOT_READY'}
  }else{
   $preflight=$a.Clone();$preflight.Check=$true
-  $result=Invoke-CoreStage 'check' $preflight
+  try{$result=Invoke-CoreStage 'check' $preflight}catch{
+   if($script:coreReason-notlike 'DEPLOY_NOT_DRAINED*'-and$script:coreReason-ne'接续维护许可身份、版本或排空状态不匹配'){throw}
+   $stage='verification-drain';$recovery=Invoke-VerificationDrainRecovery
+   if($recovery.eligibleRecovery-eq$false){$stage='check';throw}
+   if($Check){@{ok=$true;checkOnly=$true;writes=0;eligibleRecovery=$true;needsMaintenance=$recovery.needsMaintenance;coreCheckComplete=$false;ready=$false;dispatchResumed=$false;packageSha256=$a.ExpectedPackageSha256;action='正式执行时先受管排空，再重新完整Check与部署'}|ConvertTo-Json;exit 0}
+   $preflight=$a.Clone();$preflight.Check=$true;$stage='check';$result=Invoke-CoreStage 'check' $preflight
+  }
   if($null-eq $result.writes -or $result.writes-ne 0){throw 'DEPLOY_CHECK_NOT_READONLY'}
   if(-not $Check){
    $stage='deploy';$install=$a.Clone();$install.HoldMaintenance=$true
@@ -85,9 +123,11 @@ try{
    $stage='readback';$next=$a.Clone();$next.Readback=$true
    $result=Invoke-CoreStage $stage $next
    if(-not $result.ready){throw 'DEPLOY_READBACK_NOT_READY'}
-   $stage='resume';$next=$a.Clone();$next.Resume=$true
-   $result=Invoke-CoreStage $stage $next
-   if(-not $result.ready -or -not $result.dispatchResumed){throw 'DEPLOY_RESUME_NOT_CONFIRMED'}
+   if(-not $a.HoldMaintenance){
+    $stage='resume';$next=$a.Clone();$next.Resume=$true
+    $result=Invoke-CoreStage $stage $next
+    if(-not $result.ready -or -not $result.dispatchResumed){throw 'DEPLOY_RESUME_NOT_CONFIRMED'}
+   }
   }
  }
  $summary=@{ok=$true;stage=$stage;checkOnly=[bool]$Check;writes=if($Check){0}else{$null};evidenceDirectory=$evidence;ready=$result.ready;dispatchResumed=$result.dispatchResumed;packageSha256=$a.ExpectedPackageSha256}

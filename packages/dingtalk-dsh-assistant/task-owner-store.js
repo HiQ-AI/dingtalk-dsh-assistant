@@ -36,7 +36,8 @@ function validatePlanChange(chosen, currentTask) {
       fail('TASK_OWNER_ADVANCE_CONFLICT')
 }
 const decision = value => {
-  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair', 'condition'], ['action', 'summary', 'evidenceRefs'])
+  if (value?.action === 'repairCurrentStage' || value?.workflowRevision !== undefined) fail('TASK_OWNER_EXECUTION_REPAIR_DISABLED')
+  exact(value, ['action', 'summary', 'evidenceRefs', 'appendStages', 'planChange', 'assessments', 'repair', 'condition', 'workflowRevision'], ['action', 'summary', 'evidenceRefs'])
   if (!['advance', 'wait', 'complete', 'block', 'repairCurrentStage'].includes(value.action)
     || typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 4000
     || !Array.isArray(value.evidenceRefs) || value.evidenceRefs.length > 128) fail('TASK_OWNER_DECISION_INVALID')
@@ -51,12 +52,7 @@ const decision = value => {
     c.evidenceRefs.forEach(ref)
     if (c.evidenceRefs.some(item => !value.evidenceRefs.includes(item))) fail('TASK_OWNER_CONDITION_INVALID')
   } else if (value.condition !== undefined) fail('TASK_OWNER_CONDITION_INVALID')
-  if (value.action === 'repairCurrentStage') {
-    if (value.planChange || value.appendStages || value.assessments) fail('TASK_OWNER_DECISION_INVALID')
-    exact(value.repair, ['stageId', 'runId', 'generation', 'runRevision', 'requirementRevision'])
-    id(value.repair.stageId); id(value.repair.runId)
-    for (const key of ['generation', 'runRevision', 'requirementRevision']) revision(value.repair[key])
-  } else if (value.repair !== undefined) fail('TASK_OWNER_DECISION_INVALID')
+  if (value.repair !== undefined) fail('TASK_OWNER_DECISION_INVALID')
   if (value.planChange !== undefined) {
     if (value.action !== 'advance' || value.appendStages !== undefined) fail('TASK_OWNER_DECISION_INVALID')
     exact(value.planChange, ['kind', 'stages', 'affectedFrom'], ['kind', 'stages'])
@@ -126,6 +122,9 @@ function validateDecisionState(db, o, chosen) {
     AND status<>'succeeded' AND status<>'invalidated' ORDER BY position LIMIT 1`)
     .get(o.task_id, currentTask.plan_revision)
   if (currentTask.control_state !== 'active') fail('TASK_OWNER_CONTROL_BLOCKED')
+  if (chosen.action === 'repairCurrentStage' || chosen.workflowRevision !== undefined) fail('TASK_OWNER_EXECUTION_REPAIR_DISABLED')
+  if (currentTask.plan_revision > 0 && currentTask.plan_requirement_revision === currentTask.requirement_revision
+    && (chosen.planChange || chosen.appendStages?.length)) fail('TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED')
   validatePlanChange(chosen, currentTask)
   if (chosen.action === 'complete') {
     const direct = db.prepare("SELECT e.payload_ref FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").all(o.task_id, currentTask.requirement_revision,o.authorization_revision,o.input_fence_revision)
@@ -588,13 +587,24 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     return { status: 'discarded', taskId: a.taskId, turnId: a.turnId }
   }
   if (command.kind === 'task.owner.action.fail') {
-    exact(a, ['taskId', 'turnId', 'leaseEpoch', 'reason'])
+    exact(a, ['taskId', 'turnId', 'leaseEpoch', 'reason', 'diagnosticRef'], ['taskId', 'turnId', 'leaseEpoch', 'reason'])
     const t = db.prepare('SELECT * FROM task_owner_turns WHERE task_id=? AND turn_id=?').get(id(a.taskId), id(a.turnId))
-    if (!t || t.status !== 'accepted' || t.application_status !== 'pending'
+    if (!t || t.status !== 'accepted' || !(t.application_status === 'pending' || a.diagnosticRef !== undefined && ['applied', 'blocked'].includes(t.application_status))
       || revision(a.leaseEpoch) !== t.lease_epoch
       || typeof a.reason !== 'string' || !a.reason || a.reason.length > 200)
       fail('TASK_OWNER_ACTION_NOT_FOUND')
     const failures = t.application_failures + 1
+    if (a.diagnosticRef !== undefined) {
+      ref(a.diagnosticRef)
+      const o = owner(db, a.taskId), current = task(db, a.taskId)
+      if (o.lease_epoch !== t.lease_epoch || o.current_turn_id) fail('TASK_OWNER_ACTION_NOT_FOUND')
+      db.prepare("UPDATE task_owner_turns SET application_failures=?,application_status=CASE WHEN application_status IN ('pending','blocked') THEN 'discarded' ELSE application_status END,updated_at=? WHERE turn_id=?").run(failures, now, t.turn_id)
+      const eventSeq = Number(db.prepare("INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at) VALUES(?,?,'system.recovery',?,?)")
+        .run(a.taskId, `action-failed-${t.turn_id}`, a.diagnosticRef, now).lastInsertRowid)
+      db.prepare("UPDATE task_owners SET status=?,last_failure=?,failure_count=failure_count+1,event_watermark=?,revision=revision+1,updated_at=? WHERE task_id=?")
+        .run(current.control_state === 'active' ? 'pending' : 'idle', a.reason, eventSeq, now, a.taskId)
+      return { status: 'correct', failureCount: failures, diagnosticRef: a.diagnosticRef, ...(t.application_status !== 'applied' ? { discardedTurnId: t.turn_id } : { appliedTurnId: t.turn_id }) }
+    }
     // 参数/候选纠正交回同一个 Owner；已失败候选不再原样应用。
     if (correctableOwnerReasons.includes(a.reason)) {
       db.prepare("UPDATE task_owner_turns SET application_failures=?,application_status='discarded',updated_at=? WHERE turn_id=?")
@@ -689,12 +699,14 @@ export function queryTaskOwner(db, query) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) fail('TASK_OWNER_ARGUMENT_INVALID')
     revision(after)
     return db.prepare(`SELECT rowid AS sequence_id,* FROM task_owner_turns WHERE rowid>?
-      AND status='accepted' AND application_status='pending' ORDER BY rowid LIMIT ?`)
+      AND status='accepted' AND (application_status='pending' OR application_status='blocked'
+        AND EXISTS (SELECT 1 FROM task_owners o WHERE o.task_id=task_owner_turns.task_id AND o.lease_epoch=task_owner_turns.lease_epoch AND o.current_turn_id IS NULL)) ORDER BY rowid LIMIT ?`)
       .all(after, limit).map(row => ({ taskId: row.task_id, turnId: row.turn_id,
         leaseEpoch: row.lease_epoch, eventWatermark: row.event_watermark,
         requirementRevision: row.requirement_revision, planRevision: row.plan_revision,
         controlRevision: row.control_revision, authorizationRevision: row.authorization_revision,
-        inputFenceRevision: row.input_fence_revision,
+        inputFenceRevision: row.input_fence_revision, applicationStatus: row.application_status,
+        ...(row.application_status === 'blocked' ? { lastFailure: owner(db, row.task_id).last_failure } : {}),
         retryAt: row.application_failures ? new Date(Date.parse(row.updated_at) + recoveryRetryDelayMs(row.application_failures)).toISOString() : null,
         decision: JSON.parse(row.decision_json), sequenceId: row.sequence_id }))
   }

@@ -34,3 +34,10 @@ test('合并结果UI不接收远程origin或任意case参数', async () => {
   await executeActivityMerge('initialize', f.config, f.input)
   await assert.rejects(executeActivityMerge('execute', f.config, { ...f.input, case: { parameters: { bypass: true } } }), { code: 'ACTIVITY_MERGE_EXECUTION_INVALID' })
 })
+
+test('合并结果UI准备须明确安装运行时，服务拒绝非loopback', async()=>{
+  const f=await fixture()
+  await assert.rejects(executeActivityMerge('prepare',f.config,f.input),{code:'ACTIVITY_MERGE_INSTALL_RUNTIME_INVALID'})
+  const {serveActivityMerge}=await import('../scripts/local-acceptance-activity-merge.mjs')
+  await assert.rejects(serveActivityMerge(f.config,f.input,{host:'0.0.0.0',port:19113}),{code:'ACTIVITY_MERGE_INPUT_INVALID'})
+})
