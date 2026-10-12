@@ -1,3 +1,4 @@
+import { withAuthorizationSessions } from '../packages/dingtalk-dsh-assistant/execution-authorization-session.js'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
@@ -303,8 +304,8 @@ test('生产流程经真实效果账等待 Web 审批，批准后同一精确动
       ? { principalId: 'owner', approval: { requestId: 'release-approval', approverIds: ['owner'] } }
       : { principalId: 'owner', authorizationRef: `approved-scope:${prepared.operation}` },
   })
-  const workflow = createReleaseTaskWorkflow({ kind: 'production-release', adapter })
-  const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow] })
+  const workflow = withAuthorizationSessions(createReleaseTaskWorkflow({ kind: 'production-release', adapter }), { provider: 'fixture', model: 'fixture' })
+  const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow], sessions: { close: async()=>{}, cancel: async()=>{}, run: async ({ requestAuthorization, onResult, onSessionBound })=>{ await onSessionBound(); const output=await requestAuthorization('Exact production action requires authorization',new AbortController().signal);await onResult(output);return {status:'submitted'} } } })
   t.after(async () => { await controller.close(); await store.close() })
   await controller.createRun({ commandId: 'create', runId: 'run', taskId: 'task', workflowId: workflow.id, input: requirement('production-release') })
   const before = await controller.whenIdle('run')

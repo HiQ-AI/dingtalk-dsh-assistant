@@ -269,3 +269,26 @@ else if(args[1]==='view')console.log(JSON.stringify(s.pr));else process.exit(2);
   await assert.rejects(pending,{code:'PR_CANCELLED'})
   assert.throws(()=>process.kill(pid,0))
 })
+
+test('complete check logs preserve late failure bytes, digest and tail across steps',async()=>{
+ const {createHash}=await import('node:crypto')
+ const root=await mkdtemp(join(tmpdir(),'dsh-full-check-')),snapshot={candidateDigest:'a'.repeat(64),files:[]}
+ const result=await createVerificationJobCheck({id:'late-failure',version:'2',root,steps:[{executable:process.execPath,args:['-e',"process.stdout.write('A'.repeat(90000))"]},{executable:process.execPath,args:['-e',"process.stdout.write('B'.repeat(200000)+'TAIL_REAL_FAILURE');process.stderr.write('ERR_REASON');process.exitCode=7"]}]}).run(snapshot)
+ assert.equal(result.passed,false)
+ const log=JSON.parse(result.log),step=log.steps[1];assert.equal(step.exitCode,7);assert.equal(step.outputTruncated,true)
+ const decode=record=>Buffer.from(record.tail,record.tailEncoding==='base64'?'base64':'utf8').toString()
+ assert.match(decode(step.fullLogs.stdout),/TAIL_REAL_FAILURE/);assert.match(decode(step.fullLogs.stderr),/ERR_REASON/)
+ for(const current of log.steps)for(const record of Object.values(current.fullLogs)){
+  const bytes=await readFile(record.path);assert.equal(bytes.length,record.bytes);assert.equal(createHash('sha256').update(bytes).digest('hex'),record.sha256);assert.equal(record.error,null)
+ }
+ assert.ok(Buffer.byteLength(result.log)<65536)
+})
+
+test('existing PR independently observed after preflight success remains verifiable without send journals', async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'dsh-pr-observed-')),repoDir=join(dir,'repo');const{mkdir}=await import('node:fs/promises');await mkdir(repoDir);const state=join(dir,'state.json'),script=join(dir,'gh.cjs'),sha='a'.repeat(40);
+ await writeFile(script,`const fs=require('fs'),[file,...a]=process.argv.slice(2),s=JSON.parse(fs.readFileSync(file));if(a[0]!=='api'&&a[1]!=='view')throw Error('mutation forbidden');console.log(JSON.stringify(a[0]==='api'?[[{number:s.number,html_url:s.url,state:'open',draft:true,head:{sha:s.headRefOid,ref:s.headRefName},base:{ref:s.baseRefName},body:s.body}]]:s));`);
+ const config={repository:repoDir,repo:'test/repo',head:'codex/test',base:'feature/uat3-base',previousPullRequest:{number:370,repo:'test/repo',head:'codex/test',base:'feature/uat3-base',operationKey:'c'.repeat(64),url:'https://github.com/test/repo/pull/370'},ghCommand:{executable:process.execPath,args:[script,state]}};
+ const a=createGithubPullRequests(config),p=a.prepare({runId:'run',generation:1,requirementDigest:'b'.repeat(64),commitId:sha,title:'t',body:'b'}),row={number:370,url:'https://github.com/test/repo/pull/370',state:'OPEN',isDraft:true,headRefOid:sha,headRefName:config.head,baseRefName:config.base,body:'<!-- dsh-operation:'+p.operationKey+' -->'};await writeFile(state,JSON.stringify(row));assert.equal((await a.execute(p,{requireDraft:true})).status,'succeeded');const restarted=createGithubPullRequests(config);assert.equal((await restarted.reconcile(p,{requireDraft:true})).status,'succeeded');
+ for(const change of [{headRefOid:'d'.repeat(40)},{baseRefName:'feature/uat2-base'},{isDraft:false}]){await writeFile(state,JSON.stringify({...row,...change}));await assert.rejects(restarted.reconcile(p,{requireDraft:true}),/PR_PREVIOUS_IDENTITY_CONFLICT|PR_DRAFT_REQUIRED/)}
+ await writeFile(state,JSON.stringify({...row,body:'old'}));const missing=await restarted.reconcile(p,{requireDraft:true});assert.equal(missing.reason,'PR_PREFLIGHT_NOT_SENT');assert.equal(missing.mutationAttempted,false);
+});

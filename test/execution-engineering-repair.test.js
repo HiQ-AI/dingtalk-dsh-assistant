@@ -7,20 +7,22 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { createExecutionController } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
+import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createEngineeringRegistry } from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
 import { createEngineeringFailureRepair } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 
-for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${ambiguous ? '补丁歧义读原工作区' : '读失败候选'}、并发拒绝、幂等及旧证据保留`, { timeout: 180000 }, async t => {
+for (const ambiguous of [false, true]) test(`冻结v18维护修复保留同Run历史，原生Owner拒绝旧修复决策：${ambiguous ? '补丁歧义读原工作区' : '读失败候选'}、并发拒绝、幂等及旧证据保留`, { timeout: 180000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-engineering-repair-')), source = join(root, 'source'), remote = join(root, 'remote.git')
   await mkdir(join(source, 'src'), { recursive: true })
   const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
   await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
   await writeFile(join(source, 'src/value.txt'), ambiguous ? 'unique\nbase\nbase' : 'base'); await git('add', '.'); await git('commit', '-m', 'base')
-  await git('init', '--bare', remote); await git('push', remote, 'HEAD:refs/heads/feature/uat2-base')
-  const store = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'repair', initialize: true })
+  await git('init', '--bare', remote); await git('push', remote, 'HEAD:refs/heads/main', 'HEAD:refs/heads/feature/uat2-base')
+  const rawStore = await openExecutionStore({ dbPath: join(root, 'control.db'), instanceId: 'repair', initialize: true })
+  let frozenRecord, seedHistorical = false
+  const store = { ...rawStore, query: q => seedHistorical && q.kind === 'workflow.list' ? Promise.resolve([frozenRecord]) : rawStore.query(q) }
   t.after(() => store.close())
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
   const profile = join(root, 'profile.json'); await writeFile(profile, JSON.stringify({ environment: 'uat', env: {} }))
@@ -30,22 +32,23 @@ for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${a
   let proposals = 0, oldRead = false
   const sessions = { async run({ binding, input, onSessionBound, onResult }) {
     await onSessionBound()
-    if (input.criteria) return onResult({ cases: [] }) // 第二代止于本地验收计划门禁，不访问业务服务。
-    const current = await registry.repositoryInspect(binding, { operation: 'read', path: 'src/value.txt' }, undefined, input)
+    if (input.criteria) return onResult({ cases: binding.generation === 2 ? [] : input.criteria.map(item => ({ criterionId: item.id, scenarioId: 'value', steps: ['Read candidate value'], expected: 'good', parameters: {} })) }) // 第二代止于本地验收计划门禁，不访问业务服务。
+    const requirementInput = input.requirement ?? input
+    const current = await registry.repositoryInspect(binding, { operation: 'read', path: 'src/value.txt' }, undefined, requirementInput)
     let content = 'effective-change\nbad'
-    if (binding.generation === 2) {
-      const context = await registry.repositoryInspect(binding, { operation: 'repair' }, undefined, input)
+    if (binding.generation === 2 || !ambiguous && proposals > 0) {
+      const context = await registry.repositoryInspect(binding, { operation: 'repair' }, undefined, requirementInput)
       if (ambiguous) {
         assert.equal(context.sourceKind, 'workspace'); assert.equal(context.candidateDigest, undefined)
         assert.ok(context.materials.some(item => item.proposal?.replacements?.[1]?.from === 'base'))
       } else assert.ok(context.materials.some(item => item.log?.includes('bad')))
-      const previous = await registry.repositoryInspect(binding, { operation: 'read', source: 'previous', path: 'src/value.txt' }, undefined, input)
+      const previous = await registry.repositoryInspect(binding, { operation: 'read', source: 'previous', path: 'src/value.txt' }, undefined, requirementInput)
       if (ambiguous) {
-        await assert.rejects(registry.repositoryInspect({ ...binding, generation: 1 }, { operation: 'repair' }, undefined, input), /ENGINEERING_READ_STALE/)
-        await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', source: 'previous', path: '../outside' }, undefined, input), /ENGINEERING_READ_ARGUMENT_INVALID/)
+        await assert.rejects(registry.repositoryInspect({ ...binding, generation: 1 }, { operation: 'repair' }, undefined, requirementInput), /ENGINEERING_READ_STALE/)
+        await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', source: 'previous', path: '../outside' }, undefined, requirementInput), /ENGINEERING_READ_ARGUMENT_INVALID/)
         const oldFile = join(oldWorkspace.workspace.directory, 'src/value.txt')
         await writeFile(oldFile, previous.text + '\ndrift')
-        try { await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', source: 'previous', path: 'src/value.txt' }, undefined, input), /ENGINEERING_REPAIR_WORKSPACE_DRIFT/) }
+        try { await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', source: 'previous', path: 'src/value.txt' }, undefined, requirementInput), /ENGINEERING_REPAIR_WORKSPACE_DRIFT/) }
         finally { await writeFile(oldFile, previous.text) }
       }
       assert.equal(previous.text, ambiguous ? 'unique\nbase\nbase' : content); oldRead = true; content = ambiguous ? 'effective-change\ngood' : previous.text.replace('bad', 'good')
@@ -58,7 +61,21 @@ for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${a
   const controller = createExecutionController({ store, artifacts, sessions, readTools: ['engineering_repo_inspect'], delivery: createExecutionDelivery({ store, artifacts, ...registry.deliveryOptions }), workflows: [], changeQuietMs: 0, maxChangeDelayMs: 0 })
   t.after(() => controller.close())
   const runId = controller.plannedTaskStageRunId({ taskId: 'task', planRevision: 1, stageId: 'stage-1', attempt: 1 })
-  const prepared = await registry.prepareTask({ taskId: 'task', arguments: { repositoryId: 'repo', uatEnvironment: 'uat2', objective: '修复', acceptanceCriteria: ['值正确'] } }, { commandId: 'original', stageRunId: runId, run: { actorId: 'owner' }, unit: {} }, controller)
+  const action = { taskId: 'task', arguments: { repositoryId: 'repo', uatEnvironment: 'uat2', objective: '修复', acceptanceCriteria: ['值正确'] } }
+  const origin = { commandId: 'original', stageRunId: runId, run: { actorId: 'owner' }, unit: {} }
+  const prepared = await registry.prepareTask(action, origin, { registerWorkflow() {} })
+  // Seed an actual frozen legacy definition: v18 proposal/edit repair semantics remain auditable.
+  frozenRecord = structuredClone((await store.query({ kind: 'workflow.list' })).find(record => record.config.runId === runId))
+  frozenRecord.definitionVersion = '18'; delete frozenRecord.digest
+  for (const key of ['developmentMode', 'developmentBindingVersion', 'sourceCommit', 'sourceRef', 'branchSelection']) delete frozenRecord.config[key]
+  seedHistorical = true
+  await assert.rejects(registry.restore(store, artifacts), { code: 'ENGINEERING_DEFINITION_DRIFT' })
+  seedHistorical = false
+  let legacyWorkflow
+  await registry.prepareTask(action, origin, { registerWorkflow(value) { legacyWorkflow = value } })
+  frozenRecord.digest = defineExecutionWorkflow(legacyWorkflow).digest
+  await store.command({ id: 'frozen-v18-definition', kind: 'workflow.register', args: frozenRecord })
+  controller.registerWorkflow(legacyWorkflow)
   await controller.createTaskPlan({ commandId: 'plan', taskId: 'task', stages: [{ stageId: 'stage-1', workflowId: prepared.workflowId, input: prepared.input }] })
   const requirement = await artifacts.put(prepared.input)
   await store.command({ id: 'bind', kind: 'task.requirement.bind-legacy', args: { taskId: 'task', expectedRequirementRevision: 1, requirementRef: requirement.ref, sessionId: 'owner-test', criteria: ['值正确'], sourceKey: 'web:test', eventKey: 'created' } })
@@ -90,25 +107,36 @@ for (const ambiguous of [false, true]) test(`正式Owner修复同Run新代：${a
   const unknown = createEngineeringFailureRepair({ store: unknownStore, artifacts, controller, engineering: registry })
   assert.equal((await unknown.inspectCurrentExecution('task')).repairable, false)
   await assert.rejects(unknown.repairCurrentStage({ taskId: 'task', decision, commandId: 'unknown' }), /REPAIR_NOT_ADMITTED/)
-  let repairCommand
+  let repairCommand, rejectedOwnerRepair = false
   const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller, modelConfig: () => ({ provider: 'test', model: 'test' }), authorizeStages: async () => true, advanceTask: async () => {}, ...helpers,
     repairCurrentStage: args => { repairCommand = args.commandId; return helpers.repairCurrentStage(args) },
     sessionRunner: { async run({ input, onSessionBound, onCandidate, readArtifact }) {
-      assert.equal(input.currentExecution.repairable, true)
+      assert.equal(input.currentExecution.repairable, false)
       for (const ref of decision.evidenceRefs) await readArtifact(ref)
       if (!ambiguous) assert.equal((await readArtifact(evidenceRef)).text, Buffer.from(failedEvidence.data, 'base64').toString('utf8'))
-      await onSessionBound(); await onCandidate(decision); return { status: 'submitted', decision }
+      await onSessionBound(); await assert.rejects(onCandidate(decision), { code: 'TASK_OWNER_EXECUTION_REPAIR_DISABLED' }); rejectedOwnerRepair = true; return { status: 'no_submission' }
     }, async close() {} } })
   t.after(() => owner.close())
-  await owner.observe('task'); await owner.drive('task'); assert.deepEqual(await owner.applyPending(), [])
+  await owner.observe('task'); await assert.rejects(owner.drive('task'), { code: 'TASK_OWNER_NO_DECISION' }); assert.deepEqual(await owner.applyPending(), [])
+  assert.equal(rejectedOwnerRepair, true)
+  assert.equal(repairCommand, undefined)
+  assert.equal((await controller.state(runId)).run.generation, 1)
+  repairCommand = 'explicit-frozen-v18-maintenance-repair'
+  const repairReceipt = await helpers.repairCurrentStage({ taskId: 'task', decision, commandId: repairCommand })
+  if (!ambiguous) assert.equal(repairReceipt.result.mode, 'candidate-in-place')
   await controller.whenIdle(runId)
   const second = await controller.state(runId)
-  assert.equal(second.run.generation, 2, JSON.stringify(second)); assert.equal(proposals, 2); assert.equal(oldRead, true)
+  assert.equal(second.run.generation, ambiguous ? 2 : 1, JSON.stringify(second)); assert.equal(proposals, 2); assert.equal(oldRead, true)
+  if (!ambiguous) {
+    for (const nodeId of ['prepare-generation', 'define-local-acceptance', 'plan-local-acceptance', 'prepare-workspace']) assert.deepEqual(second.nodes.find(node => node.nodeId === nodeId), first.nodes.find(node => node.nodeId === nodeId))
+    const retried = second.nodes.find(node => node.nodeId === 'inspect-and-propose'), original = first.nodes.find(node => node.nodeId === 'inspect-and-propose')
+    assert.equal(retried.nodeRunId, original.nodeRunId); assert.notEqual(retried.sessionId, original.sessionId); assert.notEqual(retried.inputDigest, original.inputDigest); assert.equal(retried.leaseEpoch, original.leaseEpoch + 1)
+  }
   assert.equal(second.nodes.find(node => node.nodeId === 'verify-candidate').status, 'succeeded', JSON.stringify(second))
   const workspace = await artifacts.read(second.nodes.find(node => node.nodeId === 'prepare-workspace').outputRef)
   assert.equal(await readFile(join(workspace.workspace.directory, 'src/value.txt'), 'utf8'), 'effective-change\ngood')
   assert.deepEqual(await artifacts.read(evidenceRef), failedEvidence)
   if (ambiguous) assert.equal(await readFile(join(oldWorkspace.workspace.directory, 'src/value.txt'), 'utf8'), 'unique\nbase\nbase')
   await helpers.repairCurrentStage({ taskId: 'task', decision, commandId: repairCommand })
-  assert.equal((await controller.state(runId)).run.generation, 2)
+  assert.equal((await controller.state(runId)).run.generation, ambiguous ? 2 : 1)
 })

@@ -1,3 +1,4 @@
+import { createUatSchemaMigrationHost } from './workflow-uat-schema-host.js'
 import { stat, readFile } from 'node:fs/promises'
 import { resolve, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -58,6 +59,7 @@ export async function createHostPlatformClients({ secretsDirectory, productionTa
   } catch {
     // Bytebase 凭据缺失时保持数据变更不可注册；发布客户端仍可独立工作。
   }
+  let uatSchemaMigrationPlatform
   let uatPostgresPlatform
   if (uatPostgres !== undefined) {
     const configured = uatPostgres?.targets
@@ -75,6 +77,8 @@ export async function createHostPlatformClients({ secretsDirectory, productionTa
         connection: { host: credential.host, port: Number(credential.port),
           database: target.database, user: credential.user, password: credential.password } }))
       const { Client } = await loadPostgres()
+      const editor = entries.find(entry => entry.target.database === 'hiq_editor')
+      if (editor) uatSchemaMigrationPlatform = createUatSchemaMigrationHost({ connection: editor.connection, Client })
       uatPostgresPlatform = createUatPostgres({ entries,
         receiptDbPath: uatPostgres.receiptDbPath, Client }).platform
     } catch {
@@ -135,6 +139,7 @@ export async function createHostPlatformClients({ secretsDirectory, productionTa
     readEntry: args => uat.kubernetes.readEntry(args),
   } }, ...(bytebase ? { bytebase } : {}),
   ...(uatPostgresPlatform ? { uatPostgres: uatPostgresPlatform } : {}),
+  ...(uatSchemaMigrationPlatform ? { uatSchemaMigration: uatSchemaMigrationPlatform } : {}),
   ...(productionPostgresPlatform ? { productionPostgres: productionPostgresPlatform } : {}) }
 }
 

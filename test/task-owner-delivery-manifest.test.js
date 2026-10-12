@@ -70,9 +70,11 @@ async function fixture(t, { mutateFinal, action = 'complete', domainProof = fals
         assert.notEqual(nodeRef, outputRef)
         assert.deepEqual(await readArtifact(nodeRef), { taskRunId: '901' })
         await assert.rejects(readArtifact('foreign-task-ref'), /TASK_OWNER_ARTIFACT_NOT_ALLOWED/)
-        await assert.rejects(helpers.authorizeCompletion({ taskId: 'task', requirement, plan: await controller.taskPlan('task'),
+        assert.equal(await helpers.authorizeCompletion({ taskId: 'task', requirement, plan: await controller.taskPlan('task'),
           decision: { action: 'complete', summary: '已核验', evidenceRefs: [nodeRef],
-            assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [nodeRef] })) } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+            assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: [nodeRef] })) } }), true)
+        await assert.rejects(helpers.authorizeCompletion({ taskId: 'task', requirement, plan: await controller.taskPlan('task'),
+          decision: { action: 'complete', summary: '外部引用', evidenceRefs: ['foreign-task-ref'], assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: ['foreign-task-ref'] })) } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
       }
       const decision = { action, summary: '处理当前任务', evidenceRefs: outputRef ? [outputRef] : [],
         ...(['wait', 'block'].includes(action) ? { condition: { kind: 'business-input', missing: '确认结论', responsibleParty: '需求方', resumeWhen: '确认结论后继续', evidenceRefs: outputRef ? [outputRef] : [] } } : {}),
@@ -108,7 +110,7 @@ test('已验完整候选跨会话克隆保留回执，摘要和引用篡改以�
   })
 })
 
-test('Owner controller交接领域正文并允许读取节点，跨任务及节点直接完成仍拒绝', async t => {
+test('Owner controller交接领域正文并允许读取节点，拒绝跨任务证据但接纳绑定成功节点回执', async t => {
   const f = await fixture(t, { domainProof: true })
   await f.owner.drive('task')
   assert.equal((await f.store.query({ kind: 'task.owner.delivery-manifest', taskId: 'task' })).taskId, 'task')

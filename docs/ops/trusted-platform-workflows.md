@@ -314,3 +314,61 @@ node scripts/configure-project-local-acceptance.mjs --profile <当前profile绝�
 check零写，返回恢复前后SHA、精确字段和knownActiveRuns摘要匹配。由正式部署入口确认维护/停机后，原参数改为 `--apply`；它沿既有配置锁、二次CAS、临时文件rename、独立回读，仅写profile及配置器自身备份，不写业务/control数据库。
 
 提案需包含profile/expectedProfileSha256、sourceProfile/sourceProfileSha256、deploymentReceipt及beforeConfigProof的{path,sha256}、精确dataset与dataset-web repositories。每项只接受id/restoreChecks/removeTaskLocalAcceptance/dependencyRepositories，checks必须与固定旧profile一致；旧profile不可已有taskmap，当前依赖必须保持相同。当前部署配置apply回执须绑定当前profile SHA及其真实before备份；beforeConfigProof须绑定旧profile与活动Run。再次只读核对当前活动定义repositoryDigest，全部匹配才允许恢复。无关仓库字段差异、未知仓库、来源篡改、活动Run漂移均拒绝。恢复后仍用Task checkpoint单独升级检查/验收，不再次全局改旧Run依赖配置。
+
+
+## Original Owner candidate adoption and repeated UAT targets
+
+The formal local deployment accepts `ReleaseTargetsProposal`, a JSON file with `expectedProfileSha256`, one `target` and its `policy`. It only appends an exact UAT deployment target and a non-empty required scenario policy; conflicting existing entries, production targets, credentials and unrelated profile changes are rejected. `scripts/configure-release-targets.mjs --check` is read-only. The official `scripts/deploy-local.ps1` performs the profile CAS change during drained maintenance. It does not create a historical profile backup for this append.
+
+The verified frontend UAT3 mapping is HiQ-AI/dataset-web, feature/uat3-base, Woodpecker repository 2 / dataset-web-uat3-poll, hiqlcd-app-uat3/dataset-web, registry.cn-sh1.ctyun.cn/hiq-ai/dataset-web and https://editor3.hiqdat.dev/. This target does not replace the existing frontend UAT2 or backend UAT3 configuration.
+
+For an already developed candidate, the existing original-Owner `review-delivery` project-evidence path binds the actual existing directory, source base, commit and Draft PR with evidence file hashes. Optional `acceptance.scenarioIds` is a submitted applicability claim for the Owner to judge, never a Host test result. UAT preparation can use the resulting accepted Owner manifest instead of replaying engineering nodes. It rechecks current Git tree, PR identity and evidence bytes; the required scenario policy remains enforced. A changed integrated commit needs a new Owner review, even when older test evidence is retained in its documented scope. The accepted candidate manifest may outlive a later release-scope revision, but its exact candidate and evidence must still match. It does not authorize merge/deployment by itself.
+
+A task may declare an ordered target array per publication workflow in `stageTargets`. Each occurrence binds the corresponding declared target; every target must be admitted by Host configuration and existing source authorization remains required. Deployment selects the preceding merge receipt for its repository.
+
+If a reset reuses a managed workspace address already owned by two consistent exclusive records for a different preparation, read-only reconciliation records a preflight failure with mutationAttempted=false and both preparation digests. It does not adopt the old tree, delete the directory, or restart development. The existing pure candidate must be bound through the original Owner candidate review path; an incomplete, tampered or linked old initialization remains a conflict.
+
+## Candidate acceptance before publication
+
+An original Owner paused delivery review may submit `action: wait` with explicit `candidateAcceptance: {scenarioIds,evidenceRefs}` after reading the reviewed facts. The independent `task-candidate-acceptance` artifact records `accepted=true` and `businessCompleted=false`; neither task completion nor release success is inferred from a wait summary. Only declared, explicitly accepted candidate scenarios can feed UAT preparation. Current Git/PR/tree/evidence and required target policies are still checked. The full requirement and its authorized merge/deployment stages stay unchanged. Resume uses the existing formal task control API after candidate acceptance and any independent review; actual merge, pipeline, image, Pod and entry evidence remains necessary for final completion. Old complete candidate manifests remain compatible.
+
+
+## Private-repository rules plan response
+
+GitHub rules queries may return the exact plan-feature403 for a private repository. This response alone never proves an empty policy. Both atomic UAT push policy and required-check observation use the official paginated branches?protected=false listing (which covers branch protection and rulesets), requiring the exact target/current SHA, a complete list and a second unchanged single-branch read before recording confirmed-unprotected. Permission403, protected/missing/drifting/contradictory branches, incomplete pages and network failures stay blocked. Host configured required checks/scenarios, original accepted candidate evidence, execution-time policy rereads and atomic fast-forward base lease remain enforced. No alternate merge channel or repository visibility change is used. Source: https://docs.github.com/en/rest/branches/branches#list-branches
+
+
+发布选源使用与发布验证相同的原 Owner 接受记录：优先显式 candidate-acceptance，缺省才读取完成清单。候选接受不代表任务完成。已冻结旧候选且尚无外部效果的发布 Run 由原 Owner 替换后缀重新冻结；不改旧回执、不重播开发。
+需求更新后，原Owner可替换已暂停排空、没有任何effect记录的UAT合并阶段。原子计划修订保留成功前缀及旧节点回执，将旧Run记录为cancelled并生成run.superseded-no-effect审计事件。未暂停、未排空、有effect（包括失败或未知）、有待处理输入、当前计划或工程阶段均不适用。
+上述无effect暂停发布例外只能从首个可替换暂停阶段的位置开始；事务内禁止替换范围覆盖任一已完成阶段、已成功Run或任意effect记录，成功前缀必须原样保留。
+UAT预检对original-owner-candidate-v1与original-owner-review-v1使用同一原Owner证据回读验证；候选检查点不回退到历史工程Run产物，缺接受记录仍拒绝。
+
+
+PR base SHA may lag the authoritative branch ref after a base update. UAT preflight binds the freshly read branch SHA as expectedBase; it does not compare that SHA with the cached PR base SHA. The atomic writer still proves expectedBase is an ancestor of the accepted head, verifies the exact tree, and enforces the server lease on the real target ref. PR repository, target branch and accepted head identity remain mandatory.
+
+
+## Task-scoped UAT schema migration
+
+`task-uat-schema-migration` is an optional native external-effect workflow. It is unavailable until a trusted `platforms.uatSchemaMigration.targets` registration is appended through the formal local installer. The current adapter accepts only original SG22 task/PR382/candidate781d2, UAT endpoint192.168.8.8:30770/hiq_editor/public, and the committed `docs/sg22/activity-merge-result.sql` blob SHA256452330b9a3f34529d68440c68b2120da626f821f082184806cccf317354808a1. Windows checkout CRLF bytes have a different digest and are not the committed source. No model-supplied SQL, production Bytebase target or new credential is used.
+
+Use the existing `ReleaseTargetsProposal` formal install argument with the exclusive JSON shape `{ expectedProfileSha256, uatSchemaMigrationTarget }`. The schema target contains exactly `id` plus the exported `sg22SchemaScope` fields. `scripts/configure-release-targets.mjs --check` verifies profile CAS and returns writes0; the formal installer applies only that optional workflow configuration during drained maintenance. Existing release, production and credential configuration remain unchanged. A conflicting schema target is rejected. Append the original task's migration stage/target/source authorization through its formal context after registration; do not use an ad hoc SQL command.
+
+The Host reuses only the existing `hiq_editor_uat` credential. Before migration the native workflow verifies original Owner-accepted candidate, merged PR, exact UAT branch and committed SQL. Execution obtains a per-migration advisory transaction lock, creates the three `te_activity_merge_*` tables plus their declared index, and writes migration/schema digest comments on those three new tables in the same transaction. It changes no existing business table, data or permissions and creates no fourth ledger table. The native effect receipt and final readback carry task, candidate, migration key and actual schema digest.
+
+An existing partial/unmarked schema or changed schema fails closed. Concurrent retries share the lock and reuse only the exact committed migration marker. Before-COMMIT failure rolls back all DDL. A lost COMMIT response leaves a native unknown effect; read-only reconciliation takes the same lock and validates all three markers against their current catalog digest before acknowledging success. Empty post-rollback state is `unseen` and may retry naturally. Never overwrite historical native receipts or mark the business task complete from schema success.
+
+UAT2 and UAT3 share this UAT editor DB. Readback maps NodePort30770 to db/pg-cluster-2-rw-np → pg-cluster-2-2(10.42.3.7:5432); the registered production editor endpoint is101.89.215.147:5432. The exact deployed SG18 UAT2 backend has no source references to the new table names. Pinned SQL only creates the approved new objects; real isolated PostgreSQL tests preserve an existing UAT2 business sentinel. This proof covers configured deployment/credential separation, not ownership of unrelated databases on the server. No production connection is opened.
+
+## Execution-session authorization and UAT builds
+
+Ordinary development, UAT build and same-candidate UAT rebuild do not request business approval. The Host still checks the current task, repository, accepted candidate, stage input and registered UAT target. External tool approval remains independent.
+
+A visible authorization step dispatches an execution session. The session assesses the original instructions, existing authorization and the exact operation, then actively calls `execution_request_authorization(reason)` when approval is necessary. Scheduling the step never creates an application. Ordinary workflow nodes cannot call this tool. The Host records the actual application and its session reasoning; an agent-submitted approval without the tool result is rejected. Production release and data-change workflows retain their actual approval boundary.
+
+Missing authorization is routed to the execution session for assessment. An existing pending request waits for the authorization session; neither case is classified as a maintainer implementation failure. Frozen historical workflow definitions retain their original digests. Newly registered authorization workflows record their session-model configuration for restart hydration.
+
+### Prepared legacy effect retirement
+
+The formal local endpoint is `POST /tasks/<taskId>/retire-prepared-effect` with exactly `runId`, `effectId`, `assessmentRef`, `reason`, `expectedRequirementRevision`, and `expectedControlRevision`. The configured trusted web actor and task access are verified. The assessment artifact must bind the current task/run/node. This operation requires the task and run to be paused, the current node drained and the external effect still prepared with no dispatch history, active lease, result or resource hold. Unknown or started effects must reconcile first.
+
+Retirement keeps the old request decision pending, revokes its availability and appends a separate audited retirement event. The run remains paused; prior successful nodes and receipts remain intact. Formal resume can prepare a deterministic successor for the same node, generation and exact payload under current policy. It cannot change the candidate or replay a successful/unknown operation. An action still requiring approval must use a visible execution-session authorization step; retirement does not provide approval or convert a historical workflow definition. This endpoint must not be used to bypass an external approval rejection.

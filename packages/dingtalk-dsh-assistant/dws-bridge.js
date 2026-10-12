@@ -235,6 +235,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
           ...(entry?.lastBackfillAt ? { succeededAt: entry.lastBackfillAt } : {}),
           ...(entry?.lastBackfillErrorAt ? { failedAt: entry.lastBackfillErrorAt } : {}),
           ...(entry?.lastBackfillError ? { lastError: entry.lastBackfillError } : {}),
+          ...(entry?.lastBackfillMessageId ? { lastErrorMessageId: entry.lastBackfillMessageId } : {}),
+          ...(entry?.lastBackfillCommandKind ? { lastErrorCommandKind: entry.lastBackfillCommandKind } : {}),
         },
         reconnect: {
           attempt: entry?.reconnectAttempt ?? 0,
@@ -295,7 +297,10 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         const history = await adapter.readGroupRange(groupId, { start, end })
         if (!Array.isArray(history.messages) || history.complete !== true || history.hasMore === true || (history.failedCount ?? 0) !== 0) throw new Error(`dws_backfill_partial:${groupId}`)
         const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
-        for (const message of ordered) await processMessage(normalizeHistoryMessage(message, groupId))
+        for (const message of ordered) {
+          entry.activeBackfillMessageId = message.messageId
+          await processMessage(normalizeHistoryMessage(message, groupId))
+        }
         entry.backfillState = 'ok'
         entry.lastBackfillAt = now()
         entry.lastSuccessfulBackfillEndAt = end
@@ -307,6 +312,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         }
         delete entry.lastBackfillError
         delete entry.lastBackfillErrorAt
+        delete entry.lastBackfillMessageId
+        delete entry.lastBackfillCommandKind
         publishHealth()
         if (!entry.recoveryRequired && (!hadSuccessfulBackfill || recoveryCompleted)) {
           const completedRecoveryEpoch = entry.recoveryEpoch
@@ -321,11 +328,14 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         entry.backfillState = 'failed'
         entry.lastBackfillError = describeError(error)
         entry.lastBackfillErrorAt = now()
+        entry.lastBackfillMessageId = entry.activeBackfillMessageId
+        entry.lastBackfillCommandKind = error?.commandKind
         publishHealth()
         logger.warn(error)
       }
     })().finally(() => {
       delete entry.activeBackfillStartAt
+      delete entry.activeBackfillMessageId
       entry.backfillRunning = false
       const rerunAfterActive = entry.recoveryQueued
       entry.recoveryQueued = false

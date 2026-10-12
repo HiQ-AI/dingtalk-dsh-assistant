@@ -266,3 +266,15 @@ test('重建的旧失败仍是unknown且规则digest不变',async()=>{
  const prepared=await platform.releaseAdapters['uat-rebuild'].prepareOperation({kind:'uat-rebuild',operation:'rebuild',requirement,observation,runId:'r',generation:1,requirementDigest:executionDigest(requirement),expected:{commitSha,previousPhase:'preflight',previousEvidenceDigest:executionDigest(observation.evidenceRefs)}})
  state.pipeline=[{number:319,commitSha,branch:target.branch,status:'killed'}];assert.equal((await platform.operationAdapter.reconcile(prepared)).status,'unknown');assert.equal(state.calls.length,0)
 })
+
+
+test('exact shared release resource aliases retain rules identity and conflicting workload aliases reject',async()=>{
+ const clients=fixture().clients,original=createReleasePlatform({targets:[target],clients})
+ const aliased=createReleasePlatform({targets:[target,structuredClone(target)],clients})
+ assert.equal(aliased.releaseAdapters['uat-deployment'].rulesDigest,original.releaseAdapters['uat-deployment'].rulesDigest)
+ const phase=await aliased.releaseAdapters['uat-deployment'].inspect({phase:'preflight',requirement})
+ assert.ok(phase)
+ for(const delta of [{branch:'feature/uat3-base'},{kubernetes:{namespace:'hiqlcd-app-uat3',deployment:'dataset'}},{entryUrl:'https://different.example.test/'},{registry:{image:'registry.cn-sh1.ctyun.cn/hiq-ai/other'}}]){
+  assert.throws(()=>createReleasePlatform({targets:[target,{...target,...delta}],clients}),{code:'RELEASE_PLATFORM_TARGET_DUPLICATE'})
+ }
+})

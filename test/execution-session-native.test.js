@@ -276,13 +276,14 @@ if (process.argv[2] === '--execution-session-child') {
     assert.ok(JSON.stringify(history.events).includes('execution_arguments_invalid'))
   })
 
-  test('连续格式纠正超过旧步数上限后仍可提交', async t => {
-    const h = await host({ script: n => n <= 40 ? ({ name: 'execution_node_submit', args: { output: { answer: 42 } } }) : submit('corrected') })
+  test('合法工具步骤超过旧步数上限后经有限格式纠正仍可提交', async t => {
+    const h = await host({ script: n => n <= 38 ? ({ name: 'read_fixture', args: {} }) : n <= 40 ? ({ name: 'execution_node_submit', args: { output: { answer: 42 } } }) : submit('corrected') })
     t.after(() => h.close())
     let submitted = 0
     const result = await drive(h, { definition: definition({ maxSteps: 2 }), onResult: async () => { submitted++ } })
     assert.equal(result.status, 'submitted')
     assert.equal(h.requests.length, 41)
+    assert.equal(h.reads.length, 38)
     assert.equal(submitted, 1)
   })
 
@@ -407,10 +408,11 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(h2.requests.length, 1); assert.deepEqual(h2.effects, [])
   })
 
-  test('实际JSONL跨OS进程恢复正式模块：原日志前缀不变，lease增加，旧工具结果进入新请求', { timeout: 15000 }, async () => {
+  test('实际JSONL跨OS进程恢复正式模块：原日志前缀不变，lease增加，旧工具结果进入新请求', { timeout: 30000 }, async t => {
     const root = await temp()
     for (const phase of ['initial', 'resume']) {
       const child = spawn(process.execPath, [self, '--execution-session-child', root, phase], { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill() })
       let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk })
       child.stdout.resume()
       const exit = await new Promise((resolveChild, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolveChild({ code, signal })) })
@@ -981,3 +983,77 @@ test('v19 实施节点仓库读取使用原requirement基线而非plan封装', a
   const result = await drive(h, { input: { requirement, plan: { ref: 'plan', digest: 'digest' } }, definition: definition({ allowedTools: ['engineering_repo_inspect', 'engineering_apply_edits'] }), applyEdits: async () => ({}) })
   assert.equal(result.status, 'submitted'); assert.deepEqual(received, requirement)
 })
+
+if (process.argv[2] !== '--execution-session-child') {
+  for (const scenario of ['empty-plan', 'missing-capability', 'backend-scope']) test(`v20 native controller SQLite contract ${scenario}`, async t => {
+    const { createEngineeringContractWorkflow } = await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
+    const { openExecutionStore } = await import('../packages/dingtalk-dsh-assistant/execution-store.js')
+    const { createExecutionController } = await import('../packages/dingtalk-dsh-assistant/execution-controller.js')
+    const root=await temp(), store=await openExecutionStore({dbPath:join(root,'control.db'),instanceId:scenario,initialize:true})
+    t.after(()=>store.close())
+    const artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+    const options={workflowId:'task-engineering-v20-'+scenario,provider:'execution-fixture',model:'scripted',discovery:{allowedPrefixes:['src/']},project:{repository:'dataset',uatEnvironment:'uat3',targetCommit:'a'.repeat(40),taskBase:'a'.repeat(40)},workspaceAdapter:{},editAdapter:{},checks:[{id:'check',version:'1',run:async()=>({passed:true})}],adapterIdentity:'fixture',localAcceptance:{identity:'fixture',scenarios:scenario==='missing-capability'?[]:[{id:'dataset-merge-ui'}]},stageContract:{taskId:'task',stageId:'backend',repositoryId:'dataset',objective:'返回可信分组结果',criteria:['可信分组结果'],editablePaths:[],allowedPrefixes:['src/']}}
+    const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
+    if(scenario!=='backend-scope')Object.assign(options.stageContract,{stageId:'ui',repositoryId:'dataset-web',objective:'合并UI',criteria:['业务结果正确']})
+    options.acceptanceApplicability={scope:{taskId:options.stageContract.taskId,stageId:options.stageContract.stageId,repositoryId:options.stageContract.repositoryId,requestDigest:executionDigest({request:options.stageContract.objective,acceptanceCriteria:options.stageContract.criteria})},scenarios:[{scenarioId:'dataset-merge-ui',criteria:options.stageContract.criteria}]}
+    const flow=createEngineeringContractWorkflow(options)
+    const local=flow.nodes.find(node=>node.id==='plan-local-acceptance')
+    const good={cases:[{criterionId:'criterion-1',scenarioId:'dataset-merge-ui',steps:['核对'],expected:'业务结果正确',parameters:{}}]}
+    const plan={document:{name:'修改方案.md',markdown:'当前后端阶段方案'},scopePaths:['src/main/java/Merge.java'],criteria:[{criterion:'可信分组结果',design:'结构化结果',verification:'执行后端用例'}]}
+    const outputs=scenario==='backend-scope'?[{...plan,scopePaths:['dataset-web/src/page.vue']},plan]:[{cases:[]},good]
+    const h=await host({root,script:outputs.map(output=>({name:'execution_node_submit',args:{output}})),isCurrent:binding=>controller.isCurrent(binding)})
+    let controller
+    t.after(async()=>{await controller?.close();await h.close();await store.close()})
+    let node,input
+    if(scenario==='backend-scope'){
+      const original=flow.nodes.find(node=>node.id==='inspect-and-propose')
+      node={...original,allowedTools:[],inputDependencies:[],mapInput:args=>original.mapInput({...args,dependencyOutputs:{'prepare-workspace':{workspace:{directory:root}}}})}
+      input={request:'返回可信分组结果',constraints:[],baseCommit:'a'.repeat(40),editablePaths:[],acceptanceCriteria:['可信分组结果']}
+    }else{
+      node={...local,mapInput:({requirement})=>requirement}
+      input={criteria:[{id:'criterion-1',description:'业务结果正确'}],scenarios:options.localAcceptance.scenarios,stageContract:options.stageContract,acceptanceApplicability:options.acceptanceApplicability}
+    }
+    controller=createExecutionController({store,artifacts,sessions:h.manager,workflows:[{id:flow.id,version:flow.version,nodes:[node]}]})
+    await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:flow.id,input})
+    const state=await controller.whenIdle('run'),current=state.nodes[0]
+    if(scenario==='missing-capability'){
+      assert.equal(state.run.status,'waiting');assert.equal(current.waitReason.reference,'LOCAL_ACCEPTANCE_CAPABILITY_MISSING');assert.equal(current.outputRef,null);assert.equal(h.requests.length,1)
+    }else{
+      assert.equal(state.run.status,'succeeded',JSON.stringify(state.controllerError));assert.equal(h.requests.length,2)
+      assert.deepEqual(await artifacts.read(current.outputRef),outputs[1]);assert.equal(current.leaseEpoch,1)
+      const saved=await h.ctx.sessionPersistence.inspect(current.sessionId)
+      assert.equal(saved.events.filter(event=>event.type==='dingtalk/execution-session').length,1)
+      assert.match(JSON.stringify(saved.events),scenario==='backend-scope'?/ENGINEERING_TECHNICAL_PLAN_INVALID/:/LOCAL_ACCEPTANCE_PLAN_INVALID/)
+    }
+    assert.equal((await store.query({kind:'effect.list',runId:'run'})).length,0)
+  })
+}
+
+for(const outcome of ['corrected','exhausted'])test('submission correction is bounded in the same native session: '+outcome,async t=>{
+ const bad={name:'execution_node_submit',args:{output:{answer:7}}}
+ const script=outcome==='corrected'?[bad,bad,submit('done')]:[bad,bad,bad,bad,submit('must not run')]
+ const h=await host({script});t.after(()=>h.close())
+ const result=await drive(h)
+ assert.equal(result.status,outcome==='corrected'?'submitted':'no_submission')
+ if(outcome==='exhausted')assert.equal(result.reason,'execution_output_correction_limit')
+ assert.ok(h.requests.length<=4)
+})
+
+if (process.argv[2] !== '--execution-session-child') {
+ test('native session explicitly initiates managed authorization and persists its reasoning',async t=>{
+  let calls=0
+  const h=await host({script:[{name:'execution_request_authorization',args:{reason:'This exact production action requires a new authorization'}},submit('request-recorded')]})
+  t.after(()=>h.close())
+  const result=await drive(h,{definition:definition({allowedTools:['execution_request_authorization']}),requestAuthorization:async reason=>{calls++;assert.match(reason,/exact production/);return {requestId:'actual-request',status:'pending'}}})
+  assert.equal(result.status,'submitted');assert.equal(calls,1)
+  const events=JSON.stringify((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events)
+  assert.match(events,/actual-request/);assert.match(events,/exact production action/)
+ })
+ test('ordinary native session cannot invoke the authorization application tool',async t=>{
+  let calls=0
+  const h=await host({script:[{name:'execution_request_authorization',args:{reason:'not allowed'}}]})
+  t.after(()=>h.close())
+  const result=await drive(h,{requestAuthorization:async()=>{calls++;return {}}})
+  assert.equal(result.status,'no_submission');assert.equal(calls,0)
+ })
+}

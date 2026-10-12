@@ -316,3 +316,16 @@ test('UAT 合并目标只来自受信白名单，授权不要求真人审批', a
       pullRequestNumber: 42, headCommitSha: 'a'.repeat(40) } }, materials: [] }),
   { code: 'UAT_MERGE_TARGET_NOT_ALLOWED' })
 })
+
+for(const definitionVersion of ['original-owner-review-v1','original-owner-candidate-v1'])test(`UAT preflight routes ${definitionVersion} through current Owner proof, never legacy engineering`,async()=>{
+ const commit='a'.repeat(40),base='b'.repeat(40),tree='c'.repeat(40),repository='Owner/web'
+ const target={id:'web-uat3',kind:'uat-deployment',repository,environment:'uat',service:'dataset-web',runbookId:'web-uat3',branch:'feature/uat3-base',woodpecker:{baseUrl:'https://woodpecker.hiqdat.dev',repositoryId:1,cronName:'web-uat3'},kubernetes:{namespace:'uat3',deployment:'web'},registry:{image:'registry.cn-sh1.ctyun.cn/hiq-ai/dataset-web'},entryUrl:'https://uat3.example.test'}
+ let legacyReads=0,ownerReads=0
+ const github={readAtomicPushPolicy:async()=>({allowed:true,evidenceRef:'policy'}),readBranch:async()=>({commitSha:base,evidenceRef:'branch'}),readPullRequest:async()=>({number:7,state:'open',merged:false,draft:false,mergeable:true,baseBranch:target.branch,baseRepository:repository,headRepository:repository,headCommitSha:commit,baseCommitSha:base,evidenceRef:'pr'}),readCommit:async()=>({treeSha:tree,evidenceRef:'commit'}),readChecks:async()=>({complete:true,checks:[],evidenceRef:'checks'}),readRequiredChecks:async()=>({complete:true,checks:[],evidenceRef:'required'}),resolveApprovedPullRequest:async()=>({}),mergePullRequest:async()=>({}),atomicFastForward:async()=>({})}
+ const clients={release:{github,woodpecker:Object.fromEntries(['listPipelines','readBuildEvidence','triggerBuild'].map(k=>[k,async()=>({})])),kubernetes:Object.fromEntries(['readDeployment','readPods','readEntry'].map(k=>[k,async()=>({})])),registry:{readManifest:async()=>({})}}}
+ const platform=createTrustedWorkflowPlatforms({config:{release:{targets:[target]},uatMerge:{targets:[{targetId:target.id,requiredChecks:[],requiredScenarioIds:['seven-ui']}]}},clients,ownerActorId:'owner'})
+ platform.bindExecution({controller:{state:async()=>{legacyReads++;throw Error('legacy engineering fallback forbidden')}},store:{query:async()=>{ownerReads++;return null}},artifacts:{read:async()=>{throw Error('no Owner binding should not read artifacts')}},repositories:[]})
+ const requirement={request:'merge accepted candidate',targetId:target.id,repository,service:'dataset-web',baseBranch:target.branch,pullRequestNumber:7,headCommitSha:commit,requiredChecks:[],evidenceRefs:['owner-delivery-task:task'],localEvidence:{taskId:'task',runId:'original-engineering-run',definitionVersion}}
+ await assert.rejects(platform.uatMergeAdapter.inspect({phase:'preflight',requirement}),{code:'UAT_OWNER_ACCEPTANCE_REQUIRED'})
+ assert.equal(legacyReads,0);assert.equal(ownerReads,2)
+})

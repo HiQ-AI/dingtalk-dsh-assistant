@@ -190,7 +190,7 @@ export async function verifyCandidate({ candidate, checks, signal }) {
     if (!check || typeof check.id !== 'string' || !check.id || typeof check.version !== 'string' || !check.version || typeof check.run !== 'function') fail('CANDIDATE_CHECKS_INVALID')
     let result
     signal?.throwIfAborted()
-    try { result = await check.run(Object.freeze({ files: snapshot.files, readFile: snapshot.readFile, candidateDigest: snapshot.candidate.digest }), { signal }) }
+    try { result = await check.run(Object.freeze({ files: snapshot.files, readFile: snapshot.readFile, candidateDigest: snapshot.candidate.digest, candidate: Object.freeze({ ...snapshot.candidate }) }), { signal }) }
     catch (error) { if (error.executionDrained === false) throw error; result = { passed: false, log: String(error?.message ?? error) } }
     signal?.throwIfAborted()
     if (!result || typeof result.passed !== 'boolean' || typeof result.log !== 'string') fail('CANDIDATE_CHECK_RESULT_INVALID')
@@ -245,4 +245,49 @@ export async function assertCandidateManagedEdits({ candidate, sourceTree, edits
     return !target || file.mode !== target.mode || file.oid !== target.oid || file.size !== target.size
   })) fail('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
   return { sourceTree, tree: candidate.tree, candidateDigest: candidate.digest, files: snapshot.files.length }
+}
+
+// Check the existing task worktree against the frozen Git tree; never export it.
+export function assertCandidateWorktree(candidate,{signal,generatedDirectories=[]}={}) {
+ return gitOperation.run({signal},async()=>{
+  if(!Array.isArray(generatedDirectories)||generatedDirectories.some(path=>!pathValid(path)))fail('CANDIDATE_GENERATED_PATH_INVALID')
+  const snapshot=await readCandidate(candidate,{signal}),known=new Set(snapshot.files.map(file=>file.path))
+  for(const file of snapshot.files){
+   signal?.throwIfAborted();let parent=candidate.repository
+   for(const part of file.path.split('/').slice(0,-1)){parent=join(parent,part);if((await lstat(parent)).isSymbolicLink())fail('CANDIDATE_WORKTREE_CHANGED')}
+   const path=join(candidate.repository,file.path),metadata=await lstat(path)
+   if(!metadata.isFile()||metadata.isSymbolicLink()||metadata.size!==file.size)fail('CANDIDATE_WORKTREE_CHANGED')
+   const handle=await open(path,'r')
+   try{
+    const before=await handle.stat(),digest=createHash(file.oid.length===40?'sha1':'sha256').update('blob '+file.size+'\0')
+    if(!before.isFile()||before.ino!==metadata.ino||before.size!==file.size)fail('CANDIDATE_WORKTREE_CHANGED')
+    const chunk=Buffer.alloc(256*1024);let length=0
+    for(;;){signal?.throwIfAborted();const {bytesRead}=await handle.read(chunk,0,chunk.length,length);if(!bytesRead)break;length+=bytesRead;digest.update(chunk.subarray(0,bytesRead))}
+    const after=await handle.stat(),current=await lstat(path)
+    if(length!==file.size||digest.digest('hex')!==file.oid||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs||current.isSymbolicLink()||current.ino!==before.ino)fail('CANDIDATE_WORKTREE_CHANGED')
+    if(process.platform!=='win32'&&(current.mode&0o111?'100755':'100644')!==file.mode)fail('CANDIDATE_WORKTREE_CHANGED')
+   }finally{await handle.close()}
+  }
+  // A frozen deletion must remain absent even when Git still tracks the path.
+  // Ignored/generated exemptions never exempt a path tracked by the source commit/index.
+  const tracked=(await git(candidate.repository,['ls-files','--cached','-z'])).toString().split('\0').filter(Boolean)
+  const baseline=(await git(candidate.repository,['ls-tree','-r','--name-only','-z',candidate.baseCommit])).toString().split('\0').filter(Boolean)
+  for(const path of new Set([...tracked,...baseline]))if(!known.has(path)){
+   try{await lstat(join(candidate.repository,path));fail('CANDIDATE_WORKTREE_CHANGED')}
+   catch(error){if(!['ENOENT','ENOTDIR'].includes(error.code))throw error}
+  }
+  const extra=(await git(candidate.repository,['ls-files','--others','--exclude-standard','-z'])).toString().split('\0').filter(Boolean)
+  if(extra.some(path=>!known.has(path)&&!generatedDirectories.some(dir=>path===dir||path.startsWith(dir+'/'))))fail('CANDIDATE_WORKTREE_CHANGED')
+  return snapshot
+ })
+}
+const workspaceUses=new Set()
+// Runtime node leases/drain protect restart; this guard excludes overlapping live uses.
+export async function withCandidateWorkspaceUse(directory,work,{signal}={}){
+ signal?.throwIfAborted()
+ const real=await realpath(directory),key=process.platform==='win32'?real.toLowerCase():real
+ if(workspaceUses.has(key))fail('CANDIDATE_WORKTREE_BUSY')
+ workspaceUses.add(key)
+ let drained=true
+ try{return await work()}catch(error){drained=error?.executionDrained!==false;throw error}finally{if(drained)workspaceUses.delete(key)}
 }

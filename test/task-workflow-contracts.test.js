@@ -254,19 +254,19 @@ test('冻结SQL校验只在当前Host纯只读预检通过后恢复，静态证�
 
 const schema = { type: 'object' }
 
-test('Owner根据真实Host检查事实选择任务副本修订，未知错误不强迫修改业务',async()=>{
+test('uncontracted runtime workflow revision is unavailable and cannot mutate execution',async()=>{
  const stage={stageId:'engineering',runId:'run',workflowId:'task-engineering-test',workflowDigest:'digest',status:'running'}
  const plan={task:{controlState:'active',requirementRevision:2,planRequirementRevision:2},stages:[stage]}
  const state={run:{taskId:'task',runId:'run',workflowId:stage.workflowId,workflowDigest:'digest',status:'waiting',generation:4,revision:8},pendingInputCount:0,nodes:[{nodeId:'verify-candidate',status:'waiting',drained:true,evidenceRefs:['real-log'],waitReason:{reference:'ARBITRARY_HOST_FAILURE'}}]}
  const caps={checkProfiles:[{digest:'trusted',checks:[{id:'test',args:['--test']}]}]};let received,effects=[]
  const facade=createTaskWorkflowContracts({controller:{taskPlan:async()=>plan,state:async()=>state,workflowDefinition:()=>({})},store:{query:async q=>q.kind==='effect.list'?effects:null},artifacts:{read:async()=>({})},inspectWorkflowRevision:async()=>caps,reviseWorkflow:async args=>{received=args;return {queued:true}}})
  const observed=await facade.inspectCurrentExecution('task')
- assert.equal(observed.repairable,true);assert.equal(observed.mode,'workflow-revision');assert.deepEqual(observed.evidenceRefs,['real-log'])
- const decision={repair:observed.repairBinding,summary:'原配置选择不存在的测试；选择Host已登记的自动发现检查',evidenceRefs:['real-log'],workflowRevision:{startNodeId:'verify-candidate',checkProfileDigest:'trusted'}}
- assert.deepEqual(await facade.repairCurrentStage({taskId:'task',commandId:'revise',decision}),{queued:true})
- assert.equal(received.expectedRevision,8);assert.deepEqual(received.revision,decision.workflowRevision)
- await assert.rejects(facade.repairCurrentStage({taskId:'task',commandId:'foreign',decision:{...decision,evidenceRefs:['other-task']}}),/WORKFLOW_REPAIR_NOT_ADMITTED/)
- effects=[{state:'unknown'}];assert.equal((await facade.inspectCurrentExecution('task')).repairable,false)
+ assert.equal(observed,null,'runtime workflow revision no longer exposed to Owner')
+ const decision={repair:observed?.repairBinding,summary:'原配置选择不存在的测试；选择Host已登记的自动发现检查',evidenceRefs:['real-log'],workflowRevision:{startNodeId:'verify-candidate',checkProfileDigest:'trusted'}}
+ await assert.rejects(facade.repairCurrentStage({taskId:'task',commandId:'revise',decision}),/WORKFLOW_OWNER_CONTRACT_UNAVAILABLE/)
+ assert.equal(received,undefined)
+ await assert.rejects(facade.repairCurrentStage({taskId:'task',commandId:'foreign',decision:{...decision,evidenceRefs:['other-task']}}),/WORKFLOW_OWNER_CONTRACT_UNAVAILABLE/)
+ effects=[{state:'unknown'}];assert.equal(await facade.inspectCurrentExecution('task'),null)
 })
 const requirement = { request: '按现有材料回答问题', acceptanceCriteria: ['给出有依据的调查结论'], constraints: [], scope: {} }
 const synthetic = (ownerContract, version = '1') => ({ id: 'task-inventory-count', version, ...(ownerContract ? { ownerContract } : {}), nodes: [
@@ -317,7 +317,8 @@ test('只读调查范围说明不阻塞完成，未知来源和未满足验收�
       evidenceIds: ['message'], limitations: ['材料没有账号创建人的审计记录'] })
   }, async close() {}, async cancel() {} }
   const f = await fixture(t, workflow, input, sessions), completed = await f.finish()
-  assert.equal(completed.plan.task.status, 'succeeded')
+  assert.equal(completed.plan.task.planStatus, 'succeeded')
+  assert.equal(completed.plan.task.status, 'pending')
   assert.equal(await f.helpers.authorizeCompletion(completed), true)
   await assert.rejects(f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision, assessments: [] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   await assert.rejects(f.helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision, evidenceRefs: ['invented'] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
@@ -393,8 +394,9 @@ test('冻结合同的只读完成策略把原始节点正文同时交给Owner及
   assert.equal(observed.body.total, 2)
   assert.equal(f.controller.workflowDefinition(workflow.id, originalDigest).ownerContract.version, '3')
   assert.equal(stage.workflowDigest, originalDigest)
-  await assert.rejects(helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision,
-    evidenceRefs: [nodeRef], assessments: [{ ...completed.decision.assessments[0], evidenceRefs: [nodeRef] }] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
+  assert.equal(await helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision,
+    evidenceRefs: [nodeRef], assessments: [{ ...completed.decision.assessments[0], evidenceRefs: [nodeRef] }] } }), true)
+  await assert.rejects(helpers.authorizeCompletion({ ...completed, decision: { ...completed.decision, evidenceRefs: ['foreign-node'] } }), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   invalid = true
   await assert.rejects(helpers.readStageArtifacts({ taskId: 'task', stage, plan: completed.plan }), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/)
   await assert.rejects(helpers.authorizeCompletion(completed), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/)
@@ -785,7 +787,7 @@ test('无调查阶段以当前任务原生查询证据验收，拒绝伪造引�
     assessments: [{ itemId: 'item', status: 'satisfied', evidenceRefs: ['query-proof'] }] }
   let evidence = [proof], calls = 0
   const contracts = createTaskWorkflowContracts({ controller: {}, artifacts: {},
-    store: { async query({ kind }) { return kind === 'task.owner.acceptance' ? [item] : { taskId: 'direct' } } },
+    store: { async query({ kind }) { return kind === 'task.owner.acceptance' ? [item] : kind === 'task.owner.events' ? [] : { taskId: 'direct' } } },
     readTaskEvidence: async binding => { assert.deepEqual(binding, { taskId: 'direct', requirementRevision: 3 }); return evidence },
     verifyAcceptance: async context => {
       calls++; assert.deepEqual(context.stages, []); assert.deepEqual(context.directEvidence, [proof]); return true
@@ -813,7 +815,7 @@ test('直接查询必须经过共享语义验收，查询成功不代表业务�
   const args = { taskId: 'task', requirement: {}, plan: { task: { taskId: 'task', requirementRevision: 1 }, stages: [] },
     decision: { evidenceRefs: ['proof'], assessments: [{ itemId: 'item', status: 'satisfied', evidenceRefs: ['proof'] }] } }
   const options = { controller: {}, artifacts: {}, readTaskEvidence: async () => [proof],
-    store: { async query({ kind }) { return kind === 'task.owner.acceptance' ? [item] : {} } } }
+    store: { async query({ kind }) { return kind === 'task.owner.acceptance' ? [item] : kind === 'task.owner.events' ? [] : {} } } }
   await assert.rejects(createTaskWorkflowContracts(options).authorizeCompletion(args), { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
   await assert.rejects(createTaskWorkflowContracts({ ...options, verifyAcceptance: async () => false }).authorizeCompletion(args),
     { code: 'TASK_OWNER_COMPLETION_UNVERIFIED' })
@@ -840,24 +842,116 @@ test('工程检查失败同代候选重入保留成功准备与工作区，重�
  await assert.rejects(f.store.command({id:'unbound-candidate',kind:'input.accept',args:{runId,inputId:'unbound',sourceKey:'unbound',requirementRef:before.run.requirementRef,candidateRepair:{inputRef:before.nodes[4].inputRef,inputDigest:before.nodes[4].inputDigest}}}),/WORKFLOW_REPAIR_NOT_ADMITTED/);
  const db=new DatabaseSync(join(f.artifacts.root,'..','control.db'));
  try{db.prepare("INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES('external-proof','operation',?,?,?,?,?,'digest','{\"action\":\"external\"}','[]','fixture','succeeded','now','now')").run(runId,before.nodes[4].nodeRunId,before.nodes[4].nodeId,before.run.generation,before.nodes[4].inputDigest);
- await assert.rejects(facade.repairCurrentStage({taskId:'task',commandId:'external-deny',decision:{repair:observed.repairBinding,evidenceRefs:observed.evidenceRefs}}),/WORKFLOW_REPAIR_NOT_ADMITTED/);
+ await assert.rejects(facade.repairCurrentStage({taskId:'task',commandId:'external-deny',decision:{repair:observed?.repairBinding,evidenceRefs:observed.evidenceRefs}}),/WORKFLOW_REPAIR_NOT_ADMITTED/);
  assert.equal((await f.controller.state(runId)).nodes[4].status,'succeeded');
  db.prepare("DELETE FROM execution_effects WHERE effect_id='external-proof'").run();}finally{db.close()}
- await facade.repairCurrentStage({taskId:'task',commandId:'repair-candidate',decision:{repair:observed.repairBinding,evidenceRefs:observed.evidenceRefs}});
+ await facade.repairCurrentStage({taskId:'task',commandId:'repair-candidate',decision:{repair:observed?.repairBinding,evidenceRefs:observed.evidenceRefs}});
  const after=await f.controller.whenIdle(runId);assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.equal(after.run.requirementRef,before.run.requirementRef);
  for(const id of ids.slice(0,4))assert.equal(calls[id],1);for(const id of ids.slice(4))assert.equal(calls[id],2);
  for(let i=0;i<4;i++){assert.equal(after.nodes[i].outputRef,before.nodes[i].outputRef);assert.equal(after.nodes[i].leaseEpoch,before.nodes[i].leaseEpoch)}
  assert.equal((await f.store.query({kind:'workflow.repair.context',runId,generation:after.run.generation})).mode,'candidate-in-place');
 });
 
-for(const variant of ['current','foreign-task','old-requirement','old-plan','old-control','unregistered','missing-diagnostic'])test(`实际修复合同统一当前Task证据范围 ${variant}`,async()=>{
+for(const variant of ['current','foreign-task','old-requirement','old-plan','old-control','unregistered','missing-diagnostic'])test(`uncontracted revision remains fail-closed regardless of evidence scope ${variant}`,async()=>{
  const stage={stageId:'engineering',runId:'run',workflowId:'task-engineering-test',workflowDigest:'digest',status:'running'}
  const task={taskId:'task',controlState:'active',requirementRevision:2,planRequirementRevision:2,planRevision:3,controlRevision:4,requirementRef:'requirement'}
  const plan={task,stages:[stage]},state={run:{taskId:'task',runId:'run',workflowId:stage.workflowId,workflowDigest:'digest',status:'waiting',generation:4,revision:8},pendingInputCount:0,nodes:[{nodeId:'inspect',status:'succeeded',outputRef:'candidate',drained:true},{nodeId:'verify',status:'waiting',drained:true,evidenceRefs:['real-log'],waitReason:{reference:'HOST_FAILURE'}}]}
  const diagnostic={kind:'owner-action-failure',taskId:variant==='foreign-task'?'other':'task',plan:{task:{...task,requirementRevision:variant==='old-requirement'?1:2,planRevision:variant==='old-plan'?2:3,controlRevision:variant==='old-control'?3:4}}}
  const events=variant==='unregistered'?[]:[{eventType:'system.recovery',eventSeq:1,payloadRef:'feedback'}];let invoked=0
  const facade=createTaskWorkflowContracts({controller:{taskPlan:async()=>plan,state:async()=>state,workflowDefinition:()=>({})},store:{query:async q=>q.kind==='effect.list'?[]:q.kind==='task.owner.events'?events:null},artifacts:{read:async ref=>ref==='feedback'?diagnostic:{}},inspectWorkflowRevision:async()=>({checkProfiles:[]}),reviseWorkflow:async()=>{invoked++;return{queued:true}}})
- const observed=await facade.inspectCurrentExecution('task'),decision={repair:observed.repairBinding,summary:'读取原需求、候选和当前Host反馈后调整策略',evidenceRefs:[...(variant==='missing-diagnostic'?[]:['real-log']),'requirement','candidate','feedback'],workflowRevision:{startNodeId:'verify',resumeCurrent:true}}
- if(variant==='current'){assert.deepEqual(await facade.repairCurrentStage({taskId:'task',decision,commandId:'recover'}),{queued:true});assert.equal(invoked,1)}
- else{await assert.rejects(facade.repairCurrentStage({taskId:'task',decision,commandId:'reject'}),/WORKFLOW_REPAIR_NOT_ADMITTED/);assert.equal(invoked,0)}
+ const observed=await facade.inspectCurrentExecution('task'),decision={repair:observed?.repairBinding,summary:'读取原需求、候选和当前Host反馈后调整策略',evidenceRefs:[...(variant==='missing-diagnostic'?[]:['real-log']),'requirement','candidate','feedback'],workflowRevision:{startNodeId:'verify',resumeCurrent:true}}
+ assert.equal(observed,null)
+ {await assert.rejects(facade.repairCurrentStage({taskId:'task',decision,commandId:'reject'}),/WORKFLOW_OWNER_CONTRACT_UNAVAILABLE/);assert.equal(invoked,0)}
+})
+
+test('acceptance replay joins identical frozen evidence and invalidates facts and authorization fences', async t => {
+  let facts=1,calls=0
+  const contract={id:'external-result',version:'3',validateCompletion:async({verifyAcceptance})=>verifyAcceptance(),readArtifacts:async()=>({domainEvidence:{facts}})}
+  const f=await fixture(t,synthetic(contract),{items:['a']})
+  const frozenRequirement=await f.artifacts.put(requirement)
+  await f.store.command({id:'bind-acceptance-replay',kind:'task.requirement.bind-legacy',args:{taskId:'task',expectedRequirementRevision:1,requirementRef:frozenRequirement.ref,sessionId:'owner-session',criteria:requirement.acceptanceCriteria,sourceKey:'source',eventKey:'bind-acceptance-replay'}})
+  const completed=await f.finish()
+  const helpers=createTaskWorkflowContracts({controller:f.controller,store:f.store,artifacts:f.artifacts,verifyAcceptance:async()=>{calls++;await new Promise(resolve=>setImmediate(resolve));return true}})
+  const authorize=()=>helpers.authorizeCompletion({...completed,decision:structuredClone(completed.decision)})
+  assert.deepEqual(await Promise.all([authorize(),authorize()]),[true,true]);assert.equal(calls,1)
+  assert.equal(await authorize(),true);assert.equal(calls,1)
+  facts++;assert.equal(await authorize(),true);assert.equal(calls,2)
+  for(const eventType of ['authorization.changed','intent.received']){
+    await f.store.command({id:eventType,kind:'task.owner.event',args:{taskId:'task',eventKey:eventType,eventType}})
+    assert.equal(await authorize(),true)
+  }
+  assert.equal(calls,4)
+  await assert.rejects(helpers.authorizeCompletion({...completed,plan:{...completed.plan,task:{...completed.plan.task,requirementRevision:2}}}),{code:'TASK_OWNER_COMPLETION_UNVERIFIED'})
+  assert.equal(calls,4)
+})
+
+test('acceptance replay never retains rejection or aborted verification', async t => {
+  let calls=0,pass=false
+  const contract={id:'external-result',version:'3',validateCompletion:async({verifyAcceptance})=>verifyAcceptance()}
+  const f=await fixture(t,synthetic(contract),{items:['a']})
+  const frozenRequirement=await f.artifacts.put(requirement)
+  await f.store.command({id:'bind-acceptance-replay',kind:'task.requirement.bind-legacy',args:{taskId:'task',expectedRequirementRevision:1,requirementRef:frozenRequirement.ref,sessionId:'owner-session',criteria:requirement.acceptanceCriteria,sourceKey:'source',eventKey:'bind-acceptance-replay'}})
+  const completed=await f.finish()
+  const helpers=createTaskWorkflowContracts({controller:f.controller,store:f.store,artifacts:f.artifacts,verifyAcceptance:async()=>{calls++;return pass}})
+  await assert.rejects(helpers.authorizeCompletion(completed),{code:'TASK_OWNER_COMPLETION_UNVERIFIED'})
+  pass=true;assert.equal(await helpers.authorizeCompletion(completed),true);assert.equal(calls,2)
+  const abort=new AbortController();abort.abort(Error('cancelled'))
+  await assert.rejects(helpers.authorizeCompletion({...completed,signal:abort.signal}),/cancelled/)
+  assert.equal(calls,2)
+})
+
+test('accepted candidate completion evidence stays distinct from queries and still requires current complete plan and semantic acceptance',async()=>{
+ const proof={kind:'original-owner-candidate',taskId:'direct',requirementRevision:3,evidenceRef:'candidate',artifactRef:'candidate',evidence:{reviewedFacts:{scope:'Actual component and backend proof; no full application claim'}},ownerCandidate:{acceptanceRef:'candidate',reviewRef:'facts',sourceRequirementRevision:1,accepted:true,businessCompleted:false}}
+ const item={itemId:'item',criterion:'Current accepted candidate'},plan={task:{taskId:'direct',requirementRevision:3,status:'active',planRevision:0},stages:[]}
+ const decision={action:'complete',summary:'Verified current candidate',evidenceRefs:['candidate'],assessments:[{itemId:'item',status:'satisfied',evidenceRefs:['candidate']}]}
+ let valid=true,candidate=proof
+ const contracts=createTaskWorkflowContracts({controller:{},artifacts:{},store:{query:async q=>q.kind==='task.owner.acceptance'?[item]:q.kind==='task.owner.events'?[]:{taskId:'direct'}},readAcceptedCandidateEvidence:async()=>[candidate],verifyAcceptance:async context=>{assert.deepEqual(context.directEvidence,[proof]);return valid}})
+ const args={taskId:'direct',plan,requirement:{request:'Current accepted candidate',scope:{}},decision}
+ assert.equal(await contracts.authorizeCompletion(args),true)
+ valid=false;await assert.rejects(contracts.authorizeCompletion({...args,decision:structuredClone(decision)}),{code:'TASK_OWNER_COMPLETION_UNVERIFIED'})
+ candidate={...proof,ownerCandidate:{...proof.ownerCandidate,accepted:false}};await assert.rejects(contracts.authorizeCompletion(args),/ARTIFACT_SCOPE_MISMATCH/)
+ candidate={...proof,requirementRevision:2};await assert.rejects(contracts.authorizeCompletion(args),/ARTIFACT_SCOPE_MISMATCH/)
+})
+
+test('UAT semantic completion reads only native current succeeded drained runtime receipts', async t => {
+  const contract={id:'fixture-runtime',version:'1',validateCompletion:async c=>await c.verifyAcceptance(c)}
+  const template=synthetic(contract).nodes[0]
+  const workflow={id:'task-uat-deployment',version:'runtime-fixture',ownerContract:contract,nodes:[
+    {...template,id:'inspect-built',execute:async()=>({pipeline:322,commit:'actual-commit',digest:'sha256:actual'})},
+    {...template,id:'inspect-runtime',execute:async()=>({ready:true,imageDigest:'sha256:actual',httpStatus:200})},
+    {...template,id:'finalize',execute:async()=>({status:'uat-deployed'})}]}
+  const f=await fixture(t,workflow,{items:['a']}),completed=await f.finish()
+  const state=await f.controller.state(completed.plan.stages[0].runId)
+  const augmented={...state,nodes:[{...state.nodes[0],generation:0,outputRef:'stale'},
+    {...state.nodes[1],drained:false,outputRef:'undrained'},...state.nodes]}
+  let passes=true
+  const helpers=createTaskWorkflowContracts({store:f.store,artifacts:{read:async ref=>{
+    assert.notEqual(ref,'stale');assert.notEqual(ref,'undrained');return f.artifacts.read(ref)
+  }},controller:{state:async()=>augmented,workflowDefinition:(...args)=>f.controller.workflowDefinition(...args)},
+    verifyAcceptance:async({stages})=>{
+      const actual=stages[0].output.hostExecution.runtimeEvidence
+      assert.deepEqual(actual.map(v=>v.nodeId),['inspect-built','inspect-runtime'])
+      assert.equal(actual[0].output.pipeline,322);assert.equal(actual[1].output.imageDigest,'sha256:actual')
+      return passes
+    }})
+  assert.equal(await helpers.authorizeCompletion(completed),true)
+  passes=false
+  await assert.rejects(helpers.authorizeCompletion({...completed,decision:structuredClone(completed.decision)}),{code:'TASK_OWNER_COMPLETION_UNVERIFIED'})
+})
+
+
+test('semantic completion preserves authenticated maintenance clarifications and invalidates cached checks', async t => {
+ const f=await fixture(t,synthetic({id:'maintenance-fixture',version:'1',validateCompletion:async c=>c.verifyAcceptance()}),{items:['a']})
+ const frozen=await f.artifacts.put(requirement)
+ await f.store.command({id:'bind-maintenance-check',kind:'task.requirement.bind-legacy',args:{taskId:'task',expectedRequirementRevision:1,requirementRef:frozen.ref,sessionId:'owner-session',criteria:requirement.acceptanceCriteria,sourceKey:'source',eventKey:'bind-maintenance-check'}})
+ const completed=await f.finish(),stage=completed.plan.stages[0]
+ let events=[],calls=0,pass=true
+ const source={kind:'engineering-maintenance-constraint',channel:'internal-maintenance',taskId:'task',requestId:'clarify',requirementRef:frozen.ref,stageId:stage.stageId,runId:stage.runId,text:'Original boundary; actual route observation, not automatic acceptance'}
+ const sourceArtifact=await f.artifacts.put(source),fact=await f.artifacts.put({kind:'constraint',repairSource:{kind:'engineering-maintenance',sourceRef:sourceArtifact.ref}})
+ const helpers=createTaskWorkflowContracts({controller:f.controller,artifacts:f.artifacts,store:{query:q=>q.kind==='task.owner.events'?events:f.store.query(q)},verifyAcceptance:async c=>{calls++;assert.deepEqual(c.maintenanceConstraints,events.length?[{eventSeq:events[0].eventSeq,payloadRef:fact.ref,sourceRef:sourceArtifact.ref,...source}]:[]);return pass}})
+ assert.equal(await helpers.authorizeCompletion(completed),true);assert.equal(calls,1)
+ events=[{eventSeq:500,eventType:'intent.received',payloadRef:fact.ref}]
+ assert.equal(await helpers.authorizeCompletion({...completed,decision:structuredClone(completed.decision)}),true);assert.equal(calls,2)
+ pass=false;events=[{eventSeq:501,eventType:'intent.received',payloadRef:fact.ref}]
+ await assert.rejects(helpers.authorizeCompletion({...completed,decision:structuredClone(completed.decision)}),{code:'TASK_OWNER_COMPLETION_UNVERIFIED'})
 })

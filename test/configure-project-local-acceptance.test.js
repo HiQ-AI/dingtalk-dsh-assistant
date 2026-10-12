@@ -13,10 +13,11 @@ const configuration = root => ({ version: 'test-v1', sharedDataProfilePath: join
 test('必要仓库依赖及Task场景精确更新保留无关字段，越界拒绝',async t=>{
  const f=await fixture(t),source=planProjectLocalAcceptance(f.source,f.supplied,yaml).updated
  const scope={taskId:'task-abc123',uatEnvironment:'uat3',requestDigest:'a'.repeat(64)}
- const patches=[{id:'dataset-web',dependencyRepositories:['dataset'],taskLocalAcceptance:[{scope,localAcceptance:f.supplied['dataset-web']}]},{id:'dataset',dependencyRepositories:['dataset-web']}]
+ const patches=[{id:'dataset-web',dependencyRepositories:['dataset'],taskLocalAcceptance:[{scope,localAcceptance:f.supplied['dataset-web'],checks:[{id:'merge-check',version:'1',executable:process.execPath,args:['scripts/test-merge.js']}]}]},{id:'dataset',dependencyRepositories:['dataset-web']}]
  const plan=planProjectLocalAcceptance(source,f.supplied,yaml,{allowUpdate:true,repositoryPatches:patches})
  assert.match(plan.updated,/dependencyRepositories:/);assert.match(plan.updated,/task-abc123/);assert.match(plan.updated,/# 保留注释/)
  assert.equal(planProjectLocalAcceptance(plan.updated,f.supplied,yaml,{allowUpdate:true,repositoryPatches:patches}).changed,false)
+ assert.match(plan.updated,/merge-check/);const invalidChecks=structuredClone(patches);invalidChecks[0].taskLocalAcceptance[0].checks=[];assert.throws(()=>planProjectLocalAcceptance(source,f.supplied,yaml,{allowUpdate:true,repositoryPatches:invalidChecks}),/LOCAL_CONFIG_REPOSITORY_PATCH_INVALID/)
  for(const invalid of [[{id:'dataset-web',dependencyRepositories:['other']}],[{id:'dataset-web',managedRoot:'D:/other'}],[{id:'other',dependencyRepositories:['dataset']}],[{id:'dataset',dependencyRepositories:['dataset']}],[{id:'dataset',taskLocalAcceptance:[{scope:{...scope,requestDigest:'wrong'},localAcceptance:f.supplied.dataset}]}]])
   assert.throws(()=>planProjectLocalAcceptance(source,f.supplied,yaml,{allowUpdate:true,repositoryPatches:invalid}),/LOCAL_CONFIG_REPOSITORY_PATCH_INVALID/)
 })

@@ -1,3 +1,5 @@
+import { planReleasePolicyRestore } from './repair-release-target-policy.mjs'
+import {createLegacyVerificationJobCheck} from '../packages/dingtalk-dsh-assistant/execution-check-job.js'
 import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import yaml from 'js-yaml'
 import { DatabaseSync } from 'node:sqlite'
@@ -134,7 +136,11 @@ export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate =
         if(!isDeepStrictEqual(repo.dependencyRepositories,patch.dependencyRepositories))replaceProperty(repo,'dependencyRepositories',patch.dependencyRepositories)
       }
       if(patch.taskLocalAcceptance!==undefined){
-        if(!Array.isArray(patch.taskLocalAcceptance)||patch.taskLocalAcceptance.some(item=>!plain(item)||Object.keys(item).sort().join(',')!=='localAcceptance,scope'||!plain(item.scope)||Object.keys(item.scope).sort().join(',')!=='requestDigest,taskId,uatEnvironment'||!/^task-[a-f0-9]+$/.test(item.scope.taskId)||!/^uat[1-9]$/.test(item.scope.uatEnvironment)||!/^[a-f0-9]{64}$/.test(item.scope.requestDigest)))fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+        if(!Array.isArray(patch.taskLocalAcceptance)||patch.taskLocalAcceptance.some(item=>!plain(item)||Object.keys(item).some(key=>!['localAcceptance','scope','checks'].includes(key))||!plain(item.scope)||Object.keys(item.scope).sort().join(',')!=='requestDigest,taskId,uatEnvironment'||!/^task-[a-f0-9]+$/.test(item.scope.taskId)||!/^uat[1-9]$/.test(item.scope.uatEnvironment)||!/^[a-f0-9]{64}$/.test(item.scope.requestDigest)))fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+        for(const item of patch.taskLocalAcceptance)if(item.checks!==undefined){
+          if(!Array.isArray(item.checks)||!item.checks.length)fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')
+          try{for(const check of item.checks)createLegacyVerificationJobCheck({...check,root:repo.managedRoot})}catch{fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')}
+        }
         for(const item of patch.taskLocalAcceptance)try{createLocalAcceptanceRunner({root:repo.managedRoot,config:item.localAcceptance})}catch{fail('LOCAL_CONFIG_REPOSITORY_PATCH_INVALID')}
         if(!isDeepStrictEqual(repo.taskLocalAcceptance,patch.taskLocalAcceptance))replaceProperty(repo,'taskLocalAcceptance',patch.taskLocalAcceptance)
       }
@@ -193,6 +199,7 @@ export function planProjectLocalAcceptance(source, bundle, yaml, { allowUpdate =
 /** 仅撤回已由原部署回执和当前活动定义共同证明的仓库配置漂移。 */
 export async function planProjectRepositoryRestore(source, proposalPath, { profile, expectedSha256 }) {
   const bytes=await readFile(proposalPath),proposal=JSON.parse(bytes)
+  if(proposal.kind==='release-policy-repair')return planReleasePolicyRestore(source,proposalPath,{profile,expectedSha256})
   const proofFile=async proof=>{if(!plain(proof)||!isAbsolute(proof.path??'')||!/^[a-f0-9]{64}$/.test(proof.sha256??''))fail('LOCAL_CONFIG_RESTORE_PROOF_INVALID');const value=await readFile(proof.path);if(hash(value)!==proof.sha256)fail('LOCAL_CONFIG_RESTORE_PROOF_CHANGED');return JSON.parse(value)}
   if(proposal.profile!==profile||proposal.expectedProfileSha256!==expectedSha256||hash(source)!==expectedSha256
     ||!isAbsolute(proposal.sourceProfile??'')||!/^[a-f0-9]{64}$/.test(proposal.sourceProfileSha256??'')
@@ -252,15 +259,15 @@ export async function configureProjectLocalAcceptance({ profile, bundle, mode, e
   if (await readFile(profile, 'utf8') !== source) fail('LOCAL_CONFIG_PROFILE_CHANGED')
   if(restoreProposal){const fresh=await planProjectRepositoryRestore(source,restoreProposal,{profile,expectedSha256});if(fresh.plan.updated!==plan.updated||!isDeepStrictEqual(fresh.proof,restored.proof))fail('LOCAL_CONFIG_RESTORE_PROOF_CHANGED')}
   const backupPath = `${profile}.local-acceptance-${randomUUID()}.bak`, temporary = `${profile}.${randomUUID()}.tmp`
-  await writeFile(backupPath, source, { flag: 'wx', mode: 0o600 })
-  if (await readFile(backupPath, 'utf8') !== source) fail('LOCAL_CONFIG_BACKUP_MISMATCH')
+  if(restored?.proof?.kind!=='release-policy-repair')await writeFile(backupPath, source, { flag: 'wx', mode: 0o600 })
+  if (restored?.proof?.kind!=='release-policy-repair' && await readFile(backupPath, 'utf8') !== source) fail('LOCAL_CONFIG_BACKUP_MISMATCH')
   try {
     await writeFile(temporary, plan.updated, { flag: 'wx', mode: 0o600 })
     if (await readFile(profile, 'utf8') !== source) fail('LOCAL_CONFIG_PROFILE_CHANGED')
     await rename(temporary, profile)
   } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error }) }
   if (await readFile(profile, 'utf8') !== plan.updated) fail('LOCAL_CONFIG_WRITE_READBACK_MISMATCH')
-  return { ...result, backupPath, writes: 2 }
+  return restored?.proof?.kind==='release-policy-repair' ? {...result,writes:1} : { ...result, backupPath, writes: 2 }
   } finally { await unlink(lockPath) }
 }
 

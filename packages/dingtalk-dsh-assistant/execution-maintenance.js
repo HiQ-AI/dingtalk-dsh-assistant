@@ -1,3 +1,4 @@
+import { createTaskRunScope, assertTaskRunScope } from './execution-task-run-scope.js'
 import { executionError } from './execution-artifacts.js'
 
 // 同步调用于控制账事务中；使用既有事件账持久化，不引入第二份运行状态。
@@ -20,24 +21,39 @@ export function maintenanceStatus(db, processIncarnation) {
   const drained = Object.values(busy).every(value => value === 0)
   return { ...state, busy, drained, processIncarnation,
     stopPermitted: state.active && state.phase === 'stopping' && drained && !!processIncarnation && state.sealedIncarnation === processIncarnation,
+    taskRunPermitted: !state.active && !!state.taskRunScope && state.taskRunScope.processIncarnation===processIncarnation,
+    dispatchRestricted: !!state.taskRunScope,
     resumePermitted: state.active && state.phase === 'stopping' && drained && !!processIncarnation && state.sealedIncarnation !== processIncarnation }
 }
 
 const dispatchCommands = new Set(['node.claim', 'task.owner.claim', 'effect.begin', 'approval.notice.send', 'run.recovery.admit',
   'message.coordinator.claim', 'message.agent.begin', 'message.node.claim', 'message.command.claim', 'message.notification.claim', 'message.notification.operation.claim'])
-export function assertMaintenanceDispatch(db, kind) {
+export function assertMaintenanceDispatch(db, command, processIncarnation) {
+  const kind=command.kind
+  const state=maintenanceState(db)
+  assertTaskRunScope(db,command,state.taskRunScope,processIncarnation)
   if (dispatchCommands.has(kind) && maintenanceState(db).active) throw executionError('RUNTIME_MAINTENANCE_ACTIVE')
 }
 
 export function reduceMaintenanceCommand(db, command, context) {
-  if (!['runtime.maintenance.change','runtime.maintenance.seal','runtime.maintenance.resume'].includes(command.kind)) return null
+  if (!['runtime.maintenance.change','runtime.maintenance.seal','runtime.maintenance.resume','runtime.maintenance.task-run'].includes(command.kind)) return null
   const a = command.args
   const changing = command.kind === 'runtime.maintenance.change'
-  const fields = ['expectedRevision','maintenanceId','actorId','reason', ...(changing ? ['active'] : [])]
+  const fields = ['expectedRevision','maintenanceId','actorId','reason', ...(changing ? ['active'] : []), ...(command.kind==='runtime.maintenance.task-run'?['taskId','runId','expectedRequirementRevision','expectedControlRevision','groupId','allowedEffects']:[])]
   if (!a || Object.keys(a).some(key => !fields.includes(key))
     || changing && typeof a.active !== 'boolean' || !Number.isSafeInteger(a.expectedRevision) || a.expectedRevision < 0
     || ['maintenanceId','actorId','reason'].some(key => typeof a[key] !== 'string' || !a[key].trim() || a[key].length > 4096)) throw executionError('RUNTIME_MAINTENANCE_INVALID')
+  if((changing&&a.active===false||['runtime.maintenance.resume','runtime.maintenance.task-run'].includes(command.kind))
+    &&db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_purge_cleanup'").get()
+    &&db.prepare('SELECT 1 FROM task_purge_cleanup LIMIT 1').get())throw executionError('TASK_PURGE_CLEANUP_PENDING')
   const current = maintenanceState(db)
+  if(command.kind==='runtime.maintenance.task-run'){
+    const status=maintenanceStatus(db,context.processIncarnation)
+    if(!current.active||current.revision!==a.expectedRevision||current.maintenanceId!==a.maintenanceId||current.actorId!==a.actorId||!status.drained||!(current.phase==='draining'||status.resumePermitted)) throw executionError('RUNTIME_MAINTENANCE_STALE')
+    const taskRunScope=createTaskRunScope(db,a,context.processIncarnation)
+    const next={...current,active:false,phase:'task-scoped',revision:current.revision+1,taskRunScope,reason:a.reason,changedAt:context.now,resumedIncarnation:context.processIncarnation}
+    context.emitEvent('runtime.maintenance.changed',next);return next
+  }
   if (!changing) {
     if (!current.active || current.revision !== a.expectedRevision || current.maintenanceId !== a.maintenanceId || current.actorId !== a.actorId) throw executionError('RUNTIME_MAINTENANCE_STALE')
     if (!context.processIncarnation) throw executionError('RUNTIME_MAINTENANCE_INCARNATION_REQUIRED')

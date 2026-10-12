@@ -13,7 +13,11 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
   if (!store?.command || !store?.query || !coordinator?.process) throw new Error('MESSAGE_DEPENDENCIES_REQUIRED')
   const config = { ...defaultMessagePolicy, ...policy }
   let closed = false
-  const cmd = async (kind, args, id = `${kind}:${randomUUID()}`) => (await store.command({ id, kind, args })).result
+  const commandReceipt = async (kind, args, id = `${kind}:${randomUUID()}`) => {
+    try { return await store.command({ id, kind, args }) }
+    catch (error) { error.commandKind ??= kind; throw error }
+  }
+  const cmd = async (kind, args, id) => (await commandReceipt(kind, args, id)).result
   const state = runId => store.query({ kind: 'message.run', runId })
   const revision = data => data.run.revision ?? data.run.matterSetRevision ?? 0
   async function receive(input, { process: launch = true } = {}) {
@@ -28,7 +32,7 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
     const previous=await state(runId)
     const nextVersion=previous.run.sourceVersion+1
     const newRunId=`msg-replay-${digest([previous.run.sourceKey,nextVersion]).slice(0,40)}`
-    const result=await cmd('message.reprocess',{runId,newRunId,policy:config,...(compactPolicy !== undefined ? {compactPolicy} : {})},`reprocess:${runId}:${newRunId}`)
+    const result=await cmd('message.reprocess',{runId,newRunId,expectedSourceVersion:previous.run.sourceVersion,policy:config,...(compactPolicy !== undefined ? {compactPolicy} : {})},`reprocess:${runId}:${newRunId}`)
     await process(result.run.runId)
     return state(result.run.runId)
   }
@@ -84,7 +88,7 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
         return
       }
       let receipt
-      try { receipt = await store.command({ id: `dispatch:${command.commandId}:${randomUUID()}`, kind: 'message.command.claim', args: { commandId: command.commandId } }) }
+      try { receipt = await commandReceipt('message.command.claim', { commandId: command.commandId }, `dispatch:${command.commandId}:${randomUUID()}`) }
       catch (error) { if (['MESSAGE_COMMAND_NOT_READY', 'MESSAGE_DEPENDENCY_PENDING', 'MESSAGE_INPUT_PENDING', 'MESSAGE_STALE'].includes(error.code)) return; throw error }
       if (!receipt.dispatchEligible || !receipt.result?.command) return
       const claimed = receipt.result.command
@@ -143,8 +147,20 @@ export function createMessageWorkflow({ store, coordinator, context = {}, handle
     return coordinator.recover({ dispatch })
   }
   async function resume(input) {
-    const result = await cmd('message.wake', input, `wake:${input.eventId}`)
-    if (result?.run?.runId) await coordinator.wake(result.run.runId, { dispatch })
+    const receipt = await commandReceipt('message.wake', input, `wake:${input.eventId}`)
+    const result = receipt.result
+    // A durable replay must not acquire execution authority again.
+    if (receipt.replayed === true) return result
+    if (result?.run?.runId) {
+      try { await coordinator.wake(result.run.runId, { dispatch }) }
+      catch (error) {
+        // The answer is durable; normal recovery will retry dispatch after the restriction ends.
+        if (!['RUNTIME_MAINTENANCE_ACTIVE', 'TASK_RUN_SCOPE_DISPATCH_DENIED', 'TASK_RUN_SCOPE_REARM_REQUIRED'].includes(error.code)) throw error
+        return { ...result, processing: 'deferred', dispatchDeferred: {
+          code: error.code, ...(error.commandKind ? { commandKind: error.commandKind } : {}),
+        } }
+      }
+    }
     return result
   }
   async function close() { closed = true; await coordinator.close() }

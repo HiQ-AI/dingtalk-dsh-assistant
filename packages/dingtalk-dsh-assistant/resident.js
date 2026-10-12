@@ -14,7 +14,7 @@ import { openExecutionStore } from './execution-store.js'
 import { closeExecutionResources } from './execution.js'
 import { openWorkflowService } from './workflow-service.js'
 import { createTrustedWorkflowPlatforms } from './workflow-trusted-platforms.js'
-import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification } from './workflow-notifications.js'
+import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification, workflowNotificationDisclosureAllowed } from './workflow-notifications.js'
 import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workflow-cutover.js'
 import { join, resolve } from 'node:path'
 
@@ -149,8 +149,16 @@ export async function apply(ctx, config = {}) {
       profile, runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: directory }),
     }) },
     notifications: {
-      canDisclose: async notification => workflowConfig.groupIds.includes(notification.payload.conversationId) && notification.disclosure.conversationId === notification.payload.conversationId,
+      canDisclose: async notification => workflowNotificationDisclosureAllowed(dwsConfig, workflowConfig, notification),
       send: notification => sendWorkflowNotification(dwsAdapter, notification),
+      sendScoped: async (notification, scope) => {
+        if (!scope.authorizationRef || notification.id !== scope.notificationId
+          || notification.payload?.fact?.taskId !== scope.taskId || notification.payload.conversationId !== scope.conversationId
+          || !workflowConfig.groupIds.includes(scope.conversationId)) throw new Error('WORKFLOW_NOTIFICATION_FORBIDDEN')
+        const scopedAdapter = createDwsAdapter({ enabled: dwsConfig.enabled === true, writesAuthorized: true,
+          profile: dwsConfig.profile, runner: dwsRunner })
+        return sendWorkflowNotification(scopedAdapter, notification)
+      },
       recall: async ({ messageId }) => dwsAdapter.recallMessage(messageId),
       readbackRecall: async ({ conversationId, messageId, ack }) => {
         if ((ack?.recallStatus ?? ack?.result?.recallStatus) !== 'SUCCESS') return undefined
@@ -204,7 +212,9 @@ export async function apply(ctx, config = {}) {
       return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
     }
     runtime.getWorkflowMailboxes = () => workflow.mailboxes()
+    runtime.sendScopedTaskCompletionNotification = args => workflow.sendScopedTaskCompletionNotification(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.prepareWorkflowNotificationOperation = args => workflow.prepareWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.retireWorkflowNotification = (args, check) => workflow.retireWorkflowNotification(args, { channel: 'web', actorId: workflowConfig.webActorId }, check)
     runtime.executeWorkflowNotificationOperation = args => workflow.executeWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.reconcileWorkflowNotificationOperation = args => workflow.reconcileWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.listWorkflowTopics = groupId => workflow.topics(groupId)
@@ -219,15 +229,24 @@ export async function apply(ctx, config = {}) {
     runtime.changeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.sealWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'seal')
     runtime.resumeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'resume')
+    runtime.runScopedWorkflowTask = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'task-run')
     runtime.submitWorkflowTask = args => {
       if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
       return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     }
+    runtime.controlWorkflowTaskExecution = args => workflow.controlTaskExecution(args,{channel:'web',actorId:workflowConfig.webActorId})
+  runtime.reviewWorkflowTaskDelivery = args => workflow.reviewTaskDelivery(args, { channel:'web', actorId:workflowConfig.webActorId })
+  runtime.confirmWorkflowTaskCompletion = args => workflow.confirmTaskCompletion(args,{channel:'web',actorId:workflowConfig.webActorId})
     runtime.retryWorkflowInvestigation = args => workflow.retryInvestigation(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.repairWorkflowStageAuthorizations = args => workflow.repairStageAuthorizations(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.applyWorkflowMaintenanceConstraint = args => workflow.applyMaintenanceConstraint(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.reassessWorkflowReadonly = args => workflow.reassessReadonly(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.handoffWorkflowDataChangeApproval = args => workflow.handoffDataChangeApproval(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.retireWorkflowPreparedEffect = args => workflow.retirePreparedEffect(args, { channel: 'web', actorId: workflowConfig.webActorId })
+    runtime.resetWorkflowExecution = args => workflow.resetExecution(args,{channel:'web',actorId:workflowConfig.webActorId})
+    runtime.preparePurgedWorkflowRun = args => workflow.preparePurgedRun(args,{channel:'web',actorId:workflowConfig.webActorId})
+    runtime.purgeWorkflowExecution = args => workflow.purgeExecution(args,{channel:'web',actorId:workflowConfig.webActorId})
     runtime.deleteWorkflowTask = args => workflow.deleteCancelledTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
     runtime.recoverWorkflowClarification = args => workflow.recoverClarification(args, { channel: 'web', actorId: workflowConfig.webActorId })

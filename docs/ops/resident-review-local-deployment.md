@@ -814,3 +814,64 @@ SG22 最终登记输入目录为 `docs/tmp/sg22-ui-host-profile-final/`（取代
 统一入口 scripts/deploy-local.ps1 尊重 ArgumentsFile 中已有 HoldMaintenance=true：完成安装与独立Readback后保留维护，不自动Resume。单任务核验时，在新实例中通过正式 /tasks/:id/pause 控制接口暂停其余任务并独立回读，再以原ArgumentsFile显式 -Resume 继续派发；不会重装或启动其它暂停任务。默认未提供HoldMaintenance仍完成全流程。
 
 维护退出健康回读：封存后的新实例若仅 DWS 回补报告 `RUNTIME_MAINTENANCE_ACTIVE`，统一部署入口允许继续原许可的 Resume。必须同时满足维护 ID 匹配、stopping/drained、busy 全零、新 incarnation 的 resumePermitted、控制库健康、recoveryIssueCount=0、全部 listener 和 humanReplies ready；真实 DWS 认证/网络错误仍拒绝。前置记录标记 maintenanceBackfillPaused，不声称回补成功。Resume 只提交一次，最多等待 60 秒真实回补，随后必须独立读到 health=ok、inboundProcessing=true、dwsBridge.healthy=true，才记录恢复成功。无需重装或重启；超时保留实际状态，修复真实收信问题后继续回读。
+
+Store 不可用且仅残留已终止 Agent 的 running/drained=0 时，使用 scripts/native-store-reload.mjs 的只读失活证明与 reconcileFailedStoreSessions：真实 session JSONL 的原 run/node/generation/session/lease 必须匹配，最后 turn/end 为故障发生后的 STORE_UNAVAILABLE；其他 Owner、效果、消息 busy 必须为零。先原生 witness/disable 取得同 PID/nonce disposed，并核对18998释放、3080原 Host存活。独占 openExecutionStore 重开后只用 runtime.maintenance.change 与原 node.drained 收敛，节点仍 waiting/controller-restarted，不调用 run.recover、不 schedule、不标成功。退出独占Store并恢复profile原SHA，在同Host回读健康/零busy后，按真实维护 revision 使用 ContinueMaintenanceId 继续正式部署。活会话、未知effects或身份漂移仍拒绝。此路径不直接修改SQL、不使用seal-offline、不删除锁，也不替代外部进程排空证明。
+
+暂停且已排空的工程任务可以在 active/drained 维护窗内执行正式 checkpoint：保留维护、任务/Run/stage CAS、成功前缀、候选身份及效果边界，允许 paused 控制态，不恢复任务、不改 pauseRequested，不要求节点派发 scope。cancelled/终态 Run 仍拒绝。需求 revision 更新后，旧 succeeded 业务状态改为 pending；旧 Run/stage 的成功证据保留，旧 stage 延迟完成也不能把新需求置为 succeeded。未领取的旧开始通知只有明确 requirementRevision 或原始 task.accept 回执关联时才能按版本失效；缺少关联的历史通知不猜版本。
+
+维护且已暂停的checkpoint只记录冻结版本的配置，不等待群消息通用路由完成；消息和barrier不被消费或标记processed。恢复/派发继续校验原消息fence，真实Run待应用input继续阻止checkpoint，需求版本变化继续受CAS约束。历史进度/状态不能被当作新需求或当前运行事实。
+
+
+### User-declared completion correction / legacy source-only migration
+
+`POST /tasks/:taskId/confirm-completion` corrects a cancelled manual task with no Run and no running Owner when the user explicitly declares it complete. It requires local configured web actor, original topicId, requestId and current control/requirement revisions, plus the exact declaration. The formal transaction records previous cancellation control and user-declaration basis; `engineeringVerified=false`. Business status becomes succeeded; operational control is paused to keep execution disabled. Task/detail/board show completed/succeeded with the declaration. Cancellation and source history remain, no Run/Owner/notification is created. Do not use this as engineering verification.
+
+Existing `POST /tasks/:taskId/reissue-repository` also supports a drained user-paused legacy v22 Run after successful development, only when all effects are succeeded workspace/edit and no execution/publication effects exist. It freezes the whole existing candidate (including approved uncommitted edits) and exposes it read-only as retired evidence to normal analysis/development. The same logical Task/Run gains a new generation and fresh source-only branch/workspace. Old node results/effects remain unchanged; the Run remains user-paused until formal resume. Build and acceptance start fresh on the new candidate; historical verification cannot pass the new generation. Unknown/external/commit/push/PR effects are refused.
+
+
+## Delivered project evidence review
+
+The existing local `POST /tasks/:taskId/review-delivery` supports `facts.kind: project-evidence` for an already delivered candidate. Submit the original run ID, projects (authorized directory, configured GitHub repository, commit, source base, existing Draft PR number), evidence files (authorized path, SHA256, description), and the actual completion scope. No JUnit, JAR, PostgreSQL schema-cleanup format is required. The earlier backend request shape remains compatible, but its artifact contents are evidence for Owner judgment rather than format-based acceptance gates.
+
+Host reads current clean tracked Git candidates, remote identity (including an existing local source mirror), current Draft PR heads/base, and evidence bytes. The original Owner must read those bytes and decide whether they support the authorized completion scope. Component fixtures, historical backend coverage, browser saving and deployed UAT results must remain distinct. Evidence hashes are checked again before completion. The task stays paused; this review does not replay development, create runs/PRs, merge, deploy or send notifications.
+
+旧普通执行节点已保存的 prepared 效果若携带原 requestId，原审批已合法 approved 且未 revoked 时，核对持久化 run 的 taskId（兼容旧 payload 缺少 taskId），按原效果身份继续原生 effect.begin；不会创建新请求或替换效果。pending、rejected、revoked 及错任务/run/目标/效果绑定均不派发。原生 lease、安全边界、资源互斥和防重复发布保持生效。
+
+
+### Paused original Owner delivery review reads
+
+A task-scoped paused delivery review may use the same registered read-only query tools as an active original Owner. The native review must match task, requirement and control revisions; current session, turn, lease and owner epoch checks remain required. Ordinary paused tasks remain denied. This permits checking existing acceptance evidence without resuming or replaying successful publication stages. No write capabilities or new remote targets are granted.
+
+### Explicit single completion reply
+
+Local host POST `/tasks/<taskId>/notifications/<notificationId>/send-completion` accepts only the exact bound `conversationId` and `{authorization:{confirmed:true,confirmationRef:<human confirmation reference>}}`. It sends the existing latest applied completion report text; it cannot edit text, reopen a task, enumerate or drain notifications. Requires the configured web actor and subscribed original group. Global `dws.writesAuthorized` is unchanged. Existing delivered replies return without sending; acknowledged/unknown replies only read back; sending is not retried. Check real ACK and independently observed message ID before reporting delivery.
+
+### 群完成回复的可访问性
+
+完成回复直接包含结论、实际交付和必要的未验证/省略边界；只引用已知群成员可访问的交付链接，不追加 Agent 本地任务详情或本地路径指引。格式化保留原结案事实，不改写已投递回执或重新生成历史通知。已发送消息可通过既有正式撤回/恢复操作纠正，但仅在确有误导且获得精确消息操作授权时使用；不能因此自动补发或释放历史队列。
+
+### 新轮次范围与暂停承接
+
+群意图会话为 revise 给出本轮完整有效 constraints：仍有效的安全边界、真人暂停和审批顺序继续保留；被明确取代的旧轮次限制归入历史。新 requirement 的 constraintHistory 引用旧 requirement 及其版本，不重写旧成果或授权回执。未提供新 constraints 时保留当前集合。需求修订不会改变控制状态；最新原文明确要求继续执行时，意图会话输出 revise 后依赖该修订的 resume，通过既有正式控制事务恢复。仅补充资料或仍有效暂停不得恢复，也不按部署关键词自动恢复。
+
+对外群完成正文使用原群业务事项名称，说明本轮实际交付与未验证范围，不用维护编号或泛称“核心功能修复完成”替代业务内容。合法业务型号、工单和 PR 编号保留；格式化不添加内部身份字段。
+
+当前任务的新轮完整范围可通过 `revise.arguments.constraintRevision={constraints:[...],sourceQuote:"当前原文逐字引用"}` 投影，当前原文必须匹配已绑定来源。它不会撤销共享话题条件，也不能用于其他 intent。显式恢复时，如果计划仍属于旧需求版本，只恢复任务控制供原 Owner 规划，旧暂停 Run 不恢复或推进。
+
+
+## Obsolete drained execution retirement
+
+The loopback operator execution-control endpoint accepts `action: retire` with the exact task/run, current requirement/control revisions, run generation and plan revision. Retirement cancels a paused, waiting Run from an older requirement only when every node is drained, no input is pending, the current generation has no effects and every earlier effect succeeded. It preserves earlier effects and history, records actual cancellation and blocks the old running stage so the original Owner can prepare the current scope. It does not complete the task, resume an old developer generation or authorize publication. Task sessions cannot retire Runs. Repeating the same request recovers an interrupted cancellation from its durable receipt.
+
+
+## Current task scope for a shared UAT publication target
+
+A generic project/environment merge policy can use `acceptancePolicy: original-owner-current-scope` instead of an unrelated fixed scenario list. It requires a nonempty original Owner accepted candidate proof for the current task requirement, exact PR/commit/tree and immutable evidence bytes. A later plan revision may reuse that same accepted scope. Historical fixed-list policies remain unchanged. Register via the formal ReleaseTargetsProposal path after tests and narrow review. This mode does not prove deployed notification isolation or authorize notification delivery.
+
+For obsolete execution retirement, an already succeeded local workspace creation is retained and may be retired with the drained Run; current-generation edits, commit, push, publication, failed or unknown effects still prevent this retirement path. This allows a redundant inspection workspace to be preserved without repeating development or pretending acceptance succeeded.
+
+## 已完成发布的启动后补证
+使用本任务 review-delivery 的 project-evidence 登记真实启动后材料；它支持已合并候选。暂停/恢复只影响调度，不使同需求、同计划、同授权的已登记材料失去可读性。原 Owner 最终语义验收将读取 supplementaryReviews，Host 重新核对当前候选、文件哈希和已成功阶段绑定。补证不等于验收通过，不改写历史 candidate acceptance 或发布回执，不重发合并/部署；最终完成仍由原 Owner 判断。
+
+## Kubernetes 启动配置受限读取
+正式 directQueries.statusResources 的 kubernetes 资源可选 startupInspection：booleanProperties 仅登记 *.enabled 布尔键，springConditions 仅登记绑定这些键的类名。Host 使用现有 get/logs 读取当前容器启动后的保留日志，并复核 Deployment、Pod UID、containerID、imageID 和 startedAt；不使用 exec、不读取 Secret/env、不返回原始日志或其他参数。仅输出声明的布尔值与指定条件结果，声明值不等于完整有效配置。未保留、截断或冲突日志返回 unavailable，不推断 Bean 缺席。查询 scope 与注册资源授权保持原规则；最终判断仍由原 Owner 和语义验收完成。

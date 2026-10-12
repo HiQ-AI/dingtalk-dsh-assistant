@@ -66,3 +66,63 @@ test('后端检查提案可由当前构造器接纳，不透传旧执行上限',
  for(const changed of [{...before[0],timeoutMs:1000},{...before[0],steps:[{...before[0].steps[0],timeoutMs:1000}]}])
   assert.throws(()=>prepareBackendChecks([changed],options),/EXISTING_STEPS_DIFFERENT/)
 })
+
+test('notification coverage rejects wrong suites, no tests and unproved skipped exceptions',async t=>{
+ const {validateJUnitCoverage}=await import('../scripts/verify-dataset-unit-tests.mjs')
+ const {createHash}=await import('node:crypto')
+ const scope={taskId:'notification',stageId:'backend',repositoryId:'dataset',requestDigest:'a'.repeat(64),candidateDigest:'b'.repeat(64)}
+ const testCase=(suite,name,status='executed',reason='')=>'HOST_JUNIT_CASE:'+ [suite,name,status,reason].map(value=>Buffer.from(value).toString('base64')).join(':')
+ const suite='com.ecdigit.ecdata.task.ApprovalNotificationOutboxTaskTest',policy={scope,requiredTests:[{suite,name:'dispatchRetry'}],allowedSkips:[]}
+ await assert.rejects(validateJUnitCoverage('',policy,scope),/JUNIT_EXECUTED_TESTS_MISSING/)
+ await assert.rejects(validateJUnitCoverage(testCase('MergePreviewCalculatorTest','merge'),policy,scope),/JUNIT_REQUIRED_COVERAGE_MISSING/)
+ const skipped=testCase('VersionManageControllerPublishTest','batchPublish','skipped','requires full Spring context'),good=testCase(suite,'dispatchRetry')
+ await assert.rejects(validateJUnitCoverage(good+'\n'+skipped,policy,scope),/JUNIT_SKIPPED_NOT_AUTHORIZED/)
+ const root=await mkdtemp(join(tmpdir(),'dsh-skip-proof-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const path=join(root,'alternative.json'),bytes=Buffer.from(JSON.stringify({scope,criterion:'batch publish validation',passed:true,actual:'validated',expected:'validated'}));await writeFile(path,bytes)
+ policy.allowedSkips=[{suite:'VersionManageControllerPublishTest',name:'batchPublish',reason:'requires full Spring context',alternativeEvidence:{path,sha256:createHash('sha256').update(bytes).digest('hex'),criterion:'batch publish validation'}}]
+ await assert.rejects(validateJUnitCoverage(good+'\n'+skipped,policy,scope),/JUNIT_SKIP_EXCEPTION_UNSUPPORTED/)
+ await assert.rejects(validateJUnitCoverage(good+'\n'+skipped.replace(Buffer.from('requires full Spring context').toString('base64'),Buffer.from('different').toString('base64')),policy,scope),/JUNIT_SKIP_EXCEPTION_UNSUPPORTED/)
+ await writeFile(path,'{}');await assert.rejects(validateJUnitCoverage(good+'\n'+skipped,policy,scope),/JUNIT_SKIP_EXCEPTION_UNSUPPORTED/)
+ await assert.rejects(validateJUnitCoverage(good,policy,{...scope,taskId:'foreign'}),/JUNIT_SCOPE_INVALID/)
+})
+
+test('JUnit policy requires independent Host task stage repository request and candidate binding',async()=>{
+ const {validateJUnitCoverage,hostVerificationScope}=await import('../scripts/verify-dataset-unit-tests.mjs')
+ const scope={taskId:'task-1234',stageId:'notification',repositoryId:'dataset',requestDigest:'a'.repeat(64),candidateDigest:'b'.repeat(64)}
+ const policy={scope:{...scope},requiredTests:[{suite:'NotificationTest',name:'retry'}]}
+ const output='HOST_JUNIT_CASE:'+['NotificationTest','retry','executed',''].map(s=>Buffer.from(s).toString('base64')).join(':')
+ assert.throws(()=>hostVerificationScope({}),/JUNIT_HOST_SCOPE_REQUIRED/)
+ await assert.rejects(validateJUnitCoverage(output,policy,undefined),/JUNIT_SCOPE_INVALID/)
+ for(const key of ['taskId','stageId','repositoryId','requestDigest','candidateDigest']){
+  const wrong={...scope,[key]:key.endsWith('Digest')?'c'.repeat(64):'foreign'}
+  await assert.rejects(validateJUnitCoverage(output,policy,wrong),/JUNIT_SCOPE_INVALID/)
+  const incomplete={...scope};delete incomplete[key]
+  await assert.rejects(validateJUnitCoverage(output,{...policy,scope:incomplete},scope),/JUNIT_SCOPE_INVALID/)
+ }
+ assert.equal((await validateJUnitCoverage(output,policy,{...scope})).cases.length,1)
+})
+
+test('Host rejects pinned JUnit policy from another stage repository request or candidate before execution',async t=>{
+ const {validateEngineeringVerificationPolicy}=await import('../packages/dingtalk-dsh-assistant/workflow-engineering.js')
+ const {createHash}=await import('node:crypto')
+ const root=await mkdtemp(join(tmpdir(),'dsh-host-policy-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const path=join(root,'policy.json'),scope={taskId:'task-1234',stageId:'notification',repositoryId:'dataset',requestDigest:'a'.repeat(64),candidateDigest:'b'.repeat(64)}
+ const bytes=Buffer.from(JSON.stringify({scope:{...scope},requiredTests:[{suite:'NotificationTest',name:'retry'}]}));await writeFile(path,bytes)
+ const command={args:['verify-dataset-unit-tests.mjs','--policy',path,'--policy-sha256',createHash('sha256').update(bytes).digest('hex')]}
+ await validateEngineeringVerificationPolicy(command,{...scope})
+ for(const key of ['taskId','stageId','repositoryId','requestDigest','candidateDigest']){
+  const wrong={...scope,[key]:key.endsWith('Digest')?'c'.repeat(64):'foreign'}
+  await assert.rejects(validateEngineeringVerificationPolicy(command,wrong),e=>e.code==='ENGINEERING_CHECK_SCOPE_MISMATCH')
+ }
+ await assert.rejects(validateEngineeringVerificationPolicy({args:['verify-dataset-unit-tests.mjs']},scope),e=>e.code==='ENGINEERING_CHECK_POLICY_REQUIRED')
+ await assert.rejects(validateEngineeringVerificationPolicy(command,undefined),e=>e.code==='ENGINEERING_CHECK_SCOPE_MISMATCH')
+})
+
+test('V2 check process receives independent Host binding over ambient scope',async t=>{
+ const {createVerificationJobCheck}=await import('../packages/dingtalk-dsh-assistant/execution-check-job.js')
+ const root=await mkdtemp(join(tmpdir(),'dsh-host-env-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const scope={taskId:'task-1234',stageId:'notification',repositoryId:'dataset',requestDigest:'a'.repeat(64),candidateDigest:'b'.repeat(64)}
+ const check=createVerificationJobCheck({id:'host-scope',version:'1',root,executable:process.execPath,args:['-e',"const s=JSON.parse(process.env.DSH_VERIFICATION_SCOPE);if(s.taskId!=='task-1234'||s.stageId!=='notification'||s.candidateDigest!=='b'.repeat(64))process.exit(1)"]})
+ const result=await check.run({files:[],candidateDigest:scope.candidateDigest},{bindingScope:scope})
+ assert.equal(result.passed,true)
+})

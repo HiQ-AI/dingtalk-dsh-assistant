@@ -88,7 +88,7 @@ test('同Run换节点绑定复用原交付键，已成功或未知效果均不�
 
 test('专用Host授权必需，通用授权不能代替文件外发授权', async t => {
   const f = await fixture(t, { authorizeMessage: async () => null })
-  await assert.rejects(f.gateway.execute(f.request('c')), { code: 'DELIVERY_NOT_AUTHORIZED' })
+  await assert.rejects(f.gateway.execute(f.request('c')), { code: 'AUTHORIZATION_ASSESSMENT_REQUIRED' })
   assert.equal(f.counts().sends, 0)
 })
 

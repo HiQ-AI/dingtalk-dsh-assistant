@@ -12,7 +12,7 @@ async function fixture({ requiredFile = false, deliver = false } = {}) {
   const file = await managed.register({ taskId: 'task', requirementRevision: 1, role: 'report', fileName: 'report.md',
     producer: { runId: 'run', nodeRunId: 'node', outputRef: 'operation:write' }, bytes: Buffer.from('verified report') })
   const output = { summary: '调查已完成', artifactFiles: requiredFile ? [file] : [] }
-  const plan = { task: { taskId: 'task', status: 'succeeded', requirementRevision: 1, planRequirementRevision: 1, planRevision: 2 },
+  const plan = { task: { taskId: 'task', status: 'succeeded', planStatus: 'succeeded', requirementRevision: 1, planRequirementRevision: 1, planRevision: 2 },
     stages: [{ stageId: 'stage', runId: 'run', workflowId: 'workflow', workflowDigest: 'frozen-v1', status: 'succeeded', outputRef: 'result' }] }
   const state = { run: { taskId: 'task', runId: 'run', workflowId: 'workflow', workflowDigest: 'frozen-v1', status: 'succeeded', generation: 0 },
     pendingInputCount: 0, nodes: [{ nodeRunId: 'node', status: 'succeeded', outputRef: 'result', generation: 0 }] }

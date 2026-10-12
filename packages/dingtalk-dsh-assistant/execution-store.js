@@ -97,6 +97,11 @@ export async function openExecutionStore(options) {
       requestDigest: createHash('sha256').update(JSON.stringify({ action, value: value ?? null })).digest('hex') }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        if (action === 'query') {
+          pending.delete(requestId)
+          reject(error('STORE_QUERY_TIMEOUT', 'Execution store read timed out'))
+          return
+        }
         // 不是未提交：所有待答复命令都必须按原 ID 在重开后读回。
         unavailable(error('COMMIT_ACK_UNKNOWN', '控制事务回执超时，禁止派生新效果'), { ...diagnostic, origin: 'rpc-timeout' })
         void worker.terminate()
@@ -112,7 +117,13 @@ export async function openExecutionStore(options) {
     get healthy() { return healthy && !closing && !closed },
     get failure() { return firstFailure },
     command(command) { return rpc('command', command) },
-    query(query) { return rpc('query', query) },
+    async query(query) {
+      try { return await rpc('query', query) }
+      catch (cause) {
+        if (cause.code !== 'STORE_QUERY_TIMEOUT') throw cause
+        return rpc('query', query)
+      }
+    },
     async close() {
       if (!closing && !closed) {
         closing = true

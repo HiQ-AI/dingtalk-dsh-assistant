@@ -290,6 +290,16 @@ function prepare(db, args, context) {
         return target(change.content) === change.expectedHash || old && (change.expectedHash !== target(old.content) || target(change.content) === target(old.content))
       })) fail('EDIT_REPAIR_REPLAY_FORBIDDEN')
   }
+  if (definition.preparedRetirement) {
+    const previous = effectRow(db, definition.preparedRetirement.effectId), proof = JSON.parse(previous.result_json ?? 'null')
+    if (previous.state !== 'failed' || proof?.reason !== 'PREPARED_POLICY_RETIRED'
+      || proof.retirementKey !== definition.preparedRetirement.retirementKey
+      || definition.action !== 'external' || previous.node_run_id !== db.prepare('SELECT node_run_id FROM execution_nodes WHERE run_id=? AND node_id=? AND current=1').get(identity.runId,identity.nodeId)?.node_run_id
+      || previous.generation !== identity.generation || previous.input_digest !== identity.inputDigest
+      || digest(JSON.parse(previous.definition_json).payload) !== digest(definition.payload)
+      || effectId !== `external-${digest({ nodeRunId: previous.node_run_id, action: 'external', preparedRetirement: proof.retirementKey })}`)
+      fail('prepared_retirement_successor_invalid')
+  }
   const identityDigest = digest(identity)
   const existing = db.prepare('SELECT * FROM execution_effects WHERE effect_id=?').get(effectId)
   if (existing) {
@@ -309,6 +319,40 @@ function prepare(db, args, context) {
     VALUES(?,?,?,?,?)`).run(approval.requestId, effectId, encode(approval.approverIds), context.now, context.now)
   context.emitEvent('effect.prepared', { effectId, runId: identity.runId, nodeRunId: node.nodeRunId })
   return changed({ effect: effectDto(effectRow(db, effectId)), created: true })
+}
+
+function retirePrepared(db, args, context) {
+  const row = effectRow(db, text(args.effectId, 'effectId'))
+  const reason = text(args.reason, 'reason'), assessmentRef = text(args.assessmentRef, 'assessmentRef')
+  const actorId = text(args.actorId, 'actorId')
+  const run = db.prepare('SELECT * FROM execution_runs WHERE run_id=?').get(row.run_id)
+  const node = db.prepare('SELECT * FROM execution_nodes WHERE node_run_id=?').get(row.node_run_id)
+  if (row.definition_digest !== args.expectedDefinitionDigest || run.revision !== args.expectedRunRevision
+    || !run.pause_requested || run.stop_requested || run.status !== 'waiting'
+    || !node.current || !node.drained || node.status !== 'waiting'
+    || node.lease_epoch !== args.expectedLeaseEpoch || row.generation !== node.generation
+    || row.input_digest !== node.input_digest) fail('prepared_retirement_stale')
+  if (row.state !== 'prepared' || row.dispatch_lease_epoch !== null || row.identity_json || row.result_json
+    || db.prepare('SELECT 1 FROM execution_resource_holds WHERE effect_id=?').get(row.effect_id)
+    || db.prepare("SELECT 1 FROM execution_effects WHERE run_id=? AND state IN ('starting','executing','unknown')").get(row.run_id)
+    || db.prepare("SELECT 1 FROM execution_events WHERE kind='effect.started' AND json_extract(payload,'$.effectId')=?").get(row.effect_id))
+    fail('prepared_retirement_requires_reconciliation')
+  const definition = JSON.parse(row.definition_json)
+  if (definition.action !== 'external') fail('prepared_retirement_not_supported')
+  if (row.request_id) {
+    const approval = approvalRow(db, row.request_id)
+    if (approval.decision !== 'pending' || approval.revoked || !JSON.parse(approval.approver_ids_json).includes(actorId))
+      fail('prepared_retirement_actor_invalid')
+    db.prepare('UPDATE execution_approvals SET revoked=1,revoked_by=?,revoke_source=?,updated_at=? WHERE request_id=?')
+      .run(actorId, 'policy-transition', context.now, row.request_id)
+  } else if (definition.principalId !== actorId) fail('prepared_retirement_actor_invalid')
+  const retirementKey = digest({ effectId: row.effect_id, definitionDigest: row.definition_digest, assessmentRef, reason })
+  const result = { status: 'failed', reason: 'PREPARED_POLICY_RETIRED', retirementKey, assessmentRef, retirementReason: reason, actorId }
+  db.prepare("UPDATE execution_effects SET state='failed',result_json=?,updated_at=? WHERE effect_id=?").run(encode(result),context.now,row.effect_id)
+  db.prepare("UPDATE execution_nodes SET status='ready',wait_reason=NULL WHERE node_run_id=?").run(row.node_run_id)
+  db.prepare("UPDATE execution_runs SET revision=revision+1,recovery_reason='user_pause' WHERE run_id=?").run(row.run_id)
+  context.emitEvent('effect.prepared-retired', { effectId: row.effect_id, runId: row.run_id, requestId: row.request_id, ...result })
+  return changed({ effect: effectDto(effectRow(db,row.effect_id)), retired: true })
 }
 
 function begin(db, args, context) {
@@ -468,7 +512,7 @@ function revokeSafety(db, args, context) {
 /** command={id,kind,args}；必须由ControlStore在同一个同步写事务内调用。 */
 export function reduceEffectCommand(db, command, context) {
   const handlers = {
-    'effect.prepare': prepare, 'effect.begin': begin, 'effect.rearmUnsent': rearmUnsent, 'effect.identity': recordIdentity, 'effect.observe': observe,
+    'effect.retirePrepared': retirePrepared, 'effect.prepare': prepare, 'effect.begin': begin, 'effect.rearmUnsent': rearmUnsent, 'effect.identity': recordIdentity, 'effect.observe': observe,
     'approval.decide': (db, args, context) => approval(db, args, context, false),
     'approval.revoke': (db, args, context) => approval(db, args, context, true), 'safety.revoke': revokeSafety,
     ...Object.fromEntries(['prepare','send','receipt','delivered','recalled','unsent'].map(action =>

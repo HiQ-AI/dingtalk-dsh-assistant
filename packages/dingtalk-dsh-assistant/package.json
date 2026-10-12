@@ -16,7 +16,8 @@
   },
   "files": [
     "*.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "execution-verification-job.ps1"
   ],
   "exports": {
     ".": "./index.js",

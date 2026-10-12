@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile, symlink, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability, verifyTaskAcceptance } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
 import { createTaskMarkdownFileAdapter } from '../packages/dingtalk-dsh-assistant/task-markdown-file.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
@@ -327,3 +327,41 @@ test('宿主历史回执精确摘要读取和Task需求绑定，普通文件不�
  for(const drift of [{taskId:'task-b'},{requirementRevision:3}])assert.equal(await verifyTaskAcceptance({...args,directEvidence:[{...args.directEvidence[0],...drift}]}),false);
  assert.equal(calls,1);await writeFile(join(root,'receipt.json'),content+' ');await assert.rejects(capability.execute({input,scope}),{code:'QUERY_RECEIPT_CONTENT_CHANGED'});
 });
+
+test('original Owner candidate facts enter semantic completion as hostCandidate, never a task query or automatic success',async()=>{
+ const proof={kind:'original-owner-candidate',taskId:'task',requirementRevision:14,evidenceRef:'candidate',artifactRef:'candidate',evidence:{scope:'Actual component and backend/PG evidence; fixture and SSO boundaries preserved'},ownerCandidate:{acceptanceRef:'candidate',reviewRef:'facts',sourceRequirementRevision:10,accepted:true,businessCompleted:false}}
+ const item={itemId:'item',criterion:'Current candidate',evidenceRefs:['candidate']},decision={summary:'Actual scope',evidenceRefs:['candidate']}
+ let approved=true
+ const check=async input=>{assert.equal(input.evidence[0].hostQuery,undefined);assert.equal(input.evidence[0].hostCandidate.sourceRequirementRevision,10);assert.equal(input.evidence[0].hostCandidate.businessCompleted,false);assert.equal(input.evidence[0].scope,proof.evidence.scope);return{status:approved?'satisfied':'unsatisfied',resultVerified:approved,criteria:[{criterion:item.criterion,passed:approved,evidenceIds:['candidate']}]}}
+ const options={check,requirement:{request:'Current candidate',constraints:[]},decision,stages:[],directEvidence:[proof],acceptanceItems:[item]}
+ assert.equal(await verifyTaskAcceptance(options),true);approved=false;assert.equal(await verifyTaskAcceptance(options),false)
+})
+
+
+test('semantic acceptance sends maintenance clarification through the native model request without changing criteria', async()=>{
+ let captured
+ const expected=domainAcceptanceResult(),maintenanceConstraints=[{sourceRef:'canonical',text:'Original authorized scope',taskId:'task'}]
+ const model=createDomainAcceptanceCheck({modelConfig:domainModel,llm:{async *stream(request){captured=request;yield {type:'text-delta',text:JSON.stringify(expected)};yield {type:'finish',reason:{kind:'stop'}}}}})
+ const check=input=>model(input)
+ const input=domainAcceptanceInput()
+ const result=await verifyTaskAcceptance({check,requirement:{request:input.request,constraints:input.constraints},decision:{summary:'actual',evidenceRefs:input.evidence.map(v=>v.evidenceId)},stages:input.evidence.map(v=>({stage:{outputRef:v.evidenceId},output:v})),acceptanceItems:input.acceptanceItems,maintenanceConstraints})
+ assert.equal(result,true)
+ assert.match(JSON.stringify(captured.messages),/Original authorized scope/)
+ assert.match(captured.system,/不得扩展验收/)
+ assert.deepEqual(input.acceptanceItems,domainAcceptanceInput().acceptanceItems)
+})
+
+
+test('v4 v5 and v6 completion preserve maintenance defaults and reject failed semantic assessment',async()=>{
+ for(const workflowVersion of ['4','5','6']){
+  let captured,pass=true
+  const criterion='Actual effect verified',proof={status:'succeeded'},output={output:proof,verification:{passed:true,outputDigest:executionDigest(proof)}}
+  const workflow=createGeneralCapabilityStepWorkflow({capabilities:[],workflowVersion,completionCheck:async input=>{captured=input;return {status:pass?'satisfied':'unverified',resultVerified:pass,criteria:[{criterion,passed:pass,evidenceIds:['actual-ref']}]}}})
+  const stage={stageId:'stage',outputRef:'actual-ref'},args={output,stage,stages:[{stage,output,contractId:'general-capability-result'}],requirement:{request:'Actual effect',acceptanceCriteria:[criterion]},decision:{summary:'Actual receipt',evidenceRefs:['actual-ref']},acceptanceItems:[{itemId:'actual',criterion,evidenceRefs:['actual-ref']}]}
+  assert.equal(await workflow.ownerContract.validateCompletion(args),true);assert.deepEqual(captured.maintenanceConstraints,[])
+  const maintenanceConstraints=[{sourceRef:'canonical',text:'Authenticated original boundary'}]
+  assert.equal(await workflow.ownerContract.validateCompletion({...args,maintenanceConstraints}),true);assert.deepEqual(captured.maintenanceConstraints,maintenanceConstraints)
+  pass=false;assert.equal(await workflow.ownerContract.validateCompletion({...args,maintenanceConstraints}),false)
+  assert.equal(await workflow.ownerContract.validateCompletion({...args,output:{...output,verification:{passed:false}},maintenanceConstraints}),false)
+ }
+})

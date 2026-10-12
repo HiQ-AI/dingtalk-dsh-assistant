@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn } from 'node:child_process'
-import { realpath, readdir, stat } from 'node:fs/promises'
+import { realpath, readdir, stat, readFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { assertVerifiedCandidate } from './execution-candidate.js'
@@ -45,7 +45,7 @@ async function admit(repository, bare) {
 
 export function createGitDelivery(scope, context = {}) { return gitOperation.run(context, () => createGitDeliveryImpl(scope)) }
 
-async function createGitDeliveryImpl({ repository, remote, branch, author, mergeParent }) {
+async function createGitDeliveryImpl({ repository, remote, branch, author, mergeParent, ownedTaskWorkspace }) {
   if (mergeParent !== undefined && !oid(mergeParent)) fail('GIT_MERGE_PARENT_INVALID')
   if (!isAbsolute(repository ?? '') || typeof remote !== 'string' || !remote || /[\0\r\n]/.test(repository + remote)) fail('GIT_LOCAL_SCOPE_REQUIRED')
   const localRemote = isAbsolute(remote)
@@ -67,12 +67,16 @@ async function createGitDeliveryImpl({ repository, remote, branch, author, merge
   if (!author || !['name', 'email'].every(key => typeof author[key] === 'string' && author[key].trim() && !/[<>\0\r\n]/.test(author[key]))) fail('GIT_AUTHOR_INVALID')
   author = { name: author.name, email: author.email }
   const scope = { repository, remote, ref, author }
+  if(ownedTaskWorkspace){
+    const metadata=JSON.parse(await readFile(join(repository,'..','repository.json'),'utf8'))
+    if(metadata.taskId!==ownedTaskWorkspace.taskId||metadata.repositoryId!==ownedTaskWorkspace.repositoryId||metadata.remote!==remote||metadata.developmentBranch!==branch||await realpath(join(repository,'.git'))!==await realpath(resolve(repository,await command(repository,['rev-parse','--git-common-dir']))))fail('GIT_WORKSPACE_OWNERSHIP_INVALID')
+  }
   const check = async () => {
     await admit(repository, false); if (localRemote) await admit(remote, true)
     const signing = await git(repository, ['config', '--bool', '--get', 'commit.gpgsign'])
     if ((signing.code !== 0 && signing.code !== 1) || signing.stdout === 'true') fail('GIT_SIGNING_UNSUPPORTED')
     const worktrees = await command(repository, ['worktree', 'list', '--porcelain', '-z'])
-    if (worktrees.split('\0').includes(`branch ${ref}`)) fail('GIT_CHECKED_OUT_REF')
+    if (worktrees.split('\0').includes(`branch ${ref}`) && (!ownedTaskWorkspace || worktrees.split('\0').filter(line=>line.startsWith('worktree ')).length!==1 || !worktrees.split('\0').includes(`worktree ${repository.replaceAll('\\','/')}`))) fail('GIT_CHECKED_OUT_REF')
   }
   await check()
   const currentLocal = async () => { const result = await git(repository, ['rev-parse', '--verify', '--quiet', ref]); if (result.code === 1) return null; if (result.code || !oid(result.stdout)) fail('GIT_REF_READ_FAILED'); return result.stdout }
@@ -128,6 +132,7 @@ async function createGitDeliveryImpl({ repository, remote, branch, author, merge
       ...(mergeParent && mergeParent !== prepared.baseCommit ? ['-p', mergeParent] : []), '-F', '-'], { input: prepared.message, env })
     if (commitId !== prepared.commitId) fail('GIT_COMMIT_ID_MISMATCH')
     await command(repository, ['update-ref', ref, commitId, prepared.expectedLocalSha ?? '0'.repeat(40)])
+    if(ownedTaskWorkspace)await command(repository,['read-tree',prepared.tree]) // Index only; never reset/overwrite working files.
     return reconcileCommit(prepared)
   }
   async function preparePush({ commit, expectedRemoteSha }) {

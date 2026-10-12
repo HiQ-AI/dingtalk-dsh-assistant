@@ -1,3 +1,4 @@
+import { withAuthorizationSessions } from '../packages/dingtalk-dsh-assistant/execution-authorization-session.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -124,9 +125,10 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
       return { principalId: 'owner', authorizationRef: 'production-task-specific' }
     },
   })
-  const sessions = { async run({ onSessionBound, onResult }) { await onSessionBound(); onResult({ ...proposal, ...nativeProposal, applySql: fixtureSql }) }, async cancel() {}, async close() {} }
+  const sessions = { async run({ onSessionBound, onResult, requestAuthorization }) { await onSessionBound(); if (requestAuthorization) { const result = await requestAuthorization('Synthetic exact data change needs approval', new AbortController().signal); await onResult(result); return { status: 'submitted', drained: true } } await onResult({ ...proposal, ...nativeProposal, applySql: fixtureSql }) }, async cancel() {}, async close() {} }
   t.after(async () => { await store.close() })
-  const workflow = createDataChangeTaskWorkflow({ provider: 'test', model: 'synthetic', adapter })
+  const rawWorkflow = createDataChangeTaskWorkflow({ provider: 'test', model: 'synthetic', adapter })
+  const workflow = withAuthorizationSessions(rawWorkflow, { provider: 'test', model: 'synthetic' })
   assert.equal(defineExecutionWorkflow(workflow).nodes.length, 15)
   const controller = createExecutionController({ store, artifacts, sessions, delivery, workflows: [workflow] })
   t.after(async () => { await controller.close(); await store.close() })
@@ -137,9 +139,9 @@ async function fixture(t, { unknownExecution = false, unknownRehearsal = false,
 test('持久 v4 原生待审 Run 使用冻结定义恢复，v5 新定义不改其必填基线合同', async t => {
   const f = await fixture(t, { native: true })
   await f.controller.close()
-  const legacy = createDataChangeTaskWorkflowV4({ provider: 'test', model: 'synthetic', adapter: f.adapter })
+  const legacy = withAuthorizationSessions(createDataChangeTaskWorkflowV4({ provider: 'test', model: 'synthetic', adapter: f.adapter }), { provider: 'test', model: 'synthetic' })
   const definition = defineExecutionWorkflow(legacy)
-  assert.equal(legacy.version, '4')
+  assert.equal(legacy.version, '4-authorization-session')
   assert.ok(legacy.nodes[0].inputSchema.required.includes('baseline'))
   const historicalController = createExecutionController({ store: f.store, artifacts: f.artifacts,
     sessions: f.sessions, delivery: f.delivery, workflows: [legacy] })
@@ -147,7 +149,7 @@ test('持久 v4 原生待审 Run 使用冻结定义恢复，v5 新定义不改�
     workflowId: legacy.id, input: input() })
   assert.equal((await historicalController.whenIdle('historical-v4')).nodes[10].waitReason.reference, 'BYTEBASE_APPROVAL_PENDING')
   await historicalController.close()
-  const oldAgain = createDataChangeTaskWorkflowV4({ provider: 'test', model: 'synthetic', adapter: f.adapter })
+  const oldAgain = withAuthorizationSessions(createDataChangeTaskWorkflowV4({ provider: 'test', model: 'synthetic', adapter: f.adapter }), { provider: 'test', model: 'synthetic' })
   assert.equal(defineExecutionWorkflow(oldAgain).digest, definition.digest)
   const restored = createExecutionController({ store: f.store, artifacts: f.artifacts,
     sessions: f.sessions, delivery: f.delivery, workflows: [f.workflow], historicalWorkflows: [oldAgain] })
@@ -386,12 +388,14 @@ for (const [automatic, precreated, decision = 'approved', drop = false] of [[fal
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'real-contract', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true, taskWorkspaceRoot: join(directory, 'tasks'), getTaskDirectories: async taskId => ({ logicalTaskId: taskId }) })
   external.bindStore(store)
-  const workflow = createDataChangeTaskWorkflow({ provider: 'fixture', model: 'fixture', adapter: external.dataChangeAdapter })
-  assert.equal(workflow.version, '7')
+  const rawWorkflow = createDataChangeTaskWorkflow({ provider: 'fixture', model: 'fixture', adapter: external.dataChangeAdapter })
+  assert.equal(rawWorkflow.version, '7')
+  const workflow = withAuthorizationSessions(rawWorkflow, { provider: 'fixture', model: 'fixture' })
   const delivery = createExecutionDelivery({ store, artifacts, authorize: async () => false,
     externalAdapter: external.operationAdapter, authorizeExternal: external.authorizeExternal })
   const controller = createExecutionController({ store, artifacts, delivery, workflows: [workflow], sessions: {
-    async run({ input, onSessionBound, onResult }) {
+    async run({ input, onSessionBound, onResult, requestAuthorization }) {
+      if (requestAuthorization) { await onSessionBound(); const result = await requestAuthorization('Original exact column change requires plugin approval', new AbortController().signal); await onResult(result); return { status: 'submitted', drained: true } }
       assert.ok(input.request.includes('process_id_temp')); assert.equal(input.sources[0].id, 'verified-investigation-output')
       await onSessionBound(); onResult({ applySql, rollbackSql: 'ALTER TABLE public.process_id_temp DROP COLUMN name;',
         verificationSql, expectedChange: JSON.stringify({ rows: drop ? [] : [expectedRow] }) })

@@ -20,12 +20,12 @@ const workflow = id => ({ id, version: '1', nodes: [{
 }] })
 const runFile = promisify(execFile)
 
-async function setup(t) {
+async function setup(t, extraWorkflows=[]) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-stage-plan-'))
   const dbPath = join(directory, 'control.sqlite'), instanceId = 'plan-test'
   const store = await openExecutionStore({ dbPath, instanceId, initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
-  const controller = createExecutionController({ store, artifacts, workflows: [workflow('investigate'), workflow('implement')] })
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow('investigate'), workflow('implement'), ...extraWorkflows] })
   t.after(async () => { await controller.close(); await store.close(); await rm(directory, { recursive: true, force: true }) })
   return { store, artifacts, controller, dbPath, instanceId }
 }
@@ -131,7 +131,8 @@ test('新任务计划结算后可追加阶段，要求版本不随计划操作�
   let plan = await controller.advanceTaskPlan('append-task')
   await controller.whenIdle(plan.stages[0].runId)
   plan = await controller.advanceTaskPlan('append-task')
-  assert.equal(plan.task.status, 'succeeded')
+  assert.equal(plan.task.status, 'pending')
+  assert.equal(plan.task.planStatus, 'succeeded')
   await controller.extendTaskPlan({ commandId: 'extend-settled', taskId: 'append-task',
     expectedPlanRevision: 1, expectedControlRevision: 1, requirementRevision: 1,
     stages: [{ stageId: 'stage-2', workflowId: 'implement' }] })
@@ -155,7 +156,8 @@ test('新要求使旧成功计划的完成候选失效，必须重新确认计�
   let plan = await controller.advanceTaskPlan('fence-task')
   await controller.whenIdle(plan.stages[0].runId)
   plan = await controller.advanceTaskPlan('fence-task')
-  assert.equal(plan.task.status, 'succeeded')
+  assert.equal(plan.task.status, 'pending')
+  assert.equal(plan.task.planStatus, 'succeeded')
   await store.command({ id: 'update-fence', kind: 'task.requirement.update', args: {
     taskId: 'fence-task', expectedRequirementRevision: 1, requirementRef: second.ref, eventKey: 'fence-updated',
   } })
@@ -482,6 +484,7 @@ test('排查、方案、真人确认、开发、UAT 四阶段沿用同一业务 
       && event.payload.runId === runIds[index]
       && event.payload.outputRef === plan.stages[index].outputRef))
   }
+  plan = await controller.taskPlan(taskId)
   assert.equal(plan.task.status, 'succeeded')
   assert.deepEqual(plan.stages.map(stage => stage.status), ['succeeded', 'succeeded', 'succeeded', 'succeeded'])
   assert.equal(new Set(runIds).size, 4)
@@ -764,10 +767,12 @@ for (const viaOwner of [false, true]) test(`必要工程依赖插入保留等待
       sessionRunner:{async run({onSessionBound,onCandidate}){await onSessionBound();await onCandidate(decision);return {status:'submitted',decision}},async close(){}}})
     t.after(()=>owner.close())
     await owner.ensure({taskId:'dependency-task',sourceKey:'dependency-source',criteria:['真实前后端完成'],origin:{actorId:'requester'}})
-    await owner.drive('dependency-task')
+    await assert.rejects(owner.drive('dependency-task'),{code:'TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED'})
     assert.deepEqual(await owner.applyPending(),[])
-    // Owner 使用自动分配stage-2，测试后续按持久身份读取，不假设模型指定ID。
-    request.stage.stageId='stage-2'
+    assert.equal((await controller.taskPlan('dependency-task')).stages.length,1)
+    assert.deepEqual((await controller.state(originalRunId)).nodes,original.nodes)
+    assert.equal((await controller.taskPlan('dependency-task')).task.planRevision,1)
+    return
   } else {
     await controller.insertTaskDependency(request)
     assert.deepEqual((await controller.insertTaskDependency(request)).result, await store.query({ kind: 'receipt', commandId: 'insert-backend' }).then(receipt => receipt.result))
@@ -833,4 +838,194 @@ test('必要依赖拒绝活跃节点与新输入，未改原Run或阶段', async
  await assert.rejects(controller.insertTaskDependency({...request,commandId:'insert-pending'}),{code:'TASK_DEPENDENCY_NOT_DRAINED'})
  assert.equal((await controller.taskPlan('busy-task')).stages.length,1)
  assert.notEqual((await controller.state(runId)).run.recoveryReason,'stage-dependency')
+})
+
+for(const late of [false,true])test(`new requirement keeps old successful Run immutable; late completion=${late}`,async t=>{
+ const {controller,store,artifacts}=await setup(t);
+ const first=await artifacts.put(1);await store.command({id:'accept-revised-success',kind:'task.accept',args:{taskId:'revised-success',requirementRef:first.ref,requirementRevision:1,sessionId:'owner-revised-success',criteria:['result 2'],sourceKey:'source-revised-success',eventKey:'created-revised-success'}});
+ await controller.initializeTaskPlan({commandId:'create-revised-success',taskId:'revised-success',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'first',workflowId:'investigate',input:1}]});
+ let plan=await controller.advanceTaskPlan('revised-success');const runId=plan.stages[0].runId;await controller.whenIdle(runId);
+ if(!late)plan=await controller.advanceTaskPlan('revised-success');
+ const history=await store.query({kind:'run',runId});const before=await controller.taskPlan('revised-success');const replacement=await artifacts.put(2);
+ await store.command({id:'new-success-requirement',kind:'task.requirement.update',args:{taskId:'revised-success',expectedRequirementRevision:1,requirementRef:replacement.ref,eventKey:'new-success-requirement'}});
+ if(late)await store.command({id:'late-old-completion',kind:'task.stage.complete',args:{taskId:'revised-success',planRevision:1,stageId:'first',runId}});
+ const current=await controller.taskPlan('revised-success');assert.equal(current.task.status,'pending');assert.equal(current.task.requirementRevision,2);assert.equal(current.task.planRequirementRevision,1);assert.equal(current.task.controlRevision,before.task.controlRevision);
+ assert.deepEqual(await store.query({kind:'run',runId}),history);assert.equal((await store.query({kind:'run.list',taskId:'revised-success'})).length,1);
+});
+
+
+
+test('completion correction refuses active task, stale declaration and running Owner without rewriting cancellation receipts',async t=>{
+ const {store,artifacts,controller}=await setup(t);const requirement=await artifacts.put({request:'manually handled topic'});await store.command({id:'accept-user-confirmation',kind:'task.accept',args:{taskId:'confirmed-topic',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner-confirmed-topic',sourceKey:'source-user',criteria:['manual completion'],eventKey:'created-topic'}});const args={taskId:'confirmed-topic',expectedControlRevision:1,expectedRequirementRevision:1,actorId:'owner',topicId:'original-topic',declaration:'User declares manually handled task complete; no engineering verification.'};await assert.rejects(store.command({id:'active-must-not-complete',kind:'task.completion.confirm',args}),{code:'TASK_COMPLETION_CORRECTION_UNSAFE'});await store.command({id:'running-owner',kind:'task.owner.claim',args:{taskId:args.taskId,turnId:'inflight-owner',expectedLeaseEpoch:0}});const cancellation=await controller.controlTask({commandId:'cancel-topic',taskId:args.taskId,intent:'cancel',expectedControlRevision:1});const plan=await controller.taskPlan(args.taskId);assert.equal(plan.task.controlState,'cancelled');await assert.rejects(store.command({id:'stale-completion',kind:'task.completion.confirm',args}),{code:'TASK_COMPLETION_STALE'});await assert.rejects(store.command({id:'running-must-not-complete',kind:'task.completion.confirm',args:{...args,expectedControlRevision:plan.task.controlRevision}}),{code:'TASK_COMPLETION_CORRECTION_UNSAFE'});assert.equal((await controller.taskPlan(args.taskId)).task.status,'cancelled');assert.deepEqual((await store.query({kind:'receipt',commandId:'cancel-topic'})).result,cancellation.receipt.result);assert.equal((await store.query({kind:'run.list',taskId:args.taskId})).length,0);
+});
+
+
+test('user-declared no-plan completion survives real Store close and cold reopen without reopening execution', async t => {
+ const directory=await mkdtemp(join(tmpdir(),'completion-cold-'));const dbPath=join(directory,'control.sqlite');let store;
+ t.after(async()=>{await store?.close();await rm(directory,{recursive:true,force:true})});
+ store=await openExecutionStore({dbPath,instanceId:'completion-cold',initialize:true});
+ await store.command({id:'accept-cold',kind:'task.accept',args:{taskId:'cold-task',requirementRef:'requirement.json',requirementRevision:1,sessionId:'owner-cold',criteria:['manual'],sourceKey:'cold-source',eventKey:'cold-created'}});
+ await store.command({id:'cancel-cold',kind:'task.control.cancel',args:{taskId:'cold-task',expectedControlRevision:1}});
+ const before=await store.query({kind:'task.plan',taskId:'cold-task'});
+ await store.command({id:'confirm-cold',kind:'task.completion.confirm',args:{taskId:'cold-task',expectedControlRevision:before.task.controlRevision,expectedRequirementRevision:1,actorId:'owner',topicId:'original-topic',declaration:'User confirms complete.'}});
+ const expected=await store.query({kind:'task.plan',taskId:'cold-task'});await store.close();store=null;
+ store=await openExecutionStore({dbPath,instanceId:'completion-cold'});assert.deepEqual(await store.query({kind:'task.plan',taskId:'cold-task'}),expected);assert.equal(expected.task.status,'succeeded');assert.equal(expected.task.controlState,'paused');assert.deepEqual(expected.stages,[]);assert.equal((await store.query({kind:'run.list',taskId:'cold-task'})).length,0);
+ await store.close();store=null;
+ // Invalid synthetic persisted completions must retain the original startup invariant.
+ for(const scenario of ['audit-missing','requirement-mismatch','execution-active']){
+  const db=new DatabaseSync(dbPath);db.exec('BEGIN');
+  if(scenario==='audit-missing')db.prepare("DELETE FROM execution_events WHERE kind='task.completion.confirmed'").run();
+  if(scenario==='requirement-mismatch')db.prepare('UPDATE business_tasks SET requirement_revision=2').run();
+  if(scenario==='execution-active')db.prepare("UPDATE task_controls SET state='active'").run();
+  const {validateTaskPlanSchema}=await import('../packages/dingtalk-dsh-assistant/execution-task-plan.js');assert.throws(()=>validateTaskPlanSchema(db),{code:'TASK_PLAN_INVARIANT_FAILED'},scenario);db.exec('ROLLBACK');db.close();
+ }
+});
+
+for(const blocker of [null,'not-paused','not-drained','same-requirement','engineering','effect'])test(`replace stopped no-effect publication suffix, blocker=${blocker}`,async t=>{
+ const id=blocker==='engineering'?'task-engineering-test':'task-uat-pr-merge'
+ const w=workflow(id);w.nodes[0].execute=async()=>{throw new Error('EXPECTED_PREFLIGHT_FAILURE')}
+ const {store,artifacts,controller,dbPath}=await setup(t,[w]);const first=await artifacts.put(1)
+ await store.command({id:'accept-paused-publication',kind:'task.accept',args:{taskId:'paused-publication',requirementRef:first.ref,requirementRevision:1,sessionId:'owner-paused-publication',criteria:['actual publication'],sourceKey:'source-publication',eventKey:'created-publication'}})
+ await controller.initializeTaskPlan({commandId:'init-paused-publication',taskId:'paused-publication',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'publish',workflowId:id,input:1}]})
+ const plan=await controller.advanceTaskPlan('paused-publication'),runId=plan.stages[0].runId;await controller.whenIdle(runId)
+ await controller.pause({commandId:'pause-publication',runId,reason:'wrong candidate, no effects'})
+ if(blocker!=='same-requirement'){const updated=await artifacts.put(2);await store.command({id:'update-publication',kind:'task.requirement.update',args:{taskId:'paused-publication',expectedRequirementRevision:1,requirementRef:updated.ref,eventKey:'updated-publication'}})}
+ const db=new DatabaseSync(dbPath)
+ try{
+  db.prepare("UPDATE execution_runs SET status='waiting',pause_requested=1,stop_requested=0 WHERE run_id=?").run(runId)
+  if(blocker==='not-paused')db.prepare('UPDATE execution_runs SET pause_requested=0 WHERE run_id=?').run(runId)
+  if(blocker==='not-drained')db.prepare('UPDATE execution_nodes SET drained=0 WHERE run_id=?').run(runId)
+  if(blocker==='effect'){
+   const n=db.prepare('SELECT * FROM execution_nodes WHERE run_id=? AND current=1').get(runId)
+   db.prepare(`INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('effect-publication','operation',runId,n.node_run_id,n.node_id,1,'a'.repeat(64),'b'.repeat(64),'{}','[]','test-authority','failed',new Date().toISOString(),new Date().toISOString())
+  }
+ }finally{db.close()}
+ const request={commandId:'revise-paused-publication',taskId:'paused-publication',expectedPlanRevision:1,expectedControlRevision:1,requirementRevision:blocker==='same-requirement'?1:2,affectedFrom:0,stages:[{stageId:'publish',workflowId:id,input:2}]}
+ if(blocker){await assert.rejects(controller.reviseTaskPlan(request),{code:'TASK_STAGE_STILL_RUNNING'});assert.equal((await controller.taskPlan('paused-publication')).task.planRevision,1)}
+ else {await controller.reviseTaskPlan(request);const current=await controller.taskPlan('paused-publication');assert.equal(current.task.planRevision,2);assert.equal(current.stages[0].attempt,2);assert.equal((await controller.state(runId)).run.status,'cancelled');assert.equal((await controller.state(runId)).nodes[0].evidenceRefs.length>0,true)}
+})
+
+for(const affectedFrom of [0,1])test(`no-effect publication suffix preserves completed effect prefix, affectedFrom=${affectedFrom}`,async t=>{
+ const w=workflow('task-uat-pr-merge');w.nodes[0].execute=async()=>{throw new Error('EXPECTED_PREFLIGHT_FAILURE')}
+ const {store,artifacts,controller,dbPath}=await setup(t,[w]);const goal=await artifacts.put(1)
+ await store.command({id:'accept-effect-prefix',kind:'task.accept',args:{taskId:'effect-prefix',requirementRef:goal.ref,requirementRevision:1,sessionId:'owner-effect-prefix',criteria:['actual publication'],sourceKey:'source-effect-prefix',eventKey:'created-effect-prefix'}})
+ await controller.initializeTaskPlan({commandId:'init-effect-prefix',taskId:'effect-prefix',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'done',workflowId:'investigate',input:1},{stageId:'publish',workflowId:'task-uat-pr-merge'}]})
+ let plan=await controller.advanceTaskPlan('effect-prefix');const prefixRunId=plan.stages[0].runId;await controller.whenIdle(prefixRunId);plan=await controller.advanceTaskPlan('effect-prefix');const prefix=structuredClone(plan.stages[0])
+ await controller.bindTaskStageInput({commandId:'bind-publication',taskId:'effect-prefix',planRevision:1,expectedControlRevision:1,stageId:'publish',predecessorOutputRef:prefix.outputRef,input:2})
+ plan=await controller.advanceTaskPlan('effect-prefix');const pausedRunId=plan.stages[1].runId;await controller.whenIdle(pausedRunId);await controller.pause({commandId:'stop-publication',runId:pausedRunId,reason:'wrong old candidate'})
+ const updated=await artifacts.put(3);await store.command({id:'update-effect-prefix',kind:'task.requirement.update',args:{taskId:'effect-prefix',expectedRequirementRevision:1,requirementRef:updated.ref,eventKey:'updated-effect-prefix'}})
+ const db=new DatabaseSync(dbPath)
+ try{
+  const n=db.prepare('SELECT * FROM execution_nodes WHERE run_id=? AND current=1').get(prefixRunId)
+  db.prepare(`INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('prefix-effect','operation',prefixRunId,n.node_run_id,n.node_id,1,'a'.repeat(64),'b'.repeat(64),'{}','[]','test-authority','succeeded',new Date().toISOString(),new Date().toISOString())
+  db.prepare("UPDATE execution_runs SET status='waiting',pause_requested=1,stop_requested=0 WHERE run_id=?").run(pausedRunId)
+ }finally{db.close()}
+ const request={commandId:'replace-effect-prefix',taskId:'effect-prefix',expectedPlanRevision:1,expectedControlRevision:1,requirementRevision:2,affectedFrom,stages:[{stageId:'done',workflowId:'investigate',...(affectedFrom===0?{input:3}:{})},{stageId:'publish',workflowId:'task-uat-pr-merge'}]}
+ if(affectedFrom===0){await assert.rejects(controller.reviseTaskPlan(request),{code:'TASK_PLAN_IMPACT_INVALID'});assert.equal((await controller.taskPlan('effect-prefix')).task.planRevision,1);assert.equal((await controller.state(pausedRunId)).run.status,'waiting')}
+ else {await controller.reviseTaskPlan(request);assert.equal((await controller.taskPlan('effect-prefix')).task.planRevision,2);assert.equal((await controller.state(pausedRunId)).run.status,'cancelled')}
+ const current=await controller.taskPlan('effect-prefix');assert.deepEqual(current.stages[0],prefix);assert.equal((await controller.state(prefixRunId)).run.status,'succeeded');assert.equal((await store.query({kind:'effect.list',runId:prefixRunId})).length,1)
+})
+
+test('new owner-managed flow stays pending until the original session explicitly completes; replay and historical done stay stable', async t => {
+  const {store, artifacts, controller}=await setup(t)
+  const goal=await artifacts.put(3)
+  await store.command({id:'completion-create',kind:'task.accept',args:{taskId:'completion-task',requirementRef:goal.ref,requirementRevision:1,sessionId:'original-session',criteria:['result reviewed'],sourceKey:'source',eventKey:'created'}})
+  await controller.initializeTaskPlan({commandId:'completion-plan',taskId:'completion-task',expectedPlanRevision:0,expectedRequirementRevision:1,stages:[{stageId:'first',workflowId:'investigate',input:3}]})
+  let plan=await controller.advanceTaskPlan('completion-task');await controller.whenIdle(plan.stages[0].runId);plan=await controller.advanceTaskPlan('completion-task')
+  assert.equal(plan.stages[0].status,'succeeded');assert.equal(plan.task.planStatus,'succeeded');assert.equal(plan.task.status,'pending')
+  const claim=(await store.command({id:'completion-claim',kind:'task.owner.claim',args:{taskId:'completion-task',turnId:'review',expectedLeaseEpoch:0}})).result
+  await store.command({id:'completion-bound',kind:'task.owner.sessionBound',args:{taskId:'completion-task',turnId:'review',leaseEpoch:claim.leaseEpoch,sessionId:'original-session'}})
+  const evidenceRefs=[plan.stages[0].outputRef]
+  await store.command({id:'completion-candidate',kind:'task.owner.candidate',args:{taskId:'completion-task',turnId:'review',leaseEpoch:claim.leaseEpoch,decision:{action:'complete',summary:'whole task explicitly reviewed',evidenceRefs,assessments:[{itemId:'acceptance-1',status:'satisfied',evidenceRefs}]}}})
+  await store.command({id:'completion-accept',kind:'task.owner.accept',args:{taskId:'completion-task',turnId:'review',leaseEpoch:claim.leaseEpoch}})
+  assert.equal((await controller.taskPlan('completion-task')).task.status,'pending')
+  const applied={id:'completion-applied',kind:'task.owner.applied',args:{taskId:'completion-task',turnId:'review',leaseEpoch:claim.leaseEpoch}}
+  await store.command(applied);plan=await controller.taskPlan('completion-task');assert.equal(plan.task.status,'succeeded')
+  await store.command(applied);await controller.advanceTaskPlan('completion-task');assert.deepEqual(await controller.taskPlan('completion-task'),plan)
+  await controller.createTaskPlan({commandId:'legacy-plan',taskId:'legacy-done',stages:[{stageId:'first',workflowId:'investigate',input:3}]})
+  let legacy=await controller.advanceTaskPlan('legacy-done');await controller.whenIdle(legacy.stages[0].runId);legacy=await controller.advanceTaskPlan('legacy-done')
+  assert.equal(legacy.task.status,'succeeded');await controller.advanceTaskPlan('legacy-done');assert.deepEqual(await controller.taskPlan('legacy-done'),legacy)
+})
+
+test('accepted session completion cannot finish a newer requirement', async t => {
+  const {store,artifacts,controller}=await setup(t)
+  const goal=await artifacts.put(3)
+  await store.command({id:'stale-completion-create',kind:'task.accept',args:{taskId:'stale-completion',requirementRef:goal.ref,requirementRevision:1,sessionId:'original-stale-session',criteria:['review result'],sourceKey:'source',eventKey:'created'}})
+  await controller.initializeTaskPlan({commandId:'stale-completion-plan',taskId:'stale-completion',expectedPlanRevision:0,expectedRequirementRevision:1,stages:[{stageId:'first',workflowId:'investigate',input:3}]})
+  let plan=await controller.advanceTaskPlan('stale-completion');await controller.whenIdle(plan.stages[0].runId);plan=await controller.advanceTaskPlan('stale-completion')
+  const claim=(await store.command({id:'stale-completion-claim',kind:'task.owner.claim',args:{taskId:'stale-completion',turnId:'review',expectedLeaseEpoch:0}})).result
+  await store.command({id:'stale-completion-bound',kind:'task.owner.sessionBound',args:{taskId:'stale-completion',turnId:'review',leaseEpoch:claim.leaseEpoch,sessionId:'original-stale-session'}})
+  const evidenceRefs=[plan.stages[0].outputRef]
+  await store.command({id:'stale-completion-candidate',kind:'task.owner.candidate',args:{taskId:'stale-completion',turnId:'review',leaseEpoch:claim.leaseEpoch,decision:{action:'complete',summary:'old goal complete',evidenceRefs,assessments:[{itemId:'acceptance-1',status:'satisfied',evidenceRefs}]}}})
+  await store.command({id:'stale-completion-accept',kind:'task.owner.accept',args:{taskId:'stale-completion',turnId:'review',leaseEpoch:claim.leaseEpoch}})
+  const next=await artifacts.put(5)
+  await store.command({id:'stale-completion-update',kind:'task.requirement.update',args:{taskId:'stale-completion',expectedRequirementRevision:1,requirementRef:next.ref,eventKey:'new-goal'}})
+  await assert.rejects(store.command({id:'stale-completion-apply',kind:'task.owner.applied',args:{taskId:'stale-completion',turnId:'review',leaseEpoch:claim.leaseEpoch}}),{code:'TASK_OWNER_CANDIDATE_STALE'})
+  assert.equal((await controller.taskPlan('stale-completion')).task.status,'pending')
+})
+
+
+test('新要求恢复任务只唤醒Owner，不恢复旧计划暂停Run或重放开发',async t=>{
+ let executions=0
+ const stopped=workflow('old-development');stopped.nodes[0].execute=async()=>{executions++;throw new Error('EXPECTED_OLD_STOP')}
+ const {store,artifacts,controller,dbPath}=await setup(t,[stopped])
+ await store.command({id:'old-round-accept',kind:'task.accept',args:{taskId:'new-round-resume',requirementRef:(await artifacts.put(1)).ref,requirementRevision:1,sessionId:'original-owner',criteria:['Current authorized delivery'],sourceKey:'original-source',eventKey:'created'}})
+ await controller.initializeTaskPlan({commandId:'old-development-plan',taskId:'new-round-resume',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'develop',workflowId:'old-development',input:1}]})
+ const started=await controller.advanceTaskPlan('new-round-resume'),runId=started.stages[0].runId
+ await controller.whenIdle(runId)
+ await controller.pause({commandId:'old-run-pause',runId,reason:'Old round stopped before publication'})
+ const db=new DatabaseSync(dbPath)
+ // Exact drained paused checkpoint in this disposable fixture, never the resident database.
+ db.prepare("UPDATE execution_runs SET status='waiting',pause_requested=1,recovery_reason='user_pause' WHERE run_id=?").run(runId)
+ db.close()
+ const before=await controller.taskPlan('new-round-resume')
+ await controller.controlTask({commandId:'old-task-pause',taskId:'new-round-resume',intent:'pause',expectedControlRevision:before.task.controlRevision})
+ const paused=await controller.taskPlan('new-round-resume')
+ await store.command({id:'current-requirement',kind:'task.requirement.update',args:{taskId:'new-round-resume',expectedRequirementRevision:paused.task.requirementRevision,requirementRef:(await artifacts.put(2)).ref,eventKey:'current-scope'}})
+ const oldState=await controller.state(runId),oldExecutions=executions
+ const resumed=await controller.controlTask({commandId:'explicit-current-resume',taskId:'new-round-resume',intent:'resume',expectedControlRevision:paused.task.controlRevision})
+ assert.equal(resumed.plan.task.controlState,'active')
+ assert.notEqual(resumed.plan.task.planRequirementRevision,resumed.plan.task.requirementRevision)
+ assert.equal((await controller.state(runId)).run.pauseRequested,true)
+ assert.equal((await controller.state(runId)).run.generation,oldState.run.generation)
+ assert.equal(executions,oldExecutions)
+ const runs=await store.query({kind:'run.list',taskId:'new-round-resume'});assert.equal(runs.length,1);assert.equal(runs[0].runId,runId)
+})
+
+for(const blocker of [null,'receipt-recovery','current-workspace','same-requirement','not-paused','not-drained','current-effect','old-unsettled','pending-input','stale-generation','stale-plan','task-session'])test(`formal obsolete run retirement preserves earlier effects, blocker=${blocker}`,async t=>{
+ let executions=0
+ const w=workflow('obsolete-engineering');w.nodes[0].execute=async()=>{executions++;throw new Error('EXPECTED_STOP')}
+ const {store,artifacts,controller,dbPath}=await setup(t,[w]);const taskId='retirement-test'
+ const original=(await artifacts.put(1)).ref
+ await store.command({id:'accept',kind:'task.accept',args:{taskId,requirementRef:original,requirementRevision:1,sessionId:'owner',criteria:['current delivery'],sourceKey:'source',eventKey:'created'}})
+ await controller.initializeTaskPlan({commandId:'init',taskId,expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:w.id,input:1}]})
+ const plan=await controller.advanceTaskPlan(taskId),runId=plan.stages[0].runId;await controller.whenIdle(runId)
+ if(blocker!=='same-requirement')await store.command({id:'new-requirement',kind:'task.requirement.update',args:{taskId,expectedRequirementRevision:1,requirementRef:(await artifacts.put(2)).ref,eventKey:'new-scope'}})
+ const db=new DatabaseSync(dbPath),now=new Date().toISOString()
+ try{
+  db.prepare("UPDATE execution_runs SET generation=2,status='waiting',pause_requested=1,stop_requested=0 WHERE run_id=?").run(runId)
+  db.prepare('UPDATE execution_nodes SET generation=2 WHERE run_id=? AND current=1').run(runId)
+  const n=db.prepare('SELECT * FROM execution_nodes WHERE run_id=? AND current=1').get(runId)
+  db.prepare(`INSERT INTO execution_effects(effect_id,kind,run_id,node_run_id,node_id,generation,input_digest,definition_digest,definition_json,resource_keys_json,authorization_ref,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('old-success','operation',runId,n.node_run_id,n.node_id,['current-effect','current-workspace'].includes(blocker)?2:1,'a'.repeat(64),'b'.repeat(64),blocker==='current-workspace'?'{"action":"workspace"}':'{}','[]','test-authority',blocker==='old-unsettled'?'unknown':'succeeded',now,now)
+  if(blocker==='not-paused')db.prepare('UPDATE execution_runs SET pause_requested=0 WHERE run_id=?').run(runId)
+  if(blocker==='not-drained')db.prepare('UPDATE execution_nodes SET drained=0 WHERE run_id=?').run(runId)
+  if(blocker==='pending-input')db.prepare("INSERT INTO execution_inputs(run_id,input_id,source_key,requirement_ref,status,accepted_at) VALUES(?,?,?,?,?,?)").run(runId,'pending','input-source',original,'pending',now)
+ }finally{db.close()}
+ const effects=await store.query({kind:'effect.list',runId}),before=executions
+ const args={commandId:'retire',taskId,runId,action:'retire',source:blocker==='task-session'?'task-session':'operator',actorId:'operator',reason:'new authorized scope replaces drained old generation',expectedRequirementRevision:blocker==='same-requirement'?1:2,expectedControlRevision:1,generation:blocker==='stale-generation'?1:2,expectedPlanRevision:blocker==='stale-plan'?2:1}
+ if(blocker&&!['receipt-recovery','current-workspace'].includes(blocker)){await assert.rejects(controller.controlRun(args));assert.equal((await controller.state(runId)).run.status,'waiting');assert.equal((await controller.taskPlan(taskId)).stages[0].status,'running')}
+ else{
+  if(blocker==='receipt-recovery'){const {commandId,...nativeArgs}=args;await store.command({id:commandId,kind:'run.control',args:nativeArgs});assert.equal((await controller.state(runId)).run.status,'cancelling')}
+  await controller.controlRun(args);await controller.controlRun(args)
+  assert.equal((await controller.state(runId)).run.status,'cancelled')
+  const current=await controller.taskPlan(taskId);assert.equal(current.stages[0].status,'blocked');assert.equal(current.task.controlState,'active')
+  await assert.rejects(controller.controlRun({...args,generation:1}),{code:'NODE_CONTROL_REQUEST_CONFLICT'})
+  await controller.reviseTaskPlan({commandId:'current-suffix',taskId,expectedPlanRevision:1,expectedControlRevision:1,requirementRevision:2,affectedFrom:0,stages:[{stageId:'current-work',workflowId:'investigate',input:2}]})
+  const beforeReplay=await controller.taskPlan(taskId)
+  await controller.controlRun(args)
+  assert.deepEqual(await controller.taskPlan(taskId),beforeReplay)
+
+ }
+ assert.deepEqual(await store.query({kind:'effect.list',runId}),effects)
+ assert.equal(executions,before);assert.equal((await store.query({kind:'run.list',taskId})).length,1)
 })

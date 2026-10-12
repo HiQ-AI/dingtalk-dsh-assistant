@@ -21,7 +21,7 @@ async function fixture(mode = 'success') {
   await writeFile(packagePath, 'candidate-package')
   const original = await readFile(join(repository, 'scripts/deploy-local.ps1'), 'utf8')
   assert.ok(original.includes("D:/dsh_home/profiles/web/cordis.patch.yml"))
-  await writeFile(join(root, 'scripts/deploy-local.ps1'), original.replace('D:/dsh_home/profiles/web/cordis.patch.yml', profile.replaceAll('\\', '/')))
+  await writeFile(join(root, 'scripts/deploy-local.ps1'), original.replace('D:/dsh_home/profiles/web/cordis.patch.yml', profile.replaceAll('\\', '/')).replace("$nativeNode='D:/soft/node-v24.19.0/node.exe'", "$nativeNode='"+process.execPath.replaceAll('\\','/')+"'"))
   const helper = `param([switch]$Check,[switch]$Readback,[switch]$Resume,[switch]$HoldMaintenance,[string]$Package,[string]$ExpectedProfileSha256,[string]$ExpectedPackageSha256,[string]$EvidenceDirectory,[string]$RestoreConfigurationProposal,[string]$RepairStoppedLaunch)
 $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..'))

@@ -478,7 +478,7 @@ test('Owner候选落盘后进程强杀，重开原Task重新领取且旧租约�
   assert.equal((await store.query({ kind: 'receipt', commandId: 'accept-after-kill' })).result.status, 'accepted')
 })
 
-test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决定', async t => {
+test('Owner拒绝旧追加协议，已接纳推进强杀后重启只应用一次原决定', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-owner-applied-crash-'))
   const dbPath = join(root, 'control.sqlite'), instanceId = 'owner-action-crash'
   let store = await openExecutionStore({ dbPath, instanceId, initialize: true })
@@ -492,9 +492,12 @@ test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决
   await store.command(command('task.owner.claim', { taskId: 'task-owner', turnId: 'turn-accepted', expectedLeaseEpoch: 0 }))
   await store.command(command('task.owner.sessionBound', { taskId: 'task-owner', turnId: 'turn-accepted',
     leaseEpoch: 1, sessionId: 'owner-session' }))
-  await store.command(command('task.owner.candidate', { taskId: 'task-owner', turnId: 'turn-accepted', leaseEpoch: 1,
-    decision: { action: 'advance', summary: '追加后续阶段', evidenceRefs: [],
-      appendStages: [{ workflowId: 'analysis', gate: 'none' }] } }))
+  const candidate={taskId:'task-owner',turnId:'turn-accepted',leaseEpoch:1}
+  const frozen=await store.query({kind:'task.plan',taskId:'task-owner'})
+  await assert.rejects(store.command(command('task.owner.candidate',{...candidate,
+    decision:{action:'advance',summary:'legacy append rejected',evidenceRefs:[],appendStages:[{workflowId:'analysis',gate:'none'}]}})),{code:'TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED'})
+  assert.deepEqual(await store.query({kind:'task.plan',taskId:'task-owner'}),frozen)
+  await store.command(command('task.owner.candidate',{...candidate,decision:{action:'advance',summary:'advance existing managed plan',evidenceRefs:[]}}))
   await store.command(command('task.owner.accept', { taskId: 'task-owner', turnId: 'turn-accepted', leaseEpoch: 1 }))
   await store.close(); store = null
   const probe = child(t, `const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
@@ -512,8 +515,8 @@ test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决
   assert.equal((await probe.exited).signal, 'SIGKILL')
   store = await openExecutionStore({ dbPath, instanceId })
   const plan = await store.query({ kind: 'task.plan', taskId: 'task-owner' })
-  assert.equal(plan.stages.length, 2)
-  assert.equal(plan.task.requirementRevision, 2)
+  assert.equal(plan.stages.length, 1)
+  assert.equal(plan.task.requirementRevision, 1)
   let resumedCalls = 0
   const owner = createTaskOwnerController({ ctx: {}, store, artifacts: {},
     controller: { taskPlan: taskId => store.query({ kind: 'task.plan', taskId }) },
@@ -522,7 +525,7 @@ test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决
   assert.deepEqual(await owner.applyPending(), [])
   assert.deepEqual(await owner.applyPending(), [])
   assert.equal(resumedCalls, 1)
-  assert.equal((await store.query({ kind: 'task.plan', taskId: 'task-owner' })).stages.length, 2)
+  assert.equal((await store.query({ kind: 'task.plan', taskId: 'task-owner' })).stages.length, 1)
   assert.deepEqual(await store.query({ kind: 'task.owner.actions.pending', limit: 10 }), [])
   await owner.close()
 })
@@ -1072,4 +1075,43 @@ for(const variant of ['current','history','missing-event','foreign-ref','unappli
   assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages[0].requirementRef,variant==='foreign-ref'?'sha256/foreign.json':'sha256/requirement.json')
   assert.equal((await f.query()).nodes[0].waitReason.reference,'execution_tool_failed')
  }
+})
+
+test('PR final readonly recovery uses native admission, backoff and original node', async t=>{
+ const f=await fixture(t),n=await f.claim();await f.drain(n);await f.store.command(command('node.commit',{...identity(n),inputDigest:d,outcome:'waiting',evidenceRefs:[],waitReason:{kind:'recovery',reference:'ENGINEERING_PR_UNCONFIRMED'}}));const state=await f.query(),args={runId:'run',runRevision:state.run.revision,nodeRunId:n.nodeRunId,generation:n.generation,leaseEpoch:n.leaseEpoch,inputDigest:d,errorCode:'ENGINEERING_PR_UNCONFIRMED'};
+ await rejects(f.store.command(command('run.recovery.admit',{...args,inputDigest:changedDigest})),'RECOVERY_RETRY_NOT_ADMITTED');assert.equal((await f.store.command(command('run.recovery.admit',args))).result.attempt,1);await rejects(f.store.command(command('run.recovery.admit',args)),'RECOVERY_RETRY_DEFERRED');await f.store.command(command('run.recover',{runId:'run'}));const after=await f.query();assert.equal(after.run.status,'queued');assert.equal(after.run.generation,state.run.generation);assert.equal(after.nodes[0].nodeRunId,n.nodeRunId);assert.equal(after.nodes[0].status,'ready');
+});
+for (const mode of ['drop-once', 'late-once', 'drop-all']) test(`read timeout ${mode} keeps worker healthy and bounds retry`, { timeout: 15000 }, async t => {
+  const f = await fixture(t)
+  await f.store.close()
+  const probe = child(t, `
+    const {Worker}=await import('node:worker_threads');const on=Worker.prototype.on;
+    const nativeTimeout=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>nativeTimeout(fn,ms===10000?150:ms,...args);
+    let reads=0;
+    Worker.prototype.on=function(name,fn){return on.call(this,name,name==='message'?m=>{
+      if(m.type==='response'&&m.value?.run?.runId==='run'){
+        reads++;
+        if(${JSON.stringify(mode)}==='drop-all'||reads===1){
+          if(${JSON.stringify(mode)}==='late-once')nativeTimeout(()=>fn(m),450);
+          return;
+        }
+      }
+      fn(m);
+    }:fn)};
+    const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
+    const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});let code,result;
+    try{result=await s.query({kind:'run',runId:'run'})}catch(e){code=e.code}
+    await new Promise(resolve=>nativeTimeout(resolve,500));
+    const healthy=s.healthy,failure=s.failure;
+    const receipt=await s.command({id:'after-read-timeout',kind:'run.stop',args:{runId:'run',reason:'read recovered'}});
+    await s.close();process.send({type:'result',code,runId:result?.run?.runId,reads,healthy,failure,stopped:receipt.result});
+  `, [f.dbPath, f.instanceId])
+  const actual = await probe.message('result')
+  assert.equal(actual.reads, 2)
+  assert.equal(actual.healthy, true)
+  assert.equal(actual.failure, null)
+  if (mode === 'drop-all') assert.equal(actual.code, 'STORE_QUERY_TIMEOUT')
+  else { assert.equal(actual.code, undefined); assert.equal(actual.runId, 'run') }
+  assert.ok(actual.stopped)
+  assert.equal((await probe.exited).code, 0)
 })

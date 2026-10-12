@@ -78,8 +78,8 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: materialReferenceFailure
     ? { code: 'QUERY_ARGUMENT_INVALID', phase: 'execution', message: '本轮Task工件引用被截短；先用materials/source=current读取索引，再复制完整artifactRef，不得猜测SHA。' } : materialSourceFailure
     ? { code: 'QUERY_ARGUMENT_INVALID', phase: 'execution', message: '本轮materials误用source=previous；Task共享材料不按代次区分，请在原会话用source=current读取同一工件。' } : scopeFailure
-    ? { code: 'ENGINEERING_READ_PATH_INVALID', phase: 'execution', message: '原生本轮仓库读取路径被拒绝；需Owner指示使用准入路径和Task共享材料继续。' } : interrupted
-    ? { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留失败工具历史，需Owner核对后受管续行。' }
+    ? { code: 'ENGINEERING_READ_PATH_INVALID', phase: 'execution', message: '原生本轮仓库读取路径被拒绝；原执行会话按Host已提供的准入路径和Task共享材料纠正读取参数。' } : interrupted
+    ? { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留失败工具历史，由Host核对当前控制状态与原授权后受管续行，不由Owner审批工程节点。' }
     : { code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', message: String(end.data.reason.error.message).slice(0, 2000) } }
 }
 
@@ -252,7 +252,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     return agentCtx => {
       const allowed = new Set([...definition.allowedTools, SUBMIT])
       agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${sourceInterpretationInstructions}${definition.allowedTools.includes('engineering_repo_inspect') ? '\n工程需求优先级：当前Task原始request、已读取需求正文及Host锁定的UAT环境决定目标；旧repair计划、项目本地验收说明和默认场景仅是待核实的测试方法，不能替换业务需求或改变UAT。发现冲突时按当前Task需求实现并报告场景不适用，不照错场景改业务。已有明确交办不得因测试说明自行追加真人审批、确认或用户补充；只有真实Host权限结果才能形成授权等待。构建通过或补齐后台隔离不代表业务功能已实现。' : ''}`, complete: true })
-      agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => !['engineering_repo_inspect', 'engineering_apply_edits'].includes(name) && !registry.has(name)) })
+      agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => !['engineering_repo_inspect', 'engineering_apply_edits', 'execution_request_authorization'].includes(name) && !registry.has(name)) })
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。
       agentCtx.tools.guard(exec => {
         if (!allowed.has(exec.name)) { halt(entry, 'execution_tool_not_allowed'); return 'execution_tool_not_allowed' }
@@ -266,6 +266,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (schema) {
           const problems = validateJsonSchemaValue(schema, exec.arguments)
           if (problems.length) {
+            if(exec.name===SUBMIT&&++entry.submissionCorrections>3){halt(entry,'execution_output_correction_limit');return 'execution_output_correction_limit'}
             const feedback = `execution_arguments_invalid: ${problems.join('; ').slice(0, 2000)}`
             entry.correctableCalls.set(exec.token, feedback)
             return feedback
@@ -312,7 +313,8 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
                 entry.failure = { code: error.code ?? 'execution_submission_rejected', tool: SUBMIT, phase: 'output-validation', message: String(error.message).slice(0, 2000) }
                 throw error
               }
-              return { received: false, feedback: error.code === 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' ? '方案引用必须使用输入 plan.ref；成功需引用当前工具真实成功 effectId。已派发编辑后不可退回方案；没有编辑收据时必须先取得 Host 的 no-change 实证，才能空 effectRefs 提交成功。请核对后重新提交。' : error.code === 'GROUP_REPLY_INTERNAL_DETAILS' ? error.message : 'execution_output_needs_correction: 请核对输出合同；证据引用必须原样复制当前工具返回的完整 evidenceRef，包括 tasks/.../ 前缀，不可截短为文件名、使用 sourceRefs 或自行构造引用。修正后重新提交。' }
+              if(++entry.submissionCorrections>3){halt(entry,'execution_output_correction_limit');throw failure('execution_output_correction_limit')}
+              return { received: false, feedback: error.code === 'ENGINEERING_TECHNICAL_EXECUTION_INVALID' ? 'Host自动绑定当前方案和真实编辑效果，无需重复填写方案或效果身份；请在原会话纠正业务输出。成功须有真实编辑回执或Host核验的no-change实证；已派发编辑后不可退回方案，未知效果先对账，不得更换批次重发。' : ['GROUP_REPLY_INTERNAL_DETAILS','LOCAL_ACCEPTANCE_PLAN_INVALID','ENGINEERING_TECHNICAL_PLAN_INVALID'].includes(error.code) ? `${error.code}: ${error.message}` : 'execution_output_needs_correction: 请核对输出合同；证据引用必须原样复制当前工具返回的完整 evidenceRef，包括 tasks/.../ 前缀，不可截短为文件名、使用 sourceRefs 或自行构造引用。修正后重新提交。' }
             }
             if (!await current(entry)) throw failure('execution_binding_stale')
             exec.signal.throwIfAborted()
@@ -352,19 +354,30 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           },
         })
       }
-      if (definition.allowedTools.includes('engineering_apply_edits')) agentCtx.tools.register({
-        name: 'engineering_apply_edits',
-        description: '按已核对的技术方案执行一次受管文件修改批次。expectedHash 必须来自当前文件读取；成功后原样引用返回的 effectId，不得更换批次重发。参数只包含文件修改，禁止传任务或目录身份。',
-        parameters: { type: 'object', properties: {
-          noChange: { type: 'object', properties: { reason: { type: 'string', minLength: 1 }, reviewedPaths: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } } }, required: ['reason', 'reviewedPaths'], additionalProperties: false },
-          changes: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', minLength: 1 }, expectedHash: { oneOf: [{ type: 'string', pattern: '^[a-f0-9]{64}$' }, { type: 'null' }] }, content: { oneOf: [{ type: 'string' }, { type: 'null' }] } }, required: ['path', 'expectedHash', 'content'], additionalProperties: false } },
-          replacements: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', minLength: 1 }, expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' }, from: { type: 'string', minLength: 1 }, to: { type: 'string' } }, required: ['path', 'expectedHash', 'from', 'to'], additionalProperties: false } },
-        }, required: ['changes', 'replacements'], additionalProperties: false },
+      if (definition.allowedTools.includes('execution_request_authorization')) agentCtx.tools.register({
+        name: 'execution_request_authorization', description: 'Initiate the actual business authorization application from this execution session after assessing the original instructions and exact action. This is not a user approval.',
+        parameters: { type: 'object', properties: { reason: { type: 'string', minLength: 1 } }, required: ['reason'], additionalProperties: false },
         output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute(args, exec) {
           if (!await current(entry)) throw failure('execution_binding_stale')
           exec.signal.throwIfAborted()
-          const value = await entry.applyEdits(copy(args), exec.signal)
+          if (typeof entry.requestAuthorization !== 'function') throw failure('execution_authorization_request_not_admitted')
+          return entry.requestAuthorization(args.reason, exec.signal)
+        },
+      })
+      if (definition.allowedTools.includes('engineering_apply_edits')) agentCtx.tools.register({
+        name: 'engineering_apply_edits',
+        description: '按已核对的技术方案执行一次受管文件修改批次。expectedHash 必须来自当前文件读取；同一批次可安全重试；Host 自动绑定真实 effectId，禁止更换已派发的批次。参数只包含文件修改，禁止传任务或目录身份。',
+        parameters: { type: 'object', properties: {
+          noChange: { type: 'object', properties: { reason: { type: 'string', minLength: 1 }, reviewedPaths: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } } }, required: entry.binding.nodeVersion==='11'?[]:['reason', 'reviewedPaths'], additionalProperties: false },
+          changes: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', minLength: 1 }, expectedHash: { oneOf: [{ type: 'string', pattern: '^[a-f0-9]{64}$' }, { type: 'null' }] }, content: { oneOf: [{ type: 'string' }, { type: 'null' }] } }, required: ['path', 'expectedHash', 'content'], additionalProperties: false } },
+          replacements: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', minLength: 1 }, expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' }, from: { type: 'string', minLength: 1 }, to: { type: 'string' } }, required: ['path', 'expectedHash', 'from', 'to'], additionalProperties: false } },
+        }, additionalProperties: false },
+        output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+        async execute(args, exec) {
+          if (!await current(entry)) throw failure('execution_binding_stale')
+          exec.signal.throwIfAborted()
+          const value = await entry.applyEdits(copy({ ...args, changes: args.changes ?? [], replacements: args.replacements ?? [] }), exec.signal)
           if (!await current(entry)) throw failure('execution_binding_stale')
           exec.signal.throwIfAborted()
           return value
@@ -375,7 +388,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         description: '先用 materials 查看本 Task 共享材料与产物索引；materials 始终使用 source=current（包括历史工件），source=previous只用于上一代仓库文件；materials 带 path=artifactRef 可分段读取原工件，历史来源仅作背景不代表当前授权。尚未读取完整材料不能据此断言需求已满足或无需修改。仓库用 list/search/read；read/materials 的 limit 最大16000字符，list/search 最大200条，按 nextOffset 分页。仓库读取返回完整文件 SHA256 用于修改校验。error.code=QUERY_ARGUMENT_INVALID或status=not_found、invalid_source、invalid_limit时按 suggestedCall 纠正后继续，不代表节点失败。',
         parameters: { type: 'object', properties: {
           operation: { type: 'string', enum: ['list', 'search', 'read', 'repair', 'materials'] }, query: { type: 'string' }, path: { type: 'string' },
-          source: { type: 'string', enum: ['current', 'previous'] }, offset: { type: 'integer' }, limit: { type: 'integer' },
+          source: { type: 'string', enum: ['current', 'previous', 'retired'] }, offset: { type: 'integer' }, limit: { type: 'integer' },
         }, required: ['operation'], additionalProperties: false },
         output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute(args, exec) {
@@ -388,7 +401,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, definition, onSessionBound, onResult, validateOutput, classifyOutputError, recoveryContext, applyEdits }) {
+  async function run({ binding, input, definition, onSessionBound, onResult, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
@@ -396,13 +409,14 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || name === SUBMIT)) throw failure('execution_definition_invalid')
       assertSupportedJsonSchema(definition.outputSchema)
       if (definition.allowedTools.includes('engineering_apply_edits') && (typeof applyEdits !== 'function' || registry.has('engineering_apply_edits'))) throw failure('execution_edit_executor_required')
+      if (definition.allowedTools.includes('execution_request_authorization') && (typeof requestAuthorization !== 'function' || registry.has('execution_request_authorization'))) throw failure('execution_authorization_request_not_admitted')
       if (typeof onSessionBound !== 'function' || typeof onResult !== 'function') throw failure('execution_callbacks_required')
       if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function')) throw failure('execution_callbacks_invalid')
       if (entries.has(executionKey(binding)) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), validateOutput, classifyOutputError, applyEdits, cancelled: false, stale: false, attempted: false, accepted: false,
-      correctableCalls: new Map(), steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
+    const entry = { binding, input: copy(input), validateOutput, classifyOutputError, applyEdits, requestAuthorization, cancelled: false, stale: false, attempted: false, accepted: false,
+      correctableCalls: new Map(), submissionCorrections: 0, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })
     entries.set(executionKey(binding), entry); sessions.set(binding.sessionId, entry)
@@ -455,7 +469,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         const currentEnd = session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
         if (!entry.accepted && !entry.haltCode && !entry.failure && entry.interruptedTool
           && currentEnd?.data?.reason?.kind === 'aborted' && currentEnd.data.reason.reason?.kind === 'user')
-          entry.failure = { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；需Owner核对诊断后续行。' }
+          entry.failure = { code: 'EXECUTION_TURN_INTERRUPTED', phase: 'execution', message: '原生当前回合由用户中断；保留诊断，由Host按当前控制状态与原授权判断是否续行。' }
         if (!entry.accepted && !entry.haltCode && !entry.failure) {
           const end = session.snapshotEvents().findLast(event => event.seq > startSeq && event.type === 'turn/end')
           if (end?.data?.reason?.kind === 'error') {

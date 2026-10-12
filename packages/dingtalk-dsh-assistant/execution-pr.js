@@ -99,7 +99,7 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
         if (!await journal(prepared, 'attempt-start') || await journal(prepared, 'send-complete')) throw executionError('PR_JOURNAL_INVALID')
         if (!await journal(prepared, 'send-intent')) return failure.observation
       }
-      if (!preflight && await journal(prepared, 'attempt-start') && !await journal(prepared, 'send-complete') && !await journal(prepared, 'send-intent')) {
+      if (!preflight && !previousPullRequest && await journal(prepared, 'attempt-start') && !await journal(prepared, 'send-complete') && !await journal(prepared, 'send-intent')) {
         return { status: 'failed', phase: 'preflight', mutationAttempted: false, reason: 'PR_PREFLIGHT_NOT_SENT', readAttempts: 1 }
       }
     }
@@ -108,20 +108,24 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
     if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw executionError('PR_READBACK_INVALID')
     const rows = pages.flat()
     if (rows.some(item => !item || !Number.isSafeInteger(item.number) || typeof item.head?.ref !== 'string' || typeof item.base?.ref !== 'string')) throw executionError('PR_READBACK_INVALID')
-    const list = rows.map(item => ({ number: item.number, url: item.html_url, state: item.merged_at ? 'MERGED' : item.state?.toUpperCase(),
+    const list = rows.map(item => ({ draft:item.draft, number: item.number, url: item.html_url, state: item.merged_at ? 'MERGED' : item.state?.toUpperCase(),
       headRefOid: item.head.sha, headRefName: item.head.ref, baseRefName: item.base.ref, body: item.body }))
       .filter(item => item.headRefName === head && (previousPullRequest || item.baseRefName === base))
     if (previousPullRequest) {
       if (list.some(item => item.state === 'OPEN' && item.number !== previousPullRequest.number)) throw executionError('PR_IDENTITY_AMBIGUOUS')
-      const current = await json(['pr', 'view', String(previousPullRequest.number), '--repo', repo, '--json', 'number,url,state,headRefOid,headRefName,baseRefName,body'])
+      const current = await json(['pr', 'view', String(previousPullRequest.number), '--repo', repo, '--json', 'number,url,state,headRefOid,headRefName,baseRefName,body,isDraft'])
       if (current.number !== previousPullRequest.number || current.headRefName !== head
         || typeof current.url !== 'string' || !/^https:\/\//.test(current.url)
         || (!allowHeadChange && current.headRefOid !== prepared.commitId)) throw executionError('PR_PREVIOUS_IDENTITY_CONFLICT')
+      if(operation.getStore()?.requireDraft && current.isDraft!==true) throw executionError('PR_DRAFT_REQUIRED')
       if (current.body?.includes(marker(prepared)) && current.baseRefName === base && ['OPEN', 'MERGED'].includes(current.state)) {
         return { status: 'succeeded', number: current.number, url: current.url, state: current.state, commitId: current.headRefOid, repo, head, base }
       }
       if (current.state !== 'OPEN' || current.baseRefName !== previousPullRequest.base
-        || !current.body?.includes(`<!-- dsh-operation:${previousPullRequest.operationKey} -->`)) throw executionError('PR_PREVIOUS_IDENTITY_CONFLICT')
+        || (previousPullRequest.url ? current.url!==previousPullRequest.url : !current.body?.includes(`<!-- dsh-operation:${previousPullRequest.operationKey} -->`))) throw executionError('PR_PREVIOUS_IDENTITY_CONFLICT')
+      if (!preflight && await journal(prepared, 'attempt-start') && !await journal(prepared, 'send-complete') && !await journal(prepared, 'send-intent')) {
+        return { status: 'failed', phase: 'preflight', mutationAttempted: false, reason: 'PR_PREFLIGHT_NOT_SENT', readAttempts: 1 }
+      }
       return { status: 'unknown', reason: 'pr_retarget_not_observed', previousNumber: current.number }
     }
     const matching = list.filter(item => item.body?.includes(marker(prepared)))
@@ -135,7 +139,8 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
       if (list.some(item => item.state === 'OPEN')) throw executionError('PR_BRANCH_ALREADY_USED')
       return { status: 'unknown', reason: 'pr_not_observed', repo, head, commitId: prepared.commitId }
     }
-    const result = await json(['pr', 'view', String(matching[0].number), '--repo', repo, '--json', 'number,url,state,headRefOid,headRefName,baseRefName,body'])
+    const result = await json(['pr', 'view', String(matching[0].number), '--repo', repo, '--json', 'number,url,state,headRefOid,headRefName,baseRefName,body,isDraft'])
+    if(operation.getStore()?.requireDraft && result.isDraft!==true) throw executionError('PR_DRAFT_REQUIRED')
     if (result.headRefName !== head || result.baseRefName !== base || (!allowHeadChange && result.headRefOid !== prepared.commitId) || !result.body?.includes(marker(prepared))
       || !['OPEN', 'MERGED'].includes(result.state) || !Number.isSafeInteger(result.number) || !/^https:\/\//.test(result.url ?? '')) throw executionError('PR_RESULT_CONFLICT')
     return { status: 'succeeded', number: result.number, url: result.url, state: result.state, commitId: result.headRefOid, repo, head, base }
@@ -154,7 +159,7 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
   async function execute(prepared) {
     validate(prepared)
     if (await journal(prepared, 'send-intent')) {
-      try { return await operation.run({}, () => reconcile(prepared)) }
+      try { return await operation.run({requireDraft:operation.getStore()?.requireDraft}, () => reconcile(prepared)) }
       catch (error) { if (!['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_PERMISSION_DENIED', 'PR_CONNECTION_FAILED', 'PR_CANCELLED'].includes(error.code)) throw error; return { status: 'unknown', phase: 'after-send-intent', reason: error.code } }
     }
     try { await journal(prepared, 'attempt-start', { createdAt: new Date().toISOString() }) }
@@ -182,6 +187,7 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
       }
       throw error
     }
+    if(operation.getStore()?.requireDraft && existing.previousNumber) throw executionError('PR_DRAFT_EXISTING_MUTATION_DENIED')
     const directory = await mkdtemp(join(tmpdir(), 'dsh-pr-')), path = join(directory, 'body.md')
     try {
       await writeFile(path, `${prepared.body}\n\n${marker(prepared)}\n`, { flag: 'wx' })
@@ -193,10 +199,10 @@ export function createGithubPullRequests({ repository, repo, base, head, previou
       }
       let completion
       try { const result = await invoke(command, existing.previousNumber ? ['pr', 'edit', String(existing.previousNumber), '--repo', repo,
-        ...(previousPullRequest ? ['--base', base] : []), '--title', prepared.title, '--body-file', path] : ['pr', 'create', '--repo', repo, '--base', base, '--head', head, '--title', prepared.title, '--body-file', path], repository); completion = { exitCode: result.code } }
+        ...(previousPullRequest ? ['--base', base] : []), '--title', prepared.title, '--body-file', path] : ['pr', 'create', ...(operation.getStore()?.requireDraft?['--draft']:[]), '--repo', repo, '--base', base, '--head', head, '--title', prepared.title, '--body-file', path], repository); completion = { exitCode: result.code } }
       catch (error) { completion = { reason: error.code ?? 'PR_SEND_UNKNOWN' } }
       await journal(prepared, 'send-complete', { completedAt: new Date().toISOString(), ...(completion ?? { returned: true }) })
-      try { return await operation.run({}, () => reconcile(prepared)) }
+      try { return await operation.run({requireDraft:operation.getStore()?.requireDraft}, () => reconcile(prepared)) }
       catch (error) { if (!['PR_READBACK_FAILED', 'PR_READBACK_INVALID', 'PR_PERMISSION_DENIED', 'PR_CONNECTION_FAILED', 'PR_CANCELLED'].includes(error.code)) throw error; return { status: 'unknown', phase: 'after-send-intent', reason: error.code } }
     } finally { await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error }); await rmdir(directory) }
   }

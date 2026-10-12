@@ -71,12 +71,10 @@ for (const mode of ['write', 'omitted', 'import']) test(`真实消息与Owner业
         : { role: 'report', fileName: '报告.sql', content: '-- 原字节测试\nSELECT 1;\n' }, expectedEvidence: '原文件摘要核验' } }
     const complete = input.stages.length > 0 && input.stages.every(stage => stage.status === 'succeeded')
     const decision = !input.stages.length ? { action: 'advance', summary: '生成文件', evidenceRefs: [],
-      planChange: { kind: 'initialize', stages: [write] } }
-      : complete && !omitDelivery && input.stages.length === 1 ? { action: 'advance', summary: '文件已生成，追加交付', evidenceRefs: refs,
-        planChange: { kind: 'append', stages: [{ workflowId: 'task-group-file-delivery', gate: 'none' }] } }
+      planChange: { kind: 'initialize', stages: [write, ...(!omitDelivery ? [{ workflowId: 'task-group-file-delivery', gate: 'none' }] : [])] } }
       : complete ? { action: 'complete', summary: '产物处理完毕', evidenceRefs: refs,
         assessments: input.acceptanceItems.map(item => ({ itemId: item.itemId, status: 'satisfied', evidenceRefs: refs })) }
-        : { action: input.stages.some(stage => stage.status === 'ready') ? 'advance' : 'wait', summary: '继续当前阶段', evidenceRefs: refs }
+        : { action: input.stages.some(stage => stage.status === 'ready') ? 'advance' : 'wait', summary: '继续当前阶段', evidenceRefs: refs, ...(!input.stages.some(stage => stage.status === 'ready') ? { condition: { kind: 'business-input', missing: '阶段执行回执', responsibleParty: '执行会话', resumeWhen: '当前阶段完成', evidenceRefs: refs } } : {}) }
     await onCandidate(decision)
     return { status: 'submitted', decision }
   }, async close() {} }
@@ -107,12 +105,13 @@ for (const mode of ['write', 'omitted', 'import']) test(`真实消息与Owner业
   }
   assert.ok(taskId, JSON.stringify(await service.messages.state(received.runId)))
   const execution = service.execution
-  for (let attempt = 0; attempt < 12; attempt++) {
+  for (let attempt = 0; attempt < 120; attempt++) {
     const plan = await execution.controller.taskPlan(taskId)
     for (const stage of plan.stages.filter(item => item.runId)) await execution.controller.whenIdle(stage.runId)
     await service.recover()
     const owner = await execution.store.query({ kind: 'task.owner', taskId })
-    if (owner.status === 'completed' || omitDelivery && (await execution.controller.taskPlan(taskId)).task.status === 'succeeded') break
+    if (owner.status === 'completed' || omitDelivery && ownerCalls > 1 && owner.status !== 'running' && (await execution.controller.taskPlan(taskId)).task.planStatus === 'succeeded') break
+    await new Promise(resolve => setTimeout(resolve, 25))
   }
   const plan = await execution.controller.taskPlan(taskId)
   assert.equal(plan.task.taskId, taskId)

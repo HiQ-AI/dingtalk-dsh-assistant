@@ -1,4 +1,5 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
+import { isDeepStrictEqual } from 'node:util'
 
 const fail = code => { throw executionError(code) }
 const sha = value => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value)
@@ -58,7 +59,10 @@ export function createReleasePlatform({ targets, clients }) {
       || (target.kind !== 'production-release' && !nonempty(target.woodpecker.cronName))
       || (target.kind === 'production-release' && target.productionTriggerVerified !== true)) fail('RELEASE_PLATFORM_TARGET_INVALID')
     const key = `${target.kind}:${target.repository}:${target.environment}:${target.service}:${target.runbookId}`
-    if (byKey.has(key)) fail('RELEASE_PLATFORM_TARGET_DUPLICATE')
+    if (byKey.has(key)) {
+      if (isDeepStrictEqual(byKey.get(key), target)) continue
+      fail('RELEASE_PLATFORM_TARGET_DUPLICATE')
+    }
     // 严格白名单。不允许把认证材料、任意 HTTP 地址或命令随任务持久化。
     if (Object.keys(target).some(field => !['kind', 'repository', 'environment', 'service', 'runbookId', 'branch', 'woodpecker', 'kubernetes', 'registry', 'entryUrl', 'productionTriggerVerified'].includes(field))
       || Object.keys(target.woodpecker ?? {}).some(field => !['baseUrl', 'repositoryId', 'cronName'].includes(field))

@@ -98,7 +98,9 @@ test('文件投递历史 v1 与新 v2 分别冻结，业务验收变更不改旧
   const h = harness(), options = { files: h.files, messageAdapter: h.adapter }
   const previous = createLegacyTaskGroupFileDeliveryWorkflow(options), current = createTaskGroupFileDeliveryWorkflow(options)
   assert.equal(previous.version, '1'); assert.equal(previous.ownerContract.version, '1')
-  assert.equal(defineExecutionWorkflow(previous).digest, '63292d0c2e3d0e4703cae7477e652b2f7c43b2d0a52c007b1458f4bfae7b6eab')
+  const previousDefinition = defineExecutionWorkflow(previous)
+  assert.equal(previousDefinition.digest, 'f04d36eb92e4ba24da1cc3398ba236e5bd310d36006331e4e050619be543f035')
+  assert.ok(previousDefinition.legacyDigests.includes('63292d0c2e3d0e4703cae7477e652b2f7c43b2d0a52c007b1458f4bfae7b6eab'), '已部署历史摘要仍可恢复')
   assert.equal(current.version, '2'); assert.equal(current.ownerContract.version, '2')
   assert.notEqual(defineExecutionWorkflow(previous).digest, defineExecutionWorkflow(current).digest)
   assert.deepEqual(previous.nodes.map(node => node.version), current.nodes.map(node => node.version))
