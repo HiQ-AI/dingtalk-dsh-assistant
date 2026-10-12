@@ -471,13 +471,13 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
   const profile = join(directory, 'uat-profile.json')
   await writeFile(profile, JSON.stringify({ environment: 'uat', env: { TEST_ACCEPTANCE_PROFILE: 'isolated-test-profile' } }))
-  const expectationFile=join(directory,'approved-round-value.txt')
+  const expectationFile=join(directory,'approved-round-value.txt'),scenarioAudit=join(directory,'round-service-observation.json')
   await writeFile(expectationFile,'one')
   const readInput = "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',async()=>{const input=JSON.parse(s);"
   const command = code => ({ executable: process.execPath, args: ['-e', code] })
   const localAcceptance = { version: '1', sharedDataProfilePath: profile, prepareSteps: [],
     service: { ...command("require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"), args: ['-e', "require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])", '{port}', '127.0.0.1'], readyPath: '/' },
-    scenarios: [{ id: 'value', expected: 'passed', description: '读取候选服务业务值', ...command(readInput + "const businessValue=await(await fetch(input.baseUrl)).text(),expectedValue=require('node:fs').readFileSync(" + JSON.stringify(expectationFile) + ",'utf8');console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,businessValue,expectedValue,actual:businessValue===expectedValue?'passed':'failed'}));});") }],
+    scenarios: [{ id: 'value', expected: 'passed', description: '读取候选服务业务值', ...command(readInput + "const businessValue=await(await fetch(input.baseUrl)).text(),expectedValue=require('node:fs').readFileSync(" + JSON.stringify(expectationFile) + ",'utf8');require('node:fs').writeFileSync(" + JSON.stringify(scenarioAudit) + ",JSON.stringify({businessValue,expectedValue}));console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,businessValue,expectedValue,actual:businessValue===expectedValue?'passed':'failed'}));});") }],
     cleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace}));});"),
     verifyCleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace,empty:true}));});") }
   const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance,taskLocalAcceptance: ['first','second'].map(request=>({scope:{taskId:'task',stageId:null,repositoryId:'repo',uatEnvironment:'uat1',requestDigest:executionDigest({request,acceptanceCriteria:['候选服务返回本轮修改值']})},localAcceptance,scenarioCoverage:[{scenarioId:'value',criteria:['候选服务返回本轮修改值']}]})),acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
@@ -504,7 +504,7 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   const state=await controller.whenIdle(prepared.runId)
   assert.equal(state.run.status,'succeeded',JSON.stringify(await controller.state(prepared.runId)));assert.equal(state.run.generation,2)
   const directoryOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'prepare-workspace').outputRef)
-  assert.equal(directoryOutput.workspace.kind, 'independent-git-repository')
+  assert.equal((await (await import('node:fs/promises')).stat(join(directoryOutput.workspace.directory,'.git'))).isDirectory(),true)
   assert.ok(directoryOutput.workspace.directory.startsWith(root))
   const localOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'finalize-local-acceptance').outputRef)
   assert.equal(localOutput.localAcceptance.passed, true)
@@ -512,13 +512,13 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   assert.deepEqual(localOutput.localAcceptance.cleanup, { dataCleaned: true, processStopped: true })
   assert.equal(localOutput.localPrepared.resourceKey, 'external:local-acceptance:shared-uat')
   assert.equal(localOutput.localAcceptance.checks[0].actual, 'passed')
-  const finalAcceptanceLog=JSON.stringify(localOutput.localAcceptance.checks[0])
-  assert.match(finalAcceptanceLog,/two/)
+  assert.deepEqual(JSON.parse(await readFile(scenarioAudit,'utf8')),{businessValue:'two',expectedValue:'two'})
   const planOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'inspect-and-propose').outputRef)
   assert.match(planOutput.document.markdown, /value.txt/)
   assert.equal(state.nodes.some(node => node.nodeId === 'validate-proposal'), false)
   const startOutput = await artifacts.read(state.nodes.find(node => node.nodeId === 'prepare-generation').outputRef)
-  assert.equal(startOutput.startingPoint.mode, 'continue')
+  assert.equal(startOutput.startingPoint.mode, 'reuse-planned')
+  assert.equal(startOutput.requirement.expectedRemoteSha,firstCommit)
   assert.equal(startOutput.startingPoint.repository, 'test/repo')
   const result=await artifacts.read(state.nodes.at(-1).outputRef),pr=JSON.parse(await readFile(stateFile,'utf8'))
   assert.notEqual(result.commitId,firstCommit);assert.equal(await git(remote,'rev-parse',result.commitId+'^'),firstCommit)
@@ -1034,9 +1034,16 @@ for (const upgradedRunner of [false, true]) test('固定工程重启后复用同
   if(upgradedRunner){
     const {copyFile,symlink}=await import('node:fs/promises'),{fileURLToPath,pathToFileURL}=await import('node:url')
     const copy=join(directory,'upgraded-plugin'),original=fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/',import.meta.url));await mkdir(copy)
-    for(const name of await readdir(original))if(name.endsWith('.js')||name==='package.json')await copyFile(join(original,name),join(copy,name))
+    for(const name of await readdir(original))if(name.endsWith('.js')||name.endsWith('.ps1')||name==='package.json')await copyFile(join(original,name),join(copy,name))
     await symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),join(copy,'node_modules'),'junction')
-    const runnerFile=join(copy,'execution-local-acceptance.js');await writeFile(runnerFile,(await readFile(runnerFile,'utf8'))+'\n// supported runner implementation upgrade\n')
+    const runnerFile=join(copy,'execution-inline-acceptance.js'),runnerSource=await readFile(runnerFile,'utf8')
+    const executeStart='async execute(prepared, { signal } = {}) {'
+    assert.equal(runnerSource.split(executeStart).length,2)
+    await writeFile(runnerFile,runnerSource.replace(executeStart,executeStart+'\n      signal?.throwIfAborted()'))
+    const {createInlineWorktreeAcceptanceRunner:oldRunnerFactory}=await import('../packages/dingtalk-dsh-assistant/execution-inline-acceptance.js')
+    const {createInlineWorktreeAcceptanceRunner:newRunnerFactory}=await import(pathToFileURL(runnerFile).href)
+    const identityOptions={root:join(root,'local-acceptance'),config:localAcceptance,tempRoot:join(root,'tmp')}
+    assert.notEqual(newRunnerFactory(identityOptions).identity,oldRunnerFactory(identityOptions).identity)
     restoredFactory=(await import(pathToFileURL(join(copy,'workflow-engineering.js')).href)).createEngineeringRegistry
   }
   registry=restoredFactory(registryOptions)
@@ -1045,8 +1052,13 @@ for (const upgradedRunner of [false, true]) test('固定工程重启后复用同
   if(upgradedRunner){
     assert.equal(defineExecutionWorkflow(workflow).digest,before.run.workflowDigest)
     const accepted=await artifacts.read(before.nodes.find(n=>n.nodeId==='run-local-acceptance').outputRef)
+    const effectsBefore=await store.query({kind:'effect.list',runId:prepared.runId})
     await assert.rejects(registry.deliveryOptions.externalAdapter.reconcile(accepted.localPrepared),{code:'LOCAL_ACCEPTANCE_PREPARED_MISMATCH'})
     assert.equal(await readFile(join(directory,'check-count'),'utf8'),countBefore)
+    const unchanged=await store.query({kind:'run',runId:prepared.runId})
+    assert.deepEqual(unchanged.nodes.find(node=>node.nodeId==='verify-candidate'),verifiedNode)
+    assert.deepEqual(await artifacts.read(verifiedNode.outputRef),verified)
+    assert.deepEqual(await store.query({kind:'effect.list',runId:prepared.runId}),effectsBefore)
     return
   }
   controller=createExecutionController({store,artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows})
