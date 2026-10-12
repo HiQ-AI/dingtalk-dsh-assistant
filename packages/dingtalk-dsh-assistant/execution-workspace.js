@@ -182,7 +182,19 @@ async function createManagedWorkspacesImpl({ root, sourceRepository, targetCommi
       await noLinks(dirname(prepared.directory))
       for (const name of ['metadata.json', 'initialized.json']) {
         const path = join(dirname(prepared.directory), name); await noLinks(path)
-        if (canonicalExecutionJson(JSON.parse(await readFile(path, 'utf8'))) !== canonicalExecutionJson(prepared)) fail('WORKSPACE_IDENTITY_CONFLICT')
+        const stored=JSON.parse(await readFile(path,'utf8'))
+        if (canonicalExecutionJson(stored) !== canonicalExecutionJson(prepared)) {
+          // Both exclusive records prove a different completed preparation owns this address.
+          // execute cannot have mutated it: mkdir(container) fails before any write. Do not adopt its tree.
+          await noLinks(join(dirname(prepared.directory),'initialized.json'))
+          const initialized=JSON.parse(await readFile(join(dirname(prepared.directory),'initialized.json'),'utf8'))
+          const {digest,...body}=stored
+          if(name==='metadata.json' && digest===executionDigest(body) && canonicalExecutionJson(stored)===canonicalExecutionJson(initialized)
+            && stored.action==='workspace' && [1,2].includes(stored.version)
+            && ['root','sourceRepository','runId','generation','directory'].every(key=>stored[key]===prepared[key]))
+            return {status:'failed',phase:'preflight',mutationAttempted:false,reason:'WORKSPACE_PREPARATION_ADDRESS_COLLISION',directory:prepared.directory,preparedDigest:prepared.digest,existingPreparedDigest:digest}
+          fail('WORKSPACE_IDENTITY_CONFLICT')
+        }
       }
       await admit(prepared.directory)
       if (await text(prepared.directory, ['rev-parse', 'HEAD']) !== prepared.baseCommit || await text(prepared.directory, ['rev-parse', 'HEAD^{tree}']) !== prepared.baseTree) fail('WORKSPACE_BASE_CONFLICT')
@@ -227,3 +239,52 @@ async function createManagedWorkspacesImpl({ root, sourceRepository, targetCommi
 }
 
 export function createManagedWorkspaces(options, context = {}) { return gitOperation.run(context, () => createManagedWorkspacesImpl(options)) }
+
+/** New Tasks bind one independent repository per Task/repository, regardless of Run/generation. */
+export async function createTaskRemoteWorkspace({root,remote,taskId,repositoryId,sourceBranch,sourceCommit,developmentBranch,targetBranch,targetCommit}) {
+  if(!isAbsolute(root??'')||!remote||typeof remote!=='string'||remote.startsWith('-')||/[\0\r\n]/.test(remote)||!taskId||!repositoryId||!oid(sourceCommit)||!oid(targetCommit))fail('WORKSPACE_SCOPE_INVALID')
+  await noLinks(root);root=await realpath(root)
+  const container=join(root,'task-'+executionDigest([taskId,repositoryId]).slice(0,32)),directory=join(container,'repository')
+  const scope={version:3,action:'workspace',root,directory,remote,taskId,repositoryId,sourceBranch,sourceCommit,developmentBranch,targetBranch,targetCommit,conflictPaths:[]}
+  const bindingPath=value=>join(container,'bindings',value.digest+'.json')
+  function validate(value){
+    const {digest,...body}=value??{}
+    if(digest!==executionDigest(body)||Object.entries(scope).some(([k,v])=>canonicalExecutionJson(body[k])!==canonicalExecutionJson(v))||typeof body.runId!=='string'||!body.runId||!Number.isSafeInteger(body.generation)||body.generation<1||!oid(body.baseCommit)||!/^[a-f0-9]{64}$/.test(body.requirementDigest??''))fail('WORKSPACE_PREPARED_INVALID')
+  }
+  const prepare=async({runId,generation,requirementDigest,baseCommit})=>{const body={...scope,runId,generation,requirementDigest,baseCommit};const prepared={...body,digest:executionDigest(body)};validate(prepared);return prepared}
+  async function inspect(value){
+    await noLinks(directory);await admit(directory)
+    const metadata=JSON.parse(await readFile(join(container,'repository.json'),'utf8'))
+    if(executionDigest(metadata)!==executionDigest({taskId,repositoryId,remote,developmentBranch}))fail('WORKSPACE_IDENTITY_CONFLICT')
+    const checkoutCommit=await text(directory,['rev-parse','HEAD']),branch=await text(directory,['symbolic-ref','--short','HEAD'])
+    if(checkoutCommit!==value.baseCommit||branch!==developmentBranch)fail('WORKSPACE_BASE_CONFLICT')
+    return {status:'succeeded',directory,baseCommit:checkoutCommit,sourceCommit:checkoutCommit,baseTree:await text(directory,['rev-parse','HEAD^{tree}']),developmentBranch:branch,sourceBranch,targetBranch,remote,remoteSourceCommit:sourceCommit,sourceMode:'remote-source-only',preparedDigest:value.digest,conflictPaths:[]}
+  }
+  async function reconcile(value){
+    validate(value)
+    try{await noLinks(bindingPath(value));const stored=JSON.parse(await readFile(bindingPath(value),'utf8'));if(executionDigest(stored)!==executionDigest(value))fail('WORKSPACE_IDENTITY_CONFLICT');return inspect(value)}
+    catch(error){if(error.code==='ENOENT')return {status:'unknown',directory,reason:'workspace_binding_incomplete'};throw error}
+  }
+  async function execute(value){
+    validate(value);await noLinks(root)
+    let existing=false;try{await lstat(directory);existing=true}catch(error){if(error.code!=='ENOENT')throw error}
+    if(existing){await inspect(value)}else{
+      await mkdir(container);await writeExclusive(join(container,'repository.json'),{taskId,repositoryId,remote,developmentBranch});await mkdir(directory)
+      await git(directory,['init','--template=']);await git(directory,['config','core.longpaths','true'])
+      for(const commit of new Set([sourceCommit,value.baseCommit,targetCommit]))await git(directory,['fetch','--no-tags','--no-write-fetch-head','--',remote,commit])
+      // A target branch participates in purity evidence only; never read-tree/merge it into development.
+      const ancestor=await text(directory,['merge-base',sourceCommit,value.baseCommit])
+      const targetOnly=new Set((await text(directory,['rev-list',ancestor+'..'+targetCommit])).split('\n').filter(Boolean))
+      const development=(await text(directory,['rev-list','--parents',ancestor+'..'+value.baseCommit])).split('\n').filter(Boolean)
+      if(development.some(line=>{const [, ...parents]=line.split(' ');return parents.length>1&&parents.some(parent=>targetOnly.has(parent))}))fail('ENGINEERING_DEVELOPMENT_BRANCH_REBUILD_REQUIRED')
+      const checkout=await manifest(directory,value.baseCommit)
+      await git(directory,['-c','core.autocrlf=false','checkout','-b',developmentBranch,value.baseCommit])
+      if(canonicalExecutionJson((await checkedPaths(directory)).sort())!==canonicalExecutionJson(checkout.files.map(file=>file.path).sort()))fail('WORKSPACE_CHECKOUT_MISMATCH')
+      for(const file of checkout.files){const path=join(directory,file.path);await noLinks(path);const bytes=await readFile(path);if(bytes.length!==file.size||createHash('sha1').update('blob '+bytes.length+'\0').update(bytes).digest('hex')!==file.oid)fail('WORKSPACE_CHECKOUT_MISMATCH')}
+    }
+    await mkdir(join(container,'bindings'),{recursive:true})
+    try{await writeExclusive(bindingPath(value),value)}catch(error){if(error.code!=='EEXIST')throw error}
+    return reconcile(value)
+  }
+  return {directory,...Object.fromEntries(Object.entries({prepare,execute,reconcile}).map(([name,operation])=>[name,(value,context={})=>gitOperation.run(context,()=>operation(value))]))}
+}

@@ -1073,3 +1073,42 @@ for(const variant of ['current','history','missing-event','foreign-ref','unappli
   assert.equal((await f.query()).nodes[0].waitReason.reference,'execution_tool_failed')
  }
 })
+
+test('PR final readonly recovery uses native admission, backoff and original node', async t=>{
+ const f=await fixture(t),n=await f.claim();await f.drain(n);await f.store.command(command('node.commit',{...identity(n),inputDigest:d,outcome:'waiting',evidenceRefs:[],waitReason:{kind:'recovery',reference:'ENGINEERING_PR_UNCONFIRMED'}}));const state=await f.query(),args={runId:'run',runRevision:state.run.revision,nodeRunId:n.nodeRunId,generation:n.generation,leaseEpoch:n.leaseEpoch,inputDigest:d,errorCode:'ENGINEERING_PR_UNCONFIRMED'};
+ await rejects(f.store.command(command('run.recovery.admit',{...args,inputDigest:changedDigest})),'RECOVERY_RETRY_NOT_ADMITTED');assert.equal((await f.store.command(command('run.recovery.admit',args))).result.attempt,1);await rejects(f.store.command(command('run.recovery.admit',args)),'RECOVERY_RETRY_DEFERRED');await f.store.command(command('run.recover',{runId:'run'}));const after=await f.query();assert.equal(after.run.status,'queued');assert.equal(after.run.generation,state.run.generation);assert.equal(after.nodes[0].nodeRunId,n.nodeRunId);assert.equal(after.nodes[0].status,'ready');
+});
+for (const mode of ['drop-once', 'late-once', 'drop-all']) test(`read timeout ${mode} keeps worker healthy and bounds retry`, { timeout: 15000 }, async t => {
+  const f = await fixture(t)
+  await f.store.close()
+  const probe = child(t, `
+    const {Worker}=await import('node:worker_threads');const on=Worker.prototype.on;
+    const nativeTimeout=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>nativeTimeout(fn,ms===10000?150:ms,...args);
+    let reads=0;
+    Worker.prototype.on=function(name,fn){return on.call(this,name,name==='message'?m=>{
+      if(m.type==='response'&&m.value?.run?.runId==='run'){
+        reads++;
+        if(${JSON.stringify(mode)}==='drop-all'||reads===1){
+          if(${JSON.stringify(mode)}==='late-once')nativeTimeout(()=>fn(m),450);
+          return;
+        }
+      }
+      fn(m);
+    }:fn)};
+    const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
+    const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});let code,result;
+    try{result=await s.query({kind:'run',runId:'run'})}catch(e){code=e.code}
+    await new Promise(resolve=>nativeTimeout(resolve,500));
+    const healthy=s.healthy,failure=s.failure;
+    const receipt=await s.command({id:'after-read-timeout',kind:'run.stop',args:{runId:'run',reason:'read recovered'}});
+    await s.close();process.send({type:'result',code,runId:result?.run?.runId,reads,healthy,failure,stopped:receipt.result});
+  `, [f.dbPath, f.instanceId])
+  const actual = await probe.message('result')
+  assert.equal(actual.reads, 2)
+  assert.equal(actual.healthy, true)
+  assert.equal(actual.failure, null)
+  if (mode === 'drop-all') assert.equal(actual.code, 'STORE_QUERY_TIMEOUT')
+  else { assert.equal(actual.code, undefined); assert.equal(actual.runId, 'run') }
+  assert.ok(actual.stopped)
+  assert.equal((await probe.exited).code, 0)
+})

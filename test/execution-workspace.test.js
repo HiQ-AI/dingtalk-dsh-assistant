@@ -213,3 +213,15 @@ test('受管工作区完整提取超过16MiB的已授权基线文件，取消仍
   const candidate=await freezeCandidate({repository:prepared.directory,baseCommit,generation:1,requirementDigest:f.input.requirementDigest})
   assert.deepEqual(await(await readCandidate(candidate)).readFile('large.bin'),bytes)
 })
+
+test('reset address collision settles a proven different preparation without adopting or writing old tree',async()=>{
+ const f=await setup(),prepared=await f.adapter.prepare(f.input);await f.adapter.execute(prepared)
+ const oldMetadata=await readFile(join(dirname(prepared.directory),'metadata.json')),oldIndex=await readFile(join(prepared.directory,'.git/index'))
+ const next=await f.adapter.prepare({...f.input,requirementDigest:'b'.repeat(64)})
+ const result=await f.adapter.reconcile(next)
+ assert.equal(result.status,'failed');assert.equal(result.mutationAttempted,false);assert.equal(result.reason,'WORKSPACE_PREPARATION_ADDRESS_COLLISION');assert.equal(result.existingPreparedDigest,prepared.digest)
+ assert.deepEqual(await readFile(join(dirname(prepared.directory),'metadata.json')),oldMetadata);assert.deepEqual(await readFile(join(prepared.directory,'.git/index')),oldIndex)
+ assert.equal((await f.adapter.reconcile(prepared)).status,'succeeded')
+ await writeFile(join(dirname(prepared.directory),'initialized.json'),'{}')
+ await assert.rejects(f.adapter.reconcile(next),{code:'WORKSPACE_IDENTITY_CONFLICT'})
+})

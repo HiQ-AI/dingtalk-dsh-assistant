@@ -210,14 +210,15 @@ export function createLocalAcceptanceRunner({ root, config }) {
   function paths(prepared) {
     if (!prepared || !/^[a-f0-9]{64}$/.test(prepared.identity ?? '')) fail('PREPARED_INVALID')
     const control = join(roots, prepared.identity)
-    return { control, directory: join(control, 'candidate'), preparedPath: join(control, 'prepared.json'), receiptPath: join(control, 'receipt.json') }
+    if (prepared.snapshotIdentity !== undefined && !/^[a-f0-9]{64}$/.test(prepared.snapshotIdentity)) fail('PREPARED_INVALID')
+    return { control, directory: join(roots, prepared.snapshotIdentity ?? prepared.identity, 'candidate'), preparedPath: join(control, 'prepared.json'), receiptPath: join(control, 'receipt.json') }
   }
-  async function trustedPrepared(prepared) {
+  async function trustedPrepared(prepared, requireCurrent = true) {
     const location = paths(prepared)
     await checkedDirectory(location.control)
     const stored = await json(location.preparedPath)
     const supplied = Object.fromEntries(Object.keys(stored).map(key => [key, prepared[key]]))
-    if (executionDigest(stored) !== executionDigest(supplied) || stored.directory !== location.directory || stored.runnerIdentity !== identity) fail('PREPARED_MISMATCH')
+    if (executionDigest(stored) !== executionDigest(supplied) || stored.directory !== location.directory || (requireCurrent && stored.runnerIdentity !== identity)) fail('PREPARED_MISMATCH')
     return location
   }
   async function profile() {
@@ -275,6 +276,24 @@ export function createLocalAcceptanceRunner({ root, config }) {
       await save(preparedPath, prepared)
       return prepared
     },
+    async retryPrepared(original, { attemptKey } = {}) {
+      if (!text(attemptKey)) fail('RETRY_CONTEXT_INVALID')
+      const previousLocation = await trustedPrepared(original, false), stored = await json(previousLocation.preparedPath)
+      const receipt = await json(previousLocation.receiptPath)
+      if (receipt.identity !== stored.identity || receipt.candidateDigest !== stored.candidateDigest || receipt.planDigest !== stored.planDigest
+        || receipt.passed !== false || receipt.cleanup?.mode !== 'read-only' || receipt.cleanup.createdResources !== 0
+        || receipt.cleanup.dataCleaned !== true || receipt.cleanup.processStopped !== true || receipt.executionDrained === false) fail('RETRY_NOT_CLEAN')
+      await verifySourceManifest(stored)
+      if (executionDigest(await profile()) !== stored.profileDigest) fail('DATA_PROFILE_CHANGED')
+      const retryIdentity = executionDigest({ runner: identity, previousIdentity:stored.identity,attemptKey })
+      const prepared = {...stored,runnerIdentity:identity,identity:retryIdentity,namespace:`acceptance-${retryIdentity.slice(0,32)}`,snapshotIdentity:stored.snapshotIdentity ?? stored.identity}
+      const location = paths(prepared);await privateDirectory(location.control)
+      const prior = await optionalJson(location.preparedPath)
+      if (prior) { if (executionDigest(prior)!==executionDigest(prepared)) fail('PREPARED_MISMATCH');return prior }
+      await save(join(location.control,'snapshot-files.json'),await json(join(previousLocation.control,'snapshot-files.json')))
+      await save(join(location.control,'retry-from.json'),{previousIdentity:stored.identity,attemptKey,candidateDigest:stored.candidateDigest,planDigest:stored.planDigest})
+      await save(location.preparedPath,prepared);return prepared
+    },
     async execute(prepared, { signal } = {}) {
       prepared = structuredClone(prepared)
       const { control, receiptPath } = await trustedPrepared(prepared)
@@ -285,13 +304,7 @@ export function createLocalAcceptanceRunner({ root, config }) {
       }
       const reservationPath = join(control, 'execution-reserved.json')
       try { await lstat(reservationPath); throw unknownExecution() } catch (error) { if (error.code !== 'ENOENT') throw error }
-      const manifest = await json(join(control, 'snapshot-files.json'))
-      if (executionDigest(manifest) !== prepared.manifestDigest) fail('CANDIDATE_MISMATCH')
-      if (executionDigest(await snapshotFiles(prepared.directory)) !== executionDigest(manifest.map(file => file.path).sort())) fail('CANDIDATE_MISMATCH')
-      for (const file of manifest) {
-        const path = join(prepared.directory, file.path)
-        if (canonical(await realpath(path)) !== canonical(path) || (await lstat(path)).isSymbolicLink() || hash(await readFile(path)) !== file.hash) fail('CANDIDATE_MISMATCH')
-      }
+      await verifySourceManifest(prepared)
       for (const companion of companions) await checkCompanionArtifact(companion)
       // 预约先于一切共享库写入。进程崩溃后不能靠重试重新执行有副作用的用例。
       try { await writeFile(reservationPath, JSON.stringify({ identity: prepared.identity, startedAt: new Date().toISOString() }), { flag: 'wx', mode: 0o600 }) }

@@ -96,8 +96,8 @@ export const dataChangeProposalRepairPolicy = Object.freeze({
       ...(validationSource ? { validationSource } : {}),
       ...(validationFailure ? { validationFailure } : {}),
       instruction: validationSource
-        ? '当前Host已对原候选完成只读准备校验，附带新的受信校验事实。读取原诊断与候选后确认本次精确SQL，再提交repairCurrentStage；不需要重复查询已有目录事实，后续仍须本次独立真人审批。'
-        : '候选尚未产生外部效果。先读取失败候选和校验错误，查询当前目标的受信结构资料，再用不同于上次失败的具体修正策略提交repairCurrentStage；不得原样重试空SQL，不得替换既有工单或批准。',
+        ? '当前Host已对原候选完成只读准备校验，附带新的受信校验事实。原任务执行会话读取原诊断与候选后确认本次精确SQL，按现有task_execution_control接管当前节点并提交真实产出；不需要重复查询已有目录事实，后续仍须本次独立真人审批。'
+        : '候选尚未产生外部效果。原任务执行会话先读取失败候选和校验错误，查询当前目标的受信结构资料，使用不同于上次失败的具体修正策略，按现有task_execution_control重试或接管当前节点；接管后须提交真实产出，不得原样重试空SQL，不得替换既有工单或批准。',
       waitingNodes: waiting.map(node => ({ nodeId: node.nodeId, reason: node.waitReason?.reference, drained: node.drained })),
       evidenceRefs: [...new Set([...waiting.flatMap(node => node.evidenceRefs ?? []), ...(proposal?.outputRef ? [proposal.outputRef] : [])])] }
   },

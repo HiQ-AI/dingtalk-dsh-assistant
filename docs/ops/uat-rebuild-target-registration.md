@@ -1,0 +1,5 @@
+# Formal UAT rebuild target registration
+
+`ReleaseTargetsProposal` accepts existing platform types `uat-deployment` and `uat-rebuild` with the same target/policy shape. Rebuild registration preserves profile SHA256 CAS, repository admission, nonempty scenario policy, exact-entry conflict checks, production/credential rejection and unrelated-config protection. Check mode never calls platform clients or writes the profile. Apply remains routed through `scripts/deploy-local.ps1` during drained maintenance.
+
+For SG22, register a distinct frontend UAT3 rebuild target using the existing deployment target repository, environment, service, branch, Woodpecker, Kubernetes, registry and entry URL. Only id, kind and runbookId differ. Registration neither dispatches a build nor accepts a failed candidate: the existing rebuild workflow still verifies terminal failure, exact candidate and current runtime before dispatch.

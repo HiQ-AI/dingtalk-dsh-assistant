@@ -1,14 +1,18 @@
-import { proveEngineeringNoAdditionalChange } from './task-workflow.js'
+import { authorizationTool, isAuthorizationSession } from './execution-authorization-session.js'
+import {createHash} from 'node:crypto'
+import {readFile} from 'node:fs/promises'
+import { inspectExecutionInputLineage, inspectLocalAcceptanceCorrection, executionNodeContractDigest } from './execution-input-lineage.js'
+import { normalizeEngineeringAcceptancePlan, normalizeWorktreeAcceptancePlan, proveEngineeringNoAdditionalChange } from './task-workflow.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
-import { canonicalExecutionJson, executionDigest, executionError } from './execution-artifacts.js'
+import { canonicalExecutionJson, executionDigest, executionError, parseArtifactReference } from './execution-artifacts.js'
 import { validateWorkflowRepairAdmission } from './task-workflow-contracts.js'
 import { classifyExecutionFailure } from './execution-recovery-policy.js'
 import { withVerificationProcessJournal } from './execution-check-job.js'
 
-const isEngineeringEditAgent = (definition, node) => definition.version === '19' && definition.id.startsWith('task-engineering-')
-  && node.id === 'apply-changes' && node.version === '7' && node.executor === 'agent'
+const isEngineeringEditAgent = (definition, node) => ['19','20','21','22','23','24','25'].includes(definition.version) && definition.id.startsWith('task-engineering-')
+  && node.id === 'apply-changes' && node.version === (['24','25'].includes(definition.version) ? '11' : definition.version === '23' ? '10' : definition.version === '22' ? '9' : ['20','21'].includes(definition.version) ? '8' : '7') && node.executor === 'agent'
   && node.allowedEffects?.length === 2 && node.allowedEffects.includes('read') && node.allowedEffects.includes('workspace.edit')
   && node.allowedTools?.length === 2 && node.allowedTools.includes('engineering_repo_inspect') && node.allowedTools.includes('engineering_apply_edits')
   && typeof node.execute === 'function'
@@ -76,12 +80,16 @@ export function defineExecutionWorkflow(definition) {
       || node.inputDependencies.some(id => !ids.has(id)))) throw executionError('NODE_DEPENDENCY_INVALID')
     ids.add(node.id)
     if (!['code', 'agent'].includes(node.executor)) throw executionError('EXECUTOR_NOT_ADMITTED')
+    if (node.authorizationNode !== undefined && (['task-engineering', 'task-uat-deployment'].includes(definition.id)
+      || node.authorizationNode !== true || !isAuthorizationSession(node)
+      || !node.allowedEffects?.includes('external.operation'))) throw executionError('AUTHORIZATION_NODE_INVALID')
     if (node.drainPolicy !== undefined && (node.drainPolicy !== 'external-process' || node.executor !== 'code')) throw executionError('NODE_DRAIN_POLICY_INVALID')
     if (!Array.isArray(node.allowedEffects) || !node.allowedEffects.length || node.allowedEffects.some(e => !['pure', 'read', 'git.commit', 'git.push', 'github.pr', 'workspace.prepare', 'workspace.edit', 'external.operation', 'file.write', 'message.send'].includes(e))
-      || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)) && !isEngineeringEditAgent(definition, node))) throw executionError('EFFECT_NOT_ADMITTED')
+      || (node.executor === 'agent' && node.allowedEffects.some(e => !['pure', 'read'].includes(e)) && !isEngineeringEditAgent(definition, node) && !isAuthorizationSession(node))) throw executionError('EFFECT_NOT_ADMITTED')
     if (typeof node.mapInput !== 'function') throw executionError('INPUT_MAPPER_REQUIRED')
     if (node.allowInputContinuation !== undefined && (node.allowInputContinuation !== true || node.executor !== 'agent' || typeof node.admitOutput !== 'function')) throw executionError('NODE_CONTINUATION_INVALID')
     if (node.admitOutput !== undefined && typeof node.admitOutput !== 'function') throw executionError('NODE_ADMISSION_INVALID')
+    if (node.rebindOutput !== undefined && (typeof node.rebindOutput !== 'function' || node.executor !== 'agent' || node.id !== 'inspect-and-propose')) throw executionError('NODE_REBIND_INVALID')
     if (['validateOutput', 'classifyOutputError'].some(key => node[key] !== undefined && typeof node[key] !== 'function')) throw executionError('NODE_ADMISSION_INVALID')
     if (node.executor === 'code' && typeof node.execute !== 'function') throw executionError('CODE_EXECUTOR_REQUIRED')
     if (node.executor === 'agent' && (![node.provider, node.model, node.prompt].every(v => typeof v === 'string' && v.length) || !Array.isArray(node.allowedTools))) throw executionError('AGENT_DEFINITION_INVALID')
@@ -97,11 +105,13 @@ export function defineExecutionWorkflow(definition) {
         .map(key => [key, ownerContract[key] ? normalizeSource(ownerContract[key].toString()) : null])) } } : {}),
     nodes: nodes.map(n => ({
     id: n.id, version: n.version, executor: n.executor, allowedEffects: n.allowedEffects,
+    ...(n.authorizationNode ? { authorizationNode: true, authorizationExecute: normalizeSource(n.authorizationExecute.toString()) } : {}),
     ...(historicalLimits ? { maxSteps: n.maxSteps ?? 32, timeoutMs: n.timeoutMs ?? 120000 } : {}),
     inputSchema: n.inputSchema, outputSchema: n.outputSchema, mapper: normalizeSource(n.mapInput.toString()),
     implementation: n.execute ? normalizeSource(n.execute.toString()) : null, provider: n.provider ?? null, model: n.model ?? null,
     ...(n.reasoningEffort === undefined ? {} : { reasoningEffort: n.reasoningEffort }),
     ...(n.drainPolicy === undefined ? {} : { drainPolicy: n.drainPolicy }),
+    ...(n.rebindOutput ? { rebindOutput: normalizeSource(n.rebindOutput.toString()) } : {}),
     ...(n.admitOutput ? { admitOutput: normalizeSource(n.admitOutput.toString()), allowInputContinuation: n.allowInputContinuation === true } : {}),
     ...(n.validateOutput ? { validateOutput: normalizeSource(n.validateOutput.toString()), classifyOutputError: n.classifyOutputError ? normalizeSource(n.classifyOutputError.toString()) : null } : {}),
     prompt: n.prompt ?? null, allowedTools: n.allowedTools ?? [], rulesDigest: n.rulesDigest ?? null,
@@ -129,7 +139,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       throw executionError('DUPLICATE_WORKFLOW')
     }
     if (!delivery && definition.nodes.some(node => node.allowedEffects.some(e => !['pure', 'read'].includes(e)))) throw executionError('DELIVERY_ADAPTER_REQUIRED')
-    for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => name === 'engineering_apply_edits' ? !isEngineeringEditAgent(definition, node) : !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
+    for (const node of definition.nodes) if ((node.allowedTools ?? []).some(name => name === authorizationTool ? !isAuthorizationSession(node) : name === 'engineering_apply_edits' ? !isEngineeringEditAgent(definition, node) : !readTools.includes(name))) throw executionError('TOOL_NOT_ADMITTED')
     if (!historical) definitions.set(definition.id, definition)
     for (const digest of [definition.digest, ...definition.legacyDigests]) byDigest.set(digest, definition)
     return definition
@@ -145,6 +155,30 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
     return run.workflowDigest === definition.digest ? definition : { ...definition, digest: run.workflowDigest }
   }
+  const resolveLineageDefinition = record => {
+    try { return definitionOf({workflowId:record.workflowId,workflowDigest:record.digest}) } catch { return null }
+  }
+  async function retainedSemanticEvidence(state, previous, next, retained) {
+    const proof=[]
+    for(const node of retained){
+      const before=previous.nodes[node.position],after=next.nodes[node.position]
+      if(!before||!after||executionNodeContractDigest(before)!==executionNodeContractDigest(after))throw executionError('WORKFLOW_RETAINED_CONTRACT_CHANGED')
+      const input=await artifacts.read(node.inputRef)
+      const lineage=await inspectExecutionInputLineage({store,artifacts,run:state.run,node,input,definition:previous,resolveDefinition:resolveLineageDefinition})
+      if(!lineage.trusted || input.requirementRef!==state.run.requirementRef)throw executionError('WORKFLOW_RETAINED_INPUT_UNPROVEN')
+      proof.push({nodeRunId:node.nodeRunId,nodeId:node.nodeId,nodeVersion:node.nodeVersion,inputRef:node.inputRef,inputDigest:node.inputDigest,
+        requirementRef:input.requirementRef,businessInputDigest:executionDigest(input.data),fromContractDigest:executionNodeContractDigest(before),toContractDigest:executionNodeContractDigest(after)})
+    }
+    return {semanticProofVersion:1,producer:'execution-controller',retainedContracts:proof}
+  }
+  async function localPlannerInput(state,node,frozen,input) {
+    const previous=state.nodes[node.position-1]
+    if(node.nodeId!=='plan-local-acceptance'||frozen.executor!=='agent'||!node.sessionBound||!node.sessionId||previous?.nodeId!=='define-local-acceptance'||previous.status!=='succeeded'||!previous.outputRef)
+      return {trusted:false,gates:[{name:'originalPlannerSession',passed:false}]}
+    const expectedData=await frozen.mapInput({requirement:await artifacts.read(state.run.requirementRef),previousOutput:await artifacts.read(previous.outputRef),dependencyOutputs:{},artifactRefs:{previousOutput:previous.outputRef}})
+    validate(frozen.inputSchema,input.data)
+    return inspectLocalAcceptanceCorrection({run:state.run,node,input,expectedData})
+  }
   async function inspectNodeRecovery(runId, suppliedState, automaticPlanRevision = false) {
     const state = suppliedState ?? await query(runId, { includeRecovery: true })
     const recovery = state.nodeRecovery
@@ -153,9 +187,57 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     if (closed || flights.has(runId) && !(automaticPlanRevision && (recovery.technicalPlanRevision === true || recovery.localPlanCorrection === true) && !active.has(runId))) return { ...recovery, repairable: false, reason: 'executor-still-active' }
     const definition = definitionOf(state.run)
     const node = state.nodes.find(item => item.nodeRunId === recovery.nodeRunId), frozen = node && definition.nodes[node.position]
-    if (!frozen || frozen.executor !== 'agent' || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect)))
+    if (recovery.readonlyFixtureRetry) {
+      if(frozen?.id!=='finalize-local-acceptance'||!['21','22','23','24'].includes(definition.version)||typeof definition.nodes.find(n=>n.id==='prepare-local-acceptance')?.retryAcceptance!=='function')return {...recovery,repairable:false,reason:'acceptance-retry-capability-missing'}
+      const output=await artifacts.read(recovery.acceptanceOutputRef),receipt=output.localAcceptance,prepared=output.localPrepared
+      let fixtureDigest,report,ledger
+      try {fixtureDigest=createHash('sha256').update(await readFile(recovery.runnerScript)).digest('hex');const config=JSON.parse(await readFile(recovery.runnerConfigPath,'utf8'));if(config.taskId!==state.run.taskId||config.uatEnvironment!==prepared.uatEnvironment)throw new Error('scope');report=JSON.parse(await readFile(`${config.evidenceRoot}/${prepared.namespace}/result.json`,'utf8'));ledger=JSON.parse(await readFile(`${config.evidenceRoot}/${prepared.namespace}/dataset-merge-ui-ledger.json`,'utf8'))}catch{}
+      const expectedIds=['SG20-01-selection','SG20-02-columns','SG20-03-panel','SG20-04-filter-scroll','SG20-05-steps','SG20-06-notice','SG20-07-description']
+      if(report?.runnerDigest===fixtureDigest
+        ||receipt?.passed!==false||receipt.cleanup?.mode!=='read-only'||receipt.cleanup.createdResources!==0||receipt.cleanup.dataCleaned!==true||receipt.cleanup.processStopped!==true
+        ||prepared.candidateDigest!==receipt.candidateDigest||prepared.planDigest!==receipt.planDigest||prepared.runId!==runId
+        ||report?.browserClosed!==true||report.passed!==false||report.backendVerified!==false||report.pageErrors?.length!==0||report.cases?.length!==7
+        ||expectedIds.some(id=>report.cases.filter(c=>c.id===id).length!==1)||report.cases.some(c=>!['PASS','FAIL'].includes(c.status))
+        ||ledger?.namespace!==prepared.namespace||ledger.businessWrites!==0||ledger.browserClosed!==true)
+        return {...recovery,repairable:false,reason:'readonly-fixture-fix-proof-missing'}
+      return {...recovery,fixtureDigest}
+    }
+    if (recovery.readonlyAcceptanceRetry) {
+      if (frozen?.id !== 'run-local-acceptance' || frozen.executor !== 'code' || !['21','22','23','24'].includes(definition.version)) return {...recovery,repairable:false,reason:'acceptance-node-contract-mismatch'}
+      const input=await artifacts.read(node.inputRef)
+      if (executionDigest(input)!==node.inputDigest || input.requirementRef!==state.run.requirementRef || !input.data?.localPrepared) return {...recovery,repairable:false,reason:'acceptance-input-proof-missing'}
+      try {await store.query({kind:'node.acceptance-retry-proof',binding:{runId,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest},prepared:{...input.data.localPrepared,requirementDigest:input.data.candidate.requirementDigest}})}
+      catch {return {...recovery,repairable:false,reason:'acceptance-retry-proof-missing'}}
+      return recovery
+    }
+
+    if (!frozen || frozen.executor !== 'agent' || frozen.allowedEffects.some(effect => !['pure','read'].includes(effect))
+      && !(recovery.editArgumentCorrection && isEngineeringEditAgent(definition, frozen)))
       return { ...recovery, repairable: false, reason: 'node-effects-not-readonly' }
-    if (recovery.validationNodeRunId) {
+    if (recovery.executionPlanCorrection) {
+      const ui = state.nodes.find(item => item.nodeRunId === recovery.acceptanceNodeRunId)
+      const output = ui && await artifacts.read(ui.outputRef)
+      const receipt = output?.localAcceptance, prepared = output?.localPrepared
+      const verified = state.nodes.find(item => item.nodeId === 'verify-candidate')
+      const verification = verified && await artifacts.read(verified.outputRef)
+      const expected = JSON.stringify({uiContract:true,coverage:'candidate-ui-with-explicit-api-and-list-fixtures',backendVerified:false})
+      let report,ledger
+      try {const config=JSON.parse(await readFile(recovery.runnerConfigPath,'utf8'));if(config.taskId!==state.run.taskId||config.uatEnvironment!==prepared.uatEnvironment)throw new Error('scope');report=JSON.parse(await readFile(`${config.evidenceRoot}/${prepared.namespace}/result.json`,'utf8'));ledger=JSON.parse(await readFile(`${config.evidenceRoot}/${prepared.namespace}/dataset-merge-ui-ledger.json`,'utf8'))}catch{}
+      const ids=['SG20-01-selection','SG20-02-columns','SG20-03-panel','SG20-04-filter-scroll','SG20-05-steps','SG20-06-notice','SG20-07-description']
+      const mismatch=receipt?.failureCode==='LOCAL_ACCEPTANCE_EXPECTATION_MISMATCH'&&receipt.checks?.length===1&&receipt.checks[0].actual===expected&&receipt.checks[0].expected!==expected
+        &&report?.passed===true&&report.browserClosed===true&&report.backendVerified===false&&report.pageErrors?.length===0&&report.cases?.length===7
+        &&ids.every(id=>report.cases.filter(c=>c.id===id&&c.status==='PASS').length===1)&&ledger?.namespace===prepared.namespace&&ledger.businessWrites===0&&ledger.browserClosed===true
+      const parameterError=receipt?.failureCode==='LOCAL_ACCEPTANCE_COMMAND_FAILED'&&receipt.checks?.length===0&&Object.keys(prepared.plan.cases[0].parameters??{}).length>0
+      if (ui.status!=='succeeded'||ui.outputRef!==recovery.acceptanceOutputRef||!ui.drained
+        ||prepared?.taskId!==state.run.taskId||prepared.runId!==runId||prepared.generation!==state.run.generation
+        ||prepared.candidateDigest!==verification?.candidate?.digest||verification?.verification?.passed!==true
+        ||receipt?.candidateDigest!==prepared.candidateDigest||receipt?.planDigest!==executionDigest(prepared.plan)||receipt.passed!==false
+        ||receipt.cleanup?.mode!=='read-only'||receipt.cleanup.createdResources!==0||receipt.cleanup.dataCleaned!==true||receipt.cleanup.processStopped!==true
+        ||prepared.plan.cases?.length!==1||prepared.plan.cases[0].scenarioId!==recovery.runnerScenarioId||!recovery.runnerInstructions?.includes(expected)||!mismatch&&!parameterError)
+        return {...recovery,repairable:false,reason:'readonly-plan-interface-proof-missing'}
+
+    }
+    if (recovery.validationNodeRunId && !recovery.executionPlanCorrection) {
       const validation = state.nodes.find(item => item.nodeRunId === recovery.validationNodeRunId)
       const validator = validation && definition.nodes[validation.position]
       if ((recovery.localPlanCorrection ? validation?.position <= node.position : validation?.position !== node.position + 1) || validation.leaseEpoch !== recovery.validationLeaseEpoch
@@ -163,16 +245,26 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           ? !isEngineeringEditAgent(definition, validator ?? {}) : validator?.executor !== 'code' || validator.allowedEffects.some(effect => !((recovery.localPlanCorrection ? ['pure','workspace.prepare'] : ['pure']).includes(effect)))))
         return { ...recovery, repairable: false, reason: 'proposal-validation-not-pure' }
       const validationInput = await artifacts.read(validation.inputRef), proposal = await artifacts.read(node.outputRef)
-      if (executionDigest(validationInput) !== validation.inputDigest || validationInput.workflowDigest !== definition.digest
+      const lineage = recovery.localPlanCorrection ? {trusted:validationInput.requirementRef===state.run.requirementRef&&validation.inputRef.startsWith(`tasks/${state.run.taskId}/`),gates:[]} : await inspectExecutionInputLineage({store,artifacts,run:state.run,node:validation,input:validationInput,definition,resolveDefinition:resolveLineageDefinition})
+      if (executionDigest(validationInput) !== validation.inputDigest || !lineage.trusted
         || validationInput.nodeId !== validation.nodeId || (recovery.technicalPlanRevision === true
           ? validationInput.data.plan?.ref !== node.outputRef || validationInput.data.plan?.digest !== executionDigest(proposal)
           : executionDigest(recovery.localPlanCorrection ? validationInput.data.plan : validationInput.data) !== executionDigest(proposal)))
-        return { ...recovery, repairable: false, reason: 'proposal-validation-input-mismatch' }
+        return { ...recovery, repairable: false, reason: 'proposal-validation-input-mismatch', gates: lineage.gates }
+    }
+    if (recovery.editArgumentCorrection) {
+      const proofs = await Promise.all(recovery.evidenceRefs.map(ref => artifacts.read(ref)))
+      if (!proofs.some(proof => proof.kind === 'execution-failure' && proof.runId === runId
+        && proof.nodeRunId === node.nodeRunId && proof.nodeId === node.nodeId && proof.generation === node.generation
+        && proof.leaseEpoch === node.leaseEpoch && proof.inputDigest === node.inputDigest
+        && proof.code === 'execution_tool_failed' && proof.phase === 'execution'
+        && proof.tool === 'engineering_apply_edits' && proof.message === 'ENGINEERING_NO_EFFECT_MODIFICATION'))
+        return { ...recovery, repairable: false, reason: 'edit-rejection-proof-missing' }
     }
     const input = await artifacts.read(node.inputRef)
-    if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId)
-      return { ...recovery, repairable: false, reason: 'node-input-identity-mismatch' }
-    return recovery
+    const lineage = recovery.localPlanCorrection ? await localPlannerInput(state,node,frozen,input) : await inspectExecutionInputLineage({store,artifacts,run:state.run,node,input,definition,resolveDefinition:resolveLineageDefinition})
+    if (!lineage.trusted) return { ...recovery, repairable: false, reason: 'node-input-identity-mismatch', gates: lineage.gates }
+    return {...recovery, gates:lineage.gates, lineage:lineage.chain ?? [], warnings:lineage.warnings ?? []}
   }
   async function resumeAgent({ commandId, runId, expectedRevision, nodeRunId, generation, leaseEpoch, inputDigest, contextRef }, automaticPlanRevision = false) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
@@ -293,6 +385,30 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     })
     return true
   }
+  async function correctLocalPlannerObjective(runId, state) {
+    const node = state.nodes.find(item => item.status === 'waiting')
+    if (node?.nodeId !== 'plan-local-acceptance' || node.waitReason?.reference !== 'execution_no_submission') return false
+    if (state.run.pauseRequested || state.run.stopRequested || state.pendingInputCount) return false
+    const plan = await store.query({ kind: 'task.plan', taskId: state.run.taskId })
+    if (plan.task.controlState !== 'active') return false
+    const requirement = await artifacts.read(plan.task.requirementRef), input = await artifacts.read(node.inputRef)
+    const objective = requirement.objective?.trim()
+    if (!objective || objective === input.data.request?.trim()) return false
+    const commandId = `planner-objective:${node.nodeRunId}:${plan.task.requirementRevision}`
+    if (await store.query({ kind: 'receipt', commandId })) return 'already-attempted'
+    const recovery = await inspectNodeRecovery(runId)
+    if (!recovery.repairable) return false
+    const context = await artifacts.put({ kind: 'execution-recovery-context', taskId: state.run.taskId, runId,
+      nodeRunId: node.nodeRunId, generation: state.run.generation, requirementRevision: plan.task.requirementRevision,
+      planRevision: plan.task.planRevision, controlRevision: plan.task.controlRevision, problemKey: recovery.problemKey,
+      canonicalRequirementRef: plan.task.requirementRef,
+      diagnosis: 'The local planner received the original short reply without the resolved task objective.',
+      strategy: `Use the current formal task objective to select the configured scenario: ${objective}. Preserve the original criteria and scope. Submit an executable plan; do not claim acceptance has run or passed.`,
+      evidenceRefs: recovery.evidenceRefs }, { reference: node.inputRef })
+    await resumeAgent({ commandId, runId, expectedRevision: recovery.runRevision, nodeRunId: node.nodeRunId,
+      generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: node.inputDigest, contextRef: context.ref })
+    return true
+  }
   async function correctLocalPlan(runId, state, automatic = false) {
     const recovery = await inspectNodeRecovery(runId, await query(runId, { includeRecovery: true }), automatic)
     if (!recovery.repairable || !recovery.localPlanCorrection) return false
@@ -301,9 +417,25 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       nodeRunId: recovery.nodeRunId, generation: recovery.generation, requirementRevision: plan.task.requirementRevision,
       planRevision: plan.task.planRevision, controlRevision: plan.task.controlRevision, problemKey: recovery.problemKey,
       diagnosis: '本地验收准备拒绝了原规划结果；请读取完整失败工件和原需求，纠正原用例计划。',
-      strategy: '继续原规划会话，补齐实际可执行用例。已成功的准备、编辑和验证保持，不修改候选源码来迎合错误计划。', evidenceRefs: recovery.evidenceRefs }, { reference: state.run.requirementRef })
+      strategy: recovery.executionPlanCorrection
+        ? `Continue the original planning session. Correct the plan to the frozen runner scope: candidate UI with explicit API/list fixtures, backendVerified:false; parameters:{}. Replace incompatible backend merge claims in expected and steps; retain all seven UI assertions. Expected MUST be the exact JSON string specified below. Do not claim backend verification, skip any case, change candidate code, or invent a successful result. Host retains applied candidate and passed verification; new plan digest creates a new acceptance namespace. Frozen runner instructions: ${recovery.runnerInstructions}`
+        : '继续原规划会话，补齐实际可执行用例。已成功的准备、编辑和验证保持，不修改候选源码来迎合错误计划。', evidenceRefs: recovery.evidenceRefs }, { reference: state.run.requirementRef })
     await resumeAgent({ commandId: `local-plan-correction:${recovery.problemKey}`, runId, expectedRevision: recovery.runRevision,
       nodeRunId: recovery.nodeRunId, generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest, contextRef: context.ref }, automatic)
+    return true
+  }
+  async function correctEditArguments(runId, state) {
+    const recovery = await inspectNodeRecovery(runId, await query(runId, { includeRecovery: true }))
+    if (!recovery.repairable || !recovery.editArgumentCorrection) return false
+    const plan = await store.query({ kind: 'task.plan', taskId: state.run.taskId })
+    const context = await artifacts.put({ kind: 'execution-recovery-context', taskId: state.run.taskId, runId,
+      nodeRunId: recovery.nodeRunId, generation: recovery.generation, requirementRevision: plan.task.requirementRevision,
+      planRevision: plan.task.planRevision, controlRevision: plan.task.controlRevision, problemKey: recovery.problemKey,
+      diagnosis: 'Previous engineering_apply_edits batch rejected before dispatch: replacement entries 4 and 5 had identical from/to. No edit effect exists.',
+      strategy: 'Continue this original session and plan. Read actual files again. Omit identical replacements. Use actual newline and quote characters rather than literal backslash-n or backslash-quote text. Submit one real batch built from current file hashes; never invent effects or repeat a successful edit.',
+      evidenceRefs: recovery.evidenceRefs }, { reference: state.run.requirementRef })
+    await resumeAgent({ commandId: `edit-argument-correction:${recovery.problemKey}`, runId, expectedRevision: recovery.runRevision,
+      nodeRunId: recovery.nodeRunId, generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest, contextRef: context.ref })
     return true
   }
   async function drive(runId) {
@@ -337,10 +469,15 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         Object.assign(binding, { kind: 'task-node', inputVersion: history.inputVersion, inputHistory: history.inputHistory })
       }
       const abort = new AbortController(); active.set(runId, abort)
+      const editBatchReceipts=new Map()
       let input, engineeringProofRef, noChangeProof, editBatchReceipt, output, submitted = false, failure, outcome
       try {
         input = await artifacts.read(binding.inputRef)
-        if (executionDigest(input) !== binding.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== ready.nodeId) throw executionError('NODE_INPUT_IDENTITY_MISMATCH')
+        if (executionDigest(input) !== binding.inputDigest || input.nodeId !== ready.nodeId) throw executionError('NODE_INPUT_IDENTITY_MISMATCH')
+        if(input.workflowDigest!==definition.digest){
+          const correction=ready.nodeId==='plan-local-acceptance'&&await store.query({kind:'node.recovery-context',nodeRunId:binding.nodeRunId,inputDigest:binding.inputDigest,leaseEpoch:binding.leaseEpoch})
+          if(!correction?.localPlanCorrection||!(await localPlannerInput(state,ready,nodeDefinition,input)).trusted)throw executionError('NODE_INPUT_IDENTITY_MISMATCH')
+        }
         validate(nodeDefinition.inputSchema, input.data)
         if (nodeDefinition.executor === 'code') {
           abort.signal.throwIfAborted()
@@ -351,7 +488,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             perform: async ({ action, prepared }) => {
               if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : ['file', 'artifact'].includes(action) ? 'file.write' : action === 'message' ? 'message.send' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
-              const effect = await delivery.execute({ binding, action, prepared }, { signal: abort.signal })
+              const effect = await delivery.execute({ binding, action, prepared }, { signal: abort.signal, authorizationNode: false })
               if (isTerminalUatBuildFailure(effect)) throw Object.assign(executionError('RELEASE_PIPELINE_FAILED'), { terminalEffect: effect })
               if (effect.unsentRecovery) throw executionError('PR_CONNECTION_FAILED')
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
@@ -366,25 +503,55 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           const agentDefinition = Object.fromEntries(['provider', 'model', 'reasoningEffort', 'prompt', 'allowedTools', 'outputSchema'].filter(key => nodeDefinition[key] !== undefined).map(key => [key, nodeDefinition[key]]))
           const recovery = await store.query({ kind: 'node.recovery-context', nodeRunId: binding.nodeRunId,
             inputDigest: binding.inputDigest, leaseEpoch: binding.leaseEpoch })
+          let authorizationOutput
+          const managedAuthorization = isAuthorizationSession(nodeDefinition)
           const managedEdit = isEngineeringEditAgent(definition, nodeDefinition)
           const currentEdits = async () => (await store.query({ kind: 'effect.list', runId })).filter(effect => effect.nodeRunId === binding.nodeRunId)
+          const normalizeManagedOutput=async value=>{
+            if (['24','25'].includes(definition.version) && nodeDefinition.id === 'plan-local-acceptance') return normalizeWorktreeAcceptancePlan(value, input.data)
+            if (definition.version === '23' && nodeDefinition.id === 'plan-local-acceptance') return normalizeEngineeringAcceptancePlan(value, input.data)
+            if(!managedEdit||!['22','23','24','25'].includes(definition.version))return value
+            const effects=await currentEdits()
+            return {...value,...(['23','24'].includes(definition.version) && value.summary===undefined ? {summary:value.status==='succeeded'?'受管实施已完成，继续实际构建与验收':'技术方案需要修订'}:{}),planRef:input.data.plan.ref,effectRefs:effects.map(effect=>effect.effectId)}
+          }
           const validateAgentOutput = async value => {
+            value=await normalizeManagedOutput(value)
             if (nodeDefinition.validateOutput) await nodeDefinition.validateOutput({ output: value, input: input.data, binding })
             if (!managedEdit) return
             const effects = await currentEdits()
+            if(['24','25'].includes(definition.version)){
+              if(value.status==='plan-revision-needed'?effects.length!==0:value.status!=='succeeded'||!effects.length&&!noChangeProof||effects.some(effect=>effect.state!=='succeeded'||effect.inputDigest!==binding.inputDigest||effect.generation!==binding.generation||effect.definition.action!=='edit'))throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID')
+            }else{
             if (value.planRef !== input.data.plan.ref || (value.status === 'plan-revision-needed'
               ? effects.length !== 0 || value.effectRefs?.length !== 0
               : value.status !== 'succeeded' || !(effects.length === 0 && noChangeProof && value.effectRefs?.length === 0) && (effects.length !== 1 || effects[0].state !== 'succeeded'
                 || effects[0].inputDigest !== binding.inputDigest || effects[0].generation !== binding.generation
                 || effects[0].definition.action !== 'edit' || value.effectRefs?.length !== 1 || value.effectRefs[0] !== effects[0].effectId)))
               throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID')
+            }
           }
           outcome = await sessions.run({ binding, input: input.data, definition: agentDefinition,
+            ...(managedAuthorization ? { requestAuthorization: async (reason, signal) => {
+              if (!await isCurrent(binding)) throw executionError('NODE_STALE')
+              await artifacts.put({ taskId: binding.taskId, runId, nodeRunId: binding.nodeRunId, reason,
+                source: 'authorization-execution-session' }, { reference: binding.inputRef })
+              authorizationOutput = await nodeDefinition.authorizationExecute({ input: structuredClone(input.data),
+                runId, taskId: binding.taskId, generation: binding.generation, requirementDigest: binding.requirementDigest,
+                perform: async ({ action, prepared }) => {
+                  if (action !== 'external') throw executionError('EFFECT_NOT_ADMITTED')
+                  const effect = await delivery.execute({ binding, action, prepared }, { signal, authorizationNode: true, authorizationRequested: true })
+                  if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
+                  return effect.result.result
+                } })
+              return structuredClone(authorizationOutput)
+            } } : {}),
             ...(managedEdit ? { applyEdits: async (edits, signal) => {
+              edits = { ...edits, changes: edits.changes ?? [], replacements: edits.replacements ?? [] }
               if (!await isCurrent(binding)) throw executionError('NODE_STALE')
               signal.throwIfAborted()
               const batchDigest = executionDigest(edits)
-              if (editBatchReceipt) {
+              if(['24','25'].includes(definition.version)&&editBatchReceipts.has(batchDigest))return structuredClone(editBatchReceipts.get(batchDigest))
+              if (!['24','25'].includes(definition.version) && editBatchReceipt) {
                 if (editBatchReceipt.digest !== batchDigest) throw executionError('DELIVERY_IDENTITY_CONFLICT')
                 return structuredClone(editBatchReceipt.result)
               }
@@ -403,7 +570,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
               } catch (error) {
                 if (!await isCurrent(binding)) throw executionError('NODE_STALE')
                 signal.throwIfAborted()
-                if (!dispatchStarted && !(await currentEdits()).length && ['EDIT_BASE_CONFLICT', 'ENGINEERING_CHANGE_DISPOSITION_INVALID', 'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED', 'ENGINEERING_CONFLICT_NOT_READ', 'ENGINEERING_NO_CHANGES_PROPOSED', 'ENGINEERING_PATCH_CONFLICT', 'ENGINEERING_PATCH_BASE_CONFLICT', 'ENGINEERING_PATCH_AMBIGUOUS'].includes(error.code))
+                if (!dispatchStarted && (['24','25'].includes(definition.version) || !(await currentEdits()).length) && ['ENGINEERING_NO_EFFECT_MODIFICATION', 'EDIT_BASE_CONFLICT', 'ENGINEERING_CHANGE_DISPOSITION_INVALID', 'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED', 'ENGINEERING_CONFLICT_NOT_READ', 'ENGINEERING_NO_CHANGES_PROPOSED', 'ENGINEERING_PATCH_CONFLICT', 'ENGINEERING_PATCH_BASE_CONFLICT', 'ENGINEERING_PATCH_AMBIGUOUS'].includes(error.code))
                   return { received: false, error: { code: error.code, message: '文件修改参数与当前文件不符。重新读取文件取得完整 hash 和唯一原文，修正同一批次后重试；未派发编辑。' } }
                 throw error
               }
@@ -415,6 +582,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
               if (!applied) throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID')
               const receipt = { status: 'succeeded', effectId: applied.effectId, planRef: input.data.plan.ref }
               editBatchReceipt = { digest: batchDigest, result: receipt }
+              editBatchReceipts.set(batchDigest,receipt)
               return receipt
             } } : {}),
             ...(recovery ? { recoveryContext: await artifacts.read(recovery.contextRef) } : {}),
@@ -423,7 +591,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             onSessionBound: () => command(`bound:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.sessionBound', {
               runId, nodeId: ready.nodeId, generation: binding.generation, leaseEpoch: binding.leaseEpoch, sessionId: binding.sessionId,
             }),
-            onResult: value => { output = value; submitted = true },
+            onResult: async value => {
+              if (managedAuthorization && !authorizationOutput) throw executionError('AUTHORIZATION_RESULT_UNVERIFIED')
+              output = managedAuthorization ? authorizationOutput : await normalizeManagedOutput(value); submitted = true
+            },
           })
         }
       } catch (error) {
@@ -487,6 +658,11 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             await command(`result:${binding.nodeRunId}:${binding.leaseEpoch}`, 'node.commit', { ...identity,
               outcome: disposition.outcome, outputRef: result.ref, evidenceRefs: [result.ref, diagnosis.ref], waitReason: disposition.waitReason,
               failure: { code, phase: 'output-admission', targetNodeId: ready.nodeId } })
+            if (nodeDefinition.rebindOutput && code === 'ENGINEERING_DEVELOPMENT_REBUILD_REQUIRED') {
+              try { await nodeDefinition.rebindOutput({ binding, outputRef: result.ref, controller: { registerWorkflow: input => registerDefinition(input, false, true) } }); errors.delete(runId) }
+              catch(error) { errors.set(runId,error); throw error }
+              continue
+            }
             if (isEngineeringEditAgent(definition, nodeDefinition) && code === 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED') {
               const snapshot = await query(runId, { includeRecovery: true })
               const recovery = await inspectNodeRecovery(runId, snapshot, true)
@@ -508,7 +684,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           if (disposition?.outcome !== 'succeeded') throw executionError('NODE_ADMISSION_INVALID')
         }
         let nextState = state.nodes[ready.position + 1], retainedSuccessor = false
-        if (ready.nodeId === 'plan-local-acceptance' && nextState?.status === 'succeeded') {
+        if ((ready.nodeId === 'plan-local-acceptance' || definition.version === '25' && ready.nodeId === 'define-local-acceptance') && nextState?.status === 'succeeded') {
           const record = (await store.query({ kind: 'workflow.list' })).find(item => item.digest === state.run.workflowDigest)
           const checkpoint = record?.config?.checkpoint
           const receipt = checkpoint?.kind === 'local-acceptance' && await store.query({ kind: 'receipt', commandId: `engineering-checkpoint:${runId}:${checkpoint.requestId}` })
@@ -562,14 +738,15 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const index=state.nodes.findIndex(n=>n.nodeId===startNodeId)
       if(state.run.taskId!==taskId||index<0||typeof reason!=='string'||!reason.trim()
         ||typeof next.ownerContract?.validateRevision!=='function')throw executionError('WORKFLOW_REVISION_NOT_ADMITTED')
-      const signature=node=>executionDigest(Object.fromEntries(Object.entries(node).filter(([,v])=>v!==undefined).map(([k,v])=>[k,typeof v==='function'?v.toString().replace(/\r\n?/g,'\n'):v])))
+      const signature=executionNodeContractDigest
       if(next.nodes.length<=index||state.nodes.slice(0,index).some((n,i)=>n.status!=='succeeded'||n.nodeId!==next.nodes[i].id||signature(previous.nodes[i])!==signature(next.nodes[i])))throw executionError('WORKFLOW_REVISION_PREFIX_CHANGED')
       await next.ownerContract.validateRevision({previous,next,startNodeId,retainedNodeIds:state.nodes.slice(0,index).map(n=>n.nodeId)})
       const first=next.nodes[index],dependencies={},dependencyRefs={}
       for(const id of first.inputDependencies??[]){const node=state.nodes.slice(0,index).find(n=>n.nodeId===id);if(!node?.outputRef)throw executionError('NODE_PREDECESSOR_INCOMPLETE');dependencies[id]=await artifacts.read(node.outputRef);dependencyRefs[id]=node.outputRef}
       const prior=state.nodes[index-1],input=await prepareInput(next,first,state.run.requirementRef,prior?.outputRef?await artifacts.read(prior.outputRef):undefined,dependencies,{previousOutput:prior?.outputRef,dependencies:dependencyRefs})
       const plan=await store.query({kind:'task.plan',taskId})
-      const evidence=await artifacts.put({kind:'task-workflow-revision',taskId,runId,reason,evidenceRefs,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,previousNodes:state.nodes,retainedNodeIds:state.nodes.slice(0,index).map(n=>n.nodeId)},{reference:state.run.requirementRef})
+      const semanticEvidence=await retainedSemanticEvidence(state,previous,next,state.nodes.slice(0,index))
+      const evidence=await artifacts.put({...semanticEvidence,kind:'task-workflow-revision',taskId,runId,reason,evidenceRefs,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,previousNodes:state.nodes,retainedNodeIds:state.nodes.slice(0,index).map(n=>n.nodeId)},{reference:state.run.requirementRef})
       return command(commandId,'run.workflow.revise',{taskId,runId,expectedRevision,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,toWorkflowId:workflowId,startNodeId,reason,
         inputRef:input.ref,inputDigest:input.digest,evidenceRef:evidence.ref,expectedRequirementRevision:plan.task.requirementRevision,expectedPlanRevision:plan.task.planRevision,expectedControlRevision:plan.task.controlRevision,
         nodes:next.nodes.map(node=>({nodeId:node.id,nodeVersion:node.version,executor:node.executor}))})
@@ -590,8 +767,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const dependencies={}
       for(const id of node.inputDependencies??[]){const prior=state.nodes.find(item=>item.nodeId===id);if(prior?.status!=='succeeded'||!prior.outputRef)throw executionError('NODE_PREDECESSOR_INCOMPLETE');dependencies[id]=await artifacts.read(prior.outputRef)}
       const previous=state.nodes[index-1],input=await prepareInput(definition,node,state.run.requirementRef,previous?.outputRef?await artifacts.read(previous.outputRef):undefined,dependencies)
-      const evidence=await artifacts.put({kind:'engineering-checkpoint',mode:kind,runId,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,
-        invalidated:state.nodes.slice(index).filter(item=>kind!=='local-acceptance'||item.position<=index+1||item.status==='ready'||item.nodeId==='prepare-local-acceptance'&&item.status==='waiting').map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
+      const retained=state.nodes.filter(item=>item.position<index || kind==='local-acceptance'&&item.position>index+(definition.version==='25'?0:1)&&item.position<state.nodes.findIndex(node=>node.nodeId==='prepare-local-acceptance')&&item.status==='succeeded')
+      const semanticEvidence=await retainedSemanticEvidence(state,definitionOf(state.run),definition,retained)
+      const evidence=await artifacts.put({...semanticEvidence,kind:'engineering-checkpoint',mode:kind,runId,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,
+        invalidated:state.nodes.slice(index).filter(item=>kind!=='local-acceptance'||item.position<=index+(definition.version==='25'?0:1)||item.status==='ready'||item.nodeId==='prepare-local-acceptance'&&item.status==='waiting').map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
       const receipt=await command(commandId,'run.workflow.checkpoint',{runId,expectedRevision,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,toWorkflowId:workflowId,
         kind,startNodeId:start,inputRef:input.ref,inputDigest:input.digest,evidenceRef:evidence.ref,maintenance,
         expectedRequirementRevision:plan.task.requirementRevision,expectedControlRevision:plan.task.controlRevision,
@@ -609,6 +788,12 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (closed) throw executionError('CONTROLLER_CLOSED')
       const definition = registerDefinition(input, false, true)
       return { id: definition.id, version: definition.version, digest: definition.digest }
+    },
+    async prepareResetRun({ taskId,runId,workflowId,input }) {
+      const definition=definitions.get(workflowId)
+      if(!definition) throw executionError('WORKFLOW_NOT_FOUND')
+      const requirement=await artifacts.put(input,{taskId}),first=await prepareInput(definition,definition.nodes[0],requirement.ref)
+      return {taskId,runId,workflowId,workflowDigest:definition.digest,requirementRef:requirement.ref,nodes:definition.nodes.map((node,index)=>({nodeId:node.id,nodeVersion:node.version,executor:node.executor,inputRef:index?null:first.ref,inputDigest:index?null:first.digest}))}
     },
     async createRun({ ownerTurnId, commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')
@@ -833,9 +1018,14 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       if (!['pause', 'cancel', 'resume', 'reopen'].includes(intent)) throw executionError('TASK_CONTROL_INVALID')
       const receipt = await command(commandId, `task.control.${intent}`, { taskId, expectedControlRevision,
         ...(intent === 'reopen' ? { requirementRevision, authorizationRef } : {}) })
-      if (['pause', 'cancel'].includes(intent)) await this.advanceTaskPlan(taskId)
+      if (['pause', 'cancel'].includes(intent)) {
+        const settled = await this.advanceTaskPlan(taskId)
+        if (intent === 'pause' && settled.task.controlState === 'pausing') await this.advanceTaskPlan(taskId)
+      }
       if (intent === 'resume') {
         const plan = await store.query({ kind: 'task.plan', taskId })
+        // A new requirement resumes the Owner, not a historical development run.
+        if (plan.task.planRequirementRevision !== plan.task.requirementRevision) return { receipt, plan }
         const stage = plan.stages.find(item => item.status === 'running')
         if (stage?.runId) {
           const state = await query(stage.runId)
@@ -845,6 +1035,93 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         await this.advanceTaskPlan(taskId)
       }
       return { receipt, plan: await store.query({ kind: 'task.plan', taskId }) }
+    },
+    async controlRun({commandId,...args}) {
+      if(closed)throw executionError('CONTROLLER_CLOSED')
+      const finishRetirement=async()=>{
+        interrupt(args.runId)
+        const state=await query(args.runId)
+        if(state.run.stopRequested&&state.run.status==='cancelling'&&state.nodes.every(node=>node.drained))await command(commandId+':drained','run.stopped',{runId:args.runId})
+        const plan=await this.taskPlan(args.taskId)
+        if(plan.stages.some(stage=>stage.runId===args.runId&&stage.status==='running'))await this.advanceTaskPlan(args.taskId)
+      }
+      const prior=await store.query({kind:'receipt',commandId})
+      if(prior) {
+        const result=prior.result
+        if(result.taskId!==args.taskId||result.runId!==args.runId||result.control?.action!==args.action||result.control?.source!==args.source||result.control?.actorId!==args.actorId||result.control?.reason!==args.reason)throw executionError('NODE_CONTROL_REQUEST_CONFLICT')
+        if(args.action==='retire'&&(result.retiredGeneration!==args.generation||result.planRevision!==args.expectedPlanRevision))throw executionError('NODE_CONTROL_REQUEST_CONFLICT')
+        if(args.action==='retire')await finishRetirement()
+        return prior
+      }
+      const receipt=await command(commandId,'run.control',args)
+      if(args.action==='retire') {
+        await finishRetirement()
+        return receipt
+      }
+      if(args.action==='stop') {
+        interrupt(args.runId)
+        const state=await query(args.runId)
+        if(state.run.pauseRequested&&!state.run.stopRequested&&!['succeeded','failed','cancelled'].includes(state.run.status)&&state.nodes.every(node=>node.drained))await command(commandId+':drained','run.paused',{runId:args.runId})
+      }
+      schedule(args.runId)
+      if(args.action==='continue')await this.advanceTaskPlan(args.taskId)
+      return receipt
+    },
+    async controlNode({commandId,taskId,runId,nodeRunId,action,expectedRequirementRevision,expectedControlRevision,generation,leaseEpoch,reason,source='operator',actorId,outputRef,evidenceRefs=[]}, {validateControlledOutput}={}) {
+      if(closed)throw executionError('CONTROLLER_CLOSED')
+      const prior=await store.query({kind:'receipt',commandId})
+      if(prior){if(prior.result.taskId!==taskId||prior.result.runId!==runId||prior.result.nodeRunId!==nodeRunId||prior.result.control?.source!==source||prior.result.control?.actorId!==actorId||prior.result.control?.action!==action||prior.result.control?.outputRef!==(outputRef??null)||prior.result.control?.reason!==reason)throw executionError('NODE_CONTROL_REQUEST_CONFLICT');return prior}
+      let state=await query(runId),node=state.nodes.find(item=>item.nodeRunId===nodeRunId)
+      if(state.run?.taskId!==taskId||!node||node.generation!==generation||node.leaseEpoch!==leaseEpoch)throw executionError('NODE_CONTROL_STALE')
+      if(source==='task-session') {
+        const owner=await store.query({kind:'task.owner',taskId})
+        if(!owner||owner.status!=='running'||!owner.sessionBound||owner.sessionId!==actorId)throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+      }
+      // Drain the old execution before granting control. Timeout leaves the pause intact, never implies drained.
+      if(flights.has(runId)||state.nodes.some(item=>!item.drained)) {
+        await this.pause({commandId:commandId+':pause',runId,reason})
+        const started=Date.now()
+        while(flights.has(runId)){if(Date.now()-started>45000)throw executionError('NODE_CONTROL_DRAIN_PENDING');await delay(100)}
+        state=await query(runId);node=state.nodes.find(item=>item.nodeRunId===nodeRunId)
+      }
+      const definition=definitionOf(state.run),frozen=definition.nodes[node.position],input=await artifacts.read(node.inputRef)
+      let output,nextInput
+      if(['reuse','submit-output','skip'].includes(action)) {
+        if(action==='skip') {
+          // A skip has no fabricated output. Pass a real predecessor only if the next contract accepts it.
+          if(node.position===0)throw executionError('NODE_SKIP_INPUT_REQUIRED')
+          const previous=state.nodes[node.position-1]
+          if(previous.status!=='succeeded'||!previous.outputRef||frozen.allowedEffects.some(item=>!['pure','read'].includes(item)))throw executionError('NODE_SKIP_NOT_APPLICABLE')
+          if(definition.nodes.slice(node.position+1).some(item=>item.inputDependencies?.includes(node.nodeId)))throw executionError('NODE_SKIP_REQUIRED_OUTPUT')
+          outputRef=previous.outputRef;output=await artifacts.read(outputRef)
+        }else{
+          if(!outputRef)throw executionError('NODE_CONTROL_OUTPUT_REQUIRED')
+          const identity=parseArtifactReference(outputRef),scope=parseArtifactReference(state.run.requirementRef)
+          if(identity.logicalTaskId!==scope.logicalTaskId)throw executionError('NODE_CONTROL_OUTPUT_SCOPE_INVALID')
+          output=await artifacts.read(outputRef);validate(frozen.outputSchema,output)
+          const controlledProof=await validateControlledOutput?.({input:input.data,output,binding:{...node,taskId,runId}})===true
+          if(frozen.allowedEffects.includes('github.pr')&&!controlledProof)throw executionError('ENGINEERING_PR_UNCONFIRMED')
+          if(action==='reuse'){
+            const provenance=await store.query({kind:'node.output.producer',taskId,outputRef})
+            if((!provenance||provenance.nodeId!==node.nodeId||provenance.nodeVersion!==node.nodeVersion)&&typeof frozen.validateOutput!=='function'&&!controlledProof)throw executionError('NODE_CONTROL_REUSE_UNPROVEN')
+          }
+          if(frozen.validateOutput)await frozen.validateOutput({input:input.data,output,binding:{...node,taskId,runId}})
+          if(frozen.admitOutput&&(await frozen.admitOutput({input:input.data,output,binding:{...node,taskId,runId},signal:new AbortController().signal}))?.outcome!=='succeeded')throw executionError('NODE_CONTROL_OUTPUT_REJECTED')
+          if(isEngineeringEditAgent(definition,frozen)) {
+            const effects=(await store.query({kind:'effect.list',runId})).filter(item=>item.nodeRunId===nodeRunId&&item.definition.action==='edit')
+            if(!effects.length||effects.some(item=>item.state!=='succeeded')||output.status!=='succeeded')throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID')
+          }
+        }
+        const next=definition.nodes[node.position+1],dependencies={},dependencyRefs={}
+        for(const id of next?.inputDependencies??[]){const prior=state.nodes.find(item=>item.nodeId===id&&item.status==='succeeded'&&item.outputRef);if(id===node.nodeId&&action!=='skip'){dependencies[id]=output;dependencyRefs[id]=outputRef}else if(prior){dependencies[id]=await artifacts.read(prior.outputRef);dependencyRefs[id]=prior.outputRef}else throw executionError('NODE_DEPENDENCY_UNAVAILABLE')}
+        const prepared=next?await prepareInput(definition,next,state.run.requirementRef,output,dependencies,{previousOutput:outputRef,dependencies:dependencyRefs}):null
+        if(prepared)nextInput={nodeId:next.id,inputRef:prepared.ref,inputDigest:prepared.digest}
+        evidenceRefs=[...new Set([outputRef,...evidenceRefs])]
+      }
+      const receipt=await command(commandId,'node.control',{taskId,runId,nodeRunId,generation,leaseEpoch,expectedRequirementRevision,expectedControlRevision,action,source,actorId,reason,...(outputRef?{outputRef,evidenceRefs}:{}),...(nextInput?{nextInput}:{})})
+      errors.delete(runId)
+      if(action!=='takeover')schedule(runId)
+      return receipt
     },
     async continueNode({ commandId, runId, nodeRunId, expectedInputVersion, expectedInputDigest, expectedOutputRef, answer }) {
       const replay=await store.query({kind:'receipt',commandId})
@@ -896,7 +1173,11 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     },
     async pause({ commandId, runId, reason }) {
       const receipt = await command(commandId, 'run.pause', { runId, reason })
-      interrupt(runId); schedule(runId); return receipt
+      interrupt(runId)
+      const state = await query(runId)
+      if (state.run.pauseRequested && !state.run.stopRequested && !['succeeded','failed','cancelled'].includes(state.run.status) && state.nodes.every(node => node.drained))
+        await command(`${commandId}:drained`, 'run.paused', { runId })
+      schedule(runId); return receipt
     },
     async resume({ commandId, runId }) {
       const receipt = await command(commandId, 'run.resume', { runId })
@@ -916,8 +1197,35 @@ export function createExecutionController({ store, artifacts, sessions, delivery
     async recover({ commandId, runId }) {
       if (flights.has(runId)) throw executionError('EXECUTOR_STILL_ACTIVE')
       const state = await query(runId), definition = definitionOf(state.run)
+      const rebuilding = state.nodes.find(node => node.status === 'waiting' && node.drained && node.waitReason?.reference === 'ENGINEERING_DEVELOPMENT_REBUILD_REQUIRED')
+      if (rebuilding && definition.nodes[rebuilding.position]?.rebindOutput) {
+        await definition.nodes[rebuilding.position].rebindOutput({ binding: { ...rebuilding, taskId: state.run.taskId, runId }, outputRef: rebuilding.outputRef, controller: { registerWorkflow: input => registerDefinition(input, false, true) } })
+        errors.delete(runId); schedule(runId); return
+      }
       if (state.run.recoveryReason === 'stage-dependency') throw executionError('TASK_DEPENDENCY_PENDING')
-      if (await correctLocalPlan(runId, state)) return
+      const objectiveCorrection = await correctLocalPlannerObjective(runId, state)
+      if (objectiveCorrection === true || objectiveCorrection === 'already-attempted') return
+      const fixtureRetry=await inspectNodeRecovery(runId)
+      if(fixtureRetry.repairable&&fixtureRetry.readonlyFixtureRetry){
+        const ui=state.nodes.find(n=>n.nodeRunId===fixtureRetry.acceptanceNodeRunId),prepare=state.nodes.find(n=>n.nodeId==='prepare-local-acceptance')
+        const output=await artifacts.read(ui.outputRef),oldPrepare=await artifacts.read(prepare.outputRef)
+        const retry=await definition.nodes.find(n=>n.id==='prepare-local-acceptance').retryAcceptance(output.localPrepared,{attemptKey:`fixture:${fixtureRetry.fixtureDigest}:${output.localPrepared.identity}`})
+        const freshOutput={...oldPrepare,localPrepared:retry},freshArtifact=await artifacts.put(freshOutput,{reference:state.run.requirementRef})
+        const uiDefinition=definition.nodes[ui.position],freshInput=await prepareInput(definition,uiDefinition,state.run.requirementRef,freshOutput)
+        const prepared={...retry,action:'external',workflowKind:'local-acceptance',taskId:state.run.taskId,runId,generation:state.run.generation,requirementDigest:output.localPrepared.requirementDigest,resourceKey:output.localPrepared.resourceKey}
+        const context=await artifacts.put({kind:'readonly-fixture-retry',runId,previousIdentity:output.localPrepared.identity,newIdentity:retry.identity,fixtureDigest:fixtureRetry.fixtureDigest,candidateDigest:retry.candidateDigest,planDigest:retry.planDigest,evidenceRefs:fixtureRetry.evidenceRefs,reason:'Retry the same verified candidate and plan after corrected runner assertions. Failed read-only attempt is clean; retain all seven cases and original failure evidence.'},{reference:state.run.requirementRef})
+        const task=(await store.query({kind:'task.plan',taskId:state.run.taskId})).task
+        await command(`clean-ui-retry:${runId}:${retry.identity}`,'node.retry-local-acceptance',{runId,expectedRevision:state.run.revision,expectedRequirementRevision:task.requirementRevision,expectedControlRevision:task.controlRevision,nodeRunId:fixtureRetry.nodeRunId,generation:fixtureRetry.generation,leaseEpoch:fixtureRetry.leaseEpoch,inputDigest:fixtureRetry.inputDigest,previousEffectId:fixtureRetry.previousEffectId,prepared,prepareOutputRef:freshArtifact.ref,nextInputRef:freshInput.ref,nextInputDigest:freshInput.digest,contextRef:context.ref})
+        schedule(runId);return
+      }
+      const readonlyRetry=await inspectNodeRecovery(runId)
+      if (readonlyRetry.repairable && readonlyRetry.readonlyAcceptanceRetry) {
+        const node=state.nodes.find(n=>n.nodeRunId===readonlyRetry.nodeRunId), input=await artifacts.read(node.inputRef)
+        const context=await artifacts.put({kind:'readonly-acceptance-identity-recovery',runId,nodeRunId:node.nodeRunId,generation:node.generation,inputDigest:node.inputDigest,evidenceRefs:readonlyRetry.evidenceRefs,reason:'Corrected plan has a new acceptance identity; previous completed readonly receipt remains immutable.'},{reference:node.inputRef})
+        await command(`readonly-acceptance-retry:${node.nodeRunId}:${node.inputDigest}`,'node.retry-readonly-acceptance',{runId,expectedRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,prepared:{...input.data.localPrepared,requirementDigest:input.data.candidate.requirementDigest},contextRef:context.ref})
+        schedule(runId);return
+      }
+      if (await correctLocalPlan(runId, state) || await correctEditArguments(runId, state)) return
       await sessions?.cancel(runId)
       // 独占Store已排除旧Controller；这里只排空纯/read原生句柄，不释放外部效果hold。
       for (const node of state.nodes) if (!node.drained && node.leaseEpoch > 0) {
@@ -938,6 +1246,29 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       schedule(runId)
     },
     async whenIdle(runId) { while (flights.has(runId)) { await flights.get(runId); await Promise.resolve() } return query(runId) },
+    async retirePreparedEffect({ runId, effectId, assessmentRef, reason, actorId }) {
+      const state = await query(runId), effect = await store.query({ kind: 'effect.get', effectId })
+      const assessment = await artifacts.read(assessmentRef)
+      if (!state?.run || !effect || effect.runId !== runId || assessment.taskId !== state.run.taskId
+        || assessment.runId !== runId || assessment.nodeRunId !== effect.nodeRunId)
+        throw executionError('PREPARED_RETIREMENT_ASSESSMENT_SCOPE_INVALID')
+      const commandId = `retire-prepared:${effectId}:${executionDigest([assessmentRef,reason])}`
+      const replay = await store.query({ kind: 'receipt', commandId })
+      if (replay) {
+        const prior = replay.result?.effect, proof = prior?.result
+        if (prior?.effectId !== effectId || prior.runId !== runId || prior.nodeRunId !== effect.nodeRunId
+          || prior.generation !== effect.generation || prior.inputDigest !== effect.inputDigest
+          || prior.definitionDigest !== effect.definitionDigest || proof?.reason !== 'PREPARED_POLICY_RETIRED'
+          || proof.assessmentRef !== assessmentRef || proof.retirementReason !== reason || proof.actorId !== actorId)
+          throw executionError('PREPARED_RETIREMENT_REQUEST_CONFLICT')
+        return replay
+      }
+      const node = state.nodes.find(item => item.nodeRunId === effect.nodeRunId)
+      if (!node) throw executionError('PREPARED_RETIREMENT_ASSESSMENT_SCOPE_INVALID')
+      return command(commandId, 'effect.retirePrepared', {
+        effectId, assessmentRef, reason, actorId, expectedRunRevision: state.run.revision,
+        expectedLeaseEpoch: node.leaseEpoch, expectedDefinitionDigest: effect.definitionDigest })
+    },
     async state(runId, options) { return { ...await query(runId, options), controllerError: errors.get(runId)?.code ?? errors.get(runId)?.message ?? null } },
     async close() {
       closed = true

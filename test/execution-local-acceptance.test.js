@@ -323,3 +323,20 @@ for (const taskFiles of [false, true]) test('验收配置和方案不以数量�
   assert.equal(prepared.plan.cases.length,40)
   assert.equal(prepared.plan.cases[0].steps.length,40)
 })
+
+for (const taskFiles of [false, true]) test('干净失败的新attempt绑定当前runner并保留原快照和回执：'+taskFiles, windows, async t => {
+ const fixture=await setup(t,{readonly:true,mismatch:true},false,taskFiles)
+ const failed=await fixture.runner.execute(fixture.prepared)
+ assert.equal(failed.passed,false);assert.equal(failed.cleanup.createdResources,0)
+ const oldReceipt=await readFile(join(dirname(fixture.prepared.directory),'receipt.json'),'utf8')
+ const options={...fixture.options,config:{...fixture.options.config,version:'fixture-2'}}
+ const runner=taskFiles?(await import('../packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js')).createTaskLocalAcceptanceRunner(options):createLocalAcceptanceRunner(options)
+ await assert.rejects(runner.execute(fixture.prepared),{code:'LOCAL_ACCEPTANCE_PREPARED_MISMATCH'})
+ const retry=await runner.retryPrepared({...fixture.prepared,action:'external'},{attemptKey:'fixed-runner'})
+ assert.equal(retry.runnerIdentity,runner.identity);assert.equal(retry.directory,fixture.prepared.directory)
+ assert.notEqual(retry.identity,fixture.prepared.identity);assert.equal(retry.candidateDigest,fixture.prepared.candidateDigest)
+ assert.deepEqual(await runner.retryPrepared(fixture.prepared,{attemptKey:'fixed-runner'}),retry)
+ const result=await runner.execute(retry);assert.equal(result.identity,retry.identity);assert.equal(result.failureCode,'LOCAL_ACCEPTANCE_EXPECTATION_MISMATCH')
+ assert.equal(await readFile(join(dirname(fixture.prepared.directory),'receipt.json'),'utf8'),oldReceipt)
+ await assert.rejects(runner.retryPrepared({...fixture.prepared,candidateDigest:'b'.repeat(64)},{attemptKey:'bad'}),{code:'LOCAL_ACCEPTANCE_PREPARED_MISMATCH'})
+})

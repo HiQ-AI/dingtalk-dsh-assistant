@@ -1,0 +1,9 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {isWebRequirementTargetAllowed} from '../packages/dingtalk-dsh-assistant/workflow-service.js'
+import {validateScope} from '../scripts/local-acceptance-notification-outbox-uat.mjs'
+test('existing engineering context admits only configured original task repository without external target',()=>{
+ const a={workflowId:'task-engineering',targetId:'dataset-web',repositoryId:'dataset-web',engineeringRepositories:[{repositoryId:'dataset-web'},{repositoryId:'dataset'}]};assert.equal(isWebRequirementTargetAllowed(a),true);assert.equal(isWebRequirementTargetAllowed({...a,targetId:'dataset'}),false);assert.equal(isWebRequirementTargetAllowed({...a,engineeringRepositories:[]}),false)
+})
+test('engineering context does not weaken external target admission',()=>{const a={workflowId:'task-uat-deployment',targetId:'approved',externalWorkflowIds:['task-uat-deployment'],externalTargets:[{workflowId:'task-uat-deployment',targetId:'approved'}]};assert.equal(isWebRequirementTargetAllowed(a),true);assert.equal(isWebRequirementTargetAllowed({...a,targetId:'production'}),false);assert.equal(isWebRequirementTargetAllowed({...a,externalWorkflowIds:[]}),false)})
+test('existing UAT runner rejects wrong task, namespace, remote service and extra case parameters before access',()=>{const c={taskId:'task-5c4b495243ce147b3d6e32279fe9715f',uatEnvironment:'uat2',projectConfigRoot:'D:/project/dataset/src/main/resources',evidenceRoot:'D:/evidence'},i={uatEnvironment:'uat2',namespace:'acceptance-'+'a'.repeat(32),baseUrl:'http://127.0.0.1:18719',case:{parameters:{}}};assert.ok(validateScope(c,i));for(const bad of [{namespace:'public'},{baseUrl:'http://192.168.8.8'},{case:{parameters:{send:true}}}])assert.throws(()=>validateScope(c,{...i,...bad}));assert.throws(()=>validateScope({...c,taskId:'other'},i))})

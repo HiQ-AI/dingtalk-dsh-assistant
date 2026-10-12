@@ -52,11 +52,11 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     if (!effect || !route?.adapter || effect.definition.adapterId !== route.id || effect.definition.adapterVersion !== '1') throw executionError('DELIVERY_EFFECT_INVALID')
     if (effect.state === 'succeeded' && effect.definition.action === 'workspace') {
       // 历史创建成功不能证明目录当前仍属于本任务；重用前只读复核，不重建。
-      const current = await route.adapter.reconcile(effect.definition.payload)
+      const current = await route.adapter.reconcile(effect.definition.payload,{runId:effect.runId,generation:effect.generation})
       if (current?.status !== 'succeeded') throw executionError('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
     }
     if (effect.state === 'succeeded' && ['edit', 'file', 'artifact'].includes(effect.definition.action)) {
-      if ((await route.adapter.reconcile(effect.definition.payload))?.status !== 'succeeded')
+      if ((await route.adapter.reconcile(effect.definition.payload,{runId:effect.runId,generation:effect.generation}))?.status !== 'succeeded')
         throw executionError(['file', 'artifact'].includes(effect.definition.action) ? 'TASK_MARKDOWN_CURRENT_IDENTITY_UNCONFIRMED' : 'EDIT_CURRENT_IDENTITY_UNCONFIRMED')
     }
     if (effect.state === 'failed' && effect.definition.action === 'pr'
@@ -70,8 +70,8 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     if (!methods[action]) throw executionError('DELIVERY_ACTION_INVALID')
     let observation
     try { observation = action === 'message'
-      ? await route.adapter[route.reconcile](payload, { previousObservation: effect.result?.result })
-      : await route.adapter[route.reconcile](payload) }
+      ? await route.adapter[route.reconcile](payload, { previousObservation: effect.result?.result,runId:effect.runId,generation:effect.generation })
+      : await route.adapter[route.reconcile](payload,{runId:effect.runId,generation:effect.generation}) }
     catch (error) { observation = { status: 'unknown', reason: error.code ?? 'ADAPTER_READBACK_FAILED' } }
     // 查询失败不能覆盖先前已持久化的受理身份；后续恢复仍需要同一 ACK。
     if (action === 'message' && observation?.status === 'unknown' && effect.result?.result?.result)
@@ -79,7 +79,13 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     const observed = await observe(effectId, observation)
     return action === 'pr' && observed.state === 'failed' ? reconcile(effectId) : observed
   }
-  async function dispatch({ binding, action, prepared }, effectId, { signal } = {}) {
+  async function dispatch({ binding, action, prepared }, effectId, { signal, authorizationNode = false, authorizationRequested = false } = {}) {
+    let preparedRetirement
+    const retired = action === 'external' ? await lookup(effectId) : null
+    if (retired?.result?.reason === 'PREPARED_POLICY_RETIRED') {
+      preparedRetirement = { effectId: retired.effectId, retirementKey: retired.result.retirementKey }
+      effectId = `external-${executionDigest({ nodeRunId: binding.nodeRunId, action, preparedRetirement: retired.result.retirementKey })}`
+    }
     let editRepair
     const original = action === 'edit' ? await lookup(effectId) : null
     if (original && original.inputDigest !== binding.inputDigest) {
@@ -96,12 +102,27 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
         })) throw executionError('EDIT_REPAIR_REPLAY_FORBIDDEN')
       }
     }
+    if (action === 'external' && prepared.workflowKind === 'local-acceptance') {
+      const prior = await lookup(effectId)
+      if (prior && prior.inputDigest !== binding.inputDigest) {
+        const proof = await store.query({kind:'node.acceptance-retry-proof',binding,prepared})
+        effectId = proof.effectId
+      }
+    }
     const route = methods[action]
     let effect = await lookup(effectId)
     if (effect) {
       if (effect.runId !== binding.runId || effect.nodeRunId !== binding.nodeRunId || effect.generation !== binding.generation
         || effect.inputDigest !== binding.inputDigest || effect.definition.action !== action
         || executionDigest(effect.definition.payload) !== executionDigest(prepared)) throw executionError('DELIVERY_IDENTITY_CONFLICT')
+      if (effect.state === 'prepared' && effect.requestId && !(authorizationNode && authorizationRequested)) {
+        const approval = await store.query({ kind: 'approval.get', requestId: effect.requestId })
+        const { run } = await store.query({ kind: 'run', runId: effect.runId })
+        if (run?.taskId !== binding.taskId || approval.requestId !== effect.requestId || approval.effectId !== effect.effectId
+          || prepared.taskId !== undefined && prepared.taskId !== binding.taskId) throw executionError('DELIVERY_IDENTITY_CONFLICT')
+        if (approval.decision !== 'approved' || approval.revoked) throw executionError('AUTHORIZATION_ASSESSMENT_REQUIRED',
+          'The original approval remains unresolved or revoked; this ordinary node cannot create a new request.')
+      }
       if (effect.state !== 'prepared') {
         effect = await reconcile(effectId)
         if (!effect.unsentRecovery) return effect
@@ -114,9 +135,13 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       }
     } else {
       const grant = await (action === 'external' ? authorizeExternal : ['file', 'artifact'].includes(action) ? authorizeFile : action === 'message' ? authorizeMessage : authorize)?.({ binding: structuredClone(binding), action, prepared: structuredClone(prepared) })
-      if (!grant || typeof grant.principalId !== 'string' || !grant.principalId
+      if (!grant) throw executionError('AUTHORIZATION_ASSESSMENT_REQUIRED',
+        'Execution session must assess whether authorization is necessary from the original task and actual action; do not infer or create a human approval in this ordinary execution node.')
+      if (typeof grant.principalId !== 'string' || !grant.principalId
         || (typeof grant.authorizationRef !== 'string' || !grant.authorizationRef) && (!grant.approval || typeof grant.approval.requestId !== 'string'
           || !grant.approval.requestId || !Array.isArray(grant.approval.approverIds) || !grant.approval.approverIds.length)) throw executionError('DELIVERY_NOT_AUTHORIZED')
+      if (grant.approval && !(authorizationNode && authorizationRequested)) throw executionError('AUTHORIZATION_ASSESSMENT_REQUIRED',
+        'Execution session must assess this action against original user instructions and existing authorization. If new business authorization is needed, use a predefined visible authorization node; this ordinary node cannot create a request.')
       if (action === 'message') {
         const prior = (await store.query({ kind: 'effect.list', runId: binding.runId })).find(item =>
           item.definition.action === 'message' && item.definition.payload.deliveryKey === prepared.deliveryKey)
@@ -132,10 +157,15 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
       await command(`prepare:${effectId}`, 'effect.prepare', {
         effectId, kind: 'operation', runId: binding.runId, nodeId: binding.nodeId, generation: binding.generation,
         leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
-        definition: { adapterId: route.id, adapterVersion: '1', principalId: grant.principalId, action, payload: prepared, ...(editRepair ? {editRepair} : {}) },
-        resourceKeys: [['external', 'file', 'artifact', 'message'].includes(action) ? prepared.resourceKey : ['workspace', 'edit'].includes(action) ? `workspace:${prepared.directory}` : action === 'pr' ? `github:${prepared.repo}:${prepared.head}` : `git:${action === 'push' ? prepared.remote : prepared.repository}:${prepared.ref}`],
+        definition: { adapterId: route.id, adapterVersion: '1', principalId: grant.principalId, action, payload: prepared, ...(preparedRetirement ? { preparedRetirement } : {}), ...(editRepair ? {editRepair} : {}) },
+        resourceKeys: [...(action==='external'&&prepared.sourceMode==='task-worktree'?[`workspace:${prepared.directory}`]:[]), ['external', 'file', 'artifact', 'message'].includes(action) ? prepared.resourceKey : ['workspace', 'edit'].includes(action) ? `workspace:${prepared.directory}` : action === 'pr' ? `github:${prepared.repo}:${prepared.head}` : `git:${action === 'push' ? prepared.remote : prepared.repository}:${prepared.ref}`],
         ...(grant.approval ? { approval: grant.approval } : { authorizationRef: grant.authorizationRef }),
       })
+    }
+    const currentEffect = action === 'external' ? await lookup(effectId) : null
+    if (currentEffect?.authorizationRef?.startsWith('uat-build:')) {
+      const grant = await authorizeExternal?.({ binding: structuredClone(binding), prepared: structuredClone(prepared) })
+      if (grant?.authorizationRef !== currentEffect.authorizationRef) throw executionError('DELIVERY_AUTHORIZATION_STALE')
     }
     const { epoch } = await store.query({ kind: 'safety.get' })
     const permit = await command(`begin:${effectId}:${binding.leaseEpoch}:${epoch}`, 'effect.begin', {
@@ -143,7 +173,7 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
     })
     if (!permit.dispatchEligible) return reconcile(effectId)
     let observation
-    try { observation = await route.adapter[route.execute](prepared, { signal }) }
+    try { observation = await route.adapter[route.execute](prepared, { signal,runId:binding.runId,generation:binding.generation }) }
     catch (error) { observation = { status: 'unknown', reason: error.code ?? 'ADAPTER_EXECUTION_UNKNOWN' } }
     const observed = await observe(effectId, observation)
     if (action === 'pr' && observed.state === 'failed') return reconcile(effectId)
@@ -163,7 +193,7 @@ export function createExecutionDelivery({ store, artifacts, adapter, workspaceAd
         || (action === 'message' && (prepared.taskId !== binding?.taskId || prepared.nodeRunId !== binding?.nodeRunId
           || !/^[a-f0-9]{64}$/.test(prepared.deliveryKey ?? '') || prepared.resourceKey !== `message:${prepared.deliveryKey}`))
         || !/^[a-f0-9]{64}$/.test(binding?.requirementDigest ?? '') || prepared.requirementDigest !== binding.requirementDigest) return Promise.reject(executionError('DELIVERY_INPUT_INVALID'))
-      const effectId = `${['workspace', 'edit', 'external', 'file', 'artifact', 'message'].includes(action) ? action : 'git'}-${executionDigest({ nodeRunId: binding.nodeRunId, action, ...(action === 'message' ? { deliveryKey: prepared.deliveryKey } : {}) })}`
+      const effectId = `${['workspace', 'edit', 'external', 'file', 'artifact', 'message'].includes(action) ? action : 'git'}-${executionDigest({ nodeRunId: binding.nodeRunId, action, ...(action === 'message' ? { deliveryKey: prepared.deliveryKey } : {}), ...(action==='edit'&&binding.nodeId==='apply-changes'&&binding.nodeVersion==='11'?{editBatch:executionDigest(prepared)}:{}) })}`
       const digest = executionDigest(snapshot), existing = flights.get(effectId)
       if (existing) return existing.digest === digest ? existing.promise : Promise.reject(executionError('DELIVERY_IDENTITY_CONFLICT'))
       const promise = dispatch(snapshot, effectId, context).finally(() => flights.delete(effectId))

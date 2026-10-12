@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -594,4 +595,50 @@ for (const scenario of ['delivered','recalled','late','missing','wrong-actor','w
       assert.ok(proof.presentation.deliveredSequence < proof.approvedSequence)
     }
   }
+})
+
+
+function retirementFixture() {
+ const f=fixture()
+ f.db.exec("ALTER TABLE execution_runs ADD COLUMN revision INTEGER DEFAULT 3; ALTER TABLE execution_runs ADD COLUMN pause_requested INTEGER DEFAULT 1; ALTER TABLE execution_runs ADD COLUMN status TEXT DEFAULT 'waiting'; ALTER TABLE execution_runs ADD COLUMN recovery_reason TEXT; ALTER TABLE execution_nodes ADD COLUMN wait_reason TEXT;")
+ const definition={adapterId:'external-operation',adapterVersion:'1',principalId:'owner',action:'external',payload:{candidate:'same',operation:'build'}}
+ f.command('effect.prepare',prepared('old-policy',{...request('old-request'),definition}))
+ f.db.exec("UPDATE execution_nodes SET status='waiting',drained=1")
+ const args={effectId:'old-policy',expectedDefinitionDigest:f.get('old-policy').definitionDigest,expectedRunRevision:3,expectedLeaseEpoch:1,actorId:'owner',assessmentRef:'tasks/task/assessment.json',reason:'Execution session determined this ordinary build needs no business approval under the new rule'}
+ return {...f,args,definition}
+}
+test('formal prepared retirement retains pending decision and audit; only same payload gets one fresh effect',t=>{
+ const f=retirementFixture();t.after(()=>f.db.close())
+ const original=f.get('old-policy').definition
+ const retired=f.command('effect.retirePrepared',f.args).result.effect
+ assert.equal(retired.result.reason,'PREPARED_POLICY_RETIRED')
+ assert.deepEqual(retired.definition,original)
+ assert.equal(f.approvals('old-request').decision,'pending');assert.equal(f.approvals('old-request').revoked,true)
+ assert.equal(f.db.prepare("SELECT count(*) n FROM execution_events WHERE kind='effect.prepared-retired'").get().n,1)
+ assert.equal(f.command('effect.begin',beginArgs('old-policy')).dispatchEligible,false)
+ f.db.exec("UPDATE execution_nodes SET status='running',drained=0; UPDATE execution_runs SET pause_requested=0,status='active'")
+ const key=retired.result.retirementKey
+ const id='external-'+createHash('sha256').update(JSON.stringify({action:'external',nodeRunId:'node-run',preparedRetirement:key})).digest('hex')
+ const next=prepared(id,{definition:{...f.definition,preparedRetirement:{effectId:'old-policy',retirementKey:key}}})
+ f.command('effect.prepare',next)
+ assert.equal(f.command('effect.prepare',next).result.created,false)
+ assert.equal(f.command('effect.begin',beginArgs(id)).dispatchEligible,true)
+ f.command('effect.observe',receipt(id))
+ assert.equal(f.command('effect.begin',beginArgs(id)).dispatchEligible,false)
+ assert.equal(f.get('old-policy').result.assessmentRef,f.args.assessmentRef)
+})
+for(const [name,mutate,expected] of [
+ ['unknown effect',f=>f.db.exec("UPDATE execution_effects SET state='unknown'"),'prepared_retirement_requires_reconciliation'],
+ ['already started',f=>f.db.exec("UPDATE execution_effects SET dispatch_lease_epoch=1"),'prepared_retirement_requires_reconciliation'],
+ ['stale run',f=>f.args.expectedRunRevision=2,'prepared_retirement_stale'],
+ ['stale lease',f=>f.args.expectedLeaseEpoch=0,'prepared_retirement_stale'],
+ ['undrained node',f=>f.db.exec('UPDATE execution_nodes SET drained=0'),'prepared_retirement_stale'],
+ ['active run',f=>f.db.exec('UPDATE execution_runs SET pause_requested=0'),'prepared_retirement_stale'],
+ ['wrong actor',f=>f.args.actorId='stranger','prepared_retirement_actor_invalid'],
+ ['already approved',f=>f.db.exec("UPDATE execution_approvals SET decision='approved'"),'prepared_retirement_actor_invalid'],
+])test('retirement rejects '+name+' atomically',t=>{
+ const f=retirementFixture();t.after(()=>f.db.close());mutate(f)
+ assert.throws(()=>f.command('effect.retirePrepared',f.args),code(expected))
+ assert.equal(f.approvals('old-request').revoked,false)
+ assert.equal(f.db.prepare("SELECT count(*) n FROM execution_events WHERE kind='effect.prepared-retired'").get().n,0)
 })

@@ -1,8 +1,11 @@
+import { currentOwnerUatPolicy, assertUatLocalAcceptance, assertCurrentUatOwnerBinding } from './uat-acceptance-policy.js'
 import { createHash } from 'node:crypto'
 import { executionDigest, executionError } from './execution-artifacts.js'
+import { createUatSchemaMigrationPlatform } from './workflow-uat-schema-migration.js'
 import { createReleasePlatform } from './workflow-release-platform.js'
 import { createUatMergePlatform } from './workflow-uat-merge-platform.js'
 import { createBytebaseDataChangePlatform } from './workflow-bytebase-platform.js'
+import { readAcceptedProjectDeliveryProof, readOwnerAcceptedDeliveryBinding } from './task-delivery-review.js'
 import { readEngineeringDeliveryProof } from './workflow-engineering.js'
 import { isTerminalUatBuildFailure } from './execution-delivery.js'
 
@@ -173,6 +176,18 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
     const source = requirement.localEvidence
     if (!source?.taskId || !source.runId) throw executionError('UAT_LOCAL_EVIDENCE_REQUIRED')
+    if(['original-owner-review-v1','original-owner-candidate-v1'].includes(source.definitionVersion)){
+      const proof=await readAcceptedProjectDeliveryProof({taskId:source.taskId,repository:requirement.repository,headCommitSha:requirement.headCommitSha,pullRequestNumber:requirement.pullRequestNumber,store:execution.store,artifacts:execution.artifacts,repositories:execution.repositories})
+      if(executionDigest(proof)!==executionDigest(source))throw executionError('UAT_LOCAL_EVIDENCE_MISMATCH')
+      const policy=config.uatMerge.targets.find(item=>item.targetId===requirement.targetId)
+      if(!policy)throw executionError('UAT_LOCAL_SCENARIO_REQUIRED')
+      assertUatLocalAcceptance(policy,proof)
+      if(currentOwnerUatPolicy(policy)){
+        const [binding,plan]=await Promise.all([execution.store.query({kind:'task.owner.candidate-acceptance',taskId:source.taskId}),execution.store.query({kind:'task.plan',taskId:source.taskId})])
+        assertCurrentUatOwnerBinding(policy,binding,plan)
+      }
+      return {...proof,evidenceRef:`uat-owner-evidence:${executionDigest(proof)}`}
+    }
     const proof = await readEngineeringDeliveryProof({ state: await execution.controller.state(source.runId),
       artifacts: execution.artifacts, store: execution.store, taskId: source.taskId })
     if (!proof.localEvidence || proof.pullRequest.repository !== requirement.repository
@@ -180,10 +195,22 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       || proof.commitSha !== requirement.headCommitSha
       || executionDigest(proof.localEvidence) !== executionDigest(source)) throw executionError('UAT_LOCAL_EVIDENCE_MISMATCH')
     const policy = config.uatMerge.targets.find(item => item.targetId === requirement.targetId)
-    if (!policy?.requiredScenarioIds?.length || policy.requiredScenarioIds.some(id => !proof.localEvidence.scenarioIds.includes(id)))
-      throw executionError('UAT_LOCAL_SCENARIO_REQUIRED')
+    if(!policy)throw executionError('UAT_LOCAL_SCENARIO_REQUIRED')
+    assertUatLocalAcceptance(policy,proof.localEvidence)
     return { ...proof.localEvidence, evidenceRef: `uat-local-evidence:${executionDigest(proof.localEvidence)}` }
   }
+  const uatSchemaMigration = config?.uatSchemaMigration?.targets?.length
+    ? createUatSchemaMigrationPlatform({ targets: config.uatSchemaMigration.targets, postgres: clients?.uatSchemaMigration,
+      github: clients?.release?.github, readAcceptedSource: async target => {
+        if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
+        const { binding } = await readOwnerAcceptedDeliveryBinding({ store: execution.store, taskId: target.taskId })
+        if (!binding) throw executionError('UAT_SCHEMA_ACCEPTED_CANDIDATE_REQUIRED')
+        const accepted = await execution.artifacts.read(binding.ref), facts = await execution.artifacts.read(accepted.reviewRef)
+        const project = facts.projects?.find(item => item.repository === target.repository)
+        if (project?.commit !== target.candidateSha || project.pr?.number !== target.pullRequestNumber
+          || !facts.acceptance?.scenarioIds?.length) throw executionError('UAT_SCHEMA_ACCEPTED_CANDIDATE_REQUIRED')
+        return { candidateSha: project.commit, evidenceRef: binding.ref }
+      } }) : null
   const uatMerge = config?.uatMerge?.targets?.length
     ? createUatMergePlatform({ targets: config.release?.targets ?? [],
       policies: config.uatMerge.targets, github: clients?.release?.github, readLocalEvidence }) : null
@@ -266,7 +293,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     bytebase.workflowAdapter.legacyAdapter = legacyPlatform.workflowAdapter
     bytebase.legacyExternalAdapter = legacyPlatform.externalAdapter
   }
-  if (!release && !bytebase && !uatMerge) return null
+  if (!release && !bytebase && !uatMerge && !uatSchemaMigration) return null
   const databaseTargets = new Map((config.bytebase?.targets ?? []).map(target => [target.id, target]))
   if ([...releaseTargets.keys(), ...databaseTargets.keys()].some(id => !id || typeof id !== 'string')
     || releaseTargets.size !== (config.release?.targets?.length ?? 0)
@@ -340,7 +367,7 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (executionDigest(view) !== executionDigest(trusted)) throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID')
     return trusted
   }
-  async function prepareUatRebuildFromFailure({ taskId, runId, mergeRunId }) {
+  async function prepareUatRebuildFromFailure({ taskId, runId, mergeRunId, targetId }) {
     if (!execution || !release) throw executionError('UAT_REBUILD_SOURCE_UNCONFIRMED')
     const state = await execution.controller.state(runId)
     const run = state?.run, node = state?.nodes?.find(item => item.nodeId === 'execute-build')
@@ -366,16 +393,25 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       && item.environment === requirement.target.environment && item.runbookId === requirement.target.runbookId)
     const fields = ['repository', 'environment', 'service', 'branch', 'woodpecker', 'kubernetes', 'registry', 'entryUrl']
     const identity = item => Object.fromEntries(fields.map(field => [field, item[field]]))
-    const matches = original.length === 1 ? [...releaseTargets.values()].filter(item => item.kind === 'uat-rebuild'
+    // Release platform registration already rejects conflicting aliases for the same business key.
+    const matches = original.length > 0 ? [...releaseTargets.values()].filter(item => item.kind === 'uat-rebuild'
       && executionDigest(identity(item)) === executionDigest(identity(original[0]))) : []
-    if (matches.length !== 1) throw executionError('UAT_REBUILD_TARGET_UNRESOLVED')
+    const selected = targetId ? matches.find(item => item.id === targetId) : matches[0]
+    if (!selected || matches.some(item => executionDigest(identity(item)) !== executionDigest(identity(selected))))
+      throw executionError('UAT_REBUILD_TARGET_UNRESOLVED')
     return prepareRequirement({ workflowId: 'task-uat-rebuild', action: { taskId,
-      arguments: { objective: requirement.request, targetId: matches[0].id, commitSha: requirement.target.commitSha },
+      arguments: { objective: requirement.request, targetId: selected.id, commitSha: requirement.target.commitSha },
       constraints: requirement.constraints }, materials: [{ resourceRef: `uat-failed-task:${taskId}:${runId}` }] })
   }
   async function prepareRequirement({ workflowId, action, materials, definitionVersion, taskContext }) {
     const request = requireText(action.arguments?.objective, 'EXTERNAL_OBJECTIVE_REQUIRED')
     const constraints = [...new Set(action.constraints ?? [])]
+    if (workflowId === 'task-uat-schema-migration') {
+      const target = uatSchemaMigration?.target
+      if (!target || action.taskId !== target.taskId || action.arguments?.targetId !== target.id)
+        throw executionError('UAT_SCHEMA_TARGET_NOT_ALLOWED')
+      return { request, taskId: target.taskId, targetId: target.id, candidateSha: target.candidateSha }
+    }
     if (workflowId === 'task-data-change-approval-resume') {
       const view = await readApprovalHandoff(action.taskId)
       const selected = databaseTargets.get(action.arguments?.targetId)
@@ -395,12 +431,13 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       if (!Number.isInteger(pullRequestNumber) || pullRequestNumber < 1
         || !/^[a-f0-9]{40}$/u.test(headCommitSha ?? ''))
         throw executionError('UAT_MERGE_PR_IDENTITY_REQUIRED')
-      const markers = (materials ?? []).filter(item => /^engineering-task:[^:]+:[^:]+$/u.test(item.resourceRef ?? ''))
+      const markers = (materials ?? []).filter(item => /^(?:engineering-task:[^:]+:[^:]+|owner-delivery-task:[^:]+)$/u.test(item.resourceRef ?? ''))
       if (markers.length !== 1 || !action.taskId || markers[0].resourceRef.split(':')[1] !== action.taskId)
         throw executionError('UAT_LOCAL_EVIDENCE_REQUIRED')
       if (!execution) throw executionError('UAT_EXECUTION_BINDING_INVALID')
+      const ownerEvidence=markers[0].resourceRef.startsWith('owner-delivery-task:')
       const runId = markers[0].resourceRef.split(':')[2]
-      const proof = await readEngineeringDeliveryProof({ state: await execution.controller.state(runId),
+      const proof = ownerEvidence ? {localEvidence:await readAcceptedProjectDeliveryProof({taskId:action.taskId,repository:selected.repository,headCommitSha,pullRequestNumber,store:execution.store,artifacts:execution.artifacts,repositories:execution.repositories})} : await readEngineeringDeliveryProof({ state: await execution.controller.state(runId),
         artifacts: execution.artifacts, store: execution.store, taskId: action.taskId })
       const requirement = { request, targetId, repository: selected.repository, service: selected.service,
         baseBranch: selected.branch, pullRequestNumber, headCommitSha,
@@ -513,11 +550,13 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
         throw executionError('DATA_CHANGE_APPROVAL_HANDOFF_IDENTITY_INVALID')
       return { status: 'failed', reason: 'APPROVAL_CHANNEL_SUPERSEDED', result: proof }
     },
-    execute: prepared => prepared.workflowKind === 'data-change'
+    execute: prepared => prepared.workflowKind === 'uat-schema-migration'
+      ? uatSchemaMigration?.operationAdapter.execute(prepared) : prepared.workflowKind === 'data-change'
       ? (prepared.intent?.approvalSource === 'bytebase' ? nativeBytebase?.externalAdapter : prepared.intent?.approvalSource === 'assistant' ? bytebase?.externalAdapter : bytebase?.legacyExternalAdapter ?? bytebase?.externalAdapter).execute(prepared)
       : prepared.workflowKind === 'uat-pr-merge'
         ? uatMerge?.operationAdapter.execute(prepared) : release?.operationAdapter.execute(prepared),
-    reconcile: prepared => prepared.workflowKind === 'data-change'
+    reconcile: prepared => prepared.workflowKind === 'uat-schema-migration'
+      ? uatSchemaMigration?.operationAdapter.reconcile(prepared) : prepared.workflowKind === 'data-change'
       ? (prepared.intent?.approvalSource === 'bytebase' ? nativeBytebase?.externalAdapter : prepared.intent?.approvalSource === 'assistant' ? bytebase?.externalAdapter : bytebase?.legacyExternalAdapter ?? bytebase?.externalAdapter).reconcile(prepared)
       : prepared.workflowKind === 'uat-pr-merge'
         ? uatMerge?.operationAdapter.reconcile(prepared) : release?.operationAdapter.reconcile(prepared),
@@ -553,9 +592,36 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       || approval.revoked || approval.decisionSource !== 'web' || !approval.decidedBy)
       throw executionError('RELEASE_APPROVAL_PROOF_REQUIRED')
   }
+  async function authorizeUatBuild(binding, prepared) {
+    if (!execution || !binding.taskId) throw executionError('UAT_EXECUTION_BINDING_INVALID')
+    const plan = await execution.store.query({ kind: 'task.plan', taskId: binding.taskId })
+    const stage = plan?.stages.find(item => item.runId === binding.runId)
+    if (plan?.task.taskId !== binding.taskId || plan.task.controlState !== 'active'
+      || plan.task.planRequirementRevision !== plan.task.requirementRevision
+      || stage?.workflowId !== `task-${prepared.workflowKind}` || stage.status !== 'running' || !stage.requirementRef)
+      throw executionError('UAT_EXECUTION_BINDING_INVALID')
+    const input = await execution.artifacts.read(stage.requirementRef)
+    const target = [...releaseTargets.values()].find(item => item.kind === prepared.workflowKind
+      && item.repository === input.target?.repository && item.environment === input.target.environment
+      && item.service === input.target.service && item.runbookId === input.target.runbookId)
+    if (!target || input.target.environment !== 'uat' || !/^[a-f0-9]{40}$/.test(input.target.commitSha ?? '')
+      || input.target.commitSha !== prepared.expected?.commitSha
+      || executionDigest(input) !== prepared.requirementDigest || executionDigest(input.target) !== prepared.targetDigest)
+      throw executionError('UAT_BUILD_TARGET_MISMATCH')
+    return { principalId: owner, authorizationRef: `uat-build:${executionDigest({ taskId: binding.taskId,
+      runId: binding.runId, targetId: target.id, commitSha: input.target.commitSha, operation: prepared.operation })}` }
+  }
   async function authorizeExternal({ binding, prepared }) {
     if (!binding?.runId || prepared?.runId !== binding.runId || prepared.generation !== binding.generation)
       throw executionError('EXTERNAL_AUTHORIZATION_IDENTITY_INVALID')
+    if (prepared.workflowKind === 'uat-schema-migration') {
+      const target = uatSchemaMigration?.target
+      const state = await execution?.controller.state(binding.runId)
+      if (!target || state?.run.taskId !== target.taskId || prepared.expected?.targetId !== target.id
+        || prepared.expected?.taskId !== target.taskId || prepared.expected?.candidateSha !== target.candidateSha)
+        throw executionError('UAT_SCHEMA_TARGET_NOT_ALLOWED')
+      return { principalId: owner, authorizationRef: `uat-schema:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
+    }
     if (prepared.workflowKind === 'uat-pr-merge') {
       if (!uatMerge || prepared.operation !== 'merge-uat-pr'
         || !uatMerge.configuredTargetIds.includes(prepared.expected?.targetId))
@@ -592,16 +658,34 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
       if (prepared.operation === 'tag') await assertProductionTagApproval(prepared)
       return { principalId: owner, authorizationRef: `release:${executionDigest([binding.runId, binding.nodeRunId, prepared])}` }
     }
+    if (prepared.workflowKind === 'uat-deployment' && prepared.operation === 'build'
+      || prepared.workflowKind === 'uat-rebuild' && prepared.operation === 'rebuild')
+      return authorizeUatBuild(binding, prepared)
     return { principalId: owner, approval: {
       requestId: `external:${executionDigest([binding.runId, binding.nodeRunId, prepared])}`,
       approverIds: [...new Set(productionApprovers)],
     } }
   }
   return { releaseAdapters: release?.releaseAdapters ?? {},
+    ...(uatSchemaMigration ? { uatSchemaMigrationAdapter: uatSchemaMigration.adapter } : {}),
     ...(uatMerge ? { uatMergeAdapter: uatMerge.adapter } : {}),
     ...(bytebase ? { dataChangeAdapter: bytebase.workflowAdapter } : {}),
     operationAdapter, authorizeExternal, prepareRequirement, prepareUatRebuildFromFailure, verifyDataChangeApprovalHandoff, bindStore, bindExecution,
+    async prepareAcceptedProjectSource({taskId,targetId}) {
+      if(!execution)throw executionError('UAT_EXECUTION_BINDING_INVALID')
+      const target=releaseTargets.get(targetId)
+      if(!target||target.kind!=='uat-deployment')throw executionError('UAT_MERGE_TARGET_NOT_ALLOWED')
+      const {binding}=await readOwnerAcceptedDeliveryBinding({store:execution.store,taskId})
+      if(!binding)return null
+      const manifest=await execution.artifacts.read(binding.ref),facts=await execution.artifacts.read(manifest.reviewRef)
+      if(!facts.acceptance?.scenarioIds?.length)return null
+      const project=facts.projects?.find(item=>item.repository===target.repository)
+      if(!project)throw executionError('UAT_OWNER_CANDIDATE_MISMATCH')
+      const proof=await readAcceptedProjectDeliveryProof({taskId,repository:target.repository,headCommitSha:project.commit,pullRequestNumber:project.pr.number,store:execution.store,artifacts:execution.artifacts,repositories:execution.repositories})
+      return {pullRequestNumber:project.pr.number,headCommitSha:proof.commitSha,resourceRef:`owner-delivery-task:${taskId}`}
+    },
     availableTargets: [
+      ...(uatSchemaMigration ? [{ targetId: uatSchemaMigration.target.id, workflowId: 'task-uat-schema-migration', repository: uatSchemaMigration.target.repository, branch: uatSchemaMigration.target.branch }] : []),
       ...[...releaseTargets].map(([targetId, target]) => ({ targetId, workflowId: `task-${target.kind}`,
         ...(target.kind === 'uat-deployment' ? { repository: target.repository, branch: target.branch } : {}) })),
       ...(uatMerge ? uatMerge.configuredTargetIds.map(targetId => ({ targetId, workflowId: 'task-uat-pr-merge',

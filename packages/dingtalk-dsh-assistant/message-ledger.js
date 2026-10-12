@@ -1,4 +1,4 @@
-import { reduceTaskOwnerCommand } from './task-owner-store.js'
+import { reduceTaskOwnerCommand, queryTaskOwner } from './task-owner-store.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 import { taskNotificationAllowed, notificationSilence } from './workflow-notifications.js'
@@ -56,6 +56,7 @@ export function isPassiveTaskProgress(body) {
   if (typeof body !== 'string') return false
   const text = body.trim()
   const withoutMention = text.replace(/^@[^\s，,]+(?:\([^)]*\))?\s*/u, '')
+  if (/^任务已开始处理[。.!！]?\s*(?:-\s*小小鹏代回)?$/u.test(withoutMention)) return true
   return /^任务已创建[，,]\s*开始处理[。.!！]?\s*任务[:：]\s*\S+\s*[—-]\s*\S+$/u.test(withoutMention)
 }
 export function isQuietGroupMessage(body) {
@@ -76,6 +77,17 @@ export function isQuietGroupMessage(body) {
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const str = v => { if (typeof v !== 'string' || !v.trim()) fail('MESSAGE_INVALID_ARGUMENT'); return v }
 const json = v => JSON.stringify(v)
+// Completion belongs to the verified task result, rather than a historical message revision.
+export function currentOwnerCompletion(db,notification,explicitCompletion=false){
+ const phase=notification.payload?.phase
+ if(!phase?.startsWith('owner:')||phase.startsWith('owner:started:')||phase.startsWith('owner:application_wait:'))return false
+ const fact=db.prepare(`SELECT r.task_id,r.report_type,t.application_status,t.requirement_revision,t.plan_revision,t.control_revision,b.requirement_revision AS current_requirement,b.plan_revision AS current_plan,b.plan_requirement_revision,c.control_revision AS current_control FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id JOIN business_tasks b ON b.task_id=r.task_id JOIN task_controls c ON c.task_id=r.task_id WHERE r.report_id=?`).get(phase.slice(6))
+ if(!fact||fact.task_id!==notification.payload?.fact?.taskId||fact.report_type!=='complete'||fact.application_status!=='applied'||fact.requirement_revision!==fact.current_requirement||fact.plan_revision!==fact.current_plan||fact.control_revision!==fact.current_control||!explicitCompletion&&fact.current_plan>0&&fact.plan_requirement_revision!==fact.current_requirement)return false
+ const current=queryTaskOwner(db,{kind:'task.owner',taskId:fact.task_id})
+ if(current?.decision?.action!=='complete'||current.applicationStatus!=='applied'||current.eventWatermark!==current.processedWatermark)return false
+ const pending=db.prepare('SELECT event_type FROM task_events WHERE task_id=? AND handled_at IS NULL').all(fact.task_id)
+ return pending.every(event=>['topic.fact','query.succeeded','workflow.succeeded'].includes(event.event_type))
+}
 function taskFactVersion(db, taskId) {
   const task = db.prepare('SELECT requirement_revision,requirement_ref,plan_revision,plan_requirement_revision,status FROM business_tasks WHERE task_id=?').get(str(taskId)) ?? null
   const control = db.prepare('SELECT * FROM task_controls WHERE task_id=?').get(taskId) ?? null
@@ -199,6 +211,50 @@ function notificationFactDigest(db,n){
 }
 function notificationTaskDeleted(db, taskId) {
   return !!taskId && !!db.prepare("SELECT 1 FROM execution_events WHERE kind='task.delete' AND json_extract(payload,'$.taskId')=? LIMIT 1").get(taskId)
+}
+// 只读预检与退休命令共用；不领取、不调用渠道，不推断未确认发送。
+export function inspectNotificationRetirement(db, notificationId, supersededByNotificationId) {
+  const n=get(db,'notification',str(notificationId)),kept=get(db,'notification',str(supersededByNotificationId))
+  if(n.status!=='prepared'||n.leaseEpoch!==0||n.ack||n.evidence||n.startedAt||n.ackAt||n.deliveredAt||n.deliveredMessageId||n.error||n.deliveryError||n.sendAttemptCount>0||n.deliveryAttemptCount>0)
+    fail('MESSAGE_NOTIFICATION_RETIRE_UNSAFE_DELIVERY')
+  if(db.prepare("SELECT 1 FROM message_items WHERE kind='notification-operation' AND json_extract(body,'$.snapshot.notificationId')=? AND json_extract(body,'$.status') IN ('in_flight','acknowledged','unknown') LIMIT 1").get(n.id))
+    fail('MESSAGE_NOTIFICATION_RETIRE_UNSAFE_DELIVERY')
+  const action=n.commandId?get(db,'command',n.commandId):null
+  const taskId=n.payload?.fact?.taskId??action?.result?.taskId
+  if(!taskId||action?.result?.taskId&&action.result.taskId!==taskId||kept.id===n.id
+    ||kept.payload?.conversationId!==n.payload?.conversationId||kept.payload?.fact?.taskId!==taskId
+    ||kept.status!=='delivered'||!kept.evidence?.messageId||kept.evidence.conversationId!==n.payload.conversationId||kept.recallStatus==='recalled')fail('MESSAGE_NOTIFICATION_RETIRE_REPLACEMENT_UNPROVEN')
+  const keptReport=db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.application_status FROM task_reports r
+    JOIN task_owner_turns t ON t.turn_id=r.turn_id WHERE r.report_id=?`).get(kept.payload.phase?.slice(6))
+  const latest=db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(taskId)
+  const source=run(db,n.runId),phase=n.payload?.phase
+  const currentRun=db.prepare('SELECT run_id,revision,status FROM execution_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId)??null
+  const currentTask=db.prepare('SELECT requirement_revision,plan_revision,status FROM business_tasks WHERE task_id=?').get(taskId)
+  if(source.conversationId!==n.payload.conversationId||run(db,kept.runId).conversationId!==n.payload.conversationId
+    ||!currentTask||!kept.payload.phase?.startsWith('owner:')||keptReport?.task_id!==taskId
+    ||keptReport.report_type!=='complete'||keptReport.application_status!=='applied')fail('MESSAGE_NOTIFICATION_RETIRE_REPLACEMENT_UNPROVEN')
+  // 只撤销Host当前策略明确禁发的自动启动意图，不宣告Task完成；其它报告仍走原守卫。
+  const policyWithdrawn=phase==='task:started'&&n.payload?.fact?.taskId===taskId
+    &&action?.runId===n.runId&&action.status==='applied'&&['create','research'].includes(action.kind)
+    &&action.result?.taskId===taskId&&(!action.args?.taskId||action.args.taskId===taskId)
+    &&n.eventKey===`task.started:${taskId}`&&!taskNotificationAllowed({phase,action})
+  if(!policyWithdrawn&&(keptReport.turn_id!==latest?.turn_id||!currentOwnerCompletion(db,kept,true)
+    ||currentTask.status!=='succeeded'))fail('MESSAGE_NOTIFICATION_RETIRE_REPLACEMENT_UNPROVEN')
+  const report=phase?.startsWith('owner:')?db.prepare(`SELECT r.task_id,r.turn_id,r.report_type,t.requirement_revision,t.application_status
+    FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id WHERE r.report_id=?`).get(phase.slice(6)):null
+  let reason
+  if(policyWithdrawn)reason='automatic-start-policy-withdrawn'
+  else if(report?.task_id===taskId&&report.application_status==='applied'&&['complete','wait','block'].includes(report.report_type)
+    &&(report.requirement_revision!==currentTask?.requirement_revision||report.turn_id!==latest.turn_id))reason='owner-conclusion-replaced'
+  else if(phase==='receipt'&&action?.status==='applied'&&['status','result'].includes(action.kind)&&action.result?.runId
+    &&currentRun&&action.result.runId!==currentRun.run_id)reason='execution-result-replaced'
+  if(!reason)fail('MESSAGE_NOTIFICATION_RETIRE_STILL_CURRENT')
+  const ownerFacts=db.prepare('SELECT status,revision,lease_epoch,event_watermark,processed_watermark,authorization_revision,input_fence_revision FROM task_owners WHERE task_id=?').get(taskId)
+  const facts={notification:n,source,action,taskId,currentTask,currentRun,ownerFacts,taskFacts:taskFactVersion(db,taskId),report:report??null,keptReport,
+    latestTurnId:latest?.turn_id??null,replacement:kept,reason,
+    ...(policyWithdrawn?{policy:{phase,automaticNotificationAllowed:false}}:{})}
+  return {notificationId:n.id,supersededByNotificationId:kept.id,conversationId:n.payload.conversationId,taskId,reason,
+    replacementMessageId:kept.evidence.messageId,expectedFactDigest:digest(facts),facts}
 }
 function notificationStateCurrent(source,fact){
   if(fact.revision!==source.revision||fact.status!==source.status||(fact.reason??null)!==(source.reason??null)
@@ -877,7 +933,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if((runCount ? !task : a.executionRunId !== null)||!businessTask?.requirement_ref||a.request.runSequence!==runCount
       ||a.request.inputVersion!==businessTask.requirement_revision+1)fail('REVISION_CONFLICT')
     if(!['cancel','context'].includes(a.request.action))fail('MESSAGE_WEB_ACTION_UNSUPPORTED')
-    if(a.request.action==='context'&&isBusinessTaskTerminal(db,a.request.taskId))fail('RUN_TERMINAL')
+    if(a.request.action==='context'&&['cancelling','cancelled'].includes(db.prepare('SELECT state FROM task_controls WHERE task_id=?').get(a.request.taskId)?.state))fail('RUN_TERMINAL')
     const event={id:str(a.eventId),actorId:str(a.actorId),runId:origin.run.runId,executionRunId:task?.run_id??null,request:a.request,input:a.input??null,status:'pending'}
     put(db,event.runId,'web-task',event);return {result:{event}}
   }
@@ -922,6 +978,18 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     put(db,r.runId,'notification-diagnostic',diagnostic);return {result:{diagnostic}}
   }
   if(kind.startsWith('message.notification.')) {
+    if(kind==='message.notification.retire') {
+      if(a.authorizationRef!==`host-web:${encodeURIComponent(str(a.actorId))}`)fail('MESSAGE_NOTIFICATION_RETIRE_AUTHORIZATION_REQUIRED')
+      const snapshot=inspectNotificationRetirement(db,a.notificationId,a.supersededByNotificationId)
+      if(a.expectedFactDigest!==snapshot.expectedFactDigest)fail('MESSAGE_NOTIFICATION_RETIRE_STALE')
+      const n=get(db,'notification',a.notificationId)
+      n.status='superseded';n.supersededAt=now;n.supersededReason=snapshot.reason;n.supersededByOutboundId=snapshot.supersededByNotificationId
+      n.retirement={requestId:str(a.requestId),actorId:str(a.actorId),authorizationRef:str(a.authorizationRef),evidenceRef:str(a.evidenceRef),
+        expectedFactDigest:snapshot.expectedFactDigest,supersededByNotificationId:snapshot.supersededByNotificationId,
+        replacementMessageId:snapshot.replacementMessageId,taskId:snapshot.taskId,retiredAt:now,reason:snapshot.reason}
+      put(db,n.runId,'notification',n)
+      return {result:{notification:n},dispatchEligible:false}
+    }
     if(kind==='message.notification.operation.prepare') {
       const n=get(db,'notification',a.notificationId),type=str(a.type),operationId=str(a.operationId),reason=str(a.reason),authorizationRef=str(a.authorizationRef)
       const existing=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+operationId)
@@ -1014,7 +1082,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       put(db,n.runId,'notification-replacement',replacement)
       return {result:{replacement}}
     }
-    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);if(source.status==='superseded'){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision||n.payload?.phase==='system_wait'&&(!q.blocked||rows(db,source.runId,'request').some(item=>item.status==='pending'&&item.kind==='needs_context'&&!item.blocked)||rows(db,source.runId,'command').some(item=>['pending','running'].includes(item.status))||rows(db,source.runId,'node').some(item=>item.status==='running'))){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
+    if(kind==='message.notification.claim') {if(n.status!=='prepared')fail('MESSAGE_NOTIFICATION_NOT_READY');const source=run(db,n.runId);const explicitCompletion=Boolean(a.completionAuthorizationRef);const verifiedCompletion=currentOwnerCompletion(db,n,explicitCompletion);if(explicitCompletion&&!verifiedCompletion)fail('MESSAGE_COMPLETION_NOTIFICATION_UNPROVEN');if(source.status==='superseded'&&!verifiedCompletion){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}if(n.requestId){const q=get(db,'request',n.requestId);if(q.status!=='pending'||q.revision!==source.revision||n.payload?.phase==='system_wait'&&(!q.blocked||rows(db,source.runId,'request').some(item=>item.status==='pending'&&item.kind==='needs_context'&&!item.blocked)||rows(db,source.runId,'command').some(item=>['pending','running'].includes(item.status))||rows(db,source.runId,'node').some(item=>item.status==='running'))){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
       const phase=n.payload?.phase
       const action=n.commandId?get(db,'command',n.commandId):null
       const row=phase?.startsWith('owner:')?db.prepare(`SELECT r.*,t.application_status FROM task_reports r
@@ -1027,10 +1095,10 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       }
       const taskId=n.payload?.fact?.taskId??(n.commandId?get(db,'command',n.commandId).result?.taskId:n.acceptanceId?get(db,'acceptance',n.acceptanceId).taskId:null)
       if(notificationTaskDeleted(db,taskId)){n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}
-      const version=n.payload?.fact
+      const version=n.payload?.fact,requirementRevision=notificationRequirementRevision(db,n)
       if(n.acceptanceId){const fact=get(db,'acceptance',n.acceptanceId);if(db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(fact.taskId)?.requirement_revision!==fact.requirementRevision){n.status='superseded';put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}}
-      if(n.stateFact&&!notificationStateCurrent(source,n.stateFact)||version&&(version.sourceVersion!==source.sourceVersion||version.runRevision!==source.revision
-        ||version.taskId&&version.requirementRevision!==undefined&&db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(version.taskId)?.requirement_revision!==version.requirementRevision)){
+      if(n.stateFact&&!notificationStateCurrent(source,n.stateFact)||version&&(!verifiedCompletion&&(version.sourceVersion!==source.sourceVersion||version.runRevision!==source.revision)
+        ||version.taskId&&requirementRevision!==undefined&&db.prepare('SELECT requirement_revision FROM business_tasks WHERE task_id=?').get(version.taskId)?.requirement_revision!==requirementRevision)){
         n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}
       }
       if(version?.commandLeaseEpoch!==undefined&&(()=>{const command=get(db,'command',n.commandId);return command.status!=='applied'||command.leaseEpoch!==version.commandLeaseEpoch||version.commandInputVersion!==undefined&&command.result?.inputVersion!==version.commandInputVersion})()){n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n);return {result:{notification:n},dispatchEligible:false}}
@@ -1073,9 +1141,9 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
           JOIN task_owners o ON o.task_id=r.task_id
           JOIN business_tasks b ON b.task_id=r.task_id JOIN task_controls c ON c.task_id=r.task_id WHERE r.report_id=?`).get(reportId)
         const latest=fact?db.prepare("SELECT turn_id FROM task_owner_turns WHERE task_id=? AND status='accepted' ORDER BY rowid DESC LIMIT 1").get(fact.task_id):null
-        if(!fact||(!releasedWait&&((applicationWait ? fact.application_status!=='blocked'||fact.owner_status!=='blocked'||fact.report_control_revision!==fact.control_revision : fact.application_status!=='applied'||fact.event_watermark!==fact.processed_watermark)||latest?.turn_id!==fact.turn_id
+        if(!fact||(!releasedWait&&((applicationWait ? fact.application_status!=='blocked'||fact.owner_status!=='blocked'||fact.report_control_revision!==fact.control_revision : fact.application_status!=='applied'||!verifiedCompletion&&fact.event_watermark!==fact.processed_watermark)||latest?.turn_id!==fact.turn_id
             ||fact.report_requirement_revision!==fact.requirement_revision
-            ||fact.report_type==='complete'&&fact.plan_revision>0&&fact.plan_requirement_revision!==fact.requirement_revision))){
+            ||!explicitCompletion&&fact.report_type==='complete'&&fact.plan_revision>0&&fact.plan_requirement_revision!==fact.requirement_revision))){
           n.status='superseded';n.supersededAt=now;put(db,n.runId,'notification',n)
           return {result:{notification:n},dispatchEligible:false}
         }
@@ -1162,14 +1230,21 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       &&!db.prepare(`SELECT 1 FROM message_topic_bindings own JOIN message_topic_bindings related ON related.topic_id=own.topic_id
         JOIN message_items i ON i.run_id=related.run_id AND i.kind='command' WHERE own.run_id=?
         AND (json_extract(i.body,'$.args.taskId') IS NOT NULL OR json_extract(i.body,'$.args.binding.taskId') IS NOT NULL) LIMIT 1`).get(old.runId)
+    const pendingConversationFacts=['waiting','pending','needs_attention'].includes(old.status)
+      &&a.expectedSourceVersion===old.sourceVersion&&conversationFactOnly(oldCommands)
+      &&oldCommands.every(item=>item.status==='pending'&&item.leaseEpoch===0&&item.revision===old.revision
+        &&item.result==null&&!item.args?.binding?.target?.taskId)
+      &&oldNotifications.length===0&&rows(db,old.runId,'agent-execution').length===0
+      &&!db.prepare('SELECT 1 FROM execution_runs WHERE run_id=? UNION ALL SELECT 1 FROM execution_effects WHERE run_id=? LIMIT 1').get(old.runId,old.runId)
     if((!['waiting','needs_attention','pending'].includes(old.status) && !(old.status==='settled'&&oldUnits.length&&oldUnits.every(item=>item.status==='ignored')) && !rejectedFacts&&!conversationFacts)
-      || oldCommands.length&&!rejectedFacts&&!reconciledNoEffect&&!conversationFacts)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
+      || oldCommands.length&&!rejectedFacts&&!reconciledNoEffect&&!conversationFacts&&!pendingConversationFacts)fail('MESSAGE_REPROCESS_EFFECT_PENDING')
     if(db.prepare('SELECT 1 FROM message_runs WHERE run_id=?').get(str(a.newRunId)))fail('MESSAGE_REPROCESS_EXISTS')
     const sequence=old.context?.replayOfSequenceId??db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(old.runId).seq
     const origin=old.context?.replayOf?run(db,old.context.replayOf):old
     const spent=db.prepare('SELECT claims,input_tokens,output_tokens FROM message_sources WHERE source_key=?').get(old.sourceKey)
     for(const request of rows(db,old.runId,'request').filter(item=>item.status==='pending')){request.status='superseded';request.reason='message_reprocessed';put(db,old.runId,'request',request)}
     for(const notice of oldNotifications.filter(item=>item.status==='prepared')){notice.status='superseded';notice.supersededAt=now;put(db,old.runId,'notification',notice)}
+    if(pendingConversationFacts)revoke(db,old)
     old.status='superseded';old.routingStatus='routing_superseded';old.reason='message_reprocessed';save(db,old);invalidateMessageSourceTopics(db,old.sourceKey,now)
     const next={...old,runId:a.newRunId,sourceVersion:old.sourceVersion+1,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,
       context:{...old.context,...(a.compactPolicy !== undefined ? {compactPolicy:str(a.compactPolicy)} : {}),occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
@@ -1177,6 +1252,10 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     delete next.activatedAt;delete next.executionStartedAt;delete next.reason;delete next.capacityRetryVersion;delete next.attentionScope;delete next.attentionUnitIds;delete next.coordinatorConsumed
     db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
+    // Transfer the fence to the new source; only its final decision may release it.
+    const replayBarriers=rows(db,old.runId,'barrier').filter(item=>item.status==='pending')
+    for(const barrier of replayBarriers){barrier.previousOwnerRunId=barrier.ownerRunId;barrier.ownerRunId=a.newRunId
+      db.prepare('UPDATE message_items SET run_id=?,body=? WHERE item_id=?').run(a.newRunId,json(barrier),'barrier:'+barrier.id)}
     registerMessageImpact(db,next,now)
     for(const request of resolvedSplitRequests){
       const id=createHash('sha256').update(json([next.runId,request.id])).digest('hex')
@@ -1760,6 +1839,7 @@ export function queryMessages(db,a) {
       .map(row=>({runId:row.run_id,targetRunId:row.target_run_id,requestId:row.request_id}))
   }
   if(a.kind==='message.notification.diagnostics')return db.prepare("SELECT body FROM message_items WHERE kind='notification-diagnostic'").all().map(row=>JSON.parse(row.body)).filter(item=>(!a.runId||item.runId===a.runId)&&(!a.status||item.status===a.status))
+  if(a.kind==='message.notificationRetirement')return inspectNotificationRetirement(db,a.notificationId,a.supersededByNotificationId)
   if(a.kind==='message.notification'){if(Boolean(a.notificationId)===Boolean(a.eventKey))fail('MESSAGE_NOTIFICATION_QUERY_INVALID');const row=a.eventKey?db.prepare("SELECT body FROM message_items WHERE kind='notification' AND json_extract(body,'$.eventKey')=? LIMIT 1").get(str(a.eventKey)):db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification:'+str(a.notificationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationOperation'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-operation:'+str(a.operationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.notificationReplacement'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('notification-replacement:'+str(a.replacementId));return row?JSON.parse(row.body):null}
@@ -1926,7 +2006,7 @@ export function assertMessageTaskUnfenced(db,taskId,{allowRelatedProcessing=fals
      JOIN message_runs r ON r.run_id=b.run_id WHERE b.topic_id=? AND json_extract(i.body,'$.status')='pending'
      AND json_extract(r.body,'$.status')!='superseded' LIMIT 1`).get(origin.topic_id))fail('MESSAGE_INPUT_PENDING')
    const pending=queryMessages(db,{kind:'message.routing.pending',conversationId:source.conversationId,topicId:origin.topic_id??undefined})
-     .filter(candidate=>candidate.runId!==source.runId)
+     .filter(candidate=>candidate.runId!==source.runId&&!isPassiveTaskProgress(candidate.body))
    if(pending.some(candidate=>{
      if(origin.topic_id)return true
      const scoped=rows(db,candidate.runId,'barrier').filter(b=>b.targetTaskId===taskId||b.targetSourceKey===source.sourceKey)
@@ -1941,3 +2021,32 @@ export function assertMessageTaskUnfenced(db,taskId,{allowRelatedProcessing=fals
  const sources=db.prepare("SELECT r.source_key, json_extract(i.body,'$.unitId') AS unit_id FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.args.taskId')=?").all(taskId)
  if(fences.some(b=>!consumingRuns.has(b.ownerRunId)&&(b.targetTaskId===taskId||sources.some(s=>s.source_key===b.targetSourceKey&&(!b.unitIds||b.unitIds.includes(s.unit_id))))))fail('MESSAGE_INPUT_PENDING')
 }
+
+// Legacy task-start replies belong to their persisted creation receipt, not today's task revision.
+function notificationRequirementRevision(db,notice){
+ const version=notice.payload?.fact?.requirementRevision
+ if(Number.isSafeInteger(version)&&version>0)return version
+ const taskId=notice.payload?.fact?.taskId
+ if(notice.payload?.phase!=='task:started'||notice.eventKey!==`task.started:${taskId}`||!notice.commandId)return undefined
+ const row=db.prepare('SELECT result FROM execution_receipts WHERE command_id=?').get(`task-accept:${notice.commandId}`)
+ const receipt=row&&JSON.parse(row.result),accepted=receipt?.result??receipt
+ return accepted?.taskId===taskId&&Number.isSafeInteger(accepted.requirementRevision)&&accepted.requirementRevision>0?accepted.requirementRevision:undefined
+}
+
+// Retire proven older unclaimed task replies; claimed and sent history stays immutable.
+export function supersedeUnclaimedTaskRevisionNotifications(db,taskId,requirementRevision,now){
+ const reports=db.prepare("SELECT r.report_id FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id WHERE r.task_id=? AND r.report_type IN ('complete','wait','block') AND t.requirement_revision<?").all(taskId,requirementRevision)
+ const phases=new Set(reports.map(r=>'owner:'+r.report_id))
+ let count=0
+ for(const row of db.prepare("SELECT item_id,body FROM message_items WHERE kind='notification' AND json_extract(body,'$.status')='prepared' AND json_extract(body,'$.leaseEpoch')=0").all()){
+  const notice=JSON.parse(row.body)
+  if(notice.payload?.fact?.taskId!==taskId)continue
+  const version=notificationRequirementRevision(db,notice)
+  if(!phases.has(notice.payload?.phase)&&!(Number.isSafeInteger(version)&&version<requirementRevision&&notice.payload?.phase==='task:started'))continue
+  notice.status='superseded';notice.supersededAt=now;notice.supersededReason='task-requirement-revised'
+  count+=db.prepare('UPDATE message_items SET body=? WHERE item_id=? AND body=?').run(JSON.stringify(notice),row.item_id,row.body).changes
+ }
+ return count
+}
+
+export const supersedeUnclaimedCompletionNotifications = supersedeUnclaimedTaskRevisionNotifications

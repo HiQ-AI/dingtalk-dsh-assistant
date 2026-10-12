@@ -87,12 +87,33 @@ export function validateTaskPlanSchema(db, { legacy = false, sourceConditions = 
     'SELECT task_id,plan_revision,stage_id,position,workflow_id,workflow_digest,unavailable_reason,requirement_ref,predecessor_output_ref,gate,status,attempt,run_id,output_ref,evidence_refs,confirmed_output_ref FROM task_plan_stages LIMIT 0',
   ]) db.prepare(sql).all()
   if (sourceConditions) db.prepare('SELECT source_condition FROM task_plan_stages LIMIT 0').all()
+  // A user-declared completion may have no engineering plan; its native audit is the proof.
+  const declaredCompletion = `t.status='succeeded'
+    AND EXISTS(SELECT 1 FROM task_controls c WHERE c.task_id=t.task_id AND c.state='paused')
+    AND NOT EXISTS(SELECT 1 FROM execution_runs r WHERE r.task_id=t.task_id)
+    AND EXISTS(SELECT 1 FROM execution_events e WHERE e.kind='task.completion.confirmed'
+      AND json_extract(e.payload,'$.taskId')=t.task_id
+      AND json_extract(e.payload,'$.requirementRevision')=t.requirement_revision
+      AND json_extract(e.payload,'$.basis')='user-declaration'
+      AND json_extract(e.payload,'$.engineeringVerified')=0)`
+  // Native session completion is terminal only after its accepted decision was applied.
+  // Older schemas without owners retain their original no-plan invariant.
+  const sessionCompletion = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_owner_turns'").get()
+    ? `t.status='succeeded' AND EXISTS(SELECT 1 FROM task_owner_turns q
+        WHERE q.task_id=t.task_id AND q.status='accepted' AND q.application_status='applied'
+          AND json_extract(q.decision_json,'$.action')='complete'
+          AND q.requirement_revision=t.requirement_revision AND q.plan_revision=t.plan_revision
+          AND EXISTS(SELECT 1 FROM execution_events e WHERE e.kind='task.owner.applied'
+            AND json_extract(e.payload,'$.taskId')=q.task_id
+            AND json_extract(e.payload,'$.turnId')=q.turn_id))`
+    : '0'
+  const completedWithoutPlan = `(${declaredCompletion}) OR (${sessionCompletion})`
   const invalid = db.prepare(`SELECT t.task_id FROM business_tasks t
     LEFT JOIN task_plan_stages s ON s.task_id=t.task_id AND s.plan_revision=t.plan_revision
-    GROUP BY t.task_id HAVING COUNT(s.stage_id)=0 ${legacy ? '' : "AND (t.plan_revision<>0 OR t.status<>'pending' OR t.requirement_ref IS NULL)"}`).all()
+    GROUP BY t.task_id HAVING COUNT(s.stage_id)=0 ${legacy ? '' : `AND (t.plan_revision<>0 OR (t.status<>'pending' AND NOT (${completedWithoutPlan})) OR t.requirement_ref IS NULL)`}`).all()
   if (invalid.length) fail('TASK_PLAN_INVARIANT_FAILED')
-  if (!legacy && db.prepare(`SELECT task_id FROM business_tasks WHERE plan_requirement_revision>requirement_revision
-    OR (plan_revision=0 AND (plan_requirement_revision<>0 OR status<>'pending' OR requirement_ref IS NULL))
+  if (!legacy && db.prepare(`SELECT t.task_id FROM business_tasks t WHERE plan_requirement_revision>requirement_revision
+    OR (plan_revision=0 AND (plan_requirement_revision<>0 OR (status<>'pending' AND NOT (${completedWithoutPlan})) OR requirement_ref IS NULL))
     OR (plan_revision>0 AND plan_requirement_revision=0) LIMIT 1`).get()) fail('TASK_PLAN_INVARIANT_FAILED')
   if (db.prepare(`SELECT t.task_id FROM business_tasks t LEFT JOIN task_controls c ON c.task_id=t.task_id
     WHERE c.task_id IS NULL LIMIT 1`).get()) fail('TASK_PLAN_INVARIANT_FAILED')
@@ -114,7 +135,11 @@ export function queryTaskPlan(db, query) {
   exact(query, ['kind', 'taskId'])
   const taskId = name(query.taskId), task = taskRow(db, taskId)
   if (!task) return null
-  return { task: taskDto(task), stages: stageRows(db, taskId, task.plan_revision).map(stageDto) }
+  const confirmation=db.prepare("SELECT payload FROM execution_events WHERE kind='task.completion.confirmed' AND json_extract(payload,'$.taskId')=? AND json_extract(payload,'$.requirementRevision')=? ORDER BY seq DESC LIMIT 1").get(taskId,task.requirement_revision)
+  const confirmed=confirmation?JSON.parse(confirmation.payload):null
+  const stages = stageRows(db, taskId, task.plan_revision).map(stageDto)
+  const completedPlan = task.status === 'pending' && stages.length > 0 && stages.every(stage => stage.status === 'succeeded')
+  return { task: {...taskDto(task), ...(completedPlan ? { planStatus: 'succeeded' } : {}),...(confirmed?{status:'succeeded',userConfirmedCompletion:confirmed}:{})}, stages }
 }
 
 function validateStages(stages, db, taskId) {
@@ -128,7 +153,7 @@ function validateStages(stages, db, taskId) {
       exact(condition, ['sourceKey', 'sourceVersion', 'sourceQuote', 'objective', 'requiredActorId', 'repositoryId', 'acceptanceCriteria'])
       if (condition.repositoryId !== undefined && (typeof condition.repositoryId !== 'string' || !condition.repositoryId.trim()
         || !Array.isArray(condition.acceptanceCriteria) || !condition.acceptanceCriteria.length
-        || condition.acceptanceCriteria.some(item => typeof item !== 'string' || !item.trim() || item.length > 2000))) fail('TASK_STAGE_SOURCE_CONDITION_INVALID')
+        || condition.acceptanceCriteria.some(item => typeof item !== 'string' || !item.trim()))) fail('TASK_STAGE_SOURCE_CONDITION_INVALID')
       natural(condition.sourceVersion)
       if (['sourceKey', 'sourceQuote', 'objective'].some(key => typeof condition[key] !== 'string' || !condition[key].trim())
         || !condition.sourceQuote.includes(condition.objective)
@@ -172,8 +197,21 @@ function insertStages(db, taskId, revision, stages, previous = [], affectedFrom 
   })
 }
 
-export function reduceTaskPlanCommand(db, command, { now }) {
+export function reduceTaskPlanCommand(db, command, { now, emitEvent }) {
   const a = command.args
+  if(command.kind==='task.completion.confirm'){
+    exact(a,['taskId','expectedControlRevision','expectedRequirementRevision','actorId','declaration','topicId'])
+    const taskId=name(a.taskId),task=taskRow(db,taskId)
+    if(!task||task.control_revision!==natural(a.expectedControlRevision)||task.requirement_revision!==natural(a.expectedRequirementRevision))fail('TASK_COMPLETION_STALE')
+    if(task.control_state!=='cancelled'||db.prepare('SELECT 1 FROM execution_runs WHERE task_id=? LIMIT 1').get(taskId)||db.prepare("SELECT 1 FROM task_owners WHERE task_id=? AND (status='running' OR current_turn_id IS NOT NULL)").get(taskId))fail('TASK_COMPLETION_CORRECTION_UNSAFE')
+    for(const key of ['actorId','declaration','topicId'])if(typeof a[key]!=='string'||!a[key].trim()||a[key].length>16000)fail('TASK_COMPLETION_DECLARATION_REQUIRED')
+    const confirmation={taskId,requirementRevision:task.requirement_revision,actorId:a.actorId,declaration:a.declaration,topicId:a.topicId,basis:'user-declaration',engineeringVerified:false,previousControlState:task.control_state,previousControlRevision:task.control_revision,confirmedAt:now}
+    db.prepare("UPDATE business_tasks SET status='succeeded',updated_at=? WHERE task_id=?").run(now,taskId)
+    // Execution remains disabled. This correction does not create/reopen a Run or claim an Owner.
+    db.prepare("UPDATE task_controls SET state='paused',control_revision=control_revision+1 WHERE task_id=?").run(taskId)
+    emitEvent('task.completion.confirmed',confirmation)
+    return {status:'applied',taskId,outcome:'succeeded',controlRevision:task.control_revision+1,confirmation}
+  }
   if (command.kind === 'task.plan.accept') {
     exact(a, ['taskId', 'requirementRevision', 'requirementRef'])
     const taskId = name(a.taskId)
@@ -191,7 +229,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     if (!task || task.requirement_revision !== natural(a.expectedRequirementRevision)) fail('TASK_REQUIREMENT_STALE')
     reference(a.requirementRef)
     if (!task.requirement_ref) fail('TASK_REQUIREMENT_LEGACY_UNBOUND')
-    db.prepare('UPDATE business_tasks SET requirement_revision=?,requirement_ref=?,updated_at=? WHERE task_id=?')
+    db.prepare("UPDATE business_tasks SET requirement_revision=?,requirement_ref=?,status=CASE WHEN status='succeeded' THEN 'pending' ELSE status END,updated_at=? WHERE task_id=?")
       .run(task.requirement_revision + 1, a.requirementRef, now, taskId)
     return { status: 'applied', taskId, requirementRevision: task.requirement_revision + 1, requirementRef: a.requirementRef }
   }
@@ -310,7 +348,7 @@ export function reduceTaskPlanCommand(db, command, { now }) {
       workflowDigest: row.workflow_digest, unavailableReason: row.unavailable_reason,
       requirementRef: row.requirement_ref, gate: row.gate })), ...a.stages], db, taskId)
     if (a.stages.some(stage => stage.requirementRef !== null)) fail('TASK_STAGE_INPUT_NOT_BOUND')
-    const readyNow = task.status === 'succeeded' && old.every(stage => stage.status === 'succeeded')
+    const readyNow = ['pending', 'succeeded'].includes(task.status) && old.every(stage => stage.status === 'succeeded')
     for (const [index, stage] of a.stages.entries()) {
       db.prepare(`INSERT INTO task_plan_stages(task_id,plan_revision,stage_id,position,workflow_id,workflow_digest,unavailable_reason,requirement_ref,gate,status,attempt,source_condition)
         VALUES(?,?,?,?,?,?,?,?,?,?,1,?)`).run(taskId, task.plan_revision, stage.stageId, old.length + index,
@@ -438,7 +476,10 @@ export function reduceTaskPlanCommand(db, command, { now }) {
         .run(status, taskId, task.plan_revision, next.stage_id)
       db.prepare('UPDATE business_tasks SET status=?,updated_at=? WHERE task_id=?')
         .run(next.unavailable_reason ? 'blocked' : next.gate === 'confirmation' ? 'waiting_confirmation' : 'active', now, taskId)
-    } else db.prepare("UPDATE business_tasks SET status='succeeded',updated_at=? WHERE task_id=?").run(now, taskId)
+    } else db.prepare('UPDATE business_tasks SET status=?,updated_at=? WHERE task_id=?').run(task.plan_requirement_revision === task.requirement_revision
+      && !db.prepare('SELECT 1 FROM task_owners WHERE task_id=?').get(taskId) ? 'succeeded' : 'pending', now, taskId)
+    if (next && task.plan_requirement_revision !== task.requirement_revision)
+      db.prepare("UPDATE business_tasks SET status='pending' WHERE task_id=?").run(taskId)
     if (task.control_state === 'pausing' || task.control_state === 'cancelling') {
       db.prepare('UPDATE task_controls SET state=?,control_revision=control_revision+1 WHERE task_id=?')
         .run(task.control_state === 'pausing' ? 'paused' : 'cancelled', taskId)
@@ -471,12 +512,33 @@ export function reduceTaskPlanCommand(db, command, { now }) {
     natural(a.requirementRevision); validateStages(a.stages, db, taskId)
     const old = stageRows(db, taskId, task.plan_revision), affectedFrom = a.affectedFrom
     if (!Number.isSafeInteger(affectedFrom) || affectedFrom < 0 || affectedFrom >= a.stages.length || affectedFrom > old.length) fail('TASK_PLAN_IMPACT_INVALID')
-    if (old.some(stage => stage.status === 'running')) fail('TASK_STAGE_STILL_RUNNING')
+    const replaceable = new Set()
+    for (const stage of old.filter(stage => stage.status === 'running')) {
+      const run = db.prepare('SELECT * FROM execution_runs WHERE run_id=? AND task_id=?').get(stage.run_id, taskId)
+      if (stage.position < affectedFrom || task.plan_requirement_revision >= task.requirement_revision
+        || stage.workflow_id !== 'task-uat-pr-merge' || !run || run.status !== 'waiting'
+        || !run.pause_requested || run.stop_requested
+        || db.prepare('SELECT 1 FROM execution_nodes WHERE run_id=? AND drained=0').get(run.run_id)
+        || db.prepare("SELECT 1 FROM execution_inputs WHERE run_id=? AND status='pending'").get(run.run_id)
+        || db.prepare('SELECT 1 FROM execution_effects WHERE run_id=?').get(run.run_id)) fail('TASK_STAGE_STILL_RUNNING')
+      replaceable.add(stage.stage_id)
+    }
     // 已有外部效果必须先由 ExecutionRun 排空/对账；当前修订只允许成功前缀后继续。
-    if (old.slice(affectedFrom).some(stage => stage.run_id && !['succeeded', 'blocked'].includes(stage.status))) fail('TASK_STAGE_RECONCILIATION_REQUIRED')
+    if (replaceable.size) {
+      const first = old.find(stage => replaceable.has(stage.stage_id))
+      if (affectedFrom !== first.position) fail('TASK_PLAN_IMPACT_INVALID')
+      if (old.slice(affectedFrom).some(stage => stage.status === 'succeeded'
+        || stage.run_id && (db.prepare('SELECT status FROM execution_runs WHERE run_id=?').get(stage.run_id)?.status === 'succeeded'
+          || db.prepare('SELECT 1 FROM execution_effects WHERE run_id=?').get(stage.run_id)))) fail('TASK_STAGE_RECONCILIATION_REQUIRED')
+    }
+    if (old.slice(affectedFrom).some(stage => stage.run_id && !['succeeded', 'blocked'].includes(stage.status) && !replaceable.has(stage.stage_id))) fail('TASK_STAGE_RECONCILIATION_REQUIRED')
     if (old.slice(0, affectedFrom).some(stage => stage.status !== 'succeeded')) fail('TASK_PLAN_PREFIX_INVALID')
     const revision = task.plan_revision + 1
     insertStages(db, taskId, revision, a.stages, old, affectedFrom)
+    for (const stage of old.filter(stage => replaceable.has(stage.stage_id))) {
+      db.prepare("UPDATE execution_runs SET status='cancelled',stop_requested=1,revision=revision+1,updated_at=? WHERE run_id=?").run(now,stage.run_id)
+      emitEvent('run.superseded-no-effect',{taskId,runId:stage.run_id,previousPlanRevision:task.plan_revision,planRevision:revision})
+    }
     db.prepare('UPDATE business_tasks SET requirement_revision=?,plan_revision=?,plan_requirement_revision=?,status=?,updated_at=? WHERE task_id=?')
       .run(a.requirementRevision, revision, a.requirementRevision, a.stages[affectedFrom].unavailableReason ? 'blocked'
         : a.stages[affectedFrom].gate === 'confirmation' ? 'waiting_confirmation' : 'active', now, taskId)

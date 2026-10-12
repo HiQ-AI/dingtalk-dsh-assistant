@@ -46,18 +46,18 @@ export function createRegisteredPostgresConnector({credentialsPath}){
 }
 export function createAgentDatabaseReadCapability({resources,connectDatabase}){
  if(!Array.isArray(resources)||typeof connectDatabase!=='function'||new Set(resources.map(r=>r.id)).size!==resources.length)fail('QUERY_DATABASE_CONFIG_INVALID')
- for(const r of resources)if(!r.id||!r.connectionId||!Array.isArray(r.tables)||!r.tables.length||r.tables.some(t=>!identifier(t.schema)||!identifier(t.table)||!Array.isArray(t.columns)||!t.columns.length||t.columns.some(c=>!identifier(c)))
+ for(const r of resources)if(!r.id||!r.connectionId||(r.dataAccess!==undefined&&r.dataAccess!=='all-tables-readonly')||!Array.isArray(r.tables)||(r.dataAccess!=='all-tables-readonly'&&!r.tables.length)||r.tables.some(t=>!identifier(t.schema)||!identifier(t.table)||!Array.isArray(t.columns)||!t.columns.length||t.columns.some(c=>!identifier(c)))
   ||(r.metadataSchemas!==undefined&&(!Array.isArray(r.metadataSchemas)||!r.metadataSchemas.length||r.metadataSchemas.some(s=>!identifier(s))))
   ||(r.identityPolicy!==undefined&&(r.identityPolicy!=='host-enforced-readonly'||r.environment!=='uat'))
   ||(r.environment!==undefined&&!['uat','production'].includes(r.environment)))fail('QUERY_DATABASE_CONFIG_INVALID')
  const registry=new Map(resources.map(r=>[r.id,structuredClone(r)])),produced=new WeakSet()
- const authorize=async({input,scope})=>registry.has(input.resourceId)&&scope.databaseIds?.includes(input.resourceId)===true
- return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v4:'+executionDigest(resources),description:'通过Host登记连接查询数据库：tables/columns返回列的类型长度、默认值、可空、identity及generated定义；metadataSchemas内可用constraints/indexes/dependencies/table_stats读取约束、索引、直接目录依赖和估算规模（不是精确行数）。table使用schema.table，唯一已登记短表名会解析为该登记全名，不扩大范围。select仍只读取登记表/列。结果按offset/nextOffset分页，最多100行；不接受SQL、连接串或表达式。每次核验只读事务和生产副本身份。缺少operation是工具能力问题，不等于数据库权限不足。',parameters:agentDatabaseParameters,authorize,
+ const authorize=async({input,scope})=>{if(!registry.has(input.resourceId))fail('QUERY_DATABASE_RESOURCE_UNSUPPORTED');return scope.databaseIds?.includes(input.resourceId)===true}
+ return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v5:'+executionDigest(resources),description:'Host结构化只读数据库查询。dataAccess=all-tables-readonly时可读取该连接数据库所有普通表/分区表及物化表的列和数据，最终受数据库账号权限约束；不调用任意SQL、函数、视图或外部连接。其它资源只读登记的表/列；metadataSchemas仅允许结构查询，不授予行数据读取。必须使用schema.table；投影/过滤列校验，值参数绑定，最多100行，offset分页，只读事务和超时/结果上限。资源/表/列能力缺失与真实数据库42501权限拒绝分别报告；已开放只读查询不要求逐次写权限授权。',parameters:agentDatabaseParameters,authorize,
   available: scope => resources.some(resource => scope?.databaseIds?.includes(resource.id)),
   async execute({input,scope,signal}){
    if(!await authorize({input,scope}))fail('QUERY_SCOPE_DENIED')
    if(!['tables','columns',...metadataOperations,'select'].includes(input.operation))fail('QUERY_ARGUMENT_INVALID')
-   const resource=registry.get(input.resourceId),limit=input.limit??30,offset=input.offset??0
+   const resource=registry.get(input.resourceId),allTables=resource.dataAccess==='all-tables-readonly',limit=input.limit??30,offset=input.offset??0
    if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0||offset>10000)fail('QUERY_LIMIT_INVALID')
    if(input.operation!=='tables'&&typeof input.table==='string'&&!input.table.includes('.')){
     const matches=resource.tables.filter(table=>table.table===input.table)
@@ -65,11 +65,16 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
     input={...input,table:`${matches[0].schema}.${matches[0].table}`}
    }
    const metadataTable=typeof input.table==='string'?input.table.split('.'):[]
-   const metadataAllowed=metadataTable.length===2&&metadataTable.every(identifier)&&resource.metadataSchemas?.includes(metadataTable[0])
+   const metadataAllowed=metadataTable.length===2&&metadataTable.every(identifier)&&(allTables||resource.metadataSchemas?.includes(metadataTable[0]))
    const table=resource.tables.find(t=>`${t.schema}.${t.table}`===input.table)
-   if(metadataOperations.includes(input.operation)?!metadataAllowed:input.operation!=='tables'&&!table&&!(input.operation==='columns'&&metadataAllowed))fail('QUERY_SCOPE_DENIED')
-   const columns=input.columns??table?.columns
-   if(input.operation==='select'&&(!columns?.length||columns.length>50||columns.some(c=>!table.columns.includes(c))||(input.filters??[]).length>20||(input.filters??[]).some(f=>!table.columns.includes(f.column))))fail('QUERY_SCOPE_DENIED')
+   if(metadataOperations.includes(input.operation)?!metadataAllowed:input.operation!=='tables'&&!table&&!allTables&&!(input.operation==='columns'&&metadataAllowed))fail('QUERY_DATABASE_TABLE_UNSUPPORTED')
+   if(input.operation==='select'&&(metadataTable.length!==2||!metadataTable.every(identifier)))fail('QUERY_ARGUMENT_INVALID')
+   let columns=input.columns??table?.columns
+   if(input.operation==='select'){
+    if(input.columns!==undefined&&(!Array.isArray(columns)||!columns.length||columns.length>50||columns.some(c=>!identifier(c))))fail('QUERY_ARGUMENT_INVALID')
+    if(!Array.isArray(input.filters??[])||(input.filters??[]).length>20||(input.filters??[]).some(f=>!identifier(f.column)||!['eq','ne','lt','lte','gt','gte','like'].includes(f.operator)||![null,'string','number','boolean'].includes(f.value===null?null:typeof f.value)))fail('QUERY_ARGUMENT_INVALID')
+    if(!allTables&&(!columns?.length||columns.length>50||columns.some(c=>!table.columns.includes(c))||(input.filters??[]).some(f=>!table.columns.includes(f.column))))fail('QUERY_DATABASE_COLUMN_UNSUPPORTED')
+   }
    let client
    const abort=()=>{void client?.end().catch(()=>{})}
    try{
@@ -87,7 +92,16 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
     }
     if((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only!=='on')fail('QUERY_DATABASE_NOT_READONLY')
     let rows
-    if(input.operation==='tables')rows=(await client.query({text:'SELECT table_schema,table_name,table_type FROM information_schema.tables WHERE table_schema=ANY($1::text[]) ORDER BY table_schema,table_name',values:[schemas]})).rows.filter(row=>resource.metadataSchemas?.includes(row.table_schema)||resource.tables.some(t=>t.schema===row.table_schema&&t.table===row.table_name))
+    if(allTables&&input.operation==='select'){
+     const relation=(await client.query({text:'SELECT t.relkind AS relation_kind FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=$1 AND t.relname=$2',values:metadataTable})).rows[0]
+     if(!relation)fail('QUERY_NOT_FOUND')
+     // Views/foreign tables can invoke functions or another connection; plain table SELECT only.
+     if(!['r','p','m'].includes(relation.relation_kind))fail('QUERY_DATABASE_OBJECT_UNSUPPORTED')
+     const known=(await client.query({text:'SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position',values:metadataTable})).rows.map(row=>row.column_name)
+     columns=input.columns??known.slice(0,50)
+     if(!columns.length||columns.some(c=>!known.includes(c))||(input.filters??[]).some(f=>!known.includes(f.column)))fail('QUERY_ARGUMENT_INVALID')
+    }
+    if(input.operation==='tables')rows=(await client.query({text:'SELECT table_schema,table_name,table_type FROM information_schema.tables WHERE '+(allTables?"table_type='BASE TABLE'":'table_schema=ANY($1::text[])')+' ORDER BY table_schema,table_name',values:allTables?[]:[schemas]})).rows.filter(row=>allTables||resource.metadataSchemas?.includes(row.table_schema)||resource.tables.some(t=>t.schema===row.table_schema&&t.table===row.table_name))
     else if(input.operation==='columns')rows=(await client.query(metadataAllowed
      ?{text:`SELECT ${columnProjection} FROM ${columnCatalog} WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`,values:metadataTable}
      :{text:`SELECT ${columnProjection} FROM ${columnCatalog} WHERE table_schema=$1 AND table_name=$2 AND column_name=ANY($3::text[]) ORDER BY ordinal_position`,values:[table.schema,table.table,table.columns]})).rows
@@ -96,7 +110,7 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
      const values=[],ops={eq:'=',ne:'<>',lt:'<',lte:'<=',gt:'>',gte:'>=',like:'LIKE'}
      const filters=(input.filters??[]).map(f=>{if(!Object.hasOwn(ops,f.operator))fail('QUERY_ARGUMENT_INVALID');values.push(f.value);return `${quote(f.column)} ${ops[f.operator]} $${values.length}`})
      values.push(limit+1,offset)
-     const text=`SELECT ${columns.map(quote).join(',')} FROM ${quote(table.schema)}.${quote(table.table)}${filters.length?' WHERE '+filters.join(' AND '):''} LIMIT $${values.length-1} OFFSET $${values.length}`
+     const text=`SELECT ${columns.map(quote).join(',')} FROM ${quote(allTables?metadataTable[0]:table.schema)}.${quote(allTables?metadataTable[1]:table.table)}${filters.length?' WHERE '+filters.join(' AND '):''} LIMIT $${values.length-1} OFFSET $${values.length}`
      rows=(await client.query({text,values,queryMode:'extended'})).rows
     }
     const selected=input.operation==='select'?rows.slice(0,limit):rows.slice(offset,offset+limit)
@@ -106,7 +120,7 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
      observedAt:new Date().toISOString(),transactionReadOnly:true,productionReplicaVerified:resource.environment==='production'}
     if(Buffer.byteLength(JSON.stringify(output))>24000)fail('QUERY_CAPACITY')
     produced.add(output);return output
-   }catch(e){if(signal?.aborted)throw e;if(e.code?.startsWith('QUERY_'))throw e;fail(e.code==='57014'?'QUERY_TIMEOUT':e.code==='42P01'?'QUERY_NOT_FOUND':e.code==='42703'?'QUERY_ARGUMENT_INVALID':e.code==='42501'?'QUERY_SCOPE_DENIED':'QUERY_DATABASE_UNAVAILABLE')}
+   }catch(e){if(signal?.aborted)throw e;if(e.code?.startsWith('QUERY_'))throw e;fail(e.code==='57014'?'QUERY_TIMEOUT':e.code==='42P01'?'QUERY_NOT_FOUND':e.code==='42703'?'QUERY_ARGUMENT_INVALID':e.code==='42501'?'QUERY_DATABASE_PERMISSION_DENIED':['28P01','28000'].includes(e.code)?'QUERY_DATABASE_AUTH_FAILED':'QUERY_DATABASE_UNAVAILABLE')}
    finally{signal?.removeEventListener('abort',abort);if(client){await client.query('ROLLBACK').catch(()=>{});await client.end().catch(()=>{})}}
   },
   async verify({input,scope,output}){return {passed:await authorize({input,scope})&&produced.has(output),outputDigest:executionDigest(output),sourceRefs:[`database:${input.resourceId}:${input.table??'catalog'}:${executionDigest(output)}`]}}

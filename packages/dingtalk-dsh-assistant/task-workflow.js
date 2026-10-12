@@ -1,3 +1,4 @@
+import { validateEngineeringPlanScope, validateLocalAcceptanceSubmission, validateEngineeringApproach } from './engineering-output-contract.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { createHash } from 'node:crypto'
 import { freezeCandidate, readCandidate, verifyCandidate, assertCandidateManagedEdits } from './execution-candidate.js'
@@ -18,7 +19,7 @@ function verificationFailure(verification) {
   return Object.assign(executionError('ENGINEERING_VERIFICATION_FAILED'), { evidence })
 }
 /** 工程候选链：文件白名单和检查器由Host明确提供；Agent只产数据。 */
-export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort, workspaceAdapter, editAdapter, checks, adapterIdentity, deliveryPlan, discovery, prepareGeneration, verifiedCandidates = [], workflowId = 'task-engineering' }) {
+export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort, workspaceAdapter, editAdapter, checks, adapterIdentity, deliveryPlan, discovery, prepareGeneration, stableChecks, verifiedCandidates = [], workflowId = 'task-engineering' }) {
   if (!workspaceAdapter || !editAdapter || !Array.isArray(checks) || !checks.length || typeof adapterIdentity !== 'string' || !adapterIdentity) throw executionError('ENGINEERING_ADAPTER_REQUIRED')
   if (deliveryPlan && (!deliveryPlan.identity || typeof deliveryPlan.gitAdapterFor !== 'function' || typeof deliveryPlan.prAdapterFor !== 'function'
     || !/^\d{10} \+0000$/.test(deliveryPlan.date) || ![deliveryPlan.commitMessage, deliveryPlan.title, deliveryPlan.body].every(value => typeof value === 'string' && value))) throw executionError('ENGINEERING_DELIVERY_PLAN_INVALID')
@@ -27,8 +28,10 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
   checks = checks.map(check => Object.freeze({ ...check }))
   // 保存真实检查票据；重启时仅由Host核验本Run成功节点工件后恢复，节点输入JSON不具备票据身份。
   const verificationTickets = new Map()
-  const rulesDigest = executionDigest({ adapterIdentity, discovery, verificationFailure: verificationFailure.toString(), prepareGeneration: prepareGeneration?.toString() ?? null, checks: checks.map(check => ({ id: check.id, version: check.version, implementation: check.run.toString(), configurationDigest: check.configurationDigest ?? null })),
+  const digestRules = checkSet => executionDigest({ adapterIdentity, discovery, verificationFailure: verificationFailure.toString(), prepareGeneration: prepareGeneration?.toString() ?? null, checks: checkSet.map(check => ({ id: check.id, version: check.version, implementation: check.run.toString(), configurationDigest: check.configurationDigest ?? null })),
     delivery: deliveryPlan ? { identity: deliveryPlan.identity, date: deliveryPlan.date, commitMessage: deliveryPlan.commitMessage, title: deliveryPlan.title, body: deliveryPlan.body, expectedRemoteSha: deliveryPlan.expectedRemoteSha } : null })
+  const rulesDigest=digestRules(checks),stableRulesDigest=stableChecks ? digestRules(stableChecks) : rulesDigest
+  const rulesForNode=node=>['prepare-generation','prepare-workspace','inspect-and-propose','apply-changes','validate-proposal'].includes(node.id) ? stableRulesDigest : rulesDigest
   for (const {candidate, verification} of verifiedCandidates) verificationTickets.set(executionDigest({ candidateDigest:candidate.digest, rulesDigest, generation:candidate.generation, requirementDigest:candidate.requirementDigest }), verification)
   const requirement = { type: 'object', properties: {
     request: text, constraints: { type: 'array', items: text }, baseCommit: text,
@@ -198,7 +201,7 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
   if (prepareGeneration) {
     for (const node of workflow.nodes) {
       const original = node.mapInput
-      node.rulesDigest = executionDigest({ rulesDigest, originalMapper: original.toString() })
+      node.rulesDigest = executionDigest({ rulesDigest:rulesForNode(node), originalMapper: original.toString() })
       node.inputDependencies = ['prepare-generation', ...(node.inputDependencies ?? [])]
       node.mapInput = args => original({ ...args, requirement: args.dependencyOutputs['prepare-generation'] })
     }
@@ -207,7 +210,7 @@ export function createEngineeringTaskWorkflow({ provider, model, reasoningEffort
       execute: async ({ input, runId, generation }) => prepareGeneration({ input, runId, generation }),
     })
   }
-  workflow.nodes = workflow.nodes.map(node => ({ ...node, rulesDigest: node.rulesDigest ?? rulesDigest }))
+  workflow.nodes = workflow.nodes.map(node => ({ ...node, rulesDigest: node.rulesDigest ?? rulesForNode(node) }))
   return workflow
 }
 
@@ -455,6 +458,7 @@ export function createEngineeringLocalAcceptanceWorkflow(options) {
     { id: 'prepare-local-acceptance', version: '1', executor: 'code', allowedEffects: ['workspace.prepare'], inputSchema: object, outputSchema: object,
       inputDependencies: ['define-local-acceptance', 'plan-local-acceptance'],
       mapInput: ({ previousOutput, dependencyOutputs }) => ({ build: previousOutput, criteria: dependencyOutputs['define-local-acceptance'].localContext.criteria, plan: dependencyOutputs['plan-local-acceptance'] }),
+      retryAcceptance: (prepared, context) => local.retryPrepared(prepared, context),
       execute: async ({ input, taskId, runId, generation, signal }) => {
         validatePlan(input.plan, input.criteria)
         const localPrepared = await local.prepare({ candidate: input.build.candidate, plan: input.plan, taskId, runId, generation,
@@ -499,7 +503,12 @@ export function createEngineeringLocalAcceptanceWorkflow(options) {
         body: `${prepared.body}\n\n## 本地业务验收\n\n本地候选服务连接共享 UAT 数据，目标环境 ${receipt.uatEnvironment}。\n\n${summary}\n\n任务测试数据已清理，本地验收进程已停止。验收回执：\`${receipt.identity}\`。` })
     }
   }
-  for (const node of workflow.nodes) node.rulesDigest = executionDigest({ previous: node.rulesDigest ?? null, localAcceptance: local?.identity ?? null, planValidation: validatePlan.toString() })
+  for (const node of workflow.nodes) {
+    const usesLocal = localNodes.some(item => item.id === node.id) || ['prepare-commit','prepare-pr'].includes(node.id)
+    node.rulesDigest = executionDigest({ previous: node.rulesDigest ?? null,
+      localAcceptance: usesLocal ? local?.identity ?? null : options.stableLocalAcceptanceIdentity ?? local?.identity ?? null,
+      planValidation: validatePlan.toString() })
+  }
   return workflow
 }
 
@@ -524,6 +533,10 @@ export function createEngineeringUatBaselineWorkflow(options) {
   if (!['targetCommit', 'taskBase'].every(key => /^[a-f0-9]{40}$/.test(options.project?.[key] ?? ''))) throw executionError('ENGINEERING_UAT_BASELINE_REQUIRED')
   const workflow = createEngineeringBranchReuseWorkflow(options)
   workflow.version = '13'
+  if (options.project.developmentMode === 'source-only') {
+    for(const node of workflow.nodes) node.rulesDigest=executionDigest({previous:node.rulesDigest,developmentMode:'source-only'})
+    return workflow
+  }
   const prepare = context => options.workspaceAdapter.prepare({ runId: context.runId, generation: context.generation,
     requirementDigest: context.requirementDigest, baseCommit: (context.input.requirement ?? context.input).baseCommit })
   const workspace = workflow.nodes.find(node => node.id === 'prepare-workspace'), execute = workspace.execute
@@ -776,4 +789,291 @@ export function createEngineeringTechnicalPlanWorkflow(options) {
     rulesDigest: executionDigest({ previous: apply.rulesDigest, technicalPlanVersion: 19, explicitPaths }),
   })
   return workflow
+}
+
+/** v20 validates planning submissions without changing historical frozen factories. */
+export function createEngineeringContractWorkflow(options) {
+  const workflow = createEngineeringTechnicalPlanWorkflow(options)
+  workflow.version = '20'
+  const proposal = workflow.nodes.find(node => node.id === 'inspect-and-propose')
+  const scope = structuredClone(options.stageContract ?? {
+    taskId: options.taskContext?.taskId ?? options.workflowId,
+    stageId: null, repositoryId: options.project.repository,
+    objective: null, criteria: [], editablePaths: [], allowedPrefixes: options.discovery?.allowedPrefixes ?? [],
+  })
+  const generation = workflow.nodes.find(node => node.id === 'prepare-generation')
+  if (generation) {
+    generation.inputSchema = { ...generation.inputSchema, properties: { ...generation.inputSchema.properties,
+      acceptanceCriteria: { type: 'array', items: text } },
+      required: [...new Set([...generation.inputSchema.required, 'acceptanceCriteria'])] }
+    generation.mapInput = ({ requirement }) => requirement
+    const generationExecute = generation.execute
+    generation.execute = async args => {
+      await options.resolveAcceptanceApplicability?.(args.input)
+      if (!args.input.acceptanceCriteria.length || !options.resolveAcceptanceApplicability && scope.criteria.length
+        && executionDigest(args.input.acceptanceCriteria) !== executionDigest(scope.criteria))
+        throw executionError('ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH')
+      const { acceptanceCriteria, ...input } = args.input
+      return generationExecute({ ...args, input })
+    }
+    generation.version = String(Number(generation.version) + 1)
+    generation.rulesDigest = executionDigest({ previous: generation.rulesDigest, scope, frozenAcceptanceCriteria: 1 })
+  }
+  const mapper = proposal.mapInput, validate = proposal.validateOutput
+  proposal.inputSchema = { ...proposal.inputSchema, properties: { ...proposal.inputSchema.properties, stageContract: { type: 'object' } }, required: [...proposal.inputSchema.required, 'stageContract'] }
+  proposal.mapInput = args => { const input = mapper(args); return { ...input, stageContract: { ...scope, objective: args.requirement.request, criteria: args.requirement.acceptanceCriteria ?? scope.criteria, editablePaths: scope.editablePaths.length ? scope.editablePaths : input.editablePaths } } }
+  proposal.validateOutput = args => { validate(args); return validateEngineeringPlanScope(args.output, args.input.stageContract) }
+  proposal.classifyOutputError = error => error.code === 'ENGINEERING_TECHNICAL_PLAN_INVALID' ? 'correctable' : 'blocked'
+  proposal.version = String(Number(proposal.version) + 1)
+  proposal.rulesDigest = executionDigest({ previous: proposal.rulesDigest, scope, validator: validateEngineeringPlanScope.toString() })
+  proposal.prompt += '\n只为stageContract中的当前阶段制定方案：仓库相对路径须在其白名单/前缀内，criteria逐项原样保留当前阶段验收原文，不将整个PRD的其他阶段纳入范围。'
+  const applicability=structuredClone(options.acceptanceApplicability ?? null)
+  const define=workflow.nodes.find(node=>node.id==='define-local-acceptance'),defineExecute=define.execute
+  define.version='2'
+  define.execute=async args=>{const result=await defineExecute(args);const currentScope={...scope,objective:args.input.request,criteria:args.input.acceptanceCriteria};const currentApplicability=options.resolveAcceptanceApplicability ? await options.resolveAcceptanceApplicability(args.input) : applicability;return {...result,localContext:{...result.localContext,stageContract:currentScope,acceptanceApplicability:currentApplicability}}}
+  define.rulesDigest=executionDigest({previous:define.rulesDigest??null,scope,applicability})
+  const planner = workflow.nodes.find(node => node.id === 'plan-local-acceptance')
+  planner.version = '2'
+  planner.validateOutput = ({ input, output }) => validateLocalAcceptanceSubmission(output, input)
+  planner.classifyOutputError = error => error.code === 'LOCAL_ACCEPTANCE_PLAN_INVALID' ? 'correctable' : 'blocked'
+  planner.rulesDigest = executionDigest({ previous: planner.rulesDigest ?? null, scope, applicability, validator: validateLocalAcceptanceSubmission.toString() })
+  planner.prompt = planner.prompt.replace('缺少可执行场景时 cases 留空，不编造 scenarioId。', '不得提交空cases或编造场景；缺少可执行能力时明确说明并阻塞，不能声称验收通过。')
+  // The managed implementation receives the same frozen stage contract as its planner.
+  const apply = workflow.nodes.find(node => node.id === 'apply-changes'), applyMapper = apply.mapInput
+  apply.inputSchema = { ...apply.inputSchema, properties: { ...apply.inputSchema.properties, requirement: proposal.inputSchema } }
+  apply.mapInput = args => { const input = applyMapper(args); return { ...input, requirement: proposal.mapInput(args) } }
+  apply.version = '8'
+  return workflow
+}
+
+
+// Current fixed development flow checks actual supplied business inputs; historical v20 remains frozen.
+export function createEngineeringSimpleWorkflow(options) {
+  const workflow=createEngineeringContractWorkflow(options)
+  workflow.version='21'
+  const planner=workflow.nodes.find(node=>node.id==='plan-local-acceptance')
+  planner.version='3'
+  planner.validateOutput=({input,output})=>validateConfiguredAcceptancePlan(output,input)
+  planner.classifyOutputError=error=>error.code==='LOCAL_ACCEPTANCE_PLAN_INVALID'?'correctable':'blocked'
+  planner.rulesDigest=executionDigest({previous:planner.rulesDigest,validator:validateConfiguredAcceptancePlan.toString(),businessInputs:1})
+  planner.prompt+='\n当前固定开发流程直接依据输入中的原文 criteria 和已配置 scenarios 制定验收，不要求补写 applicability 摘要或权限材料。必须使用实际场景，覆盖每项验收并写出步骤和预期；真实执行结果仍由后续 runner 验证。'
+  return workflow
+}
+export function validateConfiguredAcceptancePlan(plan,context) {
+  if(!context?.request?.trim()||!Array.isArray(context.criteria)||!context.criteria.length
+    ||context.criteria.some(c=>!c.id||!c.description?.trim())||!context.scenarios?.length)
+    throw executionError('LOCAL_ACCEPTANCE_CAPABILITY_MISSING','缺少真实需求、原文验收或已配置的可执行场景')
+  const cases=plan?.cases
+  if(!Array.isArray(cases)||!cases.length||new Set(cases.map(c=>c.criterionId)).size!==cases.length
+    ||context.criteria.some(c=>!cases.some(item=>item.criterionId===c.id))
+    ||cases.some(c=>!context.criteria.some(criterion=>criterion.id===c.criterionId)
+      ||!context.scenarios.some(scenario=>scenario.id===c.scenarioId)
+      ||!c.expected?.trim()||!Array.isArray(c.steps)||!c.steps.length||c.steps.some(step=>typeof step!=='string'||!step.trim()||step.length>2000)))
+    throw executionError('LOCAL_ACCEPTANCE_PLAN_INVALID','验收计划必须覆盖原文验收，使用真实配置场景并提供步骤和预期')
+  return plan
+}
+
+/** v22 keeps fixed engineering steps with minimal planning output. */
+export function createEngineeringMinimalWorkflow(options) {
+  const workflow=createEngineeringSimpleWorkflow(options)
+  workflow.version='22'
+  const permitMetadata=schema=>{
+    if(!schema||typeof schema!=='object')return schema
+    const result=structuredClone(schema)
+    if(result.type==='object')result.additionalProperties=true
+    if(result.properties)for(const key of Object.keys(result.properties))result.properties[key]=permitMetadata(result.properties[key])
+    if(result.items)result.items=permitMetadata(result.items)
+    return result
+  }
+  for(const node of workflow.nodes){node.inputSchema=permitMetadata(node.inputSchema);node.outputSchema=permitMetadata(node.outputSchema)}
+  const proposal=workflow.nodes.find(node=>node.id==='inspect-and-propose')
+  proposal.outputSchema={type:'object',properties:{document:{type:'object',properties:{markdown:{type:'string'}},required:['markdown'],additionalProperties:true},scopePaths:{type:'array',items:text}},required:['document'],additionalProperties:true}
+  proposal.validateOutput=({input,output})=>validateEngineeringApproach(output,input.stageContract)
+  proposal.version=String(Number(proposal.version)+1)
+  proposal.rulesDigest=executionDigest({previous:proposal.rulesDigest,minimalApproach:1,validator:validateEngineeringApproach.toString()})
+  proposal.prompt='Read the original task requirement and current code with engineering_repo_inspect. Submit document.markdown explaining the technical approach and core illustrative snippets. Filename, scopePaths, repeated criteria and ancillary metadata are optional. Do not provide before/after edit payloads or claim implementation or verification. The apply-changes node owns development; subsequent real build, tests and UI acceptance determine quality. Original requirement and approved effect boundaries remain authoritative.'
+  const apply=workflow.nodes.find(node=>node.id==='apply-changes')
+  apply.outputSchema={type:'object',properties:{status:{type:'string',enum:['succeeded','plan-revision-needed']},summary:text},required:['status','summary'],additionalProperties:true}
+  apply.validateOutput=({output})=>{if(!output.summary?.trim())throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID');return output}
+  apply.version=String(Number(apply.version)+1)
+  apply.rulesDigest=executionDigest({previous:apply.rulesDigest,ancillaryOutputFields:1})
+  return workflow
+}
+
+// Only deterministic defaults; expected remains a business assertion supplied by the plan.
+export function normalizeEngineeringAcceptancePlan(plan, context) {
+  const fail = detail => { throw executionError('LOCAL_ACCEPTANCE_PLAN_INVALID', detail) }
+  if (!context?.request?.trim() || !context.criteria?.length || !context.scenarios?.length)
+    throw executionError('LOCAL_ACCEPTANCE_CAPABILITY_MISSING', '缺少需求、验收目标或可执行场景')
+  if (!Array.isArray(plan?.cases) || !plan.cases.length) fail('缺少实际验收案例')
+  const cases = plan.cases.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) fail('验收案例必须为对象')
+    const criterionId = item.criterionId ?? (context.criteria.length === 1 ? context.criteria[0].id : undefined)
+    const scenarioId = item.scenarioId ?? (context.scenarios.length === 1 ? context.scenarios[0].id : undefined)
+    const scenario = context.scenarios.find(value => value.id === scenarioId)
+    if (!context.criteria.some(value => value.id === criterionId) || !scenario)
+      fail('需明确对应验收目标和已配置场景；多个选项不能自动猜测')
+    if (typeof item.expected !== 'string' || !item.expected.trim() || item.expected.length > 2000) fail('缺少真实业务预期 expected')
+    const parameters = item.parameters === undefined ? {} : item.parameters
+    if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) fail('场景参数必须为对象')
+    const steps = item.steps ?? [scenario.description || scenario.id]
+    if (!Array.isArray(steps) || !steps.length || steps.some(step => typeof step !== 'string' || !step.trim() || step.length > 2000)) fail('提供的步骤必须有内容')
+    return { ...item, criterionId, scenarioId, parameters, steps }
+  })
+  if (new Set(cases.map(item => item.criterionId)).size !== cases.length
+    || context.criteria.some(value => !cases.some(item => item.criterionId === value.id))) fail('验收案例必须覆盖实际目标')
+  return { ...plan, cases }
+}
+
+/** v23 retains all fixed nodes and leaves frozen v22 definitions recoverable. */
+export function createEngineeringLeanWorkflow(options) {
+  const workflow = createEngineeringMinimalWorkflow(options)
+  workflow.version = '23'
+  const proposal = workflow.nodes.find(node => node.id === 'inspect-and-propose')
+  proposal.outputSchema = { ...proposal.outputSchema, properties: { document: proposal.outputSchema.properties.document } }
+  proposal.validateOutput = ({ output }) => {
+    if (typeof output?.document?.markdown !== 'string' || !output.document.markdown.trim())
+      throw executionError('ENGINEERING_TECHNICAL_PLAN_INVALID', '缺少技术思路')
+    return output
+  }
+  proposal.version = String(Number(proposal.version) + 1)
+  proposal.prompt += '\nScope paths are optional planning notes; actual edits are checked against the Host repository scope.'
+  const planner = workflow.nodes.find(node => node.id === 'plan-local-acceptance')
+  planner.outputSchema = structuredClone(planner.outputSchema)
+  planner.outputSchema.properties.cases.items.required = ['expected']
+  planner.validateOutput = ({ input, output }) => normalizeEngineeringAcceptancePlan(output, input)
+  planner.version = String(Number(planner.version) + 1)
+  planner.rulesDigest = executionDigest({ previous: planner.rulesDigest, normalization: normalizeEngineeringAcceptancePlan.toString() })
+  planner.prompt += '\n单一目标或单一场景的ID、空parameters及步骤说明可以省略，由Host从当前输入补齐。多个目标/场景须明确ID；expected必须保留真实业务预期。'
+  const apply = workflow.nodes.find(node => node.id === 'apply-changes')
+  apply.outputSchema = { ...apply.outputSchema, required: ['status'] }
+  apply.validateOutput = ({ output }) => output
+  apply.version = String(Number(apply.version) + 1)
+  apply.prompt += '\n只需提交status；planRef、effectRefs及省略的summary由Host从本节点真实效果补齐。engineering_apply_edits只需提交使用的修改数组。'
+  return workflow
+}
+
+export function normalizeWorktreeAcceptancePlan(plan, context) {
+  const fail = detail => { throw executionError('LOCAL_ACCEPTANCE_PLAN_INVALID', detail) }
+  if (!context?.request?.trim() || !context.criteria?.length || !context.scenarios?.length)
+    throw executionError('LOCAL_ACCEPTANCE_CAPABILITY_MISSING', '缺少需求、验收目标或可执行场景')
+  if (!Array.isArray(plan?.cases) || !plan.cases.length) fail('缺少实际验收案例')
+  const cases = plan.cases.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) fail('验收案例必须为对象')
+    const criterionId = item.criterionId ?? (context.criteria.length === 1 ? context.criteria[0].id : undefined)
+    const scenarioId = item.scenarioId ?? (context.scenarios.length === 1 ? context.scenarios[0].id : undefined)
+    const scenario = context.scenarios.find(value => value.id === scenarioId)
+    if (!context.criteria.some(value => value.id === criterionId) || !scenario)
+      fail('需明确对应验收目标和已配置场景；多个选项不能自动猜测')
+    if (typeof item.expected !== 'string' || !item.expected.trim()) fail('缺少真实业务预期 expected')
+    const parameters = item.parameters === undefined ? {} : item.parameters
+    if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) fail('场景参数必须为对象')
+    const steps = item.steps ?? [scenario.description || scenario.id]
+    if (!Array.isArray(steps) || !steps.length || steps.some(step => typeof step !== 'string' || !step.trim())) fail('提供的步骤必须有内容')
+    return { ...item, criterionId, scenarioId, parameters, steps }
+  })
+  if (new Set(cases.map(item => item.criterionId)).size !== cases.length
+    || context.criteria.some(value => !cases.some(item => item.criterionId === value.id))) fail('验收案例必须覆盖实际目标')
+  return { ...plan, cases }
+}
+
+/** v24: one task worktree; durable receipts, no model change-list artifacts. */
+export function createEngineeringWorktreeWorkflow(options){
+ const workflow=createEngineeringLeanWorkflow(options);workflow.version='24'
+ const define=workflow.nodes.find(n=>n.id==='define-local-acceptance')
+ const scope=structuredClone(options.stageContract??{taskId:options.taskContext?.taskId??options.workflowId,stageId:null,repositoryId:options.project.repository,objective:null,criteria:[],editablePaths:[],allowedPrefixes:options.discovery?.allowedPrefixes??[]})
+ define.version='3'
+ define.execute=async({input})=>{
+  if(!options.localAcceptance||!Array.isArray(input.acceptanceCriteria)||!input.acceptanceCriteria.length||input.acceptanceCriteria.some(v=>typeof v!=='string'||!v.trim()))throw executionError('LOCAL_ACCEPTANCE_CRITERIA_REQUIRED')
+  return {...input,localContext:{request:input.request,criteria:input.acceptanceCriteria.map((description,i)=>({id:'criterion-'+(i+1),description})),scenarios:options.localAcceptance.scenarios,uatEnvironment:options.project.uatEnvironment,stageContract:{...scope,objective:input.request,criteria:input.acceptanceCriteria},acceptanceApplicability:options.acceptanceApplicability??null}}
+ }
+ const planner=workflow.nodes.find(n=>n.id==='plan-local-acceptance')
+ planner.version='5';planner.validateOutput=({input,output})=>normalizeWorktreeAcceptancePlan(output,input)
+ planner.rulesDigest=executionDigest({previous:planner.rulesDigest,normalization:normalizeWorktreeAcceptancePlan.toString()})
+ const apply=workflow.nodes.find(n=>n.id==='apply-changes'),edit=apply.execute
+ apply.version='11'
+ apply.execute=async context=>{
+  if(context.edits?.noChange){const proof=context.edits.noChange;context={...context,edits:{...context.edits,noChange:{reason:proof.reason??'复用已读取实现，继续真实构建与验收',reviewedPaths:proof.reviewedPaths??options.observedPaths?.(context)??[]}}}}
+  return edit(context)
+ }
+ apply.prompt='Implement the original requirement using the technical approach and core snippets in plan. Read actual files with engineering_repo_inspect for current Hash values and make required edits with engineering_apply_edits. You may submit multiple edit batches using current file contents; Host records changed files and effects automatically. Replaying the same batch returns its existing result. If the read implementation already meets the requirement, noChange:{} lets Host fill paths from actual reads. Submit status=succeeded when implementation finishes; Host fills planRef, summary and effectRefs. If the approach needs a real correction, submit status=plan-revision-needed with a concrete summary before editing. Keep the authorized path scope and Host tool constraints. Later fixed nodes perform real build and acceptance.'
+ workflow.nodes.find(n=>n.id==='inspect-and-propose').prompt='Read the original objective and actual implementation. Submit the technical approach or core code snippets in document.markdown. Host provides document name, repository and workflow identity. The next development node implements the actual edits.'
+ planner.prompt='Plan actual business acceptance for the current request, criteria and executable scenarios. Submit cases with real expected results. Host fills deterministic criterionId, scenarioId, steps and parameters for a single criterion and scenario. Select correct IDs when multiple options exist. Cover all actual criteria; actual scenario results must equal expected.'
+ const prepare=workflow.nodes.find(n=>n.id==='prepare-local-acceptance')
+ prepare.version='2'
+ prepare.execute=async({input,taskId,runId,generation,signal})=>({ ...input.build,localPrepared:await options.localAcceptance.prepare({candidate:input.build.candidate,plan:input.plan,taskId,runId,generation,uatEnvironment:options.project.uatEnvironment,signal})})
+ const commit=workflow.nodes.find(n=>n.id==='prepare-commit')
+ commit.version='2'
+ commit.execute=async({input,signal})=>{
+  if(input.localPrepared?.candidateDigest!==input.candidate?.digest)throw executionError('LOCAL_ACCEPTANCE_RECEIPT_INVALID')
+  await options.localAcceptance.assertPassed(input.localPrepared,input.localAcceptance)
+  if(typeof options.readVerifiedCandidate!=='function')throw executionError('CANDIDATE_VERIFICATION_UNTRUSTED')
+  const verification=await options.readVerifiedCandidate({candidate:input.candidate,signal})
+  const adapter=await options.deliveryPlan.gitAdapterFor(input.candidate.repository)
+  return adapter.prepareCommit({candidate:input.candidate,verification,requiredChecks:options.checks.map(({id,version})=>({id,version})),message:input.currentRequest??options.deliveryPlan.commitMessage,date:options.deliveryPlan.date},{signal})
+ }
+ return workflow
+}
+
+/** Current instruction removes the separate planning session; frozen v24 keeps its 17 nodes. */
+export function resolveInternalAcceptanceExpected(scenario) {
+ if(typeof scenario.expected==='string'&&scenario.expected.trim())return scenario.expected
+ const description=scenario.description??'',marker=/expected\s*(?:必须|必須|应|應|=|:|：)/i.exec(description)
+ if(marker){
+  const tail=description.slice(marker.index+marker[0].length),start=tail.indexOf('{'),end=tail.lastIndexOf('}')
+  if(start>=0&&end>start){try{return JSON.stringify(JSON.parse(tail.slice(start,end+1)))}catch{}}
+ }
+ throw executionError('LOCAL_ACCEPTANCE_EXPECTATION_REQUIRED',`Scenario ${scenario.id} requires an explicit approved executable expected value`)
+}
+export function buildInternalAcceptancePlan({criteria,scenarios}) {
+ if(!criteria?.length||!scenarios?.length)throw executionError('LOCAL_ACCEPTANCE_CAPABILITY_MISSING')
+ const cases=criteria.flatMap(criterion=>{
+  const mapped=scenarios.filter(s=>s.criterionIds?.includes(criterion.id)||s.criteria?.includes(criterion.description))
+  return (mapped.length?mapped:scenarios).map(scenario=>({criterionId:criterion.id,criterionDescription:criterion.description,scenarioId:scenario.id,expected:resolveInternalAcceptanceExpected(scenario),steps:[scenario.description||scenario.id],parameters:structuredClone(scenario.parameters??{})}))
+ })
+ return {cases}
+}
+export function createEngineeringInlineAcceptanceWorkflow(options){
+ const workflow=createEngineeringWorktreeWorkflow(options);workflow.version='25'
+ const define=workflow.nodes.find(n=>n.id==='define-local-acceptance'),defineExecute=define.execute
+ define.execute=async context=>{const output=await defineExecute(context);return {...output,localContext:{...output.localContext,executionHint:'优先使用项目已有启动配置；不要求固定 local.yml。不新增私有数据库或默认中间件。验收准备由程序解析已有 profile/路径和已配置命令，并在执行记录中列出实际使用的配置。原始验收目标必须由实际场景验证。'}}}
+ workflow.nodes=workflow.nodes.filter(n=>n.id!=='plan-local-acceptance')
+ const preparation=workflow.nodes.find(n=>n.id==='prepare-local-acceptance')
+ preparation.version='3';preparation.inputDependencies=preparation.inputDependencies.filter(id=>id!=='plan-local-acceptance')
+ preparation.mapInput=({previousOutput,dependencyOutputs})=>({build:previousOutput,localContext:dependencyOutputs['define-local-acceptance'].localContext})
+ preparation.execute=async({input,taskId,runId,generation,signal})=>({...input.build,localPrepared:await options.localAcceptance.prepare({candidate:input.build.candidate,plan:buildInternalAcceptancePlan({criteria:input.localContext.criteria,scenarios:options.acceptanceScenarios??input.localContext.scenarios}),taskId,runId,generation,uatEnvironment:options.project.uatEnvironment,signal})})
+ preparation.rulesDigest=executionDigest({previous:preparation.rulesDigest,internalPlan:buildInternalAcceptancePlan.toString(),expected:resolveInternalAcceptanceExpected.toString()})
+ const pr=workflow.nodes.find(n=>n.id==='prepare-pr'),preparePr=pr.execute
+ pr.version='2'
+ pr.execute=async context=>{
+  const prepared=context.input.prepared
+  const changedPaths=await options.readCommitChangedPaths(prepared)
+  return preparePr({...context,input:{...context.input,prepared:{...prepared,changedPaths}}})
+ }
+ const generation=workflow.nodes.find(n=>n.id==='prepare-generation'),generationExecute=generation.execute
+ generation.version=String(Number(generation.version)+1)
+ generation.execute=async context=>{const output=await generationExecute(context);return {...output,startingPoint:Object.fromEntries(Object.entries({repository:options.project.repository,remote:options.project.remote,sourceBranch:options.project.sourceBranch,plannedDevelopmentBranch:options.project.developmentBranch,targetBranch:options.project.targetBranch,remoteSourceCommit:options.project.remoteSourceCommit,sourceOrigin:options.project.remote?'remote-ls-remote':'legacy-local-ref',mode:output.requirement.expectedRemoteSha?'reuse-planned':'create-planned'}).filter(([,v])=>v!==undefined))}}
+ if(options.project.remote){
+  const workspace=workflow.nodes.find(n=>n.id==='prepare-workspace');workspace.version='5'
+  workspace.execute=async context=>{
+   const prepared=await options.workspaceAdapter.prepare({runId:context.runId,generation:context.generation,requirementDigest:context.requirementDigest,baseCommit:context.input.baseCommit},{signal:context.signal})
+   const receipt=await context.perform({action:'workspace',prepared})
+   if(receipt?.status!=='succeeded'||receipt.directory!==prepared.directory||receipt.baseCommit!==prepared.baseCommit)throw executionError('ENGINEERING_WORKSPACE_RECEIPT_INVALID')
+   return {requirement:context.input,workspace:{...receipt,branchDisposition:context.input.expectedRemoteSha?'reused':'created'}}
+  }
+  const apply=workflow.nodes.find(n=>n.id==='apply-changes'),edit=apply.execute
+  apply.execute=async context=>{
+   if(!context.edits?.noChange)return edit(context)
+   const prepared=await options.workspaceAdapter.prepare({runId:context.runId,generation:context.generation,requirementDigest:context.requirementDigest,baseCommit:context.input.requirement.baseCommit})
+   const receipt=await options.workspaceAdapter.reconcile(prepared)
+   if(receipt.status!=='succeeded')throw executionError('WORKSPACE_CURRENT_IDENTITY_UNCONFIRMED')
+   const reviewedPaths=context.edits.noChange.reviewedPaths??options.observedPaths?.(context)??[]
+   await options.assertConflictReads({...context,paths:reviewedPaths})
+   const candidate=await freezeCandidate({repository:prepared.directory,baseCommit:prepared.baseCommit,generation:context.generation,requirementDigest:context.requirementDigest},{signal:context.signal})
+   if(candidate.tree!==receipt.baseTree)throw executionError('ENGINEERING_NO_CHANGE_WORKSPACE_DRIFT')
+   return {status:'succeeded',changeDisposition:'no-change',reason:context.edits.noChange.reason??'实际读取确认原实现满足要求',reviewedPaths,files:[],candidateDigest:candidate.digest,tree:candidate.tree}
+  }
+ }
+ workflow.nodes.find(n=>n.id==='inspect-and-propose').prompt+='\nUse existing project run configuration and original acceptance requirements. Development owns necessary tests. Acceptance preparation derives cases internally; no separate planning submission is required.'
+ return workflow
 }

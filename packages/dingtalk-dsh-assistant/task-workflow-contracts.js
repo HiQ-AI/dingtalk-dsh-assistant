@@ -3,7 +3,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { selectTaskDeliveryFiles } from './task-group-file-delivery.js'
 import { dataChangeProposalRepairPolicy } from './workflow-data-change.js'
 import { createHash } from 'node:crypto'
-import { readTaskOwnerStageArtifacts } from './task-owner-controller.js'
+import { readTaskOwnerStageArtifacts, readOwnerMaintenanceConstraints } from './task-owner-controller.js'
 
 /** 只识别 Host 已保存的 Node 检查器“显式测试文件不存在”证据，不按业务描述猜测修复方向。 */
 export async function inspectEngineeringCheckPrerequisite({ state, artifacts }) {
@@ -215,18 +215,24 @@ export async function validateWorkflowRepairAdmission({ state, plan, definition,
 
 /** 领域合同的公共接入：按冻结定义取规则，公共身份与控制账写入仍由 Host 负责。 */
 export function createTaskWorkflowContracts({ controller, store, artifacts, prepareRepairContext, validateFiles, verifyFileDelivery,
-  completionPolicy = contract => contract, verifyAcceptance, readTaskEvidence, prepareDataChangeRepairInput, inspectWorkflowRevision, reviseWorkflow }) {
+  completionPolicy = contract => contract, verifyAcceptance, readTaskEvidence, readAcceptedCandidateEvidence, prepareDataChangeRepairInput, inspectWorkflowRevision, reviseWorkflow }) {
   const readableStore = Object.freeze({ query: query => store.query(query) })
   const readableArtifacts = Object.freeze({ read: ref => artifacts.read(ref) })
   // 只传递本次真实验收回执给紧接的持久化，不能由模型 JSON 提供；清单变化即失效。
   const verifiedDecisions = new WeakMap()
+  const acceptanceVerifications = new Map()
   async function directEvidenceFor(taskId, plan) {
     const evidence = await readTaskEvidence?.({ taskId, requirementRevision: plan.task.requirementRevision }) ?? []
     if (!Array.isArray(evidence) || evidence.some(item => !item.evidenceRef
       || item.artifactRef !== item.evidenceRef || item.taskId !== taskId
       || item.requirementRevision !== plan.task.requirementRevision))
       throw executionError('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')
-    return evidence
+    const candidates=await readAcceptedCandidateEvidence?.({taskId,plan}) ?? []
+    if(!Array.isArray(candidates)||candidates.some(item=>item.kind!=='original-owner-candidate'
+      ||item.taskId!==taskId||item.requirementRevision!==plan.task.requirementRevision
+      ||!item.evidenceRef||item.artifactRef!==item.evidenceRef||item.ownerCandidate?.accepted!==true
+      ||item.ownerCandidate.businessCompleted!==false))throw executionError('TASK_OWNER_ARTIFACT_SCOPE_MISMATCH')
+    return [...evidence,...candidates]
   }
   async function contextFor(taskId, stage, plan, suppliedState) {
     const state = suppliedState ?? await controller.state(stage.runId, { includeRecovery: true })
@@ -308,7 +314,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
     const directEvidence = await directEvidenceFor(taskId, plan)
     const current = !plan.stages.length || plan.task.planRequirementRevision === plan.task.requirementRevision
     if (!current) missing.push({ kind: 'requirement', code: 'TASK_STAGE_REQUIREMENT_STALE' })
-    if (plan.stages.length && plan.task.status !== 'succeeded') missing.push({ kind: 'plan', code: 'TASK_DELIVERY_PLAN_INCOMPLETE' })
+    if (plan.stages.length && plan.task.planStatus !== 'succeeded') missing.push({ kind: 'plan', code: 'TASK_DELIVERY_PLAN_INCOMPLETE' })
     for (const stage of plan.stages) {
       if (!current || stage.status !== 'succeeded' || !stage.outputRef) {
         missing.push({ kind: 'stage', stageId: stage.stageId, code: 'TASK_DELIVERY_STAGE_INCOMPLETE' }); continue
@@ -390,8 +396,9 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       missing.push({ kind: 'delivery', code: 'TASK_DELIVERY_FILE_RECEIPT_REQUIRED' })
     const manifest = { kind: 'task-delivery-manifest', version: 1, taskId, requirementRevision: plan.task.requirementRevision,
       planRevision: plan.task.planRevision, validation: 'structure-and-evidence-binding',
-      complete: missing.length === 0, missing, artifacts: entries, queryEvidence: directEvidence.map(({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision }) =>
-        ({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision })), files, acceptance,
+      complete: missing.length === 0, missing, artifacts: entries, queryEvidence: directEvidence.filter(item=>item.kind!=='original-owner-candidate').map(({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision }) =>
+        ({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision })),
+      ...(directEvidence.some(item=>item.kind==='original-owner-candidate')?{candidateEvidence:directEvidence.filter(item=>item.kind==='original-owner-candidate').map(({artifactRef,evidenceRef,taskId,requirementRevision,ownerCandidate})=>({artifactRef,evidenceRef,taskId,requirementRevision,ownerCandidate}))}:{}), files, acceptance,
       businessValidation: { status: 'unverified', policy: 'domain-items-v1', items: [] } }
     const verified = decision && verifiedDecisions.get(decision)
     if (verified && verified.manifestDigest === executionDigest(manifest)
@@ -414,7 +421,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           `完成验收门禁未通过：${JSON.stringify(metadata)}`), { completionGate: metadata })
       }
       if (decision && typeof decision === 'object') verifiedDecisions.delete(decision)
-      if (!plan || plan.task.taskId !== taskId || (plan.stages.length && (plan.task.status !== 'succeeded'
+      if (!plan || plan.task.taskId !== taskId || (plan.stages.length && (plan.task.planStatus !== 'succeeded'
         || plan.task.planRequirementRevision !== plan.task.requirementRevision
         || plan.stages.some(stage => stage.status !== 'succeeded' || !stage.outputRef)))) reject('plan-current-and-complete', { taskStatus: plan?.task?.status, requirementRevision: plan?.task?.requirementRevision,
           planRequirementRevision: plan?.task?.planRequirementRevision, incompleteStageIds: plan?.stages?.filter(stage => stage.status !== 'succeeded' || !stage.outputRef).map(stage => stage.stageId) ?? [] })
@@ -431,12 +438,36 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       const directEvidence = await directEvidenceFor(taskId, plan)
       const known = new Set([...plan.stages.flatMap(stage => [stage.outputRef, ...(stage.evidenceRefs ?? [])]),
         ...directEvidence.map(item => item.evidenceRef)])
+      // A successful child receipt is valid evidence of its already bound stage. Normalize
+      // references only; the Owner's criteria and satisfied statuses remain untouched.
+      const aliases = new Map()
+      for (const context of contexts) for (const node of context.state.nodes) {
+        if (node.status !== 'succeeded' || !node.drained || node.generation !== context.state.run.generation) continue
+        for (const ref of [node.outputRef, ...(node.evidenceRefs ?? [])].filter(Boolean)) {
+          if (known.has(ref)) continue
+          const previous = aliases.get(ref)
+          if (previous && previous !== context.stage.outputRef) reject('acceptance-evidence-ambiguous', { evidenceRef: ref })
+          aliases.set(ref, context.stage.outputRef)
+        }
+      }
+      const submitted = [...(decision.evidenceRefs ?? []), ...(decision.assessments ?? []).flatMap(item => item.evidenceRefs ?? [])]
+      const unknown = [...new Set(submitted.filter(ref => !known.has(ref) && !aliases.has(ref)))]
+      if (unknown.length) reject('acceptance-evidence-binding', { unknownEvidenceRefs: unknown, completionEvidenceRefs: [...known] })
+      for (const ref of new Set(submitted.filter(ref => !known.has(ref)))) {
+        const value = await artifacts.read(ref)
+        if (value === undefined || value === null || value.passed === false || value.failed === true
+          || ['failed','rejected','cancelled'].includes(value.status) || typeof value.kind === 'string' && value.kind.endsWith('-failure'))
+          reject('acceptance-evidence-result-failed', { evidenceRef: ref, completionEvidenceRefs: [...known] })
+      }
+      const normalize = refs => refs && [...new Set(refs.map(ref => aliases.get(ref) ?? ref))]
+      decision.evidenceRefs = normalize(decision.evidenceRefs)
+      if (decision.assessments) decision.assessments = decision.assessments.map(item => ({ ...item, evidenceRefs: normalize(item.evidenceRefs) }))
       const items = await store.query({ kind: 'task.owner.acceptance', taskId })
       if (!decision.evidenceRefs?.length || !decision.evidenceRefs.every(ref => known.has(ref))
         || !items.length || decision.assessments?.length !== items.length
         || !items.every(item => decision.assessments.some(assessment => assessment.itemId === item.itemId
           && assessment.status === 'satisfied' && assessment.evidenceRefs?.length
-            && assessment.evidenceRefs.every(ref => known.has(ref) && decision.evidenceRefs.includes(ref))))) reject('acceptance-evidence-binding', { itemIds: items.map(item => item.itemId) })
+            && assessment.evidenceRefs.every(ref => known.has(ref) && decision.evidenceRefs.includes(ref))))) reject('acceptance-evidence-binding', { itemIds: items.map(item => item.itemId), completionEvidenceRefs: [...known] })
       const manifest = await readDeliveryManifest({ taskId, plan, requirement, decision })
       if (!manifest.complete) reject('delivery-manifest', { missing: manifest.missing })
       const planning = await store.query({ kind: 'task.owner.planning', taskId })
@@ -448,14 +479,22 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           return evidenceRefs.length ? [{ itemId: item.itemId, criterion: item.criterion, evidenceRefs }] : []
         })
         context.extension = await readPolicyArtifacts(context)
+        // Semantic acceptance reads native current runtime receipts, not reference strings.
+        context.runtimeEvidence = context.stage.workflowId === 'task-uat-deployment'
+          ? await Promise.all(context.state.nodes.filter(node => node.current !== false
+            && node.generation === context.state.run.generation && node.status === 'succeeded'
+            && node.drained === true && ['inspect-built', 'inspect-runtime'].includes(node.nodeId)
+            && node.outputRef).map(async node => ({ nodeId: node.nodeId, artifactRef: node.outputRef,
+              output: await artifacts.read(node.outputRef) }))) : []
       }
-      const semanticStages = contexts.map(({ stage, state, output, input, contract, extension }) => ({ stage, input, contractId: contract.id,
+      const semanticStages = contexts.map(({ stage, state, output, input, contract, extension, runtimeEvidence }) => ({ stage, input, contractId: contract.id,
         output: { ...output, hostExecution: { taskId, stageId: stage.stageId, runId: stage.runId,
           workflowId: stage.workflowId, workflowDigest: stage.workflowDigest, position: stage.position,
           predecessorOutputRef: stage.predecessorOutputRef, planning,
           run: { status: state.run.status, generation: state.run.generation,
             createdAt: state.run.createdAt, updatedAt: state.run.updatedAt },
           ...(extension.domainEvidence === undefined ? {} : { domainEvidence: extension.domainEvidence }),
+          ...(runtimeEvidence.length ? { runtimeEvidence } : {}),
           nodes: state.nodes.map(node => ({ nodeId: node.nodeId, executor: node.executor,
             position: node.position, generation: node.generation, status: node.status,
             inputRef: node.inputRef, outputRef: node.outputRef })) } } }))
@@ -465,12 +504,46 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
       const sharedItems = items.map(item => ({ itemId: item.itemId, criterion: item.criterion,
         evidenceRefs: decision.assessments.find(value => value.itemId === item.itemId).evidenceRefs }))
       const sharedRefs = new Set(sharedItems.flatMap(item => item.evidenceRefs))
-      const sharedContext = { requirement: { ...requirement, acceptanceItems: sharedItems, signal }, decision,
+      const maintenanceConstraints = await readOwnerMaintenanceConstraints({ taskId, plan, store, artifacts, signal })
+      const sharedContext = { maintenanceConstraints, requirement: { ...requirement, acceptanceItems: sharedItems, signal }, decision,
         stages: semanticStages.filter(item => [item.stage.outputRef, ...(item.stage.evidenceRefs ?? [])].some(ref => sharedRefs.has(ref))),
         directEvidence: directEvidence.filter(item => sharedRefs.has(item.evidenceRef)), acceptanceItems: sharedItems }
       let sharedVerification
-      const verifyShared = typeof verifyAcceptance === 'function'
-        ? () => sharedVerification ??= Promise.resolve().then(() => verifyAcceptance(sharedContext)) : undefined
+      const verifyShared = typeof verifyAcceptance === 'function' ? () => sharedVerification ??= (async () => {
+        signal?.throwIfAborted()
+        const owner = await store.query({ kind: 'task.owner', taskId })
+        if (typeof plan.task.requirementRef !== 'string'
+          || ![plan.task.requirementRevision, plan.task.planRevision, plan.task.controlRevision,
+            owner?.authorizationRevision, owner?.inputFenceRevision].every(Number.isSafeInteger)) {
+          const verified = await verifyAcceptance(sharedContext)
+          signal?.throwIfAborted()
+          return verified
+        }
+        const { signal: ignoredSignal, ...frozenRequirement } = sharedContext.requirement
+        // A retry after a late stage event must not recheck identical frozen evidence.
+        // New requirements, controls, authorizations, facts or assessments require a new check.
+        const digest = executionDigest({ taskId, requirementRef: plan.task.requirementRef,
+          requirementRevision: plan.task.requirementRevision, planRevision: plan.task.planRevision,
+          controlRevision: plan.task.controlRevision, authorizationRevision: owner?.authorizationRevision ?? null,
+          inputFenceRevision: owner?.inputFenceRevision ?? null, requirement: frozenRequirement,
+          decision, maintenanceConstraints, stages: sharedContext.stages, directEvidence: sharedContext.directEvidence,
+          acceptanceItems: sharedItems })
+        let cached = acceptanceVerifications.get(taskId)
+        if (cached?.digest !== digest) {
+          cached = { digest, promise: Promise.resolve().then(() => verifyAcceptance(sharedContext)) }
+          acceptanceVerifications.set(taskId, cached)
+          if (acceptanceVerifications.size > 256) acceptanceVerifications.delete(acceptanceVerifications.keys().next().value)
+        }
+        try {
+          const verified = await cached.promise
+          signal?.throwIfAborted()
+          if (verified !== true && acceptanceVerifications.get(taskId) === cached) acceptanceVerifications.delete(taskId)
+          return verified
+        } catch (cause) {
+          if (acceptanceVerifications.get(taskId) === cached) acceptanceVerifications.delete(taskId)
+          throw cause
+        }
+      })() : undefined
       // 引用只分派验收责任，不证明满足。各领域核验本域事实，语义验收共享所有条目的显式绑定证据。
       for (const contractId of new Set(stages.map(item => item.contractId))) {
         const domainStages = stages.filter(item => item.contractId === contractId)
@@ -490,7 +563,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
           const general = policy?.id === 'general-capability-result' && policy.version === '2'
           if (!policy || await policy.validateCompletion({ ...context, requirement: domainRequirement,
             decision: domainDecision, stages: domainStages, acceptanceItems: general ? [] : context.acceptanceItems,
-            verifyAcceptance: verifyDomain, signal }) !== true) reject('domain-completion', { stageId: context.stage.stageId,
+            verifyAcceptance: verifyDomain, maintenanceConstraints, signal }) !== true) reject('domain-completion', { stageId: context.stage.stageId,
               runId: context.stage.runId, contract: { id: context.contract.id, version: context.contract.version },
               policy: { id: policy?.id, version: policy?.version }, itemIds: context.acceptanceItems.map(item => item.itemId) })
           // 已冻结的通用合同内置领域验收；保留其效果检查，在此用显式绑定证据完成语义验收。
@@ -510,7 +583,7 @@ export function createTaskWorkflowContracts({ controller, store, artifacts, prep
         if (!verifyShared || await verifyShared() !== true) reject('shared-semantic-acceptance')
         for (const item of sharedItems.filter(item => item.evidenceRefs.some(ref => directEvidence.some(value => value.evidenceRef === ref)))) {
           const existing = receipts.find(value => value.itemId === item.itemId)
-          const validators = [{ kind: 'task-query', requirementRevision: plan.task.requirementRevision,
+          const validators = [{ kind: item.evidenceRefs.some(ref=>directEvidence.some(value=>value.evidenceRef===ref&&value.kind==='original-owner-candidate')) ? 'original-owner-candidate' : 'task-query', requirementRevision: plan.task.requirementRevision,
             evidenceRefs: item.evidenceRefs.filter(ref => directEvidence.some(value => value.evidenceRef === ref)) }]
           if (existing) existing.validators.push(...validators)
           else receipts.push({ ...item, validators })

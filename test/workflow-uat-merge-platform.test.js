@@ -20,13 +20,13 @@ const requirement = { request: '将开发 PR 合入 UAT', targetId: target.id,
   repository: target.repository, service: target.service, baseBranch: target.branch,
   pullRequestNumber: 42, headCommitSha: HEAD, requiredChecks: ['unit'], evidenceRefs: ['task:source'] }
 
-function fixture({ failingCheck = false, driftHead = false, missingWrites = false } = {}) {
+function fixture({ failingCheck = false, driftHead = false, missingWrites = false, cachedBase = BASE } = {}) {
   let merged = false, calls = 0, checks = 0
   const github = {
     readPullRequest: async () => ({ number: 42, state: merged ? 'closed' : 'open', merged,
       draft: false, mergeable: true, baseBranch: 'feature/uat1-base', baseRepository: 'HiQ-AI/dataset',
       headRepository: 'HiQ-AI/dataset', headCommitSha: driftHead ? BASE : HEAD,
-      baseCommitSha: BASE, mergeCommitSha: merged ? MERGE : null, evidenceRef: 'pr:42' }),
+      baseCommitSha: cachedBase, mergeCommitSha: merged ? MERGE : null, evidenceRef: 'pr:42' }),
     readBranch: async () => ({ commitSha: merged ? MERGE : BASE, evidenceRef: 'branch:uat' }),
     readCommit: async ({ commitSha }) => ({ commitSha, treeSha: TREE, evidenceRef: `commit:${commitSha}` }),
     readChecks: async () => { checks++; return { complete: true, checks: [{ id: 1, name: 'unit',
@@ -73,7 +73,7 @@ test('原子UAT仅FF显式base租约；无REST写入，保护策略与非FF均�
     fetchImpl: async (url, options) => {
       assert.equal(options.method,undefined)
       const body = url.includes('/rules/') ? (blocked ? [{type:'pull_request'}] : []) : url.includes('/pulls/')
-        ? { state:'open',draft:false,head:{sha:HEAD,repo:{full_name:'HiQ-AI/dataset'}},base:{ref:'feature/uat1-base',sha:BASE,repo:{full_name:'HiQ-AI/dataset'}} }
+        ? { state:'open',draft:false,head:{sha:HEAD,repo:{full_name:'HiQ-AI/dataset'}},base:{ref:'feature/uat1-base',sha:'e'.repeat(40),repo:{full_name:'HiQ-AI/dataset'}} }
         : {protected:false,commit:{sha:BASE}}
       return {ok:true,status:200,json:async()=>body}
     }, execFileImpl: async (_exe,args) => {
@@ -263,4 +263,15 @@ test('真实本地bare Git只快进，检查后base并发漂移由服务端lease
   await git(['--git-dir',remote,'update-ref',ref,base,head]);race=true
   await assert.rejects(github.atomicFastForward(input),/UAT_ATOMIC_PUSH_UNCONFIRMED/)
   assert.equal(await git(['--git-dir',remote,'rev-parse',ref]),concurrent);assert.equal(pushes,2)
+})
+
+
+test('cached PR base does not replace authoritative branch or atomic lease', async () => {
+  const f = fixture({ cachedBase: 'e'.repeat(40) }), p = f.platform()
+  const observation = await p.adapter.inspect({ phase: 'preflight', requirement })
+  assert.equal(observation.facts.baseCommitSha, BASE)
+  const prepared = await p.adapter.prepareOperation({ requirement, observation, runId: 'cached-base', generation: 1,
+    requirementDigest: executionDigest(requirement) })
+  assert.equal((await p.operationAdapter.execute(prepared)).status, 'succeeded')
+  assert.equal(f.calls, 1)
 })

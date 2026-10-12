@@ -699,3 +699,50 @@ test('Owner不得提交执行修复或在同需求下修改已建立计划',()=>
  assert.throws(()=>send({action:'advance',summary:'重排',evidenceRefs:[],appendStages:[{workflowId:'task-analysis',gate:'none'}]}),{code:'TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED'})
  send({action:'advance',summary:'按既有计划继续',evidenceRefs:[]})
  }finally{f.db.close()}})
+
+test('native accepted applied candidate refs bind final completion without weakening stage or foreign guards',()=>{
+ const f=fixture(),candidate='tasks/task-1/sha256-'+ 'c'.repeat(64)+'.json',facts='tasks/task-1/sha256-'+ 'd'.repeat(64)+'.json'
+ try{
+  f.send('task.owner.event',{taskId:'task-1',eventKey:'candidate-source',eventType:'task.created'})
+  f.send('task.owner.claim',{taskId:'task-1',turnId:'original-candidate',expectedLeaseEpoch:0})
+  f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'original-candidate',leaseEpoch:1,sessionId:'session-1'})
+  f.send('task.owner.candidate',{taskId:'task-1',turnId:'original-candidate',leaseEpoch:1,decision:{action:'wait',summary:'Original candidate review',evidenceRefs:[],condition:businessCondition}})
+  f.send('task.owner.accept',{taskId:'task-1',turnId:'original-candidate',leaseEpoch:1})
+  // Immutable native acceptance-event fixture; never mutate a live task database.
+  f.db.exec('CREATE TABLE execution_events(seq INTEGER PRIMARY KEY,kind TEXT,payload TEXT)')
+  f.db.prepare('UPDATE task_owner_turns SET decision_json=? WHERE turn_id=?').run(JSON.stringify({candidateAcceptance:{evidenceRefs:[facts]}}),'original-candidate')
+  f.db.prepare('INSERT INTO execution_events(kind,payload) VALUES(?,?)').run('task.owner.accept',JSON.stringify({taskId:'task-1',turnId:'original-candidate',candidateAcceptanceRef:candidate,requirementRevision:1}))
+  f.send('task.owner.event',{taskId:'task-1',eventKey:'finished',eventType:'workflow.succeeded'})
+  f.send('task.owner.claim',{taskId:'task-1',turnId:'completion',expectedLeaseEpoch:1})
+  f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'completion',leaseEpoch:2,sessionId:'session-1'})
+  const decide=refs=>({action:'complete',summary:'Actual candidate and release evidence verified',evidenceRefs:refs,assessments:[{itemId:'acceptance-1',status:'satisfied',evidenceRefs:refs}]})
+  const submit=refs=>f.send('task.owner.candidate',{taskId:'task-1',turnId:'completion',leaseEpoch:2,decision:decide(refs)})
+  assert.throws(()=>submit([facts]),{code:'TASK_OWNER_COMPLETION_UNPROVEN'})
+  f.db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task-1'").run()
+  f.db.prepare("UPDATE task_plan_stages SET status='succeeded',output_ref='proof/output.json',evidence_refs=? WHERE task_id='task-1'").run(JSON.stringify(['proof/result.json']))
+  assert.throws(()=>submit([facts]),{code:'TASK_OWNER_COMPLETION_UNPROVEN'})
+  f.send('task.owner.applied',{taskId:'task-1',turnId:'original-candidate',leaseEpoch:1})
+  assert.throws(()=>submit(['tasks/other/foreign.json']),{code:'TASK_OWNER_COMPLETION_UNPROVEN'})
+  f.db.prepare("UPDATE execution_events SET payload=json_set(payload,'$.taskId','foreign')").run()
+  assert.throws(()=>submit([facts]),{code:'TASK_OWNER_COMPLETION_UNPROVEN'})
+  f.db.prepare("UPDATE execution_events SET payload=json_set(payload,'$.taskId','task-1')").run()
+  assert.equal(submit([candidate,facts,'proof/result.json']).status,'received')
+ }finally{f.db.close()}
+})
+
+test('registered delivery evidence survives control resume but not requirement or authorization changes',()=>{
+ const f=fixture();try{
+  f.db.exec('CREATE TABLE execution_receipts(command_id TEXT PRIMARY KEY,result TEXT)')
+  f.db.prepare("INSERT INTO task_events(task_id,event_key,event_type,payload_ref,created_at) VALUES('task-1','review','delivery.review.requested','proof/review.json',?)").run(at)
+  const event=f.db.prepare("SELECT seq FROM task_events WHERE event_key='review'").get()
+  const review={taskId:'task-1',payloadRef:'proof/review.json',eventSeq:event.seq,requirementRevision:1,planRevision:1,controlRevision:1,authorizationRevision:1}
+  f.db.prepare('INSERT INTO execution_receipts VALUES(?,?)').run('owner-delivery-review:review',JSON.stringify({review}))
+  f.db.prepare("UPDATE task_controls SET control_revision=2,state='active' WHERE task_id='task-1'").run()
+  assert.equal(f.read('task.owner.delivery-review-evidence').payloadRef,'proof/review.json')
+  f.db.prepare("UPDATE task_owners SET authorization_revision=2 WHERE task_id='task-1'").run()
+  assert.equal(f.read('task.owner.delivery-review-evidence'),null)
+  f.db.prepare("UPDATE task_owners SET authorization_revision=1 WHERE task_id='task-1'").run()
+  f.db.prepare("UPDATE business_tasks SET requirement_revision=2 WHERE task_id='task-1'").run()
+  assert.equal(f.read('task.owner.delivery-review-evidence'),null)
+ }finally{f.db.close()}
+})

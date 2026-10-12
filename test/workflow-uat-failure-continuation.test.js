@@ -30,7 +30,7 @@ function proofFixture(mutate = () => {}) {
     woodpecker: { listPipelines: noWrite, readBuildEvidence: noWrite, triggerBuild: noWrite },
     registry: { readManifest: noWrite }, kubernetes: { readDeployment: noWrite, readPods: noWrite, readEntry: noWrite },
   } }
-  const platform = createTrustedWorkflowPlatforms({ config: { release: { targets: [target, rebuilt] } }, clients, ownerActorId: 'owner' })
+  const platform = createTrustedWorkflowPlatforms({ config: { release: { targets: [target, ...(data.aliases ?? []), rebuilt] } }, clients, ownerActorId: 'owner' })
   platform.bindExecution({ controller: { state: async () => state }, artifacts: { read: async () => requirement }, store: { query: async () => [effect] } })
   return { platform, ...data }
 }
@@ -101,4 +101,14 @@ test('保留原阶段确认门禁，未确认不启动重建', async () => {
   assert.equal(f.plan.stages[2].status, 'waiting_confirmation')
   f.plan.stages[2].status = 'ready'; await f.run()
   assert.deepEqual(f.calls.map(c => c[0]), ['revise', 'bind', 'advance'])
+})
+
+test('equal deployment aliases resolve the same verified rebuild target', async () => {
+  const { platform } = proofFixture(f => { f.aliases = [{ ...structuredClone(target), id: 'sg22-deployment' }] })
+  const input = await platform.prepareUatRebuildFromFailure({ taskId: 'task', runId: 'failed-run', mergeRunId: 'merge', targetId: 'rebuild' })
+  assert.equal(input.target.commitSha, commitSha)
+  await assert.rejects(platform.prepareUatRebuildFromFailure({ taskId: 'task', runId: 'failed-run', mergeRunId: 'merge', targetId: 'other' }), /UAT_REBUILD_TARGET_UNRESOLVED/)
+})
+test('conflicting deployment aliases are rejected by existing registration', () => {
+  assert.throws(() => proofFixture(f => { f.aliases = [{ ...structuredClone(target), id: 'sg22-deployment', branch: 'other' }] }), /RELEASE_PLATFORM_TARGET_DUPLICATE/)
 })

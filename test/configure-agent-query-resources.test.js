@@ -74,3 +74,9 @@ test('固定UAT2浏览器配置沿现有status登记；不允许模型URL与自�
  assert.equal((await planAgentQueryResources(source,p)).changed,true)
  for(const field of ['url','selector','script']){const bad=structuredClone(p);bad.directQueries.statusResources[0][field]='untrusted';await assert.rejects(planAgentQueryResources(source,bad),/QUERY_CONFIG_RESOURCE_INVALID/)}
 })
+
+test('all-table readonly registration uses existing connection and performs no database connection',async()=>{
+ const p=databaseProposal();p.directQueries.databases[0].dataAccess='all-tables-readonly';p.directQueries.databases[0].tables=[]
+ const plan=await planAgentQueryResources(source,p);assert.ok(plan.updated.includes('all-tables-readonly'));assert.ok(plan.updated.includes('approved-readonly'))
+ p.directQueries.databases[0].dataAccess='write-anything';await assert.rejects(planAgentQueryResources(source,p),/QUERY_CONFIG_DATABASE_INVALID/)
+})

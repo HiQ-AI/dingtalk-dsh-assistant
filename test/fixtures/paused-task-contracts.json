@@ -1,0 +1,188 @@
+{
+  "capturedAt": "2026-10-09T07:32:50.906372+00:00",
+  "source": "SQLite mode=ro; BEGIN; rollback",
+  "tasks": [
+    {
+      "sg": "SG20",
+      "taskId": "task-83c651ebdbdb77584a06d1fcb6b9e255",
+      "runId": "run-01a4fc72219b513a3f78e7cdb5be55699e448d6b63b97d3a65f8fcf60dc4d03f",
+      "generation": 6,
+      "workflowDigest": "231eb18aaa5dd39aee567151ec4b02baa3f8b9e0b4b7b29527bf3606046d489d",
+      "control": {
+        "task_id": "task-83c651ebdbdb77584a06d1fcb6b9e255",
+        "control_revision": 3,
+        "state": "paused"
+      },
+      "plannerInputRef": "tasks/task-83c651ebdbdb77584a06d1fcb6b9e255/sha256-f259c945d86933c23656dfdc5e2033213cd4558e01ffe0c0f4d3025cfa238ab2.json",
+      "plannerInputDigest": "f259c945d86933c23656dfdc5e2033213cd4558e01ffe0c0f4d3025cfa238ab2",
+      "plannerWorkflowDigest": "5da190f2b11482a88c3460dc67f24bf2835f045ca45259af1351801b4b2aacc0",
+      "criteria": [
+        {
+          "description": "完成当前事项原文要求的交付",
+          "id": "criterion-1"
+        }
+      ],
+      "scenarios": [
+        {
+          "id": "dataset-merge-ui"
+        }
+      ],
+      "plan": {
+        "cases": []
+      },
+      "scopePaths": [],
+      "waiting": [
+        {
+          "nodeId": "prepare-local-acceptance",
+          "waitReason": "{\"kind\":\"recovery\",\"reference\":\"LOCAL_ACCEPTANCE_PLAN_INVALID\"}"
+        }
+      ]
+    },
+    {
+      "sg": "SG19",
+      "taskId": "task-5c4b495243ce147b3d6e32279fe9715f",
+      "runId": "run-f224f918ef2a4985b8d7fb9e6f00d4a50db5de681f6e43e0632f099349ac0727",
+      "generation": 1,
+      "workflowDigest": "c279478c8e8eebba5d39b02b92c63996beccbad5e538e7a8d4a7fe44e41932eb",
+      "control": {
+        "task_id": "task-5c4b495243ce147b3d6e32279fe9715f",
+        "control_revision": 3,
+        "state": "paused"
+      },
+      "plannerInputRef": "tasks/task-5c4b495243ce147b3d6e32279fe9715f/sha256-1fa7cb2ae89028ad93ee2d179dedec98b186ec932ba31709bb7f077cffee1095.json",
+      "plannerInputDigest": "1fa7cb2ae89028ad93ee2d179dedec98b186ec932ba31709bb7f077cffee1095",
+      "plannerWorkflowDigest": "c279478c8e8eebba5d39b02b92c63996beccbad5e538e7a8d4a7fe44e41932eb",
+      "criteria": [
+        {
+          "description": "修正分配撤回通知派发队列查询的 PostgreSQL SQL 子句顺序，并证明真实 MyBatis 输出可执行",
+          "id": "criterion-1"
+        },
+        {
+          "description": "验证待投递通知可被领取并正常派发、并发领取不重复、失败重试仍有效，且不补发历史积压通知",
+          "id": "criterion-2"
+        },
+        {
+          "description": "提交后端代码修复及可核验的测试结果，不修改配置或部署 UAT2",
+          "id": "criterion-3"
+        }
+      ],
+      "scenarios": [
+        {
+          "id": "merge-normalization"
+        }
+      ],
+      "plan": {
+        "cases": []
+      },
+      "scopePaths": [],
+      "waiting": [
+        {
+          "nodeId": "verify-candidate",
+          "waitReason": "{\"kind\":\"recovery\",\"reference\":\"ENGINEERING_VERIFICATION_FAILED\"}"
+        }
+      ]
+    },
+    {
+      "sg": "SG18",
+      "taskId": "task-1edb9931ffe6ecd4efc0a3949376d66f",
+      "runId": "run-8fd2d5775eca1d446eb3fd72f2f881db5132b52326ebcaa06d949d585e37283c",
+      "generation": 4,
+      "workflowDigest": "e39af8b882882416ae74f09f8ff0ae239754bf4aa88b8e84ffdcce8250dcd564",
+      "control": {
+        "task_id": "task-1edb9931ffe6ecd4efc0a3949376d66f",
+        "control_revision": 3,
+        "state": "paused"
+      },
+      "plannerInputRef": "tasks/task-1edb9931ffe6ecd4efc0a3949376d66f/sha256-81d2f1e119219d7d58d0d60c47fe16296ef54266caa2f151e33de58b427303f5.json",
+      "plannerInputDigest": "81d2f1e119219d7d58d0d60c47fe16296ef54266caa2f151e33de58b427303f5",
+      "plannerWorkflowDigest": "e39af8b882882416ae74f09f8ff0ae239754bf4aa88b8e84ffdcce8250dcd564",
+      "criteria": [
+        {
+          "description": "完成当前事项原文要求的交付",
+          "id": "criterion-1"
+        }
+      ],
+      "scenarios": [
+        {
+          "id": "merge-normalization"
+        }
+      ],
+      "plan": {
+        "cases": [
+          {
+            "criterionId": "criterion-1",
+            "expected": "{\"sourceCount\":2,\"sourceValue\":\"0.5\",\"sourceUnit\":\"kg\",\"declaredUnit\":\"t\",\"weightSum\":\"1\",\"resultValue\":\"1\",\"resultUnit\":\"t\",\"persisted\":true}",
+            "parameters": {},
+            "scenarioId": "merge-normalization",
+            "steps": [
+              "在本次专属命名空间创建两份声明单位为 t、各权重为 0.5 的 0.5 kg 数据；记录精确数据标识以便清理。",
+              "对这两份数据执行真实 preview，再执行 confirm。",
+              "独立读取共享 UAT 数据库中的落库结果，核对来源数量、来源数值与单位、声明单位、权重和、结果数值与单位及持久化状态。",
+              "清理本次精确创建的数据及对应 Redis snapshot，不触及其他 UAT 数据。"
+            ]
+          }
+        ]
+      },
+      "scopePaths": [],
+      "waiting": [
+        {
+          "nodeId": "verify-candidate",
+          "waitReason": "{\"kind\":\"recovery\",\"reference\":\"ENGINEERING_VERIFICATION_FAILED\"}"
+        }
+      ]
+    },
+    {
+      "sg": "SG22",
+      "taskId": "task-f559fc2e93230cf2cdcd61c8ad51dc35",
+      "runId": "run-b7198615cd06723b2ee9b443f3f99290308a52000399e5876e6ca055dc2e2867",
+      "generation": 1,
+      "workflowDigest": "dc781352fde99b4eab2e47629bcd3bab53fa6236521769b30d2c3193aa531ffd",
+      "control": {
+        "task_id": "task-f559fc2e93230cf2cdcd61c8ad51dc35",
+        "control_revision": 3,
+        "state": "paused"
+      },
+      "plannerInputRef": "tasks/task-f559fc2e93230cf2cdcd61c8ad51dc35/sha256-dc4f31af8bbdab2fb92bbb805c0211e064f2f4e8204e2a19c0b7b1e17583b6f7.json",
+      "plannerInputDigest": "dc4f31af8bbdab2fb92bbb805c0211e064f2f4e8204e2a19c0b7b1e17583b6f7",
+      "plannerWorkflowDigest": "448f3e6de668fa007ee0c01f3e5ae46a7f6817e685a9b0a5b644e1da3ac94c7a",
+      "criteria": [
+        {
+          "description": "后端为本次合并提供可核对的、按已提交数据集身份 ID 固定范围的可信逐组结果，不信任前端传来的成功/失败状态，并落实租户、版本、权限校验。",
+          "id": "criterion-1"
+        },
+        {
+          "description": "提供真实结果 Excel 导出：一条已提交数据集一行，15 列顺序和值符合 PRD，前 14 列下载时读取最新数据，第 15 列固定本次确认结果；核心字段或记录缺失时拒绝不完整文件，保留候选导出的既有样式。",
+          "id": "criterion-2"
+        },
+        {
+          "description": "请求超时、缺失或相互矛盾的组结果不得被当作确定失败，也不得在核实前启动版本生成；已成功合并及未选数据的既有保护规则保持。",
+          "id": "criterion-3"
+        }
+      ],
+      "scenarios": [
+        {
+          "id": "merge-normalization"
+        }
+      ],
+      "plan": {
+        "cases": []
+      },
+      "scopePaths": [
+        "src/main/java/com/ecdigit/ecdata/dto/SameNameActivityMergeDTO.java",
+        "src/main/java/com/ecdigit/ecdata/controller/VersionManageController.java",
+        "src/main/java/com/ecdigit/ecdata/service/impl/SameNameActivityMergeServiceImpl.java",
+        "src/main/java/com/ecdigit/ecdata/service/impl/SameNameActivityMergeTxService.java",
+        "src/main/java/com/ecdigit/ecdata/mapper/SameNameActivityMergeMapper.java",
+        "src/main/resources/mapper/mybatis/SameNameActivityMergeMapper.xml",
+        "src/test/java/com/ecdigit/ecdata/service/impl/SameNameActivityMergeServiceImplTest.java",
+        "dataset-web/src"
+      ],
+      "waiting": [
+        {
+          "nodeId": "apply-changes",
+          "waitReason": "{\"kind\":\"recovery\",\"reference\":\"ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED\"}"
+        }
+      ]
+    }
+  ]
+}

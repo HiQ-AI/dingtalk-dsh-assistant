@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
-import { createWorkflowNotifications, notificationSilence, sameDeliveredText, taskNotificationAllowed, notificationParagraphs, ownerReportNotificationText } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
+import { createWorkflowNotifications, notificationSilence, sameDeliveredText, taskNotificationAllowed, notificationParagraphs, ownerReportNotificationText, workflowNotificationDisclosureAllowed } from '../packages/dingtalk-dsh-assistant/workflow-notifications.js'
 
 test('内部修复方向即使继承确认事件也不投递到群', () => {
   assert.equal(taskNotificationAllowed({ phase: 'owner:repair:1', report: {
@@ -127,7 +127,7 @@ test('内部读取失败不按次数制造人工告知；恢复后仍无多余�
   assert.equal((await f.notices()).length, 0)
 })
 
-test('Task接纳完成只通知一次开始，需求修订不再通知', async t => {
+test('Task接纳、开始及需求修订保持静默', async t => {
   const f = await fixture(t)
   await f.call('split', { runId: 'm', units: [{ unitId: 'u', goalText: '审核状态查询' }] })
   await f.call('accept', { runId: 'm', unitId: 'u', commands: [{ commandId: 'c', kind: 'create', args: { taskId: 'task', replyPolicy: 'none' } }] })
@@ -137,12 +137,10 @@ test('Task接纳完成只通知一次开始，需求修订不再通知', async t
   await f.flush()
   assert.equal((await f.notices()).length, 0)
   await f.call('command.complete', { commandId: 'c', leaseEpoch: claim.leaseEpoch, result: { taskId: 'task', reply: '已收到' } })
-  await f.flush(); assert.equal((await f.notices()).length, 1)
-  assert.equal((await f.notices())[0].eventKey,'task.started:task')
-  assert.equal((await f.notices())[0].payload.text,'任务已开始处理。')
+  await f.flush(); assert.equal((await f.notices()).length, 0)
   await f.store.command({ id: 'task-update', kind: 'task.requirement.update', args: { taskId: 'task', expectedRequirementRevision: 1,
     requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'updated' } })
-  await f.flush(); assert.equal((await f.notices()).length, 1)
+  await f.flush(); assert.equal((await f.notices()).length, 0)
 })
 
 test('发送未知后来源更新仍回读旧通知，不删除效果或再次发送', async t => {
@@ -196,9 +194,9 @@ for (const revised of [false, true]) test(`Owner ${kind} 通知及原生领取�
   if (revised) {
     await send('task.requirement.update', { taskId: 'task', expectedRequirementRevision: 1,
       requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'before-claim' })
-    const stale = await f.call('notification.claim', { notificationId: notice.id })
-    assert.equal(stale.dispatchEligible, false)
-    assert.equal(stale.result.notification.status, 'superseded')
+    const stale = (await f.notices()).find(item=>item.id===notice.id)
+    assert.equal(stale.status, 'superseded')
+    await assert.rejects(f.call('notification.claim', { notificationId: notice.id }), {code:'MESSAGE_NOTIFICATION_NOT_READY'})
     return
   }
   const preparedClaim = await f.call('notification.claim', { notificationId: notice.id })
@@ -226,7 +224,7 @@ test('Owner无结构化用户操作的阻塞只留内部事实', async () => {
   }, async command({ kind, args }) { assert.equal(kind, 'message.notification.prepare'); notices.set(args.notificationId, { ...args, id: args.notificationId }); return {} } }
   await createWorkflowNotifications({ store }).flush()
   await createWorkflowNotifications({ store }).flush()
-  assert.equal(reports, 2); assert.equal(notices.size, 1); assert.equal([...notices.values()][0].payload.phase,'task:started')
+  assert.equal(reports, 2); assert.equal(notices.size, 0)
 })
 
 test('同一事项多条补充和实际开始均静默', async () => {
@@ -368,6 +366,7 @@ test('材料耗尽但仍有内部自动读取时不发人工介入',async t=>{
  await f.call('wait',{runId:'m',unitId:'$',nodeId:'S',reason:'自动读取',request:{requestId:'automatic',kind:'needs_context',needs:[]}})
  await f.flush()
  assert.equal((await f.notices()).length,0)
+
 })
 
 
@@ -430,7 +429,7 @@ for(const scenario of ['internal-progress','ordinary-progress','internal-started
  const visible=[...notices.values()].filter(n=>n.payload.phase.startsWith('owner:'))
  assert.equal(visible.length,['complete','user-action','permission'].includes(scenario)?1:0)
  assert.equal(pages.length,0) // 通知策略不再依赖特殊恢复事件分页。
- if(scenario==='complete')assert.equal(visible[0].payload.text,`【结论】\n\n${notificationParagraphs(summary)}\n\n【详情】\n\n完整结果与证据请查看原事项的任务详情。`)
+ if(scenario==='complete')assert.equal(visible[0].payload.text,`【结论】\n\n${notificationParagraphs(summary)}`)
  if(scenario==='user-action')assert.equal(visible[0].payload.text,`【需补充】\n\n请${condition.responsibleParty}补充以下信息：\n\n${notificationParagraphs(missing)}\n\n【下一步】\n\n${condition.resumeWhen}`)
  if(scenario==='permission')assert.equal(visible[0].payload.text,`【需授权】\n\n请${condition.responsibleParty}处理以下授权：\n\n${notificationParagraphs(missing)}\n\n【下一步】\n\n${condition.resumeWhen}`)
 })
@@ -443,13 +442,13 @@ async function acceptStartTask(f,taskId='task',commandId='c',runId='m') {
  await f.call('command.complete',{commandId,leaseEpoch:claim.leaseEpoch,result:{taskId}})
 }
 
-test('零Run任务开始投递一次；发送未知重启恢复只回查',async t=>{
+test('零Run任务启动及重复恢复扫描无外发',async t=>{
  const f=await fixture(t);await acceptStartTask(f)
  let sends=0,reads=0
  const adapter={canDisclose:async()=>true,send:async()=>{sends++;throw Error('lost ACK')},readback:async()=>{reads++;return null}}
  await f.flush(adapter);await f.flush(adapter)
- assert.equal(sends,1);assert.equal(reads,2)
- assert.equal((await f.notices())[0].status,'unknown')
+ assert.equal(sends,0);assert.equal(reads,0)
+ assert.equal((await f.notices()).length,0)
  assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).stages.length,0)
 })
 for(const mode of ['cancelled','completed','web','explicit-silence'])test(`领取任务开始通知复核并拒绝过期或禁发：${mode}`,async t=>{
@@ -457,21 +456,27 @@ for(const mode of ['cancelled','completed','web','explicit-silence'])test(`领�
  await acceptStartTask(f)
  if(mode==='web') f.edit(db=>{const row=db.prepare("SELECT body FROM message_runs WHERE run_id='m'").get();const r=JSON.parse(row.body);r.channel='web';db.prepare("UPDATE message_runs SET body=? WHERE run_id='m'").run(JSON.stringify(r))})
  await f.flush()
- if(['web','explicit-silence'].includes(mode)){assert.equal((await f.notices()).length,0);return}
- const notice=(await f.notices())[0]
- f.edit(db=>{if(mode==='cancelled')db.prepare("UPDATE task_controls SET state='cancelled' WHERE task_id='task'").run();else db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task'").run()})
- const claimed=await f.call('notification.claim',{notificationId:notice.id})
+ assert.equal((await f.notices()).length,0)
+ // 合成部署前的未领取记录，验证发送前仍按当前策略退休旧启动通知。
+ f.edit(db=>{
+  if(mode==='cancelled')db.prepare("UPDATE task_controls SET state='cancelled' WHERE task_id='task'").run()
+  if(mode==='completed')db.prepare("UPDATE business_tasks SET status='succeeded' WHERE task_id='task'").run()
+  const notice={id:'legacy-start',runId:'m',commandId:'c',eventKey:'task.started:task',status:'prepared',leaseEpoch:0,
+   payload:{phase:'task:started',text:'任务已开始处理。',fact:{taskId:'task'},conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'source'}}
+  db.prepare('INSERT INTO message_items(item_id,run_id,kind,body) VALUES (?,?,?,?)').run('notification:legacy-start','m','notification',JSON.stringify(notice))
+ })
+ const claimed=await f.call('notification.claim',{notificationId:'legacy-start'})
  assert.equal(claimed.dispatchEligible,false);assert.equal(claimed.result.notification.status,'superseded')
 })
 
-test('重复创建同一Task跨消息只开始一次，不同同名Task分别开始',async t=>{
+test('跨消息重复接纳及不同同名Task均不发开始通知',async t=>{
  const f=await fixture(t);await acceptStartTask(f);await f.flush()
  for(const [runId,commandId,taskId] of [['m2','c2','task'],['m3','c3','task-other']]){
   await f.call('receive',{runId,sourceKey:runId,sourceVersion:1,conversationId:'g',actorId:'a',body:'请核查同名结果',context:{sourceMessageId:runId}})
   await acceptStartTask(f,taskId,commandId,runId);await f.flush()
  }
  const starts=(await f.notices()).filter(n=>n.payload.phase==='task:started')
- assert.deepEqual(starts.map(n=>n.eventKey).sort(),['task.started:task','task.started:task-other'])
+ assert.deepEqual(starts,[])
 })
 
 test('原生开始准备拒绝未应用命令及借用另一Task身份',async t=>{
@@ -539,6 +544,64 @@ test('无Owner计划的旧任务终态也使用同一结果排版',async()=>{
  },async command({kind,args}){assert.equal(kind,'message.notification.prepare');notices.push(args);return{}}}
  await createWorkflowNotifications({store,controller:{state:async()=>({run:{runId:'business',taskId:'task',status:'succeeded',revision:1},nodes:[{outputRef:'result'}]}),taskPlan:async()=>null},artifacts:{read:async()=>({summary:'已交付核验结果。'})}}).flush()
  const result=notices.find(n=>n.payload.phase.startsWith('terminal:'))
- assert.equal(result.payload.text,'【结论】\n\n已交付核验结果。\n\n【详情】\n\n完整结果与证据请查看原事项的任务详情。')
+ assert.equal(result.payload.text,'【结论】\n\n已交付核验结果。')
  assert.equal(result.payload.sourceMessageId,'original')
+})
+
+test('Owner notification presents actual condition kind without inventing permission',()=>{
+ for(const [kind,heading]of [['business-input','需补充'],['permission','需授权'],['approval','需审批'],['capability','能力待恢复'],['execution','执行待恢复']]){
+  const text=ownerReportNotificationText({reportType:'wait',facts:{summary:'当前状态',condition:{kind,missing:'实际原因',responsibleParty:'负责人',resumeWhen:'实际恢复条件'}}})
+  assert.ok(text.includes(heading));assert.ok(text.includes('实际原因'));assert.ok(text.includes('实际恢复条件'))
+  if(['capability','execution'].includes(kind))assert.ok(!text.includes('授权'))
+ }
+})
+
+test('native requirement revision retires unclaimed completion while maintenance blocks delivery',async t=>{
+ const f=await fixture(t),send=(kind,args)=>f.store.command({id:randomUUID(),kind,args})
+ await send('task.accept',{taskId:'task',requirementRef:`sha256-${'a'.repeat(64)}.json`,requirementRevision:1,sessionId:'owner',criteria:['交付结果'],sourceKey:'source',eventKey:'created'})
+ await send('task.owner.claim',{taskId:'task',turnId:'turn',expectedLeaseEpoch:0})
+ await send('task.owner.sessionBound',{taskId:'task',turnId:'turn',leaseEpoch:1,sessionId:'owner'})
+ await send('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'block',summary:'fixture',evidenceRefs:[],condition:{kind:'business-input',missing:'fixture',responsibleParty:'fixture',resumeWhen:'fixture',evidenceRefs:[]}}})
+ await send('task.owner.accept',{taskId:'task',turnId:'turn',leaseEpoch:1});await send('task.owner.applied',{taskId:'task',turnId:'turn',leaseEpoch:1})
+ const [report]=await f.store.query({kind:'task.owner.reports',taskId:'task'})
+ // Seed the stored historical report kind in this isolated test database only.
+ f.edit(db=>db.prepare("UPDATE task_reports SET report_type='complete' WHERE report_id=?").run(report.reportId))
+ await f.call('split',{runId:'m',units:[{unitId:'u'}]})
+ await f.call('accept',{runId:'m',unitId:'u',commands:[{commandId:'c',kind:'revise',args:{taskId:'task',replyPolicy:'none'}}]})
+ const claimed=(await f.call('command.claim',{commandId:'c'})).result.command
+ await f.call('command.complete',{commandId:'c',leaseEpoch:claimed.leaseEpoch,result:{taskId:'task'}})
+ await f.call('notification.prepare',{runId:'m',commandId:'c',notificationId:'old-complete',eventKey:'old-complete',payload:{phase:`owner:${report.reportId}`,fact:{taskId:'task'},text:'fixture historical complete',conversationId:'g'},disclosure:{conversationId:'g',authorizationRef:'source'}})
+ const before=(await f.store.query({kind:'message.notification',notificationId:'old-complete'})).payload
+ await send('runtime.maintenance.change',{active:true,expectedRevision:0,maintenanceId:'hold',actorId:'owner',reason:'test no send'})
+ await send('task.requirement.update',{taskId:'task',expectedRequirementRevision:1,requirementRef:`sha256-${'b'.repeat(64)}.json`,eventKey:'corrected-release-goal'})
+ const notice=await f.store.query({kind:'message.notification',notificationId:'old-complete'})
+ assert.equal(notice.status,'superseded');assert.equal(notice.leaseEpoch,0);assert.deepEqual(notice.payload,before)
+ assert.equal((await f.store.query({kind:'task.plan',taskId:'task'})).task.requirementRevision,2)
+ assert.equal((await f.store.query({kind:'task.owner.reports',taskId:'task'})).length,1)
+ let sent=0;await assert.rejects(f.flush({canDisclose:async()=>true,send:async()=>{sent++;return {messageId:'wrong'}},readback:async()=>null}),/MESSAGE_NOTIFICATION_SCAN_FAILED/);assert.equal(sent,0)
+})
+
+
+test('outbound disabled preserves prepared notifications and lease without sending', async t => {
+  const f = await fixture(t)
+  await f.call('wait', { runId: 'm', unitId: '$', nodeId: 'R', reason: 'business input',
+    request: { requestId: 'q-disabled', kind: 'needs_clarification', question: 'Choose target', permittedActors: ['a'] } })
+  await f.flush()
+  const before = await f.notices()
+  assert.equal(before.length, 1)
+  assert.equal(before[0].status, 'prepared')
+  let sends = 0
+  const dwsConfig = { writesAuthorized: false }
+  const adapter = { canDisclose: async n => workflowNotificationDisclosureAllowed(dwsConfig, { groupIds: ['g'] }, n),
+    send: async () => { sends++; throw Error('MUST_NOT_SEND') } }
+  await f.flush(adapter)
+  await f.flush(adapter)
+  assert.equal(sends, 0)
+  assert.deepEqual(await f.notices(), before)
+  const notice = before[0]
+  assert.equal(workflowNotificationDisclosureAllowed({ writesAuthorized: true }, { groupIds: ['g'] }, notice), true)
+  assert.equal(workflowNotificationDisclosureAllowed({}, { groupIds: ['g'] }, notice), false)
+  assert.equal(workflowNotificationDisclosureAllowed({ writesAuthorized: true }, { groupIds: ['other'] }, notice), false)
+  assert.equal(workflowNotificationDisclosureAllowed({ writesAuthorized: true }, { groupIds: ['g'] },
+    { ...notice, disclosure: { ...notice.disclosure, conversationId: 'other' } }), false)
 })

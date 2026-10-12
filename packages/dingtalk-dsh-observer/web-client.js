@@ -199,6 +199,19 @@ window.__ModuleLoader__.load({
       }, elapsed === '耗时未记录' ? '累计总耗时未记录' : `累计总耗时 ${elapsed.replace(/^(?:已用时|耗时) /, '')}`))
     }
     const nodeTitle = { 'prepare-delivery': '核对待交付文件', 'send-files': '发送群文件', 'verify-delivery': '回读并核验文件', 'prepare-merge-main': '准备合并主分支', 'execute-merge-main': '合并主分支', 'prepare-verify-main-merge': '准备核验主分支合并', 'execute-verify-main-merge': '核验主分支合并', 'inspect-merged': '回读合并结果', 'prepare-approval-gate': '准备审批', 'execute-approval-gate': '等待真人审批', 'inspect-approved': '回读审批结果', 'prepare-tag': '准备发布标签', 'execute-tag': '创建发布标签', 'inspect-tagged': '回读标签结果', 'prepare-build': '准备构建', 'execute-build': '执行构建', 'inspect-built': '核对构建产物', 'inspect-runtime': '核对运行版本', investigate: '调查与分析', 'accept-result': '校验调查结果', execute: '执行任务', 'prepare-rebuild': '准备重新构建', 'execute-rebuild': '执行重新构建', 'prepare-workspace': '创建独立工作目录', 'read-files': '读取相关文件', 'propose-changes': '编写修改方案', 'inspect-and-propose': '编写修改方案', 'validate-proposal': '检查修改方案', 'apply-changes': '按方案修改文件', 'verify-candidate': '构建检查', 'business-acceptance': '业务验收', 'define-local-acceptance': '核对本地验收条件', 'plan-local-acceptance': '编写本地验收用例', 'prepare-local-acceptance': '准备本地验收环境', 'run-local-acceptance': '启动服务并执行本地验收', 'finalize-local-acceptance': '核对验收与清理结果', 'index-files': '索引可修改文件', 'select-files': '选择改动文件', 'validate-selection': '检查文件范围', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '编写合并请求', 'create-pr': '创建合并请求', 'prepare-generation': '确认项目与修改起点', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'inspect-preflight': '核对合并条件', 'prepare-merge': '准备合并', 'execute-merge': '执行合并', 'verify-source': '回读合并结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核对交付结果' }
+    const taskStepControl = node => {
+      const control = node.control
+      const action = control?.action
+      const accepted = !node.definitionPending && node.status === 'succeeded'
+      const skipped = !node.definitionPending && (node.status === 'skipped' || accepted && action === 'skip')
+      const label = accepted && action === 'submit-output' ? '会话接管完成'
+        : accepted && action === 'reuse' ? '已复用产出' : accepted && action === 'skip' ? '不适用 · 已跳过'
+          : node.status === 'waiting' && action === 'takeover' ? '会话接管中 · 等待提交' : undefined
+      const knownAction = ['retry', 'skip', 'reuse', 'takeover', 'submit-output'].includes(action)
+      const reason = knownAction && typeof control.reason === 'string' ? control.reason.trim() : ''
+      const source = control?.source === 'task-session' ? '原任务会话' : control?.source === 'operator' ? '维护操作' : ''
+      return { label, skipped, reason, source }
+    }
     const taskDisplayTitle = task => {
       const text = String(task.title || task.objective || '未命名任务').replace(/\s+/gu, ' ').trim() || '未命名任务'
       const first = text.split(/[。！？\n]/u)[0]
@@ -899,13 +912,15 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
       const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
       const selectedWorkflowTask = (workflowTaskDetail?.taskId === selectedWorkflowTaskId || workflowTaskDetail?.requestedTaskId === selectedWorkflowTaskId) ? workflowTaskDetail : undefined
-      const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过' }
+      const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过', blocked: '已阻塞' }
       const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
 
       const taskNodes = selectedWorkflowTask?.executionNodes || []
-      const completedSteps = taskNodes.filter(node => !node.definitionPending && node.status === 'succeeded').length
+      const completedSteps = taskNodes.filter(node => !node.definitionPending && node.status === 'succeeded' && node.control?.action !== 'skip').length
+      const skippedSteps = taskNodes.filter(node => !node.definitionPending && node.status === 'succeeded' && node.control?.action === 'skip').length
       const stepsResolved = selectedWorkflowTask?.plan?.stepsResolved !== false && !taskNodes.some(node => node.definitionPending)
-      const stepProgress = taskNodes.length ? Math.min(stepsResolved ? 100 : 99, Math.round(completedSteps / taskNodes.length * 100)) : 0
+      const stepProgress = taskNodes.length ? Math.min(stepsResolved ? 100 : 99, Math.round((completedSteps + skippedSteps) / taskNodes.length * 100)) : 0
+      const stepProgressText = !stepsResolved ? '步骤待确定' : `${skippedSteps ? '步骤处理' : '步骤完成'} ${stepProgress}%`
       const taskTone = selectedWorkflowTask?.outcome === 'failed' ? colors.danger : selectedWorkflowTask?.state === 'waiting' ? colors.warning : selectedWorkflowTask?.outcome === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : colors.accent
       const taskStatus = selectedWorkflowTask?.workflowProgress?.outcomeLabel || ({ succeeded: '已完成', failed: '执行失败', cancelled: '已取消' }[selectedWorkflowTask?.outcome]) || ({ completed: '已结束', running: '执行中', waiting: '等待处理', queued: '待执行' }[selectedWorkflowTask?.state]) || '状态未记录'
       const activeStep = taskNodes.find(node => ['running', 'waiting', 'failed'].includes(node.status))
@@ -922,7 +937,7 @@ window.__ModuleLoader__.load({
             React.createElement('span', { style: { color: colors.muted } }, `最近更新 ${fmt(selectedWorkflowTask.updatedAt)}`)),
           React.createElement('h1', { title: selectedWorkflowTask.title || selectedWorkflowTask.objective, style: { margin: 0, fontSize: 22, fontWeight: 650, lineHeight: 1.45, letterSpacing: '-.02em', maxWidth: 900 } }, taskDisplayTitle(selectedWorkflowTask)),
           React.createElement('div', { style: { marginTop: 16, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px 24px', fontSize: 12 } },
-            React.createElement('span', { style: { color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, taskNodes.length ? `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : stepsResolved ? '暂无步骤记录' : '步骤待确定'),
+            React.createElement('span', { style: { color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, taskNodes.length ? skippedSteps ? `已处理 ${completedSteps + skippedSteps} / ${taskNodes.length} 个步骤（完成 ${completedSteps}，不适用跳过 ${skippedSteps}）` : `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : stepsResolved ? '暂无步骤记录' : '步骤待确定'),
             activeStep ? React.createElement('span', { style: { color: stepColor(activeStep.status) } }, `当前 · ${activeStep.title || nodeTitle[activeStep.nodeId] || '执行步骤'}`) : null,
             React.createElement(TaskTotalElapsed, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask }))),
         selectedWorkflowTask.objective ? React.createElement('details', { style: { margin: '0 0 16px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } },
@@ -934,8 +949,8 @@ window.__ModuleLoader__.load({
         React.createElement('section', { 'aria-label': '执行步骤' },
           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 12 } },
             React.createElement('h2', { style: { margin: 0, fontSize: 16, fontWeight: 650 }, tabIndex: -1 }, '执行步骤'),
-            taskNodes.length || !stepsResolved ? React.createElement('span', { style: { fontSize: 12, color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, stepsResolved ? `步骤完成 ${stepProgress}%` : '步骤待确定') : null),
-          taskNodes.length ? React.createElement('div', { role: 'progressbar', 'aria-label': '步骤完成情况', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': stepProgress, 'aria-valuetext': stepsResolved ? `步骤完成 ${stepProgress}%` : '步骤待确定', style: { height: 3, background: colors.border, marginBottom: 24 } }, React.createElement('div', { style: { width: `${stepProgress}%`, height: '100%', background: taskTone } })) : null,
+            taskNodes.length || !stepsResolved ? React.createElement('span', { style: { fontSize: 12, color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, stepProgressText) : null),
+          taskNodes.length ? React.createElement('div', { role: 'progressbar', 'aria-label': skippedSteps ? '步骤处理情况' : '步骤完成情况', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': stepProgress, 'aria-valuetext': stepProgressText, style: { height: 3, background: colors.border, marginBottom: 24 } }, React.createElement('div', { style: { width: `${stepProgress}%`, height: '100%', background: taskTone } })) : null,
           !taskNodes.length ? React.createElement('p', { style: { padding: '20px 0', color: colors.muted, fontSize: 14 } }, stepsResolved ? '暂无执行步骤记录' : '该阶段步骤待确定') : null,
           ...groupTaskSteps(taskNodes).map((group, groupIndex) => React.createElement('section', {
             key: group.key, className: 'observer-task-workflow', 'aria-label': `工作流 ${group.title}`,
@@ -943,18 +958,20 @@ window.__ModuleLoader__.load({
             React.createElement('h3', { style: { margin: '0 0 14px', padding: '10px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 14, fontWeight: 600 } },
               `工作流 ${groupIndex + 1} · ${group.title}`, React.createElement('span', { style: { marginLeft: 12, color: colors.muted, fontSize: 12, fontWeight: 400 } }, `${group.steps.length} 个步骤`)),
             React.createElement('ol', { style: { margin: 0, padding: 0, listStyle: 'none' } }, ...group.steps.map(({ node, index }) => {
-            const tone = stepColor(node.status)
+            const presentation = taskStepControl(node)
+            const tone = stepColor(presentation.skipped ? 'skipped' : node.status)
             return React.createElement('li', { key: node.stepKey, 'data-step-key': node.stepKey, tabIndex: -1, className: 'observer-task-step', 'aria-current': node.status === 'running' ? 'step' : undefined },
               React.createElement('span', { 'aria-label': `步骤 ${index + 1}`, style: { display: 'grid', placeItems: 'center', width: 28, height: 28, boxSizing: 'border-box', borderRadius: '50%', border: `${node.status === 'running' ? 2 : 1}px solid ${tone}`, background: colors.surface, color: tone, fontSize: 12, fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, String(index + 1).padStart(2, '0')),
               React.createElement('div', { style: { minWidth: 0 } },
                 React.createElement('div', { className: 'observer-task-step-heading' },
                   React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '4px 10px' } },
                     React.createElement('strong', { style: { fontSize: 14, lineHeight: 1.6 } }, node.title || nodeTitle[node.templateNodeId ?? node.nodeId] || '执行步骤'),
-                    React.createElement('span', { style: { color: tone, fontSize: 12 } }, nodeState[node.status] || '状态未记录')),
+                    React.createElement('span', { style: { color: tone, fontSize: 12 } }, presentation.label || nodeState[node.status] || '状态未记录')),
                   React.createElement('div', { style: { marginLeft: 'auto', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, React.createElement(TaskStepElapsed, { node }))),
                 React.createElement('span', { style: { display: 'block', marginBottom: 6, color: colors.muted, fontSize: 12, fontVariantNumeric: 'tabular-nums' } },
                   Number.isFinite(Date.parse(node.startedAt)) ? React.createElement('time', { dateTime: node.startedAt }, taskStepStart(node)) : taskStepStart(node)),
                 node.waitReason?.reference ? React.createElement('p', { style: { margin: '0 0 6px', fontSize: 13, lineHeight: 1.7, color: colors.warning } }, traceReason(node.waitReason.reference)) : null,
+                presentation.reason ? React.createElement('p', { style: { margin: '0 0 6px', fontSize: 13, lineHeight: 1.7, color: colors.muted, whiteSpace: 'pre-wrap' } }, `操作原因${presentation.source ? `（${presentation.source}）` : ''}：${traceReason(presentation.reason)}`) : null,
                 node.outputRef ? React.createElement(TaskStepOutput, { key: `${node.nodeRunId}:${node.outputRef}`, taskId: selectedWorkflowTask.taskId, node, detailRevision: selectedWorkflowTask.detailRevision }) : React.createElement('span', { style: { color: colors.muted, fontSize: 13 } }, node.definitionPending ? '该阶段步骤待确定' : ['pending', 'ready', 'blocked'].includes(node.status) ? '执行后将在这里展示产出' : '暂未记录产出'),
                 node.sessionId ? React.createElement('button', { type: 'button', onClick: () => navigate(node.sessionId), style: { display: 'block', marginTop: 6, padding: 0, border: 0, color: colors.accent, background: 'transparent', font: 'inherit', fontSize: 12, cursor: 'pointer' } }, '查看会话记录') : null))
           }))))),

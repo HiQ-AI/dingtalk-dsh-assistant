@@ -1,27 +1,40 @@
+import {stageTargetId} from './task-stage-target.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { assertDataChangeExecutionIdentity } from './workflow-data-change.js'
 
 /** 平台领域决定前序证明的消费规则，公共服务不再拼装各平台参数。 */
 export function createExternalStageContracts({ workflowIds, external, readEngineeringProof, readArtifact, readTaskEvidence }) {
   return workflowIds.map(id => ({ id, version: '1',
-    async prepare({ taskId, stage, plan, stageIndex, requirement, origin, definitionVersion }) {
+    async prepare({ taskId, stage, plan, stageIndex, requirement, origin, definitionVersion, continuation }) {
+      if (continuation?.preparedInputRef) {
+        const prepared = await readArtifact(continuation.preparedInputRef)
+        if (prepared.kind !== 'task-workflow-preparation' || prepared.taskId !== taskId
+          || prepared.workflowId !== id || prepared.sessionId !== continuation.sessionId)
+          throw executionError('TASK_STAGE_PREPARATION_SCOPE_INVALID')
+        return { input: await external.prepareUatRebuildFromFailure({ taskId,
+          runId: prepared.failedRunId, mergeRunId: prepared.mergeRunId, targetId: prepared.targetId }) }
+      }
       const args = { ...origin.command.args.arguments, ...requirement.target, objective: requirement.request,
-        ...(requirement.stageTargets?.[id] ? { targetId: requirement.stageTargets[id] } : {}) }
+        ...(stageTargetId(requirement,plan,stageIndex,id) ? { targetId: stageTargetId(requirement,plan,stageIndex,id) } : {}) }
       let materials = [], taskContext
       if (['task-uat-deployment', 'task-uat-pr-merge'].includes(id)) {
         const completed = plan.stages.slice(0, Math.max(0, stageIndex)).filter(item => item.status === 'succeeded')
-        const merged = completed.findLast(item => item.workflowId === 'task-uat-pr-merge' && item.outputRef)
+        const target=external.availableTargets?.find(item=>item.workflowId===id&&item.targetId===args.targetId)
+        let merged,mergedProof
+        for(const item of completed.filter(item=>item.workflowId==='task-uat-pr-merge'&&item.outputRef).reverse()){const output=await readArtifact(item.outputRef);if(!target?.repository||output.repository===target.repository){merged=item;mergedProof=output;break}}
         const engineered = completed.findLast(item => item.runId && item.workflowId.startsWith('task-engineering-'))
-        const proof = engineered ? await readEngineeringProof(taskId, engineered) : null
-        const mergedProof = merged ? await readArtifact(merged.outputRef) : null
+        const acceptedSource=id==='task-uat-pr-merge'&&external.prepareAcceptedProjectSource ? await external.prepareAcceptedProjectSource({taskId,targetId:args.targetId}) : null
+        const proof = !acceptedSource&&!(id==='task-uat-deployment'&&mergedProof)&&engineered ? await readEngineeringProof(taskId, engineered) : null
+
         if (mergedProof && (mergedProof.baseBranch === undefined || mergedProof.mergeCommitSha === undefined))
           throw executionError('UAT_MERGE_SOURCE_INVALID')
+        if(acceptedSource)Object.assign(args,{pullRequestNumber:acceptedSource.pullRequestNumber,headCommitSha:acceptedSource.headCommitSha})
         if (id === 'task-uat-pr-merge' && proof) Object.assign(args, {
           pullRequestNumber: proof.pullRequest.number, headCommitSha: proof.pullRequest.commitSha })
         if (id === 'task-uat-deployment' && mergedProof) args.commitSha = mergedProof.mergeCommitSha
         materials = id === 'task-uat-deployment' && mergedProof
           ? [{ resourceRef: `uat-merge-task:${taskId}:${merged.runId}` }]
-          : proof ? [{ resourceRef: `engineering-task:${taskId}:${engineered.runId}` }] : []
+          : acceptedSource ? [{resourceRef:acceptedSource.resourceRef}] : proof ? [{ resourceRef: `engineering-task:${taskId}:${engineered.runId}` }] : []
       }
       if (id === 'task-data-change') {
         const prior = plan.stages.slice(0, Math.max(0, stageIndex)).findLast(item => item.status === 'succeeded' && item.outputRef)
@@ -434,4 +447,32 @@ export function createScopedNativeDataChangeCompletionPolicy(adapter) {
       return externalWorkflowOwnerContract.validateCompletion(context)
     },
   })
+}
+
+/** Execution sessions choose the continuation; the Host only prepares verified platform inputs. */
+export function createTaskWorkflowPreparationTool({ store, controller, artifacts, external }) {
+  return {
+    name: 'task_prepare_workflow', control: true,
+    description: 'Prepare a same-candidate UAT rebuild from a terminal failed deployment receipt. This does not dispatch or replay any effect. Use preparedInputRef on the new stage only after choosing to continue the original task.',
+    parameters: { type: 'object', properties: {
+      workflowId: { type: 'string', enum: ['task-uat-rebuild'] },
+      failedRunId: { type: 'string' }, mergeRunId: { type: 'string' }, targetId: { type: 'string' },
+    }, required: ['workflowId', 'failedRunId', 'mergeRunId', 'targetId'], additionalProperties: false },
+    async execute({ binding, args }) {
+      if (args.workflowId !== 'task-uat-rebuild') throw executionError('TASK_STAGE_PREPARATION_SCOPE_INVALID')
+      const owner = await store.query({ kind: 'task.owner', taskId: binding.taskId })
+      if (!owner || owner.status !== 'running' || owner.sessionId !== binding.sessionId
+        || owner.turnId !== binding.turnId || owner.leaseEpoch !== binding.leaseEpoch)
+        throw executionError('WORKFLOW_ACTION_FORBIDDEN')
+      const plan = await controller.taskPlan(binding.taskId)
+      if (!plan.stages.some(stage => stage.runId === args.failedRunId)
+        || !plan.stages.some(stage => stage.runId === args.mergeRunId && stage.status === 'succeeded'))
+        throw executionError('TASK_STAGE_PREPARATION_SCOPE_INVALID')
+      const input = await external.prepareUatRebuildFromFailure({ taskId: binding.taskId,
+        runId: args.failedRunId, mergeRunId: args.mergeRunId, targetId: args.targetId })
+      const saved = await artifacts.put({ kind: 'task-workflow-preparation', taskId: binding.taskId,
+        workflowId: args.workflowId, sessionId: binding.sessionId, failedRunId: args.failedRunId, mergeRunId: args.mergeRunId, targetId: args.targetId, input }, { taskId: binding.taskId })
+      return { preparedInputRef: saved.ref, workflowId: args.workflowId, input }
+    }, classifyError: () => 'correctable',
+  }
 }

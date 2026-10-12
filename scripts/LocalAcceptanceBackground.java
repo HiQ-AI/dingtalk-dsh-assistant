@@ -136,6 +136,17 @@ public class LocalAcceptanceBackground {
       int skipped=Integer.parseInt(suite.getAttribute("skipped"));
       require(tests>0&&Integer.parseInt(suite.getAttribute("failures"))==0&&Integer.parseInt(suite.getAttribute("errors"))==0&&skipped>=0&&skipped<=tests,"JUNIT_NOT_PASSED");
       require(suite.getElementsByTagName("testcase").getLength()==tests&&suite.getElementsByTagName("failure").getLength()==0&&suite.getElementsByTagName("error").getLength()==0&&suite.getElementsByTagName("skipped").getLength()==skipped,"JUNIT_CASES_INVALID");
+      org.w3c.dom.NodeList cases=suite.getElementsByTagName("testcase");
+      for(int i=0;i<cases.getLength();i++){
+        org.w3c.dom.Element item=(org.w3c.dom.Element)cases.item(i);
+        org.w3c.dom.NodeList ignored=item.getElementsByTagName("skipped");
+        String reason=ignored.getLength()==0?"":((org.w3c.dom.Element)ignored.item(0)).getAttribute("message");
+        if(ignored.getLength()>0&&reason.isEmpty())reason=ignored.item(0).getTextContent();
+        String[] fields={qualified,item.getAttribute("name"),ignored.getLength()==0?"executed":"skipped",reason};
+        System.out.print("HOST_JUNIT_CASE:");
+        for(int j=0;j<fields.length;j++){if(j>0)System.out.print(":");System.out.print(Base64.getEncoder().encodeToString(fields[j].getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
+        System.out.println();
+      }
       total+=tests;skippedTotal+=skipped;
     }
     require(total>skippedTotal,"JUNIT_EXECUTED_TESTS_MISSING");

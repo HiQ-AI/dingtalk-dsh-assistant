@@ -103,7 +103,25 @@ export async function readTaskMaterialValue({ directories, artifacts, artifactRe
 }
 
 /** 同逻辑Task材料导航；索引可由原工件重建，不参与业务授权或验收。 */
-export async function readTaskMaterials({ directories, artifacts, requirementRevision, requirementRef, artifactRef, offset = 0, limit = 16000 }) {
+export async function readTaskMaterialIndexPage({ logicalTaskId, names, artifacts, requirementRevision, requirementRef, offset, limit }) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw executionError('TASK_MATERIAL_ARGUMENT_INVALID')
+  const entries = []
+  for (const name of names.slice(offset, offset + limit)) {
+    if (!/^sha256-[a-f0-9]{64}\.json$/.test(name)) throw executionError('ARTIFACT_REFERENCE_INVALID')
+    const ref = `tasks/${logicalTaskId}/${name}`, value = await artifacts.read(ref)
+    if (!value || !(value.kind === 'agent-query-evidence' || Array.isArray(value.sourceInstructions)
+      || Array.isArray(value.materials) && typeof value.request === 'string'
+      || typeof value.id === 'string' && typeof value.text === 'string'
+      || value.document || value.artifactFiles || value.artifactId && value.fileName)) continue
+    const revision = value.execution?.requirementRevision ?? value.requirementRevision ?? null
+    entries.push({ artifactRef: ref, relativePath: `work/artifacts/${name}`, kind: value.kind ?? 'artifact', requirementRevision: revision,
+      status: ref === requirementRef || revision !== null && revision === requirementRevision ? 'current' : 'history' })
+  }
+  return { logicalTaskId, entries, totalEntries: names.length, nextCursor: offset + limit < names.length ? offset + limit : null,
+    instruction: '索引项不证明授权或验收；用artifactRef分页读完整原文。work/tmp单层及outputs产物可沿已登记相对路径读取。' }
+}
+
+export async function readTaskMaterials({ directories, artifacts, requirementRevision, requirementRef, artifactRef, offset = 0, limit = 16000, indexOffset, indexLimit = 50, indexState }) {
   if (!directories?.logicalTaskId || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 16000) throw executionError('TASK_MATERIAL_ARGUMENT_INVALID')
   await checkedTaskDirectory(directories.work)
   const prefix = `tasks/${directories.logicalTaskId}/`
@@ -113,6 +131,16 @@ export async function readTaskMaterials({ directories, artifacts, requirementRev
   }
   const directory = join(directories.work, 'artifacts'), entries = []
   await checkedTaskDirectory(directory, true)
+  // On-demand entry pagination: only open artifacts in this page. No snapshot-time scan or index rewrite.
+  if (indexOffset !== undefined) {
+    if (!Number.isSafeInteger(indexOffset) || indexOffset < 0 || !Number.isSafeInteger(indexLimit) || indexLimit < 1 || indexLimit > 100) throw executionError('TASK_MATERIAL_ARGUMENT_INVALID')
+    if (indexState && indexState.logicalTaskId && indexState.logicalTaskId !== directories.logicalTaskId) throw executionError('TASK_MATERIAL_SCOPE_INVALID')
+    const names = indexState?.names ?? (await readdir(directory)).filter(name => /^sha256-[a-f0-9]{64}\.json$/.test(name)).sort()
+    if (indexState && !indexState.names) Object.assign(indexState, { logicalTaskId: directories.logicalTaskId, names })
+    // Immutable name list pins pagination across retries/additions. Cursor is an offset in this listing,
+    // callers use the Host-frozen listing for a turn (see listMaterials in owner controller).
+    return readTaskMaterialIndexPage({ logicalTaskId: directories.logicalTaskId, names, artifacts, requirementRevision, requirementRef, offset: indexOffset, limit: indexLimit })
+  }
   for (const name of (await readdir(directory)).sort()) {
     if (!/^sha256-[a-f0-9]{64}\.json$/.test(name)) continue
     const ref = prefix + name, value = await artifacts.read(ref)

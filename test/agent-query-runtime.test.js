@@ -7,3 +7,30 @@ const pod={metadata:{name:'dataset-one',namespace:'uat3',uid:'pod',resourceVersi
 function runner(calls,{drift=false}={}){let reads=0;return async(cmd,args,opts)=>{calls.push({cmd,args,opts});let value;if(args.includes('logs'))return{stdout:'2026-09-28T00:00:00Z ERROR java.lang.IllegalStateException: password=SUPERSECRET request body PRIVATE\n2026-09-28T00:00:01Z at com.hiq.Service.run(Service.java:42)\n'};if(args.includes('deployment')){value=structuredClone(d);if(++reads>1&&drift)value.metadata.resourceVersion='3'}else if(args.includes('replicasets'))value={items:[{metadata:{uid:'rs',ownerReferences:[{kind:'Deployment',name:'dataset',uid:'dep',controller:true}]}}]};else value={items:[pod]};return{stdout:JSON.stringify(value)}}}
 test('实际受信平台读取复用，部署/配置/日志字段投影且无原文秘密',async()=>{const calls=[],tool=createAgentStatusReadCapability({resources:[r],execFileImpl:runner(calls)}),input={resourceId:r.id},scope={statusIds:[r.id]};const output=await tool.execute({input,scope});assert.equal(output.values.pods[0].containers[0].imageId,'registry/dataset@sha256:'+'a'.repeat(64));assert.ok(!JSON.stringify(output).includes('SUPERSECRET'));assert.ok(!JSON.stringify(output).includes('PRIVATE'));assert.equal(output.values.pods[0].containers[0].logSummary.diagnostics[1].codeLocation,'com.hiq.Service.run(Service.java:42)');assert.equal((await tool.verify({input,scope,output})).passed,true);assert.ok(calls.every(c=>c.cmd==='kubectl'&&c.opts.timeout===12000));assert.ok(calls.every(c=>!c.args.includes('secret')&&!c.args.includes('exec')));assert.ok(calls.find(c=>c.args.includes('logs')).args.includes('--tail=200'))})
 test('授权、目标、版本漂移及执行异常固定拒绝',async()=>{const calls=[],tool=createAgentStatusReadCapability({resources:[r],execFileImpl:runner(calls)});await assert.rejects(tool.execute({input:{resourceId:r.id},scope:{statusIds:[]}}),/QUERY_SCOPE_DENIED/);assert.equal(calls.length,0);assert.throws(()=>createAgentStatusReadCapability({resources:[{...r,namespace:'x;delete'}]}),/QUERY_STATUS_CONFIG_INVALID/);await assert.rejects(createAgentStatusReadCapability({resources:[r],execFileImpl:runner([],{drift:true})}).execute({input:{resourceId:r.id},scope:{statusIds:[r.id]}}),/QUERY_SOURCE_CHANGED/);await assert.rejects(createAgentStatusReadCapability({resources:[r],execFileImpl:async()=>{throw Error('SECRET')}}).execute({input:{resourceId:r.id},scope:{statusIds:[r.id]}}),e=>e.message==='QUERY_RUNTIME_UNAVAILABLE')})
+for(const variant of ['valid-startup','pod-replaced','container-restarted','warning','partial-line','unknown-metadata'])test(`registered startup query binds current container with GET/logs only: ${variant}`,async()=>{
+ const config={...r,startupInspection:{booleanProperties:['approval.notification-outbox.enabled'],springConditions:[{className:'ApprovalNotificationOutboxTask',property:'approval.notification-outbox.enabled'}]}}
+ const current=structuredClone(pod);current.spec.containers[0].command=['java','-Dapproval.notification-outbox.enabled=false','-jar','app.jar','--approval.notification-outbox.enabled=false']
+ Object.assign(current.status.containerStatuses[0],{containerID:'container-id',state:{running:{startedAt:'2026-10-12T08:25:00Z'}}})
+ const calls=[],execFileImpl=async(cmd,args,opts)=>{
+  calls.push({cmd,args,opts});let value
+  if(args.includes('logs'))return{stdout:args.some(x=>x.startsWith('--since-time='))?[
+   '2026-10-12T08:25:01Z    ApprovalNotificationOutboxTask:',
+   '2026-10-12T08:25:01Z       Did not match:',
+   "2026-10-12T08:25:01Z          - @ConditionalOnProperty (approval.notification-outbox.enabled=true) found different value in property 'enabled' (OnPropertyCondition)"
+  ].join(String.fromCharCode(10))+(variant==='partial-line'?'':String.fromCharCode(10)):'',...(variant==='unknown-metadata'?{}:{stderr:variant==='warning'?'SECRET WARNING':''})}
+  if(args.includes('deployment'))value=d
+  else if(args.includes('replicasets'))value={items:[{metadata:{uid:'rs',ownerReferences:[{kind:'Deployment',name:'dataset',uid:'dep',controller:true}]}}]}
+  else if(args.includes('pod')){value=structuredClone(current);if(variant==='pod-replaced')value.metadata.uid='other';if(variant==='container-restarted')value.status.containerStatuses[0].containerID='other-container'}
+  else value={items:[current]}
+  return{stdout:JSON.stringify(value)}
+ }
+ const tool=createAgentStatusReadCapability({resources:[config],execFileImpl}),input={resourceId:r.id},scope={statusIds:[r.id]}
+ if(!['pod-replaced','container-restarted'].includes(variant)){
+  const out=await tool.execute({input,scope});const observation=out.values.pods[0].containers[0].startupObservation
+  assert.equal(observation.podUid,'pod');assert.equal(observation.containerId,'container-id');assert.equal(observation.conditions[0].excludedByCondition,variant==='valid-startup'?true:null)
+  if(variant!=='valid-startup')assert.equal(observation.windowIntegrity.status,'unknown')
+  assert.ok(!JSON.stringify(out).includes('SUPERSECRET'));assert.ok(!JSON.stringify(out).includes('SECRET WARNING'));assert.equal((await tool.verify({input,scope,output:out})).passed,true)
+ }else await assert.rejects(tool.execute({input,scope}),/QUERY_SOURCE_CHANGED/)
+ assert.ok(calls.every(call=>!call.args.includes('exec')&&!call.args.includes('secret')))
+ assert.ok(calls.some(call=>call.args.includes('--limit-bytes=524288')))
+})

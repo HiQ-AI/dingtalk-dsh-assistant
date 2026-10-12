@@ -158,19 +158,45 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, await store.reconcileWorkflowTopic(body, check))
     } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|MAINTENANCE|ACTIVE/.test(error.message) ? 409 : 400, { error: error.message }) }
   }
-  if (['/runtime/maintenance','/runtime/maintenance/seal','/runtime/maintenance/resume'].includes(url.pathname)) {
+  if (['/runtime/maintenance','/runtime/maintenance/seal','/runtime/maintenance/resume','/runtime/maintenance/task-run'].includes(url.pathname)) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
       || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
     const operation = url.pathname.split('/')[3] ?? 'change'
-    const method = {change:'changeWorkflowMaintenance',seal:'sealWorkflowMaintenance',resume:'resumeWorkflowMaintenance'}[operation]
+    const method = {change:'changeWorkflowMaintenance',seal:'sealWorkflowMaintenance',resume:'resumeWorkflowMaintenance','task-run':'runScopedWorkflowTask'}[operation]
     if (!store.getWorkflowMaintenance || !store[method]) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
     if (request.method === 'GET' && operation === 'change') return send(response, 200, await store.getWorkflowMaintenance())
     if (request.method !== 'POST') return send(response, 405, { error: 'method_not_allowed' })
     try {
-      const body = z.strictObject({ requestId: requiredText.max(200), ...(operation === 'change' ? { active: z.boolean() } : {}), expectedRevision: z.number().int().nonnegative(),
+      const body = z.strictObject({ requestId: requiredText.max(200), ...(operation === 'change' ? { active: z.boolean() } : {}), ...(operation==='task-run'?{taskId:requiredText,runId:requiredText,expectedRequirementRevision:z.number().int().positive(),expectedControlRevision:z.number().int().positive(),groupId:requiredText,allowedEffects:z.array(z.enum(['workspace','edit','external','commit','push','pr','progress']))}:{}), expectedRevision: z.number().int().nonnegative(),
         maintenanceId: requiredText.max(200), reason: requiredText.max(4096) }).parse(await readJson(request))
       return send(response, 200, await store[method](body))
     } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|SEALED|NOT_DRAINED/.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
+  const resetExecution=/^\/tasks\/([^/]+)\/reset-execution$/u.exec(url.pathname)
+  if(request.method==='POST'&&resetExecution){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
+    if(!store.resetWorkflowExecution)return send(response,404,{error:'workflow_disabled'})
+    try{
+      const body=z.strictObject({requestId:requiredText.max(200),expectedControlRevision:z.number().int().positive(),reason:requiredText.max(2000),checkOnly:z.boolean(),prepareNewRun:z.boolean()}).parse(await readJson(request))
+      return send(response,200,await store.resetWorkflowExecution({...body,taskId:decodeURIComponent(resetExecution[1])}))
+    }catch(error){return send(response,/FORBIDDEN/.test(error.message)?403:/STALE|CONFLICT|NOT_DRAINED/.test(error.message)?409:400,{error:error.message})}
+  }
+  if(request.method==='POST'&&url.pathname==='/runtime/execution-purge'){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
+    if(!store.purgeWorkflowExecution)return send(response,404,{error:'workflow_disabled'})
+    try{
+      const body=z.object({requestId:requiredText.max(200),reason:requiredText.max(2000),checkOnly:z.boolean(),tasks:z.array(z.object({taskId:requiredText,expectedControlRevision:z.number().int().positive()})).length(4)}).parse(await readJson(request))
+      return send(response,200,await store.purgeWorkflowExecution(body))
+    }catch(error){return send(response,/FORBIDDEN/.test(error.message)?403:/STALE|CONFLICT|NOT_DRAINED/.test(error.message)?409:400,{error:error.message})}
+  }
+  const purgedStart=/^\/tasks\/([^/]+)\/prepare-purged-run$/u.exec(url.pathname)
+  if(request.method==='POST'&&purgedStart){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
+    if(!store.preparePurgedWorkflowRun)return send(response,404,{error:'workflow_disabled'})
+    try{
+      const body=z.object({requestId:requiredText.max(200),expectedRequirementRevision:z.number().int().positive(),expectedControlRevision:z.number().int().positive(),checkOnly:z.boolean()}).parse(await readJson(request))
+      return send(response,200,await store.preparePurgedWorkflowRun({...body,taskId:decodeURIComponent(purgedStart[1])}))
+    }catch(error){return send(response,/FORBIDDEN/.test(error.message)?403:/STALE|NOT_DRAINED|PENDING/.test(error.message)?409:400,{error:error.message})}
   }
   const workflowRerun = /^\/tasks\/([^/]+)\/rerun$/u.exec(url.pathname)
   if (request.method === 'POST' && workflowRerun) {
@@ -180,7 +206,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     try {
       const body = z.strictObject({ requestId: requiredText.max(200), expectedRunId: requiredText.max(200).nullable(),
         objective: requiredText.max(12000), acceptanceCriteria: acceptanceCriteriaSchema,
-        constraints: z.array(requiredText.max(2000)).max(32).optional(), repositoryId: requiredText.max(64),
+        constraints: z.array(requiredText.max(2000)).max(32).optional(), repositoryId: requiredText.max(64), developmentSourceRef: requiredText.optional(),
         uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']),
         stages: z.tuple([z.literal('task-engineering'), z.literal('task-uat-pr-merge'), z.literal('task-uat-deployment')]),
         mergeTargetId: requiredText.max(200), deployTargetId: requiredText.max(200) }).parse(await readJson(request))
@@ -196,6 +222,35 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const body = z.strictObject({ expectedControlRevision:z.number().int().positive(),checkOnly:z.boolean() }).parse(await readJson(request))
       return send(response,200,await store.deleteWorkflowTask({...body,taskId:decodeURIComponent(deleteTask[1])}))
     } catch(error) { return send(response,/FORBIDDEN/.test(error.message)?403:409,{error:error.message}) }
+  }
+  const executionControl=/^\/tasks\/([^/]+)\/execution-control$/u.exec(url.pathname)
+  if(request.method==='POST'&&executionControl){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
+    if(!store.controlWorkflowTaskExecution)return send(response,404,{error:'workflow_disabled'})
+    try{
+      const body=z.strictObject({requestId:requiredText.max(200),action:z.enum(['continue','stop','retire','retry','skip','reuse','takeover','submit-output','reconcile-failure']),reason:requiredText.max(2000),runId:requiredText.max(128),expectedRequirementRevision:z.number().int().positive(),expectedControlRevision:z.number().int().positive(),nodeRunId:requiredText.max(128).optional(),generation:z.number().int().positive().optional(),leaseEpoch:z.number().int().nonnegative().optional(),outputRef:requiredText.max(4096).optional(),evidenceRefs:z.array(requiredText.max(4096)).max(128).optional(),runRevision:z.number().int().nonnegative().optional(),inputDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),effectId:requiredText.max(200).optional(),expectedPlanRevision:z.number().int().positive().optional(),maintenanceId:requiredText.max(200).optional(),maintenanceRevision:z.number().int().nonnegative().optional()}).parse(await readJson(request))
+      return send(response,200,await store.controlWorkflowTaskExecution({...body,taskId:decodeURIComponent(executionControl[1])}))
+    }catch(error){return send(response,/FORBIDDEN|SCOPE/u.test(error.message)?403:/STALE|UNSAFE|PENDING|CONFLICT|DRAIN|REUSE_REQUIRED/u.test(error.message)?409:400,{error:error.message})}
+  }
+  const deliveryReview=/^\/tasks\/([^/]+)\/review-delivery$/u.exec(url.pathname)
+  if(request.method==='POST'&&deliveryReview){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
+    if(!store.reviewWorkflowTaskDelivery)return send(response,404,{error:'workflow_disabled'})
+    try{
+      const digest=z.string().regex(/^[a-f0-9]{64}$/), text=requiredText.max(4096)
+      const body=z.strictObject({requestId:requiredText.max(200),expectedControlRevision:z.number().int().positive(),expectedRequirementRevision:z.number().int().positive(),reason:requiredText.max(2000),
+        facts:z.union([z.strictObject({runId:text,directory:text,repository:text,commit:z.string().regex(/^[a-f0-9]{40}$/),prNumber:z.number().int().positive(),verificationFile:text,businessJUnitPath:text.optional(),cleanupPath:text.optional(),cleanupSha256:digest.optional(),jarPath:text.optional(),jarSha256:digest.optional()}),z.strictObject({kind:z.literal('project-evidence'),runId:text,projects:z.array(z.strictObject({directory:text,repository:text,commit:z.string().regex(/^[a-f0-9]{40}$/),sourceBase:z.string().regex(/^[a-f0-9]{40}$/),prNumber:z.number().int().positive()})).min(1).max(10),evidence:z.array(z.strictObject({path:text,sha256:digest,description:requiredText.max(2000)})).min(1).max(40),scope:requiredText.max(12000),acceptance:z.strictObject({scenarioIds:z.array(requiredText.max(200)).min(1).max(128)}).optional()})])}).parse(await readJson(request))
+      return send(response,202,await store.reviewWorkflowTaskDelivery({...body,taskId:decodeURIComponent(deliveryReview[1])}))
+    }catch(error){return send(response,/FORBIDDEN|SCOPE|NOT_AUTHORIZED/u.test(error.message)?403:/STALE|UNSAFE|CHANGED|MISMATCH/u.test(error.message)?409:400,{error:error.message})}
+  }
+  const completionCorrection=/^\/tasks\/([^/]+)\/confirm-completion$/u.exec(url.pathname)
+  if(request.method==='POST'&&completionCorrection){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
+    if(!store.confirmWorkflowTaskCompletion)return send(response,404,{error:'workflow_disabled'})
+    try{
+      const body=z.strictObject({requestId:requiredText.max(200),expectedControlRevision:z.number().int().positive(),expectedRequirementRevision:z.number().int().positive(),topicId:requiredText.max(128),declaration:requiredText.max(16000)}).parse(await readJson(request))
+      return send(response,200,await store.confirmWorkflowTaskCompletion({...body,taskId:decodeURIComponent(completionCorrection[1])}))
+    }catch(error){return send(response,/FORBIDDEN|MISMATCH/u.test(error.message)?403:/STALE|UNSAFE/u.test(error.message)?409:400,{error:error.message})}
   }
   const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|pause|resume|confirm-stage|reopen|archive|title)$/u.exec(url.pathname)
   if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
@@ -219,7 +274,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         : z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : {
           context: requiredText.max(16000), requirement: z.strictObject({
             objective: requiredText.max(12000), acceptanceCriteria: acceptanceCriteriaSchema,
-            stageTargets: z.record(z.string(), requiredText),
+            stageTargets: z.record(z.string(), z.union([requiredText,z.array(requiredText).min(1).max(10)])),
             stageAuthorizations: z.array(z.strictObject({ workflowId: requiredText, sourceQuote: requiredText,
               objective: requiredText, gate: z.enum(['none', 'confirmation']) })),
           }).optional(),
@@ -253,6 +308,18 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, body.dryRun ? 200 : 202, await store.handoffWorkflowDataChangeApproval({ ...body, taskId: decodeURIComponent(approvalHandoff[1]) }))
     } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT|UNSAFE|MAINTENANCE/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
+  const maintenanceConstraint = /^\/tasks\/([^/]+)\/maintenance-constraint$/u.exec(url.pathname)
+  if (request.method === 'POST' && maintenanceConstraint) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.applyWorkflowMaintenanceConstraint) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ requestId: requiredText.max(200), text: requiredText.max(16000),
+        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
+        evidenceRefs: z.array(requiredText.max(4096)).min(2).max(32) }).parse(await readJson(request))
+      return send(response, 202, await store.applyWorkflowMaintenanceConstraint({ ...body, taskId: decodeURIComponent(maintenanceConstraint[1]) }))
+    } catch (error) { return send(response, /FORBIDDEN|SCOPE_REQUIRED/u.test(error.message) ? 403 : /STALE|CONFLICT|BUSY/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   const readonlyReassessment = /^\/tasks\/([^/]+)\/reassess-readonly$/u.exec(url.pathname)
   if (request.method === 'POST' && readonlyReassessment) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
@@ -279,6 +346,18 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 202, await store.repairWorkflowStageAuthorizations({ ...body, taskId: decodeURIComponent(authorizationRepair[1]) }))
     } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT|DRAINED/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
+  const retirePrepared = /^\/tasks\/([^/]+)\/retire-prepared-effect$/u.exec(url.pathname)
+  if (request.method === 'POST' && retirePrepared) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.retireWorkflowPreparedEffect) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ runId: requiredText, effectId: requiredText, assessmentRef: requiredText,
+        reason: requiredText.max(16000), expectedRequirementRevision: z.number().int().positive(),
+        expectedControlRevision: z.number().int().positive() }).parse(await readJson(request))
+      return send(response, 202, await store.retireWorkflowPreparedEffect({ ...body, taskId: decodeURIComponent(retirePrepared[1]) }))
+    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|stale/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  }
   const ownerRetry = /^\/tasks\/([^/]+)\/retry-owner$/u.exec(url.pathname)
   if (request.method === 'POST' && ownerRetry) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
@@ -288,7 +367,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const body = z.strictObject({ retryKey: requiredText.max(200), reason: requiredText.max(16000),
         expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
         expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
-        expectedLastFailure: z.enum(['TASK_OWNER_NO_DECISION', 'TASK_OWNER_TIMEOUT', 'ENGINEERING_REPOSITORY_SCOPE_MISMATCH']) }).parse(await readJson(request))
+        expectedLastFailure: requiredText.max(200).nullable() }).parse(await readJson(request))
       return send(response, 202, await store.retryWorkflowOwner({ ...body, taskId: decodeURIComponent(ownerRetry[1]) }))
     } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
@@ -325,7 +404,30 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     } catch (error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /STALE|UNCHANGED/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }
   const workflowReply = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/answer$/u.exec(url.pathname)
+  const scopedCompletion = /^\/tasks\/([^/]+)\/notifications\/([^/]+)\/send-completion$/u.exec(url.pathname)
+  if (request.method === 'POST' && scopedCompletion) {
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.sendScopedTaskCompletionNotification) return send(response, 404, { error: 'workflow_disabled' })
+    try {
+      const body = z.strictObject({ conversationId: requiredText,
+        authorization: z.strictObject({ confirmed: z.literal(true), confirmationRef: requiredText }) }).parse(await readJson(request))
+      return send(response, 202, await store.sendScopedTaskCompletionNotification({ ...body,
+        taskId: decodeURIComponent(scopedCompletion[1]), notificationId: decodeURIComponent(scopedCompletion[2]) }))
+    } catch (error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|AUTHORIZATION/u.test(error.message) ? 403 : 409, { error: error.message }) }
+  }
   const notificationOperation = /^\/workflows\/notifications\/operations(?:\/([^/]+)\/(execute|reconcile))?$/u.exec(url.pathname)
+  const retirement=/^\/workflows\/notifications\/([^/]+)\/retirement$/u.exec(url.pathname)
+  if(retirement&&['GET','POST'].includes(request.method)){
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||(request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin)))return send(response,403,{error:'workflow_local_identity_required'})
+    if(!store.retireWorkflowNotification)return send(response,404,{error:'workflow_disabled'})
+    try{
+      const check=request.method==='GET'
+      const fields=check?z.strictObject({supersededByNotificationId:requiredText}):z.strictObject({supersededByNotificationId:requiredText,requestId:requiredText,expectedFactDigest:requiredText.regex(/^[a-f0-9]{64}$/u)})
+      const input=fields.parse(check?Object.fromEntries(url.searchParams):await readJson(request))
+      return send(response,200,await store.retireWorkflowNotification({...input,notificationId:decodeURIComponent(retirement[1])},check))
+    }catch(error){return send(response,error instanceof z.ZodError?400:/FORBIDDEN/u.test(error.message)?403:409,{error:error.message})}
+  }
   if(request.method==='POST'&&notificationOperation){
     if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||(request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin)))return send(response,403,{error:'workflow_local_identity_required'})
     const operationId=notificationOperation[1]?decodeURIComponent(notificationOperation[1]):undefined,action=notificationOperation[2]??'prepare'
@@ -514,7 +616,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/reissue-repository'.length))
     try {
-      const body = z.strictObject({ repositoryId: requiredText, requestId: requiredText, uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional() }).parse(await readJson(request))
+      const body = z.strictObject({ repositoryId: requiredText, requestId: requiredText, developmentSourceRef: requiredText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional() }).parse(await readJson(request))
       return send(response, 202, await store.submitWorkflowTask({ ...body, taskId, action: 'reissue-repository' }))
     } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|UNSAFE|NOT_REISSUABLE/u.test(error.message) ? 409 : 400, { error: error.message }) }
   }

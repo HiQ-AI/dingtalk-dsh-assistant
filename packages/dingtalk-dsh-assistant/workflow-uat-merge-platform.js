@@ -1,3 +1,4 @@
+import { validUatAcceptancePolicy, assertUatLocalAcceptance } from './uat-acceptance-policy.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
 
 const fail = code => { throw executionError(code) }
@@ -18,12 +19,11 @@ export function createUatMergePlatform({ targets, policies, github, readLocalEvi
       || !Array.isArray(policy.requiredChecks) || (!localRequired && !policy.requiredChecks.length)
       || policy.requiredChecks.some(name => !nonempty(name))
       || new Set(policy.requiredChecks).size !== policy.requiredChecks.length
-      || (localRequired && (!Array.isArray(policy.requiredScenarioIds) || !policy.requiredScenarioIds.length
-        || policy.requiredScenarioIds.some(id => !nonempty(id)) || new Set(policy.requiredScenarioIds).size !== policy.requiredScenarioIds.length))
-      || byId.has(policy.targetId) || Object.keys(policy).some(key => !['targetId', 'requiredChecks', ...(localRequired ? ['requiredScenarioIds'] : [])].includes(key)))
+      || (localRequired && !validUatAcceptancePolicy(policy))
+      || byId.has(policy.targetId) || Object.keys(policy).some(key => !['targetId', 'requiredChecks', ...(localRequired ? ['requiredScenarioIds','acceptancePolicy'] : [])].includes(key)))
       fail('UAT_MERGE_TARGET_INVALID')
     byId.set(policy.targetId, { target, requiredChecks: [...policy.requiredChecks],
-      ...(localRequired ? { requiredScenarioIds: [...policy.requiredScenarioIds] } : {}) })
+      ...(localRequired ? policy.acceptancePolicy ? {acceptancePolicy:policy.acceptancePolicy} : { requiredScenarioIds: [...policy.requiredScenarioIds] } : {}) })
   }
   if (!byId.size) fail('UAT_MERGE_TARGET_REQUIRED')
   const read = async (method, args) => {
@@ -41,7 +41,7 @@ export function createUatMergePlatform({ targets, policies, github, readLocalEvi
     return entry
   }
   async function preflight(requirement) {
-    const { target, requiredChecks, requiredScenarioIds } = selected(requirement)
+    const policy = selected(requirement), { target, requiredChecks } = policy
     if (typeof github.atomicFastForward !== 'function' || typeof github.readAtomicPushPolicy !== 'function') fail('UAT_ATOMIC_BASE_CAPABILITY_REQUIRED')
     const atomicPolicy = await read('readAtomicPushPolicy', { repository: target.repository, branch: target.branch })
     if (atomicPolicy.allowed !== true) fail('UAT_ATOMIC_PUSH_POLICY_UNSUPPORTED')
@@ -54,14 +54,14 @@ export function createUatMergePlatform({ targets, policies, github, readLocalEvi
     if (pr.number !== requirement.pullRequestNumber || pr.state !== 'open' || pr.merged !== false
       || pr.draft === true || pr.mergeable !== true || pr.baseBranch !== target.branch
       || pr.baseRepository !== target.repository || pr.headRepository !== target.repository
-      || pr.headCommitSha !== requirement.headCommitSha || pr.baseCommitSha !== branch.commitSha
+      || pr.headCommitSha !== requirement.headCommitSha || !sha(branch.commitSha)
       || !sha(head.treeSha) || checks.complete !== true || !Array.isArray(checks.checks))
       fail('UAT_MERGE_PR_DRIFT_OR_UNCONFIRMED')
     const local = localRequired ? await readLocalEvidence(requirement) : null
     if (localRequired && (local?.treeSha !== head.treeSha || local.commitSha !== requirement.headCommitSha
       || !nonempty(local.evidenceRef))) fail('UAT_LOCAL_EVIDENCE_MISMATCH')
     if (['13', '14', '15'].includes(local?.definitionVersion) && local.targetCommit !== branch.commitSha) fail('UAT_MERGE_BASELINE_DRIFT')
-    if (localRequired && (!Array.isArray(local.scenarioIds) || requiredScenarioIds.some(id => !local.scenarioIds.includes(id)))) fail('UAT_LOCAL_SCENARIO_REQUIRED')
+    if (localRequired) assertUatLocalAcceptance(policy, local)
     const rules = localRequired ? await read('readRequiredChecks', { repository: target.repository, branch: target.branch }) : null
     if (localRequired && (rules?.complete !== true || !Array.isArray(rules.checks))) fail('UAT_MERGE_RULES_UNCONFIRMED')
     const required = [...requiredChecks.map(name => ({ name })), ...(rules?.checks ?? [])]
@@ -169,7 +169,7 @@ export function createUatMergePlatform({ targets, policies, github, readLocalEvi
   return { adapter: { id: 'trusted-uat-pr-merge', version: localRequired ? '2' : '1',
     rulesDigest: executionDigest({ targets: [...byId].map(([id, value]) => ({ id,
       repository: value.target.repository, branch: value.target.branch, requiredChecks: value.requiredChecks,
-      ...(localRequired ? { requiredScenarioIds: value.requiredScenarioIds } : {}) })),
+      ...(localRequired ? value.acceptancePolicy ? {acceptancePolicy:value.acceptancePolicy} : { requiredScenarioIds: value.requiredScenarioIds } : {}) })),
       ...(localRequired ? { localEvidenceVersion: 1 } : {}), atomicBaseVersion: 1 }),
     inspect, prepareOperation }, operationAdapter: { execute, reconcile }, configuredTargetIds: [...byId.keys()] }
 }

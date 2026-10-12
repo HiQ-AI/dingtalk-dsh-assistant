@@ -57,7 +57,7 @@ window.root=new Vue({el:'#app',render:h=>h(Create)});window.component=name=>{con
 
 export async function verifyDatasetMergeUI({ repository, playwrightModule, evidenceRoot, baseUrl, namespace }) {
   await mkdir(evidenceRoot, { recursive: true })
-  const report = { taskId:'task-83c651ebdbdb77584a06d1fcb6b9e255',uatEnvironment:'uat3',coverage:'candidate-ui-with-explicit-api-and-list-fixtures',backendVerified:false,browserClosed:true,cases:[],pageErrors:[] }
+  const report = { runnerDigest:createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex'),taskId:'task-83c651ebdbdb77584a06d1fcb6b9e255',uatEnvironment:'uat3',coverage:'candidate-ui-with-explicit-api-and-list-fixtures',backendVerified:false,browserClosed:true,cases:[],pageErrors:[] }
   let browser
   try {
     const candidate = await readDatasetMergeCandidate(repository); report.proof=candidate.proof
@@ -94,18 +94,34 @@ export async function verifyDatasetMergeUI({ repository, playwrightModule, evide
     })
     const preview=async()=>{await page.locator('.form-two-wrap .search-item.name input').fill('验收结果');await page.locator('.form-two-wrap button.next').click();await page.waitForFunction(()=>component('Create').curStep===3)};await preview()
     await run('SG20-03-panel',async()=>{
-      const button=page.locator('.settings-heading button');assert.equal(await button.getAttribute('aria-expanded'),'false');assert.equal(await page.locator('.settings-content').count(),0)
-      assert.ok(await page.locator('.preview-reminder').isVisible());await button.click();assert.equal(await page.locator('.source-dataset-table').count(),1)
-      await page.evaluate(()=>component('Create').handlePreviewPrev());await preview();assert.equal(await button.getAttribute('aria-expanded'),'false')
+      const button=page.locator('.settings-heading button'),content=page.locator('.settings-content');assert.equal(await button.getAttribute('aria-expanded'),'false');assert.equal(await content.isVisible(),false)
+      assert.ok(await page.locator('.preview-reminder').isVisible());await button.click();await content.waitFor({state:'visible'});assert.equal(await button.getAttribute('aria-expanded'),'true');assert.equal(await page.locator('.source-dataset-table').count(),1);assert.equal(await page.locator('.source-dataset-table').isVisible(),true)
+      await button.click();await content.waitFor({state:'hidden'});assert.equal(await button.getAttribute('aria-expanded'),'false');assert.ok(await page.locator('.preview-reminder').isVisible());assert.ok(await page.locator('.common-filters').isVisible());await button.click();await content.waitFor({state:'visible'})
+      await page.evaluate(()=>component('Create').handlePreviewPrev());await preview();assert.equal(await button.getAttribute('aria-expanded'),'false');assert.equal(await content.isVisible(),false)
       const box=await page.locator('.settings-heading').boundingBox();assert.ok(Math.abs(box.height-38)<=2,'heading height '+box.height)
     })
     await run('SG20-04-filter-scroll',async()=>{
       const widths=await page.locator('.common-filters .el-select').evaluateAll(xs=>xs.map(x=>x.getBoundingClientRect().width));await page.setViewportSize({width:420,height:900})
-      for(const tab of ['merged','unmerged']){await page.evaluate(tab=>component('FormThree').activeTab=tab,tab);await page.waitForTimeout(50)
-        const dimensions=await page.locator('.common-filters .el-select').evaluateAll(xs=>xs.map(x=>x.getBoundingClientRect().width));assert.deepEqual(dimensions,widths)
-        const scroll=await page.locator('.common-filters').evaluate(x=>({overflow:getComputedStyle(x).overflowX,scroll:x.scrollWidth,width:x.clientWidth}));assert.ok(['auto','scroll'].includes(scroll.overflow));assert.ok(scroll.scroll>scroll.width);assert.ok(await page.locator('.common-filters .filter-button').evaluateAll(xs=>xs.every(x=>getComputedStyle(x).whiteSpace==='nowrap')))
-        await page.locator('.common-filters').evaluate(x=>x.scrollLeft=x.scrollWidth);assert.ok(await page.locator('.common-filters').evaluate(x=>x.scrollLeft>0))}
-      await page.setViewportSize({width:1440,height:1000});await page.evaluate(()=>component('FormThree').activeTab='merged')
+      try {
+        for(const tab of ['merged','unmerged']) {
+          await page.evaluate(tab=>component('FormThree').activeTab=tab,tab);await page.waitForTimeout(50)
+          const dimensions=await page.locator('.common-filters .el-select').evaluateAll(xs=>xs.map(x=>x.getBoundingClientRect().width));assert.deepEqual(dimensions,widths)
+          const scrollContainer=await page.locator('.common-filters').evaluateHandle(x=>{for(let e=x;e;e=e.parentElement)if(['auto','scroll'].includes(getComputedStyle(e).overflowX)&&e.scrollWidth>e.clientWidth)return e;return null})
+          try {
+            assert.ok(await scrollContainer.evaluate(e=>!!e),'No horizontal scroll container for '+tab)
+            const scroll=await scrollContainer.evaluate(e=>({className:e.className,overflow:getComputedStyle(e).overflowX,scroll:e.scrollWidth,width:e.clientWidth}));assert.ok(['auto','scroll'].includes(scroll.overflow));assert.ok(scroll.scroll>scroll.width)
+            assert.ok(await page.locator('.common-filters .filter-button').evaluateAll(xs=>xs.every(x=>getComputedStyle(x).whiteSpace==='nowrap')))
+            await scrollContainer.evaluate(e=>e.scrollLeft=e.scrollWidth);assert.ok(await scrollContainer.evaluate(e=>e.scrollLeft>0))
+            const controls=await page.locator('.common-filters .el-select,.common-filters .filter-button').all()
+            for(const control of controls) {
+              await control.evaluate(e=>e.scrollIntoView({block:'nearest',inline:'nearest'}))
+              const rect=await control.boundingBox(),container=await scrollContainer.evaluate(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right}})
+              assert.ok(rect&&rect.x>=container.left-2&&rect.x+rect.width<=container.right+2,tab+' control must remain reachable by horizontal scroll')
+            }
+            report.filterScrollDiagnostics??=[];report.filterScrollDiagnostics.push({tab,widths,dimensions,scroll,reachableControls:controls.length})
+          } finally {await scrollContainer.dispose()}
+        }
+      } finally {await page.setViewportSize({width:1440,height:1000});await page.evaluate(()=>component('FormThree').activeTab='merged')}
     })
     await run('SG20-05-steps',async()=>{
       assert.equal(await page.locator('.merge-step.current').count(),1);assert.equal(await page.locator('.merge-step.complete .el-icon-check').count(),2)

@@ -3,10 +3,12 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { isAbsolute } from 'node:path'
 import { executionError } from './execution-artifacts.js'
+import {validateStartupInspection,projectStartupInspection} from './runtime-startup-observation.js'
 const exec=promisify(execFile),safe=x=>typeof x==='string'&&/^[a-z0-9][a-z0-9.-]{0,62}$/.test(x)
 const fail=code=>{throw executionError(code)}
 export function validateRuntimeResource(r){
  if(r.kind!=='kubernetes'||!r.id||!isAbsolute(r.kubeconfig??'')||!safe(r.namespace)||!safe(r.deployment))fail('QUERY_STATUS_CONFIG_INVALID')
+ validateStartupInspection(r.startupInspection)
  let u;try{u=new URL(r.server)}catch{fail('QUERY_STATUS_CONFIG_INVALID')}
  if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash||u.pathname!=='/')fail('QUERY_STATUS_CONFIG_INVALID')
 }
@@ -15,7 +17,7 @@ export async function readRuntimeResource(r,{signal,execFileImpl=exec}={}){
  validateRuntimeResource(r)
  signal=signal?AbortSignal.any([signal,AbortSignal.timeout(60000)]):AbortSignal.timeout(60000)
  const base=['--kubeconfig',r.kubeconfig,'--server',r.server,...(r.skipTlsVerify===true?['--insecure-skip-tls-verify']:[]),'--request-timeout=10s','-n',r.namespace]
- const run=async args=>{try{return(await execFileImpl('kubectl',[...base,...args],{windowsHide:true,timeout:12000,maxBuffer:1024*1024,signal})).stdout}catch{if(signal?.aborted)throw signal.reason;fail('QUERY_RUNTIME_UNAVAILABLE')}}
+ const run=async (args,metadata=false)=>{try{const result=await execFileImpl('kubectl',[...base,...args],{windowsHide:true,timeout:12000,maxBuffer:1024*1024,signal});return metadata?result:result.stdout}catch{if(signal?.aborted)throw signal.reason;fail('QUERY_RUNTIME_UNAVAILABLE')}}
  const json=async args=>{try{return JSON.parse(await run([...args,'-o','json']))}catch(e){if(e.code)throw e;fail('QUERY_RUNTIME_INVALID')}}
  const captured=new Map()
  const boundedExec=async(command,args)=>{
@@ -40,6 +42,23 @@ export async function readRuntimeResource(r,{signal,execFileImpl=exec}={}){
   for(const c of p.spec?.containers??[]){
    if(!safe(c.name))fail('QUERY_RUNTIME_IDENTITY_INVALID')
    const state=(p.status?.containerStatuses??[]).find(s=>s.name===c.name)
+   let startupObservation
+   if(r.startupInspection){
+    const startedAt=state?.state?.running?.startedAt
+    if(!startedAt||!state.containerID||!state.imageID)fail('QUERY_RUNTIME_IDENTITY_INVALID')
+    const startupResult=await run(['logs',p.metadata.name,'--container',c.name,`--since-time=${startedAt}`,'--tail=-1','--limit-bytes=524288','--timestamps=true'],true)
+    const startupRaw=startupResult.stdout
+    const returnedBytes=Buffer.byteLength(startupRaw,'utf8')
+    const completeness={limitBytes:524288,returnedBytes,status:returnedBytes>=524288?'byte-limit-reached'
+      :typeof startupResult.stderr!=='string'||startupResult.stderr.trim()||startupRaw&&!startupRaw.endsWith('\n')?'unknown':'complete-retained-window'}
+    const latestPod=await json(['get','pod',p.metadata.name])
+    const latestState=latestPod.status?.containerStatuses?.find(item=>item.name===c.name)
+    if(latestPod.metadata?.uid!==p.metadata.uid||latestState?.containerID!==state.containerID
+      ||latestState?.imageID!==state.imageID||latestState?.state?.running?.startedAt!==startedAt)fail('QUERY_SOURCE_CHANGED')
+    startupObservation={...projectStartupInspection(r.startupInspection,{container:c,startedAt,raw:startupRaw,completeness}),
+      deploymentUid:d.metadata.uid,podUid:p.metadata.uid,containerId:state.containerID,imageId:state.imageID,observedAt:new Date().toISOString(),
+      source:{kind:'kubernetes-current-container-startup',maxBytes:524288,from:startedAt,completeness}}
+   }
    const raw=await run(['logs',p.metadata.name,'--container',c.name,'--since=10m','--tail=200','--limit-bytes=32768','--timestamps=true'])
    const lines=raw.split(/\r?\n/).filter(Boolean),exceptions={},diagnostics=[]
    for(const line of lines)for(const name of line.match(/\b(?:[a-zA-Z_$][\w$]*\.)*[A-Z][\w$]*(?:Exception|Error)\b/g)??[])exceptions[name]=(exceptions[name]??0)+1
@@ -50,7 +69,7 @@ export async function readRuntimeResource(r,{signal,execFileImpl=exec}={}){
     const location=/\bat ([a-zA-Z_$][\w.$]*)\(([A-Za-z_$][\w$]*\.java):(\d{1,6})\)/.exec(line)
     if(level||exceptionType||location)diagnostics.push({timestamp,level,exceptionType,codeLocation:location?`${location[1]}(${location[2]}:${location[3]})`:null})
    }
-   containers.push({name:c.name,image:c.image,imageId:state?.imageID??null,ready:state?.ready===true,restartCount:state?.restartCount??0,
+   containers.push({...(startupObservation?{startupObservation}:{}),name:c.name,image:c.image,imageId:state?.imageID??null,ready:state?.ready===true,restartCount:state?.restartCount??0,
     ports:(c.ports??[]).map(x=>({port:x.containerPort,protocol:x.protocol??'TCP'})),resources:Object.fromEntries(['requests','limits'].map(k=>[k,Object.fromEntries(Object.entries(c.resources?.[k]??{}).filter(([name,value])=>['cpu','memory','ephemeral-storage'].includes(name)&&typeof value==='string'&&/^[0-9.]+(?:[eE][+-]?[0-9]+|[a-zA-Z]{0,2})$/.test(value)))])),
     logSummary:{windowSeconds:600,maxLines:200,maxBytes:32768,returnedLines:lines.length,errorLines:lines.filter(x=>/\bERROR\b/.test(x)).length,warnLines:lines.filter(x=>/\bWARN\b/.test(x)).length,exceptionTypes:Object.entries(exceptions).slice(0,30).map(([type,count])=>({type,count})),diagnostics:diagnostics.slice(0,50),messageTemplatesSupported:false,rawContentExposed:false}})
   }

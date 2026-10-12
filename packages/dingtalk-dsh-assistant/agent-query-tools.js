@@ -1,7 +1,17 @@
 import { executionDigest, executionError } from './execution-artifacts.js'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
-const correctable = new Set(['QUERY_ARGUMENT_INVALID','QUERY_NOT_FOUND','QUERY_LIMIT_INVALID','QUERY_TIMEOUT','QUERY_SCOPE_DENIED','QUERY_CAPACITY',
+// A current native delivery review is read-only and remains claimable while paused.
+export function taskOwnerQueryControlAllowed(owner, plan, binding) {
+  if (plan.task.controlState === 'active') return true
+  const review = owner.deliveryReview
+  return plan.task.controlState === 'paused' && Boolean(review)
+    && review.taskId === binding.taskId
+    && review.requirementRevision === binding.requirementRevision
+    && review.controlRevision === plan.task.controlRevision
+}
+
+const correctable = new Set(['QUERY_ARGUMENT_INVALID','QUERY_NOT_FOUND','QUERY_LIMIT_INVALID','QUERY_TIMEOUT','QUERY_SCOPE_DENIED','QUERY_CAPACITY','QUERY_DATABASE_RESOURCE_UNSUPPORTED','QUERY_DATABASE_TABLE_UNSUPPORTED','QUERY_DATABASE_COLUMN_UNSUPPORTED','QUERY_DATABASE_OBJECT_UNSUPPORTED','QUERY_DATABASE_PERMISSION_DENIED','QUERY_DATABASE_AUTH_FAILED','QUERY_DATABASE_UNAVAILABLE','QUERY_DATABASE_UNCONFIGURED',
   'DWS_DOC_AUTH_REQUIRED','DWS_DOC_PERMISSION_DENIED','DWS_DOC_NOT_FOUND','DWS_DOC_INCOMPLETE','DWS_DOC_TEMPORARY','DWS_DOC_READ_FAILED'])
 export const classifyAgentQueryError = error => correctable.has(error?.code) ? 'correctable' : 'fatal'
 const fail = code => { throw executionError(code) }

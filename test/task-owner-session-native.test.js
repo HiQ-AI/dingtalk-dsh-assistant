@@ -1,9 +1,12 @@
+import { projectOwnerContext } from '../packages/dingtalk-dsh-assistant/task-owner-context.js'
+import { ownerImmutableReadReceipts } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { classifyAgentQueryError } from '../packages/dingtalk-dsh-assistant/agent-query-tools.js'
 import { sessionWorkspace, taskDirectories, taskFilePath } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
@@ -16,7 +19,7 @@ import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-js
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createTaskOwnerSessions, previouslyReadOwnerArtifacts, ownerDecisionSchema } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
-import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
+import { createTaskOwnerController, readOwnerMaintenanceConstraints } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
@@ -28,7 +31,7 @@ const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-proj
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
 test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async t => {
-  for (const mode of ['clone', 'diagnostic', 'foreign-diagnostic']) await t.test(mode, async t => {
+  for (const mode of ['clone', 'diagnostic', 'foreign-diagnostic', 'child', 'foreign-child', 'missing-child', 'failed-child', 'unsatisfied-child']) await t.test(mode, async t => {
   const root = await mkdtemp(join(tmpdir(), 'owner-native-completion-'))
   const store = await openExecutionStore({ dbPath: join(root, 'control.sqlite'), instanceId: 'native-completion', initialize: true })
   const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
@@ -36,14 +39,24 @@ test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async 
   const workflow = { id: 'proof-report', version: '1', ownerContract: { id: 'proof-result', version: '1', validateCompletion: () => true },
     nodes: [{ id: 'report', version: '1', executor: 'code', allowedEffects: ['pure'], inputSchema: { type: 'object' }, outputSchema: { type: 'object' },
       mapInput: ({ requirement }) => requirement, execute: async () => ({ summary: '结论已核验' }) }] }
-  const controller = createExecutionController({ store, artifacts, workflows: [workflow] })
+  if (mode.endsWith('child')) workflow.nodes.unshift({ id:'ui-check',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({requirement})=>requirement,execute:async()=>({passed:mode!=='failed-child',summary:'fixture child UI evidence'}) })
+  const foreignWorkflow = {...workflow,id:'foreign-proof',nodes:workflow.nodes.map((node,index)=>index===0?{...node,execute:async()=>({passed:true,foreign:true})}:node)}
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow,foreignWorkflow] })
   await controller.createTaskPlan({ commandId: 'plan', taskId: 'native-task', stages: [{ stageId: 'report', workflowId: workflow.id, input: requirement }] })
   let plan = await controller.advanceTaskPlan('native-task')
   await controller.whenIdle(plan.stages[0].runId)
   plan = await controller.advanceTaskPlan('native-task')
   const ref = plan.stages[0].outputRef
-  const candidate = { action: 'complete', summary: '结论已核验', evidenceRefs: [ref],
-    assessments: [{ itemId: 'acceptance-1', status: 'satisfied', evidenceRefs: [ref] }] }
+  const childRef = mode.endsWith('child') ? (await controller.state(plan.stages[0].runId)).nodes[0].outputRef : ref
+  let foreignRef
+  if(mode==='foreign-child'){
+    await controller.createTaskPlan({commandId:'foreign-plan',taskId:'foreign-task',stages:[{stageId:'foreign',workflowId:'foreign-proof',input:requirement}]})
+    const foreignPlan=await controller.advanceTaskPlan('foreign-task');await controller.whenIdle(foreignPlan.stages[0].runId)
+    const foreignState=await controller.state(foreignPlan.stages[0].runId);assert.equal(foreignState.run.status,'succeeded');foreignRef=foreignState.nodes[0].outputRef;assert.notEqual(foreignRef,childRef);assert.equal((await artifacts.read(foreignRef)).passed,true)
+  }
+  const submittedRef = mode === 'foreign-child' ? foreignRef : mode === 'missing-child' ? 'sha256-'+ 'b'.repeat(64) +'.json' : childRef
+  const candidate = { action: 'complete', summary: '结论已核验', evidenceRefs: [submittedRef],
+    assessments: [{ itemId: 'acceptance-1', status: mode==='unsatisfied-child'?'unsatisfied':'satisfied', evidenceRefs: [submittedRef] }] }
   const diagnostic = await artifacts.put({ kind: 'domain-acceptance-rejection', taskId: mode === 'foreign-diagnostic' ? 'other' : 'native-task',
     assessment: { status: 'unverified', criteria: [{ criterion: '结论已核验', passed: false, reason: '核验原执行记录' }] },
     evidence: [{ evidenceId: ref, hostExecution: { taskId: 'native-task', runId: plan.stages[0].runId } }] })
@@ -62,7 +75,7 @@ test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async 
   const owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller, sessionRunner,
     modelConfig: () => ({ provider: 'owner-fixture', model: 'scripted' }), advanceTask: async () => {}, authorizeStages: async () => false,
     authorizeCompletion: async ({ taskId, decision }) => {
-      if (++checks === 1 && mode !== 'clone') throw Object.assign(new Error('实际验收未核验，读取原始诊断'),
+      if (++checks === 1 && ['diagnostic','foreign-diagnostic'].includes(mode)) throw Object.assign(new Error('实际验收未核验，读取原始诊断'),
         { code: 'TASK_OWNER_COMPLETION_UNVERIFIED', diagnosticRef: diagnostic.ref })
       return helpers.authorizeCompletion({ taskId, decision, requirement, plan: await controller.taskPlan(taskId) })
     },
@@ -72,18 +85,26 @@ test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async 
   await store.command({ id: 'bind', kind: 'task.requirement.bind-legacy', args: { taskId: 'native-task', expectedRequirementRevision: 1,
     requirementRef: (await artifacts.put(requirement)).ref, sessionId: initial.sessionId,
     criteria: requirement.acceptanceCriteria, sourceKey: 'source', eventKey: 'bind' } })
-  if (mode === 'foreign-diagnostic') {
-    await assert.rejects(owner.drive('native-task'), /TASK_OWNER_NO_DECISION/)
+  if (['foreign-diagnostic','foreign-child','missing-child','failed-child','unsatisfied-child'].includes(mode)) {
+    await assert.rejects(owner.drive('native-task'), mode==='foreign-diagnostic' ? /TASK_OWNER_NO_DECISION/ : /TASK_OWNER_REPEATED_INVALID_DECISION/)
     const persisted = await h.ctx.sessionPersistence.inspect(initial.sessionId)
-    assert.match(JSON.stringify(persisted.events), /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/u)
+    if(mode==='unsatisfied-child') assert.equal(checks,0,'satisfied-only schema rejects before Host completion authorization')
+    else assert.match(JSON.stringify(persisted.events), mode==='foreign-diagnostic' ? /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/u : /TASK_OWNER_COMPLETION_UNVERIFIED/u)
     assert.equal(await store.query({ kind: 'task.owner.delivery-manifest', taskId: 'native-task' }), null)
     return
   }
   await owner.drive('native-task')
   assert.notEqual(submittedDecision, returnedDecision)
   assert.deepEqual(submittedDecision, returnedDecision)
+  if (mode==='child') {
+    assert.notEqual(childRef,ref); assert.deepEqual(returnedDecision.evidenceRefs,[ref]);assert.deepEqual(returnedDecision.assessments[0].evidenceRefs,[ref]);assert.deepEqual(candidate.evidenceRefs,[childRef])
+    assert.match(JSON.stringify(h.requests[0]),/completionEvidenceRefs/)
+  }
   const saved = await store.query({ kind: 'task.owner.delivery-manifest', taskId: 'native-task' })
   assert.equal((await artifacts.read(saved.ref)).businessValidation.status, 'accepted')
+  if(mode==='child' && process.env.SG20_OWNER_BINDING_PROOF_PATH){
+    await writeFile(process.env.SG20_OWNER_BINDING_PROOF_PATH,JSON.stringify({testProvider:'owner-fixture',scriptedModel:true,businessBackendVerified:false,inputRequest:h.requests[0],modelSubmitted:candidate,hostCanonicalDecision:returnedDecision,persistedOwnerDecision:(await store.query({kind:'task.owner',taskId:'native-task'})).decision,manifest:await artifacts.read(saved.ref),originalChildRef:childRef,canonicalStageRef:ref},null,2))
+  }
   assert.equal((await store.query({ kind: 'task.owner', taskId: 'native-task' })).decision.action, 'complete')
   assert.ok(h.requests.length > 0)
   if (mode === 'diagnostic') {
@@ -127,6 +148,127 @@ test('相同等待动作只改写condition说明仍触发重新诊断', async t 
     onCandidate: async () => { throw Object.assign(Error('TASK_OWNER_RECOVERY_AVAILABLE'), { code: 'TASK_OWNER_RECOVERY_AVAILABLE' }) } })
   assert.equal(result.reason, 'TASK_OWNER_REPEATED_INVALID_DECISION')
   assert.equal(h.requests.length, 2)
+})
+
+test('Owner compact context requires complete current constraints before submit and exposes paged material tool', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-compact-native-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const input = { taskId: 'compact-task', task: { requirementRevision: 1, controlState: 'paused' },
+    goal: { request: '等待真人批准', constraints: ['必须保持暂停。'.repeat(3000)] }, stages: [] }
+  const projection = await projectOwnerContext(input, artifacts), ref = projection.requiredRefs[0]
+  const calls = [
+    { name: 'task_owner_submit', args: { decision } },
+    { name: 'task_owner_read_artifact', args: { artifactRef: ref, offset: 0, limit: 16000 } },
+    { name: 'task_owner_submit', args: { decision } },
+    { name: 'task_owner_read_artifact', args: { artifactRef: ref, offset: 16000, limit: 16000 } },
+    { name: 'task_owner_list_materials', args: { cursor: 0, limit: 10 } },
+  ]
+  const h = await host(root, null, null, decision, undefined, 1, calls)
+  t.after(() => h.close())
+  let candidates = 0, listings = 0
+  const result = await h.sessions.run({ binding: { taskId: 'compact-task', sessionId: 'compact-owner', turnId: 'compact-turn', leaseEpoch: 1, ownerEpoch: 1, sessionBound: false },
+    input, ...projection, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    readArtifact: ref => artifacts.read(ref), listMaterials: async args => { listings++; assert.equal(args.limit, 10); return { entries: [], nextCursor: null } },
+    onCandidate: async () => { candidates++ } })
+  assert.equal(result.status, 'submitted'); assert.equal(candidates, 1); assert.equal(listings, 1)
+  assert.equal(h.requests.length, 6)
+  assert.match(JSON.stringify(h.requests[2]), /task_owner_current_context_unread/)
+  assert.match(JSON.stringify(h.requests[3]), /task_owner_current_context_unread/)
+  const saved = await h.ctx.sessionPersistence.inspect('compact-owner')
+  assert.ok(JSON.stringify(saved.events).includes(ref))
+})
+
+test('unchanged context receipt survives consecutive turns without reread; changed constraints require fresh complete pages', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-repeat-context-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const marker = 'UNCHANGED_AUTHORIZATION_', input = { taskId: 'repeat-task', task: { requirementRevision: 1 },
+    goal: { request: '等待批准', constraints: [marker.repeat(1800)] }, stages: [] }
+  const waiting = { action: 'wait', summary: '等待已有批准', evidenceRefs: [], condition: {
+    kind: 'approval', missing: '真人批准', responsibleParty: '审批人', resumeWhen: '批准后继续', evidenceRefs: [] } }
+  const firstProjection = await projectOwnerContext(input, artifacts), calls = []
+  const scheduleRead = async ref => {
+    const length = JSON.stringify(await artifacts.read(ref)).length
+    for (let offset = 0; offset < length; offset += 16000) calls.push({ name: 'task_owner_read_artifact', args: { artifactRef: ref, offset } })
+  }
+  await scheduleRead(firstProjection.requiredRefs[0]); calls.push({ name: 'task_owner_submit', args: { decision: waiting } })
+  const h = await host(root, null, null, waiting, undefined, 1, calls)
+  t.after(() => h.close())
+  const sizes = [], copies = []
+  const run = async (lease, projection) => {
+    h.setLease(lease); const firstRequest = h.requests.length
+    const result = await h.sessions.run({ binding: { taskId: input.taskId, sessionId: 'repeat-owner', turnId: `turn-${lease}`,
+      leaseEpoch: lease, ownerEpoch: 1, sessionBound: lease > 1, requirementRevision: input.task.requirementRevision },
+      input, ...projection, provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+      readArtifact: ref => artifacts.read(ref), onCandidate: async () => {} })
+    assert.equal(result.status, 'submitted')
+    const request = JSON.stringify(h.requests[firstRequest]); sizes.push(request.length); copies.push(request.split(marker).length-1)
+    return h.requests.length-firstRequest
+  }
+  assert.equal(await run(1, firstProjection), calls.length)
+  assert.equal(await run(2, firstProjection), 1)
+  assert.equal(await run(3, firstProjection), 1)
+  assert.ok(copies[1] > 1700); assert.equal(copies[2], copies[1])
+  assert.ok(sizes[2]-sizes[1] < 3000)
+  // A new requirement revision alone does not invalidate a still-current identical section.
+  input.task.requirementRevision = 2
+  assert.equal(await run(4, await projectOwnerContext(input, artifacts)), 1)
+  input.goal.constraints = ['CHANGED_APPROVAL_REQUIRES_HUMAN_'.repeat(1300)]
+  const changed = await projectOwnerContext(input, artifacts)
+  assert.notEqual(changed.requiredRefs[0], firstProjection.requiredRefs[0])
+  calls[h.requests.length] = { name: 'task_owner_submit', args: { decision: waiting } }
+  calls.length = h.requests.length+1
+  await scheduleRead(changed.requiredRefs[0]); calls.push({ name: 'task_owner_submit', args: { decision: waiting } })
+  assert.ok(await run(5, changed) > 1)
+  assert.equal(copies[4], 0)
+  input.goal.constraints = [marker.repeat(1800)]
+  assert.equal(await run(6, await projectOwnerContext(input, artifacts)), 1)
+  assert.equal(copies[5], copies[1]) // Restore one applicable copy from audit pages, without a new tool read.
+  const saved = await h.ctx.sessionPersistence.inspect('repeat-owner')
+  assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_owner_read_artifact').length, 6)
+  assert.ok(saved.events.some(event => event.type === 'tool/result' && event.surfaceOp?.op === 'replace'))
+  assert.ok(JSON.stringify(saved.events).includes(marker.repeat(100)))
+  if (process.env.DSH_CONTEXT_METRICS_PATH) await writeFile(process.env.DSH_CONTEXT_METRICS_PATH, JSON.stringify({ firstRequestChars: sizes, firstRequestMarkerOccurrences: copies, nativeArtifactCalls: 6 }, null, 2))
+})
+
+test('generic DSH summary restores applicable complete read from audit without repeated read or lost changed requirement', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-generic-compaction-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true }), calls = []
+  const marker = 'GENERIC_READ_', input = { taskId: 'generic-task', task: { requirementRevision: 1 }, goal: { request: '等待批准', constraints: [marker.repeat(2200)] }, stages: [] }
+  const waiting = { action: 'wait', summary: '等待批准', evidenceRefs: [], condition: { kind: 'approval', missing: '真人批准', responsibleParty: '审批人', resumeWhen: '批准后继续', evidenceRefs: [] } }
+  const schedule = async projection => {
+    const ref = projection.requiredRefs[0], length = JSON.stringify(await artifacts.read(ref)).length
+    for (let offset = 0; offset < length; offset += 16000) calls.push({ name: 'task_owner_read_artifact', args: { artifactRef: ref, offset } })
+    calls.push({ name: 'task_owner_submit', args: { decision: waiting } })
+  }
+  const original = await projectOwnerContext(input, artifacts); await schedule(original)
+  const h = await host(root, null, null, waiting, undefined, 1, calls)
+  t.after(() => h.close())
+  const run = async (lease, projection) => {
+    h.setLease(lease); const start = h.requests.length
+    const result = await h.sessions.run({ binding: { taskId: input.taskId, sessionId: 'generic-owner', turnId: `generic-${lease}`, leaseEpoch: lease,
+      ownerEpoch: 1, sessionBound: lease > 1, requirementRevision: input.task.requirementRevision }, input, ...projection,
+      provider: 'owner-fixture', model: 'scripted', readArtifact: ref => artifacts.read(ref), onSessionBound: async () => {},
+      onCandidate: async () => { if (lease === 1) {
+        const session = h.ctx.agents.get('generic-owner').session, shadowed = session.surface.nodes.slice(0, -1)
+        session.append('user/message', createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: 'Generic DSH historical summary, no full tool pages' }] }),
+          { surfaceOp: { op: 'replace', start: shadowed[0], end: shadowed.at(-1) }, sourceEventSeqs: shadowed })
+      } } })
+    assert.equal(result.status, 'submitted'); return { steps: h.requests.length-start, request: JSON.stringify(h.requests[start]) }
+  }
+  await run(1, original)
+  const second = await run(2, original); assert.equal(second.steps, 1); assert.equal(second.request.split(marker).length-1, 2200)
+  input.goal.constraints = ['NEW_REQUIRED_APPROVAL_'.repeat(1300)]
+  const changed = await projectOwnerContext(input, artifacts); calls.length = h.requests.length; await schedule(changed)
+  const third = await run(3, changed); assert.ok(third.steps > 1); assert.ok(!third.request.includes(marker))
+  input.goal.constraints = [marker.repeat(2200)]
+  const fourth = await run(4, await projectOwnerContext(input, artifacts)); assert.equal(fourth.steps, 1)
+  assert.equal(fourth.request.split(marker).length-1, 2200)
+  const saved = await h.ctx.sessionPersistence.inspect('generic-owner')
+  assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_owner_read_artifact').length, 4)
+  assert.ok(saved.events.some(event => event.data.source?.ownerReadProjection))
 })
 
 async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1, queryCalls = []) {
@@ -739,4 +881,79 @@ test('Owner原生工具只公开业务协调并可按既有计划继续',async t
  const root=await mkdtemp(join(tmpdir(),'owner-observe-only-'));const h=await host(root,null,null,()=>({action:'advance',summary:'按既有计划继续',evidenceRefs:[]}));t.after(()=>h.close())
  let accepted=0;const result=await h.sessions.run({binding:{taskId:'task',sessionId:'owner-observe',turnId:'turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{currentExecution:{repairable:false,responsibility:'execution-session'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{accepted++}})
  assert.equal(result.status,'submitted');assert.equal(accepted,1)
+})
+
+test('maintenance constraint body and original provenance reach actual native model request after event consumption',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'owner-maintenance-model-input-'))
+ const store=await openExecutionStore({dbPath:join(root,'fixture.sqlite'),instanceId:'maintenance-input',initialize:true})
+ const artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+ let executions=0
+ const workflow={id:'fixture-delivery',version:'1',nodes:[{id:'proof',version:'1',executor:'code',allowedEffects:['pure'],inputSchema:{type:'object'},outputSchema:{type:'object'},mapInput:({requirement})=>requirement,execute:async()=>{executions++;return {fixture:true}}}]}
+ const controller=createExecutionController({store,artifacts,workflows:[workflow]})
+ await controller.createTaskPlan({commandId:'fixture-plan',taskId:'fixture-task',stages:[{stageId:'delivery',workflowId:workflow.id,input:{request:'fixture draft delivery',acceptanceCriteria:['fixture delivery'],constraints:[]}}]})
+ let plan=await controller.advanceTaskPlan('fixture-task');await controller.whenIdle(plan.stages[0].runId);plan=await controller.advanceTaskPlan('fixture-task')
+ const text='EXACT_MAINTENANCE_BODY: existing Draft PR is this delivery endpoint; backendVerified:false; no merge/deploy authorization; evaluate original items using actual stage evidence.'
+ const original={sourceKey:'dws:fixture-source',sourceVersion:1,actorId:'original-user',text:'fixture original instruction'}
+ const source={kind:'engineering-maintenance-constraint',version:1,requestId:'fixture-maintenance',taskId:'fixture-task',actorId:'actual-operator',channel:'internal-maintenance',text,requestDigest:'fixture-digest',requirementRef:plan.task.requirementRef,runId:plan.stages[0].runId,stageId:plan.stages[0].stageId,evidenceRefs:[plan.stages[0].outputRef],sources:[original]}
+ const sourceRef=(await artifacts.put(source,{taskId:'fixture-task'})).ref
+ const waiting={action:'wait',summary:'fixture wait for independent review',evidenceRefs:[],condition:{kind:'approval',missing:'fixture review',responsibleParty:'fixture operator',resumeWhen:'fixture review result',evidenceRefs:[]}}
+ const h=await host(root,null,sourceRef,waiting)
+ const owner=createTaskOwnerController({ctx:{},store,artifacts,controller,sessionRunner:h.sessions,modelConfig:()=>({provider:'owner-fixture',model:'scripted'}),advanceTask:async()=>{},authorizeStages:async()=>false})
+ t.after(async()=>{await owner.close();await h.close();await controller.close();await store.close()})
+ const initial=await owner.ensure({taskId:'fixture-task',sourceKey:'fixture-source',criteria:['fixture delivery'],origin:{}})
+ const event=await owner.event({taskId:'fixture-task',eventKey:'existing-maintenance',eventType:'intent.received',payload:{kind:'constraint',text,actorId:'actual-operator',sourceKey:sourceRef,repairSource:{kind:'engineering-maintenance',sourceRef}}})
+ const texts=value=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(texts):value&&typeof value==='object'?Object.values(value).flatMap(texts):[]
+ const wireInput=request=>texts(request).flatMap(value=>{try{const parsed=JSON.parse(value);return parsed?.maintenanceConstraints?[parsed]:[]}catch{return []}}).at(-1)
+ await owner.drive('fixture-task');await owner.applyPending()
+ assert.ok(h.requests.length>=2)
+ const first=wireInput(h.requests[0]);assert.ok(first,'native LlmAdapter must receive the serialized Owner input, not an index assertion')
+ assert.equal(first.maintenanceConstraints[0].text,text);assert.equal(first.maintenanceConstraints[0].actorId,'actual-operator');assert.equal(first.maintenanceConstraints[0].channel,'internal-maintenance')
+ assert.deepEqual(first.maintenanceConstraints[0].sources,[original]);assert.deepEqual(first.maintenanceConstraints[0].evidenceRefs,source.evidenceRefs);assert.equal(first.maintenanceConstraints[0].sourceRef,sourceRef)
+ const after=await store.query({kind:'task.owner',taskId:'fixture-task'});assert.equal(after.status,'idle');assert.ok(after.processedWatermark>=event.result.eventSeq)
+ h.setLease(2)
+ await owner.event({taskId:'fixture-task',eventKey:'fixture-existing-path-recovery',eventType:'system.recovery',payload:{reason:'fixture re-evaluate recorded input, no new constraint'}})
+ const requestCount=h.requests.length
+ await owner.drive('fixture-task');await owner.applyPending()
+ const second=wireInput(h.requests[requestCount]);assert.ok(second)
+ assert.equal(second.maintenanceConstraints.length,1);assert.equal(second.maintenanceConstraints[0].text,text);assert.deepEqual(second.maintenanceConstraints[0].sources,[original])
+ assert.ok(!second.events.some(item=>item.eventType==='intent.received'),'existing consumed fact must remain visible without resending it')
+ const final=await store.query({kind:'task.owner',taskId:'fixture-task'});assert.equal(final.sessionId,initial.sessionId);assert.equal(executions,1)
+ const proofPath=join(root,'model-request-proof.json')
+ await writeFile(proofPath,JSON.stringify({testProvider:'owner-fixture',scriptedModel:true,businessBackendVerified:false,firstModelRequest:h.requests[0],secondModelRequest:h.requests[requestCount],firstOwnerInput:first,secondOwnerInput:second,originalExecutions:executions,originalSessionPreserved:final.sessionId===initial.sessionId},null,2))
+ console.log('Native model request proof: '+proofPath)
+ const saved=await h.ctx.sessionPersistence.inspect(final.sessionId)
+ assert.ok(saved.events.some(item=>item.type==='tool/call'&&item.data.name==='task_owner_read_artifact'&&JSON.parse(item.data.arguments).artifactRef===sourceRef),'canonical source must remain readable through the native artifact tool')
+})
+
+test('maintenance input preserves canonical source and excludes other task, requirement and run',async()=>{
+ const plan={task:{requirementRef:'current-requirement'},stages:[{stageId:'current-stage',runId:'current-run'}]}
+ const canonical={kind:'engineering-maintenance-constraint',channel:'internal-maintenance',taskId:'task',requestId:'existing',requirementRef:'current-requirement',stageId:'current-stage',runId:'current-run',actorId:'operator',text:'full unchanged body',sources:[{actorId:'user',text:'original'}],evidenceRefs:['actual-proof']}
+ for(const delta of [{},{taskId:'foreign'},{requirementRef:'old-requirement'},{runId:'foreign-run'},{channel:'im'}]){
+  const source={...canonical,...delta},records=new Map([['fact',{kind:'constraint',repairSource:{kind:'engineering-maintenance',sourceRef:'canonical'}}],['canonical',source]])
+  const store={query:async()=>[{eventSeq:540,eventType:'intent.received',payloadRef:'fact'}]}
+  const result=await readOwnerMaintenanceConstraints({taskId:'task',plan,store,artifacts:{read:async ref=>records.get(ref)}})
+  if(Object.keys(delta).length===0){assert.equal(result.length,1);assert.deepEqual(result[0],{eventSeq:540,payloadRef:'fact',sourceRef:'canonical',...canonical})}else assert.deepEqual(result,[])
+ }
+})
+
+test('Owner completion schema and references allow bounded same-turn correction',async t=>{
+ for(const mode of ['schema','references','limit']){
+  const root=await mkdtemp(join(tmpdir(),'owner-completion-correction-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const ref='sha256-'+ 'a'.repeat(64)+'.json',valid={action:'complete',summary:'Verified fixture delivery',evidenceRefs:[ref],assessments:[{itemId:'acceptance-1',status:'satisfied',evidenceRefs:[ref]}]}
+  const h=await host(root,null,null,step=>mode==='schema'&&step===1?{...valid,summary:{bad:true}}:mode==='references'&&step===1?{...valid,evidenceRefs:['unknown']} :mode==='limit'?{...valid,evidenceRefs:['unknown-'+step]}:valid);t.after(()=>h.close())
+  let checks=0
+  const result=await h.sessions.run({binding:{taskId:'correction-task',sessionId:'correction-owner',turnId:'correction-turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{completionEvidenceRefs:[ref]},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>{checks++;if(value.evidenceRefs[0]!==ref)throw Object.assign(Error('Bind successful original stage receipt'),{code:'TASK_OWNER_COMPLETION_UNVERIFIED'});return {} }})
+  if(mode==='limit'){assert.notEqual(result.status,'submitted');assert.equal(checks,4);assert.ok(h.requests.length<=5);assert.match(JSON.stringify((await h.ctx.sessionPersistence.inspect('correction-owner')).events),/TASK_OWNER_CORRECTION_LIMIT/)}
+  else{assert.equal(result.status,'submitted');assert.deepEqual(result.decision,valid);assert.equal(h.requests.length,2);assert.match(JSON.stringify(h.requests[1]),/Host completionEvidenceRefs/)}
+ }
+})
+
+test('paused delivery review compiles one complete native prompt and reaches original Owner decision', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-delivery-review-prompt-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const chosen = {action:'wait',summary:'Review actual facts',evidenceRefs:[],condition:{kind:'capability',missing:'remaining evidence',responsibleParty:'execution host',resumeWhen:'evidence available',evidenceRefs:[]}}
+  const h = await host(root,null,null,()=>chosen)
+  t.after(()=>h.close())
+  const result = await h.sessions.run({binding:{taskId:'review-task',sessionId:'original-review-owner',turnId:'review-turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{task:{controlState:'paused'},deliveryReview:{payloadRef:'review-facts'},stages:[],goal:{request:'Review existing Draft only'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>assert.equal(value.action,'wait')})
+  assert.equal(result.status,'submitted');assert.equal(h.requests.length,1);assert.equal(result.decision.action,'wait')
 })
