@@ -810,9 +810,13 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (baseline && !pureDevelopment) {
       const prepare = workflowOptions.prepareGeneration
       workflowOptions.prepareGeneration = async context => { await assertTargetCurrent(); return prepare(context) }
+    }
+    if ((baseline && !pureDevelopment) || workflowOptions.sourceOnlyNoChangePolicy === true) {
       workflowOptions.assertConflictReads = async ({ runId, generation, requirementDigest, paths }) => {
         if (runId !== saved.runId) fail('ENGINEERING_READ_SCOPE_INVALID')
-        if (!config.discovery) {
+        if (workflowOptions.sourceOnlyNoChangePolicy === true && (!Array.isArray(paths) || !paths.length || paths.some(path => typeof path !== 'string'))) fail('ENGINEERING_CONFLICT_NOT_READ')
+        if (workflowOptions.sourceOnlyNoChangePolicy === true && !config.discovery && paths.some(path => !config.editablePaths.includes(path))) fail('ENGINEERING_CONFLICT_NOT_READ')
+        if (!config.discovery && workflowOptions.sourceOnlyNoChangePolicy !== true) {
           if (paths.some(path => !config.editablePaths.includes(path))) fail('ENGINEERING_CONFLICT_NOT_READ')
           return
         }
@@ -828,7 +832,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
           for (const node of state.nodes.filter(node => node.executor === 'agent' && node.sessionBound && node.sessionId && node.generation === generation)) {
             const events = await readSessionEvents(node.sessionId)
             for (const path of await restoreEngineeringReadEvidence({ events, binding: { ...node, taskId: saved.taskId, runId },
-              paths, directory: workspace.directory, allowedPrefixes: config.discovery.allowedPrefixes }))
+              paths, directory: workspace.directory, allowedPrefixes: config.discovery?.allowedPrefixes ?? config.editablePaths }))
               read.set(path, createHash('sha256').update(await readFile(join(workspace.directory, path))).digest('hex'))
           }
           conflictReads.set(key, read)
@@ -1021,7 +1025,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         suggestedCall: { operation: 'list', query: path.split('/').at(-1), source } }
       const bytes = await snapshot.readFile(path, { signal }), content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
       const text = content.slice(offset, offset + limit)
-      if (source === 'current' && ['13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24'].includes(item.record.definitionVersion) && text.length) {
+      if (source === 'current' && ['13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25'].includes(item.record.definitionVersion) && text.length) {
         const readKey = `${binding.runId}:${binding.generation}:${binding.requirementDigest}`
         if (!conflictReads.has(readKey)) conflictReads.set(readKey, new Map())
         conflictReads.get(readKey).set(path, createHash('sha256').update(bytes).digest('hex'))
