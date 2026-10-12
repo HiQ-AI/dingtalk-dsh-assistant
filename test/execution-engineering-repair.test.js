@@ -30,7 +30,7 @@ for (const ambiguous of [false, true]) test(`冻结v18维护修复保留同Run�
   const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), author: { name: 'Test', email: 'test@example.invalid' }, repositories: [{ id: 'repo', sourceRepository: source, managedRoot: join(root, 'managed'), remote, baseRef: 'main', githubRepository: 'test/repo', discovery: { allowedPrefixes: ['src/'] }, checks: [{ id: 'build', version: '1', executable: process.execPath, args: ['-e', "const v=require('node:fs').readFileSync('src/value.txt','utf8');console.log(v);if(!v.includes('good'))process.exit(1)"] }], localAcceptance: { version: '1', sharedDataProfilePath: profile, prepareSteps: [], service: { ...command, args: ['-e', 'process.exit(1)', '{port}', '127.0.0.1'], readyPath: '/' }, scenarios: [{ ...command, id: 'value', description: '值' }], cleanup: command, verifyCleanup: command } }] })
   await registry.restore(store, artifacts)
   let proposals = 0, oldRead = false
-  const sessions = { async run({ binding, input, onSessionBound, onResult }) {
+  const sessions = { async run({ binding, input, recoveryContext, onSessionBound, onResult }) {
     await onSessionBound()
     if (input.criteria) return onResult({ cases: binding.generation === 2 ? [] : input.criteria.map(item => ({ criterionId: item.id, scenarioId: 'value', steps: ['Read candidate value'], expected: 'good', parameters: {} })) }) // 第二代止于本地验收计划门禁，不访问业务服务。
     const requirementInput = input.requirement ?? input
@@ -52,6 +52,17 @@ for (const ambiguous of [false, true]) test(`冻结v18维护修复保留同Run�
         finally { await writeFile(oldFile, previous.text) }
       }
       assert.equal(previous.text, ambiguous ? 'unique\nbase\nbase' : content); oldRead = true; content = ambiguous ? 'effective-change\ngood' : previous.text.replace('bad', 'good')
+    } else if (recoveryContext) {
+      assert.equal(ambiguous, false)
+      assert.equal(recoveryContext.kind, 'execution-recovery-context')
+      assert.equal(recoveryContext.nodeRunId, binding.nodeRunId)
+      assert.equal(recoveryContext.generation, 1)
+      assert.ok(recoveryContext.evidenceRefs.includes(evidenceRef))
+      const originalFailure = await artifacts.read(evidenceRef)
+      assert.deepEqual(originalFailure, failedEvidence)
+      assert.match(Buffer.from(originalFailure.data, 'base64').toString('utf8'), /bad/)
+      assert.equal(current.text, content)
+      oldRead = true; content = current.text.replace('bad', 'good')
     }
     proposals++
     onResult({ changeDisposition: 'modify', reviewedPaths: ['src/value.txt'], reason: '读取当前值后按任务修复并验证', document: { name: '修改方案.md', markdown: '修改 src/value.txt 并验证构建。' },
@@ -125,12 +136,17 @@ for (const ambiguous of [false, true]) test(`冻结v18维护修复保留同Run�
   await helpers.repairCurrentStage({ taskId: 'task', decision, commandId: repairCommand })
   await controller.whenIdle(runId)
   const second = await controller.state(runId)
-  assert.equal(second.run.generation, 2, JSON.stringify(second)); assert.equal(proposals, 2); assert.equal(oldRead, true)
+  assert.equal(second.run.generation, ambiguous ? 2 : 1, JSON.stringify(second)); assert.equal(proposals, 2); assert.equal(oldRead, true)
+  if (!ambiguous) {
+    for (const nodeId of ['prepare-generation', 'define-local-acceptance', 'plan-local-acceptance', 'prepare-workspace']) assert.deepEqual(second.nodes.find(node => node.nodeId === nodeId), first.nodes.find(node => node.nodeId === nodeId))
+    const retried = second.nodes.find(node => node.nodeId === 'inspect-and-propose'), original = first.nodes.find(node => node.nodeId === 'inspect-and-propose')
+    assert.equal(retried.nodeRunId, original.nodeRunId); assert.equal(retried.sessionId, original.sessionId); assert.equal(retried.leaseEpoch, original.leaseEpoch + 1)
+  }
   assert.equal(second.nodes.find(node => node.nodeId === 'verify-candidate').status, 'succeeded', JSON.stringify(second))
   const workspace = await artifacts.read(second.nodes.find(node => node.nodeId === 'prepare-workspace').outputRef)
   assert.equal(await readFile(join(workspace.workspace.directory, 'src/value.txt'), 'utf8'), 'effective-change\ngood')
   assert.deepEqual(await artifacts.read(evidenceRef), failedEvidence)
   if (ambiguous) assert.equal(await readFile(join(oldWorkspace.workspace.directory, 'src/value.txt'), 'utf8'), 'unique\nbase\nbase')
   await helpers.repairCurrentStage({ taskId: 'task', decision, commandId: repairCommand })
-  assert.equal((await controller.state(runId)).run.generation, 2)
+  assert.equal((await controller.state(runId)).run.generation, ambiguous ? 2 : 1)
 })
