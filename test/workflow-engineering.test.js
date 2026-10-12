@@ -493,8 +493,9 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
     await onResult({status:'succeeded',summary:'已按方案修改',planRef:input.plan.ref,effectRefs:[receipt.effectId]})
   },async cancel(){},async close(){}}
   const controller=createExecutionController({store:{query:q=>store.query(q),command:async c=>{if(c.kind==='node.drained'&&c.args.nodeId==='finalize'&&c.args.generation===1){firstCommit=await git(remote,'rev-parse',head);reached.resolve();await release.promise}return store.command(c)}},artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:[],changeQuietMs:0,maxChangeDelayMs:0});t.after(()=>controller.close())
-  const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'first',acceptanceCriteria:['候选服务返回本轮修改值']}},{commandId:'revision-command',run:{actorId:'owner'},unit:{}},controller)
-  await controller.createRun({commandId:'create',...prepared})
+  const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'first',acceptanceCriteria:['候选服务返回本轮修改值']}},{stageRunId:controller.plannedTaskStageRunId({taskId:'task',planRevision:1,stageId:'engineering',attempt:1}),commandId:'revision-command',run:{actorId:'owner'},unit:{}},controller)
+  await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:prepared.workflowId,input:prepared.input}]})
+  await controller.advanceTaskPlan('task')
   await Promise.race([reached.promise, controller.whenIdle(prepared.runId).then(state => { if(state.run.status !== 'running') throw new Error(JSON.stringify(state)) })])
   await controller.changeInput({commandId:'revise',runId:prepared.runId,inputId:'revision',sourceKey:'revision',input:{...prepared.input,request:'second'}});release.resolve()
   const rejected=await controller.whenIdle(prepared.runId)
@@ -502,11 +503,14 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   assert.equal(rejected.nodes.find(node=>node.status==='waiting').waitReason.reference,'LOCAL_ACCEPTANCE_FAILED')
   const verifiedSecond=rejected.nodes.find(node=>node.nodeId==='verify-candidate')
   await store.command({id:'hold-second-acceptance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'second-acceptance',actorId:'owner',reason:'fixture approved second requested value'}})
+  try {
   await registry.updateCheckpoint({runId:prepared.runId,requestId:'second-value',kind:'local-acceptance',
     localAcceptance:{...localAcceptance,version:'second-value',scenarios:localAcceptance.scenarios.map(scenario=>({...scenario,expected:'two'}))},
     scope:{taskId:'task',uatEnvironment:'uat1',requestDigest:executionDigest({request:'first',acceptanceCriteria:prepared.input.acceptanceCriteria})},
     maintenance:{maintenanceId:'second-acceptance',revision:1}},controller,artifacts)
+  } finally {
   await store.command({id:'release-second-acceptance',kind:'runtime.maintenance.change',args:{active:false,expectedRevision:1,maintenanceId:'second-acceptance',actorId:'owner',reason:'fixture correction complete'}})
+  }
   await controller.recover({commandId:'recover-second-acceptance',runId:prepared.runId})
   const state=await controller.whenIdle(prepared.runId)
   const keptSecond=state.nodes.find(node=>node.nodeId==='verify-candidate')
