@@ -1,2 +1,5 @@
 packages/dingtalk-dsh-assistant/task-release-workflows.js -text whitespace=cr-at-eol
 packages/dingtalk-dsh-assistant/web-client.js text eol=lf
+
+# Frozen workflow rules hash function source; preserve release bytes across checkout.
+packages/dingtalk-dsh-assistant/task-workflow.js -text whitespace=cr-at-eol
