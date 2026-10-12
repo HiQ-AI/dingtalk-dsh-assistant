@@ -56,7 +56,7 @@ export function isPassiveTaskProgress(body) {
   if (typeof body !== 'string') return false
   const text = body.trim()
   const withoutMention = text.replace(/^@[^\s，,]+(?:\([^)]*\))?\s*/u, '')
-  if (/^任务已开始处理[。.!！]?\s*(?:-\s*小小鹏代回)?$/u.test(withoutMention)) return true
+  if (/^任务已开始处理[。.!！]?\s*(?:-\s*[^\r\n，,。.!！]+代回)?$/u.test(withoutMention)) return true
   return /^任务已创建[，,]\s*开始处理[。.!！]?\s*任务[:：]\s*\S+\s*[—-]\s*\S+$/u.test(withoutMention)
 }
 export function isQuietGroupMessage(body) {

@@ -4,18 +4,20 @@ import {DatabaseSync} from 'node:sqlite'
 import {currentOwnerCompletion,isQuietGroupMessage,assertMessageTaskUnfenced} from '../packages/dingtalk-dsh-assistant/message-ledger.js'
 function fixture(){
  const db=new DatabaseSync(':memory:')
- db.exec(`CREATE TABLE business_tasks(task_id TEXT,requirement_revision INTEGER,plan_revision INTEGER,plan_requirement_revision INTEGER);CREATE TABLE task_controls(task_id TEXT,control_revision INTEGER);CREATE TABLE task_owner_turns(turn_id TEXT,application_status TEXT,requirement_revision INTEGER,plan_revision INTEGER,control_revision INTEGER);CREATE TABLE task_reports(report_id TEXT,task_id TEXT,turn_id TEXT,report_type TEXT);CREATE TABLE task_events(task_id TEXT,event_type TEXT,handled_at TEXT);INSERT INTO business_tasks VALUES('task',2,3,2);INSERT INTO task_controls VALUES('task',4);INSERT INTO task_owner_turns VALUES('turn','applied',2,3,4);INSERT INTO task_reports VALUES('report','task','turn','complete')`)
+ db.exec(`CREATE TABLE business_tasks(task_id TEXT,requirement_revision INTEGER,plan_revision INTEGER,plan_requirement_revision INTEGER);CREATE TABLE task_controls(task_id TEXT,control_revision INTEGER);CREATE TABLE task_owner_turns(turn_id TEXT,application_status TEXT,requirement_revision INTEGER,plan_revision INTEGER,control_revision INTEGER);CREATE TABLE task_reports(report_id TEXT,task_id TEXT,turn_id TEXT,report_type TEXT);CREATE TABLE task_events(task_id TEXT,event_type TEXT,handled_at TEXT);INSERT INTO business_tasks VALUES('task',2,3,2);INSERT INTO task_controls VALUES('task',4);INSERT INTO task_owner_turns VALUES('turn','applied',2,3,4);INSERT INTO task_reports VALUES('report','task','turn','complete');ALTER TABLE business_tasks ADD COLUMN requirement_ref TEXT;ALTER TABLE business_tasks ADD COLUMN status TEXT DEFAULT 'succeeded';ALTER TABLE task_controls ADD COLUMN state TEXT DEFAULT 'active';ALTER TABLE task_owner_turns ADD COLUMN decision_json TEXT;UPDATE task_owner_turns SET decision_json='{"action":"complete"}';CREATE TABLE task_plan_stages(task_id TEXT,plan_revision INTEGER,status TEXT);CREATE TABLE task_owners(task_id TEXT,current_turn_id TEXT,event_watermark INTEGER,processed_watermark INTEGER);INSERT INTO task_owners VALUES('task','turn',4,4)`)
  return {db,notice:{payload:{phase:'owner:report',fact:{taskId:'task',sourceVersion:1,runRevision:1}}}}
 }
 test('applied task completion remains current across history and context-only observation metadata',()=>{
  const {db,notice}=fixture();try{assert.equal(currentOwnerCompletion(db,notice),true);for(const type of ['topic.fact','query.succeeded','workflow.succeeded'])db.prepare('INSERT INTO task_events VALUES(?,?,NULL)').run('task',type);notice.payload.fact.sourceVersion=99;notice.payload.fact.runRevision=99;assert.equal(currentOwnerCompletion(db,notice),true)}finally{db.close()}
 })
 test('new business input, changed requirement or control and unapplied result invalidate completion',()=>{
- for(const change of ["INSERT INTO task_events VALUES('task','intent.received',NULL)","INSERT INTO task_events VALUES('task','source.related',NULL)","UPDATE business_tasks SET requirement_revision=3","UPDATE task_controls SET control_revision=5","UPDATE task_owner_turns SET application_status='pending'"]){const {db,notice}=fixture();try{db.exec(change);assert.equal(currentOwnerCompletion(db,notice),false)}finally{db.close()}}
+ for(const change of ["INSERT INTO task_events VALUES('task','intent.received',NULL)","INSERT INTO task_events VALUES('task','source.related',NULL)","UPDATE business_tasks SET requirement_revision=3","UPDATE task_controls SET control_revision=5","UPDATE task_owner_turns SET application_status='pending'","UPDATE task_owners SET event_watermark=5","UPDATE task_owner_turns SET decision_json='{\"action\":\"wait\"}'"]){const {db,notice}=fixture();try{db.exec(change);assert.equal(currentOwnerCompletion(db,notice),false)}finally{db.close()}}
 })
 test('pure progress acknowledgements do not become pending business input; extra requirements still block',()=>{
  assert.equal(isQuietGroupMessage('@李辰  任务已开始处理。  \n- 小小鹏代回'),true);
  assert.equal(isQuietGroupMessage('任务已开始处理'),true);
+ for(const name of ['陈明','Ada'])assert.equal(isQuietGroupMessage(`任务已开始处理。\n- ${name}代回`),true);
+ for(const suffix of ['请增加键盘导航','暂停此任务'])assert.equal(isQuietGroupMessage(`任务已开始处理。\n- Ada代回，${suffix}`),false);
  for(const body of ['任务已开始处理。请增加键盘导航','@李辰 任务已开始处理。暂停此任务','任务已开始处理失败，需要修改','已开始处理，新需求如下'])assert.equal(isQuietGroupMessage(body),false);
 })
 

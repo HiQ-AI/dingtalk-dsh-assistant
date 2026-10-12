@@ -22,8 +22,8 @@ test('two repositories advance sequentially through real edits checks acceptance
  const configs=[],fixture={}
  for(const id of ['frontend','backend']){
   const source=join(dir,id),managedRoot=join(dir,id+'-managed'),remote=join(dir,id+'.git');await mkdir(source);await mkdir(managedRoot)
-  await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'old');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/feature/uat3-base')
-  configs.push({id,sourceRepository:source,managedRoot,remote,githubRepository:'test/'+id,baseRef:'main',editablePaths:['value.txt'],localAcceptance,checks:[{id:'real-check',version:'1',...command("if(require('node:fs').readFileSync('value.txt','utf8')!=="+JSON.stringify(id+'-new')+")process.exit(1)")}]})
+  await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'old');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat3-base')
+  configs.push({id,sourceRepository:source,managedRoot,remote,githubRepository:'test/'+id,baseRef:'main',editablePaths:['value.txt'],localAcceptance:{...localAcceptance,scenarios:localAcceptance.scenarios.map(scenario=>({...scenario,expected:id+'-new'}))},checks:[{id:'real-check',version:'1',...command("if(require('node:fs').readFileSync('value.txt','utf8')!=="+JSON.stringify(id+'-new')+")process.exit(1)")}]})
   fixture[id]={remote,stateFile:join(dir,id+'-pr.json')}
  }
  const fixtureFile=join(dir,'gh-fixture.json'),script=join(dir,'gh.cjs');await writeFile(fixtureFile,JSON.stringify(fixture))

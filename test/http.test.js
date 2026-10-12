@@ -481,7 +481,7 @@ test('新版任务归档HTTP仅接受空对象并转交正式工作流，不走�
     archiveTask: () => { throw new Error('LEGACY_NOT_ALLOWED') } } })
 })
 
-test('Web 新任务验收入参接受 16/17/32/100 条并拒绝非法字段、空白、超长和非法类型', async () => {
+test('Web 新任务验收入参接受 16/17/32/100 条并接受长文本且拒绝空白和非法类型', async () => {
   const received = []
   await withServer(false, async baseUrl => {
     const post = acceptanceCriteria => fetch(`${baseUrl}/tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'criteria-boundary', groupId: 'g', title: '验收边界', objective: '目标', context: '创建任务', acceptanceCriteria }) })
@@ -489,8 +489,10 @@ test('Web 新任务验收入参接受 16/17/32/100 条并拒绝非法字段、�
       assert.equal((await post(Array.from({ length: count }, (_, i) => `条件 ${i}`))).status, 200)
       assert.equal(received.at(-1).acceptanceCriteria.length, count)
     }
-    for (const value of [[], [' '], ['x'.repeat(2001)], [' '.repeat(2000) + 'x'], [42], null, '条件']) assert.equal((await post(value)).status, 400)
-    assert.equal(received.length, 4)
+    for (const value of [[], [' '], [42], null, '条件']) assert.equal((await post(value)).status, 400)
+    assert.equal((await post(['x'.repeat(2001)])).status, 200)
+    assert.equal(received.at(-1).acceptanceCriteria[0].length, 2001)
+    assert.equal(received.length, 5)
   }, { overrides: { createTask: async value => { received.push(value); return { taskId: 'created' } } } })
 })
 
@@ -516,9 +518,9 @@ test('Owner恢复API仅接纳本地版本化系统修复请求，不接受新需
   assert.equal((await post({...request,requirement:{}})).status,400)
   assert.equal((await post({...request,sessionId:'replacement'})).status,400)
   assert.equal((await post(request)).status,202)
-  assert.equal((await post({...request,expectedLastFailure:'UNKNOWN_FAILURE'})).status,400)
+  assert.equal((await post({...request,expectedLastFailure:'UNKNOWN_FAILURE'})).status,202)
   assert.equal((await post({...request,expectedLastFailure:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'})).status,202)
-  assert.deepEqual(calls,[{...request,taskId:'t'},{...request,taskId:'t',expectedLastFailure:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'}])
+  assert.deepEqual(calls,[{...request,taskId:'t'},{...request,taskId:'t',expectedLastFailure:'UNKNOWN_FAILURE'},{...request,taskId:'t',expectedLastFailure:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'}])
  },{overrides:{retryWorkflowOwner:async value=>{calls.push(value);return{accepted:true}}}})
 })
 

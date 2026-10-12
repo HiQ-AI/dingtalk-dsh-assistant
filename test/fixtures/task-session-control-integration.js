@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile,appendFile,rm,realpath} from 'node:fs/promises'
-import {tmpdir} from 'node:os'
 import {resolve,join,sep} from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
@@ -10,7 +9,7 @@ import {taskDirectories} from '../../packages/dingtalk-dsh-assistant/session-wor
 import {createExecutionController} from '../../packages/dingtalk-dsh-assistant/execution-controller.js'
 const exec=promisify(execFile),object={type:'object'}
 export async function openTaskSessionControlFixture(t,{execute,expected='actual requested artifact',controllerFactory=createExecutionController,workflowFactory,validateOutput,ownerContract}={}){
- const approved=resolve('docs/tmp');const temporary=resolve(tmpdir());assert.ok(temporary===approved||temporary.startsWith(approved+sep),'TEMP/TMP must stay in this isolated D workspace')
+ const temporary=resolve('docs/tmp/task-session-control');await mkdir(temporary,{recursive:true});const approved=await realpath(resolve('docs/tmp'));assert.ok((await realpath(temporary)).startsWith(approved+sep),'fixture temporary root must stay in repository docs/tmp')
  const directory=await mkdtemp(join(temporary,'task-session-control-')),dbPath=join(directory,'control.sqlite'),instanceId='task-session-control'
  const candidatePath=join(directory,'actual-result.txt'),script=join(directory,'verify.cjs'),tracePath=join(directory,'calls.jsonl')
  await writeFile(script,"const fs=require('node:fs'),[file,expected]=process.argv.slice(2);let actual='';try{actual=fs.readFileSync(file,'utf8')}catch(e){if(e.code!=='ENOENT')throw e};console.log(JSON.stringify({actual,expected}));if(actual!==expected)process.exit(7)")

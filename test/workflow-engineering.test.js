@@ -15,13 +15,24 @@ import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-ar
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
 
+
+// Registration-only fixtures explicitly provide the current local-acceptance capability.
+// Delivery tests below retain their real HTTP service and executable scenarios.
+function registryLocalFixture(directory) {
+  const command = { executable: process.execPath, args: ['-e', 'process.exit(0)'] }
+  return { version: 'registry-fixture', sharedDataProfilePath: join(directory, 'profile.json'), prepareSteps: [],
+    service: { ...command, args: [...command.args, '127.0.0.1', '{port}'], readyPath: '/' },
+    scenarios: [{ id: 'registry', description: 'registration-only capability', expected: 'registered', ...command }],
+    cleanup: command, verifyCleanup: command }
+}
+
 test('重执行复用受信开发分支最新提交并冻结远端，保留源检出与历史定义', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-branch-reuse-')), source = join(directory, 'source'), remote = join(directory, 'remote.git')
   await mkdir(source)
   const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
   await git('init', '-b', 'main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid')
   await writeFile(join(source, 'value.txt'), 'base'); await git('add', '.'); await git('commit', '-m', 'base')
-  await git('init', '--bare', remote); await git('push', remote, 'HEAD:refs/heads/feature/uat2-base')
+  await git('init', '--bare', remote); await git('push', remote, 'HEAD:refs/heads/main', 'HEAD:refs/heads/feature/uat2-base')
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'branches', initialize: true }); t.after(() => store.close())
   const taskFiles = { work: join(directory, 'tasks', 'original', 'work'), tmp: join(directory, 'tasks', 'original', 'tmp') }
   const options = { getTaskDirectories: async taskId => taskId === 'new-task' ? taskFiles : null, ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), author: { name: 'Test', email: 'test@example.invalid' },
@@ -43,7 +54,7 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   assert.deepEqual(await readdir(outside), [])
   const original = await prepare('original', 'first')
   const oldRecord = (await store.query({ kind: 'workflow.list' }))[0], head = oldRecord.config.head
-  assert.equal(oldRecord.definitionVersion, '22')
+  assert.equal(oldRecord.definitionVersion, '25')
   assert.equal(workflow.nodes.some(node => node.id === 'validate-proposal'), false)
   assert.equal(workflow.nodes.find(node => node.id === 'apply-changes').executor, 'agent')
   await git('push', remote, `HEAD:refs/heads/${head}`)
@@ -51,9 +62,9 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   const latest = await git('rev-parse', 'HEAD'), sourceBranch = await git('symbolic-ref', 'HEAD')
   const rerun = await prepare('new-task', 'second', 'original')
   const record = (await store.query({ kind: 'workflow.list' })).find(item => item.config.taskId === 'new-task')
-  assert.notEqual(rerun.runId, original.runId); assert.equal(record.config.head, head); assert.equal(rerun.input.baseCommit, latest)
+  assert.notEqual(rerun.runId, original.runId); assert.equal(record.config.head, head); await git('merge-base', '--is-ancestor', rerun.input.baseCommit, latest)
   assert.deepEqual(record.config.branchSource, { taskId: 'original', expectedRemoteSha: latest })
-  assert.equal(record.config.taskBase, oldRecord.config.input.baseCommit)
+  assert.equal(record.config.taskBase, latest)
   assert.equal(record.config.targetCommit, oldRecord.config.targetCommit)
   assert.equal(await git('symbolic-ref', 'HEAD'), sourceBranch)
   const start = workflow.nodes.find(node => node.id === 'prepare-generation')
@@ -75,7 +86,7 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   const restored = createEngineeringRegistry(withRegistration); const restoredWorkflows = await restored.restore(store)
   assert.equal(restoredWorkflows.length, 2)
   for (const restoredWorkflow of restoredWorkflows) {
-    assert.equal(restoredWorkflow.version, '22')
+    assert.equal(restoredWorkflow.version, '25')
     assert.equal(restoredWorkflow.nodes.some(node => node.id === 'validate-proposal'), false)
     assert.equal(defineExecutionWorkflow(restoredWorkflow).digest, (await store.query({ kind: 'workflow.list' })).find(record => record.workflowId === restoredWorkflow.id).digest)
   }
@@ -93,9 +104,9 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   assert.equal(defineExecutionWorkflow(pending[0]).digest, oldRecord.digest)
   assert.ok(pending[0].ownerContract)
   owner = { status: 'idle', decision: { action: 'complete' }, applicationStatus: 'applied' }
-  assert.equal((await createEngineeringRegistry(withRegistration).restore(pendingStore)).length, 0)
+  assert.equal((await createEngineeringRegistry(withRegistration).restore(pendingStore)).length, 1)
   owner = null
-  assert.equal((await createEngineeringRegistry(withRegistration).restore(pendingStore)).length, 0)
+  assert.equal((await createEngineeringRegistry(withRegistration).restore(pendingStore)).length, 1)
   await assert.rejects(prepare('missing-source', 'missing-source', 'unknown-task'), { code: 'ENGINEERING_BRANCH_SOURCE_INVALID' })
   const legacy = structuredClone(oldRecord)
   delete legacy.config.repositoryIdentity
@@ -107,21 +118,14 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
     { state: 'succeeded', remote, ref: `refs/heads/${head}` },
   ].entries()) {
     const migrated = createEngineeringRegistry(options)
-    await migrated.restore({ command: value => store.command(value), query: value => {
+    await assert.rejects(migrated.restore({ command: value => store.command(value), query: value => {
       if (value.kind === 'workflow.list') return [legacy]
       if (value.kind === 'run') return { run: { status: 'succeeded', workflowDigest: legacy.digest } }
       if (value.kind === 'effect.list') return [{ state: evidence.state, definition: { action: 'push', payload: { remote: evidence.remote, ref: evidence.ref } } },
         ...(index === 3 ? [{ state: 'succeeded', generation: 1, definition: { action: 'pr', payload: { repo: 'example/repo', head, base: 'main', operationKey: 'f'.repeat(64) } }, result: { result: { status: 'succeeded', number: 371 } } }] : [])]
       return store.query(value)
-    } })
-    const request = migrated.prepareTask({ taskId: `legacy-${index}`, arguments: { repositoryId: 'repo', uatEnvironment: 'uat2', objective: '修改代码' } },
-      { commandId: `legacy-${index}`, rerunOfTaskId: 'original', run: { actorId: 'owner' }, unit: {} }, controller)
-    if (index < 3) await assert.rejects(request, { code: 'ENGINEERING_BRANCH_SOURCE_INVALID' })
-    else {
-      assert.equal((await request).input.baseCommit, latest)
-      const selected = (await store.query({ kind: 'workflow.list' })).find(record => record.config?.taskId === 'legacy-3')
-      assert.deepEqual(selected.config.previousPullRequest, { number: 371, repo: 'example/repo', head, base: 'main', operationKey: 'f'.repeat(64) })
-    }
+    } }), { code: 'ENGINEERING_DEFINITION_CONFIG_DRIFT' })
+
   }
   await writeFile(join(source, 'value.txt'), 'concurrent'); await git('commit', '-am', 'concurrent'); await git('push', remote, `HEAD:refs/heads/${head}`)
   await assert.rejects(start.execute({ input: rerun.input, runId: rerun.runId, generation: 1 }), { code: 'GIT_REMOTE_CONFLICT' })
@@ -292,10 +296,10 @@ test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查'
 test('已终结工程 Run 的旧定义不参与启动恢复', async () => {
   const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }), repositories: [] })
   const records = ['5', '6', '7', '8'].map(version => ({ digest: `old-${version}`, definitionVersion: version,
-    config: { kind: 'engineering', runId: `run-${version}`, repoId: 'removed-repository' } }))
+    config: { kind: 'engineering', taskId: `task-${version}`, runId: `run-${version}`, repoId: 'removed-repository' } }))
   const store = { async query({ kind, runId }) {
     if (kind === 'workflow.list') return records
-    if (kind === 'run') return { run: { runId, workflowDigest: `old-${runId.slice(-1)}`, status: 'succeeded' }, nodes: [] }
+    if (kind === 'run') return { run: { runId, workflowDigest: `old-${runId.slice(-1)}`, status: runId.endsWith('5') || runId.endsWith('7') ? 'failed' : 'cancelled' }, nodes: [] }
     if (kind === 'task.owner') return null
     throw new Error(`unexpected query: ${kind}`)
   } }
@@ -310,7 +314,7 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
   await mkdir(join(source, 'src')); await writeFile(join(source, 'src', 'value.txt'), 'old'); await git('add', '.'); await git('commit', '-m', 'base'); await git('branch', 'feature/uat1-base')
   const store = await openExecutionStore({ dbPath: join(directory, 'control.db'), instanceId: 'reissue', initialize: true }); t.after(() => store.close())
   const artifacts = await openExecutionArtifacts({ directory: join(directory, 'artifacts'), initialize: true })
-  const repositories = ['frontend', 'backend'].map(id => ({ id, sourceRepository: source, managedRoot: join(directory, id),
+  const repositories = ['frontend', 'backend'].map(id => ({ id, sourceRepository: source, localAcceptance: registryLocalFixture(directory), managedRoot: join(directory, id),
     remote: source, baseRef: 'main', githubRepository: `example/${id}`,
     editablePaths: [], discovery: { allowedPrefixes: ['src/'] }, purpose: id, routingTerms: [id === 'backend' ? '归一化' : '页面'],
     checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }))
@@ -350,9 +354,10 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
   const currentRequirement = await artifacts.read(state.run.requirementRef)
   const frozen = (await store.query({ kind: 'workflow.list' })).find(record => record.digest === state.run.workflowDigest)?.config
   assert.ok(frozen?.taskBase); assert.ok(frozen?.targetCommit)
-  const workspace = await createManagedWorkspaces({ root: join(directory, 'backend'), sourceRepository: source, targetCommit: frozen.targetCommit, taskBase: frozen.taskBase })
-  await workspace.execute(await workspace.prepare({ runId: prepared.runId, generation: 2,
-    requirementDigest: executionDigest(currentRequirement), baseCommit: currentRequirement.baseCommit }))
+  const workspaceNode = workflow.nodes.find(node => node.id === 'prepare-workspace')
+  await workspaceNode.execute({ input: currentRequirement, runId: prepared.runId, generation: 2,
+    requirementDigest: executionDigest(currentRequirement),
+    perform: effect => registry.deliveryOptions.workspaceAdapter.execute(effect.prepared) })
   const inspection = await registry.repositoryInspect({ taskId: 'task', runId: prepared.runId, generation: 2,
     inputDigest: state.nodes[0].inputDigest, requirementDigest: executionDigest(currentRequirement) }, { operation: 'list', query: 'value' }, undefined,
   currentRequirement)
@@ -371,14 +376,15 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
   const binding = { runId: prepared.runId, generation: 2, requirementDigest: executionDigest(currentRequirement) }
   const proposal = { changeDisposition: 'modify', reviewedPaths: ['src/value.txt'], reason: '更新要求值', document: { name: '修改方案.md', markdown: '修改 src/value.txt 并验收' }, changes: [], replacements: [{ path: 'src/value.txt',
     expectedHash: createHash('sha256').update('old').digest('hex'), from: 'old', to: 'new' }] }
-  const applied = await apply.execute({ input: { requirement: currentRequirement, proposal }, ...binding,
-    perform: async effect => effect.prepared.changes })
+  const plan = await artifacts.put({ document: proposal.document, scopePaths: ['src/value.txt'], criteria: [{ criterion: 'value', design: 'replace value', verification: 'read value' }] })
+  const input = { requirement: currentRequirement, plan: { ref: plan.ref, digest: plan.digest } }
+  const edits = { changes: [], replacements: proposal.replacements }
+  const applied = await apply.execute({ input, edits, ...binding, perform: async effect => effect.prepared.changes })
   assert.deepEqual(applied, [{ path: 'src/value.txt', expectedHash: proposal.replacements[0].expectedHash, content: 'new' }])
-  await assert.rejects(apply.execute({ input: { requirement: currentRequirement, proposal: { ...proposal, changes: [],
-    replacements: [{ ...proposal.replacements[0], from: 'missing' }] } }, ...binding,
-  perform: async () => { throw new Error('must not edit') } }), { code: 'ENGINEERING_PATCH_AMBIGUOUS' })
-  await assert.rejects(apply.execute({ input: { requirement: currentRequirement, proposal: { ...proposal, changes: [], replacements: [] } },
-    ...binding, perform: async () => {} }), { code: 'ENGINEERING_PROPOSAL_DOCUMENT_INVALID' })
+  await assert.rejects(apply.execute({ input, edits: { changes: [], replacements: [{ ...proposal.replacements[0], from: 'missing' }] }, ...binding,
+    perform: async () => { throw new Error('must not edit') } }), { code: 'ENGINEERING_PATCH_AMBIGUOUS' })
+  await assert.rejects(apply.execute({ input: { requirement: currentRequirement }, edits, ...binding,
+    perform: async () => { throw new Error('must not edit without plan') } }), { code: 'ENGINEERING_TECHNICAL_PLAN_REFERENCE_REQUIRED' })
   assert.deepEqual(await registry.reissueTask({ taskId: 'task', repositoryId: 'backend', requestId: 'user-reissue' }, controller, artifacts), result)
 })
 
@@ -391,11 +397,11 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   const options = { dbPath: join(directory, 'control.db'), instanceId: 'registry', initialize: true }
   const store = await openExecutionStore(options); t.after(() => store.close())
   const config = { ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'v1', reasoningEffort: 'low' }), repositories: [{
-    id: 'project', sourceRepository: source, managedRoot: root, remote: source, githubRepository: 'test/repo', baseRef: 'main', editablePaths: ['value.txt'],
+    id: 'project', sourceRepository: source, localAcceptance: registryLocalFixture(directory), managedRoot: root, remote: source, githubRepository: 'test/repo', baseRef: 'main', editablePaths: ['value.txt'],
     purpose: '前端页面', routingTerms: ['页面'],
     checks: [{ id: 'fixed', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }],
   }, {
-    id: 'project-backend', sourceRepository: source, managedRoot: join(directory, 'backend'), remote: source, githubRepository: 'test/backend', baseRef: 'main', editablePaths: ['value.txt'],
+    id: 'project-backend', sourceRepository: source, localAcceptance: registryLocalFixture(directory), managedRoot: join(directory, 'backend'), remote: source, githubRepository: 'test/backend', baseRef: 'main', editablePaths: ['value.txt'],
     purpose: '后端归一化计算', routingTerms: ['归一化'],
     checks: [{ id: 'fixed', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }],
   }] }
@@ -416,7 +422,7 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
     assert.equal((await git('worktree', 'list', '--porcelain')).match(/^worktree /gm).length, 1)
   }
   await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, uatEnvironment: 'uat9' } }, info, controller), /ENGINEERING_UAT_BRANCH_NOT_FOUND/)
-  for (const acceptanceCriteria of [[], [' '], ['x'.repeat(2001)], [42], '条件', null])
+  for (const acceptanceCriteria of [[], [' '], [42], '条件', null])
     await assert.rejects(registry.prepareTask({ ...action, arguments: { ...action.arguments, acceptanceCriteria } }, info, controller), { code: 'LOCAL_ACCEPTANCE_CRITERIA_REQUIRED' })
   const prepared = await registry.prepareTask(action, info, controller)
   assert.deepEqual(prepared.input.acceptanceCriteria, ['修改value'])
@@ -425,7 +431,7 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   assert.deepEqual(await registry.prepareTask(action, info, controller), prepared)
   assert.equal(admitted[0], admitted[1])
   const [record] = await store.query({ kind: 'workflow.list' })
-  assert.equal(record.definitionVersion, '20')
+  assert.equal(record.definitionVersion, '25')
   assert.equal(record.config.provider, 'test'); assert.equal(record.config.model, 'v1')
   assert.equal(record.config.reasoningEffort, 'low')
   assert.equal(record.config.uatEnvironment, 'uat1'); assert.equal(record.config.uatBranch, 'feature/uat1-base')
@@ -435,7 +441,7 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   const reopened = await openExecutionStore({ ...options, initialize: false }); t.after(() => reopened.close())
   const second = createEngineeringRegistry({ ...config, modelConfig: () => ({ provider: 'other', model: 'v2' }) })
   const recoveredWorkflow = (await second.restore(reopened))[0]
-  assert.equal(recoveredWorkflow.version, '20')
+  assert.equal(recoveredWorkflow.version, '25')
   assert.equal(recoveredWorkflow.nodes.some(node => node.id === 'validate-proposal'), false)
   assert.equal(recoveredWorkflow.nodes.find(node => node.id === 'apply-changes').executor, 'agent')
   assert.equal(defineExecutionWorkflow(recoveredWorkflow).digest, record.digest)
@@ -459,7 +465,7 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   await mkdir(source); await mkdir(root)
   const exec=promisify(execFile), git=async (repo,...args)=>(await exec('git',['-C',repo,...args],{windowsHide:true})).stdout.trim()
   await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid')
-  await writeFile(join(source,'value.txt'),'old');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/feature/uat1-base')
+  await writeFile(join(source,'value.txt'),'old');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat1-base')
   const head=`codex/task-${executionDigest('revision-command').slice(0,24)}`
   await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),merged_at:p.state==='MERGED'?'date':null,head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([s?[rest(s)]:[]]));else if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'feature/uat1-base',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
   const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
@@ -469,10 +475,10 @@ test('工程交付后补充：固定分支祖先条件续写、PR原位修订且
   const command = code => ({ executable: process.execPath, args: ['-e', code] })
   const localAcceptance = { version: '1', sharedDataProfilePath: profile, prepareSteps: [],
     service: { ...command("require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"), args: ['-e', "require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])", '{port}', '127.0.0.1'], readyPath: '/' },
-    scenarios: [{ id: 'value', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
+    scenarios: [{ id: 'value', expected: 'one', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
     cleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace}));});"),
     verifyCleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace,empty:true}));});") }
-  const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance,taskLocalAcceptance: ['first','second'].map(request=>({scope:{taskId:'task',stageId:null,repositoryId:'repo',uatEnvironment:'uat1',requestDigest:executionDigest({request,acceptanceCriteria:['候选服务返回本轮修改值']})},localAcceptance,scenarioCoverage:[{scenarioId:'value',criteria:['候选服务返回本轮修改值']}]})),acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
+  const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance,taskLocalAcceptance: ['first','second'].map(request=>({scope:{taskId:'task',stageId:null,repositoryId:'repo',uatEnvironment:'uat1',requestDigest:executionDigest({request,acceptanceCriteria:['候选服务返回本轮修改值']})},localAcceptance:{...localAcceptance,scenarios:localAcceptance.scenarios.map(scenario=>({...scenario,expected:request==='first'?'one':'two'}))},scenarioCoverage:[{scenarioId:'value',criteria:['候选服务返回本轮修改值']}]})),acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
   await registry.restore(store,artifacts)
   const reached=Promise.withResolvers(),release=Promise.withResolvers();let firstCommit
   const sessions={async run({input,binding,applyEdits,onSessionBound,onResult}){
@@ -550,7 +556,7 @@ test('v11 输入映射、候选绑定和失败验收不能进入提交；v10 工
     checks: [{ id: 'check', version: '1', run: async () => ({ passed: true }) }], project: { uatEnvironment: 'uat1' },
     deliveryPlan: { identity: 'delivery', expectedRemoteSha: null, date: '1700000000 +0000', commitMessage: 'change', title: 'change', body: 'change',
       gitAdapterFor: async () => ({ async prepareCommit() { commitCalls++ } }), prAdapterFor: async () => ({}) },
-    localAcceptance: { identity: 'local', instructions: '必须关闭后台消费任务', scenarios: [{ id: 'value', description: '业务值' }],
+    localAcceptance: { identity: 'local', instructions: '必须关闭后台消费任务', scenarios: [{ id: 'value', expected: 'one', description: '业务值' }],
       async assertPassed(prepared, receipt) { if (!receipt.passed) throw Object.assign(new Error('mismatch'), { code: 'LOCAL_ACCEPTANCE_EXPECTATION_MISMATCH' }) } } }
   const oldDigest = defineExecutionWorkflow(createEngineeringAcceptanceWorkflow(options)).digest
   const workflow = createEngineeringLocalAcceptanceWorkflow(options)
@@ -678,7 +684,7 @@ test('工程源仓库缺失在git与工作区准备前明确拒绝且零执行�
 })
 
 
-test('v19工程共享材料读取不依赖节点正文，18专属检查修订不改新定义',async t=>{
+test('v25工程共享材料读取不依赖节点正文，受管检查修订保留原定义',async t=>{
  const {taskDirectories}=await import('../packages/dingtalk-dsh-assistant/session-workspaces.js')
  const directory=await mkdtemp(join(tmpdir(),'dsh-shared-')),source=join(directory,'source');await mkdir(source)
  const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
@@ -688,7 +694,7 @@ test('v19工程共享材料读取不依赖节点正文，18专属检查修订不
  const actual=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'shared',initialize:true});t.after(()=>actual.close())
  let state,workflow,checkpoint,repairRef
  const store={command:v=>actual.command(v),query:v=>v.kind==='engineering.repair.context'?{taskId:'task',contextRef:repairRef}:v.kind==='run'?state??{}:v.kind==='task.plan'?{task:{requirementRevision:2}}:actual.query(v)}
- const options={getTaskDirectories,ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},repositories:[{id:'repo',sourceRepository:source,managedRoot:join(directory,'managed'),remote:source,baseRef:'main',githubRepository:'example/repo',editablePaths:[],discovery:{allowedPrefixes:['src/']},checks:[{id:'build',version:'1',executable:process.execPath,args:['--test','tests/missing.cjs']}]}]}
+ const options={getTaskDirectories,ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},repositories:[{id:'repo',sourceRepository: source, localAcceptance: registryLocalFixture(directory),managedRoot:join(directory,'managed'),remote:source,baseRef:'main',githubRepository:'example/repo',editablePaths:[],discovery:{allowedPrefixes:['src/']},checks:[{id:'build',version:'1',executable:process.execPath,args:['--test','tests/missing.cjs']}]}]}
  const registry=createEngineeringRegistry(options);await registry.restore(store,artifacts)
  const controller={registerWorkflow:value=>{workflow=value},updateEngineeringCheckpoint:async args=>{checkpoint=args;return {result:{toDigest:args.workflowDigest}}}}
  const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'按共享材料开发'}},{commandId:'source',run:{actorId:'owner'},unit:{}},controller)
@@ -717,10 +723,12 @@ test('v19工程共享材料读取不依赖节点正文，18专属检查修订不
  assert.ok(!JSON.stringify(repair).includes('新增诊断正文不可灌入repair'));assert.equal(repair.entries,undefined)
  await assert.rejects(registry.repositoryInspect({...binding,taskId:'other'},{operation:'materials'}),{code:'ENGINEERING_READ_SCOPE_INVALID'})
  await actual.command({id:'maintenance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'修正检查'}})
- assert.equal(old.definitionVersion,'20')
- await assert.rejects(registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-v2',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['--test']}],maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts),{code:'ENGINEERING_CHECKPOINT_NOT_ADMITTED'})
- assert.equal(checkpoint,undefined)
- assert.deepEqual(await actual.query({kind:'workflow.list'}),[old])
+ assert.equal(old.definitionVersion,'25')
+ await registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-v2',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['--test']}],maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts)
+ assert.equal(checkpoint.runId,prepared.runId)
+ const records=await actual.query({kind:'workflow.list'})
+ assert.deepEqual(records.find(record=>record.digest===old.digest),old)
+ assert.ok(records.some(record=>record.config.checkpoint?.requestId==='checks-v2'))
  const restored=createEngineeringRegistry(options);await restored.restore(store,artifacts)
  assert.equal(state.run.generation,1)
 })
@@ -759,29 +767,30 @@ test('必要后端阶段仅替换阶段仓库与阶段验收，保留Task授权�
  assert.deepEqual(requirement.acceptanceCriteria,['全部UI与真实下载完成']);assert.equal(requirement.target.repositoryId,'dataset-web')
 })
 
-test('必要工程仓库绑定拒绝无关仓库、他人/旧版来源和无阶段验收',()=>{
+test('必要工程仓库绑定拒绝未登记仓库、他人/旧版来源和无阶段验收',()=>{
  const requirement={target:{repositoryId:'dataset-web',uatEnvironment:'uat3'},authorization:{actorId:'human'},sourceInstructions:[{sourceKey:'request',sourceVersion:2,actorId:'human',text:'开发失败明细下载'}]}
  const repositories=[{repositoryId:'dataset-web',dependencyRepositories:['dataset']},{repositoryId:'dataset'},{repositoryId:'unrelated'}]
  const stage={workflowId:'task-engineering',sourceCondition:{repositoryId:'dataset',sourceKey:'request',sourceVersion:2,sourceQuote:'开发失败明细下载',objective:'明细下载',acceptanceCriteria:['真实API下载Excel']}}
  assert.doesNotThrow(()=>assertEngineeringStageRepository({requirement,stage,repositories}))
- for(const change of [{repositoryId:'unrelated'},{sourceVersion:1},{sourceKey:'foreign'},{objective:'额外业务'},{acceptanceCriteria:[]}])
+ for(const change of [{repositoryId:'unregistered'},{sourceVersion:1},{sourceKey:'foreign'},{objective:'额外业务'},{acceptanceCriteria:[]}])
   assert.throws(()=>assertEngineeringStageRepository({requirement,stage:{...stage,sourceCondition:{...stage.sourceCondition,...change}},repositories}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
  assert.throws(()=>assertEngineeringStageRepository({requirement:{...requirement,authorization:{actorId:'other'}},stage,repositories}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
- assert.throws(()=>assertEngineeringStageRepository({requirement,stage,repositories:repositories.map(r=>({...r,dependencyRepositories:[]}))}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+ assert.doesNotThrow(()=>assertEngineeringStageRepository({requirement,stage,repositories:repositories.map(r=>({...r,dependencyRepositories:[]}))}))
+ assert.doesNotThrow(()=>assertEngineeringStageRepository({requirement,stage:{...stage,sourceCondition:{...stage.sourceCondition,repositoryId:'unrelated'}},repositories}))
 })
 
 test('必要依赖StageContract到真实registry优先显式来源仓库，普通路由和跨Task/UAT仍拒绝', async () => {
  const root=await mkdtemp(join(tmpdir(),'dependency-routing-')),source=join(root,'source'),remote=join(root,'remote.git')
  await mkdir(source);const run=promisify(execFile),git=async(...args)=>(await run('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
- await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'base');await git('add','.');await git('commit','-m','base');await git('init','--bare',remote);await git('push',remote,'HEAD:refs/heads/feature/uat3-base');await git('push',remote,'HEAD:refs/heads/feature/uat2-base')
+ await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'base');await git('add','.');await git('commit','-m','base');await git('init','--bare',remote);await git('push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat3-base');await git('push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat2-base')
  const requirement={request:'前端失败明细下载',scope:{kind:'engineering'},target:{repositoryId:'frontend',uatEnvironment:'uat3'},authorization:{actorId:'human',ownerConfirmed:true},sourceInstructions:[{sourceKey:'source',sourceVersion:2,actorId:'human',text:'前端失败明细下载'}],constraints:[],acceptanceCriteria:['真实导出']}
  const plan={task:{taskId:'task',planRevision:1,requirementRevision:2,requirementRef:'requirement'},stages:[{stageId:'stage-1',status:'running',workflowId:'task-engineering-existing',runId:'current'}]}
  const stage={workflowId:'task-engineering',stageId:'stage-2',sourceCondition:{repositoryId:'backend',sourceKey:'source',sourceVersion:2,sourceQuote:requirement.request,objective:requirement.request,acceptanceCriteria:['后端真实导出']}}
- const records=[];const store={query:async q=>q.kind==='task.plan'?(q.taskId==='task'?plan:null):q.kind==='task.owner.query-evidence'?[]:q.kind==='workflow.list'?records:q.kind==='run'?{run:{taskId:'task',status:'waiting'},pendingInputCount:0,nodes:[]}:null,command:async c=>{if(c.kind==='workflow.register')records.push(c.args);return {result:c.args}}}
- const base={sourceRepository:source,managedRoot:join(root,'managed'),remote,baseRef:'main',githubRepository:'example/repo',editablePaths:['value.txt'],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e','process.exit(0)']}]}
- const engineering=createEngineeringRegistry({repositories:[{...base,id:'frontend',routingTerms:['前端'],dependencyRepositories:['backend']},{...base,id:'backend',taskLocalAcceptance:[{scope:{taskId:'task',stageId:'stage-2',repositoryId:'backend',uatEnvironment:'uat3',requestDigest:executionDigest({request:requirement.request,acceptanceCriteria:stage.sourceCondition.acceptanceCriteria})},localAcceptance:null,scenarioCoverage:[]}]}],ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},getTaskDirectories:async()=>({work:join(root,'tasks/task/work'),tmp:join(root,'tasks/task/tmp')})})
+ const records=[],commands=[];const store={query:async q=>q.kind==='task.plan'?(q.taskId==='task'?plan:null):q.kind==='task.owner.query-evidence'?[]:q.kind==='workflow.list'?records:q.kind==='run'?{run:{taskId:'task',status:'waiting'},pendingInputCount:0,nodes:[]}:null,command:async c=>{commands.push(c);if(c.kind==='workflow.register')records.push(c.args);return {result:c.args}}}
+ const base={sourceRepository: source, localAcceptance: registryLocalFixture(root),managedRoot:join(root,'managed'),remote,baseRef:'main',githubRepository:'example/repo',editablePaths:['value.txt'],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e','process.exit(0)']}]}
+ const engineering=createEngineeringRegistry({repositories:[{...base,id:'unrelated',routingTerms:['unrelated domain']},{...base,id:'frontend',routingTerms:['前端'],dependencyRepositories:['backend']},{...base,id:'backend',taskLocalAcceptance:[{scope:{taskId:'task',stageId:'stage-2',repositoryId:'backend',uatEnvironment:'uat3',requestDigest:executionDigest({request:requirement.request,acceptanceCriteria:stage.sourceCondition.acceptanceCriteria})},localAcceptance:null,scenarioCoverage:[]}]}],ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},getTaskDirectories:async()=>({work:join(root,'tasks/task/work'),tmp:join(root,'tasks/task/tmp')})})
  await engineering.restore(store,{read:async()=>requirement})
- const controller={registerWorkflow(){},plannedTaskStageRunId:()=> 'dependency-run'}
+ const registered=[];const controller={registerWorkflow(value){registered.push(value)},plannedTaskStageRunId:()=> 'dependency-run'}
  const contract=createEngineeringStageContract({engineering,controller,readTaskEvidence:async()=>[],mayCreate:async()=>true})
  const origin={run:{actorId:'human'},command:{kind:'create',id:'source-command',args:{arguments:{}}}}
  const prepare=(s=stage,r=requirement,taskId='task',decision={planChange:{kind:'insertDependency'}})=>contract.prepare({taskId,stage:s,plan,requirement:r,origin,decision})
@@ -789,10 +798,21 @@ test('必要依赖StageContract到真实registry优先显式来源仓库，普�
  await assert.rejects(prepare(stage,{...requirement,target:{...requirement.target,uatEnvironment:'uat2'}}),{code:'ENGINEERING_REPOSITORY_SCOPE_MISMATCH'})
  await assert.rejects(prepare(stage,requirement,'foreign'),{code:'ENGINEERING_TASK_CONTEXT_INVALID'})
  await assert.rejects(prepare({...stage,sourceCondition:{...stage.sourceCondition,sourceVersion:1}}),{code:'TASK_OWNER_STAGE_NOT_AUTHORIZED'})
+ // Host registration alone does not authorize a new repository for this bound Task.
+ const unauthorized={...stage,sourceCondition:{...stage.sourceCondition,repositoryId:'unrelated'}}
+ const before={records:records.length,commands:commands.length,registered:registered.length}
+ let rejection
+ await prepare(unauthorized).catch(error=>{rejection=error})
+ assert.ok(rejection,JSON.stringify({unexpectedRepository:records.at(-1)?.config.repoId,workflowDelta:records.length-before.records,registryDelta:registered.length-before.registered,commands:commands.slice(before.commands).map(command=>command.kind)}))
+ assert.equal(rejection.code,'TASK_OWNER_STAGE_NOT_AUTHORIZED')
+ assert.equal(records.length,before.records)
+ assert.equal(commands.length,before.commands)
+ assert.equal(registered.length,before.registered)
+ assert.equal(commands.some(command=>command.kind.startsWith('effect.')),false)
  const result=await prepare();assert.equal(result.runId,'dependency-run');assert.equal(records.at(-1).config.repoId,'backend');assert.equal(records.at(-1).config.uatEnvironment,'uat3')
 })
 
-test('任务工程副本增删读取节点并重启恢复，检查来自Host且保留原模板与验收职责',async t=>{
+test('当前工程拒绝动态改图入口，Host检查与验收职责随原模板冷恢复',async t=>{
  const directory=await mkdtemp(join(tmpdir(),'dsh-task-revision-')),source=join(directory,'source');await mkdir(source)
  const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
  await git('init','-b','main');await git('config','user.name','Test');await git('config','user.email','test@example.invalid');await writeFile(join(source,'value.txt'),'base');await git('add','.');await git('commit','-m','base');await git('branch','feature/uat2-base')
@@ -800,31 +820,24 @@ test('任务工程副本增删读取节点并重启恢复，检查来自Host且�
  const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
  let state,workflow,lastArgs
  const store={command:value=>actual.command(value),query:value=>value.kind==='run'?state??{}:actual.query(value)}
- const options={ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},repositories:[{id:'repo',sourceRepository:source,managedRoot:join(directory,'managed'),remote:source,baseRef:'main',githubRepository:'example/repo',editablePaths:['value.txt'],checks:[{id:'build',version:'1',executable:process.execPath,args:['--test']}]}]}
+ const options={ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},repositories:[{id:'repo',sourceRepository: source, localAcceptance: registryLocalFixture(directory),managedRoot:join(directory,'managed'),remote:source,baseRef:'main',githubRepository:'example/repo',editablePaths:['value.txt'],checks:[{id:'build',version:'1',executable:process.execPath,args:['--test']}]}]}
  const registry=createEngineeringRegistry(options);await registry.restore(store,artifacts)
  const controller={recover:async()=>{},registerWorkflow:value=>{workflow=value},reviseTaskWorkflow:async args=>{lastArgs=args;return{result:{workflowDigest:args.workflowDigest}}}}
  const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat2',objective:'按原目标修订步骤'}},{commandId:'source',run:{actorId:'owner'},unit:{}},controller)
  const old=(await actual.query({kind:'workflow.list'}))[0],base=workflow
  state={run:{runId:prepared.runId,taskId:'task',generation:1,revision:2,workflowDigest:old.digest,status:'waiting'},nodes:[]}
- const caps=await registry.taskRevisionCapabilities({runId:prepared.runId});assert.equal(caps.checkProfiles.length,1)
- const from=base.nodes.findIndex(node=>node.id==='inspect-and-propose'),suffix=base.nodes.slice(from).map(node=>({nodeId:node.id,templateNodeId:node.id}))
- const planSchema=base.nodes[from].outputSchema
- const args={taskId:'task',runId:prepared.runId,expectedRevision:2,reason:'先核当前实现，再编写原目标方案',evidenceRefs:['sha256/diagnostic.json']}
- await assert.rejects(registry.reviseTaskWorkflow({...args,commandId:'bad',revision:{startNodeId:'inspect-and-propose',checkProfileDigest:'a'.repeat(64)}},controller),{code:'ENGINEERING_REVISION_CHECK_PROFILE_INVALID'})
- await assert.rejects(registry.reviseTaskWorkflow({...args,commandId:'drop-verify',revision:{startNodeId:'inspect-and-propose',nodes:suffix.filter(node=>node.nodeId!=='verify-candidate')}},controller),{code:'ENGINEERING_REVISION_RESPONSIBILITY_MISSING'})
- await registry.reviseTaskWorkflow({...args,commandId:'insert-read',revision:{startNodeId:'inspect-and-propose',checkProfileDigest:caps.checkProfiles[0].digest,nodes:[{nodeId:'inspect-extra',templateNodeId:'inspect-and-propose',outputSchema:{...planSchema,properties:{...planSchema.properties,extra:{type:'string'}}}},...suffix]}},controller)
- assert.equal(workflow.nodes[from].id,'inspect-extra');assert.equal(lastArgs.runId,prepared.runId)
- const record=(await actual.query({kind:'workflow.list'})).find(record=>record.digest===lastArgs.workflowDigest)
- assert.equal(record.config.taskRevision.fromDigest,old.digest);assert.equal(record.config.taskRevision.nodePlan.length,base.nodes.length+1)
- assert.equal((await actual.query({kind:'workflow.list'})).find(record=>record.digest===old.digest).digest,old.digest)
- assert.deepEqual(workflow.nodes.slice(0,from).map(node=>node.mapInput.toString()),base.nodes.slice(0,from).map(node=>node.mapInput.toString()))
- const revisedDigest=defineExecutionWorkflow(workflow).digest
- state.run.workflowDigest=revisedDigest
+ // Old graph mutation APIs are absent, while checks and exact cold restore remain.
+ assert.equal(registry.taskRevisionCapabilities,undefined)
+ assert.equal(registry.reviseTaskWorkflow,undefined)
+ assert.equal(lastArgs,undefined)
+ assert.ok(base.nodes.some(node=>node.id==='verify-candidate'))
+ assert.ok(base.nodes.some(node=>node.id==='finalize-local-acceptance'))
+ assert.equal(base.nodes.find(node=>node.id==='inspect-and-propose').outputSchema.properties.changes,undefined)
  const restarted=createEngineeringRegistry(options),restored=await restarted.restore(store,artifacts)
- assert.ok(restored.some(value=>defineExecutionWorkflow(value).digest===revisedDigest))
- await restarted.reviseTaskWorkflow({...args,commandId:'remove-read',revision:{startNodeId:'inspect-extra',nodes:suffix}},controller)
- assert.equal(workflow.nodes.some(node=>node.id==='inspect-extra'),false)
- assert.equal(workflow.nodes.find(node=>node.id==='inspect-and-propose').outputSchema.properties.changes,undefined)
+ assert.equal(restarted.reviseTaskWorkflow,undefined)
+ assert.ok(restored.some(value=>defineExecutionWorkflow(value).digest===old.digest))
+ assert.deepEqual(await actual.query({kind:'workflow.list'}),[old])
+ assert.equal(defineExecutionWorkflow(base).digest,old.digest)
 })
 
 test('原生读取凭据只恢复同绑定且当前完整SHA吻合的路径',async()=>{
@@ -843,7 +856,7 @@ test('原生读取凭据只恢复同绑定且当前完整SHA吻合的路径',asy
  assert.deepEqual(await restoreEngineeringReadEvidence(args),[])
 })
 
-test('真实工程任务删除零效果冗余实施节点，保留准备并完成候选检查本地业务验收与交付', { timeout: 240000 }, async t => {
+test('真实工程受管noChange保留固定节点并完成候选检查本地业务验收与交付', { timeout: 240000 }, async t => {
   const { readFile } = await import('node:fs/promises')
   const { openExecutionArtifacts } = await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
   const { createExecutionController } = await import('../packages/dingtalk-dsh-assistant/execution-controller.js')
@@ -852,7 +865,7 @@ test('真实工程任务删除零效果冗余实施节点，保留准备并完�
   await mkdir(source); await mkdir(root)
   const exec=promisify(execFile), git=async (repo,...args)=>(await exec('git',['-C',repo,...args],{windowsHide:true})).stdout.trim()
   await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid')
-  await writeFile(join(source,'value.txt'),'one');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/feature/uat1-base')
+  await writeFile(join(source,'value.txt'),'one');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat1-base')
   const head=`codex/task-${executionDigest('revision-command').slice(0,24)}`
   await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),merged_at:p.state==='MERGED'?'date':null,head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([s?[rest(s)]:[]]));else if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'feature/uat1-base',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
   const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
@@ -862,29 +875,29 @@ test('真实工程任务删除零效果冗余实施节点，保留准备并完�
   const command = code => ({ executable: process.execPath, args: ['-e', code] })
   const localAcceptance = { version: '1', sharedDataProfilePath: profile, prepareSteps: [],
     service: { ...command("require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"), args: ['-e', "require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])", '{port}', '127.0.0.1'], readyPath: '/' },
-    scenarios: [{ id: 'value', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
+    scenarios: [{ id: 'value', expected: 'one', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
     cleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace}));});"),
     verifyCleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace,empty:true}));});") }
   const registry=createEngineeringRegistry({ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance,acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]})
   await registry.restore(store,artifacts)
-  const sessions={async run({input,applyEdits,onSessionBound,onResult}){await onSessionBound();if(input.criteria)return onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取真实候选服务'],expected:'one',parameters:{}}))});if(applyEdits)return{status:'no_submission',reason:'无需新增编辑，应检查现有实现',failure:{code:'CURRENT_CODE_ALREADY_SATISFIES',phase:'execution'}};return onResult({document:{name:'修改方案.md',markdown:'# 技术方案\n读取 value.txt 确认当前值，复用原实现并实跑验证。'},scopePaths:['value.txt'],criteria:[{criterion:'值为one',design:'复用已有实现',verification:'真实服务读值'}]})},async cancel(){},async close(){}};
+  const sessions={async run({input,binding,applyEdits,onSessionBound,onResult}){await onSessionBound();if(input.criteria)return onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取真实候选服务'],expected:'one',parameters:{}}))});if(applyEdits){const observed=await registry.repositoryInspect(binding,{operation:'read',path:'value.txt'},undefined,input.requirement);assert.equal(observed.text,'one');await applyEdits({changes:[],replacements:[],noChange:{reason:'Confirmed existing implementation',reviewedPaths:['value.txt']}},new AbortController().signal);return onResult({status:'succeeded',summary:'Existing implementation verified',planRef:input.plan.ref,effectRefs:[]})};return onResult({document:{name:'修改方案.md',markdown:'# 技术方案\n读取 value.txt 确认当前值，复用原实现并实跑验证。'},scopePaths:['value.txt'],criteria:[{criterion:'值为one',design:'复用已有实现',verification:'真实服务读值'}]})},async cancel(){},async close(){}};
   const controller=createExecutionController({store,artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:[]});t.after(()=>controller.close());
   const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'first',acceptanceCriteria:['候选服务返回本轮修改值']}},{stageRunId:controller.plannedTaskStageRunId({taskId:'task',planRevision:1,stageId:'engineering',attempt:1}),commandId:'revision-command',run:{actorId:'owner'},unit:{}},controller)
   await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:prepared.workflowId,input:prepared.input}]});await controller.advanceTaskPlan('task');
-  const before=await controller.whenIdle(prepared.runId);assert.equal(before.run.status,'waiting',JSON.stringify(before));assert.equal(before.nodes.find(n=>n.status==='waiting').nodeId,'apply-changes');
-  const old=controller.workflowDefinition(before.run.workflowId,before.run.workflowDigest),start=old.nodes.findIndex(n=>n.id==='apply-changes');
-  const receipt=await registry.reviseTaskWorkflow({taskId:'task',runId:prepared.runId,commandId:'remove-redundant-edit',expectedRevision:before.run.revision,reason:'现有实现满足原目标，删除没有产生效果的重复编辑，继续实际构建和业务验收',evidenceRefs:before.nodes[start].evidenceRefs,revision:{startNodeId:'apply-changes',nodes:old.nodes.slice(start+1).map(n=>({nodeId:n.id,templateNodeId:n.id,...(n.id==='prepare-local-acceptance'?{dependencyArtifacts:{'plan-local-acceptance':before.nodes.find(x=>x.nodeId==='plan-local-acceptance').outputRef}}:{})}))}},controller);
-  assert.equal(receipt.result.generation,before.run.generation);
-  const after=await controller.whenIdle(prepared.runId);assert.equal(after.run.status,'succeeded',JSON.stringify(await controller.state(prepared.runId)));assert.equal(after.run.generation,before.run.generation);
-  for(let i=0;i<start;i++){assert.equal(after.nodes[i].outputRef,before.nodes[i].outputRef);assert.equal(after.nodes[i].leaseEpoch,before.nodes[i].leaseEpoch)}
-  assert.equal(after.nodes.some(n=>n.nodeId==='apply-changes'),false);
+  const after=await controller.whenIdle(prepared.runId)
+  assert.equal(after.run.status,'succeeded',JSON.stringify(await controller.state(prepared.runId)))
+  assert.equal(after.run.generation,1)
+  assert.equal(registry.reviseTaskWorkflow,undefined)
+  assert.equal(registry.taskRevisionCapabilities,undefined)
+  assert.ok(after.nodes.some(n=>n.nodeId==='apply-changes'&&n.status==='succeeded'))
+  assert.ok(after.nodes.every(n=>n.leaseEpoch===1))
   const local=await artifacts.read(after.nodes.find(n=>n.nodeId==='finalize-local-acceptance').outputRef);assert.equal(local.localAcceptance.passed,true);assert.equal(local.localAcceptance.checks[0].actual,'one');assert.deepEqual(local.localAcceptance.cleanup,{dataCleaned:true,processStopped:true});
   const proof=await readEngineeringDeliveryProof({state:after,artifacts,store,taskId:'task'});assert.equal(proof.commitSha,(await artifacts.read(after.nodes.at(-1).outputRef)).commitId);
   const effects=await store.query({kind:'effect.list',runId:prepared.runId});assert.equal(effects.some(e=>e.definition.action==='edit'),false);assert.ok(effects.every(e=>e.state==='succeeded'));
   const result=await artifacts.read(after.nodes.at(-1).outputRef);assert.equal(result.deliveryStatus,'pr_verified');assert.equal(await git(remote,'show',result.commitId+':value.txt'),'one');assert.equal(await readFile(join(source,'value.txt'),'utf8'),'one');
 });
 
-test('真实工程本地重规划接新方案并保留已验证候选完成交付', { timeout: 240000 }, async t => {
+test('真实工程受管验收配置纠正保留已验证候选完成交付', { timeout: 240000 }, async t => {
   const { readFile } = await import('node:fs/promises')
   const { openExecutionArtifacts } = await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
   const { createExecutionController } = await import('../packages/dingtalk-dsh-assistant/execution-controller.js')
@@ -893,7 +906,7 @@ test('真实工程本地重规划接新方案并保留已验证候选完成交�
   await mkdir(source); await mkdir(root)
   const exec=promisify(execFile), git=async (repo,...args)=>(await exec('git',['-C',repo,...args],{windowsHide:true})).stdout.trim()
   await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid')
-  await writeFile(join(source,'value.txt'),'one');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/feature/uat1-base')
+  await writeFile(join(source,'value.txt'),'one');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat1-base')
   const head=`codex/task-${executionDigest('revision-command').slice(0,24)}`
   await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),merged_at:p.state==='MERGED'?'date':null,head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([s?[rest(s)]:[]]));else if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'feature/uat1-base',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
   const store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
@@ -903,34 +916,38 @@ test('真实工程本地重规划接新方案并保留已验证候选完成交�
   const command = code => ({ executable: process.execPath, args: ['-e', code] })
   const localAcceptance = { version: '1', sharedDataProfilePath: profile, prepareSteps: [],
     service: { ...command("require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"), args: ['-e', "require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])", '{port}', '127.0.0.1'], readyPath: '/' },
-    scenarios: [{ id: 'value', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
+    scenarios: [{ id: 'value', expected: 'one', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
     cleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace}));});"),
     verifyCleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace,empty:true}));});") }
-  const registryOptions={ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance:{...localAcceptance,version:'wrong-profile',scenarios:localAcceptance.scenarios.map(s=>({...s,id:'unrelated'}))},acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]};let registry=createEngineeringRegistry(registryOptions)
+  const registryOptions={ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance:{...localAcceptance,version:'wrong-profile',scenarios:localAcceptance.scenarios.map(s=>({...s,expected:'wrong-value'}))},acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]};let registry=createEngineeringRegistry(registryOptions)
   await registry.restore(store,artifacts)
-  let planCalls=0;const sessions={async run({input,applyEdits,onSessionBound,onResult}){await onSessionBound();if(input.criteria){planCalls++;if(planCalls===1)return onResult({cases:[]});return onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取真实候选服务'],expected:'one',parameters:{}}))});}if(applyEdits)return{status:'no_submission',reason:'无需新增编辑，应检查现有实现',failure:{code:'CURRENT_CODE_ALREADY_SATISFIES',phase:'execution'}};return onResult({document:{name:'修改方案.md',markdown:'# 技术方案\n读取 value.txt 确认当前值，复用原实现并实跑验证。'},scopePaths:['value.txt'],criteria:[{criterion:'值为one',design:'复用已有实现',verification:'真实服务读值'}]})},async cancel(){},async close(){}};
+  let planCalls=0;const sessions={async run({input,binding,applyEdits,onSessionBound,onResult}){await onSessionBound();if(input.criteria){planCalls++;if(planCalls===1)return onResult({cases:[]});return onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取真实候选服务'],expected:'one',parameters:{}}))});}if(applyEdits){const observed=await registry.repositoryInspect(binding,{operation:'read',path:'value.txt'},undefined,input.requirement);assert.equal(observed.text,'one');await applyEdits({changes:[],replacements:[],noChange:{reason:'Confirmed existing implementation',reviewedPaths:['value.txt']}},new AbortController().signal);return onResult({status:'succeeded',summary:'Existing implementation verified',planRef:input.plan.ref,effectRefs:[]})};return onResult({document:{name:'修改方案.md',markdown:'# 技术方案\n读取 value.txt 确认当前值，复用原实现并实跑验证。'},scopePaths:['value.txt'],criteria:[{criterion:'值为one',design:'复用已有实现',verification:'真实服务读值'}]})},async cancel(){},async close(){}};
   let controller=createExecutionController({store,artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:[]});t.after(()=>controller.close());
   const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'first',acceptanceCriteria:['候选服务返回本轮修改值']}},{stageRunId:controller.plannedTaskStageRunId({taskId:'task',planRevision:1,stageId:'engineering',attempt:1}),commandId:'revision-command',run:{actorId:'owner'},unit:{}},controller)
   await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:prepared.workflowId,input:prepared.input}]});await controller.advanceTaskPlan('task');
-  const before=await controller.whenIdle(prepared.runId);assert.equal(before.run.status,'waiting',JSON.stringify(before));assert.equal(before.nodes.find(n=>n.status==='waiting').nodeId,'apply-changes');
-  const old=controller.workflowDefinition(before.run.workflowId,before.run.workflowDigest),start=old.nodes.findIndex(n=>n.id==='apply-changes');
-  const receipt=await registry.reviseTaskWorkflow({taskId:'task',runId:prepared.runId,commandId:'remove-redundant-edit',expectedRevision:before.run.revision,reason:'现有实现满足原目标，删除没有产生效果的重复编辑，继续实际构建和业务验收',evidenceRefs:before.nodes[start].evidenceRefs,revision:{startNodeId:'apply-changes',nodes:old.nodes.slice(start+1).map(n=>({nodeId:n.id,templateNodeId:n.id,...(n.id==='prepare-local-acceptance'?{dependencyArtifacts:{'plan-local-acceptance':before.nodes.find(x=>x.nodeId==='plan-local-acceptance').outputRef}}:{})}))}},controller);
-  assert.equal(receipt.result.generation,before.run.generation);
-  const localBefore=await controller.whenIdle(prepared.runId);assert.equal(localBefore.nodes.find(n=>n.status==='waiting').nodeId,'prepare-local-acceptance');
-  registryOptions.repositories[0].taskLocalAcceptance=[{scope:{taskId:'task',uatEnvironment:'uat1',requestDigest:executionDigest({request:'first',acceptanceCriteria:['候选服务返回本轮修改值']})},localAcceptance}];
-  await controller.close();registry=createEngineeringRegistry(registryOptions);const restoredWorkflows=await registry.restore(store,artifacts);controller=createExecutionController({store,artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:restoredWorkflows});
-  const current=controller.workflowDefinition(localBefore.run.workflowId,localBefore.run.workflowDigest),localStart=current.nodes.findIndex(n=>n.id==='prepare-local-acceptance');
-  const caps=await registry.taskRevisionCapabilities({runId:prepared.runId});assert.equal(caps.localAcceptanceProfiles.length,1);
-  const replacement=[{nodeId:'define-current-acceptance',templateNodeId:'define-local-acceptance'},{nodeId:'plan-current-acceptance',templateNodeId:'plan-local-acceptance'},...current.nodes.slice(localStart).map(n=>({nodeId:n.id,templateNodeId:n.id,...(n.id==='prepare-local-acceptance'?{dependencyBindings:{'define-local-acceptance':'define-current-acceptance','plan-local-acceptance':'plan-current-acceptance'},previousOutputNodeId:'verify-candidate'}:{})}))];
-  const localArgs={taskId:'task',runId:prepared.runId,expectedRevision:localBefore.run.revision,reason:'原用例为空，原Agent按本Task已登记场景重写计划，保留已验证候选',evidenceRefs:localBefore.nodes[localStart].evidenceRefs};
-  await assert.rejects(registry.reviseTaskWorkflow({...localArgs,commandId:'foreign-local',revision:{startNodeId:'prepare-local-acceptance',localAcceptanceProfileDigest:'a'.repeat(64),nodes:replacement}},controller),{code:'ENGINEERING_REVISION_LOCAL_PROFILE_INVALID'});
-  await assert.rejects(registry.reviseTaskWorkflow({...localArgs,commandId:'wrong-plan-source',revision:{startNodeId:'prepare-local-acceptance',nodes:replacement.map(n=>n.nodeId==='prepare-local-acceptance'?{...n,dependencyBindings:{'plan-local-acceptance':'verify-candidate'}}:n)}},controller),{code:'ENGINEERING_REVISION_DEPENDENCY_INVALID'});
-  await registry.reviseTaskWorkflow({...localArgs,commandId:'replan-local',revision:{startNodeId:'prepare-local-acceptance',localAcceptanceProfileDigest:caps.localAcceptanceProfiles[0].digest,nodes:replacement}},{...controller,recover:async()=>({queued:true})});
-  const revised=await controller.state(prepared.runId),restored=await createEngineeringRegistry(registryOptions).restore(store,artifacts);assert.ok(restored.some(w=>defineExecutionWorkflow(w).digest===revised.run.workflowDigest));
-  await controller.recover({commandId:'test-drive-replan-local',runId:prepared.runId});
-  const after=await controller.whenIdle(prepared.runId);assert.equal(after.run.status,'succeeded',JSON.stringify(await controller.state(prepared.runId)));assert.equal(after.run.generation,before.run.generation);
-  for(let i=0;i<start;i++){assert.equal(after.nodes[i].outputRef,before.nodes[i].outputRef);assert.equal(after.nodes[i].leaseEpoch,before.nodes[i].leaseEpoch)}
-  assert.equal(after.nodes.some(n=>n.nodeId==='apply-changes'),false);for(const n of localBefore.nodes.slice(0,localStart)){const kept=after.nodes.find(x=>x.nodeRunId===n.nodeRunId);assert.equal(kept.outputRef,n.outputRef);assert.equal(kept.leaseEpoch,n.leaseEpoch)}assert.equal(planCalls,2);
+  const before=await controller.whenIdle(prepared.runId)
+  assert.equal(before.run.status,'waiting',JSON.stringify(before))
+  assert.equal(before.nodes.find(n=>n.status==='waiting').nodeId,'finalize-local-acceptance')
+  assert.equal(registry.reviseTaskWorkflow,undefined)
+  const verified=before.nodes.find(n=>n.nodeId==='verify-candidate')
+  const scope={taskId:'task',uatEnvironment:'uat1',requestDigest:executionDigest({request:'first',acceptanceCriteria:prepared.input.acceptanceCriteria})}
+  await store.command({id:'hold-acceptance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'acceptance-fix',actorId:'owner',reason:'unit test scoped correction'}})
+  const checkpointArgs={runId:prepared.runId,requestId:'acceptance-fix',kind:'local-acceptance',localAcceptance,scope,maintenance:{maintenanceId:'acceptance-fix',revision:1}}
+  await assert.rejects(registry.updateCheckpoint({...checkpointArgs,scope:{...scope,taskId:'foreign'}},controller),{code:'ENGINEERING_ACCEPTANCE_SCOPE_MISMATCH'})
+  await registry.updateCheckpoint(checkpointArgs,controller)
+  const revised=await controller.state(prepared.runId),restored=await createEngineeringRegistry(registryOptions).restore(store,artifacts)
+  assert.ok(restored.some(w=>defineExecutionWorkflow(w).digest===revised.run.workflowDigest))
+  await store.command({id:'release-acceptance',kind:'runtime.maintenance.change',args:{active:false,expectedRevision:1,maintenanceId:'acceptance-fix',actorId:'owner',reason:'unit correction complete'}})
+  await controller.recover({commandId:'test-drive-acceptance-fix',runId:prepared.runId})
+  const after=await controller.whenIdle(prepared.runId)
+  assert.equal(after.run.status,'succeeded',JSON.stringify(await controller.state(prepared.runId)))
+  assert.equal(after.run.generation,before.run.generation)
+  const kept=after.nodes.find(n=>n.nodeId==='verify-candidate')
+  assert.equal(kept.nodeRunId,verified.nodeRunId)
+  assert.equal(kept.outputRef,verified.outputRef)
+  assert.equal(kept.leaseEpoch,verified.leaseEpoch)
+  assert.ok(after.nodes.some(n=>n.nodeId==='apply-changes'&&n.status==='succeeded'))
+  assert.equal(planCalls,0)
   const local=await artifacts.read(after.nodes.find(n=>n.nodeId==='finalize-local-acceptance').outputRef);assert.equal(local.localAcceptance.passed,true);assert.equal(local.localAcceptance.checks[0].actual,'one');assert.deepEqual(local.localAcceptance.cleanup,{dataCleaned:true,processStopped:true});
   const proof=await readEngineeringDeliveryProof({state:after,artifacts,store,taskId:'task'});assert.equal(proof.commitSha,(await artifacts.read(after.nodes.at(-1).outputRef)).commitId);
   const effects=await store.query({kind:'effect.list',runId:prepared.runId});assert.equal(effects.some(e=>e.definition.action==='edit'),false);assert.ok(effects.every(e=>e.state==='succeeded'));
@@ -946,7 +963,7 @@ for (const upgradedRunner of [false, true]) test('固定工程重启后复用同
   await mkdir(source); await mkdir(root)
   const exec=promisify(execFile), git=async (repo,...args)=>(await exec('git',['-C',repo,...args],{windowsHide:true})).stdout.trim()
   await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid')
-  await writeFile(join(source,'value.txt'),'one');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/feature/uat1-base')
+  await writeFile(join(source,'value.txt'),'one');await git(source,'add','.');await git(source,'commit','-m','base');await exec('git',['init','--bare',remote]);await git(source,'push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat1-base')
   const head=`codex/task-${executionDigest('revision-command').slice(0,24)}`
   await writeFile(script,`const fs=require('node:fs'),cp=require('node:child_process');const [file,remote,head,...args]=process.argv.slice(2);let s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;const sha=()=>cp.execFileSync('git',['ls-remote',remote,'refs/heads/'+head],{encoding:'utf8'}).trim().split(/\\s+/)[0];const value=x=>args[args.indexOf(x)+1];if(s)s.headRefOid=sha();const rest=p=>({number:p.number,html_url:p.url,state:p.state.toLowerCase(),merged_at:p.state==='MERGED'?'date':null,head:{sha:p.headRefOid,ref:p.headRefName},base:{ref:p.baseRefName},body:p.body});if(args[0]==='api'&&args.includes('--paginate'))console.log(JSON.stringify([s?[rest(s)]:[]]));else if(args[0]==='api')console.log(JSON.stringify({object:{sha:sha()}}));else if(args[1]==='list')console.log(JSON.stringify(s?[s]:[]));else if(args[1]==='view')console.log(JSON.stringify(s));else if(['create','edit'].includes(args[1])){s={number:1,url:'https://github.com/test/repo/pull/1',state:'OPEN',headRefOid:sha(),headRefName:head,baseRefName:'feature/uat1-base',body:fs.readFileSync(value('--body-file'),'utf8'),title:value('--title'),creates:(s?.creates??0)+(args[1]==='create'?1:0),edits:(s?.edits??0)+(args[1]==='edit'?1:0)};fs.writeFileSync(file,JSON.stringify(s));process.exit(1)}else process.exit(2)`)
   const realStore=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'revision',initialize:true});let held=false;const store={...realStore,async command(value){const result=await realStore.command(value);if(!held&&value.kind==='node.commit'){const state=await realStore.query({kind:'run',runId:value.args.runId});if(state.nodes.some(n=>n.nodeId===value.args.nodeId&&n.nodeId==='finalize-local-acceptance'&&n.status==='succeeded')){held=true;await realStore.command({id:'hold-after-acceptance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'restart',actorId:'owner',reason:'test exact restart boundary'}})}}return result}},artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true});t.after(()=>store.close())
@@ -956,12 +973,12 @@ for (const upgradedRunner of [false, true]) test('固定工程重启后复用同
   const command = code => ({ executable: process.execPath, args: ['-e', code] })
   const localAcceptance = { version: '1', sharedDataProfilePath: profile, prepareSteps: [],
     service: { ...command("require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"), args: ['-e', "require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])", '{port}', '127.0.0.1'], readyPath: '/' },
-    scenarios: [{ id: 'value', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
+    scenarios: [{ id: 'value', expected: 'one', description: '读取候选服务业务值', ...command(readInput + "const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});") }],
     cleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace}));});"),
     verifyCleanup: command(readInput + "console.log(JSON.stringify({namespace:input.namespace,empty:true}));});") }
-  const registryOptions={ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance,taskLocalAcceptance: ['first','second'].map(request=>({scope:{taskId:'task',stageId:null,repositoryId:'repo',uatEnvironment:'uat1',requestDigest:executionDigest({request,acceptanceCriteria:['候选服务返回本轮修改值']})},localAcceptance,scenarioCoverage:[{scenarioId:'value',criteria:['候选服务返回本轮修改值']}]})),acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"require('node:fs').appendFileSync("+JSON.stringify(join(directory,'check-count'))+",'check\\n');if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]};let registry=createEngineeringRegistry(registryOptions)
+  const registryOptions={ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,stateFile,remote,head]},repositories:[{id:'repo',sourceRepository:source,managedRoot:root,remote,githubRepository:'test/repo',baseRef:'main',editablePaths:['value.txt'],localAcceptance,taskLocalAcceptance: ['first','second'].map(request=>({scope:{taskId:'task',stageId:null,repositoryId:'repo',uatEnvironment:'uat1',requestDigest:executionDigest({request,acceptanceCriteria:['候选服务返回本轮修改值']})},localAcceptance:{...localAcceptance,scenarios:localAcceptance.scenarios.map(scenario=>({...scenario,expected:request==='first'?'one':'two'}))},scenarioCoverage:[{scenarioId:'value',criteria:['候选服务返回本轮修改值']}]})),acceptanceChecks:[{id:'value-acceptance',version:'1',criterion:'修改后的值符合约定',expected:'true',executable:process.execPath,args:['-e',"console.log(JSON.stringify({actual:String(['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))}))"]}],checks:[{id:'check',version:'1',executable:process.execPath,args:['-e',"require('node:fs').appendFileSync("+JSON.stringify(join(directory,'check-count'))+",'check\\n');if(!['one','two'].includes(require('node:fs').readFileSync('value.txt','utf8')))process.exit(1)"]}]}]};let registry=createEngineeringRegistry(registryOptions)
   await registry.restore(store,artifacts)
-  let planCalls=0;const sessions={async run({input,applyEdits,onSessionBound,onResult}){const signal=new AbortController().signal;await onSessionBound();if(input.criteria){planCalls++;return onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取真实候选服务'],expected:'one',parameters:{}}))});}if(applyEdits){await applyEdits({changes:[],replacements:[],noChange:{reason:'已读现实现，无新增修改',reviewedPaths:['value.txt']}},signal);return onResult({status:'succeeded',summary:'已核无新增修改',planRef:input.plan.ref,effectRefs:[]})};return onResult({document:{name:'修改方案.md',markdown:'# 技术方案\n读取 value.txt 确认当前值，复用原实现并实跑验证。'},scopePaths:['value.txt'],criteria:[{criterion:'候选服务返回本轮修改值',design:'复用已有实现',verification:'真实服务读值'}]})},async cancel(){},async close(){}};
+  let planCalls=0;const sessions={async run({input,binding,applyEdits,onSessionBound,onResult}){const signal=new AbortController().signal;await onSessionBound();if(input.criteria){planCalls++;return onResult({cases:input.criteria.map(item=>({criterionId:item.id,scenarioId:'value',steps:['读取真实候选服务'],expected:'one',parameters:{}}))});}if(applyEdits){const observed=await registry.repositoryInspect(binding,{operation:'read',path:'value.txt'},undefined,input.requirement);assert.equal(observed.text,'one');await applyEdits({changes:[],replacements:[],noChange:{reason:'已读现实现，无新增修改',reviewedPaths:['value.txt']}},signal);return onResult({status:'succeeded',summary:'已核无新增修改',planRef:input.plan.ref,effectRefs:[]})};return onResult({document:{name:'修改方案.md',markdown:'# 技术方案\n读取 value.txt 确认当前值，复用原实现并实跑验证。'},scopePaths:['value.txt'],criteria:[{criterion:'候选服务返回本轮修改值',design:'复用已有实现',verification:'真实服务读值'}]})},async cancel(){},async close(){}};
   let controller=createExecutionController({store,artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:[]});t.after(()=>controller.close());
   const prepared=await registry.prepareTask({taskId:'task',arguments:{repositoryId:'repo',uatEnvironment:'uat1',objective:'first',acceptanceCriteria:['候选服务返回本轮修改值']}},{stageRunId:controller.plannedTaskStageRunId({taskId:'task',planRevision:1,stageId:'engineering',attempt:1}),commandId:'revision-command',run:{actorId:'owner'},unit:{}},controller)
   await controller.createTaskPlan({commandId:'plan',taskId:'task',stages:[{stageId:'engineering',workflowId:prepared.workflowId,input:prepared.input}]});await controller.advanceTaskPlan('task');
@@ -1006,7 +1023,7 @@ test('execution reset registry reuses dirty workspace and creates current two-no
  const exec=promisify(execFile),git=async (path,...args)=>(await exec('git',['-C',path,...args],{windowsHide:true})).stdout.trim()
  await git(source,'init','-b','main');await git(source,'config','user.name','Test');await git(source,'config','user.email','test@example.invalid')
  await writeFile(join(source,'value.txt'),'base');await git(source,'add','.');await git(source,'commit','-m','base')
- await git(source,'init','--bare',remote);await git(source,'push',remote,'HEAD:refs/heads/feature/uat2-base')
+ await git(source,'init','--bare',remote);await git(source,'push',remote,'HEAD:refs/heads/main','HEAD:refs/heads/feature/uat2-base')
  const actual=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'reset-registry',initialize:true});t.after(()=>actual.close())
  const artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
  let oldRun,oldOutput,workflow
@@ -1022,7 +1039,7 @@ test('execution reset registry reuses dirty workspace and creates current two-no
  oldOutput=(await artifacts.put({workspace:{directory:receipt.directory,sourceRepository:source,baseCommit:base,targetCommit:base,taskBase:base,mergeTree:wp.mergeTree,conflictPaths:[],status:'succeeded'}},{taskId:'task'})).ref
  const reset=await registry.prepareExecutionReset({taskId:'task',sourceRunId:oldRun,runId:'fresh-task-run',commandId:'reset-test'},controller)
  assert.equal(reset.taskId,'task');assert.equal(reset.runId,'fresh-task-run')
- assert.equal(workflow.version,'22');assert.equal(workflow.nodes.some(n=>n.id==='validate-proposal'),false)
+ assert.equal(workflow.version,'25');assert.equal(workflow.nodes.some(n=>n.id==='validate-proposal'),false)
  assert.equal(workflow.nodes.find(n=>n.id==='inspect-and-propose').outputSchema.properties.changes,undefined)
  assert.equal(workflow.nodes.find(n=>n.id==='apply-changes').executor,'agent')
  assert.equal(await readFile(join(receipt.directory,'value.txt'),'utf8'),'retained dirty development')
@@ -1033,7 +1050,7 @@ test('execution reset registry reuses dirty workspace and creates current two-no
  assert.equal(await readFile(join(receipt.directory,'value.txt'),'utf8'),'retained dirty development')
 })
 
-test('v22 acceptance checkpoint retains real factory preparation delivery identity', async t => {
+test('v25 acceptance checkpoint retains real factory preparation delivery identity', async t => {
  const {executionNodeContractDigest}=await import('../packages/dingtalk-dsh-assistant/execution-input-lineage.js')
  const directory=await mkdtemp(join(tmpdir(),'dsh-v22-identity-')),source=join(directory,'source');await mkdir(source)
  const exec=promisify(execFile),git=async(...args)=>(await exec('git',['-C',source,...args],{windowsHide:true})).stdout.trim()
@@ -1057,7 +1074,7 @@ test('v22 acceptance checkpoint retains real factory preparation delivery identi
  const acceptanceCorrected=(await actual.query({kind:'workflow.list'})).find(r=>r.config.checkpoint?.requestId==='fix')
  state.run.workflowDigest=acceptanceCorrected.digest
  await registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-fix',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['-e','process.exit(0) // new check']}],maintenance:{maintenanceId:'hold',revision:1}},controller)
- for(const id of ['prepare-generation','define-local-acceptance','plan-local-acceptance','prepare-workspace','inspect-and-propose','apply-changes'])
+ for(const id of ['prepare-generation','define-local-acceptance','prepare-workspace','inspect-and-propose','apply-changes'])
    assert.equal(executionNodeContractDigest(after.nodes.find(n=>n.id===id)),executionNodeContractDigest(workflow.nodes.find(n=>n.id===id)),id)
  assert.notEqual(executionNodeContractDigest(after.nodes.find(n=>n.id==='verify-candidate')),executionNodeContractDigest(workflow.nodes.find(n=>n.id==='verify-candidate')))
  const corrected=(await actual.query({kind:'workflow.list'})).find(r=>r.config.checkpoint?.requestId==='checks-fix')

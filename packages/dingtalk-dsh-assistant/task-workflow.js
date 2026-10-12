@@ -1053,7 +1053,7 @@ export function createEngineeringInlineAcceptanceWorkflow(options){
  const generation=workflow.nodes.find(n=>n.id==='prepare-generation'),generationExecute=generation.execute
  generation.version=String(Number(generation.version)+1)
  generation.execute=async context=>{const output=await generationExecute(context);return {...output,startingPoint:Object.fromEntries(Object.entries({repository:options.project.repository,remote:options.project.remote,sourceBranch:options.project.sourceBranch,plannedDevelopmentBranch:options.project.developmentBranch,targetBranch:options.project.targetBranch,remoteSourceCommit:options.project.remoteSourceCommit,sourceOrigin:options.project.remote?'remote-ls-remote':'legacy-local-ref',mode:output.requirement.expectedRemoteSha?'reuse-planned':'create-planned'}).filter(([,v])=>v!==undefined))}}
- if(options.project.remote){
+ if(options.project.remote||options.sourceOnlyNoChangePolicy===true){
   const workspace=workflow.nodes.find(n=>n.id==='prepare-workspace');workspace.version='5'
   workspace.execute=async context=>{
    const prepared=await options.workspaceAdapter.prepare({runId:context.runId,generation:context.generation,requirementDigest:context.requirementDigest,baseCommit:context.input.baseCommit},{signal:context.signal})

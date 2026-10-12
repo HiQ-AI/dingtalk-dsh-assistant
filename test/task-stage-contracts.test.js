@@ -76,28 +76,21 @@ test('后阶段准备获得真实交接和冻结历史定义版本', async () =>
   await assert.rejects(registry.prepare({ ...f, stage: next, requirement: {} }), { code: 'TASK_STAGE_REQUIREMENT_STALE' })
 })
 
-test('工程消费者仅接受声明的调查类型和版本，未知交接在领域准备前拒绝', async () => {
+test('engineering preparation binds current Task query evidence and requirement revision', async () => {
   const f = fixture(), next = { stageId: 'engineering', workflowId: 'task-engineering', status: 'pending' }
   f.plan.stages.push(next)
-  let calls = 0, received
+  let received, evidenceScope
+  const queryEvidence = [{ evidenceRef: 'current-query', result: { columns: ['id'] } }]
   f.controller.plannedTaskStageRunId = () => 'engineering-run'
   const contract = createEngineeringStageContract({ controller: f.controller, mayCreate: async () => true,
-    engineering: { async prepareTask(_action, context) { calls++; received = context; return { input: { request: '工程' } } } } })
+    readTaskEvidence: async scope => { evidenceScope = scope; return queryEvidence },
+    engineering: { async prepareTask(_action, context) { received = context; return { input: { request: 'change' } } } } })
   const registry = createTaskStageContracts({ ...f, contracts: [contract] })
-  const context = { ...f, stage: next, requirement: {}, origin: { command: { args: { arguments: {} } }, run: {} } }
-  for (const producer of [{ id: 'investigation-result', version: '999' }, { id: 'foreign-result', version: '2' }]) {
-    f.definition.ownerContract.resultContract = { ...producer, requiredFields: ['summary'] }
-    await assert.rejects(registry.prepare(context), { code: 'TASK_STAGE_HANDOFF_UNSUPPORTED' })
-    assert.equal(calls, 0)
-  }
-  for (const producer of [{ id: 'investigation-result', version: '2' }, { id: 'agent-investigation-result', version: '1' }]) {
-    f.definition.ownerContract.resultContract = { ...producer, requiredFields: ['summary'] }
-    await registry.prepare(context)
-    assert.deepEqual(received.investigationHandoff, { planRevision: 3, stageId: 'engineering', predecessorStageId: 'first', outputRef: 'output' })
-  }
-  assert.equal(calls, 2)
-  await registry.prepare({ ...context, stageIndex: 0 })
-  assert.equal(calls, 3)
+  await registry.prepare({ ...f, stage: next, requirement: { scope: { databaseIds: ['editor'] } },
+    origin: { command: { args: { arguments: {} } }, run: {} } })
+  assert.deepEqual(evidenceScope, { taskId: 'task', requirementRevision: 2 })
+  assert.deepEqual(received.taskContext, { taskId: 'task', requirementRevision: 2, scope: { databaseIds: ['editor'] }, queryEvidence })
+  assert.equal(received.stageRunId, 'engineering-run')
   assert.equal(received.investigationHandoff, undefined)
 })
 
@@ -154,20 +147,22 @@ for (const pending of [true, false]) test(`正式 Host 重启恢复 v5 成功前
   await controller.whenIdle(running.stages[0].runId)
   const before = await controller.advanceTaskPlan('task')
   assert.equal(before.stages[0].status, 'succeeded')
-  assert.equal(before.task.status, pending ? 'waiting_confirmation' : 'succeeded')
+  assert.equal(before.task.status, pending ? 'waiting_confirmation' : 'pending')
+  if (!pending) assert.equal(before.task.planStatus, 'succeeded')
   const outputBefore = await artifacts.read(before.stages[0].outputRef)
   await controller.close(); await store.close()
-  service = await openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', dbPath, artifactDirectory, instanceId: 'v5-restart' },
+  const open = () => openWorkflowService({ ctx: {}, config: { groupIds: ['g'], ownerActorId: 'owner', dbPath, artifactDirectory, instanceId: 'v5-restart' },
     legacy: { getAgentConfig: () => model }, judge: async () => { throw Error('UNEXPECTED_MODEL') }, taskOwnerSessions: { async close() {} } })
-  const restored = service.execution.controller.workflowDefinition(workflow.id, definition.digest)
-  assert.equal(restored.version, '5'); assert.equal(restored.digest, definition.digest)
-  assert.equal(service.execution.controller.workflowDefinition(workflow.id).version, '6')
-  const plan = await service.execution.controller.taskPlan('task')
-  assert.deepEqual(plan, before)
-  const handoff = await readTaskStageHandoff({ taskId: 'task', plan, stage: plan.stages[0], controller: service.execution.controller, artifacts: service.execution.artifacts })
-  assert.deepEqual(handoff.value, outputBefore)
-  assert.deepEqual(handoff.contract, { id: 'agent-investigation-result', version: '1' })
-  assert.equal(await restored.ownerContract.validateCompletion({ output: handoff.value }), true)
+  await assert.rejects(open(), { code: pending ? 'WORKFLOW_CUTOVER_ACTIVE_REFERENCES' : 'WORKFLOW_VERSION_UNAVAILABLE' })
+  // Retirement fails closed; no historical result or frozen workflow is rewritten.
+  assert.deepEqual(await artifacts.read(before.stages[0].outputRef), outputBefore)
+  assert.equal(definition.version, '5')
+  const checkStore = await openExecutionStore({ dbPath, instanceId: 'v5-restart' })
+  try {
+    const saved = await checkStore.query({ kind: 'task.plan', taskId: 'task' })
+    assert.deepEqual(saved, before)
+  } finally { await checkStore.close() }
+
 })
 
 test('产物声明拒绝未知字段和重复必交字段，声明变化进入 workflow digest', () => {

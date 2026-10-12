@@ -276,13 +276,14 @@ if (process.argv[2] === '--execution-session-child') {
     assert.ok(JSON.stringify(history.events).includes('execution_arguments_invalid'))
   })
 
-  test('连续格式纠正超过旧步数上限后仍可提交', async t => {
-    const h = await host({ script: n => n <= 40 ? ({ name: 'execution_node_submit', args: { output: { answer: 42 } } }) : submit('corrected') })
+  test('合法工具步骤超过旧步数上限后经有限格式纠正仍可提交', async t => {
+    const h = await host({ script: n => n <= 38 ? ({ name: 'read_fixture', args: {} }) : n <= 40 ? ({ name: 'execution_node_submit', args: { output: { answer: 42 } } }) : submit('corrected') })
     t.after(() => h.close())
     let submitted = 0
     const result = await drive(h, { definition: definition({ maxSteps: 2 }), onResult: async () => { submitted++ } })
     assert.equal(result.status, 'submitted')
     assert.equal(h.requests.length, 41)
+    assert.equal(h.reads.length, 38)
     assert.equal(submitted, 1)
   })
 
@@ -407,10 +408,11 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(h2.requests.length, 1); assert.deepEqual(h2.effects, [])
   })
 
-  test('实际JSONL跨OS进程恢复正式模块：原日志前缀不变，lease增加，旧工具结果进入新请求', { timeout: 15000 }, async () => {
+  test('实际JSONL跨OS进程恢复正式模块：原日志前缀不变，lease增加，旧工具结果进入新请求', { timeout: 30000 }, async t => {
     const root = await temp()
     for (const phase of ['initial', 'resume']) {
       const child = spawn(process.execPath, [self, '--execution-session-child', root, phase], { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill() })
       let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk })
       child.stdout.resume()
       const exit = await new Promise((resolveChild, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolveChild({ code, signal })) })

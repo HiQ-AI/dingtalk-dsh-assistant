@@ -60,7 +60,7 @@ test('仅原生只读待审效果可受信失败收口，CAS阻止落账且重�
 
 test('缺少授权和generation不符不调用写适配器', async t => {
   const f = await fixture(t, { authorize: async () => null })
-  await assert.rejects(f.gateway.execute(f.request), { code: 'DELIVERY_NOT_AUTHORIZED' })
+  await assert.rejects(f.gateway.execute(f.request), { code: 'AUTHORIZATION_ASSESSMENT_REQUIRED' })
   await assert.rejects(f.gateway.execute({ ...f.request, prepared: { ...f.request.prepared, generation: 2 } }), { code: 'DELIVERY_INPUT_INVALID' })
   await assert.rejects(f.gateway.execute({ ...f.request, prepared: { ...f.request.prepared, requirementDigest: 'c'.repeat(64) } }), { code: 'DELIVERY_INPUT_INVALID' })
   assert.equal(f.counts().sent, 0)

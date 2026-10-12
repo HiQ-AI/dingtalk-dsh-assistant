@@ -66,10 +66,10 @@ test('数据库工具拒绝SQL与高权限身份；结构化条件值使用参�
  assert.equal(calls.at(-1),'ROLLBACK')
  assert.throws(()=>createAgentDatabaseReadCapability({resources:[{...resource,environment:'production',identityPolicy:'host-enforced-readonly'}],connectDatabase:async()=>client}),{code:'QUERY_DATABASE_CONFIG_INVALID'})
  await assert.rejects(uat.execute({input:{...input,operation:'delete'},scope}),{code:'QUERY_ARGUMENT_INVALID'})
- await assert.rejects(uat.execute({input:{...input,table:'public.other'},scope}),{code:'QUERY_SCOPE_DENIED'})
+ await assert.rejects(uat.execute({input:{...input,table:'public.other'},scope}),{code:'QUERY_DATABASE_TABLE_UNSUPPORTED'})
  privileged=false;const result=await capability.execute({input,scope});assert.equal(result.transactionReadOnly,true)
  const sql=calls.find(c=>typeof c==='object'&&c.text.startsWith('SELECT "id"'));assert.ok(sql);assert.doesNotMatch(sql.text,/DELETE/);assert.match(sql.values[0],/DELETE/);assert.equal(calls.at(-1),'ROLLBACK')
- await assert.rejects(capability.execute({input:{...input,columns:['password']},scope}),{code:'QUERY_SCOPE_DENIED'})
+ await assert.rejects(capability.execute({input:{...input,columns:['password']},scope}),{code:'QUERY_DATABASE_COLUMN_UNSUPPORTED'})
 })
 
 test('状态工具仅登记端点GET与标量字段，不将整份响应泄露给Agent',async()=>{
@@ -157,7 +157,7 @@ test('生产只读连接按显式schema调查未知表结构，数据读取仍�
  assert.deepEqual(calls.find(q=>typeof q==='object'&&q.text.includes('information_schema.columns')).values,['public','process_id_temp']);
  assert.equal((await capability.execute({input:{resourceId:'production',operation:'tables'},scope})).rows.length,1);
  assert.equal(connected,2);
- for(const input of [{resourceId:'production',operation:'select',table:'public.process_id_temp'},{resourceId:'production',operation:'columns',table:'private.secret'},{resourceId:'production',operation:'columns',table:'public.process_id_temp;DROP TABLE x'}])await assert.rejects(capability.execute({input,scope}),{code:'QUERY_SCOPE_DENIED'});
+ for(const input of [{resourceId:'production',operation:'select',table:'public.process_id_temp'},{resourceId:'production',operation:'columns',table:'private.secret'},{resourceId:'production',operation:'columns',table:'public.process_id_temp;DROP TABLE x'}])await assert.rejects(capability.execute({input,scope}),{code:'QUERY_DATABASE_TABLE_UNSUPPORTED'});
  assert.equal(connected,2);
  replica=false;await assert.rejects(capability.execute({input,scope}),{code:'QUERY_DATABASE_NOT_READONLY'});
  assert.equal(calls.filter(q=>typeof q==='object'&&q.text.includes('information_schema.columns')).length,1);
@@ -179,7 +179,7 @@ test('完整结构固定操作保留schema权限及生产副本门禁，结构�
  const columnSql=calls.find(q=>typeof q==='object'&&q.text.includes('information_schema.columns')).text
  for(const field of ['column_default','character_maximum_length','numeric_precision','is_identity','generation_expression','format_type','column_comment'])assert.ok(columnSql.includes(field))
  const before=connections
- for(const operation of ['constraints','indexes','dependencies','table_stats','select'])await assert.rejects(capability.execute({input:{resourceId:'production',operation,table:operation==='select'?'public.process_id_temp':'private.secret'},scope}),{code:'QUERY_SCOPE_DENIED'})
+ for(const operation of ['constraints','indexes','dependencies','table_stats','select'])await assert.rejects(capability.execute({input:{resourceId:'production',operation,table:operation==='select'?'public.process_id_temp':'private.secret'},scope}),{code:'QUERY_DATABASE_TABLE_UNSUPPORTED'})
  assert.equal(connections,before)
  replica=false;await assert.rejects(capability.execute({input:{resourceId:'production',operation:'indexes',table:'public.process_id_temp'},scope}),{code:'QUERY_DATABASE_NOT_READONLY'})
  assert.equal(calls.filter(q=>typeof q==='object').length,10)
@@ -243,8 +243,8 @@ test('数据库唯一登记短表名正常查询，歧义是参数错误且不�
  assert.equal((await capability.verify({input,scope,output})).passed,true)
  const before=connections
  await assert.rejects(capability.execute({input:{...input,table:'missing'},scope}),{code:'QUERY_ARGUMENT_INVALID'})
- await assert.rejects(capability.execute({input:{...input,table:'private.sample'},scope}),{code:'QUERY_SCOPE_DENIED'})
- await assert.rejects(capability.execute({input:{...input,operation:'select',columns:['password']},scope}),{code:'QUERY_SCOPE_DENIED'})
+ await assert.rejects(capability.execute({input:{...input,table:'private.sample'},scope}),{code:'QUERY_DATABASE_TABLE_UNSUPPORTED'})
+ await assert.rejects(capability.execute({input:{...input,operation:'select',columns:['password']},scope}),{code:'QUERY_DATABASE_COLUMN_UNSUPPORTED'})
  const ambiguous=createAgentDatabaseReadCapability({resources:[{...resource,tables:[...resource.tables,{schema:'other',table:'sample',columns:['id']}]}],connectDatabase})
  await assert.rejects(ambiguous.execute({input,scope}),{code:'QUERY_ARGUMENT_INVALID'})
  assert.equal(connections,before)

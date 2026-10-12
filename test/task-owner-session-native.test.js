@@ -782,6 +782,18 @@ for (const mode of ['new', 'partial', 'legacy']) test(`原生Owner动作应用�
       if (mode !== 'legacy') assert.match(diagnostic.errors[1].message, /业务代码尚未执行/); assert.equal(diagnostic.receipts.length, partial ? 1 : 0); assert.equal(diagnostic.plan.stages.length, partial ? 2 : 1); assert.equal(diagnostic.plan.stages[0].status, 'ready')
     } return h.sessions.run(args) }, async close() {} } })
   await owner.ensure({ taskId: 'task', criteria: ['原业务目标'], sourceKey: 'source', origin: {} })
+  if (partial) {
+    const beforePlan = await controller.taskPlan('task')
+    await assert.rejects(owner.drive('task'), /TASK_OWNER_NO_DECISION/)
+    const nativeOwner = await store.query({ kind: 'task.owner', taskId: 'task' })
+    const native = await h.ctx.sessionPersistence.inspect(nativeOwner.sessionId)
+    assert.match(JSON.stringify(native.events), /TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED/)
+    assert.deepEqual(await controller.taskPlan('task'), beforePlan)
+    assert.deepEqual(await owner.applyPending(), [])
+    assert.equal(applicationCalls, 0)
+    assert.equal(executionCalls, 0)
+    return
+  }
   await owner.drive('task'); const initial = await store.query({ kind: 'task.owner', taskId: 'task' })
   assert.equal((await owner.applyPending()).length, 1)
   if (mode === 'legacy') { assert.equal((await store.query({kind:'task.owner',taskId:'task'})).status,'blocked'); assert.deepEqual(await owner.applyPending(),[]); assert.equal(applicationCalls,1) }

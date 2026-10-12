@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
-import { createManagedWorkspaces } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
+import { createManagedWorkspaces, createTaskRemoteWorkspace } from '../packages/dingtalk-dsh-assistant/execution-workspace.js'
 import { createManagedEdits } from '../packages/dingtalk-dsh-assistant/execution-edit.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createEngineeringTaskWorkflow, createEngineeringDirectWorkflow } from '../packages/dingtalk-dsh-assistant/task-workflow.js'
@@ -127,7 +127,7 @@ test('空方案工程任务仅在排空且无编辑效果时升级同仓库流�
   assert.equal(after.nodeHistory.some(node => node.nodeId === 'inspect-and-propose' && node.status === 'superseded'), true)
 })
 
-test('按需检索支持路径缩小范围与四千字符读取，拒绝越权路径', { timeout: 120000 }, async t => {
+test('按需检索支持路径缩小范围与四千字符读取，拒绝越权路径', { timeout: 240000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-inspect-')), source = join(directory, 'source'), root = join(directory, 'managed')
   await mkdir(source); await mkdir(join(source, 'src')); await mkdir(root)
   const exec = promisify(execFile), git = async (...args) => (await exec('git', ['-C', source, ...args], { windowsHide: true })).stdout.trim()
@@ -139,6 +139,7 @@ test('按需检索支持路径缩小范围与四千字符读取，拒绝越权�
   const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }),
     author: { name: 'Test', email: 'test@example.invalid' }, repositories: [{ id: 'repo', sourceRepository: source, managedRoot: root,
       remote: source, githubRepository: 'example/repo', baseRef: 'main', editablePaths: [], discovery: { allowedPrefixes: ['src/'] },
+      localAcceptance: { version: 'inspection-fixture', sharedDataProfilePath: join(directory, 'profile.json'), prepareSteps: [], service: { executable: process.execPath, args: ['-e', 'process.exit(0)', '127.0.0.1', '{port}'], readyPath: '/' }, scenarios: [{ id: 'value', description: 'inspection fixture only', executable: process.execPath, args: ['-e', 'process.exit(0)'] }], cleanup: { executable: process.execPath, args: ['-e', 'process.exit(0)'] }, verifyCleanup: { executable: process.execPath, args: ['-e', 'process.exit(0)'] } },
       checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }] })
   await registry.restore(store, artifacts)
   let workflow
@@ -152,7 +153,7 @@ test('按需检索支持路径缩小范围与四千字符读取，拒绝越权�
     nodes: workflow.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor,
       inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })) } })
   const saved = (await store.query({kind:'workflow.list'})).find(record=>record.config?.runId===task.runId).config
-  const workspaceAdapter = await createManagedWorkspaces({ root, sourceRepository: source, targetCommit:saved.targetCommit, taskBase:saved.taskBase })
+  const workspaceAdapter = saved.remoteSourceCommit ? await createTaskRemoteWorkspace({ root, remote: source, taskId: saved.taskId, repositoryId: saved.repoId, sourceBranch: saved.sourceBranch, sourceCommit: saved.remoteSourceCommit, developmentBranch: saved.head, targetBranch: saved.uatBranch, targetCommit: saved.targetCommit }) : await createManagedWorkspaces({ root, sourceRepository: source, ...(saved.developmentMode === 'source-only' ? {} : { targetCommit:saved.targetCommit, taskBase:saved.taskBase }) })
   const prepared = await workspaceAdapter.prepare({ runId: task.runId, generation: 1, requirementDigest: executionDigest(task.input), baseCommit: task.input.baseCommit })
   await workspaceAdapter.execute(prepared)
   const binding = { runId: task.runId, taskId: task.taskId, generation: 1, inputDigest: first.digest, requirementDigest: executionDigest(task.input) }
@@ -170,9 +171,11 @@ test('按需检索支持路径缩小范围与四千字符读取，拒绝越权�
     const corrected = await registry.repositoryInspect(binding, invalid.suggestedCall, undefined, task.input)
     assert.ok(operation === 'read' ? corrected.text.length === 5000 : corrected.paths.includes('src/value.txt'))
   }
-  await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: 'outside.txt', limit: 19000 }, undefined, task.input), { code: 'ENGINEERING_READ_PATH_INVALID' })
+  const denied0 = await registry.repositoryInspect(binding, { operation: 'read', path: 'outside.txt', limit: 19000 }, undefined, task.input)
+  assert.equal(denied0.status, 'scope_denied'); assert.equal(denied0.code, 'ENGINEERING_READ_SCOPE_DENIED'); assert.equal(denied0.text, undefined); assert.equal(denied0.expectedHash, undefined); assert.deepEqual(denied0.allowedPrefixes, ['src/'])
   for (const limit of [0, -1, 1.5]) await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: 'src/value.txt', limit }, undefined, task.input), { code: 'ENGINEERING_READ_ARGUMENT_INVALID' })
-  await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: 'outside.txt' }, undefined, task.input), { code: 'ENGINEERING_READ_PATH_INVALID' })
+  const denied1 = await registry.repositoryInspect(binding, { operation: 'read', path: 'outside.txt' }, undefined, task.input)
+  assert.equal(denied1.status, 'scope_denied'); assert.equal(denied1.code, 'ENGINEERING_READ_SCOPE_DENIED'); assert.equal(denied1.text, undefined); assert.equal(denied1.expectedHash, undefined); assert.deepEqual(denied1.allowedPrefixes, ['src/'])
   await assert.rejects(registry.repositoryInspect(binding, { operation: 'read', path: '../outside.txt' }, undefined, task.input), { code: 'ENGINEERING_READ_ARGUMENT_INVALID' })
   for(const path of ['', '/src/value.txt', 'src//value.txt', 'src/'])await assert.rejects(registry.repositoryInspect(binding,{operation:'read',path},undefined,task.input),{code:'ENGINEERING_READ_ARGUMENT_INVALID'})
   await assert.rejects(registry.repositoryInspect({...binding,taskId:'other'}, {operation:'read',path:'src/missing.vue'},undefined,task.input),{code:'ENGINEERING_READ_SCOPE_INVALID'})

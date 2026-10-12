@@ -28,6 +28,7 @@ const exact = (value, allowed, required = allowed) => {
 const json = value => JSON.stringify(value)
 function validatePlanChange(chosen, currentTask) {
     if (chosen.appendStages?.some(stage => stage.capabilityStep)
+      && chosen.planChange?.kind !== 'initialize'
       && (chosen.appendStages.length !== 1
         || !['pending', 'succeeded'].includes(currentTask.plan_status))) fail('TASK_OWNER_ADVANCE_CONFLICT')
     if (chosen.planChange?.kind === 'initialize' && (currentTask.plan_status !== 'pending'

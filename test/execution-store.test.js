@@ -478,7 +478,7 @@ test('Owner候选落盘后进程强杀，重开原Task重新领取且旧租约�
   assert.equal((await store.query({ kind: 'receipt', commandId: 'accept-after-kill' })).result.status, 'accepted')
 })
 
-test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决定', async t => {
+test('Owner拒绝旧追加协议，已接纳推进强杀后重启只应用一次原决定', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-owner-applied-crash-'))
   const dbPath = join(root, 'control.sqlite'), instanceId = 'owner-action-crash'
   let store = await openExecutionStore({ dbPath, instanceId, initialize: true })
@@ -492,9 +492,12 @@ test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决
   await store.command(command('task.owner.claim', { taskId: 'task-owner', turnId: 'turn-accepted', expectedLeaseEpoch: 0 }))
   await store.command(command('task.owner.sessionBound', { taskId: 'task-owner', turnId: 'turn-accepted',
     leaseEpoch: 1, sessionId: 'owner-session' }))
-  await store.command(command('task.owner.candidate', { taskId: 'task-owner', turnId: 'turn-accepted', leaseEpoch: 1,
-    decision: { action: 'advance', summary: '追加后续阶段', evidenceRefs: [],
-      appendStages: [{ workflowId: 'analysis', gate: 'none' }] } }))
+  const candidate={taskId:'task-owner',turnId:'turn-accepted',leaseEpoch:1}
+  const frozen=await store.query({kind:'task.plan',taskId:'task-owner'})
+  await assert.rejects(store.command(command('task.owner.candidate',{...candidate,
+    decision:{action:'advance',summary:'legacy append rejected',evidenceRefs:[],appendStages:[{workflowId:'analysis',gate:'none'}]}})),{code:'TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED'})
+  assert.deepEqual(await store.query({kind:'task.plan',taskId:'task-owner'}),frozen)
+  await store.command(command('task.owner.candidate',{...candidate,decision:{action:'advance',summary:'advance existing managed plan',evidenceRefs:[]}}))
   await store.command(command('task.owner.accept', { taskId: 'task-owner', turnId: 'turn-accepted', leaseEpoch: 1 }))
   await store.close(); store = null
   const probe = child(t, `const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
@@ -512,8 +515,8 @@ test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决
   assert.equal((await probe.exited).signal, 'SIGKILL')
   store = await openExecutionStore({ dbPath, instanceId })
   const plan = await store.query({ kind: 'task.plan', taskId: 'task-owner' })
-  assert.equal(plan.stages.length, 2)
-  assert.equal(plan.task.requirementRevision, 2)
+  assert.equal(plan.stages.length, 1)
+  assert.equal(plan.task.requirementRevision, 1)
   let resumedCalls = 0
   const owner = createTaskOwnerController({ ctx: {}, store, artifacts: {},
     controller: { taskPlan: taskId => store.query({ kind: 'task.plan', taskId }) },
@@ -522,7 +525,7 @@ test('Owner已接纳的追加阶段落盘后强杀，重启只应用一次原决
   assert.deepEqual(await owner.applyPending(), [])
   assert.deepEqual(await owner.applyPending(), [])
   assert.equal(resumedCalls, 1)
-  assert.equal((await store.query({ kind: 'task.plan', taskId: 'task-owner' })).stages.length, 2)
+  assert.equal((await store.query({ kind: 'task.plan', taskId: 'task-owner' })).stages.length, 1)
   assert.deepEqual(await store.query({ kind: 'task.owner.actions.pending', limit: 10 }), [])
   await owner.close()
 })

@@ -39,13 +39,17 @@ test('generic native test discovery needs no pinned suite and keeps current Host
 })
 
 import {mkdtemp,mkdir,writeFile,readFile,readdir,rm} from 'node:fs/promises'
-import {join} from 'node:path'
+import {join,delimiter} from 'node:path'
+import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 test('native evidence works from arbitrary project directory and preserves real nonzero exit',async t=>{
  const root=await mkdtemp(join(tmpdir(),'arbitrary-project-')),project=join(root,'other-repository'),maven=join(root,'maven')
  t.after(()=>rm(root,{recursive:true,force:true}));await mkdir(project);await mkdir(join(maven,'boot'),{recursive:true})
  await writeFile(join(maven,'boot','plexus-classworlds-fixture.jar'),'invalid jar intentionally exercises a real Java failure')
- await assert.rejects(main(['--java','D:/soft/jdk-11.0.2/bin/java.exe','--maven-home',maven],project),/DATASET_TEST_COMMAND_FAILED/)
+ const javaName=process.platform==='win32'?'java.exe':'java'
+ const java=[...(process.env.JAVA_HOME?[join(process.env.JAVA_HOME,'bin')]:[]),...(process.env.PATH??'').split(delimiter)].map(directory=>join(directory,javaName)).find(path=>existsSync(path))
+ assert.ok(java,'the native verification fixture requires the JDK supplied by CI or PATH')
+ await assert.rejects(main(['--java',java,'--maven-home',maven],project),/DATASET_TEST_COMMAND_FAILED/)
  const [proof]=await readdir(join(project,'target'));assert.ok(proof.startsWith('host-unit-'))
  const evidence=(await readdir(join(project,'target',proof))).find(x=>x.endsWith('.json'))
  const result=JSON.parse(await readFile(join(project,'target',proof,evidence),'utf8'))

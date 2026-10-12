@@ -781,7 +781,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
       const current=currentVerificationFactory(cfg),base=createWorktreeVerificationJobCheck({...cfg,generatedDirectories:deliveryConfig.localAcceptanceConfig?.generatedOutputDirectories??[]})
       return {...current,configurationDigest:executionDigest({check:base.configurationDigest,runConfigurationRoot:runConfigurationRoot??null,service:deliveryConfig.localAcceptanceConfig?.service??null,discovery:discoverProjectRunConfiguration.toString(),build:projectConfiguredBuild.toString()})}
     }:record.definitionVersion==='24'?cfg=>createWorktreeVerificationJobCheck({...cfg,generatedDirectories:deliveryConfig.localAcceptanceConfig?.generatedOutputDirectories??[]}):record.definitionVersion==='23'?createVerificationJobCheck:createLegacyVerificationJobCheck,check,join(managedRoot,'checks')))
-    const workflowOptions = { stableChecks, stableLocalAcceptanceIdentity, resolveAcceptanceApplicability, acceptanceApplicability: saved.localAcceptanceApplicability, stageContract: saved.stageContract, taskContext: saved.taskContext, investigationHandoff: saved.investigationHandoff, workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
+    const workflowOptions = { sourceOnlyNoChangePolicy: record.definitionVersion==='25'&&saved.sourceOnlyNoChangePolicyVersion===1, stableChecks, stableLocalAcceptanceIdentity, resolveAcceptanceApplicability, acceptanceApplicability: saved.localAcceptanceApplicability, stageContract: saved.stageContract, taskContext: saved.taskContext, investigationHandoff: saved.investigationHandoff, workflowId: record.workflowId, provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort,
       workspaceAdapter, editAdapter, checks, prepareGeneration: saved.branchSource ? (remoteWorkspace ? async context => {
         if (context.runId !== saved.runId) fail('ENGINEERING_DELIVERY_SCOPE_INVALID')
         if (await previousPush(context.generation)) return prepareGeneration(context)
@@ -1116,8 +1116,6 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     if (!entry) fail('ENGINEERING_REPOSITORY_NOT_ADMITTED')
     const uatEnvironment = action.arguments.uatEnvironment, uatBranch = entry.config.targetBranch??uatBranchFor(uatEnvironment)
     if (!uatBranch) fail('ENGINEERING_UAT_ENVIRONMENT_REQUIRED')
-    const source=await resolveRemoteProjectBranches(entry.config,{uatBranch,commandId})
-    const targetCommit=source.targetCommit
     const matches = [...configs.values()].filter(item => item.config.routingTerms?.some(term => request.includes(term)))
     let dependencyAdmitted = false
     if (info.dependencyStage) {
@@ -1130,11 +1128,21 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         || candidate.stage.sourceCondition?.repositoryId !== repoId || candidate.stage.sourceCondition.objective !== request
         || executionDigest(candidate.stage.sourceCondition.acceptanceCriteria) !== executionDigest(action.arguments.acceptanceCriteria)) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
       assertEngineeringStageRepository({ requirement, stage: candidate.stage, repositories: [...configs.values()].map(item => ({ repositoryId: item.config.id, dependencyRepositories: item.config.dependencyRepositories })) })
+      const primary=configs.get(requirement.target.repositoryId)
+      if(!primary?.config.dependencyRepositories?.includes(repoId))fail('TASK_OWNER_STAGE_NOT_AUTHORIZED')
       const state = await store.query({ kind: 'run', runId: current.runId })
       if (state?.run.taskId !== taskId || state.run.status !== 'waiting' || state.pendingInputCount || state.nodes.some(node => !node.drained)) fail('TASK_DEPENDENCY_NOT_DRAINED')
       dependencyAdmitted = true
     }
     if (!dependencyAdmitted && matches.length === 1 && matches[0].config.id !== repoId) fail('ENGINEERING_REPOSITORY_SCOPE_MISMATCH')
+    if(entry.config.sourceRepository&&!entry.config.sourceBranch&&!entry.config.developmentBranch&&!entry.config.targetBranch){
+      let directory
+      try { directory=await lstat(entry.config.sourceRepository) }
+      catch(error){if(error.code!=='ENOENT')throw error;fail('ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE')}
+      if(!directory.isDirectory()||directory.isSymbolicLink())fail('ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE')
+    }
+    const source=await resolveRemoteProjectBranches(entry.config,{uatBranch,commandId})
+    const targetCommit=source.targetCommit
     const constraints = [...new Set([...(action.constraints ?? []), ...(info.unit.constraints ?? []), ...(info.unit.sharedConstraints ?? [])])]
     if (constraints.some(item => typeof item !== 'string')) fail('ENGINEERING_INPUT_LIMIT')
     const acceptanceCriteria = action.arguments.acceptanceCriteria === undefined ? [request] : action.arguments.acceptanceCriteria
@@ -1264,7 +1272,7 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
         previousPullRequest = candidates[0]
       }
       const selected = modelConfig(), selectedAuthor = author ?? { name: await git(config.sourceRepository, ['config', 'user.name']), email: await git(config.sourceRepository, ['config', 'user.email']) }
-      const saved = { ...(taskFiles ? { taskFiles } : {}), kind: 'engineering', registryVersion: '1', ...(remotePreparation?{sourceBranch:source.sourceBranch,remoteSourceCommit:source.sourceCommit}:{developmentMode:'source-only',developmentBindingVersion:2,...(developmentSourceRef?{sourceRequestRef:developmentSourceRef}:{}),sourceCommit,sourceRef:developmentSource.ref,branchSelection}), repoId, uatEnvironment, uatBranch, targetCommit, taskBase, repositoryIdentity, ...selectConfiguredLocalAcceptance(config, {taskId,uatEnvironment,requestDigest:executionDigest({request,acceptanceCriteria}),stageId:info.stageId ?? null,repositoryId:repoId}), stageContract: {taskId,stageId:info.stageId ?? null,repositoryId:repoId,objective:request,criteria:acceptanceCriteria,editablePaths:entry.config.editablePaths,allowedPrefixes:config.discovery?.allowedPrefixes ?? []}, repositoryDigest: entry.digest, runId, taskId, sourceCommandId: commandId, ownerActorId,
+      const saved = { ...(taskFiles ? { taskFiles } : {}), kind: 'engineering', registryVersion: '1', ...(remotePreparation?{sourceBranch:source.sourceBranch,remoteSourceCommit:source.sourceCommit}:{developmentMode:'source-only',developmentBindingVersion:2,sourceOnlyNoChangePolicyVersion:1,...(developmentSourceRef?{sourceRequestRef:developmentSourceRef}:{}),sourceCommit,sourceRef:developmentSource.ref,branchSelection}), repoId, uatEnvironment, uatBranch, targetCommit, taskBase, repositoryIdentity, ...selectConfiguredLocalAcceptance(config, {taskId,uatEnvironment,requestDigest:executionDigest({request,acceptanceCriteria}),stageId:info.stageId ?? null,repositoryId:repoId}), stageContract: {taskId,stageId:info.stageId ?? null,repositoryId:repoId,objective:request,criteria:acceptanceCriteria,editablePaths:entry.config.editablePaths,allowedPrefixes:config.discovery?.allowedPrefixes ?? []}, repositoryDigest: entry.digest, runId, taskId, sourceCommandId: commandId, ownerActorId,
         fingerprint, ...(taskContext ? { taskContext } : {}), provider: selected.provider, model: selected.model, ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }), input: { request, constraints, baseCommit, editablePaths: entry.config.editablePaths, acceptanceCriteria },
         head, ...(branchSource ? { branchSource } : {}), ...(previousPullRequest ? { previousPullRequest } : {}), date: `${Math.floor(Date.now() / 1000)} +0000`,
         title: request.replace(/[\r\n\0]+/g, ' ').slice(0, 120), body: `## 任务\n\n${request}\n\n## 约束\n\n${constraints.map(value => `- ${value}`).join('\n') || '无额外约束'}\n\n## 验证配置\n\n${config.checks.map(check => `- ${check.id} / ${check.version}`).join('\n')}`, author: selectedAuthor }
@@ -1505,7 +1513,12 @@ export function createEngineeringRegistry({ repositories = [], ownerActorId, mod
     const source=rebuilding ? {ref:saved.sourceRef,commit:saved.sourceCommit} : await resolveDevelopmentSource({repository:config.sourceRepository,remote:config.remote,
       baseRef:developmentSourceRef??config.baseRef,baseBranch:developmentSourceRef?undefined:config.baseBranch})
     const records=(await store.query({kind:'workflow.list'})).filter(record=>record.config?.kind==='engineering'&&record.config.taskId===taskId&&record.config.repoId===repositoryId)
-    for(const record of records){const previous=record.config;if(previous.ownerActorId!==ownerActorId||previous.repositoryIdentity&&executionDigest(previous.repositoryIdentity)!==executionDigest({sourceRepository:config.sourceRepository,remote:config.remote,githubRepository:config.githubRepository}))fail('ENGINEERING_BRANCH_SOURCE_INVALID')}
+    for(const record of records){
+      const previous=record.config,identity=previous.repositoryIdentity
+      if(previous.ownerActorId!==ownerActorId||identity&&(identity.remote!==config.remote
+        ||identity.githubRepository!==config.githubRepository
+        ||Object.hasOwn(identity,'sourceRepository')&&identity.sourceRepository!==config.sourceRepository))fail('ENGINEERING_BRANCH_SOURCE_INVALID')
+    }
     const retired=new Set(records.map(r=>r.config.branchSelection?.retiredHead).filter(Boolean))
     const heads=[...new Set(records.map(r=>r.config.head))].filter(head=>!retired.has(head))
     if(heads.length>1)fail('ENGINEERING_BRANCH_SOURCE_AMBIGUOUS')

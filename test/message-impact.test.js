@@ -85,12 +85,12 @@ test('A20 同消息多事项按完整覆盖后的 unit 证明推进，父等待�
   assert.equal(claimed.result.node.status,'running')
 })
 
-test('A21 内部请求有界重试和同ID恢复，非法协议受管supersede保留审计',async t=>{
+test('A21 内部请求记录Host重试但不升级业务阻塞，非法协议受管supersede保留审计',async t=>{
   const f=await fixture(t);await f.receive('a')
   await f.call('wait',{runId:'a',nodeId:'R',reason:'资源不可用',request:{requestId:'q',kind:'needs_context'}})
   for(let i=0;i<3;i++)await f.call('request.retry',{runId:'a',requestId:'q',error:'unavailable',retryAt:null,maxAttempts:3,contractVersion:'material-v2'})
   await f.reopen();const q=await f.store.query({kind:'message.request',requestId:'q'})
-  assert.equal(q.attempts,3);assert.equal(q.blocked,true);assert.equal(q.responsibility,'system')
+  assert.equal(q.attempts,3);assert.equal(q.blocked,false);assert.equal(q.responsibility,'host');assert.equal(q.status,'pending');assert.equal(q.lastError,'unavailable')
   await f.call('request.supersede',{runId:'a',requestId:'q',reason:'invalid internal reference'})
   assert.equal((await f.store.query({kind:'message.request',requestId:'q'})).status,'superseded')
   assert.equal((await f.store.query({kind:'message.run',runId:'a'})).run.status,'pending')
@@ -124,7 +124,9 @@ test('受管reprocess新版本登记impact并清除旧局部失败聚合，原�
   await f.call('reprocess',{runId:'old',newRunId:'next',reason:'repair',policy:{initialWindowMs:90000,linkedWindowMs:90000,maxClaims:99999}})
   const next=(await f.store.query({kind:'message.run',runId:'next'})).run
   assert.equal(next.sourceVersion,2);assert.equal(next.attentionScope,undefined);assert.equal(next.attentionUnitIds,undefined)
-  assert.equal(Date.parse(next.deadline)-Date.parse(next.createdAt),90000);assert.equal(next.policy.linkedWindowMs,90000);assert.equal(next.policy.maxClaims,21)
+  assert.equal(next.deadline,undefined);assert.equal(next.executionStartedAt,undefined);
+  await f.call('split',{runId:'next',units:[{unitId:'next-u'}]});
+  const claim=await f.call('node.claim',{runId:'next',unitId:'next-u',nodeId:'R',input:{},leaseWindowMs:90000});assert.equal(claim.result.node.leaseWindowMs,90000);assert.equal(Number.isFinite(Date.parse(claim.result.node.deadline)),true)
   assert.equal((await f.store.query({kind:'message.impact',runId:'next'})).impact.sourceVersion,2)
   assert.equal((await f.store.query({kind:'message.run',runId:'old'})).units[0].blockedReason,'协议错误')
 })
@@ -170,7 +172,7 @@ test('A17 Owner候选接纳、应用、计划接纳和阶段启动均在同库�
   await command('task.accept',{taskId:'task',requirementRef:'sha256/requirement',requirementRevision:1,sessionId:'session',criteria:['核查'],sourceKey:'origin',eventKey:'created'})
   await command('task.owner.claim',{taskId:'task',turnId:'turn',expectedLeaseEpoch:0})
   await command('task.owner.sessionBound',{taskId:'task',turnId:'turn',leaseEpoch:1,sessionId:'session'})
-  await command('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'wait',summary:'准备材料',evidenceRefs:[]}})
+  await command('task.owner.candidate',{taskId:'task',turnId:'turn',leaseEpoch:1,decision:{action:'wait',summary:'准备材料',evidenceRefs:[],condition:{kind:'business-input',missing:'待核查原始材料',responsibleParty:'需求方',resumeWhen:'收到材料',evidenceRefs:[]}}})
   await f.receive('before-owner')
   await rejects(command('task.owner.accept',{taskId:'task',turnId:'turn',leaseEpoch:1}),'MESSAGE_INPUT_PENDING')
   await f.prove('before-owner','topic-a')
@@ -197,7 +199,7 @@ test('A16/A26 已归类相关事实令旧Owner候选失效，当前Owner应用�
   await command('task.accept',{taskId:'task',requirementRef:'sha256/requirement',requirementRevision:1,sessionId:'session',criteria:['核查'],sourceKey:'origin',eventKey:'created'})
   await command('task.owner.claim',{taskId:'task',turnId:'old',expectedLeaseEpoch:0})
   await command('task.owner.sessionBound',{taskId:'task',turnId:'old',leaseEpoch:1,sessionId:'session'})
-  await command('task.owner.candidate',{taskId:'task',turnId:'old',leaseEpoch:1,decision:{action:'wait',summary:'旧候选',evidenceRefs:[]}})
+  await command('task.owner.candidate',{taskId:'task',turnId:'old',leaseEpoch:1,decision:{action:'wait',summary:'旧候选',evidenceRefs:[],condition:{kind:'business-input',missing:'待核查原始材料',responsibleParty:'需求方',resumeWhen:'收到材料',evidenceRefs:[]}}})
   await f.receive('fact',{actorId:'unprivileged',body:'追加不能改变行业审核状态'})
   await f.call('split',{runId:'fact',units:[{unitId:'fact-unit'}]});await f.bind('fact','topic-a')
   await f.call('topic.intent.accept',{runId:'fact',topicId:'topic-a',conversationId:'group',inputRevision:2,
@@ -207,7 +209,7 @@ test('A16/A26 已归类相关事实令旧Owner候选失效，当前Owner应用�
   assert.equal(sources.find(source=>source.sourceKey==='fact').actorId,'unprivileged')
   await command('task.owner.release',{taskId:'task',turnId:'old',leaseEpoch:1,reason:'TASK_OWNER_CANDIDATE_STALE'})
   await command('task.owner.claim',{taskId:'task',turnId:'current',expectedLeaseEpoch:1})
-  await command('task.owner.candidate',{taskId:'task',turnId:'current',leaseEpoch:2,decision:{action:'wait',summary:'已纳入事实核对',evidenceRefs:[]}})
+  await command('task.owner.candidate',{taskId:'task',turnId:'current',leaseEpoch:2,decision:{action:'wait',summary:'已纳入事实核对',evidenceRefs:[],condition:{kind:'business-input',missing:'待核查原始材料',responsibleParty:'需求方',resumeWhen:'收到材料',evidenceRefs:[]}}})
   await command('task.owner.accept',{taskId:'task',turnId:'current',leaseEpoch:2})
   await command('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,
     stages:[{stageId:'stage',workflowId:'work',workflowDigest:hash,unavailableReason:null,requirementRef:'sha256/requirement',gate:'none'}]})
@@ -250,7 +252,7 @@ test('Owner消费信封拒绝旧turn，即使没有新增事实也不能借旧�
   await command('task.accept',{taskId:'task',requirementRef:'sha256/requirement',requirementRevision:1,sessionId:'session',criteria:['核查'],sourceKey:'origin',eventKey:'created'})
   await command('task.owner.claim',{taskId:'task',turnId:'old',expectedLeaseEpoch:0})
   await command('task.owner.sessionBound',{taskId:'task',turnId:'old',leaseEpoch:1,sessionId:'session'})
-  await command('task.owner.candidate',{taskId:'task',turnId:'old',leaseEpoch:1,decision:{action:'wait',summary:'等待阶段',evidenceRefs:[]}})
+  await command('task.owner.candidate',{taskId:'task',turnId:'old',leaseEpoch:1,decision:{action:'wait',summary:'等待阶段',evidenceRefs:[],condition:{kind:'business-input',missing:'阶段回执',responsibleParty:'执行会话',resumeWhen:'阶段完成',evidenceRefs:[]}}})
   await command('task.owner.accept',{taskId:'task',turnId:'old',leaseEpoch:1})
   await command('task.owner.applied',{taskId:'task',turnId:'old',leaseEpoch:1})
   await command('task.owner.event',{taskId:'task',eventKey:'progress',eventType:'stage.progress'})
@@ -290,6 +292,7 @@ for(const nodeCount of [1,2])test(`A17 已领取节点遇新消息仍排空真�
 test('A28 v5→v6检查零写，迁移保留原账，独占锁防在线旧进程，重试不重放',async t=>{
   const f=await fixture(t);await f.receive('old');await f.store.close()
   const db=new DatabaseSync(f.dbPath)
+  const currentSchema=db.prepare('PRAGMA user_version').get().user_version
   db.exec("DELETE FROM message_items WHERE kind='impact'; PRAGMA user_version=5; UPDATE execution_meta SET schema_version=5")
   const original=db.prepare('SELECT body FROM message_runs').get().body;db.close()
   const script=resolve('scripts/migrate-message-impact.js'),hash=async()=>createHash('sha256').update(await readFile(f.dbPath)).digest('hex')
@@ -322,11 +325,15 @@ test('A28 v5→v6检查零写，迁移保留原账，独占锁防在线旧进程
   const restored=new DatabaseSync(f.dbPath)
   const columns=Object.keys(impactRow)
   restored.prepare(`INSERT INTO message_items (${columns.join(',')}) VALUES (${columns.map(()=>'?').join(',')})`).run(...Object.values(impactRow));restored.close()
+  const oldRecovery=execFileSync('git',['show','0ed1f0a:packages/dingtalk-dsh-assistant/execution-recovery-policy.js'],{encoding:'utf8'})
   const oldSource=execFileSync('git',['show','0ed1f0a:packages/dingtalk-dsh-assistant/execution-store-worker.js'],{encoding:'utf8'})
-    .replace(/from '(\.\/[^']+)'/gu,(_,specifier)=>'from '+JSON.stringify(pathToFileURL(resolve('packages/dingtalk-dsh-assistant',specifier)).href))
+    .replace(/from '(\.\/[^']+)'/gu,(_,specifier)=>'from '+JSON.stringify(specifier==='./execution-recovery-policy.js' ? 'data:text/javascript,'+encodeURIComponent(oldRecovery) : pathToFileURL(resolve('packages/dingtalk-dsh-assistant',specifier)).href))
   const oldWorker=new Worker(new URL('data:text/javascript,'+encodeURIComponent(oldSource)),{workerData:{dbPath:f.dbPath,instanceId:f.instanceId,initialize:false,processIncarnation:'old-v5'}})
   const oldResult=await new Promise((resolve,reject)=>{oldWorker.once('message',resolve);oldWorker.once('error',reject)})
   assert.equal(oldResult.type,'fatal');assert.equal(oldResult.error.code,'STORE_SCHEMA_MISMATCH');await oldWorker.terminate()
+  await assert.rejects(openExecutionStore({dbPath:f.dbPath,instanceId:f.instanceId}),{code:'STORE_SCHEMA_MISMATCH'})
+  // Only the synthetic fixture labels were downgraded; its current-schema tables remain intact.
+  const restoredSchema=new DatabaseSync(f.dbPath);restoredSchema.exec(`PRAGMA user_version=${currentSchema}; UPDATE execution_meta SET schema_version=${currentSchema}`);restoredSchema.close()
   await f.reopen();assert.equal((await f.store.query({kind:'message.run',runId:'old'})).commands.length,0)
 })
 
@@ -347,7 +354,11 @@ test('同文来源别名仍登记影响账，schema6完整性回读通过且不�
   const impact = await f.store.query({ kind: 'message.impact', runId: 'alias-version-2' })
   assert.equal(impact.impact.sourceVersion, 2)
   assert.equal((await f.store.query({ kind: 'message.run', runId: 'alias-version-2' })).commands.length, 0)
-  await f.reopen()
+  // Verify the historical v6 checker against a v6-labelled synthetic fixture;
+  // current runtime opening still retains its own newer schema version.
+  await f.store.close()
+  const historical = new DatabaseSync(f.dbPath)
+  historical.exec('PRAGMA user_version=6; UPDATE execution_meta SET schema_version=6');historical.close()
   const { verifyMessageImpact } = await import('../scripts/migrate-message-impact.js')
   const db = new DatabaseSync(f.dbPath, { readOnly: true })
   try { assert.equal(verifyMessageImpact(db).sources, 2) } finally { db.close() }

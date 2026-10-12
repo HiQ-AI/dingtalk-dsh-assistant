@@ -1222,7 +1222,7 @@ for(const boundary of ['normal','paused','unknown-effect','prepare-effect'])test
  const variant='factory';
  const {createEngineeringTaskContextWorkflow}=await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
  const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
- const directory=await mkdtemp(join(tmpdir(),'real-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'real-local',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true})
+ const directory=await mkdtemp(join(tmpdir(),'real-local-checkpoint-')),store=await openExecutionStore({dbPath:join(directory,'control.db'),instanceId:'real-local',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(directory,'artifacts'),initialize:true,taskWorkspaceRoot:join(directory,'task-files'),getTaskDirectories:async taskId=>({logicalTaskId:taskId})})
  t.after(()=>store.close());let plans=0,prepares=0;const calls={}
  const make=id=>{
   const workflow=createEngineeringTaskContextWorkflow({workflowId:id,provider:'test',model:'test',prepareGeneration:async()=>({}),discovery:{allowedPrefixes:['src/']},project:{uatEnvironment:'uat3',targetCommit:'a'.repeat(40),taskBase:'a'.repeat(40)},workspaceAdapter:{},editAdapter:{},checks:[{id:'check',version:'1',run:async()=>({passed:true})}],adapterIdentity:'test',localAcceptance:{identity:'stable-business-scenario',scenarios:[{id:'scenario'}],prepare:async()=>{prepares++;return{prepared:true}}}})
@@ -1241,7 +1241,7 @@ for(const boundary of ['normal','paused','unknown-effect','prepare-effect'])test
  const send=(kind,args,id=kind)=>store.command({id,kind,args}),input={request:'当前任务',acceptanceCriteria:['业务要求']},config={kind:'engineering',taskId:'task',runId:'run',uatEnvironment:'uat3',input,localAcceptanceConfig:{id:'old'}}
  await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
  await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,localAcceptanceConfig:{id:'new'},localAcceptanceScope:{taskId:'task',uatEnvironment:'uat3',requestDigest:executionDigest(input)},checkpoint:{kind:'local-acceptance',fromDigest:oldDef.digest,requestId:'fix'}}},'next')
- const requirement=await artifacts.put(input)
+ const requirement=await artifacts.put(input,{taskId:'task'})
  await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:input.acceptanceCriteria,sourceKey:'source',eventKey:'source'})
  await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
  await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input,stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
@@ -1269,7 +1269,7 @@ for(const boundary of ['normal','paused','unknown-effect','prepare-effect'])test
 for(const boundary of ['trusted','paused','checkpoint-paused','checkpoint-cancelled','unrecorded','tampered-input','semantic-change','changed-mapper','changed-schema','changed-rules','missing-attestation'])test(`retained planner lineage with real SQLite ${boundary}`,async t=>{
  const {createEngineeringTaskContextWorkflow}=await import('../packages/dingtalk-dsh-assistant/task-workflow.js')
  const {executionDigest}=await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
- const root=await mkdtemp(join(tmpdir(),'dsh-retained-lineage-')),store=await openExecutionStore({dbPath:join(root,'control.db'),instanceId:'lineage',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true});t.after(()=>store.close())
+ const root=await mkdtemp(join(tmpdir(),'dsh-retained-lineage-')),store=await openExecutionStore({dbPath:join(root,'control.db'),instanceId:'lineage',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true,taskWorkspaceRoot:join(root,'task-files'),getTaskDirectories:async taskId=>({logicalTaskId:taskId})});t.after(()=>store.close())
  let preparations=0,plans=0
  const factory=createEngineeringTaskContextWorkflow({workflowId:'task-engineering-lineage',provider:'test',model:'test',discovery:{allowedPrefixes:['src/']},project:{uatEnvironment:'uat3',targetCommit:'a'.repeat(40),taskBase:'a'.repeat(40)},workspaceAdapter:{},editAdapter:{},checks:[{id:'check',version:'1',run:async()=>({passed:true})}],adapterIdentity:'fixture',localAcceptance:{identity:'fixture',scenarios:[{id:'ui'}]}})
  const pick=id=>factory.nodes.find(node=>node.id===id),shape={type:'object'}
@@ -1283,7 +1283,7 @@ for(const boundary of ['trusted','paused','checkpoint-paused','checkpoint-cancel
  const send=(kind,args,id=kind)=>store.command({id,kind,args})
  await send('workflow.register',{workflowId:old.id,digest:oldDef.digest,definitionVersion:'18',config},'old')
  await send('workflow.register',{workflowId:next.id,digest:nextDef.digest,definitionVersion:'18',config:{...config,checkpoint:{kind:'checks',fromDigest:oldDef.digest,requestId:'fix'},checkpointChecks:[{id:'check',version:'2'}]}},'next')
- const requirement=await artifacts.put(input)
+ const requirement=await artifacts.put(input,{taskId:'task'})
  await send('task.accept',{taskId:'task',requirementRevision:1,requirementRef:requirement.ref,sessionId:'owner',criteria:input.acceptanceCriteria,sourceKey:'source',eventKey:'source'})
  await send('task.plan.initialize',{taskId:'task',expectedPlanRevision:0,expectedRequirementRevision:1,expectedControlRevision:1,stages:[{stageId:'engineering',workflowId:old.id,workflowDigest:oldDef.digest,unavailableReason:null,requirementRef:requirement.ref,gate:'none'}]})
  await controller.createRun({commandId:'create',taskId:'task',runId:'run',workflowId:old.id,input,stageBinding:{planRevision:1,stageId:'engineering',attempt:1,expectedControlRevision:1}})
@@ -1315,7 +1315,11 @@ for(const boundary of ['trusted','paused','checkpoint-paused','checkpoint-cancel
  if(boundary==='paused')await controller.pause({commandId:'pause',runId:'run',reason:'user pause'})
  const state=await controller.state('run',{includeRecovery:true})
  if(boundary==='trusted'){
-  const gate=await controller.inspectNodeRecovery('run');assert.equal(gate.repairable,true,JSON.stringify(gate));assert.equal(gate.lineage.length,1);assert.ok(gate.gates.every(g=>g.passed))
+  const gate=await controller.inspectNodeRecovery('run');assert.equal(gate.repairable,true,JSON.stringify(gate));assert.ok(gate.gates.every(g=>g.passed))
+  const {inspectExecutionInputLineage}=await import('../packages/dingtalk-dsh-assistant/execution-input-lineage.js')
+  const node=state.nodes[2],original=await artifacts.read(node.inputRef)
+  const lineage=await inspectExecutionInputLineage({store,artifacts,run:state.run,node,input:original,definition:nextDef})
+  assert.equal(lineage.trusted,true,JSON.stringify(lineage));assert.equal(lineage.chain.length,1);assert.ok(lineage.gates.every(g=>g.passed))
  }else if(boundary==='paused'){assert.equal((await controller.inspectNodeRecovery('run')).repairable,false)}
  else{
   const {inspectExecutionInputLineage}=await import('../packages/dingtalk-dsh-assistant/execution-input-lineage.js')

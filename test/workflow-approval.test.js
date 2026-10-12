@@ -21,13 +21,18 @@ for (const [decision, channel] of [['approved', 'web'], ['rejected', 'web'], ['r
     runId: 'run', nodeId: 'publish', expectedGeneration: 1, expectedLeaseEpoch: 0,
   } })
   let sends = 0, recoveries = 0
-  const delivery = createExecutionDelivery({ store, artifacts, authorize: async () => null,
+  const rawDelivery = createExecutionDelivery({ store, artifacts, authorize: async () => null,
     externalAdapter: { execute: async () => { sends++; return { status: 'succeeded', evidenceRef: 'readback' } }, reconcile: async () => ({ status: 'unknown' }) },
     authorizeExternal: async () => ({ principalId: 'owner', approval: { requestId: 'approval-1', approverIds: ['owner'] } }),
   })
+  // This service-level fixture explicitly invokes the visible authorization step.
+  const delivery = { ...rawDelivery, execute: (request, context = {}) => rawDelivery.execute(request, { ...context, authorizationNode: true, authorizationRequested: true }) }
   const prepared = { action: 'external', workflowKind: decision === 'approved' ? 'production-release' : 'data-change',
     ...(decision === 'rejected' ? { stage: 'approval-gate', intent: { approvalSource: 'assistant' } } : {}), runId: 'run', generation: 1,
     requirementDigest: 'c'.repeat(64), resourceKey: 'external:production:service', taskId: 'task' }
+  await assert.rejects(rawDelivery.execute({ binding: { ...binding, requirementDigest: 'c'.repeat(64) }, action: 'external', prepared }), { code: 'AUTHORIZATION_ASSESSMENT_REQUIRED' })
+  assert.equal((await store.query({ kind: 'effect.list', runId: 'run' })).length, 0)
+  assert.equal(sends, 0)
   await assert.rejects(delivery.execute({ binding: { ...binding, requirementDigest: 'c'.repeat(64) }, action: 'external', prepared }), { code: 'effect_approval_required' })
   const controller = { state: async () => ({ run: { taskId: 'task', runId: 'run' } }), recover: async () => { recoveries++ } }
   const approvals = createWorkflowApprovalService({ store, controller, authorizeTask: async ({ taskId, actorId, conversationId }) => taskId === 'task' && actorId === 'owner' && conversationId === 'group' })

@@ -58,7 +58,7 @@ test('Owner不能把调查明确不足改成已满足，必须引用随后阶段
     const output = result(); output.criterionReviews[1].status = status
     const stage = { stageId: 'first', runId: 'run', workflowId: 'task-investigation', workflowDigest: 'v6', status: 'succeeded', outputRef: 'investigation' }
     const later = { stageId: 'second', runId: 'next', workflowId: 'delivery', workflowDigest: 'delivery-v1', status: 'succeeded', outputRef: 'delivered' }
-    const plan = { task: { taskId: 'task', status: 'succeeded', planRevision: 1, requirementRevision: 1, planRequirementRevision: 1 }, stages: [stage] }
+    const plan = { task: { taskId: 'task', status: 'succeeded', planStatus: 'succeeded', planRevision: 1, requirementRevision: 1, planRequirementRevision: 1 }, stages: [stage] }
     const laterOutput = { summary: '修复部署验收已回读' }
     const deliveryContract = { id: 'delivery-result', version: '1', validateCompletion: () => true }
     const facade = createTaskWorkflowContracts({ controller: {
@@ -173,7 +173,7 @@ function mixedFixture({ verdict = true, legacy = false, external = false } = {})
   const contracts = [createInvestigationWorkflow(options).ownerContract, second]
   const stages = contracts.map((contract, index) => ({ stageId: `stage-${index + 1}`, runId: `run-${index + 1}`,
     workflowId: `workflow-${index + 1}`, workflowDigest: `frozen-${index + 1}`, status: 'succeeded', outputRef: `out-${index + 1}` }))
-  const plan = { task: { taskId: 'task', status: 'succeeded', requirementRevision: 1, planRequirementRevision: 1, planRevision: 1 }, stages }
+  const plan = { task: { taskId: 'task', status: 'succeeded', planStatus: 'succeeded', requirementRevision: 1, planRequirementRevision: 1, planRevision: 1 }, stages }
   const states = stages.map(stage => ({ run: { ...stage, taskId: 'task', status: 'succeeded', generation: 0, revision: 1,
     requirementRef: `input-${stage.stageId}` }, nodes: [{ status: 'succeeded', outputRef: stage.outputRef, generation: 0 }], pendingInputCount: 0 }))
   const decision = { summary: '调查和保存均完成', evidenceRefs: ['out-1', 'out-2'],

@@ -767,10 +767,12 @@ for (const viaOwner of [false, true]) test(`必要工程依赖插入保留等待
       sessionRunner:{async run({onSessionBound,onCandidate}){await onSessionBound();await onCandidate(decision);return {status:'submitted',decision}},async close(){}}})
     t.after(()=>owner.close())
     await owner.ensure({taskId:'dependency-task',sourceKey:'dependency-source',criteria:['真实前后端完成'],origin:{actorId:'requester'}})
-    await owner.drive('dependency-task')
+    await assert.rejects(owner.drive('dependency-task'),{code:'TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED'})
     assert.deepEqual(await owner.applyPending(),[])
-    // Owner 使用自动分配stage-2，测试后续按持久身份读取，不假设模型指定ID。
-    request.stage.stageId='stage-2'
+    assert.equal((await controller.taskPlan('dependency-task')).stages.length,1)
+    assert.deepEqual((await controller.state(originalRunId)).nodes,original.nodes)
+    assert.equal((await controller.taskPlan('dependency-task')).task.planRevision,1)
+    return
   } else {
     await controller.insertTaskDependency(request)
     assert.deepEqual((await controller.insertTaskDependency(request)).result, await store.query({ kind: 'receipt', commandId: 'insert-backend' }).then(receipt => receipt.result))

@@ -7,3 +7,15 @@
 最终现场包 SHA256 为 `ed1fd0738619978980707b14efc76303fb1a3a66aee246a7c0b7fb6ff81ae853`；该值用于交接溯源，不表示本归档分支重新部署或生成相同 tgz。归档过程中只有测试入口及空白整理差异：安装态冷启动测试改为当前分支源码；真实登录模型测试须显式 `DSH_ARCHIVE_LIVE_MODEL_TEST=1`，默认跳过且不读取本机登录态。
 
 普通 CI 使用锁定依赖、隔离 Spring 夹具、Node 24 测试与三个 workspace 包构建。真实登录模型测试仍依赖原本机 provider 环境，普通 CI 不声称覆盖它；不得为了 CI 自动导入登录凭据。业务部署、通知发送、任务恢复、npm 发布不属于归档动作。
+
+## 归档回归发现的兼容性与权限修复
+
+冻结工作流中函数源码参与规则摘要。归档保留 `task-workflow.js`、`workflow-engineering.js` 的原始字节，以及发布文件中已部署函数的原有换行跨度；SQL fixture 保留批准摘要对应的精确字节。旧完成策略及旧发布定义的固定摘要断言不更新。
+
+工程重新发起兼容当前两字段仓库身份和历史三字段身份；owner、remote、GitHub 仓库必须匹配，历史本地源字段存在时仍精确匹配。真正的依赖准备入口按已绑定 Task 主仓库的 `dependencyRepositories` 授权，再读取源和注册；基础来源解析本身不授予仓库权限。本地模式先验证源目录，remote-only 模式保留远端来源解析。
+
+新建 source-only v25 定义持久化 `sourceOnlyNoChangePolicyVersion: 1`。仅该标记启用现有的真实 reconcile、已读取路径验证、candidate freeze 和 baseTree 相等核验；Git 未合并索引仍由 candidate freeze 拒绝。未标记的历史 v25 按原定义恢复，不用新策略改写历史 Run。
+
+首轮 `initialize` 可提出完整固定计划，仍要求 pending 且 plan revision 0，并逐阶段验证授权。已运行计划的追加/改图入口保持禁用。原生会话仍限制连续无效提交纠正，测试使用有效读取与有限纠正证明旧步数限制已解除，不放开无限重试。
+
+测试夹具使用实际受管授权工具结果、真实绑定的读取/工件/候选和隔离 Git、HTTP、SQLite。多进程恢复及大量真实 Git 操作采用有界等待和清理，不删结果断言。业务 PostgreSQL 与已登录模型仍为显式外部验收，普通归档 CI 不执行。
