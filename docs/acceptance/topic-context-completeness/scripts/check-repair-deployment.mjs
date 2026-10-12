@@ -142,7 +142,7 @@ try {
  }else if(mode==='package'){
   const contents=spawnSync('tar',['-tf',arg],{encoding:'utf8',windowsHide:true});if(contents.status!==0)throw Error('PACKAGE_UNREADABLE')
   const names=contents.stdout.trim().split(/\r?\n/)
-  const files=readdirSync(source).filter(f=>f.endsWith('.js')||f==='cordis.patch.yml'||f==='package.json')
+  const files=readdirSync(source).filter(f=>f.endsWith('.js')||f==='execution-verification-job.ps1'||f==='cordis.patch.yml'||f==='package.json')
   for(const file of files){
    if(names.filter(x=>x==='package/'+file).length!==1)throw Error('PACKAGE_FILE_MISSING:'+file)
    const packed=spawnSync('tar',['-xOf',arg,'package/'+file],{windowsHide:true,maxBuffer:32*1024*1024})
@@ -151,7 +151,7 @@ try {
    if(!same(packed.stdout,expected))throw Error('PACKAGE_SOURCE_MISMATCH:'+file)
    if(installed&&!same(readFileSync(join(installed,file)),expected))throw Error('INSTALLED_SOURCE_MISMATCH:'+file)
   }
-  if(names.some(n=>n.endsWith('.js')&&!files.includes(n.slice('package/'.length))))throw Error('PACKAGE_UNEXPECTED_SOURCE')
+  if(names.some(n=>(n.endsWith('.js')||n.endsWith('.ps1'))&&!files.includes(n.slice('package/'.length))))throw Error('PACKAGE_UNEXPECTED_SOURCE')
   console.log(JSON.stringify({verifiedFiles:files.length,sha256:hash(readFileSync(arg))}))
  }else throw Error('INVALID_MODE')
 }catch(error){console.error(error.message);process.exitCode=1}finally{db.close()}
