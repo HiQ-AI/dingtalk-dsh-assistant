@@ -3659,7 +3659,19 @@ for (const reason of ['BYTEBASE_APPROVAL_PENDING', 'BYTEBASE_HUMAN_APPROVAL_NOT_
     assert.equal(reads, 1); assert.equal(sends, 1); assert.equal(production, 0)
     waitingDecision = "unconfigured"
     assert.deepEqual(await service.recoverExecutionTasks(), [])
-    assert.equal((await service.tasks())[0].waitingCondition.kind, "execution")
+    // 恢复入口不等待 Owner 会话；只有当前 wait 已应用且同轮水位收敛，
+    // tasks() 才按 Owner 的执行等待覆盖底层 Bytebase 能力条件。
+    const ownerDeadline = Date.now() + 30000
+    let waitingOwner
+    for (;;) {
+      waitingOwner = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
+      if (waitingOwner?.applicationStatus === 'applied' && waitingOwner.decision?.action === 'wait'
+        && waitingOwner.decision.condition?.kind === 'execution'
+        && waitingOwner.eventWatermark === waitingOwner.processedWatermark) break
+      assert.ok(Date.now() < ownerDeadline, 'Bytebase waiting Owner未收敛：' + JSON.stringify(waitingOwner))
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal((await service.tasks({ taskId: task.taskId }))[0].waitingCondition.kind, "execution")
     const [waitingEffect]=await execution.store.query({kind:"effect.list",runId:task.runId})
     assert.equal(waitingEffect.state,"unknown");assert.equal(waitingEffect.result.result.result.approval.decision,"unconfigured",JSON.stringify(waitingEffect))
     assert.equal((await execution.controller.state(task.runId)).nodes[0].status,"waiting")
