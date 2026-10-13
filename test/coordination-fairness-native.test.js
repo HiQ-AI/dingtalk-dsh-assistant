@@ -50,7 +50,8 @@ test('同群九次无效提交按step让出，工具结果落稳后路由和其�
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false }); new LlmRuntime(ctx); new ToolRuntime(ctx)
-  const loop = new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
+  const loop = ctx.agentLoop
   const entered = Promise.withResolvers(), release = Promise.withResolvers(), done = Promise.withResolvers()
   const otherEntered = Promise.withResolvers(), otherRelease = Promise.withResolvers()
   const current = new Set(), calls = new Map(), agents = new Map(), order = [], errors = []

@@ -8,7 +8,7 @@ import {AgentRegistry} from '@deepseek-ai/dsh-agent'
 import {AgentLoop} from '@deepseek-ai/dsh-agent-loop'
 import {LlmRuntime} from '@deepseek-ai/dsh-llm'
 import {SessionStore} from '@deepseek-ai/dsh-session'
-import {JsonlSessionPersistence} from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import {SystemPrompt} from '@deepseek-ai/dsh-system-prompt'
 import {ToolRuntime} from '@deepseek-ai/dsh-tools'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
@@ -21,7 +21,7 @@ const {SessionProjectionRegistry}=loopRequire('@deepseek-ai/dsh-session-projecti
 test('real configured model chooses isolated takeover and verified continuation',{timeout:180000,skip:process.env.DSH_ARCHIVE_LIVE_MODEL_TEST!=='1'},async t=>{
  process.env.DSH_HOME='D:/dsh_home' // Existing provider login only: no credential copy, setup, logout or login.
  const root=resolve('docs/tmp/task-session-control/cold-start-fix/real-model-round-2');await mkdir(root,{recursive:true})
- const ctx=new Context();new AgentRegistry(ctx);new SessionStore(ctx);new SessionProjectionRegistry(ctx);new SessionTitleService(ctx,{fallbackMaxWords:10,fallbackMaxBytes:120,maxTitleBytes:200});new SystemPrompt(ctx,{includeRuntimeContext:false,includeHarnessIdentity:false});new LlmRuntime(ctx);new ToolRuntime(ctx);new JsonlSessionPersistence(ctx,{root:join(root,'sessions'),packChunks:false,compression:'none',writeBatchMaxDelayMs:1});new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
+ const ctx=new Context();new AgentRegistry(ctx);new SessionStore(ctx);new SessionProjectionRegistry(ctx);new SessionTitleService(ctx,{fallbackMaxWords:10,fallbackMaxBytes:120,maxTitleBytes:200});new SystemPrompt(ctx,{includeRuntimeContext:false,includeHarnessIdentity:false});new LlmRuntime(ctx);new ToolRuntime(ctx);new JsonlSessionPersistence(ctx,{root:join(root,'sessions'),packChunks:false,compression:'none',writeBatchMaxDelayMs:1});await ctx.plugin(AgentLoop, {agents:[],maxParallelToolCalls:1})
  const plugin=await import('file:///D:/dsh_home/profiles/web/node_modules/dsh-codex-connect/lib/index.js');plugin.apply(ctx,{enableProxy:false,enableSearch:false,enableReserveFallback:false,enableNativeCompaction:false,enableImageTool:false,enableImageGeneration:false,enableAutoReview:false})
  const f=await openTaskSessionControlFixture(t);const goal={request:'Repair this synthetic isolated failed local verification without rerunning its failed executor. Independently produce and verify the requested local artifact, preserve successful preceding work, and advance the next node exactly once. Choose appropriate task execution controls yourself. No network tool, notification, PR or business resource is allowed. After controls succeed submit a wait decision because this is a bounded test, not a business task completion.',acceptanceCriteria:['actual requested artifact'],constraints:[],scope:{}}
  await f.start({input:goal});const before=await f.controller.state(f.runId);assert.equal(before.run.status,'waiting');const calls=[]

@@ -38,7 +38,8 @@ test('真实协调器中九次非法旧决策不挡住新图文任务，公平�
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SystemPrompt(ctx, { includeRuntimeContext: false }); new LlmRuntime(ctx); new ToolRuntime(ctx)
-  const loop = new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
+  const loop = ctx.agentLoop
   const firstEntered = Promise.withResolvers(), releaseFirst = Promise.withResolvers(), taskCreated = Promise.withResolvers()
   const oldFinished = Promise.withResolvers(), newFinished = Promise.withResolvers()
   const calls = new Map(), agents = new Map(), requests = new Map(), acceptedOrder = [], applicationIds = [], errors = [], imagesSeen = []
@@ -139,7 +140,7 @@ test('真实协调器中九次非法旧决策不挡住新图文任务，公平�
   assert.equal(calls.get(oldRequest.requestId), 10)
   assert.equal(calls.get(newRequest.requestId), 2)
   const results = agents.get(oldRequest.requestId).session.snapshotEvents().filter(event => event.type === 'tool/result')
-    .map(event => JSON.parse(event.data.message.content[0].content[0].text))
+    .map(event => JSON.parse(event.data.message.content[0].text))
   assert.equal(results.filter(result => result.status === 'invalid-arguments').length, 9)
   assert.ok(results.slice(0, 9).every(result => result.issues.some(issue => issue.field === 'decision.reason')))
   assert.equal(store.listTasks().length, 1)

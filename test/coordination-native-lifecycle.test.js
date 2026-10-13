@@ -37,7 +37,8 @@ async function setup(t, { snapshot = { tables: {}, global: null }, illegalFirst 
   new SystemPrompt(ctx, { includeRuntimeContext: false })
   new LlmRuntime(ctx)
   new ToolRuntime(ctx)
-  const loop = new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
+  const loop = ctx.agentLoop
   let modelCalls = 0, engineeringWrites = 0, submitCalls = 0, active = true
   const presented = [], disposed = [], errors = []
   class ScriptedModel extends LlmAdapter {
@@ -106,7 +107,7 @@ test('真实AgentLoop提交后post-execute尚未结束不能dispose，成功结�
   await h.manager.close()
   assert.equal(h.stats().modelCalls, 1)
   assert.equal(resultEvents(agent).length, 1)
-  assert.notEqual(resultEvents(agent)[0].data.message.content[0].isError, true)
+  assert.notEqual(resultEvents(agent)[0].data.message.isError, true)
   assert.equal(h.disposed.length, 1)
   assert.equal(h.disposed[0].status, 'idle')
   assert.equal(h.disposed[0].events.filter(event => event.type === 'tool/result').length, 1)
@@ -126,7 +127,7 @@ test('真实工具allowlist既不向模型呈现pwsh也拒绝恶意调用，随�
   assert.ok(h.presented.every(names => !names.includes('pwsh')))
   const results = resultEvents(agent)
   assert.equal(results.length, 2)
-  assert.equal(results[0].data.message.content[0].isError, true)
+  assert.equal(results[0].data.message.isError, true)
   assert.equal(h.store.listTopics('g').length, 1)
 })
 
@@ -154,7 +155,7 @@ test('原生scope-local工程工具可绕过restrict展示但不能绕过单调g
   assert.equal(h.stats().engineeringWrites, 0)
   assert.equal(h.stats().submitCalls, 1)
   assert.equal(h.stats().modelCalls, 2)
-  assert.equal(resultEvents(agent)[0].data.message.content[0].isError, true)
+  assert.equal(resultEvents(agent)[0].data.message.isError, true)
   assert.ok(JSON.stringify(resultEvents(agent)[0]).includes('coordination_tool_outside_role'))
 })
 
@@ -164,7 +165,8 @@ test('首step前路由抢占保留已claim消息，并自动续行且请求等�
   new SystemPrompt(ctx, { includeRuntimeContext: false }); new LlmRuntime(ctx); new ToolRuntime(ctx)
   const { installFakeLlm } = await import('../packages/dingtalk-dsh-assistant/fake-llm.js')
   installFakeLlm(ctx)
-  const loop = new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
+  const loop = ctx.agentLoop
   const entered = Promise.withResolvers(), release = Promise.withResolvers()
   const routeEntered = Promise.withResolvers(), routeRelease = Promise.withResolvers()
   class RouteModel extends LlmAdapter {
@@ -224,7 +226,8 @@ test('审阅句柄尚在创建时入站路由排队，审阅首个模型step也�
   new SystemPrompt(ctx, { includeRuntimeContext: false }); new LlmRuntime(ctx); new ToolRuntime(ctx)
   const { installFakeLlm } = await import('../packages/dingtalk-dsh-assistant/fake-llm.js')
   installFakeLlm(ctx)
-  const loop = new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
+  const loop = ctx.agentLoop
   const creating = Promise.withResolvers(), release = Promise.withResolvers(), order = []
   const manager = createCoordinationSessions({ isCurrent: () => true, onError: error => { throw error }, create: async entry => {
     if (entry.role === 'review') { creating.resolve(); await release.promise }

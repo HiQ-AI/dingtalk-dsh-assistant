@@ -1,3 +1,5 @@
+import { findSessionLog } from './fixtures/session-persistence.js'
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises'
@@ -9,7 +11,7 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { LlmRuntime, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
-import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import PermissionPresetService from '@deepseek-ai/dsh-permission-presets'
@@ -24,11 +26,11 @@ const decisionSchema = { type: 'object', properties: { kind: { type: 'string' },
 async function host(root, options = {}) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
-  new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
+  new SystemPrompt(ctx, { includeRuntimeContext: options.includeRuntimeContext ?? false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   ctx.provide('shell', { sandboxMode: 'workspace-write' })
   new ApprovalService(ctx, { policy: 'ask' })
-  new PermissionPresetService(ctx, { presets: {
+  await ctx.plugin(PermissionPresetService, { presets: {
     'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
     'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
   } })
@@ -39,13 +41,13 @@ async function host(root, options = {}) {
     async resolveByPath(path) { return memberships.get(path) },
     async create(path) {
       const target = { sessionIds: [], async attachSession(id) {
-        assert.equal((await ctx.sessionPersistence.inspect(id)).meta.cwd, path)
+        assert.equal((await inspectSession(ctx.sessionPersistence, id)).meta.cwd, path)
         if (!this.sessionIds.includes(id)) this.sessionIds.push(id)
       } }
       memberships.set(path, target); return target
     },
   })
-  new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
   const optionsForHost = options
   class Scripted extends LlmAdapter {
@@ -86,8 +88,8 @@ test('原生群会话同轮读取材料后提交，跨轮恢复同一session并�
   assert.equal((await run(2)).status, 'submitted')
   assert.equal(reads, 1); assert.equal(candidates, 2)
   assert.deepEqual(terminalResults, [true, true])
-  const persisted = await h.ctx.sessionPersistence.inspect('group-session')
-  assert.equal(persisted.events.filter(e => e.type === 'dingtalk/group-coordinator-session').length, 1)
+  const persisted = await inspectSession(h.ctx.sessionPersistence, 'group-session')
+  assert.equal(persisted.events.filter(e => e.type === 'plugin:dingtalk/group-coordinator-session').length, 1)
   assert.equal(persisted.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append').length, 2)
   assert.equal(h.requests.length, 3)
   await assert.rejects(run(2), /LEASE_NOT_ADVANCED/)
@@ -121,8 +123,8 @@ test('群逻辑会话跨原生宿主重启恢复，禁止注入写工具', async
   const next = { ...args, binding: { ...args.binding, turnId: 'second', leaseEpoch: 2, sessionBound: true }, input: { message: '原需求补充' } }
   await assert.rejects(second.sessions.run({ ...next, readTools: [{ ...tool, effectClass: 'write' }] }), /READ_TOOL_REQUIRED/)
   assert.equal((await second.sessions.run(next)).status, 'submitted')
-  const saved = await second.ctx.sessionPersistence.inspect('restart-session')
-  assert.equal(saved.events.filter(e => e.type === 'dingtalk/group-coordinator-session').length, 1)
+  const saved = await inspectSession(second.ctx.sessionPersistence, 'restart-session')
+  assert.equal(saved.events.filter(e => e.type === 'plugin:dingtalk/group-coordinator-session').length, 1)
   assert.equal(saved.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append').length, 2)
 })
 
@@ -184,8 +186,8 @@ test('旧职责目录派生到Agent根，完整继承日志，恢复群名和完
     input: { sources: [{ runId: 'm1', sourceVersion: 1, actorId: 'user', sourceKey: 'source:m1', body: '不要改生产，只分析；附件已提供', context: { quotes: [{ text: '引用原文' }], attachments: [{ resourceRef: 'file' }] } }], candidates: [{ obsoleteSnapshot: '旧目录'.repeat(20000) }] },
     provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {} }
   assert.equal((await h.sessions.run(args)).status, 'submitted')
-  const parent = await h.ctx.sessionPersistence.inspect('old-group')
-  const parentPath = h.ctx.sessionPersistence.locate(parent.meta).path, originalBytes = await readFile(parentPath)
+  const parent = await inspectSession(h.ctx.sessionPersistence, 'old-group')
+  const parentPath = await findSessionLog(join(root, 'sessions'), parent.meta.id), originalBytes = await readFile(parentPath)
   assert.equal(parent.events.findLast(e => e.type === 'session/title').data.title, name)
   assert.equal(parent.events.findLast(e => e.type === 'permission/preset').data.preset, 'danger-full-access')
   assert.equal(parent.events.findLast(e => e.type === 'approval/policy').data.policy, 'never')
@@ -198,7 +200,7 @@ test('旧职责目录派生到Agent根，完整继承日志，恢复群名和完
   assert.equal(h.requests.length, callsBefore)
   // 模拟绑定CAS回执丢失：同一旧绑定只恢复同一个派生Session，不重复复制。
   assert.deepEqual(await h.sessions.prepare(binding), relocated)
-  const child = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
+  const child = await inspectSession(h.ctx.sessionPersistence, relocated.sessionId)
   assert.equal(child.meta.cwd, root)
   assert.deepEqual(h.memberships.get(root).sessionIds, [relocated.sessionId])
   assert.ok(h.ctx.sessions.get(relocated.sessionId), '空闲协调会话仍挂接，宿主可读标题与权限投影')
@@ -216,12 +218,12 @@ test('旧职责目录派生到Agent根，完整继承日志，恢复群名和完
   h.setLease(3); name = '广场与编辑器迭代'
   assert.equal(await h.sessions.prepare({ conversationId: 'group', sessionId: relocated.sessionId, sessionBound: true, leaseEpoch: 2 }), null)
   assert.equal(h.requests.length, callsBefore)
-  assert.equal((await h.ctx.sessionPersistence.inspect(relocated.sessionId)).events.findLast(e => e.type === 'session/title').data.title, name)
+  assert.equal((await inspectSession(h.ctx.sessionPersistence, relocated.sessionId)).events.findLast(e => e.type === 'session/title').data.title, name)
   assert.equal((await h.sessions.run({ ...args, input: { sources: [], candidates: [{ current: true }] },
     binding: { ...args.binding, sessionId: relocated.sessionId, turnId: 'next', leaseEpoch: 3, sessionBound: true } })).status, 'submitted')
-  const saved = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
+  const saved = await inspectSession(h.ctx.sessionPersistence, relocated.sessionId)
   assert.equal(saved.events.findLast(e => e.type === 'session/title').data.title, name)
-  assert.equal(saved.events.filter(e => e.type === 'dingtalk/group-coordinator-session').length, 2)
+  assert.equal(saved.events.filter(e => e.type === 'plugin:dingtalk/group-coordinator-session').length, 2)
   await assert.rejects(h.sessions.run({ ...args, binding: { ...args.binding, sessionId: relocated.sessionId, leaseEpoch: 3, sessionBound: true } }), /LEASE_NOT_ADVANCED/)
 })
 
@@ -244,7 +246,7 @@ test('每轮完整输入保留，下一轮原生surface只保留历史来源而�
   assert.ok(!current.includes('fullHostSnapshot'))
   assert.ok(current.length < before.length / 2)
   t.diagnostic(`模型可见输入字符：完整旧快照=${before.length}，下一轮保留原文与当前快照=${current.length}`)
-  const saved = await h.ctx.sessionPersistence.inspect('history-group')
+  const saved = await inspectSession(h.ctx.sessionPersistence, 'history-group')
   assert.ok(saved.events.some(e => e.type === 'user/message' && e.surfaceOp === 'append' && JSON.stringify(e.data).includes('fullHostSnapshot')))
   assert.equal(saved.events.filter(e => e.data?.source?.groupCoordinatorHistory).length, 1)
 })
@@ -317,21 +319,25 @@ test('阶段授权原文不匹配在同会话反馈修正，不改写来源或�
 
 for (const variant of ['idle', 'active', 'running', 'foreign-input', 'identity', 'lease', 'changed-during-fork']) test(`外部观察会话受管派生保留原实例并核验边界：${variant}`, async t => {
   const root = await mkdtemp(join(tmpdir(), 'group-observer-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const h = await host(root, { getWorkspaceDir: () => root }); t.after(() => h.close())
+  let h, external, sessions
+  t.after(async () => { await sessions?.close(); await external?.dispose(); await h?.close(); await rm(root, { recursive: true, force: true }) })
+  h = await host(root, { getWorkspaceDir: () => root, includeRuntimeContext: true })
   await h.sessions.run({ binding: { conversationId: 'g', sessionId: 'observed', turnId: 'first', leaseEpoch: 1, sessionBound: false },
     input: {}, provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {} })
   await h.sessions.close()
-  const external = await h.ctx.agents.resume({ resumeSessionId: 'observed' }); t.after(() => external.dispose())
+  external = await h.ctx.agents.resume({ resumeSessionId: 'observed' })
   await external.agent.whenIdle()
-  const sessions = createGroupCoordinatorSessions({ ctx: h.ctx, isCurrent: async () => true, getWorkspaceDir: () => root })
-  t.after(() => sessions.close())
+  sessions = createGroupCoordinatorSessions({ ctx: h.ctx, isCurrent: async () => true, getWorkspaceDir: () => root })
   const binding = { conversationId: variant === 'identity' ? 'other' : 'g', sessionId: 'observed', status: 'idle', sessionBound: true, leaseEpoch: variant === 'lease' ? 2 : 1 }
   let release, busy
   if (variant === 'active') busy = external.agent.runMaintenance(() => new Promise(resolve => { release = resolve }))
   if (variant === 'running') {
     const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
+    const entered = Promise.withResolvers(), gate = Promise.withResolvers()
+    release = gate.resolve
+    external.agent.ctx.on('agent/pre-step', async (_event, next) => { entered.resolve(); await gate.promise; return next() })
     external.agent.steer(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '活动输入' }] }))
+    await entered.promise
     assert.equal(external.agent.status, 'running')
   }
   if (variant === 'foreign-input') external.agent.session.append('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '额外输入' }] }, { surfaceOp: 'append' })
@@ -339,7 +345,7 @@ for (const variant of ['idle', 'active', 'running', 'foreign-input', 'identity',
     const create = h.ctx.agents.create.bind(h.ctx.agents)
     h.ctx.agents.create = async options => {
       const handle = await create(options)
-      external.agent.session.append('test/input-changed', {}, { ignorable: true })
+      external.agent.session.append('plugin:dingtalk/test-input-changed', {})
       return handle
     }
   }
@@ -357,7 +363,7 @@ for (const variant of ['idle', 'active', 'running', 'foreign-input', 'identity',
   assert.deepEqual(external.agent.session.snapshotEvents(), before)
   assert.equal(h.requests.length, calls)
   assert.deepEqual(await sessions.prepare(binding), relocated)
-  const child = await h.ctx.sessionPersistence.inspect(relocated.sessionId)
+  const child = await inspectSession(h.ctx.sessionPersistence, relocated.sessionId)
   assert.equal(child.meta.parentSession, 'observed')
   assert.deepEqual(child.events.slice(0, child.inheritedEventCount), before)
   assert.equal((await sessions.run({ binding: { ...binding, sessionId: relocated.sessionId, leaseEpoch: 3, turnId: 'next' }, input: {},

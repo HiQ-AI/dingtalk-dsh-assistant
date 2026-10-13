@@ -120,7 +120,7 @@ export function projectPerformanceEvent(previous, input) {
   if (event.type === 'tool/result') {
     const callId = data.message?.source?.callId, call = session.calls[callId]
     bucket.toolResults++
-    if (data.error || data.message?.content?.some(block => block.type === 'tool-result' && block.isError)) bucket.toolErrors++
+    if (data.error || data.message?.isError) bucket.toolErrors++
     if (call && time >= call.startedAt) {
       addSample(bucket.toolMs, time - call.startedAt)
       recordInterval(projection, identitySchema.parse(call), 'tool', call.startedAt, time)

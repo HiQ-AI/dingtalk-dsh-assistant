@@ -5,10 +5,10 @@ const jsonLine = (input, label) => {
   const line = input.split(/\r?\n/u).find((value) => value.startsWith(`${label}：`))
   return line === undefined ? undefined : JSON.parse(line.slice(label.length + 1))
 }
-const toolResults = (messages) => messages.flatMap((message) => message.content.filter((block) => block.type === 'tool-result')).flatMap((block) => {
-  if (block.isError) return []
-  const text = block.content.filter((item) => item.type === 'text').map((item) => item.text).join('')
-  try { return [{ ...JSON.parse(text), toolCallId: block.toolCallId }] } catch { return [] }
+const toolResults = (messages) => messages.filter((message) => message.role === 'tool').flatMap((message) => {
+  if (message.isError) return []
+  const text = message.content.filter((item) => item.type === 'text').map((item) => item.text).join('')
+  try { return [{ ...JSON.parse(text), toolCallId: message.toolCallId }] } catch { return [] }
 })
 const toolCalls = (messages) => messages.flatMap((message) => message.content.filter((block) => block.type === 'tool-call'))
 
@@ -55,7 +55,7 @@ class FakeResidentAdapter extends LlmAdapter {
       const query = calls.findLast((item) => item.name === 'group_reply_review_get' && JSON.parse(item.arguments).requestIds?.includes(requestId))
       return query ? results.findLast((item) => item.toolCallId === query.id && Array.isArray(item.candidates)) : undefined
     }
-    const hasToolResultAfterInput = afterInput.some((message) => message.content.some((block) => block.type === 'tool-result'))
+    const hasToolResultAfterInput = afterInput.some((message) => message.role === 'tool')
     const activeTasksText = options.system?.match(/## 本群全部任务关联索引\n\n([^\n]+)/u)?.[1]
     const tasks = activeTasksText?.startsWith('[') ? JSON.parse(activeTasksText) : []
     if (input.startsWith('[TASK_TOPIC_CONTEXT]')) {
@@ -65,8 +65,8 @@ class FakeResidentAdapter extends LlmAdapter {
       const stages = systemSection('当前执行轮次阶段任务')?.split('\n').map(line => line.replace(/^- /u, '').replace(/（stageId: .*）$/u, ''))
       const criteria = systemSection('当前执行轮次验收标准')?.split('\n').map(line => line.replace(/^- /u, ''))
       if (!ref || !stages?.length || !criteria?.length || !binding.sourceRefs?.length) throw new Error('fake_task_input_missing')
-      const acknowledgements = afterInput.flatMap((message) => message.content.filter((block) => block.type === 'tool-result'))
-      if (acknowledgements.some((block) => block.isError)) throw new Error('fake_task_tool_rejected')
+      const acknowledgements = afterInput.filter((message) => message.role === 'tool')
+      if (acknowledgements.some((message) => message.isError)) throw new Error('fake_task_tool_rejected')
       const version = { inputVersion: ref.inputVersion, runSequence: ref.runSequence }
       const resultFor = name => {
         const sent = calls.findLast(item => item.name === name), result = sent && results.findLast(item => item.toolCallId === sent.id)

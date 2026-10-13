@@ -45,7 +45,7 @@ test('单一业务插件正常启停，历史启用配置不再启动任务表�
       async create() { throw new Error('not expected') },
       async resume() { throw new Error('not expected') },
     },
-    subagents: { drainContinuableDescendants: async () => undefined },
+    subagents: { drainDescendants: async () => undefined },
   }
 
   await apply(ctx, { host: '127.0.0.1', port: 0 })

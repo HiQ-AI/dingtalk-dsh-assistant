@@ -30,8 +30,8 @@ test('原生usage互斥分项、首流/完成、并行工具累计与并集以�
   append(input(4, 'assistant/message', 500, { usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 900, cacheWriteTokens: 50 }, message: { content: ['SECRET'] } }))
   append(input(5, 'tool/call', 500, { callId: 'a', name: 'secret-name', arguments: 'SECRET' }))
   append(input(6, 'tool/call', 600, { callId: 'b' }))
-  append(input(7, 'tool/result', 1000, { message: { source: { callId: 'a' }, content: [{ type: 'tool-result', content: 'SECRET' }] } }))
-  append(input(8, 'tool/result', 1100, { message: { source: { callId: 'b' }, content: [{ type: 'tool-result', isError: true }] } }))
+  append(input(7, 'tool/result', 1000, { message: { role: 'tool', toolCallId: 'a', source: { kind: 'tool', callId: 'a' }, content: [{ type: 'text', text: 'SECRET' }] } }))
+  append(input(8, 'tool/result', 1100, { message: { role: 'tool', toolCallId: 'b', source: { kind: 'tool', callId: 'b' }, isError: true, content: [{ type: 'text', text: 'failed' }] } }))
   const [row] = listPerformance(projection).rows
   assert.equal(row.usage.totalInputTokens, 1050)
   assert.equal(row.usage.inputTokens, 100)

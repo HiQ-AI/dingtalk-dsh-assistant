@@ -348,14 +348,17 @@ export function selectTaskLocalAcceptance(config, scope) {
 /** 从原生工具回执恢复读事实；当前文件必须仍为工具返回的完整 SHA，不制造已读记录。 */
 export async function restoreEngineeringReadEvidence({ events, binding, paths, directory, allowedPrefixes }) {
   const read = new Set()
-  const identity = events.find(event => event.type === 'dingtalk/execution-session')?.data?.identity
+  const identity = events.find(event => ['plugin:dingtalk/execution-session', 'dingtalk/execution-session'].includes(event.type))?.data?.identity
   if (!identity || ['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].some(key => identity[key] !== binding[key])) return []
   for (const call of events.filter(event => event.type === 'tool/call' && event.data.name === 'engineering_repo_inspect')) {
     let args; try { args = JSON.parse(call.data.arguments) } catch { continue }
     if (args.operation !== 'read' || args.source && args.source !== 'current' || !paths.includes(args.path)) continue
     const result = events.find(event => event.seq > call.seq && event.type === 'tool/result'
-      && event.data.message?.content?.some(block => block.type === 'tool-result' && block.toolCallId === call.data.callId && !block.isError))
-    const blocks = result?.data.message.content.find(block => block.toolCallId === call.data.callId)?.content
+      && (event.data.message?.role === 'tool'
+        ? event.data.message.toolCallId === call.data.callId && !event.data.message.isError
+        : event.data.message?.content?.some(block => block.type === 'tool-result' && block.toolCallId === call.data.callId && !block.isError)))
+    const blocks = result?.data.message.role === 'tool' ? result.data.message.content
+      : result?.data.message.content.find(block => block.toolCallId === call.data.callId)?.content
     let value; try { value = JSON.parse(blocks?.find(block => block.type === 'text')?.text) } catch { continue }
     if (value.path !== args.path || !value.text || !/^[a-f0-9]{64}$/.test(value.expectedHash)
       || /[\\:\0\r\n]/.test(args.path) || args.path.split('/').some(part => !part || ['.', '..', '.git'].includes(part.toLowerCase()))

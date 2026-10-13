@@ -93,8 +93,10 @@ export function readExecutedAgentQueryRefs(events, toolNames) {
   for (const event of events.filter(item => item.type === 'tool/result')) {
     const call = event.sourceEventSeqs?.length === 1 ? calls.get(event.sourceEventSeqs[0]) : null
     if (!call || !names.has(call.data.name)) continue
-    const block = event.data.message.content[0]
-    if (event.data.message.source.callId !== call.data.callId || block?.toolCallId !== call.data.callId || block.type !== 'tool-result') fail('QUERY_EVIDENCE_INVALID')
+    const message = event.data.message
+    const block = message.role === 'tool' ? message : message.content[0]
+    if (message.source.callId !== call.data.callId || block?.toolCallId !== call.data.callId
+      || message.role !== 'tool' && block?.type !== 'tool-result') fail('QUERY_EVIDENCE_INVALID')
     if (block.isError) continue
     if (block.content.length !== 1 || block.content[0].type !== 'text') fail('QUERY_EVIDENCE_INVALID')
     let value

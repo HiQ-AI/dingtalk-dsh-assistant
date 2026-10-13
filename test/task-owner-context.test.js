@@ -158,7 +158,7 @@ test('visible base survives continuation, updates removed constraints, and resto
     append(type, data, options = {}) {
       const seq = events.length
       events.push({ type, data: structuredClone(data), seq, ...options })
-      if (options.surfaceOp?.op === 'replace') this.surface.nodes = this.surface.nodes.filter(id => id !== options.surfaceOp.start)
+      if (options.surfaceOp?.op === 'replace') this.surface.nodes = this.surface.nodes.filter(id => id !== options.surfaceOp.startSeq)
       this.surface.nodes.push(seq)
     } }
   const binding = { taskId: 'one', sessionId: 'owner' }, f = fixture()

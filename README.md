@@ -151,7 +151,7 @@ DWS 群消息
 
 - Windows 11 与 PowerShell 7。
 - Node.js 24 或更高版本。较低版本缺少 DSH Session JSONL 持久化所需的 zstd API。
-- 已安装 DSH `0.1.2-rc.1`，并能正常启动 `dsh web`。Assistant、Observer 与 DSH 核心包必须保持该版本边界，不能混装 `0.1.1-rc.2` 依赖树。
+- 本分支适配 DSH `0.2.1-alpha.2`（用户指定的预发布版本），并要求能够正常启动 `dsh web`。Assistant、Observer、DSH 核心及服务 peer 依赖必须保持相同版本，不能混装旧依赖树。升级与会话格式边界见 [DSH 兼容说明](docs/ops/dsh-0.2.1-alpha.2-compatibility.md)。
 - 已安装并配置所选模型对应的 DSH provider。只有使用 ChatGPT/Codex 订阅时才需要 `dsh-codex-connect`。
 - 已安装并登录 DWS。只有启用真实钉钉订阅时才需要。
 

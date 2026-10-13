@@ -9,7 +9,7 @@ async function setup(t) {
     async put(key, value) { values.set(`${name}:${key}`, value) }, async delete(key) { values.delete(`${name}:${key}`) }, async update(key, transform) { const value = transform(values.get(`${name}:${key}`)); values.set(`${name}:${key}`, value); return value } })
   const store = await openResidentStore({ open: async () => ({ table, close: async () => {} }) })
   const ctx = { agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) }, agents: { get: id => agents.get(id) },
-    subagents: { drainContinuableDescendants: async () => {} }, on(name, fn) { events.set(name, fn); return () => events.delete(name) } }
+    subagents: { drainDescendants: async () => {} }, on(name, fn) { events.set(name, fn); return () => events.delete(name) } }
   const runtime = await openResidentRuntime(ctx, store, process.cwd(), { supervisorIntervalMs: 0 })
   t.after(() => runtime.close())
   await store.subscribe({ groupId: 'g', residentSessionId: 'main' })

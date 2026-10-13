@@ -1,3 +1,4 @@
+import { inspectSession, inboxHasPending } from './session-persistence.js'
 import { nameSession } from './session-workspaces.js'
 import { sourceInterpretationInstructions } from './agent-work.js'
 import { isAbsolute } from 'node:path'
@@ -5,7 +6,12 @@ import { createHash } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
-const IDENTITY_EVENT = 'dingtalk/execution-session'
+const IDENTITY_EVENT = 'plugin:dingtalk/execution-session'
+const REBIND_EVENT = 'plugin:dingtalk/execution-session-rebind'
+const isRecord = (event, type) => event.type === type || event.type === type.slice('plugin:'.length)
+const isRuntimeContext = source => source?.kind === 'runtime-context' && source.form === 'snapshot'
+  || source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot'
+const toolResults = event => event.data.message?.role === 'tool' ? [event.data.message] : event.data.message?.content ?? []
 const SUBMIT = 'execution_node_submit'
 const taskIdentityKeys = ['taskId', 'runId', 'nodeRunId', 'generation', 'inputDigest', 'sessionId']
 const messageIdentityKeys = ['kind', 'runId', 'unitId', 'inputVersion', 'inputDigest', 'sessionId']
@@ -26,14 +32,14 @@ const providerTransient = cause => cause?.code === 'TRANSPORT' && String(cause.m
 export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'execution_no_submission') {
   validateBinding(binding)
   if (binding.kind || !binding.sessionBound || ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) return null
-  const stored = await ctx.sessionPersistence.inspect(binding.sessionId), events = stored.events
+  const stored = await inspectSession(ctx.sessionPersistence, binding.sessionId), events = stored.events
   validateHistory(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
-  const rebind = events.find(event => event.type === 'dingtalk/execution-session-rebind')
+  const rebind = events.find(event => isRecord(event, REBIND_EVENT))
   const consumedParent = (source, seq) => rebind && seq < rebind.seq
     && source?.executionSession?.sessionId === rebind.data.parentSessionId
     && source.executionSession.leaseEpoch < rebind.data.leaseEpoch
   const inputs = events.filter(event => event.type === 'user/message')
-  if (inputs.some(event => event.data.source?.kind !== 'coordinator' && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt' && event.data.source.form === 'snapshot'))) return null
+  if (inputs.some(event => event.data.source?.kind !== 'coordinator' && !isRuntimeContext(event.data.source))) return null
   if (inputs.some(event => event.data.source?.kind === 'coordinator' && event.data.source.executionSession?.sessionId !== binding.sessionId && !consumedParent(event.data.source, event.seq))) return null
   const input = inputs.findLast(event => event.data.source?.kind === 'coordinator')
   if (input?.data.source.executionSession?.sessionId !== binding.sessionId || input.data.source.executionSession.leaseEpoch !== binding.leaseEpoch) return null
@@ -45,9 +51,9 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
   if (!overloaded && !interrupted && !scopeFailure) return null
   let materialSourceFailure = false, materialReferenceFailure = false
   if (interrupted || scopeFailure) {
-    const errors = events.filter(event => event.seq > input.seq && event.type === 'tool/result' && event.data.message?.content?.some(block => block.type === 'tool-result' && block.isError))
-    if (errors.length !== 1 || errors[0].data.message.content.length !== 1) return null
-    const result = errors[0].data.message.content[0]
+    const errors = events.filter(event => event.seq > input.seq && event.type === 'tool/result' && toolResults(event).some(result => result.isError))
+    if (errors.length !== 1 || toolResults(errors[0]).length !== 1) return null
+    const result = toolResults(errors[0])[0]
     const call = events.findLast(event => event.seq < errors[0].seq && event.type === 'tool/call')
     let args
     try { args = JSON.parse(call?.data.arguments) } catch {}
@@ -72,7 +78,7 @@ export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'exe
     || events.some(event => event.seq > input.seq && /^(assistant\/|tool\/)/u.test(event.type) && JSON.stringify(event.data).includes(SUBMIT))) return null
   // 未消费的额外 inbox 输入也不得被当作旧错误续行。
   const inbox = events.filter(event => event.type === 'agent/inbox/spliced').flatMap(event => event.data.inserted ?? [])
-  if (inbox.some(message => message.source?.kind !== 'coordinator' && !(message.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt' && message.source.form === 'snapshot'))) return null
+  if (inbox.some(message => message.source?.kind !== 'coordinator' && !isRuntimeContext(message.source))) return null
   if (events.filter(event => event.type === 'agent/inbox/spliced').some(event => (event.data.inserted ?? []).some(message => message.source?.kind === 'coordinator'
     && (message.source.executionSession?.sessionId !== binding.sessionId && !consumedParent(message.source, event.seq) || message.source.executionSession.leaseEpoch > binding.leaseEpoch)))) return null
   return { binding: identityOf(binding), leaseEpoch: binding.leaseEpoch, inputSeq: input.seq, endSeq: end.seq, failure: materialReferenceFailure
@@ -106,8 +112,8 @@ function validateBinding(binding) {
 }
 
 function validateHistory(events, binding) {
-  const identities = events.filter(event => event.type === IDENTITY_EVENT)
-  const moves = events.filter(event => event.type === 'dingtalk/execution-session-rebind')
+  const identities = events.filter(event => isRecord(event, IDENTITY_EVENT))
+  const moves = events.filter(event => isRecord(event, REBIND_EVENT))
   if (moves.length > 1 || moves.length && (moves[0].data.sessionId !== binding.sessionId
     || moves[0].data.parentSessionId !== identities[0]?.data.identity.sessionId
     || !Number.isSafeInteger(moves[0].data.leaseEpoch) || moves[0].data.leaseEpoch > binding.leaseEpoch
@@ -172,7 +178,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     if (binding.kind || !binding.sessionBound || !binding.sessionId) return null
     const held = entries.get(executionKey(binding))
     if (held && (held.handle || !held.drainError)) throw notDrained('execution_run_busy')
-    let stored = await ctx.sessionPersistence.inspect(binding.sessionId)
+    let stored = await inspectSession(ctx.sessionPersistence, binding.sessionId)
     if (stored.meta.origin === 'subagent') return null
     // 历史迁移仅由卸载输入入口后的维护桥执行；不能借用仍可接收 Web 输入的观察句柄。
     if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw notDrained('execution_session_already_live')
@@ -180,37 +186,40 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       agentOptions: { provider: definition.provider, model: definition.model }, setup: agentCtx => { agentCtx.tools.restrict({ allow: [] }) } })
     const observed = owned.agent
     try {
-      if (observed.status !== 'idle' || observed.inbox.hasPending || observed.session !== ctx.sessions.get(binding.sessionId)) throw notDrained('execution_session_already_live')
+      if (observed.status !== 'idle' || inboxHasPending(observed.inbox) || observed.session !== ctx.sessions.get(binding.sessionId)) throw notDrained('execution_session_already_live')
       return await observed.runMaintenance(async signal => {
         const events = observed.session.snapshotEvents(), lastEnd = events.findLast(event => event.type === 'turn/end')
         validateHistory(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
         const inputs = events.filter(event => event.type === 'user/message')
         const lastInput = inputs.findLast(event => event.data.source?.executionSession)
-        if (!lastEnd || !lastInput || lastEnd.seq < lastInput.seq || observed.inbox.hasPending
+        if (!lastEnd || !lastInput || lastEnd.seq < lastInput.seq || inboxHasPending(observed.inbox)
           || binding.status === 'running' && lastInput.data.source.executionSession.leaseEpoch >= binding.leaseEpoch
-          || inputs.some(event => event.data.source?.kind !== 'coordinator' && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt' && event.data.source.form === 'snapshot'))
+          || inputs.some(event => event.data.source?.kind !== 'coordinator' && !isRuntimeContext(event.data.source))
           || inputs.some(event => event.data.source?.kind === 'coordinator' && event.data.source.executionSession?.sessionId !== binding.sessionId)
           || events.some(event => event.seq > lastEnd.seq && event.type !== 'session/end-seed')) throw failure('execution_observer_session_unsafe')
         await ctx.sessions.flush(observed.session)
-        stored = await ctx.sessionPersistence.inspect(binding.sessionId)
-        const unchanged = () => !signal.aborted && !observed.inbox.hasPending && JSON.stringify(observed.session.snapshotEvents()) === JSON.stringify(events)
+        stored = await inspectSession(ctx.sessionPersistence, binding.sessionId)
+        const unchanged = () => !signal.aborted && !inboxHasPending(observed.inbox) && JSON.stringify(observed.session.snapshotEvents()) === JSON.stringify(events)
         if (!unchanged() || JSON.stringify(stored.events) !== JSON.stringify(events)) throw failure('execution_observer_session_unsafe')
         const sessionId = `execution-${createHash('sha256').update(JSON.stringify([binding.sessionId,binding.nodeRunId,binding.inputDigest,binding.leaseEpoch])).digest('hex').slice(0,40)}`
-        const event = { type: 'dingtalk/execution-session-rebind', seq: events.length, time: Date.now(), ignorable: true,
+        const cut = { type: 'session/end-seed', seq: events.length, time: Date.now(), data: { inherited: true } }
+        const event = { type: REBIND_EVENT, seq: events.length + 1, time: cut.time, ignorable: true,
           data: { parentSessionId: binding.sessionId, sessionId, inputDigest: binding.inputDigest, leaseEpoch: binding.leaseEpoch } }
         let previous
-        try { previous = await ctx.sessionPersistence.inspect(sessionId) } catch (error) {
+        try { previous = await inspectSession(ctx.sessionPersistence, sessionId) } catch (error) {
           if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== sessionId) throw error
         }
         if (ctx.agents.get(sessionId) || ctx.sessions.get(sessionId)) throw failure('execution_observer_session_unsafe')
+        const ownStart = previous?.events[events.length]?.type === 'session/end-seed'
+          && previous.events[events.length].data.inherited === true ? events.length + 1 : events.length
         if (previous && (previous.meta.origin !== 'subagent' || previous.meta.parentSession !== binding.sessionId || previous.meta.cwd !== stored.meta.cwd
           || JSON.stringify(previous.events.slice(0,events.length)) !== JSON.stringify(events)
-          || previous.events[events.length]?.type !== event.type || JSON.stringify(previous.events[events.length]?.data) !== JSON.stringify(event.data)
-          || previous.events.slice(events.length+1).some(item => item.type !== 'session/end-seed'))) throw failure('execution_observer_session_unsafe')
+          || !isRecord(previous.events[ownStart] ?? {}, REBIND_EVENT) || JSON.stringify(previous.events[ownStart]?.data) !== JSON.stringify(event.data)
+          || previous.events.slice(ownStart+1).some(item => item.type !== 'session/end-seed'))) throw failure('execution_observer_session_unsafe')
         const options = { agentOptions: { provider: definition.provider, model: definition.model }, setup: agentCtx => { agentCtx.tools.restrict({ allow: [] }) } }
         const child = previous ? await ctx.agents.resume({ ...options, resumeSessionId: sessionId })
           : await ctx.agents.create({ ...options, sessionId, meta: { cwd: stored.meta.cwd, parentSession: binding.sessionId, origin: 'subagent', isSeeded: true },
-            seed: [...events,event], inheritedEventCount: events.length })
+            seed: [...events, cut, event], inheritedEventCount: events.length })
         try {
           await ctx.sessions.flush(child.agent.session)
           if (!unchanged()) throw failure('execution_observer_session_unsafe')
@@ -425,14 +434,14 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (!await current(entry)) return { status: entry.cancelled || closed ? 'cancelled' : 'stale' }
         if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw notDrained('execution_session_already_live')
         let stored
-        try { stored = await ctx.sessionPersistence.inspect(binding.sessionId) }
+        try { stored = await inspectSession(ctx.sessionPersistence, binding.sessionId) }
         catch (error) {
           // 原生 inspect 用专门错误表示不存在；I/O、损坏和其他错误必须继续失败。
           if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== binding.sessionId) throw error
         }
         if (binding.sessionBound && !stored) throw failure('execution_session_missing')
         if (stored) {
-          const move = stored.events.find(event => event.type === 'dingtalk/execution-session-rebind')
+          const move = stored.events.find(event => isRecord(event, REBIND_EVENT))
           if (move && (stored.meta.origin !== 'subagent' || stored.meta.parentSession !== move.data.parentSessionId)) throw failure('execution_session_identity_mismatch')
           validateHistory(stored.events, entry.binding)
           entry.steps = stored.events.filter(event => event.type === 'step/start').length

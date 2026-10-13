@@ -1,3 +1,4 @@
+import { inspectSession } from './session-persistence.js'
 import { sessionWorkspace, nameSession } from './session-workspaces.js'
 import { groupReplyInstructions, assertGroupReply } from './workflow-notifications.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -202,9 +203,10 @@ const withHumanBlockerHistory = (task, blocker) => {
 const activityDetail = (event, session) => {
   if (event.type === 'tool/call') return { tool: event.data?.name ?? 'unknown', ...(event.data?.callId ? { callId: event.data.callId } : {}) }
   if (event.type === 'tool/result') {
-    const callId = event.data?.message?.source?.callId
+    const message = event.data?.message
+    const callId = message?.role === 'tool' ? message.toolCallId : message?.source?.callId
     const call = callId && session.snapshotEvents().findLast(item => item.type === 'tool/call' && item.data?.callId === callId)
-    const result = event.data?.message?.content?.find(item => item.type === 'tool-result')
+    const result = message?.role === 'tool' ? message : message?.content?.find(item => item.type === 'tool-result')
     const eventTime = typeof event.time === 'number' ? event.time : Date.parse(event.time)
     const callTime = typeof call?.time === 'number' ? call.time : Date.parse(call?.time)
     return { tool: call?.data?.name ?? 'unknown', ...(typeof result?.isError === 'boolean' ? { isError: result.isError } : {}),
@@ -2396,20 +2398,20 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           }
         }
         const persistence = ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
-        if (persistence?.prepare && completedActivityAuditQueue.length) {
+        if (persistence?.open && completedActivityAuditQueue.length) {
           const audit = completedActivityAuditQueue.shift()
           if (!activityProjectionFailures.has(audit.taskId)) {
             let prepared
             try {
-              prepared = await persistence.prepare(SessionId(audit.sessionId), AbortSignal.timeout(resumeTimeoutMs))
-              await reconcileActivityProjection(audit.taskId, prepared.session)
+              prepared = await inspectSession(persistence, SessionId(audit.sessionId), { signal: AbortSignal.timeout(resumeTimeoutMs) })
+              await reconcileActivityProjection(audit.taskId, { id: prepared.meta.id, snapshotEvents: () => prepared.events })
             } catch (error) {
-              if (!prepared && /^session "[^"]+" not found$/u.test(error.message)) completedActivityAuditUnavailable.set(audit.taskId, 'session-not-found')
+              if (!prepared && error.name === 'SessionPersistenceNotFoundError' && error.sessionId === audit.sessionId) completedActivityAuditUnavailable.set(audit.taskId, 'session-not-found')
               else {
                 completedActivityAuditQueue.push(audit)
                 recoveryIssues.push({ taskId: audit.taskId, kind: 'activity-projection', error: error.message })
               }
-            } finally { prepared?.[Symbol.dispose]?.() }
+            }
           } else completedActivityAuditQueue.push(audit)
         }
       })
@@ -2889,7 +2891,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
         await reports.drain()
         await pumpTail
         const all = [...leafHandles.values(), ...residentHandles.values()]
-        await ctx.subagents.drainContinuableDescendants(all.map((handle) => handle.agent))
+        await ctx.subagents.drainDescendants(all.map((handle) => handle.agent))
         await Promise.all(all.map((handle) => handle.dispose()))
         await Promise.allSettled([...pendingLeafDisposals])
         leafHandles.clear(); residentHandles.clear(); leafTaskBySession.clear(); await activityTail; await performanceTail; await store.close()

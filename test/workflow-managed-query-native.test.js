@@ -1,3 +1,4 @@
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rename, readdir } from 'node:fs/promises'
@@ -12,7 +13,7 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { LlmRuntime, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
-import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
@@ -89,7 +90,7 @@ test('工程v26正式服务通过原生节点工具消费冻结配置，移动�
     new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
     new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false }); new LlmRuntime(ctx); new ToolRuntime(ctx)
     new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
-    new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+    await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
     await ctx.plugin(LocalCredentialProvider, { path: join(root, 'credentials.yaml'), watch: false })
     configuration = createWorkflowConfiguration({ instanceId: config.instanceId, credentials: ctx.credentials, workflowIds: ['task-engineering'], webActorId: identity.actorId })
     class Scripted extends LlmAdapter {
@@ -144,7 +145,7 @@ test('工程v26正式服务通过原生节点工具消费冻结配置，移动�
   assert.deepEqual(definition.nodes.find(node => node.id === 'apply-changes').allowedTools, ['engineering_repo_inspect', 'engineering_apply_edits'])
   assert.ok(requests.some(request => JSON.stringify(request.tools).includes('query_readonly_database')))
   const originalNode = old.state.nodes.find(node => node.nodeId === 'inspect-and-propose')
-  const evidenceRefs = readExecutedAgentQueryRefs((await ctx.sessionPersistence.inspect(originalNode.sessionId)).events, ['query_readonly_database'])
+  const evidenceRefs = readExecutedAgentQueryRefs((await inspectSession(ctx.sessionPersistence, originalNode.sessionId)).events, ['query_readonly_database'])
   assert.equal(evidenceRefs.length, 1)
   assert.deepEqual((await service.execution.artifacts.read(evidenceRefs[0])).result.rows, [{ id: 7 }])
   await save('dbConfig', 'plain', JSON.stringify({ ...imported.config, db: 'current_database' }), 'json'); await save('dbPassword', 'secret', 'native-fixture-secret-new')
@@ -188,7 +189,7 @@ test('工程v26正式服务通过原生节点工具消费冻结配置，移动�
   assert.equal(connections.length, 4)
   assert.deepEqual(connections.at(-1), { database: 'reset_database', password: 'native-fixture-secret-reset' })
   const resetQueried = await service.execution.controller.state(reset.newRunId), resetNode = resetQueried.nodes.find(item => item.nodeId === 'inspect-and-propose')
-  assert.equal(readExecutedAgentQueryRefs((await ctx.sessionPersistence.inspect(resetNode.sessionId)).events, ['query_readonly_database']).length, 1)
+  assert.equal(readExecutedAgentQueryRefs((await inspectSession(ctx.sessionPersistence, resetNode.sessionId)).events, ['query_readonly_database']).length, 1)
   await service.execution.controller.pause({ commandId: 'pause-reset-run', runId: reset.newRunId, reason: '重置Run冻结与原生消费验收完成' })
   for (const variant of ['legacy-only', 'no-permission']) {
     await close()

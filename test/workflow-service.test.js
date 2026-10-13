@@ -1,3 +1,4 @@
+import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 import { startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -7162,7 +7163,7 @@ for(const variant of ['unknown','version','quote','topic','explicit'])test(`语�
 test('旧provider未提交通过受管证据重分类后同Run同Session恢复', async t => {
   let calls = 0, events = []
   const { service, execution } = await fixture(t, 'owner', undefined, {
-    ctx: { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events }) } },
+    ctx: { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: sessionPersistenceFixture(async () => ({ events })) },
     executionSessions: { async run({ binding, onSessionBound, onResult }) {
       calls++; await onSessionBound()
       if (calls === 1) {

@@ -1,7 +1,9 @@
+import { findSessionLog, sessionPersistenceFixture } from './fixtures/session-persistence.js'
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import { sessionWorkspace, taskDirectories, taskFilePath } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import testRunner from 'node:test'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
@@ -13,7 +15,7 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { LlmRuntime, LlmAdapter, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
-import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createExecutionSessions, inspectLegacyTurnFailure } from '../packages/dingtalk-dsh-assistant/execution-session.js'
@@ -25,13 +27,15 @@ import { validateAgentWorkResult, agentWorkResultSchema, createInvestigationWork
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 
+// Process fixtures run only the requested phase, without registering the parent suites.
+const test = process.argv[2] === '--execution-session-child' ? () => {} : testRunner
 const self = fileURLToPath(import.meta.url)
 const artifacts = resolve(dirname(self), '../docs/tmp/execution-session-native')
 const binding = (extra = {}) => ({ taskId: 'task', runId: 'run', nodeRunId: 'node', generation: 1, leaseEpoch: 1, inputDigest: 'input-R1', sessionId: 'session-node-r1', sessionBound: false, ...extra })
 const definition = (extra = {}) => ({ provider: 'execution-fixture', model: 'scripted', prompt: 'R1_OLD_MARKER_30ba', allowedTools: ['read_fixture'], outputSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false }, ...extra })
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const submit = answer => ({ name: 'execution_node_submit', args: { output: { answer } } })
-const leases = events => [...new Set(events.flatMap(event => event.type === 'dingtalk/execution-session' ? [event.data.creationLease]
+const leases = events => [...new Set(events.flatMap(event => event.type === 'plugin:dingtalk/execution-session' ? [event.data.creationLease]
   : event.type === 'user/message' && event.data.source.executionSession ? [event.data.source.executionSession.leaseEpoch] : []))]
 async function temp() { await mkdir(artifacts, { recursive: true }); return mkdtemp(join(artifacts, 'run-')) }
 
@@ -44,7 +48,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
-  new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   const requests = [], reads = [], effects = [], handles = []
   await writeFile(join(root, 'fixture.txt'), 'NATIVE_READ_VALUE_922d')
   ctx.on('agent/created', ({ agent }) => { handles.push(agent) })
@@ -94,7 +98,7 @@ async function processPhase(root, phase) {
   const h = await host({ root, script: phase === 'initial' ? [{ name: 'read_fixture' }, submit('first')] : [submit('resumed')] })
   try {
     const result = await drive(h, { binding: binding({ leaseEpoch: phase === 'initial' ? 1 : 2, sessionBound: phase !== 'initial' }) })
-    const persisted = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+    const persisted = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
     await writeFile(join(root, phase + '.json'), JSON.stringify({ pid: process.pid, result, events: persisted.events, requests: h.requests }))
   } finally { await h.close() }
 }
@@ -106,7 +110,7 @@ if (process.argv[2] === '--execution-session-child') {
     const root = await temp()
     const first = await host({ root, script: [{ text: '本轮未能得到结论' }] })
     assert.equal((await drive(first)).reason, 'execution_no_submission')
-    const prior = await first.ctx.sessionPersistence.inspect(binding().sessionId)
+    const prior = await inspectSession(first.ctx.sessionPersistence, binding().sessionId)
     await first.close()
     const next = await host({ root, script: [submit('recovered')] })
     t.after(() => next.close())
@@ -114,9 +118,9 @@ if (process.argv[2] === '--execution-session-child') {
       strategy: '原路径没有结果，按已登记目录读取目标材料后重新判断', evidenceRefs: ['proof/diagnosis.json'] }
     const result = await drive(next, { binding: binding({ leaseEpoch: 2, sessionBound: true }), recoveryContext })
     assert.equal(result.status, 'submitted')
-    const saved = await next.ctx.sessionPersistence.inspect(binding().sessionId)
+    const saved = await inspectSession(next.ctx.sessionPersistence, binding().sessionId)
     assert.deepEqual(saved.events.slice(0, prior.events.length), prior.events)
-    assert.equal(saved.events.filter(event => event.type === 'dingtalk/execution-session').length, 1)
+    assert.equal(saved.events.filter(event => event.type === 'plugin:dingtalk/execution-session').length, 1)
     const latest = saved.events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
     assert.deepEqual(JSON.parse(latest.data.content[0].text), { requirement: 'read and submit' })
     assert.match(latest.data.content[1].text, /原路径没有结果/u)
@@ -142,8 +146,8 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(run.status,'submitted');assert.equal(checks,3);assert.equal(accepted,1);assert.equal(h.requests.length,4)
     assert.match(queryRef,/^tasks\/task\/sha256-/u)
     assert.ok(JSON.stringify(h.requests[3]).includes('不可截短为文件名'))
-    assert.deepEqual(readExecutedAgentQueryRefs((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events,[tool.name]),[queryRef])
-    assert.deepEqual(readExecutedAgentQueryRefs((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events,['unrelated-tool']),[])
+    assert.deepEqual(readExecutedAgentQueryRefs((await inspectSession(h.ctx.sessionPersistence, binding().sessionId)).events,[tool.name]),[queryRef])
+    assert.deepEqual(readExecutedAgentQueryRefs((await inspectSession(h.ctx.sessionPersistence, binding().sessionId)).events,['unrelated-tool']),[])
   })
   test('原生工具缺失路径为结构化结果，不停止queued读取；模型list纠正后能提交', async t => {
     const calls=[],inspect=args=>({name:'engineering_repo_inspect',args})
@@ -159,7 +163,7 @@ if (process.argv[2] === '--execution-session-child') {
     const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
     assert.equal(result.status,'submitted');assert.equal(result.output.answer,'corrected');assert.equal(calls.length,4)
     assert.equal(calls[1].path,'src/other.vue')
-    const serialized=JSON.stringify((await h.ctx.sessionPersistence.inspect(binding().sessionId)).events)
+    const serialized=JSON.stringify((await inspectSession(h.ctx.sessionPersistence, binding().sessionId)).events)
     assert.ok(serialized.includes('ENGINEERING_READ_NOT_FOUND'));assert.ok(!serialized.includes('execution_attempt_stopped'))
   })
   test('原生工具安全门禁及普通异常仍停止会话和queued读取，不白名单泛化错误',async t=>{
@@ -213,8 +217,8 @@ if (process.argv[2] === '--execution-session-child') {
     const result = await drive(h, {
       onSessionBound: async () => {
         assert.equal(h.requests.length, 0)
-        const durable = await h.ctx.sessionPersistence.inspect(binding().sessionId)
-        assert.equal(durable.events[0].type, 'dingtalk/execution-session')
+        const durable = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
+        assert.equal(durable.events[0].type, 'plugin:dingtalk/execution-session')
         assert.equal(durable.events[0].data.identity.inputDigest, 'input-R1')
         assert.equal(durable.events[0].data.creationLease, 1)
         assert.equal(durable.events[0].ignorable, true)
@@ -224,7 +228,7 @@ if (process.argv[2] === '--execution-session-child') {
         assert.equal(bound, true)
         assert.deepEqual(value, { answer: 'complete' })
         assert.equal(h.ctx.agents.get(binding().sessionId), undefined)
-        const durable = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+        const durable = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
         assert.equal(durable.events.filter(e => e.type === 'tool/result').length, 3)
         completed++
       },
@@ -271,7 +275,7 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(h.requests.length, 4)
     assert.ok(JSON.stringify(h.requests[1]).includes('execution_arguments_invalid'))
     assert.ok(JSON.stringify(h.requests[3]).includes('execution_arguments_invalid'))
-    const history = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+    const history = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
     assert.deepEqual(leases(history.events), [1])
     assert.ok(JSON.stringify(history.events).includes('execution_arguments_invalid'))
   })
@@ -315,7 +319,7 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(result.reason, 'execution_tool_not_allowed')
     assert.deepEqual(h.effects, [])
     assert.equal(h.requests.length, 1)
-    const stored = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+    const stored = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
     assert.ok(JSON.stringify(stored.events).includes('execution_tool_not_allowed'))
   })
 
@@ -339,7 +343,7 @@ if (process.argv[2] === '--execution-session-child') {
     await assert.rejects(drive(h, { binding: binding({ sessionBound: true }) }), { code: 'execution_session_missing' })
     assert.equal(h.ctx.sessions.get(binding().sessionId), undefined)
     const foreign = await h.ctx.agents.create({ sessionId: binding().sessionId })
-    foreign.agent.session.append('session/title', { title: 'unrelated' })
+    h.ctx.sessionTitle.rename(foreign.agent.session, 'unrelated')
     await h.ctx.sessions.flush(foreign.agent.session); await foreign.dispose()
     await assert.rejects(drive(h), { code: 'execution_session_identity_mismatch' })
     assert.equal(h.requests.length, 0)
@@ -353,8 +357,8 @@ if (process.argv[2] === '--execution-session-child') {
     await assert.rejects(drive(h, { binding: binding({ inputDigest: 'wrong', leaseEpoch: 2 }) }), { code: 'execution_session_identity_mismatch' })
     const result = await drive(h, { binding: binding({ leaseEpoch: 2, sessionBound: false }) })
     assert.equal(result.status, 'submitted')
-    const stored = await h.ctx.sessionPersistence.inspect(binding().sessionId)
-    assert.equal(stored.events.filter(e => e.type === 'dingtalk/execution-session').length, 1)
+    const stored = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
+    assert.equal(stored.events.filter(e => e.type === 'plugin:dingtalk/execution-session').length, 1)
     assert.deepEqual(leases(stored.events), [1, 2])
   })
 
@@ -389,7 +393,7 @@ if (process.argv[2] === '--execution-session-child') {
     assert.equal(callbacks, 0); assert.equal(h.requests.length, 1)
     assert.equal(h.ctx.agents.get(binding().sessionId), undefined)
     assert.equal(h.manager.assertDrained(binding()), true)
-    const durable = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+    const durable = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
     assert.equal(durable.events.filter(e => e.type === 'tool/result').length, 1)
 
     const h2 = await host({ script: [{ name: 'held_read' }, { name: 'unsafe_write' }] })
@@ -423,7 +427,7 @@ if (process.argv[2] === '--execution-session-child') {
     assert.notEqual(initial.pid, resumed.pid)
     assert.deepEqual(resumed.events.slice(0, initial.events.length), initial.events)
     assert.deepEqual(leases(resumed.events), [1, 2])
-    assert.equal(resumed.events.filter(e => e.type === 'dingtalk/execution-session').length, 1)
+    assert.equal(resumed.events.filter(e => e.type === 'plugin:dingtalk/execution-session').length, 1)
     assert.equal(resumed.requests.length, 1)
     assert.ok(JSON.stringify(resumed.requests[0]).includes('NATIVE_READ_VALUE_922d'))
     assert.equal(resumed.result.status, 'submitted')
@@ -495,13 +499,13 @@ test('消息原生会话：查询纠正、提交和跨Host补充恢复，无虚�
   assert.equal(result.status, 'submitted'); assert.equal(seen.length, 2)
   assert.ok(seen.every(value => value.kind === 'message-unit' && !Object.hasOwn(value, 'taskId')))
   assert.ok(JSON.stringify(h.requests[1]).includes('correctable_error'))
-  const first = await h.ctx.sessionPersistence.inspect('message-session')
+  const first = await inspectSession(h.ctx.sessionPersistence, 'message-session')
   assert.equal(first.events[0].data.version, 2)
   await h.close()
   const next = await host({ root, tools: [tool], script: [submit('continued')] }); t.after(() => next.close())
   const resumed = messageBinding({ sessionBound: true, leaseEpoch: 2, inputVersion: 2, inputDigest: 'clarified-input' })
   assert.equal((await drive(next, { binding: resumed, definition: definition({ allowedTools: ['project_query'] }) })).status, 'submitted')
-  const history = await next.ctx.sessionPersistence.inspect('message-session')
+  const history = await inspectSession(next.ctx.sessionPersistence, 'message-session')
   assert.deepEqual(history.events.slice(0, first.events.length), first.events)
   await assert.rejects(drive(next, { binding: messageBinding({ taskId: 'fake' }) }), { code: 'execution_binding_invalid' })
   await assert.rejects(drive(next, { binding: messageBinding({ leaseEpoch: 3 }) }), { code: 'execution_session_identity_mismatch' })
@@ -571,10 +575,10 @@ test('显式调查节点同Session补充：Host历史逐项匹配，任务身份
   const h = await host({ script: [submit('need environment'), submit('answered with UAT2')] }); t.after(() => h.close())
   const first = binding({ kind: 'task-node', inputVersion: 1, inputHistory: [] })
   assert.equal((await drive(h, { binding: first })).status, 'submitted')
-  const prior = await h.ctx.sessionPersistence.inspect(first.sessionId)
+  const prior = await inspectSession(h.ctx.sessionPersistence, first.sessionId)
   const second = { ...first, inputVersion: 2, inputDigest: 'input-with-environment', inputHistory: [{ inputVersion: 1, inputDigest: first.inputDigest }], leaseEpoch: 2, sessionBound: true }
   assert.equal((await drive(h, { binding: second, input: { environment: 'uat2' } })).status, 'submitted')
-  const resumed = await h.ctx.sessionPersistence.inspect(first.sessionId)
+  const resumed = await inspectSession(h.ctx.sessionPersistence, first.sessionId)
   assert.deepEqual(resumed.events.slice(0, prior.events.length), prior.events)
   const turns = resumed.events.filter(event => event.type === 'user/message').map(event => event.data.source.executionSession)
   assert.deepEqual(turns.map(turn => [turn.inputVersion, turn.inputDigest, turn.leaseEpoch]), [[1, 'input-R1', 1], [2, 'input-with-environment', 2]])
@@ -627,11 +631,11 @@ test('Host输出校验默认fatal，校验期间失效的lease不可软化', asy
 test('新原生会话使用Host工作区meta，模型input不能覆盖；恢复保持原metadata', async t => {
   const root = await temp(), workspace = await sessionWorkspace(resolve(root), 'execution'); let lookups = 0; const h = await host({ root, getWorkspaceDir: () => { lookups++; return workspace }, script: [submit('first'), submit('second')] }); t.after(() => h.close())
   await drive(h, { input: { request: '核对草稿字段', cwd: resolve('docs'), workspaceDir: resolve('test') } })
-  const initial = await h.ctx.sessionPersistence.inspect(binding().sessionId)
+  const initial = await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
   assert.equal(initial.meta.cwd, workspace)
   assert.equal(initial.events.findLast(event => event.type === 'session/title').data.title, '核对草稿字段 · 任务执行')
   await drive(h, { binding: binding({ leaseEpoch: 2, sessionBound: true }) })
-  assert.equal((await h.ctx.sessionPersistence.inspect(binding().sessionId)).meta.cwd, workspace)
+  assert.equal((await inspectSession(h.ctx.sessionPersistence, binding().sessionId)).meta.cwd, workspace)
   assert.equal(lookups, 1)
   const invalid = await host({ getWorkspaceDir: () => 'relative/path' }); t.after(() => invalid.close())
   await assert.rejects(drive(invalid), { code: 'execution_workspace_invalid' })
@@ -651,7 +655,7 @@ test('同消息不同unit原生并行且取消只排空目标unit',async t=>{
  assert.equal((await first).status,'cancelled')
  assert.equal(h.manager.assertDrained(messageBinding()),true)
  assert.equal(h.manager.assertDrained(secondBinding),true)
- assert.ok((await h.ctx.sessionPersistence.inspect(secondBinding.sessionId)).events.some(e=>e.type==='tool/result'))
+ assert.ok((await inspectSession(h.ctx.sessionPersistence, secondBinding.sessionId)).events.some(e=>e.type==='tool/result'))
 })
 
 
@@ -671,11 +675,11 @@ test('任务原生节点工作目录隔离，宿主重启恢复原cwd且原始�
   const locations = []
   for (const identity of identities) {
     assert.equal((await drive(h, { binding: identity, input: { request: '目录隔离', taskId: 'forged', cwd: root } })).status, 'submitted')
-    const saved = await h.ctx.sessionPersistence.inspect(identity.sessionId)
+    const saved = await inspectSession(h.ctx.sessionPersistence, identity.sessionId)
     const expected = taskFilePath(root, identity.taskId, 'work', identity.nodeRunId)
     assert.equal(saved.meta.cwd, expected)
     await writeFile(join(expected, 'draft.txt'), identity.sessionId)
-    const location = h.ctx.sessionPersistence.locate(saved.meta).path
+    const location = await findSessionLog(join(root, 'sessions'), saved.meta.id)
     assert.ok(location.startsWith(join(root, 'sessions') + sep))
     assert.ok(!(location.startsWith(join(root, 'tasks') + sep)))
     assert.match(await readFile(location, 'utf8'), /dingtalk\/execution-session/)
@@ -690,9 +694,9 @@ test('任务原生节点工作目录隔离，宿主重启恢复原cwd且原始�
   const resumed = await host({ root, getWorkspaceDir: () => { throw new Error('must not reselect persisted cwd') } })
   t.after(() => resumed.close())
   assert.equal((await drive(resumed, { binding: { ...identities[0], leaseEpoch: 2, sessionBound: true } })).status, 'submitted')
-  const saved = await resumed.ctx.sessionPersistence.inspect(identities[0].sessionId)
+  const saved = await inspectSession(resumed.ctx.sessionPersistence, identities[0].sessionId)
   assert.equal(saved.meta.cwd, taskFilePath(root, 'task-a', 'work', 'node-a'))
-  assert.equal(resumed.ctx.sessionPersistence.locate(saved.meta).path, locations[0])
+  assert.equal(await findSessionLog(join(root, 'sessions'), saved.meta.id), locations[0])
   assert.deepEqual(leases(saved.events), [1, 2])
 })
 
@@ -750,13 +754,13 @@ for (const transport of [false,true]) test(`旧provider失败只读重分类核�
   assert.equal(proof.failure.code, 'EXECUTION_PROVIDER_TRANSIENT')
   await assert.rejects(inspectLegacyTurnFailure(h.ctx, { ...b, inputDigest: 'forged' }, previousCode), { code: 'execution_session_identity_mismatch' })
   assert.equal(await inspectLegacyTurnFailure(h.ctx, { ...b, leaseEpoch: 2 }, previousCode), null)
-  const stored = await h.ctx.sessionPersistence.inspect(b.sessionId)
+  const stored = await inspectSession(h.ctx.sessionPersistence, b.sessionId)
   for (const extra of [
     { type: 'user/message', data: { source: { kind: 'web' } } },
     { type: 'agent/inbox/spliced', data: { inserted: [{ source: { kind: 'coordinator', executionSession: { sessionId: b.sessionId, leaseEpoch: 1 } } }] } },
     { type: 'tool/result', data: { name: 'execution_node_submit' } },
   ]) {
-    const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events: [...stored.events, { ...extra, seq: stored.events.at(-1).seq + 1 }] }) } }
+    const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: sessionPersistenceFixture(async () => ({ events: [...stored.events, { ...extra, seq: stored.events.at(-1).seq + 1 }] })) }
     assert.equal(await inspectLegacyTurnFailure(ctx, b, previousCode), null)
   }
   assert.equal(await inspectLegacyTurnFailure({ ...h.ctx, agents: { get: () => ({}) } }, b, previousCode), null)
@@ -782,7 +786,7 @@ test('历史中断证据仅接纳最后本轮精确只读工具取消形态', as
     { seq: 2, type: 'tool/call', data: { name: 'engineering_repo_inspect', callId: 'call' } },
     { seq: 3, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'call', isError: true, content: [{ type: 'text', text: 'Error: [object Object]' }] }] } } },
     { seq: 4, type: 'step/end', data: {} }, { seq: 5, type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } }]
-  const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: { inspect: async () => ({ events }) } }
+  const ctx = { agents: { get() {} }, sessions: { get() {} }, sessionPersistence: sessionPersistenceFixture(async () => ({ events })) }
   assert.equal((await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')).failure.code,'EXECUTION_TURN_INTERRUPTED')
   assert.equal(await inspectLegacyTurnFailure(ctx,b),null)
   events[3].data.message.content[0].content[0].text = 'Error: real failure'
@@ -795,7 +799,7 @@ test('历史中断证据仅接纳最后本轮精确只读工具取消形态', as
 test('受管工程新会话声明原生子会话归属', async t => {
   const h=await host();t.after(()=>h.close())
   await drive(h)
-  assert.equal((await h.ctx.sessionPersistence.inspect(binding().sessionId)).meta.origin,'subagent')
+  assert.equal((await inspectSession(h.ctx.sessionPersistence, binding().sessionId)).meta.origin,'subagent')
 })
 
 test('旧工程冷会话在维护桥派生受管子会话', async t => {
@@ -804,12 +808,12 @@ test('旧工程冷会话在维护桥派生受管子会话', async t => {
   h.ctx.agents.create=options=>{const meta={...options.meta};delete meta.origin;return originalCreate({...options,meta})}
   await drive(h)
   h.ctx.agents.create=originalCreate
-  const before=await h.ctx.sessionPersistence.inspect(binding().sessionId)
+  const before=await inspectSession(h.ctx.sessionPersistence, binding().sessionId)
   let saved
   const proof=await h.manager.prepareManagedSession(binding({status:'running',sessionBound:true,leaseEpoch:2}),definition(),async p=>{saved=p})
   assert.equal(proof,saved)
   assert.equal(h.ctx.agents.get(binding().sessionId),undefined)
-  const child=await h.ctx.sessionPersistence.inspect(proof.sessionId)
+  const child=await inspectSession(h.ctx.sessionPersistence, proof.sessionId)
   assert.equal(child.meta.origin,'subagent');assert.equal(child.meta.parentSession,binding().sessionId)
   assert.equal(child.events.filter(e=>e.type==='user/message').length,before.events.filter(e=>e.type==='user/message').length)
   const result=await drive(h,{binding:binding({sessionId:proof.sessionId,sessionBound:true,leaseEpoch:3})})
@@ -846,7 +850,7 @@ test('历史scope工具错误按真实blocked尾部重分类，拒绝别的工�
  {seq:79,type:'tool/call',data:{name:'engineering_repo_inspect',callId:'call'}},
  {seq:80,type:'tool/result',data:{message:{content:[{type:'tool-result',toolCallId:'call',isError:true,content:[{type:'text',text:'Error: ENGINEERING_READ_PATH_INVALID'}]}]}}},
  {seq:81,type:'step/end',data:{}},{seq:82,type:'turn/end',data:{reason:{kind:'blocked'}}}]
- const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence: sessionPersistenceFixture(async()=>({events}))}
  assert.equal((await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')).failure.code,'ENGINEERING_READ_PATH_INVALID')
  events[2].data.name='other';assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null);events[2].data.name='engineering_repo_inspect'
  events[3].data.message.content[0].content[0].text='Error: other';assert.equal(await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed'),null)
@@ -865,7 +869,7 @@ for(const variant of ['valid','foreign','parent-after-rebind','parent-new-lease'
  if(variant==='inbox-parent-after')events.splice(4,0,{seq:94,type:'agent/inbox/spliced',data:{inserted:[input(94,'parent',2).data]}})
  if(variant==='current-submit')events.splice(-1,0,{seq:150,type:'tool/call',data:{name:'execution_node_submit'}})
  if(variant==='current-lease')events[4].data.source.executionSession.leaseEpoch=3
- const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence: sessionPersistenceFixture(async()=>({events}))}
  const proof=await inspectLegacyTurnFailure(ctx,b,'EXECUTION_PROVIDER_FAILED')
  if(variant==='valid'){assert.equal(proof.failure.code,'EXECUTION_PROVIDER_TRANSIENT');assert.equal(proof.inputSeq,98);assert.equal(proof.endSeq,153)}else assert.equal(proof,null)
 })
@@ -873,11 +877,11 @@ for(const variant of ['valid','foreign','parent-after-rebind','parent-new-lease'
 test('已提交候选经纯校验退回后原生同会话续行，保留旧提交历史',async t=>{
  const root=await temp(),first=await host({root,script:[submit('original-proposal')]})
  assert.equal((await drive(first)).status,'submitted')
- const before=await first.ctx.sessionPersistence.inspect(binding().sessionId);await first.close()
+ const before=await inspectSession(first.ctx.sessionPersistence, binding().sessionId);await first.close()
  const next=await host({root,script:[submit('corrected-proposal')]});t.after(()=>next.close())
  const result=await drive(next,{binding:binding({leaseEpoch:2,sessionBound:true}),recoveryContext:{kind:'execution-recovery-context',taskId:'task',runId:'run',nodeRunId:'node',diagnosis:'候选纯校验拒绝',strategy:'保留有效改动，纠正无效替换后重新提交',evidenceRefs:['proof/original-proposal','proof/validation']}})
  assert.equal(result.status,'submitted')
- const after=await next.ctx.sessionPersistence.inspect(binding().sessionId)
+ const after=await inspectSession(next.ctx.sessionPersistence, binding().sessionId)
  assert.deepEqual(after.events.slice(0,before.events.length),before.events)
  assert.match(JSON.stringify(next.requests[0]),/original-proposal/)
  assert.match(JSON.stringify(next.requests[0]),/纠正无效替换/)
@@ -892,8 +896,8 @@ test('共享材料previous参数反馈后原生同会话自行纠正并提交',a
  assert.equal(result.status,'submitted');assert.equal(calls.length,2)
  assert.ok(JSON.stringify(h.requests[1]).includes('invalid_source'))
  assert.match(JSON.stringify(h.requests[0]),/不能替换业务需求或改变UAT/);assert.match(JSON.stringify(h.requests[0]),/自行追加真人审批/)
- const events=(await h.ctx.sessionPersistence.inspect(binding().sessionId)).events
- assert.equal(events.filter(e=>e.type==='dingtalk/execution-session').length,1)
+ const events=(await inspectSession(h.ctx.sessionPersistence, binding().sessionId)).events
+ assert.equal(events.filter(e=>e.type==='plugin:dingtalk/execution-session').length,1)
 })
 for(const variant of ['valid','foreign','current','read','malformed','extra-error','submitted','missing-args'])test(`历史materials代次误用精确重分类：${variant}`,async()=>{
  const b=binding({sessionBound:true}),identity=Object.fromEntries(['taskId','runId','nodeRunId','generation','inputDigest','sessionId'].map(key=>[key,b[key]]))
@@ -908,7 +912,7 @@ for(const variant of ['valid','foreign','current','read','malformed','extra-erro
  {seq:5,type:'step/end',data:{}},{seq:6,type:'turn/end',data:{reason:{kind:'blocked'}}}]
  if(variant==='extra-error')events.splice(2,0,{...structuredClone(events[3]),seq:1.5})
  if(variant==='submitted')events.splice(2,0,{seq:1.5,type:'tool/call',data:{name:'execution_node_submit'}})
- const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence: sessionPersistenceFixture(async()=>({events}))}
  const proof=await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')
  if(variant==='valid')assert.equal(proof.failure.code,'QUERY_ARGUMENT_INVALID');else assert.equal(proof,null)
 })
@@ -926,7 +930,7 @@ for(const variant of ['valid','foreign','previous','read','malformed','extra-err
  {seq:5,type:'step/end',data:{}},{seq:6,type:'turn/end',data:{reason:{kind:'blocked'}}}]
  if(variant==='extra-error')events.splice(2,0,{...structuredClone(events[3]),seq:1.5})
  if(variant==='submitted')events.splice(2,0,{seq:1.5,type:'tool/call',data:{name:'execution_node_submit'}})
- const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence:{inspect:async()=>({events})}}
+ const ctx={agents:{get(){}},sessions:{get(){}},sessionPersistence: sessionPersistenceFixture(async()=>({events}))}
  const proof=await inspectLegacyTurnFailure(ctx,b,'execution_tool_failed')
  if(variant==='valid')assert.equal(proof.failure.code,'QUERY_ARGUMENT_INVALID');else assert.equal(proof,null)
 })
@@ -937,8 +941,8 @@ test('共享材料短引用反馈后原生同会话查索引再用完整引用�
  t.after(()=>h.close())
  const result=await drive(h,{definition:definition({allowedTools:['engineering_repo_inspect']})})
  assert.equal(result.status,'submitted');assert.equal(calls.length,3);assert.ok(JSON.stringify(h.requests[1]).includes('QUERY_ARGUMENT_INVALID'))
- const events=(await h.ctx.sessionPersistence.inspect(binding().sessionId)).events
- assert.equal(events.filter(e=>e.type==='dingtalk/execution-session').length,1)
+ const events=(await inspectSession(h.ctx.sessionPersistence, binding().sessionId)).events
+ assert.equal(events.filter(e=>e.type==='plugin:dingtalk/execution-session').length,1)
 })
 
 
@@ -1021,8 +1025,8 @@ if (process.argv[2] !== '--execution-session-child') {
     }else{
       assert.equal(state.run.status,'succeeded',JSON.stringify(state.controllerError));assert.equal(h.requests.length,2)
       assert.deepEqual(await artifacts.read(current.outputRef),outputs[1]);assert.equal(current.leaseEpoch,1)
-      const saved=await h.ctx.sessionPersistence.inspect(current.sessionId)
-      assert.equal(saved.events.filter(event=>event.type==='dingtalk/execution-session').length,1)
+      const saved=await inspectSession(h.ctx.sessionPersistence, current.sessionId)
+      assert.equal(saved.events.filter(event=>event.type==='plugin:dingtalk/execution-session').length,1)
       assert.match(JSON.stringify(saved.events),scenario==='backend-scope'?/ENGINEERING_TECHNICAL_PLAN_INVALID/:/LOCAL_ACCEPTANCE_PLAN_INVALID/)
     }
     assert.equal((await store.query({kind:'effect.list',runId:'run'})).length,0)

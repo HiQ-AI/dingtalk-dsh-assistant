@@ -1,3 +1,4 @@
+import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 import { scriptedCoordinator, actionDecision } from './fixtures/group-coordinator.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -68,7 +69,7 @@ async function fixture(t, execute = async () => answer('已回答'), options = {
   const notifications = options.notifications ?? { canDisclose: async () => true, send: async notice => { sent.push(notice); return { messageId: `reply-${sent.length}` } }, readback: async notice => ({ messageId: notice.ack.messageId, conversationId: 'g' }) }
   const taskOwnerSessions = { async run() { throw new Error('ORDINARY_ANSWER_MUST_NOT_CREATE_TASK') }, async close() {} }
   const messageAgentSessions = { run(options) { const flight = (async () => { calls.push(options); await options.onSessionBound(); const result = await execute(options, calls.length); await options.onResult(result); return { status: 'submitted', output: result } })(); flights.add(flight); void flight.then(() => flights.delete(flight), () => flights.delete(flight)); return flight }, async cancel() {}, async close() { await Promise.all([...flights]) } }
-  const open = () => openWorkflowService({ ctx: { sessions: { get: () => null }, sessionPersistence: { inspect: async () => ({ events: [] }) } }, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'owner', ...options.config }, legacy, coordinatorSessions, execution, notifications, taskOwnerSessions, messageAgentSessions })
+  const open = () => openWorkflowService({ ctx: { sessions: { get: () => null }, sessionPersistence: sessionPersistenceFixture(async () => ({ events: [] })) }, config: { groupIds: ['g'], ownerActorId: 'owner', webActorId: 'owner', ...options.config }, legacy, coordinatorSessions, execution, notifications, taskOwnerSessions, messageAgentSessions })
   let service
   t.after(async () => { await service?.close(); await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
   service = await open()

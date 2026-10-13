@@ -1,3 +1,5 @@
+import { requestSystemText, findSessionLog } from './fixtures/session-persistence.js'
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { projectOwnerContext } from '../packages/dingtalk-dsh-assistant/task-owner-context.js'
 import { ownerImmutableReadReceipts } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -15,7 +17,7 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { LlmRuntime, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
-import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createTaskOwnerSessions, previouslyReadOwnerArtifacts, ownerDecisionSchema } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
@@ -64,8 +66,12 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
     h.ctx.provide('agentPresets', { serviceFor: (_agent, name) => name === 'permissionPresets' ? permissions : undefined, async mount(agentCtx, id) {
       mounted.push(id)
       bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx))
-      if (mounted.length === 2) permissions.set(agentCtx.agent.session, 'workspace-write')
       return { id: 'native-fixture' }
+    } })
+    const resume = h.ctx.agents.resume.bind(h.ctx.agents)
+    h.ctx.agents.resume = options => resume({ ...options, setup(agentCtx, agent) {
+      permissions.set(agent.session, 'workspace-write')
+      return options.setup?.(agentCtx, agent)
     } })
     t.after(async () => { await h.close(); await standing.dispose(); await rm(root, { recursive: true, force: true }) })
     let executed = 0, delegated = 0, artifactReads = 0, cancellation
@@ -97,9 +103,9 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
     await cancellation
     assert.equal(h.requests[0].tools.some(x => x.name === 'subagent'), !['disabled', 'review'].includes(mode), '启用时完整公开preset工具')
     if (mode === 'correct') {
-      assert.match(h.requests[0].system, /PRESET_WORKSPACE_RULES_MARKER/)
-      assert.match(h.requests[0].system, /不绕过受管数据库变更、生产变更、发布和消息发送入口/)
-      assert.match(h.requests[0].system, /未知外部效果先回查原效果/)
+      assert.match(requestSystemText(h.requests[0]), /PRESET_WORKSPACE_RULES_MARKER/)
+      assert.match(requestSystemText(h.requests[0]), /不绕过受管数据库变更、生产变更、发布和消息发送入口/)
+      assert.match(requestSystemText(h.requests[0]), /未知外部效果先回查原效果/)
       assert.equal(result.status, 'submitted'); assert.equal(executed, 2)
       assert.deepEqual(receipts.map(x => x.phase), ['started', 'settled', 'started', 'settled'])
       assert.equal(receipts[1].result.isError, true); assert.equal(receipts[3].result.isError, false)
@@ -109,8 +115,7 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
       assert.match(JSON.stringify(h.requests[1]), /evidenceRef/)
       assert.match(JSON.stringify(h.requests[1]), /真实命令参数错误/)
       for (const [requestIndex,callId,refDigit,expectedText] of [[1,'call-1','2','真实命令参数错误'],[2,'call-2','4','真实业务检查通过']]) {
-        const blocks=h.requests[requestIndex].messages.flatMap(message=>message.content??[])
-        const toolResult=blocks.find(block=>block.type==='tool-result'&&block.toolCallId===callId)
+        const toolResult=h.requests[requestIndex].messages.find(message=>message.role==='tool'&&message.toolCallId===callId)
         assert.ok(toolResult,'实际SDK请求必须包含原工具结果')
         assert.match(JSON.stringify(toolResult.content),new RegExp(expectedText))
         assert.ok(JSON.stringify(toolResult.content).includes(`sha256-${refDigit.repeat(64)}.json`),'凭据引用与结果在同一tool-result中')
@@ -124,7 +129,7 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
         onNativeExecution: async () => { throw new Error('恢复仅提交，不重复业务工具') } })
       assert.equal(resumed.status, 'submitted')
       assert.deepEqual(mounted, [undefined, 'native-fixture'])
-      const persisted = await h.ctx.sessionPersistence.inspect('native-owner')
+      const persisted = await inspectSession(h.ctx.sessionPersistence, 'native-owner')
       assert.equal(persisted.events.filter(event => event.type === 'agent-preset/selected').length, 1)
     } else if (mode === 'background') {
       assert.equal(executed, 2); assert.equal(receipts.length, 4)
@@ -162,12 +167,12 @@ test('Owner原生回执保留SDK block反馈及value替换渲染', async t => {
     const receipts=[],ref=`sha256-${'8'.repeat(64)}.json`
     const result=await h.sessions.run({binding:{taskId:'post-task',sessionId:'post-owner',turnId:'turn',leaseEpoch:1,ownerEpoch:1,requirementRevision:1,inputDigest:'a'.repeat(64),sessionBound:false},input:{},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{},onNativeExecution:async receipt=>{receipts.push(receipt);return{evidenceRef:ref}}})
     assert.equal(result.status,'submitted');assert.equal(receipts.length,2)
-    const blocks=h.requests[1].messages.flatMap(message=>message.content??[]),toolResult=blocks.find(block=>block.type==='tool-result'&&block.toolCallId==='call-1')
+    const toolResult=h.requests[1].messages.find(message=>message.role==='tool'&&message.toolCallId==='call-1')
     assert.ok(toolResult)
     assert.equal(receipts[1].postExecutionDecision,mode==='block'?'block':'accept')
     if(mode==='block'){assert.match(JSON.stringify(toolResult),/HOST_BLOCK_REASON/);assert.ok(JSON.stringify(toolResult).includes(ref))}
     else{assert.match(JSON.stringify(toolResult),/SDK_RENDER:replaced/);assert.doesNotMatch(JSON.stringify(toolResult),/SDK_RENDER:original/);assert.ok(!JSON.stringify(toolResult).includes(ref),'value替换保持SDK schema和renderer，不强加content')}
-    const persisted=await h.ctx.sessionPersistence.inspect('post-owner')
+    const persisted=await inspectSession(h.ctx.sessionPersistence, 'post-owner')
     assert.equal(persisted.events.filter(event=>event.type==='user/message'&&event.data.source?.kind==='coordinator'&&JSON.stringify(event.data.content).includes(ref)).length,0,'回执不能额外追加coordinator消息')
   })
 })
@@ -190,7 +195,7 @@ test('Owner真实SDK续轮只保留一份可见需求基线并传入新动态状
     assert.ok(messages.includes('contextBaseDigest'))
     assert.ok(messages.includes(`\\"controlRevision\\":${leaseEpoch}`)||messages.includes(`"controlRevision":${leaseEpoch}`))
   }
-  const saved=await h.ctx.sessionPersistence.inspect('base-owner')
+  const saved=await inspectSession(h.ctx.sessionPersistence, 'base-owner')
   assert.equal(saved.events.filter(event=>event.type==='user/message'&&event.data.source?.ownerContextBase).length,1,'未变基线续轮不重新注入')
 })
 
@@ -296,7 +301,7 @@ test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async 
     criteria: requirement.acceptanceCriteria, sourceKey: 'source', eventKey: 'bind' } })
   if (['foreign-diagnostic','foreign-child','missing-child','failed-child','unsatisfied-child'].includes(mode)) {
     await assert.rejects(owner.drive('native-task'), mode==='foreign-diagnostic' ? /TASK_OWNER_NO_DECISION/ : /TASK_OWNER_REPEATED_INVALID_DECISION/)
-    const persisted = await h.ctx.sessionPersistence.inspect(initial.sessionId)
+    const persisted = await inspectSession(h.ctx.sessionPersistence, initial.sessionId)
     if(mode==='unsatisfied-child') assert.equal(checks,0,'satisfied-only schema rejects before Host completion authorization')
     else assert.match(JSON.stringify(persisted.events), mode==='foreign-diagnostic' ? /TASK_OWNER_ARTIFACT_SCOPE_MISMATCH/u : /TASK_OWNER_COMPLETION_UNVERIFIED/u)
     assert.equal(await store.query({ kind: 'task.owner.delivery-manifest', taskId: 'native-task' }), null)
@@ -341,7 +346,7 @@ test('状态候选同轮纠正，改写说明不能绕过相同动作检测；�
     assert.equal(result.status, repeat ? 'no_submission' : 'submitted')
     if (repeat) assert.equal(result.reason, 'TASK_OWNER_REPEATED_INVALID_DECISION')
     else assert.deepEqual(result.decision.condition, valid.condition)
-    const stored = await h.ctx.sessionPersistence.inspect('owner-condition')
+    const stored = await inspectSession(h.ctx.sessionPersistence, 'owner-condition')
     assert.match(JSON.stringify(stored.events), /候选未落账/u)
   }
 })
@@ -384,7 +389,7 @@ test('Owner compact context requires complete current constraints before submit 
   assert.equal(h.requests.length, 6)
   assert.match(JSON.stringify(h.requests[2]), /task_owner_current_context_unread/)
   assert.match(JSON.stringify(h.requests[3]), /task_owner_current_context_unread/)
-  const saved = await h.ctx.sessionPersistence.inspect('compact-owner')
+  const saved = await inspectSession(h.ctx.sessionPersistence, 'compact-owner')
   assert.ok(JSON.stringify(saved.events).includes(ref))
 })
 
@@ -434,7 +439,7 @@ test('unchanged context receipt survives consecutive turns without reread; chang
   input.goal.constraints = [marker.repeat(1800)]
   assert.equal(await run(6, await projectOwnerContext(input, artifacts)), 1)
   assert.equal(copies[5], copies[1]) // Restore one applicable copy from audit pages, without a new tool read.
-  const saved = await h.ctx.sessionPersistence.inspect('repeat-owner')
+  const saved = await inspectSession(h.ctx.sessionPersistence, 'repeat-owner')
   assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_owner_read_artifact').length, 6)
   assert.ok(saved.events.some(event => event.type === 'tool/result' && event.surfaceOp?.op === 'replace'))
   assert.ok(JSON.stringify(saved.events).includes(marker.repeat(100)))
@@ -461,9 +466,9 @@ test('generic DSH summary restores applicable complete read from audit without r
       ownerEpoch: 1, sessionBound: lease > 1, requirementRevision: input.task.requirementRevision }, input, ...projection,
       provider: 'owner-fixture', model: 'scripted', readArtifact: ref => artifacts.read(ref), onSessionBound: async () => {},
       onCandidate: async () => { if (lease === 1) {
-        const session = h.ctx.agents.get('generic-owner').session, shadowed = session.surface.nodes.slice(0, -1)
+        const session = h.ctx.agents.get('generic-owner').session, shadowed = session.surface.nodes.slice(1, -1)
         session.append('user/message', createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: 'Generic DSH historical summary, no full tool pages' }] }),
-          { surfaceOp: { op: 'replace', start: shadowed[0], end: shadowed.at(-1) }, sourceEventSeqs: shadowed })
+          { surfaceOp: { op: 'replace', startSeq: shadowed[0], endSeq: shadowed.at(-1) }, sourceEventSeqs: shadowed })
       } } })
     assert.equal(result.status, 'submitted'); return { steps: h.requests.length-start, request: JSON.stringify(h.requests[start]) }
   }
@@ -475,7 +480,7 @@ test('generic DSH summary restores applicable complete read from audit without r
   input.goal.constraints = [marker.repeat(2200)]
   const fourth = await run(4, await projectOwnerContext(input, artifacts)); assert.equal(fourth.steps, 1)
   assert.equal(fourth.request.split(marker).length-1, 2200)
-  const saved = await h.ctx.sessionPersistence.inspect('generic-owner')
+  const saved = await inspectSession(h.ctx.sessionPersistence, 'generic-owner')
   assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_owner_read_artifact').length, 4)
   assert.ok(saved.events.some(event => event.data.source?.ownerReadProjection))
 })
@@ -500,7 +505,7 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   }
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false,
     compression: 'none', writeBatchMaxDelayMs: 1 })
-  new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
   const requestChecks = []
   class Scripted extends LlmAdapter {
@@ -541,7 +546,7 @@ test('原生Owner同轮收到受信验收实际判定及持久工件引用', asy
   assert.equal(result.status, 'submitted')
   assert.match(JSON.stringify(h.requests[1]), /领域验收实际判定：unverified/u)
   assert.ok(JSON.stringify(h.requests[1]).includes(ref))
-  const saved = await h.ctx.sessionPersistence.inspect('assessment-owner')
+  const saved = await inspectSession(h.ctx.sessionPersistence, 'assessment-owner')
   assert.ok(JSON.stringify(saved.events).includes(message))
 })
 
@@ -560,24 +565,24 @@ test('同一个业务 Task 的原生 Owner 会话跨唤醒复用并持久记录�
   h.setLease(2)
   assert.equal((await run(2)).status, 'submitted')
   assert.deepEqual(seen, ['bound-1', 'candidate-1', 'bound-2', 'candidate-2'])
-  const saved = await h.ctx.sessionPersistence.inspect(sessionId)
-  assert.equal(saved.events.filter(event => event.type === 'dingtalk/task-owner-session').length, 1)
+  const saved = await inspectSession(h.ctx.sessionPersistence, sessionId)
+  assert.equal(saved.events.filter(event => event.type === 'plugin:dingtalk/task-owner-session').length, 1)
   assert.equal(saved.meta.cwd, join(root, 'session-workspaces', '任务负责'))
   assert.equal(saved.events.findLast(event => event.type === 'session/title').data.title, '整理任务交付报告 · 任务负责')
   assert.equal(saved.events.filter(event => event.type === 'user/message' && event.surfaceOp === 'append').length, 2)
   assert.equal(h.requests.length, 2)
   assert.ok(h.requests.every(request => request.tools.map(tool => tool.name).join(',') === 'task_owner_submit'))
-  assert.match(h.requests[0].system, /先完成必要调查，再用task-general-capability阶段/u)
-  assert.match(h.requests[0].system, /write-task-file/u)
-  assert.match(h.requests[0].system, /含capabilityStep时，本轮planChange.stages只能有一个阶段/u)
-  assert.match(h.requests[0].system, /已有计划的前序阶段必须全部成功/u)
-  assert.match(h.requests[0].system, /下一轮才追加群文件交付阶段，保留各阶段的gate/u)
-  assert.match(h.requests[0].system, /再安排task-group-file-delivery阶段/u)
-  assert.match(h.requests[0].system, /import-task-file/u)
-  assert.match(h.requests[0].system, /input严格含\{role,fileName,relativePath\}/u)
-  assert.match(h.requests[0].system, /Host只读来源后冻结大小和SHA256/u)
-  assert.match(h.requests[0].system, /二进制仅使用真实受信来源并已登记的artifactFiles/u)
-  assert.match(h.requests[0].system, /正文报告不能替代附件/u)
+  assert.match(requestSystemText(h.requests[0]), /先完成必要调查，再用task-general-capability阶段/u)
+  assert.match(requestSystemText(h.requests[0]), /write-task-file/u)
+  assert.match(requestSystemText(h.requests[0]), /含capabilityStep时，本轮planChange.stages只能有一个阶段/u)
+  assert.match(requestSystemText(h.requests[0]), /已有计划的前序阶段必须全部成功/u)
+  assert.match(requestSystemText(h.requests[0]), /下一轮才追加群文件交付阶段，保留各阶段的gate/u)
+  assert.match(requestSystemText(h.requests[0]), /再安排task-group-file-delivery阶段/u)
+  assert.match(requestSystemText(h.requests[0]), /import-task-file/u)
+  assert.match(requestSystemText(h.requests[0]), /input严格含\{role,fileName,relativePath\}/u)
+  assert.match(requestSystemText(h.requests[0]), /Host只读来源后冻结大小和SHA256/u)
+  assert.match(requestSystemText(h.requests[0]), /二进制仅使用真实受信来源并已登记的artifactFiles/u)
+  assert.match(requestSystemText(h.requests[0]), /正文报告不能替代附件/u)
 })
 
 test('原生Owner会话必须读取积压事件页后才能提交候选', async t => {
@@ -658,7 +663,7 @@ test('已绑定的负责人会话缺失时拒绝另建会话', async t => {
 
 test('会话存储读故障原样阻断，不能伪装为可重建的缺失', async () => {
   const ctx = { agents: { get: () => null }, sessions: { get: () => null },
-    sessionPersistence: { inspect: async () => { throw Object.assign(new Error('disk-read-failed'), { code: 'EIO' }) } } }
+    sessionPersistence: { open: async () => { throw Object.assign(new Error('disk-read-failed'), { code: 'EIO' }) } } }
   const sessions = createTaskOwnerSessions({ ctx, isCurrent: async () => true })
   await assert.rejects(sessions.run({ binding: { taskId: 'task-1', sessionId: 'session-1',
     turnId: 'turn-1', leaseEpoch: 1, ownerEpoch: 1, sessionBound: true }, input: {},
@@ -694,9 +699,9 @@ test('原生Owner公开摘要含内部编号时工具反馈要求改写，记录
   assert.equal(result.status, 'submitted')
   assert.equal(h.requests.length, 2)
   assert.deepEqual(candidates.map(value => value.summary), ['已开始整理资料。'])
-  assert.match(h.requests[0].system, /发给群成员的回复/u)
+  assert.match(requestSystemText(h.requests[0]), /发给群成员的回复/u)
   assert.match(JSON.stringify(h.requests[1]), /GROUP_REPLY_INTERNAL_DETAILS/u)
-  assert.ok((await h.ctx.sessionPersistence.inspect('public-session')).events.length > 0)
+  assert.ok((await inspectSession(h.ctx.sessionPersistence, 'public-session')).events.length > 0)
 })
 
 
@@ -716,9 +721,9 @@ test('Owner原生工作目录使用受信任务绑定，重启保持cwd及宿主
   const locations = []
   for (const taskId of ['task-a', 'task-b']) {
     assert.equal((await run(h, taskId)).status, 'submitted')
-    const saved = await h.ctx.sessionPersistence.inspect(`owner-${taskId}`)
+    const saved = await inspectSession(h.ctx.sessionPersistence, `owner-${taskId}`)
     assert.equal(saved.meta.cwd, taskFilePath(root, taskId, 'work'))
-    const location = h.ctx.sessionPersistence.locate(saved.meta).path
+    const location = await findSessionLog(join(root, 'sessions'), saved.meta.id)
     assert.ok(location.startsWith(join(root, 'sessions') + sep))
     assert.ok(!location.startsWith(join(root, 'tasks') + sep))
     assert.match(await readFile(location, 'utf8'), /dingtalk\/task-owner-session/)
@@ -731,9 +736,9 @@ test('Owner原生工作目录使用受信任务绑定，重启保持cwd及宿主
   const resumed = await host(root, null, null, decision, () => { throw new Error('must not reselect persisted cwd') })
   t.after(() => resumed.close()); resumed.setLease(2)
   assert.equal((await run(resumed, 'task-a', 2)).status, 'submitted')
-  const saved = await resumed.ctx.sessionPersistence.inspect('owner-task-a')
+  const saved = await inspectSession(resumed.ctx.sessionPersistence, 'owner-task-a')
   assert.equal(saved.meta.cwd, taskFilePath(root, 'task-a', 'work'))
-  assert.equal(resumed.ctx.sessionPersistence.locate(saved.meta).path, locations[0])
+  assert.equal(await findSessionLog(join(root, 'sessions'), saved.meta.id), locations[0])
   assert.equal(saved.events.filter(event => event.type === 'user/message' && event.surfaceOp === 'append').length, 2)
 })
 
@@ -765,14 +770,14 @@ test('Owner完整大材料重试只保留当前输入投影，原始快照审计
     provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
     onCandidate: async () => { if (reject) throw Object.assign(Error('UNKNOWN_STORAGE'), { code: 'UNKNOWN_STORAGE' }) } })
   assert.equal((await run(1)).status, 'no_submission')
-  const first = await h.ctx.sessionPersistence.inspect('owner-snapshot')
+  const first = await inspectSession(h.ctx.sessionPersistence, 'owner-snapshot')
   reject = false; h.setLease(2)
   assert.equal((await run(2)).status, 'submitted')
   const request = JSON.stringify(h.requests[1])
   assert.equal(request.split(marker).length - 1, 1)
   assert.ok(request.includes(body))
   assert.match(request, /superseded/u)
-  const after = await h.ctx.sessionPersistence.inspect('owner-snapshot')
+  const after = await inspectSession(h.ctx.sessionPersistence, 'owner-snapshot')
   assert.deepEqual(after.events.slice(0, first.events.length), first.events)
   assert.equal(after.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append').length, 2)
   assert.equal(after.events.filter(e => e.surfaceOp?.op === 'replace').length, 1)
@@ -831,11 +836,11 @@ test('Owner读取调查的待补充建议后可安排待审候选阶段，不机
     readArtifact: async () => { read = true; return { outcome: 'needs_input', question: '是否确认全部字段规格？', limitations: ['目标明确，候选可供审批'] } },
     onCandidate: async value => { assert.equal(read, true); assert.equal(value.action, 'advance'); submitted = true } })
   assert.equal(result.status, 'submitted'); assert.equal(submitted, true)
-  assert.match(h.requests[0].system, /不把候选当用户事实/)
-  assert.match(h.requests[0].system, /驳回时读真实意见/)
-  assert.match(h.requests[0].system, /修改后重新送审/)
-  assert.match(h.requests[0].system, /普通调查.*直接使用本会话的查询工具/)
-  assert.doesNotMatch(h.requests[0].system, /outcome=needs_input 时 wait 并询问/)
+  assert.match(requestSystemText(h.requests[0]), /不把候选当用户事实/)
+  assert.match(requestSystemText(h.requests[0]), /驳回时读真实意见/)
+  assert.match(requestSystemText(h.requests[0]), /修改后重新送审/)
+  assert.match(requestSystemText(h.requests[0]), /普通调查.*直接使用本会话的查询工具/)
+  assert.doesNotMatch(requestSystemText(h.requests[0]), /outcome=needs_input 时 wait 并询问/)
 })
 
 test('任务会话直接查询并同轮修正，成功证据先落账再读取提交；过期结果不交付', async t => {
@@ -887,8 +892,8 @@ test('任务查询仅开放注入工具；未知工具与未知执行错误不�
       tools: [{ name: 'query_fixture', description: '受信只读查询', parameters: { type: 'object', properties: {}, additionalProperties: false },
         classifyError: () => 'fatal', execute: async () => { executed++; throw Object.assign(Error('连接实现故障'), { code: 'QUERY_DRIVER_BROKEN' }) } }] })
     assert.equal(executed, mode === 'fatal' ? 1 : 0); assert.equal(persisted, 0)
-    const saved = await h.ctx.sessionPersistence.inspect('guard-owner')
-    assert.ok(saved.events.some(event => event.type === 'tool/result' && event.data.message.content[0].isError))
+    const saved = await inspectSession(h.ctx.sessionPersistence, 'guard-owner')
+    assert.ok(saved.events.some(event => event.type === 'tool/result' && event.data.message.isError))
     assert.doesNotMatch(JSON.stringify(saved.events), /"status":"correctable_error"/)
   }
 })
@@ -932,10 +937,10 @@ test('工程准备缺UAT在同一Owner会话纠正为具体等待，未接纳工
   assert.deepEqual(accepted, [wait])
   assert.equal(h.requests.length, 2)
   assert.match(JSON.stringify(h.requests[1]), /缺少uatEnvironment/u)
-  assert.match(h.requests[0].system, /补充后继续原Task/u)
-  assert.match(h.requests[0].system, /summary仍为string.*【结论】.*【结果】.*【下一步】/u)
-  assert.match(h.requests[0].system, /排查完成（尚未修复）/u)
-  assert.match(h.requests[0].system, /2–3条短重点/u)
+  assert.match(requestSystemText(h.requests[0]), /补充后继续原Task/u)
+  assert.match(requestSystemText(h.requests[0]), /summary仍为string.*【结论】.*【结果】.*【下一步】/u)
+  assert.match(requestSystemText(h.requests[0]), /排查完成（尚未修复）/u)
+  assert.match(requestSystemText(h.requests[0]), /2–3条短重点/u)
 })
 
 
@@ -1009,7 +1014,7 @@ for (const mode of ['new', 'partial', 'legacy']) test(`原生Owner动作应用�
     const beforePlan = await controller.taskPlan('task')
     await assert.rejects(owner.drive('task'), /TASK_OWNER_NO_DECISION/)
     const nativeOwner = await store.query({ kind: 'task.owner', taskId: 'task' })
-    const native = await h.ctx.sessionPersistence.inspect(nativeOwner.sessionId)
+    const native = await inspectSession(h.ctx.sessionPersistence, nativeOwner.sessionId)
     assert.match(JSON.stringify(native.events), /TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED/)
     assert.deepEqual(await controller.taskPlan('task'), beforePlan)
     assert.deepEqual(await owner.applyPending(), [])
@@ -1027,8 +1032,8 @@ for (const mode of ['new', 'partial', 'legacy']) test(`原生Owner动作应用�
   const plan = await controller.taskPlan('task'), state = await controller.whenIdle(plan.stages[0].runId)
   assert.equal(state.run.status, 'succeeded'); assert.equal(plan.stages.length, partial ? 2 : 1); assert.ok(executionCalls >= 1)
   assert.equal((await store.query({ kind: 'task.owner', taskId: 'task' })).sessionId, initial.sessionId)
-  const native = await h.ctx.sessionPersistence.inspect(initial.sessionId)
-  assert.equal(native.events.filter(e => e.type === 'dingtalk/task-owner-session').length, 1)
+  const native = await inspectSession(h.ctx.sessionPersistence, initial.sessionId)
+  assert.equal(native.events.filter(e => e.type === 'plugin:dingtalk/task-owner-session').length, 1)
   assert.ok(JSON.stringify(native.events).includes(mode === 'legacy' ? '历史决定应用失败' : '底层选择不存在'))
 })
 
@@ -1116,10 +1121,10 @@ test('Owner原生工具只公开业务协调并可按既有计划继续',async t
  const root=await mkdtemp(join(tmpdir(),'owner-observe-only-'));const h=await host(root,null,null,()=>({action:'advance',summary:'按既有计划继续',evidenceRefs:[]}));t.after(()=>h.close())
  let accepted=0;const result=await h.sessions.run({binding:{taskId:'task',sessionId:'owner-observe',turnId:'turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{currentExecution:{repairable:false,responsibility:'execution-session'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{accepted++}})
  assert.equal(result.status,'submitted');assert.equal(accepted,1)
- assert.match(h.requests[0].system,/任务级唯一责任人/u)
- assert.match(h.requests[0].system,/节点会话是受托执行者/u)
- assert.match(h.requests[0].system,/不承诺自动修复/u)
- assert.match(h.requests[0].system,/不得提交repairCurrentStage或workflowRevision/u)
+ assert.match(requestSystemText(h.requests[0]),/任务级唯一责任人/u)
+ assert.match(requestSystemText(h.requests[0]),/节点会话是受托执行者/u)
+ assert.match(requestSystemText(h.requests[0]),/不承诺自动修复/u)
+ assert.match(requestSystemText(h.requests[0]),/不得提交repairCurrentStage或workflowRevision/u)
 })
 
 test('maintenance constraint body and original provenance reach actual native model request after event consumption',async t=>{
@@ -1160,7 +1165,7 @@ test('maintenance constraint body and original provenance reach actual native mo
  const proofPath=join(root,'model-request-proof.json')
  await writeFile(proofPath,JSON.stringify({testProvider:'owner-fixture',scriptedModel:true,businessBackendVerified:false,firstModelRequest:h.requests[0],secondModelRequest:h.requests[requestCount],firstOwnerInput:first,secondOwnerInput:second,originalExecutions:executions,originalSessionPreserved:final.sessionId===initial.sessionId},null,2))
  console.log('Native model request proof: '+proofPath)
- const saved=await h.ctx.sessionPersistence.inspect(final.sessionId)
+ const saved=await inspectSession(h.ctx.sessionPersistence, final.sessionId)
  assert.ok(saved.events.some(item=>item.type==='tool/call'&&item.data.name==='task_owner_read_artifact'&&JSON.parse(item.data.arguments).artifactRef===sourceRef),'canonical source must remain readable through the native artifact tool')
 })
 
@@ -1182,7 +1187,7 @@ test('Owner completion schema and references allow bounded same-turn correction'
   const h=await host(root,null,null,step=>mode==='schema'&&step===1?{...valid,summary:{bad:true}}:mode==='references'&&step===1?{...valid,evidenceRefs:['unknown']} :mode==='limit'?{...valid,evidenceRefs:['unknown-'+step]}:valid);t.after(()=>h.close())
   let checks=0
   const result=await h.sessions.run({binding:{taskId:'correction-task',sessionId:'correction-owner',turnId:'correction-turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{completionEvidenceRefs:[ref]},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>{checks++;if(value.evidenceRefs[0]!==ref)throw Object.assign(Error('Bind successful original stage receipt'),{code:'TASK_OWNER_COMPLETION_UNVERIFIED'});return {} }})
-  if(mode==='limit'){assert.notEqual(result.status,'submitted');assert.equal(checks,4);assert.ok(h.requests.length<=5);assert.match(JSON.stringify((await h.ctx.sessionPersistence.inspect('correction-owner')).events),/TASK_OWNER_CORRECTION_LIMIT/)}
+  if(mode==='limit'){assert.notEqual(result.status,'submitted');assert.equal(checks,4);assert.ok(h.requests.length<=5);assert.match(JSON.stringify((await inspectSession(h.ctx.sessionPersistence, 'correction-owner')).events),/TASK_OWNER_CORRECTION_LIMIT/)}
   else{assert.equal(result.status,'submitted');assert.deepEqual(result.decision,valid);assert.equal(h.requests.length,2);assert.match(JSON.stringify(h.requests[1]),/Host completionEvidenceRefs/)}
  }
 })
@@ -1240,7 +1245,7 @@ test('Owner blocker review returns diagnosis to original native session before i
   assert.equal(unknownRejected,true);assert.equal(checks,2);assert.equal(executed,1);assert.equal(h.requests.length,5)
   const diagnostic=await artifacts.read(diagnosticRef)
   assert.equal(diagnostic.kind,'owner-blocker-review');assert.equal(diagnostic.assessment.status,'continue')
-  const persisted=await h.ctx.sessionPersistence.inspect('blocker-owner')
+  const persisted=await inspectSession(h.ctx.sessionPersistence, 'blocker-owner')
   assert.ok(persisted.events.some(event=>event.type==='tool/call'&&event.data.name==='task_owner_read_artifact'&&JSON.parse(event.data.arguments).artifactRef===diagnosticRef))
   assert.match(JSON.stringify(persisted.events),/TASK_OWNER_BLOCKER_UNVERIFIED/)
   assert.match(JSON.stringify(persisted.events),/TASK_OWNER_BLOCKER_EVIDENCE_UNREAD/)

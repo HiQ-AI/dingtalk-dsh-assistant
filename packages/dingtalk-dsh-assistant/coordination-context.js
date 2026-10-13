@@ -12,11 +12,9 @@ export function visibleToolOutputs(agent) {
   const messages = agent?.session?.deriveMessages?.() ?? []
   const calls = new Map(messages.flatMap((message) => message.content ?? []).filter((block) => block.type === 'tool-call').map((block) => [block.id, block.name]))
   for (const message of messages) {
-    for (const block of message.content ?? []) {
-      if (block.type !== 'tool-result' || block.isError || !['group_task_prompt_get', 'group_task_review_context_get', 'group_decision_context_get', 'group_topic_context_get'].includes(calls.get(block.toolCallId))) continue
-      const text = (block.content ?? []).filter((item) => item.type === 'text').map((item) => item.text).join('\n')
-      try { outputs.push(JSON.parse(text)) } catch { /* 非 JSON 工具结果不能证明结构化内容身份。 */ }
-    }
+    if (message.role !== 'tool' || message.isError || !['group_task_prompt_get', 'group_task_review_context_get', 'group_decision_context_get', 'group_topic_context_get'].includes(calls.get(message.toolCallId))) continue
+    const text = (message.content ?? []).filter((item) => item.type === 'text').map((item) => item.text).join('\n')
+    try { outputs.push(JSON.parse(text)) } catch { /* 非 JSON 工具结果不能证明结构化内容身份。 */ }
   }
   if (session && generation !== undefined) projections.set(session, { generation, outputs })
   return outputs

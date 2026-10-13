@@ -199,13 +199,13 @@ window.__ModuleLoader__.load({
       ])
       return { health, groups, tasks, alerts, authorizations, topics: topicPage.topics }
     }
-    function SidebarAction({ wide }) {
+    function SidebarAction({ wide, onOpen }) {
       const isOpen = useOpen()
       const icon = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
         React.createElement('rect', { x: 3, y: 3, width: 18, height: 18, rx: 3 }),
         React.createElement('path', { d: 'M7 15v2M12 11v6M17 7v10' }))
       return React.createElement('button', {
-        type: 'button', title: '钉钉群聊运行看板', 'aria-label': '钉钉群聊运行看板', onClick: () => setOpen(true),
+        type: 'button', title: '钉钉群聊运行看板', 'aria-label': '钉钉群聊运行看板', onClick: onOpen,
         style: wide
           ? { boxSizing: 'border-box', cursor: 'pointer', width: 'calc(100% + 4px)', height: 42, color: 'var(--dsw-alias-label-primary)', background: isOpen ? 'var(--dingtalk-dsh-observer-selected-bg, var(--dsw-alias-interactive-bg-selected, var(--dsw-alias-interactive-bg-hover)))' : 'transparent', border: 0, outline: 'none', boxShadow: 'none', borderRadius: 12, flex: '0 0 auto', alignItems: 'center', gap: 8, margin: '4px -2px', padding: '0 10px 0 8px', fontFamily: 'inherit', fontSize: 14, lineHeight: '22px', display: 'flex', overflow: 'hidden' }
           : { boxSizing: 'border-box', cursor: 'pointer', width: 36, height: 36, color: 'var(--dsw-alias-label-primary)', background: isOpen ? 'var(--dingtalk-dsh-observer-selected-bg, var(--dsw-alias-interactive-bg-selected, var(--dsw-alias-interactive-bg-hover)))' : 'transparent', border: 0, outline: 'none', boxShadow: 'none', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '8px 0 10px', padding: 0 }
@@ -1492,19 +1492,19 @@ window.__ModuleLoader__.load({
       return React.createElement('div', { 'data-dingtalk-observer': '', style: { width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: colors.surface, color: 'inherit', overflow: 'auto' } }, React.createElement('style', null, observerCss), header, main)
     }
     function apply(ctx) {
-      ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dingtalk-dsh-observer-entry', order: 5, inject: () => ({}) }, SidebarAction))
-      ctx.slots.inject('conversation', () => {
+      ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dingtalk-dsh-observer-entry', order: 5, inject: () => ({ onOpen: () => { ctx.layout.selectPanel(null); setOpen(true) } }) }, SidebarAction))
+      ctx.slots.inject('main.conversation', () => {
         let disposeContent
         const syncContent = (visible) => {
           if (visible && !disposeContent) {
-            disposeContent = ctx.slots.register({ name: 'conversation', id: 'dingtalk-dsh-observer', priority: -10, inject: () => ({ openSession: async (sessionId, parentSessionId) => {
+            disposeContent = ctx.slots.register({ name: 'main.conversation', priority: -10, inject: () => ({ openSession: async (sessionId, parentSessionId) => {
               if (parentSessionId) {
                 let address = ctx.sessions.subagentAddress(sessionId)
-                if (!address) { await ctx.sessions.refreshSubagents(parentSessionId); address = ctx.sessions.subagentAddress(sessionId) }
-                if (address) { ctx.sessions.openSubagent(address); return }
+                if (!address) { await ctx.sessions.refreshProjections(parentSessionId); address = ctx.sessions.subagentAddress(sessionId) }
+                if (address) { ctx.uiWorkspace.openSession(address); return }
               }
               await ctx.sessions.refresh()
-              ctx.sessions.open(sessionId)
+              ctx.uiWorkspace.openSession(sessionId)
             } }) }, ObserverContent)
           } else if (!visible && disposeContent) {
             disposeContent()
@@ -1519,7 +1519,7 @@ window.__ModuleLoader__.load({
         }
       })
     }
-    module.exports = { name: 'dingtalk-dsh-observer-client', inject: ['slots', 'sessions'], apply }
+    module.exports = { name: 'dingtalk-dsh-observer-client', inject: ['slots', 'sessions', 'uiWorkspace', 'layout'], apply }
     return module.exports
   }
 })

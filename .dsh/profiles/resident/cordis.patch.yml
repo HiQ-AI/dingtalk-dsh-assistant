@@ -21,6 +21,22 @@
     packChunks: false
 
 - insert:
+    # Alpha2 makes presets and workspace services explicit profile composition.
+    # This resident preset inherits the base layer's existing tools and policies.
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config:
+        default: standard
+
+    - id: preset-standard
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: standard
+        plugins: []
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
     - id: storage
       name: '@deepseek-ai/dsh-storage'
 

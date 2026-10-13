@@ -78,7 +78,7 @@ async function setup(t, options = {}) {
       async dispose() { await options.disposeGate?.(sessionId); h.disposed.push(sessionId) } }
     h.handles.set(sessionId, handle)
     const agentCtx = { on(name, listener) { hooks.set(name, listener); return () => hooks.delete(name) }, tools: { register(tool) { tools.set(tool.name, tool) }, restrict(rule) { restrictions.push(rule) }, guard(check) { guards.push(check) }, get(name) { return ['read', 'glob', 'grep', 'skill'].includes(name) ? { name } : undefined } }, systemPrompt: { section(value) { sections.push(value) } } }
-    const setupResult = await input.setup?.(agentCtx)
+    const setupResult = await input.setup?.(agentCtx, agent)
     assert.equal(setupResult, undefined)
     h.calls.push({ resumed, sessionId, input })
     return handle
@@ -90,7 +90,7 @@ async function setup(t, options = {}) {
     ...(options.sessionPersistence ? { sessionPersistence: options.sessionPersistence } : {}),
     agentDefaultModel: { currentSelection: () => ({ ...selection }), async saveSelection(value) { Object.assign(selection, value); h.savedSelection = value } },
     agents: { create: (input) => makeHandle(input, false), resume: (input) => makeHandle(input, true), get: (id) => h.handles.get(String(id))?.agent },
-    subagents: { drainContinuableDescendants: async () => {} },
+    subagents: { drainDescendants: async () => {} },
     agentPresets: { mount: async (_ctx, id) => ({ id }), composeFrom: () => 'standard', serviceFor: () => ({ set(session, preset) { h.permissions.push([session.id, preset]) } }) },
     goals: {
       get: (agent) => h.goals.get(agent.session.id),
@@ -455,7 +455,7 @@ test('已完成任务重启后从持久 Session 审计并补齐遗漏活动', as
   await original.runtime.close()
   let disposed = 0
   const restored = await setup(t, { snapshot: original.snapshot, sessionPersistence: {
-    async prepare(id) { return { session: { id, snapshotEvents: () => sessionEvents.get(String(id)) }, [Symbol.dispose]() { disposed += 1 } } },
+    async open(id, access) { assert.equal(access, 'read'); return { header: { id }, inheritedEventCount: 0, async read() { return { events: sessionEvents.get(String(id)) } }, async close() { disposed += 1 } } },
   } })
   assert.equal(restored.store.listActivities(task.taskId).length, 0)
   await restored.runtime.reconcileActivityProjections({ force: true })
@@ -471,7 +471,7 @@ test('历史已完成任务的 Session 不存在时审计收束为不可回填�
   await original.runtime.close()
   let attempts = 0
   const restored = await setup(t, { snapshot: original.snapshot, sessionPersistence: {
-    async prepare(id) { attempts += 1; throw new Error(`session "${id}" not found`) },
+    async open(id) { attempts += 1; throw Object.assign(new Error(`session "${id}" not found`), { name: 'SessionPersistenceNotFoundError', sessionId: id }) },
   } })
   await restored.runtime.reconcileActivityProjections({ force: true })
   await restored.runtime.reconcileActivityProjections({ force: true })
@@ -487,7 +487,7 @@ test('已完成任务的持久 Session 读取故障仍保留重试和当前告�
   await original.runtime.close()
   let attempts = 0
   const restored = await setup(t, { snapshot: original.snapshot, sessionPersistence: {
-    async prepare() { attempts += 1; throw new Error('EPERM: synthetic read failure') },
+    async open() { attempts += 1; throw new Error('EPERM: synthetic read failure') },
   } })
   await restored.runtime.reconcileActivityProjections({ force: true })
   await restored.runtime.reconcileActivityProjections({ force: true })

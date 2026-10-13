@@ -1,3 +1,5 @@
+import { requestSystemText } from './fixtures/session-persistence.js'
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, mkdir } from 'node:fs/promises'
@@ -9,7 +11,7 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { LlmRuntime, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
-import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import PermissionPresetService from '@deepseek-ai/dsh-permission-presets'
@@ -30,7 +32,7 @@ async function fixture(t, action = false, hooks = {}) {
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   ctx.provide('shell', { sandboxMode: 'workspace-write' })
   new ApprovalService(ctx, { policy: 'ask' })
-  new PermissionPresetService(ctx, { presets: {
+  await ctx.plugin(PermissionPresetService, { presets: {
     'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
     'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
   } })
@@ -39,11 +41,11 @@ async function fixture(t, action = false, hooks = {}) {
   ctx.provide('workspaceRegistry', {
     async resolveByPath(path) { return workspaces.get(path) },
     async create(path) {
-      const target = { async attachSession(id) { assert.equal((await ctx.sessionPersistence.inspect(id)).meta.cwd, path) } }
+      const target = { async attachSession(id) { assert.equal((await inspectSession(ctx.sessionPersistence, id)).meta.cwd, path) } }
       workspaces.set(path, target); return target
     },
   })
-  new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   const inputs = [], requests = []
   class Scripted extends LlmAdapter {
     async *stream(options) {
@@ -96,8 +98,8 @@ test('原生群协调贯通持久账：同session连续两消息，静默稳态�
   await f.workflow.recover()
   assert.equal(f.requests.length, 2)
   assert.deepEqual(f.counters(), { judges: 0, dispatched: 0, candidateReads: 2 })
-  const saved = await f.ctx.sessionPersistence.inspect(first.coordinator.sessionId)
-  assert.equal(saved.events.filter(e => e.type === 'dingtalk/group-coordinator-session').length, 1)
+  const saved = await inspectSession(f.ctx.sessionPersistence, first.coordinator.sessionId)
+  assert.equal(saved.events.filter(e => e.type === 'plugin:dingtalk/group-coordinator-session').length, 1)
   assert.equal(saved.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append').length, 2)
 })
 
@@ -126,7 +128,7 @@ test('idle群恢复自动派生到新工作区，控制账绑定和原生父日�
   assert.notEqual(current.sessionId, prior.sessionId)
   assert.equal(current.leaseEpoch, prior.leaseEpoch + 1)
   assert.equal(current.sessionHistory[0].sessionId, prior.sessionId)
-  const child = await f.ctx.sessionPersistence.inspect(current.sessionId)
+  const child = await inspectSession(f.ctx.sessionPersistence, current.sessionId)
   assert.equal(child.meta.cwd, root)
   assert.equal(child.meta.parentSession, prior.sessionId)
   assert.equal(f.requests.length, 1)
@@ -381,7 +383,7 @@ test('原生持久同session重放回读旧命令无Task事实，历史received�
   })
   await f.receive('original','核对材料')
   const group=await f.store.query({kind:'message.coordinator',conversationId:'group'})
-  const persisted=await f.ctx.sessionPersistence.inspect(group.coordinator.sessionId)
+  const persisted=await inspectSession(f.ctx.sessionPersistence, group.coordinator.sessionId)
   const history=JSON.stringify(persisted.events)
   assert.match(history,/acceptedDecisions/);assert.match(history,/executionPending/);assert.match(history,/taskExists/)
   await f.workflow.receive({runId:'replayed',sourceKey:'source:original',sourceVersion:2,conversationId:'group',actorId:'user',body:'核对材料'},{process:false})
@@ -967,8 +969,8 @@ test('原生协调材料加点名保持同话题fact，不把权限谨慎规则�
   unit.intent = { kind: 'intent', actions: [{ intent: 'fact', arguments: { text: '材料发送者点名处理人，尚未给出处理动作' }, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
  }, handlers: { fact: async () => ({ status: 'completed' }) } })
  await f.receive('mention-only', '导入导出规则文档，@孙鹏')
- assert.match(JSON.stringify(f.requests[0].system), /尚未表达要做什么/)
- assert.match(JSON.stringify(f.requests[0].system), /不能凭空生成分析任务/)
+ assert.match(JSON.stringify(requestSystemText(f.requests[0])), /尚未表达要做什么/)
+ assert.match(JSON.stringify(requestSystemText(f.requests[0])), /不能凭空生成分析任务/)
  const state = await f.workflow.state('mention-only')
  assert.deepEqual(state.commands.map(command => command.kind), ['fact'])
  assert.equal(state.requests.length, 0)

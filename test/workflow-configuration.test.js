@@ -290,7 +290,7 @@ test('完整Resident按已激活workflow启动，原生credentials透传到配�
     storage: { backend: new Map([['json', { root: directory }]]) }, storageDomain,
     agentDefaultModel: { currentSelection: () => ({ provider: 'fixture', model: 'fixture' }) },
     agents: { create: async () => { throw Error('MODEL_NOT_EXPECTED') }, resume: async () => { throw Error('MODEL_NOT_EXPECTED') } },
-    subagents: { drainContinuableDescendants: async () => {} },
+    subagents: { drainDescendants: async () => {} },
   }
   const start = async () => {
     const reserve = createServer()

@@ -23,8 +23,20 @@ export async function apply(ctx,config){
     await writeFile(temporary,JSON.stringify({kind,nonce:config.nonce,pid:process.pid,entryId:targetId,moduleName:targetName}),{flag:'wx',mode:0o600})
     await rename(temporary,output)
   }
+  const targetDisabled=entry=>ready && !disposed && entry?.options?.id===targetId && entry.options.name===targetName && entry.options.disabled===true
+  // Current Loader retains entry.fiber and no longer emits partial-dispose on disable.
+  // Join the exact root fiber's public lifecycle barrier, then verify it cannot restart.
+  ctx.on('internal/status',async fiber=>{
+    const entry=fiber?.entry
+    if(!targetDisabled(entry) || entry.fiber!==fiber || fiber.uid!==null || typeof fiber.await!=='function')return
+    await fiber.await()
+    if(!targetDisabled(entry) || entry.fiber!==fiber || fiber.uid!==null || fiber.inertia!==undefined)return
+    disposed=true
+    await publish('disposed')
+  },{global:true})
+  // Older resident hosts still expose the completed Loader disposal boundary.
   ctx.on('loader/partial-dispose',async(entry,_legacy,active)=>{
-    if(!ready || disposed || active!==true || entry?.options?.id!==targetId || entry.options.name!==targetName || entry.options.disabled!==true || entry.fiber!==undefined || entry._disposing!==0)return
+    if(!targetDisabled(entry) || active!==true || entry.fiber!==undefined || entry._disposing!==0)return
     disposed=true
     await publish('disposed')
   })

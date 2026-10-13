@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {join} from 'node:path'
+import {tmpdir} from 'node:os'
 import {createAgentStatusReadCapability} from '../packages/dingtalk-dsh-assistant/agent-query-status.js'
-const r={id:'uat3',kind:'kubernetes',kubeconfig:'D:/trusted/kube.yml',server:'https://127.0.0.1:6443',skipTlsVerify:false,namespace:'uat3',deployment:'dataset'}
+const r={id:'uat3',kind:'kubernetes',kubeconfig:join(tmpdir(),'trusted','kube.yml'),server:'https://127.0.0.1:6443',skipTlsVerify:false,namespace:'uat3',deployment:'dataset'}
+test('平台读取仍拒绝相对凭据路径',()=>assert.throws(()=>createAgentStatusReadCapability({resources:[{...r,kubeconfig:'relative/kube.yml'}]}),/QUERY_STATUS_CONFIG_INVALID/))
 const d={metadata:{name:'dataset',namespace:'uat3',uid:'dep',resourceVersion:'1',generation:1},spec:{replicas:1},status:{readyReplicas:1,availableReplicas:1,observedGeneration:1}}
 const pod={metadata:{name:'dataset-one',namespace:'uat3',uid:'pod',resourceVersion:'2',ownerReferences:[{kind:'ReplicaSet',uid:'rs',controller:true}]},spec:{containers:[{name:'dataset',image:'registry/dataset:uat3',env:[{name:'PASSWORD',value:'SUPERSECRET'}],ports:[{containerPort:8080}],resources:{limits:{memory:'1Gi'}}}]},status:{phase:'Running',containerStatuses:[{name:'dataset',ready:true,imageID:'registry/dataset@sha256:'+'a'.repeat(64),restartCount:0}]}}
 function runner(calls,{drift=false}={}){let reads=0;return async(cmd,args,opts)=>{calls.push({cmd,args,opts});let value;if(args.includes('logs'))return{stdout:'2026-09-28T00:00:00Z ERROR java.lang.IllegalStateException: password=SUPERSECRET request body PRIVATE\n2026-09-28T00:00:01Z at com.hiq.Service.run(Service.java:42)\n'};if(args.includes('deployment')){value=structuredClone(d);if(++reads>1&&drift)value.metadata.resourceVersion='3'}else if(args.includes('replicasets'))value={items:[{metadata:{uid:'rs',ownerReferences:[{kind:'Deployment',name:'dataset',uid:'dep',controller:true}]}}]};else value={items:[pod]};return{stdout:JSON.stringify(value)}}}
