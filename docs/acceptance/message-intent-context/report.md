@@ -7,3 +7,5 @@
 旧版已答待续办来源通过有权操作者以新eventId正式重试恢复，不自动重放全消息。原任务权限、效果账和冻结定义不变，无schema迁移。README及部署/恢复说明已同步。
 
 边界：本轮没有合并、部署、真实群消息或真实模型语义准确率验证。历史可取得与机制完整性不等于所有自然语言均会准确分类。回滚保留控制账及续办标记，避免旧代码再次过滤未完成单元。
+
+交付：[PR158](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/158)，`gh pr view 158 --json url,number,state,mergedAt,headRefName,headRefOid,baseRefName,statusCheckRollup` 实际回读OPEN、mergedAt=null、head=80d02f769cf284f204de65891717e0102b3200f8，远端无检查结果；不将本地通过表述为CI通过。后续收口仅更新本报告及goal，无源码变化。
