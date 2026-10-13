@@ -136,3 +136,20 @@ test('growing receipt lists and workflow catalog are deferred losslessly without
   assert.deepEqual(projected.modelInput.completionEvidenceRefs, small.completionEvidenceRefs)
   assert.deepEqual(projected.modelInput.workflowCatalog, small.workflowCatalog)
 })
+
+test('duplicate source text resolves within the same input while identities and differing requirements survive', async () => {
+  const f = fixture(), text = '核验一位专家通过另一位退回后是否禁止撤回；仅核验，不修复部署。'.repeat(4)
+  const input = { taskId: 'dedup', goal: { request: text, sourceInstructions: [
+    { sourceKey: 'a', sourceVersion: 1, actorId: 'human-a', text },
+    { sourceKey: 'b', sourceVersion: 2, actorId: 'human-b', text: text + '新增要求' },
+  ] }, currentSources: [{ sourceKey: 'a', sourceVersion: 1, actorId: 'human-a', text, attachments: ['attachment'] }] }
+  const original = structuredClone(input), { modelInput } = await projectOwnerContext(input, f.artifacts)
+  const resolve = value => value?.sameAs ? value.sameAs.reduce((node, key) => node[key], modelInput) : value
+  assert.deepEqual(input, original)
+  assert.equal(resolve(modelInput.goal.request), text)
+  assert.equal(resolve(modelInput.currentSources[0].text), text)
+  assert.equal(modelInput.goal.sourceInstructions[1].text, text + '新增要求')
+  assert.deepEqual({ ...modelInput.currentSources[0], text: resolve(modelInput.currentSources[0].text) }, input.currentSources[0])
+  assert.ok(JSON.stringify(modelInput.goal).length + JSON.stringify(modelInput.currentSources).length < JSON.stringify(input.goal).length + JSON.stringify(input.currentSources).length)
+})
+
