@@ -65,3 +65,4 @@
 - Round 11进行中：用户要求本地部署；已从堆内存耗尽退出恢复旧服务并进入正式维护，等待原Owner收口后安装候选13d64bc。
 
 - Round 11：SHA256 a304c582f21c2c50cdc215ea1c0f2f7be6c792e4bc4e35cc59fc6521f9f75c3d已安装，进程42884，health=ok，维护revision767 inactive。原Task正式resume controlRevision3；基线3494字符，恢复首轮16923字符其中events15556，不能套用静态样本2102。
+- Round 12：新增自主判断调查收益指令，停止依据核验同步，不新增申请/审批/工具禁令；106项定向回归通过，尚未部署，见round-12.md。
