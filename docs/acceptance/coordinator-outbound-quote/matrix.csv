@@ -1,0 +1,7 @@
+case,round-1,round-2,evidence
+outbound-echo-quote-reproduction,PASS,PASS,round-1.md;round-2.md
+ordinary-quote-and-stale-rejection,PASS,NOT_RUN,round-1.md
+related-regressions,PASS,NOT_RUN,round-1.md
+local-package-process-health,NOT_RUN,PASS,round-2.md
+original-source-resume,NOT_RUN,PASS,round-2.md
+original-business-reply-delivery,NOT_RUN,FAIL,round-2.md capability-blocked-no-notification

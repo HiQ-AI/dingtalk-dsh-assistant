@@ -1873,6 +1873,52 @@ test('已送达通知回声准确关联原话题且不再次调用群协调',asy
  assert.equal((await service.mailboxes()).messages.length,1)
 })
 
+test('引用已隔离的已送达回声不阻塞同批后续消息',async t=>{
+ const batches=[]
+ const notifications={canDisclose:async()=>true,send:async()=>({messageId:'quoted-outbound'}),readback:async()=>({messageId:'quoted-outbound',conversationId:'g'})}
+ const {service,message,execution}=await fixture(t,'owner',notifications,{coordinatorSessions:{async close(){},async run({input,onSessionBound,onCandidate}){
+  await onSessionBound();batches.push(structuredClone(input.sources))
+  const decisions=input.sources.map(source=>{
+   const decision=coordinatorUnit(source,'answer',{objective:source.body})
+   decision.units[0].intent.replyPolicy=source.body==='核对原事项'?'result':'none'
+   return decision
+  })
+  // 失败时保留真实提交错误，避免测试随生产 stale 重新领取而无限循环。
+  try{await onCandidate({decisions})}catch(cause){throw new Error('引用提交失败',{cause})}
+  return {status:'submitted'}
+ }}})
+ const original=await service.ingest({...message,messageId:'quote-origin',text:'核对原事项'})
+ await service.messages.process(original.runId)
+ await service.flushNotifications()
+  const notice=(await execution.store.query({kind:'message.notifications',runId:original.runId,states:['delivered']}))[0]
+ assert.ok(notice,'原通知已真实经过发送和独立回读')
+ assert.equal(notice.evidence.messageId,'quoted-outbound')
+ // 通过原生接收命令保留历史已入账回声，不借 ingest 的新消息回声过滤掩盖问题。
+ const echo={runId:'historical-quoted-echo'}
+ await execution.store.command({id:'receive-quoted-echo',kind:'message.receive',args:{...echo,
+  sourceKey:`dws:${executionDigest(['','g','quoted-outbound'])}`,sourceVersion:1,conversationId:'g',actorId:'assistant-account',body:'旧回声正文',context:{sourceMessageId:'quoted-outbound'}}})
+ await execution.store.command({id:'quarantine-quoted-echo',kind:'message.echo.quarantine',args:{runId:echo.runId}})
+ assert.equal((await service.state(echo.runId)).run.status,'superseded')
+ const quoteKey=`dws:${executionDigest(['','g','quoted-outbound'])}`
+ const first=await service.messages.receive({runId:'quote-followup',sourceKey:'quote-followup',sourceVersion:1,
+  conversationId:'g',actorId:'owner',body:'小助手，请继续核对',context:{sourceMessageId:'quote-followup',
+   quoteRefs:[{sourceKey:quoteKey,messageId:'quoted-outbound',text:'客户端旧引用正文'}]}},{process:false})
+ const second=await service.messages.receive({runId:'quote-second',sourceKey:'quote-second',sourceVersion:1,
+  conversationId:'g',actorId:'owner',body:'小助手，请核对第二项',context:{sourceMessageId:'quote-second'}},{process:false})
+ await service.messages.process(first.runId)
+ const batch=batches.find(items=>items.some(item=>item.runId===first.runId))
+ assert.deepEqual(batch.map(item=>item.runId),[first.runId,second.runId])
+ const quote=batch.find(item=>item.runId===first.runId).context.quotes[0]
+ assert.equal(quote.actorId,'assistant');assert.equal(quote.sourceKind,'notification')
+ assert.equal(quote.text,notice.payload.text)
+ for(const received of [first,second]){
+  await service.messages.process(received.runId)
+  const state=await service.state(received.runId)
+  assert.equal(state.run.status,'settled');assert.equal(state.commands.length,1);assert.equal(state.commands[0].status,'applied')
+ }
+ await service.messages.recover();assert.equal(batches.length,2)
+})
+
 
 test('长旧任务候选按需回读全文，不按来源预写详情材料',async t=>{
  const task={taskId:'untitled',groupId:'g',objective:'历史目标。'.repeat(200)+'未经审批不得修改生产数据。',state:'completed',outcome:'succeeded'}
