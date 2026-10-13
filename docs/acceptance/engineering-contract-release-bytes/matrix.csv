@@ -1,0 +1,10 @@
+case,round-1,round-2
+frozen-contract-bytes,FAIL,PASS
+windows-and-lf-checkout,FAIL,PASS
+persisted-definition-digest,FAIL,PASS
+new-contract-and-controller-regressions,NOT_RUN,PASS
+existing-release-digest-regressions,NOT_RUN,FAIL
+local-runtime-start,FAIL,PASS
+retired-sync-endpoints,NOT_RUN,PASS
+live-settings-browser,NOT_RUN,PASS
+maintenance-resumed,NOT_RUN,PASS
