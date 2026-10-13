@@ -268,7 +268,7 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
     if (entry.rejectedCandidates.has(identity)) { entry.submissionFailure = 'TASK_OWNER_REPEATED_INVALID_DECISION'; throw fail(entry.submissionFailure) }
     entry.rejectedCandidates.add(identity)
     entry.attempted = false
-    return { received: false, feedback: feedback + (entry.completionEvidenceRefs.length ? '\nHost completionEvidenceRefs: ' + JSON.stringify(entry.completionEvidenceRefs) + '. Bind original assessments to these stage/query receipts; successful child receipts are normalized by Host. Correct and resubmit within this turn.' : '') }
+    return { received: false, feedback: feedback + (entry.completionEvidenceRefs.length && !['TASK_OWNER_CONDITION_REQUIRED', 'TASK_OWNER_CONDITION_INVALID'].includes(code) ? '\nHost completionEvidenceRefs: ' + JSON.stringify(entry.completionEvidenceRefs) + '. Bind original assessments to these stage/query receipts; successful child receipts are normalized by Host. Correct and resubmit within this turn.' : '') }
   }
 
   function setup(entry, onCandidate, readPage, readArtifact, listMaterials) {
@@ -368,7 +368,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
           }
           const problems = validateJsonSchemaValue({ type: 'object', properties: { decision: ownerDecisionSchema },
             required: ['decision'], additionalProperties: false }, args)
-          if (problems.length) return rejectCandidate(entry, args.decision, 'TASK_OWNER_DECISION_INVALID', '决定字段不符合合同，请核对字段类型和必填项后重新提交。')
+          if (problems.length) return rejectCandidate(entry, args.decision, 'TASK_OWNER_DECISION_INVALID', '决定字段不符合合同：' + problems.join('；'))
           if (!args.decision.summary.trim() || args.decision.summary.length > 8000
             || args.decision.appendStages?.some(stage => !stage.workflowId.trim())
             || Buffer.byteLength(JSON.stringify(args.decision), 'utf8') > 16000) return rejectCandidate(entry, args.decision, 'TASK_OWNER_DECISION_INVALID', '决定内容超限或为空，请缩减并保留必要事实。')
@@ -394,6 +394,8 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
               'TASK_OWNER_ADVANCE_CONFLICT', 'TASK_OWNER_WAIT_CONFLICT', 'TASK_OWNER_BLOCK_CONFLICT', 'TASK_OWNER_COMPLETION_UNPROVEN', 'TASK_OWNER_STAGE_NOT_AUTHORIZED', 'TASK_OWNER_ENGINEERING_INPUT_REQUIRED', 'TASK_OWNER_COMPLETION_UNVERIFIED', 'TASK_OWNER_RECOVERY_AVAILABLE', 'TASK_OWNER_RECOVERY_DIAGNOSTICS_UNREAD', 'DATA_CHANGE_REPAIR_INPUT_UNCHANGED', 'DATA_CHANGE_REPAIR_STRATEGY_REPEATED']
             if (correctable.includes(error.code)) {
               if (error.ownerDiagnosticRef) entry.readableArtifacts.add(error.ownerDiagnosticRef)
+              if (['TASK_OWNER_CONDITION_REQUIRED', 'TASK_OWNER_CONDITION_INVALID'].includes(error.code))
+                return rejectCandidate(entry, args.decision, error.code, `${error.code}：${error.message} 候选未落账，请按具体字段或引用修正后重新提交。`)
               return rejectCandidate(entry, args.decision, error.code, (error.message && error.message !== error.code ? error.message + '\n' : '') + error.code + '：候选未落账。核对当前task/stages及验收证据；wait/block必须给出具体condition，阶段全部成功仍可等待整体目标的必要条件。尚无计划时用initialize，已有成功计划可append后续阶段；advance须有合法后续计划，complete须满足全部验收；请修正，不得重复相同拒绝决定。')
             }
             if (error.code === 'TASK_OWNER_REPAIR_BINDING_INVALID') {

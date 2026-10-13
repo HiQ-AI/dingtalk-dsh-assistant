@@ -139,6 +139,39 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
   })
 })
 
+test('Owner条件证据子集错误穿过真实SQLite线程精确反馈并同轮修正', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-condition-feedback-'))
+  const store = await openExecutionStore({ dbPath: join(root, 'control.sqlite'), instanceId: 'condition-feedback', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const workflow = { id: 'condition-fixture', version: '1', nodes: [{ id: 'step', version: '1', executor: 'code', allowedEffects: ['pure'],
+    inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement, execute: async () => ({}) }] }
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow] })
+  t.after(async () => { await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'condition-task', stages: [{ stageId: 'step', workflowId: workflow.id, input: {} }] })
+  const send = (kind, args) => store.command({ id: `${kind}-${Math.random()}`, kind, args })
+  await send('task.owner.init', { taskId: 'condition-task', sessionId: 'condition-owner', sourceKey: 'source', criteria: ['核验真实结果'] })
+  await send('task.owner.event', { taskId: 'condition-task', eventKey: 'start', eventType: 'task.created' })
+  await send('task.owner.claim', { taskId: 'condition-task', turnId: 'condition-turn', expectedLeaseEpoch: 0 })
+  await send('task.owner.sessionBound', { taskId: 'condition-task', turnId: 'condition-turn', leaseEpoch: 1, sessionId: 'condition-owner' })
+  const evidenceRef = `tasks/condition-task/sha256-${'c'.repeat(64)}.json`
+  const chosen = { action: 'wait', summary: '等待实际核验结果', evidenceRefs: [],
+    condition: { kind: 'execution', missing: '结果仍未确认', responsibleParty: '原执行会话', resumeWhen: '原调用结果已核验', evidenceRefs: [evidenceRef] } }
+  const h = await host(root, null, null, step => ({ ...chosen, evidenceRefs: step === 1 ? [] : [evidenceRef] }))
+  h.onRequest(() => { assert.ok(h.requests.length < 3, '应在精确反馈后一次修正完成') })
+  t.after(() => h.close())
+  let calls = 0
+  const result = await h.sessions.run({ binding: { taskId: 'condition-task', sessionId: 'condition-owner', turnId: 'condition-turn', leaseEpoch: 1,
+    ownerEpoch: 1, sessionBound: false }, input: { completionEvidenceRefs: ['unrelated-completion-ref'] },
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    onCandidate: async decision => { calls++; return send('task.owner.candidate', { taskId: 'condition-task', turnId: 'condition-turn', leaseEpoch: 1, decision }) } })
+  assert.equal(result.status, 'submitted', JSON.stringify(h.requests.at(-1)?.messages)); assert.equal(calls, 2)
+  const feedback = JSON.stringify(h.requests[1])
+  assert.match(feedback, /condition.evidenceRefs必须是decision.evidenceRefs的子集/)
+  assert.ok(feedback.includes(evidenceRef))
+  assert.ok(!feedback.includes('Host completionEvidenceRefs:'))
+  assert.equal((await send('task.owner.accept', { taskId: 'condition-task', turnId: 'condition-turn', leaseEpoch: 1 })).result.status, 'accepted')
+})
+
 test('Owner原生权限服务缺失时在模型调用前明确失败', async t => {
   const root = await mkdtemp(join(tmpdir(), 'owner-permission-missing-'))
   const h = await host(root)

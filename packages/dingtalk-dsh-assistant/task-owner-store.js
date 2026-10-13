@@ -6,7 +6,7 @@ import { transientRecoveryReasons, correctableOwnerReasons, ownerRetryableReason
 import { readCurrentTaskSource, assertMessageTaskUnfenced } from './message-ledger.js'
 
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
-const fail = code => { throw Object.assign(new Error(code), { code }) }
+const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
 const id = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)) fail('TASK_OWNER_ID_INVALID')
   return value
@@ -45,14 +45,20 @@ const decision = value => {
   value.evidenceRefs.forEach(ref)
   if (['wait', 'block'].includes(value.action)) {
     const c = value.condition
-    if (!c) fail('TASK_OWNER_CONDITION_REQUIRED')
-    exact(c, ['kind', 'missing', 'responsibleParty', 'resumeWhen', 'evidenceRefs'])
-    if (!['business-input', 'approval', 'capability', 'permission', 'execution'].includes(c.kind)
-      || ['missing', 'responsibleParty', 'resumeWhen'].some(key => typeof c[key] !== 'string' || !c[key].trim() || c[key].length > 2000)
-      || !Array.isArray(c.evidenceRefs) || c.evidenceRefs.length > 128) fail('TASK_OWNER_CONDITION_INVALID')
+    if (!c) fail('TASK_OWNER_CONDITION_REQUIRED', 'wait/block必须提供condition，包含kind、missing、responsibleParty、resumeWhen、evidenceRefs。')
+    const fields = ['kind', 'missing', 'responsibleParty', 'resumeWhen', 'evidenceRefs']
+    if (Object.getPrototypeOf(c) !== Object.prototype) fail('TASK_OWNER_CONDITION_INVALID', 'condition必须是对象。')
+    const absent = fields.filter(key => !Object.hasOwn(c,key)), extra = Object.keys(c).filter(key => !fields.includes(key))
+    if (absent.length || extra.length) fail('TASK_OWNER_CONDITION_INVALID', `condition字段不符合合同：缺少${JSON.stringify(absent)}；多余${JSON.stringify(extra)}。`)
+    if (!['business-input', 'approval', 'capability', 'permission', 'execution'].includes(c.kind))
+      fail('TASK_OWNER_CONDITION_INVALID', 'condition.kind必须为business-input、approval、capability、permission或execution。')
+    const invalidText = ['missing', 'responsibleParty', 'resumeWhen'].filter(key => typeof c[key] !== 'string' || !c[key].trim() || c[key].length > 2000)
+    if (invalidText.length) fail('TASK_OWNER_CONDITION_INVALID', `condition字段${JSON.stringify(invalidText)}必须是非空字符串，且每项不超过2000字符。`)
+    if (!Array.isArray(c.evidenceRefs) || c.evidenceRefs.length > 128) fail('TASK_OWNER_CONDITION_INVALID', 'condition.evidenceRefs必须是最多128项的引用数组。')
     c.evidenceRefs.forEach(ref)
-    if (c.evidenceRefs.some(item => !value.evidenceRefs.includes(item))) fail('TASK_OWNER_CONDITION_INVALID')
-  } else if (value.condition !== undefined) fail('TASK_OWNER_CONDITION_INVALID')
+    const missingRefs = c.evidenceRefs.filter(item => !value.evidenceRefs.includes(item))
+    if (missingRefs.length) fail('TASK_OWNER_CONDITION_INVALID', `condition.evidenceRefs必须是decision.evidenceRefs的子集；以下引用未列入decision.evidenceRefs：${JSON.stringify(missingRefs)}。核对真实证据后，在decision.evidenceRefs中逐字列入确实用于本决定的引用，或从condition.evidenceRefs移除未使用引用；不要仅更换condition.kind。`)
+  } else if (value.condition !== undefined) fail('TASK_OWNER_CONDITION_INVALID', '只有wait/block允许condition；其他动作应移除condition。')
   if (value.candidateAcceptance !== undefined) {
     const acceptance = value.candidateAcceptance
     if (value.action !== 'wait') fail('TASK_OWNER_CANDIDATE_ACCEPTANCE_INVALID')

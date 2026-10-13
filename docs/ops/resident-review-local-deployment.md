@@ -907,3 +907,5 @@ For obsolete execution retirement, an already succeeded local workspace creation
 正式 directQueries.statusResources 的 kubernetes 资源可选 startupInspection：booleanProperties 仅登记 *.enabled 布尔键，springConditions 仅登记绑定这些键的类名。Host 使用现有 get/logs 读取当前容器启动后的保留日志，并复核 Deployment、Pod UID、containerID、imageID 和 startedAt；不使用 exec、不读取 Secret/env、不返回原始日志或其他参数。仅输出声明的布尔值与指定条件结果，声明值不等于完整有效配置。未保留、截断或冲突日志返回 unavailable，不推断 Bean 缺席。查询 scope 与注册资源授权保持原规则；最终判断仍由原 Owner 和语义验收完成。
 
 执行 Owner 完全权限修复：沿 Owner 修复版本受控部署流程安装。独立回读原会话 permission/preset=danger-full-access、sandbox/mode=danger-full-access、approval/policy=never，确认发生在恢复后的模型请求前；工具列表开放不代表权限预设已生效。暂停中仅成果评估不主动提升权限。
+
+Owner 条件校验反馈修复无 schema 迁移。沿受控部署并确认排空后安装；原 TASK_OWNER_CORRECTION_LIMIT 保留历史，通过原 Task 的 reassess-readonly 入口及当前 Owner/租约/需求/控制版本恢复，禁止直接改库清除失败。回读原会话权限、恢复后的真实调用及候选提交结果，不能将恢复运行等同业务完成。

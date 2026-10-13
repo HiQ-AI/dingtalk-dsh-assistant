@@ -894,3 +894,5 @@ Owner 观察与执行恢复分别使用独立的在途恢复链，复用同一�
 工程重启沿已登记的固定流程继续。Host 从同 Run 成功检查节点恢复已核验的候选/检查回执，代码及检查配置未变时提交阶段不重复构建；候选或检查改变仍需真实验证。动态节点/入出契约修改不再向模型开放，历史已接受定义仍可读取和恢复。
 
 冻结工程定义包含合同校验函数的源码摘要。发行包须保留 `.gitattributes` 指定的字节，包括 `engineering-output-contract.js` 的混合换行；Windows checkout 不得把已有合同统一转为 CRLF，否则无逻辑变化也会阻止历史工作流恢复。相关回归覆盖 `core.autocrlf=true/false` 的真实 Git checkout。
+
+Owner 的等待/阻塞候选必须将 condition.evidenceRefs 全部列入主 evidenceRefs；校验拒绝会指出具体字段或遗漏引用，原会话应修正候选继续，不能仅更换阻塞类别。
