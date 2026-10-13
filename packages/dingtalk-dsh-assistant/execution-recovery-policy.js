@@ -11,13 +11,19 @@ export const correctableOwnerReasons = Object.freeze(['TASK_OWNER_NO_DECISION', 
 export const ownerRetryableReason = code => transientRecoveryReasons.includes(code)
   || correctableOwnerReasons.includes(code) || ['TASK_OWNER_SESSION_MISSING', 'TASK_OWNER_TIMEOUT'].includes(code)
 
-// 诊断描述恢复责任；暂态重领由控制账、排空证明和持久退避共同决定。
+// 诊断标明具体处理方，不转移任务 Owner 的整体责任，也不授予自动修复能力；续行仍由控制账准入。
 export const engineeringProposalCorrectionReasons = Object.freeze(['ENGINEERING_NO_EFFECT_MODIFICATION', 'ENGINEERING_CHANGE_DISPOSITION_INVALID',
   'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED', 'ENGINEERING_PROPOSAL_DOCUMENT_INVALID'])
+// 诊断与控制账复用同一份既有准入列表；输出错误必须同时满足输出阶段。
+export const agentContinuationReasons = Object.freeze(['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission',
+  'EXECUTION_TURN_INTERRUPTED', 'execution_step_budget_exhausted', 'execution_timeout',
+  'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY', 'ENGINEERING_READ_PATH_INVALID'])
+export const agentCorrectableOutputReasons = Object.freeze(['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT',
+  'AGENT_WORK_RESULT_INVALID', 'AGENT_WORK_EVIDENCE_INVALID', 'AGENT_WORK_COVERAGE_INCOMPLETE', 'QUERY_EVIDENCE_INVALID', 'GROUP_REPLY_INTERNAL_DETAILS'])
 const failurePolicies = Object.freeze({
   'correctable-output': ['node-executor', 'correct-output-and-continue'],
-  'business-validation': ['task-owner', 'repair-artifact-and-revalidate'],
-  'task-blocked': ['task-owner', 'inspect-blocker-and-replan'],
+  'business-validation': ['node-executor', 'inspect-diagnosis-and-correct-within-capability'],
+  'task-blocked': ['node-executor', 'inspect-blocker-and-report-resume-condition'],
   'missing-input': ['requester', 'supply-required-input'],
   'missing-environment': ['operator', 'restore-required-environment'],
   'external-uncertain': ['effect-reconciler', 'reconcile-before-replay'],
@@ -33,9 +39,8 @@ const classifiedReasons = new Map([
   ...['ENGINEERING_VERIFICATION_FAILED', 'ENGINEERING_ACCEPTANCE_FAILED', 'LOCAL_ACCEPTANCE_FAILED',
     'RELEASE_PIPELINE_FAILED', ...engineeringPatchRepairReasons].map(code => [code, 'business-validation']),
   ['AGENT_WORK_NEEDS_INPUT', 'missing-input'],
-  ['AGENT_WORK_BLOCKED', 'task-blocked'],
+  ...agentContinuationReasons.map(code => [code, 'task-blocked']),
   ['LOCAL_ACCEPTANCE_CAPABILITY_MISSING', 'task-blocked'],
-  ['EXECUTION_TURN_INTERRUPTED', 'task-blocked'],
   ['ENGINEERING_UAT_ENVIRONMENT_REQUIRED', 'missing-environment'],
   ['ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE', 'missing-environment'],
   ['SESSION_ADAPTER_UNAVAILABLE', 'missing-environment'],
@@ -45,8 +50,7 @@ const classifiedReasons = new Map([
 
 export function classifyExecutionFailure({ code, phase = 'execution' }) {
   // Schema 不合法只在输出边界可归于结果修正；同一错误发生在输入映射时属于实现合同错误。
-  const correctable = phase === 'output-validation' && ['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT'].includes(code)
-    || ['output-validation', 'output-admission'].includes(phase) && code === 'AGENT_WORK_RESULT_INVALID'
+  const correctable = ['output-validation', 'output-admission'].includes(phase) && agentCorrectableOutputReasons.includes(code)
   const category = correctable
     ? 'correctable-output' : classifiedReasons.get(code) ?? 'implementation-error'
   const [responsibleParty, nextAction] = failurePolicies[category]

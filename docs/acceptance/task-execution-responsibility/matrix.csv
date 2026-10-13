@@ -1,0 +1,17 @@
+case,round,status,evidence
+原会话失败自动续行,1,PASS,round-1-service.log
+重启后保持原节点与成功前缀,1,PASS,round-1-service.log
+同问题重复失败不空转,1,PASS,round-1-service.log
+暂停取消需求来源效果边界,1,PASS,round-1-service.log
+失败扫描漏派发反证,1,FAIL,round-1.md
+诊断正文可读反证,1,FAIL,round-1.md
+完整回归与最终审查,1,PENDING,round-1.md
+原会话失败自动续行,4,PASS,round-4/recovery-tests.log
+重启后保持原节点与成功前缀,4,PASS,round-4/recovery-tests.log
+同问题重复失败不空转,4,PASS,round-4/recovery-tests.log
+暂停取消需求来源效果边界,4,PASS,round-4/recovery-tests.log
+失败扫描漏派发反证,4,PASS,round-4/recovery-tests.log
+诊断正文可读反证,4,PASS,round-4/recovery-tests.log
+完整回归与最终审查,4,PASS,round-3.md;round-4.md
+诊断分类与准入一致且未知错误不放宽,4,PASS,round-4/classification-tests.log
+归档与已完成任务不重启,4,PASS,round-4/recovery-tests.log

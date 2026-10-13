@@ -13,7 +13,7 @@ import { installMessageSchema, validateMessageSchema, reduceMessageCommand, reco
 import { installTaskPlanSchema, validateTaskPlanSchema, reduceTaskPlanCommand, queryTaskPlan, bindRunToTaskStage } from './execution-task-plan.js'
 import { installTaskOwnerSchema, validateTaskOwnerSchema, reduceTaskOwnerCommand,
   queryTaskOwner, recoverTaskOwners, isUnstartedEngineeringPreparation } from './task-owner-store.js'
-import { transientRecoveryReasons, recoveryRetryDelayMs, engineeringProposalCorrectionReasons } from './execution-recovery-policy.js'
+import { transientRecoveryReasons, recoveryRetryDelayMs, engineeringProposalCorrectionReasons, agentContinuationReasons, agentCorrectableOutputReasons } from './execution-recovery-policy.js'
 import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { executionDigest, parseArtifactReference } from './execution-artifacts.js'
 
@@ -273,11 +273,9 @@ function inspectNodeRecovery(runId, { reclassifyInterrupted = false, reclassifyP
     code: failure.code, phase: failure.phase, targetNodeId: failure.targetNodeId,
     ...(technicalPlanRevision || localPlanCorrection ? { reviewInputDigest: candidate.input_digest } : {}) })
   detail.problemKey = problemKey
-  const correctable = reclassifyInterrupted && failure.code === 'execution_tool_failed' || reclassifyProvider && failure.code === 'EXECUTION_PROVIDER_FAILED' || ['AGENT_WORK_BLOCKED', 'NO_NODE_SUBMISSION', 'execution_no_submission', 'EXECUTION_TURN_INTERRUPTED', 'execution_step_budget_exhausted', 'execution_timeout',
-    'QUERY_ARGUMENT_INVALID', 'QUERY_NOT_FOUND', 'QUERY_LIMIT_INVALID', 'QUERY_TIMEOUT', 'QUERY_CAPACITY', 'ENGINEERING_READ_PATH_INVALID'].includes(failure.code)
+  const correctable = reclassifyInterrupted && failure.code === 'execution_tool_failed' || reclassifyProvider && failure.code === 'EXECUTION_PROVIDER_FAILED' || agentContinuationReasons.includes(failure.code)
     || ['output-validation', 'output-admission'].includes(failure.phase)
-      && ['NODE_SCHEMA_INVALID', 'INVALID_JSON_VALUE', 'INVALID_JSON_OBJECT', 'AGENT_WORK_RESULT_INVALID',
-        'AGENT_WORK_EVIDENCE_INVALID', 'AGENT_WORK_COVERAGE_INCOMPLETE', 'QUERY_EVIDENCE_INVALID', 'GROUP_REPLY_INTERNAL_DETAILS'].includes(failure.code)
+      && agentCorrectableOutputReasons.includes(failure.code)
   if (!correctable && !proposalCorrection && !editArgumentCorrection) return { ...detail, reason: 'failure-requires-implementation-repair' }
   if (proposalCorrection && (failure.phase !== (technicalPlanRevision ? 'output-admission' : 'execution') || failure.targetNodeId !== candidate.node_id)) return detail
   if (failure.code === 'ENGINEERING_READ_PATH_INVALID' && n.output_ref) return detail
@@ -740,7 +738,9 @@ function coreCommand(command, now, consumption = {}) {
     if (r.recovery_reason === 'stage-dependency') fail('TASK_DEPENDENCY_PENDING')
     const recovering = nodes(r.run_id).filter(n => n.status === 'waiting' && n.wait_reason && JSON.parse(n.wait_reason).kind === 'recovery')
     if (!recovering.length) fail('RUN_NOT_RECOVERING')
-    if (recovering.some(n => ['EXECUTION_TURN_INTERRUPTED', 'ENGINEERING_READ_PATH_INVALID', 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED', ...engineeringProposalCorrectionReasons].includes(JSON.parse(n.wait_reason).reference))) fail('NODE_RECOVERY_REQUIRES_OWNER')
+    const recovery = inspectNodeRecovery(r.run_id)
+    if (recovery.repairable || recovery.reason === 'strategy-change-required'
+      || recovering.some(n => ['EXECUTION_TURN_INTERRUPTED', 'ENGINEERING_READ_PATH_INVALID', 'ENGINEERING_TECHNICAL_PLAN_REVISION_REQUIRED', ...engineeringProposalCorrectionReasons].includes(JSON.parse(n.wait_reason).reference))) fail('NODE_RECOVERY_REQUIRES_CONTEXT')
     if (recovering.some(n => !n.drained)) fail('NODE_NOT_DRAINED')
     assertRunEffectsDrained(db, r.run_id)
     for (const n of recovering) {
@@ -1800,8 +1800,19 @@ function query(value) {
     const limit = integer(value.limit ?? 100, 'limit', 1); if (limit > 200) fail('INVALID_ARGUMENT')
     const before = integer(value.beforeSequenceId ?? Number.MAX_SAFE_INTEGER, 'beforeSequenceId', 1)
     if (value.activeOnly !== undefined && typeof value.activeOnly !== 'boolean') fail('INVALID_ARGUMENT')
-    return db.prepare("SELECT rowid AS sequence_id,* FROM execution_runs WHERE rowid<? AND (? IS NULL OR task_id=?) AND (?=0 OR (status NOT IN ('succeeded','failed','cancelled') AND pause_requested=0 AND COALESCE(recovery_reason,'')<>'stage-dependency')) ORDER BY rowid DESC LIMIT ?")
-      .all(before, value.taskId ? text(value.taskId, 'taskId') : null, value.taskId ?? null, value.activeOnly ? 1 : 0, limit)
+    if (value.includeFailed !== undefined && typeof value.includeFailed !== 'boolean') fail('INVALID_ARGUMENT')
+    // 失败节点仍可能等待原会话纠正；仅恢复扫描显式纳入当前活动任务的失败 Run。
+    return db.prepare(`SELECT r.rowid AS sequence_id,r.* FROM execution_runs r
+      WHERE r.rowid<? AND (? IS NULL OR r.task_id=?) AND (?=0 OR (
+        r.pause_requested=0 AND COALESCE(r.recovery_reason,'')<>'stage-dependency' AND (
+          r.status NOT IN ('succeeded','failed','cancelled') OR (?=1 AND r.status='failed' AND r.stop_requested=0 AND EXISTS (
+            SELECT 1 FROM business_tasks t JOIN task_controls c USING(task_id)
+            JOIN task_plan_stages s ON s.task_id=t.task_id AND s.plan_revision=t.plan_revision
+            WHERE t.task_id=r.task_id AND t.status IN ('active','blocked') AND c.state='active'
+              AND s.run_id=r.run_id AND s.status IN ('running','blocked')
+          ))))) ORDER BY r.rowid DESC LIMIT ?`)
+      .all(before, value.taskId ? text(value.taskId, 'taskId') : null, value.taskId ?? null,
+        value.activeOnly ? 1 : 0, value.includeFailed ? 1 : 0, limit)
       .filter(row=>value.includeArchived||!archivedExecutionIds(db,row.task_id).has(row.run_id))
       .map(row => ({ ...runDto(row), sequenceId: row.sequence_id }))
   }

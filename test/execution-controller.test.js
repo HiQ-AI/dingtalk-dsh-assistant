@@ -7,7 +7,7 @@ import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
-import { classifyExecutionFailure, recoveryRetryDelayMs } from '../packages/dingtalk-dsh-assistant/execution-recovery-policy.js'
+import { classifyExecutionFailure, recoveryRetryDelayMs, agentContinuationReasons, agentCorrectableOutputReasons } from '../packages/dingtalk-dsh-assistant/execution-recovery-policy.js'
 
 const number = { type: 'number' }
 const workflow = execute => ({ id: 'synthetic', version: '1', nodes: [
@@ -32,11 +32,25 @@ test('失败分类仅使用精确白名单，输出错误不扩散到输入和�
   for (const code of ['AGENT_WORK_RESULT_INVALID', 'CUSTOM_AGENT_WORK_RESULT_INVALID'])
     assert.equal(classifyExecutionFailure({ code, phase: 'input-validation' }).category, 'implementation-error')
   assert.equal(classifyExecutionFailure({ code: 'CUSTOM_AGENT_WORK_RESULT_INVALID', phase: 'output-admission' }).category, 'implementation-error')
+  for (const code of ['ENGINEERING_ACCEPTANCE_FAILED', 'ENGINEERING_VERIFICATION_FAILED', 'LOCAL_ACCEPTANCE_FAILED', 'AGENT_WORK_BLOCKED', 'LOCAL_ACCEPTANCE_CAPABILITY_MISSING']) {
+    const recovery = classifyExecutionFailure({ code })
+    assert.equal(recovery.responsibleParty, 'node-executor')
+    assert.doesNotMatch(recovery.nextAction, /replan|repair-artifact/u)
+  }
+  for (const code of agentContinuationReasons) assert.equal(classifyExecutionFailure({ code }).responsibleParty, 'node-executor')
+  for (const code of agentCorrectableOutputReasons) {
+    for (const phase of ['output-validation', 'output-admission']) assert.equal(classifyExecutionFailure({ code, phase }).responsibleParty, 'node-executor')
+    for (const phase of ['input-mapping', 'input-validation']) assert.equal(classifyExecutionFailure({ code, phase }).responsibleParty, 'maintainer')
+  }
+  for (const code of ['execution_tool_failed', 'EXECUTION_PROVIDER_FAILED']) {
+    assert.equal(agentContinuationReasons.includes(code), false)
+    assert.equal(classifyExecutionFailure({ code }).responsibleParty, 'maintainer')
+  }
 })
 
 test('执行失败保存恢复责任，未知故障和外部未知结果不自动重放', async t => {
   for (const [code, category, nextAction] of [
-    ['ENGINEERING_ACCEPTANCE_FAILED', 'business-validation', 'repair-artifact-and-revalidate'],
+    ['ENGINEERING_ACCEPTANCE_FAILED', 'business-validation', 'inspect-diagnosis-and-correct-within-capability'],
     ['ENGINEERING_UAT_ENVIRONMENT_REQUIRED', 'missing-environment', 'restore-required-environment'],
     ['DELIVERY_RECONCILIATION_REQUIRED', 'external-uncertain', 'reconcile-before-replay'],
     ['CUSTOM_ACCEPTANCE_FAILED', 'implementation-error', 'inspect-and-fix-implementation'],
@@ -51,6 +65,7 @@ test('执行失败保存恢复责任，未知故障和外部未知结果不自�
     assert.equal(state.run.status, 'waiting')
     assert.equal(diagnosis.recovery.category, category)
     assert.equal(diagnosis.recovery.nextAction, nextAction)
+    if (category === 'business-validation') assert.equal(diagnosis.recovery.responsibleParty, 'node-executor')
     assert.equal(calls, 1)
     assert.equal(state.nodes[1].leaseEpoch, 0)
   })
@@ -807,7 +822,7 @@ test('超过32个节点的完整Run持续执行并保留全部成功产物', asy
   assert.equal(await artifacts.read(result.nodes.at(-1).outputRef),80)
 })
 
-test('历史原生中断重分类仍只允许Owner同一问题续行一次并保留成功前缀', async t => {
+test('历史原生中断重分类由受管恢复续行一次并保留成功前缀', async t => {
   let count = 0
   const f = await agentRecoveryFixture(t, () => ({ status: 'no_submission', reason: ++count === 1 ? 'execution_tool_failed' : 'EXECUTION_TURN_INTERRUPTED', failure: { code: count === 1 ? 'execution_tool_failed' : 'EXECUTION_TURN_INTERRUPTED', phase: 'execution' } }))
   const before = await f.controller.state(f.runId), n = before.nodes[1]
@@ -816,15 +831,13 @@ test('历史原生中断重分类仍只允许Owner同一问题续行一次并保
   await f.store.command({ id: 'reclassify-interruption', kind: 'node.failure.reclassify', args: { runId:f.runId,runRevision:before.run.revision,nodeRunId:n.nodeRunId,generation:n.generation,leaseEpoch:n.leaseEpoch,inputDigest:n.inputDigest,sessionId:n.sessionId,evidenceRef:proof.ref,previousCode:'execution_tool_failed',code:'EXECUTION_TURN_INTERRUPTED' } })
   const recovery = await f.controller.inspectNodeRecovery(f.runId)
   assert.equal(recovery.repairable,true);assert.ok(recovery.evidenceRefs.includes(proof.ref))
-  await assert.rejects(f.store.command({ id: 'bypass-store-interruption', kind: 'run.recover', args: { runId: f.runId } }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
-  await assert.rejects(f.controller.recover({ commandId: 'bypass-controller-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
-  const held = await f.controller.state(f.runId)
-  assert.equal(held.run.status, 'waiting');assert.equal(held.nodes[1].leaseEpoch,n.leaseEpoch)
-  await f.controller.resumeNode(await f.resumeArgs());await f.controller.whenIdle(f.runId)
+  await assert.rejects(f.store.command({ id: 'bypass-store-interruption', kind: 'run.recover', args: { runId: f.runId } }), { code: 'NODE_RECOVERY_REQUIRES_CONTEXT' })
+  await f.controller.recover({ commandId: 'managed-controller-interruption', runId: f.runId })
+  await f.controller.whenIdle(f.runId)
   const after = await f.controller.state(f.runId), repeated = await f.controller.inspectNodeRecovery(f.runId)
   assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].sessionId,n.sessionId)
   assert.equal(repeated.problemKey,recovery.problemKey);assert.equal(repeated.reason,'strategy-change-required');assert.equal(repeated.repairable,false)
-  await assert.rejects(f.controller.recover({ commandId: 'bypass-repeat-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_OWNER' })
+  await assert.rejects(f.controller.recover({ commandId: 'bypass-repeat-interruption', runId: f.runId }), { code: 'NODE_RECOVERY_REQUIRES_CONTEXT' })
 })
 
 test('内部受管准备复用冻结workflow及CAS，维护下不调度并保留成功前缀',async t=>{
@@ -874,7 +887,7 @@ test('检查checkpoint Controller同代仅重验，成功准备只执行一次',
  await f.controller.updateEngineeringCheckpoint(args);assert.equal(verifies,2)
 })
 
-test('工程旧越界读取失败由Owner同节点同代续行，通用恢复不得绕过',async t=>{
+test('工程旧越界读取失败由受管恢复同节点同代续行，直接重领仍拒绝',async t=>{
  const f=await agentRecoveryFixture(t,({recoveryContext,input})=>recoveryContext?input+1:{status:'no_submission',reason:'execution_tool_failed',failure:{code:'execution_tool_failed',phase:'execution'}})
  const before=await f.controller.state(f.runId),node=before.nodes[1]
  assert.equal((await f.controller.inspectNodeRecovery(f.runId)).repairable,false)
@@ -882,8 +895,8 @@ test('工程旧越界读取失败由Owner同节点同代续行，通用恢复不
  await f.store.command({id:'scope-reclassify',kind:'node.failure.reclassify',args:{runId:f.runId,runRevision:before.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,sessionId:node.sessionId,evidenceRef:evidence.ref,previousCode:'execution_tool_failed',code:'ENGINEERING_READ_PATH_INVALID'}})
  const recovery=await f.controller.inspectNodeRecovery(f.runId)
  assert.equal(recovery.repairable,true)
- await assert.rejects(f.controller.recover({commandId:'bypass-path',runId:f.runId}),{code:'NODE_RECOVERY_REQUIRES_OWNER'})
- await f.controller.resumeNode(await f.resumeArgs());const after=await f.controller.whenIdle(f.runId)
+ await assert.rejects(f.store.command({id:'bypass-path',kind:'run.recover',args:{runId:f.runId}}),{code:'NODE_RECOVERY_REQUIRES_CONTEXT'})
+ await f.controller.recover({commandId:'managed-path',runId:f.runId});const after=await f.controller.whenIdle(f.runId)
  assert.equal(after.run.status,'succeeded');assert.equal(after.run.generation,before.run.generation);assert.deepEqual(after.nodes[0],before.nodes[0]);assert.equal(after.nodes[1].nodeRunId,before.nodes[1].nodeRunId);assert.equal(after.nodes[1].leaseEpoch,before.nodes[1].leaseEpoch+1)
 })
 
@@ -1437,9 +1450,13 @@ for (const scenario of [
     assert.ok(calls[1].recoveryContext.strategy.includes(scenario.objective))
   }
   if (scenario.accepts) assert.equal(after.run.status, 'succeeded')
-  else {
+  else if (scenario.objective) {
     await controller.recover({ commandId: 'repeat-objective-recover', runId }); await controller.whenIdle(runId)
-    assert.equal(calls.length, scenario.objective ? 2 : 3)
-    if (!scenario.objective) assert.ok(calls.every(call => !call.recoveryContext))
+    assert.equal(calls.length, 2)
+  } else {
+    assert.equal(calls[1].binding.sessionId, calls[0].binding.sessionId)
+    assert.equal(calls[1].recoveryContext.kind, 'execution-recovery-context')
+    await assert.rejects(controller.recover({ commandId: 'repeat-objective-recover', runId }), { code: 'NODE_RECOVERY_REQUIRES_CONTEXT' })
+    assert.equal(calls.length, 2)
   }
 })

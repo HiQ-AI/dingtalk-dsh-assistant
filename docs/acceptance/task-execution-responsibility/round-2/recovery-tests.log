@@ -1,0 +1,58 @@
+✔ Owner拒绝旧修复，执行会话续行原Agent并保留成功前缀与输入 (771.2924ms)
+✔ Owner读取诊断后推进可恢复问题，真实外部等待仍可保留：true (594.6104ms)
+✔ Owner读取诊断后推进可恢复问题，真实外部等待仍可保留：false (601.3507ms)
+✔ 历史成功阶段观察沿用旧事件身份，不唤醒已完成Owner (418.6682ms)
+✔ 原生维护恢复仅处理重复观察，重启保留原complete及错误回合与事件 (1851.2161ms)
+✔ 完成观察恢复拒绝新业务事件 (1674.2264ms)
+✔ 完成观察恢复拒绝不同产出 (1779.8799ms)
+✔ 完成观察恢复拒绝权限变化 (1984.3674ms)
+✔ 完成观察恢复拒绝要求变化 (1868.2804ms)
+✔ 完成观察恢复拒绝计划变化 (1896.2228ms)
+✔ 完成观察恢复拒绝新业务执行 (1874.8445ms)
+✔ 完成观察恢复拒绝节点未排空 (1858.3638ms)
+✔ 完成观察恢复拒绝阶段未成功 (2037.1847ms)
+✔ 完成观察恢复拒绝原完成证明未应用 (1921.7706ms)
+✔ 完成观察恢复拒绝完成后接纳业务决定 (2006.459ms)
+✔ 完成观察恢复拒绝不确定外部效果 (2062.596ms)
+✔ 新Task首轮输入不把未建立计划误判为需求过期，同turn纠正后接纳initialize (1007.8111ms)
+✔ 真实控制账Owner派发不空转且原恢复可继续：future-retry (1119.8142ms)
+✔ 真实控制账Owner派发不空转且原恢复可继续：pending-message (1049.3522ms)
+✔ 旧修复候选始终拒绝，原生查询证据按当前需求与同Owner同turn绑定 (2823.9617ms)
+✔ Owner拒绝旧修复，执行会话按validator真实身份纠正原agent且错误绑定拒绝 (1540.7479ms)
+✔ 自动恢复扫描回原会话并保留成功前缀：重启=false (788.027ms)
+✔ 自动恢复扫描回原会话并保留成功前缀：重启=true (1022.068ms)
+✔ 自动恢复同一问题二次失败跨重启不空转 (2070.0464ms)
+✔ 自动恢复无提交等待时仍回原会话，已有准入不依赖旧provider重分类 (1221.5328ms)
+✔ 自动恢复保留准入边界：pause (1021.6274ms)
+✔ 自动恢复保留准入边界：cancel (1236.3713ms)
+✔ 自动恢复保留准入边界：requirement (1256.0664ms)
+✔ 自动恢复保留准入边界：source (1195.5691ms)
+✔ 自动恢复保留准入边界：unknown-effect (1286.5376ms)
+✔ 自动恢复保留准入边界：code-failure (1065.6498ms)
+✖ 自动恢复扫描不纳入已归档失败Run，历史仍可显式读取 (1152.3712ms)
+✔ 单Task恢复失败和正在执行Task不能阻止其它恢复与通知扫描 (25.7907ms)
+✔ 大量unknown通知不能挤掉新prepared；对账游标可到下一页 (3081.7932ms)
+✔ 旧活动Task不会被超过200条新终态任务挤出恢复索引 (3655.7445ms)
+ℹ tests 35
+ℹ suites 0
+ℹ pass 34
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33213.6478
+
+✖ failing tests:
+
+test at test\workflow-recovery.test.js:137:1
+✖ 自动恢复扫描不纳入已归档失败Run，历史仍可显式读取 (1152.3712ms)
+  Error: TASK_CONTROL_CONFLICT
+      at deserializeError (file:///D:/codex/worktrees/task-execution-responsibility/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/execution-store.js:14:49)
+      at Worker.<anonymous> (file:///D:/codex/worktrees/task-execution-responsibility/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/execution-store.js:75:23)
+      at Worker.emit (node:events:509:28)
+      at MessagePort.<anonymous> (node:internal/worker:350:14)
+      at [nodejs.internal.kHybridDispatch] (node:internal/event_target:856:20)
+      at MessagePort.<anonymous> (node:internal/per_context/messageport:23:28) {
+    code: 'TASK_CONTROL_CONFLICT',
+    sqliteCode: null
+  }
