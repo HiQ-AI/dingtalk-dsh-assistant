@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { projectOwnerContext, measureOwnerContext } from '../packages/dingtalk-dsh-assistant/task-owner-context.js'
 import { executionDigest, readTaskMaterialIndexPage } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
-import { ownerImmutableReadReceipts } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
+import { ownerImmutableReadReceipts, retainOwnerContextBase } from '../packages/dingtalk-dsh-assistant/task-owner-session.js'
 
 export function fixture() {
   const values = new Map()
@@ -151,5 +151,38 @@ test('duplicate source text resolves within the same input while identities and 
   assert.equal(modelInput.goal.sourceInstructions[1].text, text + '新增要求')
   assert.deepEqual({ ...modelInput.currentSources[0], text: resolve(modelInput.currentSources[0].text) }, input.currentSources[0])
   assert.ok(JSON.stringify(modelInput.goal).length + JSON.stringify(modelInput.currentSources).length < JSON.stringify(input.goal).length + JSON.stringify(input.currentSources).length)
+})
+
+test('visible base survives continuation, updates removed constraints, and restores after compaction without historical assumptions', async () => {
+  const events = [], session = { surface: { nodes: [] }, snapshotEvents: () => events,
+    append(type, data, options = {}) {
+      const seq = events.length
+      events.push({ type, data: structuredClone(data), seq, ...options })
+      if (options.surfaceOp?.op === 'replace') this.surface.nodes = this.surface.nodes.filter(id => id !== options.surfaceOp.start)
+      this.surface.nodes.push(seq)
+    } }
+  const binding = { taskId: 'one', sessionId: 'owner' }, f = fixture()
+  const text = '核验撤回限制，当前不授权部署。'.repeat(10)
+  const raw = { taskId: 'one', goal: { request: text, constraints: ['不部署'], sourceInstructions: [{ sourceKey: 'a', text }] },
+    currentSources: [{ sourceKey: 'a', text }], task: { requirementRevision: 1 }, events: [] }
+  const { modelInput } = await projectOwnerContext(raw, f.artifacts)
+  const dynamic = retainOwnerContextBase(session, binding, modelInput)
+  const currentBase = () => JSON.parse(events[session.surface.nodes.at(-1)].data.content[0].text).ownerContextBase
+  const merged = { ...currentBase(), ...dynamic }; delete merged.contextBaseDigest
+  assert.deepEqual(merged, modelInput)
+  assert.equal(merged.goal.request.sameAs.reduce((node, key) => node[key], merged), text)
+  retainOwnerContextBase(session, binding, { ...modelInput, events: [{ eventSeq: 2 }] })
+  assert.equal(events.length, 1, 'unchanged base does not append another event')
+  const changed = { ...modelInput, goal: { ...modelInput.goal, constraints: ['只允许隔离环境测试'] } }
+  retainOwnerContextBase(session, binding, changed)
+  assert.equal(session.surface.nodes.length, 1)
+  assert.deepEqual(currentBase().goal.constraints, ['只允许隔离环境测试'])
+  session.surface.nodes = [] // Compaction removed the visible base; audit still exists.
+  retainOwnerContextBase(session, binding, changed)
+  assert.equal(events.length, 3)
+  assert.deepEqual(currentBase().goal, changed.goal)
+  retainOwnerContextBase(session, { ...binding, sessionId: 'other' }, changed)
+  assert.equal(events.length, 4, 'another session cannot reuse this base')
+  assert.deepEqual(raw.goal.constraints, ['不部署'])
 })
 

@@ -105,8 +105,17 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
       assert.equal(receipts[1].result.isError, true); assert.equal(receipts[3].result.isError, false)
       assert.deepEqual(receipts[0].arguments, receipts[1].arguments)
       assert.equal(receipts[0].binding.sessionId, 'native-owner')
-      assert.match(JSON.stringify(h.requests[1]), /Host原生工具执行回执/)
+      assert.doesNotMatch(JSON.stringify(h.requests[1]), /Host原生工具执行回执/)
+      assert.match(JSON.stringify(h.requests[1]), /evidenceRef/)
       assert.match(JSON.stringify(h.requests[1]), /真实命令参数错误/)
+      for (const [requestIndex,callId,refDigit,expectedText] of [[1,'call-1','2','真实命令参数错误'],[2,'call-2','4','真实业务检查通过']]) {
+        const blocks=h.requests[requestIndex].messages.flatMap(message=>message.content??[])
+        const toolResult=blocks.find(block=>block.type==='tool-result'&&block.toolCallId===callId)
+        assert.ok(toolResult,'实际SDK请求必须包含原工具结果')
+        assert.match(JSON.stringify(toolResult.content),new RegExp(expectedText))
+        assert.ok(JSON.stringify(toolResult.content).includes(`sha256-${refDigit.repeat(64)}.json`),'凭据引用与结果在同一tool-result中')
+        assert.equal(h.requests[requestIndex].messages.filter(message=>message.source?.kind==='coordinator'&&JSON.stringify(message.content).includes(`sha256-${refDigit.repeat(64)}.json`)).length,0)
+      }
       assert.equal(artifactReads, 1)
       h.setLease(2)
       const resumed = await h.sessions.run({ binding: { taskId: 'native-task', sessionId: 'native-owner', turnId: 'turn-2', leaseEpoch: 2,
@@ -137,6 +146,52 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
       assert.ok(h.requests[0].tools.every(x => x.name !== 'pwsh'))
     }
   })
+})
+
+test('Owner原生回执保留SDK block反馈及value替换渲染', async t => {
+  for(const mode of ['block','value']) await t.test(mode,async t=>{
+    const root=await mkdtemp(join(tmpdir(),'owner-native-post-result-'))
+    const h=await host(root,null,null,decision,undefined,1,[{name:'pwsh',args:{}}])
+    t.after(async()=>{await h.close();await rm(root,{recursive:true,force:true})})
+    h.ctx.tools.register({name:'pwsh',description:'post result fixture',parameters:{type:'object'},output:{schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},render:(_args,value)=>[{type:'text',text:`SDK_RENDER:${value.text}`}]},execute:async()=>({text:'original'})})
+    h.onRequest(()=>{if(h.requests.length===0)h.ctx.agents.get('post-owner').ctx.on('tools/post-execute',async(exec,_result,next)=>{
+      const original=await next()
+      if(exec.name!=='pwsh')return original
+      return mode==='block'?{kind:'block',feedback:[{type:'text',text:'HOST_BLOCK_REASON'}]}:{kind:'accept',value:{text:'replaced'}}
+    })})
+    const receipts=[],ref=`sha256-${'8'.repeat(64)}.json`
+    const result=await h.sessions.run({binding:{taskId:'post-task',sessionId:'post-owner',turnId:'turn',leaseEpoch:1,ownerEpoch:1,requirementRevision:1,inputDigest:'a'.repeat(64),sessionBound:false},input:{},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{},onNativeExecution:async receipt=>{receipts.push(receipt);return{evidenceRef:ref}}})
+    assert.equal(result.status,'submitted');assert.equal(receipts.length,2)
+    const blocks=h.requests[1].messages.flatMap(message=>message.content??[]),toolResult=blocks.find(block=>block.type==='tool-result'&&block.toolCallId==='call-1')
+    assert.ok(toolResult)
+    assert.equal(receipts[1].postExecutionDecision,mode==='block'?'block':'accept')
+    if(mode==='block'){assert.match(JSON.stringify(toolResult),/HOST_BLOCK_REASON/);assert.ok(JSON.stringify(toolResult).includes(ref))}
+    else{assert.match(JSON.stringify(toolResult),/SDK_RENDER:replaced/);assert.doesNotMatch(JSON.stringify(toolResult),/SDK_RENDER:original/);assert.ok(!JSON.stringify(toolResult).includes(ref),'value替换保持SDK schema和renderer，不强加content')}
+    const persisted=await h.ctx.sessionPersistence.inspect('post-owner')
+    assert.equal(persisted.events.filter(event=>event.type==='user/message'&&event.data.source?.kind==='coordinator'&&JSON.stringify(event.data.content).includes(ref)).length,0,'回执不能额外追加coordinator消息')
+  })
+})
+
+test('Owner真实SDK续轮只保留一份可见需求基线并传入新动态状态', async t=>{
+  const root=await mkdtemp(join(tmpdir(),'owner-native-context-base-'))
+  const artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+  const waiting={action:'wait',summary:'等待业务批准',evidenceRefs:[],condition:{kind:'approval',missing:'批准',responsibleParty:'审批人',resumeWhen:'批准后继续',evidenceRefs:[]}}
+  const h=await host(root,null,null,waiting)
+  t.after(async()=>{await h.close();await rm(root,{recursive:true,force:true})})
+  const input={taskId:'base-task',task:{requirementRevision:1},goal:{request:'UNIQUE_CURRENT_GOAL_MARKER'},currentSources:[{text:'UNIQUE_SOURCE_MARKER'}],stages:[]}
+  for(const leaseEpoch of [1,2]){
+    h.setLease(leaseEpoch)
+    const current={...input,versions:{controlRevision:leaseEpoch}}
+    const result=await h.sessions.run({binding:{taskId:'base-task',sessionId:'base-owner',turnId:`turn-${leaseEpoch}`,leaseEpoch,ownerEpoch:1,requirementRevision:1,sessionBound:leaseEpoch>1},input:current,...await projectOwnerContext(current,artifacts),provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{}})
+    assert.equal(result.status,'submitted')
+    const messages=JSON.stringify(h.requests.at(-1).messages)
+    assert.equal(messages.split('UNIQUE_CURRENT_GOAL_MARKER').length-1,1)
+    assert.equal(messages.split('UNIQUE_SOURCE_MARKER').length-1,1)
+    assert.ok(messages.includes('contextBaseDigest'))
+    assert.ok(messages.includes(`\\"controlRevision\\":${leaseEpoch}`)||messages.includes(`"controlRevision":${leaseEpoch}`))
+  }
+  const saved=await h.ctx.sessionPersistence.inspect('base-owner')
+  assert.equal(saved.events.filter(event=>event.type==='user/message'&&event.data.source?.ownerContextBase).length,1,'未变基线续轮不重新注入')
 })
 
 test('Owner条件证据子集错误穿过真实SQLite线程精确反馈并同轮修正', async t => {
