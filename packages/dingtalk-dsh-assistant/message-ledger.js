@@ -1089,6 +1089,24 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       const n={id:a.notificationId,eventKey,runId:r.runId,...(a.commandId?{commandId:a.commandId}:a.requestId?{requestId:a.requestId}:a.acceptanceId?{acceptanceId:a.acceptanceId}:{stateFact:a.stateFact}),payload:a.payload,disclosure:a.disclosure,status:'prepared',leaseEpoch:0,createdAt:now};put(db,r.runId,'notification',n);return {result:{notification:n}}
     }
     const n=get(db,'notification',a.notificationId)
+    if(kind==='message.notification.reconcile') {
+      // 失效处理不需要渠道写入许可，也不能领取或改写发送历史。
+      if(n.status!=='prepared'||n.leaseEpoch!==0||n.ack||n.evidence||n.startedAt||n.ackAt||n.deliveredAt||n.deliveredMessageId||n.error||n.deliveryError||n.sendAttemptCount>0||n.deliveryAttemptCount>0)
+        return {result:{notification:n}}
+      const taskId=n.payload?.fact?.taskId,phase=n.payload?.phase
+      if(!taskId||!phase?.startsWith('owner:')||phase.startsWith('owner:application_wait:')||phase.startsWith('owner:started:'))return {result:{notification:n}}
+      if(db.prepare("SELECT 1 FROM message_items WHERE kind='notification-operation' AND json_extract(body,'$.snapshot.notificationId')=? LIMIT 1").get(n.id))return {result:{notification:n}}
+      const report=db.prepare(`SELECT r.task_id,r.report_type,t.rowid AS turn_sequence,t.application_status
+        FROM task_reports r JOIN task_owner_turns t ON t.turn_id=r.turn_id WHERE r.report_id=?`).get(phase.slice(6))
+      const latest=db.prepare(`SELECT t.rowid AS turn_sequence,t.application_status,r.report_id,r.report_type
+        FROM task_owner_turns t LEFT JOIN task_reports r ON r.turn_id=t.turn_id AND r.task_id=t.task_id
+        WHERE t.task_id=? AND t.status='accepted' ORDER BY t.rowid DESC LIMIT 1`).get(taskId)
+      if(report?.task_id!==taskId||report.application_status!=='applied'||!['wait','block'].includes(report.report_type)
+        ||latest?.application_status!=='applied'||!['complete','wait','block'].includes(latest.report_type)||latest.turn_sequence<=report.turn_sequence)return {result:{notification:n}}
+      n.status='superseded';n.supersededAt=now;n.supersededReason='owner-report-replaced';n.supersededByReportId=latest.report_id
+      put(db,n.runId,'notification',n)
+      return {result:{notification:n}}
+    }
     if(kind==='message.notification.recall.record') {
       if(n.status!=='delivered'||n.evidence?.messageId!==a.messageId||a.recallStatus!=='SUCCESS'||!a.evidenceRef)fail('MESSAGE_RECALL_EVIDENCE_MISMATCH')
       if(n.recallStatus==='recalled') {if(n.recallEvidenceRef!==a.evidenceRef)fail('MESSAGE_RECALL_EVIDENCE_CONFLICT');return {result:{notification:n}}}
