@@ -32,6 +32,20 @@ HTTP 核验包括完整 GET/PUT/enabled/binding 路径、服务端身份、严�
 
 交叉审查工程消费链时发现端口类型校验会将 `true` 转为端口 1；通过真实 connector 加无网络 Client 替身复现 `opened=1, receivedPort=1`。集成代理修复为只接受整数数值或纯数字字符串后，用同一最小 probe 回读为 `opened=0, error=QUERY_DATABASE_CONFIG_INVALID`。同时推动收窄新工程工具的范围，仅显式托管映射且原 permissions 授权的数据库进入节点目录；scope 重算从真实 Run/节点/Session/定义取得依据，消息及 Owner 保留原分支。完整工程 v26 与历史摘要回归由集成验收记录提供。
 
+## 主线合并后联合回归
+
+合并 `origin/main` 的表格同步移除、看板页面保持与任务详情关联、工程合同发行字节改动后，保留上述合并前证据，另实跑以下最终联合组：
+
+```powershell
+node --test test/workflow-configuration.test.js test/http.test.js test/client.test.js test/observer-client.test.js test/observer-node-control-display.test.js test/dingtalk-dsh-assistant.test.js test/workflow-entry.test.js test/external-registry-startup.test.js test/runtime-startup-observation.test.js test/engineering-approach-contract.test.js
+```
+
+2026-10-13 04:39:14 UTC 开始，实际结果 **133/133 PASS，exit 0，FAIL/SKIP/CANCELLED 均为 0**，耗时 7688.7501 ms。覆盖移除表格同步后的完整概览、旧路由 404、配置权限与原生持久化、实际 Resident 启动，以及 `core.autocrlf=true/false` 两种真实 Git checkout 的合同发行字节。完整日志仅保存在 `docs/tmp/workflow-dashboard/final-joint-after-main.log`；命令、计数与七个关键源码 SHA256 见 [结构化汇总](backend-final-summary.json)，测试前后这些源码均无变化。
+
+合并后的 Assistant 设置页已重新生成，bundle SHA256 为 `ec26774f7406eb20420d0003e3cac3b8bdc34f5030d9d8d3310ff0b777fd685d`；Observer 为 `80aa9905cdffafde417b800f87568748902c16932d62dd3dd592f50b5d7f13f4`。前文 DB3C7660 开头的生成摘要仅代表合并前版本。
+
+最终只读审查发现重置直接创建 Run 会绕过配置快照，已由集成代理修复：`resetTaskExecution` 先检查回执与完整 reset 准入，再冻结新 Run 并提交；预览和重复回执不会重新冻结。独立读回原生消费用例及日志，确认实际 reset/dryRun/replay/resume 路径通过；首次组合为 11/12（原生用例通过，单个测试清理夹具缺少 close），修正夹具后的 reset/connector 组合为 18/18 PASS。该组由集成代理实跑，本代理只读核对，日志分别为 `docs/tmp/workflow-dashboard/runtime-reset-configuration-round1.log` 与 `runtime-reset-connector-round2.log`；不将其并入本代理的 133 项统计。
+
 ## 边界
 
 以上不是正式部署或真实钉钉消息/真实数据库业务验证。未读写正式凭据，未自动迁移原有配置文件；临时目录只有测试合成数据，不纳入提交。默认 credentials-local 明文持久化的事实已用隔离文件验证并写入 README/部署说明；Web 脱敏不代表磁盘加密。

@@ -7,12 +7,14 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 
 const root = resolve(fileURLToPath(new URL('../../../../', import.meta.url)))
-const baseCommit = '44646d2056375b32ebf2ed2f7812d946473f9722'
+const mode = process.argv[2] ?? 'initial'
+assert.ok(['initial', 'release'].includes(mode), 'baseline_mode_invalid')
+const baseCommit = mode === 'release' ? 'f1487e05736774b377daecf29988b6807365df7a' : '44646d2056375b32ebf2ed2f7812d946473f9722'
 const output = join(root, 'docs/tmp/workflow-dashboard')
 const execute = promisify(execFile)
 await mkdir(output, { recursive: true })
-const directory = await mkdtemp(join(output, 'v25-frozen-'))
-const names = ['workflow-engineering.js', 'task-workflow.js', 'execution-controller.js']
+const directory = await mkdtemp(join(output, mode === 'release' ? 'v25-release-frozen-' : 'v25-frozen-'))
+const names = ['workflow-engineering.js', 'task-workflow.js', 'execution-controller.js', ...(mode === 'release' ? ['engineering-output-contract.js'] : [])]
 const sources = {}
 for (const name of names) {
   const relative = `packages/dingtalk-dsh-assistant/${name}`
@@ -60,7 +62,7 @@ try {
   assert.equal(restored.length,1)
   assert.equal(defineExecutionWorkflow(restored[0]).digest,record.digest)
   const checkpoint = {capturedAt:new Date().toISOString(),baseCommit,sources,directory,options:serialOptions,record,digest:record.digest,nodes:workflow.nodes.map(node=>({id:node.id,version:node.version,executor:node.executor,allowedTools:node.allowedTools??[],rulesDigest:node.rulesDigest??null}))}
-  const checkpointPath=join(output,'v25-frozen-baseline.json')
+  const checkpointPath=join(output,mode === 'release' ? 'v25-release-baseline.json' : 'v25-frozen-baseline.json')
   await writeFile(checkpointPath,JSON.stringify(checkpoint,null,2))
   const confirmed=JSON.parse(await readFile(checkpointPath,'utf8'))
   assert.equal(confirmed.digest,record.digest)

@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：workflow-dashboard-20261013
-> 最近维护：2026-10-13T12:38:00+08:00
+> 最近维护：2026-10-13T13:30:00+08:00
 > 权威目标：D:/codex/worktrees/workflow-dashboard/dingtalk-dsh-assistant/docs/acceptance/workflow-dashboard/goal.md
 
 ## 总目标
@@ -19,7 +19,7 @@
 
 ## 范围与约束
 
-- 基于 origin/main 44646d2，独立分支 worktree-workflow-dashboard；保留主仓用户脏文件，不自动合并或部署。
+- 初始基于 origin/main 44646d2，已同步主线 f1487e0；独立分支 worktree-workflow-dashboard，保留主仓用户脏文件，不自动合入主线或部署。
 - Windows 11、PowerShell 7、Node 24、pnpm workspace。复用现有 store/API/权限/host adapter；不新增冗余配置文件层。
 - 用户已明确普通配置与凭据一起纳入，并要求独立配置 Tab。不要读取或回显真实秘密；隔离 fixture 验证不触发真实外部动作。
 - 非源码产物放 docs 子目录，设计约定维护 docs/manual/observer-design.md；不新建根 DESIGN/UX 文档。
@@ -28,18 +28,18 @@
 
 | ID | 子目标 | 完成判据 | 状态 | 证据 |
 | --- | --- | --- | --- | --- |
-| SG1 | 工作流目录与任务导航 | 列表/详情/内置流程/关联任务与返回、状态矩阵通过 | 已验证 | 最终 round-14 目录 32 项通过，源码 SHA 与 round-13/14 记录一致 |
+| SG1 | 工作流目录与任务导航 | 列表/详情/内置流程/关联任务与返回、状态矩阵通过 | 已验证 | 合并后 round-19 目录/导航 36 项、round-20 任务关联 24 项通过 |
 | SG2 | 变量与凭据架构 | 当前文件依赖、存储、认证、secret 和版本合同收敛并落 spec | 完成 | docs/spec/workflow-managed-configuration.md |
-| SG3 | 持久化与受控 API | CRUD/CAS/脱敏/授权/重启保持通过 | 已验证 | backend 定向 67/67；最终 UI/API/startup 联合 122/122；native Resident HTTP 重启与多实例隔离通过 |
-| SG4 | 真实工作流消费 | 受控引用、版本绑定、文件移动反例通过 | 进行中 | 原生工程 v26 查询、文件移动、Host 重启、新旧 Run 版本及租约反例通过；补齐 reset 新 Run 冻结路径 |
-| SG5 | 独立配置 Tab | 普通变量/凭据表单与工作流关联可用，失败/冲突/窄屏通过 | 已验证 | 最终 browser round-13 配置 16 项、round-14 目录 32 项通过；observer SHA 8789fe453f32795ed9ce8849faeb2d5bcec80653b1f3d8be69b56b51059e059f |
-| SG6 | 验收与 PR | 全部必要矩阵通过，文档及 PR 独立回查 | 进行中 | 最终 UI/API/startup 122/122；打包与 PR 待进行 |
+| SG3 | 持久化与受控 API | CRUD/CAS/脱敏/授权/重启保持通过 | 已验证 | 合并后 UI/API/startup/合同字节 133/133；native Resident HTTP 重启与多实例隔离通过 |
+| SG4 | 真实工作流消费 | 受控引用、版本绑定、文件移动反例通过 | 已验证 | 合并后原生消费/配置/reset/connector 23/23，关联主线 service/source 23/23；f148 发行基线 v25 恢复摘要一致且零写 |
+| SG5 | 独立配置 Tab | 普通变量/凭据表单与工作流关联可用，失败/冲突/窄屏通过 | 已验证 | 最终 browser round-18 配置 16 项通过；observer SHA 80aa9905cdffafde417b800f87568748902c16932d62dd3dd592f50b5d7f13f4 |
+| SG6 | 验收与 PR | 全部必要矩阵通过，文档及 PR 独立回查 | 进行中 | matrix 最新 91 项全 PASS，三包源码逐字匹配；待 PR 创建与独立回读 |
 
 ## 当前检查点
 
-- 当前子目标：SG4
-- 唯一下一步：保存 reset 修复后的验证检查点，合入最新 origin/main f1487e0，复测冲突与发行字节相关路径，再打包和 PR 交付。
-- 未闭环项：主线合并及针对性回归、全功能汇总与最终打包未完成；尚未提交 PR。
+- 当前子目标：SG6
+- 唯一下一步：完成最终证据提交，按中文 PR 门禁创建 PR 并独立回读。
+- 未闭环项：尚未提交 PR；不包括未获要求的合并、部署或真实业务验收。
 
 ## 进展
 
@@ -47,6 +47,7 @@
 - 2026-10-13：用户要求增加普通配置和凭据统一管理，再补充独立「配置」Tab；范围进入 SG2–SG5。
 - 2026-10-13：原生工程查询增强轮通过；真实 AgentLoop/工具注册/原生会话证据读取，以及源文件移动、Host 重启和新旧 Run 版本分别验证。工程 registry 45/45、控制器/账本定向 248/248、最终 UI/API/startup 122/122。独立审查发现 reset 直接建 Run 绕过冻结，追加同因修复与预检/重放反例，尚不宣布全绿。
 - 2026-10-13：fetch 发现主线已合入导航持久化、任务会话关联、移除任务表格同步、UAT 源码上传及工程合同发行字节修复，目标主线更新为 f1487e0。保留既有验收历史，集成后按实际影响复测；旧 446 基线依赖本机 CRLF 合同字节，不能把其摘要直接视为最新发行版本的摘要。
+- 2026-10-13：主线合并提交 a629a8d。最终 133 + 46 个独立定向测试通过，浏览器 16 + 36 + 24 项通过，三个包的 128 份 JS 与 3 份文档逐字匹配。旧夹具摘要差异以同 record、同 factory、仅换合同字节定位，保持旧失败证据；固定 f148 的真实 v25 发行基线在当前源码恢复摘要 fa635cc3…0feb1f、16 节点、零持久化写。
 
 ## 重大决策
 
@@ -64,4 +65,4 @@
 
 - create_worktree 已完成签出，但应用在 ignored AGENTS.override.md 的只读 ls-files 扫描耗时异常。只停止本次扫描后工具报失败，复用 Git 独立回读的已签出工作树并建立分支，没有重复创建或动主仓。
 - Playwright 包：C:/Users/64554/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright；独立 Edge headless 已实测。完整 React + observer 源码、API fixture 不等同正式 DSH 部署。
-- 当前协作：settings_docs 完成 store/HTTP/secret 并独立审查；review_workflow_ui 收尾 Host 消费及 reset/版本测试；workflow_entry_review 已验证最终浏览器 round-13/14，等待源码冻结后复跑历史定义恢复。
+- 当前协作：三代理完成后端、原生运行及浏览器/历史定义验证；源码已冻结，主代理汇总证据并交付 PR。

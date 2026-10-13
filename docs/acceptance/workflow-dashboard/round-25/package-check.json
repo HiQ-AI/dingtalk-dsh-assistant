@@ -1,0 +1,43 @@
+{
+  "recordedAt": "2026-10-13T05:27:55.309531+00:00",
+  "baseCommit": "f788ec8d038d01ab1ee980ff7a03a6590532eb5f",
+  "packages": [
+    {
+      "file": "dingtalk-dsh-assistant-1.0.0.tgz",
+      "bytes": 76028,
+      "sha256": "81c44a8811e866a0bd6888d00f002a09e7700f239400942ef82291a37bad988b",
+      "version": "1.0.0",
+      "sourceFilesChecked": 1,
+      "markdownFilesChecked": 2,
+      "allSourceBytesMatch": true
+    },
+    {
+      "file": "zzusp-dingtalk-dsh-assistant-1.0.0.tgz",
+      "bytes": 911444,
+      "sha256": "ecd3148111a5a91deb4136706dba7a2ead8e2bd3f649659f4493d5822941d9a3",
+      "version": "1.0.0",
+      "sourceFilesChecked": 125,
+      "markdownFilesChecked": 1,
+      "allSourceBytesMatch": true
+    },
+    {
+      "file": "zzusp-dingtalk-dsh-observer-1.0.0.tgz",
+      "bytes": 48982,
+      "sha256": "b96ed3b58212045ccb5eaa2aae3af488e3ac72ebadad7ea253c0286d903ef90d",
+      "version": "1.0.0",
+      "sourceFilesChecked": 2,
+      "markdownFilesChecked": 0,
+      "allSourceBytesMatch": true
+    }
+  ],
+  "sourceSha256": {
+    "packages/dingtalk-dsh-observer/web-client.js": "80aa9905cdffafde417b800f87568748902c16932d62dd3dd592f50b5d7f13f4",
+    "packages/dingtalk-dsh-assistant/web-client.js": "ec26774f7406eb20420d0003e3cac3b8bdc34f5030d9d8d3310ff0b777fd685d",
+    "packages/dingtalk-dsh-assistant/workflow-configuration.js": "3de6b9a38ac87b32e52741e482f5bdcf6d6170d925e1181f1deb2b8e380c13a2",
+    "packages/dingtalk-dsh-assistant/workflow-service.js": "1fdc57302abe4a6ce34b90b2bf9216b77fa00ce134a170533df5bc7ae32696bd",
+    "packages/dingtalk-dsh-assistant/workflow-engineering.js": "0d8f026cbf03e6a5acaad35550aa5bcc7df9e8a27ca67eef98f1988df8368505",
+    "packages/dingtalk-dsh-assistant/engineering-output-contract.js": "8e82c88c2eb226dc1ed880f1f399f60a29f8d51c1929405c879aecacee34561a",
+    "packages/dingtalk-dsh-assistant/execution-controller.js": "bb5efb867df388ba521219af2e24e81acc4a1bc1c85ac22f0f609e4c9c4218f5",
+    "packages/dingtalk-dsh-assistant/execution-task-reset.js": "6c0816519b363037aaec213cc272bb4526fc0c31c789ace8df5008498b2dfbb5"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "command": "node --test test/workflow-configuration.test.js test/http.test.js test/client.test.js test/observer-client.test.js test/observer-node-control-display.test.js test/dingtalk-dsh-assistant.test.js test/workflow-entry.test.js test/external-registry-startup.test.js test/runtime-startup-observation.test.js test/engineering-approach-contract.test.js",
+  "sources": [
+    {
+      "path": "packages/dingtalk-dsh-assistant/workflow-configuration.js",
+      "sha256": "3de6b9a38ac87b32e52741e482f5bdcf6d6170d925e1181f1deb2b8e380c13a2"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/http.js",
+      "sha256": "08ac2f3b9d095f6c8c74bf26e83516b91c78b887fad63fb301bf5e382023ca1a"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/resident.js",
+      "sha256": "d9bb6ee40aa6a674e002e89451e43a431f0d436ade882bf8ad66f5f66f6d21cf"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/client.js",
+      "sha256": "6361c6ceb81bc3802c8ff58521cf317d67ffc2be13f64c01cc881d1c7574dbd9"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/web-client.js",
+      "sha256": "ec26774f7406eb20420d0003e3cac3b8bdc34f5030d9d8d3310ff0b777fd685d"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+      "sha256": "8e82c88c2eb226dc1ed880f1f399f60a29f8d51c1929405c879aecacee34561a"
+    },
+    {
+      "path": "packages/dingtalk-dsh-observer/web-client.js",
+      "sha256": "80aa9905cdffafde417b800f87568748902c16932d62dd3dd592f50b5d7f13f4"
+    }
+  ],
+  "log": "docs/tmp/workflow-dashboard/final-joint-after-main.log",
+  "counts": {
+    "tests": 133,
+    "todo": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "fail": 0,
+    "pass": 133
+  },
+  "startedAt": "2026-10-13T04:39:14.9401612Z",
+  "exit": 0,
+  "changedDuringTest": []
+}
