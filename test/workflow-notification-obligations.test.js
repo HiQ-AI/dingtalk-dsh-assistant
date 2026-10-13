@@ -26,6 +26,42 @@ async function fixture(t, body = '请处理') {
       taskPlan: taskId => store.query({ kind: 'task.plan', taskId }), state: runId => store.query({ kind: 'run', runId }) }, artifacts: {}, adapter }).flush() }
 }
 
+for (const adapter of [undefined, { canDisclose: async () => false, send: async () => { throw new Error('不得发送') } }]) {
+  test(`关闭外发时仍失效同需求旧求助；${adapter ? '披露拒绝' : '无适配器'}`, async t => {
+    const f = await fixture(t)
+    await f.store.command({ id: randomUUID(), kind: 'task.accept', args: { taskId: 'task', requirementRef: `sha256-${'a'.repeat(64)}.json`, requirementRevision: 1, sessionId: 'owner', criteria: ['交付'], sourceKey: 'source', eventKey: 'created' } })
+    f.edit(db => {
+      // 隔离数据库仅构造报告时序，不运行业务或渠道。
+      for (const [turnId, type] of [['old', 'block'], ['latest', 'complete']]) {
+        db.prepare(`INSERT INTO task_owner_turns(turn_id,task_id,status,requirement_revision,plan_revision,control_revision,lease_epoch,event_watermark,authorization_revision,input_fence_revision,application_status,created_at,updated_at)
+          VALUES (?,'task','accepted',1,0,1,1,1,1,1,'applied','now','now')`).run(turnId)
+        db.prepare("INSERT INTO task_reports(report_id,task_id,turn_id,report_type,facts_json,created_at) VALUES (?,'task',?,?, '{}','now')").run(turnId, turnId, type)
+      }
+      const save = (id, overrides = {}) => db.prepare('INSERT INTO message_items(item_id,run_id,kind,body) VALUES (?, ?, ?, ?)').run('notification:' + id, 'm', 'notification', JSON.stringify({
+        id, runId: 'm', status: 'prepared', leaseEpoch: 0, payload: { phase: 'owner:old', fact: { taskId: 'task' }, conversationId: 'g', text: '需要旧资料' }, ...overrides }))
+      save('old')
+      save('claimed', { status: 'unknown', leaseEpoch: 1 })
+      save('ack', { ack: { requestId: 'unconfirmed' } })
+      save('current', { payload: { phase: 'owner:latest', fact: { taskId: 'task' } } })
+      save('other', { payload: { phase: 'owner:old', fact: { taskId: 'other-task' } } })
+      save('delivered', { status: 'delivered', leaseEpoch: 1, evidence: { messageId: 'real-message' } })
+      db.prepare("UPDATE task_owner_turns SET application_status='pending' WHERE turn_id='latest'").run()
+    })
+    await f.flush(adapter)
+    assert.equal((await f.store.query({ kind: 'message.notification', notificationId: 'old' })).status, 'prepared')
+    f.edit(db => db.prepare("UPDATE task_owner_turns SET application_status='applied' WHERE turn_id='latest'").run())
+    await f.flush(adapter)
+    await f.flush(adapter)
+    const notices = new Map((await f.notices()).map(n => [n.id, n]))
+    assert.equal(notices.get('old').status, 'superseded')
+    assert.equal(notices.get('old').leaseEpoch, 0)
+    assert.equal(notices.get('old').supersededByReportId, 'latest')
+    assert.equal(notices.get('claimed').status, 'unknown')
+    assert.equal(notices.get('delivered').status, 'delivered')
+    for (const id of ['ack', 'current', 'other']) assert.equal(notices.get(id).status, 'prepared')
+  })
+}
+
 for (const scenario of [
   { name: '普通数据变更待审', workflowId: 'task-data-change', short: true },
   { name: '已有工单接续待审', workflowId: 'task-data-change-approval-resume', short: true },
@@ -216,7 +252,7 @@ test('Owner无结构化用户操作的阻塞只留内部事实', async () => {
     if (q.kind === 'message.notification.diagnostics') return []
     if (q.kind === 'message.list') return [run]
     if (q.kind === 'message.run') return { run, requests: [], commands: [action] }
-    if (q.kind === 'message.acceptances') return []
+    if (q.kind === 'message.acceptances' || q.kind === 'message.notifications') return []
     if (q.kind === 'message.notification') return notices.get(q.notificationId)
     if (q.kind === 'message.task.latest' || q.kind === 'task.deleted' || q.kind === 'message.owner.released-wait') return null
     if (q.kind === 'task.owner.reports') { reports++; return [{ reportId: 'report', reportType: 'block', applicationStatus: 'applied', triggerTypes: [], facts: { summary: '等待负责人审批。' } }] }

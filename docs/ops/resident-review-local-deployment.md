@@ -852,6 +852,10 @@ A task-scoped paused delivery review may use the same registered read-only query
 
 ### Explicit single completion reply
 
+通知扫描在渠道披露检查之前对未领取的 Owner wait/block 通知执行 `message.notification.reconcile`。仅在同任务最新 accepted Owner 已 applied 且产生更晚的 complete/wait/block 报告时，旧求助转为 superseded，并记录替代报告 ID；关闭外发仍执行。任何已领取、发送证据或通知操作记录都会阻止该自动失效。恢复外发前独立回读待发送队列，不能把 prepared 当作发送失败，也不能将新结案报告当作渠道送达证据。
+
+冻结工程规则包含验收和项目发现函数的源码摘要，打包时必须遵守 `.gitattributes` 中对应助手文件的发行换行字节。不得批量格式化或统一换行；纯 LF 的项目发现/inline helper 使用 eol=lf，已有混合发行字节的验收 helper 与任务发布定义使用 -text。若未改逻辑却出现 ENGINEERING_DEFINITION_DRIFT，先比较上一个受信包的原始字节与规范化后的源码内容，证明仅换行漂移后恢复其发行字节，再走 RepairStoppedLaunch 自检和安装；不得忽略定义校验或修改持久化定义摘要。
+
 Local host POST `/tasks/<taskId>/notifications/<notificationId>/send-completion` accepts only the exact bound `conversationId` and `{authorization:{confirmed:true,confirmationRef:<human confirmation reference>}}`. It sends the existing latest applied completion report text; it cannot edit text, reopen a task, enumerate or drain notifications. Requires the configured web actor and subscribed original group. Global `dws.writesAuthorized` is unchanged. Existing delivered replies return without sending; acknowledged/unknown replies only read back; sending is not retried. Check real ACK and independently observed message ID before reporting delivery.
 
 ### 群完成回复的可访问性

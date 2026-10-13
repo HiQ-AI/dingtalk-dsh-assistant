@@ -5,3 +5,10 @@ packages/dingtalk-dsh-assistant/web-client.js text eol=lf
 packages/dingtalk-dsh-assistant/task-workflow.js -text whitespace=cr-at-eol
 test/fixtures/sg22-activity-merge-result.sql -text
 packages/dingtalk-dsh-assistant/workflow-engineering.js -text whitespace=cr-at-eol
+
+# 这些辅助实现的函数源码参与冻结工程规则摘要，保留发行换行字节。
+packages/dingtalk-dsh-assistant/execution-project-config.js text eol=lf
+packages/dingtalk-dsh-assistant/execution-inline-acceptance.js text eol=lf
+packages/dingtalk-dsh-assistant/execution-local-acceptance.js -text whitespace=cr-at-eol
+packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js -text whitespace=cr-at-eol
+packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js -text whitespace=cr-at-eol

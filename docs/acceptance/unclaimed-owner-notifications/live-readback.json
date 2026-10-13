@@ -1,0 +1,64 @@
+{
+  "observedAt": "2026-10-13T02:56:55.739Z",
+  "packageSha256": "83399d6e1e9fd7e452aa91970af0e9e23a103c6f88a0cb914176bb4987fb80f8",
+  "health": {
+    "status": "ok",
+    "outboundAuthorized": true,
+    "recoveryIssueCount": 0,
+    "dwsBridgeHealthy": true
+  },
+  "maintenanceActive": false,
+  "notices": [
+    {
+      "id": "notice-8c7043f",
+      "status": "delivered",
+      "leaseEpoch": 1,
+      "supersededReason": null,
+      "supersededByReportId": null,
+      "deliveredMessageId": "msgvlURG0nZ4uBFwoiRpPGiKQ==",
+      "observedAt": "2026-10-13T02:53:22.412Z"
+    },
+    {
+      "id": "notice-915b4b6",
+      "status": "superseded",
+      "leaseEpoch": 0,
+      "supersededReason": "owner-report-replaced",
+      "supersededByReportId": "owner:turn-2e267678-7ef4-465d-b966-2b72b67989b8",
+      "deliveredMessageId": null,
+      "observedAt": null
+    },
+    {
+      "id": "notice-f60495f",
+      "status": "superseded",
+      "leaseEpoch": 0,
+      "supersededReason": "owner-report-replaced",
+      "supersededByReportId": "owner:turn-2e267678-7ef4-465d-b966-2b72b67989b8",
+      "deliveredMessageId": null,
+      "observedAt": null
+    },
+    {
+      "id": "notice-5b4b492",
+      "status": "superseded",
+      "leaseEpoch": 0,
+      "supersededReason": "owner-report-replaced",
+      "supersededByReportId": "owner:turn-a239ead0-da16-4df6-a67c-c61d666e4f6e",
+      "deliveredMessageId": null,
+      "observedAt": null
+    }
+  ],
+  "states": [
+    {
+      "status": "delivered",
+      "count": 20
+    },
+    {
+      "status": "superseded",
+      "count": 14
+    }
+  ],
+  "independentCliReadback": {
+    "status": "blocked",
+    "reason": "auth status authenticated=false; token_refresh_failed",
+    "nativeReadback": "delivered with independently observed message ID"
+  }
+}

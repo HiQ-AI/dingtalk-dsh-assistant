@@ -1,0 +1,8 @@
+case,round-1,round-2,round-3,evidence
+closed-outbound-reconciliation,FAIL,PASS,PASS,round-3.md
+delivery-history-preserved,PASS,PASS,PASS,round-3.md
+unapplied-or-unrelated-report-preserved,NOT_RUN,PASS,PASS,round-3.md
+frozen-definition-restoration,NOT_RUN,FAIL,PASS,round-3.md
+live-old-notices-retired,NOT_RUN,NOT_RUN,PASS,live-readback.json
+authorized-reply-delivered,NOT_RUN,NOT_RUN,PASS,live-readback.json
+outbound-enabled-and-maintenance-released,NOT_RUN,NOT_RUN,PASS,live-readback.json

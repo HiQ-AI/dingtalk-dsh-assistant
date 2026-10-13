@@ -305,12 +305,20 @@ export function createWorkflowNotifications({ store, artifacts, controller, adap
       }
       })
     }
-    if (!adapter) { finish(); return }
     const prepared = await store.query({ kind: 'message.notifications', states: ['prepared'], afterSequenceId: preparedCursor, limit: 100 })
-    const readbacks = await store.query({ kind: 'message.notifications', states: ['acknowledged', 'unknown'], afterSequenceId: readbackCursor, limit: 100 })
+    for (let index = 0; index < prepared.length; index++) {
+      const notification = prepared[index]
+      if (notification.status !== 'prepared' || !notification.payload?.phase?.startsWith('owner:')) continue
+      await attempt(notification.runId, notification.id, async () => {
+        const reconciled = await command('message.notification.reconcile', { notificationId: notification.id }, `reconcile:${randomUUID()}`)
+        prepared[index] = { ...notification, ...reconciled.result.notification }
+      })
+    }
     preparedCursor = prepared.length === 100 ? prepared.at(-1).sequenceId : 0
+    if (!adapter) { finish(); return }
+    const readbacks = await store.query({ kind: 'message.notifications', states: ['acknowledged', 'unknown'], afterSequenceId: readbackCursor, limit: 100 })
     readbackCursor = readbacks.length === 100 ? readbacks.at(-1).sequenceId : 0
-    for (const notification of [...prepared, ...readbacks]) {
+    for (const notification of [...prepared.filter(item => item.status === 'prepared'), ...readbacks]) {
       await attempt(notification.runId, notification.id, async () => {
       if (notification.payload?.reportChannel === 'web' || notification.payload?.externalMessaging === false
         || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) return
