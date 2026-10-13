@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "mode": "baseline",
+  "checks": [
+    "task-board-real-five-second-poll",
+    "task-board-manual-refresh",
+    "baseline-host-remount-reproduces-reset-to-groups"
+  ],
+  "sourceSha256": "9670ed295b99b00700bb2e12062434c0ddf860fe9795f35d124f4cab56691ac8",
+  "browser": "155.0.4283.45",
+  "errors": [],
+  "writes": [],
+  "healthReads": 4,
+  "boundary": "真实 headless Edge、React 与完整 observer；宿主 slot/primitive/API 使用隔离 fixtures。复现重挂载，不代表已证明用户运行实例确实在重挂载；未启动业务服务、未写业务接口、未部署。"
+}
