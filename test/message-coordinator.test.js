@@ -753,6 +753,56 @@ test('Host授权等待保留批准人及动作绑定，明确拒绝则收口且�
   assert.equal(f.counters().dispatched, 0)
 })
 
+for (const proof of ['delivered', 'echo', 'ack-only', 'message-mismatch', 'group-mismatch', 'text-mismatch']) test(`澄清可核对已送达助手引用且精确验证通知证据：${proof}`, async t => {
+  const accepted = ['delivered', 'echo'].includes(proof)
+  const text = '甲乙目标都可处理，具体目标待选择'
+  const quote = { sourceKey: 'source:reply', sourceKind: 'notification', messageId: 'reply-message',
+    conversationId: 'group', actorId: 'assistant', text: proof === 'text-mismatch' ? '伪造的已确认目标' : text }
+  let checked = 0, f
+  f = await fixture(t, true, { context: () => ({ localQuote: async () => quote }),
+    sessionRunner: { async close() {}, async run(args) {
+      await args.onSessionBound()
+      const decision = answerDecision(args.input)
+      if (args.input.sources[0].runId !== 'current-notification') {
+        await args.onCandidate(decision); return { status: 'submitted' }
+      }
+      decision.decisions[0].units[0].intent = { ...clarificationIntent('source:current-notification'),
+        checkedSourceRefs: ['source:current-notification', 'source:reply'] }
+      checked++
+      if (accepted) await args.onCandidate(decision)
+      else {
+        await assert.rejects(args.onCandidate(decision), { code: 'GROUP_COORDINATOR_CLARIFICATION_INVALID' })
+        assert.equal((await f.workflow.state('current-notification')).requests.length, 0)
+        await args.onCandidate({ decisions: [{ runId: 'current-notification', reason: '引用未获核验', units: [] }] })
+      }
+      return { status: 'submitted' }
+    } } })
+  const conversationId = proof === 'group-mismatch' ? 'other-group' : 'group'
+  await f.workflow.receive({ runId: 'notice-origin', sourceKey: 'source:notice-origin', sourceVersion: 1,
+    conversationId, actorId: 'user', body: '核对两种目标', context: {} }, { process: false })
+  await f.workflow.process('notice-origin')
+  const command = (await f.workflow.state('notice-origin')).commands[0]
+  const send = async (kind, args) => (await f.store.command({ id: `${proof}:${kind}`, kind, args })).result
+  await send('message.notification.prepare', { runId: 'notice-origin', notificationId: 'notice', commandId: command.commandId,
+    payload: { text, conversationId, phase: 'result' }, disclosure: { conversationId, authorizationRef: 'source:notice-origin' } })
+  const notification = (await send('message.notification.claim', { notificationId: 'notice' })).notification
+  await send('message.notification.sent', { notificationId: 'notice', leaseEpoch: notification.leaseEpoch, ack: { messageId: 'reply-message' } })
+  if (proof !== 'ack-only') await send('message.notification.readback', { notificationId: 'notice', leaseEpoch: notification.leaseEpoch,
+    evidence: { conversationId, messageId: proof === 'message-mismatch' ? 'different-message' : 'reply-message' } })
+  if (proof === 'echo') {
+    await f.workflow.receive({ runId: 'reply', sourceKey: 'source:reply', sourceVersion: 1, conversationId: 'group',
+      actorId: 'assistant', body: text, context: { sourceMessageId: 'reply-message' } }, { process: false })
+    await send('message.echo.quarantine', { runId: 'reply' })
+  }
+  await f.workflow.receive({ runId: 'current-notification', sourceKey: 'source:current-notification', sourceVersion: 1,
+    conversationId: 'group', actorId: 'user', body: '按上条回复处理一个目标', context: { quoteRefs: [{ sourceKey: quote.sourceKey }] } }, { process: false })
+  await f.workflow.process('current-notification')
+  assert.equal(checked, 1)
+  const state = await f.workflow.state('current-notification')
+  assert.equal(state.requests.length, accepted ? 1 : 0)
+  assert.equal(state.commands.length, 0)
+})
+
 for (const mismatch of ['version', 'group']) test(`澄清依据${mismatch === 'version' ? '旧版本' : '跨群来源'}被Host拒绝且不落账`, async t => {
   let f
   const source = { sourceKey: 'source:prior', sourceVersion: mismatch === 'version' ? 0 : 1, text: '甲乙目标可选', conversationId: 'group' }

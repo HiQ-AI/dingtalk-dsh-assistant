@@ -122,7 +122,16 @@ export function createMessageCoordinator({ ctx, store, context, modelConfig, get
     for (const ref of new Set([...intent.checkedSourceRefs, ...requiredReads])) {
       const known = refs.get(ref)
       if (!known) invalid(`未知或不属于当前来源的checkedSourceRefs:${ref}`)
-      if (known.source) {
+      if (known.source?.sourceKind === 'notification') {
+        const source = known.source
+        if (source.conversationId !== input.run.conversationId || !source.messageId || source.actorId !== 'assistant')
+          invalid(`助手引用身份不匹配:${ref}`)
+        const notification = await store.query({ kind: 'message.outboundByMessage', conversationId: input.run.conversationId, messageId: source.messageId })
+        if (notification?.status !== 'delivered' || notification.evidence?.messageId !== source.messageId
+          || notification.evidence?.conversationId && notification.evidence.conversationId !== input.run.conversationId
+          || typeof notification.payload?.text !== 'string' || notification.payload.text !== source.text)
+          invalid(`助手引用未送达或正文已失效:${ref}`)
+      } else if (known.source) {
         const latest = await store.query({ kind: 'message.source', sourceKey: known.source.sourceKey })
         if (latest) {
           if (latest.conversationId !== input.run.conversationId || latest.sourceVersion !== known.source.sourceVersion)

@@ -2369,13 +2369,17 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       async localQuote(ref, run) {
         const key = typeof ref === 'string' ? ref : ref.sourceKey
         const found = await store.query({ kind: 'task.source', sourceKey: key })
-        if (found && found.conversationId === run.conversationId) return { ...projectHistorySource(found), messageId: found.context?.sourceMessageId ?? ref.messageId ?? null }
-        if (ref.messageId) {
-          const notification = await store.query({ kind: 'message.outboundByMessage', conversationId: run.conversationId, messageId: ref.messageId })
-          if (notification?.status === 'delivered' && notification.evidence?.messageId === ref.messageId)
-            return { ...ref, conversationId: run.conversationId, actorId: 'assistant', occurredAt: notification.deliveredAt ?? notification.updatedAt,
-              text: notification.payload?.text ?? ref.text, attachments: [] }
+        const messageId = ref.messageId ?? (found?.conversationId === run.conversationId ? found.context?.sourceMessageId : null)
+        if (messageId) {
+          const notification = await store.query({ kind: 'message.outboundByMessage', conversationId: run.conversationId, messageId })
+          if (notification?.status === 'delivered' && notification.evidence?.messageId === messageId
+            && (!notification.evidence.conversationId || notification.evidence.conversationId === run.conversationId)
+            && typeof notification.payload?.text === 'string')
+            return { ...(typeof ref === 'object' ? ref : {}), sourceKey: key, sourceKind: 'notification', messageId,
+              conversationId: run.conversationId, actorId: 'assistant', occurredAt: notification.deliveredAt ?? notification.updatedAt,
+              text: notification.payload.text, attachments: [] }
         }
+        if (found && found.conversationId === run.conversationId) return { ...projectHistorySource(found), messageId: found.context?.sourceMessageId ?? ref.messageId ?? null }
         if (typeof ref === 'object' && ref.text) return ref
         return null
       },
