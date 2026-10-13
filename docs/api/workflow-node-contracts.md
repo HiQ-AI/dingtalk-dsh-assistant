@@ -1,5 +1,26 @@
 # 工作流节点契约
 
+## 工作流托管变量
+
+管理接口统一要求本机回环来源、受信 Web Origin（无 Origin 的本机维护客户端也需相同 Host 校验）、匹配本机监听端口的 Host，以及 Resident 注入的已配置 `webActorId`。不接受客户端自报身份。回执 `Cache-Control: no-store`，模型工具不注册这些管理写入口。
+
+| 接口 | 请求 | 结果 |
+| --- | --- | --- |
+| `GET /config/workflow-variables` | 无 query/body | 脱敏配置视图 |
+| `PUT /config/workflow-variables/:name` | `{kind,format,description,value,expectedRevision}` | 创建或新增值版本 |
+| `POST /config/workflow-variables/:name/enabled` | `{enabled,expectedRevision}` | 启停变量，不删除历史版本 |
+| `PUT /config/workflow-bindings/:workflowId` | `{variables:[{alias,name}],expectedRevision}` | 原子替换该流程全部绑定，空数组解除绑定 |
+
+`kind` 为 `plain/secret`，`format` 为 `text/json`，`value` 均为字符串，JSON 在 Host 校验并解析。name/alias 必须以字母开头、仅含字母数字下划线短横线、最多 64 字符，禁止 `constructor/prototype/__proto__`。description 最多 500 字符，值最多 64 KiB；配置最多 100 个变量，含历史版本文档最多 4 MiB。name/kind/format 创建后不可变；secret 空白值拒绝，不能用空白清除或降级为普通变量。绑定只允许已登记且可绑定的流程与启用变量，内部 `task-general-capability` 不作为用户绑定入口。
+
+视图为 `{revision,writable,variables,bindings}`。每个变量含 name/kind/format/description/revision/enabled，仅 `plain` 附当前原始字符串 value；不返回 secret 值和历史版本正文。所有管理修改必须匹配文档级 expectedRevision（并非变量 revision），冲突返回 409 `WORKFLOW_CONFIG_REVISION_CONFLICT`，授权不足 403，服务/存储不可用 503，非法参数或引用 400；错误仅含固定 error 码，不回显输入或底层异常。
+
+配置服务创建时接收受信 `workflow.instanceId`，配置与快照的 native record 均在该实例的命名空间内；不同 profile/控制库即使使用同一宿主凭据文件和相同 runId，也不共用配置。新 Run 创建前使用 `configuration.snapshot({runId,workflowId})` 冻结引用，在实例命名空间内 **仅从 runId 的 SHA256 寻址**；元数据包含 instanceId、初始 workflowId、目录归一身份、配置版本和 alias/name/kind/format/revision，不含值。同实例同 runId 不能借改换流程重冻结；工程派生身份归一到 `task-engineering`，沿用原快照。此为最终合同，替代初始方案中 runId+workflowId 联合地址的设想。
+
+仅受信 code executor 接收 `configuration.read(alias)` 与 `readSecret(alias)`，每次读前后校验当前节点身份及取消信号；绑定缺失、类型不符、旧 Run 缺快照均失败关闭，不回退最新配置。新运行取当前值版本，旧运行/暂停/重启读冻结版本；停用只阻止新冻结，保留旧执行读取能力。受信代码与 Host adapter 不得把 secret 放进返回结果、工件、日志或模型上下文。读取 API 不支持任意路径、任意凭据 key 或环境变量替换。
+
+持久化使用宿主原生凭据 grant record，管理文档在原生 `modifyRecord` 锁内单记录 CAS 更新，快照另存只含引用的不可变记录。默认本地 provider 的文件是明文；本模块不声称加密。已保存值不依赖其初始来源文件，旧文件消费者必须显式适配后才脱离该路径；具体生产接入方式见[框架手册](../../packages/dingtalk-dsh-assistant/README.md#托管变量与凭据读取)。
+
 ## 简单加列的整型常量默认值
 
 受信 SQL 识别器接受单条可空 `ALTER TABLE schema.table ADD COLUMN column smallint|integer|bigint DEFAULT signed_decimal_integer;`。仅接受十进制整数字面量并按 PostgreSQL 类型范围用 BigInt 精确校验；拒绝函数、算术、括号表达式、SQL cast、`NOT NULL` 及附带语句。返回的 `defaultValue` 是规范十进制字符串；无默认值时不包含该字段。

@@ -80,3 +80,24 @@ test('all-table readonly registration uses existing connection and performs no d
  const plan=await planAgentQueryResources(source,p);assert.ok(plan.updated.includes('all-tables-readonly'));assert.ok(plan.updated.includes('approved-readonly'))
  p.directQueries.databases[0].dataAccess='write-anything';await assert.rejects(planAgentQueryResources(source,p),/QUERY_CONFIG_DATABASE_INVALID/)
 })
+
+test('托管数据库映射只引用登记连接和明确别名，全部迁入无需原路径，混合来源仍校验文件', async () => {
+ const p=databaseProposal()
+ p.directQueries.configurationConnections={'approved-readonly':{configAlias:'dbConfig',passwordAlias:'dbPassword'}}
+ delete p.directQueries.credentialsPath
+ const plan=await planAgentQueryResources(source,p)
+ assert.ok(plan.updated.includes('configurationConnections:'));assert.ok(!plan.updated.includes('credentialsPath:'))
+ assert.equal((await planAgentQueryResources(plan.updated,p)).changed,false)
+ for(const mapping of [[],null,{unknown:{configAlias:'dbConfig',passwordAlias:'dbPassword'}},
+  {'approved-readonly':{configAlias:'dbConfig',passwordAlias:'dbConfig'}},
+  {'approved-readonly':{configAlias:'dbConfig',passwordAlias:'dbPassword',password:'forbidden'}},
+  {'approved-readonly':{configAlias:'constructor',passwordAlias:'dbPassword'}}]){
+  const invalid=structuredClone(p);invalid.directQueries.configurationConnections=mapping
+  await assert.rejects(planAgentQueryResources(source,invalid),/QUERY_CONFIG_CONFIGURATION_CONNECTIONS_INVALID/)
+ }
+ p.directQueries.databases.push({...p.directQueries.databases[0],id:'legacy',connectionId:'legacy'})
+ p.directQueries.permissions.databaseIds.push('legacy')
+ await assert.rejects(planAgentQueryResources(source,p),/QUERY_CONFIG_CREDENTIALS_PATH_INVALID/)
+ p.directQueries.credentialsPath=resolve('docs/tmp/never-read-managed-query.json')
+ assert.equal((await planAgentQueryResources(source,p)).changed,true)
+})

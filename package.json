@@ -58,6 +58,7 @@
     "@deepseek-ai/dsh-agent-loop": "0.1.2-rc.1",
     "@deepseek-ai/dsh-attachment": "0.1.2-rc.1",
     "@deepseek-ai/dsh-code-runtime": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-credentials-local": "0.1.2-rc.1",
     "@deepseek-ai/dsh-fs": "0.1.2-rc.1",
     "@deepseek-ai/dsh-goal": "0.1.2-rc.1",
     "@deepseek-ai/dsh-goal-round-driver": "0.1.2-rc.1",

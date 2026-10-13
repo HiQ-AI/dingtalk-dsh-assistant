@@ -1181,6 +1181,13 @@ test('v19 编辑工具登记只接受精确工程apply节点，不因readTools�
   }
   const node = { ...flow.nodes.find(n => n.id === 'apply-changes'), inputDependencies: [], allowedEffects: ['read'] }
   assert.throws(() => createExecutionController({ workflows: [{ id: flow.id, version: '18', nodes: [node] }], readTools: ['engineering_repo_inspect', 'engineering_apply_edits'] }), { code: 'TOOL_NOT_ADMITTED' })
+  for (const version of ['25', '26']) {
+    const edit = { ...flow.nodes.find(n => n.id === 'apply-changes'), version: '11', inputDependencies: [] }
+    assert.doesNotThrow(() => defineExecutionWorkflow({ id: flow.id, version, nodes: [edit] }))
+    assert.throws(() => createExecutionController({ workflows: [{ id: flow.id, version, nodes: [{ ...edit,
+      allowedTools: [...edit.allowedTools, 'query_readonly_database'] }] }],
+      readTools: ['engineering_repo_inspect', 'engineering_apply_edits', 'query_readonly_database'] }), { code: 'EFFECT_NOT_ADMITTED' })
+  }
 })
 
 test('外部检查重启只结算已核排空和真实中断诊断，不重跑旧检查', async t=>{

@@ -4378,7 +4378,7 @@ test('Owner直接查询证据经真实Service与工程准备进入方案输入�
   assert.equal(plan.stages.length,1)
   const engineeringStage = plan.stages[0]
   const record = (await execution.store.query({ kind: 'workflow.list' })).find(item => item.config?.runId === engineeringStage.runId)
-  assert.equal(record.definitionVersion, '25')
+  assert.equal(record.definitionVersion, '26')
   assert.deepEqual(proposalInput.taskContext, record.config.taskContext)
   assert.equal(proposalInput.taskContext.taskId,taskId)
   assert.equal(proposalInput.taskContext.requirementRevision,plan.task.requirementRevision)

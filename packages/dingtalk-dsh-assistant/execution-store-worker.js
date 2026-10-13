@@ -872,12 +872,12 @@ function coreCommand(command, now, consumption = {}) {
       &&!current[localStart].output_ref&&current.slice(0,localStart).every(v=>v.status==='succeeded')
     const oldRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.fromDigest),nextRow=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(a.toDigest)
     const old=oldRow&&JSON.parse(oldRow.body),next=nextRow&&JSON.parse(nextRow.body)
-    const inlineAcceptance=old?.definitionVersion==='25',retainedStart=index+(inlineAcceptance?1:2)
+    const inlineAcceptance=['25','26'].includes(old?.definitionVersion),retainedStart=index+(inlineAcceptance?1:2)
     const task=db.prepare('SELECT t.*,c.control_revision,c.state AS control_state FROM business_tasks t JOIN task_controls c USING(task_id) WHERE t.task_id=?').get(r.task_id)
     reconcileAppliedStageRequirement(r,command.id,now)
     const stage=task&&db.prepare('SELECT * FROM task_plan_stages WHERE task_id=? AND plan_revision=? AND run_id=?').get(r.task_id,task.plan_revision,r.run_id)
     if(!['checks','local-acceptance'].includes(a.kind)||a.startNodeId!==(local?'define-local-acceptance':'verify-candidate')||!(local?['waiting','queued']:['waiting']).includes(r.status)||r.revision!==a.expectedRevision||r.workflow_digest!==a.fromDigest
-      ||a.fromDigest===a.toDigest||!old||!next||!['18','22','23','24','25'].includes(old.definitionVersion)||next.definitionVersion!==old.definitionVersion||next.workflowId!==a.toWorkflowId
+      ||a.fromDigest===a.toDigest||!old||!next||!['18','22','23','24','25','26'].includes(old.definitionVersion)||next.definitionVersion!==old.definitionVersion||next.workflowId!==a.toWorkflowId
       ||old.config.kind!=='engineering'||next.config.kind!=='engineering'||old.config.runId!==r.run_id||old.config.taskId!==r.task_id
       ||!task||!stage||!['active','paused'].includes(task.control_state)||task.status!=='active'||stage.status!=='running'
       ||stage.output_ref||stage.workflow_digest!==a.fromDigest||task.requirement_revision!==a.expectedRequirementRevision
@@ -958,7 +958,8 @@ function coreCommand(command, now, consumption = {}) {
     if (developmentRebuild || developmentReissue || legacyDevelopment) {
       if (!/^[a-f0-9]{40}$/.test(nextConfig.sourceCommit ?? '') || nextConfig.taskBase !== nextConfig.sourceCommit
         || nextConfig.input?.baseCommit !== nextConfig.branchSelection?.baseCommit || nextConfig.head !== nextConfig.branchSelection?.head
-        || nextConfig.developmentBindingVersion !== 2 || JSON.parse(nextRecord.body).definitionVersion !== '22'
+        || nextConfig.developmentBindingVersion !== 2 || JSON.parse(nextRecord.body).definitionVersion !== (JSON.parse(oldRecord.body).definitionVersion === '26' ? '26' : '22')
+        || JSON.parse(oldRecord.body).definitionVersion === '26' && executionDigest(nextConfig.databaseQuery ?? null) !== executionDigest(oldConfig.databaseQuery ?? null)
         || !['created','reused','rebuilt'].includes(nextConfig.branchSelection.disposition)
         || (nextConfig.branchSelection.disposition !== 'reused' && (nextConfig.input.baseCommit !== nextConfig.sourceCommit || nextConfig.branchSource || nextConfig.previousPullRequest))) fail('WORKFLOW_REISSUE_UNSAFE')
     }
@@ -977,7 +978,9 @@ function coreCommand(command, now, consumption = {}) {
       || !apply || (!developmentRebuild && !legacyDevelopment && (apply.status !== 'waiting' || !['ENGINEERING_EDIT_SCOPE_MISMATCH', 'ENGINEERING_NO_CHANGES_PROPOSED'].includes(JSON.parse(apply.wait_reason ?? 'null')?.reference)))
       || current.some(n => !n.drained) || pendingInputs(r.run_id).length
       || (!legacyDevelopment && db.prepare("SELECT effect_id FROM execution_effects WHERE run_id=? AND node_id<>'prepare-workspace' LIMIT 1").get(r.run_id))) fail('WORKFLOW_REISSUE_UNSAFE')
-    const reissuePrefix = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22'].includes(JSON.parse(nextRecord.body).definitionVersion)
+    const reissuePrefix = JSON.parse(nextRecord.body).definitionVersion === '26'
+      ? ['prepare-generation', 'define-local-acceptance', 'prepare-workspace', 'inspect-and-propose']
+      : ['11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22'].includes(JSON.parse(nextRecord.body).definitionVersion)
       ? ['prepare-generation', 'define-local-acceptance', 'plan-local-acceptance', 'prepare-workspace', 'inspect-and-propose']
       : ['prepare-generation', 'prepare-workspace', 'inspect-and-propose']
     if (!Array.isArray(a.nodes) || a.nodes.length <= reissuePrefix.length
@@ -1210,7 +1213,7 @@ function coreCommand(command, now, consumption = {}) {
       emitEvent(command.id, 'node.failure', { nodeRunId: n.node_run_id, leaseEpoch: n.lease_epoch, failure: a.failure }, now)
     }
     let next = nodes(r.run_id).find(other => other.position === n.position + 1), retainedSuccessor = false
-    if ((n.node_id === 'plan-local-acceptance' || n.node_id === 'define-local-acceptance' && JSON.parse(db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(r.workflow_digest)?.body ?? '{}').definitionVersion === '25') && next?.status === 'succeeded') {
+    if ((n.node_id === 'plan-local-acceptance' || n.node_id === 'define-local-acceptance' && ['25','26'].includes(JSON.parse(db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(r.workflow_digest)?.body ?? '{}').definitionVersion)) && next?.status === 'succeeded') {
       if (!db.prepare("SELECT 1 FROM execution_events WHERE kind='run.workflow.checkpoint' AND json_extract(payload,'$.runId')=? AND json_extract(payload,'$.kind')='local-acceptance' AND json_extract(payload,'$.toDigest')=? LIMIT 1").get(r.run_id,r.workflow_digest)
         && !db.prepare("SELECT 1 FROM execution_events WHERE kind='node.resume' AND json_extract(payload,'$.nodeRunId')=? AND json_extract(payload,'$.inputDigest')=? AND json_extract(payload,'$.nextLeaseEpoch')=? AND json_extract(payload,'$.localPlanCorrection')=1 LIMIT 1").get(n.node_run_id,n.input_digest,n.lease_epoch)) fail('ENGINEERING_CHECKPOINT_NOT_ADMITTED')
       retainedSuccessor = true

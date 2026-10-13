@@ -4,6 +4,23 @@ import test from 'node:test'
 import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { runInNewContext } from 'node:vm'
 
+test('工作流目录按当前流程和完整计划关联任务，不靠名称推断且保留归档任务', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const code = source.slice(source.indexOf('    const workflowRelatedTasks ='), source.indexOf('    const configurationError ='))
+  const related = runInNewContext(`${code}; workflowRelatedTasks`)
+  const direct = { taskId: 'direct', engine: 'workflow-v2', workflowId: 'task-data-change' }
+  const archived = { taskId: 'archived', engine: 'workflow-v2', archivedAt: '2026-10-13', workflowId: 'task-engineering', plan: { stages: [{ workflowId: 'task-data-change' }, { workflowId: 'task-data-change' }] } }
+  const sameTitle = { taskId: 'same-title', engine: 'workflow-v2', title: '数据变更', workflowId: 'task-engineering' }
+  const legacy = { taskId: 'legacy', workflowId: 'task-data-change' }
+  assert.deepEqual(related([direct, archived, sameTitle, legacy], 'task-data-change'), [direct, archived])
+  assert.deepEqual(related([direct, archived], 'task-production-release'), [])
+  for (const suffix of ['a1b2c3', 'revision-a1b2c3', 'checkpoint-a1b2c3', 'reissue-a1b2c3']) {
+    const frozen = { taskId: suffix, engine: 'workflow-v2', workflowId: `task-engineering-${suffix}` }
+    const laterStage = { taskId: `later-${suffix}`, engine: 'workflow-v2', workflowId: 'task-data-change', plan: { stages: [{ workflowId: frozen.workflowId }] } }
+    assert.deepEqual(related([frozen, laterStage, direct], 'task-engineering'), [frozen, laterStage])
+  }
+})
+
 test('消息与话题详情只展示有绑定的会话并支持分页', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /message\.runId \? React\.createElement\(Button[\s\S]*'处理过程'/)
@@ -184,7 +201,7 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.doesNotMatch(source, /activePage === 'tasks' \? 1480 : 1240/)
   assert.match(source, /归档任务/)
   assert.match(source, /id: 'alerts', label: '告警'/)
-  assert.match(source, /id: 'tasks', label: '任务看板' \}, \{ id: 'authorizations', label: '人工介入'/)
+  assert.match(source, /id: 'tasks', label: '任务看板' \}, \{ id: 'workflows', label: '工作流' \}, \{ id: 'configuration', label: '配置' \}, \{ id: 'authorizations', label: '人工介入'/)
   assert.match(source, /\/state\/authorizations/)
   assert.match(source, /\/authorizations\/\$\{encodeURIComponent\(requestId\)\}\/decision/)
   assert.match(source, /const authorizationPageSize = 10/)
@@ -322,7 +339,8 @@ test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
   assert.match(source, /inject: \['slots', 'sessions'\]/)
   // 补充表单使用 ref 保留重试幂等标识及输入焦点；仍不依赖布局测量。
   assert.doesNotMatch(source, /useLayoutEffect/)
-  assert.doesNotMatch(source, /\/config\//)
+  assert.match(source, /get\('\/config\/workflow-variables'/)
+  assert.doesNotMatch(source, /\/config\/(?:groups|agents|workflows)(?:['"/]|\b)/)
   assert.match(source, /method: 'POST'/)
 })
 

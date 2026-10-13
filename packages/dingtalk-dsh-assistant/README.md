@@ -297,6 +297,51 @@ export function createEvidenceSummaryWorkflow() {
 
 文档阶段复用前序调查的正式产物与证据，不要求再次调查同一事实。Host 绑定前序输出、核对写入范围和来源，写后独立读回路径及内容摘要；调查结论已生成、文档已保存、消息已送达是三个不同事实。
 
+### 托管变量与凭据读取
+
+运行看板的「配置」管理普通变量和凭据，并将变量绑定到流程别名。Resident 将配置服务显式传入执行底座；新 Run 创建前冻结绑定与变量版本。暂停、重试和重启读取原快照，新 Run 才采用更新后的版本。已有 Run 没有快照时不能借重投自动采用最新配置；工程派生流程沿同一目录身份使用原快照。
+
+任务重置选择创建新 Run 时，同样在正式接纳前冻结当前变量版本；预览不冻结，重复提交按原回执返回。重发并复用同一 Run 继续使用原快照。重置保留原授权数据库范围，变量更新不扩大资源权限。
+
+仅受信 `code` 节点的 `execute` 接收 `configuration.read(alias)` 和 `configuration.readSecret(alias)`。普通 JSON 返回解析值，秘密必须使用专用读取方法；缺少服务、快照、绑定或类型不符均拒绝读取。读取前后复核执行租约与取消状态，不给模型节点、提示词或工具参数注入变量正文。节点实现仍须保证产出和错误不包含读到的秘密。
+
+数据库 Host 可以显式采用托管配置，例如把 `dbConfig` 绑定到普通 JSON（`host`、`port`、`db`、`user`），把 `dbPassword` 绑定到秘密文本：
+
+```javascript
+import { createRegisteredPostgresConnector } from './agent-query-database.js'
+
+async function execute({ configuration }) {
+  const connect = createRegisteredPostgresConnector({
+    configuration,
+    connections: { approvedDatabase: { configAlias: 'dbConfig', passwordAlias: 'dbPassword' } },
+  })
+  const client = await connect({ connectionId: 'approvedDatabase' })
+  try {
+    await client.query('SELECT 1')
+    return { connected: true }
+  } finally {
+    await client.end()
+  }
+}
+```
+
+`connections` 由受信 Host 固定，不能让模型选择任意别名；已有查询 capability 的资源授权、表列限制、只读事务和结果核验仍需保留。单个 connector 的托管读取与旧 `credentialsPath` 互斥，缺变量不回退文件。
+
+现有工程流程从 v26 提供正式消费入口：在原有 `workflow.directQueries.databases` 与 `permissions.databaseIds` 中登记并授权资源后，维护者通过受信配置提案加入以下映射；模型不能创建或修改该映射：
+
+```yaml
+configurationConnections:
+  registeredReadonly:
+    configAlias: dbConfig
+    passwordAlias: dbPassword
+```
+
+`registeredReadonly` 必须是已登记数据库的 `connectionId`。在配置页保存普通 JSON `{host,port,db,user}` 与秘密文本，再在「工程开发」绑定 `dbConfig` 和 `dbPassword`。新建 v26 工程执行的「分析并提出方案」节点会获得 `query_readonly_database`；目录与 scope 只包含同时已授权且显式迁入的连接，原表列及只读限制不变。开发节点仍保留原两个工具；v25 及历史定义不会增加工具。没有托管映射或没有已授权数据库时，v26 不注册数据库工具。
+
+配置登记继续使用 `scripts/configure-agent-query-resources.mjs --check/--apply` 和部署 runbook。全体连接迁入后可以移除 `credentialsPath`；混合来源时该文件只负责未映射的连接，托管资源失败不回退它。当前消息问答及 Task Owner 没有执行 Run 快照，访问托管资源明确报 `QUERY_CONFIGURATION_TASK_NODE_REQUIRED`；它们对未迁移资源的原有查询能力保持。将连接迁入时应确认该用途变化。
+
+本次接通执行底座、PostgreSQL connector 与工程 v26 的受信只读查询；平台客户端的 `secretsDirectory`、工程 Spring 配置、验收 `sharedDataProfilePath` 及脚本 `--config` 仍需逐个显式迁入，不能将新增配置页解释为现有文件已自动迁移。隔离测试使用原生凭据 provider、真实控制器/会话与数据库客户端替身，不代表真实数据库或正式平台验证通过。
+
 ### 提交纠正与输入续行
 
 共享会话在 schema 通过后、最终接纳前执行纯 `validateOutput`。只有 Host 的 `classifyOutputError` 明确分类为 correctable 的格式或证据引用错误才反馈原会话修正，仍消耗原会话预算；默认错误、越权、身份失效和取消不软化。最终节点接纳及后续 `accept-result` 仍独立核验，模型说“完成”不足以通过。

@@ -25,16 +25,11 @@ export function inspectExecutionReset(db, args, incarnation) {
   const externalEffects=db.prepare('SELECT effect_id,state,definition_json FROM execution_effects WHERE run_id IN (SELECT run_id FROM execution_runs WHERE task_id=?)').all(args.taskId)
     .filter(e=>['commit','push','pr'].includes(JSON.parse(e.definition_json).action))
   if(args.newRun && externalEffects.some(e=>e.state==='succeeded')) fail('TASK_RESET_DELIVERY_ALREADY_PERFORMED')
-  return {taskId:args.taskId,archivedRunIds:runs.map(r=>r.run_id),requirementRef:task.requirement_ref??db.prepare('SELECT requirement_ref FROM task_plan_stages WHERE task_id=? AND plan_revision=? ORDER BY position LIMIT 1').get(args.taskId,task.plan_revision)?.requirement_ref,
-    requirementRevision:task.requirement_revision,planRevision:task.plan_revision,controlRevision:task.control_revision,
-    externalEffectIds:externalEffects.map(e=>e.effect_id),preservesRequirements:true,preservesCode:true,preservesEffects:true,physicallyDeletesFiles:false}
-}
-export function reduceExecutionReset(db,args,{now,processIncarnation,addNode}) {
-  const checked=inspectExecutionReset(db,args,processIncarnation), next=args.newRun
+  const next=args.newRun
   if(next){
     const record=db.prepare('SELECT body FROM message_workflows WHERE digest=?').get(next.workflowDigest)
     const saved=record&&JSON.parse(record.body)
-    if(!['20','21','24','25'].includes(saved?.definitionVersion)||saved.config?.taskId!==args.taskId||saved.config?.runId!==next.runId
+    if(!['20','21','24','25','26'].includes(saved?.definitionVersion)||saved.config?.taskId!==args.taskId||saved.config?.runId!==next.runId
       ||saved.workflowId!==next.workflowId||!Array.isArray(next.nodes)||!next.nodes.length
       ||next.nodes.some(n=>n.nodeId==='validate-proposal')||!next.requirementRef?.startsWith(`tasks/${args.taskId}/`)
       ||db.prepare('SELECT 1 FROM execution_runs WHERE run_id=?').get(next.runId)) fail('TASK_RESET_NEW_RUN_INVALID')
@@ -45,6 +40,12 @@ export function reduceExecutionReset(db,args,{now,processIncarnation,addNode}) {
       nodeIds.add(node.nodeId)
     }
   }
+  return {taskId:args.taskId,archivedRunIds:runs.map(r=>r.run_id),requirementRef:task.requirement_ref??db.prepare('SELECT requirement_ref FROM task_plan_stages WHERE task_id=? AND plan_revision=? ORDER BY position LIMIT 1').get(args.taskId,task.plan_revision)?.requirement_ref,
+    requirementRevision:task.requirement_revision,planRevision:task.plan_revision,controlRevision:task.control_revision,
+    externalEffectIds:externalEffects.map(e=>e.effect_id),preservesRequirements:true,preservesCode:true,preservesEffects:true,physicallyDeletesFiles:false}
+}
+export function reduceExecutionReset(db,args,{now,processIncarnation,addNode}) {
+  const checked=inspectExecutionReset(db,args,processIncarnation), next=args.newRun
   for(const runId of checked.archivedRunIds){
     db.prepare("UPDATE execution_runs SET status=CASE WHEN status IN ('succeeded','failed','cancelled') THEN status ELSE 'cancelled' END,stop_requested=1,pause_requested=0,recovery_reason='execution-archived',revision=revision+1,updated_at=? WHERE run_id=?").run(now,runId)
     db.prepare("UPDATE execution_nodes SET status=CASE WHEN status IN ('succeeded','failed','cancelled') THEN status ELSE 'cancelled' END WHERE run_id=?").run(runId)

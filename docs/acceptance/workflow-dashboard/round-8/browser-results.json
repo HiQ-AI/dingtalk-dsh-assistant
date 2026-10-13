@@ -1,0 +1,48 @@
+{
+  "status": "FAIL",
+  "mode": "configuration",
+  "browserVersion": "155.0.4283.45",
+  "observerSha256": "13f6a5f80d035bcc54aeca35f8158c86d35c68165ef48e02e630d4cc216e5ddd",
+  "checks": [
+    "config-navigation-read-states",
+    "config-save-error-retains-draft"
+  ],
+  "error": "locator.click: Timeout 7000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('region', { name: '配置管理', exact: true }).getByRole('form', { name: '变量编辑', exact: true }).getByRole('button', { name: '保存变量', exact: true })\u001b[22m\n\u001b[2m    - locator resolved to <button disabled type=\"submit\">保存变量</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is not enabled\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is not enabled\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    13 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is not enabled\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\n    at saveVariable (D:\\codex\\worktrees\\workflow-dashboard\\dingtalk-dsh-assistant\\docs\\acceptance\\workflow-dashboard\\scripts\\verify-workflow-browser.mjs:299:112)\n    at D:\\codex\\worktrees\\workflow-dashboard\\dingtalk-dsh-assistant\\docs\\acceptance\\workflow-dashboard\\scripts\\verify-workflow-browser.mjs:340:46",
+  "layout": {
+    "viewport": 1440,
+    "documentWidth": 1440,
+    "bodyWidth": 1440,
+    "overflows": []
+  },
+  "pageErrors": [],
+  "writes": [
+    "PUT /config/workflow-variables/fixturePlain",
+    "PUT /config/workflow-variables/fixturePlain",
+    "PUT /config/workflow-variables/fixturePlain"
+  ],
+  "unexpectedWrites": [],
+  "nativeDialogs": [],
+  "unexpectedRequests": [],
+  "requests": [
+    "/health",
+    "/state/groups",
+    "/state/tasks",
+    "/state/supervisor/alerts",
+    "/state/authorizations",
+    "/state/topics?offset=0&limit=100",
+    "/config/workflow-variables",
+    "/state/workflows/catalog",
+    "/config/workflow-variables",
+    "/state/workflows/catalog",
+    "/config/workflow-variables",
+    "/state/workflows/catalog",
+    "/config/workflow-variables",
+    "/state/workflows/catalog",
+    "/health",
+    "/state/groups",
+    "/state/tasks",
+    "/state/supervisor/alerts",
+    "/state/authorizations",
+    "/state/topics?offset=0&limit=100"
+  ]
+}

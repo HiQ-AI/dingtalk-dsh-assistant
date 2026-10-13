@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import test from 'node:test'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
+import { createWorkflowConfiguration } from '../packages/dingtalk-dsh-assistant/workflow-configuration.js'
+
+// fetch会重写Host；用原生HTTP请求验证服务器收到的真实Host边界。
+const rawRequest = (url, options = {}) => new Promise((resolve, reject) => {
+  const request = httpRequest(url, options, response => {
+    const chunks = []
+    response.on('data', chunk => chunks.push(chunk))
+    response.on('end', () => resolve({ status: response.statusCode, json: async () => JSON.parse(Buffer.concat(chunks).toString('utf8')) }))
+  })
+  request.on('error', reject)
+  request.end(options.body)
+})
 
 async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsBridgeHealth, overrides = {} } = {}) {
   const runtime = {
@@ -31,6 +43,103 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
+
+test('配置HTTP完整管理合同、文档CAS及secret投影沿真实service执行', async () => {
+  const records = new Map(), identity = { channel: 'web', actorId: 'server-owner' }
+  let queue = Promise.resolve()
+  const credentials = {
+    readRecord: async key => structuredClone(records.get(key)), describeRecord: async () => ({ writable: true }),
+    modifyRecord(key, mutate) {
+      const result = queue.then(async () => { const next = await mutate(structuredClone(records.get(key))); if (next !== undefined) records.set(key, next); return structuredClone(records.get(key)) })
+      queue = result.catch(() => {}); return result
+    },
+  }
+  const service = createWorkflowConfiguration({ credentials, instanceId: 'http-configuration-fixture', workflowIds: ['task-data-change'], webActorId: identity.actorId })
+  await withServer(false, async base => {
+    const write = (path, method, body) => fetch(base + path, { method, headers: { 'content-type': 'application/json', origin: 'http://localhost:3080' }, body: JSON.stringify(body) })
+    const initial = await fetch(base + '/config/workflow-variables')
+    assert.equal(initial.headers.get('cache-control'), 'no-store')
+    assert.deepEqual(await initial.json(), { revision: 0, writable: true, variables: [], bindings: [] })
+    const body = { kind: 'secret', format: 'text', description: 'HTTP隔离凭据', value: 'http-isolated-secret', expectedRevision: 0 }
+    const created = await write('/config/workflow-variables/password', 'PUT', body)
+    assert.equal(created.status, 200)
+    assert.equal(created.headers.get('cache-control'), 'no-store')
+    const state = await created.json()
+    assert.equal(state.revision, 1)
+    assert.equal(state.variables[0].name, 'password')
+    assert.equal(Object.hasOwn(state.variables[0], 'value'), false)
+    assert.ok(!JSON.stringify(state).includes(body.value))
+    const conflict = await write('/config/workflow-variables/password', 'PUT', body)
+    assert.equal(conflict.status, 409)
+    assert.equal(conflict.headers.get('cache-control'), 'no-store')
+    assert.deepEqual(await conflict.json(), { error: 'WORKFLOW_CONFIG_REVISION_CONFLICT' })
+    const bound = await write('/config/workflow-bindings/task-data-change', 'PUT', { variables: [{ alias: 'databasePassword', name: 'password' }], expectedRevision: 1 })
+    assert.equal(bound.status, 200)
+    assert.equal((await bound.json()).bindings[0].variables[0].alias, 'databasePassword')
+    const disabled = await write('/config/workflow-variables/password/enabled', 'POST', { enabled: false, expectedRevision: 2 })
+    assert.equal(disabled.status, 200)
+    const latest = await disabled.json()
+    assert.equal(latest.revision, 3)
+    assert.equal(latest.variables[0].revision, 1)
+    assert.equal(latest.variables[0].enabled, false)
+    assert.equal(latest.bindings.length, 1)
+    assert.deepEqual(await (await fetch(base + '/config/workflow-variables')).json(), latest)
+    const bindDisabled = await write('/config/workflow-bindings/task-data-change', 'PUT', { variables: [{ alias: 'databasePassword', name: 'password' }], expectedRevision: 3 })
+    assert.equal(bindDisabled.status, 400)
+    assert.deepEqual(await bindDisabled.json(), { error: 'WORKFLOW_CONFIG_VARIABLE_DISABLED' })
+  }, { overrides: { getWorkflowConfiguration: () => service.state(identity), saveWorkflowVariable: value => service.saveVariable(value, identity),
+    setWorkflowVariableEnabled: value => service.setVariableEnabled(value, identity), bindWorkflowConfiguration: value => service.bindWorkflow(value, identity) } })
+})
+
+test('配置HTTP所有读写复核Origin与Host，拒绝自报身份、错方法和非法JSON', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const body = { kind: 'plain', format: 'text', description: '', value: 'value', expectedRevision: 0 }
+    const writes = [
+      ['/config/workflow-variables/example', 'PUT', body],
+      ['/config/workflow-variables/example/enabled', 'POST', { enabled: false, expectedRevision: 0 }],
+      ['/config/workflow-bindings/task-data-change', 'PUT', { variables: [], expectedRevision: 0 }],
+    ]
+    for (const [path, method, input] of writes) {
+      for (const headers of [{ origin: 'https://evil.invalid' }, { host: 'evil.invalid' }, { host: 'localhost:1' }])
+        assert.equal((await rawRequest(base + path, { method, headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(input) })).status, 403)
+      assert.equal((await fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...input, actorId: 'forged' }) })).status, 400)
+    }
+    for (const headers of [{ origin: 'null' }, { origin: 'https://evil.invalid' }, { host: 'evil.invalid' }, { host: '127.0.0.1:1' }])
+      assert.equal((await rawRequest(base + '/config/workflow-variables', { headers })).status, 403)
+    assert.equal((await fetch(base + '/config/workflow-variables?actorId=owner')).status, 400)
+    const forgedBody = JSON.stringify({ actorId: 'forged' })
+    assert.equal((await rawRequest(base + '/config/workflow-variables', { headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(forgedBody) }, body: forgedBody })).status, 400)
+    assert.equal((await fetch(base + '/config/workflow-variables', { method: 'POST' })).status, 405)
+    for (const [contentType, value] of [['text/plain', JSON.stringify(body)], ['application/json', '{"value":"secret-must-not-echo"']]) {
+      const response = await fetch(base + '/config/workflow-variables/example', { method: 'PUT', headers: { 'content-type': contentType }, body: value })
+      assert.equal(response.status, 400)
+      assert.deepEqual(await response.json(), { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
+    }
+    assert.equal(calls.length, 0)
+  }, { overrides: Object.fromEntries(['getWorkflowConfiguration', 'saveWorkflowVariable', 'setWorkflowVariableEnabled', 'bindWorkflowConfiguration'].map(name => [name, async value => { calls.push(value); return {} }])) })
+})
+
+test('配置HTTP非本机或缺Host不调用服务，缺服务和内部异常固定脱敏', async () => {
+  for (const [method, url] of [['GET', '/config/workflow-variables'], ['PUT', '/config/workflow-variables/example'], ['POST', '/config/workflow-variables/example/enabled'], ['PUT', '/config/workflow-bindings/task-data-change']]) {
+    for (const socket of [{ remoteAddress: '192.0.2.1', localPort: 18998 }, { remoteAddress: '127.0.0.1', localPort: 18998 }]) {
+      let status, payload, calls = 0
+      const response = { setHeader() {}, writeHead(value) { status = value }, end(value) { payload = JSON.parse(value) } }
+      await handleRequest({ method, url, headers: {}, socket }, response, { getWorkflowConfiguration: () => { calls++; return {} } })
+      assert.equal(status, 403); assert.equal(payload.error, 'WORKFLOW_CONFIG_FORBIDDEN'); assert.equal(calls, 0)
+    }
+  }
+  await withServer(false, async base => {
+    const response = await fetch(base + '/config/workflow-variables')
+    assert.equal(response.status, 503)
+    assert.deepEqual(await response.json(), { error: 'WORKFLOW_CONFIG_UNAVAILABLE' })
+  })
+  await withServer(false, async base => {
+    const response = await fetch(base + '/config/workflow-variables')
+    assert.equal(response.status, 503)
+    assert.deepEqual(await response.json(), { error: 'WORKFLOW_CONFIG_STORAGE_FAILED' })
+  }, { overrides: { getWorkflowConfiguration: async () => { throw new Error('private-provider-secret') } } })
+})
 
 test('话题关联修复本机入口区分零写预检和摘要绑定执行，拒绝跨站与自报身份', async () => {
   const calls = [], input = { sourceTopicId: 'source', targetTopicId: 'target',
