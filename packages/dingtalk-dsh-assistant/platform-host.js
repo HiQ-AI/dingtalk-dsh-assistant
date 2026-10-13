@@ -45,7 +45,14 @@ export async function createHostPlatformClients({ secretsDirectory, productionTa
     // 不传播 CLI/文件异常，可能包含服务端响应或凭据片段。
     throw new Error('platform_local_credentials_unavailable')
   }
-  const uat = createClients({ githubToken, woodpeckerToken, kubeconfig,
+  let sourceUploadToken
+  try {
+    const token = (await readFileImpl(join(root, 'woodpecker-source-upload-token.txt'), 'utf8')).trim()
+    if (token && !/\s/.test(token)) sourceUploadToken = token
+  } catch {
+    // 上传凭据缺失只阻断源码上传；不能借用 Poller/GitHub 令牌或静默切回 Cron。
+  }
+  const uat = createClients({ githubToken, woodpeckerToken, sourceUploadToken, kubeconfig,
     kubeServer, kubeSkipTlsVerify: true, registryDockerCliEnabled: true,
     githubTagWritesEnabled: productionTagWritesEnabled, githubMergeWritesEnabled: uatMergeWritesEnabled })
   const production = createClients({ kubeconfig: productionKubeconfig })

@@ -731,13 +731,48 @@ test('详情慢查询跨刷新复用，切换任务不接受旧响应',async()=>
  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
  const start=source.indexOf('      const pendingDetail = '),end=source.lastIndexOf('      useEffect(() => {',source.indexOf('        const target = detailFocusTarget.current',start));
  const effects=[],requests=[],details=[],pending={current:null};
- const environment={useRef:()=>pending,useEffect:fn=>effects.push(fn),selectedWorkflowTaskId:'one',workflowDetailRetry:0,updatedAt:0,get:path=>new Promise(resolve=>requests.push({path,resolve})),setWorkflowTaskDetail:v=>details.push(v),setWorkflowDetailError:()=>{},setStepReadingNotice:()=>{},setReadingStep:()=>{},preferredTaskStep:()=>undefined,detailFocusTarget:{current:null},adjacentCurrentStep:()=>null,document:{querySelectorAll:()=>[],querySelector:()=>null,activeElement:null},window:{innerHeight:900},encodeURIComponent};
+ const environment={useRef:()=>pending,useEffect:fn=>effects.push(fn),selectedWorkflowTaskId:'one',workflowDetailRetry:0,updatedAt:0,get:path=>new Promise(resolve=>requests.push({path,resolve})),setWorkflowTaskDetail:v=>details.push(v),setWorkflowDetailError:()=>{},setStepReadingNotice:()=>{},setReadingStep:()=>{},preferredTaskStep:()=>undefined,detailFocusTarget:{current:null},latestReading:{current:null},adjacentCurrentStep:()=>null,encodeURIComponent};
  const effect=()=>{runInNewContext(`(()=>{${source.slice(start,end)}})()`,environment);return effects.pop()()};
  const first=effect();first();const refresh=effect();assert.equal(requests.length,1);refresh();
  environment.selectedWorkflowTaskId='two';effect();assert.equal(requests.length,2);
  requests[0].resolve({taskId:'one'});requests[1].resolve({taskId:'two'});await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(details.map(v=>v.taskId),['two']);
 });
+
+test('详情不可见及请求中改变选择时仍保留最新阅读，真正删除才回退', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const start = source.indexOf('      const pendingDetail = '), end = source.lastIndexOf('      useEffect(() => {', source.indexOf('        const target = detailFocusTarget.current', start))
+  const helpers = source.slice(source.indexOf('    const adjacentCurrentStep ='), source.indexOf('    function TaskStepDetail('))
+  const nodes = [{ stepKey: 'a', status: 'succeeded' }, { stepKey: 'b', status: 'waiting' }, { stepKey: 'c', status: 'pending' }]
+  const reading = { current: { readingStep: { taskId: 'task', stepKey: 'a' }, detail: { taskId: 'task', executionNodes: nodes } } }
+  const requests = [], selected = [], notices = [], effects = [], focus = { current: null }
+  const environment = { useRef: () => ({ current: null }), useEffect: fn => effects.push(fn), latestReading: reading,
+    selectedWorkflowTaskId: 'task', workflowDetailRetry: 0, updatedAt: 0, detailFocusTarget: focus,
+    get: () => new Promise(resolve => requests.push(resolve)), setWorkflowTaskDetail() {}, setWorkflowDetailError() {},
+    setReadingStep: value => selected.push(value), setStepReadingNotice: value => notices.push(value), encodeURIComponent,
+    document: { querySelector() { throw Error('hidden detail has no DOM') }, querySelectorAll() { throw Error('hidden detail has no DOM') } } }
+  const refresh = async value => {
+    runInNewContext(`(()=>{${helpers};${source.slice(start, end)}})()`, environment)
+    effects.pop()(); requests.pop()(value); await settle()
+  }
+  await refresh({ taskId: 'task', executionNodes: nodes })
+  assert.equal(selected.at(-1).stepKey, 'a')
+  assert.equal(focus.current, null)
+  runInNewContext(`(()=>{${helpers};${source.slice(start, end)}})()`, environment)
+  effects.pop()()
+  reading.current.readingStep.stepKey = 'c'
+  requests.pop()({ taskId: 'task', executionNodes: nodes }); await settle()
+  assert.equal(selected.at(-1).stepKey, 'c', '慢响应不覆盖等待期间的新选择')
+  await refresh({ taskId: 'task', executionNodes: nodes.slice(0, 2) })
+  assert.equal(selected.at(-1).stepKey, 'b')
+  assert.equal(focus.current.stepKey, 'b')
+  assert.match(notices.at(-1), /步骤已从当前计划移除/)
+  environment.selectedWorkflowTaskId = 'another-task'
+  await refresh({ taskId: 'another-task', executionNodes: [{ stepKey: 'other', status: 'running' }] })
+  assert.equal(selected.at(-1).stepKey, 'other')
+  assert.equal(notices.at(-1), '', '其他任务不能继承删除提示')
+  assert.equal(focus.current, null, '其他任务不能继承待恢复焦点')
+})
 
 test('已选话题新版本刷新详情并重置旧分页，同版本及其他话题不打断阅读', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')

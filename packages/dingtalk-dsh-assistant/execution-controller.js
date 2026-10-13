@@ -533,7 +533,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
               if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : ['file', 'artifact'].includes(action) ? 'file.write' : action === 'message' ? 'message.send' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
               const effect = await delivery.execute({ binding, action, prepared }, { signal: abort.signal, authorizationNode: false })
-              if (isTerminalUatBuildFailure(effect)) throw Object.assign(executionError('RELEASE_PIPELINE_FAILED'), { terminalEffect: effect })
+              if (isTerminalUatBuildFailure(effect)) throw Object.assign(executionError(effect.result.result.reason), { terminalEffect: effect })
               if (effect.unsentRecovery) throw executionError('PR_CONNECTION_FAILED')
               if (effect.state !== 'succeeded') throw executionError('DELIVERY_RECONCILIATION_REQUIRED')
               return effect.result.result // 对执行节点交接适配器产出，控制账回执仍单独留存。

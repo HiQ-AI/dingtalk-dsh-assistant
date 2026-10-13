@@ -187,15 +187,22 @@ test('工作流结构化契约使用独立domain版本9', () => {
   assert.equal(residentDomainSpec.version, 9)
 })
 
-test('任务表格同步配置与运行状态独立持久化', async () => {
-  const { facility, seed } = memoryFacility()
-  const store = await openResidentStore(facility)
+test('移除同步接口后历史启用配置仍可读取，更新其他设置不丢失历史字段', async () => {
   const config = { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', nodeId: 'node', documentName: '任务表', sheetId: 'sheet', sheetTitle: 'Sheet1', intervalMs: 180000 }
-  await store.setTaskSheetSyncConfig(config)
-  await store.setTaskSheetSyncStatus({ state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' })
+  const status = { state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' }
+  const historical = { tasks: [], taskSheetSyncConfig: config, taskSheetSyncStatus: status }
+  assert.deepEqual(residentDomainSpec.tables.scheduler.valueSchema.parse(historical), historical)
+  const { facility, seed } = memoryFacility(new Map([['scheduler:runtime', structuredClone(historical)]]))
+  const store = await openResidentStore(facility)
+  for (const method of ['getTaskSheetSyncConfig', 'setTaskSheetSyncConfig', 'getTaskSheetSyncStatus', 'setTaskSheetSyncStatus']) assert.equal(store[method], undefined)
+  await store.setMaxConcurrentTasks(7)
+  await store.setAgentNames(['assistant'])
+  await store.close()
   const restored = await openResidentStore(memoryFacility(seed).facility)
-  assert.deepEqual(restored.getTaskSheetSyncConfig(), config)
-  assert.deepEqual(restored.getTaskSheetSyncStatus(), { state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' })
+  assert.equal(restored.getMaxConcurrentTasks(), 7)
+  assert.deepEqual(restored.getAgentNames(), ['assistant'])
+  assert.deepEqual(seed.get('scheduler:runtime'), { ...historical, maxConcurrentTasks: 7, agentNames: ['assistant'] })
+  await restored.close()
 })
 
 test('删除后重建同 ID 流程不能复用旧修订号使旧计划恢复有效', async () => {

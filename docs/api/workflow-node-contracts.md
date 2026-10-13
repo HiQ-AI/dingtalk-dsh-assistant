@@ -232,6 +232,8 @@ Run 不设累计领取上限；`claimCount` 仅为统计。已删除 `continue-b
 `GET /state/tasks` 对原生工作流任务按持久化的 `task.web-rerun.accept` 关联树汇总，每项只返回一张卡片；已有卡片字段来自最新可读执行。已有历史并发分叉仍取活动执行，避免隐藏未结束工作。仅分析任务及同标题但无明确关联的任务保持独立。旧版任务沿用原有记录模型。
 
 - `GET /state/tasks/{taskId}/detail`：旧链接和当前链接均返回最新可读执行，`requestedTaskId` 为请求的入口，`taskId/latestTaskId` 为当前物理执行，`logicalTaskId` 为可读逻辑任务。`executionNodes` 按当前计划全部阶段及节点顺序返回；每步带稳定 `stepKey`、`stageId/stageTitle` 和真实执行/产物引用。任务副本修订节点另带 Host 可信职责映射 `templateNodeId`，页面沿现有中文职责名称展示，不能将动态 `nodeId` 当成业务标题。仅取各运行当前有效节点，不拼历史代次；计划移除的阶段不再出现。尚未绑定定义的阶段返回 `definitionPending=true` 占位，`plan.stepsResolved=false`；无计划或尚未初始化时没有杜撰步骤。
+- `stepKey` 是不透明的阅读身份，绑定 Task、阶段、当前或预定 Run、逻辑节点；客户端不得拆分或从标题/序号推导。阶段启动、节点重试、保留前缀的检查配置修订保持身份；真正替换阶段实例会改变。正文及下载仍使用真实 runId/nodeRunId/outputRef/detailRevision，不以 stepKey 放宽归属校验。
+- `taskOwner` 带 `sessionBound`，只有绑定成功才返回可导航的 `sessionId`；`executionNodes` 和 `childSessionId` 同样不返回未绑定的预分配会话。Owner 的任务会话与 Agent 节点会话分别保留身份，代码节点不补造会话。任务已结束且计划零阶段时 `plan.stepsResolved=true`，表示没有使用流程；尚未完成的零阶段计划仍为 false。历史审计接口的原身份记录不变。
 - 详情带 `detailRevision`，依据计划、需求、Owner、运行/当前节点及效果账生成，累计时钟不改变版本。投影前后版本变化重读，持续变化返回 409 `TASK_DETAIL_STALE`。需求尚未被当前计划接纳时，`plan.requirementCurrent=false`，旧步骤显示待确认且不暴露旧结果正文；后续未执行阶段也不会将前段旧成功作为当前结果。
 - `GET /state/tasks/{taskId}/executions?offset=0&limit=20`：按执行接受顺序倒序分页，返回 `{rootTaskId,latestTaskId,total,executions,nextOffset}`。每项含 `taskId`、`executionNumber`、状态、目标、时间、结果、归档时间及 `stageOutcomes`。阶段结果来自该次全部运行，失败后重建不会覆盖失败记录。结束时 `nextOffset=null`。
 - 原有 `/state/tasks/{taskId}/runs` 仍为单次执行内部的运行历史，不等于整项任务的历次执行。

@@ -6,6 +6,8 @@ import { join, resolve, dirname, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { executionDigest } from './execution-artifacts.js'
 import { narrowVerificationSql } from './workflow-postgres-uat-host.js'
+import { sourceUploadTarget, uploadUatSource } from './workflow-source-upload.js'
+import { readUploadedSourceEvidence } from './workflow-source-evidence.js'
 
 const execFile = promisify(execFileCallback)
 const fail = code => { throw new Error(code) }
@@ -16,7 +18,7 @@ const safeName = value => typeof value === 'string' && /^[A-Za-z0-9._-]+$/.test(
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
 
 /** 只接受受信 Host 注入的凭据与固定端点；异常不透传服务端响应或认证头。 */
-export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig,
+export function createPlatformClients({ githubToken, woodpeckerToken, sourceUploadToken, kubeconfig,
   kubeServer, kubeSkipTlsVerify = false, bytebaseBaseUrl, bytebaseToken, bytebaseCredentials, registryBearerToken,
   githubTagWritesEnabled = false, githubMergeWritesEnabled = false, registryDockerCliEnabled = false,
   fetchImpl = fetch, execFileImpl = execFile, attestations } = {}) {
@@ -339,6 +341,10 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
       if (steps.length !== 1 || !Number.isInteger(steps[0].id)
         || steps[0].state !== 'success' || steps[0].exit_code !== 0)
         fail('WOODPECKER_BUILD_STEP_UNCONFIRMED')
+      // 生产原生 Tag 可能也携带源码包变量；本次只增加 UAT manual 的消费证明。
+      const uploadedSource = pipeline.event === 'tag' ? undefined : await readUploadedSourceEvidence({ pipeline,
+        readStepLogs: stepId => request(woodpeckerUrl(baseUrl,
+          `repos/${repositoryId}/logs/${pipelineNumber}/${stepId}`), woodpeckerToken) })
       const logs = await request(woodpeckerUrl(baseUrl,
         `repos/${repositoryId}/logs/${pipelineNumber}/${steps[0].id}`), woodpeckerToken)
       if (!Array.isArray(logs) || logs.some(row => row.step_id !== steps[0].id
@@ -355,16 +361,45 @@ export function createPlatformClients({ githubToken, woodpeckerToken, kubeconfig
         fail('WOODPECKER_BUILD_DIGEST_UNCONFIRMED')
       return { pipelineNumber, commitSha: pipeline.commit, image: pushed[0][1], imageDigest: pushed[0][2],
         pipelineStatus: pipeline.status, buildStepStatus: steps[0].state, buildStepExitCode: steps[0].exit_code,
+        ...(uploadedSource ? { uploadedSource } : {}),
         evidenceRef: evidence('woodpecker-build', `${repositoryId}:${pipelineNumber}:${steps[0].id}:${pushed[0][2]}`) }
     },
-    async triggerBuild({ target, commitSha }) {
+    async triggerBuild({ target, commitSha, operationKey }) {
       const { baseUrl, repositoryId, cronName } = target?.woodpecker ?? {}
       if (!sha(commitSha) || !safeName(cronName) || !Number.isInteger(repositoryId)) fail('WOODPECKER_TRIGGER_INVALID')
-      const head = await github.readBranch({ repository: target.repository, branch: target.branch })
-      if (head.commitSha !== commitSha) fail('WOODPECKER_BRANCH_MOVED')
-      const scan = await woodpecker.listPipelines({ baseUrl, repositoryId })
-      if (scan.pipelines.some(row => row.commitSha === commitSha && row.branch === target.branch
-        && ['created', 'pending', 'running', 'blocked', 'success'].includes(row.status))) fail('WOODPECKER_EQUIVALENT_BUILD_EXISTS')
+      const assertCurrent = async () => {
+        const head = await github.readBranch({ repository: target.repository, branch: target.branch })
+        if (head.commitSha !== commitSha) fail('WOODPECKER_BRANCH_MOVED')
+        const scan = await woodpecker.listPipelines({ baseUrl, repositoryId })
+        if (scan.pipelines.some(row => row.commitSha === commitSha && row.branch === target.branch
+          && ['created', 'pending', 'running', 'blocked', 'success'].includes(row.status))) fail('WOODPECKER_EQUIVALENT_BUILD_EXISTS')
+      }
+      if (sourceUploadTarget(target)) {
+        let mutationAttempted = false
+        try {
+          await assertCurrent()
+          const receipt = await uploadUatSource({ target, commitSha, githubToken, sourceUploadToken,
+            fetchImpl: (...args) => { mutationAttempted = true; return fetchImpl(...args) },
+            execFileImpl, beforeUpload: assertCurrent })
+          // 201 只是接收；另查返回的精确流水线，不能把任意同 SHA 构建当成此次上传。
+          const pipeline = await request(woodpeckerUrl(baseUrl,
+            `repos/${repositoryId}/pipelines/${receipt.pipelineNumber}`), woodpeckerToken)
+          if (pipeline.number !== receipt.pipelineNumber || pipeline.event !== 'manual'
+            || pipeline.branch !== target.branch || pipeline.commit !== commitSha
+            || pipeline.variables?.SOURCE_PACKAGE_ID !== receipt.artifactId
+            || pipeline.variables?.SOURCE_PACKAGE_SHA256 !== receipt.sha256
+            || pipeline.variables?.SOURCE_COMMIT_SHA !== commitSha) fail('WOODPECKER_SOURCE_DISPATCH_UNCONFIRMED')
+          return { ...receipt, evidenceRef: `woodpecker-source-dispatch:${repositoryId}:${receipt.pipelineNumber}:${commitSha}:${receipt.artifactId}:${receipt.sha256}` }
+        } catch (error) {
+          // 同提交竞态交给既有只读对账；真正调用 PUT 后即使超时也不能声称未发送。
+          if (mutationAttempted || error.message === 'WOODPECKER_EQUIVALENT_BUILD_EXISTS') throw error
+          const cause = /^(?:SOURCE_UPLOAD_[A-Z_]+|WOODPECKER_BRANCH_MOVED|WOODPECKER_LIST_[A-Z_]+|PLATFORM_[A-Z_0-9]+)$/.test(error.message)
+            ? error.message : 'SOURCE_UPLOAD_PREPARATION_FAILED'
+          return { status: 'failed', reason: 'RELEASE_BUILD_NOT_SENT', phase: 'preflight', mutationAttempted: false,
+            cause, operationKey, commitSha, evidenceRef: `woodpecker-source-not-sent:${repositoryId}:${commitSha}:${cause}` }
+        }
+      }
+      await assertCurrent()
       const crons = await request(woodpeckerUrl(baseUrl, `repos/${repositoryId}/cron`), woodpeckerToken)
       if (!Array.isArray(crons)) fail('WOODPECKER_CRON_INVALID')
       const found = crons.filter(row => row.name === cronName && row.branch === target.branch)

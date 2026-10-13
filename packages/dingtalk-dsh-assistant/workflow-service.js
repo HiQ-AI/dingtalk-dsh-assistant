@@ -3372,6 +3372,10 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const stageTitle = taskWorkflowCatalog.find(item => item.id === stage.workflowId)?.label
         ?? (stage.workflowId.startsWith('task-engineering') ? '开发与验证' : stage.stageId)
       const context = { stageId: stage.stageId, stageTitle }
+      // 预定 Run 身份与启动时一致；检查配置修订和节点重试不能改变保留步骤的阅读身份。
+      const stageRunId = stage.runId ?? controller.plannedTaskStageRunId({ taskId,
+        planRevision: plan.task.planRevision, stageId: stage.stageId, attempt: stage.attempt })
+      const stepKey = nodeId => JSON.stringify([taskId, stage.stageId, stageRunId, nodeId])
       if (stage.runId) {
         if (!states.has(stage.runId)) states.set(stage.runId, controller.state(stage.runId))
         const state = await states.get(stage.runId)
@@ -3381,7 +3385,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         for (const node of state.nodes) {
           const current = requirementCurrent && stage.status !== 'invalidated' && state.pendingInputCount === 0
           result.push({ ...node, ...context, templateNodeId: revisionRoles[node.nodeId] ?? node.nodeId,
-            stepKey: `${taskId}:${stage.stageId}:${state.run.workflowId}:${node.nodeId}`,
+            stepKey: stepKey(node.nodeId), sessionId: node.sessionBound === true ? node.sessionId : null,
             ...(current ? {} : { status: 'blocked', waitReason: { kind: 'input', reference: '需求已更新，等待重新确认执行方案' } }),
             outputRef: current ? await taskNodeReadoutRef(node) : null })
         }
@@ -3390,7 +3394,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const definition = stage.workflowDigest ? controller.workflowDefinition(stage.workflowId, stage.workflowDigest) : null
       const planned = definition?.nodes ?? [{ id: 'definition-pending' }]
       for (const node of planned) result.push({ ...context,
-        stepKey: `${taskId}:${stage.stageId}:${stage.workflowId}:${node.id}`,
+        stepKey: stepKey(node.id),
         nodeId: node.id, nodeRunId: null, runId: null, outputRef: null, sessionId: null,
         title: definition ? undefined : `${stageTitle}（步骤待确定）`, definitionPending: !definition,
         status: plan.task.controlState === 'cancelled' ? 'cancelled' : 'pending',
@@ -3521,17 +3525,20 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         stageTasks: state?.nodes.map(node => node.nodeId) ?? [], topicRefs, checkpoints: [],
         executionNodes: completePlan && plan ? await currentPlanNodes(taskId, plan, states)
           : await Promise.all((state?.nodes ?? []).map(async node => ({ ...node,
-            ...(completePlan ? { stepKey: `${taskId}:${state.run.workflowId}:${node.nodeId}` } : {}),
+            sessionId: node.sessionBound === true ? node.sessionId : null,
+            ...(completePlan ? { stepKey: JSON.stringify([taskId, state.run.runId, node.nodeId]) } : {}),
             ...(completePlan && state.pendingInputCount ? { status: 'blocked',
               waitReason: { kind: 'input', reference: '输入已更新，等待重新执行' } } : {}),
-            outputRef: completePlan && state.pendingInputCount ? null : await taskNodeReadoutRef(node) }))), childSessionId: owner?.sessionId ?? state?.nodes.findLast(node => node.sessionId)?.sessionId,
-        taskOwner: owner ? { sessionId: owner.sessionId, status: owner.status, decision: owner.decision?.action ?? null,
+            outputRef: completePlan && state.pendingInputCount ? null : await taskNodeReadoutRef(node) }))),
+        childSessionId: owner?.sessionBound === true ? owner.sessionId : state?.nodes.findLast(node => node.sessionBound === true && node.sessionId)?.sessionId ?? null,
+        taskOwner: owner ? { sessionId: owner.sessionBound === true ? owner.sessionId : null, sessionBound: owner.sessionBound === true,
+          status: owner.status, decision: owner.decision?.action ?? null,
           revision: owner.revision, leaseEpoch: owner.leaseEpoch, requirementRevision: owner.requirementRevision, controlRevision: owner.controlRevision,
           failureCount: owner.failureCount, lastFailure: owner.lastFailure,
           eventWatermark: owner.eventWatermark, processedWatermark: owner.processedWatermark } : null,
         ...(plan ? { plan: { version: plan.task.planRevision, requirementRevision: plan.task.requirementRevision,
           requirementCurrent, currentStageId: currentStage?.stageId ?? null,
-          ...(completePlan ? { stepsResolved: plan.stages.length > 0 && plan.stages.every(stage => stage.runId || stage.workflowDigest) } : {}),
+          ...(completePlan ? { stepsResolved: plan.stages.length > 0 ? plan.stages.every(stage => stage.runId || stage.workflowDigest) : taskState === 'completed' } : {}),
           stages: plan.stages.map(stage => ({ stageId: stage.stageId,
             title: taskWorkflowCatalog.find(item => item.id === stage.workflowId)?.label ?? stage.stageId,
             status: stage.status, workflowId: stage.workflowId, runId: stage.runId, outputRef: stage.outputRef })) } } : {}),

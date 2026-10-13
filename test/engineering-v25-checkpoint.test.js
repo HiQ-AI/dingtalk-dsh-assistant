@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
+import {runInNewContext} from 'node:vm'
 import {openExecutionStore} from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import {openExecutionArtifacts} from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import {createExecutionController,defineExecutionWorkflow as controllerDefinitionBuilder} from '../packages/dingtalk-dsh-assistant/execution-controller.js'
@@ -69,11 +70,27 @@ test('v25 real checks and local checkpoints retain succeeded edits, reject unsaf
  await store.command({id:'hold-real-checkpoints',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'real-checkpoints',actorId:'owner',reason:'Correct frozen configuration without repeating successful edits'}})
  const maintenance=await store.query({kind:'runtime.maintenance'})
  const checkArgs={runId:first.runId,requestId:'fix-real-build',kind:'checks',checks:fixedChecks,maintenance}
+ // 复用详情原投影，真实维护 checkpoint 后已成功节点及其会话仍是同一个可阅读步骤。
+ const detailSource=await readFile(new URL('../packages/dingtalk-dsh-assistant/workflow-service.js',import.meta.url),'utf8')
+ const currentPlanNodes=runInNewContext(detailSource.slice(detailSource.indexOf('  async function currentPlanNodes('),detailSource.indexOf('  async function tasks('))+';currentPlanNodes',{
+  controller,taskWorkflowCatalog:[],taskNodeReadoutRef:async node=>node.outputRef,executionError:code=>Error(code),
+ })
+ const beforeDetail=await currentPlanNodes(taskId,await controller.taskPlan(taskId))
  const checkReceipt=await registry.updateCheckpoint(checkArgs,controller,artifacts);assert.equal((await registry.updateCheckpoint(checkArgs,controller,artifacts)).result.toDigest,checkReceipt.result.toDigest)
+ const afterCheck=await controller.state(first.runId),afterCheckDetail=await currentPlanNodes(taskId,await controller.taskPlan(taskId))
+ assert.notEqual(afterCheck.run.workflowId,failed.run.workflowId)
+ assert.equal(afterCheck.run.runId,failed.run.runId);assert.equal(afterCheck.run.generation,failed.run.generation)
+ for(const previous of retained){
+  assert.deepEqual(afterCheck.nodes.find(node=>node.nodeRunId===previous.nodeRunId),previous)
+  const oldStep=beforeDetail.find(node=>node.nodeRunId===previous.nodeRunId),newStep=afterCheckDetail.find(node=>node.nodeRunId===previous.nodeRunId)
+  assert.equal(newStep.stepKey,oldStep.stepKey);assert.equal(newStep.outputRef,oldStep.outputRef);assert.equal(newStep.sessionId,oldStep.sessionId)
+ }
  const originalRecord=(await store.query({kind:'workflow.list'})).find(r=>r.config.runId===first.runId&&r.digest===failed.run.workflowDigest)
  const localArgs={runId:first.runId,requestId:'fix-inline-local',kind:'local-acceptance',localAcceptance:{...localAcceptance,scenarios:localAcceptance.scenarios.map(s=>({...s,expected:'frontend-new'})),version:'2',scenarios:localAcceptance.scenarios.map(s=>({...s,expected:'frontend-new',description:'Corrected actual service assertion'}))},scope:{taskId,uatEnvironment:'uat3',requestDigest:(await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')).executionDigest({request:originalRecord.config.input.request,acceptanceCriteria:originalRecord.config.input.acceptanceCriteria})},maintenance}
  await registry.updateCheckpoint(localArgs,controller,artifacts)
  const checkpoint=await controller.state(first.runId);for(const previous of retained){const current=checkpoint.nodes.find(n=>n.nodeId===previous.nodeId);assert.equal(current.outputRef,previous.outputRef);assert.equal(current.leaseEpoch,previous.leaseEpoch)}
+ const afterLocalDetail=await currentPlanNodes(taskId,await controller.taskPlan(taskId))
+ for(const previous of retained)assert.equal(afterLocalDetail.find(node=>node.nodeRunId===previous.nodeRunId).stepKey,beforeDetail.find(node=>node.nodeRunId===previous.nodeRunId).stepKey)
  assert.equal(checkpoint.nodes.length,16);assert.deepEqual(await store.query({kind:'effect.list',runId:first.runId}),editedEffects)
  await controller.close();const coldCheckpoint=await createEngineeringRegistry({repositories:configs,ownerActorId:'owner',modelConfig:()=>({provider:'test',model:'test'}),author:{name:'Test',email:'test@example.invalid'},ghCommand:{executable:process.execPath,args:[script,fixtureFile]}}).restore(store,artifacts)
  controller=createExecutionController({store:wrappedStore,artifacts,sessions,readTools:['engineering_repo_inspect'],delivery:createExecutionDelivery({store,artifacts,...registry.deliveryOptions}),workflows:coldCheckpoint})
