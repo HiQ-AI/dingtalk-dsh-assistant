@@ -43,3 +43,7 @@ production-resume,7,PASS,round-7.md
 production-delayed-health,7,PASS,round-7.md
 native-provider-runtime,7,PASS,round-7.md
 source-delivery,7,PENDING,round-7.md
+production-check,7,PASS,round-7.md
+isolated-composition,7,PASS,round-7.md
+isolated-startup,7,PASS,round-7.md
+source-delivery,8,PASS,round-8.md

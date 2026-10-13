@@ -1,8 +1,8 @@
 # DSH Web 与插件统一升级
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：dsh-unified-upgrade-20261013
-> 最近维护：2026-10-13T21:39:31.3792174+08:00
+> 最近维护：2026-10-13T21:51:36.4664762+08:00
 > 权威目标：D:/codex/worktrees/dsh-unified-upgrade/dingtalk-dsh-assistant/docs/acceptance/dsh-unified-upgrade/goal.md
 
 ## 总目标
@@ -27,12 +27,12 @@
 | SG3 | Bytebase 适配 | 构建、类型、测试、包与兼容声明通过 | 完成 | round-1.md |
 | SG4 | 隔离完整实例与历史恢复 | 同正式原生策略完整依赖、所有插件启动、历史读写恢复通过 | 完成 | 原生策略冷装、UI及历史PASS |
 | SG5 | 受控正式部署 | 自检、排空、封存、新实例及旧业务回读通过 | 完成 | round-7.md |
-| SG6 | 源码交付与验收归档 | 必要源码提交/PR 回读、矩阵与报告 | 进行中 | Bytebase PR3 OPEN；根仓交付中 |
+| SG6 | 源码交付与验收归档 | 必要源码提交/PR 回读、矩阵与报告 | 完成 | round-8.md、report.md |
 
 ## 当前检查点
 - 当前子目标：SG6
-- 唯一下一步：核对当前diff与定向实跑证据，提交中文PR并独立回读，完成矩阵、最终报告和目标状态。
-- 未闭环项：源码PR/验收归档。正式维护已inactive rev773，PID39344、双端口、health/Bridge/inbound正常、recovery0；并行配置原prefix不可恢复盲点及真实业务E2E边界已记录。
+- 唯一下一步：无升级必需工作；用户可刷新Web页面使用当前实例，源码PR仍OPEN供审阅。
+- 未闭环项：本次安装/重启/恢复范围无。真实模型、Bytebase外部SQL/服务登记与钉钉发送未验证，Connect完整Windows check有平台/canary失败，旧配置prefix不可恢复盲点均见report。
 
 ## 进展
 - 2026-10-13：正式 DSH 0.1.2-rc.1、Connect4.42，PID46964；插件市场未在依赖中。主分支最新 b2fb1ac 含 alpha2 原生会话/Observer 适配。独立 managed worktree 已建立。suite ZIP SHA256 与 PR169 记录一致。
@@ -62,3 +62,5 @@
 - 2026-10-13：原生hoisted/noautopeer冷装候选通过；薄offline continuation Check117输入零写通过，正式38依赖安装并启动PID39344，3080/18998同PID。启动后约50秒patch从ffadc变248163（87286bytes），AST保留原Unified注释并新增欢迎/模型/权限/主题设置。维护仍active revision772，等待来源及完整差异审计，不改旧冻结证据。
 
 - 2026-10-13：采用当前并行设置新基线，不覆写未证实变更。135冻结链+117原输入实际复验；正式UI/preset/provider、完整任务/包/Web回读通过；原Resume一次恢复，延迟仍PID39344、maintenance inactive773、inboundtrue/Bridgehealthy/recovery0。唯一剩余SG6源码PR归档。
+
+- 2026-10-13：根仓PR170及Bytebase PR3均OPEN，真实gh回读并已附任务；最终逐轮矩阵及report归档。正式统一升级、重启、恢复完成，主检出无关工作保留；未扩展公共发布、合并或业务发送。
