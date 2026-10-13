@@ -11,10 +11,6 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
     unsubscribe: async (value) => ({ removed: true, ...value }),
     getAgentConfig: () => ({ workspaceDir: 'D:\\baibu-agent' }),
     updateAgentConfig: async (value) => value,
-    getTaskSheetSyncState: () => ({ config: { enabled: true }, status: { state: 'success' } }),
-    inspectTaskSheet: async () => ({ name: '任务表', sheets: [{ sheetId: 's1', title: 'Sheet1' }] }),
-    updateTaskSheetSyncConfig: async (value) => value,
-    runTaskSheetSync: async () => ({ state: 'success', taskCount: 2 }),
     inspectEnvironment: async () => ({ dws: { installed: true }, skills: [] }),
     searchGroups: async (query) => ({ complete: true, groups: [{ groupId: 'g', name: query }] }),
     archiveTask: async ({ taskId }) => ({ taskId, state: 'completed', archivedAt: '2026-08-25T00:00:00.000Z' }),
@@ -199,6 +195,16 @@ test('控制账失效时健康状态降级并保留首因，不能只看群桥',
   assert.deepEqual(result.executionStore, { healthy: false, failure: { code: 'ERR_SQLITE_ERROR', sqliteCode: 13, kind: 'run.stop' } })
 }, { transport: 'dws', overrides: { getWorkflowExecutionHealth: () => ({ healthy: false, failure: { code: 'ERR_SQLITE_ERROR', sqliteCode: 13, kind: 'run.stop' } }) } }))
 
+test('已移除的任务表格同步接口在生产和测试模式均返回404', async () => {
+  for (const testApiEnabled of [false, true]) await withServer(testApiEnabled, async (baseUrl) => {
+    for (const [method, path] of [['GET', '/state/task-sheet-sync'], ['POST', '/task-sheet-sync/check'], ['PUT', '/config/task-sheet-sync'], ['POST', '/task-sheet-sync/run']]) {
+      const response = await fetch(`${baseUrl}${path}`, { method, ...(method === 'GET' ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', sheetId: 's1' }) }) })
+      assert.equal(response.status, 404, `${method} ${path}`)
+      assert.deepEqual(await response.json(), { error: 'not_found' })
+    }
+  })
+})
+
 test('生产HTTP开放只读状态与明确的本机群配置接口，测试控制面仍关闭', async () => withServer(false, async (baseUrl) => {
   const health = await fetch(`${baseUrl}/health`)
   assert.equal(health.status, 200)
@@ -209,10 +215,6 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.equal((await fetch(`${baseUrl}/state/authorizations`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/groups/search?q=产品`)).status, 200)
   assert.equal((await fetch(`${baseUrl}/state/agent-config`)).status, 200)
-  assert.deepEqual(await (await fetch(`${baseUrl}/state/task-sheet-sync`)).json(), { config: { enabled: true }, status: { state: 'success' } })
-  assert.deepEqual(await (await fetch(`${baseUrl}/task-sheet-sync/check`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node' }) })).json(), { name: '任务表', sheets: [{ sheetId: 's1', title: 'Sheet1' }] })
-  assert.deepEqual(await (await fetch(`${baseUrl}/config/task-sheet-sync`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', sheetId: 's1' }) })).json(), { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', sheetId: 's1' })
-  assert.deepEqual(await (await fetch(`${baseUrl}/task-sheet-sync/run`, { method: 'POST' })).json(), { state: 'success', taskCount: 2 })
   assert.deepEqual(await (await fetch(`${baseUrl}/state/version`)).json(), { currentVersion: '0.4.0', latestVersion: null, updateAvailable: false })
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceDir: 'D:\\baibu-agent' }) })).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ proxyUrl: 'http://127.0.0.1:10808' }) })).status, 200)

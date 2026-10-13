@@ -1,7 +1,34 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { apply, name } from '../packages/dingtalk-dsh-assistant/client.js'
+import { apply, name, readResidentOverview } from '../packages/dingtalk-dsh-assistant/client.js'
+
+test('概览在已移除任务表格同步接口后仍加载完整状态', async (t) => {
+  const responses = {
+    '/health': { status: 'ok' },
+    '/state/groups': [{ groupId: 'group-1' }],
+    '/state/tasks': [{ id: 'task-1', state: 'running' }],
+    '/state/supervisor/alerts': [],
+    '/state/environment': { dws: { installed: true } },
+    '/state/agent-config': { agentNames: ['助理'], model: 'test-model' },
+    '/state/workflows/catalog': { engine: 'workflow-v2', workflows: [] },
+  }
+  const requested = []
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const path = new URL(url).pathname
+    requested.push(path)
+    return Object.hasOwn(responses, path)
+      ? Response.json(responses[path])
+      : Response.json({ error: 'Not Found' }, { status: 404 })
+  })
+  const overview = await readResidentOverview()
+  assert.deepEqual(requested.sort(), Object.keys(responses).sort())
+  assert.deepEqual(overview, {
+    health: responses['/health'], groups: responses['/state/groups'], tasks: responses['/state/tasks'],
+    alerts: responses['/state/supervisor/alerts'], environment: responses['/state/environment'],
+    agentConfig: responses['/state/agent-config'], workflows: responses['/state/workflows/catalog'],
+  })
+})
 
 test('Web client使用dsh原生插件页签slot注册唯一状态卡', () => {
   const registrations = []

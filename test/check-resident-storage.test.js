@@ -25,6 +25,21 @@ test('v9历史记录和新增扩展字段都通过，预检不改输入', () => 
   assert.deepEqual(result.extensions, { activityProjection: 1, stagePlan: 1, coordinationRequests: 0, reportEvents: 2 })
 })
 
+test('已移除同步功能的历史启用配置通过只读预检且不剥字段', () => {
+  const legacy = document()
+  legacy.tables.scheduler.runtime = {
+    tasks: [],
+    taskSheetSyncConfig: { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', nodeId: 'node', documentName: '任务表', sheetId: 'sheet', sheetTitle: 'Sheet1', intervalMs: 180000 },
+    taskSheetSyncStatus: { state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' },
+  }
+  const before = structuredClone(legacy)
+  const result = checkResidentStorage(legacy)
+  assert.equal(result.ok, true)
+  assert.equal(result.strippedFields, 0)
+  assert.equal(result.invalidRecords, 0)
+  assert.deepEqual(legacy, before)
+})
+
 test('Schema剥字段或类型不合法必须失败，结果只含计数不含业务正文', () => {
   const unknown = document()
   unknown.tables.tasks.task1.credential = 'sensitive-fixture'

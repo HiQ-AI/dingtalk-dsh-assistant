@@ -7,7 +7,6 @@ import { createDwsAdapter } from './dws-adapter.js'
 import { createNodeDwsRunner } from './dws-runner.js'
 import { normalizeHistoryMessage, startDwsBridge } from './dws-bridge.js'
 import { inspectEnvironment } from './environment.js'
-import { createTaskSheetSyncService } from './task-sheet-sync.js'
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
 import { openExecutionStore } from './execution-store.js'
@@ -122,11 +121,6 @@ export async function apply(ctx, config = {}) {
   await configureResidentGroups(runtime, config.groups)
   for (const migration of config.humanBlockerReplyMigrations ?? []) await runtime.migrateHumanBlockerReply(migration)
   const dwsRunner = createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: tmpdir() })
-  const taskSheetSync = createTaskSheetSyncService({ store, runner: dwsRunner, profile: dwsConfig.profile, logger: ctx.logger })
-  runtime.getTaskSheetSyncState = taskSheetSync.getState
-  runtime.inspectTaskSheet = ({ documentUrl }) => taskSheetSync.inspect(documentUrl)
-  runtime.updateTaskSheetSyncConfig = taskSheetSync.updateConfig
-  runtime.runTaskSheetSync = () => taskSheetSync.run('manual')
   const dwsAdapter = createDwsAdapter({
     enabled: dwsConfig.enabled === true,
     writesAuthorized: dwsConfig.writesAuthorized === true,
@@ -365,7 +359,6 @@ export async function apply(ctx, config = {}) {
   })
   runtime.reconcileCompletedNotifications().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
   runtime.recoverInterruptedDecisions().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
-  taskSheetSync.schedule()
 
   ctx.effect(() => {
     return async () => {
@@ -373,7 +366,7 @@ export async function apply(ctx, config = {}) {
       try {
         await closeExecutionResources([
           ['server', () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))],
-          ['taskSheetSync', () => taskSheetSync.close()], ['dws', () => stopDws()],
+          ['dws', () => stopDws()],
           ['workflow', () => workflow?.close()], ['runtime', () => runtime.close()],
         ])
       } catch (error) {
