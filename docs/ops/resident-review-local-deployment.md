@@ -57,7 +57,7 @@
 
 ## 消息与任务工作流入口
 
-Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runtime 的清理，保留并记录原始异常。宿主可能捕获插件卸载错误后继续报告卸载事件，因此该事件不能独立证明会话排空或控制库解锁；部署仍须执行下述维护、排空、owner 锁和进程回读。若旧版关闭短路导致占用残留，先保留维护并按实际原生句柄及控制账取证，不手工改写 drained。
+Resident 关闭会依次尝试 HTTP、监听、工作流及 Runtime 的清理，保留并记录原始异常。宿主可能捕获插件卸载错误后继续报告卸载事件，因此该事件不能独立证明会话排空或控制库解锁；部署仍须执行下述维护、排空、owner 锁和进程回读。若旧版关闭短路导致占用残留，先保留维护并按实际原生句柄及控制账取证，不手工改写 drained。
 
 ### 问答 Agent 与调查流程切换
 
@@ -171,7 +171,7 @@ pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp
 
 1. 停止已核实的 DSH Web PID 及仅属于该进程的 DWS 监听子进程，避免遗留重复监听；将新 tgz 绝对路径传给 profile 内的原生 CLI：`node "$profileDirectory/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add <assistant.tgz> <observer.tgz>`。
 2. 回读 profile 的两个依赖，逐一比较安装目录与工作区源码及 patch 文件的 SHA256，确认原有 profile patch 未变。`pnpm pack` 可能移除 `package.json` 末尾换行：manifest 按 JSON 内容或仅去除末尾空白后比较，其他差异仍必须调查，不能一律忽略哈希不一致。
-3. 若启用了任务表格同步，重启后回读 `/state/task-sheet-sync`，确认配置中的 nodeId/sheetId 未漂移、启动同步成功，并用 `dws sheet +read` 完整回读托管范围。`/health`、CLI 退出码或设置页提示均不能替代表格内容核对。
+3. 任务表格同步已移除。旧存储中的 `taskSheetSyncConfig` / `taskSheetSyncStatus` 仅保留历史数据，不再驱动启动、定时或手动同步，无需清理或迁移。重启后设置页应无同步入口，`GET /state/task-sheet-sync`、`POST /task-sheet-sync/check`、`PUT /config/task-sheet-sync` 和 `POST /task-sheet-sync/run` 均应返回 404；既有钉钉表格内容不会被清空或继续覆盖。
 4. 通过已配置的 `DSH Web Local` 计划任务调用持久 `start-web.ps1`，不从部署调用者环境另起 PowerShell。先确认其输出重定向目标 `D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-local/` 已存在，否则 PowerShell 在启动脚本前退出（本机曾返回 LastTaskResult=1）。stdout/stderr 只存本地 `docs/tmp/`，日志可能含登录链接，不进入 Git。
 5. 启动地址在 loader 完成后才输出，端口出现不代表地址已可读取；先确认日志包含地址再做认证访问，不把空日志当作启动失败。确认两个端口属于新进程，检查 `/health`、`/state/agent-config` 与 Web 认证访问。配置摘要应保持一致；health 的组织权限错误需单独说明，不能将其写成插件测试失败或真实投递通过。
 
@@ -238,8 +238,6 @@ DSH `@deepseek-ai/dsh-tool-fs-search` 的固定前缀剪枝补丁在独立源码
 ## 历史重开任务缺失原 Session 的恢复
 
 仅对已重开、queued、带reopenContext且resume原childSessionId明确返回该ID不存在的Task，Runtime创建新独立Session并先持久化新的childSessionId和`task-reopen-session-recreated`事件，再继续原TASK_REOPEN与Topic输入派发。旧Session ID保留在runHistory；其它错误及running/waiting不换会话。切换前按既有流程备份稳定存储，核对三个目标Task的taskId、轮次、来源版本与原ID；切换后逐个读回新Session、原Task身份、运行事件及未重复业务动作。旧轮执行细节不可恢复，当前轮必须独立核验；不得把旧结果映射成新轮通过。
-
-任务表格同步读取与看板一致的异步任务视图，包含 `workflow-v2` 节点进度、等待原因与结果；不能只同步旧 JSON Task。隔离验证通过不代表真实表格回读，安装后仍按既有配置独立核验托管范围。
 
 任务详情纯界面更新只打包 Observer；回读安装的 web-client.js 与源码 SHA256 一致。页面首屏显示状态、编号步骤与最新产出，历史执行展开后请求；不触发任务重跑或钉钉发送。
 

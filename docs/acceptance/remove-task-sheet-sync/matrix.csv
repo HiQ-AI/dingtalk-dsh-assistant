@@ -1,0 +1,8 @@
+case,round,status,evidence
+四个旧HTTP接口关闭且相邻配置可用,1,PASS,round-1.md
+旧enabled配置通过存储预检并保留数据,1,PASS,round-1.md
+Resident启动关闭不创建同步定时器,1,PASS,round-1.md
+客户端加载刷新不请求已移除接口,1,PASS,round-1.md
+浏览器相邻配置保存与错误恢复,1,PASS,round-1.md
+浏览器窄屏与键盘操作,1,PASS,round-1.md
+发布bundle与包中不含同步服务,1,PASS,round-1.md

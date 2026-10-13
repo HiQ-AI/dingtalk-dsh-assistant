@@ -6,18 +6,24 @@ import test from 'node:test'
 import { apply, name } from '../packages/dingtalk-dsh-assistant/resident.js'
 import { buildTaskAssociationIndex } from '../packages/dingtalk-dsh-assistant/runtime.js'
 
-test('单一业务插件使用通用命名且 health 明示 fake transport', async (t) => {
+test('单一业务插件正常启停，历史启用配置不再启动任务表格同步', async (t) => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'resident-health-'))
   t.after(() => rm(storageRoot, { recursive: true, force: true }))
   const effects = []
   const logs = []
-  const records = new Map()
-  const table = {
-    get: (key) => records.get(key),
-    entries: () => [...records.entries()][Symbol.iterator](),
-    async put(key, value) { records.set(key, value) },
-    async update(key, transform) { const value = transform(records.get(key)); records.set(key, value); return value },
+  const historical = {
+    tasks: [],
+    taskSheetSyncConfig: { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', nodeId: 'node', documentName: '任务表', sheetId: 'sheet', sheetTitle: 'Sheet1', intervalMs: 180000 },
+    taskSheetSyncStatus: { state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' },
   }
+  const records = new Map([['scheduler:runtime', structuredClone(historical)]])
+  const interval = t.mock.method(globalThis, 'setInterval')
+  const table = (name) => ({
+    get: (key) => records.get(`${name}:${key}`),
+    entries: () => [...records.entries()].filter(([key]) => key.startsWith(`${name}:`)).map(([key, value]) => [key.slice(name.length + 1), value])[Symbol.iterator](),
+    async put(key, value) { records.set(`${name}:${key}`, value) },
+    async update(key, transform) { const storageKey = `${name}:${key}`; const value = transform(records.get(storageKey)); records.set(storageKey, value); return value },
+  })
   const ctx = {
     effect(callback) {
       effects.push(callback)
@@ -31,7 +37,7 @@ test('单一业务插件使用通用命名且 health 明示 fake transport', asy
     storageDomain: {
       config: { backend: 'json' },
       async open() {
-        return { table: () => table, close: async () => undefined }
+        return { table, close: async () => undefined }
       },
     },
     agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
@@ -43,12 +49,15 @@ test('单一业务插件使用通用命名且 health 明示 fake transport', asy
   }
 
   await apply(ctx, { host: '127.0.0.1', port: 0 })
-  assert.equal(name, 'dingtalk-dsh-assistant')
-  assert.equal(effects.length, 1)
-
   const dispose = effects[0]()
-  assert.match(logs[0], /DingTalk group assistant listening/)
-  await dispose()
+  try {
+    assert.equal(name, 'dingtalk-dsh-assistant')
+    assert.equal(effects.length, 1)
+    assert.match(logs[0], /DingTalk group assistant listening/)
+    assert.equal(interval.mock.calls.some(call => call.arguments[1] === 180000), false)
+  } finally { await dispose() }
+  assert.deepEqual(records.get('scheduler:runtime').taskSheetSyncConfig, historical.taskSheetSyncConfig)
+  assert.deepEqual(records.get('scheduler:runtime').taskSheetSyncStatus, historical.taskSheetSyncStatus)
 })
 
 test('完成通知签名由 Agent 工作区规则决定且插件不写死身份', async () => {
