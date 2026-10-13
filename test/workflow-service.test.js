@@ -577,7 +577,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
       if(split.kind==='needs_clarification'){decisions.push({runId:source.runId,reason:split.reason,units:[{spans:[{start:0,end:source.body.length}],goalText:source.body,binding:{disposition:'new',candidateId:null},intent:coordinatorQuestion(source,split)}]});continue}
       if(split.kind==='no_action'){decisions.push({runId:source.runId,reason:split.reason,units:[]});continue}
       const units=[]
-      for(const unit of split.units){
+      for(const unit of source.continuation?.units ?? split.units){
         let routed=await legacyJudge({stage:'R',input:{...scriptInput,...unit}})
         if(routed.kind==='needs_context'){
           const answers=[]
@@ -593,6 +593,17 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
         units.push({spans:unit.spans,goalText:unit.goalText,binding:{disposition:routed.disposition,candidateId:routed.candidateId},intent:intent.kind==='needs_clarification'?coordinatorQuestion(source,intent):intent})
       }
       decisions.push({runId:source.runId,reason:'隔离业务脚本',units})
+    }
+    for(const decision of decisions){
+      const source=input.sources.find(item=>item.runId===decision.runId)
+      if(source.continuation && !decision.units.length)decision.units=source.continuation.units.map(prior=>({
+        spans:prior.spans,goalText:prior.goalText,binding:prior.binding,
+        intent:{kind:'intent',actions:[{intent:'no_action',arguments:{},dependsOn:[]}],constraints:[],requiredExecutionMaterials:[],replyPolicy:'none'}}))
+      if(source.continuation)for(const unit of decision.units){
+        const prior=source.continuation.units.find(item=>JSON.stringify(item.spans)===JSON.stringify(unit.spans))
+        assert.ok(prior,'脚本续办必须对应原澄清单元')
+        unit.unitId=prior.unitId;unit.binding=prior.binding
+      }
     }
     try { await onCandidate({decisions}) } catch(error) {
       if(!['GROUP_COORDINATOR_ACTION_INVALID','MESSAGE_TOPIC_FACT_REVISION_FORBIDDEN'].includes(error.code))throw error
@@ -1533,7 +1544,8 @@ test('Web与IM引用同一澄清首终态生效，无权拒绝且答复沿同来
   const notifications = { canDisclose: async () => true, send: async () => ({ messageId: 'question-message' }), readback: async () => ({ messageId: 'question-message', conversationId: 'g' }) }
   const judge = async ({ stage, input }) => {
     if (stage === 'S') { splits++; return { kind: 'split', units: [{ spans: [{ start: 0, end: input.source.text.length }], goalText: input.source.text, constraints: [], contextNeeds: [] }], sharedConstraints: [], coverage: [{ start: 0, end: input.source.text.length, role: 'unit' }] } }
-    if (stage === 'R') return input.clarificationAnswers?.length ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['answer'] } : { kind: 'needs_clarification', reason: '请选择范围', question: '请选择第一个或第二个范围', needs: [] }
+    if (stage === 'R') return input.clarificationAnswers?.length || input.source.text === '第二个' ? { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['answer'] } : { kind: 'needs_clarification', reason: '请选择范围', question: '请选择第一个或第二个范围', needs: [] }
+    if(input.source.text === '第二个')assert.equal(input.facts.quotedRequest.status,'resolved')
     return { kind: 'intent', actions: [{ intent: 'no_action', arguments: {}, dependsOn: [] }], constraints: [], requiredExecutionMaterials: [], replyPolicy: 'none' }
   }
   const { service, execution, message } = await fixture(t, 'owner', notifications, { judge, config: { webActorId: 'owner' } })
@@ -1543,9 +1555,72 @@ test('Web与IM引用同一澄清首终态生效，无权拒绝且答复沿同来
   const first = await service.resumeRequest({ runId: received.runId, requestId: request.id, eventId: 'web-1', answer: '第一个' }, { channel: 'web', actorId: 'owner' })
   assert.equal(first.answer, '第一个')
   const second = await service.ingest({ ...message, messageId: 'im-answer', text: '第二个', quotedMessage: { messageId: 'question-message' } })
-  assert.equal(second.answer, '第一个')
-  assert.equal(splits, 2) // 同一来源收到回答后由群会话重新决策。
-  assert.equal((await execution.store.query({ kind: 'message.list', limit: 100 })).length, 1)
+  await service.messages.process(second.runId)
+  assert.equal((await service.state(received.runId)).requests.find(item=>item.id===request.id).answer,'第一个')
+  assert.equal((await service.state(second.runId)).run.status,'settled')
+  assert.equal(splits, 3) // 原来源续办与新引用消息各自进入协调。
+  assert.equal((await execution.store.query({ kind: 'message.list', limit: 100 })).length, 2)
+})
+
+test('引用澄清补答与新任务闲聊统一入账，已解决通知再次引用仍承接新任务', async t => {
+  const seen = []
+  const notifications = { canDisclose: async () => true, send: async () => ({ messageId: 'mixed-question-notice' }),
+    readback: async () => ({ messageId: 'mixed-question-notice', conversationId: 'g' }) }
+  const sessions = coordinatorFixtureSessions(source => {
+    seen.push(structuredClone(source))
+    const make = (start, end, intent, args = {}) => {
+      const unit = coordinatorUnit(source, intent, args).units[0]
+      unit.spans = [{ start, end }]; unit.goalText = source.body.slice(start, end)
+      return unit
+    }
+    let units
+    if (source.continuation) {
+      units = source.continuation.units.map(prior => ({ ...make(prior.spans[0].start, prior.spans[0].end, 'no_action'),
+        unitId: prior.unitId, spans: prior.spans, binding: prior.binding }))
+    } else if (source.body === '请确认查哪个表') {
+      const unit = make(0, source.body.length, 'no_action')
+      unit.intent = coordinatorQuestion(source, { reason: '表名缺失', question: '请提供表名' })
+      units = [unit]
+    } else {
+      const request = source.facts.quotedRequest
+      assert.ok(request, '引用通知作为协调事实可见')
+      const firstEnd = source.body.indexOf('；') + 1, nextEnd = source.body.indexOf('；', firstEnd) + 1
+      assert.ok(firstEnd > 0 && nextEnd > firstEnd)
+      const first = request.status === 'pending'
+        ? make(0, firstEnd, 'clarification', { runId: request.runId, requestId: request.requestId, answer: '甲表' })
+        : make(0, firstEnd, 'no_action')
+      units = [first, make(firstEnd, nextEnd, 'create', { objective: source.body.slice(firstEnd, nextEnd - 1) }),
+        make(nextEnd, source.body.length, 'no_action')]
+    }
+    return { runId: source.runId, reason: '分别处理补答、独立任务与闲聊', units }
+  })
+  const { service, execution, message } = await fixture(t, 'owner', notifications, { coordinatorSessions: sessions })
+  const original = await service.ingest({ ...message, messageId: 'mixed-question', text: '请确认查哪个表' })
+  await service.messages.process(original.runId); await service.flushNotifications()
+  const request = (await service.state(original.runId)).requests[0]
+  assert.equal(request.status, 'pending')
+  const first = await service.ingest({ ...message, messageId: 'mixed-answer-first', text: '甲表；请整理本周报告；今天天气不错',
+    quotedMessage: { messageId: 'mixed-question-notice' } })
+  assert.ok(first.runId)
+  await service.messages.process(first.runId); await service.messages.recover()
+  const firstState = await service.state(first.runId)
+  assert.equal(firstState.commands.length, 2)
+  assert.ok(firstState.commands.every(command => command.status === 'applied'))
+  assert.equal(firstState.units.find(unit => unit.goalText === '今天天气不错').status, 'ignored')
+  const resolved = (await service.state(original.runId)).requests.find(item => item.id === request.id)
+  assert.equal(resolved.status, 'resolved')
+  assert.equal(resolved.answer, '甲表；', '补答只取所属单元原文，不混入新任务或闲聊')
+  const second = await service.ingest({ ...message, messageId: 'mixed-answer-second', text: '甲表已确认；请整理下周计划；谢谢啦',
+    quotedMessage: { messageId: 'mixed-question-notice' } })
+  assert.ok(second.runId)
+  await service.messages.process(second.runId); await service.messages.recover()
+  assert.equal((await service.state(second.runId)).commands.length, 1)
+  assert.equal((await service.state(second.runId)).commands[0].status, 'applied')
+  assert.equal((await execution.store.query({ kind: 'task.catalog' })).length, 2)
+  assert.equal((await execution.store.query({ kind: 'message.list', limit: 100 })).length, 3)
+  assert.equal(seen.find(source => source.runId === first.runId).facts.quotedRequest.status, 'pending')
+  assert.equal(seen.find(source => source.runId === second.runId).facts.quotedRequest.status, 'resolved')
+  assert.equal((await service.state(original.runId)).requests.find(item => item.id === request.id).answer, '甲表；')
 })
 
 test('纯话题事实同库沉淀，后续任务读取原文并强制继承话题约束', async t => {
@@ -4767,7 +4842,7 @@ test('无引用回答通过合法待答候选语义选择恢复原请求，第�
   const judge = async ({ stage, input }) => {
     if (stage === 'S') return splitOne(input.source.text)
     if (stage === 'R') return { kind: 'binding', disposition: 'new', candidateId: null, evidence: ['当前来源'] }
-    if (input.text === '查哪个表的审核状态') return { kind: 'needs_clarification', reason: 'BUSINESS_TABLE_UNKNOWN', question: '请给表名', needs: [] }
+    if (input.text === '查哪个表的审核状态' && !input.clarificationAnswers.length) return { kind: 'needs_clarification', reason: 'BUSINESS_TABLE_UNKNOWN', question: '请给表名', needs: [] }
     const candidates = input.facts.clarificationRequests
     if (input.text === '就是审核条目表') {
       sawOwnCandidate = candidates.some(item => item.question === '请给表名')
@@ -5554,7 +5629,15 @@ test('已取消排空Task原生删除有零写预检且保留防重凭证',async
 function coordinatorFixtureSessions(decide) {
  return {async run({input,onSessionBound,onCandidate,readTools}) {
   await onSessionBound()
-  await onCandidate({decisions:await Promise.all(input.sources.map(source=>decide(source,input,readTools)))})
+  await onCandidate({decisions:await Promise.all(input.sources.map(async source=>{
+   const decision=await decide(source,input,readTools)
+   if(source.continuation)for(const unit of decision.units){
+    const prior=source.continuation.units.find(item=>JSON.stringify(item.spans)===JSON.stringify(unit.spans))
+    assert.ok(prior,'脚本化续办候选必须来自原待办单元')
+    unit.unitId=prior.unitId;unit.binding=prior.binding
+   }
+   return decision
+  }))})
   return {status:'submitted'}
  },async close(){}}
 }

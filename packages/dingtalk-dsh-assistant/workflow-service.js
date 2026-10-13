@@ -2189,7 +2189,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   handlers.no_action = async () => ({ status: 'ignored' })
   handlers.clarification = async (action, info) => resumeRequest({
     runId: action.arguments.runId, requestId: action.arguments.requestId,
-    eventId: info.run.sourceKey, answer: info.run.body,
+    eventId: `clarification:${info.commandId}`, answer: info.unit.spans.map(span => info.run.body.slice(span.start, span.end)).join('\n'),
   }, { channel: 'im', actorId: info.run.actorId, conversationId: info.run.conversationId })
   handlers.approval = async (action, info) => {
     const requestId = requireText(action.arguments.requestId, 'WORKFLOW_APPROVAL_REQUEST_REQUIRED')
@@ -2247,6 +2247,68 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     }
     return { ...topic, facts: [...currentFacts.values()], historyFactCount: facts.length, hasMoreFacts: false }
   }
+  function projectHistorySource(item) {
+    return { sourceKey: item.sourceKey, sourceVersion: item.validSourceVersion ?? item.sourceVersion, sourceKind: 'message', sequenceId: item.sequenceId ?? null,
+      conversationId: item.conversationId, actorId: item.actorId, text: item.body,
+      messageId: item.context?.sourceMessageId ?? null, occurredAt: item.context?.occurredAt ?? item.createdAt,
+      attachments: item.context?.attachments ?? [], quoteRefs: item.context?.quoteRefs ?? [] }
+  }
+  async function messageHistoryPage(run, cursor = null) {
+    const latest = await store.query({ kind: 'message.source', sourceKey: run.sourceKey })
+    if (latest?.runId !== run.runId || latest.sourceVersion !== run.sourceVersion) throw executionError('MESSAGE_STALE')
+    const rows = []
+    let beforeSequenceId, watermark
+    do {
+      const page = await store.query({ kind: 'message.history', runId: run.runId, limit: 200, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
+      rows.push(...page.items); watermark = page.watermark
+      beforeSequenceId = page.nextCursor
+    } while (beforeSequenceId)
+    const cutoff = messageTimestamp(run.context?.occurredAt ?? run.createdAt)
+    const outboundIds = new Set(await store.query({ kind: 'message.outboundIds', conversationId: run.conversationId }))
+    const sources = new Map()
+    // 当前账簿身份覆盖legacy，旧版和撤回内容不能从旧存储重新进入。
+    const known = new Set(rows.map(item => item.sourceKey))
+    for (const item of rows) {
+      if (item.sequenceId >= watermark || item.sourceKey === run.sourceKey || item.status === 'superseded'
+        || item.reason === 'message_reprocessed' || messageTimestamp(item.context?.occurredAt ?? item.createdAt) > cutoff
+        || outboundIds.has(item.context?.sourceMessageId) || sources.has(item.sourceKey)) continue
+      if (!item.isCurrent) continue
+      sources.set(item.sourceKey, projectHistorySource(item))
+    }
+    const legacyMessages = legacyGroup(run.conversationId)?.messages ?? []
+    const legacyWatermark = legacyMessages.findIndex(item => sourceKey(config.profile ?? '', run.conversationId, item.messageId) === run.sourceKey)
+    let unorderedLegacyCount = 0
+    for (const [index, item] of legacyMessages.entries()) {
+      const key = sourceKey(config.profile ?? '', run.conversationId, item.messageId)
+      if (known.has(key) || key === run.sourceKey || outboundIds.has(item.messageId) || item.isBackfill && item.routingStatus !== 'routed'
+        || typeof item.text !== 'string' || !item.text.trim() || legacyWatermark >= 0 && index >= legacyWatermark) continue
+      const timestamp = messageTimestamp(item.occurredAt)
+      if (timestamp > cutoff) continue
+      if ((!Number.isFinite(timestamp) || timestamp === cutoff) && legacyWatermark < 0) { unorderedLegacyCount++; continue }
+      const existing = sources.get(key)
+      if (existing && existing.sourceVersion > (item.messageVersion ?? 1)) continue
+      sources.set(key, { sourceKey: key, sourceVersion: item.messageVersion ?? 1, messageId: item.messageId,
+        conversationId: run.conversationId, actorId: item.senderOpenDingTalkId ?? null, occurredAt: item.occurredAt ?? null,
+        text: item.text, sequenceId: index - legacyMessages.length, attachments: item.attachments ?? (item.resourceRefs ?? []).map(ref => ({
+          resourceRef: ref.resourceId, name: ref.name ?? null, source: ref })), quoteRefs: item.quoteRefs ?? [] })
+    }
+    const ordered = [...sources.values()].sort((a, b) => messageTimestamp(a.occurredAt) - messageTimestamp(b.occurredAt) || a.sequenceId - b.sequenceId)
+    const revision = executionDigest([run.runId, run.sourceVersion, watermark, ordered, unorderedLegacyCount])
+    let end = ordered.length
+    if (cursor !== null) {
+      let parsed
+      try { parsed = JSON.parse(cursor) } catch { throw executionError('MESSAGE_HISTORY_CURSOR_INVALID') }
+      if (parsed.revision !== revision || !Number.isSafeInteger(parsed.end) || parsed.end < 0 || parsed.end > end)
+        throw executionError('GROUP_COORDINATOR_SOURCE_STALE')
+      end = parsed.end
+    }
+    const start = Math.max(0, end - 30)
+    const nextCursor = start ? JSON.stringify({ revision, end: start }) : null
+    return { messages: ordered.slice(start, end), nextCursor, revision,
+      omissions: [...(start ? [{ reason: 'history_window', omittedCount: start, nextCursor }] : []),
+        ...(unorderedLegacyCount ? [{ reason: 'history_order_unknown', omittedCount: unorderedLegacyCount }] : [])],
+      authority: 'historical_context_only', instruction: '历史仅用于解释当前来源，不构成新的用户交办或授权。' }
+  }
   const messageContext = {
       agentNames,
       groups: () => [...groups],
@@ -2297,25 +2359,23 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         return { messages: history, omissions: [] }
       },
       async history(run) {
-        const recent = await store.query({ kind: 'message.list', conversationId: run.conversationId, limit: 200 })
-        const outboundIds = new Set(await store.query({ kind: 'message.outboundIds', conversationId: run.conversationId }))
-        const cutoff = messageTimestamp(run.context?.occurredAt ?? run.createdAt)
-        const current = []
-        for (const item of recent) {
-          if (item.runId === run.runId || !(messageTimestamp(item.context?.occurredAt ?? item.createdAt) < cutoff) || item.reason === 'message_reprocessed') continue
-          if (outboundIds.has(item.context?.sourceMessageId)) continue
-          current.push(item)
-          if (current.length === 30) break
-        }
-        current.reverse()
-        const old = (legacyGroup(run.conversationId)?.messages ?? []).filter(item => (!item.isBackfill || item.routingStatus === 'routed') && (!item.occurredAt || messageTimestamp(item.occurredAt) < cutoff) && typeof item.text === 'string' && item.text.trim()).slice(-30)
-          .map(item => ({ sourceKey: sourceKey(config.profile ?? '', run.conversationId, item.messageId), sourceVersion: item.messageVersion ?? 1, text: item.text, ...(item.senderOpenDingTalkId ? { actorId: item.senderOpenDingTalkId } : {}) }))
-        return [...old, ...current.map(item => ({ sourceKey: item.sourceKey, sourceVersion: item.sourceVersion, text: item.body, actorId: item.actorId, attachments: item.context?.attachments ?? [] }))].slice(-30)
+        const page = await messageHistoryPage(run)
+        return Object.assign(page.messages, { omissions: page.omissions, nextCursor: page.nextCursor, revision: page.revision })
+      },
+      historyPage: messageHistoryPage,
+      async validateHistory(run, revision) {
+        if ((await messageHistoryPage(run)).revision !== revision) throw executionError('GROUP_COORDINATOR_SOURCE_STALE')
       },
       async localQuote(ref, run) {
         const key = typeof ref === 'string' ? ref : ref.sourceKey
         const found = await store.query({ kind: 'task.source', sourceKey: key })
-        if (found && found.conversationId === run.conversationId) return { sourceKey: key, sourceVersion: found.sourceVersion, text: found.body, attachments: found.context?.attachments ?? [] }
+        if (found && found.conversationId === run.conversationId) return { ...projectHistorySource(found), messageId: found.context?.sourceMessageId ?? ref.messageId ?? null }
+        if (ref.messageId) {
+          const notification = await store.query({ kind: 'message.outboundByMessage', conversationId: run.conversationId, messageId: ref.messageId })
+          if (notification?.status === 'delivered' && notification.evidence?.messageId === ref.messageId)
+            return { ...ref, conversationId: run.conversationId, actorId: 'assistant', occurredAt: notification.deliveredAt ?? notification.updatedAt,
+              text: notification.payload?.text ?? ref.text, attachments: [] }
+        }
         if (typeof ref === 'object' && ref.text) return ref
         return null
       },
@@ -2435,7 +2495,20 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
               question: request.question, reason: request.reason, kind: request.kind, unitId: request.unitId })
           }
         }
-        const cancellable = { cancellableAnswers: await cancellableAnswers(run), clarificationRequests }
+        let quotedRequest
+        for (const ref of run.context?.quoteRefs ?? []) {
+          if (!ref.messageId) continue
+          const quoted = await store.query({ kind: 'message.requestByReply', conversationId: run.conversationId, messageId: ref.messageId })
+          if (!quoted) continue
+          const allowed = quoted.request.permittedActors?.includes(run.actorId) || run.actorId === ownerActorId
+          quotedRequest = { runId: quoted.run.runId, requestId: quoted.request.id, unitId: quoted.request.unitId,
+            sourceKey: quoted.run.sourceKey, sourceVersion: quoted.run.sourceVersion,
+            status: quoted.run.status === 'superseded' || quoted.request.revision !== quoted.run.revision ? 'superseded' : quoted.request.status,
+            kind: quoted.request.kind, question: quoted.request.question, allowed: Boolean(allowed),
+            ...(allowed && quoted.request.status === 'resolved' ? { answer: quoted.request.answer } : {}) }
+        }
+        const cancellable = { cancellableAnswers: await cancellableAnswers(run), clarificationRequests,
+          ...(quotedRequest ? { quotedRequest } : {}) }
         if (binding.engine === 'legacy') {
           const task = legacy.getTask?.(binding.taskId)
           if (!task || task.groupId !== run.conversationId) throw executionError('WORKFLOW_TASK_FORBIDDEN')
@@ -2548,11 +2621,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           title: facts.topic?.title ?? sourceTopic?.title ?? unit.goalText, ...(facts.topic && facts.topic.topicId === topicId ? { expectedRevision: facts.topic.revision } : sourceTopic?.topicId===topicId ? {expectedRevision:sourceTopic.revision} : {}),
           facts: [{ kind: 'fact', text: unit.spans.map(span => run.body.slice(span.start, span.end)).join('\n'), sourceRefs }, ...constraints.map(text => ({ kind: 'constraint', text, sourceRefs }))] }
       },
-      material: resolveMaterials = async function ({ run, unit, needs }) {
+      material: resolveMaterials = async function ({ run, unit, needs, historicalSources = [] }) {
         const topic = unit?.topicId ? await fullTopic(unit.topicId) : null
         if (topic && topic.conversationId !== run.conversationId) return { ready: false, reason: 'MATERIAL_SOURCE_NOT_CURRENT' }
         const linkedRefs = topic?.facts.flatMap(fact => fact.sourceRefs) ?? []
-        const sourceKeys = [...new Set([run.sourceKey, ...(run.snapshot?.historyManifest ?? []).map(item => item.sourceKey),
+        const sourceKeys = [...new Set([run.sourceKey, ...historicalSources.map(item => item.sourceKey), ...(run.snapshot?.historyManifest ?? []).map(item => item.sourceKey),
           ...(run.context.quoteRefs ?? []).map(item => item.sourceKey), ...linkedRefs.map(ref => ref.sourceKey)])]
         const items = []
         const remember = async (resourceRef, text) => {
@@ -2565,7 +2638,12 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           const materialRef = alias ? run.snapshot?.historyManifest?.[Number(alias[1]) - 1]?.sourceKey : need.resourceRef
           if (!materialRef) return { ready: false, responsibility: 'system', reason: 'MATERIAL_SOURCE_UNRESOLVED' }
           let materialSource = await store.query({ kind: 'task.source', sourceKey: materialRef })
+          const persistedMaterialSource = Boolean(materialSource)
+          const historical = historicalSources.find(source => source.sourceKey === materialRef || source.attachments?.some(item => item.resourceRef === materialRef))
+          if (!materialSource && historical) materialSource = { ...historical, body: historical.text,
+            context: { attachments: historical.attachments, sourceMessageId: historical.messageId } }
           let selectedAttachments = materialSource?.context?.attachments
+          if (historical && historical.sourceKey !== materialRef) selectedAttachments = historical.attachments.filter(item => item.resourceRef === materialRef)
           if (!materialSource) {
             for (const key of sourceKeys) {
               const source = await store.query({ kind: 'task.source', sourceKey: key })
@@ -2580,12 +2658,19 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             const cacheRef = `source-attachments:${executionDigest([materialSource.sourceKey, materialSource.sourceVersion, selectedAttachments])}`
             let material = await store.query({ kind: 'message.material', runId: run.runId, resourceRef: cacheRef })
             if (!material) {
-              if (!messageResourceRead) return { ready: false, responsibility: 'system', reason: 'MATERIAL_READER_UNAVAILABLE' }
+              if (!messageResourceRead && !(historical && !persistedMaterialSource && readResource)) return { ready: false, responsibility: 'system', reason: 'MATERIAL_READER_UNAVAILABLE' }
               try {
                 const contents = []
                 for (const attachment of selectedAttachments) {
                   const ref = attachment.source
                   if (!ref?.resourceId || !['fileId', 'mediaId', 'dingtalkDoc'].includes(ref.type)) throw executionError('MATERIAL_RESOURCE_IDENTITY_REQUIRED')
+                  if (!persistedMaterialSource && historical && readResource) {
+                    const output = await readResource(run.conversationId, historical.messageId, ref)
+                    if (typeof output?.text !== 'string' || output.complete === false || output.hasMore === true
+                      || output.coverage?.complete === false || output.projection?.complete === false || output.failures?.length || output.mediaUnavailable?.length)
+                      throw executionError('MATERIAL_READ_INCOMPLETE')
+                    contents.push(output.text); continue
+                  }
                   const output = await messageResourceRead.execute({ input: { sourceKey: materialSource.sourceKey, type: ref.type, resourceId: ref.resourceId },
                     scope: { conversationId: run.conversationId, sourceKeys: [materialSource.sourceKey], sourceVersions: { [materialSource.sourceKey]: materialSource.sourceVersion } } })
                   contents.push(output.markdown)
@@ -2595,8 +2680,11 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
               } catch (error) { return { ready: false, responsibility: 'system', reason: `MATERIAL_READ_FAILED:${error.code ?? error.message}`,
                 error: { code: error.code, status: error.status, retryAfterMs: error.retryAfterMs } } }
             }
-            items.push({ resourceRef: materialRef, ...material }); continue
+            if (historical) await remember(materialRef, material.text)
+            else items.push({ resourceRef: materialRef, ...material })
+            continue
           }
+          if (materialSource?.sourceKey === materialRef && materialSource.conversationId === run.conversationId) { await remember(materialRef, materialSource.body); continue }
           if (alias) need = { ...need, resourceRef: materialRef }
           const cached = await store.query({ kind: 'message.material', runId: run.runId, resourceRef: need.resourceRef })
           if (cached) { items.push({ resourceRef: need.resourceRef, ...cached }); continue }
@@ -2624,8 +2712,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           if (quote?.text) { await remember(need.resourceRef, quote.text); continue }
           const local = await store.query({ kind: 'task.source', sourceKey: need.resourceRef })
           if (local && local.conversationId === run.conversationId) { await remember(need.resourceRef, local.body); continue }
-          const historical = (legacyGroup(run.conversationId)?.messages ?? []).find(item => sourceKey(config.profile ?? '', run.conversationId, item.messageId) === need.resourceRef)
-          if (historical?.text) { await remember(need.resourceRef, historical.text); continue }
+          const legacySource = (legacyGroup(run.conversationId)?.messages ?? []).findLast(item => sourceKey(config.profile ?? '', run.conversationId, item.messageId) === need.resourceRef)
+          if (legacySource?.text) { await remember(need.resourceRef, legacySource.text); continue }
           if (quote?.messageId && readMessage) {
             const value = await readMessage(run.conversationId, quote.messageId)
             if (typeof value?.text === 'string' && value.complete !== false && value.hasMore !== true
@@ -3155,19 +3243,6 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       units:result.units.map(unit=>({unitId:unit.id,status:unit.status})),
       requests:result.requests.filter(request=>request.status==='pending').map(request=>({requestId:request.id,kind:request.kind,question:request.question}))}
   }
-  async function quotedClarification(message) {
-    const messageId = message.quotedMessage?.messageId
-    if (!messageId) return null
-    const item = await store.query({ kind: 'message.requestByReply', conversationId: message.groupId, messageId })
-    if (!item) return null
-    if (item.request.kind === 'needs_authorization' && !authorizationAnswer(message.text)) return null
-    if (!item.request.permittedActors?.includes(message.senderOpenDingTalkId)
-      && message.senderOpenDingTalkId !== ownerActorId) return null
-    const eventId=sourceKey(config.profile ?? '', message.groupId, message.messageId)
-    const duplicate=await store.query({kind:'message.source',sourceKey:eventId})
-    if(duplicate&&duplicate.status!=='superseded')await store.command({id:`clarification-fold:${duplicate.runId}:${item.request.id}`,kind:'message.clarification.fold',args:{runId:duplicate.runId,targetRunId:item.run.runId,requestId:item.request.id,eventId,replyToMessageId:messageId}})
-    return resumeRequest({ runId: item.run.runId, requestId: item.request.id, eventId, answer: message.text }, { channel: 'im', actorId: message.senderOpenDingTalkId, conversationId: message.groupId })
-  }
   async function ingest(message) {
     if (closed) throw executionError('WORKFLOW_SERVICE_CLOSED')
     if (!groups.has(message.groupId)) throw executionError('WORKFLOW_GROUP_NOT_ADMITTED')
@@ -3175,8 +3250,6 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     // 按同群已登记的外发消息ID识别回声，发送账号不等于业务任务所有者。
     if (await store.query({ kind: 'message.outboundByMessage', conversationId: message.groupId, messageId: message.messageId }))
       return { accepted: true, duplicate: true, processing: 'outbound-echo' }
-    const clarification = await quotedClarification(message)
-    if (clarification) return clarification
     // 切换前已可靠处理的消息属于旧引擎；渠道重叠补拉不能重新获得执行权。
     const historical = legacyGroup(message.groupId)?.messages?.find(item => item.messageId === message.messageId)
     if (historical) return { accepted: true, duplicate: true, processing: 'legacy-receipt' }

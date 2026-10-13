@@ -235,7 +235,7 @@ for (const placement of ['same-unit', 'same-topic-units']) test(`同一事项重
     unit.intent.actions = [{ intent: 'create', arguments: { objective: '完整事项' }, dependsOn: [] }]
     if (placement === 'same-unit') unit.intent.actions.push({ intent: 'research', arguments: { objective: '同一事项准备' }, dependsOn: [0] })
     else candidate.decisions[0].units.push({ ...structuredClone(unit), binding: { disposition: 'conversation', candidateId: `source:${args.input.sources[0].runId}` } })
-    await assert.rejects(args.onCandidate(candidate), { code: 'GROUP_COORDINATOR_EXISTING_TASK_REQUIRES_UPDATE' })
+    await assert.rejects(args.onCandidate(candidate), { code: placement === 'same-unit' ? 'GROUP_COORDINATOR_EXISTING_TASK_REQUIRES_UPDATE' : 'GROUP_COORDINATOR_DUPLICATE_UNIT' })
     rejected++
     assert.deepEqual((await f.workflow.state(args.input.sources[0].runId)).commands, [])
     await args.onCandidate(answerDecision(args.input))
@@ -518,6 +518,172 @@ test('群协调传递原始简单加列目标，候选细节不升级为业务�
 
 const clarificationIntent = sourceKey => ({ kind: 'needs_clarification', reason: 'target_conflict',
   question: '本次处理甲目标还是乙目标？', missingField: 'target', blockedAction: '确定要处理的目标', checkedSourceRefs: [sourceKey] })
+
+test('混合事项补答只续办原澄清单元，完成项和闲聊保持原身份且恢复不重派', async t => {
+  let turns = 0, original, f
+  f = await fixture(t, true, { sessionRunner: { async close() {}, async run(args) {
+    await args.onSessionBound(); turns++
+    const source = args.input.sources[0]
+    const build = (start, end, intent = 'answer') => {
+      const item = structuredClone(answerDecision(args.input).decisions[0].units[0])
+      item.spans = [{ start, end }]; item.goalText = source.body.slice(start, end)
+      item.intent.actions = [{ intent, arguments: intent === 'no_action' ? {} : { objective: item.goalText }, dependsOn: [] }]
+      return item
+    }
+    let units
+    if (turns === 1) {
+      const question = build(4, 8); question.intent = clarificationIntent(source.sourceKey)
+      units = [build(0, 4), question, build(8, source.body.length, 'no_action')]
+    } else {
+      assert.equal(turns, 2)
+      assert.deepEqual(source.continuation.retainedUnitIds.sort(), original.units.filter(u => u.unitId !== original.requests[0].unitId).map(u => u.unitId).sort())
+      assert.equal(source.continuation.units.length, 1)
+      const pending = source.continuation.units[0]
+      assert.equal(pending.unitId, original.requests[0].unitId)
+      const resumed = build(4, 8)
+      Object.assign(resumed, { unitId: pending.unitId, spans: pending.spans, binding: pending.binding })
+      units = [resumed]
+      for (const bad of [{ ...resumed, unitId: undefined }, { ...resumed, unitId: original.units.find(u => u.goalText === '查询甲；').unitId },
+        { ...resumed, spans: [{ start: 0, end: 8 }] }, { ...resumed, binding: { disposition: 'conversation', candidateId: 'source:mixed-continuation' } }]) {
+        await assert.rejects(args.onCandidate({ decisions: [{ runId: source.runId, reason: '错误续办候选', units: [bad] }] }),
+          { code: 'GROUP_COORDINATOR_CONTINUATION_INVALID' })
+      }
+    }
+    await args.onCandidate({ decisions: [{ runId: source.runId, reason: '分别处理独立事项和闲聊', units }] })
+    return { status: 'submitted' }
+  } } })
+  await f.receive('mixed-continuation', '查询甲；查询乙；今天不错')
+  original = await f.workflow.state('mixed-continuation')
+  assert.equal(f.counters().dispatched, 1)
+  assert.equal(original.commands.length, 1)
+  assert.equal(original.units.find(u => u.goalText === '今天不错').status, 'ignored')
+  const request = original.requests[0]
+  await f.workflow.resume({ runId: 'mixed-continuation', requestId: request.id, actorId: 'user', answer: '乙表', eventId: 'mixed-answer' })
+  await f.workflow.recover()
+  const resumed = await f.workflow.state('mixed-continuation')
+  assert.equal(turns, 2); assert.equal(f.counters().dispatched, 2)
+  assert.deepEqual(resumed.units.map(u => [u.unitId, u.topicId]), original.units.map(u => [u.unitId, u.topicId]))
+  assert.equal(resumed.commands.length, 2)
+  assert.deepEqual(resumed.commands.find(c => c.commandId === original.commands[0].commandId), original.commands[0])
+  assert.equal(resumed.requests.find(r => r.id === request.id).status, 'resolved')
+  await f.workflow.resume({ runId: 'mixed-continuation', requestId: request.id, actorId: 'user', answer: '重复乙表', eventId: 'mixed-answer-again' })
+  await f.workflow.recover()
+  assert.equal(turns, 2); assert.equal(f.counters().dispatched, 2)
+})
+
+test('同跨度相同动作重复单元拒绝，同句话不同目标允许独立执行', async t => {
+  let f
+  f = await fixture(t, true, { sessionRunner: { async close() {}, async run(args) {
+    await args.onSessionBound()
+    const decision = answerDecision(args.input), first = decision.decisions[0].units[0]
+    decision.decisions[0].units.push(structuredClone(first))
+    await assert.rejects(args.onCandidate(decision), { code: 'GROUP_COORDINATOR_DUPLICATE_UNIT' })
+    decision.decisions[0].units[1].intent.replyPolicy = 'none'
+    await assert.rejects(args.onCandidate(decision), { code: 'GROUP_COORDINATOR_DUPLICATE_UNIT' })
+    assert.equal((await f.workflow.state('overlap-safe')).commands.length, 0)
+    first.intent.actions[0].arguments.objective = '查询甲表'
+    decision.decisions[0].units[1].intent.actions[0].arguments.objective = '查询乙表'
+    await args.onCandidate(decision)
+    return { status: 'submitted' }
+  } } })
+  await f.receive('overlap-safe', '请分别查询甲表和乙表，共用测试环境')
+  assert.equal(f.counters().dispatched, 2)
+  assert.equal((await f.workflow.state('overlap-safe')).commands.length, 2)
+})
+
+test('同跨度相同控制动作指向不同已有任务时分别接纳，换回复策略不能重复控制同目标', async t => {
+  const controlled = []
+  let f
+  f = await fixture(t, true, { context: store => ({
+    candidates: async () => ({ cards: ['task-a', 'task-b'].map(taskId => ({ candidateId: taskId, taskId, engine: 'workflow', title: taskId })), total: 2, catalogRevision: 'two-tasks' }),
+    facts: async ({ binding }) => binding.candidateId ? { task: { factVersion: await store.query({ kind: 'message.task.version', taskId: binding.candidateId }) } } : {},
+  }), handlers: { pause: async action => { controlled.push(action.taskId); return { status: 'completed' } } },
+  sessionRunner: { async close() {}, async run(args) {
+    await args.onSessionBound()
+    const decision = answerDecision(args.input), first = decision.decisions[0].units[0]
+    first.binding = { disposition: 'existing', candidateId: 'task-a' }
+    first.intent.actions = [{ intent: 'pause', arguments: {}, dependsOn: [] }]
+    const second = structuredClone(first)
+    second.intent.replyPolicy = 'none'
+    decision.decisions[0].units.push(second)
+    await assert.rejects(args.onCandidate(decision), { code: 'GROUP_COORDINATOR_DUPLICATE_UNIT' })
+    assert.equal((await f.workflow.state('two-task-control')).commands.length, 0)
+    second.binding.candidateId = 'task-b'
+    await args.onCandidate(decision)
+    return { status: 'submitted' }
+  } } })
+  for (const taskId of ['task-a', 'task-b']) await f.store.command({ id: `accept-${taskId}`, kind: 'task.accept', args: {
+    taskId, requirementRef: 'sha256/requirement', requirementRevision: 1, sessionId: `owner-${taskId}`, criteria: ['核验'], sourceKey: 'origin', eventKey: `created-${taskId}` } })
+  await f.receive('two-task-control', '暂停甲任务和乙任务')
+  assert.deepEqual(controlled.sort(), ['task-a', 'task-b'])
+  const state = await f.workflow.state('two-task-control')
+  assert.equal(state.commands.length, 2)
+  assert.ok(state.commands.every(command => command.status === 'applied'))
+  await f.workflow.recover()
+  assert.equal(controlled.length, 2)
+})
+
+for (const retainedStatus of ['pending', 'running', 'unknown']) test(`局部补答保留${retainedStatus}命令及另一待答单元，不扩大重判范围`, async t => {
+  let turns = 0
+  const calls = []
+  const f = await fixture(t, true, { context: () => ({ material: async ({ nodeId }) => nodeId === 'coordinator'
+    ? { ready: true, data: { resources: [{ resourceRef: 'file:blocked', text: '甲查询的材料，乙丙目标仍待选择' }] } }
+    : { ready: false, reason: 'TEST_MATERIAL_UNAVAILABLE' } }),
+    handlers: { answer: async action => {
+      calls.push(action.arguments.objective)
+      if (action.arguments.objective === '查询甲；') {
+        if (retainedStatus === 'unknown') throw Error('transport_lost_after_effect')
+        return { executionPending: true }
+      }
+      return { reply: '乙表已查询' }
+    } }, sessionRunner: { async close() {}, async run(args) {
+      await args.onSessionBound(); turns++
+      const source = args.input.sources[0]
+      const build = (start, end) => {
+        const unit = structuredClone(answerDecision(args.input).decisions[0].units[0])
+        unit.spans = [{ start, end }]; unit.goalText = source.body.slice(start, end)
+        unit.intent.actions[0].arguments.objective = unit.goalText
+        return unit
+      }
+      let units
+      if (!source.continuation) {
+        await args.readTools.find(tool => tool.name === 'group_coordinator_read_material').execute({ runId: source.runId, resourceRef: 'file:blocked' })
+        const first = build(0, 4)
+        if (retainedStatus === 'pending') first.intent.requiredExecutionMaterials = ['file:blocked']
+        units = [first, ...[4, 8].map(start => {
+          const question = build(start, start + 4)
+          question.intent = { ...clarificationIntent(source.sourceKey), question: `${question.goalText}目标待确定`, checkedSourceRefs: [source.sourceKey, 'file:blocked'] }
+          return question
+        })]
+      } else {
+        assert.equal(source.continuation.units.length, 1)
+        const prior = source.continuation.units[0]
+        assert.deepEqual(prior.spans, [{ start: 4, end: 8 }])
+        units = [{ ...build(4, 8), unitId: prior.unitId, binding: prior.binding }]
+      }
+      await args.onCandidate({ decisions: [{ runId: source.runId, reason: '各事项独立处理', units }] })
+      return { status: 'submitted' }
+    } } })
+  const runId = `retained-${retainedStatus}`
+  await f.workflow.receive({ runId, sourceKey: `source:${runId}`, sourceVersion: 1, conversationId: 'group', actorId: 'user',
+    body: '查询甲；查询乙；查询丙；', context: { attachments: [{ resourceRef: 'file:blocked' }] } }, { process: false })
+  // 协调时已读附件，甲查询执行时材料不可用，乙/丙目标单独澄清。
+  await f.workflow.process(runId)
+  const before = await f.workflow.state(runId)
+  assert.equal(before.commands[0].status, retainedStatus)
+  const target = before.requests.find(request => before.units.find(unit => unit.unitId === request.unitId)?.goalText === '查询乙；')
+  const other = before.requests.find(request => before.units.find(unit => unit.unitId === request.unitId)?.goalText === '查询丙；')
+  assert.ok(target); assert.ok(other)
+  await f.workflow.resume({ runId, requestId: target.id, actorId: 'user', answer: '乙表', eventId: 'partial-answer' })
+  await f.workflow.recover()
+  const after = await f.workflow.state(runId)
+  assert.equal(turns, 2)
+  assert.deepEqual(after.commands.find(command => command.commandId === before.commands[0].commandId), before.commands[0])
+  assert.deepEqual(after.requests.find(request => request.id === other.id), other)
+  assert.equal(after.commands.length, 2)
+  assert.equal(calls.filter(value => value === '查询乙；').length, 1)
+  assert.equal(calls.filter(value => value === '查询甲；').length, retainedStatus === 'pending' ? 0 : 1)
+})
 
 test('原生澄清合同拒绝权限理由与虚构来源，同会话纠正后仅落一条合法请求', async t => {
   const f = await fixture(t, true, { transformDecision(decision, count) {

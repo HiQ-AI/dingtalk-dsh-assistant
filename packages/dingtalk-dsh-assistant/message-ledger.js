@@ -620,8 +620,9 @@ function coordinatorState(db, conversationId) {
     AND (json_extract(r.body,'$.coordinatorConsumed') IS NULL OR EXISTS(SELECT 1 FROM message_items i
       WHERE i.run_id=r.run_id AND i.kind='command' AND json_extract(i.body,'$.status')='superseded'
       AND json_extract(i.body,'$.priorStatus')='pending' AND json_extract(i.body,'$.reason')='topic_input_changed'))
-    AND NOT EXISTS(SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='command'
-      AND json_extract(i.body,'$.status')!='superseded') ORDER BY r.rowid`)
+    AND (json_array_length(json_extract(r.body,'$.coordinatorPendingUnitIds'))>0 OR NOT EXISTS(
+      SELECT 1 FROM message_items i WHERE i.run_id=r.run_id AND i.kind='command'
+      AND json_extract(i.body,'$.status')!='superseded')) ORDER BY r.rowid`)
     .all(conversationId).map(row=>({...JSON.parse(row.body),sequenceId:row.sequenceId}))
   const unconsumedTaskEvents=[]
   for(const task of db.prepare('SELECT task_id FROM business_tasks ORDER BY task_id').all()){
@@ -655,7 +656,8 @@ function reduceCoordinator(db,kind,a,ctx) {
     const selected=a.sourceRuns.map(ref=>{const r=sources.find(r=>r.runId===ref.runId&&r.sourceVersion===ref.sourceVersion);if(!r)fail('MESSAGE_STALE');return r})
     c.sessionId??=a.sessionId??`coordinator-${digest(a.conversationId)}`
     if(a.sessionId&&a.sessionId!==c.sessionId)fail('MESSAGE_COORDINATOR_STALE')
-    c.turnId=str(a.turnId);c.leaseEpoch++;c.status='running';c.sources=a.sourceRuns;c.taskEventRefs=refs;c.startedAt=now;c.error=null;c.retryAt=null
+    c.turnId=str(a.turnId);c.leaseEpoch++;c.status='running';c.sources=selected.map(r=>({runId:r.runId,sourceVersion:r.sourceVersion,
+      ...(r.coordinatorPendingUnitIds?.length?{continuationUnitIds:[...r.coordinatorPendingUnitIds]}:{})}));c.taskEventRefs=refs;c.startedAt=now;c.error=null;c.retryAt=null
     saveGroup();return {result:{binding:binding(),sources:selected,taskEvents:events}}
   }
   if(c.turnId!==a.turnId||c.leaseEpoch!==a.leaseEpoch||!['running','committed'].includes(c.status))fail('MESSAGE_COORDINATOR_STALE')
@@ -669,6 +671,13 @@ function reduceCoordinator(db,kind,a,ctx) {
     if(c.status!=='running')fail('MESSAGE_COORDINATOR_STALE')
     if(!Array.isArray(a.decisions)||a.decisions.length!==c.sources.length||new Set(a.decisions.map(d=>d.runId)).size!==c.sources.length)fail('MESSAGE_INVALID_DISPOSITION')
     for(const ref of c.taskEventRefs??[])if(!unconsumedTaskEvents.some(e=>e.taskId===ref.taskId&&e.eventSeq===ref.eventSeq))fail('MESSAGE_COORDINATOR_EVENT_STALE')
+    // 与决定落账处于同一事务，避免历史读取后发生编辑而提交旧判断。
+    for(const ref of a.historySourceVersions??[]){
+      const source=db.prepare(`SELECT r.body FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key
+        WHERE r.source_key=? AND s.current_version=? AND COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version)=s.current_version
+        AND json_extract(r.body,'$.status')!='superseded' AND json_extract(r.body,'$.conversationId')=? LIMIT 1`).get(ref.sourceKey,ref.sourceVersion,a.conversationId)
+      if(!source)fail('GROUP_COORDINATOR_SOURCE_STALE')
+    }
     for(const v of a.taskFactVersions??[])if(taskFactVersion(db,v.taskId).hash!==v.hash)fail('MESSAGE_TASK_FACTS_STALE')
     for(const v of a.topicVersions??[]){const t=queryMessageTopics(db,{kind:'message.topic',topicId:v.topicId});if(!t||t.conversationId!==a.conversationId||t.inputRevision!==v.inputRevision||t.contextRevision!==v.contextRevision)fail('MESSAGE_TOPIC_STALE')}
     const existingTopics=new Set(db.prepare('SELECT topic_id FROM message_topics').all().map(row=>row.topic_id))
@@ -696,13 +705,26 @@ function reduceCoordinator(db,kind,a,ctx) {
       if(!source||!r||r.correction)fail('MESSAGE_STALE')
       current(db,r)
       if(!Array.isArray(decision.units))fail('MESSAGE_INVALID_UNITS')
+      const continuation=r.coordinatorPendingUnitIds??[]
+      if(json(source.continuationUnitIds??[])!==json(continuation)||json(decision.continuationUnitIds??[])!==json(continuation))fail('MESSAGE_STALE')
+      if(continuation.length){
+        if(decision.units.length!==continuation.length||new Set(decision.units.map(u=>u.unitId)).size!==continuation.length)fail('MESSAGE_INVALID_UNITS')
+        for(const value of decision.units){
+          const old=get(db,'unit',value.unitId)
+          if(!continuation.includes(value.unitId)||old.runId!==r.runId||old.status!=='pending'||json(old.spans)!==json(value.spans)
+            ||rows(db,r.runId,'command').some(c=>c.unitId===old.id&&c.status!=='superseded')
+            ||!rows(db,r.runId,'request').some(q=>q.unitId===old.id&&q.nodeId==='coordinator'&&q.revision===r.revision&&q.status==='resolved'))fail('MESSAGE_INVALID_UNITS')
+        }
+      }
       for(const type of ['unit','node','request'])for(const item of rows(db,r.runId,type)) {
+        if(continuation.length&&(type==='unit'||!continuation.includes(item.unitId)))continue
         if(type==='request'&&item.status!=='pending')continue
         if(type==='unit')unbindMessageUnit(db,item.id,now)
         item.priorStatus=item.status;item.status='superseded';item.reason='conversation_coordinator';put(db,r.runId,type,item)
       }
       r.status='pending';r.reason=null;r.attentionScope=null;r.routingStatus='routing_complete';r.intentStatus='processed'
       r.coordinatorConsumed={turnId:c.turnId,leaseEpoch:c.leaseEpoch,at:now}
+      delete r.coordinatorPendingUnitIds
       for(const barrier of rows(db,r.runId,'barrier').filter(item=>item.status==='pending'&&item.reason==='source_edit'
         &&item.ownerRunId===r.runId&&item.targetSourceKey===r.sourceKey&&!item.targetTaskId)){
         barrier.status='resolved';barrier.resolution='coordinator_source_edit_consumed';barrier.resolvedAt=now
@@ -710,7 +732,8 @@ function reduceCoordinator(db,kind,a,ctx) {
       }
       for(const value of decision.units) {
         const id=str(value.unitId)
-        if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('unit:'+id))fail('MESSAGE_INVALID_UNITS')
+        if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('unit:'+id)&&!continuation.includes(id))fail('MESSAGE_INVALID_UNITS')
+        if(continuation.includes(id)&&get(db,'unit',id).topicId!==value.topic?.topicId)unbindMessageUnit(db,id,now)
         if(!Array.isArray(value.commands))fail('MESSAGE_INVALID_DISPOSITION')
         const u={...value,id,runId:r.runId,revision:r.revision,status:value.commands.length?'accepted':value.request?'pending':value.outcome??'ignored'}
         if(!['accepted','pending','ignored','rejected','applied'].includes(u.status))fail('MESSAGE_INVALID_DISPOSITION')
@@ -731,7 +754,7 @@ function reduceCoordinator(db,kind,a,ctx) {
         if(value.request){const request={...value.request,id:str(value.request.requestId),runId:r.runId,unitId:id,nodeId:'coordinator',revision:r.revision,status:'pending',createdAt:now};if(db.prepare('SELECT 1 FROM message_items WHERE item_id=?').get('request:'+request.id))fail('MESSAGE_REQUEST_EXISTS');put(db,r.runId,'request',request);if(request.kind==='needs_authorization')authorizationRequests.push(request)}
       }
       const impact=rows(db,r.runId,'impact')[0]
-      if(impact){impact.coordinatorManaged=true;impact.boundTopicIds=[...new Set(decision.units.map(u=>u.topic?.topicId).filter(Boolean))];impact.status='decided';put(db,r.runId,'impact',impact)}
+      if(impact){impact.coordinatorManaged=true;impact.boundTopicIds=[...new Set(rows(db,r.runId,'unit').filter(u=>u.status!=='superseded').map(u=>u.topicId).filter(Boolean))];impact.status='decided';put(db,r.runId,'impact',impact)}
       settle(db,r)
       if(!decision.units.length){r.status='settled';r.reason=decision.reason??'coordinator_no_action';if(!settleNoActionBarriers(db,r,now,true)){r.status='pending';save(db,r)}}
       c.consumedSequence=Math.max(c.consumedSequence,r.sequenceId);accepted.push(r)
@@ -1789,7 +1812,17 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     if(q.kind==='needs_authorization'&&(!q.permittedActors?.length||!q.permittedActors.includes(a.actorId)))fail('MESSAGE_ACTOR_FORBIDDEN')
     if(q.permittedActors?.length&&!q.permittedActors.includes(a.actorId)
       &&!(q.kind==='needs_clarification'&&a.ownerAnswer===true))fail('MESSAGE_ACTOR_FORBIDDEN')
-    if(q.status!=='pending')return {result:{request:q,run:r}}
+    if(q.status!=='pending'){
+      // 旧版补答已落账但未登记单元续办时，正式重试只修复调度身份，保留首次答案。
+      if(q.status==='resolved'&&q.nodeId==='coordinator'&&r.status==='pending'&&r.intentStatus==='intent_rejudging'
+        &&!r.coordinatorConsumed&&!(r.coordinatorPendingUnitIds??[]).includes(q.unitId)
+        &&rows(db,r.runId,'unit').some(u=>u.id===q.unitId&&u.status==='pending')
+        &&!rows(db,r.runId,'command').some(c=>c.unitId===q.unitId)
+        &&!rows(db,r.runId,'request').some(other=>other.unitId===q.unitId&&other.status==='pending')){
+        r.coordinatorPendingUnitIds=[...(r.coordinatorPendingUnitIds??[]),q.unitId];save(db,r)
+      }
+      return {result:{request:q,run:r}}
+    }
     if(q.kind==='needs_authorization'){
       if(q.authorization?.topicId){
         const topic=queryMessageTopics(db,{kind:'message.topic',topicId:q.authorization.topicId})
@@ -1798,7 +1831,11 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       q.resolvedByActorId=a.actorId
     }
     q.status='resolved';q.answer=a.answer;q.eventId=str(a.eventId);q.resolvedAt=now;put(db,r.runId,'request',q)
-    if(q.nodeId==='coordinator')delete r.coordinatorConsumed
+    if(q.nodeId==='coordinator'){
+      delete r.coordinatorConsumed
+      const unit=rows(db,r.runId,'unit').find(u=>u.id===q.unitId&&u.status==='pending')
+      if(unit)r.coordinatorPendingUnitIds=[...new Set([...(r.coordinatorPendingUnitIds??[]),unit.id])]
+    }
     for(const n of rows(db,r.runId,'node')) if(n.unitId===q.unitId&&n.nodeId===q.nodeId&&n.revision===r.revision) {n.status='superseded';put(db,r.runId,'node',n)}
     r.status='pending';if(['S','R'].includes(q.nodeId))r.routingStatus='routing_pending';else r.intentStatus='intent_rejudging';save(db,r);return {result:{request:q,run:r}}
   }
@@ -1918,6 +1955,17 @@ export function queryMessages(db,a) {
   }
   if(a.kind==='message.group') {const row=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(str(a.conversationId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.task-candidates') {const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER;if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT');return db.prepare("SELECT i.rowid AS seq,r.body AS run,i.body AS command FROM message_items i JOIN message_runs r ON r.run_id=i.run_id WHERE i.kind='command' AND json_extract(i.body,'$.kind') IN ('create','research','answer','reopen') AND json_type(i.body,'$.args.taskId')='text' AND length(json_extract(i.body,'$.args.taskId'))>0 AND json_extract(r.body,'$.conversationId')=? AND NOT EXISTS (SELECT 1 FROM execution_events e WHERE e.kind='task.delete' AND json_extract(e.payload,'$.taskId')=json_extract(i.body,'$.args.taskId')) AND i.rowid<? ORDER BY i.rowid DESC LIMIT ?").all(str(a.conversationId),before,limit).map(x=>({run:JSON.parse(x.run),command:JSON.parse(x.command),sequenceId:x.seq}))}
+  if(a.kind==='message.history') {
+    const source=run(db,a.runId);current(db,source)
+    const watermark=db.prepare('SELECT rowid AS seq FROM message_runs WHERE run_id=?').get(source.runId).seq
+    const limit=a.limit??200,before=a.beforeSequenceId??watermark
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1||before>watermark)fail('MESSAGE_INVALID_LIMIT')
+    const page=db.prepare(`SELECT r.rowid AS seq,r.body,s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version) AS is_current
+      FROM message_runs r JOIN message_sources s ON s.source_key=r.source_key
+      WHERE json_extract(r.body,'$.conversationId')=? AND r.rowid<? AND json_extract(r.body,'$.status')!='alias'
+      ORDER BY r.rowid DESC LIMIT ?`).all(source.conversationId,before,limit)
+    return {watermark,items:page.map(row=>({...JSON.parse(row.body),sequenceId:row.seq,isCurrent:row.is_current===1})),nextCursor:page.length===limit?page.at(-1).seq:null}
+  }
   if(a.kind==='message.list'||a.kind==='message.mailbox') {
     const limit=a.limit??30,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER
     if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_INVALID_LIMIT')

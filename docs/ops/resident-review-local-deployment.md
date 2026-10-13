@@ -89,7 +89,9 @@ S 保留完整当前消息和已提供背景，R 逐页累积候选及排除证�
 
 入口本地回归：`node --test test/workflow-entry.test.js test/http.test.js test/workflow-service.test.js`；原生 Runtime 防双入口测试：`node --test --test-name-pattern='已切换群' test/runtime.test.js`。测试不向真实渠道发送消息。
 
-普通澄清通过 `POST /workflows/<runId>/requests/<requestId>/answer` 接收 `{eventId,answer}`，禁止传入 actorId。此接口沿用本机可信操作者边界，只接受 loopback 和许可的同源 Origin；不是远程登录鉴权。Host 必须显式配置 `workflow.webActorId` 映射本机操作者，缺失则禁写，不默认冒认 owner。请求仍检查 permittedActors 和原请求身份。钉钉答复必须引用已独立回读的澄清通知消息 ID，并匹配同群唯一请求；Web/IM 消费同一首终态，迟到冲突只读回原答复，不创建新任务。本接口不提供生产操作批准，生产 approval 意图在未实现相应审批流程时保持 unsupported。
+普通澄清通过 `POST /workflows/<runId>/requests/<requestId>/answer` 接收 `{eventId,answer}`，禁止传入 actorId。此接口沿用本机可信操作者边界，只接受 loopback 和许可的同源 Origin；不是远程登录鉴权。Host 必须显式配置 `workflow.webActorId` 映射本机操作者，缺失则禁写，不默认冒认 owner。请求仍检查 permittedActors 和原请求身份。钉钉新消息先持久化，再统一判断补答、新任务和闲聊；引用通知按已独立回读的消息 ID 匹配同群请求，无引用补答须由协调判断与 Host 权限核验共同确认。Web/IM 对同一请求保留首次终态；引用已解决通知不会再次覆盖原答复，本条明确的新任务仍独立承接。本接口不提供生产操作批准，生产 approval 意图在未实现相应审批流程时保持 unsupported。
+
+局部澄清补答只续办原待答单元，其他已接纳命令保持。旧版已答但停在 `pending/intent_rejudging` 的混合消息，可由有权操作者通过上述 answer 接口以**新的 `eventId`** 正式重试；沿用原 `runId/requestId` 和首次答案。Host 仅在原单元仍 pending、完全没有命令、没有后续待答请求且来源未再次消费时补登记续办，其他状态拒绝扩大恢复范围。回读首次答案不变、仅该原单元继续且其他命令不增加；重复旧 `eventId` 只回放幂等回执，普通恢复扫描不会自动迁移这类旧记录。不得通过整条 reprocess 或直接改库恢复已有业务命令的来源。
 
 历史上先被独立接收、后折叠为澄清答复的消息，由恢复通路核对原请求已解决、澄清通知已送达且答复引用该通知，再把答复来源补挂原话题并结清其归类屏障。回读该答复的 `routingStatus`、`intentStatus`、`message.topic.source` 和原业务 Task 数量；补挂不重新运行意图或任务。任一证明不唯一或缺失时保持原记录并报告恢复失败，不按文本相似度强行关联。
 
