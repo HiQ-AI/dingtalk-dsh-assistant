@@ -1,0 +1,208 @@
+diff --git a/compatibility.json b/compatibility.json
+index 215698e..abd81dd 100644
+--- a/compatibility.json
++++ b/compatibility.json
+@@ -10,7 +10,8 @@
+       "0.1.7-rc.2",
+       "0.2.0-rc.1",
+       "0.2.0-rc.2",
+-      "0.2.1-alpha.1"
++      "0.2.1-alpha.1",
++      "0.2.1-alpha.2"
+     ],
+     "packages": [
+       "@deepseek-ai/dsh-agent",
+diff --git a/package.json b/package.json
+index e714cd7..98f2433 100644
+--- a/package.json
++++ b/package.json
+@@ -112,26 +112,26 @@
+     }
+   },
+   "peerDependencies": {
+-    "@deepseek-ai/cordis": "^4.0.2",
+-    "@deepseek-ai/dsh-agent": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-atomic-write": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-attachment": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-client-ui-chat": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-client-ui-layout": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-client-ui-tool": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-commands": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-compaction": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-fs": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-home-paths": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-host-webserver": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-llm": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-llm-pi-ai": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-session": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-settings": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-tools": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-util-values": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
+-    "@deepseek-ai/dsh-web": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1",
++    "@deepseek-ai/cordis": "^4.0.2 || 4.0.5-alpha.1",
++    "@deepseek-ai/dsh-agent": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-atomic-write": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-attachment": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-client-ui-chat": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-client-ui-layout": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-client-ui-primitives": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-client-ui-tool": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-commands": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-compaction": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-fs": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-home-paths": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-host-webserver": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-llm": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-llm-pi-ai": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-settings": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-tools": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-util-values": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
++    "@deepseek-ai/dsh-web": "0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2",
+     "react": "^18.2.0"
+   },
+   "peerDependenciesMeta": {
+diff --git a/scripts/check-compatibility.mjs b/scripts/check-compatibility.mjs
+index 23bdb94..240ca8a 100644
+--- a/scripts/check-compatibility.mjs
++++ b/scripts/check-compatibility.mjs
+@@ -11,7 +11,7 @@ const PACKAGE_FILE = join(REPO_ROOT, 'package.json')
+ const JSON_SCHEMA_VERSION = 1
+ const REQUIRED_NODE_RANGE = '^22.19.0 || >=24.0.0'
+ const REQUIRED_DSH_VERSION = '0.1.7-rc.1'
+-const REQUIRED_DSH_VERSIONS = [REQUIRED_DSH_VERSION, '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1']
++const REQUIRED_DSH_VERSIONS = [REQUIRED_DSH_VERSION, '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1', '0.2.1-alpha.2']
+ const REQUIRED_DSH_RANGE = REQUIRED_DSH_VERSIONS.join(' || ')
+ const REQUIRED_PI_AI_RANGE = '0.85.1'
+ const PI_AI_PACKAGE = '@earendil-works/pi-ai'
+@@ -106,6 +106,7 @@ async function main() {
+   if (packageJson.engines?.node !== REQUIRED_NODE_RANGE) fail('package.json Node engine mismatch')
+ 
+   const peers = packageJson.peerDependencies ?? {}
++  if (peers['@deepseek-ai/cordis'] !== '^4.0.2 || 4.0.5-alpha.1') fail('Cordis peer must retain stable support and the exact tested prerelease')
+   for (const [name, version] of Object.entries(peers)) {
+     if (name.startsWith('@deepseek-ai/dsh-') && version !== REQUIRED_DSH_RANGE) {
+       fail(`peer dependency ${name} must match ${REQUIRED_DSH_RANGE}`)
+diff --git a/scripts/check-dsh-next-contract.mjs b/scripts/check-dsh-next-contract.mjs
+index 20a6896..d798c6d 100644
+--- a/scripts/check-dsh-next-contract.mjs
++++ b/scripts/check-dsh-next-contract.mjs
+@@ -227,7 +227,7 @@ const candidateDoctor = {
+     status: 'unverified',
+     node: { status: 'compatible' },
+     packages: Object.fromEntries(['@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-llm-pi-ai', '@deepseek-ai/dsh-compaction', '@earendil-works/pi-ai'].map(name => [name, {
+-      supported: name === '@earendil-works/pi-ai' ? '0.85.1' : '0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1',
++      supported: name === '@earendil-works/pi-ai' ? '0.85.1' : '0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2',
+       installed: name === '@earendil-works/pi-ai' ? '0.85.1' : '0.1.7-rc.3',
+       status: 'unverified',
+     }])),
+diff --git a/src/compatibility.ts b/src/compatibility.ts
+index 8bf69cf..dc77448 100644
+--- a/src/compatibility.ts
++++ b/src/compatibility.ts
+@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
+ export const COMPATIBILITY_SCHEMA_VERSION = 1 as const
+ export const SUPPORTED_NODE_RANGE = '^22.19.0 || >=24.0.0'
+ export const SUPPORTED_DSH_PLUGIN_API_VERSION = '0.1.7-rc.1'
+-export const SUPPORTED_DSH_PLUGIN_API_VERSIONS = [SUPPORTED_DSH_PLUGIN_API_VERSION, '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1'] as const
++export const SUPPORTED_DSH_PLUGIN_API_VERSIONS = [SUPPORTED_DSH_PLUGIN_API_VERSION, '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1', '0.2.1-alpha.2'] as const
+ export const SUPPORTED_DSH_PLUGIN_API_RANGE = SUPPORTED_DSH_PLUGIN_API_VERSIONS.join(' || ')
+ export const SUPPORTED_PI_AI_RANGE = '0.85.1'
+ export const PI_AI_PACKAGE = '@earendil-works/pi-ai'
+diff --git a/tests/compatibility.spec.ts b/tests/compatibility.spec.ts
+index 46c6fd6..fc43455 100644
+--- a/tests/compatibility.spec.ts
++++ b/tests/compatibility.spec.ts
+@@ -20,6 +20,11 @@ const compatiblePackages = {
+ } as const
+ 
+ describe('compatibility contract', () => {
++  it('explicitly permits the tested Cordis prerelease without widening other prereleases', async () => {
++    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
++    expect(pkg.peerDependencies['@deepseek-ai/cordis']).toBe('^4.0.2 || 4.0.5-alpha.1')
++  })
++
+   it('evaluates the declared Node, DSH API, and pi-ai versions as compatible', () => {
+     const report = evaluateCompatibility({ nodeVersion: 'v22.19.0', packageVersions: compatiblePackages })
+     expect(report).toEqual({
+@@ -71,7 +76,7 @@ describe('compatibility contract', () => {
+     ]) expect(evaluateCompatibility({ nodeVersion: 'v24.15.0', packageVersions: packages }).status).toBe('unverified')
+   })
+ 
+-  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1'])('accepts exact consistent %s and pi-ai 0.85.1', version => {
++  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.1-alpha.1', '0.2.1-alpha.2'])('accepts exact consistent %s and pi-ai 0.85.1', version => {
+     const packages = { ...compatiblePackages, '@deepseek-ai/dsh-llm': version,
+       '@deepseek-ai/dsh-llm-pi-ai': version, '@deepseek-ai/dsh-compaction': version }
+     expect(evaluateCompatibility({ nodeVersion: 'v24.15.0', packageVersions: packages }).status).toBe('compatible')
+@@ -86,8 +91,14 @@ describe('compatibility contract', () => {
+     },
+   )
+ 
+-  it('does not infer rc.3, alpha.2, or a new pi-ai pair from rc.2 support', () => {
+-    for (const version of ['0.1.7-rc.3', '0.1.7-alpha.2', '0.2.0-rc.3', '0.2.0', '0.2.1-alpha.2', '0.2.1', '0.2.2-alpha.1']) {
++  it('rejects mixed alpha.1/alpha.2 host packages despite both versions being supported', () => {
++    const packages = { ...compatiblePackages, '@deepseek-ai/dsh-llm': '0.2.1-alpha.2',
++      '@deepseek-ai/dsh-llm-pi-ai': '0.2.1-alpha.2', '@deepseek-ai/dsh-compaction': '0.2.1-alpha.1' }
++    expect(evaluateCompatibility({ nodeVersion: 'v24.15.0', packageVersions: packages }).status).toBe('unverified')
++  })
++
++  it('does not infer rc.3, alpha.3, or a new pi-ai pair from rc.2 support', () => {
++    for (const version of ['0.1.7-rc.3', '0.1.7-alpha.2', '0.2.0-rc.3', '0.2.0', '0.2.1-alpha.3', '0.2.1', '0.2.2-alpha.1']) {
+       const packages = { ...compatiblePackages, '@deepseek-ai/dsh-llm': version,
+         '@deepseek-ai/dsh-llm-pi-ai': version, '@deepseek-ai/dsh-compaction': version }
+       expect(evaluateCompatibility({ nodeVersion: 'v24.15.0', packageVersions: packages }).status).toBe('unverified')
+diff --git a/scripts/check-dsh-alpha2-api.mjs b/scripts/check-dsh-alpha2-api.mjs
+new file mode 100644
+index 0000000..4e75e93
+--- /dev/null
++++ b/scripts/check-dsh-alpha2-api.mjs
+@@ -0,0 +1,48 @@
++import assert from 'node:assert/strict'
++import { mkdtemp, mkdir, writeFile, symlink, readFile, rm } from 'node:fs/promises'
++import { createRequire } from 'node:module'
++import { dirname, join, resolve } from 'node:path'
++import { tmpdir } from 'node:os'
++import { fileURLToPath } from 'node:url'
++import { createInstalledHostContext } from './installed-host-context.mjs'
++import { validateRuntimeProjection } from './check-installed-runtime.mjs'
++const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
++if (process.argv.length !== 3) throw new Error('usage: check-dsh-alpha2-api <installed-dsh-package.json>')
++const host = resolve(process.argv[2])
++assert.equal(JSON.parse(await readFile(host, 'utf8')).version, '0.2.1-alpha.2')
++const fixture = await mkdtemp(join(tmpdir(), 'codex-existing-alpha2-api-'))
++const profile = join(fixture, 'profiles', 'test')
++await mkdir(join(profile, 'node_modules'), { recursive: true })
++await writeFile(join(profile, 'package.json'), JSON.stringify({private:true,dependencies:{'dsh-codex-connect':'0.2.0-alpha.3'}}))
++await symlink(root, join(profile, 'node_modules/dsh-codex-connect'), process.platform === 'win32' ? 'junction' : 'dir')
++process.env.DSH_HOME = fixture
++process.env.DSH_TELEMETRY_MODE = 'DISABLED'
++let networkRequests = 0
++globalThis.fetch = async () => { networkRequests++; throw new Error('Network prohibited in synthetic API smoke') }
++const {ctx, importHost, importProfile} = await createInstalledHostContext(join(profile,'package.json'),host)
++try {
++  const requireHost = createRequire(host)
++  const cordisVersion = JSON.parse(await readFile(requireHost.resolve('@deepseek-ai/cordis/package.json'), 'utf8')).version
++  assert.equal(cordisVersion, '4.0.5-alpha.1')
++  for (const name of ['@deepseek-ai/dsh-llm','@deepseek-ai/dsh-llm-pi-ai','@deepseek-ai/dsh-compaction']) {
++    assert.equal(JSON.parse(await readFile(requireHost.resolve(`${name}/package.json`))).version,'0.2.1-alpha.2')
++  }
++  const [{default:Llm}, PiAi, Codex] = await Promise.all([importHost('@deepseek-ai/dsh-llm'),importHost('@deepseek-ai/dsh-llm-pi-ai'),importProfile('dsh-codex-connect')])
++  await ctx.plugin(Llm)
++  await ctx.plugin(PiAi,{})
++  const plugin = await ctx.plugin(Codex,{})
++  const listed = await ctx.llm.listModels('openai-codex')
++  const models = await Promise.all(listed.map(model=>ctx.llm.resolveModelInfo('openai-codex',model.id)))
++  const projection = validateRuntimeProjection(ctx.llm.listProviders(),models)
++  for(const model of models){
++    const call = await ctx.llm.prepareCall({provider:'openai-codex',model:model.id})
++    assert.equal(call.config.model,model.id)
++    assert.equal(call.config.provider,'openai-codex')
++  }
++  await plugin.dispose()
++  assert.equal(ctx.llm.listProviders().some(p=>p.id==='openai-codex'),false)
++  assert.equal(networkRequests,0)
++  console.log(JSON.stringify({dshVersion:'0.2.1-alpha.2',cordisVersion,scope:'existing-host-api-smoke-only',...projection,preparedModelCount:models.length,providerRegistration:true,disposalVerified:true,networkRequests,realCredentials:false,stockCliInstall:false}))
++} finally {
++  try { await ctx.fiber.dispose() } finally { await rm(fixture, { recursive: true, force: true }) }
++}

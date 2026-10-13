@@ -16,6 +16,8 @@
 
 每次模型调用的执行窗口由当前 Host 显式传入并从该次节点实际领取开始，不沿用旧消息 policy 的调用时限，维护和重试排队不消耗执行窗口；真实失败按 lease 计入有界恢复次数，重复扫描不重复扣次数。无业务命令且纯状态通知已独立确认送达时，也可保留通知审计后重处理。旧消息可通过本机受控接口逐条重处理。没有业务命令、全消息澄清通知已独立确认送达且答复已接纳时，恢复会保留原通知并继承答复，不重复询问；发送结果未确认或已有业务命令时仍拒绝重处理。操作及回读要求见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
 
+统一升级 DSH 与现有 Codex、钉钉、Convergent、Bytebase 时，按[联合升级规程](docs/ops/dsh-unified-host-upgrade.md)执行；先验证现场早期日志迁移及完整插件加载，再由原维护部署流程切换。
+
 ## 本地安全重启
 
 Windows 正式启动通过 Node 原生同步模块加载，保持原始模块解析和内容；不使用诊断采样。`scripts/start-web.ps1` 支持显式 `-ProjectRoot`，持久启动文件统一部署到 `DSH_HOME/launchers`。
@@ -625,6 +627,8 @@ Windows 本地验收以 PID 与创建时间共同核对进程归属和停止结�
 常规本地部署统一使用 `pwsh -NoProfile -File scripts/deploy-local.ps1 -ArgumentsFile <部署参数JSON绝对路径>`，一次执行预检、安装、独立回读和恢复派发，终端只输出阶段与汇总，详细日志位于证据目录旁的 `-runner` 目录。先加 `-Check` 可零写预检；已有部署仅加 `-Readback` 或 `-Resume` 接续，不重复安装。 恢复派发后再做一次轻量 health 与控制库维护状态回读，均通过才报告成功；不重复扫描全部任务，也不保证部署结束后的持续可用性。参数及已安装失败后的受控配置恢复见[部署规程](docs/ops/resident-review-local-deployment.md)。
 
 受控本地部署使用持久维护屏障和封存停机许可；新实例完成恢复、备份与认证 Web 回读后才恢复派发。包摘要和 profile 摘要分别核验，详情见 [部署规程](docs/ops/resident-review-local-deployment.md#维护屏障与部署许可)。
+
+宿主统一升级已封存但首次启动因缺少原生 core peer 失败时，使用[受控离线续接入口](docs/acceptance/dsh-unified-upgrade/continuation.md)，先零写 `-Check`。保持原冻结证据及正式 hoisted/autoInstallPeers=false 策略，新提案仅补经真实声明核验的 core 闭包；固定 Node 24 与 pnpm 10.13.1，锁内执行 `pnpm --dir <profile绝对路径> install`。新 CLI 静态导入 app-boot，缺依赖时不能先调用 CLI 再兜底；安装后分别核验实际入口/worker 字节、控制账、启动及 Readback/Resume。
 
 工程 v15 支持“已有实现符合要求，重新验收”：方案明确选择无需修改，Host 核实实际读取、工作区与冻结树后继续完整构建和本地验收，任务步骤会明确显示无需修改的结论。旧工作流不原地改变。
 

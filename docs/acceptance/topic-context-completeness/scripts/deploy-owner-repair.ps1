@@ -9,6 +9,7 @@ param(
   [switch]$MigrateRequiredDependency,
   [string]$RepairStoppedLaunch,
   [string]$RestoreConfigurationProposal,
+  [string]$HostUpgradeProposal,
   [string]$TaskDirectory,
   [string]$TaskMigrationPlan,
   [string]$EnrollmentProposal,
@@ -46,6 +47,7 @@ $domain='D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116'
 $starter='D:/dsh_home/launchers/start-web.ps1'
 $enrollmentTaskName='DSH Web Local'
 function Assert-DeploymentMode {
+ if($HostUpgradeProposal -and ($Bootstrap -or $RepairStoppedLaunch -or $RestoreConfigurationProposal -or $Bundle -or $MergePolicy -or $ChecksProposal -or $RepositoryPatches -or $DirectQueriesProposal -or $ReleaseTargetsProposal -or $EnrollmentProposal -or $TaskMigrationPlan -or $MigrateMessageImpact -or $MigrateExecutionEventsIndex -or $MigrateRequiredDependency)){throw '宿主升级要求独立完整维护部署，不能混入修复或配置模式'}
  if($RestoreConfigurationProposal -and (-not $RepairStoppedLaunch -or $ReleaseTargetsProposal -or $DirectQueriesProposal -or $ObserverPackage -or $MigrateRequiredDependency -or $MigrateMessageImpact -or $MigrateExecutionEventsIndex)){throw '配置失败续接仅允许原launch和精确仓库恢复提案'}
 
  if($MigrateRequiredDependency -and ($Bootstrap -or $RepairStoppedLaunch -or $MigrateMessageImpact -or $MigrateExecutionEventsIndex -or $TaskMigrationPlan)){throw '必要依赖索引迁移要求独立完整维护部署'}
@@ -85,7 +87,15 @@ function Assert-PersistentPackageSources([string]$Root,[string[]]$Paths) {
   }
  }
 }
+$hostUpgradeTool="$workspace/docs/acceptance/dsh-unified-upgrade/scripts/apply-host-upgrade.mjs"
 $deploymentInputs=@($Package)+@(@($Bundle,$MergePolicy,$ChecksProposal,$RepositoryPatches,$RestoreConfigurationProposal,$DirectQueriesProposal,$ReleaseTargetsProposal,$ObserverPackage,$TaskMigrationPlan)|Where-Object {$_})
+if($HostUpgradeProposal){
+ $hostUpgradeInputMode=if($Readback -or $Resume){'--verify'}else{'--check'}
+ $hostUpgradeInputJson=& $node $hostUpgradeTool $hostUpgradeInputMode '--profile' $profile '--proposal' $HostUpgradeProposal
+ if($LASTEXITCODE){throw '宿主升级输入零写校验失败'}
+ $hostUpgradeInputs=($hostUpgradeInputJson -join "`n")|ConvertFrom-Json
+ $deploymentInputs+=@($HostUpgradeProposal,$hostUpgradeTool,$PSCommandPath)+@($hostUpgradeInputs.localPackages|ForEach-Object path)
+}
 if($ReleaseTargetsProposal){$deploymentInputs+="$workspace/scripts/configure-release-targets.mjs"}
 if($RestoreConfigurationProposal){$deploymentInputs+=@("$workspace/scripts/configure-project-local-acceptance.mjs","$workspace/scripts/repair-release-target-policy.mjs")}
 if($EnrollmentProposal){$deploymentInputs+= $EnrollmentProposal}
@@ -383,6 +393,7 @@ function Change-MaintenancePhase($state,[string]$operation,[string]$maintenanceI
  return Invoke-RestMethod -Uri "http://127.0.0.1:18998/runtime/maintenance/$operation" -Method Post -ContentType 'application/json' -Headers @{Origin='http://127.0.0.1:3080'} -Body $body -NoProxy -TimeoutSec 20
 }
 function Assert-LaunchInputs($launchRecord) {
+ if([string]$HostUpgradeProposal-ne [string]$launchRecord.hostUpgradeProposal){throw '接续宿主升级提案身份漂移'}
  if([string]$TaskMigrationPlan-ne [string]$launchRecord.taskMigrationPlan){throw '接续任务迁移计划漂移'}
  if($ExpectedPackageSha256-ne $launchRecord.packageSha256 -or $ExpectedProfileSha256-ne $launchRecord.sourceProfileSha256){throw '接续参数与原部署输入不一致'}
  if((Get-FileHash -LiteralPath $Package).Hash-ne $launchRecord.packageSha256){throw '接续部署包摘要不匹配'}
@@ -458,6 +469,12 @@ function Assert-ConfigurationRestoreReadback($record) {
 }
 
 function Read-Deployment($launchRecord) {
+ if($launchRecord.hostUpgradeProposal){
+  foreach($path in $launchRecord.inputPaths){if((Get-FileHash -LiteralPath $path).Hash-ne $launchRecord.inputHashes.$path){throw '宿主升级冻结输入回读漂移'}}
+  [void](Run-Node @($hostUpgradeTool,'--verify','--profile',$profile,'--proposal',$launchRecord.hostUpgradeProposal))
+  $proof=Get-Content -LiteralPath "$EvidenceDirectory/host-upgrade-applied.json" -Raw|ConvertFrom-Json
+  if((Get-FileHash -LiteralPath "$EvidenceDirectory/host-upgrade-applied.json").Hash-ne $launchRecord.hostUpgradeProofSha256 -or (Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()-ne $proof.patchSha256 -or (Get-FileHash -LiteralPath "$profile/package.json").Hash.ToLowerInvariant()-ne $proof.packageJsonSha256){throw '宿主升级双文件独立回读漂移'}
+ }
  [void](Assert-ConfigurationRestoreReadback $launchRecord)
  if($launchRecord.backupScope-eq 'required-dependency-control-only'){
   if(-not $launchRecord.requiredDependencyMigrationSha256 -or (Get-FileHash -LiteralPath "$($launchRecord.backup)/manifest.json").Hash-ne $launchRecord.backupManifestSha256){throw '控制库迁移备份清单漂移'}
@@ -759,6 +776,12 @@ if($freeBytes-lt $requiredBytes){throw "D盘空间不足：可用 $freeBytes，�
 $inputHashes=@{}
 foreach($path in $deploymentInputs){$inputHashes[$path]=(Get-FileHash -LiteralPath $path).Hash}
 $packageProof=Run-Node @($checker,'package',$Package,$source)
+$hostUpgradeCheck=if($HostUpgradeProposal){Run-Node @($hostUpgradeTool,'--check','--profile',$profile,'--proposal',$HostUpgradeProposal)|ConvertFrom-Json}else{$null}
+if($HostUpgradeCheck -and $HostUpgradeCheck.beforePatchSha256-ne $ExpectedProfileSha256.ToLowerInvariant()){throw '宿主升级patch与部署CAS不一致'}
+if($HostUpgradeProposal){
+ if($hostUpgradeCheck.packageJsonSha256-ne $hostUpgradeInputs.packageJsonSha256 -or $hostUpgradeCheck.patchSha256-ne $hostUpgradeInputs.patchSha256){throw '宿主升级提案在输入冻结前漂移'}
+ foreach($local in $hostUpgradeInputs.localPackages){if($inputHashes[$local.path].ToLowerInvariant()-ne $local.sha256){throw '宿主升级本地包在输入冻结前漂移'}}
+}
 $configArgs=if($ReleaseTargetsProposal){@("$workspace/scripts/configure-release-targets.mjs",'--profile',"$profile/cordis.patch.yml",'--proposal',$ReleaseTargetsProposal,'--expected-sha256',$ExpectedProfileSha256)}elseif($DirectQueriesProposal){@("$workspace/scripts/configure-agent-query-resources.mjs",'--profile',"$profile/cordis.patch.yml",'--proposal',$DirectQueriesProposal,'--expected-sha256',$ExpectedProfileSha256)}elseif($Bundle){@("$workspace/scripts/configure-project-local-acceptance.mjs",'--profile',"$profile/cordis.patch.yml",'--bundle',$Bundle,'--merge-policy',$MergePolicy,'--checks-proposal',$ChecksProposal)+@(if($RepositoryPatches){'--repository-patches';$RepositoryPatches})+@('--expected-sha256',$ExpectedProfileSha256)}
 if($ObserverPackage){$observerProof=Run-Node @($checker,'package',$ObserverPackage,$observerSource)}
 if($configArgs){$configProof=Run-Node ($configArgs+@('--check'))}
@@ -903,10 +926,22 @@ $migrationBackupSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath $migrat
 $deploymentControlPath=if($historicalBackupRequired){"$EvidenceDirectory/backup.json"}else{"$EvidenceDirectory/deployment-control.json"}
 @{backupCreated=$historicalBackupRequired;backupScope=$backupScope;backupManifestSha256=$backupManifestSha256;backup=$backup;oldPid=$old.ProcessId;sourceProfileSha256=$ExpectedProfileSha256;packageSha256=(Get-FileHash -LiteralPath $Package).Hash;inputHashes=$inputHashes;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256}|ConvertTo-Json -Depth 10|Set-Content $deploymentControlPath
 Assert-LocalPackageSources $profile $Package $observerSourceReplacement
+if($HostUpgradeProposal){
+ $hostUpgradeApplied=Run-Node @($hostUpgradeTool,'--apply','--profile',$profile,'--proposal',$HostUpgradeProposal)|ConvertFrom-Json
+ if($hostUpgradeApplied.packageJsonSha256-ne $hostUpgradeCheck.packageJsonSha256 -or $hostUpgradeApplied.patchSha256-ne $hostUpgradeCheck.patchSha256){throw '宿主升级apply与零写预检不一致'}
+ $hostUpgradeApplied|ConvertTo-Json|Set-Content "$EvidenceDirectory/host-upgrade-applied.json"
+}
 $profileShaBeforePackage=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()
 $installPackages=@("@zzusp/dingtalk-dsh-assistant@file:$Package")+@(if($ObserverPackage){"@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"})
 & $node "$profile/node_modules/@deepseek-ai/dsh/lib/bin.js" plugin --profile web add @installPackages *> "$EvidenceDirectory/install.log"
 if($LASTEXITCODE){throw '安装失败，保持停机并保留本次控制证据'}
+if($HostUpgradeProposal){
+ $hostUpgradeVerified=Run-Node @($hostUpgradeTool,'--verify','--profile',$profile,'--proposal',$HostUpgradeProposal)|ConvertFrom-Json
+ if($hostUpgradeVerified.patchSha256-ne $hostUpgradeCheck.patchSha256){throw '宿主升级安装后patch与提案不一致，保持停机'}
+ $hostUpgradeApplied.packageJsonSha256=$hostUpgradeVerified.packageJsonSha256
+ $hostUpgradeApplied.migrationPackages=$hostUpgradeVerified.migrationPackages
+ $hostUpgradeApplied|ConvertTo-Json|Set-Content "$EvidenceDirectory/host-upgrade-applied.json"
+}
 if($configArgs){Run-Node ($configArgs+@('--apply'))|Set-Content "$EvidenceDirectory/config-applied.json"}
 else{if((Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash.ToLowerInvariant()-ne $profileShaBeforePackage){throw '无配置提案部署的profile摘要已变化'}}
 Run-Node @($checker,'package',$Package,$source,$installed)|Set-Content "$EvidenceDirectory/installed.json"
@@ -937,7 +972,7 @@ $env:PATH=(Split-Path -Parent $node)+';'+$env:PATH
 if($MigrateExecutionEventsIndex){[void](Run-Node @($checker,'execution-events-index-verify',"$EvidenceDirectory/execution-events-index-migration.json",'offline'))}
 if($MigrateRequiredDependency){[void](Run-Node @($checker,'execution-dependency-index-verify',"$EvidenceDirectory/execution-dependency-index-migration.json",'offline'))}
 $launch=Start-DeployedWeb @{enrollmentAutostartRestore=[bool]$enrollmentAutostartRestore}
-$launchRecord=@{backupCreated=$historicalBackupRequired;backupScope=$backupScope;backupManifestSha256=$backupManifestSha256;deploymentControlPath=$deploymentControlPath;deploymentControlSha256=(Get-FileHash -LiteralPath $deploymentControlPath).Hash;executionEventsIndexMigrationSha256=$executionEventsIndexMigrationSha256;requiredDependencyMigrationSha256=$requiredDependencyMigrationSha256;messageImpactMigrationSha256=$messageImpactMigrationSha256;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256;taskMigrationPlan=$TaskMigrationPlan;taskMigrationJournalSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$EvidenceDirectory/task-file-migration.json").Hash}else{''};observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;releaseTargetsProposal=$ReleaseTargetsProposal;directQueriesProposal=$DirectQueriesProposal;repositoryPatches=$RepositoryPatches;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;launchMethod=$launch.Method;launchTaskName=$launch.TaskName;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
+$launchRecord=@{hostUpgradeProposal=$HostUpgradeProposal;hostUpgradeProofSha256=if($HostUpgradeProposal){(Get-FileHash -LiteralPath "$EvidenceDirectory/host-upgrade-applied.json").Hash}else{''};backupCreated=$historicalBackupRequired;backupScope=$backupScope;backupManifestSha256=$backupManifestSha256;deploymentControlPath=$deploymentControlPath;deploymentControlSha256=(Get-FileHash -LiteralPath $deploymentControlPath).Hash;executionEventsIndexMigrationSha256=$executionEventsIndexMigrationSha256;requiredDependencyMigrationSha256=$requiredDependencyMigrationSha256;messageImpactMigrationSha256=$messageImpactMigrationSha256;taskMigrationBackupManifest=$migrationBackupManifest;taskMigrationBackupSha256=$migrationBackupSha256;taskMigrationPlan=$TaskMigrationPlan;taskMigrationJournalSha256=if($TaskMigrationPlan){(Get-FileHash -LiteralPath "$EvidenceDirectory/task-file-migration.json").Hash}else{''};observerPackage=$ObserverPackage;observerPackageSha256=$ExpectedObserverPackageSha256;releaseTargetsProposal=$ReleaseTargetsProposal;directQueriesProposal=$DirectQueriesProposal;repositoryPatches=$RepositoryPatches;mode=if($Bootstrap){'bootstrap'}else{'maintenance'};launcherPid=$launch.Id;launchMethod=$launch.Method;launchTaskName=$launch.TaskName;startedAt=$launch.StartTime.ToUniversalTime().ToString('o');packageSha256=(Get-FileHash -LiteralPath $Package).Hash;sourceProfileSha256=$ExpectedProfileSha256;inputPaths=$deploymentInputs;inputHashes=$inputHashes;profileSha256=(Get-FileHash -LiteralPath "$profile/cordis.patch.yml").Hash;backup=$backup;maintenanceId=$maintenanceId;enrollmentAutostartRestore=$enrollmentAutostartRestore}
 $launchRecord|ConvertTo-Json|Set-Content -LiteralPath "$EvidenceDirectory/launch.json" -Encoding utf8
 $result=Read-Deployment $launchRecord
 if($result.ready -and -not $HoldMaintenance){$result=Resume-Deployment $result $launchRecord}

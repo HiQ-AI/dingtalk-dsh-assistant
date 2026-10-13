@@ -73,7 +73,7 @@ test('设置页异步展示版本状态且版本检查不阻塞核心配置加�
   assert.doesNotMatch(source, /dingtalkPluginUpdate/u)
   assert.doesNotMatch(source, /sidebar\.footer\.action/u)
   assert.doesNotMatch(source, /IconDownloadOutline16/u)
-  assert.match(source, /IconRefreshOutline16/u)
+  assert.match(source, /IconRefreshOutlineRegular/u)
   assert.match(source, /检查更新/u)
   assert.doesNotMatch(source, />↑</u)
   assert.match(source, /查看 CHANGELOG/u)

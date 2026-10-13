@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.5-alpha.1",
+    "@deepseek-ai/dsh-session-format-catalog": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format-v1-to-v2": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format-v2-to-v3": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.1-alpha.2"
+  }
+}

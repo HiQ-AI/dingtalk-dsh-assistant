@@ -137,7 +137,7 @@ export function DingTalkDshAssistantCard() {
     React.createElement('section', { style: panel },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
         React.createElement('strong', null, '版本与更新'),
-        React.createElement('button', { type: 'button', style: { ...button, display: 'inline-flex', alignItems: 'center', gap: 6 }, disabled: checkingVersion, onClick: checkVersion }, checkingVersion ? '检查中…' : '检查更新', React.createElement(IconRefreshOutline16, { size: 16 }))),
+        React.createElement('button', { type: 'button', style: { ...button, display: 'inline-flex', alignItems: 'center', gap: 6 }, disabled: checkingVersion, onClick: checkVersion }, checkingVersion ? '检查中…' : '检查更新', React.createElement(IconRefreshOutlineRegular, { size: 16 }))),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '当前版本'), React.createElement('span', null, overview?.version?.currentVersion ?? '读取中')),
       overview?.version?.error
         ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, `新版本检查失败：${overview.version.error}`)

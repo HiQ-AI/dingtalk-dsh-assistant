@@ -15,3 +15,11 @@ docs/tmp/execution-runtime-native/
 docs/tmp/execution-init-smoke/
 docs/acceptance/task-group-file-delivery/round-*/
 docs/tmp/task-group-file-delivery/
+# 统一升级的私有配置及历史会话证据，不随源码交付。
+/docs/tmp/unified-production-20261013/
+/docs/tmp/unified-production-recovery-20261013/
+/docs/tmp/unified-production-adoption-20261013/
+/docs/tmp/formal-config-current-*.patch.yml
+/docs/tmp/formal-runtime-module-readback-private.json
+/docs/tmp/history*/
+/docs/tmp/final-live-history-copy/
