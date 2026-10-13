@@ -19,3 +19,9 @@
 ## 验证边界
 
 浏览器运行完整Observer源码与真实React，DSH外壳/primitive、会话导航和API为隔离替身；无真实任务写入。v25测试使用临时本地双仓、真实检查/本地验收流程、受控HTTP及模拟PR回执。测试、包内字节、部署及钉钉业务链路分别计证；正式实例未部署，真实宿主导航和业务E2E不在本轮证明范围。
+
+## PR交付回读
+
+产品提交 `92a3a0bc1d933524386615c50f716854011ff426`；PR [#162](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/162)，标题“fix(observer): 修复任务会话与流程步骤阅读关联”，base main、head worktree-task-detail-associations，独立gh回读OPEN/MERGEABLE，正文与已检查的body-file逐字一致、head与本地提交一致。推送前确认当前分支无旧PR；旧PR #159保持已合并，不再追加。
+
+PR已附加当前任务；随后仅补本段和goal交付记录，不改变产品或测试。原始回读保留在 `docs/tmp/task-detail-redesign/pr-associations-readback.json`。正式实例未部署。

@@ -1,8 +1,8 @@
 # 任务详情改版
 
-- 状态：进行中
+- 状态：已完成
 - Goal ID：task-detail-redesign
-- 最近维护：2026-10-13T11:20:42+08:00
+- 最近维护：2026-10-13T11:23:22+08:00
 - 权威目标：goal.md
 
 ## 总目标
@@ -25,13 +25,13 @@
 | SG2 | 首轮PR交付 | 分支及PR独立回读 | PASS | PR #159；本轮gh回读已MERGED，origin/main 1cd06d2 |
 | SG3 | 会话与步骤身份修复 | 四项审查缺陷及关联边界回归通过 | PASS | 后端10/10、Observer38/38、真实checkpoint1/1；round-4至round-6 |
 | SG4 | 修复浏览器与工程验证 | 新轮matrix全绿，真实交互/定向测试/双包回读 | PASS | round-9浏览器24/24、matrix31项、双包逐字节回读；历史失败保留 |
-| SG5 | 修复PR交付 | 新分支提交推送、PR正文与head独立回读 | IN_PROGRESS | worktree-task-detail-associations；正在提交并建立新PR |
+| SG5 | 修复PR交付 | 新分支提交推送、PR正文与head独立回读 | PASS | PR #162 OPEN/MERGEABLE；正文与产品提交92a3a0b独立回读一致 |
 
 ## 当前检查点
 
 - 当前子目标：SG5
-- 唯一下一步：提交已验证修复、创建新PR并独立回读正文与head。
-- 未闭环项：新PR交付。
+- 唯一下一步：无；本轮源码修复与PR交付完成。
+- 未闭环项：无；正式实例部署不在本轮范围。
 
 ## 进展
 
@@ -50,5 +50,6 @@
 ## 重要信息
 
 - 工作树：D:/project/dsh-task-detail-redesign-20261013；分支：worktree-task-detail-associations；base：1cd06d2。
-- 首轮交付：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/159（已MERGED）。本轮正式实例未部署。
+- 首轮交付：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/159（已MERGED）。
+- 本轮交付：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/162（独立回读OPEN、MERGEABLE，main ← worktree-task-detail-associations；正文与产品提交92a3a0b一致）。正式实例未部署。
 - 分工：后端投影及checkpoint、Service场景测试、浏览器脚本由三个子代理分别负责；主代理负责前端、文档、整体验证与PR。
