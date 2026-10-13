@@ -28,6 +28,8 @@ import { createExecutionController } from '../packages/dingtalk-dsh-assistant/ex
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
+const { createScope, bindScopeParent, scopeOf } = requireLoop('@deepseek-ai/dsh-scope')
+const { z } = requireLoop('zod')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
 test('Owner原生工具自主执行保留真实失败纠错与Host证据', async t => {
@@ -36,11 +38,23 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
     const calls = [{ name: 'pwsh', args: { valid: false, ...(mode === 'background' ? { run_in_background: true } : {}) } },
       { name: 'pwsh', args: { valid: true } }]
     if (mode === 'correct') calls.push({ name: 'task_owner_read_artifact', args: { artifactRef: `sha256-${'4'.repeat(64)}.json` } })
-    const h = await host(root, null, null, decision, undefined, 1, calls)
-    t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
+    const h = await host(root, null, null, decision, undefined, 1, calls, false)
+    const standing = createScope(h.ctx, { preset: 'native-fixture' })
+    standing.ctx.systemPrompt.section({ name: 'fixture:workspace-rules', order: 10, text: 'PRESET_WORKSPACE_RULES_MARKER：必须核验任务授权。' })
+    h.ctx.sessionProjections.register({ key: 'agentPreset', stateSchema: z.union([z.string(), z.null()]), stateVersion: 1,
+      init: header => header.agentPreset ?? null, apply: (state, event) => event.type === 'agent-preset/selected' ? event.data.agentPreset : state })
+    const mounted = []
+    h.ctx.provide('agentPresets', { async mount(agentCtx, id) {
+      mounted.push(id)
+      bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx))
+      return { id: 'native-fixture' }
+    } })
+    t.after(async () => { await h.close(); await standing.dispose(); await rm(root, { recursive: true, force: true }) })
     let executed = 0, artifactReads = 0, cancellation
     const receipts = []
-    h.ctx.tools.register({ name: 'pwsh', description: '原生执行fixture',
+    standing.ctx.tools.register({ name: 'subagent', description: '禁止的委派fixture', parameters: { type: 'object' },
+      output: { schema: { type: 'object' }, render: () => [] }, execute: async () => { throw new Error('不得执行') } })
+    standing.ctx.tools.register({ name: 'pwsh', description: '原生执行fixture',
       output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
       parameters: { type: 'object', properties: { valid: { type: 'boolean' }, run_in_background: { type: 'boolean' } }, required: ['valid'], additionalProperties: false },
       async execute(args, exec) {
@@ -49,6 +63,7 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
         if (!args.valid) throw new Error('真实命令参数错误')
         return { text: '真实业务检查通过' }
       } })
+    assert.equal(h.ctx.tools.get('pwsh'), undefined, '原生工具仅注册在preset父scope，global查找不可见')
     const result = await h.sessions.run({ binding: { taskId: 'native-task', sessionId: 'native-owner', turnId: 'turn-1', leaseEpoch: 1,
       ownerEpoch: 1, requirementRevision: 1, inputDigest: 'a'.repeat(64), sessionBound: false },
       input: { ...(mode === 'review' ? { deliveryReview: true } : {}) }, provider: 'owner-fixture', model: 'scripted',
@@ -61,7 +76,11 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
         return { evidenceRef: `sha256-${String(receipts.length).repeat(64)}.json` }
       } }) })
     await cancellation
+    assert.ok(h.requests[0].tools.every(x => x.name !== 'subagent'), '非允许preset工具不进入模型schema')
     if (mode === 'correct') {
+      assert.match(h.requests[0].system, /PRESET_WORKSPACE_RULES_MARKER/)
+      assert.match(h.requests[0].system, /不绕过受管数据库变更、生产变更、发布和消息发送入口/)
+      assert.match(h.requests[0].system, /未知外部效果先回查原效果/)
       assert.equal(result.status, 'submitted'); assert.equal(executed, 2)
       assert.deepEqual(receipts.map(x => x.phase), ['started', 'settled', 'started', 'settled'])
       assert.equal(receipts[1].result.isError, true); assert.equal(receipts[3].result.isError, false)
@@ -70,6 +89,15 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
       assert.match(JSON.stringify(h.requests[1]), /Host原生工具执行回执/)
       assert.match(JSON.stringify(h.requests[1]), /真实命令参数错误/)
       assert.equal(artifactReads, 1)
+      h.setLease(2)
+      const resumed = await h.sessions.run({ binding: { taskId: 'native-task', sessionId: 'native-owner', turnId: 'turn-2', leaseEpoch: 2,
+        ownerEpoch: 1, requirementRevision: 1, inputDigest: 'b'.repeat(64), sessionBound: true }, input: {},
+        provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {}, onCandidate: async () => {},
+        onNativeExecution: async () => { throw new Error('恢复仅提交，不重复业务工具') } })
+      assert.equal(resumed.status, 'submitted')
+      assert.deepEqual(mounted, [undefined, 'native-fixture'])
+      const persisted = await h.ctx.sessionPersistence.inspect('native-owner')
+      assert.equal(persisted.events.filter(event => event.type === 'agent-preset/selected').length, 1)
     } else if (mode === 'background') {
       assert.equal(executed, 1); assert.equal(receipts.length, 2)
       assert.match(JSON.stringify(h.requests[1]), /task_owner_native_background_forbidden/)
@@ -329,12 +357,23 @@ test('generic DSH summary restores applicable complete read from audit without r
   assert.ok(saved.events.some(event => event.data.source?.ownerReadProjection))
 })
 
-async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1, queryCalls = []) {
+async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1, queryCalls = [], withPreset = true) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
+  const standing = withPreset ? createScope(ctx, { preset: 'fixture' }) : null
+  if (standing) {
+    ctx.sessionProjections.register({ key: 'agentPreset', stateSchema: z.union([z.string(), z.null()]), stateVersion: 1,
+      init: header => header.agentPreset ?? null, apply: (state, event) => event.type === 'agent-preset/selected' ? event.data.agentPreset : state })
+    standing.ctx.tools.register({ name: 'read', description: '未调用的原生读取fixture', parameters: { type: 'object' },
+      output: { schema: { type: 'object' }, render: () => [] }, execute: async () => { throw new Error('此用例不应调用原生读取') } })
+    ctx.provide('agentPresets', { async mount(agentCtx, selected) {
+      assert.ok(selected === undefined || selected === 'fixture')
+      bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx)); return { id: 'fixture' }
+    } })
+  }
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false,
     compression: 'none', writeBatchMaxDelayMs: 1 })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
@@ -359,7 +398,7 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   let currentLease = 1
   const sessions = createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => binding.leaseEpoch === currentLease })
   return { ctx, sessions, requests, setLease(value) { currentLease = value },
-    async close() { await sessions.close(); await ctx.fiber.dispose() } }
+    async close() { await sessions.close(); await standing?.dispose(); await ctx.fiber.dispose() } }
 }
 
 test('原生Owner同轮收到受信验收实际判定及持久工件引用', async t => {
