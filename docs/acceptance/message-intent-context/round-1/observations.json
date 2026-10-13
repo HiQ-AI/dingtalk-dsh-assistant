@@ -1,0 +1,89 @@
+{
+  "results": [
+    {
+      "name": "两个独立动作加闲聊",
+      "supported": true,
+      "commands": 2,
+      "turns": 1,
+      "executions": 2
+    },
+    {
+      "name": "已执行单元与澄清单元混合后补答",
+      "reproduced": true,
+      "turns": 1,
+      "executions": 1,
+      "request": "resolved",
+      "run": "pending",
+      "intentStatus": "intent_rejudging",
+      "eligibleSources": 0,
+      "units": [
+        {
+          "text": "查询甲；",
+          "status": "applied"
+        },
+        {
+          "text": "查询乙；今天不错",
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "name": "重叠全文单元重复动作",
+      "reproduced": true,
+      "turns": 1,
+      "executions": 2,
+      "topics": 2
+    },
+    {
+      "name": "新协调会话读取40条旧历史",
+      "reproduced": true,
+      "visible": 30,
+      "firstVisible": "历史10",
+      "omissionMetadata": [],
+      "readOldSource": "GROUP_COORDINATOR_MATERIAL_FORBIDDEN"
+    },
+    {
+      "name": "历史混入已被编辑替换的旧版本",
+      "reproduced": true,
+      "versions": [
+        {
+          "sourceKey": "edit",
+          "sourceVersion": 1,
+          "text": "目标是旧环境甲",
+          "actorId": "owner",
+          "attachments": []
+        },
+        {
+          "sourceKey": "edit",
+          "sourceVersion": 2,
+          "text": "目标更正为新环境乙",
+          "actorId": "owner",
+          "attachments": []
+        }
+      ]
+    },
+    {
+      "name": "同时间戳的上一条消息",
+      "reproduced": true,
+      "previousPresent": false,
+      "previousWasAlreadyConsumed": true
+    },
+    {
+      "name": "引用已解决澄清再交办新任务",
+      "reproduced": true,
+      "newCoordinatorTurns": 0,
+      "newSourceRecorded": false,
+      "returnedOldAnswer": "甲表"
+    },
+    {
+      "name": "引用投影省略发送者与时间",
+      "reproduced": true,
+      "quote": {
+        "sourceKey": "quote",
+        "sourceVersion": 1,
+        "text": "先只查询",
+        "missing": false
+      }
+    }
+  ]
+}

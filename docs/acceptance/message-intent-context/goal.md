@@ -1,0 +1,53 @@
+# 消息意图上下文与混合事项
+
+> 状态：COMPLETED
+> Goal ID：message-intent-context
+> 最近维护：2026-10-13T10:10:04+08:00
+> 权威目标：D:/codex/worktrees/task-execution-responsibility/dingtalk-dsh-assistant/docs/acceptance/message-intent-context/goal.md
+
+## 总目标
+
+完整承接消息中的任务、补答和闲聊；历史可定位、补读且版本准确；局部事项续办不重放已完成工作。
+
+## 完成条件
+
+- 审计确定缺口均有修复及真实控制链路回归，授权和幂等反例通过。
+- 相关文档与当前行为一致，matrix全绿，PR已独立回读。
+
+## 范围与约束
+
+- 不部署、不重放真实消息、不改变任务执行权限。
+- 主仓已有改动保留，工作分支worktree-message-intent-context。
+
+## sub goal matrix
+
+| ID | 子目标 | 完成判据 | 状态 | 证据 |
+| --- | --- | --- | --- | --- |
+| SG1 | 统一消息入口与单元续办 | 引用混合消息不丢失，补答仅恢复待办单元 | 已完成 | round-3.md；原单元续办与引用混合通过 |
+| SG2 | 完整历史检索与来源投影 | 分页、版本、顺序、引用身份及权限反例通过 | 已完成 | round-3.md；历史9项及原子竞态通过 |
+| SG3 | 混合事项验证与独立审查 | 重复动作防护、组合场景及文档完成 | 已完成 | round-3.md；去重139项通过，文档与审查完成 |
+| SG4 | PR交付 | 实跑通过、提交与PR远端回读 | 已完成 | PR158，OPEN，head 80d02f7已独立回读 |
+
+## 当前检查点
+
+- 当前子目标：SG4
+- 唯一下一步：无，本轮实施及PR交付完成；合并/部署需另行指令。
+- 未闭环项：本轮范围内无；真实模型语义准确率及部署不属于本轮已验证范围。
+
+## 进展
+
+- 2026-10-13：已授权实施，PR157已合并；fetch后基于origin/main新分支，审计材料保留。方案已落档。
+
+## 重大决策
+
+- 新消息先持久化再由统一协调判断；引用只提供关联，不绕过本消息的多意图处理。
+- 澄清按unit续办，保留既有命令与任务身份；不放宽为整条重放。
+
+## 重要信息
+
+- 方案：docs/spec/message-intent-context-repair.md。
+- 基线复现脚本及结果：docs/tmp/intent-context-audit/。
+
+- 2026-10-13：独立审查补强重复动作replyPolicy绕过、历史版本提交竞态和旧待答恢复；不扩大执行权限。
+
+- 2026-10-13：PR [158](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/158) 已独立回读为OPEN，head=80d02f769cf284f204de65891717e0102b3200f8，mergedAt=null，statusCheckRollup=[]；未合并、未部署。主仓已有AGENTS.md及未跟踪资料保留。

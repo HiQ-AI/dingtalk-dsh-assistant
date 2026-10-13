@@ -1606,3 +1606,38 @@ test('零事项协调提交原子结算来源屏障且历史恢复严格CAS',asy
  assert.equal(state.barriers[0].status,'resolved');assert.equal(state.barriers[0].resolution,'coordinator_no_action_consumed')
  assert.equal(state.run.status,'settled');assert.equal(state.units.length,0);assert.equal(state.commands.length,0)
 })
+
+for(const boundary of ['eligible','later-question','running','unknown','applied']) test(`旧版已答混合消息正式重试精确补登记续办：${boundary}`,async t=>{
+ const f=await fixture(t)
+ await f.call('receive',receive('old-mixed'))
+ const binding=(await f.call('coordinator.claim',{conversationId:'g',expectedLeaseEpoch:0,turnId:'old-turn',sourceRuns:[{runId:'old-mixed',sourceVersion:1}]})).result.binding
+ await f.call('coordinator.commit',{...binding,decisions:[{runId:'old-mixed',sourceVersion:1,units:[
+  {unitId:'done-unit',spans:[{start:0,end:2}],commands:[{commandId:'done-command',kind:'answer',args:{}}]},
+  {unitId:'waiting-unit',spans:[{start:2,end:5}],commands:[],request:{requestId:'old-question',kind:'needs_clarification',question:'哪个表',permittedActors:['a']}},
+  {unitId:'other-waiting',spans:[{start:5,end:7}],commands:[],request:{requestId:'other-question',kind:'needs_clarification',question:'哪个环境',permittedActors:['a']}}
+ ]}]})
+ await f.call('coordinator.release',{...binding,drained:true})
+ await f.editSnapshot(db=>{
+  const change=(id,edit)=>{const item=JSON.parse(db.prepare('SELECT body FROM message_items WHERE item_id=?').get(id).body);edit(item);db.prepare('UPDATE message_items SET body=? WHERE item_id=?').run(JSON.stringify(item),id)}
+  change('command:done-command',item=>{item.status='applied'})
+  change('unit:done-unit',item=>{item.status='applied'})
+  change('request:old-question',item=>{item.status='resolved';item.answer='首次乙表';item.eventId='first-answer';item.resolvedAt='2026-10-13T01:00:00Z'})
+  const row=JSON.parse(db.prepare('SELECT body FROM message_runs WHERE run_id=?').get('old-mixed').body)
+  delete row.coordinatorConsumed;delete row.coordinatorPendingUnitIds;row.status='pending';row.intentStatus='intent_rejudging'
+  db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(JSON.stringify(row),'old-mixed')
+  if(boundary==='later-question')change('request:other-question',item=>{item.unitId='waiting-unit'})
+  if(['running','unknown','applied'].includes(boundary))change('command:done-command',item=>{item.unitId='waiting-unit';item.status=boundary})
+ })
+ const before=await f.store.query({kind:'message.run',runId:'old-mixed'})
+ assert.equal((await f.store.query({kind:'message.coordinator',conversationId:'g'})).sources.length,0)
+ await bad(f.call('wake',{runId:'old-mixed',requestId:'old-question',actorId:'outsider',answer:'越权答案',eventId:'forbidden'}),'MESSAGE_ACTOR_FORBIDDEN')
+ for(const eventId of ['retry','again'])await f.call('wake',{runId:'old-mixed',requestId:'old-question',actorId:'a',answer:'重复新答案',eventId})
+ const after=await f.store.query({kind:'message.run',runId:'old-mixed'})
+ assert.deepEqual(after.requests,before.requests)
+ assert.deepEqual(after.commands,before.commands)
+ assert.deepEqual(after.units,before.units)
+ assert.deepEqual(after.run.coordinatorPendingUnitIds??[],boundary==='eligible'?['waiting-unit']:[])
+ assert.equal((await f.store.query({kind:'message.coordinator',conversationId:'g'})).sources.length,boundary==='eligible'?1:0)
+ await f.reopen()
+ assert.deepEqual((await f.store.query({kind:'message.run',runId:'old-mixed'})).run.coordinatorPendingUnitIds??[],boundary==='eligible'?['waiting-unit']:[])
+})

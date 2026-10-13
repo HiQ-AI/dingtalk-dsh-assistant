@@ -117,18 +117,19 @@ export const messageSchemas = {
 
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]))
 export async function prepareMessageContext(run, context = {}) {
-  const source = { sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, text: run.body, actorId: run.actorId, conversationId: run.conversationId }
-  const history = (await context.history?.(run) ?? []).filter(item => item.delivered !== false && item.sourceKey !== run.sourceKey && (run.seq === undefined || item.seq === undefined || item.seq < run.seq)).slice(-30)
+  const source = { sourceKey: run.sourceKey, sourceVersion: run.sourceVersion, text: run.body, actorId: run.actorId, conversationId: run.conversationId, occurredAt: run.context?.occurredAt ?? run.createdAt }
+  const available = await context.history?.(run) ?? []
+  const history = available.filter(item => item.delivered !== false && item.sourceKey !== run.sourceKey && (run.seq === undefined || item.seq === undefined || item.seq < run.seq)).slice(-30)
   // history/quotes are local snapshots only. Remote retrieval belongs to material work.
   const localQuotes = await Promise.all((run.context?.quoteRefs ?? []).map(async ref => await context.localQuote?.(ref, run) ?? ref))
   const quotes = localQuotes.map(ref => {
     if (typeof ref === 'string') return { sourceKey: ref, missing: true }
     if (ref.conversationId && ref.conversationId !== run.conversationId && !ref.readScope?.includes(run.actorId)) return { sourceKey: ref.sourceKey, missing: true, reason: 'read_scope_denied' }
-    return { ...pick(ref, ['sourceKey', 'sourceVersion', 'text', 'bindings', 'readScope', 'disclosureScope', 'attachments']), missing: !ref.text }
+    return { ...pick(ref, ['sourceKey', 'sourceVersion', 'sourceKind', 'messageId', 'conversationId', 'actorId', 'occurredAt', 'createdAt', 'text', 'bindings', 'readScope', 'disclosureScope', 'attachments', 'quoteRefs']), missing: !ref.text }
   })
   const approved = history.filter(item => item.conversationId === undefined || item.conversationId === run.conversationId || item.readScope?.includes(run.actorId))
   const necessary = await context.splitBackground?.({ run, history: approved })
-  const data = { source, sourceEdit: run.context?.editOf ?? null, historyManifest: approved.map(item => pick(item, ['sourceKey', 'sourceVersion', 'seq', 'bindings'])), history: Array.isArray(necessary) ? necessary : necessary?.messages ?? [], quotes, attachments: run.context?.attachments ?? [], policy: run.context?.compactPolicy ?? '', replyObligation: getReplyObligation(run), agentNames: context.agentNames?.() ?? run.context?.agentNames ?? [], actorPermissions: run.context?.actorPermissions ?? [], omissions: necessary?.omissions ?? (necessary === undefined && approved.length ? [{ reason: 'background_not_projected', sourceKeys: approved.map(item => item.sourceKey) }] : []) }
+  const data = { source, sourceEdit: run.context?.editOf ?? null, historyManifest: approved.map(item => pick(item, ['sourceKey', 'sourceVersion', 'seq', 'sequenceId', 'bindings'])), history: Array.isArray(necessary) ? necessary : necessary?.messages ?? [], quotes, attachments: run.context?.attachments ?? [], policy: run.context?.compactPolicy ?? '', replyObligation: getReplyObligation(run), agentNames: context.agentNames?.() ?? run.context?.agentNames ?? [], actorPermissions: run.context?.actorPermissions ?? [], historyRevision: available.revision ?? null, historyCursor: available.nextCursor ?? null, omissions: [...(available.omissions ?? []), ...(available.length > 30 ? [{ reason: 'history_window', omittedCount: available.length - 30 }] : []), ...(necessary?.omissions ?? (necessary === undefined && approved.length ? [{ reason: 'background_not_projected', sourceKeys: approved.map(item => item.sourceKey) }] : []))] }
   return { ...data, snapshotId: digest(data) }
 }
 

@@ -83,6 +83,10 @@ Task Owner 可以有持续会话，但每个 Agent 节点按 NodeRun/租约绑�
 
 执行结果先持久化，再完成消息命令；重启发现已有结果时使用当前命令租约接纳缓存，不重跑调查。未证明只读的旧命令结果未知仍须对账。答复复用通知账本，按原消息引用、当前披露权限和 `replyPolicy` 发送并独立回读；发送结果未知时核对原通知，不重发。消息事项取消须匹配受信来源、同发送者同群及明确事项；多个候选通过现有澄清请求选择，Host 复核版本，不能凭模糊取消指令批量结束执行。
 
+群协调按单元承接混合消息：独立任务分别交办，补答仅使用该单元原文，闲聊可以静默忽略；已解决的引用不能消费新消息。`sources[].continuation` 列出待续办原 `unitId/spans`，提交只包含这些单元，保留其他命令、等待和话题身份。相同跨度、目标及动作的重复单元整体拒绝，改变回复策略不能绕过；不同目标可共享来源跨度。初次承接仍要求完整覆盖原文约束。
+
+上下文最近窗口为30条，`historyCursor/omissions` 明确标识窗口外历史和无法确认先后顺序的 legacy 消息。`group_coordinator_read_history({runId,cursor})` 以 `null` 从最近页开始，也可使用输入游标向前补读，每页返回 `messages/nextCursor/revision/omissions`。只允许当前来源水位内同群历史，按有效版本去重并保留身份、时间、引用和附件；补读来源登记到本轮材料权限。历史变化使旧游标和提交失效，数据库来源在提交事务再次核验版本。历史数据只用于解释，任务执行仍由原执行会话负责。
+
 收到自身通知的回声时，必须匹配同群通知的独立送达证据才可封存；ACK 本身不能授权封存。封存会同步结束尚在处理的模型节点并撤销本机调用，迟到结果不得重新生效，累计预算保留。旧版已封存但遗留活动节点或引用屏障的消息由 `message.echo.reconciliation` 只读预检、`message.echo.reconcile` 按 `expectedDigest` 接纳修复，日常恢复扫描也使用同一入口；只处理 `superseded/outbound_echo`，若存在业务命令、通知或外部效果则拒绝。仅释放该回声自己创建、与原通知来源及明确引用一致的消息屏障；跨所有者、指向 Task 或不匹配引用的屏障拒绝修复，不修改被引用来源或业务任务。
 
 入口代码：[消息与目录](message-context.js)、[Host 装配](workflow-service.js)、[Owner](task-owner-controller.js)、[Controller](execution-controller.js)、[控制账](execution-store.js)。旧 Resident 的 domain v9 / Task contractVersion 2 与原生 `workflow-v2` 的 SQLite 控制账是不同边界；不能把旧 `task_plan_prepare` / 报告工具当作新 Node 提交接口。兼容查询仍可能同时展示旧历史和新任务。
