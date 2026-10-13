@@ -1,6 +1,6 @@
 # 工作流与配置管理验收报告
 
-源码、接口、隔离原生运行、真实浏览器与打包验证已通过。matrix 按每个 case 的最大 round 取状态，最新 91 项全部 PASS；历史失败保留，不代表全量仓库测试或正式部署全部通过。PR 状态以 goal.md 的最终独立回读为准。
+源码、接口、隔离原生运行、真实浏览器与打包验证已通过。matrix 按每个 case 的最大 round 取状态，最新 91 项全部 PASS；历史失败保留，不代表全量仓库测试或正式部署全部通过。[PR #167](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/167) 已独立回读为 OPEN / MERGEABLE，main ← worktree-workflow-dashboard，尚未合并或部署。
 
 运行看板新增「工作流」与独立「配置」Tab，支持目录/节点/维护依赖/任务跳转，以及普通 text/JSON、凭据、版本冲突保护、启停和工作流别名绑定。凭据写后不回显，旧任务保持冻结版本；重置新 Run 重新冻结，预览与重复请求不重复冻结。
 
