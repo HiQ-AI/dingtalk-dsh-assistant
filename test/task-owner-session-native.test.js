@@ -33,11 +33,12 @@ const { z } = requireLoop('zod')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
 test('Owner原生工具自主执行保留真实失败纠错与Host证据', async t => {
-  for (const mode of ['correct', 'background', 'disabled', 'review', 'stale', 'cancel']) await t.test(mode, async t => {
+  for (const mode of ['correct', 'background', 'delegation', 'disabled', 'review', 'stale', 'cancel']) await t.test(mode, async t => {
     const root = await mkdtemp(join(tmpdir(), 'owner-native-tools-'))
     const calls = [{ name: 'pwsh', args: { valid: false, ...(mode === 'background' ? { run_in_background: true } : {}) } },
       { name: 'pwsh', args: { valid: true } }]
     if (mode === 'correct') calls.push({ name: 'task_owner_read_artifact', args: { artifactRef: `sha256-${'4'.repeat(64)}.json` } })
+    if (mode === 'delegation') calls.splice(0, 2, { name: 'subagent', args: {} })
     const h = await host(root, null, null, decision, undefined, 1, calls, false)
     const standing = createScope(h.ctx, { preset: 'native-fixture' })
     standing.ctx.systemPrompt.section({ name: 'fixture:workspace-rules', order: 10, text: 'PRESET_WORKSPACE_RULES_MARKER：必须核验任务授权。' })
@@ -50,10 +51,11 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
       return { id: 'native-fixture' }
     } })
     t.after(async () => { await h.close(); await standing.dispose(); await rm(root, { recursive: true, force: true }) })
-    let executed = 0, artifactReads = 0, cancellation
+    let executed = 0, delegated = 0, artifactReads = 0, cancellation
     const receipts = []
-    standing.ctx.tools.register({ name: 'subagent', description: '禁止的委派fixture', parameters: { type: 'object' },
-      output: { schema: { type: 'object' }, render: () => [] }, execute: async () => { throw new Error('不得执行') } })
+    standing.ctx.tools.register({ name: 'subagent', description: '宿主委派fixture', parameters: { type: 'object' },
+      output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: async () => { delegated++; return { sessionId: 'child-fixture', status: 'started' } } })
     standing.ctx.tools.register({ name: 'pwsh', description: '原生执行fixture',
       output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
       parameters: { type: 'object', properties: { valid: { type: 'boolean' }, run_in_background: { type: 'boolean' } }, required: ['valid'], additionalProperties: false },
@@ -76,7 +78,7 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
         return { evidenceRef: `sha256-${String(receipts.length).repeat(64)}.json` }
       } }) })
     await cancellation
-    assert.ok(h.requests[0].tools.every(x => x.name !== 'subagent'), '非允许preset工具不进入模型schema')
+    assert.equal(h.requests[0].tools.some(x => x.name === 'subagent'), !['disabled', 'review'].includes(mode), '启用时完整公开preset工具')
     if (mode === 'correct') {
       assert.match(h.requests[0].system, /PRESET_WORKSPACE_RULES_MARKER/)
       assert.match(h.requests[0].system, /不绕过受管数据库变更、生产变更、发布和消息发送入口/)
@@ -99,8 +101,12 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
       const persisted = await h.ctx.sessionPersistence.inspect('native-owner')
       assert.equal(persisted.events.filter(event => event.type === 'agent-preset/selected').length, 1)
     } else if (mode === 'background') {
-      assert.equal(executed, 1); assert.equal(receipts.length, 2)
-      assert.match(JSON.stringify(h.requests[1]), /task_owner_native_background_forbidden/)
+      assert.equal(executed, 2); assert.equal(receipts.length, 4)
+      assert.equal(receipts[0].arguments.run_in_background, true)
+    } else if (mode === 'delegation') {
+      assert.equal(delegated, 1); assert.equal(receipts.length, 2)
+      assert.equal(receipts[1].toolName, 'subagent')
+      assert.match(JSON.stringify(receipts[1].result.content), /child-fixture/)
     } else if (mode === 'cancel') {
       assert.equal(executed, 1); assert.equal(receipts[0].phase, 'started')
       const settled = receipts.find(x => x.phase === 'settled')

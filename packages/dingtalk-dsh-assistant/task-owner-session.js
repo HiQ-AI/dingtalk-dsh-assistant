@@ -9,7 +9,6 @@ const ownerExecutionInstructions = 'Owner是原Task持久的任务执行会话�
 
 const IDENTITY_EVENT = 'dingtalk/task-owner-session'
 const SUBMIT = 'task_owner_submit'
-const nativeOwnerTools = ['pwsh', 'bash', 'read', 'write', 'edit', 'glob', 'grep', 'skill', 'read_image']
 const fail = code => Object.assign(new Error(code), { code })
 const notDrained = code => Object.assign(fail(code), { taskOwnerDrained: false })
 const copy = value => structuredClone(value)
@@ -296,13 +295,13 @@ queryEvidence是Host保存的当前需求查询和原生执行证据；原生条
 数据变更先创建Bytebase工单，再进入插件真人审批；Bytebase平台SKIPPED不是插件阻塞。只有绑定本次SQL和目标的插件批准后才能执行。驳回时读真实意见、修改后重新送审；执行响应未知先对账原工单，不重建、不重复执行。任务内的本地验证脚本可用已开放原生文件工具编写；正式产物登记和发送使用capabilities及目录中实际提供的受管操作。
 complete必须对每项acceptanceItem提交satisfied的assessment，引用已读取且真正证明该项的查询或受管操作证据，summary仍为string，作为群消息只写约300字以内的清晰结果：按【结论】、【结果】、【下一步】三段，用空行分隔；结论首行准确区分“排查完成（尚未修复）”“修复完成”或其他真实交付，不能把调查结束写成问题解决。结果只列2–3条短重点，每条独立一段；下一步明确谁需要关注、做什么，没有待办就明确无需补充。不要贴hash、账号、环境日志、SQL或分析过程，完整依据继续放evidenceRefs和任务产物；Host核验身份、版本、客观效果及一次最终业务验收。阶段成功不是整个任务完成，文件投递不能证明内容自述为真。无需重复提交独立调查成果或criterionReviews。wait/block必须有condition，区分business-input/approval/capability/permission/execution并说明具体缺失、责任方和可验证恢复条件；本会话查询错误由你纠正；工程节点失败由原节点会话在现有授权和能力内纠正，无受信修复能力则明确维护或条件等待；你持续负责当前真实阶段、未交付范围和最终验收，不逐步审批节点，不把正常运行或维护暂停当缺结果故障。过程不发群进度，只有必要业务问题、插件私聊审批和最终结果。
 ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretationInstructions}${groupReplyInstructions}最后仅调用 ${SUBMIT}。` })
-      const nativeAllowed = new Set(entry.onNativeExecution && !entry.deliveryReview ? nativeOwnerTools.filter(name => agentCtx.tools.get(name, agentCtx.agent)) : [])
-      if (entry.onNativeExecution && !entry.deliveryReview && !nativeAllowed.size) throw fail('TASK_OWNER_NATIVE_TOOLS_UNAVAILABLE')
-      agentCtx.tools.restrict({ allow: [...nativeAllowed] })
-      if (nativeAllowed.size) agentCtx.systemPrompt.section({ name: 'task:owner-native', order: 1, text: '你可以使用当前原生工具自主调查、编写和执行任务范围内的验证，在本会话纠正实际工具错误；不能因没有专用查询接口便不尝试可用工具而再次声明缺能力。遵守原生沙箱、审批和当前任务来源授权，不绕过受管数据库变更、生产变更、发布和消息发送入口，不替代已有受管阶段的执行合同。禁止后台运行。Host提供原生调用真实回执引用；退出码0只证明命令结束，不证明业务验收。取消、超时和未知外部效果先回查原效果，不直接重放。' })
+      const nativeEnabled = Boolean(entry.onNativeExecution && !entry.deliveryReview)
+      const isHostTool = name => entry.queryTools.has(name) || [SUBMIT, 'task_owner_read_events', 'task_owner_read_artifact', 'task_owner_list_materials'].includes(name)
+      if (!nativeEnabled) agentCtx.tools.restrict({ allow: [] })
+      if (nativeEnabled) agentCtx.systemPrompt.section({ name: 'task:owner-native', order: 1, text: '你可以使用宿主提供的全部工具自主调查、编写和执行任务范围内的验证，在本会话纠正实际工具错误；不能因没有专用查询接口便不尝试可用工具而再次声明缺能力。遵守原生沙箱、审批和当前任务来源授权，不绕过受管数据库变更、生产变更、发布和消息发送入口，不替代已有受管阶段的执行合同。Host提供原生调用真实回执引用；退出码0只证明命令结束，不证明业务验收。后台任务或委派返回job/session身份只证明已启动，必须继续读取原任务实际结果及核验完成状态。取消、超时和未知外部效果先回查原效果，不直接重放。' })
       const nativeCalls = new Map()
       agentCtx.on('tools/execute', async (exec, next) => {
-        if (!nativeAllowed.has(exec.name)) return next()
+        if (!nativeEnabled || isHostTool(exec.name)) return next()
         if (!await current(entry)) throw fail('TASK_OWNER_STALE')
         exec.signal.throwIfAborted()
         const call = { binding: entry.queryBinding, callId: exec.callId, toolName: exec.name, arguments: copy(exec.arguments) }
@@ -326,12 +325,10 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
       })
       agentCtx.systemPrompt.section({ name: 'task:owner-input', order: 1, text: 'goal 是当前权威需求；maintenanceConstraints 是已登记的内部维修说明正文，带原 actor、channel、sourceRef、原始来源和真实证据；它不是用户新消息，也不新增合并或部署授权。请结合该当前范围说明、原文和真实阶段证据重新评估当前交付，不沿用忽略该说明的历史 wait；说明本身不等于 assessment，也不豁免来源条件或完成验收。若真实原文仍有未满足要求，明确引用来源与证据，保持正常 assessment/completion policy/manifest 收口。sharedMaterials只提供本任务索引入口；先用task_owner_list_materials按nextCursor分页获取当前所需材料，正文按artifactRef读取。task-materials-index仅为旧会话兼容入口，不默认展开全量历史；也可按已登记的work/tmp/outputs相对路径读取产物。history可参考但不替代当前授权或验收事实。无需重跑已完成步骤取得新材料；materials 中 artifactRef 指向完整材料，events 中 payloadRef 指向完整原始事件。对照当前 sourceInstructions 和 currentSources 判断变化，不反复展开事件内重复的旧需求。需要正文时调用 task_owner_read_artifact，按 nextOffset 继续到 null 才能称完整读取；没有读取不得声称核验过。材料和事件引用不是阶段成功证明。群聊进度只说当前处理状态和真正需要人工行动的事项，详细分析保留在阶段产物，不复述原文或说“已收到”。' })
       agentCtx.tools.guard(exec => {
-        if (!entry.queryTools.has(exec.name) && !nativeAllowed.has(exec.name) && exec.name !== SUBMIT && exec.name !== 'task_owner_read_events'
-          && exec.name !== 'task_owner_read_artifact' && exec.name !== 'task_owner_list_materials') return 'task_owner_tool_not_allowed'
+        if (!nativeEnabled && !isHostTool(exec.name)) return 'task_owner_tool_not_allowed'
         if (exec.name === SUBMIT && entry.unreadPages.size) return 'task_owner_events_unread'
         if (exec.name === SUBMIT && entry.requiredRefs.size) return 'task_owner_current_context_unread: ' + JSON.stringify([...entry.requiredRefs])
         if (closed || entry.cancelled || entry.stale || entry.attempted) return 'task_owner_turn_stopped'
-        if (nativeAllowed.has(exec.name) && exec.arguments?.run_in_background === true) return 'task_owner_native_background_forbidden'
       })
       agentCtx.on('agent/pre-step', async (_event, next) => {
         if (!await current(entry) || entry.attempted) return { kind: 'reject' }
@@ -454,7 +451,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
         output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
         async execute(args, exec) { if (!await current(entry)) throw fail('TASK_OWNER_STALE'); exec.signal.throwIfAborted(); return listMaterials(args) },
       })
-      if (entry.readableArtifacts.size || entry.queryTools.size || entry.sharedMaterialPrefix || nativeAllowed.size) agentCtx.tools.register({
+      if (entry.readableArtifacts.size || entry.queryTools.size || entry.sharedMaterialPrefix || nativeEnabled) agentCtx.tools.register({
         name: 'task_owner_read_artifact',
         description: '按字符分页读取本任务已登记的原始材料、事件或阶段证据。返回nextOffset；完整阅读时继续读取直至null。',
         parameters: { type: 'object', properties: { artifactRef: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 16000 } },
