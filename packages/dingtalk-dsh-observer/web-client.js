@@ -599,6 +599,13 @@ window.__ModuleLoader__.load({
           node.sessionBound === true && node.sessionId ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenSession(node.sessionId) }, '查看步骤会话') : null,
           React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: onBack }, '返回步骤目录')))
     }
+    const activePageStorageKey = 'dingtalk-dsh-observer.active-page'
+    const readActivePage = () => {
+      try {
+        const page = window.sessionStorage.getItem(activePageStorageKey)
+        return pages.some(item => item.id === page) ? page : 'groups'
+      } catch { return 'groups' }
+    }
     function TaskOwnerSession({ owner, onOpenSession, navigatingSessionId }) {
       if (!owner) return null
       const available = owner.sessionBound === true && owner.sessionId
@@ -611,7 +618,13 @@ window.__ModuleLoader__.load({
           : React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '会话尚未建立'))
     }
     function ObserverContent({ openSession }) {
-      const [activePage, setActivePage] = useState('groups')
+      const [activePage, updateActivePage] = useState(readActivePage)
+      const setActivePage = useCallback(page => {
+        updateActivePage(page)
+        // 导航属于看板，不能随宿主 conversation 插槽重挂载而丢失。
+        try { window.sessionStorage.setItem(activePageStorageKey, page) }
+        catch { /* 浏览器禁用存储时仍允许正常切页。 */ }
+      }, [])
       const [topicTarget, setTopicTarget] = useState()
       const [data, setData] = useState()
       const [error, setError] = useState()

@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "mode": "fixed",
+  "checks": [
+    "task-board-real-five-second-poll",
+    "task-board-manual-refresh",
+    "task-board-host-remount",
+    "groups-poll-manual-remount-reload",
+    "topics-poll-manual-remount-reload",
+    "tasks-poll-manual-remount-reload",
+    "authorizations-poll-manual-remount-reload",
+    "archive-poll-manual-remount-reload",
+    "alerts-poll-manual-remount-reload",
+    "session-close-and-reopen-keeps-page",
+    "failed-refresh-keeps-page-and-existing-content",
+    "empty-task-board-keeps-page",
+    "narrow-keyboard-navigation-and-no-horizontal-overflow",
+    "unknown-stored-page-defaults-to-groups",
+    "blocked-storage-still-allows-navigation-and-refresh"
+  ],
+  "sourceSha256": "b19f4ff81842c272160db44ae63a2f709dfcde89e986579c8461d5719d96dbb0",
+  "browser": "155.0.4283.45",
+  "errors": [],
+  "writes": [],
+  "healthReads": 37,
+  "boundary": "真实 headless Edge、React 与完整 observer；宿主 slot/primitive/API 使用隔离 fixtures。复现重挂载，不代表已证明用户运行实例确实在重挂载；未启动业务服务、未写业务接口、未部署。"
+}
