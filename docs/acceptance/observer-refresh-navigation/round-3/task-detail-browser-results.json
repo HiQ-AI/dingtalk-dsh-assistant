@@ -1,0 +1,1261 @@
+{
+  "passed": true,
+  "mode": "round-10",
+  "baseCommit": "462c213fe84bcd1ce5e31e1015d3fde0a1f81212",
+  "sourceSha256": "4d49c8624de5ddf9db0215c40a0e39830c74f0ecca6930ebd69d94d493d89549",
+  "fixtureSha256": "254da5c1c175d58af56275fb9f388460204401409a9dcb11827006285405dde8",
+  "browser": "155.0.4283.45",
+  "reactVersion": "18.3.1",
+  "checks": [
+    {
+      "id": "loading",
+      "label": "首次详情读取等待、失败与重试",
+      "status": "PASS"
+    },
+    {
+      "id": "overview",
+      "label": "结果前置、完整分组、默认选中当前等待步骤及懒读取",
+      "status": "PASS"
+    },
+    {
+      "id": "initial-visible",
+      "label": "进入窄屏后初始选中步骤处于目录可视区",
+      "status": "PASS"
+    },
+    {
+      "id": "keyboard",
+      "label": "原生按钮选择、焦点可见及目录和阅读跳转",
+      "status": "PASS"
+    },
+    {
+      "id": "output",
+      "label": "产出读取失败重试、分页、长文本、下载地址",
+      "status": "PASS"
+    },
+    {
+      "id": "preserve",
+      "label": "切换与刷新保持选择、分页和展开",
+      "status": "PASS"
+    },
+    {
+      "id": "responsive",
+      "label": "390px 窄屏、暗色与完整目录触达",
+      "status": "PASS"
+    },
+    {
+      "id": "controls",
+      "label": "跨组同名、跳过和复用的身份、原因与耗时",
+      "status": "PASS"
+    },
+    {
+      "id": "directory-scroll",
+      "label": "直接窄屏打开可见且普通刷新不抢目录和正文位置",
+      "status": "PASS"
+    },
+    {
+      "id": "slow",
+      "label": "新产物替换与旧慢响应隔离",
+      "status": "PASS"
+    },
+    {
+      "id": "removed",
+      "label": "选中步骤删除后相邻选择、焦点与提示",
+      "status": "PASS"
+    },
+    {
+      "id": "empty",
+      "label": "空计划与未确定步骤不误报完成",
+      "status": "PASS"
+    },
+    {
+      "id": "defaults",
+      "label": "首次选择失败、受阻、未开始和完成末步",
+      "status": "PASS"
+    },
+    {
+      "id": "long-plan",
+      "label": "30 步完整目录、窄屏局部滚动和返回焦点无遮挡",
+      "status": "PASS"
+    },
+    {
+      "id": "session",
+      "label": "会话入口打开选中步骤的真实 sessionId",
+      "status": "PASS"
+    },
+    {
+      "id": "owner-session",
+      "label": "任务执行会话入口导航至已绑定 Owner",
+      "status": "PASS"
+    },
+    {
+      "id": "session-boundaries",
+      "label": "任务与节点仅已绑定且有 sessionId 时允许导航",
+      "status": "PASS"
+    },
+    {
+      "id": "owner-only",
+      "label": "纯会话已完成和未形成计划任务采用不同空态",
+      "status": "PASS"
+    },
+    {
+      "id": "cross-view-refresh",
+      "label": "其他视图刷新后保留原任务阅读步骤",
+      "status": "PASS"
+    },
+    {
+      "id": "hidden-deletion",
+      "label": "隐藏期间真实删除不抢其他页焦点并在返回后恢复",
+      "status": "PASS"
+    },
+    {
+      "id": "checkpoint-reading",
+      "label": "workflow 配置修订后稳定步骤保留分页展开与焦点",
+      "status": "PASS"
+    },
+    {
+      "id": "retry-session",
+      "label": "同一步骤重试后读取新产出并打开新绑定会话",
+      "status": "PASS"
+    },
+    {
+      "id": "cross-task-notice",
+      "label": "隐藏删除后直接切换另一任务不残留原任务提示",
+      "status": "PASS"
+    },
+    {
+      "id": "isolation",
+      "label": "零运行时错误、零业务写入、无历史执行查询",
+      "status": "PASS"
+    }
+  ],
+  "metrics": [
+    {
+      "label": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "width": 1200,
+      "scrollWidth": 1200,
+      "height": 1714.40625,
+      "resultTop": 556.78125,
+      "resultHeight": 149.375,
+      "nav": {
+        "x": 120,
+        "y": 842.15625,
+        "width": 320,
+        "height": 1022.25
+      },
+      "reading": {
+        "x": 472,
+        "y": 842.15625,
+        "width": 848,
+        "height": 420.59375
+      },
+      "documentOverflow": false
+    },
+    {
+      "label": "initial-selection-narrow",
+      "selectedTop": 1213.28125,
+      "selectedBottom": 1281.671875,
+      "navTop": 921.953125,
+      "navBottom": 1285.953125,
+      "selectedVisibleInsideDirectory": true
+    },
+    {
+      "label": "long-text",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "width": 1200,
+      "scrollWidth": 1200,
+      "height": 1956.09375,
+      "resultTop": -413.21875,
+      "resultHeight": 149.375,
+      "nav": {
+        "x": 120,
+        "y": -127.84375,
+        "width": 320,
+        "height": 1022.25
+      },
+      "reading": {
+        "x": 472,
+        "y": -127.84375,
+        "width": 848,
+        "height": 1263.9375
+      },
+      "documentOverflow": false
+    },
+    {
+      "label": "narrow-long-text",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "width": 366,
+      "scrollWidth": 366,
+      "height": 2751.890625,
+      "resultTop": 616.578125,
+      "resultHeight": 145.375,
+      "nav": {
+        "x": 12,
+        "y": 921.953125,
+        "width": 366,
+        "height": 364
+      },
+      "reading": {
+        "x": 12,
+        "y": 1305.953125,
+        "width": 366,
+        "height": 1583.9375
+      },
+      "documentOverflow": false
+    },
+    {
+      "label": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "width": 1200,
+      "scrollWidth": 1200,
+      "height": 1714.40625,
+      "resultTop": 556.78125,
+      "resultHeight": 149.375,
+      "nav": {
+        "x": 120,
+        "y": 842.15625,
+        "width": 320,
+        "height": 1022.25
+      },
+      "reading": {
+        "x": 472,
+        "y": 842.15625,
+        "width": 848,
+        "height": 420.59375
+      },
+      "documentOverflow": false
+    },
+    {
+      "label": "refresh-preserves-scroll",
+      "before": {
+        "directory": 0,
+        "host": 600
+      },
+      "after": {
+        "directory": 0,
+        "host": 600
+      }
+    },
+    {
+      "label": "narrow-30-steps",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "width": 366,
+      "scrollWidth": 366,
+      "height": 1477.75,
+      "resultTop": 549.578125,
+      "resultHeight": 145.375,
+      "nav": {
+        "x": 12,
+        "y": 854.953125,
+        "width": 366,
+        "height": 364
+      },
+      "reading": {
+        "x": 12,
+        "y": 1238.953125,
+        "width": 366,
+        "height": 340.796875
+      },
+      "documentOverflow": false
+    },
+    {
+      "label": "direct-task-switch",
+      "from": "task-redesign-fixture",
+      "to": "task-another-fixture",
+      "via": "归档任务卡片",
+      "detailRequests": [
+        "/state/tasks/task-redesign-fixture/detail",
+        "/state/tasks/task-another-fixture/detail",
+        "/state/tasks/task-another-fixture/detail"
+      ]
+    }
+  ],
+  "errors": [],
+  "writes": [],
+  "requests": [
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "600",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "1200",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "1800",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-2/output",
+      "query": {
+        "ref": "artifact-2",
+        "cursor": "0",
+        "detailRevision": "revision-unrelated"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-2/nodes/node-run-5/output",
+      "query": {
+        "ref": "artifact-5",
+        "cursor": "0",
+        "detailRevision": "revision-unrelated"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-preserve-directory-scroll"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-slow",
+        "cursor": "0",
+        "detailRevision": "revision-slow"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-new",
+        "cursor": "0",
+        "detailRevision": "revision-new"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-2/nodes/node-run-5/output",
+      "query": {
+        "ref": "artifact-5",
+        "cursor": "0",
+        "detailRevision": "revision-new"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-2/output",
+      "query": {
+        "ref": "artifact-2",
+        "cursor": "0",
+        "detailRevision": "revision-1-hidden-removal"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "600",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "1200",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "1800",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/retry-node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-retry"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/runs/run-1/nodes/node-run-1/output",
+      "query": {
+        "ref": "artifact-1",
+        "cursor": "0",
+        "detailRevision": "revision-1"
+      }
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-redesign-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks/task-another-fixture/detail",
+      "query": {}
+    },
+    {
+      "path": "/health",
+      "query": {}
+    },
+    {
+      "path": "/state/groups",
+      "query": {}
+    },
+    {
+      "path": "/state/tasks",
+      "query": {}
+    },
+    {
+      "path": "/state/supervisor/alerts",
+      "query": {}
+    },
+    {
+      "path": "/state/authorizations",
+      "query": {}
+    },
+    {
+      "path": "/state/topics",
+      "query": {
+        "offset": "0",
+        "limit": "100"
+      }
+    },
+    {
+      "path": "/state/tasks/task-another-fixture/detail",
+      "query": {}
+    }
+  ],
+  "boundary": "全部任务数据为合成夹具，真实 React 与完整 observer 源码；DSH primitive/槽位/会话 API 与所有运行时 HTTP 均为隔离替身。未连接真实运行时、未操作用户浏览器、未部署，不能证明真实钉钉或宿主集成。"
+}

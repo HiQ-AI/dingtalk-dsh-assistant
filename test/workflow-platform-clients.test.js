@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 import { executionDigest } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createPlatformClients } from '../packages/dingtalk-dsh-assistant/workflow-platform-clients.js'
 
@@ -114,13 +115,21 @@ test('木啄构建证明只从精确成功步骤读取结构化 digest', async (
   assert.equal(result.commitSha, SHA)
   assert.equal(result.imageDigest, imageDigest)
   assert.match(result.evidenceRef, /^woodpecker-build:/)
+  const production = createPlatformClients({ fetchImpl: async url => json(url.endsWith('/pipelines/7')
+    ? { ...pipeline, event: 'tag', ref: 'refs/tags/v20261013-1',
+      variables: { SOURCE_PACKAGE_ID: 'c'.repeat(32), SOURCE_PACKAGE_SHA256: 'b'.repeat(64), SOURCE_COMMIT_SHA: SHA } }
+    : logs) })
+  const tagged = await production.woodpecker.readBuildEvidence({ baseUrl: target.woodpecker.baseUrl,
+    repositoryId: 4, pipelineNumber: 7 })
+  assert.equal(tagged.imageDigest, imageDigest)
+  assert.equal(tagged.uploadedSource, undefined)
   const missing = createPlatformClients({ woodpeckerToken: 'test', fetchImpl: async url =>
     json(url.endsWith('/pipelines/7') ? pipeline : [{ step_id: 19, data: Buffer.from('pushed :uat2').toString('base64') }]) })
   await assert.rejects(missing.woodpecker.readBuildEvidence({ baseUrl: target.woodpecker.baseUrl,
     repositoryId: 4, pipelineNumber: 7 }), /WOODPECKER_BUILD_DIGEST_UNCONFIRMED/)
 })
 
-test('UAT 触发前独立回读分支、流水线和 Cron', async () => {
+test('未接入源码包的仓库保留独立回读分支、流水线和 Cron', async () => {
   const calls = []
   const clients = createPlatformClients({ githubToken: 'test', woodpeckerToken: 'test', fetchImpl: async (url, options) => {
     calls.push([url, options.method ?? 'GET'])
@@ -130,9 +139,132 @@ test('UAT 触发前独立回读分支、流水线和 Cron', async () => {
     if (url.endsWith('/cron/17')) return json({ number: 99 })
     throw Error('unexpected request')
   } })
-  const receipt = await clients.woodpecker.triggerBuild({ target, commitSha: SHA })
+  const receipt = await clients.woodpecker.triggerBuild({ target: { ...target, repository: 'HiQ-AI/other-project' }, commitSha: SHA })
   assert.match(receipt.evidenceRef, /^woodpecker-cron-dispatch:/)
   assert.deepEqual(calls.map(([, method]) => method), ['GET', 'GET', 'GET', 'POST'])
+})
+
+test('源码准备失败且未产生镜像时保留可回退旧运行基线的构建步骤错误', async () => {
+  const pipeline = { number: 7, commit: SHA, event: 'manual', status: 'failure',
+    variables: { SOURCE_PACKAGE_ID: 'c'.repeat(32), SOURCE_PACKAGE_SHA256: 'b'.repeat(64), SOURCE_COMMIT_SHA: SHA },
+    workflows: [{ children: [
+      { id: 18, name: 'prepare-uploaded-source', state: 'failure', exit_code: 1 },
+      { id: 19, name: 'buildkit-build-and-push', state: 'skipped' },
+    ] }],
+  }
+  const clients = createPlatformClients({ fetchImpl: async () => json(pipeline) })
+  await assert.rejects(clients.woodpecker.readBuildEvidence({ baseUrl: target.woodpecker.baseUrl,
+    repositoryId: 4, pipelineNumber: 7, expectedPipelineStatus: 'failure' }), /WOODPECKER_BUILD_STEP_UNCONFIRMED/)
+})
+
+test('已接入源码包的 UAT 缺上传凭据时不退回 Cron', async () => {
+  let writes = 0
+  const clients = createPlatformClients({ githubToken: 'test', fetchImpl: async (url, options) => {
+    if (options.method && options.method !== 'GET') writes++
+    if (url.includes('/branches/')) return json({ commit: { sha: SHA } })
+    if (url.includes('/pipelines?')) return json([])
+    throw Error('不应请求 Cron')
+  } })
+  const receipt = await clients.woodpecker.triggerBuild({ target, commitSha: SHA, operationKey: 'd'.repeat(64) })
+  assert.equal(receipt.status, 'failed')
+  assert.equal(receipt.reason, 'RELEASE_BUILD_NOT_SENT')
+  assert.equal(receipt.mutationAttempted, false)
+  assert.equal(receipt.cause, 'SOURCE_UPLOAD_CREDENTIAL_MISSING')
+  assert.equal(writes, 0)
+})
+
+function sourceClientFixture({ project = 'dataset', moved = false, raced = false, mismatch, uploadFailure } = {}) {
+  const chosen = { ...target, repository: `HiQ-AI/${project}` }, calls = []
+  let branchReads = 0, lists = 0, packageSha
+  const artifactId = 'c'.repeat(32)
+  const clients = createPlatformClients({ githubToken: 'git-secret', woodpeckerToken: 'api-secret', sourceUploadToken: 'upload-secret',
+    execFileImpl: async (name, args) => {
+      assert.equal(name, 'git')
+      if (args[2] === 'rev-parse') return { stdout: SHA }
+      if (args[2] === 'show') return { stdout: `skip_clone: true
+when: [{ event: manual, branch: feature/uat*-base }]
+steps:
+  - name: prepare-uploaded-source
+    when: [{ event: manual, evaluate: 'SOURCE_PACKAGE_ID != ""' }]
+  - name: clone-source
+    when: [{ evaluate: 'SOURCE_PACKAGE_ID == ""' }]
+` }
+      if (args[2] === 'archive') await writeFile(args.find(arg => arg.startsWith('--output=')).slice(9), 'source archive fixture')
+      else assert.ok(['init', 'fetch'].includes(args[2]))
+      return { stdout: '' }
+    },
+    fetchImpl: async (url, options) => {
+      calls.push([url, options.method ?? 'GET'])
+      if (url.includes('/branches/')) return json({ commit: { sha: ++branchReads > 1 && moved ? 'b'.repeat(40) : SHA } })
+      if (url.includes('/pipelines?')) {
+        if (++lists === 2 && raced) return json([{ number: 97, commit: SHA, branch: chosen.branch, status: 'running' }])
+        return json([])
+      }
+      if (options.method === 'PUT') {
+        if (uploadFailure === 'timeout') throw Error('upload-secret server response')
+        if (uploadFailure === 'conflict') return { status: 409 }
+        assert.equal(options.headers.Authorization, 'Bearer upload-secret')
+        packageSha = createHash('sha256').update(options.body).digest('hex')
+        assert.equal(options.headers['X-Artifact-SHA256'], packageSha)
+        return { status: 201, json: async () => ({ project, pipeline: `${project}-uat`, environment: 'uat3',
+          commit: SHA, sha256: packageSha, artifact_id: artifactId, woodpecker_pipeline: 99 }) }
+      }
+      if (url.endsWith('/pipelines/99')) {
+        const pipeline = { number: 99, event: 'manual', branch: chosen.branch, commit: SHA,
+          variables: { SOURCE_PACKAGE_ID: artifactId, SOURCE_PACKAGE_SHA256: packageSha, SOURCE_COMMIT_SHA: SHA } }
+        if (mismatch?.startsWith('SOURCE_')) pipeline.variables[mismatch] = 'incorrect'
+        else if (mismatch) pipeline[mismatch] = 'incorrect'
+        return json(pipeline)
+      }
+      throw Error('不应请求 Cron')
+    },
+  })
+  return { trigger: () => clients.woodpecker.triggerBuild({ target: chosen, commitSha: SHA, operationKey: 'd'.repeat(64) }), calls }
+}
+
+test('两个 UAT 仓库主动上传一次并独立核对精确 manual 流水线', async () => {
+  for (const project of ['dataset', 'dataset-web']) {
+    const fixture = sourceClientFixture({ project })
+    const receipt = await fixture.trigger()
+    assert.match(receipt.evidenceRef, /^woodpecker-source-dispatch:4:99:/)
+    assert.equal(receipt.pipelineNumber, 99)
+    assert.equal(fixture.calls.filter(([, method]) => method === 'PUT').length, 1)
+    assert.equal(fixture.calls.some(([url]) => url.includes('/cron')), false)
+    assert.equal(fixture.calls.filter(([url]) => url.includes('/branches/')).length, 2)
+    assert.equal(fixture.calls.at(-1)[0].endsWith('/pipelines/99'), true)
+  }
+})
+
+test('归档后的分支漂移或 Poller 抢先触发阻止上传', async () => {
+  for (const options of [{ moved: true }, { raced: true }]) {
+    const fixture = sourceClientFixture(options)
+    if (options.raced) await assert.rejects(fixture.trigger(), /WOODPECKER_EQUIVALENT_BUILD_EXISTS/)
+    else {
+      const receipt = await fixture.trigger()
+      assert.equal(receipt.reason, 'RELEASE_BUILD_NOT_SENT')
+      assert.equal(receipt.cause, 'WOODPECKER_BRANCH_MOVED')
+      assert.equal(receipt.mutationAttempted, false)
+    }
+    assert.equal(fixture.calls.some(([, method]) => method !== 'GET'), false)
+  }
+})
+
+test('上传流水线身份或任一来源变量不匹配不能作为受理证明', async () => {
+  for (const mismatch of ['number', 'event', 'branch', 'commit', 'SOURCE_PACKAGE_ID', 'SOURCE_PACKAGE_SHA256', 'SOURCE_COMMIT_SHA']) {
+    const fixture = sourceClientFixture({ mismatch })
+    await assert.rejects(fixture.trigger(), /WOODPECKER_SOURCE_DISPATCH_UNCONFIRMED/)
+    assert.equal(fixture.calls.filter(([, method]) => method === 'PUT').length, 1)
+    assert.equal(fixture.calls.some(([, method]) => method === 'POST'), false)
+  }
+})
+
+test('上传超时或 409 不重传且不另发 Cron', async () => {
+  for (const uploadFailure of ['timeout', 'conflict']) {
+    const fixture = sourceClientFixture({ uploadFailure })
+    await assert.rejects(fixture.trigger(), /SOURCE_UPLOAD_(REQUEST_UNCONFIRMED|HTTP_409)/)
+    assert.equal(fixture.calls.filter(([, method]) => method === 'PUT').length, 1)
+    assert.equal(fixture.calls.some(([, method]) => method === 'POST'), false)
+  }
 })
 
 test('同 SHA 已有在途构建时拒绝触发', async () => {

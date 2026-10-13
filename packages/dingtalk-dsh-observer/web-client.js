@@ -596,11 +596,35 @@ window.__ModuleLoader__.load({
           React.createElement('h4', { style: { margin: '0 0 16px', fontSize: 14, fontWeight: 600 } }, '步骤产出'),
           active || visited ? node.outputRef ? React.createElement(TaskStepOutput, { taskId, node, detailRevision }) : React.createElement('p', { style: { margin: 0, padding: '12px 0 24px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } }, node.definitionPending ? '该阶段步骤待确定' : ['pending', 'ready', 'blocked'].includes(node.status) ? '执行后将在这里展示产出' : '暂未记录产出') : null),
         React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 24 } },
-          node.sessionId ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenSession(node.sessionId) }, '查看会话记录') : null,
+          node.sessionBound === true && node.sessionId ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenSession(node.sessionId) }, '查看步骤会话') : null,
           React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: onBack }, '返回步骤目录')))
     }
+    const activePageStorageKey = 'dingtalk-dsh-observer.active-page'
+    const readActivePage = () => {
+      try {
+        const page = window.sessionStorage.getItem(activePageStorageKey)
+        return pages.some(item => item.id === page) ? page : 'groups'
+      } catch { return 'groups' }
+    }
+    function TaskOwnerSession({ owner, onOpenSession, navigatingSessionId }) {
+      if (!owner) return null
+      const available = owner.sessionBound === true && owner.sessionId
+      return React.createElement('section', { 'aria-label': '任务执行会话', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 20, padding: '12px 0', borderBottom: `1px solid ${colors.border}` } },
+        React.createElement('div', null,
+          React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, '任务执行会话'),
+          React.createElement('p', { style: { margin: '6px 0 0', color: colors.muted, fontSize: 12, lineHeight: 1.7 } }, '查看任务整体的分析、安排与执行记录。')),
+        available ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: navigatingSessionId === owner.sessionId,
+          onClick: () => onOpenSession(owner.sessionId) }, navigatingSessionId === owner.sessionId ? '正在打开会话…' : '查看任务会话')
+          : React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '会话尚未建立'))
+    }
     function ObserverContent({ openSession }) {
-      const [activePage, setActivePage] = useState('groups')
+      const [activePage, updateActivePage] = useState(readActivePage)
+      const setActivePage = useCallback(page => {
+        updateActivePage(page)
+        // 导航属于看板，不能随宿主 conversation 插槽重挂载而丢失。
+        try { window.sessionStorage.setItem(activePageStorageKey, page) }
+        catch { /* 浏览器禁用存储时仍允许正常切页。 */ }
+      }, [])
       const [topicTarget, setTopicTarget] = useState()
       const [data, setData] = useState()
       const [error, setError] = useState()
@@ -650,9 +674,11 @@ window.__ModuleLoader__.load({
         setRefreshState('done')
         window.setTimeout(() => setRefreshState('idle'), 1200)
       }, [refresh, refreshState])
+      const latestReading = useRef(null)
+      useEffect(() => { latestReading.current = { readingStep, detail: workflowTaskDetail } }, [readingStep, workflowTaskDetail])
       const pendingDetail = useRef(null)
       useEffect(() => {
-        if (!selectedWorkflowTaskId) { setWorkflowTaskDetail(undefined); setWorkflowDetailError(''); setReadingStep(null); setStepReadingNotice(''); return }
+        if (!selectedWorkflowTaskId) { setWorkflowTaskDetail(undefined); setWorkflowDetailError(''); setReadingStep(null); setStepReadingNotice(''); detailFocusTarget.current = null; return }
         let active = true
         setWorkflowDetailError('')
         if (pendingDetail.current?.taskId !== selectedWorkflowTaskId || pendingDetail.current?.retry !== workflowDetailRetry) {
@@ -663,24 +689,25 @@ window.__ModuleLoader__.load({
         }
         pendingDetail.current.promise.then(value => {
           if (!active) return
-          const previous = [...document.querySelectorAll('[aria-label="任务执行详情"] li.observer-task-step')]
-          const reading = document.querySelector('[aria-label="任务执行详情"] .observer-task-step-button[aria-pressed="true"]')?.closest('li.observer-task-step')
-          const adjacentKey = adjacentCurrentStep(previous.map(element => element.dataset.stepKey), (value.executionNodes || []).map(node => node.stepKey), reading?.dataset.stepKey)
+          const previous = latestReading.current?.detail?.taskId === value.taskId ? latestReading.current : null
+          if (!previous || detailFocusTarget.current?.taskId !== selectedWorkflowTaskId) detailFocusTarget.current = null
+          const readingKey = previous?.readingStep?.taskId === selectedWorkflowTaskId ? previous.readingStep.stepKey : undefined
+          const adjacentKey = adjacentCurrentStep((previous?.detail?.executionNodes || []).map(node => node.stepKey), (value.executionNodes || []).map(node => node.stepKey), readingKey)
           if (adjacentKey !== null) { setStepReadingNotice('正在阅读的步骤已从当前计划移除，已转到相邻步骤。'); detailFocusTarget.current = { taskId: selectedWorkflowTaskId, stepKey: adjacentKey } }
-          else setStepReadingNotice('')
-          setReadingStep({ taskId: selectedWorkflowTaskId, stepKey: preferredTaskStep(value.executionNodes || [], adjacentKey ?? reading?.dataset.stepKey)?.stepKey || '' })
+          else if (!detailFocusTarget.current) setStepReadingNotice('')
+          setReadingStep({ taskId: selectedWorkflowTaskId, stepKey: preferredTaskStep(value.executionNodes || [], adjacentKey ?? readingKey)?.stepKey || '' })
           setWorkflowTaskDetail(value)
         }, cause => { if (active) setWorkflowDetailError(cause.message) })
         return () => { active = false }
       }, [selectedWorkflowTaskId, updatedAt, workflowDetailRetry])
       useEffect(() => {
         const target = detailFocusTarget.current
-        if (!target || target.taskId !== selectedWorkflowTaskId) return
+        if (!target || target.taskId !== selectedWorkflowTaskId || activePage !== 'tasks') return
         detailFocusTarget.current = null
         const steps = [...document.querySelectorAll('[aria-label="任务执行详情"] li.observer-task-step')]
         const adjacent = steps.find(element => element.dataset.stepKey === target.stepKey)
         ;(adjacent?.querySelector('button') || document.querySelector('[aria-label="执行步骤"] h2'))?.focus()
-      }, [workflowTaskDetail, selectedWorkflowTaskId])
+      }, [workflowTaskDetail, selectedWorkflowTaskId, activePage])
       useEffect(() => {
         const revealSelection = () => {
           const button = document.querySelector('[aria-label="任务执行详情"] .observer-task-step-button[aria-pressed="true"]')
@@ -694,7 +721,7 @@ window.__ModuleLoader__.load({
         const narrow = window.matchMedia('(max-width: 720px)')
         narrow.addEventListener('change', revealSelection)
         return () => narrow.removeEventListener('change', revealSelection)
-      }, [readingStep?.stepKey, selectedWorkflowTaskId])
+      }, [readingStep?.stepKey, selectedWorkflowTaskId, activePage])
       useEffect(() => {
         refresh()
         const timer = window.setInterval(refresh, 5000)
@@ -988,6 +1015,7 @@ window.__ModuleLoader__.load({
       const completedSteps = taskNodes.filter(node => !node.definitionPending && node.status === 'succeeded' && node.control?.action !== 'skip').length
       const skippedSteps = taskNodes.filter(node => !node.definitionPending && node.status === 'succeeded' && node.control?.action === 'skip').length
       const stepsResolved = selectedWorkflowTask?.plan?.stepsResolved !== false && !taskNodes.some(node => node.definitionPending)
+      const noWorkflow = stepsResolved && selectedWorkflowTask?.plan?.stages?.length === 0
       const stepProgress = taskNodes.length ? Math.min(stepsResolved ? 100 : 99, Math.round((completedSteps + skippedSteps) / taskNodes.length * 100)) : 0
       const stepProgressText = !stepsResolved ? '步骤待确定' : `${skippedSteps ? '步骤处理' : '步骤完成'} ${stepProgress}%`
       const taskTone = selectedWorkflowTask?.outcome === 'failed' ? colors.danger : selectedWorkflowTask?.state === 'waiting' ? colors.warning : selectedWorkflowTask?.outcome === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : colors.accent
@@ -1012,11 +1040,12 @@ window.__ModuleLoader__.load({
               React.createElement('h1', { title: selectedWorkflowTask.title || selectedWorkflowTask.objective, style: { margin: 0, fontSize: 24, fontWeight: 650, lineHeight: 1.45, letterSpacing: '-.02em' } }, taskDisplayTitle(selectedWorkflowTask)),
               activeStep ? React.createElement('p', { style: { margin: '12px 0 0', fontSize: 14, color: stepColor(activeStep.status) } }, `当前 · ${activeStep.title || nodeTitle[activeStep.templateNodeId ?? activeStep.nodeId] || '执行步骤'}`) : null),
             React.createElement('div', { className: 'observer-task-statistics' },
-              React.createElement('span', { style: { fontWeight: 600 } }, taskNodes.length ? skippedSteps ? `已处理 ${completedSteps + skippedSteps} / ${taskNodes.length} 个步骤（完成 ${completedSteps}，不适用跳过 ${skippedSteps}）` : `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : stepsResolved ? '暂无步骤记录' : '步骤待确定'),
+              React.createElement('span', { style: { fontWeight: 600 } }, taskNodes.length ? skippedSteps ? `已处理 ${completedSteps + skippedSteps} / ${taskNodes.length} 个步骤（完成 ${completedSteps}，不适用跳过 ${skippedSteps}）` : `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : noWorkflow ? '未使用工作流' : stepsResolved ? '暂无步骤记录' : '步骤待确定'),
               React.createElement(TaskTotalElapsed, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask })))),
         selectedWorkflowTask.objective ? React.createElement('details', { style: { margin: '0 0 16px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } },
           React.createElement('summary', { style: { cursor: 'pointer' } }, '任务目标'),
           React.createElement('p', { style: { margin: '8px 0 0', whiteSpace: 'pre-wrap' } }, selectedWorkflowTask.objective)) : null,
+        React.createElement(TaskOwnerSession, { owner: selectedWorkflowTask.taskOwner, onOpenSession: navigate, navigatingSessionId }),
         selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { marginBottom: 16, padding: '14px 18px', borderLeft: `3px solid ${colors.warning}`, background: colors.surface2, fontSize: 14, lineHeight: 1.7 } }, traceReason(selectedWorkflowTask.waitingReason)) : null,
         selectedWorkflowTask.investigationRequest ? React.createElement(WorkflowClarification, { key: selectedWorkflowTask.investigationRequest.requestId, request: selectedWorkflowTask.investigationRequest, onSubmitted: manualRefresh }) : null,
         React.createElement('section', { className: 'observer-task-result', 'aria-label': '当前结果' },
@@ -1031,7 +1060,7 @@ window.__ModuleLoader__.load({
               taskNodes.length || !stepsResolved ? React.createElement('span', { style: { fontSize: 12, color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, stepProgressText) : null),
             readingNode ? React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: focusReadingStep }, '查看所选步骤') : null),
           taskNodes.length ? React.createElement('div', { role: 'progressbar', 'aria-label': skippedSteps ? '步骤处理情况' : '步骤完成情况', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': stepProgress, 'aria-valuetext': stepProgressText, style: { height: 3, background: colors.border, marginBottom: 24, borderRadius: 4 } }, React.createElement('div', { style: { width: `${stepProgress}%`, height: '100%', background: taskTone, borderRadius: 4 } })) : null,
-          !taskNodes.length ? React.createElement('p', { style: { padding: '32px 0', color: colors.muted, fontSize: 14 } }, stepsResolved ? '暂无执行步骤记录' : '该阶段步骤待确定') : null,
+          !taskNodes.length ? React.createElement('p', { style: { padding: '32px 0', color: colors.muted, fontSize: 14 } }, noWorkflow ? '本任务未使用工作流' : stepsResolved ? '暂无执行步骤记录' : '该阶段步骤待确定') : null,
           taskNodes.length ? React.createElement('div', { className: 'observer-task-layout' },
             React.createElement('nav', { className: 'observer-task-navigation', 'aria-label': '步骤目录' },
               ...groupTaskSteps(taskNodes).map((group, groupIndex) => React.createElement('section', {

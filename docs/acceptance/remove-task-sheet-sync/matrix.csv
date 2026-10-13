@@ -6,3 +6,6 @@ Resident启动关闭不创建同步定时器,1,PASS,round-1.md
 浏览器相邻配置保存与错误恢复,1,PASS,round-1.md
 浏览器窄屏与键盘操作,1,PASS,round-1.md
 发布bundle与包中不含同步服务,1,PASS,round-1.md
+README冲突解决且主线新功能保持,2,PASS,round-2.md
+合并主线后93项定向回归,2,PASS,round-2.md
+合并主线后bundle一致与发布包回读,2,PASS,round-2.md

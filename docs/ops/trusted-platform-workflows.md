@@ -29,7 +29,19 @@ UAT 部署可独立发起，显式给出白名单目标和目标分支当前提�
     secretsDirectory: 'D:/baibu-agent/.secrets'
 ```
 
-Host 在启动时只读取当前 Poller Secret、GitHub CLI 登录及 Docker buildx 可用性，失败则拒绝装配；不会把凭据写入 profile。目标白名单仍由 `workflow.platforms` 单独配置，缺证明和目标时目录保持不可发起。部署前先核实当前 Poller Secret 名称与 UAT K3s Server；若变更，更新客户端配置和定向验证后再安装，不修改凭据文件来适配旧代码。
+Host 在启动时读取当前 Poller Secret、GitHub CLI 登录及 Docker buildx 可用性，失败则拒绝装配；不会把凭据写入 profile。另从 `secretsDirectory/woodpecker-source-upload-token.txt` 读取专用源码上传 Token，缺少时只阻断上传，不借用其他令牌。目标白名单仍由 `workflow.platforms` 单独配置，缺证明和目标时目录保持不可发起。部署前先核实当前 Poller Secret 名称与 UAT K3s Server；若变更，更新客户端配置和定向验证后再安装，不修改凭据文件来适配旧代码。
+
+## UAT 主动源码包构建
+
+`task-uat-deployment` 与同提交重建共用受信构建客户端。`HiQ-AI/dataset`、`HiQ-AI/dataset-web` 的 `feature/uat1-base` 至 `feature/uat9-base` 优先走现行 `/source-upload/v1/projects/<project>/pipelines/<project>-uat/environments/<uat>/commits/<sha>` PUT 协议；无须等待 Poller。其他仓库仍使用原先已登记的 Cron，生产 Tag 路径不变。
+
+Host 从干净隔离的 Git 裸仓浅取目标分支，核对完整 SHA 后用 `git archive` 生成最大 64 MiB 的源码包；不执行目标仓脚本，也不包含本地未提交文件。解析目标提交的 `.woodpecker/<project>-uat.yaml`，要求 `skip_clone`、manual 入口及源码包准备/clone 互斥条件成立；上传前再次核验分支和全分页等价流水线。已成功或在途的同提交构建复用，不为更换源码获取方式重复部署。
+
+部署前确认配置的 `secretsDirectory` 中已有有效 `woodpecker-source-upload-token.txt`，只报告可用性，不打印令牌；不将令牌写入 YAML、执行账或 Git。缺令牌、入口不支持、分支漂移等明确未发送错误以 `RELEASE_BUILD_NOT_SENT` 收口，保留原因和零上传证明，不静默退回 Cron，也不误触发同提交重建。上传请求不自动重试；超时、409 或回执异常沿原持久效果账只读对账，不能另发 Cron。
+
+上传必须返回 201 且项目、pipeline、环境、完整 SHA、包 SHA256、artifact ID 和流水线号全部匹配，再独立 GET 该流水线，核对 manual、分支及三个来源变量。最终构建证明还核对 `prepare-uploaded-source` 成功、日志中的包摘要与提交匹配，以及 clone 未执行；201 不代表构建或部署完成。之后继续既有 BuildKit digest、Registry、Deployment/Pod 和业务入口回读。
+
+安装仍按[本地部署规程](resident-review-local-deployment.md)执行维护、包 SHA256、安装版本、新进程与健康回读；不修改已冻结 Run 或重新触发历史任务。首次业务部署需另留精确上传流水线和运行版本证据，本地测试不代替该验证。
 
 复杂数据变更接入时，同一 Host 配置另需 `uatPostgres.receiptDbPath`（本机持久 SQLite 文件的绝对路径）、`uatPostgres.targets` 和 `productionPostgres.targets` 三项 `{project, target}`；Resident 的 `workflow.platforms.bytebase` 另登记三个 `{id, project, target, uatTarget}`。生产 `target` 是 Bytebase 资源名，只读连接精确映射 `.secrets/db-credentials.json` 中的 `tianyi_editor_slave`、`tianyi_bg_slave`、`tianyi_admin_slave`，须确认 `pg_is_in_recovery()=true` 和会话只读。`uatTarget`/Host `target` 是 `{instance: postgresql/192.168.8.8:30770, database: 同名库, environment: uat}`。三处清单必须逐项一致，Host 不从配置读取用户名或密码。安装前用只读客户端核对三库 `current_database()`、会话只读、实时 catalog 完整行数和生产副本身份；不得用过期 Bytebase `/schema` 缓存快照替代。UAT 回执文件所在目录应与工作流控制账一同备份，未知预留不能自动清除后重演。
 当前已核实的 UAT 部署目标如下；本机配置以这些精确资源为白名单，每次仍需独立预检：

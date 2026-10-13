@@ -2727,6 +2727,38 @@ test('Owner 在零阶段 Task 直接查询来源并完成原文整理，不产�
   assert.deepEqual((await execution.controller.taskPlan(taskId)).stages, [])
   assert.deepEqual(await execution.store.query({ kind: 'run.list', taskId }), [])
   assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).decision.action, 'complete')
+  const detail = await service.taskDetail(taskId)
+  assert.equal(detail.state, 'completed')
+  assert.equal(detail.outcome, 'succeeded')
+  assert.equal(detail.plan.stepsResolved, true)
+  assert.deepEqual(detail.executionNodes, [])
+  assert.equal(detail.taskOwner.sessionBound, true)
+  assert.equal(detail.taskOwner.sessionId, (await execution.store.query({ kind: 'task.owner', taskId })).sessionId)
+  assert.equal(detail.childSessionId, detail.taskOwner.sessionId)
+})
+
+test('零阶段任务执行中保留已绑定任务会话，尚未结束不冒充计划已确定', async t => {
+  const began = Promise.withResolvers(), release = Promise.withResolvers()
+  const { service, message } = await fixture(t, 'owner', undefined, { taskOwnerSessions: {
+    async run({ onSessionBound }) {
+      await onSessionBound(); began.resolve()
+      await release.promise
+      return { status: 'no_submission', reason: 'fixture-ended' }
+    }, async close() { release.resolve() },
+  } })
+  try {
+    const received = await service.ingest(message), handled = await service.messages.process(received.runId)
+    const taskId = handled.commands[0].result.taskId
+    await began.promise
+    const detail = await service.taskDetail(taskId)
+    assert.equal(detail.state, 'running')
+    assert.equal(detail.plan.stepsResolved, false)
+    assert.deepEqual(detail.plan.stages, [])
+    assert.deepEqual(detail.executionNodes, [])
+    assert.equal(detail.taskOwner.sessionBound, true)
+    assert.ok(detail.taskOwner.sessionId)
+    assert.equal(detail.childSessionId, detail.taskOwner.sessionId)
+  } finally { release.resolve() }
 })
 test('执行中收到追加文件意图时保留当前Run，完成后从核验产物启动后继', async t => {
   let release, began, writes = 0
@@ -3138,8 +3170,8 @@ test('只有局部替换的工程方案仍展示真实产出，分页不丢修�
   assert.equal(rest.nextCursor, null)
 })
 
-test('只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话', async t => {
-  const { service, message } = await fixture(t, 'owner', undefined, {
+test('任务详情和历史执行 API 按实际绑定区分 Owner 会话，取消零阶段任务不再等待步骤', async t => {
+  const { service, execution, message } = await fixture(t, 'owner', undefined, {
     taskOwnerSessions: { async run() { throw new Error('OWNER_NOT_STARTED') }, async close() {} },
   })
   const receipt = await service.ingest(message)
@@ -3150,6 +3182,19 @@ test('只读历史执行 API 不把预留 Owner 身份伪装成已绑定会话',
   assert.ok(result.taskOwner.sessionId)
   assert.equal(result.taskOwner.sessionBound, false)
   assert.deepEqual(result.runs, [])
+  const detail = await service.taskDetail(taskId)
+  assert.equal(detail.taskOwner.sessionBound, false)
+  assert.equal(detail.taskOwner.sessionId, null)
+  assert.equal(detail.childSessionId, null)
+  assert.equal(detail.plan.stepsResolved, false)
+  const plan = await execution.controller.taskPlan(taskId)
+  await execution.controller.controlTask({ commandId: 'cancel-unbound-owner', taskId, intent: 'cancel',
+    expectedControlRevision: plan.task.controlRevision })
+  const cancelled = await service.taskDetail(taskId)
+  assert.equal(cancelled.state, 'completed')
+  assert.equal(cancelled.outcome, 'cancelled')
+  assert.equal(cancelled.plan.stepsResolved, true)
+  assert.deepEqual(cancelled.executionNodes, [])
 })
 
 test('消息证据 API 仅回读绑定原文并以 hash 固定分页版本', async t => {
@@ -4063,15 +4108,16 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
   } finally { await hidden.close() }
 })
 
-for(const valid of [true,false,'observed'])test(`普通UAT构建失败收口 receipt=${valid}：单次发送、保留失败证据且不反复恢复`,async t=>{
+for(const valid of [true,false,'observed','unsent'])test(`普通UAT构建失败收口 receipt=${valid}：单次发送、保留失败证据且不反复恢复`,async t=>{
  let sends=0,reads=0;const operationKey='a'.repeat(64),commitSha='b'.repeat(40)
  const receipt={status:'failed',reason:'RELEASE_PIPELINE_FAILED',operationKey,commitSha,pipelineNumber:319,pipelineStatus:valid?'killed':'running',evidenceRef:'woodpecker:list:319'}
+ if(valid==='unsent')Object.assign(receipt,{reason:'RELEASE_BUILD_NOT_SENT',phase:'preflight',mutationAttempted:false,cause:'SOURCE_UPLOAD_CREDENTIAL_MISSING'})
  const {service,execution,message,startCodeTask}=await fixture(t,'owner',undefined,{allowedEffects:['external.operation'],deliveryOptions:{authorize:async()=>false,authorizeExternal:async()=>({principalId:'owner',authorizationRef:'fixture'}),externalAdapter:{execute:async()=>{sends++;return{status:'unknown'}},reconcile:async()=>{reads++;return receipt}}},execute:async({runId,generation,requirementDigest,perform})=>perform({action:'external',prepared:{action:'external',workflowKind:'uat-deployment',operation:'build',operationKey,expected:{commitSha},resourceKey:'external:fixture:uat',runId,generation,requirementDigest}})})
  const task=await startCodeTask();await execution.controller.whenIdle(task.runId);const before=await execution.controller.state(task.runId);assert.equal(before.run.status,'waiting')
  if(valid==='observed')await execution.delivery.reconcile((await execution.store.query({kind:'effect.list',runId:task.runId}))[0].effectId)
  await settleTaskOwners(service, service.execution);await execution.controller.whenIdle(task.runId);const after=await execution.controller.state(task.runId)
  assert.equal(after.run.status,valid?'failed':'waiting');assert.equal(after.nodes[0].status,valid?'failed':'waiting');assert.equal(after.run.generation,before.run.generation);assert.equal(sends,1);assert.equal(reads,1)
- if(valid){assert.equal(after.nodes[0].waitReason.reference,'RELEASE_PIPELINE_FAILED');assert.deepEqual(await execution.artifacts.read(after.nodes[0].evidenceRefs[0]),receipt)}
+ if(valid){assert.equal(after.nodes[0].waitReason.reference,receipt.reason);assert.deepEqual(await execution.artifacts.read(after.nodes[0].evidenceRefs[0]),receipt)}
  await settleTaskOwners(service, service.execution);await execution.controller.whenIdle(task.runId);assert.equal(sends,1);assert.equal(reads,1)
 })
 
@@ -4493,6 +4539,81 @@ test('同任务汇总卡片并分页历次执行：取消保留阶段成果、�
   assert.equal((await service.taskExecutions('history-3')).total, 3)
 })
 
+for (const mode of ['unbound-failure', 'bound-failure', 'bound-success', 'bound-retry']) test(`当前完整详情只展示真实绑定的步骤会话并区分任务接管：${mode}`, async t => {
+  let attempts = 0
+  const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {
+    config: { webActorId: 'owner' }, execute: async () => ({ summary: '前序产出' }),
+    executionSessions: { async run({ onSessionBound, onResult }) {
+      attempts++
+      if (mode !== 'unbound-failure') await onSessionBound()
+      if (mode !== 'bound-success' && !(mode === 'bound-retry' && attempts > 1))
+        throw Object.assign(new Error('会话执行失败'), { code: mode === 'unbound-failure' ? 'SESSION_CREATE_FAILED' : 'AGENT_CHECK_FAILED' })
+      await onResult({ summary: '当前步骤产出' })
+      return { status: 'submitted' }
+    }, async cancel() {}, async close() {} },
+    extraNodes: [{ id: 'agent-check', version: '1', executor: 'agent', allowedEffects: ['read'],
+      provider: 'test', model: 'test', prompt: '检查当前产出', allowedTools: [], inputSchema: schema, outputSchema: schema,
+      mapInput: ({ previousOutput }) => previousOutput }],
+  })
+  const { taskId, runId } = await startCodeTask()
+  await execution.controller.whenIdle(runId)
+  const raw = (await execution.controller.state(runId)).nodes.find(node => node.nodeId === 'agent-check')
+  const detail = await service.taskDetail(taskId), node = detail.executionNodes.find(item => item.nodeId === 'agent-check')
+  const history = (await service.taskRuns(taskId)).runs[0].nodes.find(item => item.nodeId === 'agent-check')
+  const bound = mode !== 'unbound-failure'
+  assert.ok(raw.sessionId, '领取 Agent 步骤会预分配会话身份')
+  assert.equal(raw.sessionBound, bound)
+  assert.equal(node.sessionBound, bound)
+  assert.equal(node.sessionId, bound ? raw.sessionId : null)
+  assert.equal(history.sessionId, node.sessionId)
+  assert.equal(node.status, mode === 'bound-success' ? 'succeeded' : 'waiting')
+  assert.equal(detail.childSessionId, bound ? raw.sessionId : null)
+  assert.equal(detail.executionNodes[0].sessionId, null, '代码步骤不应虚构会话')
+  if (mode === 'bound-retry') {
+    const state = await execution.controller.state(runId)
+    await execution.controller.changeInput({ commandId: 'detail-agent-new-generation', runId,
+      inputId: 'detail-agent-new-input', sourceKey: 'detail-agent-new-input', input: { request: '新输入', materials: [] },
+      expectedRevision: state.run.revision })
+    await execution.controller.whenIdle(runId)
+    const refreshed = await service.taskDetail(taskId), latest = refreshed.executionNodes.find(item => item.nodeId === node.nodeId)
+    assert.equal(latest.status, 'succeeded')
+    assert.ok(latest.generation > node.generation)
+    assert.equal(latest.sessionBound, true)
+    assert.notEqual(latest.sessionId, node.sessionId)
+    assert.notEqual(latest.nodeRunId, node.nodeRunId)
+    assert.notEqual(latest.outputRef, node.outputRef)
+    assert.equal(latest.stepKey, node.stepKey, '新节点代次更新会话与产出，但保留同一逻辑步骤的阅读身份')
+    assert.equal(refreshed.childSessionId, latest.sessionId)
+  }
+  if (mode !== 'bound-failure') return
+
+  const owner = await execution.store.query({ kind: 'task.owner', taskId }), turnId = 'detail-takeover'
+  const claim = (await execution.store.command({ id: 'detail-owner-claim', kind: 'task.owner.claim',
+    args: { taskId, turnId, expectedLeaseEpoch: owner.leaseEpoch } })).result
+  await execution.store.command({ id: 'detail-owner-bound', kind: 'task.owner.sessionBound',
+    args: { taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: owner.sessionId } })
+  const control = async (action, extra = {}) => {
+    const current = (await execution.controller.state(runId)).nodes.find(item => item.nodeId === node.nodeId)
+    const plan = await execution.controller.taskPlan(taskId)
+    return execution.controller.controlNode({ commandId: `detail-${action}`, taskId, runId, nodeRunId: current.nodeRunId,
+      generation: current.generation, leaseEpoch: current.leaseEpoch, expectedRequirementRevision: plan.task.requirementRevision,
+      expectedControlRevision: plan.task.controlRevision, action, source: 'task-session', actorId: owner.sessionId,
+      reason: '原任务会话接管并提交当前节点的有效产出', ...extra })
+  }
+  await control('takeover')
+  const output = await execution.artifacts.put({ summary: '任务会话接管产出' }, { reference: raw.inputRef })
+  await control('submit-output', { outputRef: output.ref, evidenceRefs: [output.ref] })
+  const completed = await service.taskDetail(taskId), accepted = completed.executionNodes.find(item => item.nodeId === node.nodeId)
+  assert.equal(accepted.status, 'succeeded')
+  assert.equal(accepted.control.action, 'submit-output')
+  assert.equal(accepted.control.actorId, completed.taskOwner.sessionId)
+  assert.equal(completed.taskOwner.sessionBound, true)
+  assert.equal(accepted.sessionId, raw.sessionId, '步骤保留原自动执行会话，任务会话入口另行提供接管记录')
+  assert.notEqual(accepted.sessionId, completed.taskOwner.sessionId)
+  assert.equal(completed.childSessionId, completed.taskOwner.sessionId)
+  assert.equal(accepted.stepKey, node.stepKey)
+})
+
 test('当前完整详情保留已成功前段，替换删除新增后段并隔离同名步骤', async t => {
   const { service, execution, startCodeTask } = await fixture(t, 'owner', undefined, {
     config: { webActorId: 'owner' }, nodeId: 'verify', execute: async () => ({ summary: '第一阶段有效成果' }),
@@ -4524,7 +4645,7 @@ test('当前完整详情保留已成功前段，替换删除新增后段并隔�
       { stageId: 'unknown', workflowId: 'task-engineering' }] })
   const revised = await service.taskDetail(taskId)
   assert.deepEqual(revised.executionNodes.map(node => node.stageId), ['fixture', 'release', 'unknown'])
-  assert.ok(revised.executionNodes.every(node => !node.stepKey.includes(':delivery:')))
+  assert.ok(revised.executionNodes.every(node => node.stepKey !== extended.executionNodes[1].stepKey))
   assert.equal(new Set(revised.executionNodes.map(node => node.stepKey)).size, 3)
   assert.equal(revised.executionNodes[0].stepKey, first.stepKey)
   assert.equal(revised.plan.stepsResolved, false)
@@ -4545,6 +4666,26 @@ test('当前完整详情保留已成功前段，替换删除新增后段并隔�
   assert.deepEqual(executed.executionNodes.slice(0, 2).map(node => node.status), ['succeeded', 'succeeded'])
   assert.notEqual(executed.executionNodes[0].stepKey, executed.executionNodes[1].stepKey)
   assert.equal(executed.executionNodes[1].stepKey, revised.executionNodes[1].stepKey)
+  assert.ok(executed.executionNodes.every(node => node.sessionId === null), '代码步骤与待定义阶段都没有执行会话')
+  await execution.controller.advanceTaskPlan(taskId)
+  plan = await execution.controller.taskPlan(taskId)
+  await execution.controller.reviseTaskPlan({ commandId: 'detail-replace-same-stage', taskId,
+    expectedPlanRevision: plan.task.planRevision, requirementRevision: plan.task.requirementRevision, affectedFrom: 1,
+    stages: [{ stageId: 'fixture', workflowId: 'fixture-code-operation' }, { stageId: 'release', workflowId: 'detail-new-stage' }] })
+  const replacement = await service.taskDetail(taskId)
+  assert.equal(replacement.executionNodes[0].stepKey, first.stepKey)
+  assert.notEqual(replacement.executionNodes[1].stepKey, executed.executionNodes[1].stepKey,
+    '相同阶段名、工作流与步骤名的新流程实例不能继承旧阅读身份')
+  plan = await execution.controller.taskPlan(taskId)
+  await execution.controller.bindTaskStageInput({ commandId: 'detail-bind-replacement', taskId,
+    planRevision: plan.task.planRevision, stageId: 'release', predecessorOutputRef: first.outputRef,
+    input: { request: '替换后的发布阶段', materials: [] } })
+  const restarted = await execution.controller.advanceTaskPlan(taskId)
+  await execution.controller.whenIdle(restarted.stages[1].runId)
+  const replacementExecuted = await service.taskDetail(taskId)
+  assert.notEqual(replacementExecuted.executionNodes[1].runId, executed.executionNodes[1].runId)
+  assert.equal(replacementExecuted.executionNodes[1].stepKey, replacement.executionNodes[1].stepKey,
+    '计划阶段启动后仍应保留同一阅读身份')
 })
 
 test('当前完整详情只取最新节点代次，需求更新后旧结果及正文立即失效', async t => {

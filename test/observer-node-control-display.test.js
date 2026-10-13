@@ -104,17 +104,45 @@ test('跳过单列为已处理，完整进度不能声称全部执行成功', ()
 })
 
 test('状态展示保持已有产出绑定和键盘会话入口，不增加控制请求', () => {
-  const node = { ...base, outputRef: 'accepted-output', sessionId: 'original-session', control: { action: 'reuse', reason: '沿用有效成果' } }
+  const node = { ...base, outputRef: 'accepted-output', sessionBound: true, sessionId: 'original-session', control: { action: 'reuse', reason: '沿用有效成果' } }
   const tree = render(node)
   const output = children(tree).find(item => item.type === 'existing-output')
   assert.equal(output.props.node, node)
   assert.equal(output.props.taskId, 'task')
   assert.equal(output.props.detailRevision, 'current')
-  const button = children(tree).find(item => item.type === 'button' && item.children.includes('查看会话记录'))
+  const button = children(tree).find(item => item.type === 'button' && item.children.includes('查看步骤会话'))
   assert.equal(button.props.type, 'button')
   button.props.onClick()
   assert.equal(navigation.at(-1), 'original-session')
   assert.doesNotMatch(mappingCode + rowCode, /fetch\(|post\(|\/node-control|confirm\(|alert\(/)
+})
+
+test('预分配但未绑定的步骤会话不提供跳转入口', () => {
+  for (const sessionBound of [false, undefined]) {
+    const tree = render({ ...base, sessionId: 'reserved-session', sessionBound })
+    assert.equal(children(tree).some(item => item.type === 'button' && item.children.includes('查看步骤会话')), false)
+  }
+})
+
+test('任务会话单独导航且尚未绑定时没有入口', () => {
+  const fragment = source.slice(source.indexOf('    function TaskOwnerSession('), source.indexOf('    function ObserverContent('))
+  const opened = []
+  const view = (owner, navigatingSessionId = '') => runInNewContext(`${fragment}; TaskOwnerSession({owner,navigatingSessionId,onOpenSession:id=>opened.push(id)})`, {
+    owner, navigatingSessionId, opened, colors: {}, Button: 'button',
+    React: { createElement: (type, props, ...items) => ({ type, props: props || {}, children: items.flat() }) },
+  })
+  assert.equal(view(null), null)
+  for (const sessionBound of [false, undefined]) {
+    const tree = view({ sessionId: 'reserved-owner', sessionBound })
+    assert.match(text(tree), /会话尚未建立/)
+    assert.equal(children(tree).some(item => item.type === 'button'), false)
+  }
+  const owner = { sessionId: 'task-owner', sessionBound: true }
+  const button = children(view(owner)).find(item => item.type === 'button')
+  assert.equal(button.children.join(''), '查看任务会话')
+  button.props.onClick()
+  assert.deepEqual(opened, ['task-owner'])
+  assert.equal(children(view(owner, owner.sessionId)).find(item => item.type === 'button').props.disabled, true)
 })
 
 test('整个Observer模块可加载，最小展示未加入新计时算法', () => {

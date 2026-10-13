@@ -125,6 +125,51 @@ test('UAT终态失败必须是同一冻结普通build的完整可信收据',()=>
  for(const change of [e=>e.state='unknown',e=>e.definition.adapterId='other',e=>e.definition.payload.workflowKind='uat-rebuild',e=>e.definition.payload.operation='rebuild',e=>e.result.result.reason='READ_FAILED',e=>e.result.result.operationKey='c'.repeat(64),e=>e.result.result.commitSha='d'.repeat(40),e=>e.result.result.pipelineNumber=0,e=>e.result.result.pipelineStatus='running',e=>e.result.result.evidenceRef='']){const bad=structuredClone(effect);change(bad);assert.equal(isTerminalUatBuildFailure(bad),false)}
 })
 
+test('未发送 UAT 回执只接纳精确部署或重建操作且明确零写，未知和生产不得失败收口', () => {
+  const effect = { state: 'failed', definition: { action: 'external', adapterId: 'external-operation', adapterVersion: '1',
+    payload: { workflowKind: 'uat-deployment', operation: 'build', operationKey: 'a'.repeat(64), expected: { commitSha: 'b'.repeat(40) } } },
+    result: { result: { status: 'failed', reason: 'RELEASE_BUILD_NOT_SENT', phase: 'preflight', mutationAttempted: false,
+      cause: 'SOURCE_UPLOAD_CREDENTIAL_MISSING', operationKey: 'a'.repeat(64), commitSha: 'b'.repeat(40), evidenceRef: 'source-upload:not-sent' } } }
+  assert.equal(isTerminalUatBuildFailure(effect), true)
+  const rebuild = structuredClone(effect)
+  Object.assign(rebuild.definition.payload, { workflowKind: 'uat-rebuild', operation: 'rebuild' })
+  assert.equal(isTerminalUatBuildFailure(rebuild), true)
+  Object.assign(rebuild.result.result, { reason: 'RELEASE_PIPELINE_FAILED', pipelineNumber: 319, pipelineStatus: 'killed' })
+  assert.equal(isTerminalUatBuildFailure(rebuild), false)
+  for (const change of [e => { e.state = 'unknown' }, e => { e.definition.adapterId = 'other' },
+    e => { e.definition.payload.workflowKind = 'production-release' }, e => { e.definition.payload.workflowKind = 'uat-rebuild' },
+    e => { e.definition.payload.operation = 'rebuild' }, e => { e.result.result.status = 'unknown' },
+    e => { e.result.result.reason = 'SOURCE_UPLOAD_REQUEST_UNCONFIRMED' }, e => { e.result.result.phase = 'dispatch' },
+    e => { e.result.result.mutationAttempted = true }, e => { delete e.result.result.mutationAttempted },
+    e => { e.result.result.operationKey = 'c'.repeat(64) }, e => { e.result.result.commitSha = 'd'.repeat(40) },
+    e => { e.result.result.cause = 'raw token error' }, e => { e.result.result.evidenceRef = '' }]) {
+    const changed = structuredClone(effect); change(changed)
+    assert.equal(isTerminalUatBuildFailure(changed), false)
+  }
+})
+
+test('确定未发送的普通 UAT 失败保留原始原因，效果网关不重新发送', async t => {
+  const f = await fixture(t)
+  let sends = 0, reads = 0
+  const prepared = { action: 'external', workflowKind: 'uat-deployment', operation: 'build',
+    operationKey: 'b'.repeat(64), expected: { commitSha: 'c'.repeat(40) }, runId: 'run', generation: 1,
+    requirementDigest: 'a'.repeat(64), resourceKey: 'external:fixture:uat' }
+  const receipt = { status: 'failed', reason: 'RELEASE_BUILD_NOT_SENT', phase: 'preflight', mutationAttempted: false,
+    cause: 'SOURCE_UPLOAD_CREDENTIAL_MISSING', operationKey: prepared.operationKey,
+    commitSha: prepared.expected.commitSha, evidenceRef: 'source-upload:not-sent' }
+  const gateway = createExecutionDelivery({ store: f.store, artifacts: f.artifacts,
+    authorize: async () => false, authorizeExternal: async () => ({ principalId: 'owner', authorizationRef: 'fixture' }),
+    externalAdapter: { execute: async () => { sends++; return receipt },
+      reconcile: async () => { reads++; return { status: 'unknown' } } } })
+  const request = { binding: f.request.binding, action: 'external', prepared }
+  const failed = await gateway.execute(request)
+  assert.equal(isTerminalUatBuildFailure(failed), true)
+  assert.deepEqual(await f.artifacts.read(failed.result.evidenceRef), receipt)
+  assert.equal((await gateway.execute(request)).state, 'failed')
+  assert.equal(sends, 1)
+  assert.equal(reads, 0)
+})
+
 
 test('交付回执按持久 run 归属保存，不接受适配器结果伪造任务归属', async t => {
   const f = await fixture(t, { adapter: { executeCommit: async () => ({ status: 'succeeded', taskId: 'forged-task' }) } })
