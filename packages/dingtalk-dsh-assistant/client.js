@@ -47,39 +47,6 @@ function Environment({ value }) {
   )
 }
 
-function WorkflowCatalog({ value }) {
-  if (value?.engine !== 'workflow-v2') return null
-  const workflows = value.workflows ?? []
-  const available = workflows.filter(item => item.status === 'available')
-  const unavailable = workflows.filter(item => item.status !== 'available')
-  const stageName = { prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '验证产出', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'inspect-preflight': '检查发布条件', 'inspect-runtime': '核验运行版本', finalize: '核验交付', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'approval-gate': '等待真人审批', 'readback-production': '生产只读回查' }
-  return React.createElement('section', { style: panel, 'aria-label': '任务工作流目录' },
-    React.createElement('div', { style: { display: 'grid', gap: 4 } },
-      React.createElement('strong', null, '任务工作流'),
-      React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '流程由插件代码定义。节点按顺序交接并记录进度；具体任务的执行节点在任务详情查看。')),
-    React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', fontSize: 12 } },
-      React.createElement('strong', { style: { marginRight: 4 } }, '消息进入'),
-      ...(value.messageStages ?? []).map((stage, index) => React.createElement('span', { key: stage.id, style: { border: `1px solid ${colors.border}`, borderRadius: 6, padding: '4px 7px', whiteSpace: 'nowrap' } }, `${index + 1} ${stage.label}`))),
-    React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 12, color: colors.muted } },
-      React.createElement('span', null, `${available.length} 个可发起`), React.createElement('span', null, `${unavailable.length} 个待接入`)),
-    ...available.map(item => React.createElement('details', { key: item.id, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 10 } },
-      React.createElement('summary', { style: { cursor: 'pointer', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline', fontSize: 13 } },
-        React.createElement('strong', null, item.label),
-        React.createElement('span', { style: { color: colors.muted } }, item.purpose),
-        React.createElement('span', { style: { marginLeft: 'auto', color: 'var(--dsw-alias-status-success, #168544)' } }, '可发起')),
-      React.createElement('div', { style: { display: 'grid', gap: 8, padding: '10px 0 2px 12px', fontSize: 12 } },
-        item.version ? React.createElement('div', { style: { color: colors.muted } }, `定义版本 v${item.version}`) : null,
-        item.repositories?.length ? React.createElement('div', null, `已登记仓库：${item.repositories.join('、')}`) : null,
-        item.reason ? React.createElement('div', { style: { color: colors.muted } }, item.reason) : null,
-        item.nodes?.length ? React.createElement('ol', { style: { display: 'grid', gap: 5, margin: 0, paddingLeft: 22 } }, ...item.nodes.map(node => React.createElement('li', { key: node.id },
-          React.createElement('span', null, stageName[node.id] ?? node.id),
-          React.createElement('span', { style: { color: colors.muted, marginLeft: 7 } }, node.executor === 'agent' ? '模型判断' : node.effects?.some(effect => !['pure', 'read'].includes(effect)) ? '受控操作' : '代码校验')))) : null))),
-    unavailable.length ? React.createElement('div', { style: { display: 'grid', gap: 7, borderTop: `1px solid ${colors.border}`, paddingTop: 12, fontSize: 12 } },
-      React.createElement('strong', null, '尚不能发起'),
-      ...unavailable.map(item => React.createElement('div', { key: item.id, style: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 4 } },
-        React.createElement('span', null, item.label), React.createElement('span', { style: { color: colors.muted } }, item.reason)))) : null)
-}
-
 function TaskPromptEditor({ prompts, onChange }) {
   const update = (index, patch) => onChange(prompts.map((item, position) => position === index ? { ...item, ...patch } : item))
   return React.createElement('div', { style: { display: 'grid', gap: 10 } },
@@ -237,7 +204,7 @@ export function DingTalkDshAssistantCard() {
           React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '叶子会话提示词', React.createElement('textarea', { style: { ...input, resize: 'vertical', minHeight: 100 }, value: leafSessionPrompt, onChange: event => setLeafSessionPrompt(event.target.value) })),
           React.createElement(TaskPromptEditor, { prompts: taskPrompts, onChange: setTaskPrompts }))) : null,
       React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !legacyConfigValid || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
-    React.createElement(WorkflowCatalog, { value: overview?.workflows }),
+    React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 工作流”查看流程目录、步骤、可用状态及配置与维护说明。'),
     React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),
       ...(overview?.groups ?? []).map((group) => React.createElement('div', { key: group.groupId, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
         React.createElement('div', null, group.name ? React.createElement('strong', { style: { fontSize: 13 } }, group.name) : null, React.createElement('code', { style: { display: 'block', fontSize: 12, overflowWrap: 'anywhere', color: colors.muted } }, group.groupId)),

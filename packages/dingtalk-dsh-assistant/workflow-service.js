@@ -42,7 +42,7 @@ import { describeVerificationChecks } from './execution-check-job.js'
 import { createMessageAgentController } from './message-agent.js'
 import { createAgentQueryTools, verifyAgentEvidence, taskOwnerQueryControlAllowed } from './agent-query-tools.js'
 import { createAgentResourceReadCapability } from './agent-query-resources.js'
-import { createAgentDatabaseReadCapability, createRegisteredPostgresConnector } from './agent-query-database.js'
+import { createAgentDatabaseReadCapability, createRegisteredPostgresConnector, validateDatabaseConfigurationConnections } from './agent-query-database.js'
 import { createAgentStatusReadCapability } from './agent-query-status.js'
 import { sameDwsFileProjection } from './coordination-resources.js'
 
@@ -516,7 +516,7 @@ function createExternalRegistry(external, selected) {
   return { workflows, records, byId }
 }
 
-export async function openWorkflowService({ ctx, config, legacy, coordinatorSessions, readMessage, readResource, notifications, fileTransport, engineeringGhCommand, external, generalCapabilities = [], generalCompletionCheck, generalCompletionIdentity, execution: suppliedExecution, taskOwnerSessions, messageAgentSessions }) {
+export async function openWorkflowService({ ctx, config, legacy, coordinatorSessions, readMessage, readResource, notifications, fileTransport, engineeringGhCommand, external, generalCapabilities = [], generalCompletionCheck, generalCompletionIdentity, execution: suppliedExecution, taskOwnerSessions, messageAgentSessions, configuration, databaseClient }) {
   if (!Array.isArray(config.groupIds) || !config.groupIds.length || new Set(config.groupIds).size !== config.groupIds.length) throw executionError('WORKFLOW_GROUPS_REQUIRED')
   if (generalCompletionCheck && (!generalCompletionIdentity || typeof generalCompletionIdentity !== 'string')) throw executionError('GENERAL_COMPLETION_IDENTITY_REQUIRED')
   const groups = new Set(config.groupIds)
@@ -534,6 +534,15 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       purpose, binding.sessionId), true)
   }
   const engineering = createEngineeringRegistry({ repositories: config.repositories ?? [], ownerActorId, modelConfig, author: config.gitAuthor, ghCommand: engineeringGhCommand, getTaskDirectories,
+    databaseQueryContext: async taskId => {
+      if (!(queryConfig.databases ?? []).some(resource => queryConfig.permissions?.databaseIds?.includes(resource.id)
+        && Object.hasOwn(configurationConnections ?? {}, resource.connectionId))) return null
+      const plan = await generalStore.current.query({ kind: 'task.plan', taskId })
+      const requirement = await generalArtifacts.current.read(plan.task.requirementRef)
+      const input = await resolveTaskQueryInput({ taskId, requirement })
+      const scope = queryScope(input.scope, true)
+      return { scope, databases: input.context.databases.filter(resource => scope.databaseIds.includes(resource.id)) }
+    },
     readSessionEvents: ctx?.sessionPersistence ? async sessionId => (await ctx.sessionPersistence.inspect(sessionId)).events : undefined })
   const selectedExternal = createExternalRegistry(external, modelConfig())
   const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id],
@@ -608,18 +617,51 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   if (queryConfig.permissions && (Object.keys(queryConfig.permissions).some(key => !['resourceIds', 'databaseIds', 'statusIds'].includes(key))
     || ['resourceIds', 'databaseIds', 'statusIds'].some(key => !Array.isArray(queryConfig.permissions[key])
       || queryConfig.permissions[key].some(id => typeof id !== 'string' || !id)))) throw executionError('QUERY_CONFIG_PERMISSIONS_INVALID')
+  const configurationConnections = queryConfig.configurationConnections === undefined ? undefined
+    : validateDatabaseConfigurationConnections(queryConfig.configurationConnections, queryConfig.databases ?? [])
+  const legacyDatabase = queryConfig.databases?.some(resource => !Object.hasOwn(configurationConnections ?? {}, resource.connectionId))
+    ? createRegisteredPostgresConnector({ credentialsPath: queryConfig.credentialsPath, Client: databaseClient }) : null
+  async function connectQueryDatabase(resource, { binding, signal }) {
+    if (!Object.hasOwn(configurationConnections ?? {}, resource.connectionId)) return legacyDatabase(resource)
+    if (binding?.kind !== undefined && binding.kind !== 'task-node') throw executionError('QUERY_CONFIGURATION_TASK_NODE_REQUIRED')
+    const assertCurrent = async () => {
+      signal?.throwIfAborted()
+      if (!binding || !await controller.isCurrent(binding)) throw executionError('QUERY_BINDING_STALE')
+      const state = await controller.state(binding.runId)
+      const node = state.nodes.find(item => item.nodeRunId === binding.nodeRunId)
+      if (state.run.taskId !== binding.taskId || node?.sessionId !== binding.sessionId) throw executionError('QUERY_BINDING_STALE')
+      const definition = controller.workflowDefinition(state.run.workflowId, state.run.workflowDigest)
+      if (definition.version !== '26' || !definition.nodes.find(item => item.id === node.nodeId)?.allowedTools?.includes('query_readonly_database'))
+        throw executionError('QUERY_CONFIGURATION_TASK_NODE_REQUIRED')
+      return state.run
+    }
+    const run = await assertCurrent()
+    if (!configuration) throw executionError('WORKFLOW_CONFIG_UNAVAILABLE')
+    const reader = configuration.forRun({ runId: run.runId, workflowId: run.workflowId })
+    const read = method => async alias => {
+      await assertCurrent()
+      const value = await reader[method](alias)
+      await assertCurrent()
+      return value
+    }
+    const connect = createRegisteredPostgresConnector({ configuration: { read: read('read'), readSecret: read('readSecret') },
+      connections: configurationConnections, Client: databaseClient })
+    const client = await connect(resource)
+    try { await assertCurrent(); return client } catch (error) { await client.end().catch(() => {}); throw error }
+  }
   const queryCapabilities = [...capabilities.filter(item => item.effectClass === 'read' && item.parameters),
     ...(queryConfig.resources?.length ? [createAgentResourceReadCapability({ resources: queryConfig.resources })] : []),
     ...(queryConfig.statusResources?.length ? [createAgentStatusReadCapability({ resources: queryConfig.statusResources })] : []),
     ...(queryConfig.databases?.length ? [createAgentDatabaseReadCapability({ resources: queryConfig.databases,
-      connectDatabase: createRegisteredPostgresConnector({ credentialsPath: queryConfig.credentialsPath }) })] : [])]
+      connectDatabase: connectQueryDatabase, configurationConnections })] : [])]
   const queryToolNames = queryCapabilities.map(item => item.id)
   const queryCapabilityIdentity = executionDigest(queryCapabilities.map(item => ({ id: item.id, identity: item.identity })))
-  function queryScope(base) {
+  function queryScope(base, taskNode = false) {
     const permissions = queryConfig.permissions ?? {}
-    return { ...base, queryCapabilityIdentity, resourceIds: [...new Set(permissions.resourceIds ?? [])],
-      databaseIds: [...new Set(permissions.databaseIds ?? [])],
-      statusIds: [...new Set(permissions.statusIds ?? [])] }
+    return { ...base, queryCapabilityIdentity, resourceIds: taskNode ? [] : [...new Set(permissions.resourceIds ?? [])],
+      databaseIds: [...new Set(permissions.databaseIds ?? [])].filter(id => !taskNode || queryConfig.databases?.some(resource => resource.id === id
+        && Object.hasOwn(configurationConnections ?? {}, resource.connectionId))),
+      statusIds: taskNode ? [] : [...new Set(permissions.statusIds ?? [])] }
   }
   async function resolveQueryScope({ binding, input }) {
     const scope = input.scope
@@ -640,7 +682,16 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
           throw executionError('QUERY_SCOPE_DENIED')
       }
     }
-    if (executionDigest(queryScope(scope)) !== executionDigest(scope)) throw executionError('QUERY_SCOPE_CHANGED')
+    let managedTaskQuery = false
+    if (binding.kind !== 'message-unit' && binding.kind !== 'task-owner') {
+      if (!await controller.isCurrent(binding)) throw executionError('QUERY_BINDING_STALE')
+      const current = await controller.state(binding.runId)
+      const node = current.nodes.find(item => item.nodeRunId === binding.nodeRunId)
+      if (current.run.taskId !== binding.taskId || node?.sessionId !== binding.sessionId) throw executionError('QUERY_BINDING_STALE')
+      const definition = controller.workflowDefinition(current.run.workflowId, current.run.workflowDigest)
+      managedTaskQuery = definition.version === '26' && definition.nodes.find(item => item.id === node.nodeId)?.allowedTools?.includes('query_readonly_database') === true
+    }
+    if (executionDigest(queryScope(scope, managedTaskQuery)) !== executionDigest(scope)) throw executionError('QUERY_SCOPE_CHANGED')
     return scope
   }
   async function resolveTaskQueryInput({ taskId, requirement }) {
@@ -702,6 +753,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
   const visibleDefinitions = new Map([stepWorkflow, fileWorkflow, ...selectedExternal.workflows]
     .filter(Boolean).map(workflow => [workflow.id, workflow]))
   const execution = suppliedExecution ?? await openExecutionRuntime({
+    configuration,
     ctx, getWorkspaceDir: ({ binding }) => taskSessionWorkspace('execution', binding),
     taskWorkspaceRoot: legacy.getAgentConfig().workspaceDir,
     dbPath: config.dbPath, instanceId: config.instanceId, artifactDirectory: config.artifactDirectory,
@@ -4151,7 +4203,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
         if(!stage)throw executionError('TASK_RESET_ENGINEERING_SOURCE_REQUIRED')
         args.newRun=await engineering.prepareExecutionReset({taskId:request.taskId,sourceRunId:stage.runId,runId:`run-${executionDigest(commandId)}`,commandId},controller)
       }
-      return (await store.command({id:commandId,kind:'task.execution.reset',args})).result
+      return controller.resetTaskExecution({commandId,args})
     },
     async preparePurgedRun(request,identity){
       if(identity?.channel!=='web'||!config.webActorId||identity.actorId!==config.webActorId)throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')

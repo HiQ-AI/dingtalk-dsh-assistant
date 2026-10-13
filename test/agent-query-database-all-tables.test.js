@@ -1,8 +1,47 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {createAgentDatabaseReadCapability} from '../packages/dingtalk-dsh-assistant/agent-query-database.js'
+import {createAgentDatabaseReadCapability,createRegisteredPostgresConnector} from '../packages/dingtalk-dsh-assistant/agent-query-database.js'
 const resource={id:'hiq-editor-production-approval',connectionId:'existing',environment:'production',tables:[{schema:'public',table:'approval',columns:['id']}],metadataSchemas:['public'],dataAccess:'all-tables-readonly'}
 const scope={databaseIds:[resource.id]}
+
+test('托管数据库连接只消费登记别名并保持凭据在Host',async()=>{
+ const calls=[],connection={host:'127.0.0.1',port:5432,db:'isolated',user:'readonly'},password='fixture-only-password'
+ let actual,closed=false
+ class Client{constructor(options){actual=options}async connect(){calls.push('connect')}async end(){closed=true}}
+ const configuration={async read(alias){calls.push(alias);return connection},async readSecret(alias){calls.push(alias);return password}}
+ const options={configuration,connections:{existing:{configAlias:'db.connection',passwordAlias:'db.password'}},Client}
+ assert.throws(()=>createRegisteredPostgresConnector({...options,credentialsPath:'must-not-read.json'}),{code:'QUERY_DATABASE_CONFIG_INVALID'})
+ const connect=createRegisteredPostgresConnector(options)
+ await assert.rejects(connect({connectionId:'unregistered'}),{code:'QUERY_DATABASE_UNCONFIGURED'})
+ await assert.rejects(connect({connectionId:'toString'}),{code:'QUERY_DATABASE_UNCONFIGURED'})
+ assert.deepEqual(calls,[])
+ const client=await connect(resource)
+ assert.deepEqual(calls,['db.connection','db.password','connect'])
+ assert.equal(actual.password,password);assert.equal(actual.database,connection.db)
+ assert.match(actual.options,/default_transaction_read_only=on/)
+ await client.end();assert.equal(closed,true)
+ for(const invalid of [0,true,[5432],{},' 5432','5.432e3'].map(port=>({...connection,port})).concat([{...connection,db:''},{...connection,password:'must-be-secret'}])){
+  const before=calls.filter(value=>value==='connect').length
+  await assert.rejects(createRegisteredPostgresConnector({...options,configuration:{...configuration,read:async()=>invalid}})(resource),{code:'QUERY_DATABASE_CONFIG_INVALID'})
+  assert.equal(calls.filter(value=>value==='connect').length,before)
+ }
+ const absent=Object.assign(Error('WORKFLOW_CONFIG_BINDING_REQUIRED'),{code:'WORKFLOW_CONFIG_BINDING_REQUIRED'})
+ await assert.rejects(createRegisteredPostgresConnector({...options,configuration:{...configuration,read:async()=>{throw absent}}})(resource),{code:absent.code})
+ class RejectedClient{async connect(){throw Object.assign(Error(password),{code:'28P01'})}async end(){}}
+ await assert.rejects(createRegisteredPostgresConnector({...options,Client:RejectedClient})(resource),error=>error.code==='QUERY_DATABASE_AUTH_FAILED'&&!error.message.includes(password))
+})
+test('未迁移文件连接保留pg默认端口和空密码语义',async t=>{
+ const {mkdtemp,rm,writeFile}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+ const root=await mkdtemp(join(tmpdir(),'dsh-legacy-db-config-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const credentialsPath=join(root,'connections.json')
+ await writeFile(credentialsPath,JSON.stringify({connections:{existing:{host:'127.0.0.1',db:'isolated',user:'readonly',password:''}}}))
+ let actual
+ class Client{constructor(options){actual=options}async connect(){}async end(){}}
+ const client=await createRegisteredPostgresConnector({credentialsPath,Client})(resource)
+ assert.equal(actual.port,undefined);assert.equal(actual.password,'');assert.equal(actual.database,'isolated')
+ assert.match(actual.options,/default_transaction_read_only=on/);assert.equal(actual.statement_timeout,8000)
+ await client.end()
+})
 function fixture(options={}){
  const queries=[];let connected=0
  const client={async query(q){queries.push(q);const text=typeof q==='string'?q:q.text

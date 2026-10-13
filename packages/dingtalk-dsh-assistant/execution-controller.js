@@ -11,8 +11,8 @@ import { validateWorkflowRepairAdmission } from './task-workflow-contracts.js'
 import { classifyExecutionFailure } from './execution-recovery-policy.js'
 import { withVerificationProcessJournal } from './execution-check-job.js'
 
-const isEngineeringEditAgent = (definition, node) => ['19','20','21','22','23','24','25'].includes(definition.version) && definition.id.startsWith('task-engineering-')
-  && node.id === 'apply-changes' && node.version === (['24','25'].includes(definition.version) ? '11' : definition.version === '23' ? '10' : definition.version === '22' ? '9' : ['20','21'].includes(definition.version) ? '8' : '7') && node.executor === 'agent'
+const isEngineeringEditAgent = (definition, node) => ['19','20','21','22','23','24','25','26'].includes(definition.version) && definition.id.startsWith('task-engineering-')
+  && node.id === 'apply-changes' && node.version === (['24','25','26'].includes(definition.version) ? '11' : definition.version === '23' ? '10' : definition.version === '22' ? '9' : ['20','21'].includes(definition.version) ? '8' : '7') && node.executor === 'agent'
   && node.allowedEffects?.length === 2 && node.allowedEffects.includes('read') && node.allowedEffects.includes('workspace.edit')
   && node.allowedTools?.length === 2 && node.allowedTools.includes('engineering_repo_inspect') && node.allowedTools.includes('engineering_apply_edits')
   && typeof node.execute === 'function'
@@ -129,7 +129,7 @@ export function defineExecutionWorkflow(definition) {
 }
 
 /** 一个Controller拥有推进权；等待及状态查询不调用模型，所有身份由控制账产生。 */
-export function createExecutionController({ store, artifacts, sessions, delivery, workflows, historicalWorkflows = [], readTools = [], maxConcurrentRuns = 4, externalProcessScope }) {
+export function createExecutionController({ store, artifacts, sessions, delivery, workflows, historicalWorkflows = [], readTools = [], maxConcurrentRuns = 4, externalProcessScope, configuration }) {
   if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1) throw executionError('CONTROLLER_CONFIG_INVALID')
   const definitions = new Map(), byDigest = new Map()
   function registerDefinition(input, historical = false, replay = false) {
@@ -150,6 +150,27 @@ export function createExecutionController({ store, artifacts, sessions, delivery
   const queue = [], flights = new Map(), active = new Map(), errors = new Map(), dirty = new Set()
   const query = (runId, options = {}) => store.query({ kind: 'run', runId, ...options })
   const command = (id, kind, args, context = {}) => store.command({ id, kind, args, ...context })
+  let configurationCreation = Promise.resolve()
+  const createConfiguredRun = work => {
+    if (!configuration) return work()
+    const pending = configurationCreation.then(work)
+    configurationCreation = pending.catch(() => {})
+    return pending
+  }
+  function nodeConfiguration(binding, workflowId, signal) {
+    let reader
+    const read = async (method, alias) => {
+      signal.throwIfAborted()
+      if (!await isCurrent(binding)) throw executionError('NODE_STALE')
+      if (!configuration) throw executionError('WORKFLOW_CONFIGURATION_UNAVAILABLE')
+      reader ??= configuration.forRun({ runId: binding.runId, workflowId })
+      const value = await (await reader)[method](alias)
+      signal.throwIfAborted()
+      if (!await isCurrent(binding)) throw executionError('NODE_STALE')
+      return value
+    }
+    return Object.freeze({ read: alias => read('read', alias), readSecret: alias => read('readSecret', alias) })
+  }
   function definitionOf(run) {
     const definition = byDigest.get(run.workflowDigest)
     if (!definition || definition.id !== run.workflowId) throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
@@ -507,6 +528,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           abort.signal.throwIfAborted()
           const execute = () => nodeDefinition.execute({ input: structuredClone(input.data), signal: abort.signal, runId: binding.runId,
             taskId: binding.taskId, nodeRunId: binding.nodeRunId, generation: binding.generation, requirementDigest: binding.requirementDigest,
+            configuration: nodeConfiguration(binding, state.run.workflowId, abort.signal),
             perform: async ({ action, prepared }) => {
               if (!nodeDefinition.allowedEffects.includes(action === 'workspace' ? 'workspace.prepare' : action === 'edit' ? 'workspace.edit' : action === 'pr' ? 'github.pr' : action === 'external' ? 'external.operation' : ['file', 'artifact'].includes(action) ? 'file.write' : action === 'message' ? 'message.send' : `git.${action}`) || !delivery) throw executionError('EFFECT_NOT_ADMITTED')
               abort.signal.throwIfAborted()
@@ -530,9 +552,9 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           const managedEdit = isEngineeringEditAgent(definition, nodeDefinition)
           const currentEdits = async () => (await store.query({ kind: 'effect.list', runId })).filter(effect => effect.nodeRunId === binding.nodeRunId)
           const normalizeManagedOutput=async value=>{
-            if (['24','25'].includes(definition.version) && nodeDefinition.id === 'plan-local-acceptance') return normalizeWorktreeAcceptancePlan(value, input.data)
+            if (['24','25','26'].includes(definition.version) && nodeDefinition.id === 'plan-local-acceptance') return normalizeWorktreeAcceptancePlan(value, input.data)
             if (definition.version === '23' && nodeDefinition.id === 'plan-local-acceptance') return normalizeEngineeringAcceptancePlan(value, input.data)
-            if(!managedEdit||!['22','23','24','25'].includes(definition.version))return value
+            if(!managedEdit||!['22','23','24','25','26'].includes(definition.version))return value
             const effects=await currentEdits()
             return {...value,...(['23','24'].includes(definition.version) && value.summary===undefined ? {summary:value.status==='succeeded'?'受管实施已完成，继续实际构建与验收':'技术方案需要修订'}:{}),planRef:input.data.plan.ref,effectRefs:effects.map(effect=>effect.effectId)}
           }
@@ -541,7 +563,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
             if (nodeDefinition.validateOutput) await nodeDefinition.validateOutput({ output: value, input: input.data, binding })
             if (!managedEdit) return
             const effects = await currentEdits()
-            if(['24','25'].includes(definition.version)){
+            if(['24','25','26'].includes(definition.version)){
               if(value.status==='plan-revision-needed'?effects.length!==0:value.status!=='succeeded'||!effects.length&&!noChangeProof||effects.some(effect=>effect.state!=='succeeded'||effect.inputDigest!==binding.inputDigest||effect.generation!==binding.generation||effect.definition.action!=='edit'))throw executionError('ENGINEERING_TECHNICAL_EXECUTION_INVALID')
             }else{
             if (value.planRef !== input.data.plan.ref || (value.status === 'plan-revision-needed'
@@ -572,8 +594,8 @@ export function createExecutionController({ store, artifacts, sessions, delivery
               if (!await isCurrent(binding)) throw executionError('NODE_STALE')
               signal.throwIfAborted()
               const batchDigest = executionDigest(edits)
-              if(['24','25'].includes(definition.version)&&editBatchReceipts.has(batchDigest))return structuredClone(editBatchReceipts.get(batchDigest))
-              if (!['24','25'].includes(definition.version) && editBatchReceipt) {
+              if(['24','25','26'].includes(definition.version)&&editBatchReceipts.has(batchDigest))return structuredClone(editBatchReceipts.get(batchDigest))
+              if (!['24','25','26'].includes(definition.version) && editBatchReceipt) {
                 if (editBatchReceipt.digest !== batchDigest) throw executionError('DELIVERY_IDENTITY_CONFLICT')
                 return structuredClone(editBatchReceipt.result)
               }
@@ -592,7 +614,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
               } catch (error) {
                 if (!await isCurrent(binding)) throw executionError('NODE_STALE')
                 signal.throwIfAborted()
-                if (!dispatchStarted && (['24','25'].includes(definition.version) || !(await currentEdits()).length) && ['ENGINEERING_NO_EFFECT_MODIFICATION', 'EDIT_BASE_CONFLICT', 'ENGINEERING_CHANGE_DISPOSITION_INVALID', 'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED', 'ENGINEERING_CONFLICT_NOT_READ', 'ENGINEERING_NO_CHANGES_PROPOSED', 'ENGINEERING_PATCH_CONFLICT', 'ENGINEERING_PATCH_BASE_CONFLICT', 'ENGINEERING_PATCH_AMBIGUOUS'].includes(error.code))
+                if (!dispatchStarted && (['24','25','26'].includes(definition.version) || !(await currentEdits()).length) && ['ENGINEERING_NO_EFFECT_MODIFICATION', 'EDIT_BASE_CONFLICT', 'ENGINEERING_CHANGE_DISPOSITION_INVALID', 'ENGINEERING_NO_CHANGE_EVIDENCE_REQUIRED', 'ENGINEERING_CONFLICT_NOT_READ', 'ENGINEERING_NO_CHANGES_PROPOSED', 'ENGINEERING_PATCH_CONFLICT', 'ENGINEERING_PATCH_BASE_CONFLICT', 'ENGINEERING_PATCH_AMBIGUOUS'].includes(error.code))
                   return { received: false, error: { code: error.code, message: '文件修改参数与当前文件不符。重新读取文件取得完整 hash 和唯一原文，修正同一批次后重试；未派发编辑。' } }
                 throw error
               }
@@ -706,7 +728,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
           if (disposition?.outcome !== 'succeeded') throw executionError('NODE_ADMISSION_INVALID')
         }
         let nextState = state.nodes[ready.position + 1], retainedSuccessor = false
-        if ((ready.nodeId === 'plan-local-acceptance' || definition.version === '25' && ready.nodeId === 'define-local-acceptance') && nextState?.status === 'succeeded') {
+        if ((ready.nodeId === 'plan-local-acceptance' || ['25','26'].includes(definition.version) && ready.nodeId === 'define-local-acceptance') && nextState?.status === 'succeeded') {
           const record = (await store.query({ kind: 'workflow.list' })).find(item => item.digest === state.run.workflowDigest)
           const checkpoint = record?.config?.checkpoint
           const receipt = checkpoint?.kind === 'local-acceptance' && await store.query({ kind: 'receipt', commandId: `engineering-checkpoint:${runId}:${checkpoint.requestId}` })
@@ -789,10 +811,10 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const dependencies={}
       for(const id of node.inputDependencies??[]){const prior=state.nodes.find(item=>item.nodeId===id);if(prior?.status!=='succeeded'||!prior.outputRef)throw executionError('NODE_PREDECESSOR_INCOMPLETE');dependencies[id]=await artifacts.read(prior.outputRef)}
       const previous=state.nodes[index-1],input=await prepareInput(definition,node,state.run.requirementRef,previous?.outputRef?await artifacts.read(previous.outputRef):undefined,dependencies)
-      const retained=state.nodes.filter(item=>item.position<index || kind==='local-acceptance'&&item.position>index+(definition.version==='25'?0:1)&&item.position<state.nodes.findIndex(node=>node.nodeId==='prepare-local-acceptance')&&item.status==='succeeded')
+      const retained=state.nodes.filter(item=>item.position<index || kind==='local-acceptance'&&item.position>index+(['25','26'].includes(definition.version)?0:1)&&item.position<state.nodes.findIndex(node=>node.nodeId==='prepare-local-acceptance')&&item.status==='succeeded')
       const semanticEvidence=await retainedSemanticEvidence(state,definitionOf(state.run),definition,retained)
       const evidence=await artifacts.put({...semanticEvidence,kind:'engineering-checkpoint',mode:kind,runId,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,
-        invalidated:state.nodes.slice(index).filter(item=>kind!=='local-acceptance'||item.position<=index+(definition.version==='25'?0:1)||item.status==='ready'||item.nodeId==='prepare-local-acceptance'&&item.status==='waiting').map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
+        invalidated:state.nodes.slice(index).filter(item=>kind!=='local-acceptance'||item.position<=index+(['25','26'].includes(definition.version)?0:1)||item.status==='ready'||item.nodeId==='prepare-local-acceptance'&&item.status==='waiting').map(item=>({nodeRunId:item.nodeRunId,leaseEpoch:item.leaseEpoch,inputRef:item.inputRef,outputRef:item.outputRef,evidenceRefs:item.evidenceRefs}))},{reference:state.run.requirementRef})
       const receipt=await command(commandId,'run.workflow.checkpoint',{runId,expectedRevision,fromDigest:state.run.workflowDigest,toDigest:workflowDigest,toWorkflowId:workflowId,
         kind,startNodeId:start,inputRef:input.ref,inputDigest:input.digest,evidenceRef:evidence.ref,maintenance,
         expectedRequirementRevision:plan.task.requirementRevision,expectedControlRevision:plan.task.controlRevision,
@@ -817,28 +839,49 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       const requirement=await artifacts.put(input,{taskId}),first=await prepareInput(definition,definition.nodes[0],requirement.ref)
       return {taskId,runId,workflowId,workflowDigest:definition.digest,requirementRef:requirement.ref,nodes:definition.nodes.map((node,index)=>({nodeId:node.id,nodeVersion:node.version,executor:node.executor,inputRef:index?null:first.ref,inputDigest:index?null:first.digest}))}
     },
+    async resetTaskExecution({ commandId, args }) {
+      return createConfiguredRun(async () => {
+        if (closed) throw executionError('CONTROLLER_CLOSED')
+        const prior = await store.query({ kind: 'receipt', commandId })
+        if (prior) {
+          if (prior.result.requestDigest !== args.requestDigest) throw executionError('COMMAND_ID_CONFLICT')
+          return prior.result
+        }
+        // 完整复核新 Run 的登记与占用情况后再冻结；预览及回执重投不创建快照。
+        await store.query({ kind: 'task.execution.reset.check', ...args })
+        if (args.newRun && configuration) await configuration.snapshot({ runId: args.newRun.runId, workflowId: args.newRun.workflowId })
+        return (await command(commandId, 'task.execution.reset', args)).result
+      })
+    },
     async createRun({ ownerTurnId, commandId, taskId, runId = `run-${executionDigest(commandId)}`, workflowId, input, stageBinding }) {
-      if (closed) throw executionError('CONTROLLER_CLOSED')
-      requireId(taskId); requireId(runId)
-      let definition, requirementReference
-      if (stageBinding) {
-        const plan = await store.query({ kind: 'task.plan', taskId })
-        const stage = plan?.task.planRevision === stageBinding.planRevision
-          ? plan.stages.find(item => item.stageId === stageBinding.stageId) : null
-        if (!stage || stage.workflowId !== workflowId)
-          throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
-        definition = definitionOf(stage)
-        requirementReference = stage.requirementRef
-      } else definition = definitions.get(workflowId)
-      if (!definition) throw executionError('WORKFLOW_NOT_FOUND')
-      const requirement = await artifacts.put(input, { taskId, reference: requirementReference })
-      const first = await prepareInput(definition, definition.nodes[0], requirement.ref)
-      const receipt = await command(commandId, 'run.create', { taskId, runId, workflowId, workflowDigest: definition.digest, requirementRef: requirement.ref,
-        ...(stageBinding ? { stageBinding } : {}),
-        nodes: definition.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor, inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })),
-      }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
-      if (!ownerTurnId) schedule(runId)
-      return { runId, receipt }
+      return createConfiguredRun(async () => {
+        if (closed) throw executionError('CONTROLLER_CLOSED')
+        requireId(taskId); requireId(runId)
+        let definition, requirementReference
+        if (stageBinding) {
+          const plan = await store.query({ kind: 'task.plan', taskId })
+          const stage = plan?.task.planRevision === stageBinding.planRevision
+            ? plan.stages.find(item => item.stageId === stageBinding.stageId) : null
+          if (!stage || stage.workflowId !== workflowId)
+            throw executionError('WORKFLOW_VERSION_UNAVAILABLE')
+          definition = definitionOf(stage)
+          requirementReference = stage.requirementRef
+        } else definition = definitions.get(workflowId)
+        if (!definition) throw executionError('WORKFLOW_NOT_FOUND')
+        const requirement = await artifacts.put(input, { taskId, reference: requirementReference })
+        const first = await prepareInput(definition, definition.nodes[0], requirement.ref)
+        if (configuration) {
+          const existing = await query(runId)
+          const prior = await store.query({ kind: 'receipt', commandId })
+          if (!existing.run && !prior) await configuration.snapshot({ runId, workflowId })
+        }
+        const receipt = await command(commandId, 'run.create', { taskId, runId, workflowId, workflowDigest: definition.digest, requirementRef: requirement.ref,
+          ...(stageBinding ? { stageBinding } : {}),
+          nodes: definition.nodes.map((node, index) => ({ nodeId: node.id, nodeVersion: node.version, executor: node.executor, inputRef: index ? null : first.ref, inputDigest: index ? null : first.digest })),
+        }, { ...(ownerTurnId ? { ownerTurnId } : {}) })
+        if (!ownerTurnId) schedule(runId)
+        return { runId, receipt }
+      })
     },
     async createTaskPlan({ commandId, taskId, requirementRevision = 1, stages }) {
       if (closed) throw executionError('CONTROLLER_CLOSED')

@@ -4,8 +4,22 @@ import { z } from 'zod'
 import { taskContextImpactFields } from './decision.js'
 import { isPendingDecision } from './topic-model.js'
 import { taskBoardProgress } from './task-progress.js'
+import { workflowVariableInputSchema, workflowVariableEnabledSchema, workflowBindingInputSchema, workflowConfigurationErrorCode } from './workflow-configuration.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
+
+function localConfigurationRequest(request) {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
+    || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return false
+  try {
+    const host = request.headers.host
+    if (typeof host !== 'string' || host.length > 200) return false
+    const address = new URL(`http://${host}`)
+    return ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname) && address.host === host.toLowerCase()
+      && !address.username && !address.password && address.pathname === '/' && !address.search && !address.hash
+      && (!request.socket.localPort || Number(address.port || 80) === request.socket.localPort)
+  } catch { return false }
+}
 
 export function applyResidentCorsHeaders(request, response) {
   const origin = request.headers.origin
@@ -129,6 +143,35 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
+  const variableRoute = /^\/config\/workflow-variables\/([^/]+)$/u.exec(url.pathname)
+  const enabledRoute = /^\/config\/workflow-variables\/([^/]+)\/enabled$/u.exec(url.pathname)
+  const bindingRoute = /^\/config\/workflow-bindings\/([^/]+)$/u.exec(url.pathname)
+  if (url.pathname === '/config/workflow-variables' || variableRoute || enabledRoute || bindingRoute) {
+    response.setHeader('cache-control', 'no-store')
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'WORKFLOW_CONFIG_FORBIDDEN' })
+    if (request.method === 'OPTIONS') return send(response, 204, null)
+    if (url.search) return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
+    try {
+      if (request.method === 'GET' && url.pathname === '/config/workflow-variables') {
+        if (Number(request.headers['content-length'] ?? 0) !== 0 || request.headers['transfer-encoding']) return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
+        if (!store.getWorkflowConfiguration) return send(response, 503, { error: 'WORKFLOW_CONFIG_UNAVAILABLE' })
+        return send(response, 200, await store.getWorkflowConfiguration())
+      }
+      const operation = request.method === 'PUT' && variableRoute ? { method: 'saveWorkflowVariable', schema: workflowVariableInputSchema.omit({ name: true }), field: 'name', key: variableRoute[1] }
+        : request.method === 'POST' && enabledRoute ? { method: 'setWorkflowVariableEnabled', schema: workflowVariableEnabledSchema.omit({ name: true }), field: 'name', key: enabledRoute[1] }
+          : request.method === 'PUT' && bindingRoute ? { method: 'bindWorkflowConfiguration', schema: workflowBindingInputSchema.omit({ workflowId: true }), field: 'workflowId', key: bindingRoute[1] } : null
+      if (!operation) return send(response, 405, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
+      if (!store[operation.method]) return send(response, 503, { error: 'WORKFLOW_CONFIG_UNAVAILABLE' })
+      if (request.headers['content-type']?.split(';')[0].trim() !== 'application/json') return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
+      const parsed = operation.schema.safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
+      return send(response, 200, await store[operation.method]({ ...parsed.data, [operation.field]: decodeURIComponent(operation.key) }))
+    } catch (error) {
+      const code = error instanceof SyntaxError || error instanceof URIError || error?.message === 'request_too_large' ? 'WORKFLOW_CONFIG_ARGUMENT_INVALID' : workflowConfigurationErrorCode(error)
+      return send(response, code === 'WORKFLOW_CONFIG_FORBIDDEN' ? 403 : code === 'WORKFLOW_CONFIG_REVISION_CONFLICT' ? 409
+        : ['WORKFLOW_CONFIG_STORAGE_FAILED', 'WORKFLOW_CONFIG_UNAVAILABLE', 'WORKFLOW_CONFIG_READONLY'].includes(code) ? 503 : 400, { error: code })
+    }
+  }
   const completedObservations = /^\/runtime\/maintenance\/tasks\/([^/]+)\/completed-observations$/u.exec(url.pathname)
   if (completedObservations) {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)

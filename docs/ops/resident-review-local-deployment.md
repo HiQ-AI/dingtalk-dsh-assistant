@@ -61,13 +61,13 @@ Resident 关闭会依次尝试 HTTP、同步服务、监听、工作流及 Runti
 
 ### 问答 Agent 与调查流程切换
 
-仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、owner锁和恢复门禁；普通无迁移部署不复制历史副本，已有历史迁移专用路径保留其必要备份。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受 Agent 自身明确的资料/固定提交/status授权；数据库提案显式提供 `credentialsPath`（绝对文件路径）与 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`。使用现有 UAT 账号时，仅目标数据库资源显式追加 `environment: uat` 和 `identityPolicy: host-enforced-readonly`；其他环境不允许该模式。permissions 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。默认严格检查只读角色；显式 UAT 模式由 Host 限定结构化查询并逐次核验只读事务。登记成功不代表数据库验收通过。凭据不得写入提案，配置器只接受路径。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实环境路径的提案及原始证据，不提交公开仓库。
+仅部署问答查询配置时，既有 `deploy-owner-repair.ps1` 使用 `-DirectQueriesProposal <绝对JSON>`，与 `-Bundle/-MergePolicy/-ChecksProposal` 互斥，禁止Bootstrap；不更新工程验收配置。可同时提供 `-ObserverPackage/-ExpectedObserverPackageSha256`，两包各自校验后由同一次原生 plugin add 安装，容量按两包计算，回读/Resume再次核对两包。先 `-Check`，保留原维护、封存、owner锁和恢复门禁；普通无迁移部署不复制历史副本，已有历史迁移专用路径保留其必要备份。配置器 `scripts/configure-agent-query-resources.mjs --check/--apply --profile <绝对YAML> --proposal <绝对JSON> --expected-sha256 <SHA>` 只接受 Agent 自身明确的资料/固定提交/status授权；数据库提案提供 `databases: [{id, connectionId, tables: [{schema, table, columns}]}]`；每个连接可显式配置 `configurationConnections: {connectionId: {configAlias, passwordAlias}}` 使用托管变量，未映射连接仍须 `credentialsPath`（绝对文件路径）。全部连接映射后可以省略该文件路径。使用现有 UAT 账号时，仅目标数据库资源显式追加 `environment: uat` 和 `identityPolicy: host-enforced-readonly`；其他环境不允许该模式。permissions 的 `databaseIds` 必须逐项对应全部登记数据库。表列仅接受明确标识符，拒绝通配及重复。可只登记数据库而将资料/status数组设为空。配置器不读取凭据、不连接数据库、不创建角色；check 零写，apply 保留原文并按 SHA 执行 CAS。默认严格检查只读角色；显式 UAT 模式由 Host 限定结构化查询并逐次核验只读事务。登记成功不代表数据库验收通过。凭据值不得写入提案，配置器只接受文件路径或托管变量别名映射。工程 v26 仅在存在显式托管映射且原 permissions 已授权时，为 inspect-and-propose 节点提供只读数据库工具；其 scope 和目录只包含这批托管资源。消息问答及 Task Owner 没有 Run 快照，对已迁入资源明确拒绝；未映射资源保持原读取。提案包含 `expectedProfileSha256`、固定 `target=dingtalk-dsh-assistant.config.workflow.directQueries` 及完整 `directQueries`；部署方保存含真实环境路径的提案及原始证据，不提交公开仓库。
 
 
 历史切换曾把 `answer.text` 替换为 `answer.objective`，并将旧只读材料编排合并为带工具的调查阶段。当前普通调查由 Task Owner 直接使用 Host 查询工具，不再注册独立调查定义。切换不是运行库历史迁移：已完成记录和工件保留，活动旧定义必须在安装前排空；启动遇到 `WORKFLOW_CUTOVER_ACTIVE_REFERENCES` 时停止切换并核对具体活动引用，不自动重排或改写历史。
 
 1. 在本次检出运行 `node docs/acceptance/agent-direct-execution/scripts/inventory-legacy-workflows.mjs --check --db <控制库路径> --instance <实例ID>`；不传 `--output` 只读输出，保存证据时使用全新 `--output <路径>`（拒绝覆盖）。正式维护排空后再次执行，保存两次清点。确认旧流程活动运行、当前阶段、未排空节点及未确认效果为零。旧 `answer.text` 未完成命令须在旧合同下收尾或明确停止，不能交给新 Agent 猜测其含义。
-2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。仅从旧 grants 配置迁移时，必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；已迁移实例的普通代码部署默认仅提供 Package，保持现有配置。凭据只放受保护的仓库外文件，配置和工件不得包含密码。
+2. 按下文备份、打包、安装流程部署 Assistant 与 Observer。正式 profile 的 `workflow.directQueries` 可登记 `resources`、`databases`、`statusResources`、`credentialsPath`、`configurationConnections` 与 `permissions`。permissions 包含 Agent 自身的 `resourceIds` / `databaseIds` / `statusIds`，与群成员无关。仅从旧 grants 配置迁移时，必须提供保持原资源范围的新版 DirectQueriesProposal，经 Check 和 CAS 切换；已迁移实例的普通代码部署默认仅提供 Package，保持现有配置。凭据仅由受保护的仓库外文件或按实例隔离的原生凭据记录提供；profile 配置、提案及工件不得包含密码。
 3. 仓库资源冻结完整提交；状态资源限定固定 GET URL 和返回字段；数据库资源限定表、列。默认使用专用只读账号；用户明确指定使用现有 UAT 账号时，配置 UAT 专属 Host 强制只读事务模式，并实测写入拒绝。账号凭据始终只由 Host 读取，不交给模型，也不登记生产连接。
 4. 安装后独立回读包摘要、进程、健康、流程目录及旧历史。新目录不包含 `task-investigation`，Task Owner 直接查询；工程与外部交付仍可按原权限发起；旧成功任务可读且没有重放通知。
 5. 在已授权的独立测试群分别验证材料问答、真实资料/代码/数据库读取、调查交付、补充、取消、重启和权限反例。核对真实工具工件、会话、Task 增量与钉钉独立回读；健康正常及原生本地会话通过不能代替渠道验收。
@@ -89,7 +89,15 @@ S 保留完整当前消息和已提供背景，R 逐页累积候选及排除证�
 
 验证 `/state/workflows` 的消息节点、命令和预算；`/state/tasks` 合并旧任务与 `engine=workflow-v2` 任务，进度直接来自 executionNodes。`/state/groups` 的收信箱、发信箱按群合并旧记录与新工作流的持久消息和通知，同一消息 ID 或通知 ID 只出现一次；新消息按实际发生时间排序，新通知仅在渠道独立回读后显示为已发送。已切换群不再恢复旧 Resident，也不能通过旧 Web 新建 Task 接口旁路创建；未配置群维持原入口。通知与任务运行分开：渠道 ACK 不能标记送达，必须拿到可信消息 ID 后独立回读正文和群。没有消息 ID 时保留未确认状态。
 
-配置页部署后回读 `GET /state/workflows/catalog`：确认 `engine=workflow-v2`、目标群在 `groupIds`、消息阶段为接收／上下文／S／R／I／派发，任务流程的可发起状态、版本和节点来自当前注册定义。实际浏览器中确认已切换群只显示只读目录，不出现旧“任务流程提示词”编辑器；未切换群的旧配置仍可折叠访问。通用配置保存不得改写已切换群不用的 `taskPrompts`。
+工作流目录及托管配置需一并更新 Assistant 与 Observer；不提供定义编辑 API，无控制库 schema 迁移。宿主须提供正式 `credentials` 服务，并配置 `workflow.webActorId`。按本 runbook 部署后分别回读包 SHA256、安装版本、新进程及健康，再回读 `GET /state/workflows/catalog`：确认 `engine=workflow-v2`、目标群在 `groupIds`，流程状态、版本和节点来自当前注册定义。
+
+在真实浏览器中打开“运行看板 → 工作流”，确认入口紧邻任务看板，列表与详情显示用途、可用状态、节点及配置与维护文档；进入关联的当前或归档任务后返回，选中流程保持。目录只代表当前注册定义，工程任务的具体步骤及已有任务冻结版本以任务详情为准。分别核对不可用说明、空态、读取失败重试及刷新失败保留已有内容，窄屏和键盘操作可用；源码夹具验收不替代部署页面回读。
+
+插件设置页显示“运行看板 → 工作流”文字指路，不重复展示目录；仍读取目录群归属用于区分旧版配置。已切换群不出现旧“任务流程提示词”编辑器，未切换群的旧配置仍可折叠访问；通用配置保存不得改写已切换群不用的 `taskPrompts`。
+
+托管变量由 `ctx.credentials` 的插件私有 grant 记录保存，执行引用快照另存为每 Run 一个不可变记录。默认 `credentials-local` 使用 `$DSH_HOME/.credentials.yaml` 明文，Windows 不额外加密；禁止将该文件或值写入验收日志。管理接口 `GET /config/workflow-variables` 与变量 PUT、enabled POST、binding PUT 均执行本机 Origin/Host 和服务端身份检查，并返回 `Cache-Control: no-store`；秘密无 value 字段，写入返回脱敏 state，过期文档 revision 返回 409。部署后先只读检查配置页与权限，不自动导入、轮换或停用真实凭据。经授权在隔离变量核验创建、绑定、停用、冲突保留，以及更新后旧执行固定原版本；正式 native provider 的隔离路径测试须覆盖移动来源文件、宿主重启读回，不能仅用内存 Map 代替。旧本地文件仅在消费点明确切换到托管读取后才可移走。
+
+原生凭据文件默认跨 profile 共享，配置文档和运行快照使用已登记 `workflow.instanceId` 的 SHA256 命名空间；独立控制库须使用不同 instanceId，不要为了更名随意改变现有身份，也不通过复制记录混用不同控制库。相同 Run ID 在不同实例互不读取，实例内冻结地址只由 Run ID 决定。变更实例身份必须另行规划迁移，不能回退旧全局 key。
 
 运行看板在真实浏览器中点击 `workflow-v2` 任务卡片，确认进入节点详情且排队任务也可查看；模型节点才显示所属会话记录入口。旧任务仍走原会话入口，任务卡片进度图标与折叠交互不变。
 

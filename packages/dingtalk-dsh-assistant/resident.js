@@ -17,9 +17,12 @@ import { createTrustedWorkflowPlatforms } from './workflow-trusted-platforms.js'
 import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification, workflowNotificationDisclosureAllowed } from './workflow-notifications.js'
 import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workflow-cutover.js'
 import { join, resolve } from 'node:path'
+import { createWorkflowConfiguration } from './workflow-configuration.js'
+import { taskWorkflowCatalog } from './message-context.js'
+import { taskProgressQueryDefinition } from './task-progress-query.js'
 
 export const name = 'dingtalk-dsh-assistant'
-export const inject = ['storage', 'storageDomain', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments', 'dingtalkTaskWorkflowPlatformClients']
+export const inject = ['storage', 'storageDomain', 'credentials', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments', 'dingtalkTaskWorkflowPlatformClients']
 
 export async function verifyResidentWorkflowSeal(ctx, workflowConfig) {
   const domain = ctx.storageDomain
@@ -137,7 +140,17 @@ export async function apply(ctx, config = {}) {
     config: workflowConfig.platforms, clients: ctx.get?.('dingtalkTaskWorkflowPlatformClients'),
     ownerActorId: workflowConfig.ownerActorId,
   }) : null
+  const configuration = workflowConfig ? createWorkflowConfiguration({ credentials: ctx.credentials, instanceId: workflowConfig.instanceId,
+    workflowIds: [...taskWorkflowCatalog.map(item => item.id), 'task-general-capability', taskProgressQueryDefinition.id], webActorId: workflowConfig.webActorId }) : undefined
+  if (configuration) {
+    const configurationIdentity = { channel: 'web', actorId: workflowConfig.webActorId }
+    runtime.getWorkflowConfiguration = () => configuration.state(configurationIdentity)
+    runtime.saveWorkflowVariable = args => configuration.saveVariable(args, configurationIdentity)
+    runtime.setWorkflowVariableEnabled = args => configuration.setVariableEnabled(args, configurationIdentity)
+    runtime.bindWorkflowConfiguration = args => configuration.bindWorkflow(args, configurationIdentity)
+  }
   const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile, approvalRecipientUserId: dwsConfig.humanUserId }, legacy: runtime,
+    configuration,
     external: workflowConfig.platforms ? trustedPlatforms : ctx.get?.('dingtalkTaskWorkflowExternal'),
     generalCapabilities: ctx.get?.('dingtalkTaskGeneralCapabilities') ?? [],
     generalCompletionCheck: ctx.get?.('dingtalkTaskGeneralCompletionCheck'),

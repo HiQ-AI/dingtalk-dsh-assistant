@@ -34,17 +34,53 @@ const columnCatalog=`information_schema.columns c JOIN pg_namespace n ON n.nspna
  JOIN pg_class t ON t.relnamespace=n.oid AND t.relname=c.table_name JOIN pg_attribute a ON a.attrelid=t.oid AND a.attname=c.column_name`
 const columnProjection=`${columnAttributes},format_type(a.atttypid,a.atttypmod) AS formatted_type,col_description(t.oid,a.attnum) AS column_comment`
 export const agentDatabaseParameters={type:'object',properties:{resourceId:{type:'string'},operation:{type:'string',enum:['tables','columns',...metadataOperations,'select']},table:{type:'string',description:'表名使用 schema.table，例如 public.tw_process_drafts；仅已登记且唯一的短表名可省略 schema。'},columns:{type:'array',items:{type:'string'}},filters:{type:'array',items:{type:'object',properties:{column:{type:'string'},operator:{type:'string',enum:['eq','ne','lt','lte','gt','gte','like']},value:{oneOf:[{type:'string'},{type:'number'},{type:'boolean'},{type:'null'}]}},required:['column','operator','value'],additionalProperties:false}},limit:{type:'integer'},offset:{type:'integer'}},required:['resourceId','operation'],additionalProperties:false}
+export function validateDatabaseConfigurationConnections(connections,resources){
+ const alias=value=>typeof value==='string'&&/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value)&&!['constructor','prototype','__proto__'].includes(value)
+ if(!connections||typeof connections!=='object'||Array.isArray(connections)
+  ||Object.entries(connections).some(([id,binding])=>!resources.some(resource=>resource.connectionId===id)
+   ||!binding||typeof binding!=='object'||Array.isArray(binding)||Object.keys(binding).length!==2
+   ||!alias(binding.configAlias)||!alias(binding.passwordAlias)||binding.configAlias===binding.passwordAlias))fail('QUERY_DATABASE_CONFIG_INVALID')
+ return structuredClone(connections)
+}
 /** 凭据仅Host读取；不将连接配置或数据库错误正文交给模型。 */
-export function createRegisteredPostgresConnector({credentialsPath}){
+export function createRegisteredPostgresConnector({credentialsPath,configuration,connections,Client=pg.Client}){
+ const managed=configuration!==undefined||connections!==undefined
+ if(managed?(credentialsPath!==undefined||typeof configuration?.read!=='function'||typeof configuration?.readSecret!=='function'
+  ||!connections||typeof connections!=='object'||Array.isArray(connections)
+  ||Object.values(connections).some(binding=>!binding||typeof binding.configAlias!=='string'||!binding.configAlias||typeof binding.passwordAlias!=='string'||!binding.passwordAlias))
+  :typeof credentialsPath!=='string'||!credentialsPath)fail('QUERY_DATABASE_CONFIG_INVALID')
  return async resource=>{
-  const connections=JSON.parse(await readFile(credentialsPath,'utf8')).connections,config=connections?.[resource.connectionId]
-  if(!config)fail('QUERY_DATABASE_UNCONFIGURED')
-  const client=new pg.Client({host:config.host,port:config.port,database:config.db,user:config.user,password:config.password,
-   connectionTimeoutMillis:5000,query_timeout:10000,statement_timeout:8000,options:'-c default_transaction_read_only=on -c statement_timeout=8000'})
-  await client.connect();return client
+  let config,password
+  try{
+   if(managed){
+    const binding=Object.hasOwn(connections,resource.connectionId)?connections[resource.connectionId]:null
+    if(!binding)fail('QUERY_DATABASE_UNCONFIGURED')
+    config=await configuration.read(binding.configAlias)
+    password=await configuration.readSecret(binding.passwordAlias)
+    if(!config||typeof config!=='object'||Array.isArray(config)||Object.keys(config).some(key=>!['host','port','db','user'].includes(key)))fail('QUERY_DATABASE_CONFIG_INVALID')
+   }else{
+    const saved=JSON.parse(await readFile(credentialsPath,'utf8')).connections
+    config=saved&&Object.hasOwn(saved,resource.connectionId)?saved[resource.connectionId]:null
+    if(!config)fail('QUERY_DATABASE_UNCONFIGURED')
+    password=config.password
+   }
+  }catch(error){
+   if(error.code?.startsWith('QUERY_')||error.code?.startsWith('WORKFLOW_CONFIG_'))throw error
+   fail('QUERY_DATABASE_UNCONFIGURED')
+  }
+  if(managed&&(['host','db','user'].some(key=>typeof config?.[key]!=='string'||!config[key]||config[key].includes('\0'))
+   ||!(typeof config.port==='number'||typeof config.port==='string'&&/^\d+$/.test(config.port))
+   ||!Number.isInteger(Number(config.port))||Number(config.port)<1||Number(config.port)>65535
+   ||typeof password!=='string'||!password||password.includes('\0')))fail('QUERY_DATABASE_CONFIG_INVALID')
+  let client
+  try{
+   client=new Client({host:config.host,port:managed?Number(config.port):config.port,database:config.db,user:config.user,password,
+    connectionTimeoutMillis:5000,query_timeout:10000,statement_timeout:8000,options:'-c default_transaction_read_only=on -c statement_timeout=8000'})
+   await client.connect();return client
+  }catch(error){if(client)await client.end().catch(()=>{});fail(['28P01','28000'].includes(error.code)?'QUERY_DATABASE_AUTH_FAILED':'QUERY_DATABASE_UNAVAILABLE')}
  }
 }
-export function createAgentDatabaseReadCapability({resources,connectDatabase}){
+export function createAgentDatabaseReadCapability({resources,connectDatabase,configurationConnections}){
  if(!Array.isArray(resources)||typeof connectDatabase!=='function'||new Set(resources.map(r=>r.id)).size!==resources.length)fail('QUERY_DATABASE_CONFIG_INVALID')
  for(const r of resources)if(!r.id||!r.connectionId||(r.dataAccess!==undefined&&r.dataAccess!=='all-tables-readonly')||!Array.isArray(r.tables)||(r.dataAccess!=='all-tables-readonly'&&!r.tables.length)||r.tables.some(t=>!identifier(t.schema)||!identifier(t.table)||!Array.isArray(t.columns)||!t.columns.length||t.columns.some(c=>!identifier(c)))
   ||(r.metadataSchemas!==undefined&&(!Array.isArray(r.metadataSchemas)||!r.metadataSchemas.length||r.metadataSchemas.some(s=>!identifier(s))))
@@ -52,9 +88,9 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
   ||(r.environment!==undefined&&!['uat','production'].includes(r.environment)))fail('QUERY_DATABASE_CONFIG_INVALID')
  const registry=new Map(resources.map(r=>[r.id,structuredClone(r)])),produced=new WeakSet()
  const authorize=async({input,scope})=>{if(!registry.has(input.resourceId))fail('QUERY_DATABASE_RESOURCE_UNSUPPORTED');return scope.databaseIds?.includes(input.resourceId)===true}
- return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v5:'+executionDigest(resources),description:'Host结构化只读数据库查询。dataAccess=all-tables-readonly时可读取该连接数据库所有普通表/分区表及物化表的列和数据，最终受数据库账号权限约束；不调用任意SQL、函数、视图或外部连接。其它资源只读登记的表/列；metadataSchemas仅允许结构查询，不授予行数据读取。必须使用schema.table；投影/过滤列校验，值参数绑定，最多100行，offset分页，只读事务和超时/结果上限。资源/表/列能力缺失与真实数据库42501权限拒绝分别报告；已开放只读查询不要求逐次写权限授权。',parameters:agentDatabaseParameters,authorize,
+ return {id:'query_readonly_database',effectClass:'read',identity:'agent-db-read-v5:'+executionDigest(configurationConnections?{resources,configurationConnections}:resources),description:'Host结构化只读数据库查询。dataAccess=all-tables-readonly时可读取该连接数据库所有普通表/分区表及物化表的列和数据，最终受数据库账号权限约束；不调用任意SQL、函数、视图或外部连接。其它资源只读登记的表/列；metadataSchemas仅允许结构查询，不授予行数据读取。必须使用schema.table；投影/过滤列校验，值参数绑定，最多100行，offset分页，只读事务和超时/结果上限。资源/表/列能力缺失与真实数据库42501权限拒绝分别报告；已开放只读查询不要求逐次写权限授权。',parameters:agentDatabaseParameters,authorize,
   available: scope => resources.some(resource => scope?.databaseIds?.includes(resource.id)),
-  async execute({input,scope,signal}){
+  async execute({input,scope,binding,signal}){
    if(!await authorize({input,scope}))fail('QUERY_SCOPE_DENIED')
    if(!['tables','columns',...metadataOperations,'select'].includes(input.operation))fail('QUERY_ARGUMENT_INVALID')
    const resource=registry.get(input.resourceId),allTables=resource.dataAccess==='all-tables-readonly',limit=input.limit??30,offset=input.offset??0
@@ -78,7 +114,7 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
    let client
    const abort=()=>{void client?.end().catch(()=>{})}
    try{
-    signal?.throwIfAborted();client=await connectDatabase(resource);signal?.addEventListener('abort',abort,{once:true});signal?.throwIfAborted()
+    signal?.throwIfAborted();client=await connectDatabase(resource,{binding,signal});signal?.addEventListener('abort',abort,{once:true});signal?.throwIfAborted()
     await client.query('BEGIN READ ONLY');await client.query("SET LOCAL statement_timeout='8000ms'")
     const schemas=[...new Set([...resource.tables.map(t=>t.schema),...(resource.metadataSchemas??[])])]
     // 生产副本的角色目录可保留主库权限；实际不可写性由副本身份和只读事务证明。
@@ -120,7 +156,7 @@ export function createAgentDatabaseReadCapability({resources,connectDatabase}){
      observedAt:new Date().toISOString(),transactionReadOnly:true,productionReplicaVerified:resource.environment==='production'}
     if(Buffer.byteLength(JSON.stringify(output))>24000)fail('QUERY_CAPACITY')
     produced.add(output);return output
-   }catch(e){if(signal?.aborted)throw e;if(e.code?.startsWith('QUERY_'))throw e;fail(e.code==='57014'?'QUERY_TIMEOUT':e.code==='42P01'?'QUERY_NOT_FOUND':e.code==='42703'?'QUERY_ARGUMENT_INVALID':e.code==='42501'?'QUERY_DATABASE_PERMISSION_DENIED':['28P01','28000'].includes(e.code)?'QUERY_DATABASE_AUTH_FAILED':'QUERY_DATABASE_UNAVAILABLE')}
+   }catch(e){if(signal?.aborted)throw e;if(e.code?.startsWith('QUERY_')||e.code?.startsWith('WORKFLOW_CONFIG_'))throw e;fail(e.code==='57014'?'QUERY_TIMEOUT':e.code==='42P01'?'QUERY_NOT_FOUND':e.code==='42703'?'QUERY_ARGUMENT_INVALID':e.code==='42501'?'QUERY_DATABASE_PERMISSION_DENIED':['28P01','28000'].includes(e.code)?'QUERY_DATABASE_AUTH_FAILED':'QUERY_DATABASE_UNAVAILABLE')}
    finally{signal?.removeEventListener('abort',abort);if(client){await client.query('ROLLBACK').catch(()=>{});await client.end().catch(()=>{})}}
   },
   async verify({input,scope,output}){return {passed:await authorize({input,scope})&&produced.has(output),outputDigest:executionDigest(output),sourceRefs:[`database:${input.resourceId}:${input.table??'catalog'}:${executionDigest(output)}`]}}

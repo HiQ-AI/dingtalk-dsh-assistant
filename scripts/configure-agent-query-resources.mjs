@@ -5,7 +5,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import yaml from 'js-yaml'
 import { createAgentResourceReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-resources.js'
-import { createAgentDatabaseReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-database.js'
+import { createAgentDatabaseReadCapability, validateDatabaseConfigurationConnections } from '../packages/dingtalk-dsh-assistant/agent-query-database.js'
 import { createAgentStatusReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-status.js'
 const fail = code => { throw new Error(code) }
 const hash = value => createHash('sha256').update(value).digest('hex')
@@ -14,13 +14,18 @@ export async function planAgentQueryResources(source, proposal) {
   if (!keys(proposal, ['expectedProfileSha256','target','directQueries']) || proposal.target !== 'dingtalk-dsh-assistant.config.workflow.directQueries'
     || !/^[a-f0-9]{64}$/.test(proposal.expectedProfileSha256)) fail('QUERY_CONFIG_PROPOSAL_INVALID')
   const q = proposal.directQueries
-  if (!keys(q, ['resources','databases','statusResources','permissions', ...(q?.databases?.length ? ['credentialsPath'] : [])]) || !Array.isArray(q.databases)
+  if (!keys(q, ['resources','databases','statusResources','permissions', ...(q?.credentialsPath === undefined ? [] : ['credentialsPath']), ...(q?.configurationConnections === undefined ? [] : ['configurationConnections'])]) || !Array.isArray(q.databases)
     || !Array.isArray(q.resources) || !Array.isArray(q.statusResources) || !(q.resources.length + q.databases.length + q.statusResources.length)
     || !keys(q.permissions, ['resourceIds','databaseIds','statusIds'])) fail('QUERY_CONFIG_PROPOSAL_INVALID')
   for (const r of q.resources) if (!keys(r, r.kind === 'repository' ? ['id','kind','root','commit','paths'] : ['id','kind','root','paths',...(r.hostReceipts===undefined?[]:['hostReceipts'])])) fail('QUERY_CONFIG_RESOURCE_INVALID')
   for (const r of q.statusResources) if (!keys(r,r.kind === 'uat-review-observation' ? ['id','kind','accountKey','accountsFile','playwrightModule','evidenceDirectory'] : r.kind === 'kubernetes' ? ['id','kind','kubeconfig','server','namespace','deployment','skipTlsVerify',...(r.startupInspection===undefined?[]:['startupInspection'])] : ['id','url','fields'])) fail('QUERY_CONFIG_RESOURCE_INVALID')
   // 配置登记不读取凭据、不连接数据库；运行时按资源身份策略检查事务及角色。
-  if (q.databases.length && (typeof q.credentialsPath !== 'string' || !isAbsolute(q.credentialsPath) || q.credentialsPath.includes('\0'))) fail('QUERY_CONFIG_CREDENTIALS_PATH_INVALID')
+  if (q.configurationConnections !== undefined) {
+    try { validateDatabaseConfigurationConnections(q.configurationConnections, q.databases) }
+    catch { fail('QUERY_CONFIG_CONFIGURATION_CONNECTIONS_INVALID') }
+  }
+  const needsFile = q.databases.some(resource => !Object.hasOwn(q.configurationConnections ?? {}, resource.connectionId))
+  if ((needsFile || q.credentialsPath !== undefined) && (typeof q.credentialsPath !== 'string' || !isAbsolute(q.credentialsPath) || q.credentialsPath.includes('\0'))) fail('QUERY_CONFIG_CREDENTIALS_PATH_INVALID')
   for (const r of q.databases) {
     if (!keys(r, ['id','connectionId','tables', ...(r.dataAccess===undefined?[]:['dataAccess']), ...(r.metadataSchemas === undefined ? [] : ['metadataSchemas']), ...(r.environment === undefined ? [] : ['environment']), ...(r.identityPolicy === undefined ? [] : ['identityPolicy'])]) || typeof r.id !== 'string' || !r.id.trim()
       || (r.dataAccess!==undefined&&r.dataAccess!=='all-tables-readonly')

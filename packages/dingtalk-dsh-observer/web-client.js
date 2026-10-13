@@ -109,6 +109,20 @@ window.__ModuleLoader__.load({
         [data-dingtalk-observer] { scrollbar-color: auto; }
         [data-dingtalk-observer] .observer-task-step-button[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
       }
+      [data-dingtalk-observer] .observer-workflow-layout { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 2fr); align-items: start; gap: 24px; }
+      [data-dingtalk-observer] .observer-workflow-choice { width: 100%; min-width: 0; border: 0; border-left: 3px solid transparent; padding: 16px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+      [data-dingtalk-observer] .observer-workflow-choice:hover { background: var(--dsw-alias-bg-layer-1, #f7f7f8); }
+      [data-dingtalk-observer] .observer-workflow-choice[aria-pressed="true"] { border-left-color: var(--dsw-alias-brand-primary, #4d6bfe); background: color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 8%, transparent); }
+      [data-dingtalk-observer] .observer-workflow-choice:active { background: color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 14%, transparent); }
+      [data-dingtalk-observer] .observer-workflow-choice:focus-visible { outline-offset: -3px !important; }
+      [data-dingtalk-observer] .observer-workflow-doc { color: var(--dsw-alias-brand-primary, #4d6bfe); text-underline-offset: 3px; }
+      [data-dingtalk-observer] .observer-workflow-doc:hover { text-decoration-thickness: 2px; }
+      [data-dingtalk-observer] .observer-config-field { display: grid; gap: 8px; min-width: 0; font-size: 14px; }
+      [data-dingtalk-observer] .observer-config-input { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px 12px; border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.surface}; color: inherit; font: inherit; line-height: 1.6; }
+      [data-dingtalk-observer] textarea.observer-config-input { resize: vertical; }
+      [data-dingtalk-observer] .observer-config-input:disabled { opacity: .65; cursor: not-allowed; }
+      [data-dingtalk-observer] .observer-config-binding { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+      @media (max-width: 720px) { [data-dingtalk-observer] .observer-config-binding { grid-template-columns: minmax(0, 1fr); } }
       @media (max-width: 960px) {
         [data-dingtalk-observer] .observer-task-layout { grid-template-columns: 264px minmax(0, 1fr); gap: 20px; }
         [data-dingtalk-observer] .observer-task-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
@@ -121,6 +135,7 @@ window.__ModuleLoader__.load({
         [data-dingtalk-observer] .observer-task-board { grid-template-columns: repeat(2, minmax(280px, 1fr)) !important; }
       }
       @media (max-width: 720px) {
+        [data-dingtalk-observer] .observer-workflow-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
         [data-dingtalk-observer] .observer-task-layout { grid-template-columns: minmax(0, 1fr); }
         [data-dingtalk-observer] .observer-task-navigation { max-height: 360px; overflow: auto; scrollbar-gutter: stable; padding: 2px; }
         [data-dingtalk-observer] .observer-task-reading { position: static; }
@@ -166,8 +181,8 @@ window.__ModuleLoader__.load({
         React.createElement('strong', { style: { color: 'inherit', fontSize: ui.textMd, fontWeight: 600 } }, title),
         detail ? React.createElement('span', null, detail) : null,
         actionLabel && onAction ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: onAction }, actionLabel) : null))
-    async function get(path) {
-      const response = await fetch(`${ENDPOINT}${path}`, { method: 'GET', headers: { accept: 'application/json' } })
+    async function get(path, { signal } = {}) {
+      const response = await fetch(`${ENDPOINT}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal })
       const value = await response.json()
       if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`)
       return value
@@ -202,7 +217,7 @@ window.__ModuleLoader__.load({
       { state: 'waiting', label: '等待中', tone: colors.warning, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary, #a56500) 8%, var(--dsw-alias-bg-layer-1, #fff))' },
       { state: 'completed', label: '已结束', tone: 'var(--dsw-alias-state-success-primary, #248a3d)', background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary, #248a3d) 8%, var(--dsw-alias-bg-layer-1, #fff))' }
     ]
-    const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
+    const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'workflows', label: '工作流' }, { id: 'configuration', label: '配置' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
     const traceStatus = (status) => ({ succeeded: '已完成', applied: '已接纳', settled: '处理已结束', processed: '处理已结束', running: '处理中', claimed: '处理中', pending: '等待处理', queued: '等待处理', waiting: '等待继续', waiting_user: '待补充', interrupted: '待恢复', cancelling: '正在停止', ready: '等待执行', needs_attention: '需要处理', failed: '失败', blocked: '已阻塞', superseded: '已被新消息替代', cancelled: '已取消', rejected: '未接纳', accepted: '已接纳' }[status] || '状态未记录')
     function TaskTotalElapsed({ task }) {
       const [now, setNow] = useState(Date.now)
@@ -412,6 +427,291 @@ window.__ModuleLoader__.load({
         ready ? React.createElement('p', { style: { color: colors.muted, fontSize: 12, margin: 0 } }, '耗时按本次开始到完成计算，包含工具等待；重试显示最近一次处理，不代表纯模型耗时。进行中记录可刷新查看最新状态。') : null,
         React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page?.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null))
     }
+    const workflowRelatedTasks = (tasks, workflowId) => {
+      const matches = id => id === workflowId || workflowId === 'task-engineering' && id?.startsWith('task-engineering-')
+      return tasks.filter(task => task.engine === 'workflow-v2' && (matches(task.workflowId) || task.plan?.stages?.some(stage => matches(stage.workflowId))))
+    }
+    const configurationError = cause => ({
+      WORKFLOW_CONFIG_REVISION_CONFLICT: '配置已被其他操作更新，输入已保留。请重新读取并核对后再保存。',
+      WORKFLOW_CONFIG_FORBIDDEN: '当前访问未获配置管理授权，请核对 Web 操作者及本机访问设置。',
+      WORKFLOW_CONFIG_READONLY: '当前宿主凭据存储只读，无法保存。',
+      WORKFLOW_CONFIG_UNAVAILABLE: '当前实例未提供托管配置服务。',
+      WORKFLOW_CONFIG_JSON_INVALID: '值不是有效的 JSON，请检查后重试。',
+      WORKFLOW_CONFIG_SECRET_REQUIRED: '替换凭据时必须输入新值，空白不会清除原凭据。',
+      WORKFLOW_CONFIG_VARIABLE_DISABLED: '引用中有已停用变量，请启用或移除该引用。',
+      WORKFLOW_CONFIG_ALIAS_DUPLICATE: '同一流程内的读取别名不能重复。',
+      WORKFLOW_CONFIG_LIMIT_EXCEEDED: '已达到配置存储上限，请联系维护者处理历史版本。',
+      WORKFLOW_CONFIG_ARGUMENT_INVALID: '配置内容不符合要求，请检查名称、格式和长度。',
+      WORKFLOW_CONFIG_VARIABLE_UNKNOWN: '引用的变量不存在，请重新读取并核对。',
+      WORKFLOW_CONFIG_WORKFLOW_UNKNOWN: '该流程不可绑定变量，请重新读取目录。',
+    }[cause?.message] || '配置请求失败，输入已保留。请重试或重新读取。')
+    async function saveConfiguration(path, body, method = 'PUT') {
+      const response = await fetch(`${ENDPOINT}${path}`, { method, headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      const value = await response.json()
+      if (!response.ok) throw new Error(value.error || 'WORKFLOW_CONFIG_STORAGE_FAILED')
+      return value
+    }
+    const configurationNameValid = name => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) && !['constructor', 'prototype', '__proto__'].includes(name)
+    const configurationDraft = variable => variable
+      ? { name: variable.name, kind: variable.kind, format: variable.format, description: variable.description, value: variable.kind === 'secret' ? '' : variable.value, existing: true }
+      : { name: '', kind: 'plain', format: 'text', description: '', value: '', existing: false }
+    function WorkflowConfigurationBindings({ active, workflowId, retry, onOpenConfiguration }) {
+      const [state, setState] = useState()
+      const [error, setError] = useState('')
+      useEffect(() => {
+        if (!active) return
+        let current = true
+        const controller = new AbortController()
+        setState(undefined); setError('')
+        get('/config/workflow-variables', { signal: controller.signal }).then(value => { if (current) setState(value) }, cause => { if (current) setError(configurationError(cause)) })
+        return () => { current = false; controller.abort() }
+      }, [active, workflowId, retry])
+      const bindings = state?.bindings.find(item => item.workflowId === workflowId)?.variables || []
+      return React.createElement('section', { 'aria-label': '流程变量', style: { borderTop: `1px solid ${colors.border}`, paddingTop: 16, display: 'grid', gap: 12, fontSize: ui.textMd } },
+        React.createElement('h3', { style: { margin: 0, fontSize: ui.textMd } }, '流程变量'),
+        error ? React.createElement('p', { role: 'alert', style: { margin: 0, color: colors.danger } }, error)
+          : !state ? React.createElement('span', { role: 'status', style: { color: colors.muted } }, '正在读取变量引用…')
+            : bindings.length ? React.createElement('ul', { style: { margin: 0, paddingLeft: 20, display: 'grid', gap: 12 } }, ...bindings.map(binding => {
+              const variable = state.variables.find(item => item.name === binding.name)
+              return React.createElement('li', { key: binding.alias }, React.createElement('span', null, `${binding.alias} → ${binding.name} · ${variable?.kind === 'secret' ? '凭据' : '普通变量'} · v${variable?.revision ?? '—'}${variable?.enabled === false ? ' · 已停用' : ''} `),
+                React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenConfiguration(binding.name, workflowId) }, '查看配置'))
+            })) : React.createElement('p', { style: { color: colors.muted, margin: 0 } }, '尚未绑定托管变量。流程代码需通过读取别名使用配置。'),
+        React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', style: { justifySelf: 'start' }, onClick: () => onOpenConfiguration('', workflowId) }, '管理变量绑定'))
+    }
+    function ConfigurationBrowser({ active, target }) {
+      const [state, setState] = useState()
+      const [workflows, setWorkflows] = useState([])
+      const [loading, setLoading] = useState(false)
+      const [error, setError] = useState('')
+      const [catalogError, setCatalogError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [draft, setDraft] = useState()
+      const [dirty, setDirty] = useState(false)
+      const [revealed, setRevealed] = useState(false)
+      const [busy, setBusy] = useState(false)
+      const [confirmDisable, setConfirmDisable] = useState(false)
+      const [workflowId, setWorkflowId] = useState('')
+      const [bindings, setBindings] = useState([])
+      const [bindingDirty, setBindingDirty] = useState(false)
+      const [pendingAction, setPendingAction] = useState()
+      const [retry, setRetry] = useState(0)
+      const request = useRef()
+      const saving = useRef(false)
+      const errorRegion = useRef()
+      const nameInput = useRef()
+      const lastTarget = useRef()
+      const selection = useRef({ name: '', workflowId: '' })
+      const labelStyle = { color: colors.muted, fontSize: ui.textSm, lineHeight: 1.7, margin: 0 }
+      const selectVariable = (name, data = state) => { selection.current.name = name || ''; setDraft(configurationDraft(data?.variables.find(item => item.name === name))); setDirty(false); setRevealed(false); setConfirmDisable(false); setError(''); setNotice('') }
+      const selectWorkflow = (id, data = state) => { selection.current.workflowId = id; setWorkflowId(id); setBindings((data?.bindings.find(item => item.workflowId === id)?.variables || []).map(item => ({ ...item }))); setBindingDirty(false) }
+      const applyAction = action => {
+        setPendingAction(undefined)
+        if (action.type === 'reload') { setLoading(true); setDirty(false); setBindingDirty(false); setRetry(value => value + 1); return }
+        if (action.type === 'workflow') { selectWorkflow(action.id); return }
+        if (action.type === 'target') { if (action.name) selectVariable(action.name); if (action.workflowId) selectWorkflow(action.workflowId); return }
+        selectVariable(action.name)
+        requestAnimationFrame(() => nameInput.current?.focus())
+      }
+      const navigate = action => { if (busy) return; if (dirty || bindingDirty) setPendingAction(action); else applyAction(action) }
+      useEffect(() => {
+        if (!active) { request.current?.abort(); return }
+        // 保留草稿及其读取版本，切回页面不能悄悄接受新 revision 后覆盖他人更新。
+        if (dirty || bindingDirty || saving.current) return
+        let current = true
+        const controller = new AbortController()
+        request.current = controller
+        setLoading(true); setError(''); setCatalogError('')
+        Promise.allSettled([get('/config/workflow-variables', { signal: controller.signal }), get('/state/workflows/catalog', { signal: controller.signal })]).then(results => {
+          if (!current) return
+          const [configuration, catalog] = results
+          let nextWorkflows = workflows
+          if (catalog.status === 'fulfilled') { nextWorkflows = catalog.value.engine === 'workflow-v2' ? [...catalog.value.workflows, ...(catalog.value.builtInWorkflows || [])] : []; setWorkflows(nextWorkflows) }
+          else setCatalogError('工作流目录读取失败，请重新读取后维护绑定。')
+          if (configuration.status === 'rejected') { setError(configurationError(configuration.reason)); return }
+          const data = configuration.value
+          setState(data)
+          const incomingTarget = target !== lastTarget.current ? target : undefined
+          if (!dirty) selectVariable(incomingTarget?.name || selection.current.name || data.variables[0]?.name, data)
+          if (!bindingDirty) selectWorkflow(incomingTarget?.workflowId || selection.current.workflowId || nextWorkflows[0]?.id || '', data)
+          lastTarget.current = target
+        }).finally(() => { if (current) setLoading(false) })
+        return () => { current = false; controller.abort() }
+      }, [active, retry])
+      useEffect(() => {
+        if (!active || busy || !state || !target || lastTarget.current === target) return
+        lastTarget.current = target
+        navigate({ type: 'target', ...target })
+      }, [active, busy, target, state])
+      useEffect(() => {
+        if (!dirty && !bindingDirty) return
+        const beforeUnload = event => { event.preventDefault(); event.returnValue = '' }
+        window.addEventListener('beforeunload', beforeUnload)
+        return () => window.removeEventListener('beforeunload', beforeUnload)
+      }, [dirty, bindingDirty])
+      useEffect(() => { if (!dirty && !bindingDirty) setPendingAction(undefined) }, [dirty, bindingDirty])
+      useEffect(() => { if (error && active) errorRegion.current?.focus() }, [error, active])
+      const changeDraft = (key, value) => { setDraft(previous => ({ ...previous, [key]: value })); setDirty(true); setNotice(''); setConfirmDisable(false) }
+      const mutate = async (path, body, method, done) => {
+        if (saving.current || loading || !state?.writable) return
+        saving.current = true; setBusy(true); setError(''); setNotice('')
+        try { const data = await saveConfiguration(path, { ...body, expectedRevision: state.revision }, method); setState(data); done(data) }
+        catch (cause) { setError(configurationError(cause)) }
+        finally { saving.current = false; setBusy(false) }
+      }
+      const saveVariable = event => {
+        event.preventDefault()
+        if (!configurationNameValid(draft.name)) { setError('名称须以英文字母开头，仅含字母、数字、下划线或短横线，最多 64 字符；不可使用保留名称。'); return }
+        if (draft.kind === 'secret' && !draft.value.trim()) { setError('请输入新凭据；留空不会清除或替换已有值。'); return }
+        if (new TextEncoder().encode(draft.value).length > 65536) { setError('变量值不能超过 64 KiB。'); return }
+        if (draft.format === 'json') { try { JSON.parse(draft.value) } catch { setError('值不是有效的 JSON，请检查后重试。'); return } }
+        if (!draft.existing && state.variables.some(item => item.name === draft.name)) { setError('该名称已存在，请选择已有变量进行编辑。'); return }
+        const { name, kind, format, description, value } = draft
+        void mutate(`/config/workflow-variables/${encodeURIComponent(name)}`, { kind, format, description, value }, 'PUT', data => { selectVariable(name, data); setNotice('变量已保存，后续新运行采用新版本。') })
+      }
+      const saveBindings = event => {
+        event.preventDefault()
+        if (!workflowId || bindings.some(item => !configurationNameValid(item.alias) || !item.name) || new Set(bindings.map(item => item.alias)).size !== bindings.length) { setError('请为每条引用填写有效且不重复的读取别名，并选择变量。'); return }
+        void mutate(`/config/workflow-bindings/${encodeURIComponent(workflowId)}`, { variables: bindings }, 'PUT', data => { selectWorkflow(workflowId, data); setNotice('变量绑定已保存，后续新运行采用本次绑定。') })
+      }
+      const selected = state?.variables.find(item => draft?.existing && item.name === draft.name)
+      const disabled = busy || loading || !state?.writable
+      const button = (label, onClick, props = {}) => React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick, ...props }, label)
+      const field = (label, id, element, help) => React.createElement('div', { className: 'observer-config-field' }, React.createElement('label', { htmlFor: id }, label), element, help ? React.createElement('p', { id: `${id}-help`, style: labelStyle }, help) : null)
+      const input = (id, props) => React.createElement('input', { id, className: 'observer-config-input', ...props })
+      return React.createElement('section', { hidden: !active, 'aria-label': '配置管理', style: { display: active ? 'grid' : 'none', gap: 24, minWidth: 0 } },
+        React.createElement('header', { style: { ...toolbar, border: 0, padding: 0, flexWrap: 'wrap' } },
+          React.createElement('div', null, React.createElement('h2', { style: { fontSize: ui.textLg, margin: '0 0 6px' } }, '配置'), React.createElement('p', { style: labelStyle }, '集中维护普通变量与凭据，按工作流分配读取别名。')),
+          button(loading ? '读取中…' : '重新读取配置', () => navigate({ type: 'reload' }), { disabled: loading || busy })),
+        error ? React.createElement('div', { role: 'alert', ref: errorRegion, tabIndex: -1, style: { color: colors.danger, fontSize: ui.textMd } }, error) : null,
+        notice ? React.createElement('div', { role: 'status', style: { color: statusTone.done, fontSize: ui.textMd } }, notice) : null,
+        pendingAction ? React.createElement('section', { 'aria-label': '未保存修改', style: { ...tableFrame, padding: 16, display: 'grid', gap: 12 } },
+          React.createElement('p', { style: { margin: 0 } }, '有未保存修改。继续编辑并保存，或放弃修改后继续。'),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12 } }, button('继续编辑', () => setPendingAction(undefined)), button('放弃修改并继续', () => { setDirty(false); setBindingDirty(false); selectVariable(draft?.existing ? draft.name : '', state); selectWorkflow(workflowId, state); applyAction(pendingAction) }))) : null,
+        !state ? emptyState(loading ? '正在读取配置…' : '配置尚未读取', { detail: '授权和存储就绪后，可在此维护流程变量。' }) : React.createElement(React.Fragment, null,
+          !state.writable ? React.createElement('p', { role: 'status', style: labelStyle }, '当前存储只读，可查看配置与引用，无法修改。') : null,
+          React.createElement('div', { className: 'observer-workflow-layout' },
+            React.createElement('section', { 'aria-label': '变量列表', style: { display: 'grid', gap: 16, minWidth: 0 } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } }, React.createElement('span', { style: labelStyle }, `${state.variables.length} 个变量 · 配置版本 ${state.revision}`), button('新建变量', () => navigate({ type: 'variable', name: '' }), { disabled })),
+              !state.variables.length ? emptyState('暂无变量', { detail: '在右侧填写首个变量，再将读取别名绑定到流程。' })
+                : React.createElement('ul', { style: { ...tableFrame, listStyle: 'none', margin: 0, padding: 0 } }, ...state.variables.map(variable => React.createElement('li', { key: variable.name, style: { borderBottom: `1px solid ${colors.border}` } },
+                  React.createElement('button', { type: 'button', className: 'observer-workflow-choice', 'aria-label': variable.name, 'aria-pressed': draft?.existing && variable.name === draft.name, disabled: busy || loading, onClick: () => navigate({ type: 'variable', name: variable.name }) },
+                    React.createElement('strong', { style: { display: 'block', fontSize: ui.textMd } }, variable.name),
+                    React.createElement('span', { style: { display: 'block', marginTop: 8, ...labelStyle } }, `${variable.kind === 'secret' ? '凭据 · 已设置' : '普通变量'} · ${variable.format === 'json' ? 'JSON' : '文本'} · v${variable.revision} · ${variable.enabled ? '启用' : '停用'}`),
+                    React.createElement('span', { style: { display: 'block', marginTop: 4, ...labelStyle } }, `${state.bindings.filter(item => item.variables.some(binding => binding.name === variable.name)).length} 个流程引用`)))))),
+            draft ? React.createElement('form', { 'aria-label': '变量编辑', onSubmit: saveVariable, style: { display: 'grid', gap: 16, minWidth: 0 } },
+              React.createElement('h3', { style: { fontSize: ui.textLg, margin: 0 } }, draft.existing ? `编辑 ${draft.name}` : '新建变量'),
+              field('变量名称', 'workflow-variable-name', input('workflow-variable-name', { ref: nameInput, value: draft.name, readOnly: draft.existing, disabled, autoComplete: 'off', maxLength: 64, 'aria-describedby': 'workflow-variable-name-help', onChange: event => changeDraft('name', event.target.value) }), '字母开头，使用字母、数字、下划线或短横线；创建后不可改名。'),
+              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 24 } },
+                field('类型', 'workflow-variable-kind', React.createElement('select', { id: 'workflow-variable-kind', className: 'observer-config-input', value: draft.kind, disabled: disabled || draft.existing, onChange: event => { changeDraft('kind', event.target.value); changeDraft('value', ''); setRevealed(false) } }, React.createElement('option', { value: 'plain' }, '普通变量'), React.createElement('option', { value: 'secret' }, '凭据'))),
+                field('值格式', 'workflow-variable-format', React.createElement('select', { id: 'workflow-variable-format', className: 'observer-config-input', value: draft.format, disabled: disabled || draft.existing, onChange: event => changeDraft('format', event.target.value) }, React.createElement('option', { value: 'text' }, '文本'), React.createElement('option', { value: 'json' }, 'JSON')))),
+              field('用途说明', 'workflow-variable-description', input('workflow-variable-description', { value: draft.description, disabled, maxLength: 500, onChange: event => changeDraft('description', event.target.value) })),
+              field(draft.kind === 'secret' ? draft.existing ? '替换凭据值' : '凭据值' : '变量值', 'workflow-variable-value', React.createElement('textarea', { id: 'workflow-variable-value', className: 'observer-config-input', rows: 5, disabled, autoComplete: 'off', spellCheck: false, value: draft.value, 'aria-describedby': 'workflow-variable-value-help', style: { WebkitTextSecurity: draft.kind === 'secret' && !revealed ? 'disc' : 'none' }, onChange: event => changeDraft('value', event.target.value) }), draft.kind === 'secret' ? '已保存凭据不回显。替换需重新输入；留空不会清除原值。' : '最多 64 KiB；JSON 保存前会校验格式。'),
+              draft.kind === 'secret' ? button(revealed ? '隐藏输入' : '显示输入', () => setRevealed(value => !value), { 'aria-pressed': revealed, disabled, style: { justifySelf: 'start' } }) : null,
+              React.createElement('p', { style: labelStyle }, '保存后，新运行使用新版本；已启动的运行继续读取其冻结版本。'),
+              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12 } },
+                React.createElement(Button, { type: 'submit', size: 'sm', disabled: disabled || !dirty }, busy ? '保存中…' : '保存变量'),
+                button('取消修改', () => { selectVariable(selected?.name, state) }, { disabled: busy || !dirty })),
+              selected ? React.createElement('section', { style: { borderTop: `1px solid ${colors.border}`, paddingTop: 16, display: 'grid', gap: 12 } },
+                React.createElement('p', { style: labelStyle }, selected.enabled ? '停用会阻止引用此变量的新运行启动；已经冻结的运行仍可读取旧版本。' : '该变量已停用。重新启用后可用于新运行。'),
+                confirmDisable ? React.createElement('div', { role: 'group', 'aria-label': '确认停用变量', style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
+                  button('确认停用', () => void mutate(`/config/workflow-variables/${encodeURIComponent(selected.name)}/enabled`, { enabled: false }, 'POST', () => { setConfirmDisable(false); setNotice('变量已停用，已冻结运行不受影响。') }), { disabled }), button('取消停用', () => setConfirmDisable(false), { disabled }))
+                  : button(selected.enabled ? '停用变量' : '启用变量', () => { if (selected.enabled) setConfirmDisable(true); else void mutate(`/config/workflow-variables/${encodeURIComponent(selected.name)}/enabled`, { enabled: true }, 'POST', () => setNotice('变量已启用。')) }, { disabled: disabled || dirty, style: { justifySelf: 'start' } })) : null) : null),
+          React.createElement('form', { 'aria-label': '工作流变量绑定', onSubmit: saveBindings, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 24, display: 'grid', gap: 16, minWidth: 0 } },
+            React.createElement('h3', { style: { fontSize: ui.textLg, margin: 0 } }, '工作流变量绑定'),
+            React.createElement('p', { style: labelStyle }, '流程通过约定的读取别名使用配置，凭据只交给受信执行代码。已有文件读取需先接入托管配置，绑定本身不会自动迁移。'),
+            catalogError ? React.createElement('p', { role: 'alert', style: { color: colors.danger, margin: 0 } }, catalogError) : null,
+            field('选择工作流', 'workflow-binding-workflow', React.createElement('select', { id: 'workflow-binding-workflow', className: 'observer-config-input', value: workflowId, disabled: disabled || !!catalogError || !workflows.length, onChange: event => navigate({ type: 'workflow', id: event.target.value }) }, !workflows.length ? React.createElement('option', { value: '' }, '暂无可绑定工作流') : null, ...workflows.map(item => React.createElement('option', { key: item.id, value: item.id }, item.label)))),
+            ...bindings.map((binding, index) => React.createElement('div', { key: index, className: 'observer-config-binding' },
+              field(`读取别名 ${index + 1}`, `workflow-binding-alias-${index}`, input(`workflow-binding-alias-${index}`, { value: binding.alias, maxLength: 64, disabled, onChange: event => { setBindings(items => items.map((item, position) => position === index ? { ...item, alias: event.target.value } : item)); setBindingDirty(true) } })),
+              field(`引用变量 ${index + 1}`, `workflow-binding-name-${index}`, React.createElement('select', { id: `workflow-binding-name-${index}`, className: 'observer-config-input', value: binding.name, disabled, onChange: event => { setBindings(items => items.map((item, position) => position === index ? { ...item, name: event.target.value } : item)); setBindingDirty(true) } }, React.createElement('option', { value: '' }, '请选择变量'), ...state.variables.filter(variable => variable.enabled || variable.name === binding.name).map(variable => React.createElement('option', { key: variable.name, value: variable.name }, `${variable.name}（${variable.kind === 'secret' ? '凭据' : '普通'}${variable.enabled ? '' : ' · 已停用'}）`)))),
+              button(`移除引用 ${index + 1}`, () => { setBindings(items => items.filter((_, position) => position !== index)); setBindingDirty(true) }, { disabled }))),
+            !bindings.length ? React.createElement('p', { style: labelStyle }, '该流程尚无托管变量引用。') : null,
+            React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
+              button('添加引用', () => { setBindings(items => [...items, { alias: '', name: '' }]); setBindingDirty(true) }, { disabled: disabled || !!catalogError || !workflowId || bindings.length >= 100 }),
+              React.createElement(Button, { type: 'submit', size: 'sm', disabled: disabled || !!catalogError || !bindingDirty || !workflowId }, busy ? '保存中…' : '保存绑定'),
+              button('取消绑定修改', () => selectWorkflow(workflowId), { disabled: busy || !bindingDirty }))),
+          React.createElement('p', { style: { ...labelStyle, borderTop: `1px solid ${colors.border}`, paddingTop: 16 } }, '凭据由宿主管理，页面不会读回已保存的值。默认本地存储为明文，请限制宿主目录的访问权限。')))
+    }
+    function WorkflowBrowser({ active, updatedAt, tasks, selectedId, onSelect, onOpenTask, restoreFocus, onFocusRestored, onOpenConfiguration }) {
+      const [catalog, setCatalog] = useState()
+      const [error, setError] = useState('')
+      const [loading, setLoading] = useState(false)
+      const [retry, setRetry] = useState(0)
+      const pending = useRef(null)
+      const selectedButton = useRef(null)
+      useEffect(() => {
+        if (!active) { pending.current?.controller.abort(); pending.current = null; return }
+        let current = true
+        setLoading(true)
+        if (!pending.current) {
+          const request = { controller: new AbortController() }
+          request.promise = get('/state/workflows/catalog', { signal: request.controller.signal }).then(value => {
+            if (value.engine === 'workflow-v2' && !Array.isArray(value.workflows)) throw new Error('工作流目录数据不完整')
+            return value
+          }).finally(() => { if (pending.current === request) pending.current = null })
+          pending.current = request
+        }
+        pending.current.promise.then(value => { if (current) { setCatalog(value); setError('') } },
+          cause => { if (current) setError(cause.message) }).finally(() => { if (current) setLoading(false) })
+        return () => { current = false }
+      }, [active, updatedAt, retry])
+      useEffect(() => () => pending.current?.controller.abort(), [])
+      const workflows = React.useMemo(() => catalog?.engine === 'workflow-v2' ? [...catalog.workflows, ...(catalog.builtInWorkflows || [])] : [], [catalog])
+      const selected = workflows.find(item => item.id === selectedId)
+      useEffect(() => { if (active && !selectedId && workflows.length) onSelect(workflows[0].id) }, [active, selectedId, workflows, onSelect])
+      useEffect(() => {
+        if (active && restoreFocus && selectedButton.current) { selectedButton.current.focus(); onFocusRestored() }
+      }, [active, restoreFocus, selected?.id, onFocusRestored])
+      const relatedTasks = selected ? workflowRelatedTasks(tasks, selected.id) : []
+      const availableCount = workflows.filter(item => item.status === 'available').length
+      const availability = item => tableStatusTag(item.mode === 'built-in' ? '内置能力' : item.status === 'available' ? '可发起' : '待接入', item.mode === 'built-in' ? 'neutral' : item.status === 'available' ? 'done' : 'warning')
+      const version = item => item.version ? item.mode === 'built-in' ? item.version : `v${item.version}` : item.mode === 'engineering' ? '随任务确定' : '版本未提供'
+      const retryButton = React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => setRetry(value => value + 1) }, loading ? '读取中…' : '重新读取')
+      const docs = 'https://github.com/HiQ-AI/dingtalk-dsh-assistant/blob/main/'
+      const documentLink = (path, label) => React.createElement('a', { className: 'observer-workflow-doc', href: docs + path, target: '_blank', rel: 'noopener noreferrer' }, `${label}（新窗口）`)
+      const heading = title => React.createElement('h3', { style: { margin: '0 0 12px', fontSize: ui.textMd } }, title)
+      return React.createElement('section', { hidden: !active, 'aria-label': '工作流目录', style: { display: active ? 'grid' : 'none', gap: ui.space4, minWidth: 0 } },
+        React.createElement('div', { style: { ...toolbar, border: 0, padding: 0, flexWrap: 'wrap' } },
+          React.createElement('div', null, React.createElement('h2', { style: { margin: '0 0 6px', fontSize: ui.textLg } }, '工作流'),
+            React.createElement('span', { style: { color: colors.muted, fontSize: ui.textSm } }, '查看流程用途、执行步骤和配置就绪情况。')), retryButton),
+        error ? React.createElement('div', { role: 'alert', style: { color: colors.danger, fontSize: ui.textSm } }, catalog ? `目录刷新失败，以下内容尚未刷新：${error}` : `工作流目录读取失败：${error}`) : null,
+        React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: ui.textSm } }, loading ? '正在读取工作流目录…' : catalog?.engine === 'workflow-v2' ? `${workflows.length} 个流程 · ${availableCount} 个可发起 · ${workflows.filter(item => item.mode !== 'built-in' && item.status !== 'available').length} 个待接入 · ${workflows.filter(item => item.mode === 'built-in').length} 个内置能力` : ''),
+        !catalog ? (!error ? emptyState('正在读取工作流目录…') : null)
+          : catalog.engine !== 'workflow-v2' ? emptyState('工作流目录尚未启用', { detail: '当前运行实例未提供工作流目录，请核对插件运行配置。' })
+          : !workflows.length ? emptyState('暂无工作流', { detail: '当前运行实例未登记可展示的流程。' })
+          : React.createElement('div', { className: 'observer-workflow-layout' },
+            React.createElement('section', { 'aria-label': '工作流列表', 'aria-busy': loading, style: { ...tableFrame, minWidth: 0 } },
+              React.createElement('ul', { style: { listStyle: 'none', padding: 0, margin: 0 } }, ...workflows.map(item => React.createElement('li', { key: item.id, style: { borderBottom: `1px solid ${colors.border}` } },
+                React.createElement('button', { type: 'button', className: 'observer-workflow-choice', 'aria-label': item.label, 'aria-pressed': selectedId === item.id, ref: selectedId === item.id ? selectedButton : undefined, onClick: () => onSelect(item.id) },
+                  React.createElement('span', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' } }, React.createElement('strong', { style: { fontSize: ui.textMd } }, item.label), availability(item)),
+                  React.createElement('span', { style: { display: 'block', marginTop: 8, color: colors.muted, fontSize: ui.textSm, lineHeight: 1.6 } }, item.purpose),
+                  React.createElement('span', { style: { display: 'block', marginTop: 8, color: colors.muted, fontSize: ui.textSm } }, version(item))))))),
+            React.createElement('section', { 'aria-label': '工作流详情', style: { minWidth: 0, overflowWrap: 'anywhere', display: 'grid', gap: ui.space6 } },
+              !selected ? emptyState('请选择工作流', { detail: selectedId ? '所选工作流已不在当前目录，请重新选择。' : '从列表选择流程查看详情。' }) : React.createElement(React.Fragment, null,
+                React.createElement('header', null, React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 } }, React.createElement('h2', { style: { margin: 0, fontSize: ui.textLg } }, selected.label), availability(selected)),
+                  React.createElement('p', { style: { fontSize: ui.textMd, lineHeight: 1.7, margin: '12px 0' } }, selected.purpose),
+                  React.createElement('span', { style: { color: colors.muted, fontSize: ui.textSm } }, `定义版本：${version(selected)}`)),
+                React.createElement('section', null, heading('执行步骤'),
+                  selected.mode === 'engineering' ? React.createElement('p', { style: { margin: 0, color: colors.muted, lineHeight: 1.7, fontSize: ui.textMd } }, '具体步骤随任务和仓库配置冻结，请从相关任务查看本次执行步骤。')
+                    : selected.nodes?.length ? React.createElement('ol', { style: { margin: 0, paddingLeft: 24, display: 'grid', gap: 12 } }, ...selected.nodes.map((node, index) => React.createElement('li', { key: node.id, style: { lineHeight: 1.6, fontSize: ui.textMd } },
+                      React.createElement('span', null, node.label || nodeTitle[node.id] || `步骤 ${index + 1}（名称未登记）`),
+                      React.createElement('span', { style: { marginLeft: 12, color: colors.muted, fontSize: ui.textSm } }, node.executor === 'agent' ? '模型处理' : node.executor !== 'code' ? '执行方式未提供' : node.effects?.some(effect => !['pure', 'read'].includes(effect)) ? '受控操作' : '代码校验'))))
+                    : React.createElement('p', { style: { margin: 0, color: colors.muted, fontSize: ui.textMd } }, '当前目录未提供可展示的节点定义。')),
+                React.createElement('section', { 'aria-label': '配置与维护', style: { borderTop: `1px solid ${colors.border}`, paddingTop: ui.space4, fontSize: ui.textMd, lineHeight: 1.7 } }, heading('配置与维护'),
+                  selected.reason ? React.createElement('p', { style: { margin: '0 0 12px', color: selected.status === 'available' ? colors.muted : colors.warning } }, selected.reason) : null,
+                  selected.repositories?.length ? React.createElement('p', { style: { margin: '0 0 12px' } }, `已登记仓库：${selected.repositories.join('、')}`) : null,
+                  React.createElement('p', { style: { margin: '0 0 12px', color: colors.muted } }, selected.mode === 'engineering' ? '由维护者核对受信工程仓库与验收环境配置；更新后重新读取目录。' : selected.mode === 'external' ? '由维护者核对受信平台目标、客户端与验证配置；目录可发起后仍需满足具体任务的授权条件。' : '流程随插件代码维护；变更需验证并更新插件，已有任务按其冻结定义执行。'),
+                  React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 20px', fontSize: ui.textSm } },
+                    selected.mode === 'engineering' || selected.mode === 'external' ? documentLink('docs/ops/trusted-platform-workflows.md', '配置维护说明') : null,
+                    documentLink('packages/dingtalk-dsh-assistant/README.md', '工作流开发说明'))),
+                React.createElement(WorkflowConfigurationBindings, { active, workflowId: selected.id, retry, onOpenConfiguration }),
+                React.createElement('section', { 'aria-label': '相关任务', style: { borderTop: `1px solid ${colors.border}`, paddingTop: ui.space4 } }, heading('相关任务'),
+                  React.createElement('p', { style: { color: colors.muted, fontSize: ui.textSm, margin: '0 0 12px' } }, '按任务及计划阶段的实际流程关联，包含归档任务；执行步骤和版本以任务详情为准。'),
+                  relatedTasks.length ? React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 } }, ...relatedTasks.map(task => React.createElement('li', { key: task.taskId, style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 } },
+                    React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', style: { whiteSpace: 'normal', textAlign: 'left', overflowWrap: 'anywhere', maxWidth: '100%' }, onClick: () => onOpenTask(task) }, taskDisplayTitle(task)),
+                    React.createElement('span', { style: { color: colors.muted, fontSize: ui.textSm } }, task.archivedAt ? '已归档' : ({ queued: '待执行', running: '执行中', waiting: '等待处理', completed: '已结束' }[task.state] || '状态未记录')))))
+                    : emptyState('暂无相关任务', { detail: '任务使用此流程后会显示在这里。' }))))))
+    }
     function TopicBrowser({ groups, tasks, target, updatedAt, onOpenTask, onOpenSession }) {
       const [groupId, setGroupId] = useState(target?.groupId || '')
       const [offset, setOffset] = useState(0)
@@ -601,6 +901,9 @@ window.__ModuleLoader__.load({
     }
     function ObserverContent({ openSession }) {
       const [activePage, setActivePage] = useState('groups')
+      const [selectedCatalogWorkflowId, setSelectedCatalogWorkflowId] = useState('')
+      const [taskReturnWorkflowId, setTaskReturnWorkflowId] = useState('')
+      const [configurationTarget, setConfigurationTarget] = useState()
       const [topicTarget, setTopicTarget] = useState()
       const [data, setData] = useState()
       const [error, setError] = useState()
@@ -714,9 +1017,13 @@ window.__ModuleLoader__.load({
         catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
         finally { setNavigatingSessionId('') }
       }
-      const openTask = (task) => {
-        if (task.engine === 'workflow-v2') { setSelectedWorkflowTaskId(task.taskId); setActivePage('tasks'); return }
+      const openTask = (task, returnWorkflowId = '') => {
+        if (task.engine === 'workflow-v2') { setTaskReturnWorkflowId(returnWorkflowId); setSelectedWorkflowTaskId(task.taskId); setActivePage('tasks'); return }
         if (task.childSessionId) navigate(task.childSessionId, groupsById.get(task.groupId)?.residentSessionId)
+      }
+      const returnFromTask = () => {
+        setSelectedWorkflowTaskId('')
+        if (taskReturnWorkflowId) { setSelectedCatalogWorkflowId(taskReturnWorkflowId); setActivePage('workflows') }
       }
       const copyId = async (value) => {
         let copied = false
@@ -1000,7 +1307,7 @@ window.__ModuleLoader__.load({
       const workflowDetail = selectedWorkflowTask ? React.createElement('section', { className: 'observer-task-detail', 'aria-label': '任务执行详情', style: { maxWidth: 1200, margin: '0 auto', minWidth: 0, overflowWrap: 'anywhere' } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, fontSize: 12, color: colors.muted } },
           React.createElement('span', null, '任务看板 / 任务详情'),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedWorkflowTaskId('') }, '返回看板')),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: returnFromTask }, taskReturnWorkflowId ? '返回工作流' : '返回看板')),
         stepReadingNotice ? React.createElement('p', { role: 'status', 'aria-live': 'polite', style: { color: colors.muted, fontSize: 12 } }, stepReadingNotice) : null,
         workflowDetailError ? React.createElement('div', { role: 'alert', style: { marginTop: 12, color: colors.danger, fontSize: 12 } }, `当前详情刷新失败，以下内容尚未刷新：${workflowDetailError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setWorkflowDetailRetry(value => value + 1) }, '重试读取详情')) : null,
         React.createElement('header', { className: 'observer-task-overview', style: { borderBottom: `1px solid ${colors.border}`, marginBottom: 24 } },
@@ -1057,7 +1364,7 @@ window.__ModuleLoader__.load({
                 active: readingNode?.stepKey === node.stepKey, tone: stepColor(presentation.skipped ? 'skipped' : node.status), statusLabel: presentation.label || nodeState[node.status] || '状态未记录', onOpenSession: navigate, onBack: focusStepDirectory })
             }))) : null))
         : null
-      const workflowDetailPending = selectedWorkflowTaskId && !selectedWorkflowTask ? React.createElement('section', { 'aria-label': '任务详情读取', style: { display: 'grid', gap: 12 } }, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedWorkflowTaskId('') }, '返回看板'), workflowDetailError ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `任务详情读取失败：${workflowDetailError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setWorkflowDetailRetry(value => value + 1) }, '重试读取详情')) : React.createElement('span', { role: 'status' }, '正在读取当前任务详情…')) : null
+      const workflowDetailPending = selectedWorkflowTaskId && !selectedWorkflowTask ? React.createElement('section', { 'aria-label': '任务详情读取', style: { display: 'grid', gap: 12 } }, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: returnFromTask }, taskReturnWorkflowId ? '返回工作流' : '返回看板'), workflowDetailError ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `任务详情读取失败：${workflowDetailError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setWorkflowDetailRetry(value => value + 1) }, '重试读取详情')) : React.createElement('span', { role: 'status' }, '正在读取当前任务详情…')) : null
       const tasksPage = workflowDetailPending || workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
@@ -1142,8 +1449,12 @@ window.__ModuleLoader__.load({
           alertView === 'resolved' ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredResolvedAlerts.length} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
       )
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: openTask, onOpenSession: navigate })
-      const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
-      const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
+      const pageContent = ['workflows', 'configuration'].includes(activePage) ? null : activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
+      const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box', margin: '0 auto' } }, pageContent,
+        React.createElement(WorkflowBrowser, { active: activePage === 'workflows', updatedAt, tasks: data?.tasks || [], selectedId: selectedCatalogWorkflowId, onSelect: setSelectedCatalogWorkflowId,
+          onOpenTask: task => openTask(task, selectedCatalogWorkflowId), restoreFocus: !!taskReturnWorkflowId, onFocusRestored: () => setTaskReturnWorkflowId(''),
+          onOpenConfiguration: (name, workflowId) => { setConfigurationTarget({ name, workflowId }); setActivePage('configuration') } }),
+        React.createElement(ConfigurationBrowser, { active: activePage === 'configuration', target: configurationTarget }))
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
         navigationError ? React.createElement('div', { role: 'alert', style: { ...card, borderColor: colors.danger, color: colors.danger } }, `操作失败：${navigationError}`) : null,

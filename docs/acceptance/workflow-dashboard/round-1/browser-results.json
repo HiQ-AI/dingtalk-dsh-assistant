@@ -1,0 +1,27 @@
+{
+  "status": "FAIL",
+  "mode": "verify",
+  "browserVersion": "155.0.4283.45",
+  "observerSha256": "6b51116f5c36b1a990caa5c9a8a259d5356b9cc317a8062e05bee0f2187430c5",
+  "checks": [
+    "navigation-after-tasks",
+    "catalog-lazy-loading",
+    "initial-loading",
+    "keyboard-open-tab",
+    "initial-error"
+  ],
+  "error": "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n5 !== 6\n\n    at file:///D:/codex/worktrees/workflow-dashboard/dingtalk-dsh-assistant/docs/acceptance/workflow-dashboard/scripts/verify-workflow-browser.mjs:114:12",
+  "pageErrors": [],
+  "writes": [],
+  "unexpectedRequests": [],
+  "requests": [
+    "/health",
+    "/state/groups",
+    "/state/tasks",
+    "/state/supervisor/alerts",
+    "/state/authorizations",
+    "/state/topics?offset=0&limit=100",
+    "/state/workflows/catalog",
+    "/state/workflows/catalog"
+  ]
+}

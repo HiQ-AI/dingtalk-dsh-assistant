@@ -4,6 +4,7 @@ import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {openExecutionStore} from '../packages/dingtalk-dsh-assistant/execution-store.js'
+import {createExecutionController} from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 const h='a'.repeat(64),ref=id=>`tasks/${id}/sha256-${h}.json`
 async function fixture(t){
  const dir=await mkdtemp(join(tmpdir(),'dsh-execution-reset-'))
@@ -44,7 +45,7 @@ test('preview is read only; reset archives current run, preserves requirement/co
  await assert.rejects(f.cmd('task.execution.reset',f.args('one'),'second-click'),{code:'TASK_RESET_CONTROL_STALE'})
  await assert.rejects(f.cmd('task.execution.reset',{...f.args('one'),reason:'different'},'reset-one'),{code:'COMMAND_ID_CONFLICT'})
 })
-for(const version of ['20','21','24','25']) test('new simplified run is bound to same task, stays paused until explicitly resumed, invalid cross-task reset rolls back v'+version,async t=>{
+for(const version of ['20','21','24','25','26']) test('new simplified run is bound to same task, stays paused until explicitly resumed, invalid cross-task reset rolls back v'+version,async t=>{
  const f=await fixture(t);await f.task('one')
  const next={taskId:'one',runId:'new-one',workflowId:'new-workflow',workflowDigest:'b'.repeat(64),requirementRef:ref('one'),nodes:[{nodeId:'prepare-generation',nodeVersion:'1',executor:'code',inputRef:ref('one'),inputDigest:h},{nodeId:'inspect-and-propose',nodeVersion:'20',executor:'agent',inputRef:null,inputDigest:null},{nodeId:'apply-changes',nodeVersion:'8',executor:'agent',inputRef:null,inputDigest:null}]}
  await f.cmd('workflow.register',{workflowId:next.workflowId,digest:next.workflowDigest,definitionVersion:version,config:{taskId:'one',runId:'new-one'}})
@@ -56,4 +57,20 @@ for(const version of ['20','21','24','25']) test('new simplified run is bound to
  assert.equal(plan.task.controlState,'paused');assert.equal(plan.stages[0].runId,'new-one');assert.equal(plan.stages[0].gate,'none')
  assert.deepEqual((await f.store.query({kind:'run.list',taskId:'one'})).map(r=>r.runId),['new-one'])
  assert.equal(state.nodes.some(n=>n.nodeId==='validate-proposal'),false)
+})
+
+test('controller reset admission validates before freezing and never refreezes a receipt replay',async t=>{
+ const f=await fixture(t);await f.task('one')
+ const snapshots=[],controller=createExecutionController({store:f.store,artifacts:{},sessions:{async close(){}},workflows:[],configuration:{async snapshot(args){snapshots.push(args)}}})
+ const next={taskId:'one',runId:'new-one',workflowId:'new-workflow',workflowDigest:'b'.repeat(64),requirementRef:ref('one'),nodes:[{nodeId:'prepare-generation',nodeVersion:'1',executor:'code',inputRef:ref('one'),inputDigest:h}]}
+ await f.cmd('workflow.register',{workflowId:next.workflowId,digest:next.workflowDigest,definitionVersion:'26',config:{taskId:'one',runId:'new-one'}})
+ const args={...f.args('one'),newRun:next,requestDigest:h}
+ await assert.rejects(controller.resetTaskExecution({commandId:'invalid-reset',args:{...args,newRun:{...next,requirementRef:ref('another')}}}),{code:'TASK_RESET_NEW_RUN_INVALID'})
+ assert.deepEqual(snapshots,[])
+ const result=await controller.resetTaskExecution({commandId:'accepted-reset',args})
+ assert.deepEqual(snapshots,[{runId:'new-one',workflowId:'new-workflow'}])
+ assert.deepEqual(await controller.resetTaskExecution({commandId:'accepted-reset',args}),result)
+ await assert.rejects(controller.resetTaskExecution({commandId:'accepted-reset',args:{...args,requestDigest:'c'.repeat(64)}}),{code:'COMMAND_ID_CONFLICT'})
+ assert.equal(snapshots.length,1)
+ await controller.close()
 })

@@ -54,7 +54,7 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   assert.deepEqual(await readdir(outside), [])
   const original = await prepare('original', 'first')
   const oldRecord = (await store.query({ kind: 'workflow.list' }))[0], head = oldRecord.config.head
-  assert.equal(oldRecord.definitionVersion, '25')
+  assert.equal(oldRecord.definitionVersion, '26')
   assert.equal(workflow.nodes.some(node => node.id === 'validate-proposal'), false)
   assert.equal(workflow.nodes.find(node => node.id === 'apply-changes').executor, 'agent')
   await git('push', remote, `HEAD:refs/heads/${head}`)
@@ -86,7 +86,7 @@ test('重执行复用受信开发分支最新提交并冻结远端，保留源�
   const restored = createEngineeringRegistry(withRegistration); const restoredWorkflows = await restored.restore(store)
   assert.equal(restoredWorkflows.length, 2)
   for (const restoredWorkflow of restoredWorkflows) {
-    assert.equal(restoredWorkflow.version, '25')
+    assert.equal(restoredWorkflow.version, '26')
     assert.equal(restoredWorkflow.nodes.some(node => node.id === 'validate-proposal'), false)
     assert.equal(defineExecutionWorkflow(restoredWorkflow).digest, (await store.query({ kind: 'workflow.list' })).find(record => record.workflowId === restoredWorkflow.id).digest)
   }
@@ -318,8 +318,9 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
     remote: source, baseRef: 'main', githubRepository: `example/${id}`,
     editablePaths: [], discovery: { allowedPrefixes: ['src/'] }, purpose: id, routingTerms: [id === 'backend' ? '归一化' : '页面'],
     checks: [{ id: 'check', version: '1', executable: process.execPath, args: ['-e', 'process.exit(0)'] }] }))
+  const databaseQuery = { scope: { databaseIds: ['registered'], queryCapabilityIdentity: 'frozen-test-scope' }, databases: [{ id: 'registered', connectionId: 'readonly' }] }
   const registry = createEngineeringRegistry({ ownerActorId: 'owner', modelConfig: () => ({ provider: 'test', model: 'test' }),
-    author: { name: 'Test', email: 'test@example.invalid' }, repositories })
+    author: { name: 'Test', email: 'test@example.invalid' }, repositories, databaseQueryContext: async () => databaseQuery })
   await registry.restore(store, artifacts)
   let workflow
   const controller = { registerWorkflow(value) { workflow = value }, async recover() {} }
@@ -354,6 +355,8 @@ test('工程空方案重发保留原任务并冻结新仓库定义', async t => 
   const currentRequirement = await artifacts.read(state.run.requirementRef)
   const frozen = (await store.query({ kind: 'workflow.list' })).find(record => record.digest === state.run.workflowDigest)?.config
   assert.ok(frozen?.taskBase); assert.ok(frozen?.targetCommit)
+  assert.equal(workflow.version, '26'); assert.deepEqual(frozen.databaseQuery, databaseQuery)
+  assert.ok(workflow.nodes.find(node => node.id === 'inspect-and-propose').allowedTools.includes('query_readonly_database'))
   const workspaceNode = workflow.nodes.find(node => node.id === 'prepare-workspace')
   await workspaceNode.execute({ input: currentRequirement, runId: prepared.runId, generation: 2,
     requirementDigest: executionDigest(currentRequirement),
@@ -431,7 +434,7 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   assert.deepEqual(await registry.prepareTask(action, info, controller), prepared)
   assert.equal(admitted[0], admitted[1])
   const [record] = await store.query({ kind: 'workflow.list' })
-  assert.equal(record.definitionVersion, '25')
+  assert.equal(record.definitionVersion, '26')
   assert.equal(record.config.provider, 'test'); assert.equal(record.config.model, 'v1')
   assert.equal(record.config.reasoningEffort, 'low')
   assert.equal(record.config.uatEnvironment, 'uat1'); assert.equal(record.config.uatBranch, 'feature/uat1-base')
@@ -441,7 +444,7 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   const reopened = await openExecutionStore({ ...options, initialize: false }); t.after(() => reopened.close())
   const second = createEngineeringRegistry({ ...config, modelConfig: () => ({ provider: 'other', model: 'v2' }) })
   const recoveredWorkflow = (await second.restore(reopened))[0]
-  assert.equal(recoveredWorkflow.version, '25')
+  assert.equal(recoveredWorkflow.version, '26')
   assert.equal(recoveredWorkflow.nodes.some(node => node.id === 'validate-proposal'), false)
   assert.equal(recoveredWorkflow.nodes.find(node => node.id === 'apply-changes').executor, 'agent')
   assert.equal(defineExecutionWorkflow(recoveredWorkflow).digest, record.digest)
@@ -729,7 +732,7 @@ test('v25工程共享材料读取不依赖节点正文，受管检查修订保�
  assert.ok(!JSON.stringify(repair).includes('新增诊断正文不可灌入repair'));assert.equal(repair.entries,undefined)
  await assert.rejects(registry.repositoryInspect({...binding,taskId:'other'},{operation:'materials'}),{code:'ENGINEERING_READ_SCOPE_INVALID'})
  await actual.command({id:'maintenance',kind:'runtime.maintenance.change',args:{active:true,expectedRevision:0,maintenanceId:'checks',actorId:'owner',reason:'修正检查'}})
- assert.equal(old.definitionVersion,'25')
+ assert.equal(old.definitionVersion,'26')
  await registry.updateCheckpoint({runId:prepared.runId,requestId:'checks-v2',kind:'checks',checks:[{...options.repositories[0].checks[0],version:'2',args:['--test']}],maintenance:{maintenanceId:'checks',revision:1}},controller,artifacts)
  assert.equal(checkpoint.runId,prepared.runId)
  const records=await actual.query({kind:'workflow.list'})
@@ -1094,7 +1097,7 @@ test('execution reset registry reuses dirty workspace and creates current two-no
  oldOutput=(await artifacts.put({workspace:{directory:receipt.directory,sourceRepository:source,baseCommit:base,targetCommit:base,taskBase:base,mergeTree:wp.mergeTree,conflictPaths:[],status:'succeeded'}},{taskId:'task'})).ref
  const reset=await registry.prepareExecutionReset({taskId:'task',sourceRunId:oldRun,runId:'fresh-task-run',commandId:'reset-test'},controller)
  assert.equal(reset.taskId,'task');assert.equal(reset.runId,'fresh-task-run')
- assert.equal(workflow.version,'25');assert.equal(workflow.nodes.some(n=>n.id==='validate-proposal'),false)
+ assert.equal(workflow.version,'26');assert.equal(workflow.nodes.some(n=>n.id==='validate-proposal'),false)
  assert.equal(workflow.nodes.find(n=>n.id==='inspect-and-propose').outputSchema.properties.changes,undefined)
  assert.equal(workflow.nodes.find(n=>n.id==='apply-changes').executor,'agent')
  assert.equal(await readFile(join(receipt.directory,'value.txt'),'utf8'),'retained dirty development')
