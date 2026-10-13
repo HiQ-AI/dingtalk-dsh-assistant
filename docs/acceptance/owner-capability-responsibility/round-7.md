@@ -13,3 +13,5 @@
 待记录定向测试、部署与现场原Owner实际自主进展。无UAT业务代做。
 
 - 最终定向测试：原生会话suite 67/67 PASS；判定器及通知suite 100/100 PASS。另存储/上下文在前轮组合155/155中通过。集成夹具覆盖未知引用在审查前拒绝、原Owner读诊断并自行调用工具后重提；语义协议模拟测试不等于真实模型或UAT验收。
+
+- 现场已部署：包SHA256 be42114b0ae76a30a931be71accb28c71ac2b33133f1432192ed59c324a406a8、128文件安装核对，新进程10456监听3080/18998，health=ok，维护退出revision764。原Task正式重评事件915，原Owner同一session恢复running，revision32/lease13，last_failure=null。实际request/header seq14366含43工具、自主准备与具体补充问题指令；随后原会话调用PowerShell检查账号角色，并查找隔离审核测试和浏览器工具（seq14550/14711）。尚不等于UAT业务验证完成。
