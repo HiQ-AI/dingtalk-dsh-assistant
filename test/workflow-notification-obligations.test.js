@@ -227,6 +227,7 @@ for (const revised of [false, true]) test(`Owner ${kind} 通知及原生领取�
     return
   }
   assert.ok(notice)
+  if (kind === 'business-input') assert.equal(notice.payload.text, '请确认目标环境。')
   if (revised) {
     await send('task.requirement.update', { taskId: 'task', expectedRequirementRevision: 1,
       requirementRef: `sha256-${'b'.repeat(64)}.json`, eventKey: 'before-claim' })
@@ -466,7 +467,7 @@ for(const scenario of ['internal-progress','ordinary-progress','internal-started
  assert.equal(visible.length,['complete','user-action','permission'].includes(scenario)?1:0)
  assert.equal(pages.length,0) // 通知策略不再依赖特殊恢复事件分页。
  if(scenario==='complete')assert.equal(visible[0].payload.text,`【结论】\n\n${notificationParagraphs(summary)}`)
- if(scenario==='user-action')assert.equal(visible[0].payload.text,`【需补充】\n\n请${condition.responsibleParty}补充以下信息：\n\n${notificationParagraphs(missing)}\n\n【下一步】\n\n${condition.resumeWhen}`)
+ if(scenario==='user-action')assert.equal(visible[0].payload.text,notificationParagraphs(summary))
  if(scenario==='permission')assert.equal(visible[0].payload.text,`【需授权】\n\n请${condition.responsibleParty}处理以下授权：\n\n${notificationParagraphs(missing)}\n\n【下一步】\n\n${condition.resumeWhen}`)
 })
 
@@ -584,8 +585,17 @@ test('无Owner计划的旧任务终态也使用同一结果排版',async()=>{
  assert.equal(result.payload.sourceMessageId,'original')
 })
 
+test('Owner缺业务信息直接转达具体问题，内部恢复字段不拼入群正文',()=>{
+ const summary='核验 HiQ 编辑器 UAT2 的双专家审核撤回限制时，还需要一个与现有账号不同、具备 LCA 专家审核权限的账号。\n请提供账号标识或已有案例编号，用于核对两位专家的审核结果；不要在群里发密码或令牌。'
+ for(const reportType of ['wait','block']){
+  const text=ownerReportNotificationText({reportType,facts:{summary,condition:{kind:'business-input',missing:'内部缺项',responsibleParty:'内部责任方',resumeWhen:'内部恢复条件'}}})
+  assert.equal(text,notificationParagraphs(summary))
+  assert.doesNotMatch(text,/【结论】|【下一步】|缺少：|内部缺项|内部责任方|内部恢复条件/u)
+ }
+})
+
 test('Owner notification presents actual condition kind without inventing permission',()=>{
- for(const [kind,heading]of [['business-input','需补充'],['permission','需授权'],['approval','需审批'],['capability','能力待恢复'],['execution','执行待恢复']]){
+ for(const [kind,heading]of [['permission','需授权'],['approval','需审批'],['capability','能力待恢复'],['execution','执行待恢复']]){
   const text=ownerReportNotificationText({reportType:'wait',facts:{summary:'当前状态',condition:{kind,missing:'实际原因',responsibleParty:'负责人',resumeWhen:'实际恢复条件'}}})
   assert.ok(text.includes(heading));assert.ok(text.includes('实际原因'));assert.ok(text.includes('实际恢复条件'))
   if(['capability','execution'].includes(kind))assert.ok(!text.includes('授权'))

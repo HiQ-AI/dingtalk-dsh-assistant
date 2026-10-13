@@ -28,7 +28,216 @@ import { createExecutionController } from '../packages/dingtalk-dsh-assistant/ex
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
+const { createScope, bindScopeParent, scopeOf } = requireLoop('@deepseek-ai/dsh-scope')
+const { z } = requireLoop('zod')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
+function permissionFixture() {
+  return {
+    resolve: preset => ({ sandbox: preset, approval: preset === 'danger-full-access' ? 'never' : 'ask' }),
+    current: session => session.snapshotEvents().findLast(event => event.type === 'permission/preset')?.data.preset ?? 'workspace-write',
+    set(session, preset) {
+      session.append('permission/preset', { preset })
+      session.append('sandbox/mode', { mode: preset })
+      session.append('approval/policy', { policy: preset === 'danger-full-access' ? 'never' : 'ask' })
+    },
+  }
+}
+
+test('Owner原生工具自主执行保留真实失败纠错与Host证据', async t => {
+  for (const mode of ['correct', 'background', 'delegation', 'disabled', 'review', 'stale', 'cancel']) await t.test(mode, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'owner-native-tools-'))
+    const calls = [{ name: 'pwsh', args: { valid: false, ...(mode === 'background' ? { run_in_background: true } : {}) } },
+      { name: 'pwsh', args: { valid: true } }]
+    if (mode === 'correct') calls.push({ name: 'task_owner_read_artifact', args: { artifactRef: `sha256-${'4'.repeat(64)}.json` } })
+    if (mode === 'delegation') calls.splice(0, 2, { name: 'subagent', args: {} })
+    const h = await host(root, null, null, decision, undefined, 1, calls, false)
+    const standing = createScope(h.ctx, { preset: 'native-fixture' })
+    standing.ctx.systemPrompt.section({ name: 'fixture:workspace-rules', order: 10, text: 'PRESET_WORKSPACE_RULES_MARKER：必须核验任务授权。' })
+    h.ctx.sessionProjections.register({ key: 'agentPreset', stateSchema: z.union([z.string(), z.null()]), stateVersion: 1,
+      init: header => header.agentPreset ?? null, apply: (state, event) => event.type === 'agent-preset/selected' ? event.data.agentPreset : state })
+    const mounted = []
+    const permissions = permissionFixture()
+    h.onRequest(() => {
+      const agent = h.ctx.agents.get('native-owner')
+      assert.equal(permissions.current(agent.session), ['disabled', 'review'].includes(mode) ? 'workspace-write' : 'danger-full-access')
+    })
+    h.ctx.provide('agentPresets', { serviceFor: (_agent, name) => name === 'permissionPresets' ? permissions : undefined, async mount(agentCtx, id) {
+      mounted.push(id)
+      bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx))
+      if (mounted.length === 2) permissions.set(agentCtx.agent.session, 'workspace-write')
+      return { id: 'native-fixture' }
+    } })
+    t.after(async () => { await h.close(); await standing.dispose(); await rm(root, { recursive: true, force: true }) })
+    let executed = 0, delegated = 0, artifactReads = 0, cancellation
+    const receipts = []
+    standing.ctx.tools.register({ name: 'subagent', description: '宿主委派fixture', parameters: { type: 'object' },
+      output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: async () => { delegated++; return { sessionId: 'child-fixture', status: 'started' } } })
+    standing.ctx.tools.register({ name: 'pwsh', description: '原生执行fixture',
+      output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      parameters: { type: 'object', properties: { valid: { type: 'boolean' }, run_in_background: { type: 'boolean' } }, required: ['valid'], additionalProperties: false },
+      async execute(args, exec) {
+        executed++
+        if (mode === 'cancel') { cancellation = h.sessions.cancel('native-task'); exec.signal.throwIfAborted() }
+        if (!args.valid) throw new Error('真实命令参数错误')
+        return { text: '真实业务检查通过' }
+      } })
+    assert.equal(h.ctx.tools.get('pwsh'), undefined, '原生工具仅注册在preset父scope，global查找不可见')
+    const result = await h.sessions.run({ binding: { taskId: 'native-task', sessionId: 'native-owner', turnId: 'turn-1', leaseEpoch: 1,
+      ownerEpoch: 1, requirementRevision: 1, inputDigest: 'a'.repeat(64), sessionBound: false },
+      input: { ...(mode === 'review' ? { deliveryReview: true } : {}) }, provider: 'owner-fixture', model: 'scripted',
+      onSessionBound: async () => {}, onCandidate: async () => {}, readArtifact: async ref => {
+        artifactReads++; assert.equal(ref, `sha256-${'4'.repeat(64)}.json`); return { actual: '真实原生工具证据' }
+      },
+      ...(mode === 'disabled' ? {} : { onNativeExecution: async receipt => {
+        receipts.push(receipt)
+        if (mode === 'stale' && receipt.phase === 'started') h.setLease(2)
+        return { evidenceRef: `sha256-${String(receipts.length).repeat(64)}.json` }
+      } }) })
+    await cancellation
+    assert.equal(h.requests[0].tools.some(x => x.name === 'subagent'), !['disabled', 'review'].includes(mode), '启用时完整公开preset工具')
+    if (mode === 'correct') {
+      assert.match(h.requests[0].system, /PRESET_WORKSPACE_RULES_MARKER/)
+      assert.match(h.requests[0].system, /不绕过受管数据库变更、生产变更、发布和消息发送入口/)
+      assert.match(h.requests[0].system, /未知外部效果先回查原效果/)
+      assert.equal(result.status, 'submitted'); assert.equal(executed, 2)
+      assert.deepEqual(receipts.map(x => x.phase), ['started', 'settled', 'started', 'settled'])
+      assert.equal(receipts[1].result.isError, true); assert.equal(receipts[3].result.isError, false)
+      assert.deepEqual(receipts[0].arguments, receipts[1].arguments)
+      assert.equal(receipts[0].binding.sessionId, 'native-owner')
+      assert.doesNotMatch(JSON.stringify(h.requests[1]), /Host原生工具执行回执/)
+      assert.match(JSON.stringify(h.requests[1]), /evidenceRef/)
+      assert.match(JSON.stringify(h.requests[1]), /真实命令参数错误/)
+      for (const [requestIndex,callId,refDigit,expectedText] of [[1,'call-1','2','真实命令参数错误'],[2,'call-2','4','真实业务检查通过']]) {
+        const blocks=h.requests[requestIndex].messages.flatMap(message=>message.content??[])
+        const toolResult=blocks.find(block=>block.type==='tool-result'&&block.toolCallId===callId)
+        assert.ok(toolResult,'实际SDK请求必须包含原工具结果')
+        assert.match(JSON.stringify(toolResult.content),new RegExp(expectedText))
+        assert.ok(JSON.stringify(toolResult.content).includes(`sha256-${refDigit.repeat(64)}.json`),'凭据引用与结果在同一tool-result中')
+        assert.equal(h.requests[requestIndex].messages.filter(message=>message.source?.kind==='coordinator'&&JSON.stringify(message.content).includes(`sha256-${refDigit.repeat(64)}.json`)).length,0)
+      }
+      assert.equal(artifactReads, 1)
+      h.setLease(2)
+      const resumed = await h.sessions.run({ binding: { taskId: 'native-task', sessionId: 'native-owner', turnId: 'turn-2', leaseEpoch: 2,
+        ownerEpoch: 1, requirementRevision: 1, inputDigest: 'b'.repeat(64), sessionBound: true }, input: {},
+        provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {}, onCandidate: async () => {},
+        onNativeExecution: async () => { throw new Error('恢复仅提交，不重复业务工具') } })
+      assert.equal(resumed.status, 'submitted')
+      assert.deepEqual(mounted, [undefined, 'native-fixture'])
+      const persisted = await h.ctx.sessionPersistence.inspect('native-owner')
+      assert.equal(persisted.events.filter(event => event.type === 'agent-preset/selected').length, 1)
+    } else if (mode === 'background') {
+      assert.equal(executed, 2); assert.equal(receipts.length, 4)
+      assert.equal(receipts[0].arguments.run_in_background, true)
+    } else if (mode === 'delegation') {
+      assert.equal(delegated, 1); assert.equal(receipts.length, 2)
+      assert.equal(receipts[1].toolName, 'subagent')
+      assert.match(JSON.stringify(receipts[1].result.content), /child-fixture/)
+    } else if (mode === 'cancel') {
+      assert.equal(executed, 1); assert.equal(receipts[0].phase, 'started')
+      const settled = receipts.find(x => x.phase === 'settled')
+      assert.equal(settled.cancelled, true); assert.equal(settled.result.isError, true)
+      assert.notEqual(result.status, 'submitted')
+    } else if (mode === 'stale') {
+      assert.equal(executed, 0); assert.equal(result.status, 'stale')
+      assert.equal(receipts[0].phase, 'started')
+    } else {
+      assert.equal(executed, 0); assert.equal(receipts.length, 0)
+      assert.ok(h.requests[0].tools.every(x => x.name !== 'pwsh'))
+    }
+  })
+})
+
+test('Owner原生回执保留SDK block反馈及value替换渲染', async t => {
+  for(const mode of ['block','value']) await t.test(mode,async t=>{
+    const root=await mkdtemp(join(tmpdir(),'owner-native-post-result-'))
+    const h=await host(root,null,null,decision,undefined,1,[{name:'pwsh',args:{}}])
+    t.after(async()=>{await h.close();await rm(root,{recursive:true,force:true})})
+    h.ctx.tools.register({name:'pwsh',description:'post result fixture',parameters:{type:'object'},output:{schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},render:(_args,value)=>[{type:'text',text:`SDK_RENDER:${value.text}`}]},execute:async()=>({text:'original'})})
+    h.onRequest(()=>{if(h.requests.length===0)h.ctx.agents.get('post-owner').ctx.on('tools/post-execute',async(exec,_result,next)=>{
+      const original=await next()
+      if(exec.name!=='pwsh')return original
+      return mode==='block'?{kind:'block',feedback:[{type:'text',text:'HOST_BLOCK_REASON'}]}:{kind:'accept',value:{text:'replaced'}}
+    })})
+    const receipts=[],ref=`sha256-${'8'.repeat(64)}.json`
+    const result=await h.sessions.run({binding:{taskId:'post-task',sessionId:'post-owner',turnId:'turn',leaseEpoch:1,ownerEpoch:1,requirementRevision:1,inputDigest:'a'.repeat(64),sessionBound:false},input:{},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{},onNativeExecution:async receipt=>{receipts.push(receipt);return{evidenceRef:ref}}})
+    assert.equal(result.status,'submitted');assert.equal(receipts.length,2)
+    const blocks=h.requests[1].messages.flatMap(message=>message.content??[]),toolResult=blocks.find(block=>block.type==='tool-result'&&block.toolCallId==='call-1')
+    assert.ok(toolResult)
+    assert.equal(receipts[1].postExecutionDecision,mode==='block'?'block':'accept')
+    if(mode==='block'){assert.match(JSON.stringify(toolResult),/HOST_BLOCK_REASON/);assert.ok(JSON.stringify(toolResult).includes(ref))}
+    else{assert.match(JSON.stringify(toolResult),/SDK_RENDER:replaced/);assert.doesNotMatch(JSON.stringify(toolResult),/SDK_RENDER:original/);assert.ok(!JSON.stringify(toolResult).includes(ref),'value替换保持SDK schema和renderer，不强加content')}
+    const persisted=await h.ctx.sessionPersistence.inspect('post-owner')
+    assert.equal(persisted.events.filter(event=>event.type==='user/message'&&event.data.source?.kind==='coordinator'&&JSON.stringify(event.data.content).includes(ref)).length,0,'回执不能额外追加coordinator消息')
+  })
+})
+
+test('Owner真实SDK续轮只保留一份可见需求基线并传入新动态状态', async t=>{
+  const root=await mkdtemp(join(tmpdir(),'owner-native-context-base-'))
+  const artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true})
+  const waiting={action:'wait',summary:'等待业务批准',evidenceRefs:[],condition:{kind:'approval',missing:'批准',responsibleParty:'审批人',resumeWhen:'批准后继续',evidenceRefs:[]}}
+  const h=await host(root,null,null,waiting)
+  t.after(async()=>{await h.close();await rm(root,{recursive:true,force:true})})
+  const input={taskId:'base-task',task:{requirementRevision:1},goal:{request:'UNIQUE_CURRENT_GOAL_MARKER'},currentSources:[{text:'UNIQUE_SOURCE_MARKER'}],stages:[]}
+  for(const leaseEpoch of [1,2]){
+    h.setLease(leaseEpoch)
+    const current={...input,versions:{controlRevision:leaseEpoch}}
+    const result=await h.sessions.run({binding:{taskId:'base-task',sessionId:'base-owner',turnId:`turn-${leaseEpoch}`,leaseEpoch,ownerEpoch:1,requirementRevision:1,sessionBound:leaseEpoch>1},input:current,...await projectOwnerContext(current,artifacts),provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{}})
+    assert.equal(result.status,'submitted')
+    const messages=JSON.stringify(h.requests.at(-1).messages)
+    assert.equal(messages.split('UNIQUE_CURRENT_GOAL_MARKER').length-1,1)
+    assert.equal(messages.split('UNIQUE_SOURCE_MARKER').length-1,1)
+    assert.ok(messages.includes('contextBaseDigest'))
+    assert.ok(messages.includes(`\\"controlRevision\\":${leaseEpoch}`)||messages.includes(`"controlRevision":${leaseEpoch}`))
+  }
+  const saved=await h.ctx.sessionPersistence.inspect('base-owner')
+  assert.equal(saved.events.filter(event=>event.type==='user/message'&&event.data.source?.ownerContextBase).length,1,'未变基线续轮不重新注入')
+})
+
+test('Owner条件证据子集错误穿过真实SQLite线程精确反馈并同轮修正', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-condition-feedback-'))
+  const store = await openExecutionStore({ dbPath: join(root, 'control.sqlite'), instanceId: 'condition-feedback', initialize: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(root, 'artifacts'), initialize: true })
+  const workflow = { id: 'condition-fixture', version: '1', nodes: [{ id: 'step', version: '1', executor: 'code', allowedEffects: ['pure'],
+    inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, mapInput: ({ requirement }) => requirement, execute: async () => ({}) }] }
+  const controller = createExecutionController({ store, artifacts, workflows: [workflow] })
+  t.after(async () => { await controller.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  await controller.createTaskPlan({ commandId: 'plan', taskId: 'condition-task', stages: [{ stageId: 'step', workflowId: workflow.id, input: {} }] })
+  const send = (kind, args) => store.command({ id: `${kind}-${Math.random()}`, kind, args })
+  await send('task.owner.init', { taskId: 'condition-task', sessionId: 'condition-owner', sourceKey: 'source', criteria: ['核验真实结果'] })
+  await send('task.owner.event', { taskId: 'condition-task', eventKey: 'start', eventType: 'task.created' })
+  await send('task.owner.claim', { taskId: 'condition-task', turnId: 'condition-turn', expectedLeaseEpoch: 0 })
+  await send('task.owner.sessionBound', { taskId: 'condition-task', turnId: 'condition-turn', leaseEpoch: 1, sessionId: 'condition-owner' })
+  const evidenceRef = `tasks/condition-task/sha256-${'c'.repeat(64)}.json`
+  const chosen = { action: 'wait', summary: '等待实际核验结果', evidenceRefs: [],
+    condition: { kind: 'execution', missing: '结果仍未确认', responsibleParty: '原执行会话', resumeWhen: '原调用结果已核验', evidenceRefs: [evidenceRef] } }
+  const h = await host(root, null, null, step => ({ ...chosen, evidenceRefs: step === 1 ? [] : [evidenceRef] }))
+  h.onRequest(() => { assert.ok(h.requests.length < 3, '应在精确反馈后一次修正完成') })
+  t.after(() => h.close())
+  let calls = 0
+  const result = await h.sessions.run({ binding: { taskId: 'condition-task', sessionId: 'condition-owner', turnId: 'condition-turn', leaseEpoch: 1,
+    ownerEpoch: 1, sessionBound: false }, input: { completionEvidenceRefs: ['unrelated-completion-ref'] },
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {},
+    onCandidate: async decision => { calls++; return send('task.owner.candidate', { taskId: 'condition-task', turnId: 'condition-turn', leaseEpoch: 1, decision }) } })
+  assert.equal(result.status, 'submitted', JSON.stringify(h.requests.at(-1)?.messages)); assert.equal(calls, 2)
+  const feedback = JSON.stringify(h.requests[1])
+  assert.match(feedback, /condition.evidenceRefs必须是decision.evidenceRefs的子集/)
+  assert.ok(feedback.includes(evidenceRef))
+  assert.ok(!feedback.includes('Host completionEvidenceRefs:'))
+  assert.equal((await send('task.owner.accept', { taskId: 'condition-task', turnId: 'condition-turn', leaseEpoch: 1 })).result.status, 'accepted')
+})
+
+test('Owner原生权限服务缺失时在模型调用前明确失败', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-permission-missing-'))
+  const h = await host(root)
+  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
+  h.ctx.get('agentPresets').serviceFor = () => undefined
+  await assert.rejects(h.sessions.run({ binding: { taskId: 'permission-task', sessionId: 'permission-owner', turnId: 'turn-1', leaseEpoch: 1,
+    ownerEpoch: 1, requirementRevision: 1, inputDigest: 'a'.repeat(64), sessionBound: false }, input: {},
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {}, onCandidate: async () => {},
+    onNativeExecution: async () => ({}) }), { code: 'TASK_OWNER_PERMISSION_PRESET_UNAVAILABLE' })
+  assert.equal(h.requests.length, 0)
+})
 
 test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async t => {
   for (const mode of ['clone', 'diagnostic', 'foreign-diagnostic', 'child', 'foreign-child', 'missing-child', 'failed-child', 'unsatisfied-child']) await t.test(mode, async t => {
@@ -271,18 +480,32 @@ test('generic DSH summary restores applicable complete read from audit without r
   assert.ok(saved.events.some(event => event.data.source?.ownerReadProjection))
 })
 
-async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1, queryCalls = []) {
+async function host(root, pageRef = null, artifactRef = null, candidate = decision, getWorkspaceDir = () => sessionWorkspace(root, 'owner'), artifactPages = 1, queryCalls = [], withPreset = true) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
   new SessionTitleService(ctx, { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 })
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
+  const standing = withPreset ? createScope(ctx, { preset: 'fixture' }) : null
+  if (standing) {
+    ctx.sessionProjections.register({ key: 'agentPreset', stateSchema: z.union([z.string(), z.null()]), stateVersion: 1,
+      init: header => header.agentPreset ?? null, apply: (state, event) => event.type === 'agent-preset/selected' ? event.data.agentPreset : state })
+    standing.ctx.tools.register({ name: 'read', description: '未调用的原生读取fixture', parameters: { type: 'object' },
+      output: { schema: { type: 'object' }, render: () => [] }, execute: async () => { throw new Error('此用例不应调用原生读取') } })
+    const permissions = permissionFixture()
+    ctx.provide('agentPresets', { serviceFor: (_agent, name) => name === 'permissionPresets' ? permissions : undefined, async mount(agentCtx, selected) {
+      assert.ok(selected === undefined || selected === 'fixture')
+      bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx)); return { id: 'fixture' }
+    } })
+  }
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false,
     compression: 'none', writeBatchMaxDelayMs: 1 })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
+  const requestChecks = []
   class Scripted extends LlmAdapter {
     async *stream(options) {
+      for (const check of requestChecks) check(options)
       requests.push(options)
       const selectedArtifact = typeof artifactRef === 'function' ? artifactRef(requests.length) : artifactRef
       const queryCall = queryCalls[requests.length - 1]
@@ -300,8 +523,8 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   ctx.llm.registerAdapter(['owner-fixture'], new Scripted())
   let currentLease = 1
   const sessions = createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => binding.leaseEpoch === currentLease })
-  return { ctx, sessions, requests, setLease(value) { currentLease = value },
-    async close() { await sessions.close(); await ctx.fiber.dispose() } }
+  return { ctx, sessions, requests, onRequest(check) { requestChecks.push(check) }, setLease(value) { currentLease = value },
+    async close() { await sessions.close(); await standing?.dispose(); await ctx.fiber.dispose() } }
 }
 
 test('原生Owner同轮收到受信验收实际判定及持久工件引用', async t => {
@@ -964,12 +1187,72 @@ test('Owner completion schema and references allow bounded same-turn correction'
  }
 })
 
+test('Owner blocker review returns diagnosis to original native session before it executes and proves an external blocker', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-native-blocker-'))
+  const store = await openExecutionStore({ dbPath: join(root,'control.sqlite'), instanceId:'native-blocker', initialize:true })
+  const directories = { logicalTaskId:'task', ...Object.fromEntries(['work','tmp','outputs'].map(area=>[area,join(root,'tasks','tasks','task',area)])) }
+  for (const area of ['work','tmp','outputs']) await mkdir(directories[area],{recursive:true})
+  const baseArtifacts = await openExecutionArtifacts({ directory:join(root,'artifacts'), initialize:true, taskWorkspaceRoot:join(root,'tasks'), getTaskDirectories:async()=>directories })
+  let diagnosticRef, nativeRef, executed=0, checks=0
+  const artifacts = { ...baseArtifacts, async put(value,options) {
+    const saved=await baseArtifacts.put(value,options)
+    if(value.kind==='owner-blocker-review')diagnosticRef=saved.ref
+    if(value.kind==='task-native-execution'&&value.phase==='settled')nativeRef=saved.ref
+    return saved
+  } }
+  const controller=createExecutionController({store,artifacts,workflows:[]})
+  const requirementRef=(await artifacts.put({request:'由执行会话自主核验目标',constraints:[]},{taskId:'task'})).ref
+  await store.command({id:'accept',kind:'task.accept',args:{taskId:'task',requirementRef,requirementRevision:1,sessionId:'blocker-owner',criteria:['核验目标'],sourceKey:'source',eventKey:'created'}})
+  const waiting=()=>({action:'wait',summary:nativeRef?'已实际核验外部访问拒绝':'没有专用工具',evidenceRefs:nativeRef?[nativeRef]:[],condition:{kind:'capability',missing:nativeRef?'目标服务拒绝当前身份':'专用工具',responsibleParty:nativeRef?'目标服务管理员':'能力维护方',resumeWhen:'目标身份恢复访问后继续',evidenceRefs:nativeRef?[nativeRef]:[]}})
+  const unknownRef=`sha256-${'9'.repeat(64)}.json`
+  const calls=[]
+  calls[3]={name:'pwsh',args:{command:'Inspect current target'}}
+  const h=await host(root,null,step=>step===3?diagnosticRef:null,step=>{
+    const candidate=waiting()
+    return step===1?{...candidate,evidenceRefs:[unknownRef],condition:{...candidate.condition,evidenceRefs:[unknownRef]}}:candidate
+  },undefined,3,calls)
+  h.ctx.tools.register({name:'pwsh',description:'读取当前目标访问响应',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']},output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},execute:async()=>{executed++;return{httpStatus:403,target:'fixture-target',requestId:'actual-fixture-request'}}})
+  let unknownRejected=false
+  const sessionRunner={close:()=>h.sessions.close(),run:options=>h.sessions.run({...options,onCandidate:async(...args)=>{
+    try{return await options.onCandidate(...args)}catch(error){
+      if(args[0].evidenceRefs.includes(unknownRef)){
+        assert.equal(error.code,'TASK_OWNER_BLOCKER_EVIDENCE_UNREAD')
+        assert.equal(checks,0,'未知引用必须在调用判定器之前拒绝')
+        assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision,null,'未知引用候选不得落账')
+        unknownRejected=true
+      }
+      throw error
+    }
+  }})}
+  const owner=createTaskOwnerController({ctx:h.ctx,store,artifacts,controller,sessionRunner,modelConfig:()=>({provider:'owner-fixture',model:'scripted'}),advanceTask:async()=>{},authorizeStages:async()=>false,
+    verifyBlocker:async(input,{signal})=>{
+      checks++;signal.throwIfAborted()
+      assert.equal(input.toolContext.permissionPreset,'danger-full-access')
+      assert.ok(input.toolContext.tools.some(tool=>tool.name==='pwsh'&&tool.description==='读取当前目标访问响应'))
+      assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision,null,'停止候选未预先落账')
+      if(checks===1){assert.equal(executed,0);return{status:'continue',reason:'已有原生工具，执行会话应先核验真实访问结果'}}
+      assert.equal(executed,1,'审查不替Owner执行工具')
+      assert.ok(input.evidence.some(item=>item.kind==='task-native-execution'&&item.phase==='settled'&&JSON.stringify(item.result).includes('actual-fixture-request')))
+      return{status:'external-blocker',reason:'实际访问返回403，需要外部身份恢复'}
+    }})
+  t.after(async()=>{await owner.close();await h.close();await controller.close();await store.close();await rm(root,{recursive:true,force:true})})
+  await owner.drive('task')
+  assert.equal(unknownRejected,true);assert.equal(checks,2);assert.equal(executed,1);assert.equal(h.requests.length,5)
+  const diagnostic=await artifacts.read(diagnosticRef)
+  assert.equal(diagnostic.kind,'owner-blocker-review');assert.equal(diagnostic.assessment.status,'continue')
+  const persisted=await h.ctx.sessionPersistence.inspect('blocker-owner')
+  assert.ok(persisted.events.some(event=>event.type==='tool/call'&&event.data.name==='task_owner_read_artifact'&&JSON.parse(event.data.arguments).artifactRef===diagnosticRef))
+  assert.match(JSON.stringify(persisted.events),/TASK_OWNER_BLOCKER_UNVERIFIED/)
+  assert.match(JSON.stringify(persisted.events),/TASK_OWNER_BLOCKER_EVIDENCE_UNREAD/)
+  assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision.summary,'已实际核验外部访问拒绝')
+})
+
 test('paused delivery review compiles one complete native prompt and reaches original Owner decision', async t => {
   const root = await mkdtemp(join(tmpdir(), 'owner-delivery-review-prompt-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const chosen = {action:'wait',summary:'Review actual facts',evidenceRefs:[],condition:{kind:'capability',missing:'remaining evidence',responsibleParty:'execution host',resumeWhen:'evidence available',evidenceRefs:[]}}
   const h = await host(root,null,null,()=>chosen)
   t.after(()=>h.close())
-  const result = await h.sessions.run({binding:{taskId:'review-task',sessionId:'original-review-owner',turnId:'review-turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{task:{controlState:'paused'},deliveryReview:{payloadRef:'review-facts'},stages:[],goal:{request:'Review existing Draft only'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>assert.equal(value.action,'wait')})
+  const result = await h.sessions.run({binding:{taskId:'review-task',sessionId:'original-review-owner',turnId:'review-turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{task:{controlState:'paused'},deliveryReview:{payloadRef:'review-facts'},stages:[],goal:{request:'Review existing Draft only'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onNativeExecution:async()=>assert.fail('暂停审阅不得执行原生工具'),onCandidate:async(value,_binding,toolContext)=>{assert.equal(value.action,'wait');assert.equal(toolContext.permissionPreset,'workspace-write');assert.equal(toolContext.tools.some(tool=>tool.name==='read'),false)}})
   assert.equal(result.status,'submitted');assert.equal(h.requests.length,1);assert.equal(result.decision.action,'wait')
 })

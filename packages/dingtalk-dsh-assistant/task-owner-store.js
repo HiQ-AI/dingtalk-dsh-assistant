@@ -6,7 +6,7 @@ import { transientRecoveryReasons, correctableOwnerReasons, ownerRetryableReason
 import { readCurrentTaskSource, assertMessageTaskUnfenced } from './message-ledger.js'
 
 // Task Owner 的事件、租约和决定与执行账共用 SQLite 单写事务。
-const fail = code => { throw Object.assign(new Error(code), { code }) }
+const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }) }
 const id = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)) fail('TASK_OWNER_ID_INVALID')
   return value
@@ -45,14 +45,20 @@ const decision = value => {
   value.evidenceRefs.forEach(ref)
   if (['wait', 'block'].includes(value.action)) {
     const c = value.condition
-    if (!c) fail('TASK_OWNER_CONDITION_REQUIRED')
-    exact(c, ['kind', 'missing', 'responsibleParty', 'resumeWhen', 'evidenceRefs'])
-    if (!['business-input', 'approval', 'capability', 'permission', 'execution'].includes(c.kind)
-      || ['missing', 'responsibleParty', 'resumeWhen'].some(key => typeof c[key] !== 'string' || !c[key].trim() || c[key].length > 2000)
-      || !Array.isArray(c.evidenceRefs) || c.evidenceRefs.length > 128) fail('TASK_OWNER_CONDITION_INVALID')
+    if (!c) fail('TASK_OWNER_CONDITION_REQUIRED', 'wait/block必须提供condition，包含kind、missing、responsibleParty、resumeWhen、evidenceRefs。')
+    const fields = ['kind', 'missing', 'responsibleParty', 'resumeWhen', 'evidenceRefs']
+    if (Object.getPrototypeOf(c) !== Object.prototype) fail('TASK_OWNER_CONDITION_INVALID', 'condition必须是对象。')
+    const absent = fields.filter(key => !Object.hasOwn(c,key)), extra = Object.keys(c).filter(key => !fields.includes(key))
+    if (absent.length || extra.length) fail('TASK_OWNER_CONDITION_INVALID', `condition字段不符合合同：缺少${JSON.stringify(absent)}；多余${JSON.stringify(extra)}。`)
+    if (!['business-input', 'approval', 'capability', 'permission', 'execution'].includes(c.kind))
+      fail('TASK_OWNER_CONDITION_INVALID', 'condition.kind必须为business-input、approval、capability、permission或execution。')
+    const invalidText = ['missing', 'responsibleParty', 'resumeWhen'].filter(key => typeof c[key] !== 'string' || !c[key].trim() || c[key].length > 2000)
+    if (invalidText.length) fail('TASK_OWNER_CONDITION_INVALID', `condition字段${JSON.stringify(invalidText)}必须是非空字符串，且每项不超过2000字符。`)
+    if (!Array.isArray(c.evidenceRefs) || c.evidenceRefs.length > 128) fail('TASK_OWNER_CONDITION_INVALID', 'condition.evidenceRefs必须是最多128项的引用数组。')
     c.evidenceRefs.forEach(ref)
-    if (c.evidenceRefs.some(item => !value.evidenceRefs.includes(item))) fail('TASK_OWNER_CONDITION_INVALID')
-  } else if (value.condition !== undefined) fail('TASK_OWNER_CONDITION_INVALID')
+    const missingRefs = c.evidenceRefs.filter(item => !value.evidenceRefs.includes(item))
+    if (missingRefs.length) fail('TASK_OWNER_CONDITION_INVALID', `condition.evidenceRefs必须是decision.evidenceRefs的子集；以下引用未列入decision.evidenceRefs：${JSON.stringify(missingRefs)}。核对真实证据后，在decision.evidenceRefs中逐字列入确实用于本决定的引用，或从condition.evidenceRefs移除未使用引用；不要仅更换condition.kind。`)
+  } else if (value.condition !== undefined) fail('TASK_OWNER_CONDITION_INVALID', '只有wait/block允许condition；其他动作应移除condition。')
   if (value.candidateAcceptance !== undefined) {
     const acceptance = value.candidateAcceptance
     if (value.action !== 'wait') fail('TASK_OWNER_CANDIDATE_ACCEPTANCE_INVALID')
@@ -156,7 +162,7 @@ function validateDecisionState(db, o, chosen) {
       && chosen.planChange.stages[0].preparedInputRef)) fail('TASK_OWNER_RUNTIME_PLAN_CHANGE_DISABLED')
   validatePlanChange(chosen, currentTask)
   if (chosen.action === 'complete') {
-    const direct = db.prepare("SELECT e.payload_ref FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id WHERE e.task_id=? AND e.event_type='query.succeeded' AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").all(o.task_id, currentTask.requirement_revision,o.authorization_revision,o.input_fence_revision)
+    const direct = db.prepare("SELECT e.payload_ref FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type IN ('query.succeeded','native.recorded') AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=?").all(o.task_id, currentTask.requirement_revision,o.authorization_revision,o.input_fence_revision)
     const stageCount = db.prepare('SELECT COUNT(*) AS count FROM task_plan_stages WHERE task_id=? AND plan_revision=?').get(o.task_id,currentTask.plan_revision).count
     if (!review && ((stageCount ? currentTask.plan_status !== 'succeeded' : !direct.length) || chosen.appendStages !== undefined
       || stageCount && currentTask.plan_requirement_revision !== currentTask.requirement_revision)) fail('TASK_OWNER_COMPLETION_UNPROVEN')
@@ -516,7 +522,7 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
     exact(a, ['taskId', 'eventKey', 'eventType', 'payloadRef'], ['taskId', 'eventKey', 'eventType'])
     const o = owner(db, a.taskId); id(a.eventKey); id(a.eventType)
     if (a.eventType === 'delivery.review.requested') fail('TASK_OWNER_DELIVERY_REVIEW_EVENT_RESERVED')
-    if (a.eventType === 'query.succeeded') fail('TASK_OWNER_QUERY_EVENT_RESERVED')
+    if (['query.succeeded', 'native.recorded'].includes(a.eventType)) fail('TASK_OWNER_QUERY_EVENT_RESERVED')
     if (a.payloadRef !== undefined && a.payloadRef !== null) ref(a.payloadRef)
     const prior = db.prepare('SELECT * FROM task_events WHERE event_key=?').get(a.eventKey)
     if (prior) {
@@ -549,6 +555,24 @@ export function reduceTaskOwnerCommand(db, command, { now }) {
       .run(epoch, a.turnId, now, a.taskId)
     return { status: 'applied', turnId: a.turnId, leaseEpoch: epoch, eventWatermark: o.event_watermark,
       sessionId: o.session_id, sessionBound: !!o.session_bound, ownerEpoch: o.owner_epoch, versions: v }
+  }
+  if (command.kind === 'task.owner.native-evidence') {
+    exact(a, ['taskId','turnId','leaseEpoch','requirementRevision','sessionId','ownerEpoch','evidenceRef'])
+    const { owner: o, turn: t } = turn(db,a)
+    if (o.session_id !== id(a.sessionId) || o.owner_epoch !== revision(a.ownerEpoch)) fail('TASK_OWNER_NATIVE_STALE')
+    ref(a.evidenceRef)
+    const current = task(db,a.taskId)
+    const workspaceTaskId = parseArtifactReference(current.requirement_ref).logicalTaskId ?? a.taskId
+    if (parseArtifactReference(a.evidenceRef).logicalTaskId !== workspaceTaskId) fail('TASK_OWNER_NATIVE_EVIDENCE_INVALID')
+    const v = versions(db,o)
+    if (v.controlRevision !== t.control_revision || v.authorizationRevision !== t.authorization_revision
+      || v.inputFenceRevision !== t.input_fence_revision || current.control_state !== 'active'
+      || t.status !== 'running' || revision(a.requirementRevision) !== t.requirement_revision
+      || current.requirement_revision !== t.requirement_revision) fail('TASK_OWNER_NATIVE_STALE')
+    const eventKey = `native-${createHash('sha256').update(json([a.taskId,a.turnId,a.evidenceRef])).digest('hex')}`
+    db.prepare("INSERT OR IGNORE INTO task_events(task_id,event_key,event_type,payload_ref,created_at,handled_at,turn_id) VALUES(?,?,'native.recorded',?,?,?,?)")
+      .run(o.task_id,eventKey,a.evidenceRef,now,now,t.turn_id)
+    return { status:'recorded', evidenceRef:a.evidenceRef }
   }
   if (command.kind === 'task.owner.query-evidence') {
     exact(a, ['taskId','turnId','leaseEpoch','requirementRevision','evidenceRef'])
@@ -830,6 +854,15 @@ export function queryTaskOwner(db, query) {
         ...(row.application_status === 'blocked' ? { lastFailure: owner(db, row.task_id).last_failure } : {}),
         retryAt: row.application_failures ? new Date(Date.parse(row.updated_at) + recoveryRetryDelayMs(row.application_failures)).toISOString() : null,
         decision: JSON.parse(row.decision_json), sequenceId: row.sequence_id }))
+  }
+  if (query?.kind === 'task.owner.native-evidence') {
+    const current = task(db,query.taskId), o = owner(db,query.taskId)
+    const wanted = query.requirementRevision ?? current.requirement_revision
+    if (revision(wanted) !== current.requirement_revision) fail('TASK_OWNER_NATIVE_STALE')
+    return db.prepare("SELECT e.payload_ref,t.turn_id,t.lease_epoch,t.requirement_revision FROM task_events e JOIN task_owner_turns t ON t.turn_id=e.turn_id AND t.task_id=e.task_id WHERE e.task_id=? AND e.event_type='native.recorded' AND t.requirement_revision=? AND t.authorization_revision=? AND t.input_fence_revision=? ORDER BY e.seq")
+      .all(query.taskId,wanted,o.authorization_revision,o.input_fence_revision)
+      .map(row => ({ artifactRef:row.payload_ref,taskId:query.taskId,turnId:row.turn_id,leaseEpoch:row.lease_epoch,
+        requirementRevision:row.requirement_revision }))
   }
   if (query?.kind === 'task.owner.query-evidence') {
     const current = task(db,query.taskId)

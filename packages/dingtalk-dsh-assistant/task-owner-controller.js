@@ -83,7 +83,7 @@ export function ownerWorkflowObservationType(stage, nodes) {
 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
-  authorizeStages, authorizeCompletion, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
+  authorizeStages, authorizeCompletion, verifyBlocker, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
   readStageArtifacts, readDeliveryManifest, verifyDeliveryReview, readCurrentSources, readMaterialAccess, validateDataChangeRepairContext, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir, tools = [], controlTools = [], prepareQueryInput }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
@@ -94,8 +94,11 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
   const flightAborts = new Map()
   const sessions = sessionRunner ?? createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => {
     const owner = await store.query({ kind: 'task.owner', taskId: binding.taskId })
+    const plan = await controller.taskPlan(binding.taskId)
     return !!owner && owner.status === 'running' && owner.turnId === binding.turnId
       && owner.leaseEpoch === binding.leaseEpoch && owner.sessionId === binding.sessionId
+      && (plan?.task.controlState === 'active' || !!owner.deliveryReview)
+      && (binding.requirementRevision === undefined || plan?.task.requirementRevision === binding.requirementRevision)
   } })
   const command = (id, kind, args) => store.command({ id, kind, args })
 
@@ -229,6 +232,26 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         throw error('TASK_OWNER_QUERY_EVIDENCE_INVALID')
       result.push({...record,evidenceRef:record.artifactRef,queryId:evidence.capabilityId,result:evidence.result,evidence})
     }
+    const native = await store.query({kind:'task.owner.native-evidence',taskId, ...(requirementRevision !== undefined ? {requirementRevision} : {})})
+    const calls = new Map()
+    for (const record of native) {
+      signal?.throwIfAborted()
+      const evidence = await artifacts.read(record.artifactRef), execution = evidence?.execution
+      if (evidence?.kind !== 'task-native-execution' || execution?.kind !== 'task-owner'
+        || execution.taskId !== taskId || execution.turnId !== record.turnId || execution.leaseEpoch !== record.leaseEpoch
+        || execution.requirementRevision !== record.requirementRevision
+        || !['started','settled'].includes(evidence.phase) || !evidence.callId || !evidence.toolName
+        || evidence.verification?.outputDigest !== executionDigest(evidence.result)
+        || evidence.verification?.argumentsDigest !== executionDigest(evidence.arguments)) throw error('TASK_OWNER_NATIVE_EVIDENCE_INVALID')
+      const identity = key(execution, evidence.callId)
+      const previous = calls.get(identity)
+      if (evidence.phase === 'settled' && (!previous || previous.evidence.phase !== 'started'
+        || evidence.startedRef !== previous.evidenceRef || evidence.toolName !== previous.evidence.toolName
+        || evidence.verification.argumentsDigest !== previous.evidence.verification.argumentsDigest)) throw error('TASK_OWNER_NATIVE_EVIDENCE_INVALID')
+      if (evidence.phase === 'started' && previous) throw error('TASK_OWNER_NATIVE_EVIDENCE_INVALID')
+      calls.set(identity, {...record,evidenceRef:record.artifactRef,queryId:evidence.toolName,result:evidence.result,evidence})
+    }
+    result.push(...calls.values())
     return result
   }
 
@@ -262,8 +285,11 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         Object.assign(binding,{kind:'task-owner',requirementRevision:input.task.requirementRevision,
           inputRef:input.task.requirementRef,inputDigest:executionDigest(queryInput ?? input.goal)})
         input.queryEvidence = (await readTaskEvidence({taskId,requirementRevision:binding.requirementRevision,signal}))
-          .map(({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision }) =>
-            ({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision }))
+          .map(({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision, evidence }) =>
+            ({ artifactRef, evidenceRef, queryId, taskId, turnId, leaseEpoch, requirementRevision,
+              ...(evidence.kind === 'task-native-execution' ? {nativeExecution:{phase:evidence.phase,
+                outcome:evidence.phase === 'started' || evidence.cancelled ? 'unknown' : evidence.postExecutionDecision !== 'accept' || evidence.result?.isError ? 'failed' : 'returned',
+                instruction:'真实工具回执不等于业务验证；unknown先核对原效果，禁止直接重放。'}} : {}) }))
         input.completionEvidenceRefs = [...new Set([...input.completionEvidenceRefs, ...input.queryEvidence.map(item => item.evidenceRef)])]
         const unreadPages = new Set((input.eventPages ?? []).map(page => page.ref))
         const readableArtifacts = new Set(input.stageArtifacts.flatMap(stage =>
@@ -280,7 +306,31 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
         for (const ref of [...input.events.map(event => event.payloadRef), ...(input.goal?.materials ?? []).map(material => material.artifactRef)].filter(Boolean)) readableArtifacts.add(ref)
         let acceptedCompletion, acceptedCandidate
         const materialIndexState = {}
+        const nativeCalls = new Map()
         const result = await sessions.run({ binding, input, ...projection, tools: [...tools,...controlTools], queryInput, ...modelConfig(), signal,
+          onNativeExecution: async call => {
+            const expected = Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(name => [name,binding[name]]))
+            if (input.deliveryReview || executionDigest(call.binding) !== executionDigest(expected)
+              || !['started','settled'].includes(call.phase) || !call.callId || !call.toolName) throw error('TASK_OWNER_NATIVE_EVIDENCE_INVALID')
+            const started = nativeCalls.get(call.callId)
+            if (call.phase === 'started' ? !!started : !started || started.toolName !== call.toolName
+              || started.argumentsDigest !== executionDigest(call.arguments)) throw error('TASK_OWNER_NATIVE_EVIDENCE_INVALID')
+            if (call.phase === 'started') signal.throwIfAborted()
+            const evidence = { kind:'task-native-execution', execution:expected, callId:call.callId,
+              toolName:call.toolName, arguments:call.arguments, phase:call.phase,
+              result:call.phase === 'started' ? null : call.result, recordedAt:new Date().toISOString(),
+              ...(started ? {startedRef:started.evidenceRef,cancelled:call.cancelled === true,postExecutionDecision:call.postExecutionDecision} : {}),
+              verification:{argumentsDigest:executionDigest(call.arguments),outputDigest:executionDigest(call.phase === 'started' ? null : call.result)} }
+            const {ref:evidenceRef} = await artifacts.put(evidence,{taskId})
+            await command(`owner-native:${turnId}:${key(evidenceRef)}`,'task.owner.native-evidence',{
+              taskId,turnId,leaseEpoch:claim.leaseEpoch,requirementRevision:binding.requirementRevision,
+              sessionId:binding.sessionId,ownerEpoch:binding.ownerEpoch,evidenceRef})
+            if (call.phase === 'started') nativeCalls.set(call.callId,{evidenceRef,toolName:call.toolName,argumentsDigest:evidence.verification.argumentsDigest})
+            else nativeCalls.delete(call.callId)
+            readableArtifacts.add(evidenceRef)
+            readArtifacts.set(evidenceRef,evidence)
+            return {evidenceRef}
+          },
           listMaterials: input.sharedMaterials ? async ({ cursor = 0, limit = 50 }) => readTaskMaterials({
             directories: await artifacts.getTaskDirectories(taskId), artifacts, requirementRevision: input.task.requirementRevision,
             requirementRef: input.task.requirementRef, indexOffset: cursor, indexLimit: limit, indexState: materialIndexState }) : undefined,
@@ -330,7 +380,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
-          onCandidate: async decision => {
+          onCandidate: async (decision, _binding, toolContext) => {
             if (input.deliveryReview && (!['complete','wait','block'].includes(decision.action) || decision.planChange || decision.appendStages)) throw error('TASK_OWNER_DELIVERY_REVIEW_READ_ONLY')
             if (decision.candidateAcceptance) {
               if (!input.deliveryReview || decision.action !== 'wait' || !readArtifacts.has(input.deliveryReview.payloadRef)
@@ -410,6 +460,10 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                       ? item.hostCandidate.taskId !== taskId || item.hostCandidate.requirementRevision !== binding.requirementRevision
                         || item.hostCandidate.accepted !== true || item.hostCandidate.businessCompleted !== false
                         || ![input.candidateAcceptance?.ref, input.candidateAcceptance?.reviewRef].includes(item.evidenceId)
+                      : item.hostNativeExecution
+                      ? item.hostNativeExecution.taskId !== taskId || item.hostNativeExecution.requirementRevision !== binding.requirementRevision
+                        || readArtifacts.get(item.evidenceId)?.kind !== 'task-native-execution'
+                          && !input.queryEvidence.some(evidence => evidence.artifactRef === item.evidenceId)
                       : item.hostQuery
                       ? item.hostQuery.taskId !== taskId || item.hostQuery.requirementRevision !== binding.requirementRevision
                         || readArtifacts.get(item.evidenceId)?.kind !== 'agent-query-evidence'
@@ -421,6 +475,37 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                   cause.ownerDiagnosticRef = cause.diagnosticRef
                 }
                 throw cause
+              }
+            }
+            if (!input.deliveryReview && verifyBlocker && ['wait', 'block'].includes(decision.action)
+              && ['business-input', 'approval', 'capability', 'permission', 'execution'].includes(decision.condition?.kind)
+              && Array.isArray(decision.condition.evidenceRefs)
+              && decision.condition.evidenceRefs.every(ref => decision.evidenceRefs?.includes(ref))) {
+              const records = await readTaskEvidence({ taskId, requirementRevision: binding.requirementRevision, signal })
+              const requested = new Set(decision.evidenceRefs)
+              const unknown = [...requested].filter(ref => ref !== input.task.requirementRef
+                && !records.some(record => record.evidenceRef === ref || record.artifactRef === ref) && !readArtifacts.has(ref))
+              if (unknown.length) throw error('TASK_OWNER_BLOCKER_EVIDENCE_UNREAD',
+                `停止依据引用未经当前任务核验：${JSON.stringify(unknown)}。仅使用当前任务提供的引用；可读材料先完整读取，不存在或其他任务的引用应移除，不能凭空补写。`)
+              const selected = records.filter(record => requested.has(record.evidenceRef) || requested.has(record.artifactRef))
+              for (const record of records.filter(record => record.evidence.kind === 'task-native-execution').slice(-12))
+                if (!selected.includes(record)) selected.push(record)
+              const evidence = [{ evidenceId: input.task.requirementRef, requirement: input.goal },
+                ...selected.map(record => ({ evidenceId: record.evidenceRef, ...record.evidence }))]
+              for (const ref of requested) if (!evidence.some(item => item.evidenceId === ref) && readArtifacts.has(ref))
+                evidence.push({ evidenceId: ref, artifact: readArtifacts.get(ref) })
+              const assessment = await verifyBlocker({ goal: input.goal, currentSources: input.currentSources,
+                currentExecution: { execution: input.currentExecution, stages: input.stages }, toolContext,
+                evidence, decision }, { signal })
+              signal.throwIfAborted()
+              if (assessment?.status !== 'external-blocker') {
+                const diagnostic = await artifacts.put({ kind: 'owner-blocker-review', taskId,
+                  requirementRevision: binding.requirementRevision, turnId, assessment, decision, toolContext,
+                  evidenceRefs: evidence.map(item => item.evidenceId) }, { taskId })
+                readableArtifacts.add(diagnostic.ref)
+                throw Object.assign(error('TASK_OWNER_BLOCKER_UNVERIFIED',
+                  `停止依据尚未成立：${assessment?.reason ?? '未获得有效判定'}。由原执行会话继续调查、准备和核验；真实外部阻碍可据新证据再提交。诊断：${diagnostic.ref}`),
+                  { ownerDiagnosticRef: diagnostic.ref })
               }
             }
             const digest = decision.action === 'complete' ? executionDigest(decision) : null
