@@ -911,3 +911,5 @@ For obsolete execution retirement, an already succeeded local workspace creation
 Owner 条件校验反馈修复无 schema 迁移。沿受控部署并确认排空后安装；原 TASK_OWNER_CORRECTION_LIMIT 保留历史，通过原 Task 的 reassess-readonly 入口及当前 Owner/租约/需求/控制版本恢复，禁止直接改库清除失败。回读原会话权限、恢复后的真实调用及候选提交结果，不能将恢复运行等同业务完成。
 
 Owner 停止依据核验使用现有模型配置，无 schema 或配置迁移。部署前定向验证真实外部阻碍、可继续准备、伪造引用、取消及同会话纠正；普通wait/block新增核验，暂停成果评估保持原边界。现有已应用等待不自动改写，部署后按原Task当前版本正式reassess。群补充问题沿原报告通知唯一出口及送达去重；不得重发历史已送问题。
+
+Owner上下文索引压缩仅改变新模型回合的投影，无schema迁移；旧会话日志不改写。较大的completionEvidenceRefs/workflowCatalog以可读内容摘要引用替代，按task_owner_read_artifact完整读取；部署回读需比较新回合实际注入长度，不能将离线投影测量当作现场已生效。

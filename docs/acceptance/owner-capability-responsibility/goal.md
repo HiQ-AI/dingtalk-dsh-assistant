@@ -30,3 +30,4 @@
 
 - Round 6完成基础设施修复、定向测试与部署；原Owner已正式恢复running，last_failure清空，43工具可见。原业务仍由同一Owner继续交付。
 - Round 7：原Owner合法capability block仍外包验证准备。新增技术停止依据核验，仅反馈判断不接管任务；原会话自行准备、执行和交付。见docs/spec/owner-stop-reason-validation.md。
+- Round 8：压缩每轮重复的完整证据索引和流程目录；真实输入14737→6190、17314→6922字符，74项相关测试通过；本地切换须先排空原会话，不修改历史日志。

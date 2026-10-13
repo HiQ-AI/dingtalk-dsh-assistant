@@ -111,3 +111,28 @@ test('read reuse requires complete original successful pages, exact digest, matc
   ]) assert.equal(ownerImmutableReadReceipts(invalid, binding).size, 0)
   assert.equal(ownerImmutableReadReceipts(events, { ...binding, sessionId: 'other' }).size, 0)
 })
+
+
+test('growing receipt lists and workflow catalog are deferred losslessly without hiding current obligations', async () => {
+  const f = fixture(), input = { taskId: 'task-context',
+    goal: { request: '核验真实行为', constraints: ['只核验，不部署'], authorization: { actorId: 'human' } },
+    events: [{ eventSeq: 99, eventType: 'system.recovery', payloadRef: 'current-recovery' }],
+    completionEvidenceRefs: Array.from({ length: 60 }, (_, i) => `tasks/task-context/sha256-${String(i).padStart(64, '0')}.json`),
+    workflowCatalog: Array.from({ length: 10 }, (_, i) => ({ id: `workflow-${i}`, purpose: '按实际需要选择受管流程', contract: { detail: 'scope-and-evidence '.repeat(20) } })) }
+  const original = structuredClone(input), result = await projectOwnerContext(input, f.artifacts)
+  assert.deepEqual(input, original)
+  assert.deepEqual(result.modelInput.goal, input.goal)
+  assert.deepEqual(result.modelInput.events, input.events)
+  assert.ok(JSON.stringify(result.modelInput).length < JSON.stringify(input).length / 3)
+  for (const field of ['completionEvidenceRefs', 'workflowCatalog']) {
+    const ref = result.modelInput[field].contextRef
+    assert.ok(result.readableRefs.includes(ref))
+    assert.equal(result.modelInput[field].requiredBeforeSubmit, false)
+    assert.deepEqual((await f.artifacts.read(ref)).value, original[field])
+  }
+  assert.deepEqual(result.requiredRefs, [])
+  const small = { taskId: 'small', completionEvidenceRefs: ['actual-ref'], workflowCatalog: [{ id: 'known', purpose: 'small' }] }
+  const projected = await projectOwnerContext(small, f.artifacts)
+  assert.deepEqual(projected.modelInput.completionEvidenceRefs, small.completionEvidenceRefs)
+  assert.deepEqual(projected.modelInput.workflowCatalog, small.workflowCatalog)
+})

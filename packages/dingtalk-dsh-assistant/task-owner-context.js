@@ -11,7 +11,8 @@ export async function projectOwnerContext(input, artifacts) {
     if (mandatory) required.add(ref)
     return { contextRef: ref, path, totalChars: JSON.stringify(value).length, contentDigest: digest, requiredBeforeSubmit: mandatory }
   }
-  const deferred = new Set(['constraintHistory', 'queryEvidence', 'stageArtifacts'])
+  const deferred = new Map([['constraintHistory', 4096], ['queryEvidence', 4096], ['stageArtifacts', 4096],
+    ['completionEvidenceRefs', 2048], ['workflowCatalog', 2048]])
   const visit = async (value, path = []) => {
     if (path.join('.') === 'sharedMaterials' && value?.logicalTaskId) return { logicalTaskId: value.logicalTaskId,
       indexTool: 'task_owner_list_materials', instruction: '完整材料索引按需分页；历史材料不扩大当前授权。' }
@@ -29,7 +30,7 @@ export async function projectOwnerContext(input, artifacts) {
           instruction: 'current保留当前或授权绑定来源；history仅是明确旧版本原文。当前有效约束仍完整保留在constraints。' }
       }
     }
-    if (value !== null && typeof value === 'object' && deferred.has(path.at(-1)) && JSON.stringify(value).length > 4096)
+    if (value !== null && typeof value === 'object' && deferred.has(path.at(-1)) && JSON.stringify(value).length > deferred.get(path.at(-1)))
       return save(value, path, false)
     if (typeof value === 'string' && value.length > 2048) return save(value, path, mandatory)
     if (Array.isArray(value)) return Promise.all(value.map((entry, index) => visit(entry, [...path, index])))
