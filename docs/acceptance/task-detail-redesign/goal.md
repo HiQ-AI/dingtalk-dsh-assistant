@@ -10,7 +10,7 @@
 | 页面与阅读状态实现 | PASS | web-client.js；round-3.md |
 | 独立浏览器场景与基线 | PASS | scripts/verify-browser.mjs；16/16浏览器场景 |
 | 定向回归与静态审计 | PASS | 35/35定向测试；严格审计0发现；包内源码一致 |
-| PR 交付 | IN_PROGRESS | 验证已完成，准备提交与远端只读回查 |
+| PR 交付 | PASS | PR #159，OPEN；main ← worktree-task-detail-redesign，gh独立回读正文及状态一致 |
 
 ## 决策与检查点
 
@@ -19,3 +19,5 @@
 - 实现与浏览器验收并行拆解，主代理负责页面，子代理负责独立浏览器验证脚本；交付证据逐项回读。
 
 - 第2轮发现窄屏默认选中项不在目录可视区；第3轮仅调整目录自身scrollTop并验证重开同任务、刷新不抢阅读位置。所有当前验收项通过，历史FAIL保留。
+
+- 交付：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/159 。已独立回读远端分支提交、PR编号/标题/正文/base/head/state；正式实例未部署。
