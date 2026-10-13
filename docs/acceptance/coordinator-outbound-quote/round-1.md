@@ -11,3 +11,5 @@
 旧实现复现：真实服务 fixture 保存 delivered 通知，正式接收并隔离历史回声，引用该回声时提交事务返回 `GROUP_COORDINATOR_SOURCE_STALE`（1 个用例，0 通过、1 失败，符合故障基线）。首次修复验证中的批次断言暴露 fixture 的自动派发竞态，改为原生 receive 的 `process:false` 同批接收，并逐项派发已接纳命令后重跑。
 
 最终定向命令：`node --test --test-name-pattern='引用已隔离的已送达回声|澄清可核对已送达助手引用' test/workflow-service.test.js test/message-coordinator.test.js`，7/7 通过，0 失败、0 跳过。覆盖精确 delivered、已隔离 echo、同批两条来源正常处理，以及 ACK-only、消息 ID 不符、跨群、正文不符的拒绝。详细私有日志在 `docs/tmp/coordinator-outbound-quote-tests/`，完整相关回归待记录。
+
+最终完整相关回归：`node --test test/workflow-service.test.js test/message-coordinator.test.js`，430/430 通过，0 失败、0 跳过，耗时 881234.9191 ms。包含普通旧版本/跨群澄清拒绝、真实通知引用和服务消息处理路径。日志 `docs/tmp/coordinator-outbound-quote-tests/final-regressions.log`。相关原生会话和消息账的前述 88 项基线与本次 430 项有重叠，不相加为独立用例数。
