@@ -3561,16 +3561,16 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       }
       planCursor = plans.length === 100 ? plans.at(-1).sequenceId : undefined
     } while (planCursor)
-    const page = await store.query({ kind: 'run.list', limit: 200, activeOnly: true, ...(taskRecoveryCursor ? { beforeSequenceId: taskRecoveryCursor } : {}) })
+    const page = await store.query({ kind: 'run.list', limit: 200, activeOnly: true, includeFailed: true, ...(taskRecoveryCursor ? { beforeSequenceId: taskRecoveryCursor } : {}) })
     taskRecoveryCursor = page.length === 200 ? page.at(-1).sequenceId : undefined
     for (const run of page) {
       if (closed) return failures
       recoveryPhase('tasks', 'recover-run', run.taskId)
-      if (terminal(run.status) || run.pauseRequested || run.stopRequested || run.status === 'running') continue
+      if ((terminal(run.status) && run.status !== 'failed') || run.pauseRequested || run.stopRequested || run.status === 'running') continue
       try {
-        if (run.status === 'waiting') {
+        if (['waiting', 'failed'].includes(run.status)) {
           const state = await store.query({ kind: 'run', runId: run.runId })
-          const waiting = state.nodes?.filter(node => node.status === 'waiting') ?? [], node = waiting[0]
+          const waiting = state.nodes?.filter(node => ['waiting', 'failed'].includes(node.status)) ?? [], node = waiting[0]
           if (waiting.length !== 1) continue
           const correction = await controller.inspectNodeRecovery(run.runId)
           if (correction.repairable && node.nodeId === 'plan-local-acceptance' && node.waitReason?.reference === 'execution_no_submission') {
@@ -3596,15 +3596,22 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             if (executionDigest(input) !== node.inputDigest || input.workflowDigest !== definition.digest || input.nodeId !== node.nodeId) continue
             const proof = await inspectLegacyTurnFailure(ctx, { taskId: run.taskId, runId: run.runId, nodeRunId: node.nodeRunId,
               generation: state.run.generation, inputDigest: node.inputDigest, sessionId: node.sessionId, leaseEpoch: node.leaseEpoch, sessionBound: true }, node.waitReason.reference)
-            if (!proof) continue
-            const evidence = await artifacts.put({ kind: 'legacy-turn-failure-classification', ...proof }, { taskId: run.taskId })
-            // 已发布的幂等键保留，避免把同一历史回合重分类记作另一项操作。
-            await store.command({ id: `provider-reclassify:${node.nodeRunId}:${node.leaseEpoch}`, kind: 'node.failure.reclassify', args: {
-              runId: run.runId, runRevision: state.run.revision, nodeRunId: node.nodeRunId, generation: state.run.generation,
-              leaseEpoch: node.leaseEpoch, inputDigest: node.inputDigest, sessionId: node.sessionId, evidenceRef: evidence.ref,
-              previousCode: node.waitReason.reference, code: proof.failure.code } })
+            if (proof) {
+              const evidence = await artifacts.put({ kind: 'legacy-turn-failure-classification', ...proof }, { taskId: run.taskId })
+              // 已发布的幂等键保留，避免把同一历史回合重分类记作另一项操作。
+              await store.command({ id: `provider-reclassify:${node.nodeRunId}:${node.leaseEpoch}`, kind: 'node.failure.reclassify', args: {
+                runId: run.runId, runRevision: state.run.revision, nodeRunId: node.nodeRunId, generation: state.run.generation,
+                leaseEpoch: node.leaseEpoch, inputDigest: node.inputDigest, sessionId: node.sessionId, evidenceRef: evidence.ref,
+                previousCode: node.waitReason.reference, code: proof.failure.code } })
+              continue
+            }
+          }
+          if (correction.repairable && correction.mode === 'resume-agent' && !correction.technicalPlanRevision) {
+            await controller.recover({ commandId: `execution-continuation:${run.runId}:${run.revision}`, runId: run.runId })
             continue
           }
+          // 未准入的失败 Run 不进入暂态重领；尤其不能重放同一无进展问题。
+          if (run.status === 'failed') continue
           if (node.waitReason?.reference === 'AGENT_WORK_NEEDS_INPUT') { await ensureInvestigationMessageRequest(run.runId); continue }
           if (run.workflowId === 'task-data-change' && node.nodeId === 'readback-issue'
             && node.waitReason?.kind === 'recovery') {

@@ -1,0 +1,19 @@
+✔ 失败分类仅使用精确白名单，输出错误不扩散到输入和未知故障 (4.1943ms)
+▶ 执行失败保存恢复责任，未知故障和外部未知结果不自动重放
+  ✔ ENGINEERING_ACCEPTANCE_FAILED (397.5879ms)
+  ✔ ENGINEERING_UAT_ENVIRONMENT_REQUIRED (364.9421ms)
+  ✔ DELIVERY_RECONCILIATION_REQUIRED (428.2534ms)
+  ✔ CUSTOM_ACCEPTANCE_FAILED (381.0529ms)
+✔ 执行失败保存恢复责任，未知故障和外部未知结果不自动重放 (1573.4171ms)
+✔ 通用 agent 失败续行保持成功前缀、节点会话与代际，并向原执行器传入受信修复上下文 (496.2384ms)
+✔ 历史原生中断重分类由受管恢复续行一次并保留成功前缀 (480.3446ms)
+✔ 工程旧越界读取失败由受管恢复同节点同代续行，直接重领仍拒绝 (906.9316ms)
+✔ local planner objective recovery historical missing objective retains generic recovery (1240.9712ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5102.5131

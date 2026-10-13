@@ -438,6 +438,28 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       nodeRunId: recovery.nodeRunId, generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest, contextRef: context.ref })
     return true
   }
+  async function continueOriginalAgent(runId, state) {
+    const recovery = await inspectNodeRecovery(runId)
+    // 专用纠正继续走自己的冻结合同；通用续行不扩大写入或改图能力。
+    if (!recovery.repairable || recovery.mode !== 'resume-agent' || recovery.technicalPlanRevision
+      || recovery.localPlanCorrection || recovery.editArgumentCorrection
+      || recovery.readonlyAcceptanceRetry || recovery.readonlyFixtureRetry) return false
+    const plan = await store.query({ kind: 'task.plan', taskId: state.run.taskId })
+    const context = await artifacts.put({ kind: 'execution-recovery-context', taskId: state.run.taskId, runId,
+      nodeRunId: recovery.nodeRunId, generation: recovery.generation,
+      requirementRevision: plan.task.requirementRevision, planRevision: plan.task.planRevision,
+      controlRevision: plan.task.controlRevision, problemKey: recovery.problemKey,
+      diagnosis: `原节点执行未完成：${recovery.failure.code}；阶段：${recovery.failure.phase}。完整失败事实及来源见 evidence 与 evidenceRefs。`,
+      strategy: '继续原节点会话，读取完整失败诊断和当前任务要求，在已有工具与授权范围内纠正参数、方法或产物并提交实际结果。保留已成功工作，不修改流程、不重复外部效果、不把内部错误要求用户重交材料。确实缺少能力、权限或业务信息时明确缺口及恢复条件；同一问题无新进展时不得原样重复。',
+      // 通用只读节点未必有工件工具；将白名单内完整事实随受信上下文交回。
+      evidence: await Promise.all(recovery.evidenceRefs.map(async artifactRef => ({ artifactRef, value: await artifacts.read(artifactRef) }))),
+      evidenceRefs: recovery.evidenceRefs }, { reference: state.run.requirementRef })
+    await resumeAgent({ commandId: `execution-continuation:${recovery.problemKey}`, runId,
+      expectedRevision: recovery.runRevision, nodeRunId: recovery.nodeRunId,
+      generation: recovery.generation, leaseEpoch: recovery.leaseEpoch, inputDigest: recovery.inputDigest,
+      contextRef: context.ref })
+    return true
+  }
   async function drive(runId) {
     while (!closed) {
       const state = await query(runId)
@@ -1225,7 +1247,8 @@ export function createExecutionController({ store, artifacts, sessions, delivery
         await command(`readonly-acceptance-retry:${node.nodeRunId}:${node.inputDigest}`,'node.retry-readonly-acceptance',{runId,expectedRevision:state.run.revision,nodeRunId:node.nodeRunId,generation:node.generation,leaseEpoch:node.leaseEpoch,inputDigest:node.inputDigest,prepared:{...input.data.localPrepared,requirementDigest:input.data.candidate.requirementDigest},contextRef:context.ref})
         schedule(runId);return
       }
-      if (await correctLocalPlan(runId, state) || await correctEditArguments(runId, state)) return
+      if (await correctLocalPlan(runId, state) || await correctEditArguments(runId, state)
+        || await continueOriginalAgent(runId, state)) return
       await sessions?.cancel(runId)
       // 独占Store已排除旧Controller；这里只排空纯/read原生句柄，不释放外部效果hold。
       for (const node of state.nodes) if (!node.drained && node.leaseEpoch > 0) {

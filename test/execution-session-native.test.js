@@ -120,6 +120,10 @@ if (process.argv[2] === '--execution-session-child') {
     const latest = saved.events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
     assert.deepEqual(JSON.parse(latest.data.content[0].text), { requirement: 'read and submit' })
     assert.match(latest.data.content[1].text, /原路径没有结果/u)
+    assert.match(latest.data.content[1].text, /保留原会话、节点身份/u)
+    assert.match(latest.data.content[1].text, /无能力或条件未满足时如实报告阻塞/u)
+    assert.match(next.requests[0].system, /受托节点执行会话/u)
+    assert.match(next.requests[0].system, /Task Owner是任务级唯一责任人/u)
     assert.match(JSON.stringify(next.requests[0]), /本轮未能得到结论/u)
   })
   test('原生成功查询漏引用或截短任务证据时同会话纠正，JSONL仍可重建查询集合', async t => {

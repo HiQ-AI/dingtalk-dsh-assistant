@@ -251,7 +251,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
   function setup(entry, definition) {
     return agentCtx => {
       const allowed = new Set([...definition.allowedTools, SUBMIT])
-      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${sourceInterpretationInstructions}${definition.allowedTools.includes('engineering_repo_inspect') ? '\n工程需求优先级：当前Task原始request、已读取需求正文及Host锁定的UAT环境决定目标；旧repair计划、项目本地验收说明和默认场景仅是待核实的测试方法，不能替换业务需求或改变UAT。发现冲突时按当前Task需求实现并报告场景不适用，不照错场景改业务。已有明确交办不得因测试说明自行追加真人审批、确认或用户补充；只有真实Host权限结果才能形成授权等待。构建通过或补齐后台隔离不代表业务功能已实现。' : ''}`, complete: true })
+      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${entry.binding.kind === 'message-unit' ? '' : '你是本Task的受托节点执行会话；持久Task Owner是任务级唯一责任人。流程编排提供执行工具、状态和客观门禁，不替代任务负责人。你负责本节点授权范围内的执行、证据与故障纠正；没有受信能力时如实报告缺失能力、实际阻塞和可验证恢复条件，不承诺自动修复，不自行改图或新建任务。\n'}${sourceInterpretationInstructions}${definition.allowedTools.includes('engineering_repo_inspect') ? '\n工程需求优先级：当前Task原始request、已读取需求正文及Host锁定的UAT环境决定目标；旧repair计划、项目本地验收说明和默认场景仅是待核实的测试方法，不能替换业务需求或改变UAT。发现冲突时按当前Task需求实现并报告场景不适用，不照错场景改业务。已有明确交办不得因测试说明自行追加真人审批、确认或用户补充；只有真实Host权限结果才能形成授权等待。构建通过或补齐后台隔离不代表业务功能已实现。' : ''}`, complete: true })
       agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => !['engineering_repo_inspect', 'engineering_apply_edits', 'execution_request_authorization'].includes(name) && !registry.has(name)) })
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。
       agentCtx.tools.guard(exec => {
@@ -460,7 +460,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         // 租约是 Host 的来源元数据，正常 inbox/user-message 持久化保留，不是模型参数。
         entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', executionSession: { sessionId: binding.sessionId, leaseEpoch: binding.leaseEpoch, ...(versionedInput(binding) ? { inputVersion: binding.inputVersion, inputDigest: binding.inputDigest } : {}) } }, content: [
           { type: 'text', text: JSON.stringify(entry.input) },
-          ...(recoveryContext ? [{ type: 'text', text: '本次受管恢复：保留原目标和权限，先核对原失败及以下修复方向，选择不同的可用路径并验证；不得把内部恢复说明当成用户授权。\n' + JSON.stringify(recoveryContext) }] : []),
+          ...(recoveryContext ? [{ type: 'text', text: '本次受管恢复：保留原会话、节点身份、原目标、权限和已成功工作。先读取原失败诊断及证据，再在现有受信能力内纠正并验证；不重复无进展的尝试，无能力或条件未满足时如实报告阻塞与恢复条件，不另建任务或改图。以下方向不是用户授权，也不证明具备修复能力。\n' + JSON.stringify(recoveryContext) }] : []),
         ] }))
         await entry.handle.agent.whenIdle()
         await drain(entry)

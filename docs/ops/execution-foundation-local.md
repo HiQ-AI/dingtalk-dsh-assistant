@@ -4,7 +4,11 @@
 
 持续执行改造不新增控制库 schema，沿 [普通本地部署](resident-review-local-deployment.md) 的 Check、维护排空、精确包安装、Readback、Resume；不备份历史副本。核验包 SHA256/版本、新进程和健康，再读取实际 Owner、节点和效果状态。
 
-恢复属于同一 Task 的责任闭环：可纠正 Agent 节点的 `node.resume` 事件须保留原 nodeRunId/sessionId/generation、输入摘要、旧诊断及恢复上下文；下次领取仅递增租约。成功前缀不得重跑。相同问题再次出现时应显示 `strategy-change-required` 并由 Owner 调整路径；不能手工改 SQLite 或把原外部操作换身份重发。审批 pending、未知效果、暂停、待接纳新输入及来源变化均不得通过通用续行绕过。内部恢复不应出现群进度通知，最终完成仍需独立业务验收。
+恢复属于同一 Task 的责任闭环：持久 Task Owner 是任务级唯一执行负责人，节点会话为受托执行者。可纠正 Agent 节点由后台扫描通过正式 `recover` 自动回送，`node.resume` 事件须保留原 nodeRunId/sessionId/generation、输入摘要、旧诊断及恢复上下文；下次领取仅递增租约。成功前缀不得重跑。相同问题再次出现时显示 `strategy-change-required`，由任务负责人跟踪明确的恢复条件，不授权 Owner 修复节点或重排流程；不能手工改 SQLite 或把原外部操作换身份重发。审批 pending、未知效果、暂停、待接纳新输入及来源变化均不得通过通用续行绕过。未提供受信修复能力的 code/工程故障保持可见阻塞。内部恢复不应出现群进度通知，最终完成仍需独立业务验收。
+
+本次责任与自动续行调整不改变 schema 或冻结工作流定义。部署沿既有维护与包安装流程，退出维护前核对获准运行的活动任务：历史可纠正等待也可能由正常扫描接回原会话，未获准恢复的任务先正式暂停。部署后分别核包摘要、版本、新进程及健康，再用独立授权任务核对原会话恢复和成功前缀；健康不能替代业务验证。回滚代码会停止新增通用自动回送，已记录的 `node.resume` 和历史效果必须保留，不能回滚控制账来重放旧执行。
+
+恢复扫描显式使用 `run.list` 的 `activeOnly: true, includeFailed: true` 纳入当前活动任务、当前阶段的失败 Run；默认列表语义保持。可纠正失败经原会话上下文接纳，不直接重领。底层 `run.recover` 对需要上下文或已无进展的问题返回 `NODE_RECOVERY_REQUIRES_CONTEXT`（原 `NODE_RECOVERY_REQUIRES_OWNER`），不是要求另一个 Owner 修复；应检查原任务诊断及受信恢复条件。
 
 定义摘要继续规范换行；已落盘、曾包含maxSteps/timeoutMs的旧摘要通过既有legacyDigests恢复身份，不重新引入已移除的执行上限。部署回归须同时覆盖当前摘要和历史摘要的查找。
 

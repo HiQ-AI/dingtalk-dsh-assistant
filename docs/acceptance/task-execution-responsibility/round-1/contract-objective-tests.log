@@ -1,0 +1,25 @@
+✖ local planner objective recovery historical missing objective retains generic recovery (567.6013ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1014.5556
+
+✖ failing tests:
+
+test at test\execution-controller.test.js:1368:4
+✖ local planner objective recovery historical missing objective retains generic recovery (567.6013ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-execution-responsibility/dingtalk-dsh-assistant/test/execution-controller.test.js:1450:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: { code: 'NODE_RECOVERY_REQUIRES_OWNER' },
+    operator: 'rejects',
+    diff: 'simple'
+  }

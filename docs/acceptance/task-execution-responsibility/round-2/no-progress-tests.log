@@ -1,0 +1,11 @@
+✔ 历史原生中断重分类由受管恢复续行一次并保留成功前缀 (599.2644ms)
+✔ 工程旧越界读取失败由受管恢复同节点同代续行，直接重领仍拒绝 (494.8364ms)
+✔ local planner objective recovery historical missing objective retains generic recovery (640.2235ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2036.7346

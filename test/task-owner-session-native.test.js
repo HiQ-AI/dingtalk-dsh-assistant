@@ -893,6 +893,10 @@ test('Owner原生工具只公开业务协调并可按既有计划继续',async t
  const root=await mkdtemp(join(tmpdir(),'owner-observe-only-'));const h=await host(root,null,null,()=>({action:'advance',summary:'按既有计划继续',evidenceRefs:[]}));t.after(()=>h.close())
  let accepted=0;const result=await h.sessions.run({binding:{taskId:'task',sessionId:'owner-observe',turnId:'turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{currentExecution:{repairable:false,responsibility:'execution-session'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async()=>{accepted++}})
  assert.equal(result.status,'submitted');assert.equal(accepted,1)
+ assert.match(h.requests[0].system,/任务级唯一责任人/u)
+ assert.match(h.requests[0].system,/节点会话是受托执行者/u)
+ assert.match(h.requests[0].system,/不承诺自动修复/u)
+ assert.match(h.requests[0].system,/不得提交repairCurrentStage或workflowRevision/u)
 })
 
 test('maintenance constraint body and original provenance reach actual native model request after event consumption',async t=>{
