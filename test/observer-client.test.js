@@ -9,7 +9,7 @@ test('消息与话题详情只展示有绑定的会话并支持分页', async ()
   assert.match(source, /message\.runId \? React\.createElement\(Button[\s\S]*'处理过程'/)
   assert.match(source, /\/state\/workflows\/\$\{encodeURIComponent\(runId\)\}\/trace/)
   assert.match(source, /\/state\/workflows\/topics\/\$\{encodeURIComponent\(selection\.topicId\)\}\/context/)
-  assert.match(source, /sessionId \? React\.createElement\('button'/)
+  assert.match(source, /node\.sessionId \? React\.createElement\(Button/)
   assert.match(source, /setCursorHistory\(\(items\) => \[\.\.\.items, cursor\]\)/)
   assert.match(source, /intentNextCursor/)
   assert.match(source, /判断批次分页/)
@@ -588,7 +588,14 @@ test('阅读步骤移除后定位相邻步骤，未移除步骤不改变阅读�
   assert.equal(adjacent(['a', 'b'], ['a', 'b', 'c'], 'a'), null)
   assert.match(source, /正在阅读的步骤已从当前计划移除/)
   assert.match(source, /'aria-live': 'polite'/)
-  assert.match(source, /getBoundingClientRect/)
+  assert.match(source, /observer-task-step-button\[aria-pressed="true"\]/)
+  const preferred = runInNewContext(`${fragment}; preferredTaskStep`)
+  const nodes = [{ stepKey: 'a', status: 'succeeded' }, { stepKey: 'b', status: 'waiting' }, { stepKey: 'c', status: 'pending' }]
+  assert.equal(preferred(nodes)?.stepKey, 'b')
+  assert.equal(preferred(nodes, 'a')?.stepKey, 'a')
+  assert.equal(preferred(nodes.filter(node => node.status !== 'waiting'))?.stepKey, 'c')
+  assert.equal(preferred([{ stepKey: 'a', status: 'succeeded' }, { stepKey: 'b', status: 'succeeded' }])?.stepKey, 'b')
+  assert.equal(preferred([]), undefined)
 })
 
 test('简短任务标题保留可读首句，完整目标仍可展开且不写回原任务', async () => {
@@ -706,7 +713,7 @@ test('详情慢查询跨刷新复用，切换任务不接受旧响应',async()=>
  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
  const start=source.indexOf('      const pendingDetail = '),end=source.lastIndexOf('      useEffect(() => {',source.indexOf('        const target = detailFocusTarget.current',start));
  const effects=[],requests=[],details=[],pending={current:null};
- const environment={useRef:()=>pending,useEffect:fn=>effects.push(fn),selectedWorkflowTaskId:'one',workflowDetailRetry:0,updatedAt:0,get:path=>new Promise(resolve=>requests.push({path,resolve})),setWorkflowTaskDetail:v=>details.push(v),setWorkflowDetailError:()=>{},setStepReadingNotice:()=>{},detailFocusTarget:{current:null},adjacentCurrentStep:()=>null,document:{querySelectorAll:()=>[],activeElement:null},window:{innerHeight:900},encodeURIComponent};
+ const environment={useRef:()=>pending,useEffect:fn=>effects.push(fn),selectedWorkflowTaskId:'one',workflowDetailRetry:0,updatedAt:0,get:path=>new Promise(resolve=>requests.push({path,resolve})),setWorkflowTaskDetail:v=>details.push(v),setWorkflowDetailError:()=>{},setStepReadingNotice:()=>{},setReadingStep:()=>{},preferredTaskStep:()=>undefined,detailFocusTarget:{current:null},adjacentCurrentStep:()=>null,document:{querySelectorAll:()=>[],querySelector:()=>null,activeElement:null},window:{innerHeight:900},encodeURIComponent};
  const effect=()=>{runInNewContext(`(()=>{${source.slice(start,end)}})()`,environment);return effects.pop()()};
  const first=effect();first();const refresh=effect();assert.equal(requests.length,1);refresh();
  environment.selectedWorkflowTaskId='two';effect();assert.equal(requests.length,2);
