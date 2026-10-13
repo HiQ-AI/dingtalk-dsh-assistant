@@ -1132,12 +1132,72 @@ test('Owner completion schema and references allow bounded same-turn correction'
  }
 })
 
+test('Owner blocker review returns diagnosis to original native session before it executes and proves an external blocker', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-native-blocker-'))
+  const store = await openExecutionStore({ dbPath: join(root,'control.sqlite'), instanceId:'native-blocker', initialize:true })
+  const directories = { logicalTaskId:'task', ...Object.fromEntries(['work','tmp','outputs'].map(area=>[area,join(root,'tasks','tasks','task',area)])) }
+  for (const area of ['work','tmp','outputs']) await mkdir(directories[area],{recursive:true})
+  const baseArtifacts = await openExecutionArtifacts({ directory:join(root,'artifacts'), initialize:true, taskWorkspaceRoot:join(root,'tasks'), getTaskDirectories:async()=>directories })
+  let diagnosticRef, nativeRef, executed=0, checks=0
+  const artifacts = { ...baseArtifacts, async put(value,options) {
+    const saved=await baseArtifacts.put(value,options)
+    if(value.kind==='owner-blocker-review')diagnosticRef=saved.ref
+    if(value.kind==='task-native-execution'&&value.phase==='settled')nativeRef=saved.ref
+    return saved
+  } }
+  const controller=createExecutionController({store,artifacts,workflows:[]})
+  const requirementRef=(await artifacts.put({request:'由执行会话自主核验目标',constraints:[]},{taskId:'task'})).ref
+  await store.command({id:'accept',kind:'task.accept',args:{taskId:'task',requirementRef,requirementRevision:1,sessionId:'blocker-owner',criteria:['核验目标'],sourceKey:'source',eventKey:'created'}})
+  const waiting=()=>({action:'wait',summary:nativeRef?'已实际核验外部访问拒绝':'没有专用工具',evidenceRefs:nativeRef?[nativeRef]:[],condition:{kind:'capability',missing:nativeRef?'目标服务拒绝当前身份':'专用工具',responsibleParty:nativeRef?'目标服务管理员':'能力维护方',resumeWhen:'目标身份恢复访问后继续',evidenceRefs:nativeRef?[nativeRef]:[]}})
+  const unknownRef=`sha256-${'9'.repeat(64)}.json`
+  const calls=[]
+  calls[3]={name:'pwsh',args:{command:'Inspect current target'}}
+  const h=await host(root,null,step=>step===3?diagnosticRef:null,step=>{
+    const candidate=waiting()
+    return step===1?{...candidate,evidenceRefs:[unknownRef],condition:{...candidate.condition,evidenceRefs:[unknownRef]}}:candidate
+  },undefined,3,calls)
+  h.ctx.tools.register({name:'pwsh',description:'读取当前目标访问响应',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']},output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},execute:async()=>{executed++;return{httpStatus:403,target:'fixture-target',requestId:'actual-fixture-request'}}})
+  let unknownRejected=false
+  const sessionRunner={close:()=>h.sessions.close(),run:options=>h.sessions.run({...options,onCandidate:async(...args)=>{
+    try{return await options.onCandidate(...args)}catch(error){
+      if(args[0].evidenceRefs.includes(unknownRef)){
+        assert.equal(error.code,'TASK_OWNER_BLOCKER_EVIDENCE_UNREAD')
+        assert.equal(checks,0,'未知引用必须在调用判定器之前拒绝')
+        assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision,null,'未知引用候选不得落账')
+        unknownRejected=true
+      }
+      throw error
+    }
+  }})}
+  const owner=createTaskOwnerController({ctx:h.ctx,store,artifacts,controller,sessionRunner,modelConfig:()=>({provider:'owner-fixture',model:'scripted'}),advanceTask:async()=>{},authorizeStages:async()=>false,
+    verifyBlocker:async(input,{signal})=>{
+      checks++;signal.throwIfAborted()
+      assert.equal(input.toolContext.permissionPreset,'danger-full-access')
+      assert.ok(input.toolContext.tools.some(tool=>tool.name==='pwsh'&&tool.description==='读取当前目标访问响应'))
+      assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision,null,'停止候选未预先落账')
+      if(checks===1){assert.equal(executed,0);return{status:'continue',reason:'已有原生工具，执行会话应先核验真实访问结果'}}
+      assert.equal(executed,1,'审查不替Owner执行工具')
+      assert.ok(input.evidence.some(item=>item.kind==='task-native-execution'&&item.phase==='settled'&&JSON.stringify(item.result).includes('actual-fixture-request')))
+      return{status:'external-blocker',reason:'实际访问返回403，需要外部身份恢复'}
+    }})
+  t.after(async()=>{await owner.close();await h.close();await controller.close();await store.close();await rm(root,{recursive:true,force:true})})
+  await owner.drive('task')
+  assert.equal(unknownRejected,true);assert.equal(checks,2);assert.equal(executed,1);assert.equal(h.requests.length,5)
+  const diagnostic=await artifacts.read(diagnosticRef)
+  assert.equal(diagnostic.kind,'owner-blocker-review');assert.equal(diagnostic.assessment.status,'continue')
+  const persisted=await h.ctx.sessionPersistence.inspect('blocker-owner')
+  assert.ok(persisted.events.some(event=>event.type==='tool/call'&&event.data.name==='task_owner_read_artifact'&&JSON.parse(event.data.arguments).artifactRef===diagnosticRef))
+  assert.match(JSON.stringify(persisted.events),/TASK_OWNER_BLOCKER_UNVERIFIED/)
+  assert.match(JSON.stringify(persisted.events),/TASK_OWNER_BLOCKER_EVIDENCE_UNREAD/)
+  assert.equal((await store.query({kind:'task.owner',taskId:'task'})).decision.summary,'已实际核验外部访问拒绝')
+})
+
 test('paused delivery review compiles one complete native prompt and reaches original Owner decision', async t => {
   const root = await mkdtemp(join(tmpdir(), 'owner-delivery-review-prompt-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const chosen = {action:'wait',summary:'Review actual facts',evidenceRefs:[],condition:{kind:'capability',missing:'remaining evidence',responsibleParty:'execution host',resumeWhen:'evidence available',evidenceRefs:[]}}
   const h = await host(root,null,null,()=>chosen)
   t.after(()=>h.close())
-  const result = await h.sessions.run({binding:{taskId:'review-task',sessionId:'original-review-owner',turnId:'review-turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{task:{controlState:'paused'},deliveryReview:{payloadRef:'review-facts'},stages:[],goal:{request:'Review existing Draft only'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onCandidate:async value=>assert.equal(value.action,'wait')})
+  const result = await h.sessions.run({binding:{taskId:'review-task',sessionId:'original-review-owner',turnId:'review-turn',leaseEpoch:1,ownerEpoch:1,sessionBound:false},input:{task:{controlState:'paused'},deliveryReview:{payloadRef:'review-facts'},stages:[],goal:{request:'Review existing Draft only'}},provider:'owner-fixture',model:'scripted',onSessionBound:async()=>{},onNativeExecution:async()=>assert.fail('暂停审阅不得执行原生工具'),onCandidate:async(value,_binding,toolContext)=>{assert.equal(value.action,'wait');assert.equal(toolContext.permissionPreset,'workspace-write');assert.equal(toolContext.tools.some(tool=>tool.name==='read'),false)}})
   assert.equal(result.status,'submitted');assert.equal(h.requests.length,1);assert.equal(result.decision.action,'wait')
 })

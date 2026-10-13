@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 
-export const groupReplyInstructions = '对外以原群事项的真实业务名称说明已完成什么、交付到哪里和当前轮次范围；从原群正文、所指文档名称和 goal.title 核对名称，不编造。维护材料中的 SG18 等调度编号、Owner/run/req 等内部标识不得当作事项标题或结果；也不能只说“核心功能修复完成”代替业务描述。业务名称中合法的型号、标准、工单号和交付 PR 编号应原样保留，不做编号批量替换。完成回复应自包含完成内容、实际交付结果和必要的未验证或获准省略项；只引用已知群成员可访问的交付链接，不引导查看 Agent 本地任务详情、本地路径或内部证据。发给群成员的回复、summary 和 question 使用直白的业务语言：先说结论或需要对方做什么，再给必要背景；突出重点，不堆分析过程。需要业务人员补充时明确列出每项信息及要回答的问题，多项逐行列出，清单项之间留空行以保持渠道渲染清晰，保留业务名称、选项和必要链接；不要只说“请补充信息”或“需要确认”。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务接纳、排队和启动保持静默；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
+export const groupReplyInstructions = '对外以原群事项的真实业务名称说明已完成什么、交付到哪里和当前轮次范围；从原群正文、所指文档名称和 goal.title 核对名称，不编造。维护材料中的 SG18 等调度编号、Owner/run/req 等内部标识不得当作事项标题或结果；也不能只说“核心功能修复完成”代替业务描述。业务名称中合法的型号、标准、工单号和交付 PR 编号应原样保留，不做编号批量替换。完成回复应自包含完成内容、实际交付结果和必要的未验证或获准省略项；只引用已知群成员可访问的交付链接，不引导查看 Agent 本地任务详情、本地路径或内部证据。发给群成员的回复、summary 和 question 使用直白的业务语言：先说结论或需要对方做什么，再给必要背景；突出重点，不堆分析过程。需要业务人员补充时，用大白话说清正在做什么业务动作、具体缺什么信息以及用来做什么，不使用完成报告的三段模板，不公开缺少、责任方、继续条件等内部格式；涉及账号时说明哪个系统和环境、需要什么角色或权限、与已有身份的关系，不泛称测试专家或夹具，不索要在群里公开密码、令牌或其他凭据。明确列出每项信息及要回答的问题，多项逐行列出，清单项之间留空行以保持渠道渲染清晰，保留业务名称、选项和必要链接；不要只说“请补充信息”或“需要确认”。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务接纳、排队和启动保持静默；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
 
 // 只识别明确的插件运行标签与机制，避免把业务代码、普通编号当成内部数据。
 export function assertGroupReply(text, internalIds = []) {
@@ -36,6 +36,7 @@ export function ownerReportNotificationText(report) {
 
   }
   const condition = facts.condition
+  if (condition?.kind === 'business-input') return notificationParagraphs(facts.summary)
   if (!condition) return `【需要确认】\n\n${notificationParagraphs(facts.summary)}`
   const heading = ({'business-input':'【需补充】',approval:'【需审批】',permission:'【需授权】',capability:'【能力待恢复】',execution:'【执行待恢复】'})[condition.kind] ?? '【待处理】'
   return `${heading}\n\n请${condition.responsibleParty}${condition.kind === 'business-input' ? '补充以下信息' : ['permission','approval'].includes(condition.kind) ? '处理以下授权' : '处理以下事项'}：\n\n${notificationParagraphs(condition.missing)}\n\n【下一步】\n\n${notificationParagraphs(condition.resumeWhen)}`

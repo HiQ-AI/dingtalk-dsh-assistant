@@ -29,3 +29,4 @@
 - Round 6：原 Owner 被 TASK_OWNER_CORRECTION_LIMIT 阻断。现场候选 condition.evidenceRefs 未包含于主 evidenceRefs；笼统反馈无法定位字段，四次提交仍未修正。保留校验和纠错限额，补精确反馈并验证同会话纠正，再部署恢复原 Task；不代做 UAT 业务。
 
 - Round 6完成基础设施修复、定向测试与部署；原Owner已正式恢复running，last_failure清空，43工具可见。原业务仍由同一Owner继续交付。
+- Round 7：原Owner合法capability block仍外包验证准备。新增技术停止依据核验，仅反馈判断不接管任务；原会话自行准备、执行和交付。见docs/spec/owner-stop-reason-validation.md。

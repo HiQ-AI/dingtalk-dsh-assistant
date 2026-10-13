@@ -18,7 +18,7 @@ import { openExecutionRuntime, closeExecutionResources } from './execution.js'
 import { createTaskOwnerController } from './task-owner-controller.js'
 import { defineExecutionWorkflow } from './execution-controller.js'
 import { executionDigest, executionError } from './execution-artifacts.js'
-import { createGeneralCapabilityStageContract, createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability, createDomainAcceptanceCheck, verifyTaskAcceptance } from './task-general-workflow.js'
+import { createGeneralCapabilityStageContract, createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability, createDomainAcceptanceCheck, createOwnerBlockerCheck, verifyTaskAcceptance } from './task-general-workflow.js'
 import { assertRetiredWorkflowsDrained } from './task-readonly-workflows.js'
 import { createTaskStageContracts, createTaskWorkflowContracts } from './task-workflow-contracts.js'
 export { createEngineeringFailureRepair } from './workflow-engineering.js'
@@ -1665,6 +1665,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     readDeliveryManifest: ownerContracts.readDeliveryManifest,
     advanceTask: advanceBusinessTask,
     verifyDeliveryReview: verifyDeliveryReviewFacts,
+    verifyBlocker: createOwnerBlockerCheck({ llm: ctx.llm, modelConfig: acceptanceModel }),
     authorizeCompletion: async ({ taskId, decision, signal }) => {
       const plan = await controller.taskPlan(taskId)
       if (!plan || plan.stages.length && (plan.task.planStatus !== 'succeeded'

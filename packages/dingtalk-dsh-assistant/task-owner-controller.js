@@ -83,7 +83,7 @@ export function ownerWorkflowObservationType(stage, nodes) {
 
 /** Task 事件唤醒、模型候选、Host 接纳和执行回执的唯一入口。 */
 export function createTaskOwnerController({ ctx, store, artifacts, controller, modelConfig, advanceTask,
-  authorizeStages, authorizeCompletion, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
+  authorizeStages, authorizeCompletion, verifyBlocker, prepareInitialStage, inspectCurrentExecution, repairCurrentStage,
   readStageArtifacts, readDeliveryManifest, verifyDeliveryReview, readCurrentSources, readMaterialAccess, validateDataChangeRepairContext, capabilityCatalog = [], workflowCatalog = [], sessionRunner, getWorkspaceDir, tools = [], controlTools = [], prepareQueryInput }) {
   if (!ctx || !store || !artifacts || !controller || typeof modelConfig !== 'function'
     || typeof advanceTask !== 'function' || typeof authorizeStages !== 'function') throw error('TASK_OWNER_CONTROLLER_INVALID')
@@ -380,7 +380,7 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
           },
           onSessionBound: () => command(`owner-bound:${turnId}`, 'task.owner.sessionBound', {
             taskId, turnId, leaseEpoch: claim.leaseEpoch, sessionId: claim.sessionId }),
-          onCandidate: async decision => {
+          onCandidate: async (decision, _binding, toolContext) => {
             if (input.deliveryReview && (!['complete','wait','block'].includes(decision.action) || decision.planChange || decision.appendStages)) throw error('TASK_OWNER_DELIVERY_REVIEW_READ_ONLY')
             if (decision.candidateAcceptance) {
               if (!input.deliveryReview || decision.action !== 'wait' || !readArtifacts.has(input.deliveryReview.payloadRef)
@@ -475,6 +475,37 @@ export function createTaskOwnerController({ ctx, store, artifacts, controller, m
                   cause.ownerDiagnosticRef = cause.diagnosticRef
                 }
                 throw cause
+              }
+            }
+            if (!input.deliveryReview && verifyBlocker && ['wait', 'block'].includes(decision.action)
+              && ['business-input', 'approval', 'capability', 'permission', 'execution'].includes(decision.condition?.kind)
+              && Array.isArray(decision.condition.evidenceRefs)
+              && decision.condition.evidenceRefs.every(ref => decision.evidenceRefs?.includes(ref))) {
+              const records = await readTaskEvidence({ taskId, requirementRevision: binding.requirementRevision, signal })
+              const requested = new Set(decision.evidenceRefs)
+              const unknown = [...requested].filter(ref => ref !== input.task.requirementRef
+                && !records.some(record => record.evidenceRef === ref || record.artifactRef === ref) && !readArtifacts.has(ref))
+              if (unknown.length) throw error('TASK_OWNER_BLOCKER_EVIDENCE_UNREAD',
+                `停止依据引用未经当前任务核验：${JSON.stringify(unknown)}。仅使用当前任务提供的引用；可读材料先完整读取，不存在或其他任务的引用应移除，不能凭空补写。`)
+              const selected = records.filter(record => requested.has(record.evidenceRef) || requested.has(record.artifactRef))
+              for (const record of records.filter(record => record.evidence.kind === 'task-native-execution').slice(-12))
+                if (!selected.includes(record)) selected.push(record)
+              const evidence = [{ evidenceId: input.task.requirementRef, requirement: input.goal },
+                ...selected.map(record => ({ evidenceId: record.evidenceRef, ...record.evidence }))]
+              for (const ref of requested) if (!evidence.some(item => item.evidenceId === ref) && readArtifacts.has(ref))
+                evidence.push({ evidenceId: ref, artifact: readArtifacts.get(ref) })
+              const assessment = await verifyBlocker({ goal: input.goal, currentSources: input.currentSources,
+                currentExecution: { execution: input.currentExecution, stages: input.stages }, toolContext,
+                evidence, decision }, { signal })
+              signal.throwIfAborted()
+              if (assessment?.status !== 'external-blocker') {
+                const diagnostic = await artifacts.put({ kind: 'owner-blocker-review', taskId,
+                  requirementRevision: binding.requirementRevision, turnId, assessment, decision, toolContext,
+                  evidenceRefs: evidence.map(item => item.evidenceId) }, { taskId })
+                readableArtifacts.add(diagnostic.ref)
+                throw Object.assign(error('TASK_OWNER_BLOCKER_UNVERIFIED',
+                  `停止依据尚未成立：${assessment?.reason ?? '未获得有效判定'}。由原执行会话继续调查、准备和核验；真实外部阻碍可据新证据再提交。诊断：${diagnostic.ref}`),
+                  { ownerDiagnosticRef: diagnostic.ref })
               }
             }
             const digest = decision.action === 'complete' ? executionDigest(decision) : null

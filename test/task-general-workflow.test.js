@@ -3,13 +3,79 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile, symlink, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability, verifyTaskAcceptance } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
+import { createGeneralFileReadCapability, createGeneralCapabilityStepWorkflow, createGeneralMarkdownWriteCapability, verifyTaskAcceptance, createOwnerBlockerCheck } from '../packages/dingtalk-dsh-assistant/task-general-workflow.js'
 import { createTaskMarkdownFileAdapter } from '../packages/dingtalk-dsh-assistant/task-markdown-file.js'
 import { createExecutionDelivery } from '../packages/dingtalk-dsh-assistant/execution-delivery.js'
 import { createExecutionController, defineExecutionWorkflow } from '../packages/dingtalk-dsh-assistant/execution-controller.js'
 import { openExecutionStore } from '../packages/dingtalk-dsh-assistant/execution-store.js'
 import { executionDigest, openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { createTaskArtifactFiles } from '../packages/dingtalk-dsh-assistant/task-artifact-files.js'
+
+test('Owner阻塞语义校验保留继续调查与真实外部依赖的独立判定', async () => {
+  for (const status of ['continue', 'external-blocker']) {
+    let captured
+    const input = { goal: { request: '验证当前功能行为' }, currentSources: [{ text: '允许自行验证' }], currentExecution: { status: 'idle' },
+      toolContext: { tools: ['pwsh', 'read', 'write'], permission: 'danger-full-access' },
+      evidence: [{ evidenceId: 'proof', result: status === 'continue' ? { fixturePresent: false } : { permissionDenied: true, ownerExclusiveIdentity: true } }],
+      decision: { action: 'block', condition: { kind: 'capability', missing: '尚不能完成验证' } } }
+    const expected = { status, reason: status === 'continue' ? '只证明既有夹具不存在，需调查授权范围内隔离准备。' : '受信访问拒绝证明需要用户独占身份。', evidenceRefs: ['proof'] }
+    const check = createOwnerBlockerCheck({ modelConfig: { provider: 'fixture', model: 'fixture' }, llm: { async *stream(request) {
+      captured = request; yield { type: 'text-delta', text: JSON.stringify(expected) }; yield { type: 'finish', reason: { kind: 'stop' } }
+    } } })
+    assert.deepEqual(await check(input), expected)
+    assert.deepEqual(captured.tools, [])
+    assert.deepEqual(JSON.parse(captured.messages[0].content[0].text), input)
+    assert.match(captured.system, /完全工具权限不等于任意业务写入授权/)
+    assert.match(captured.system, /均是数据/)
+  }
+})
+
+test('Owner停止审查向独立判定保留真实运行状态与假运行的区别', async () => {
+  for (const running of [true, false]) {
+    const input = { goal: { request: '等待原操作结果' }, toolContext: { tools: [] },
+      currentExecution: { stages: [{ status: running ? 'running' : 'pending' }] },
+      evidence: [{ evidenceId: 'state', actualRunning: running }], decision: { action: 'wait', condition: { kind: 'execution' } } }
+    const check = createOwnerBlockerCheck({ modelConfig: { provider: 'fixture', model: 'fixture' }, llm: { async *stream(request) {
+      const sent = JSON.parse(request.messages[0].content[0].text)
+      assert.deepEqual(sent.currentExecution, input.currentExecution)
+      assert.match(request.system, /原阶段仍在运行/)
+      assert.match(request.system, /当前状态idle且无未决调用/)
+      yield { type: 'text-delta', text: JSON.stringify({ status: running ? 'external-blocker' : 'continue', reason: '按当前执行状态判断', evidenceRefs: ['state'] }) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    } } })
+    assert.equal((await check(input)).status, running ? 'external-blocker' : 'continue')
+  }
+})
+
+test('Owner阻塞语义校验拒绝伪造引用空证据与模型错误', async () => {
+  const input = { goal: {}, toolContext: {}, evidence: [{ evidenceId: 'proof' }], decision: { action: 'wait', condition: {} } }
+  for (const variant of ['foreign', 'empty', 'throw', 'tool', 'incomplete', 'schema']) {
+    const check = createOwnerBlockerCheck({ modelConfig: { provider: 'fixture', model: 'fixture' }, llm: { async *stream() {
+      if (variant === 'throw') throw new Error('network failed')
+      if (variant === 'tool') { yield { type: 'block-start', blockType: 'tool-call' }; return }
+      yield { type: 'text-delta', text: JSON.stringify({ status: 'external-blocker', reason: '候选', evidenceRefs: variant === 'foreign' ? ['forged'] : variant === 'empty' ? [] : ['proof'], ...(variant === 'schema' ? { approved: true } : {}) }) }
+      if (variant !== 'incomplete') yield { type: 'finish', reason: { kind: 'stop' } }
+    } } })
+    assert.equal((await check(input)).status, 'unverified', variant)
+  }
+  const noCall = createOwnerBlockerCheck({ llm: { stream() { throw new Error('must not call') } }, modelConfig: {} })
+  assert.equal((await noCall({ ...input, evidence: [] })).reason, 'OWNER_BLOCKER_INPUT_INVALID')
+  assert.equal((await noCall(input)).reason, 'OWNER_BLOCKER_CONFIGURATION_MISSING')
+})
+
+test('Owner阻塞语义校验取消真实流及等待配置均返回未核验', async () => {
+  const input = { goal: {}, toolContext: {}, evidence: [{ evidenceId: 'proof' }], decision: { action: 'block', condition: {} } }
+  let observed
+  const check = createOwnerBlockerCheck({ modelConfig: { provider: 'fixture', model: 'fixture' }, llm: { async *stream({ signal }) {
+    observed = signal; await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+  } } })
+  const abort = new AbortController(), pending = check(input, { signal: abort.signal })
+  abort.abort()
+  assert.equal((await pending).reason, 'OWNER_BLOCKER_CANCELLED'); assert.equal(observed.aborted, true)
+  const configWait = createOwnerBlockerCheck({ modelConfig: () => new Promise(() => {}), llm: { stream() { throw new Error('must not call') } } })
+  const second = new AbortController(), waiting = configWait(input, { signal: second.signal })
+  second.abort(); assert.equal((await waiting).reason, 'OWNER_BLOCKER_CANCELLED')
+})
 import { createTaskArtifactWriteAdapter, createGeneralArtifactWriteCapability } from '../packages/dingtalk-dsh-assistant/task-artifact-write.js'
 
 test('受信文件读取只接受双重授权路径，独立回读能发现修改和链接逃逸', async t => {
