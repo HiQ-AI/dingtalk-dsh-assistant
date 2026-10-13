@@ -31,6 +31,17 @@ const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-proj
 const { createScope, bindScopeParent, scopeOf } = requireLoop('@deepseek-ai/dsh-scope')
 const { z } = requireLoop('zod')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
+function permissionFixture() {
+  return {
+    resolve: preset => ({ sandbox: preset, approval: preset === 'danger-full-access' ? 'never' : 'ask' }),
+    current: session => session.snapshotEvents().findLast(event => event.type === 'permission/preset')?.data.preset ?? 'workspace-write',
+    set(session, preset) {
+      session.append('permission/preset', { preset })
+      session.append('sandbox/mode', { mode: preset })
+      session.append('approval/policy', { policy: preset === 'danger-full-access' ? 'never' : 'ask' })
+    },
+  }
+}
 
 test('Owner原生工具自主执行保留真实失败纠错与Host证据', async t => {
   for (const mode of ['correct', 'background', 'delegation', 'disabled', 'review', 'stale', 'cancel']) await t.test(mode, async t => {
@@ -45,9 +56,15 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
     h.ctx.sessionProjections.register({ key: 'agentPreset', stateSchema: z.union([z.string(), z.null()]), stateVersion: 1,
       init: header => header.agentPreset ?? null, apply: (state, event) => event.type === 'agent-preset/selected' ? event.data.agentPreset : state })
     const mounted = []
-    h.ctx.provide('agentPresets', { async mount(agentCtx, id) {
+    const permissions = permissionFixture()
+    h.onRequest(() => {
+      const agent = h.ctx.agents.get('native-owner')
+      assert.equal(permissions.current(agent.session), ['disabled', 'review'].includes(mode) ? 'workspace-write' : 'danger-full-access')
+    })
+    h.ctx.provide('agentPresets', { serviceFor: (_agent, name) => name === 'permissionPresets' ? permissions : undefined, async mount(agentCtx, id) {
       mounted.push(id)
       bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx))
+      if (mounted.length === 2) permissions.set(agentCtx.agent.session, 'workspace-write')
       return { id: 'native-fixture' }
     } })
     t.after(async () => { await h.close(); await standing.dispose(); await rm(root, { recursive: true, force: true }) })
@@ -120,6 +137,18 @@ test('Owner原生工具自主执行保留真实失败纠错与Host证据', async
       assert.ok(h.requests[0].tools.every(x => x.name !== 'pwsh'))
     }
   })
+})
+
+test('Owner原生权限服务缺失时在模型调用前明确失败', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-permission-missing-'))
+  const h = await host(root)
+  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
+  h.ctx.get('agentPresets').serviceFor = () => undefined
+  await assert.rejects(h.sessions.run({ binding: { taskId: 'permission-task', sessionId: 'permission-owner', turnId: 'turn-1', leaseEpoch: 1,
+    ownerEpoch: 1, requirementRevision: 1, inputDigest: 'a'.repeat(64), sessionBound: false }, input: {},
+    provider: 'owner-fixture', model: 'scripted', onSessionBound: async () => {}, onCandidate: async () => {},
+    onNativeExecution: async () => ({}) }), { code: 'TASK_OWNER_PERMISSION_PRESET_UNAVAILABLE' })
+  assert.equal(h.requests.length, 0)
 })
 
 test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async t => {
@@ -375,7 +404,8 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
       init: header => header.agentPreset ?? null, apply: (state, event) => event.type === 'agent-preset/selected' ? event.data.agentPreset : state })
     standing.ctx.tools.register({ name: 'read', description: '未调用的原生读取fixture', parameters: { type: 'object' },
       output: { schema: { type: 'object' }, render: () => [] }, execute: async () => { throw new Error('此用例不应调用原生读取') } })
-    ctx.provide('agentPresets', { async mount(agentCtx, selected) {
+    const permissions = permissionFixture()
+    ctx.provide('agentPresets', { serviceFor: (_agent, name) => name === 'permissionPresets' ? permissions : undefined, async mount(agentCtx, selected) {
       assert.ok(selected === undefined || selected === 'fixture')
       bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx)); return { id: 'fixture' }
     } })
@@ -384,8 +414,10 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
     compression: 'none', writeBatchMaxDelayMs: 1 })
   new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
+  const requestChecks = []
   class Scripted extends LlmAdapter {
     async *stream(options) {
+      for (const check of requestChecks) check(options)
       requests.push(options)
       const selectedArtifact = typeof artifactRef === 'function' ? artifactRef(requests.length) : artifactRef
       const queryCall = queryCalls[requests.length - 1]
@@ -403,7 +435,7 @@ async function host(root, pageRef = null, artifactRef = null, candidate = decisi
   ctx.llm.registerAdapter(['owner-fixture'], new Scripted())
   let currentLease = 1
   const sessions = createTaskOwnerSessions({ ctx, getWorkspaceDir, isCurrent: async binding => binding.leaseEpoch === currentLease })
-  return { ctx, sessions, requests, setLease(value) { currentLease = value },
+  return { ctx, sessions, requests, onRequest(check) { requestChecks.push(check) }, setLease(value) { currentLease = value },
     async close() { await sessions.close(); await standing?.dispose(); await ctx.fiber.dispose() } }
 }
 
