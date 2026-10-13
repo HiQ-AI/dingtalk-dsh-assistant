@@ -13,3 +13,5 @@ packages/dingtalk-dsh-assistant/execution-inline-acceptance.js text eol=lf
 packages/dingtalk-dsh-assistant/execution-local-acceptance.js -text whitespace=cr-at-eol
 packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js -text whitespace=cr-at-eol
 packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js -text whitespace=cr-at-eol
+# 本地适配补丁按已验收的原始字节保留，避免Windows换行转换改变重建摘要。
+docs/acceptance/dsh-unified-upgrade/fixtures/*.patch -text whitespace=-blank-at-eol

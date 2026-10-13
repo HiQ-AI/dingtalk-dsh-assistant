@@ -1,0 +1,24 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {spawnSync} from 'node:child_process';
+const args=process.argv.slice(2), value=name=>args[args.indexOf(name)+1];
+if(!args.includes('--work-root')||!args.includes('--case'))throw Error('--work-root and --case required');
+const archive=path.dirname(fileURLToPath(import.meta.url));
+const work=path.resolve(value('--work-root')), runtime=path.join(work,'migration-runtime');
+const kind=value('--case');
+if(!['history','edge-generations','synthetic','writer','v4-negative','worker-negative'].includes(kind))throw Error('unknown case');
+if(kind!=='synthetic'&&!args.includes('--input-root'))throw Error('--input-root required: only an isolated caller-selected copy');
+const repository=path.resolve(args.includes('--repository-root')?value('--repository-root'):path.resolve(archive,'../../../../../'));
+const target=path.join(runtime,'archive-tests');await fs.mkdir(target,{recursive:true});
+let text=await fs.readFile(path.join(archive,'tests','verify-'+kind+'.mjs'),'utf8');
+// Tests execute beside runtime dependencies. Source helpers remain in the separate upstream checkout.
+text=text.replaceAll("'../core-migration-source/","'../../core-migration-source/");
+const script=path.join(target,'verify-'+kind+'.mjs');await fs.writeFile(script,text);
+const forward=[];
+for(const name of ['--input-root','--copy-root','--session-id'])if(args.includes(name))forward.push(name,name==='--session-id'?value(name):path.resolve(value(name)));
+if(args.includes('--check'))forward.push('--check');
+forward.push('--repository-root',repository);
+const result=spawnSync(process.execPath,[script,...forward],{cwd:runtime,stdio:'inherit'});
+if(result.error)throw result.error;
+process.exit(result.status??1);

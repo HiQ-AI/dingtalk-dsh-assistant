@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "typescript": "5.9.3",
+    "rolldown": "1.2.5",
+    "vitest": "4.1.11",
+    "@types/node": "24.13.3"
+  }
+}

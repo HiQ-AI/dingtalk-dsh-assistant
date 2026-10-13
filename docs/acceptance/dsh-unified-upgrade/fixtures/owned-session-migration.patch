@@ -1,0 +1,693 @@
+diff --git a/packages/session/session-format-v0-to-v1/package.json b/packages/session/session-format-v0-to-v1/package.json
+index d071b2e..56e4313 100644
+--- a/packages/session/session-format-v0-to-v1/package.json
++++ b/packages/session/session-format-v0-to-v1/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@deepseek-ai/dsh-session-format-v0-to-v1",
+-  "description": "Frozen released-v0 Session codec and identity migration to v1",
++  "description": "Frozen released-v0 Session codec and identity migration to v1 (local owned DingTalk legacy migration build)",
+   "version": "0.2.1-alpha.2",
+   "publishConfig": {
+     "access": "public"
+@@ -36,17 +36,22 @@
+       "targetCodec": "releasedV1SessionFormatCodec",
+       "targetHeaderValidator": "assertReleasedV1Header",
+       "targetRestorer": "restoreReleasedV1Artifact"
++    },
++    "localMigration": {
++      "upstreamCommit": "d743267388641bc76f17c45ce8b4c231aed1d32c",
++      "owner": "dingtalk-dsh-assistant",
++      "patch": "owned-dingtalk-convergent-session-migration-v1"
+     }
+   },
+   "dependencies": {
+-    "@deepseek-ai/dsh-session-format": "workspace:*",
+-    "@deepseek-ai/dsh-util-values": "workspace:*"
++    "@deepseek-ai/dsh-session-format": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-util-values": "0.2.1-alpha.2"
+   },
+   "peerDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1"
+   },
+   "devDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~",
+-    "@deepseek-ai/dsh-session": "workspace:*"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1",
++    "@deepseek-ai/dsh-session": "0.2.1-alpha.2"
+   }
+ }
+diff --git a/packages/session/session-format-v0-to-v1/src/convergence-legacy.ts b/packages/session/session-format-v0-to-v1/src/convergence-legacy.ts
+new file mode 100644
+index 0000000..2717685
+--- /dev/null
++++ b/packages/session/session-format-v0-to-v1/src/convergence-legacy.ts
+@@ -0,0 +1,39 @@
++import {SessionFormatUnsupportedMigrationError} from '@deepseek-ai/dsh-session-format'
++import type {SessionFormatJsonObject} from '@deepseek-ai/dsh-session-format'
++/** Fixed Convergent v1 diagnostics; all members describe the original recorded attempt. */
++export function assertLegacyConvergence(value: unknown): void {
++  const fail=(): never=>{throw new SessionFormatUnsupportedMigrationError('invalid owned legacy convergence record')}
++  const object=(v: unknown): SessionFormatJsonObject=>{if(!v||typeof v!=='object'||Array.isArray(v))return fail();return v as SessionFormatJsonObject}
++  const keys=(v:SessionFormatJsonObject,required:string[],optional:string[]=[]):void=>{if(required.some(k=>!Object.hasOwn(v,k))||Object.keys(v).some(k=>!required.includes(k)&&!optional.includes(k)))fail()}
++  const text=(v:unknown):void=>{if(typeof v!=='string'||!v)fail()}
++  const count=(v:unknown,min=0):void=>{if(typeof v!=='number'||!Number.isSafeInteger(v)||v<min)fail()}
++  const required=['version','jobId','trigger','chunkIndex','attemptIndex','surfaceGenerationBefore','requestTokensBefore','surfaceTokensBefore','range','selectedSurfaceTokens','outcome','willContinueJob','state']
++  const numeric=['thresholdTokens','requestTokensAfter','surfaceTokensAfter','shadowedTokens','framedSummaryTokens','summaryEstimatedInputTokens','summaryReservedOutputTokens','providerInputTokens','providerOutputTokens','remainingToThreshold','nextTokenBudget','nonShrinkingSummaryTokens','nonShrinkingShadowedTokens']
++  const data=object(value);keys(data,required,[...numeric,'capacityKey','capacity','failureKind','failureMessage'])
++  if(data['version']!==1||!['pressure','context-overflow'].includes(data['trigger'] as string)||!['started','succeeded','failed'].includes(data['outcome'] as string)||!['running','completed','failed','one-shot'].includes(data['state'] as string)||typeof data['willContinueJob']!=='boolean')fail()
++  text(data['jobId']);count(data['chunkIndex']);count(data['attemptIndex'])
++  for(const k of ['surfaceGenerationBefore','requestTokensBefore','surfaceTokensBefore','selectedSurfaceTokens'])count(data[k])
++  for(const k of numeric)if(Object.hasOwn(data,k))count(data[k])
++  const range=object(data['range']);keys(range,['start','end']);count(range['start']);count(range['end'])
++  if(Object.hasOwn(data,'capacityKey'))text(data['capacityKey'])
++  if(Object.hasOwn(data,'failureMessage')&&typeof data['failureMessage']!=='string')fail()
++  if(Object.hasOwn(data,'failureKind')&&!['input-too-large','non-shrinking','cancelled','unknown'].includes(data['failureKind'] as string))fail()
++  if(Object.hasOwn(data,'capacity')){const c=object(data['capacity']);keys(c,['capacityKey','acceptedSamples','rejectedSamples','safetyMarginTokens','firstObservedAt','updatedAt'],['largestAcceptedReplayTokens','smallestRejectedReplayTokens']);text(c['capacityKey']);for(const [k,v]of Object.entries(c))if(k!=='capacityKey')count(v)}
++}
++
++/** Remap owned local range endpoints using the enclosing edge's authoritative mapping. */
++export function remapLegacyConvergence(type: string, value: SessionFormatJsonObject | import('@deepseek-ai/dsh-session-format').SessionFormatJsonValue, reference: (value: import('@deepseek-ai/dsh-session-format').SessionFormatJsonValue | undefined) => number): import('@deepseek-ai/dsh-session-format').SessionFormatJsonValue {
++  if (!['compaction/start','compaction/summary','compaction/end'].includes(type) || !value || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value,'convergence')) return value
++  const data=value as SessionFormatJsonObject
++  assertLegacyConvergence(data['convergence'])
++  const convergence=data['convergence'] as SessionFormatJsonObject
++  const range=convergence['range'] as SessionFormatJsonObject
++  return {...data,convergence:{...convergence,range:{...range,start:reference(range['start']),end:reference(range['end'])}}}
++}
++/** Translate replacement-generation identity after an edge inserts owned surface replacements. */
++export function remapLegacyConvergenceGeneration(type: string, value: import('@deepseek-ai/dsh-session-format').SessionFormatJsonValue, sourceGeneration: number, targetGeneration: number): import('@deepseek-ai/dsh-session-format').SessionFormatJsonValue {
++  if (!['compaction/start','compaction/summary','compaction/end'].includes(type) || !value || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value,'convergence')) return value
++  const data=value as SessionFormatJsonObject;assertLegacyConvergence(data['convergence']);const convergence=data['convergence'] as SessionFormatJsonObject
++  if (convergence['surfaceGenerationBefore'] !== sourceGeneration) throw new SessionFormatUnsupportedMigrationError('legacy convergence generation does not match its source surface')
++  return {...data,convergence:{...convergence,surfaceGenerationBefore:targetGeneration}}
++}
+diff --git a/packages/session/session-format-v0-to-v1/src/dingtalk-legacy.ts b/packages/session/session-format-v0-to-v1/src/dingtalk-legacy.ts
+new file mode 100644
+index 0000000..ec22db1
+--- /dev/null
++++ b/packages/session/session-format-v0-to-v1/src/dingtalk-legacy.ts
+@@ -0,0 +1,95 @@
++import { SessionFormatUnsupportedMigrationError } from '@deepseek-ai/dsh-session-format'
++import type { SessionFormatEvent, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
++
++const owned = new Set(['dingtalk/group-coordinator-session', 'dingtalk/task-owner-session',
++  'dingtalk/execution-session', 'dingtalk/execution-session-rebind'])
++
++/** Local owned legacy vocabulary; no prefix or unknown-event admission. */
++export function assertDingtalkLegacyEvent(event: SessionFormatEvent): boolean {
++  if (!owned.has(event.type)) return false
++  const fail = (): never => { throw new SessionFormatUnsupportedMigrationError(`invalid owned legacy event ${event.type} at seq ${event.seq}`) }
++  const object = (value: unknown): SessionFormatJsonObject => {
++    if (typeof value !== 'object' || value === null || Array.isArray(value)) return fail()
++    return value as SessionFormatJsonObject
++  }
++  const keys = (value: SessionFormatJsonObject, required: readonly string[], optional: readonly string[] = []): void => {
++    if (required.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => !required.includes(key) && !optional.includes(key))) fail()
++  }
++  const strings = (value: SessionFormatJsonObject, names: readonly string[]): void => {
++    if (names.some(key => typeof value[key] !== 'string' || value[key] === '')) fail()
++  }
++  const positive = (value: unknown): void => { if (!Number.isSafeInteger(value) || typeof value !== 'number' || value < 1) fail() }
++  keys(object(event), ['type', 'seq', 'time', 'data', 'ignorable'])
++  if (event.ignorable !== true || !Number.isSafeInteger(event.seq) || event.seq < 0 || !Number.isSafeInteger(event.time) || event.time < 0) fail()
++  const data = object(event.data)
++  if (event.type === 'dingtalk/group-coordinator-session') {
++    keys(data, ['version', 'conversationId', 'sessionId', 'creationLease'], ['parentSessionId'])
++    if (data['version'] !== 1) fail()
++    strings(data, ['conversationId', 'sessionId'])
++    if (Object.hasOwn(data, 'parentSessionId')) strings(data, ['parentSessionId'])
++    positive(data['creationLease'])
++  } else if (event.type === 'dingtalk/task-owner-session') {
++    keys(data, ['version', 'taskId', 'sessionId', 'ownerEpoch', 'creationLease'])
++    if (data['version'] !== 1) fail()
++    strings(data, ['taskId', 'sessionId'])
++    positive(data['ownerEpoch']); positive(data['creationLease'])
++  } else if (event.type === 'dingtalk/execution-session-rebind') {
++    keys(data, ['parentSessionId', 'sessionId', 'inputDigest', 'leaseEpoch'])
++    strings(data, ['parentSessionId', 'sessionId', 'inputDigest']); positive(data['leaseEpoch'])
++  } else {
++    keys(data, ['version', 'identity', 'creationLease'])
++    positive(data['creationLease'])
++    const identity = object(data['identity'])
++    if (data['version'] === 1) {
++      keys(identity, ['taskId', 'runId', 'nodeRunId', 'generation', 'inputDigest', 'sessionId'])
++      strings(identity, ['taskId', 'runId', 'nodeRunId', 'inputDigest', 'sessionId']); positive(identity['generation'])
++    } else if (data['version'] === 2 && identity['kind'] === 'message-unit') {
++      keys(identity, ['kind', 'runId', 'unitId', 'inputVersion', 'inputDigest', 'sessionId'])
++      strings(identity, ['runId', 'unitId', 'inputDigest', 'sessionId']); positive(identity['inputVersion'])
++    } else if (data['version'] === 2 && identity['kind'] === 'task-node') {
++      keys(identity, ['kind', 'taskId', 'runId', 'nodeRunId', 'generation', 'inputDigest', 'sessionId'], ['inputVersion'])
++      strings(identity, ['taskId', 'runId', 'nodeRunId', 'inputDigest', 'sessionId']); positive(identity['generation'])
++      if (Object.hasOwn(identity, 'inputVersion')) positive(identity['inputVersion'])
++    } else fail()
++  }
++  return true
++}
++
++/** Exact producer-owned coordinator sources; counters refer to domain logs, not Session seqs. */
++export function assertDingtalkLegacySource(source: SessionFormatJsonObject): boolean {
++  if (source['kind'] !== 'coordinator' || Object.hasOwn(source, 'form')) return false
++  const fail = (): never => { throw new SessionFormatUnsupportedMigrationError('invalid owned legacy coordinator source') }
++  const object = (v: unknown): SessionFormatJsonObject => { if (!v || typeof v !== 'object' || Array.isArray(v)) return fail(); return v as SessionFormatJsonObject }
++  const keys = (v: SessionFormatJsonObject, required: string[], optional: string[] = []): void => { if (required.some(k => !Object.hasOwn(v,k)) || Object.keys(v).some(k => !required.includes(k) && !optional.includes(k))) fail() }
++  const text = (v: unknown): void => { if (typeof v !== 'string' || !v) fail() }
++  const count = (v: unknown, min = 1): void => { if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < min) fail() }
++  const names = ['executionSession','taskOwner','ownerContextBase','groupCoordinator'].filter(k => Object.hasOwn(source,k))
++  if (names.length === 0) { keys(source,['kind']); return true }
++  if (names.length !== 1) fail()
++  const name = names[0] as string
++  keys(source,['kind',name],name === 'groupCoordinator' ? ['groupCoordinatorHistory'] : [])
++  const data = object(source[name])
++  if (name === 'executionSession') {
++    keys(data,['sessionId','leaseEpoch'],['inputVersion','inputDigest']);text(data['sessionId']);count(data['leaseEpoch'])
++    if (Object.hasOwn(data,'inputVersion') !== Object.hasOwn(data,'inputDigest')) fail()
++    if (Object.hasOwn(data,'inputVersion')) {count(data['inputVersion']);text(data['inputDigest'])}
++  } else if (name === 'taskOwner') {
++    keys(data,['taskId','sessionId','leaseEpoch','turnId']);text(data['taskId']);text(data['sessionId']);text(data['turnId']);count(data['leaseEpoch'])
++  } else if (name === 'ownerContextBase') {
++    keys(data,['taskId','sessionId','digest']);text(data['taskId']);text(data['sessionId']);text(data['digest'])
++  } else {
++    keys(data,['conversationId','sessionId','sessionBound','leaseEpoch','turnId','status','consumedSequence','sources','taskEventRefs','startedAt','error','retryAt'],['taskEventWatermarks','committedAt','completedAt','recovery'])
++    for (const k of ['conversationId','sessionId','turnId','startedAt']) text(data[k])
++    if (typeof data['sessionBound'] !== 'boolean' || data['status'] !== 'running' || data['error'] !== null || data['retryAt'] !== null) fail()
++    count(data['leaseEpoch']);count(data['consumedSequence'],0)
++    if (Object.hasOwn(source,'groupCoordinatorHistory') && source['groupCoordinatorHistory'] !== true) fail()
++    for (const key of ['committedAt','completedAt']) if (Object.hasOwn(data,key)) text(data[key])
++    for (const key of ['sources','taskEventRefs']) {
++      if (!Array.isArray(data[key])) fail()
++      for (const item of data[key] as SessionFormatJsonObject[]) {const v=object(item);if(key==='sources'){keys(v,['runId','sourceVersion']);text(v['runId']);count(v['sourceVersion'])}else{keys(v,['taskId','eventSeq']);text(v['taskId']);count(v['eventSeq'],0)}}
++    }
++    if (Object.hasOwn(data,'taskEventWatermarks')) for(const value of Object.values(object(data['taskEventWatermarks']))) count(value,0)
++    if (data['recovery'] !== undefined && data['recovery'] !== null) {const recovery=object(data['recovery']);keys(recovery,['kind','inputDigest'],['delayMs']);text(recovery['kind']);text(recovery['inputDigest']);if(Object.hasOwn(recovery,'delayMs'))count(recovery['delayMs'],0)}
++  }
++  return true
++}
+diff --git a/packages/session/session-format-v0-to-v1/src/dispositions.ts b/packages/session/session-format-v0-to-v1/src/dispositions.ts
+index 24702e8..1d86c7d 100644
+--- a/packages/session/session-format-v0-to-v1/src/dispositions.ts
++++ b/packages/session/session-format-v0-to-v1/src/dispositions.ts
+@@ -50,12 +50,12 @@ export const RELEASED_V0_EVENT_DISPOSITIONS: Readonly<Record<string, ReleasedV0P
+   ),
+   'command/done': disposition(['commandId', 'kind'], ['text', 'sourceEventSeq']),
+   'command/run': disposition(['commandId', 'name', 'source'], ['args']),
+-  'compaction/end': disposition(['compactionId', 'turn'], ['sourceCommandId', 'error']),
++  'compaction/end': disposition(['compactionId', 'turn'], ['sourceCommandId', 'error', 'convergence']),
+   'compaction/prune': disposition(['shadowedRange', 'shadowedSeqs', 'shadowedTokenCount']),
+-  'compaction/start': disposition(['compactionId', 'turn'], ['sourceCommandId']),
++  'compaction/start': disposition(['compactionId', 'turn'], ['sourceCommandId', 'convergence']),
+   'compaction/summary': disposition(
+     ['compactionId', 'summary', 'shadowedRange', 'shadowedSeqs', 'shadowedTokenCount', 'provider', 'model'],
+-    ['sourceCommandId', 'maxTokens', 'usage', 'rawOutput', 'llmStreamCall'],
++    ['sourceCommandId', 'maxTokens', 'usage', 'rawOutput', 'llmStreamCall', 'convergence'],
+   ),
+   'feedback/record': disposition(['text']),
+   'goal/change': disposition(
+diff --git a/packages/session/session-format-v0-to-v1/src/index.ts b/packages/session/session-format-v0-to-v1/src/index.ts
+index 4409bb3..e866c3b 100644
+--- a/packages/session/session-format-v0-to-v1/src/index.ts
++++ b/packages/session/session-format-v0-to-v1/src/index.ts
+@@ -11,3 +11,9 @@ export {
+   assertReleasedV1Header,
+   restoreReleasedV1Artifact,
+ } from './validation.ts'
++export { assertDingtalkLegacyEvent } from './dingtalk-legacy.ts'
++export { remapLegacyConvergence } from './convergence-legacy.ts'
++export { remapLegacyConvergenceGeneration } from './convergence-legacy.ts'
++export { remapLegacyOwnerReadProjection } from './owner-projection.ts'
++export { remapLegacyOwnerMessage } from './owner-projection.ts'
++export { assertDingtalkLegacySource } from './dingtalk-legacy.ts'
+diff --git a/packages/session/session-format-v0-to-v1/src/owner-projection.ts b/packages/session/session-format-v0-to-v1/src/owner-projection.ts
+new file mode 100644
+index 0000000..b230ad5
+--- /dev/null
++++ b/packages/session/session-format-v0-to-v1/src/owner-projection.ts
+@@ -0,0 +1,36 @@
++import { SessionFormatUnsupportedMigrationError, isSessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
++import type { SessionFormatJsonValue, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
++const instruction='重复或被替代的工具正文仅以引用保留；原始完整工具回执仍在审计日志，当前适用正文保留一份。此投影不是新的读取或验收证明。'
++/** Remap only the explicit audit reference emitted by task-owner artifact read projection. */
++export function remapLegacyOwnerReadProjection(type: string, value: SessionFormatJsonValue, reference: (value: SessionFormatJsonValue | undefined)=>number): SessionFormatJsonValue {
++  if(type!=='tool/result'||!isSessionFormatJsonObject(value))return value
++  const message=value['message'];if(!isSessionFormatJsonObject(message)||!Array.isArray(message['content']))return value
++  const content=message['content'];const wrapper=message['role']==='user'&&content.length===1&&isSessionFormatJsonObject(content[0])&&content[0]['type']==='tool-result'?content[0]:undefined
++  const blocks=wrapper===undefined?content:wrapper['content'];if(!Array.isArray(blocks)||blocks.length!==1||!isSessionFormatJsonObject(blocks[0])||blocks[0]['type']!=='text'||typeof blocks[0]['text']!=='string')return value
++  let parsed: unknown;try{parsed=JSON.parse(blocks[0]['text'])}catch{return value}
++  if(!isSessionFormatJsonObject(parsed)||!Object.hasOwn(parsed,'historicalArtifactRead'))return value
++  const fail=():never=>{throw new SessionFormatUnsupportedMigrationError('invalid owned artifact read projection')}
++  const record=parsed['historicalArtifactRead'];if(!isSessionFormatJsonObject(record)||Object.keys(parsed).sort().join(',')!=='historicalArtifactRead,instruction'||parsed['instruction']!==instruction||Object.keys(record).sort().join(',')!=='artifactRef,contentDigest,sourceSequenceId,totalLength'||typeof record['artifactRef']!=='string'||!record['artifactRef']||typeof record['contentDigest']!=='string'||!/^[a-f0-9]{64}$/u.test(record['contentDigest'])||typeof record['totalLength']!=='number'||!Number.isSafeInteger(record['totalLength'])||record['totalLength']<0)fail()
++  const next={...parsed,historicalArtifactRead:{...record as SessionFormatJsonObject,sourceSequenceId:reference((record as SessionFormatJsonObject)['sourceSequenceId'])}}
++  const mapped=[{...blocks[0],text:JSON.stringify(next)}]
++  return {...value,message:{...message,content:wrapper===undefined?mapped:[{...wrapper,content:mapped}]}}
++}
++
++/** Map the three exact user-message projections emitted by the task-owner producer. */
++export function remapLegacyOwnerMessage(type: string, value: SessionFormatJsonValue, reference: (value: SessionFormatJsonValue | undefined)=>number): SessionFormatJsonValue {
++  if(type!=='user/message'||!isSessionFormatJsonObject(value)||!isSessionFormatJsonObject(value['source'])||value['source']['kind']!=='coordinator'||!Array.isArray(value['content'])||value['content'].length!==1)return value
++  const block=value['content'][0];if(!isSessionFormatJsonObject(block)||block['type']!=='text'||typeof block['text']!=='string')return value
++  let parsed:unknown;try{parsed=JSON.parse(block['text'])}catch{return value}
++  if(!isSessionFormatJsonObject(parsed))return value
++  const snapshot=parsed['historicalOwnerSnapshot'];let next:SessionFormatJsonObject
++  const fail=():never=>{throw new SessionFormatUnsupportedMigrationError('invalid owned owner-message projection')}
++  if(snapshot!==undefined){if(!isSessionFormatJsonObject(snapshot))fail();const s=snapshot as SessionFormatJsonObject;const old=Object.hasOwn(s,'turnId');if(old){if(Object.keys(s).sort().join(',')!=='sequenceId,turnId'||typeof s['turnId']!=='string'||!s['turnId']||Object.keys(parsed).sort().join(',')!=='historicalOwnerSnapshot,instruction'||parsed['instruction']!=='superseded：此历史输入已由当前最后一条完整 Owner 快照替代；原文按 sequenceId 保留在会话审计日志中。')fail()}else if(Object.keys(s).join(',')!=='sequenceId'||Object.keys(parsed).sort().join(',')!=='historicalOwnerSnapshot,superseded'||parsed['superseded']!==true)fail();next={...parsed,historicalOwnerSnapshot:{...s,sequenceId:reference(s['sequenceId'])}}}
++  else {const key=Object.hasOwn(parsed,'restoredOwnerContext')?'restoredOwnerContext':Object.hasOwn(parsed,'historicalOwnerContext')?'historicalOwnerContext':undefined;if(key===undefined)return value
++    const owner=parsed[key];const expected=key==='restoredOwnerContext'?'artifact,instruction,restoredOwnerContext':'historicalOwnerContext,instruction'
++    if(!isSessionFormatJsonObject(owner)||Object.keys(parsed).sort().join(',')!==expected||Object.keys(owner).sort().join(',')!=='artifactRef,contentDigest,sourceEventSeqs'||typeof owner['artifactRef']!=='string'||!owner['artifactRef']||typeof owner['contentDigest']!=='string'||!/^[a-f0-9]{64}$/u.test(owner['contentDigest'])||!Array.isArray(owner['sourceEventSeqs']))fail()
++    const expectedInstruction=key==='restoredOwnerContext'?'Host从原生完整成功读取回执恢复的本轮适用正文；不是新的读取、用户指令或验收证明。摘要未变，不要重复读取。':'旧正文仅保留引用；本轮适用正文保留一份。'
++    if(parsed['instruction']!==expectedInstruction||key==='restoredOwnerContext'&&typeof parsed['artifact']!=='string')fail()
++    next={...parsed as SessionFormatJsonObject,[key]:{...owner as SessionFormatJsonObject,sourceEventSeqs:((owner as SessionFormatJsonObject)['sourceEventSeqs'] as SessionFormatJsonValue[]).map(reference)}}
++  }
++  return {...value,content:[{...block,text:JSON.stringify(next)}]}
++}
+diff --git a/packages/session/session-format-v0-to-v1/src/payload-validation.ts b/packages/session/session-format-v0-to-v1/src/payload-validation.ts
+index 5b19f7c..2d293e6 100644
+--- a/packages/session/session-format-v0-to-v1/src/payload-validation.ts
++++ b/packages/session/session-format-v0-to-v1/src/payload-validation.ts
+@@ -1,3 +1,5 @@
++import { assertLegacyConvergence } from './convergence-legacy.ts'
++import { assertDingtalkLegacySource } from './dingtalk-legacy.ts'
+ import { SessionFormatError, sessionFormatCount, sessionFormatSafeInteger } from '@deepseek-ai/dsh-session-format'
+ import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
+ import type {
+@@ -16,6 +18,7 @@ type JsonRecord = Record<string, SessionFormatJsonValue>
+ export function assertReleasedPayloadSemantics(event: SessionFormatEvent, version: number): void {
+   const data = releasedV0Record(event.data, `${event.type} ${event.seq} data`)
+   const label = `${event.type} ${event.seq}`
++  if (['compaction/start','compaction/summary','compaction/end'].includes(event.type) && Object.hasOwn(data,'convergence')) assertLegacyConvergence(data['convergence'])
+   switch (event.type) {
+     case 'agent-preset/selected':
+       stringValue(data['agentPreset'], `${label} agentPreset`)
+@@ -545,6 +548,7 @@ function messageSourceValue(
+   const source = releasedV0Record(value, label)
+   if (expected === 'assistant' && source['kind'] !== 'model') throw new SessionFormatError(`${label} must be model source`)
+   if (expected === 'tool' && source['kind'] !== 'tool') throw new SessionFormatError(`${label} must be tool source`)
++  if (assertDingtalkLegacySource(source)) return
+   switch (source['kind']) {
+     case 'user':
+       assertReleasedV0Keys(source, ['kind'], ['rpcId', 'clientTimeZone'], label)
+diff --git a/packages/session/session-format-v0-to-v1/src/validation.ts b/packages/session/session-format-v0-to-v1/src/validation.ts
+index 762ed96..083ac1d 100644
+--- a/packages/session/session-format-v0-to-v1/src/validation.ts
++++ b/packages/session/session-format-v0-to-v1/src/validation.ts
+@@ -1,3 +1,4 @@
++import { assertDingtalkLegacyEvent } from './dingtalk-legacy.ts'
+ import { isAbsolute } from 'node:path'
+ import {
+   SessionFormatError,
+@@ -112,7 +113,7 @@ export function assertReleasedArtifactCoordinates(
+     if (typeof type !== 'string') throw new SessionFormatError(`Session event ${index} type must be a string`)
+     const disposition = RELEASED_V0_EVENT_DISPOSITIONS[type]
+     const legacy = allowLegacySteering && LEGACY_SOURCE_TYPES.has(type)
+-    const currentKnown = knownEventTypes?.has(type) === true
++    const currentKnown = knownEventTypes?.has(type) === true || assertDingtalkLegacyEvent(event)
+     const ignorableCurrent = !allowLegacySteering && !currentKnown && record['ignorable'] === true
+     if (!currentKnown && !legacy && !ignorableCurrent && !vocabularyNeutral) {
+       if (allowLegacySteering) {
+@@ -187,6 +188,7 @@ export function assertReleasedSurfaceMetadata(
+  * @param version - payload generation controlling versioned members.
+  */
+ export function assertReleasedEventPayload(event: SessionFormatEvent, version: 0 | 1): void {
++  if (assertDingtalkLegacyEvent(event)) return
+   const disposition = RELEASED_V0_EVENT_DISPOSITIONS[event.type]
+   /* v8 ignore next -- artifact coordinate validation admits only the frozen inventory before payload validation. */
+   if (disposition === undefined) {
+diff --git a/packages/session/session-format-v1-to-v2/package.json b/packages/session/session-format-v1-to-v2/package.json
+index b2ebbad..1d2caf7 100644
+--- a/packages/session/session-format-v1-to-v2/package.json
++++ b/packages/session/session-format-v1-to-v2/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@deepseek-ai/dsh-session-format-v1-to-v2",
+-  "description": "Frozen released-v1 Session codec and assistant-stream migration to v2",
++  "description": "Frozen released-v1 Session codec and assistant-stream migration to v2 (local owned DingTalk legacy migration build)",
+   "version": "0.2.1-alpha.2",
+   "publishConfig": {
+     "access": "public"
+@@ -36,19 +36,24 @@
+       "targetCodec": "releasedV2SessionFormatCodec",
+       "targetHeaderValidator": "assertReleasedV2Header",
+       "targetRestorer": "restoreReleasedV2Artifact"
++    },
++    "localMigration": {
++      "upstreamCommit": "d743267388641bc76f17c45ce8b4c231aed1d32c",
++      "owner": "dingtalk-dsh-assistant",
++      "patch": "owned-dingtalk-convergent-session-migration-v1"
+     }
+   },
+   "dependencies": {
+-    "@deepseek-ai/dsh-llm": "workspace:*",
+-    "@deepseek-ai/dsh-session-format": "workspace:*",
+-    "@deepseek-ai/dsh-session-format-v0-to-v1": "workspace:*",
+-    "@deepseek-ai/dsh-util-values": "workspace:*"
++    "@deepseek-ai/dsh-llm": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-util-values": "0.2.1-alpha.2"
+   },
+   "peerDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1"
+   },
+   "devDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~",
+-    "@deepseek-ai/dsh-session": "workspace:*"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1",
++    "@deepseek-ai/dsh-session": "0.2.1-alpha.2"
+   }
+ }
+diff --git a/packages/session/session-format-v1-to-v2/src/migration.ts b/packages/session/session-format-v1-to-v2/src/migration.ts
+index b7a8b94..eecf4c3 100644
+--- a/packages/session/session-format-v1-to-v2/src/migration.ts
++++ b/packages/session/session-format-v1-to-v2/src/migration.ts
+@@ -17,6 +17,10 @@ import type {
+ } from '@deepseek-ai/dsh-session-format'
+ import {
+   RELEASED_V0_EVENT_DISPOSITIONS,
++  assertDingtalkLegacyEvent,
++  remapLegacyConvergence,
++  remapLegacyOwnerReadProjection,
++  remapLegacyOwnerMessage,
+   assertReleasedEventPayload,
+   assertReleasedV1Header,
+   isReleasedAssistantChunkRun,
+@@ -127,7 +131,7 @@ function transformReleasedEvent(
+   context: SessionFormatMigrationContext,
+ ): void {
+   if (event.type === 'assistant/chunk') assertChunkEnvelope(event)
+-  if (RELEASED_V0_EVENT_DISPOSITIONS[event.type] === undefined) {
++  if (RELEASED_V0_EVENT_DISPOSITIONS[event.type] === undefined && !assertDingtalkLegacyEvent(event)) {
+     throw refusal(`format v1 contains unknown event type ${JSON.stringify(event.type)} at seq ${event.seq}`)
+   }
+   const interrupted = legacyInterruptedTurn(state.legacyTurns, event)
+@@ -598,7 +602,7 @@ function remapReferences(
+   return {
+     ...event,
+     seq: targetSeq,
+-    data: remapPayloadReferences(source, mapping),
++    data: remapLegacyOwnerMessage(source.type, remapLegacyOwnerReadProjection(source.type, remapLegacyConvergence(source.type, remapPayloadReferences(source, mapping), value => mapOne(coordinate(value), mapping, 'convergence range')), value => mapOne(coordinate(value), mapping, 'owner artifact read source')), value => mapOne(coordinate(value), mapping, 'owner message source')),
+     ...sources,
+     ...(operation === undefined ? {} : { surfaceOp: operation }),
+   }
+diff --git a/packages/session/session-format-v2-to-v3/package.json b/packages/session/session-format-v2-to-v3/package.json
+index bdae0f2..870504f 100644
+--- a/packages/session/session-format-v2-to-v3/package.json
++++ b/packages/session/session-format-v2-to-v3/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@deepseek-ai/dsh-session-format-v2-to-v3",
+-  "description": "Streaming system-prompt, canonical-envelope and PTC migration into V3",
++  "description": "Streaming system-prompt, canonical-envelope and PTC migration into V3 (local owned DingTalk legacy migration build)",
+   "version": "0.2.1-alpha.2",
+   "publishConfig": {
+     "access": "public"
+@@ -36,17 +36,22 @@
+       "targetCodec": "releasedV3SessionFormatCodec",
+       "targetHeaderValidator": "assertReleasedV3Header",
+       "targetRestorer": "restoreReleasedV3Artifact"
++    },
++    "localMigration": {
++      "upstreamCommit": "d743267388641bc76f17c45ce8b4c231aed1d32c",
++      "owner": "dingtalk-dsh-assistant",
++      "patch": "owned-dingtalk-convergent-session-migration-v1"
+     }
+   },
+   "dependencies": {
+-    "@deepseek-ai/dsh-session-format": "workspace:*",
+-    "@deepseek-ai/dsh-session-format-v0-to-v1": "workspace:*",
+-    "@deepseek-ai/dsh-session-format-v1-to-v2": "workspace:*"
++    "@deepseek-ai/dsh-session-format": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-v1-to-v2": "0.2.1-alpha.2"
+   },
+   "peerDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1"
+   },
+   "devDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1"
+   }
+ }
+diff --git a/packages/session/session-format-v2-to-v3/src/migration.ts b/packages/session/session-format-v2-to-v3/src/migration.ts
+index 3aecf8a..f046f90 100644
+--- a/packages/session/session-format-v2-to-v3/src/migration.ts
++++ b/packages/session/session-format-v2-to-v3/src/migration.ts
+@@ -1,3 +1,4 @@
++import { remapLegacyConvergenceGeneration } from '@deepseek-ai/dsh-session-format-v0-to-v1'
+ /** Streaming system-prompt promotion followed by canonical V3 envelope conversion. */
+ 
+ import { createHash } from 'node:crypto'
+@@ -26,6 +27,8 @@ class ReleasedV2ToV3Stage implements SessionFormatMigrationStage {
+   private readonly mapping: number[] = []
+   private readonly originalIds = new Set<string>()
+   private readonly generatedIds = new Set<string>()
++  private sourceGeneration = 0
++  private targetGeneration = 0
+   private targetSeq = 0
+   private sourceCut: number | undefined
+   private targetCut: number | undefined
+@@ -65,9 +68,12 @@ class ReleasedV2ToV3Stage implements SessionFormatMigrationStage {
+       if (data['sessionFormatVersion'] === 3) throw new SessionFormatError('format v2 delivery marker claims target format v3')
+       if (data['sessionFormatVersion'] === 2 && data['sessionId'] !== this.input.sourceHeader.id) this.lastForeignDeliverySeq = event.seq
+     }
+-    const target = remapEvent(source, this.targetSeq, this.mapping)
++    const positioned = remapEvent(source, this.targetSeq, this.mapping)
++    const target: SessionFormatEvent = { ...positioned, data: remapLegacyConvergenceGeneration(event.type, positioned.data, this.sourceGeneration, this.targetGeneration) }
+     this.mapping.push(this.targetSeq++)
+     context.emitEvent(canonicalizeTransformedEvent(renamePtcEvent(target)))
++    if (event['surfaceOp'] !== undefined && event['surfaceOp'] !== 'append') this.sourceGeneration++
++    if (target['surfaceOp'] !== undefined && target['surfaceOp'] !== 'append') this.targetGeneration++
+     if (event.type === 'step/start') {
+       this.step = { turn: data['turn'] as number, step: data['step'] as number }
+       if (this.head === undefined) this.emitSystem('', event, context)
+@@ -131,6 +137,7 @@ class ReleasedV2ToV3Stage implements SessionFormatMigrationStage {
+         ? { surfaceOp: 'append' }
+         : { surfaceOp: { op: 'replace', start: this.head, end: this.head }, sourceEventSeqs: [this.head] }),
+     }))
++    if (this.head !== undefined) this.targetGeneration++
+     this.head = seq
+     this.prompt = prompt
+   }
+diff --git a/packages/session/session-format-v2-to-v3/src/payload.ts b/packages/session/session-format-v2-to-v3/src/payload.ts
+index 3aa2add..89e3103 100644
+--- a/packages/session/session-format-v2-to-v3/src/payload.ts
++++ b/packages/session/session-format-v2-to-v3/src/payload.ts
+@@ -2,7 +2,7 @@
+ 
+ import { SessionFormatError, SessionFormatUnsupportedMigrationError, isSessionFormatJsonObject, sessionFormatCount, sessionFormatSafeInteger } from '@deepseek-ai/dsh-session-format'
+ import type { SessionFormatEvent, SessionFormatJsonObject, SessionFormatJsonValue } from '@deepseek-ai/dsh-session-format'
+-import { assertReleasedPayloadSemantics, assertReleasedSurfaceMetadata } from '@deepseek-ai/dsh-session-format-v0-to-v1'
++import { assertDingtalkLegacyEvent, assertReleasedPayloadSemantics, assertReleasedSurfaceMetadata } from '@deepseek-ai/dsh-session-format-v0-to-v1'
+ import { RELEASED_V2_EVENT_DISPOSITIONS } from '@deepseek-ai/dsh-session-format-v1-to-v2'
+ 
+ /** Audited surface event names; all other admitted events are log-only. */
+@@ -44,6 +44,7 @@ export function assertEvent(event: SessionFormatEvent, version: 2 | 3): void {
+     assertV3Event(event)
+     return
+   }
++  if (assertDingtalkLegacyEvent(event)) return
+   const disposition = RELEASED_V2_EVENT_DISPOSITIONS[event.type]
+   const feedback = event.type === 'feedback/message-put' || event.type === 'feedback/message-delete'
+   if (disposition === undefined && !feedback) {
+diff --git a/packages/session/session-format-v2-to-v3/src/references.ts b/packages/session/session-format-v2-to-v3/src/references.ts
+index a7e66bc..8ff9548 100644
+--- a/packages/session/session-format-v2-to-v3/src/references.ts
++++ b/packages/session/session-format-v2-to-v3/src/references.ts
+@@ -1,3 +1,4 @@
++import { remapLegacyConvergence, remapLegacyOwnerReadProjection, remapLegacyOwnerMessage } from '@deepseek-ai/dsh-session-format-v0-to-v1'
+ /** Explicit local-coordinate remapping; captured generations and owner-local counters remain opaque. */
+ 
+ import { SessionFormatError, sessionFormatCount } from '@deepseek-ai/dsh-session-format'
+@@ -43,7 +44,7 @@ export function remapEvent(event: SessionFormatEvent, seq: number, mapping: read
+     // Workflow seq, stream block indices, turn/step, and numeric tool JSON are not Session seqs.
+   }
+   return {
+-    ...event, seq, data,
++    ...event, seq, data: remapLegacyOwnerMessage(event.type, remapLegacyOwnerReadProjection(event.type, remapLegacyConvergence(event.type, data, one), one), one),
+     ...(event['sourceEventSeqs'] === undefined ? {} : { sourceEventSeqs: list(event['sourceEventSeqs']) }),
+     ...(event['surfaceOp'] === undefined || event['surfaceOp'] === 'append'
+       ? {} : { surfaceOp: range(event['surfaceOp']) }),
+diff --git a/packages/session/session-format-v3-to-v4/package.json b/packages/session/session-format-v3-to-v4/package.json
+index 6d0bba0..05152d9 100644
+--- a/packages/session/session-format-v3-to-v4/package.json
++++ b/packages/session/session-format-v3-to-v4/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@deepseek-ai/dsh-session-format-v3-to-v4",
+-  "description": "Streaming tool-role migration and delivery validation from Session V3 to V4",
++  "description": "Streaming tool-role migration and delivery validation from Session V3 to V4 (local owned DingTalk legacy migration build)",
+   "version": "0.2.1-alpha.2",
+   "publishConfig": {
+     "access": "public"
+@@ -36,16 +36,22 @@
+       "targetCodec": "releasedV4SessionFormatCodec",
+       "targetHeaderValidator": "assertReleasedV4Header",
+       "targetRestorer": "restoreReleasedV4Artifact"
++    },
++    "localMigration": {
++      "upstreamCommit": "d743267388641bc76f17c45ce8b4c231aed1d32c",
++      "owner": "dingtalk-dsh-assistant",
++      "patch": "owned-dingtalk-convergent-session-migration-v1"
+     }
+   },
+   "dependencies": {
+-    "@deepseek-ai/dsh-session-format": "workspace:*",
+-    "@deepseek-ai/dsh-session-format-v2-to-v3": "workspace:*"
++    "@deepseek-ai/dsh-session-format": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-v2-to-v3": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.2.1-alpha.2"
+   },
+   "peerDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1"
+   },
+   "devDependencies": {
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/cordis": "4.0.5-alpha.1"
+   }
+ }
+diff --git a/packages/session/session-format-v3-to-v4/src/owner-projection.ts b/packages/session/session-format-v3-to-v4/src/owner-projection.ts
+new file mode 100644
+index 0000000..caef5f0
+--- /dev/null
++++ b/packages/session/session-format-v3-to-v4/src/owner-projection.ts
+@@ -0,0 +1,36 @@
++import { assertDingtalkLegacyEvent, assertDingtalkLegacySource } from '@deepseek-ai/dsh-session-format-v0-to-v1'
++import {createHash} from 'node:crypto'
++import {isDeepStrictEqual} from 'node:util'
++import {isSessionFormatJsonObject} from '@deepseek-ai/dsh-session-format'
++import type {SessionFormatArtifact,SessionFormatEvent,SessionFormatJsonObject,SessionFormatJsonValue} from '@deepseek-ai/dsh-session-format'
++const canonical=(v:SessionFormatJsonValue):string=>v&&typeof v==='object'?Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical((v as SessionFormatJsonObject)[k] as SessionFormatJsonValue)).join(',')+'}':JSON.stringify(v)
++const json=(v:SessionFormatJsonValue|undefined):SessionFormatJsonObject|undefined=>{if(!Array.isArray(v))return undefined;const text=v.find(x=>isSessionFormatJsonObject(x)&&x['type']==='text');if(!isSessionFormatJsonObject(text)||typeof text['text']!=='string')return undefined;try{const p:unknown=JSON.parse(text['text']);return isSessionFormatJsonObject(p)?p as SessionFormatJsonObject:undefined}catch{return undefined}}
++/** Reconstruct only digest-verified success pages issued by this task's Owner. */
++export function ownedArtifactReceipts(artifact:SessionFormatArtifact):Map<number,{ref:string,digest:string,total:number,message:SessionFormatJsonObject}> {
++  const out=new Map<number,{ref:string,digest:string,total:number,message:SessionFormatJsonObject}>()
++  const identities=artifact.events.filter(e=>e.type==='plugin:dingtalk/task-owner-session')
++  if(identities.length!==1||!isSessionFormatJsonObject(identities[0]?.data))return out
++  assertDingtalkLegacyEvent({...identities[0] as SessionFormatEvent,type:'dingtalk/task-owner-session'});const identity=identities[0].data;if(identity['version']!==1||identity['sessionId']!==artifact.header.id||typeof identity['taskId']!=='string')return out
++  let admitted=false;const calls=new Map<string,SessionFormatJsonObject>();const pages=new Map<string,Array<{seq:number,start:number,end:number,total:number,text:string,message:SessionFormatJsonObject}>>()
++  for(const event of artifact.events){if(!isSessionFormatJsonObject(event.data))continue;const data=event.data
++    if(event.type==='user/message'&&isSessionFormatJsonObject(data['source'])&&isSessionFormatJsonObject(data['source']['taskOwner'])){if(!assertDingtalkLegacySource(data['source'])){admitted=false;continue}const owner=data['source']['taskOwner'];admitted=owner['taskId']===identity['taskId']&&owner['sessionId']===artifact.header.id}
++    if(event.type==='tool/call'&&admitted&&data['name']==='task_owner_read_artifact'&&typeof data['callId']==='string'){let args:unknown=data['arguments'];if(typeof args==='string'){try{args=JSON.parse(args)}catch{continue}}if(isSessionFormatJsonObject(args)&&typeof args['artifactRef']==='string'&&/^(?:tasks\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\/)?sha256-[a-f0-9]{64}\.json$/u.test(args['artifactRef']))calls.set(data['callId'],args as SessionFormatJsonObject)}
++    if(event.type!=='tool/result'||event['surfaceOp']!=='append'||!isSessionFormatJsonObject(data['message']))continue
++    const message=data['message'];const id=message['toolCallId'];if(typeof id!=='string')continue;const call=calls.get(id);if(!call)continue;calls.delete(id);if(message['isError']===true)continue
++    const page=json(message['content']);const start=call['offset']??0;if(!page||typeof page['artifact']!=='string'||typeof start!=='number'||!Number.isSafeInteger(start)||start<0||typeof page['totalLength']!=='number'||!Number.isSafeInteger(page['totalLength'])||start+page['artifact'].length>page['totalLength'])continue
++    const ref=call['artifactRef'] as string;const list=pages.get(ref)??[];list.push({seq:event.seq,start,end:start+page['artifact'].length,total:page['totalLength'],text:page['artifact'],message});pages.set(ref,list)
++  }
++  for(const [ref,list]of pages){const sorted=[...list].sort((a,b)=>a.start-b.start||b.seq-a.seq);let text='',valid=true;for(const page of sorted){const overlap=Math.max(0,Math.min(page.end,text.length)-page.start);if(page.total!==sorted[0]?.total||page.start>text.length||text.slice(page.start,page.start+overlap)!==page.text.slice(0,overlap)){valid=false;break}if(page.end>text.length)text+=page.text.slice(text.length-page.start)}if(!valid||text.length!==sorted[0]?.total)continue;let value:SessionFormatJsonValue;try{value=JSON.parse(text) as SessionFormatJsonValue}catch{continue}const digest=createHash('sha256').update(canonical(value)).digest('hex');if(!ref.endsWith('sha256-'+digest+'.json'))continue;for(const page of list)out.set(page.seq,{ref,digest,total:text.length,message:page.message})}
++  return out
++}
++/** A closed-turn replacement may only reproject one existing verified Owner read node. */
++export function isOwnedClosedToolReplacement(event:SessionFormatEvent,events:readonly SessionFormatEvent[],receipts:ReturnType<typeof ownedArtifactReceipts>):boolean {
++  if(!isSessionFormatJsonObject(event['surfaceOp'])||event['surfaceOp']['op']!=='replace'||event['surfaceOp']['startSeq']!==event['surfaceOp']['endSeq']||!Array.isArray(event['sourceEventSeqs'])||!isSessionFormatJsonObject(event.data)||!isSessionFormatJsonObject(event.data['message']))return false
++  const message=event.data['message'];const replaced=events[event['surfaceOp']['startSeq'] as number];if(replaced?.type!=='tool/result'||!isSessionFormatJsonObject(replaced.data)||!isSessionFormatJsonObject(replaced.data['message'])||replaced.data['message']['toolCallId']!==message['toolCallId'])return false
++  const sources=event['sourceEventSeqs'];if(!sources.includes(replaced.seq))return false;const original=sources.filter(seq=>seq===replaced.seq||Array.isArray(replaced['sourceEventSeqs'])&&replaced['sourceEventSeqs'].includes(seq)).map(seq=>receipts.get(seq as number)).find(receipt=>receipt&&receipt.message['toolCallId']===message['toolCallId']);if(!original)return false
++  const unchanged=(v:SessionFormatJsonObject)=>({...v,content:null});if(!isDeepStrictEqual(unchanged(message),unchanged(original.message)))return false
++  if(isDeepStrictEqual(message['content'],original.message['content']))return true
++  if(!Array.isArray(message['content'])||message['content'].length!==1||!isSessionFormatJsonObject(message['content'][0])||Object.keys(message['content'][0]).sort().join(',')!=='text,type'||message['content'][0]['type']!=='text')return false;const projection=json(message['content']);if(!projection||Object.keys(projection).sort().join(',')!=='historicalArtifactRead,instruction'||!isSessionFormatJsonObject(projection['historicalArtifactRead']))return false
++  const record=projection['historicalArtifactRead'];if(Object.keys(record).sort().join(',')!=='artifactRef,contentDigest,sourceSequenceId,totalLength')return false;const receipt=receipts.get(record['sourceSequenceId'] as number)
++  return record['artifactRef']===original.ref&&record['contentDigest']===original.digest&&record['totalLength']===original.total&&receipt===original&&sources.includes(record['sourceSequenceId'] as number)&&projection['instruction']==='重复或被替代的工具正文仅以引用保留；原始完整工具回执仍在审计日志，当前适用正文保留一份。此投影不是新的读取或验收证明。'
++}
+diff --git a/packages/session/session-format-v3-to-v4/src/references.ts b/packages/session/session-format-v3-to-v4/src/references.ts
+index f28b3eb..3ea0604 100644
+--- a/packages/session/session-format-v3-to-v4/src/references.ts
++++ b/packages/session/session-format-v3-to-v4/src/references.ts
+@@ -1,3 +1,4 @@
++import { remapLegacyConvergence, remapLegacyOwnerReadProjection, remapLegacyOwnerMessage } from '@deepseek-ai/dsh-session-format-v0-to-v1'
+ /** Remap released V3 local event references after interrupted-turn insertion. */
+ 
+ import { SessionFormatError, isSessionFormatJsonObject, sessionFormatCount } from '@deepseek-ai/dsh-session-format'
+@@ -61,7 +62,7 @@ export function remapV3References(event: SessionFormatEvent, seq: number, mappin
+   const surface = event['surfaceOp']
+   const range = surface === undefined || surface === 'append' ? undefined : object(surface)
+   return {
+-    ...event, seq, data,
++    ...event, seq, data: remapLegacyOwnerMessage(event.type, remapLegacyOwnerReadProjection(event.type, remapLegacyConvergence(event.type, data, reference), reference), reference),
+     ...(event['sourceEventSeqs'] === undefined ? {} : { sourceEventSeqs: references(event['sourceEventSeqs']) }),
+     ...(range === undefined ? {} : { surfaceOp: { ...range, startSeq: reference(range['startSeq']), endSeq: reference(range['endSeq']) } }),
+   }
+diff --git a/packages/session/session-format-v3-to-v4/src/relationships.ts b/packages/session/session-format-v3-to-v4/src/relationships.ts
+index aa50b3f..7f6c07c 100644
+--- a/packages/session/session-format-v3-to-v4/src/relationships.ts
++++ b/packages/session/session-format-v3-to-v4/src/relationships.ts
+@@ -1,3 +1,4 @@
++import { ownedArtifactReceipts, isOwnedClosedToolReplacement } from './owner-projection.ts'
+ /** Mandatory native V4 relationships; incomplete tails retain their open transactions. */
+ 
+ import { isDeepStrictEqual } from 'node:util'
+@@ -64,8 +65,10 @@ class Relationships {
+   readonly startedRetries = new Set<string>()
+   readonly commands = new Set<string>()
+   readonly orphanCompactions = new Set<number>()
++  readonly ownerReceipts: ReturnType<typeof ownedArtifactReceipts>
+ 
+   constructor(readonly artifact: SessionFormatArtifact, readonly knownEventTypes: ReadonlySet<string>) {
++    this.ownerReceipts = ownedArtifactReceipts(artifact)
+     let start: number | undefined
+     for (const event of artifact.events) {
+       if (!knownEventTypes.has(event.type)) continue
+@@ -147,6 +150,7 @@ class Relationships {
+ 
+   tool(event: SessionFormatEvent, data: SessionFormatJsonObject): void {
+     if (event.type === 'tool/result' && event['surfaceOp'] !== 'append') {
++      if (this.turn === null && isOwnedClosedToolReplacement(event, this.artifact.events, this.ownerReceipts)) return
+       this.requireTurn(event.type)
+       return
+     }
+diff --git a/packages/session/session-persistence-jsonl/package.json b/packages/session/session-persistence-jsonl/package.json
+index 22af65b..3ccd568 100644
+--- a/packages/session/session-persistence-jsonl/package.json
++++ b/packages/session/session-persistence-jsonl/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@deepseek-ai/dsh-session-persistence-jsonl",
+-  "description": "JSONL durable session persistence backend for the DeepSeek Harness",
++  "description": "JSONL durable session persistence backend for the DeepSeek Harness (local owned session migration verifier build)",
+   "version": "0.2.1-alpha.2",
+   "publishConfig": {
+     "access": "public"
+@@ -28,23 +28,30 @@
+   ],
+   "license": "MIT",
+   "peerDependencies": {
+-    "@deepseek-ai/dsh-session": "workspace:*",
+-    "@deepseek-ai/dsh-session-persistence": "workspace:*",
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/dsh-session": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-persistence": "0.2.1-alpha.2",
++    "@deepseek-ai/cordis": "~4.0.5-alpha.1"
+   },
+   "dependencies": {
+-    "@deepseek-ai/dsh-llm": "workspace:*",
+-    "@deepseek-ai/dsh-session-format": "workspace:*",
+-    "@deepseek-ai/dsh-session-format-catalog": "workspace:*",
+-    "@deepseek-ai/dsh-session-format-v3-to-v4": "workspace:*",
+-    "@deepseek-ai/node-addon-system": "workspace:~",
+-    "@deepseek-ai/schemastery": "workspace:~",
++    "@deepseek-ai/dsh-llm": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-catalog": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.1-alpha.2",
++    "@deepseek-ai/node-addon-system": "~0.1.2",
++    "@deepseek-ai/schemastery": "~3.18.5-alpha.1",
+     "koffi": "3.1.1"
+   },
+   "devDependencies": {
+-    "@deepseek-ai/dsh-session": "workspace:*",
+-    "@deepseek-ai/dsh-session-format-v0-to-v1": "workspace:*",
+-    "@deepseek-ai/dsh-session-persistence": "workspace:*",
+-    "@deepseek-ai/cordis": "workspace:~"
++    "@deepseek-ai/dsh-session": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.2.1-alpha.2",
++    "@deepseek-ai/dsh-session-persistence": "0.2.1-alpha.2",
++    "@deepseek-ai/cordis": "~4.0.5-alpha.1"
++  },
++  "dsh": {
++    "localMigration": {
++      "upstreamCommit": "d743267388641bc76f17c45ce8b4c231aed1d32c",
++      "owner": "dingtalk-dsh-assistant",
++      "patch": "owned-dingtalk-convergent-session-migration-v1"
++    }
+   }
+ }

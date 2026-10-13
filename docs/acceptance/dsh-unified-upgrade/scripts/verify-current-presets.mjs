@@ -1,0 +1,18 @@
+import fs from 'node:fs';
+import {createHash} from 'node:crypto';
+import {createRequire} from 'node:module';
+import {parseArgs,isDeepStrictEqual} from 'node:util';
+const {values}=parseArgs({options:{snapshot:{type:'string'},proposal:{type:'string'}}});
+if(!values.snapshot||!values.proposal)throw new Error('需要snapshot和proposal绝对文件路径');
+const require=createRequire(new URL('../../../../package.json',import.meta.url));
+const yaml=require('js-yaml');
+const schema=yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js',{kind:'scalar',construct:value=>({opaqueJs:value})})]);
+const bytes=fs.readFileSync(values.snapshot);
+const rows=yaml.load(bytes.toString('utf8'),{schema});
+const expected=yaml.load(JSON.parse(fs.readFileSync(values.proposal,'utf8')).patchAppend,{schema});
+const ids=['compaction-basic','preset-standard','preset-ptc','preset-cordis'];
+if(!Array.isArray(rows)||!Array.isArray(expected)||!isDeepStrictEqual(expected.map(row=>row.id),ids))throw new Error('完整升级节点列表错误');
+const flatten=entries=>entries.flatMap(row=>[row,...flatten(row.insert??[]),...(row.group&&Array.isArray(row.config)?flatten(row.config):[])]);
+const all=flatten(rows);
+for(const row of expected)if(!isDeepStrictEqual(row,all.findLast(actual=>actual.id===row.id)))throw new Error(`升级节点内容不匹配：${row.id}`);
+console.log(JSON.stringify({writes:0,evaluatedExpressions:0,patchSha256:createHash('sha256').update(bytes).digest('hex'),completePresetIds:ids,exact:true}));
