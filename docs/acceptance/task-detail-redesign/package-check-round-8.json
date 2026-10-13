@@ -1,0 +1,26 @@
+{
+  "round": 8,
+  "packages": [
+    {
+      "package": "zzusp-dingtalk-dsh-assistant-1.0.0.tgz",
+      "bytes": 904492,
+      "sha256": "0316f5b0d869eb8c5ddc2471f8d8e4853e5e9bf8bcb1128b1171b980202cb666",
+      "source": "packages/dingtalk-dsh-assistant/workflow-service.js",
+      "sourceBytes": 371740,
+      "sourceSha256": "da0d27ac64cf0dc0cf5b1126def6f5bae33eba20e0cc610e4e853ffa4a842c2b",
+      "archiveEntry": "package/workflow-service.js",
+      "packedSourceMatches": true
+    },
+    {
+      "package": "zzusp-dingtalk-dsh-observer-1.0.0.tgz",
+      "bytes": 39285,
+      "sha256": "70e8e8fa6dc70a05df2a68bfbbbd6472197833e9942b2691966bb26ef3144cb3",
+      "source": "packages/dingtalk-dsh-observer/web-client.js",
+      "sourceBytes": 166999,
+      "sourceSha256": "b6e0898858786273dd69502ccbcc3cf2aca571f591490149669cfded8480c85b",
+      "archiveEntry": "package/web-client.js",
+      "packedSourceMatches": true
+    }
+  ],
+  "independentGetFileHashMatches": true
+}

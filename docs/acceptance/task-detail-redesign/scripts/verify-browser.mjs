@@ -48,7 +48,7 @@ const titles = ['确认材料范围', '核对资料', '生成实施方案', '环
 const nodes = titles.map((title, index) => ({
   stepKey: `fixture-step-${index + 1}`, nodeId: `node-${index + 1}`, nodeRunId: `node-run-${index + 1}`, runId: `run-${Math.floor(index / 4) + 1}`,
   stageId: `stage-${Math.floor(index / 4) + 1}`, stageTitle: ['调查与准备', '执行与验证', '交付与回读'][Math.floor(index / 4)],
-  title, status: index < 5 ? 'succeeded' : index === 5 ? 'waiting' : 'pending',
+  title, status: index < 5 ? 'succeeded' : index === 5 ? 'waiting' : 'pending', sessionBound: true,
   ...(index < 6 ? { startedAt: `2026-10-13T01:${String(index * 3).padStart(2, '0')}:00.000Z`, completedAt: `2026-10-13T01:${String(index * 3 + 2).padStart(2, '0')}:00.000Z`, leaseEpoch: index === 4 ? 2 : 1 } : {}),
   ...(index < 5 && index !== 3 ? { outputRef: `artifact-${index + 1}`, sessionId: `session-step-${index + 1}` } : {}),
   ...(index === 3 ? { control: { action: 'skip', reason: '该环境没有独立发布步骤，已由任务负责人确认不适用。', source: 'operator' } } : {}),
@@ -61,11 +61,13 @@ const fixture = {
   createdAt: '2026-10-13T00:58:00.000Z', updatedAt: '2026-10-13T01:17:00.000Z', waitingReason: '等待用户补充验收范围，已完成的材料和检查结论可继续阅读。',
   executionTiming: { elapsedMs: 600000, sampledAt: '2026-10-13T01:17:00.000Z', running: false, complete: true },
   detailRevision: 'revision-1', executionNodes: nodes,
+  taskOwner: { sessionId: 'session-task-owner', sessionBound: true, status: 'waiting' },
   result: '已完成材料整理和方案核对，等待确认验收范围。\n[查看交付说明](https://example.test/delivery/report) 与 https://example.test/review/42',
   plan: { stepsResolved: true, stages: ['调查与准备', '执行与验证', '交付与回读'].map((title, i) => ({ stageId: `stage-${i + 1}`, title, status: i === 0 ? 'succeeded' : i === 1 ? 'waiting_confirmation' : 'ready' })) },
   workflowProgress: { outcomeLabel: '等待补充', stages: [] },
 }
 let detail = structuredClone(fixture), detailFailure = false, detailHold = false, releaseDetail
+const otherTaskDetails = new Map()
 let failOutput = false, holdOutput = false, releaseOutput, overrideText = ''
 const textFor = id => `产出摘要\n${id} 已完成核对，输入材料与当前版本一致。\n\n正文\n` + ('这是合成的验收正文。中文长文本、English-token-' + 'x'.repeat(100) + '，用来检查换行和长段落阅读。\n').repeat(13) + `\n${id}-正文结束标记`
 const browser = await playwright.chromium.launch({ channel: 'msedge', headless: true })
@@ -74,7 +76,7 @@ const page = await context.newPage()
 page.setDefaultTimeout(10000)
 const errors = [], writes = [], requests = [], checks = [], metrics = []
 // 冻结五秒轮询；刷新仍走真实 UI 与真实 fetch，隔离时间导致的夹具竞态。
-await page.addInitScript(() => { const interval = window.setInterval; window.setInterval = (fn, ms, ...args) => ms === 5000 ? interval(() => {}, ms) : interval(fn, ms, ...args) })
+await page.addInitScript(() => { const interval = window.setInterval; window.setInterval = (fn, ms, ...args) => { if (ms === 5000) { window.__observerRefresh = fn; return interval(() => {}, ms) } return interval(fn, ms, ...args) } })
 page.on('pageerror', error => errors.push(error.message))
 await page.route('**/*', async route => {
   const target = new URL(route.request().url())
@@ -84,13 +86,14 @@ await page.route('**/*', async route => {
   requests.push({ path: target.pathname, query: Object.fromEntries(target.searchParams) })
   let data = []
   if (target.pathname === '/health') data = { status: 'ok' }
-  if (target.pathname === '/state/tasks') data = [fixture]
+  if (target.pathname === '/state/tasks') data = [fixture, ...otherTaskDetails.values()]
   if (target.pathname === '/state/groups') data = [{ groupId: fixture.groupId, name: '隔离验收群', messages: [], outbox: [] }]
   if (target.pathname === '/state/topics') data = { topics: [], total: 0 }
   if (target.pathname.endsWith('/detail')) {
     if (detailHold) { detailHold = false; await new Promise(resolve => { releaseDetail = resolve }) }
     if (detailFailure) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '合成夹具读取失败' }) })
-    data = structuredClone(detail)
+    const requestedTaskId = decodeURIComponent(target.pathname.split('/')[3])
+    data = structuredClone(otherTaskDetails.get(requestedTaskId) || detail)
   }
   const match = /\/nodes\/([^/]+)\/output$/.exec(target.pathname)
   if (match) {
@@ -107,15 +110,25 @@ const active = () => page.getByRole('region', { name: '步骤详情', exact: tru
 const navigation = () => region().locator('.observer-task-navigation')
 const step = key => navigation().locator(`li[data-step-key="${key}"] button`)
 const outputReads = () => requests.filter(request => request.path.endsWith('/output'))
+function assertCompletedFixture(task) {
+  assert.equal(task.state, 'completed'); assert.equal(task.outcome, 'succeeded'); assert.equal(task.waitingReason, undefined)
+  assert.equal(task.workflowProgress.outcome, 'succeeded'); assert.equal(task.workflowProgress.outcomeLabel, '已完成')
+  assert.ok(task.plan.stages.every(stage => stage.status === 'succeeded'))
+  assert.ok(task.executionNodes.every(node => node.status === 'succeeded'))
+  assert.deepEqual([...new Set(task.executionNodes.map(node => node.stageId))], task.plan.stages.map(stage => stage.stageId))
+  assert.deepEqual(task.workflowProgress.stages.map(stage => stage.stageId), task.plan.stages.map(stage => stage.stageId))
+  assert.ok(task.workflowProgress.stages.every(stage => stage.completed === true))
+}
 async function openCard() {
   await page.getByRole('button', { name: '任务看板', exact: true }).click()
   const card = page.getByRole('button').filter({ has: page.locator(`strong[title="${fixture.title}"]`) })
   await card.focus(); await page.keyboard.press('Enter')
 }
 async function back() { await page.getByRole('button', { name: '返回看板', exact: true }).click() }
-async function refresh() {
+async function refresh({ automatic = false } = {}) {
   const before = requests.filter(item => item.path.endsWith('/detail')).length
-  await page.getByRole('button', { name: '刷新', exact: true }).click()
+  if (automatic) await page.evaluate(() => window.__observerRefresh())
+  else await page.getByRole('button', { name: '刷新', exact: true }).click()
   await page.waitForFunction(() => document.querySelector('[aria-label="刷新"]')?.getAttribute('aria-busy') !== 'true')
   for (let i = 0; requests.filter(item => item.path.endsWith('/detail')).length <= before && i < 100; i++) await page.waitForTimeout(20)
   assert.ok(requests.filter(item => item.path.endsWith('/detail')).length > before, 'refresh_detail_requested')
@@ -128,6 +141,15 @@ async function select(key) {
   assert.equal(await step(key).getAttribute('aria-pressed'), 'true')
 }
 async function expand() { const summary = active().locator('summary'); await summary.waitFor(); if (await summary.locator('..').getAttribute('open') === null) await summary.click(); await active().locator('details[open] > div').waitFor() }
+async function readAllOutput() {
+  let pages = 0
+  while (await active().getByRole('button', { name: '继续阅读产出', exact: true }).count()) {
+    const response = page.waitForResponse(response => response.url().includes('/output?'))
+    await active().getByRole('button', { name: '继续阅读产出', exact: true }).click(); await response
+    await active().getByText('正在读取产出…', { exact: true }).waitFor({ state: 'hidden' }); assert.ok(++pages < 20)
+  }
+  return pages
+}
 async function screenshot(name) { await page.screenshot({ path: path.join(output, name), fullPage: true }) }
 async function recordLayout(label) {
   const result = await region().evaluate(element => {
@@ -177,6 +199,13 @@ try {
       await objective.locator('summary').click(); assert.equal(await objective.locator('p').textContent(), fixture.objective); await objective.locator('summary').click()
       await recordLayout('desktop'); await screenshot('desktop.png')
       await page.setViewportSize({ width: 390, height: 844 })
+      // resize 的 matchMedia 回调异步派发，等待实际可见条件，不在回调前抢读一次性指标。
+      if (Number(mode.slice(6)) >= 3) await page.waitForFunction(() => {
+        const button = document.querySelector('.observer-task-navigation li[data-step-key="fixture-step-6"] button')
+        if (!button) return false
+        const bounds = button.getBoundingClientRect(), nav = button.closest('nav').getBoundingClientRect()
+        return bounds.top >= nav.top && bounds.bottom <= nav.bottom
+      })
       const initialSelection = await step('fixture-step-6').evaluate(element => { const bounds = element.getBoundingClientRect(), nav = element.closest('nav').getBoundingClientRect(); return { selectedTop: bounds.top, selectedBottom: bounds.bottom, navTop: nav.top, navBottom: nav.bottom, selectedVisibleInsideDirectory: bounds.top >= nav.top && bounds.bottom <= nav.bottom } })
       metrics.push({ label: 'initial-selection-narrow', ...initialSelection })
       await screenshot('initial-selection-narrow.png'); await page.setViewportSize({ width: 1440, height: 1100 })
@@ -197,8 +226,7 @@ try {
     await check('output', '产出读取失败重试、分页、长文本、下载地址', async () => {
       failOutput = true; await select('fixture-step-1')
       await active().getByRole('alert').waitFor(); await active().getByRole('button', { name: '重试读取产出', exact: true }).click(); await expand()
-      let pages = 0
-      while (await active().getByRole('button', { name: '继续阅读产出', exact: true }).count()) { const response = page.waitForResponse(response => response.url().includes('/output?')); await active().getByRole('button', { name: '继续阅读产出', exact: true }).click(); await response; await active().getByText('正在读取产出…', { exact: true }).waitFor({ state: 'hidden' }); assert.ok(++pages < 20) }
+      const pages = await readAllOutput()
       await active().getByText(/node-run-1-正文结束标记/).waitFor()
       const href = await active().getByRole('link', { name: '下载 检查记录.txt', exact: true }).getAttribute('href')
       assert.ok(href.includes('/nodes/node-run-1/document?ref=artifact-1&detailRevision=revision-1'))
@@ -306,9 +334,119 @@ try {
     })
     await check('session', '会话入口打开选中步骤的真实 sessionId', async () => {
       await back(); detail = structuredClone(fixture); await openCard(); await active().waitFor()
-      await active().getByRole('button', { name: '查看会话记录', exact: true }).click()
+      await active().getByRole('button', { name: '查看步骤会话', exact: true }).click()
       assert.deepEqual(await page.evaluate(() => window.opened), ['session-current-step'])
     })
+    if (Number(mode.slice(6)) >= 4) {
+      await check('owner-session', '任务执行会话入口导航至已绑定 Owner', async () => {
+        detail = structuredClone(fixture); overrideText = ''
+        await page.getByRole('button', { name: '钉钉群聊运行看板', exact: true }).click(); await openCard(); await region().locator('h1').waitFor()
+        const owner = region().getByRole('region', { name: '任务执行会话', exact: true })
+        await owner.getByRole('button', { name: '查看任务会话', exact: true }).waitFor(); await screenshot('owner-session.png')
+        await owner.getByRole('button', { name: '查看任务会话', exact: true }).click()
+        assert.equal(await page.evaluate(() => window.opened.at(-1)), 'session-task-owner')
+      })
+      await check('session-boundaries', '任务与节点仅已绑定且有 sessionId 时允许导航', async () => {
+        detail = structuredClone(fixture); detail.taskOwner.sessionBound = false; detail.executionNodes[0].sessionBound = false
+        await page.getByRole('button', { name: '钉钉群聊运行看板', exact: true }).click(); await openCard(); await active().waitFor(); await select('fixture-step-1')
+        const owner = () => region().getByRole('region', { name: '任务执行会话', exact: true })
+        for (const [bound, id] of [[false, 'preallocated-session'], [undefined, 'legacy-session'], [true, null]]) {
+          detail.taskOwner = { sessionBound: bound, sessionId: id }; detail.executionNodes[0].sessionBound = bound; detail.executionNodes[0].sessionId = id
+          detail.detailRevision += '-binding'; await refresh()
+          assert.equal(await owner().getByRole('button', { name: '查看任务会话', exact: true }).count(), 0)
+          await owner().getByText('会话尚未建立', { exact: true }).waitFor()
+          assert.equal(await active().getByRole('button', { name: '查看步骤会话', exact: true }).count(), 0)
+        }
+        await screenshot('unbound-sessions.png')
+      })
+      await check('owner-only', '纯会话已完成和未形成计划任务采用不同空态', async () => {
+        await back(); detail = structuredClone(fixture); detail.state = 'completed'; detail.outcome = 'succeeded'; detail.executionNodes = []; detail.plan = { stages: [], stepsResolved: true }
+        detail.workflowProgress = { outcome: 'succeeded', outcomeLabel: '已完成', stages: [] }; detail.waitingReason = undefined
+        detail.taskOwner.status = 'succeeded'; detail.executionTiming.elapsedMs = 0; detail.result = '已通过任务执行会话完成资料查询，并回读确认结果。'
+        assertCompletedFixture(detail)
+        await openCard(); await region().locator('h1').waitFor()
+        await region().getByText('本任务未使用工作流', { exact: true }).waitFor()
+        assert.equal(await region().locator('[aria-label="任务阶段"]').count(), 0)
+        assert.equal(await region().getByText('该阶段步骤待确定', { exact: true }).count(), 0)
+        assert.equal(await region().getByRole('progressbar').count(), 0)
+        assert.equal(await region().getByRole('button', { name: '查看任务会话', exact: true }).count(), 1)
+        await screenshot('owner-only-completed.png')
+        detail.state = 'running'; detail.outcome = undefined; detail.plan.stepsResolved = false; detail.detailRevision += '-running'
+        detail.workflowProgress = { outcomeLabel: '执行中', stages: [] }; detail.taskOwner.status = 'running'; detail.result = undefined; await refresh()
+        await region().getByText('该阶段步骤待确定', { exact: true }).waitFor()
+        assert.equal(await region().getByText('本任务未使用工作流', { exact: true }).count(), 0)
+        await screenshot('no-plan-running.png')
+      })
+      await check('cross-view-refresh', '其他视图刷新后保留原任务阅读步骤', async () => {
+        await back(); detail = structuredClone(fixture); await openCard(); await active().waitFor(); await select('fixture-step-1')
+        await page.getByRole('button', { name: '群消息', exact: true }).click(); await refresh({ automatic: true })
+        await page.getByRole('button', { name: '任务看板', exact: true }).click()
+        assert.equal(await active().getAttribute('data-step-key'), 'fixture-step-1')
+      })
+      await check('hidden-deletion', '隐藏期间真实删除不抢其他页焦点并在返回后恢复', async () => {
+        await page.getByRole('button', { name: '群消息', exact: true }).click()
+        const otherView = page.getByRole('button', { name: '群消息', exact: true }); await otherView.focus()
+        detail.executionNodes = detail.executionNodes.filter(node => node.stepKey !== 'fixture-step-1'); detail.detailRevision += '-hidden-removal'; await refresh({ automatic: true })
+        assert.equal(await otherView.evaluate(element => element === document.activeElement), true)
+        // 第二次后台刷新不能清掉尚未送达任务页的提示与焦点。
+        await refresh({ automatic: true })
+        assert.equal(await otherView.evaluate(element => element === document.activeElement), true)
+        await page.getByRole('button', { name: '任务看板', exact: true }).click()
+        assert.equal(await active().getAttribute('data-step-key'), 'fixture-step-2')
+        await page.getByText('正在阅读的步骤已从当前计划移除，已转到相邻步骤。', { exact: true }).waitFor()
+        assert.equal(await step('fixture-step-2').evaluate(element => element === document.activeElement), true)
+      })
+      await check('checkpoint-reading', 'workflow 配置修订后稳定步骤保留分页展开与焦点', async () => {
+        await back(); detail = structuredClone(fixture); await openCard(); await active().waitFor(); await select('fixture-step-1'); await expand(); await readAllOutput()
+        await active().getByText(/node-run-1-正文结束标记/).waitFor()
+        const count = outputReads().length
+        await active().locator('h3').focus()
+        detail.plan.stages[0].workflowId = 'workflow-v26'; detail.executionNodes[0].workflowId = 'workflow-v26'; detail.detailRevision = 'revision-checkpoint-replaced'
+        await refresh({ automatic: true })
+        assert.equal(await active().getAttribute('data-step-key'), 'fixture-step-1')
+        await active().getByText(/node-run-1-正文结束标记/).waitFor()
+        assert.equal(await active().locator('details').getAttribute('open'), '')
+        assert.equal(await active().locator('h3').evaluate(element => element === document.activeElement), true)
+        assert.equal(outputReads().length, count)
+        assert.equal(await page.getByText('正在阅读的步骤已从当前计划移除，已转到相邻步骤。', { exact: true }).count(), 0)
+      })
+      await check('retry-session', '同一步骤重试后读取新产出并打开新绑定会话', async () => {
+        detail.executionNodes[0] = { ...detail.executionNodes[0], nodeRunId: 'retry-node-run-1', sessionId: 'retry-session-1', sessionBound: true, leaseEpoch: 2 }
+        detail.detailRevision = 'revision-retry'; await refresh(); await expand()
+        await active().getByText(/retry-node-run-1 已完成核对/).waitFor()
+        assert.equal(await active().getAttribute('data-step-key'), 'fixture-step-1')
+        assert.ok(outputReads().at(-1).path.includes('/nodes/retry-node-run-1/output'))
+        await active().getByRole('button', { name: '查看步骤会话', exact: true }).click()
+        assert.equal(await page.evaluate(() => window.opened.at(-1)), 'retry-session-1')
+      })
+      await check('cross-task-notice', '隐藏删除后直接切换另一任务不残留原任务提示', async () => {
+        detail = structuredClone(fixture)
+        const another = { ...structuredClone(fixture), taskId: 'task-another-fixture', title: '已归档的另一项交付任务', state: 'completed', outcome: 'succeeded', archivedAt: '2026-10-13T02:00:00.000Z', waitingReason: undefined,
+          plan: { stepsResolved: true, stages: [{ stageId: 'stage-1', title: '调查与准备', status: 'succeeded' }] },
+          workflowProgress: { outcome: 'succeeded', outcomeLabel: '已完成', stages: [{ stageId: 'stage-1', title: '调查与准备', completed: true }] }, detailRevision: 'another-revision-1', result: '另一项任务已完成交付。',
+          taskOwner: { sessionId: 'another-task-owner', sessionBound: true, status: 'succeeded' }, executionTiming: { ...fixture.executionTiming, elapsedMs: 120000 },
+          executionNodes: [{ ...nodes[0], stepKey: 'another-step-1', outputRef: undefined, sessionId: 'another-step-session' }] }
+        assertCompletedFixture(another)
+        otherTaskDetails.set(another.taskId, another)
+        await page.getByRole('button', { name: '钉钉群聊运行看板', exact: true }).click(); await openCard(); await active().waitFor(); await select('fixture-step-1')
+        // 归档页保留 A 的 selectedWorkflowTaskId；点击 B 卡片直接 openTask(B)，没有返回看板清空中间态。
+        await page.getByRole('button', { name: '归档任务', exact: true }).click()
+        detail.executionNodes = detail.executionNodes.filter(node => node.stepKey !== 'fixture-step-1'); detail.detailRevision = 'revision-delete-before-switch'
+        await refresh({ automatic: true })
+        const card = page.getByRole('button').filter({ has: page.locator(`strong[title="${another.title}"]`) })
+        await card.focus(); await page.keyboard.press('Enter')
+        await region().getByRole('heading', { name: another.title, exact: true }).waitFor()
+        assert.equal(await region().locator('[aria-label="任务阶段"]').textContent(), '01 · 调查与准备 · 已完成')
+        assert.equal(await region().getByText(/等待人工确认|待执行/).count(), 0)
+        assert.equal(await active().getAttribute('data-step-key'), 'another-step-1')
+        assert.equal(await region().getByText('正在阅读的步骤已从当前计划移除，已转到相邻步骤。', { exact: true }).count(), 0)
+        await refresh({ automatic: true })
+        assert.equal(await region().getByText('正在阅读的步骤已从当前计划移除，已转到相邻步骤。', { exact: true }).count(), 0)
+        assert.equal(await active().getAttribute('data-step-key'), 'another-step-1')
+        metrics.push({ label: 'direct-task-switch', from: fixture.taskId, to: another.taskId, via: '归档任务卡片', detailRequests: requests.filter(item => item.path.endsWith('/detail')).slice(-3).map(item => item.path) })
+        await screenshot('cross-task-clean-notice.png')
+      })
+    }
     assert.deepEqual(errors, []); assert.deepEqual(writes, [])
     assert.equal(requests.some(item => item.path.endsWith('/executions') || item.path.endsWith('/runs')), false)
     checks.push({ id: 'isolation', label: '零运行时错误、零业务写入、无历史执行查询', status: 'PASS' })
