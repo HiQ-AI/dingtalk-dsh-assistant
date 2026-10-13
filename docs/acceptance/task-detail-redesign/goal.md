@@ -1,0 +1,23 @@
+# 任务详情改版
+
+目标：将当前任务详情改为可定位、可持续阅读的步骤工作台，保持当前计划与结果真实性。
+
+## Sub goal matrix
+
+| 子目标 | 状态 | 证据 |
+| --- | --- | --- |
+| 现状与设计约束 | PASS | docs/spec/task-detail-redesign.md；源码与当前 API |
+| 页面与阅读状态实现 | PASS | web-client.js；round-3.md |
+| 独立浏览器场景与基线 | PASS | scripts/verify-browser.mjs；16/16浏览器场景 |
+| 定向回归与静态审计 | PASS | 35/35定向测试；严格审计0发现；包内源码一致 |
+| PR 交付 | PASS | PR #159，OPEN；main ← worktree-task-detail-redesign，gh独立回读正文及状态一致 |
+
+## 决策与检查点
+
+- 2026-10-13：沿用宿主主题与现有设计文档；不改变后端或部署。主仓已有未提交内容，使用基于最新 origin/main（462c213）的独立工作树。
+- 目录与阅读面板替代全量正文时间线；保留步骤身份、当前结果、真实耗时及只读边界。
+- 实现与浏览器验收并行拆解，主代理负责页面，子代理负责独立浏览器验证脚本；交付证据逐项回读。
+
+- 第2轮发现窄屏默认选中项不在目录可视区；第3轮仅调整目录自身scrollTop并验证重开同任务、刷新不抢阅读位置。所有当前验收项通过，历史FAIL保留。
+
+- 交付：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/159 。已独立回读远端分支提交、PR编号/标题/正文/base/head/state；正式实例未部署。

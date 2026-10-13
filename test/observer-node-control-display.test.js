@@ -12,16 +12,18 @@ const stateCode = source.match(/      const nodeState = (\{[^\n]+\})/)[1]
 const states = runInNewContext(`(${stateCode})`)
 const reasonCode = source.slice(source.indexOf('    const traceReason ='), source.indexOf('    const readableValue ='))
 const traceReason = runInNewContext(`${reasonCode}; traceReason`)
-const rowCode = source.slice(source.indexOf('            const presentation = taskStepControl(node)'), source.indexOf('          }))))),', source.indexOf('            const presentation = taskStepControl(node)')))
+const rowCode = source.slice(source.indexOf('    function TaskStepDetail('), source.indexOf('    function ObserverContent('))
 const children = tree => tree && typeof tree === 'object' ? [tree, ...(tree.children || []).flatMap(children)] : []
 const text = tree => tree === null || tree === undefined ? '' : typeof tree === 'object' ? (tree.children || []).map(text).join('\n') : String(tree)
 const navigation = []
-const render = node => runInNewContext(`(() => { ${rowCode} })()`, {
+const render = (node, active = true, visited = active) => runInNewContext(`${rowCode}; TaskStepDetail({ taskId: 'task', node, index: 0, detailRevision: 'current', active, tone: stepColor(taskStepControl(node).skipped ? 'skipped' : node.status), statusLabel: taskStepControl(node).label || nodeState[node.status], onOpenSession: navigate, onBack: () => {} })`, {
   node, index: 0, taskStepControl: control, nodeState: states, nodeTitle: {},
+  active, useState: () => [visited, () => {}], useEffect: () => {},
   colors: { surface: 'surface', muted: 'muted', warning: 'warning', accent: 'accent' },
   stepColor: status => status === 'succeeded' ? 'success' : status,
   React: { createElement: (type, props, ...items) => ({ type, props: props || {}, children: items.flat() }) },
   TaskStepElapsed: 'existing-elapsed', TaskStepOutput: 'existing-output',
+  Button: 'button', pill: color => ({ color }),
   selectedWorkflowTask: { taskId: 'task', detailRevision: 'current' }, traceReason,
   taskStepStart: () => '开始时间未记录', fmt: value => value,
   navigate: id => navigation.push(id),
@@ -124,4 +126,14 @@ test('整个Observer模块可加载，最小展示未加入新计时算法', () 
   assert.equal(typeof module.apply, 'function')
   assert.doesNotMatch(mappingCode + progressCode + rowCode, /waitingMs|waitingElapsedMs|sampledAt|new Date\(control|Date\.parse\(control/)
   assert.match(rowCode, /React\.createElement\(TaskStepElapsed, \{ node \}\)/)
+})
+
+test('未读步骤不请求正文，已读步骤切换后保留输出组件与当前版本绑定', () => {
+  const node = { ...base, outputRef: 'saved-output' }
+  assert.equal(render(node, false, false).props.hidden, true)
+  assert.equal(children(render(node, false, false)).some(item => item.type === 'existing-output'), false)
+  const retained = render(node, false, true)
+  assert.equal(retained.props.hidden, true)
+  assert.equal(children(retained).find(item => item.type === 'existing-output').props.detailRevision, 'current')
+  assert.equal(render(node).props.hidden, false)
 })
