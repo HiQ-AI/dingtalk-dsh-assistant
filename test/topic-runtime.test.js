@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
-import { Session } from '@deepseek-ai/dsh-session'
-import { Inbox } from '@deepseek-ai/dsh-agent'
+import { Session, SessionStore } from '@deepseek-ai/dsh-session'
+import { Context } from '@deepseek-ai/cordis'
+import { AgentRegistry } from '@deepseek-ai/dsh-agent'
+import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
+import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { LlmRuntime, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { createRequire } from 'node:module'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { openResidentStore, resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
 import { boundedTopicContext, createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
@@ -1491,8 +1497,8 @@ test('模型停稳后仅有限次提醒，同一归类请求仍可提交', async
 
 function visibleTool(session, name, result) {
   const id = `call-${session.snapshotEvents().length}`
-  session.append('assistant/message', { turn: 1, step: 1, message: { id: `assistant-${id}`, role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' }, content: [{ type: 'tool-call', id, name, arguments: '{}' }] } }, { surfaceOp: 'append' })
-  session.append('tool/result', { turn: 1, step: 1, message: { id: `result-${id}`, role: 'user', source: { kind: 'tool', callId: id }, content: [{ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text: JSON.stringify(result) }] }] } }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn: 1, step: 1, stream: [], message: { id: `assistant-${id}`, role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' }, content: [{ type: 'tool-call', id, name, arguments: '{}' }] } }, { surfaceOp: 'append' })
+  session.append('tool/result', { turn: 1, step: 1, message: { ...createToolResultMessage({ callId: id, isError: false, content: [{ type: 'text', text: JSON.stringify(result) }] }), id: `result-${id}` } }, { surfaceOp: 'append' })
 }
 
 test('材料清单从当前surface分页形成，跨请求与压缩摘要不冒充正文', async t => {
@@ -1611,7 +1617,7 @@ test('审阅身份忽略提交时间，但流程引用、最后检查点和Topic
 })
 function compactSurface(session) {
   const nodes = [...session.surface.nodes]
-  session.append('user/message', { id: `summary-${session.snapshotEvents().length}`, role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text: '之前曾经读取流程和原文；此摘要不保留完整正文。' }] }, { surfaceOp: { op: 'replace', start: nodes[0], end: nodes.at(-1) }, sourceEventSeqs: nodes })
+  session.append('user/message', { id: `summary-${session.snapshotEvents().length}`, role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text: '之前曾经读取流程和原文；此摘要不保留完整正文。' }] }, { surfaceOp: { op: 'replace', startSeq: nodes[0], endSeq: nodes.at(-1) }, sourceEventSeqs: nodes })
 }
 
 test('原生 surface 流程正文与连续页跨请求复用，压缩后历史日志不能冒充可见', () => {
@@ -1627,7 +1633,7 @@ test('原生 surface 流程正文与连续页跨请求复用，压缩后历史�
   assert.equal(visibleSectionLength(agent, text), 0)
   visibleTool(session, 'group_task_review_context_get', { requestId: 'old', section: 'messages', offset: 0, nextOffset: 4, text: text.slice(0, 4) })
   assert.equal(visibleSectionLength(agent, text), text.length)
-  const reopened = Session.fromRestore(session.id, JSON.parse(JSON.stringify(session.snapshotEvents())), JSON.parse(JSON.stringify(session.header)))
+  const reopened = Session.fromRestore(session.id, JSON.parse(JSON.stringify(session.snapshotEvents())), JSON.parse(JSON.stringify(session.header)), 0, 'detached')
   assert.equal(visiblePromptRefs({ session: reopened }, [prompt]).length, 1)
   compactSurface(reopened)
   assert.ok(reopened.snapshotEvents().some((event) => event.type === 'tool/result'))
@@ -1668,7 +1674,7 @@ test('稳定请求跨重启识别已消费消息，原文可见时恢复只发�
   await ingest(h, 'restart'); await h.coordinator.schedule('g')
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
   await h.coordinator.close(); await h.store.close()
-  const restored = Session.fromRestore(session.id, JSON.parse(JSON.stringify(session.snapshotEvents())), JSON.parse(JSON.stringify(session.header)))
+  const restored = Session.fromRestore(session.id, JSON.parse(JSON.stringify(session.snapshotEvents())), JSON.parse(JSON.stringify(session.header)), 0, 'detached')
   let resume, idleCalls = 0
   const reminder = new Promise((resolve) => { resume = resolve })
   const reopened = await setup(t, { snapshot: h.snapshot, session: restored, retryDelayMs: 5, whenIdle: () => ++idleCalls === 1 ? Promise.resolve() : new Promise(() => {}), onSteer: resume })
@@ -1741,7 +1747,16 @@ test('只读快路径拒绝动作和候选变化，Task事实在真实提交临�
 })
 
 test('原生 Inbox 仍停放原请求时，恢复提醒不会再排入第二份正文', async (t) => {
-  const session = Session.create('session-pending-body'), inbox = new Inbox(session, { inserted() {}, discarded() {}, claimed() {} })
+  const ctx = new Context()
+  new AgentRegistry(ctx); new SessionStore(ctx)
+  const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
+  const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
+  new SessionProjectionRegistry(ctx)
+  new SystemPrompt(ctx, { includeRuntimeContext: false }); new LlmRuntime(ctx); new ToolRuntime(ctx)
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
+  const loop = ctx.agentLoop
+  const { session, inbox } = await loop.create('session-pending-body')
+  t.after(() => ctx.fiber.dispose())
   let finish, idleCalls = 0
   const reminder = new Promise((resolve) => { finish = resolve })
   const h = await setup(t, { session, inbox, retryDelayMs: 2, whenIdle: () => ++idleCalls === 1 ? Promise.resolve() : new Promise(() => {}), onSteer(message) { inbox.append('next-step', message); if (message.content[0].text.startsWith('[COORDINATION_RESUME]')) finish() } })

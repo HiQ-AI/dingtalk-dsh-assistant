@@ -1,3 +1,4 @@
+import { inspectSession, inboxHasPending } from './session-persistence.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { groupReplyInstructions } from './workflow-notifications.js'
@@ -5,9 +6,11 @@ import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 
-const IDENTITY = 'dingtalk/group-coordinator-session'
+const IDENTITY = 'plugin:dingtalk/group-coordinator-session'
 const SUBMIT = 'group_coordinator_submit'
 const fail = code => Object.assign(new Error(code), { code })
+const isRuntimeContext = source => source?.kind === 'runtime-context' && source.form === 'snapshot'
+  || source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot'
 
 // 原始事件保持不变；下一轮只携带已结束轮次的来源，不累积失效的Host快照。
 function retainCoordinatorSources(session) {
@@ -23,7 +26,7 @@ function retainCoordinatorSources(session) {
     })) }
     session.append('user/message', createUserMessage({ source: { ...source, groupCoordinatorHistory: true },
       content: [{ type: 'text', text: JSON.stringify(history) }] }),
-    { surfaceOp: { op: 'replace', start: seq, end: seq }, sourceEventSeqs: [seq] })
+    { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
   }
 }
 
@@ -60,7 +63,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     service.rename(session, name)
   }
   async function inspect(sessionId) {
-    try { return await ctx.sessionPersistence.inspect(sessionId) }
+    try { return await inspectSession(ctx.sessionPersistence, sessionId) }
     catch (error) { if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== sessionId) throw error }
   }
   const current = async entry => !closed && !entry.cancelled && await isCurrent(entry.binding)
@@ -109,7 +112,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     const observed = ctx.agents.get(binding.sessionId)
     if (observed || ctx.sessions.get(binding.sessionId)) {
       if (!observed || observed.session !== ctx.sessions.get(binding.sessionId) || observed.status !== 'idle'
-        || observed.inbox.hasPending || binding.status !== 'idle' || !binding.sessionBound)
+        || inboxHasPending(observed.inbox) || binding.status !== 'idle' || !binding.sessionBound)
         throw fail('GROUP_COORDINATOR_SESSION_ALREADY_LIVE')
       // 裸Agent没有dispose capability。仅在公开idle维护锁内验证观察恢复，保留原会话，派生受管子会话。
       return observed.runMaintenance(async signal => {
@@ -117,20 +120,19 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
         history(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
         const lastTurn = events.findLastIndex(event => event.type === 'turn/end')
         const lastInput = events.findLast(event => event.type === 'user/message' && event.data.source?.groupCoordinator)
-        if (observed.inbox.hasPending || observed.session.header.cwd !== cwd || lastTurn < 0
+        if (inboxHasPending(observed.inbox) || observed.session.header.cwd !== cwd || lastTurn < 0
           || lastInput?.data.source.groupCoordinator.leaseEpoch !== binding.leaseEpoch
           || events.slice(lastTurn + 1).some(event => event.type !== 'session/end-seed')
           || events.some(event => event.type === 'user/message' && !event.data.source?.groupCoordinator
-            && !(event.data.source?.kind === 'plugin' && event.data.source.plugin === '@deepseek-ai/dsh-system-prompt'
-              && event.data.source.form === 'snapshot')))
+            && !isRuntimeContext(event.data.source)))
           throw fail('GROUP_COORDINATOR_OBSERVER_SESSION_UNSAFE')
         await ctx.sessions.flush(observed.session)
         const stored = await inspect(binding.sessionId)
         if (!stored || JSON.stringify(stored.events) !== JSON.stringify(events) || signal.aborted
-          || observed.inbox.hasPending || JSON.stringify(observed.session.snapshotEvents()) !== JSON.stringify(events))
+          || inboxHasPending(observed.inbox) || JSON.stringify(observed.session.snapshotEvents()) !== JSON.stringify(events))
           throw fail('GROUP_COORDINATOR_OBSERVER_SESSION_UNSAFE')
         const relocation = await prepareStored(binding, cwd, configuration, stored, true)
-        if (signal.aborted || observed.inbox.hasPending || JSON.stringify(observed.session.snapshotEvents()) !== JSON.stringify(events)) {
+        if (signal.aborted || inboxHasPending(observed.inbox) || JSON.stringify(observed.session.snapshotEvents()) !== JSON.stringify(events)) {
           const owned = idleSessions.get(relocation.sessionId)
           if (owned) { await owned.dispose(); idleSessions.delete(relocation.sessionId) }
           checkedWorkspaces.delete(relocation.sessionId)
@@ -166,8 +168,10 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       : await ctx.agents.create({ sessionId, meta: { cwd, parentSession: binding.sessionId, isSeeded: true },
         setup,
         inheritedEventCount: stored.events.length,
-        seed: [...stored.events, { type: IDENTITY, seq: stored.events.length, time: Date.now(), ignorable: true,
-          data: { version: 1, conversationId: binding.conversationId, sessionId, parentSessionId: binding.sessionId, creationLease: binding.leaseEpoch + 1 } }] })
+        seed: [...stored.events,
+          { type: 'session/end-seed', seq: stored.events.length, time: Date.now(), data: { inherited: true } },
+          { type: IDENTITY, seq: stored.events.length + 1, time: Date.now(), ignorable: true,
+            data: { version: 1, conversationId: binding.conversationId, sessionId, parentSessionId: binding.sessionId, creationLease: binding.leaseEpoch + 1 } }] })
     try {
       permissions(handle); title(handle.agent.session, binding.conversationId)
       retainCoordinatorSources(handle.agent.session)

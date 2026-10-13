@@ -15,8 +15,9 @@ test('UAT2观察仅已知读请求，撤回/保存/消息已读/跨站和编码�
  assert.equal(allowed(origin+'/api%2fdataset/approval/list','GET','document'),false)
 })
 test('登记资源与既有statusIds权限一致，模型不能注入账号/URL',async()=>{
- const r={id:'browser',kind:'uat-review-observation',accountKey:'editor_uat_admin',accountsFile:'D:/trusted/accounts.json',playwrightModule:'D:/trusted/index.mjs',evidenceDirectory:'D:/trusted/proofs'}
+ const r={id:'browser',kind:'uat-review-observation',accountKey:'editor_uat_admin',accountsFile:join(tmpdir(),'trusted','accounts.json'),playwrightModule:join(tmpdir(),'trusted','index.mjs'),evidenceDirectory:join(tmpdir(),'trusted','proofs')}
  assert.doesNotThrow(()=>validateBrowserResource(r));assert.throws(()=>validateBrowserResource({...r,accountKey:'arbitrary'}),{code:'QUERY_BROWSER_CONFIG_INVALID'})
+ for(const key of ['accountsFile','playwrightModule','evidenceDirectory'])assert.throws(()=>validateBrowserResource({...r,[key]:'relative/path'}),{code:'QUERY_BROWSER_CONFIG_INVALID'})
  const c=createAgentStatusReadCapability({resources:[r]});assert.equal(await c.authorize({input:{resourceId:r.id},scope:{statusIds:[]}}),false)
  await assert.rejects(c.execute({input:{resourceId:r.id},scope:{statusIds:[]}}),{code:'QUERY_SCOPE_DENIED'})
  assert.deepEqual(Object.keys(c.parameters.properties),['resourceId'])

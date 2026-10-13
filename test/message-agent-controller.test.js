@@ -1,3 +1,5 @@
+import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -9,7 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { SessionStore } from '@deepseek-ai/dsh-session'
-import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { LlmRuntime, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
@@ -70,7 +72,7 @@ test('问答截短或构造查询引用先反馈纠正，原样引用持久回�
  const ref=`tasks/task-a/sha256-${'a'.repeat(64)}.json`
  const f=await fixture(t,{verifyEvidence:async({refs})=>{reads++;assert.deepEqual(refs,[ref]);return true}})
  f.queryReceipt(ref)
- const c=f.controller({ctx:{sessions:{get:()=>null},sessionPersistence:{inspect:async id=>{inspected++;assert.equal(id,f.sessions.calls[0].binding.sessionId);return {events:f.events}}}}})
+ const c=f.controller({ctx:{sessions:{get:()=>null},sessionPersistence:sessionPersistenceFixture(async id=>{inspected++;assert.equal(id,f.sessions.calls[0].binding.sessionId);return {events:f.events}})}})
  await c.start({},await f.claim())
  const call=f.sessions.calls[0]
  for(const invalid of [ref.split('/').at(-1),'invented-evidence']) {
@@ -161,7 +163,7 @@ test('真实原生 Loop 与持久会话完成等待补充后同 session 续行',
  new SystemPrompt(ctx,{includeRuntimeContext:false,includeHarnessIdentity:false});new LlmRuntime(ctx);new ToolRuntime(ctx)
  const f=await fixture(t)
  new JsonlSessionPersistence(ctx,{root:join(f.dir,'sessions'),packChunks:false,compression:'none',writeBatchMaxDelayMs:1})
- new AgentLoop(ctx,{agents:[],maxParallelToolCalls:1})
+ await ctx.plugin(AgentLoop, {agents:[],maxParallelToolCalls:1})
  let calls=0
  class Scripted extends LlmAdapter {
   async *stream(){
@@ -183,7 +185,7 @@ test('真实原生 Loop 与持久会话完成等待补充后同 session 续行',
   await c.start({},await f.claim());await c.idle()
   const final=await f.store.query({kind:'message.run',runId:'m'})
   assert.equal(final.executions[0].status,'succeeded');assert.equal(final.commands[0].status,'applied');assert.equal(calls,2)
-  const persisted=await ctx.sessionPersistence.inspect(final.executions[0].sessionId)
+  const persisted=await inspectSession(ctx.sessionPersistence, final.executions[0].sessionId)
   const versions=persisted.events.filter(e=>e.type==='user/message').map(e=>e.data.source?.executionSession?.inputVersion).filter(Boolean)
   assert.deepEqual(versions,[1,2])
  } finally {await c.close();await ctx.fiber.dispose()}

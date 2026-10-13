@@ -67,10 +67,10 @@ test('正式configure修改验收配置仍完整保留末尾禁用屏障，只�
 
 test('完整dispose见证必须ready后精确nonce/PID/entry且确已完成，其他事件零回执',async()=>{
  const evidenceDirectory=await mkdtemp(join(tmpdir(),'bootstrap-witness-')),nonce=randomUUID(),config={evidenceDirectory,expectedPid:process.pid,nonce}
- let listener
- const ctx={on(event,fn){assert.equal(event,'loader/partial-dispose');listener=fn}}
+ const listeners=new Map(),ctx={on(event,fn){listeners.set(event,fn)}}
  await assert.rejects(apply(ctx,{...config,expectedPid:process.pid+1}),/BOOTSTRAP_WITNESS_IDENTITY_INVALID/)
  await apply(ctx,config)
+ const listener=listeners.get('loader/partial-dispose')
  assert.equal(JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-ready.json'),'utf8')).nonce,nonce)
  const entry={options:{id:'dingtalk-dsh-assistant',name:'@zzusp/dingtalk-dsh-assistant/resident',disabled:true},_disposing:0}
  for(const invalid of [{...entry,options:{...entry.options,id:'other'}},{...entry,options:{...entry.options,disabled:false}},{...entry,_disposing:1},{...entry,fiber:{}}])await listener(invalid,{},true)
@@ -80,6 +80,28 @@ test('完整dispose见证必须ready后精确nonce/PID/entry且确已完成，�
  const receipt=JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-disposed.json'),'utf8'))
  assert.deepEqual(receipt,{kind:'disposed',nonce,pid:process.pid,entryId:entry.options.id,moduleName:entry.options.name})
  await listener(entry,{},true)
+ assert.deepEqual(JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-disposed.json'),'utf8')),receipt)
+})
+
+test('终态fiber见证拒绝子插件、旧句柄、未排空及未禁用entry',async()=>{
+ const evidenceDirectory=await mkdtemp(join(tmpdir(),'bootstrap-fiber-witness-')),nonce=randomUUID()
+ const listeners=new Map(),ctx={on(event,fn,options){listeners.set(event,fn);if(event==='internal/status')assert.equal(options.global,true)}}
+ await apply(ctx,{evidenceDirectory,expectedPid:process.pid,nonce})
+ const listener=listeners.get('internal/status')
+ const entry={options:{id:'dingtalk-dsh-assistant',name:'@zzusp/dingtalk-dsh-assistant/resident',disabled:true}}
+ const awaitIdle=async()=>{},fiber={entry,uid:null,inertia:undefined,await:awaitIdle};entry.fiber=fiber
+ for(const change of [{uid:1},{await:undefined},{inertia:Promise.resolve()}]){
+  Object.assign(fiber,change);await listener(fiber);Object.assign(fiber,{uid:null,inertia:undefined,await:awaitIdle})
+ }
+ await listener({...fiber}) // A child or replaced fiber cannot prove the entry root disposed.
+ for(const change of [{id:'other'},{name:'other'},{disabled:false}]){
+  const prior={...entry.options};Object.assign(entry.options,change);await listener(fiber);entry.options=prior
+ }
+ await assert.rejects(readFile(join(evidenceDirectory,'bootstrap-disposed.json')),error=>error.code==='ENOENT')
+ await listener(fiber)
+ const receipt=JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-disposed.json'),'utf8'))
+ assert.deepEqual(receipt,{kind:'disposed',nonce,pid:process.pid,entryId:entry.options.id,moduleName:entry.options.name})
+ await listener(fiber)
  assert.deepEqual(JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-disposed.json'),'utf8')),receipt)
 })
 
@@ -100,17 +122,24 @@ test('真实Cordis Loader等待完整disposer后才发指定entry见证',async t
  const {default:witness}=await import('../scripts/bootstrap-workflow-maintenance.mjs')
  const evidenceDirectory=await mkdtemp(join(tmpdir(),'bootstrap-native-')),ctx=new Context()
  await ctx.plugin(Loader)
- let release,started
+ let release,started,releaseChild,startedChild,finished
  const startedPromise=new Promise(resolve=>{started=resolve}),gate=new Promise(resolve=>{release=resolve})
- t.after(async()=>{release();await ctx.fiber.dispose()})
+ const childStarted=new Promise(resolve=>{startedChild=resolve}),childGate=new Promise(resolve=>{releaseChild=resolve})
+ const parentFinished=new Promise(resolve=>{finished=resolve})
+ t.after(async()=>{release();releaseChild();await ctx.fiber.dispose()})
  // 仅业务插件是可控fixture；Loader事件和见证插件均为真实实现，无运行态连接。
- ctx.loader.import=async()=>({apply(context){context.effect(()=>async()=>{started();await gate})}})
+ ctx.loader.import=async()=>({async apply(context){
+  context.effect(()=>async()=>{started();await gate;finished()})
+  await context.plugin({apply(child){child.effect(()=>async()=>{startedChild();await childGate})}})
+ }})
  await ctx.plugin(witness,{evidenceDirectory,expectedPid:process.pid,nonce:randomUUID()})
  const id=await ctx.loader.create({id:'dingtalk-dsh-assistant',name:'@zzusp/dingtalk-dsh-assistant/resident'})
  await ctx.loader.await()
- const pending=ctx.loader.resolve(id).update({disabled:true});await startedPromise
+ const pending=ctx.loader.resolve(id).update({disabled:true});await Promise.all([startedPromise,childStarted])
  await assert.rejects(readFile(join(evidenceDirectory,'bootstrap-disposed.json')),e=>e.code==='ENOENT')
- release();await pending
+ release();await parentFinished
+ await assert.rejects(readFile(join(evidenceDirectory,'bootstrap-disposed.json')),e=>e.code==='ENOENT')
+ releaseChild();await pending
  for(let i=0;i<50;i++){
   try{assert.equal(JSON.parse(await readFile(join(evidenceDirectory,'bootstrap-disposed.json'),'utf8')).entryId,'dingtalk-dsh-assistant');return}catch(error){if(error.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,10))}
  }

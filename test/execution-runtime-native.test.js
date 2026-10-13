@@ -1,3 +1,4 @@
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -10,7 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { SessionStore } from '@deepseek-ai/dsh-session'
-import { JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { LlmRuntime, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
@@ -36,7 +37,7 @@ async function nativeHost(root, mode) {
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
-  new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 1 })
+  await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   const requests = []
   class Model extends LlmAdapter {
     async *stream(options) {
@@ -93,7 +94,7 @@ async function phase(root, mode) {
       await runtime.controller.createRun({ commandId: 'create', taskId: 'task', runId: 'run', workflowId: 'native', input: '固定输入' })
     }
     const state = await runtime.controller.whenIdle('run')
-    const session = await ctx.sessionPersistence.inspect(state.nodes[0].sessionId)
+    const session = await inspectSession(ctx.sessionPersistence, state.nodes[0].sessionId)
     await writeFile(join(root, `${mode}.json`), JSON.stringify({ pid: process.pid, state, requests, session,
       finalOutput: state.run.status === 'succeeded' ? await runtime.artifacts.read(state.nodes[1].outputRef) : null }))
   } finally { await runtime.close(); await ctx.fiber.dispose() }
@@ -141,7 +142,7 @@ if (process.argv[2] === '--m1-native-child') {
       assert.equal(resumed.finalOutput, 14)
       assert.equal(resumed.requests.length, 1)
       if (mode === 'initial') assert.ok(JSON.stringify(resumed.requests).includes('M1_PERSISTED_WAIT_MARKER'))
-      assert.equal(resumed.session.events.filter(e => e.type === 'dingtalk/execution-session').length, 1)
+      assert.equal(resumed.session.events.filter(e => e.type === 'plugin:dingtalk/execution-session').length, 1)
     })
   }
 

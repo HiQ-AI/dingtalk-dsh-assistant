@@ -1,3 +1,4 @@
+import { inspectSession } from './session-persistence.js'
 import { executionDigest, parseArtifactReference } from './execution-artifacts.js'
 import { ownerContextInstructions, ownerContextBaseFields } from './task-owner-context.js'
 import { nameSession } from './session-workspaces.js'
@@ -8,14 +9,17 @@ import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai
 
 const ownerExecutionInstructions = 'Owner是原Task持久的任务执行会话，也是任务级唯一责任人，持续负责目标、推进、验收和如实报告。节点会话是受托执行者；流程编排与Host提供工具、状态、调度和客观门禁，不成为第二个任务责任人。节点故障由原节点会话读取诊断，在现有授权和受信能力内纠正并继续，保留成功节点；不具备修复能力时明确维护方、缺失能力与可验证恢复条件，不承诺自动修复。按当前问题选择成本合理的最小充分验证路径；询问目标环境现在是否修复时优先核验当前行为。每次扩大调查或失败重试前，自行判断新增证据能否改变结论、能否消除关键不确定性、是否有更直接的方法，以及时间、下载量和环境准备成本是否值得。低收益或明显超出当前问题所需的调查应自行停止并调整路径，不为避免报告未验证而无限深挖；不为调查投入新增征求意见或申请环节，也不按镜像、源码或反编译等工具名称一概禁止。停止一条调查路径不等于任务完成；如实区分已确认事实与未验证部分，只有缺少无法自行取得的必要业务信息时才请求具体补充。验证方案、隔离测试夹具、所需角色与运行环境的准备也是Owner的执行工作；缺少现成配置或专用工具时，先用当前原生工具和工作区知识自行调查并准备授权范围内的验证。不得把已有账号清单视为全部可用能力，不得把仅提供现成业务回执作为继续条件。真实共享环境不允许写入时，自行选择可行的隔离核验，并如实区分它与当前线上实测的证明范围；不能虚构账号、授权、结果或跳过真实外部权限。Owner持续跟踪阻塞和未交付范围，任务责任不因等待或委派而转移。不得提交repairCurrentStage或workflowRevision，也不得因内部工程错误新增、替换或重排已启动任务的流程。允许初始化任务计划和按既有计划advance；真实用户目标变更须沿显式需求更新处理。读取system.recovery诊断仅供观察，不得重放旧修复动作；applied历史不回滚，未知效果继续原身份对账。工具或执行错误不是业务用户缺资料；仅真正缺业务信息、权限或批准时明确列出需谁补什么。助手宣告验收完成必须覆盖最新需求和全部交付范围，并基于真实业务验收证据；旧Run成功不代表新增需求完成，不把排查完成当修复完成。有权用户明确确认原任务已完成时，按Host接纳的原话题、明确任务和作者来源记录用户确认完成，无需额外核查或执行；不得将其写成助手验收、伪造工程节点成功，第三方done不得关闭任意任务。'
 
-const IDENTITY_EVENT = 'dingtalk/task-owner-session'
+const IDENTITY_EVENT = 'plugin:dingtalk/task-owner-session'
+const isIdentity = event => event.type === IDENTITY_EVENT || event.type === 'dingtalk/task-owner-session'
+// V4 stores tool-role messages directly; legacy read-only fixtures may still wrap results.
+const toolResults = event => event?.data?.message?.role === 'tool' ? [event.data.message] : event?.data?.message?.content ?? []
 const SUBMIT = 'task_owner_submit'
 const fail = code => Object.assign(new Error(code), { code })
 const notDrained = code => Object.assign(fail(code), { taskOwnerDrained: false })
 const copy = value => structuredClone(value)
 
 // 基线必须仍在模型可见surface中；审计历史本身不能证明模型持有正文。
-export function retainOwnerContextBase(session, binding, input) {
+export function retainOwnerContextBase(session, binding, input, enqueueInitial) {
   if (!input.contextAccess) return input
   const base = Object.fromEntries(ownerContextBaseFields.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]))
   if (!Object.keys(base).length) return input
@@ -25,9 +29,13 @@ export function retainOwnerContextBase(session, binding, input) {
     && event.data.source.ownerContextBase.sessionId === binding.sessionId).at(-1)
   const content = [{ type: 'text', text: JSON.stringify({ ownerContextBase: base }) }]
   if (!previous || JSON.stringify(previous.data.content) !== JSON.stringify(content)) {
-    session.append('user/message', createUserMessage({ source: { kind: 'coordinator', ownerContextBase: {
-      taskId: binding.taskId, sessionId: binding.sessionId, digest } }, content }), previous
-      ? { surfaceOp: { op: 'replace', start: previous.seq, end: previous.seq }, sourceEventSeqs: [previous.seq] }
+    const message = createUserMessage({ source: { kind: 'coordinator', ownerContextBase: {
+      taskId: binding.taskId, sessionId: binding.sessionId, digest } }, content })
+    // V4 reserves the first surface node for the native system prompt. On a fresh
+    // session, queue the baseline so the driver admits it after that protected head.
+    if (!previous && !visible.size && enqueueInitial) enqueueInitial(message)
+    else session.append('user/message', message, previous
+      ? { surfaceOp: { op: 'replace', startSeq: previous.seq, endSeq: previous.seq }, sourceEventSeqs: [previous.seq] }
       : { surfaceOp: 'append' })
   }
   return { ...Object.fromEntries(Object.entries(input).filter(([key]) => !ownerContextBaseFields.includes(key))), contextBaseDigest: digest }
@@ -73,7 +81,7 @@ export function previouslyReadOwnerArtifacts(events, binding) {
       } catch {}
     }
     if (event.type !== 'tool/result') continue
-    for (const result of event.data.message?.content ?? []) {
+    for (const result of toolResults(event)) {
       const call = calls.get(result.toolCallId)
       if (!call || result.isError) continue
       calls.delete(result.toolCallId)
@@ -107,7 +115,7 @@ export function ownerImmutableReadReceipts(events, binding) {
       } catch {}
     }
     if (event.type !== 'tool/result' || !Number.isSafeInteger(event.seq) || event.surfaceOp && event.surfaceOp !== 'append') continue
-    for (const block of event.data.message?.content ?? []) {
+    for (const block of toolResults(event)) {
       const call = calls.get(block.toolCallId)
       if (!call) continue
       calls.delete(block.toolCallId)
@@ -149,30 +157,31 @@ export function ownerImmutableReadReceipts(events, binding) {
   return receipts
 }
 
-export function compactOwnerReadProjection(session, binding, currentRefs, restoreRefs = new Set()) {
+export function compactOwnerReadProjection(session, binding, currentRefs, restoreRefs = new Set(), replaceTools = true) {
   const events = session.snapshotEvents(), receipts = ownerImmutableReadReceipts(events, binding)
   const pages = new Map()
   for (const [ref, receipt] of receipts) for (const sequenceId of receipt.sequences) pages.set(sequenceId, { ref, receipt })
   const bySeq = new Map(events.map(event => [event.seq, event]))
   for (const sequenceId of [...session.surface.nodes]) {
     const currentEvent = bySeq.get(sequenceId)
-    if (currentEvent?.type !== 'tool/result' || currentEvent.data.message?.content?.length !== 1) continue
+    if (currentEvent?.type !== 'tool/result' || toolResults(currentEvent).length !== 1) continue
     // Follow explicit audit ancestry rather than assuming provider call IDs never repeat.
     const originalSeq = pages.has(sequenceId) ? sequenceId
       : (currentEvent.sourceEventSeqs ?? []).find(seq => pages.has(seq) && bySeq.get(seq)?.type === 'tool/result'
-        && bySeq.get(seq).data.message?.content?.[0]?.toolCallId === currentEvent.data.message.content[0].toolCallId)
+        && toolResults(bySeq.get(seq))[0]?.toolCallId === toolResults(currentEvent)[0].toolCallId)
     const original = bySeq.get(originalSeq)
     if (!original) continue
     const { ref, receipt } = pages.get(original.seq)
     receipt.visible.add(original.seq)
     const keep = currentRefs.has(ref) && receipt.retained.has(original.seq)
     const replacement = copy(currentEvent.data)
-    replacement.message.content[0].content = keep ? copy(original.data.message.content[0].content)
+    const replacementResult = replacement.message.role === 'tool' ? replacement.message : replacement.message.content[0]
+    replacementResult.content = keep ? copy(toolResults(original)[0].content)
       : [{ type: 'text', text: JSON.stringify({ historicalArtifactRead: { artifactRef: ref,
         sourceSequenceId: original.seq, contentDigest: receipt.digest, totalLength: receipt.totalLength },
         instruction: '重复或被替代的工具正文仅以引用保留；原始完整工具回执仍在审计日志，当前适用正文保留一份。此投影不是新的读取或验收证明。' }) }]
-    if (JSON.stringify(replacement) !== JSON.stringify(currentEvent.data)) session.append('tool/result', replacement,
-      { surfaceOp: { op: 'replace', start: sequenceId, end: sequenceId }, sourceEventSeqs: [...new Set([original.seq, sequenceId])].sort((a,b) => a-b) })
+    if (replaceTools && JSON.stringify(replacement) !== JSON.stringify(currentEvent.data)) session.append('tool/result', replacement,
+      { surfaceOp: { op: 'replace', startSeq: sequenceId, endSeq: sequenceId }, sourceEventSeqs: [...new Set([original.seq, sequenceId])].sort((a,b) => a-b) })
   }
   // Generic DSH compaction can remove original tool nodes. Rehydrate already-read CURRENT
   // requirements from verified audit pages, not by forcing the agent to issue the same read again.
@@ -197,7 +206,7 @@ export function compactOwnerReadProjection(session, binding, currentRefs, restor
       replacement.content = full ? fullContent : [{ type: 'text', text: JSON.stringify({ historicalOwnerContext: { artifactRef: ref,
         contentDigest: receipt.digest, sourceEventSeqs: [...receipt.retained] }, instruction: '旧正文仅保留引用；本轮适用正文保留一份。' }) }]
       if (JSON.stringify(replacement) !== JSON.stringify(event.data)) session.append('user/message', replacement,
-        { surfaceOp: { op: 'replace', start: event.seq, end: event.seq }, sourceEventSeqs: [...new Set([event.seq, ...receipt.retained])].sort((a,b) => a-b) })
+        { surfaceOp: { op: 'replace', startSeq: event.seq, endSeq: event.seq }, sourceEventSeqs: [...new Set([event.seq, ...receipt.retained])].sort((a,b) => a-b) })
     }
     if (restore && !list.length) session.append('user/message', createUserMessage({ source: { kind: 'coordinator',
       ownerReadProjection: { taskId: binding.taskId, sessionId: binding.sessionId, artifactRef: ref } }, content: fullContent }),
@@ -236,7 +245,7 @@ function assertBinding(binding) {
 }
 
 function validateHistory(events, binding) {
-  const identities = events.filter(event => event.type === IDENTITY_EVENT)
+  const identities = events.filter(isIdentity)
   if (identities.length !== 1 || identities[0].data?.version !== 1
     || identities[0].data.taskId !== binding.taskId
     || identities[0].data.sessionId !== binding.sessionId
@@ -298,15 +307,15 @@ export function createTaskOwnerSessions({ ctx, isCurrent, getWorkspaceDir }) {
       submissionSchema.properties.action.enum = submissionSchema.properties.action.enum.filter(action => action !== 'repairCurrentStage')
       delete submissionSchema.properties.repair
     }
-    return async agentCtx => {
+    return async (agentCtx, agent) => {
       if (entry.onNativeExecution && !entry.deliveryReview) {
         const presets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : ctx.agentPresets
         if (!presets?.mount) throw fail('TASK_OWNER_NATIVE_PRESET_UNAVAILABLE')
-        const session = agentCtx.agent.session
+        const session = agent.session
         const selected = ctx.sessionProjections.stateOf(session, 'agentPreset')
         const preset = await presets.mount(agentCtx, selected ?? undefined)
         if (!selected) session.append('agent-preset/selected', { agentPreset: preset.id })
-        const permissions = presets.serviceFor?.(agentCtx.agent, 'permissionPresets')
+        const permissions = presets.serviceFor?.(agent, 'permissionPresets')
           ?? agentCtx.get?.('permissionPresets')
         if (!permissions?.set || !permissions?.current || !permissions?.resolve) throw fail('TASK_OWNER_PERMISSION_PRESET_UNAVAILABLE')
         const full = permissions.resolve('danger-full-access')
@@ -410,11 +419,11 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
           exec.signal.throwIfAborted()
           let candidate
           try {
-            const header = agentCtx.agent.session.snapshotEvents().findLast(event => event.type === 'request/header')?.data.header
+            const header = agent.session.requestHeader()
             const presets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : ctx.agentPresets
-            const permissions = presets?.serviceFor?.(agentCtx.agent, 'permissionPresets') ?? agentCtx.get?.('permissionPresets')
+            const permissions = presets?.serviceFor?.(agent, 'permissionPresets') ?? agentCtx.get?.('permissionPresets')
             const toolContext = { tools: (header?.tools ?? []).map(tool => ({ name: tool.name, description: tool.description })),
-              permissionPreset: permissions?.current?.(agentCtx.agent.session) ?? null }
+              permissionPreset: permissions?.current?.(agent.session) ?? null }
             candidate = await onCandidate(copy(args.decision), entry.binding, toolContext)
           }
           catch (error) {
@@ -564,7 +573,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
       if (!await current(entry)) return { status: 'stale' }
       if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw notDrained('TASK_OWNER_SESSION_ALREADY_LIVE')
       let stored
-      try { stored = await ctx.sessionPersistence.inspect(binding.sessionId) }
+      try { stored = await inspectSession(ctx.sessionPersistence, binding.sessionId) }
       catch (error) {
         if (error.name !== 'SessionPersistenceNotFoundError' || error.sessionId !== binding.sessionId) throw error
       }
@@ -594,7 +603,9 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
       const session = entry.handle.agent.session
       // Preserve one complete applicable copy; repeated/obsolete pages become audit references.
       // Replacements alter only content, preserving original call identity and error/success status.
-      const receipts = compactOwnerReadProjection(session, binding, entry.readableArtifacts, entry.contextRefs)
+      // V4 tool-result surface rewrites require an open turn. The pre-step hook
+      // applies them before the model request; here only inspect receipts and restore user context.
+      const receipts = compactOwnerReadProjection(session, binding, entry.readableArtifacts, entry.contextRefs, false)
       entry.reusedRefs = [...entry.requiredRefs].filter(ref => {
         const receipt = receipts.get(ref)
         return receipt?.kind === 'owner-context-section' && [...receipt.retained].every(seq => receipt.visible.has(seq))
@@ -613,7 +624,7 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
           text: JSON.stringify({ historicalOwnerSnapshot: { sequenceId: originalSeq }, superseded: true }) }] })
         if (JSON.stringify(event.data.content) === JSON.stringify(replacement.content)) continue
         session.append('user/message', replacement,
-          { surfaceOp: { op: 'replace', start: sequenceId, end: sequenceId }, sourceEventSeqs: [...new Set([originalSeq, sequenceId])] })
+          { surfaceOp: { op: 'replace', startSeq: sequenceId, endSeq: sequenceId }, sourceEventSeqs: [...new Set([originalSeq, sequenceId])] })
       }
       await ctx.sessions.flush(session)
       if (!await current(entry)) return { status: 'stale' }
@@ -629,7 +640,8 @@ ${ownerExecutionInstructions}${ownerFileDeliveryInstructions}${sourceInterpretat
       markRead(promptInput)
       if (promptInput.contextAccess) Object.assign(promptInput.contextAccess, { requiredRefs: [...entry.requiredRefs],
         previouslyReadRefs: entry.reusedRefs ?? [] })
-      const turnInput = retainOwnerContextBase(session, binding, promptInput)
+      const turnInput = retainOwnerContextBase(session, binding, promptInput,
+        message => entry.handle.agent.inbox.append('next-step', message))
       entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator',
         taskOwner: { taskId: binding.taskId, sessionId: binding.sessionId, leaseEpoch: binding.leaseEpoch,
           turnId: binding.turnId } }, content: [{ type: 'text', text: JSON.stringify(turnInput) }] }))

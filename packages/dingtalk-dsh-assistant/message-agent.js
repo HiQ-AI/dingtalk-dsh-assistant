@@ -1,3 +1,4 @@
+import { inspectSession } from './session-persistence.js'
 import { assertGroupReply } from './workflow-notifications.js'
 import { randomUUID } from 'node:crypto'
 import { createExecutionSessions } from './execution-session.js'
@@ -29,7 +30,7 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
 
   const validateOutput = async (entry, input, result) => {
     const live = ctx.sessions.get(entry.sessionId)
-    const events = live ? live.snapshotEvents() : (await ctx.sessionPersistence.inspect(entry.sessionId)).events
+    const events = live ? live.snapshotEvents() : (await inspectSession(ctx.sessionPersistence, entry.sessionId)).events
     const accepted = await validateAgentWorkResult(result, {
       sourceRefs: input.sourceRefs ?? [],
       executedQueryRefs: readExecutedAgentQueryRefs(events, tools.map(tool => tool.name)),

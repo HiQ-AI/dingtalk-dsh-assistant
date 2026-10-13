@@ -1,3 +1,4 @@
+import { inspectSession } from './session-persistence.js'
 import {createNotificationRetirementHandler} from './notification-retirement.js'
 import { sendTaskCompletionNotification } from './task-completion-notification.js'
 import { withAuthorizationSessions } from './execution-authorization-session.js'
@@ -543,7 +544,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const scope = queryScope(input.scope, true)
       return { scope, databases: input.context.databases.filter(resource => scope.databaseIds.includes(resource.id)) }
     },
-    readSessionEvents: ctx?.sessionPersistence ? async sessionId => (await ctx.sessionPersistence.inspect(sessionId)).events : undefined })
+    readSessionEvents: ctx?.sessionPersistence ? async sessionId => (await inspectSession(ctx.sessionPersistence, sessionId)).events : undefined })
   const selectedExternal = createExternalRegistry(external, modelConfig())
   const externalWorkflows = [...selectedExternal.byId.keys()].map(id => ({ id, purpose: externalLabels[id],
     ...(external?.availableTargets ? { targetIds: external.availableTargets.filter(item => item.workflowId === id).map(item => item.targetId) } : {}) }))
