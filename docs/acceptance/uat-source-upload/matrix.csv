@@ -1,0 +1,13 @@
+case,round,status,evidence
+archive-and-upload-contract,1,PASS,round-1.md
+pipeline-source-consumption,1,PASS,round-1.md
+write-before-error-classification,1,FAIL,round-1.md
+failed-prepare-rebuild-baseline,1,FAIL,round-1.md
+archive-and-upload-contract,2,PASS,round-2.md
+pipeline-source-consumption,2,PASS,round-2.md
+write-before-error-classification,2,PASS,round-2.md
+failed-prepare-rebuild-baseline,2,PASS,round-2.md
+deduplication-and-unknown-no-resend,2,PASS,round-2.md
+production-tag-and-frozen-rules,2,PASS,round-2.md
+real-current-branch-preparation,2,PASS,round-2.md
+host-credential-boundary,2,PASS,round-2.md

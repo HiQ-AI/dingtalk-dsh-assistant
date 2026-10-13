@@ -379,7 +379,8 @@ export function createTrustedWorkflowPlatforms({ config, clients, ownerActorId }
     if (!requirement.evidenceRefs?.includes(`uat-merge-task:${taskId}:${mergeRunId}`))
       throw executionError('UAT_REBUILD_SOURCE_UNCONFIRMED')
     const effects = await execution.store.query({ kind: 'effect.list', runId })
-    const failed = effects.filter(item => item.nodeRunId === node.nodeRunId && isTerminalUatBuildFailure(item))
+    const failed = effects.filter(item => item.nodeRunId === node.nodeRunId && isTerminalUatBuildFailure(item)
+      && item.result.result.reason === 'RELEASE_PIPELINE_FAILED')
     const effect = failed[0], prepared = effect?.definition.payload
     if (effects.some(item => !['succeeded', 'failed'].includes(item.state)) || failed.length !== 1
       || effect.runId !== runId || effect.generation !== run.generation || effect.inputDigest !== node.inputDigest

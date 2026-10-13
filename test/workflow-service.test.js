@@ -4063,15 +4063,16 @@ for (const [firstDecision, workflowKind] of [['approved', 'uat-deployment'], ['r
   } finally { await hidden.close() }
 })
 
-for(const valid of [true,false,'observed'])test(`普通UAT构建失败收口 receipt=${valid}：单次发送、保留失败证据且不反复恢复`,async t=>{
+for(const valid of [true,false,'observed','unsent'])test(`普通UAT构建失败收口 receipt=${valid}：单次发送、保留失败证据且不反复恢复`,async t=>{
  let sends=0,reads=0;const operationKey='a'.repeat(64),commitSha='b'.repeat(40)
  const receipt={status:'failed',reason:'RELEASE_PIPELINE_FAILED',operationKey,commitSha,pipelineNumber:319,pipelineStatus:valid?'killed':'running',evidenceRef:'woodpecker:list:319'}
+ if(valid==='unsent')Object.assign(receipt,{reason:'RELEASE_BUILD_NOT_SENT',phase:'preflight',mutationAttempted:false,cause:'SOURCE_UPLOAD_CREDENTIAL_MISSING'})
  const {service,execution,message,startCodeTask}=await fixture(t,'owner',undefined,{allowedEffects:['external.operation'],deliveryOptions:{authorize:async()=>false,authorizeExternal:async()=>({principalId:'owner',authorizationRef:'fixture'}),externalAdapter:{execute:async()=>{sends++;return{status:'unknown'}},reconcile:async()=>{reads++;return receipt}}},execute:async({runId,generation,requirementDigest,perform})=>perform({action:'external',prepared:{action:'external',workflowKind:'uat-deployment',operation:'build',operationKey,expected:{commitSha},resourceKey:'external:fixture:uat',runId,generation,requirementDigest}})})
  const task=await startCodeTask();await execution.controller.whenIdle(task.runId);const before=await execution.controller.state(task.runId);assert.equal(before.run.status,'waiting')
  if(valid==='observed')await execution.delivery.reconcile((await execution.store.query({kind:'effect.list',runId:task.runId}))[0].effectId)
  await settleTaskOwners(service, service.execution);await execution.controller.whenIdle(task.runId);const after=await execution.controller.state(task.runId)
  assert.equal(after.run.status,valid?'failed':'waiting');assert.equal(after.nodes[0].status,valid?'failed':'waiting');assert.equal(after.run.generation,before.run.generation);assert.equal(sends,1);assert.equal(reads,1)
- if(valid){assert.equal(after.nodes[0].waitReason.reference,'RELEASE_PIPELINE_FAILED');assert.deepEqual(await execution.artifacts.read(after.nodes[0].evidenceRefs[0]),receipt)}
+ if(valid){assert.equal(after.nodes[0].waitReason.reference,receipt.reason);assert.deepEqual(await execution.artifacts.read(after.nodes[0].evidenceRefs[0]),receipt)}
  await settleTaskOwners(service, service.execution);await execution.controller.whenIdle(task.runId);assert.equal(sends,1);assert.equal(reads,1)
 })
 

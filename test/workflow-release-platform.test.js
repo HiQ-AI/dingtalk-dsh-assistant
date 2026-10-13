@@ -126,6 +126,57 @@ test('流水线未完成时回读 unknown，不发送第二次', async () => {
   assert.equal(state.calls.length, 1)
 })
 
+test('普通 UAT 确定未发送回执绑定冻结操作，直接失败且不被空流水线对账覆盖', async () => {
+  const { platform, clients } = fixture()
+  const rulesDigest = platform.releaseAdapters['uat-deployment'].rulesDigest
+  const observation = { phase: 'preflight', status: 'confirmed',
+    targetDigest: executionDigest(requirement.target), evidenceRefs: ['github:branch:1'] }
+  const prepared = await platform.releaseAdapters['uat-deployment'].prepareOperation({ kind: 'uat-deployment',
+    operation: 'build', requirement, observation, runId: 'run-unsent', generation: 1,
+    requirementDigest: executionDigest(requirement), expected: { commitSha, previousPhase: 'preflight',
+      previousEvidenceDigest: executionDigest(observation.evidenceRefs) } })
+  let scans = 0
+  const listPipelines = clients.woodpecker.listPipelines
+  clients.woodpecker.listPipelines = async (...args) => { scans++; return listPipelines(...args) }
+  const receipt = { status: 'failed', reason: 'RELEASE_BUILD_NOT_SENT', phase: 'preflight', mutationAttempted: false,
+    cause: 'SOURCE_UPLOAD_CREDENTIAL_MISSING', commitSha, operationKey: prepared.operationKey, evidenceRef: 'source-upload:not-sent' }
+  clients.woodpecker.triggerBuild = async args => {
+    assert.equal(args.operationKey, prepared.operationKey)
+    assert.equal(args.commitSha, commitSha)
+    return receipt
+  }
+  assert.deepEqual(await platform.operationAdapter.execute(prepared), receipt)
+  assert.equal(scans, 1)
+  assert.equal(platform.releaseAdapters['uat-deployment'].rulesDigest, rulesDigest)
+  for (const patch of [{ status: 'unknown' }, { phase: 'dispatch' }, { mutationAttempted: true },
+    { mutationAttempted: undefined }, { operationKey: '0'.repeat(64) }, { commitSha: 'c'.repeat(40) },
+    { cause: '' }, { cause: 'raw token error' }]) {
+    clients.woodpecker.triggerBuild = async () => ({ ...receipt, ...patch })
+    await assert.rejects(platform.operationAdapter.execute(prepared), { code: 'RELEASE_PLATFORM_UNSENT_RECEIPT_INVALID' })
+  }
+})
+
+test('同提交重建确定未发送可失败收口，派发异常和既有失败仍只读 unknown', async () => {
+  const { clients } = fixture()
+  const platform = createReleasePlatform({ targets: [{ ...target, kind: 'uat-rebuild' }], clients })
+  const observation = { phase: 'preflight', status: 'confirmed',
+    targetDigest: executionDigest(requirement.target), evidenceRefs: ['proof'] }
+  const prepared = await platform.releaseAdapters['uat-rebuild'].prepareOperation({ kind: 'uat-rebuild',
+    operation: 'rebuild', requirement, observation, runId: 'run-rebuild-unsent', generation: 1,
+    requirementDigest: executionDigest(requirement), expected: { commitSha, previousPhase: 'preflight',
+      previousEvidenceDigest: executionDigest(observation.evidenceRefs) } })
+  clients.woodpecker.triggerBuild = async () => ({ status: 'failed', reason: 'RELEASE_BUILD_NOT_SENT', phase: 'preflight',
+    mutationAttempted: false, cause: 'SOURCE_UPLOAD_GIT_FAILED', commitSha,
+    operationKey: prepared.operationKey, evidenceRef: 'source-upload:not-sent' })
+  const unsent = await platform.operationAdapter.execute(prepared)
+  assert.equal(unsent.status, 'failed')
+  assert.equal(unsent.reason, 'RELEASE_BUILD_NOT_SENT')
+  assert.equal(unsent.operationKey, prepared.operationKey)
+  clients.woodpecker.triggerBuild = async () => { throw Error('SOURCE_UPLOAD_REQUEST_UNCONFIRMED') }
+  await assert.rejects(platform.operationAdapter.execute(prepared), /SOURCE_UPLOAD_REQUEST_UNCONFIRMED/)
+  assert.equal((await platform.operationAdapter.reconcile(prepared)).status, 'unknown')
+})
+
 test('执行前再查：已有在途流水线不重触发，普通 UAT 失败须走重建', async () => {
   const built = fixture()
   built.state.pipeline.push({ number: 4, branch: target.branch, commitSha, status: 'success' })
