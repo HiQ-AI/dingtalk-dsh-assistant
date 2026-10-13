@@ -1,0 +1,8 @@
+"case_id","description","round_1","evidence"
+"owner-autonomous-execution","原Owner自行选择并实际执行验证而非读维护方结果","PASS","round-1.md: SDK and SQLite tests"
+"same-session-correction","工具失败后同一会话改变策略并继续","PASS","round-1.md: SDK and SQLite tests"
+"task-evidence-identity","执行输入输出绑定原Task需求版本会话与调用","PASS","round-1.md: SDK and SQLite tests"
+"pause-and-stale","暂停取消来源换代阻止继续执行","PASS","round-1.md: SDK and SQLite tests"
+"unknown-effect-reconciliation","响应未知不盲目重复有副作用操作","NOT_RUN","round-1.md: live verification pending"
+"managed-action-boundary","受管生产发布消息入口不得由通用执行绕过","PASS","round-1.md: retained managed policy; no semantic shell isolation claim"
+"original-task-live-delivery","原事项自己取得证据完成结论和群回复","NOT_RUN","round-1.md: live verification pending"

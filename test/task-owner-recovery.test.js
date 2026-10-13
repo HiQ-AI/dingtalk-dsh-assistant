@@ -12,6 +12,56 @@ import { createExecutionController } from '../packages/dingtalk-dsh-assistant/ex
 import { createTaskOwnerController } from '../packages/dingtalk-dsh-assistant/task-owner-controller.js'
 import { createTaskWorkflowContracts } from '../packages/dingtalk-dsh-assistant/task-workflow-contracts.js'
 
+test('native Owner evidence binds session and folds settled calls while preserving failures and unknown starts', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'owner-native-evidence-'))
+  const store = await openExecutionStore({ dbPath: join(directory, 'control.sqlite'), instanceId: 'native-evidence', initialize: true })
+  const directories = { logicalTaskId: 'task', ...Object.fromEntries(['work','tmp','outputs'].map(area => [area,join(directory,'tasks','tasks','task',area)])) }
+  for (const area of ['work','tmp','outputs']) await mkdir(directories[area], { recursive: true })
+  const artifacts = await openExecutionArtifacts({ directory: join(directory,'artifacts'), initialize: true, taskWorkspaceRoot: join(directory,'tasks'), getTaskDirectories: async () => directories })
+  const controller = createExecutionController({ store, artifacts, workflows: [] })
+  let owner, ran = false
+  t.after(async () => { await owner?.close(); await controller.close(); await store.close() })
+  const requirementRef = (await artifacts.put({ request: '核对撤回是否拒绝' }, { taskId: 'task' })).ref
+  await store.command({ id: 'accept', kind: 'task.accept', args: { taskId: 'task', requirementRef, requirementRevision: 1, sessionId: 'native-session', criteria: ['核对撤回是否拒绝'], sourceKey: 'source', eventKey: 'created' } })
+  owner = createTaskOwnerController({ ctx: {}, store, artifacts, controller, modelConfig: () => ({}), advanceTask: async () => {}, authorizeStages: async () => false,
+    sessionRunner: { async close() {}, async run({ binding, onSessionBound, onNativeExecution, onCandidate }) {
+      ran = true
+      await onSessionBound()
+      const execution = Object.fromEntries(['kind','taskId','sessionId','turnId','leaseEpoch','ownerEpoch','requirementRevision','inputDigest'].map(name => [name,binding[name]]))
+      const call = { binding: execution, phase: 'started', callId: 'success', toolName: 'pwsh', arguments: { command: 'Get-Content result.json' } }
+      for (const drift of [{ sessionId: 'other-session' }, { taskId: 'other-task' }, { requirementRevision: 99 }]) {
+        await assert.rejects(onNativeExecution({ ...call, binding: { ...execution, ...drift } }), { code: 'TASK_OWNER_NATIVE_EVIDENCE_INVALID' })
+      }
+      assert.equal((await store.query({ kind: 'task.owner.native-evidence', taskId: 'task' })).length, 0)
+      const started = await onNativeExecution(call)
+      await assert.rejects(onNativeExecution({ ...call, phase: 'settled', arguments: { command: 'changed' }, result: {} }), { code: 'TASK_OWNER_NATIVE_EVIDENCE_INVALID' })
+      const result = { isError: false, content: [{ type: 'text', text: '{"status":"rejected"}' }] }
+      const settled = await onNativeExecution({ ...call, phase: 'settled', result, postExecutionDecision: 'accept' })
+      const failed = { ...call, callId: 'failed' }
+      await onNativeExecution(failed)
+      const failure = { isError: true, content: [{ type: 'text', text: 'Access denied' }], error: { code: 'ACCESS_DENIED' } }
+      const failureRef = await onNativeExecution({ ...failed, phase: 'settled', result: failure, postExecutionDecision: 'accept' })
+      const unknown = await onNativeExecution({ ...call, callId: 'unknown' })
+      const evidence = await owner.readTaskEvidence({ taskId: 'task' })
+      assert.equal(evidence.length, 3)
+      assert.deepEqual(evidence.map(item => item.evidenceRef), [settled.evidenceRef, failureRef.evidenceRef, unknown.evidenceRef])
+      assert.equal(evidence[0].evidence.startedRef, started.evidenceRef)
+      assert.deepEqual(evidence[0].result, result)
+      assert.deepEqual(evidence[1].result, failure)
+      assert.equal(evidence[2].evidence.phase, 'started')
+      assert.equal(evidence[2].result, null)
+      assert.equal((await store.query({ kind: 'task.owner.native-evidence', taskId: 'task' })).length, 5)
+      const decision = { action: 'wait', summary: '核对未知调用效果', evidenceRefs: [unknown.evidenceRef], condition: { kind: 'execution', missing: '独立效果回读', responsibleParty: 'execution-session', resumeWhen: '完成未知效果对账', evidenceRefs: [unknown.evidenceRef] } }
+      await onCandidate(decision)
+      return { status: 'submitted', decision }
+    } } })
+  await owner.drive('task')
+  assert.equal(ran, true)
+  const persisted = await owner.readTaskEvidence({ taskId: 'task' })
+  assert.equal(persisted.length, 3)
+  assert.equal(persisted[2].evidence.phase, 'started')
+})
+
 // Host execution session resumes its frozen node; Task Owner cannot authorize repairs.
 async function managedRecoveryRequest({controller,artifacts,runId,summary,commandId}) {
  const recovery=await controller.inspectNodeRecovery(runId);assert.equal(recovery.repairable,true,JSON.stringify(recovery))

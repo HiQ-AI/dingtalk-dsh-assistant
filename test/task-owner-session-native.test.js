@@ -30,6 +30,64 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { action: 'advance', summary: '启动已登记的第一阶段', evidenceRefs: [] }
 
+test('Owner原生工具自主执行保留真实失败纠错与Host证据', async t => {
+  for (const mode of ['correct', 'background', 'disabled', 'review', 'stale', 'cancel']) await t.test(mode, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'owner-native-tools-'))
+    const calls = [{ name: 'pwsh', args: { valid: false, ...(mode === 'background' ? { run_in_background: true } : {}) } },
+      { name: 'pwsh', args: { valid: true } }]
+    if (mode === 'correct') calls.push({ name: 'task_owner_read_artifact', args: { artifactRef: `sha256-${'4'.repeat(64)}.json` } })
+    const h = await host(root, null, null, decision, undefined, 1, calls)
+    t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
+    let executed = 0, artifactReads = 0, cancellation
+    const receipts = []
+    h.ctx.tools.register({ name: 'pwsh', description: '原生执行fixture',
+      output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      parameters: { type: 'object', properties: { valid: { type: 'boolean' }, run_in_background: { type: 'boolean' } }, required: ['valid'], additionalProperties: false },
+      async execute(args, exec) {
+        executed++
+        if (mode === 'cancel') { cancellation = h.sessions.cancel('native-task'); exec.signal.throwIfAborted() }
+        if (!args.valid) throw new Error('真实命令参数错误')
+        return { text: '真实业务检查通过' }
+      } })
+    const result = await h.sessions.run({ binding: { taskId: 'native-task', sessionId: 'native-owner', turnId: 'turn-1', leaseEpoch: 1,
+      ownerEpoch: 1, requirementRevision: 1, inputDigest: 'a'.repeat(64), sessionBound: false },
+      input: { ...(mode === 'review' ? { deliveryReview: true } : {}) }, provider: 'owner-fixture', model: 'scripted',
+      onSessionBound: async () => {}, onCandidate: async () => {}, readArtifact: async ref => {
+        artifactReads++; assert.equal(ref, `sha256-${'4'.repeat(64)}.json`); return { actual: '真实原生工具证据' }
+      },
+      ...(mode === 'disabled' ? {} : { onNativeExecution: async receipt => {
+        receipts.push(receipt)
+        if (mode === 'stale' && receipt.phase === 'started') h.setLease(2)
+        return { evidenceRef: `sha256-${String(receipts.length).repeat(64)}.json` }
+      } }) })
+    await cancellation
+    if (mode === 'correct') {
+      assert.equal(result.status, 'submitted'); assert.equal(executed, 2)
+      assert.deepEqual(receipts.map(x => x.phase), ['started', 'settled', 'started', 'settled'])
+      assert.equal(receipts[1].result.isError, true); assert.equal(receipts[3].result.isError, false)
+      assert.deepEqual(receipts[0].arguments, receipts[1].arguments)
+      assert.equal(receipts[0].binding.sessionId, 'native-owner')
+      assert.match(JSON.stringify(h.requests[1]), /Host原生工具执行回执/)
+      assert.match(JSON.stringify(h.requests[1]), /真实命令参数错误/)
+      assert.equal(artifactReads, 1)
+    } else if (mode === 'background') {
+      assert.equal(executed, 1); assert.equal(receipts.length, 2)
+      assert.match(JSON.stringify(h.requests[1]), /task_owner_native_background_forbidden/)
+    } else if (mode === 'cancel') {
+      assert.equal(executed, 1); assert.equal(receipts[0].phase, 'started')
+      const settled = receipts.find(x => x.phase === 'settled')
+      assert.equal(settled.cancelled, true); assert.equal(settled.result.isError, true)
+      assert.notEqual(result.status, 'submitted')
+    } else if (mode === 'stale') {
+      assert.equal(executed, 0); assert.equal(result.status, 'stale')
+      assert.equal(receipts[0].phase, 'started')
+    } else {
+      assert.equal(executed, 0); assert.equal(receipts.length, 0)
+      assert.ok(h.requests[0].tools.every(x => x.name !== 'pwsh'))
+    }
+  })
+})
+
 test('真实原生AgentLoop返回克隆complete仍接纳原已验回执', async t => {
   for (const mode of ['clone', 'diagnostic', 'foreign-diagnostic', 'child', 'foreign-child', 'missing-child', 'failed-child', 'unsatisfied-child']) await t.test(mode, async t => {
   const root = await mkdtemp(join(tmpdir(), 'owner-native-completion-'))

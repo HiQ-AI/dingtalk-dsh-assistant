@@ -616,6 +616,55 @@ test('可纠正动作仅封存失败候选，当前Owner收到诊断继续', () 
 })
 
 
+test('原生执行回执独立索引隔离暂停租约需求及任务范围', () => {
+  const f = fixture()
+  try {
+    f.db.prepare("UPDATE business_tasks SET requirement_ref=? WHERE task_id='task-1'").run(`tasks/task-1/sha256-${'a'.repeat(64)}.json`)
+    f.send('task.owner.event',{taskId:'task-1',eventKey:'native-start',eventType:'task.created'})
+    const claim = f.send('task.owner.claim',{taskId:'task-1',turnId:'turn-native',expectedLeaseEpoch:0})
+    const args = {taskId:'task-1',turnId:'turn-native',leaseEpoch:1,requirementRevision:1,sessionId:'session-1',ownerEpoch:1,
+      evidenceRef:`tasks/task-1/sha256-${'b'.repeat(64)}.json`}
+    assert.throws(()=>f.send('task.owner.native-evidence',{...args,leaseEpoch:2}),{code:'TASK_OWNER_LEASE_STALE'})
+    for (const patch of [{requirementRevision:2},{sessionId:'other'},{ownerEpoch:2}])
+      assert.throws(()=>f.send('task.owner.native-evidence',{...args,...patch}),{code:'TASK_OWNER_NATIVE_STALE'})
+    assert.throws(()=>f.send('task.owner.native-evidence',{...args,evidenceRef:args.evidenceRef.replace('task-1','task-2')}),{code:'TASK_OWNER_NATIVE_EVIDENCE_INVALID'})
+    assert.throws(()=>f.send('task.owner.event',{taskId:'task-1',eventKey:'fake-native',eventType:'native.recorded',payloadRef:args.evidenceRef}),{code:'TASK_OWNER_QUERY_EVENT_RESERVED'})
+    f.send('task.owner.native-evidence',args)
+    f.send('task.owner.native-evidence',args)
+    assert.deepEqual(f.read('task.owner.native-evidence'),[{artifactRef:args.evidenceRef,taskId:'task-1',turnId:'turn-native',leaseEpoch:1,requirementRevision:1}])
+    assert.deepEqual(f.read('task.owner.query-evidence'),[])
+    assert.equal(f.read('task.owner').eventWatermark,claim.eventWatermark)
+    assert.equal(f.db.prepare("SELECT event_type FROM task_events WHERE payload_ref=?").get(args.evidenceRef).event_type,'native.recorded')
+    f.db.prepare("UPDATE task_controls SET state='paused' WHERE task_id='task-1'").run()
+    assert.throws(()=>f.send('task.owner.native-evidence',{...args,evidenceRef:`tasks/task-1/sha256-${'c'.repeat(64)}.json`}),{code:'TASK_OWNER_NATIVE_STALE'})
+    f.db.prepare("UPDATE task_controls SET state='active' WHERE task_id='task-1'").run()
+    f.db.prepare("UPDATE business_tasks SET requirement_revision=2 WHERE task_id='task-1'").run()
+    assert.throws(()=>f.send('task.owner.native-evidence',args),{code:'TASK_OWNER_NATIVE_STALE'})
+    assert.deepEqual(f.read('task.owner.native-evidence'),[])
+  } finally { f.db.close() }
+})
+
+test('原生执行证据允许Host完成接纳且拒绝未登记及跨任务引用', () => {
+  const f = fixture()
+  try {
+    f.db.prepare("DELETE FROM task_plan_stages WHERE task_id='task-1'").run()
+    f.db.prepare("UPDATE business_tasks SET plan_revision=0,plan_requirement_revision=0,requirement_ref=? WHERE task_id='task-1'").run(`tasks/task-1/sha256-${'a'.repeat(64)}.json`)
+    f.send('task.owner.event',{taskId:'task-1',eventKey:'native-completion',eventType:'task.created'})
+    f.send('task.owner.claim',{taskId:'task-1',turnId:'turn-native',expectedLeaseEpoch:0})
+    f.send('task.owner.sessionBound',{taskId:'task-1',turnId:'turn-native',leaseEpoch:1,sessionId:'session-1'})
+    const evidenceRef = `tasks/task-1/sha256-${'b'.repeat(64)}.json`
+    const decision = {action:'complete',summary:'基于原生执行真实证据完成核验',evidenceRefs:[evidenceRef],assessments:[{itemId:'acceptance-1',status:'satisfied',evidenceRefs:[evidenceRef]}]}
+    const candidate = {taskId:'task-1',turnId:'turn-native',leaseEpoch:1,decision}
+    assert.throws(()=>f.send('task.owner.candidate',candidate),{code:'TASK_OWNER_COMPLETION_UNPROVEN'})
+    f.send('task.owner.native-evidence',{taskId:'task-1',turnId:'turn-native',leaseEpoch:1,requirementRevision:1,sessionId:'session-1',ownerEpoch:1,evidenceRef})
+    const foreignRef = evidenceRef.replace('task-1','task-2')
+    assert.throws(()=>f.send('task.owner.candidate',{...candidate,decision:{...decision,evidenceRefs:[foreignRef],assessments:[{...decision.assessments[0],evidenceRefs:[foreignRef]}]}}),{code:'TASK_OWNER_COMPLETION_UNPROVEN'})
+    f.send('task.owner.candidate',candidate)
+    assert.equal(f.send('task.owner.accept',{taskId:'task-1',turnId:'turn-native',leaseEpoch:1}).status,'accepted')
+    assert.deepEqual(f.read('task.owner.query-evidence'),[])
+  } finally { f.db.close() }
+})
+
 test('无阶段调查以原生查询证明完成；隔离任务、需求版本和Owner租约', () => {
   const f = fixture()
   try {

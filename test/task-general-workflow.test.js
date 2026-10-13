@@ -328,6 +328,20 @@ test('宿主历史回执精确摘要读取和Task需求绑定，普通文件不�
  assert.equal(calls,1);await writeFile(join(root,'receipt.json'),content+' ');await assert.rejects(capability.execute({input,scope}),{code:'QUERY_RECEIPT_CONTENT_CHANGED'});
 });
 
+test('native Owner evidence enters business acceptance as hostNativeExecution without query promotion or automatic success', async () => {
+ const evidence={kind:'task-native-execution',phase:'settled',cancelled:false,postExecutionDecision:'accept',arguments:{command:'Read actual response'},result:{isError:false,content:[{type:'text',text:'exit code 0'}]}}
+ const directEvidence=[{taskId:'task',requirementRevision:2,queryId:'pwsh',evidenceRef:'native',evidence}]
+ const acceptanceItems=[{itemId:'withdraw',criterion:'双专家场景拒绝撤回',evidenceRefs:['native']}]
+ let approved=false, calls=0
+ const check=async input=>{calls++;const actual=input.evidence[0];assert.equal(actual.hostQuery,undefined);assert.deepEqual(actual.hostNativeExecution,{taskId:'task',requirementRevision:2,toolId:'pwsh',phase:evidence.phase,cancelled:evidence.cancelled,postExecutionDecision:evidence.postExecutionDecision});assert.deepEqual(actual.result,evidence.result);return{status:approved?'satisfied':'unverified',resultVerified:approved,criteria:[{criterion:acceptanceItems[0].criterion,passed:approved,evidenceIds:['native']}]}}
+ const args={check,requirement:{request:'核验真实业务结果'},decision:{summary:'执行已返回',evidenceRefs:['native']},stages:[],directEvidence,acceptanceItems}
+ assert.equal(await verifyTaskAcceptance(args),false)
+ approved=true;assert.equal(await verifyTaskAcceptance(args),true)
+ approved=false;evidence.phase='started';evidence.result=null;assert.equal(await verifyTaskAcceptance(args),false)
+ evidence.phase='settled';evidence.cancelled=true;evidence.result={isError:true,content:[{type:'text',text:'cancelled'}]};assert.equal(await verifyTaskAcceptance(args),false)
+ assert.equal(calls,4)
+})
+
 test('original Owner candidate facts enter semantic completion as hostCandidate, never a task query or automatic success',async()=>{
  const proof={kind:'original-owner-candidate',taskId:'task',requirementRevision:14,evidenceRef:'candidate',artifactRef:'candidate',evidence:{scope:'Actual component and backend/PG evidence; fixture and SSO boundaries preserved'},ownerCandidate:{acceptanceRef:'candidate',reviewRef:'facts',sourceRequirementRevision:10,accepted:true,businessCompleted:false}}
  const item={itemId:'item',criterion:'Current candidate',evidenceRefs:['candidate']},decision={summary:'Actual scope',evidenceRefs:['candidate']}
