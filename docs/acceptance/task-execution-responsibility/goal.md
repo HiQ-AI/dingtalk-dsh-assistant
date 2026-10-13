@@ -1,8 +1,8 @@
 # 任务执行责任与自动续行
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：task-execution-responsibility
-> 最近维护：2026-10-13T09:30:00+08:00
+> 最近维护：2026-10-13T09:34:41+08:00
 > 权威目标：D:/codex/worktrees/task-execution-responsibility/dingtalk-dsh-assistant/docs/acceptance/task-execution-responsibility/goal.md
 
 ## 总目标
@@ -28,13 +28,13 @@
 | SG1 | 实现原会话自动续行与诊断 | 真实控制链路同身份续行，保留前缀 | 已完成 | round-1-service.log：13/13 |
 | SG2 | 统一责任合同和会话指导 | 分类与提示无越权修复要求 | 已完成 | round-2/contract-tests.log：286/286；round-4/classification-tests.log：10/10 |
 | SG3 | 独立反例验证与文档 | matrix 全绿且审查问题关闭 | 已完成 | report.md；最终恢复36/36、Service23/23 |
-| SG4 | 提交与 PR 回读 | 本地实跑、远端状态及正文一致 | 进行中 | 准备提交 |
+| SG4 | 提交与 PR 回读 | 本地实跑、远端状态及正文一致 | 已完成 | ea4e6dad；PR #157 OPEN，已独立回读正文及分支 |
 
 ## 当前检查点
 
 - 当前子目标：SG4
-- 唯一下一步：检查最终 diff，提交并创建 PR，独立回读远端状态。
-- 未闭环项：提交与 PR；部署和真实任务不在本次范围内。
+- 唯一下一步：无，本轮实现、验证及 PR 交付已完成。
+- 未闭环项：无；部署和真实任务不在本次范围内。
 
 ## 进展
 
@@ -51,3 +51,5 @@
 
 - 起点 f37917d；开发目录 D:/codex/worktrees/task-execution-responsibility/dingtalk-dsh-assistant。
 - 详细用例状态以 matrix.csv 为准；每轮输出进 round-N.md。
+
+- 交付：实现提交 ea4e6dad2a71ab9484dac65ad6f7f0300ada1e38；[PR #157](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/157)，独立回读为 OPEN，base=main，head=worktree-task-execution-responsibility。
