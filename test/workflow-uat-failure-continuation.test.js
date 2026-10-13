@@ -53,6 +53,8 @@ for (const [name, mutate] of [
   ['wrong-merge', f => { f.requirement.evidenceRefs = ['uat-merge-task:task:other'] }],
   ['wrong-environment', f => { f.rebuilt.kubernetes.namespace = 'uat3' }],
   ['changed-head', f => { f.branchSha = 'd'.repeat(40) }],
+  ['not-sent', f => { Object.assign(f.effect.result.result, { reason: 'RELEASE_BUILD_NOT_SENT',
+    phase: 'preflight', mutationAttempted: false, cause: 'SOURCE_UPLOAD_CREDENTIAL_MISSING' }) }],
 ]) test(`重建接续拒绝 ${name}`, async () => {
   const { platform } = proofFixture(mutate)
   await assert.rejects(platform.prepareUatRebuildFromFailure({ taskId: 'task', runId: 'failed-run', mergeRunId: 'merge' }))

@@ -14,7 +14,7 @@ test('Host 仅从本机路径装配凭据并只提供客户端对象', async () 
       kubernetes: { readDeployment: () => {}, readPods: () => {}, readEntry: () => {} } } },
   })
   assert.deepEqual(Object.keys(clients), ['release'])
-  assert.deepEqual(observed[5][1].sort(), ['githubToken', 'woodpeckerToken', 'kubeconfig', 'kubeServer', 'kubeSkipTlsVerify', 'registryDockerCliEnabled', 'githubTagWritesEnabled', 'githubMergeWritesEnabled'].sort())
+  assert.deepEqual(observed[5][1].sort(), ['githubToken', 'woodpeckerToken', 'sourceUploadToken', 'kubeconfig', 'kubeServer', 'kubeSkipTlsVerify', 'registryDockerCliEnabled', 'githubTagWritesEnabled', 'githubMergeWritesEnabled'].sort())
   assert.deepEqual(observed[6][1], ['kubeconfig'])
   assert.deepEqual(observed[2][2].slice(0, 5), ['--kubeconfig', 'C:\\secret-home\\k3s\\kubeconfig-uat.yml',
     '--server', 'https://192.168.8.8:6443', '--insecure-skip-tls-verify'])
@@ -41,6 +41,27 @@ test('生产与 UAT 的 Kubernetes 身份按固定命名空间选择且默认不
   assert.equal(await service.release.kubernetes.readPods({ namespace: 'hiqlcd-app-uat3' }), 'uat')
   assert.throws(() => service.release.kubernetes.readDeployment({ namespace: 'other' }),
     /platform_kubernetes_namespace_not_allowed/)
+})
+
+test('源码上传仅使用受信目录专用令牌，不混用平台凭据', async () => {
+  for (const configured of [true, false]) {
+    const created = [], paths = []
+    const clients = await createHostPlatformClients({ secretsDirectory: 'C:/secret-home',
+      statImpl: async () => ({ isFile: () => true }),
+      execFileImpl: async name => ({ stdout: name === 'kubectl'
+        ? JSON.stringify({ data: { WOODPECKER_TOKEN: Buffer.from('wood-secret').toString('base64') } }) : 'github-secret' }),
+      readFileImpl: async path => {
+        paths.push(path)
+        if (configured && path.endsWith('woodpecker-source-upload-token.txt')) return 'upload-secret\n'
+        throw Error('不可回显的凭据文件内容')
+      },
+      createClients: args => { created.push(args); return { github: {}, woodpecker: {}, kubernetes: {} } },
+    })
+    assert.equal(created[0].sourceUploadToken, configured ? 'upload-secret' : undefined)
+    assert.equal(created[1].sourceUploadToken, undefined)
+    assert.equal(paths.filter(path => path.endsWith('woodpecker-source-upload-token.txt')).length, 1)
+    assert.equal(JSON.stringify(clients).includes('secret'), false)
+  }
 })
 
 test('Host 仅从本机 JSON 读取 Bytebase 凭据并隔离于发布客户端', async () => {

@@ -290,6 +290,15 @@ export function createReleasePlatform({ targets, clients }) {
     if (!method) fail('RELEASE_PLATFORM_OPERATION_INVALID')
     const evidence = await read(...method, { target: copy(target), operationKey: prepared.operationKey,
       commitSha: prepared.expected.commitSha, ...(prepared.expected.tag ? { tag: prepared.expected.tag } : {}) })
+    if (evidence.reason === 'RELEASE_BUILD_NOT_SENT') {
+      if (!(prepared.workflowKind === 'uat-deployment' && prepared.operation === 'build'
+          || prepared.workflowKind === 'uat-rebuild' && prepared.operation === 'rebuild')
+        || evidence.status !== 'failed' || evidence.phase !== 'preflight' || evidence.mutationAttempted !== false
+        || evidence.operationKey !== prepared.operationKey || evidence.commitSha !== prepared.expected.commitSha
+        || typeof evidence.cause !== 'string' || !/^[A-Z][A-Z0-9_]{0,95}$/.test(evidence.cause))
+        fail('RELEASE_PLATFORM_UNSENT_RECEIPT_INVALID')
+      return evidence
+    }
     // 发送回执不是完成证据。立即做一次独立回读；未确认时留给恢复流程，不重发。
     const observed = await reconcile(prepared)
     return { ...observed, dispatchEvidenceRef: evidence.evidenceRef }
