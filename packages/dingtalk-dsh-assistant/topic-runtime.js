@@ -674,16 +674,6 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       record = await store.updateTopicDecision({ groupId, topicId, decisionId, patch: { status: 'applying', error: undefined, attempt: (record.attempt ?? 0) + 1, nextRetryAt: undefined } })
       const decision = record.decision
       for (const action of decision.actions) if (action.kind === 'task-cancel') cancelTask(action.taskId)
-      if (decision.reply?.trim()) {
-        const messages = topicMessages(groupId, topicId, record.revision)
-        const target = messages.findLast((message) => decision.basisMessageIds.includes(message.messageId) && message.senderOpenDingTalkId && message.sourceKind !== 'internal' && message.sourceKind !== 'web')
-        const persisted = await appendOutbox({ groupId, sourceMessageId: `topic-decision:${decisionId}`, outboundId: record.outboundId, decisionId,
-          topicRefs: [{ topicId, revision: record.revision }], text: decision.reply, replyKind: decision.replyReview?.kind,
-          matterSourceMessageIds: [...new Set(messages.filter((message) => decision.basisUnitRefs.some((ref) => unitKey(ref) === unitKey(message))).map((message) => message.messageId))], matterUnitRefs: decision.basisUnitRefs,
-          taskIds: record.operations.map((operation) => operation.taskId).filter(Boolean), replacesOutboundIds: decision.replyReview?.replaceOutboundIds,
-          ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: [target.senderOpenDingTalkId] } : {}) })
-        if (persisted?.status) throw new Error(`topic_outbox_${persisted.status}`)
-      }
       for (let index = 0; index < record.operations.length; index++) {
         record = store.getTopic(groupId, topicId).decisions.find((item) => item.decisionId === decisionId)
         const operation = record.operations[index]
@@ -700,6 +690,18 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         await store.updateTopicDecision({ groupId, topicId, decisionId, patch: {
           operations: record.operations.map((item, at) => at === index ? { ...item, status: 'applied' } : item),
         } })
+      }
+      // 回复可能声明任务已承接；必须先确认全部动作落账。失败恢复沿原 operationId 对账。
+      activeOperation = undefined
+      if (decision.reply?.trim()) {
+        const messages = topicMessages(groupId, topicId, record.revision)
+        const target = messages.findLast((message) => decision.basisMessageIds.includes(message.messageId) && message.senderOpenDingTalkId && message.sourceKind !== 'internal' && message.sourceKind !== 'web')
+        const persisted = await appendOutbox({ groupId, sourceMessageId: `topic-decision:${decisionId}`, outboundId: record.outboundId, decisionId,
+          topicRefs: [{ topicId, revision: record.revision }], text: decision.reply, replyKind: decision.replyReview?.kind,
+          matterSourceMessageIds: [...new Set(messages.filter((message) => decision.basisUnitRefs.some((ref) => unitKey(ref) === unitKey(message))).map((message) => message.messageId))], matterUnitRefs: decision.basisUnitRefs,
+          taskIds: record.operations.map((operation) => operation.taskId).filter(Boolean), replacesOutboundIds: decision.replyReview?.replaceOutboundIds,
+          ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: [target.senderOpenDingTalkId] } : {}) })
+        if (persisted?.status) throw new Error(`topic_outbox_${persisted.status}`)
       }
       await store.completeTopicDecision({ groupId, topicId, decisionId, ...decision.topicUpdate })
       onInputSettled?.(groupId)

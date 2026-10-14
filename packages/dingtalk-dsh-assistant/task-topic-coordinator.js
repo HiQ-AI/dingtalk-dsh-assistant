@@ -123,7 +123,18 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
   })
   return {
     schedule: groupId => topics.schedule(groupId), applyAccepted: (...args) => topics.applyAccepted(...args), recover: () => topics.recover(),
-    retryMessage: (groupId, messageId) => topics.retryMessage(groupId, messageId),
+    async retryMessage(groupId, messageId) {
+      // 该错误发生在任务写入之前；显式重试仍复用原动作的版本与已应用证据门禁。
+      for (const topic of store.getGroup(groupId)?.topics ?? []) for (const record of topic.decisions) {
+        const sourceMissing = record.error === 'TASK_TOPIC_SOURCE_VERSION_MISSING'
+        const projectedReply = record.error === 'outbox_identity_duplicate' && record.failureOperationId === record.outboundId
+          && record.operations.every(operation => operation.status === 'applied')
+        if (record.status !== 'blocked' || !sourceMissing && !projectedReply || !record.decision.basisMessageIds.includes(messageId)) continue
+        await topics.retryOperation({ groupId, topicId: topic.topicId, decisionId: record.decisionId,
+          operationId: record.failureOperationId, resolution: projectedReply ? 'applied' : 'not-applied', reason: '显式重试原消息：重新核验准入来源、原动作版本及原回复身份' })
+      }
+      return topics.retryMessage(groupId, messageId)
+    },
     async whenIdle() {
       await topics.drain()
       while (handles.size || dispatches.size) {

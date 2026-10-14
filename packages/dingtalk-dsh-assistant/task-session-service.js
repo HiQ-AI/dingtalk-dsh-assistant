@@ -74,6 +74,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   function topicTaskView(task) { return { ...task, state: task.status === 'completed' ? 'completed' : task.control === 'cancelled' ? 'cancelled' : task.control === 'paused' || task.drained ? 'waiting' : 'running', inputVersion: task.requirementRevision, runSequence: task.runSequence ?? 1, topicRefs: task.topicRefs ?? [], appliedOperations: task.appliedOperations ?? [], acceptanceCriteria: task.requirements ?? [], taskPromptRefs: [] } }
   const command = async (kind, args, id = `${kind}:${randomUUID()}`) => {
     const receipt = await store.command({ id, kind, args: clean(args) })
+    // 幂等收据保存的是当时快照；通知当前态须独立回读，不能用旧 prepared 覆盖已送达缓存。
+    if (receipt.replayed && receipt.result?.notification)
+      receipt.result.notification = await query('notification.get', { notificationId: receipt.result.notification.id })
     if (receipt.result?.execution) executionCache.set(receipt.result.execution.executionId, receipt.result.execution)
     if (receipt.result?.operation) operationCache.set(receipt.result.operation.id ?? receipt.result.operation.operationId, receipt.result.operation)
     if (receipt.result?.notification) notificationCache.set(receipt.result.notification.id, receipt.result.notification)
@@ -332,7 +335,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   async function applyTopicAction(groupId, action, operation, record) {
     if (action.kind === 'task-proposal') return
-    const topicSources = [...new Map(action.topicRefs.flatMap(ref => resolveTopicMessages(residentStore.getGroup(groupId), ref.topicId, ref.revision)).map(message => [message.messageId, message])).values()]
+    // 固定话题历史可能保留早期通知回声；它们仅是上下文，不是准入的用户来源。
+    const topicSources = [...new Map(action.topicRefs.flatMap(ref => resolveTopicMessages(residentStore.getGroup(groupId), ref.topicId, ref.revision))
+      .filter(message => !isOwnNotification({ ...message, groupId })).map(message => [message.messageId, message])).values()]
     const available = await query('source.list', { groupId })
     const sources = []
     for (const message of topicSources) {

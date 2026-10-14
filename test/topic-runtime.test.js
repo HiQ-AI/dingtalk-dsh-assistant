@@ -705,7 +705,7 @@ test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', asyn
   await h.coordinator.drain('g')
   assert.equal(h.store.getTopic('g', request.topicId).decisions[0].status, 'failed')
   assert.equal(h.store.listTasks().length, 1)
-  assert.equal(h.store.getGroup('g').outbox.length, 1)
+  assert.equal(h.store.getGroup('g').outbox.length, 0, '动作提交后的异常仍不能提前发送成功回复')
   await h.store.updateTopicDecision({ groupId: 'g', topicId: request.topicId, decisionId: request.requestId, patch: { nextRetryAt: new Date(0).toISOString() } })
   await h.coordinator.close(); await h.store.close()
   const reopened = await setup(t, { snapshot: h.snapshot })
@@ -715,6 +715,30 @@ test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', asyn
   assert.equal(reopened.store.getTopic('g', request.topicId).processedRevision, 1)
   assert.equal(reopened.store.getTopic('g', request.topicId).decisions[0].operations[0].status, 'applied')
   assert.deepEqual(reopened.applications, [])
+})
+
+test('任务动作拒绝时零回复；动作全部落账后才发送承接回复', async t => {
+  const h = await setup(t, { beforeAction() { throw new Error('TASK_TOPIC_SOURCE_VERSION_MISSING') } })
+  await ingest(h, 'a', { text: '@助理 请查原因' })
+  const request = (await route(h)).pendingDecisions[0]
+  const action = { kind: 'new-task', title: '查原因', objective: '查原因', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] }
+  await h.call('group_decision_submit', submission(request, { actions: [action], reply: '已补入任务', reason: undefined }))
+  await h.coordinator.drain('g')
+  const record = h.store.getTopic('g', request.topicId).decisions[0]
+  assert.equal(record.status, 'blocked')
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  assert.equal(h.store.listTasks().length, 0)
+  const reopened = await setup(t, { snapshot: h.snapshot, beforeAppend() {
+    const current = reopened.store.getTopic('g', request.topicId).decisions[0]
+    assert.ok(current.operations.every(operation => operation.status === 'applied'))
+    assert.equal(reopened.store.listTasks().length, 1)
+  } })
+  await reopened.coordinator.retryOperation({ groupId: 'g', topicId: request.topicId, decisionId: record.decisionId,
+    operationId: record.failureOperationId, resolution: 'not-applied', reason: '已核对来源错误发生在任务写入之前' })
+  assert.equal(reopened.store.getGroup('g').outbox.length, 1)
+  await reopened.coordinator.recover(); await reopened.coordinator.drain('g')
+  assert.equal(reopened.store.getGroup('g').outbox.length, 1)
+  assert.equal(reopened.applications.length, 1)
 })
 
 test('同revision拒绝后新请求跨重启稳定，共享消息不转授权且已发回复不重放', async t => {
@@ -1464,7 +1488,7 @@ test('归类快照只携带当前事实，失败决策按需查询可见精简�
   assert.equal(Object.hasOwn(context.topic, 'decisions'), false)
 })
 
-test('动作必须先有确认且可靠 Outbox 拒绝时零 Task 副作用', async (t) => {
+test('动作仍要求确认草稿，Outbox 拒绝保留已应用动作且恢复不重复执行', async (t) => {
   const h = await setup(t), request = await (async () => { await ingest(h, 'a'); return (await route(h)).pendingDecisions[0] })()
   const actions = [{ kind: 'new-task', title: 'A', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: request.revision }] }]
   assert.equal((await h.call('group_decision_submit', submission(request, { actions }))).status, 'invalid-arguments')
@@ -1472,9 +1496,18 @@ test('动作必须先有确认且可靠 Outbox 拒绝时零 Task 副作用', asy
   h.store.appendOutbox = async () => ({ status: 'reply-busy' })
   assert.equal((await h.call('group_decision_submit', submission(request, { actions, reply: '确认核验' }))).status, 'accepted')
   await h.coordinator.drain('g')
-  assert.equal(h.store.listTasks().length, 0)
-  assert.equal(h.applications.length, 0)
-  assert.equal(h.store.getTopic('g', request.topicId).decisions[0].error, 'topic_outbox_reply-busy')
+  assert.equal(h.store.listTasks().length, 1)
+  assert.equal(h.applications.length, 1)
+  const record = h.store.getTopic('g', request.topicId).decisions[0]
+  assert.equal(record.error, 'topic_outbox_reply-busy')
+  assert.equal(record.failureOperationId, record.outboundId)
+  assert.equal(record.operations[0].status, 'applied')
+  const reopened = await setup(t, { snapshot: h.snapshot })
+  await reopened.coordinator.retryOperation({ groupId: 'g', topicId: request.topicId, decisionId: record.decisionId,
+    operationId: record.outboundId, resolution: 'not-applied', reason: '回复入口拒绝，原任务动作已经独立回读' })
+  assert.equal(reopened.store.listTasks().length, 1)
+  assert.equal(reopened.store.getGroup('g').outbox.length, 1)
+  assert.equal(reopened.applications.length, 0)
 })
 
 test('模型停稳后仅有限次提醒，同一归类请求仍可提交', async (t) => {
