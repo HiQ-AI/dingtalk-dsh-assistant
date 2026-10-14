@@ -23,6 +23,79 @@ const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-lo
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { kind: 'no_action', reason: '人际闲聊' }
 const decisionSchema = { type: 'object', properties: { kind: { type: 'string' }, reason: { type: 'string' } }, required: ['kind', 'reason'], additionalProperties: false }
+
+test('repeated and empty source wakes keep one copy across SDK requests, including dynamic mode', async t => {
+  for (const dynamic of [false, true]) {
+    const root = await mkdtemp(join(tmpdir(), 'group-growth-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const h = await host(root); t.after(() => h.close())
+    const metrics = []
+    const source = { runId: 'run', sourceKey: 'key', sourceVersion: 1, actorId: 'actor', body: 'AUTHORIZATION: only analyze. '.repeat(100), context: { quotes: [{ text: 'quoted boundary' }], attachments: [{ resourceRef: 'attachment' }] } }
+    for (let leaseEpoch = 1; leaseEpoch <= 32; leaseEpoch++) {
+      h.setLease(leaseEpoch)
+      const sources = leaseEpoch <= 6 ? [source] : []
+      const result = await h.sessions.run({ binding: { conversationId: 'group', sessionId: 'growth', turnId: 't' + leaseEpoch, leaseEpoch, sessionBound: leaseEpoch > 1 },
+        dynamic, input: { sources, candidates: [{ obsolete: 'candidate'.repeat(1000) }] }, provider: 'group-fixture', model: 'scripted', decisionSchema,
+        readTools: [{ name: 'read_material', effectClass: 'read', description: 'read', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: () => [{ type: 'text', text: 'UNKNOWN_EFFECT: do not replay' }] }, execute: async () => ({}) }], onSessionBound: async () => {}, onCandidate: async () => {} })
+      assert.equal(result.status, 'submitted')
+      const messages = h.requests.at(-1).messages
+      const hostInputs = messages.filter(m => m.source?.groupCoordinator)
+      const sourceCopies = hostInputs.flatMap(m => m.content).flatMap(b => b.type === 'text' ? JSON.parse(b.text).sources ?? [] : [])
+      assert.equal(sourceCopies.length, 1, `same source must occur once, dynamic=${dynamic}, wake=${leaseEpoch}`)
+      assert.match(JSON.stringify(messages), /quoted boundary/)
+      assert.match(JSON.stringify(messages), /UNKNOWN_EFFECT: do not replay/)
+      assert.ok(hostInputs.length <= 2, 'empty histories must not accumulate')
+      metrics.push({ wake: leaseEpoch, hostMessagesBytes: Buffer.byteLength(JSON.stringify(hostInputs)), messagesBytes: Buffer.byteLength(JSON.stringify(messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(h.requests.at(-1))) })
+    }
+    const saved = await inspectSession(h.ctx.sessionPersistence, 'growth')
+    assert.equal(saved.events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append' && e.data.source?.groupCoordinator).length, 32)
+    assert.ok(metrics.at(-1).hostMessagesBytes < metrics[0].hostMessagesBytes + 1000)
+    assert.ok(metrics.at(-1).messagesBytes - metrics[6].messagesBytes < 25 * 700, 'only actual tool and decision history grows')
+    t.diagnostic(JSON.stringify({ scope: 'group scripted adapter UTF-8 JSON bytes', dynamic, metrics: metrics.filter(item => [1, 6, 7, 32].includes(item.wake)) }))
+  }
+})
+
+test('upgrade deduplicates stored histories but preserves independent versions, actors and authorization evidence', async t => {
+  const { createUserMessage, createSystemMessage } = await import('@deepseek-ai/dsh-llm')
+  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
+  const root = await mkdtemp(join(tmpdir(), 'group-upgrade-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root); t.after(() => h.close())
+  const binding = { conversationId: 'group', sessionId: 'old-histories', turnId: 'old', leaseEpoch: 1, sessionBound: true }
+  const session = h.ctx.sessions.prepare(binding.sessionId, { seed: [{ type: 'plugin:dingtalk/group-coordinator-session', seq: 0, time: Date.now(), ignorable: true,
+    data: { version: 1, conversationId: binding.conversationId, sessionId: binding.sessionId, creationLease: 1 } }] })
+  session.append('turn/start', { turn: 1 }); session.append('step/start', { turn: 1, step: 1 })
+  session.append('system/message', { turn: 1, step: 1, message: createSystemMessage('original system') }, { surfaceOp: 'append' })
+  const source = { runId: 'old', sourceKey: 'source', sourceVersion: 1, actorId: 'owner', body: 'Analyze only', quotes: [{ text: 'approval required' }], attachments: [{ resourceRef: 'original-file' }] }
+  const append = (sources, owner = binding) => session.append('user/message', createUserMessage({ source: { kind: 'coordinator', groupCoordinator: owner, groupCoordinatorHistory: true }, content: [{ type: 'text', text: JSON.stringify({ sources }) }] }), { surfaceOp: 'append' })
+  for (let i = 0; i < 71; i++) append([{ ...source, runId: 'wake-' + i }])
+  for (let i = 0; i < 97; i++) append([])
+  const distinct = [{ ...source, sourceVersion: 2 }, { ...source, actorId: 'other-actor' }, { ...source, body: 'Do not touch production' },
+    { ...source, quotes: [{ text: 'UNKNOWN_EFFECT: must investigate' }] }, { ...source, attachments: [{ resourceRef: 'other-file' }] },
+    { ...source, context: { policy: 'New red line', authorization: { approved: false } } },
+    { actorId: 'owner', body: 'UNIDENTIFIED_SOURCE' }, { actorId: 'owner', body: 'UNIDENTIFIED_SOURCE' }]
+  distinct.forEach(item => append([item]))
+  append([{ ...source, body: 'FOREIGN_GROUP_BOUNDARY' }], { ...binding, conversationId: 'another-group' })
+  session.append('step/end', { turn: 1, step: 1 }); session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const writer = await h.ctx.sessionPersistence.create(session.header)
+  await writer.append(session.snapshotEvents()); await writer.close()
+  const original = (await inspectSession(h.ctx.sessionPersistence, binding.sessionId)).events
+  h.setLease(2)
+  await h.sessions.run({ binding: { ...binding, leaseEpoch: 2, turnId: 'new' }, input: { sources: [], groupResponsibility: 'CURRENT_RED_LINE', candidates: [] },
+    provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {},
+    readTools: [{ name: 'read_material', effectClass: 'read', description: 'read', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: () => [{ type: 'text', text: 'material' }] }, execute: async () => ({}) }] })
+  const saved = await inspectSession(h.ctx.sessionPersistence, binding.sessionId), folded = foldSurface(saved.events)
+  assert.deepEqual(saved.events.slice(0, original.length), original)
+  const messages = folded.nodes.map(seq => deriveEventMessage(saved.events[seq], folded.projectedMessages)).filter(Boolean)
+  const histories = messages.filter(m => m.source?.groupCoordinatorHistory)
+  const sources = histories.flatMap(m => JSON.parse(m.content[0].text).sources)
+  assert.equal(sources.length, 2 + distinct.length)
+  assert.equal(sources.filter(item => item.body === 'UNIDENTIFIED_SOURCE').length, 2)
+  assert.equal(histories.some(m => JSON.parse(m.content[0].text).sources.length === 0), false)
+  assert.match(JSON.stringify(h.requests.at(-1)), /CURRENT_RED_LINE/)
+  for (const marker of ['approval required', 'UNKNOWN_EFFECT', 'other-file', 'New red line', 'approved', 'FOREIGN_GROUP_BOUNDARY']) assert.match(JSON.stringify(sources), new RegExp(marker))
+  t.diagnostic(JSON.stringify({ scope: 'group Host source history, UTF-8 JSON bytes', beforeBytes: Buffer.byteLength(JSON.stringify(original.filter(e => e.type === 'user/message').map(e => e.data))), afterBytes: Buffer.byteLength(JSON.stringify(histories)), originalHistoryCount: original.filter(e => e.type === 'user/message').length, visibleHistoryCount: histories.length }))
+})
 async function host(root, options = {}) {
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)

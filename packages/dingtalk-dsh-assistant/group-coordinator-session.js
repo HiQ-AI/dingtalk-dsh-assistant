@@ -5,6 +5,7 @@ import { groupReplyInstructions } from './group-message.js'
 import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
+import { retireHostContext } from './host-context.js'
 
 const IDENTITY = 'plugin:dingtalk/group-coordinator-session'
 const SUBMIT = 'group_coordinator_submit'
@@ -13,17 +14,45 @@ const isRuntimeContext = source => source?.kind === 'runtime-context' && source.
   || source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot'
 
 // 原始事件保持不变；下一轮只携带已结束轮次的来源，不累积失效的Host快照。
-function retainCoordinatorSources(session) {
+function retainCoordinatorSources(session, currentSources = [], position) {
   const events = session.snapshotEvents()
-  for (const seq of [...session.surface.nodes]) {
+  const conversationId = events.findLast(event => event.type === IDENTITY)?.data.conversationId
+  // Keep all source evidence, including authorization and unknown fields. The
+  // flattened quote/attachment shape remains compatible with stored histories.
+  const project = ({ context, ...source }) => {
+    if (!context) return source
+    const { quotes = source.quotes ?? [], attachments = source.attachments ?? [], ...evidence } = context
+    return { ...source, quotes, attachments, ...(Object.keys(evidence).length ? { context: evidence } : {}) }
+  }
+  const signature = source => {
+    const { runId: _wake, ...evidence } = project(source)
+    return JSON.stringify(evidence, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value)
+  }
+  const seen = new Set((Array.isArray(currentSources) ? currentSources : []).map(signature))
+  for (const seq of [...session.surface.nodes].reverse()) {
     const event = events[seq], source = event?.data?.source
-    if (event.type !== 'user/message' || !source?.groupCoordinator || source.groupCoordinatorHistory) continue
+    if (event.type !== 'user/message' || source?.kind !== 'coordinator'
+      || source.groupCoordinator?.conversationId !== conversationId) continue
     const input = JSON.parse(event.data.content.find(block => block.type === 'text').text)
     if (!Array.isArray(input.sources)) continue
-    const history = { sources: input.sources.map(({ runId, sourceVersion, actorId, body, sourceKey, context }) => ({
-      runId, sourceVersion, actorId, body, sourceKey,
-      ...(context ? { quotes: context.quotes ?? [], attachments: context.attachments ?? [] } : {}),
-    })) }
+    const sources = input.sources.map(project).filter(item => {
+      // Missing source identity cannot safely be deduplicated. Same key/version
+      // with different body, actor, attachments or boundaries also stays visible.
+      if (typeof item.sourceKey !== 'string' || !item.sourceKey || !Number.isSafeInteger(item.sourceVersion) || item.sourceVersion < 1) return true
+      const key = signature(item)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    if (!sources.length) {
+      // Empty developer replacements require an open SDK step. Idle workspace
+      // relocation defers these nodes until the next actual request.
+      if (position) retireHostContext(session, event, position)
+      continue
+    }
+    if (source.groupCoordinatorHistory && sources.length === input.sources.length) continue
+    const history = { sources }
     session.append('user/message', createUserMessage({ source: { ...source, groupCoordinatorHistory: true },
       content: [{ type: 'text', text: JSON.stringify(history) }] }),
     { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
@@ -208,6 +237,13 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
         if (!await current(entry) || entry.staleReason || entry.submitted || dynamic && entry.submissionAttempts >= 3) return { kind: 'reject' }
         return next()
       })
+      agentCtx.on('agent/request', (position, next) => {
+        if (!entry.contextRetired) {
+          retainCoordinatorSources(entry.handle.agent.session, input.sources, position)
+          entry.contextRetired = true
+        }
+        return next()
+      })
       agentCtx.on('tools/pre-execute', async (_exec, next) => !await current(entry) ? { kind: 'deny', reason: 'group_coordinator_stale' } : next())
       agentCtx.on('tools/result', (exec, result) => { if (exec.name === SUBMIT && exec.callId === entry.submitCallId && !result.isError) entry.accepted = true })
       for (const tool of readTools) {
@@ -288,7 +324,6 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       if (stored) history(entry.handle.agent.session.snapshotEvents(), binding)
       if (!dynamic) permissions(entry.handle)
       title(entry.handle.agent.session, binding.conversationId)
-      if (!dynamic) retainCoordinatorSources(entry.handle.agent.session)
       checkedWorkspaces.set(binding.sessionId, JSON.stringify([entry.handle.agent.session.header.cwd, getGroupName?.(binding.conversationId) ?? null]))
       await ctx.sessions.flush(entry.handle.agent.session)
       if (!await current(entry)) return { status: 'stale' }

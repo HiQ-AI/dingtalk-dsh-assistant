@@ -25,6 +25,53 @@ async function fixture(t, options = {}) {
   return { root, config, command, query, task, execution, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }); return store } }
 }
 
+test('active blockers never re-inject recursive execution inputs or historical results', async t => {
+  const f = await fixture(t), owner = await f.task()
+  const raw = { objective: 'Current goal', previousExecutions: [{ input: { previousExecutions: [{ secret: 'recursive-input' }] } }], context: 'large-context'.repeat(2000) }
+  const execution = (await f.command('execution.dispatch', { binding: owner.binding, key: 'blocker', prompt: 'Inspect', input: raw })).result.execution
+  const blockers = await f.query({ kind: 'task.blockers', taskId: 'task' })
+  assert.equal(blockers.executions.length, 1)
+  assert.equal(blockers.executions[0].executionId, execution.executionId)
+  assert.equal(blockers.executions[0].input.objective, raw.objective)
+  assert.equal(blockers.executions[0].input.previousExecutions, undefined)
+  assert.equal(blockers.executions[0].input.context, undefined)
+  assert.equal(blockers.executions[0].results, undefined)
+  assert.deepEqual((await f.query({ kind: 'execution.get', executionId: execution.executionId })).input, raw, 'ledger remains lossless')
+  t.diagnostic(JSON.stringify({ scope: 'owner active blocker executions, UTF-8 JSON bytes', beforeBytes: Buffer.byteLength(JSON.stringify([execution])), afterBytes: Buffer.byteLength(JSON.stringify(blockers.executions)) }))
+})
+
+test('continued and recovering blockers keep current result and unknown operation evidence without recursive history', async t => {
+  const f = await fixture(t), owner = await f.task()
+  let execution, binding
+  for (let version = 1; version <= 5; version++) {
+    const args = { binding: owner.binding, key: 'version-' + version, prompt: 'goal', input: { objective: 'goal-' + version,
+      previousExecutions: execution ? [execution] : [], context: 'old-input'.repeat(1000), recoveryReadOnly: true, readbackOperationId: 'unresolved' } }
+    execution = (await f.command(version === 1 ? 'execution.dispatch' : 'execution.continue', { ...args, ...(execution ? { executionId: execution.executionId } : {}) })).result.execution
+    binding = (await f.command('execution.claim', { executionId: execution.executionId })).result.binding
+    await f.command('execution.result', { binding, output: { evidence: ['UNKNOWN_EFFECT: never replay'], version } })
+    const [blocker] = (await f.query({ kind: 'task.blockers', taskId: 'task' })).executions
+    assert.equal(blocker.result.payload.output.version, version)
+    assert.equal(blocker.input.previousExecutions, undefined); assert.equal(blocker.results, undefined)
+    assert.equal(blocker.input.recoveryReadOnly, true); assert.equal(blocker.input.readbackOperationId, 'unresolved')
+    assert.match(JSON.stringify(blocker.result), /UNKNOWN_EFFECT/)
+    if (version < 5) await f.command('execution.drained', { binding })
+    execution = await f.query({ kind: 'execution.get', executionId: execution.executionId })
+  }
+  assert.equal(execution.results.length, 4, 'all historical results remain in ledger')
+  const other = await f.execution(owner.binding, 'uncertain-write')
+  const operation = (await f.command('operation.prepare', { binding: other, key: 'write', definition: { tool: 'write', input: { boundary: 'UNKNOWN_EFFECT: verify original target' } }, resourceKeys: ['restricted-target'] })).result.operation
+  await f.command('operation.start', { binding: other, operationId: operation.operationId })
+  await f.reopen()
+  const blockers = await f.query({ kind: 'task.blockers', taskId: 'task' })
+  const blocker = blockers.executions.find(item => item.executionId === execution.executionId)
+  assert.equal(blocker.recovering, true)
+  assert.equal(blocker.result.payload.output.version, 5)
+  assert.equal(blocker.input.previousExecutions, undefined)
+  assert.equal(blockers.operations[0].state, 'unknown')
+  assert.deepEqual(blockers.operations[0].definition, operation.definition)
+  assert.deepEqual(blockers.operations[0].resourceKeys, ['restricted-target'])
+})
+
 test('dispatch is durable and idempotent; execution IDs are independent and owner claims are single flight', async t => {
   const f = await fixture(t), owner = await f.task(), a = await f.execution(owner.binding, 'one'), b = await f.execution(owner.binding, 'two')
   assert.notEqual(a.executionId, b.executionId)

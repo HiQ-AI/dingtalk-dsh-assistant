@@ -1,4 +1,5 @@
 import { quotedSendRejectionProof } from './group-message.js'
+import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
@@ -126,7 +127,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       && execution.controlRevision === task.controlRevision && !execution.cancelRequested
   }
   const blockers = taskId => ({
-    executions: execs(taskId).filter(item => !item.drained || !terminalExecutions.has(item.status)),
+    executions: execs(taskId).filter(item => !item.drained || !terminalExecutions.has(item.status)).map(taskExecutionContext),
     operations: ops(taskId).filter(item => !terminalOperations.has(item.state)),
     legacy: legacy(),
   })

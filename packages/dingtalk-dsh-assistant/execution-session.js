@@ -6,6 +6,7 @@ import { sourceInterpretationInstructions } from './task-source-instructions.js'
 import { isAbsolute, dirname, basename, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { retireHostContext } from './host-context.js'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
 const IDENTITY_EVENT = 'plugin:dingtalk/execution-session'
@@ -418,6 +419,18 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       agentCtx.on('agent/pre-step', async (_event, next) => {
         if (!await current(entry) || entry.attempted || entry.haltCode) return { kind: 'reject' }
         entry.steps++
+        return next()
+      })
+      agentCtx.on('agent/request', (position, next) => {
+        if (dynamicExecution(entry.binding) && !entry.contextRetired) {
+          const session = entry.handle.agent.session, events = session.snapshotEvents()
+          for (const seq of [...session.surface.nodes]) {
+            const event = events[seq]
+            if (event.type === 'user/message' && event.data.source?.kind === 'coordinator'
+              && event.data.source.executionSession?.sessionId === entry.binding.sessionId) retireHostContext(session, event, position)
+          }
+          entry.contextRetired = true
+        }
         return next()
       })
       agentCtx.on('tools/pre-execute', async (_exec, next) => {

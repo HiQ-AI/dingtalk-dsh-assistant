@@ -67,6 +67,44 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
     latestInputBytes: Buffer.byteLength(JSON.stringify(latestInput(last))), totalRequestBytes: Buffer.byteLength(JSON.stringify(last)) } }))
 })
 
+test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-five-context-'), metrics = []
+  const scope = 'ONLY_ANALYZE_AUTHORIZATION_'.repeat(300)
+  const h = await fixture.host(async request => {
+    const routed = topicTaskCalls(request)
+    if (routed) return routed
+    const input = latestInput(request)
+    if (!request.tools.some(tool => tool.name === 'task_delegate')) return [call('execution_submit', { output: { status: 'completed', summary: 'done-' + input.objective, evidence: ['UNKNOWN_EFFECT: observed, never replay'], limitations: ['analysis only'], artifacts: [] } })]
+    const host = request.messages.filter(m => m.source?.taskSession && !m.source.taskContextHistory)
+    assert.equal(host.length, 1)
+    assert.match(JSON.stringify(input.sources), /ONLY_ANALYZE_AUTHORIZATION_/)
+    for (const e of [...input.executions, ...input.blockers.executions]) {
+      assert.equal(e.input.previousExecutions, undefined); assert.equal(e.input.context, undefined); assert.equal(e.results, undefined); assert.equal(e.inputHistory, undefined)
+    }
+    const execution = input.executions[0]
+    const reads = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content).filter(b => b.type === 'text').flatMap(b => { try { const value = JSON.parse(b.text); return value.executionId && value.input ? [value] : [] } catch { return [] } })
+    for (const e of reads) { assert.equal(e.input.previousExecutions, undefined); assert.equal(e.results, undefined); assert.equal(e.input.context, undefined) }
+    metrics.push({ lease: input.task.leaseEpoch, inputVersion: execution?.inputVersion ?? 0, currentInputBytes: Buffer.byteLength(JSON.stringify(input)), hostMessagesBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(m => m.source?.taskSession))), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+    if (execution && !execution.drained) return [decision('wait', 'wait for physical drain')]
+    if (execution && !reads.some(e => e.inputVersion === execution.inputVersion)) return [call('task_execution_read', { executionId: execution.executionId })]
+    if (execution?.inputVersion === 32) {
+      assert.match(JSON.stringify(reads), /UNKNOWN_EFFECT/)
+      return [decision('complete', '32 inputs reviewed')]
+    }
+    return [call('task_delegate', { key: 'continue-' + (execution?.inputVersion ?? 0), objective: 'generation-' + ((execution?.inputVersion ?? 0) + 1),
+      ...(execution ? { executionId: execution.executionId } : {}), context: scope }), decision('wait', 'wait for result')]
+  })
+  await h.service.ingest({ ...message, text: '测试助手，仅分析并汇总32轮观察。' + scope }); await h.service.whenIdle()
+  const [task] = await h.query('task.list'), executions = await h.query('execution.list')
+  assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal(executions.length, 1); assert.equal(executions[0].inputVersion, 32)
+  assert.ok(metrics.length >= 33)
+  t.diagnostic(JSON.stringify({ scope: 'native owner scripted adapter, UTF-8 JSON bytes; no provider tokens', metrics: metrics.filter(m => [0, 1, 5, 32].includes(m.inputVersion)) }))
+  assert.ok(metrics.every(m => m.currentInputBytes < 60000), 'current owner input must stay within fixture budget')
+  assert.ok(metrics.at(-1).currentInputBytes < metrics[0].currentInputBytes + 6000, 'input growth excludes recursive execution history')
+  assert.ok(metrics.at(-1).hostMessagesBytes - metrics.at(-1).currentInputBytes < 33 * 750, 'only small retired snapshot markers grow')
+})
+
 test('configured group responsibility reaches group and task models and its reply signature survives notification formatting', { timeout: 15000 }, async t => {
   const fixture = await nativeCase(t, 'task-group-reply-scope-')
   const responsibility = 'GROUP_REPLY_SCOPE_PROOF：日常回复末尾空一行附 - 测试群助理代回。'
