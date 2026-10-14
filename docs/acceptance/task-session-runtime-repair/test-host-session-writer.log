@@ -1,0 +1,13 @@
+✔ official session follow reads a cold Host-owned task without acquiring its writer and the Host resumes next lease (3543.2812ms)
+✔ registered task writers require exact active Host scope while readonly access and unrelated legacy sessions remain available (856.0777ms)
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (16298.6929ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (2118.3136ms)
+✔ native recovery no-op preserves an undrained task writer conflict alert (656.4293ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 21430.2523

@@ -1,3 +1,4 @@
+import { stableTaskResourceIdentity, mergeTaskResources } from './task-message-projections.js'
 import { randomUUID } from 'node:crypto'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
@@ -60,6 +61,8 @@ const replacementBusy = (group, replacesOutboundIds, decisionId) => replacesOutb
 
 const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), senderName: z.string().min(1).optional(), occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(), content: z.string() })
 const messageFactFields = {
+  taskSessionRefs: z.array(z.string().min(1)).optional(),
+  resourceRefs: z.array(z.record(z.string(), z.unknown())).optional(),
   messageVersion: z.number().int().positive(), imageRefs: z.array(z.record(z.string(), z.unknown())).optional(), mediaUnavailable: z.array(z.string()).optional(),
   sourceKind: z.enum(['dingtalk', 'web', 'internal', 'migration']).optional(), migrationSource: z.string().optional(),
   ignoredRanges: z.array(sourceRangeSchema.extend({ reason: z.string().min(1) })).optional(),
@@ -69,6 +72,7 @@ const messageFactFields = {
 const inboundSchema = z.object({
   ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed']).default('pending'), routingError: z.string().optional(),
   messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]),
+  messageAiSendFlag: z.literal('DWS').optional(),
   senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(),
   agentDeliveryStatus: z.enum(['pending', 'steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped']).optional(),
   agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional(),
@@ -80,6 +84,9 @@ const outboundSchema = z.object({
   taskInputVersion: z.number().int().positive().optional(), taskRunSequence: z.number().int().positive().optional(),
   supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), supersededReason: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
   readbackRequired: z.boolean().optional(),
+  notificationState: z.enum(['prepared','starting','unknown','delivered','failed']).optional(),
+  notificationRetryAt: z.string().optional(), notificationFailurePhase: z.enum(['send', 'readback']).optional(), notificationKnownNotSent: z.boolean().optional(),
+  notificationTaskId: z.string().min(1).optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
   sendAttemptCount: z.number().int().nonnegative().optional(), readbackAttemptCount: z.number().int().nonnegative().optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
@@ -186,7 +193,7 @@ const taskSchema = z.object({
 })
 const schedulerSchema = z.object({
   performanceProjection: performanceProjectionSchema.optional(),
-  tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
+  tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), replySignature: z.string().max(80).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
   leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
   // 已移除任务表格同步；仅保留历史字段声明，避免读取旧数据时剥离配置和状态。
   taskSheetSyncConfig: z.object({ enabled: z.boolean(), documentUrl: z.string().url(), nodeId: z.string().min(1), documentName: z.string().min(1), sheetId: z.string().min(1), sheetTitle: z.string().min(1), intervalMs: z.literal(180000) }).optional(),
@@ -328,6 +335,9 @@ export async function openResidentStore(storageDomain) {
   const groups = domain.table('groups')
   const scheduler = domain.table('scheduler')
   const tasks = domain.table('tasks')
+  let taskSessionReader
+  const currentTask = id => taskSessionReader ? taskSessionReader.getTask(id) : tasks.get(id)
+  const currentTasks = () => taskSessionReader ? taskSessionReader.listTasks() : [...tasks.entries()].map(([, task]) => task)
   const alerts = domain.table('alerts')
   const activities = domain.table('activities')
   for (const [key, alert] of alerts.entries()) {
@@ -444,6 +454,11 @@ export async function openResidentStore(storageDomain) {
     hasGroupConfiguration: () => scheduler.get('runtime')?.groupConfigurationInitialized === true,
     getAgentWorkspaceDir: () => scheduler.get('runtime')?.agentWorkspaceDir,
     getAgentNames: () => scheduler.get('runtime')?.agentNames ?? [],
+    getReplySignature: () => scheduler.get('runtime')?.replySignature,
+    setReplySignature: async (replySignature) => {
+      await scheduler.update('runtime', (current) => ({ ...current, replySignature }))
+      return { replySignature }
+    },
     getMaxConcurrentTasks: () => scheduler.get('runtime')?.maxConcurrentTasks,
     setMaxConcurrentTasks: async (maxConcurrentTasks) => {
       await scheduler.update('runtime', (current) => ({ ...current, maxConcurrentTasks }))
@@ -503,8 +518,9 @@ export async function openResidentStore(storageDomain) {
     initializeGroupConfiguration: async () => {
       await scheduler.update('runtime', (current) => ({ ...current, groupConfigurationInitialized: true }))
     },
-    getTask: (taskId) => tasks.get(taskId),
-    listTasks: () => [...tasks.entries()].map(([, task]) => task),
+    setTaskSessionReader: reader => { taskSessionReader = reader },
+    getTask: currentTask,
+    listTasks: currentTasks,
     listTaskTimings: () => {
       const projected = [...activities.entries()].map(([, value]) => value)
       return [...tasks.entries()].map(([, task]) => ({ taskId: task.taskId, ...taskTiming(task, projected) }))
@@ -546,7 +562,7 @@ export async function openResidentStore(storageDomain) {
       await groups.delete(entry[0])
       return { removed: true, groupId }
     }),
-    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, quotedMessage, imageRefs, mediaUnavailable, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
+    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       let duplicate = false, enriched = false, sequence
@@ -559,13 +575,17 @@ export async function openResidentStore(storageDomain) {
             ...(sameQuote && missingText(quotedMessage.content) && !missingText(previous.quotedMessage?.content) ? { content: previous.quotedMessage.content } : {}),
             ...(sameQuote && missingText(quotedMessage.senderName) && !missingText(previous.quotedMessage?.senderName) ? { senderName: previous.quotedMessage.senderName } : {}),
             ...(sameQuote && !quotedMessage.occurredAt && previous.quotedMessage?.occurredAt ? { occurredAt: previous.quotedMessage.occurredAt } : {}) } : previous.quotedMessage
-          const next = { ...previous, ...(senderName ? { senderName } : {}), ...(senderOpenDingTalkId ? { senderOpenDingTalkId } : {}),
+          const next = { ...previous, ...(messageAiSendFlag ? { messageAiSendFlag } : {}), ...(messageVersion > previous.messageVersion ? { text } : {}), ...(resourceRefs !== undefined ? { resourceRefs: mergeTaskResources(previous.resourceRefs, resourceRefs) } : {}), ...(senderName ? { senderName } : {}), ...(senderOpenDingTalkId ? { senderOpenDingTalkId } : {}),
             ...(nextQuote ? { quotedMessage: nextQuote } : {}), ...(imageRefs !== undefined ? { imageRefs } : {}), ...(mediaUnavailable !== undefined ? { mediaUnavailable } : {}) }
-          if (JSON.stringify(next) === JSON.stringify(previous)) return latest
+          if (JSON.stringify(next) === JSON.stringify(previous) && !(messageVersion > previous.messageVersion)) return latest
+          const { resourceRefs: previousResources, messageAiSendFlag: _previousSendFlag, ...previousFacts } = previous
+          const { resourceRefs: nextResources, messageAiSendFlag: _nextSendFlag, ...nextFacts } = next
+          if (!(messageVersion > previous.messageVersion) && JSON.stringify(previousFacts) === JSON.stringify(nextFacts) && stableTaskResourceIdentity(previousResources) === stableTaskResourceIdentity(nextResources))
+            return { ...latest, messages: latest.messages.map(item => item.messageId === messageId ? next : item) }
           enriched = true
           const { facts, ...oldFact } = previous
           next.facts = [...(facts ?? []), oldFact]
-          next.messageVersion = previous.messageVersion + 1
+          next.messageVersion = Math.max(previous.messageVersion + 1, messageVersion ?? 1)
           next.routingStatus = 'pending'
           const now = new Date().toISOString()
           return { ...latest, messages: latest.messages.map((item) => item.messageId === messageId ? next : item),
@@ -578,8 +598,8 @@ export async function openResidentStore(storageDomain) {
             }) }
         }
         sequence = latest.nextSequence
-        const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, quotedMessage,
-          imageRefs, mediaUnavailable, sourceKind, messageVersion: 1, facts: [], routingStatus: 'pending', agentDeliveryStatus: 'pending' })
+        const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, quotedMessage,
+          imageRefs, mediaUnavailable, resourceRefs, sourceKind, messageVersion: messageVersion ?? 1, facts: [], routingStatus: 'pending', agentDeliveryStatus: 'pending' })
         return { ...latest, nextSequence: sequence + 1, messages: [...latest.messages, accepted] }
       })
       return { duplicate, enriched, sequence, group }
@@ -600,7 +620,7 @@ export async function openResidentStore(storageDomain) {
         status: selectedRevision === topic.revision ? topic.status : priorUpdate?.status ?? 'active', openQuestions: selectedRevision === topic.revision ? topic.openQuestions : priorUpdate?.openQuestions ?? [],
         entries: topic.entries.filter((item) => item.revision <= selectedRevision), decisions: visibleDecisions }
       return { groupId, topicId, revision: selectedRevision, topic: snapshot, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit,
-        taskRefs: [...tasks.entries()].map(([, task]) => task).filter((task) => task.groupId === groupId && task.topicRefs.some((ref) => ref.topicId === topicId)).map((task) => ({ taskId: task.taskId, inputVersion: task.inputVersion, topicRefs: task.topicRefs })) }
+        taskRefs: currentTasks().filter((task) => task.groupId === groupId && task.topicRefs.some((ref) => ref.topicId === topicId)).map((task) => ({ taskId: task.taskId, inputVersion: task.inputVersion, topicRefs: task.topicRefs })) }
     },
     routeMessages: ({ groupId, routeId, routingRevision, routes }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -688,19 +708,19 @@ export async function openResidentStore(storageDomain) {
         const targetTaskIds = (decision.actions ?? []).map((action) => action.taskId).filter(Boolean)
         if (new Set(targetTaskIds).size !== targetTaskIds.length) throw new Error('topic_task_action_duplicate')
         for (const action of decision.actions ?? []) {
-          if (action.kind === 'new-task') assertNewTaskMetadata(action)
+          if (action.kind === 'new-task') taskSessionReader ? validateTaskMetadata(action) : assertNewTaskMetadata(action)
           if (action.taskId && !expectedTaskVersions.some((item) => item.taskId === action.taskId)) throw new Error('topic_task_version_required')
-          const task = action.taskId ? tasks.get(action.taskId) : undefined
-          if (task) assertTaskRevisionMetadata(task, action)
+          const task = action.taskId ? currentTask(action.taskId) : undefined
+          if (task && !taskSessionReader) assertTaskRevisionMetadata(task, action)
         }
         for (const expected of expectedTaskVersions) {
-          const task = tasks.get(expected.taskId)
+          const task = currentTask(expected.taskId)
           if (!task || task.groupId !== groupId || task.inputVersion !== expected.inputVersion || (expected.runSequence !== undefined && task.runSequence !== expected.runSequence)) { result = { status: 'task-stale', taskId: expected.taskId }; return latest }
           if (latest.taskReservations.some((item) => item.taskId === expected.taskId) && !(decision.actions.some(action => action.kind === 'task-cancel' && action.taskId === expected.taskId) && decision.actions.filter(action => action.taskId === expected.taskId).every(action => action.kind === 'task-cancel') && blockedReservationsOnly(latest, expected.taskId))) { result = { status: 'task-busy', taskId: expected.taskId }; return latest }
         }
         for (const action of decision.actions ?? []) {
-          const task = action.taskId ? tasks.get(action.taskId) : undefined
-          if (task && action.kind === 'task-context') assertTaskContextRevision(task, action, taskRevisionBasis(latest, task, action))
+          const task = action.taskId ? currentTask(action.taskId) : undefined
+          if (task && !taskSessionReader && action.kind === 'task-context') assertTaskContextRevision(task, action, taskRevisionBasis(latest, task, action))
         }
         const now = new Date().toISOString()
         const operations = (decision.actions ?? []).map((action, actionIndex) => ({ operationId: `${decisionId}:action:${actionIndex}`, actionIndex, status: 'pending',
@@ -718,7 +738,9 @@ export async function openResidentStore(storageDomain) {
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (typeof requestId !== 'string' || !requestId.trim() || typeof text !== 'string' || !text.trim()) throw new Error('web_task_input_invalid')
       const identity = `${groupId}:${requestId}`
-      const messageId = stableId('web', identity), decisionId = stableId('decision', identity), topicId = stableId('topic', `web:${identity}`)
+      const messageId = stableId('web', identity), decisionId = stableId('decision', identity)
+      const reuseTopics = !!taskSessionReader && action.kind === 'new-task' && topicRefs.length > 0
+      const topicId = reuseTopics ? topicRefs[0].topicId : stableId('topic', `web:${identity}`)
       const digest = fingerprint({ text, action, topicRefs })
       let result
       await groups.update(entry[0], (latest) => {
@@ -732,27 +754,33 @@ export async function openResidentStore(storageDomain) {
         for (const ref of topicRefs) {
           const topic = latest.topics.find((item) => item.topicId === ref.topicId)
           if (!topic || topic.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
+          if (reuseTopics && topic.decisions.some(isPendingDecision)) { result = { status: 'topic-busy', topicId: ref.topicId }; return latest }
         }
-        const task = action.taskId ? tasks.get(action.taskId) : undefined
-        if (action.kind === 'new-task') assertNewTaskMetadata(action)
+        const task = action.taskId ? currentTask(action.taskId) : undefined
+        if (action.kind === 'new-task') taskSessionReader ? validateTaskMetadata(action) : assertNewTaskMetadata(action)
         if (action.kind !== 'new-task') {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }
           if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId) && !(action.kind === 'task-cancel' && blockedReservationsOnly(latest, task.taskId))) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
           if ((action.kind === 'task-reopen' && task.state !== 'completed') || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
           const basisIds = new Set([messageId, ...taskRevisionBasis(latest, task, { ...action, topicRefs })])
-          assertTaskContextRevision(task, action, basisIds)
+          if (!taskSessionReader) assertTaskContextRevision(task, action, basisIds)
         }
-        const now = new Date().toISOString(), refs = [...topicRefs, { topicId, revision: 1 }]
+        const now = new Date().toISOString(), refs = reuseTopics ? topicRefs.map(ref => ({ topicId: ref.topicId, revision: ref.revision + (ref.topicId === topicId ? 1 : 0) })) : [...topicRefs, { topicId, revision: 1 }]
+        const revision = reuseTopics ? refs[0].revision : 1
         const unit = { unitId: stableId('unit', `web:${identity}`), unitRevision: 1, unitKey: 'web-input', summary: text, sourceRanges: [{ start: 0, end: text.length, quote: text }], contextRanges: [] }
         const unitRef = { unitId: unit.unitId, unitRevision: 1 }
         const decision = { actions: [{ ...action, topicRefs: refs, basisUnitRefs: [unitRef] }], reply: '', basisMessageIds: [messageId], basisUnitRefs: [unitRef] }
         const operation = { operationId: `${decisionId}:action:0`, actionIndex: 0, taskId: task?.taskId ?? stableId('task', `${decisionId}:0`), status: 'pending' }
-        const record = { decisionId, revision: 1, decision, fingerprint: digest, status: 'accepted', operations: [operation], outboundId: stableId('outbound', decisionId), createdAt: now, updatedAt: now }
+        const record = { decisionId, revision, decision, fingerprint: digest, status: 'accepted', operations: [operation], outboundId: stableId('outbound', decisionId), createdAt: now, updatedAt: now }
         const message = inboundSchema.parse({ messageId, sequence: latest.nextSequence, text, occurredAt: now, sourceKind: 'web', messageVersion: 1, units: [unit], facts: [], routingStatus: 'routed', agentDeliveryStatus: 'delivered' })
         const topic = topicSchema.parse({ topicId, groupId, title: action.title ?? task?.title ?? text.slice(0, 120), revision: 1, processedRevision: 0, status: 'active', summary: '', summaryRevision: 0, openQuestions: [],
           entries: [{ revision: 1, messageId, messageVersion: 1, ...unitRef, action: 'add', effectOwner: true, reason: 'web-task-input' }], decisions: [record], createdAt: now, updatedAt: now })
         result = { status: 'accepted', topicId, messageId, record }
-        return { ...latest, messages: [...latest.messages, message], nextSequence: latest.nextSequence + 1, topics: [...latest.topics, topic], routingRevision: latest.routingRevision + 1,
+        const topics = reuseTopics ? latest.topics.map(item => {
+          const ref = item.topicId === topicId ? refs.find(ref => ref.topicId === item.topicId) : undefined
+          return ref ? { ...item, revision: ref.revision, updatedAt: now, entries: [...item.entries, { revision: ref.revision, messageId, messageVersion: 1, ...unitRef, action: 'add', effectOwner: item.topicId === topicId, reason: 'web-task-authorization' }], decisions: item.topicId === topicId ? [...item.decisions, record] : item.decisions } : item
+        }) : [...latest.topics, topic]
+        return { ...latest, messages: [...latest.messages, message], nextSequence: latest.nextSequence + 1, topics, routingRevision: latest.routingRevision + 1,
           taskReservations: [...latest.taskReservations, { taskId: operation.taskId, inputVersion: task?.inputVersion ?? 1, runSequence: task?.runSequence ?? 1, decisionId, topicId }] }
       })
       return result
@@ -809,17 +837,17 @@ export async function openResidentStore(storageDomain) {
         const record = latest.topics.find(topic => topic.topicId === topicId)?.decisions.find(item => item.decisionId === decisionId)
         if (!record) throw new Error(`topic_decision_not_found:${decisionId}`)
         if (record.status === 'rejected') { rejected = true; return latest }
-        if (!isPendingDecision(record) || !record.decision.actions.length || record.decision.actions.some(action => action.kind !== 'task-context')) return latest
+        if (taskSessionReader || !isPendingDecision(record) || !record.decision.actions.length || record.decision.actions.some(action => action.kind !== 'task-context')) return latest
         if (record.operations.length !== record.decision.actions.length || record.operations.some((operation, index) => operation.actionIndex !== index || operation.taskId !== record.decision.actions[index].taskId)) return latest
         // Task 写入与 operation 写回之间崩溃时，以 Task 的持久幂等账为准。
-        if (record.operations.some(operation => operation.status !== 'pending' || tasks.get(operation.taskId)?.appliedOperations.includes(operation.operationId))) return latest
+        if (record.operations.some(operation => operation.status !== 'pending' || currentTask(operation.taskId)?.appliedOperations.includes(operation.operationId))) return latest
         for (const action of record.decision.actions) {
-          const task = tasks.get(action.taskId)
+          const task = currentTask(action.taskId)
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) return latest
         }
         let failure
         try {
-          for (const action of record.decision.actions) assertTaskContextRevision(tasks.get(action.taskId), action, taskRevisionBasis(latest, tasks.get(action.taskId), action))
+          for (const action of record.decision.actions) assertTaskContextRevision(currentTask(action.taskId), action, taskRevisionBasis(latest, currentTask(action.taskId), action))
         } catch (error) {
           if (!(error instanceof TaskRevisionError)) throw error
           failure = error.message
@@ -882,6 +910,28 @@ export async function openResidentStore(storageDomain) {
       }) }))
       return result
     }),
+    retryBackgroundMessageRouting: ({ groupId, messageId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      const message = entry[1].messages.find(item => item.messageId === messageId)
+      if (!message) throw new Error(`message_not_found:${messageId}`)
+      if (message.routingStatus !== 'routed' || message.agentDeliveryStatus !== 'skipped') return message
+      const updated = { ...message, routingStatus: 'pending', routingError: undefined, agentDeliveryStatus: 'pending' }
+      await groups.update(entry[0], group => ({ ...group, messages: group.messages.map(item => item.messageId === messageId ? updated : item) }))
+      return updated
+    }),
+    recordTaskSessionRouting: ({ groupId, messageId, taskIds }) => serialize(groupId, async () => {
+      if (!Array.isArray(taskIds) || taskIds.some(id => typeof id !== 'string' || !id)) throw new Error('task_session_refs_invalid')
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_found:${groupId}`)
+      const message = entry[1].messages.find(item => item.messageId === messageId)
+      if (!message) throw new Error(`message_not_found:${messageId}`)
+      const refs = [...new Set(taskIds)]
+      if (message.routingStatus === 'routed' && JSON.stringify(message.taskSessionRefs ?? []) === JSON.stringify(refs)) return message
+      const updated = { ...message, taskSessionRefs: refs, routingStatus: 'routed', agentDeliveryStatus: 'delivered' }
+      await groups.update(entry[0], group => ({ ...group, messages: group.messages.map(item => item.messageId === messageId ? updated : item) }))
+      return updated
+    }),
     markMessageAgentDelivery: ({ groupId, messageId, status, error, retryAt }) => serialize(groupId, async () => {
       if (!['pending', 'steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)
       if (retryAt !== undefined && (status !== 'decision-retrying' || Number.isNaN(new Date(retryAt).valueOf()))) throw new Error('message_agent_decision_retry_at_invalid')
@@ -922,6 +972,18 @@ export async function openResidentStore(storageDomain) {
         }),
       }))
       return { groupId, status, onlyMissing, ...(messageIds !== undefined ? { messageIds } : {}), updated, total: group.messages.length, group }
+    }),
+    projectTaskNotification: ({ groupId, outbound }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      const value = outboundSchema.parse(outbound)
+      return groups.update(entry[0], latest => {
+        const previous = latest.outbox.find(item => item.outboundId === value.outboundId)
+        if (previous && previous.text !== value.text) throw new Error('task_notification_projection_conflict')
+        if (previous?.notificationState === 'delivered' && value.notificationState !== 'delivered') return latest
+        const outbox = previous ? latest.outbox.map(item => item.outboundId === value.outboundId ? { ...item, ...value, ...(value.status === 'sent' ? { deliveryPendingReason: undefined, deliveryError: undefined } : {}) } : item) : [...latest.outbox, value]
+        return { ...latest, outbox }
+      })
     }),
     appendOutbox: ({ groupId, preflight, outboundId, topicRefs, decisionId, resultFingerprint, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, matterSourceMessageIds, matterUnitRefs, taskIds, taskInputVersion, taskRunSequence, replacesOutboundIds }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)

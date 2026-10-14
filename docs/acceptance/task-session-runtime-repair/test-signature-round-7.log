@@ -1,0 +1,53 @@
+✔ binds the native quote and true mention to the same source without faking display-name mentions (2.5861ms)
+✔ orders conclusion, evidence, explicit boundaries and signature while preserving supplied links and code (0.609ms)
+✔ does not invent URLs, evidence, questions or acceptance messages (0.409ms)
+✔ emits one signature even when it was supplied in the summary (0.2785ms)
+✔ requires full source binding rather than silently falling back to unquoted sending (0.6235ms)
+✔ rejects private runtime references and UI chrome but preserves legitimate business identifiers (0.4051ms)
+✔ rejects malformed content rather than stringifying objects into a public message (0.1672ms)
+✔ uses the existing DWS quote and mention protocol without unsupported formatting flags (0.3591ms)
+✔ two independent personal signatures never become defaults or derive from responsibility text (0.27ms)
+✔ explicit global signature replaces standalone model signatures without changing business prose (0.7345ms)
+✔ explicit signature accepts a personal one-line label and rejects unsafe or ambiguous multiline values (0.2489ms)
+✔ signature cleanup preserves assignment lists and code examples rather than deleting matching body lines (0.1409ms)
+✔ without a global signature each group retains its model footer and no default is inferred (0.1707ms)
+✔ acceptance ack is durable before readback; readback errors survive restart and never resend (50.8832ms)
+✔ send command diagnostics are bounded and redacted, and unknown never becomes a retry (38.4289ms)
+▶ empty, failed or unobserved readback values cannot establish delivery
+  ✔ {} (41.2604ms)
+  ✔ {"messageId":"m","visible":false} (38.0402ms)
+  ✔ {"messageId":"m","deliveryStatus":"failed"} (36.2365ms)
+  ✔ {"messageId":"m","status":"error"} (36.335ms)
+  ✔ null (40.6327ms)
+✔ empty, failed or unobserved readback values cannot establish delivery (194.87ms)
+✔ ack ID/status takes priority over history; status errors remain visible and verified message is required (1.7299ms)
+✔ successful send preserves actual process diagnostics and malformed stdout preserves failure details (1.11ms)
+✔ restart in the ack/readback window reconciles with durable ack and never dispatches again (50.1986ms)
+✔ nested acknowledgement signature and cloud credentials are redacted by object key (0.5614ms)
+✔ rate-limited readback remains unknown, persists cooldown across restart, and never resends (42.9696ms)
+✔ empty readback schedules bounded exponential observation instead of rapid polling (43.1057ms)
+✔ exact quote-guard refusal is durable not-sent, waits, and retries the same quoted send without fallback (37.7467ms)
+✔ old unknown exact pre-send refusal reclassifies in place without history reads or manufactured ACK (22.5183ms)
+▶ generic exits, altered guard envelopes, accepted evidence and arbitrary knownNotSent flags never authorize resend
+  ✔ wrong origin (21.2034ms)
+  ✔ wrong operation (21.7769ms)
+  ✔ not retryable (21.8829ms)
+  ✔ accepted stdout (24.1664ms)
+  ✔ ordinary rate limit (23.5524ms)
+  ✔ unverified flag (21.019ms)
+✔ generic exits, altered guard envelopes, accepted evidence and arbitrary knownNotSent flags never authorize resend (134.889ms)
+✔ accepted evidence prevents legacy pre-send reclassification and failed retry (26.106ms)
+✔ outbox projection distinguishes guard refusal, unknown observation, and retired confirmation without exposing ACK (0.4586ms)
+✔ failed rows with acceptance evidence cannot re-enter send dispatch (26.427ms)
+✔ native quote and mention must be verified independently of text (2.4934ms)
+✔ unknown send cannot be reconciled from somebody else quoting identical text (0.2083ms)
+✔ exact successful delivery can distinguish unavailable mention metadata from verification (0.8167ms)
+✔ send status cannot replace a different acknowledged message identity (0.1308ms)
+ℹ tests 43
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 805.4343

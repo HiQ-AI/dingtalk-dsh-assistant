@@ -139,36 +139,44 @@ test('数据变更升级v7后重启保留v6冻结定义和旧计划', async t =>
   assert.equal(service.execution.controller.workflowDefinition(prior.id, definition.digest).nodes.find(node=>node.id==='approval-gate').executor,'code')
 })
 
-test('维护HTTP仅受信本机身份可改，严格参数、幂等与过期许可均校验', async t => {
+test('旧维护HTTP写入410；历史service保留本机身份、幂等与过期许可校验', async t => {
   const { service } = await fixture(t,'owner',undefined,{config:{webActorId:'owner'}})
-  const runtime={getWorkflowMaintenance:()=>service.maintenance(),changeWorkflowMaintenance:request=>service.changeMaintenance(request,{channel:'web',actorId:'owner'}),
-    sealWorkflowMaintenance:request=>service.changeMaintenance(request,{channel:'web',actorId:'owner'},'seal'),resumeWorkflowMaintenance:request=>service.changeMaintenance(request,{channel:'web',actorId:'owner'},'resume')}
+  const runtime={getWorkflowMaintenance:()=>service.maintenance(),changeWorkflowMaintenance:()=>assert.fail('retired maintenance write'),
+    sealWorkflowMaintenance:()=>assert.fail('retired seal'),resumeWorkflowMaintenance:()=>assert.fail('retired resume')}
   const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
   const url=`http://127.0.0.1:${server.address().port}/runtime/maintenance`
   const body={requestId:'enter',active:true,expectedRevision:0,maintenanceId:'deploy',reason:'验证维护部署'}
   const post=(value,origin='http://127.0.0.1:3080')=>fetch(url,{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify(value)})
-  assert.equal((await post(body,'https://evil.invalid')).status,403)
-  assert.equal((await post({...body,actorId:'owner'})).status,400)
+  assert.equal((await post(body,'https://evil.invalid')).status,410)
+  assert.equal((await post({...body,actorId:'owner'})).status,410)
   await assert.rejects(service.changeMaintenance(body,{channel:'web',actorId:'other'}),/FORBIDDEN/)
-  assert.equal((await post(body)).status,200);assert.equal((await post(body)).status,200)
+  assert.equal((await post(body)).status,410);assert.equal((await post(body)).status,410)
+  const identity={channel:'web',actorId:'owner'}
+  await service.changeMaintenance(body,identity);await service.changeMaintenance(body,identity)
   assert.equal((await (await fetch(url)).json()).active,true)
   assert.deepEqual(await service.recoverExecutionTasks(),[])
-  assert.equal((await post({...body,requestId:'stale',active:false})).status,409)
-  assert.equal((await post({...body,requestId:'resume',active:false,expectedRevision:1})).status,200)
+  assert.equal((await post({...body,requestId:'stale',active:false})).status,410)
+  await assert.rejects(service.changeMaintenance({...body,requestId:'stale',active:false},identity),/STALE|CONFLICT/)
+  assert.equal((await post({...body,requestId:'resume',active:false,expectedRevision:1})).status,410)
+  await service.changeMaintenance({...body,requestId:'resume',active:false,expectedRevision:1},identity)
   assert.equal((await (await fetch(url)).json()).active,false)
-  assert.equal((await post({...body,requestId:'enter-seal',expectedRevision:2})).status,200)
+  assert.equal((await post({...body,requestId:'enter-seal',expectedRevision:2})).status,410)
+  await service.changeMaintenance({...body,requestId:'enter-seal',expectedRevision:2},identity)
   const transition={requestId:'seal',maintenanceId:'deploy',expectedRevision:3,reason:'原子停机许可'}
   const call=(operation,value)=>fetch(`${url}/${operation}`,{method:'POST',headers:{'content-type':'application/json',origin:'http://127.0.0.1:3080'},body:JSON.stringify(value)})
-  assert.equal((await call('seal',{...transition,processIncarnation:'fake'})).status,400)
-  const sealResponse=await call('seal',transition);assert.equal(sealResponse.status,200)
-  const sealed=(await sealResponse.json()).state
+  assert.equal((await call('seal',{...transition,processIncarnation:'fake'})).status,410)
+  assert.equal((await call('seal',transition)).status,410)
+  const sealed=(await service.changeMaintenance(transition,identity,'seal')).state
   assert.equal(sealed.stopPermitted,true);assert.equal(sealed.phase,'stopping')
-  assert.equal((await post({...body,requestId:'old-leave',active:false,expectedRevision:4})).status,409)
-  assert.equal((await call('resume',{...transition,requestId:'old-resume',expectedRevision:4})).status,409)
-  assert.equal((await call('seal',transition)).status,200)
+  assert.equal((await post({...body,requestId:'old-leave',active:false,expectedRevision:4})).status,410)
+  assert.equal((await call('resume',{...transition,requestId:'old-resume',expectedRevision:4})).status,410)
+  await assert.rejects(service.changeMaintenance({...body,requestId:'old-leave',active:false,expectedRevision:4},identity),/SEALED|STALE|CONFLICT/)
+  await assert.rejects(service.changeMaintenance({...transition,requestId:'old-resume',expectedRevision:4},identity,'resume'),/SEALED|STALE|CONFLICT/)
+  assert.equal((await call('seal',transition)).status,410)
+  await service.changeMaintenance(transition,identity,'seal')
   assert.equal((await (await fetch(url)).json()).stopPermitted,true)
 })
-test('完成观察维护HTTP复用原生完成证明，拒绝跨源和伪造身份并校验CAS', async t => {
+test('完成观察维护HTTP入口退休；历史service复用完成证明并校验身份与CAS', async t => {
   const { service, execution, message } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' } })
   const accepted = await service.ingest(message), state = await service.messages.process(accepted.runId)
   assert.equal(state.commands[0].result.runId, null)
@@ -194,26 +202,27 @@ test('完成观察维护HTTP复用原生完成证明，拒绝跨源和伪造身�
     maintenanceId: 'recovery', reason: '验证恢复' }, identity)
   await service.changeMaintenance({ requestId: 'seal-recovery', expectedRevision: 1,
     maintenanceId: 'recovery', reason: '验证封存后恢复' }, identity, 'seal')
-  const runtime = { getCompletedWorkflowObservations: taskId => service.completedObservations(taskId),
-    reconcileCompletedWorkflowObservations: request => service.reconcileCompletedObservations(request, identity) }
+  const runtime = { getCompletedWorkflowObservations: () => assert.fail('retired observation proof'),
+    reconcileCompletedWorkflowObservations: () => assert.fail('retired observation write') }
   const server = createServer((req, res) => handleRequest(req, res, runtime))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
   const url = `http://127.0.0.1:${server.address().port}/runtime/maintenance/tasks/${taskId}/completed-observations`
-  assert.equal((await fetch(url, { headers: { origin: 'https://evil.invalid' } })).status, 403)
-  const proofResponse = await fetch(url); assert.equal(proofResponse.status, 200)
-  const proof = await proofResponse.json()
+  assert.equal((await fetch(url, { headers: { origin: 'https://evil.invalid' } })).status, 410)
+  assert.equal((await fetch(url)).status, 410)
+  const proof = await service.completedObservations(taskId)
   const body = { requestId: 'restore-completion', completeTurnId: proof.completeTurnId,
     expectedOwnerRevision: proof.expectedOwnerRevision, expectedEventWatermark: proof.expectedEventWatermark,
     maintenanceId: proof.maintenanceId, expectedMaintenanceRevision: proof.expectedMaintenanceRevision, reason: '处理重复成功观察' }
   const post = value => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:3080' }, body: JSON.stringify(value) })
-  assert.equal((await post({ ...body, actorId: 'owner' })).status, 400)
-  assert.equal((await post({ ...body, taskId: 'other' })).status, 400)
-  assert.equal((await post({ ...body, expectedMaintenanceRevision: 0 })).status, 409)
+  assert.equal((await post({ ...body, actorId: 'owner' })).status, 410)
+  assert.equal((await post({ ...body, taskId: 'other' })).status, 410)
+  assert.equal((await post({ ...body, expectedMaintenanceRevision: 0 })).status, 410)
   await assert.rejects(service.reconcileCompletedObservations({ ...body, taskId }, { channel: 'web', actorId: 'other' }), /FORBIDDEN/)
-  const response = await post(body); assert.equal(response.status, 200)
-  const result = await response.json(); assert.equal(result.owner.status, 'idle')
+  assert.equal((await post(body)).status, 410)
+  await assert.rejects(service.reconcileCompletedObservations({ ...body, taskId, expectedMaintenanceRevision: 0 }, identity), /STALE|CONFLICT/)
+  const result = await service.reconcileCompletedObservations({ ...body, taskId }, identity); assert.equal(result.owner.status, 'idle')
   assert.deepEqual(result.owner.decision, before.decision)
-  const repeated = await post(body); assert.equal(repeated.status, 200); assert.equal((await repeated.json()).receipt.replayed, true)
+  assert.equal((await post(body)).status, 410); assert.equal((await service.reconcileCompletedObservations({ ...body, taskId }, identity)).receipt.replayed, true)
   assert.equal((await service.maintenance()).phase, 'stopping')
   assert.equal((await execution.store.query({ kind: 'task.owner', taskId })).processedWatermark, proof.expectedEventWatermark)
 })
@@ -701,7 +710,7 @@ async function fixture(t, actor = 'owner', notifications, options = {}) {
   return { service, execution, message, startCodeTask, root }
 }
 
-test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、恢复只留 Web 且拒绝越权阶段', async t => {
+test('旧 Web 重执行和阶段确认HTTP退休；历史service独立任务、持久幂等、恢复与授权语义保持', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'web-rerun-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const source = join(directory, 'source'), remote = join(directory, 'remote.git')
@@ -769,18 +778,19 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   await assert.rejects(service.submitWebTask({ ...request, mergeTargetId: 'foreign' }, identity), /TARGET_NOT_ADMITTED/)
   await assert.rejects(service.submitWebTask({ ...request, uatEnvironment: 'uat2' }, identity), /TARGET_NOT_ADMITTED/)
   await assert.rejects(service.submitWebTask({ ...request, expectedRunId: 'stale-run' }, identity), /SOURCE_CHANGED/)
-  const server = createServer((req, res) => handleRequest(req, res, { listTaskView: () => service.tasks(), isWorkflowTask: async () => true, submitWorkflowTask: value => service.submitWebTask(value, identity) }))
+  const server = createServer((req, res) => handleRequest(req, res, { listTaskView: () => service.tasks(), isWorkflowTask: async () => true, submitWorkflowTask: () => assert.fail('retired workflow submit') }))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
   const post = (input, origin) => fetch(`http://127.0.0.1:${server.address().port}/tasks/${original.taskId}/rerun`, {
     method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(input) })
-  assert.equal((await post(body, 'https://evil.example')).status, 403)
-  assert.equal((await post({ ...body, actorId: 'owner' })).status, 400)
-  const response = await post(body); assert.equal(response.status, 202)
-  const accepted = await response.json()
+  assert.equal((await post(body, 'https://evil.example')).status, 410)
+  assert.equal((await post({ ...body, actorId: 'owner' })).status, 410)
+  assert.equal((await post(body)).status, 410)
+  const accepted = await service.submitWebTask(request, identity)
   assert.notEqual(accepted.taskId, original.taskId); assert.equal(accepted.reportChannel, 'web')
   assert.equal(accepted.planningError, 'TASK_OWNER_STAGE_NOT_AUTHORIZED')
   assert.equal((await service.submitWebTask(request, identity)).taskId, accepted.taskId)
-  assert.equal((await post({ ...body, objective: '冲突修改' })).status, 409)
+  assert.equal((await post({ ...body, objective: '冲突修改' })).status, 410)
+  await assert.rejects(service.submitWebTask({ ...request, objective: '冲突修改' }, identity), /CONFLICT/)
   const origin = await execution.store.query({ kind: 'task.origin', taskId: accepted.taskId })
   assert.equal(origin.channel, 'web'); assert.equal(origin.rerunOfTaskId, original.taskId)
   const family = await execution.store.query({ kind: 'task.family', taskId: accepted.taskId })
@@ -843,18 +853,22 @@ test('正式 Web 重执行新建独立任务，持久幂等、原任务不变、
   const confirm = (body, originHeader) => fetch(`http://127.0.0.1:${server.address().port}/tasks/${confirmationTask.taskId}/confirm-stage`, {
     method: 'POST', headers: { 'content-type': 'application/json', ...(originHeader ? { origin: originHeader } : {}) }, body: JSON.stringify(body) })
   const confirmRequest = { ...confirmBody, action: 'confirm-stage', taskId: confirmationTask.taskId }
-  assert.equal((await confirm(confirmBody, 'https://evil.example')).status, 403)
-  assert.equal((await confirm({ ...confirmBody, actorId: 'owner' })).status, 400)
+  assert.equal((await confirm(confirmBody, 'https://evil.example')).status, 410)
+  assert.equal((await confirm({ ...confirmBody, actorId: 'owner' })).status, 410)
   await assert.rejects(service.submitWebTask(confirmRequest, { channel: 'web', actorId: 'attacker' }), /FORBIDDEN/)
   for (const change of [{ requirementRevision: 9 }, { controlRevision: 9 }, { planRevision: 9 }, { runSequence: 0 },
     { stageId: 'deploy' }, { outputRef: 'sha256-foreign.json' }]) {
-    assert.equal((await confirm({ ...confirmBody, ...change })).status, 409)
+    assert.equal((await confirm({ ...confirmBody, ...change })).status, 410)
+    await assert.rejects(service.submitWebTask({ ...confirmRequest, ...change }, identity), /CONFLICT|STALE|NOT_WAITING/)
   }
   await assert.rejects(service.submitWebTask({ ...confirmRequest, taskId: accepted.taskId }, identity), /CONFLICT|STALE/)
   const ownerBeforeConfirmation = await execution.store.query({ kind: 'task.owner', taskId: confirmationTask.taskId })
-  assert.equal((await confirm(confirmBody)).status, 202)
-  assert.equal((await confirm(confirmBody)).status, 202)
-  assert.equal((await confirm({ ...confirmBody, confirmationText: '不同授权' })).status, 409)
+  assert.equal((await confirm(confirmBody)).status, 410)
+  assert.equal((await confirm(confirmBody)).status, 410)
+  await service.submitWebTask(confirmRequest, identity)
+  await service.submitWebTask(confirmRequest, identity)
+  assert.equal((await confirm({ ...confirmBody, confirmationText: '不同授权' })).status, 410)
+  await assert.rejects(service.submitWebTask({ ...confirmRequest, confirmationText: '不同授权' }, identity), /CONFLICT/)
   const confirmed = await execution.controller.taskPlan(confirmationTask.taskId)
   assert.equal(confirmed.stages[1].status, 'ready'); assert.equal(confirmed.stages[1].runId, null)
   assert.equal(confirmed.stages[2].status, 'blocked'); assert.equal(confirmed.stages[2].runId, null)
@@ -2271,7 +2285,7 @@ test('运行中原消息修订更新 Task 要求，原会话旧输入冻结且�
   assert.equal((await execution.store.query({kind:'task.owner',taskId:original.taskId})).decision,null)
 })
 
-for(const runCount of [1,2]) test(`新Task真实HTTP补充与取消同库幂等；无权/跨站/伪造输入不执行，暂停不恢复：${runCount}个Run`,async t=>{
+for(const runCount of [1,2]) test(`旧Task HTTP补充取消410；历史service同库幂等、身份与暂停语义保持：${runCount}个Run`,async t=>{
  let started,release;const began=new Promise(r=>started=r),gate=new Promise(r=>release=r);t.after(()=>release())
  const sessions={async close(){},async run({input,onSessionBound,onCandidate}){await onSessionBound();const refs=input.stages.flatMap(stage=>stage.evidenceRefs??[]);const decision=!input.stages.length?{action:'advance',summary:'生成任务文档',evidenceRefs:[],planChange:{kind:'initialize',stages:[markdownStage('# 原始上下文任务')]}}:{action:'wait',summary:'等候后续业务步骤',evidenceRefs:refs,condition:{kind:'execution',missing:'业务结果',responsibleParty:'执行方',resumeWhen:'结果到达后评估',evidenceRefs:refs}};await onCandidate(decision);return{status:'submitted',decision}}}
  const {service,execution,message}=await managedMarkdownFixture(t,undefined,{config:{webActorId:'owner'},taskOwnerSessions:sessions})
@@ -2291,7 +2305,7 @@ for(const runCount of [1,2]) test(`新Task真实HTTP补充与取消同库幂等�
  const original={...command,runId:(await execution.controller.taskPlan(command.taskId)).stages[0].runId}
  await execution.controller.pause({commandId:'pause-test',runId:original.runId,reason:'先暂停'});release();await execution.controller.whenIdle(original.runId)
  let legacyCalls=0
- const runtime={isWorkflowTask:service.isTask,submitWorkflowTask:r=>service.submitWebTask(r,{channel:'web',actorId:'owner'}),cancelTask:()=>{legacyCalls++;throw new Error('legacy')},appendTaskContext:()=>{legacyCalls++;throw new Error('legacy')}}
+ const runtime={isWorkflowTask:service.isTask,submitWorkflowTask:()=>{legacyCalls++;throw Error('retired workflow submit')},cancelTask:()=>{legacyCalls++;throw new Error('legacy')},appendTaskContext:()=>{legacyCalls++;throw new Error('legacy')}}
  const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)))
  const post=(action,body,origin)=>fetch(`http://127.0.0.1:${server.address().port}/tasks/${original.taskId}/${action}`,{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
  if(runCount===2){
@@ -2306,14 +2320,18 @@ for(const runCount of [1,2]) test(`新Task真实HTTP补充与取消同库幂等�
  }
  const task=(await service.tasks())[0],input={requestId:'web-context-1',inputVersion:task.inputVersion,runSequence:task.runSequence,context:'追加检查中文格式',topicRefs:[]}
  assert.equal(task.runSequence,runCount)
- if(runCount===2)assert.equal((await post('context',{...input,requestId:'stale-context',runSequence:1})).status,409)
+ if(runCount===2)assert.equal((await post('context',{...input,requestId:'stale-context',runSequence:1})).status,410)
+ const submit=(action,input)=>service.submitWebTask({...input,action,taskId:task.taskId},{channel:'web',actorId:'owner'})
+ if(runCount===2)await assert.rejects(submit('context',{...input,requestId:'stale-context',runSequence:1}),/CONFLICT|STALE/)
  const acceptanceBefore=await execution.store.query({kind:'task.owner.acceptance',taskId:task.taskId})
  assert.equal((await post('context',input,'https://evil.example')).status,403)
- assert.equal((await post('context',{...input,actorId:'owner'})).status,400)
+ assert.equal((await post('context',{...input,actorId:'owner'})).status,410)
  await assert.rejects(service.submitWebTask({...input,action:'context',taskId:task.taskId},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
  await assert.rejects(service.submitWebTask({action:'reissue-repository',taskId:task.taskId,repositoryId:'backend',requestId:'unauthorized'},{channel:'web',actorId:'attacker'}),/FORBIDDEN/)
- const firstContext=await post('context',input);assert.equal(firstContext.status,202,await firstContext.text());assert.equal((await post('context',input)).status,202)
- assert.equal((await post('context',{...input,context:'冲突内容'})).status,409)
+ assert.equal((await post('context',input)).status,410);assert.equal((await post('context',input)).status,410)
+ await submit('context',input);await submit('context',input)
+ assert.equal((await post('context',{...input,context:'冲突内容'})).status,410)
+ await assert.rejects(submit('context',{...input,context:'冲突内容'}),/CONFLICT/)
  let state=await execution.controller.state(original.runId);assert.equal(state.pendingInputCount,0)
  if(runCount===1)assert.equal(state.run.pauseRequested,true);else assert.equal(state.run.status,'cancelled')
  const revisedPlan=await execution.controller.taskPlan(task.taskId)
@@ -2321,9 +2339,11 @@ for(const runCount of [1,2]) test(`新Task真实HTTP补充与取消同库幂等�
  assert.equal(revisedPlan.task.requirementRevision,2)
  assert.match((await execution.artifacts.read(revisedPlan.task.requirementRef)).request,/追加检查中文格式/u)
  assert.equal((await execution.artifacts.read(state.run.requirementRef)).input.content,'# 原始上下文任务')
- assert.equal((await post('reopen',input)).status,409);assert.equal((await post('archive',{})).status,409)
+ assert.equal((await post('reopen',input)).status,410);assert.equal((await post('archive',{})).status,410)
+ await assert.rejects(submit('reopen',input),/CONFLICT|STALE|INVALID|UNSUPPORTED/);await assert.rejects(submit('archive',{}),/CONFLICT|STALE|COMPLETED|NOT_COMPLETE/)
  const cancel={requestId:'web-cancel-1',inputVersion:(await service.tasks())[0].inputVersion,runSequence:task.runSequence,reason:'停止'}
- assert.equal((await post('cancel',cancel)).status,202);assert.equal((await post('cancel',cancel)).status,202)
+ assert.equal((await post('cancel',cancel)).status,410);assert.equal((await post('cancel',cancel)).status,410)
+ await submit('cancel',cancel);await submit('cancel',cancel)
  await execution.controller.whenIdle(original.runId);state=await execution.controller.state(original.runId);assert.equal(state.run.status,'cancelled');assert.equal(legacyCalls,0)
 })
 
@@ -2353,12 +2373,15 @@ for (const recoveryProof of ['clean','effects','external-stage','plan-receipt','
   const revision={objective:'按批准方案部署至 UAT',acceptanceCriteria:['UAT 版本独立回读'],stageTargets:{'task-uat-deployment':'uat-test','task-data-change':'production-db'},stageAuthorizations:[
     {workflowId:'task-uat-deployment',sourceQuote:'按批准方案部署至 UAT',objective:'按批准方案部署至 UAT',gate:'none'},
     {workflowId:'task-data-change',sourceQuote:'按批准方案部署至 UAT',objective:'按批准方案部署至 UAT',gate:'none'}]}
-  const runtime={isWorkflowTask:()=>true,submitWorkflowTask:request=>service.submitWebTask(request,{channel:'web',actorId:'owner'})}
+  const runtime={isWorkflowTask:()=>true,submitWorkflowTask:()=>assert.fail('retired workflow submit')}
   const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
   const post=body=>fetch(`http://127.0.0.1:${server.address().port}/tasks/${taskId}/context`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})
   const input={requestId:'explicit-revision',inputVersion:2,runSequence:0,context:'按批准方案部署至 UAT。由本机执行人明确修订，保留已有成果。',requirement:revision}
-  assert.equal((await post({...input,requirement:{...revision,stageTargets:{'task-uat-deployment':'unknown'}}})).status,400)
-  const accepted=await post(input);assert.equal(accepted.status,202,await accepted.text());assert.equal((await post(input)).status,202)
+  assert.equal((await post({...input,requirement:{...revision,stageTargets:{'task-uat-deployment':'unknown'}}})).status,410)
+  assert.equal((await post(input)).status,410);assert.equal((await post(input)).status,410)
+  const submit=value=>service.submitWebTask({...value,taskId,action:'context'},{channel:'web',actorId:'owner'})
+  await assert.rejects(submit({...input,requirement:{...revision,stageTargets:{'task-uat-deployment':'unknown'}}}),{code:'EXTERNAL_TARGET_NOT_ALLOWED'})
+  await submit(input);await submit(input)
   const revisedPlan=await execution.controller.taskPlan(taskId),goal=await execution.artifacts.read(revisedPlan.task.requirementRef)
   assert.equal(goal.objective,revision.objective);assert.deepEqual(goal.acceptanceCriteria,revision.acceptanceCriteria)
   const revisedAcceptance=await execution.store.query({kind:'task.owner.acceptance',taskId})
@@ -2374,7 +2397,8 @@ for (const recoveryProof of ['clean','effects','external-stage','plan-receipt','
   assert.deepEqual(await execution.artifacts.read(original.task.requirementRef),originalInput)
   assert.equal((await execution.artifacts.read(preservedOutput)).execution.requirementRevision,1)
   assert.deepEqual(await execution.store.query({kind:'run.list',taskId}),[])
-  assert.equal((await post({...input,context:'冲突内容'})).status,409)
+  assert.equal((await post({...input,context:'冲突内容'})).status,410)
+  await assert.rejects(submit({...input,context:'冲突内容'}),/CONFLICT/)
   assert.deepEqual((await settleTaskOwners(service, service.execution)).failures,[])
   const source=await execution.store.query({kind:'task.source',sourceKey:goal.authorization.sourceKey})
   assert.equal(source.body,input.context);assert.equal(source.channel,'web');assert.equal(source.actorId,'owner')
@@ -3935,14 +3959,15 @@ for (const pendingMode of ['resume', 'other']) test(`审批交接先真实上下
     stageTargets: { 'task-data-change': 'production-db', 'task-data-change-approval-resume': 'production-db' },
     stageAuthorizations: ['task-data-change', 'task-data-change-approval-resume'].map(workflowId => ({ workflowId, objective: context, sourceQuote: context, gate: 'none' })) }
   const runtime = { isWorkflowTask: async taskId => taskId === task.taskId,
-    submitWorkflowTask: request => service.submitWebTask(request, { channel: 'web', actorId: 'owner' }),
-    handoffWorkflowDataChangeApproval: request => service.handoffDataChangeApproval(request, { channel: 'web', actorId: 'owner' }) }
+    submitWorkflowTask: () => assert.fail('retired workflow submit'),
+    handoffWorkflowDataChangeApproval: () => assert.fail('retired approval handoff') }
   const server = createServer((request, response) => handleRequest(request, response, runtime))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
   const post = (action, body, origin) => fetch(`http://127.0.0.1:${server.address().port}/tasks/${task.taskId}/${action}`, {
     method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) })
-  const contextResult = await post('context', { requestId: 'handoff-context', inputVersion: 2, runSequence: 4, context, requirement: revision })
-  assert.equal(contextResult.status, 202, await contextResult.text())
+  const contextInput = { requestId: 'handoff-context', inputVersion: 2, runSequence: 4, context, requirement: revision }
+  assert.equal((await post('context', contextInput)).status, 410)
+  await service.submitWebTask({ ...contextInput, action: 'context', taskId: task.taskId }, { channel: 'web', actorId: 'owner' })
   const afterContext = await execution.controller.state(task.runId), plan = await execution.controller.taskPlan(task.taskId)
   const priorOwner = await execution.store.query({ kind: 'task.owner', taskId: task.taskId })
   const claim = await execution.store.command({ id: 'handoff-pending-claim', kind: 'task.owner.claim', args: { taskId: task.taskId, turnId: 'handoff-pending', expectedLeaseEpoch: priorOwner.leaseEpoch } })
@@ -3964,17 +3989,16 @@ for (const pendingMode of ['resume', 'other']) test(`审批交接先真实上下
     expectedOwnerRevision: owner.revision, expectedLeaseEpoch: owner.leaseEpoch, expectedRunRevision: afterContext.run.revision, generation: afterContext.run.generation }
   const { taskId: unusedTaskId, ...httpInput } = input
   const eventsBeforeCheck = await execution.store.query({ kind: 'task.owner.events', taskId: task.taskId })
-  assert.equal((await post('handoff-data-change-approval', { ...httpInput, actorId: 'other' })).status, 400)
-  assert.equal((await post('handoff-data-change-approval', httpInput, 'https://untrusted.invalid')).status, 403)
-  const checked = await post('handoff-data-change-approval', httpInput)
-  const check = await checked.json()
+  assert.equal((await post('handoff-data-change-approval', { ...httpInput, actorId: 'other' })).status, 410)
+  assert.equal((await post('handoff-data-change-approval', httpInput, 'https://untrusted.invalid')).status, 410)
+  assert.equal((await post('handoff-data-change-approval', httpInput)).status, 410)
   if (pendingMode === 'other') {
-    assert.equal(checked.status, 409, JSON.stringify(check)); assert.match(check.error, /UNSAFE/)
+    await assert.rejects(service.handoffDataChangeApproval(input, { channel: 'web', actorId: 'owner' }), /UNSAFE/)
     assert.equal(closes, 0); assert.equal(sends, 1)
     assert.equal((await execution.controller.state(task.runId)).run.status, 'waiting')
     return
   }
-  assert.equal(checked.status, 200, JSON.stringify(check))
+  const check = await service.handoffDataChangeApproval(input, { channel: 'web', actorId: 'owner' })
   assert.equal(check.authorized, true); assert.equal(closes, 0); assert.equal(sends, 1)
   assert.deepEqual(await execution.store.query({ kind: 'task.owner.events', taskId: task.taskId }), eventsBeforeCheck)
   assert.equal((await execution.controller.state(task.runId)).run.revision, afterContext.run.revision)
@@ -3983,7 +4007,8 @@ for (const pendingMode of ['resume', 'other']) test(`审批交接先真实上下
   const maintenance = await execution.store.query({ kind: 'runtime.maintenance' })
   await execution.store.command({ id: 'handoff-maintenance-enter', kind: 'runtime.maintenance.change', args: {
     maintenanceId: 'handoff', actorId: 'owner', active: true, expectedRevision: maintenance.revision, reason: 'fixture' } })
-  assert.equal((await post('handoff-data-change-approval', httpInput)).status, 409)
+  assert.equal((await post('handoff-data-change-approval', httpInput)).status, 410)
+  await assert.rejects(service.handoffDataChangeApproval(input, { channel: 'web', actorId: 'owner' }), /MAINTENANCE/)
   await execution.store.command({ id: 'handoff-maintenance-leave', kind: 'runtime.maintenance.change', args: {
     maintenanceId: 'handoff', actorId: 'owner', active: false, expectedRevision: maintenance.revision + 1, reason: 'fixture' } })
   const stop = execution.controller.stop.bind(execution.controller)
@@ -4411,7 +4436,7 @@ test('渠道inline-code转换可独立回读，值变化仍拒绝',async()=>{
 })
 
 
-test('新版任务真实HTTP归档仅完成可用，幂等持久且不改变节点产物或发送消息', async t => {
+test('旧归档HTTP退休；历史service仅完成可归档、幂等持久且产物与消息不变', async t => {
   let sends = 0
   const notices = { canDisclose: async () => true, send: async () => { sends++; return { messageId: 'archive-notice' } },
     readback: async () => ({ messageId: 'archive-notice', conversationId: 'g' }) }
@@ -4430,21 +4455,21 @@ test('新版任务真实HTTP归档仅完成可用，幂等持久且不改变节�
   await assert.rejects(service.submitWebTask({ action: 'archive', taskId: task.taskId }, { channel: 'web', actorId: 'attacker' }), /FORBIDDEN/)
   let legacyCalls = 0
   const runtime = { isWorkflowTask: service.isTask, listTaskView: () => service.tasks(),
-    submitWorkflowTask: request => service.submitWebTask(request, identity), archiveTask: () => { legacyCalls++; throw new Error('LEGACY_NOT_ALLOWED') } }
+    submitWorkflowTask: () => { legacyCalls++; throw Error('retired workflow submit') }, archiveTask: () => { legacyCalls++; throw new Error('LEGACY_NOT_ALLOWED') } }
   const server = createServer((req, res) => handleRequest(req, res, runtime))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise(resolve => server.close(resolve)))
   const base = `http://127.0.0.1:${server.address().port}`
   const post = (body, origin = 'http://127.0.0.1:3080') => fetch(`${base}/tasks/${task.taskId}/archive`, {
     method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) })
-  assert.equal((await post({}, 'https://evil.invalid')).status, 403)
-  assert.equal((await post({ actorId: 'owner' })).status, 400)
-  assert.equal((await post({ taskId: 'another' })).status, 400)
-  const first = await post({}); assert.equal(first.status, 200, await first.clone().text())
-  const archived = await first.json()
+  assert.equal((await post({}, 'https://evil.invalid')).status, 410)
+  assert.equal((await post({ actorId: 'owner' })).status, 410)
+  assert.equal((await post({ taskId: 'another' })).status, 410)
+  assert.equal((await post({})).status, 410)
+  const archived = await service.submitWebTask({ action: 'archive', taskId: task.taskId }, identity)
   assert.ok(Number.isFinite(Date.parse(archived.archivedAt)))
-  const second = await post({}); assert.equal(second.status, 200)
-  assert.equal((await second.json()).archivedAt, archived.archivedAt)
+  assert.equal((await post({})).status, 410)
+  assert.equal((await service.submitWebTask({ action: 'archive', taskId: task.taskId }, identity)).archivedAt, archived.archivedAt)
   const listed = await (await fetch(`${base}/state/tasks`)).json()
   assert.equal(listed.find(item => item.taskId === task.taskId).archivedAt, archived.archivedAt)
   assert.deepEqual(await execution.controller.taskPlan(task.taskId), planBefore)
@@ -5056,7 +5081,7 @@ test('无引用回答通过合法待答候选语义选择恢复原请求，第�
   assert.equal(resolved.answer, '就是审核条目表')
 })
 
-test('内部材料重试HTTP只由本机操作者恢复，保留原请求且真实读取失败不冒充ready', async t => {
+test('旧材料重试HTTP退休；历史service保留身份、原请求且读取失败不冒充ready', async t => {
   let reads = 0
   const { service, execution } = await fixture(t, 'owner', undefined, { config: { webActorId: 'owner' }, coordinatorSessions:coordinatorFixtureSessions(source=>{const d=coordinatorUnit(source,'research',{objective:'读取文件'});d.units[0].intent.requiredExecutionMaterials=['retry-file'];return d}),
     readMessage: async () => ({ conversationId: 'g', messageId: 'retry-message', text: '读取这个文件', resourceRefs: [{ type: 'fileId', resourceId: 'retry-file' }] }),
@@ -5066,26 +5091,28 @@ test('内部材料重试HTTP只由本机操作者恢复，保留原请求且真�
   const waiting=await service.messages.process(source.runId)
   const requestId=waiting.requests.find(r=>r.status==='pending').id
   await execution.store.command({ id: 'record-material-failure', kind: 'message.request.retry', args: { runId: source.runId, requestId, error: 'FILE_UNAVAILABLE', contractVersion: 'v1' } })
-  const runtime = { retryWorkflowMaterialRequest: args => service.retryMaterialRequest(args, { channel: 'web', actorId: 'owner' }) }
+  const runtime = { retryWorkflowMaterialRequest: () => assert.fail('retired material retry') }
   const server = createServer((req, res) => handleRequest(req, res, runtime))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)))
   const endpoint = `http://127.0.0.1:${server.address().port}/workflows/${source.runId}/requests/${requestId}/retry`
   const input = { sourceVersion: 1, reason: '已更新文件访问能力', dependencyRevision: 'reader-v2' }
   const post = (body, origin = 'http://127.0.0.1:3080') => fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) })
-  assert.equal((await post(input, 'https://evil.invalid')).status, 403)
-  assert.equal((await post({ ...input, actorId: 'owner' })).status, 400)
+  assert.equal((await post(input, 'https://evil.invalid')).status, 410)
+  assert.equal((await post({ ...input, actorId: 'owner' })).status, 410)
   await assert.rejects(service.retryMaterialRequest(input, { channel: 'web', actorId: 'other' }), /FORBIDDEN/)
-  assert.equal((await post({ ...input, sourceVersion: 2 })).status, 409)
-  const response = await post(input)
-  assert.equal(response.status, 200)
-  const result = await response.json()
+  assert.equal((await post({ ...input, sourceVersion: 2 })).status, 410)
+  assert.equal((await post(input)).status, 410)
+  const retry=value=>service.retryMaterialRequest({ ...value, runId: source.runId, requestId }, { channel: 'web', actorId: 'owner' })
+  await assert.rejects(retry({ ...input, sourceVersion: 2 }), /STALE|CONFLICT/)
+  const result = await retry(input)
   assert.equal(result.request.id, requestId)
   assert.equal(result.request.status, 'pending')
   assert.equal(result.request.retryHistory.length, 1)
   assert.equal(result.request.attempts, 1)
   assert.equal(reads, 2)
   assert.equal((await execution.store.query({ kind: 'run.list' })).length, 0)
-  assert.equal((await post(input)).status, 409)
+  assert.equal((await post(input)).status, 410)
+  await assert.rejects(retry(input), /STALE|CONFLICT|RETRY/)
 })
 
 test('多事项执行要求按各自原文span保存，模型摘要不成为默认验收前提', async t => {
@@ -7544,11 +7571,11 @@ test('backfill service API preserves durable answer and deferred dispatch under 
 })
 
 
-test('user-declared completion corrects only cancelled no-Run topic task through native HTTP and consistent task projection',async t=>{
+test('user-declared completion corrects only cancelled no-Run topic task via historical service with retired HTTP and consistent task projection',async t=>{
  const {service,execution,message}=await fixture(t,'owner',undefined,{config:{webActorId:'owner'},storeCommand:async(c,next)=>{if(c.kind==='task.owner.claim')throw Object.assign(Error('synthetic Owner dispatch is disabled for correction test'),{code:'TASK_OWNER_NOT_CLAIMABLE'});return next(c)}});const received=await service.ingest({...message,messageId:'completion-correction-source'});await service.messages.process(received.runId);const original=(await service.state(received.runId)).commands.find(c=>c.result?.taskId);assert(original);const taskId=original.result.taskId;const origin=await execution.store.query({kind:'task.origin',taskId});const topic=(await execution.store.query({kind:'message.topic.bindings',conversationId:'g'})).find(b=>b.unitId===origin.command.unitId&&b.sourceKey===origin.run.sourceKey).topic;await execution.controller.controlTask({commandId:'cancel-before-user-correction',taskId,intent:'cancel',expectedControlRevision:1});const before=await execution.store.query({kind:'task.plan',taskId});assert.equal(before.task.controlState,'cancelled');const history=(await service.messages.state(received.runId));const owner=await execution.store.query({kind:'task.owner',taskId});
  const request={requestId:'user-correction',expectedControlRevision:before.task.controlRevision,expectedRequirementRevision:before.task.requirementRevision,topicId:topic.topicId,declaration:'User confirms the manually handled topic task is complete; no engineering verification claimed.'};const identity={channel:'web',actorId:'owner'};
  await assert.rejects(service.confirmTaskCompletion({...request,taskId,topicId:'wrong-topic'},identity),{code:'TASK_COMPLETION_TOPIC_MISMATCH'});await assert.rejects(service.confirmTaskCompletion({...request,taskId},{channel:'web',actorId:'other'}),{code:'WORKFLOW_ACTION_FORBIDDEN'});await assert.rejects(service.confirmTaskCompletion({...request,taskId,expectedControlRevision:before.task.controlRevision+1},identity),{code:'TASK_COMPLETION_STALE'});
- const server=createServer((q,r)=>handleRequest(q,r,{confirmWorkflowTaskCompletion:a=>service.confirmTaskCompletion(a,identity)}));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));const url='http://127.0.0.1:'+server.address().port+'/tasks/'+taskId+'/confirm-completion';const response=await fetch(url,{method:'POST',headers:{Origin:'http://127.0.0.1:3080','Content-Type':'application/json'},body:JSON.stringify(request)});assert.equal(response.status,200);assert.equal((await response.json()).result.outcome,'succeeded');const after=await execution.store.query({kind:'task.plan',taskId});assert.equal(after.task.status,'succeeded');assert.equal(after.task.controlState,'paused');assert.equal(after.task.userConfirmedCompletion.engineeringVerified,false);assert.equal(after.task.userConfirmedCompletion.basis,'user-declaration');const projected=(await service.tasks({taskId}))[0];assert.equal(projected.state,'completed');assert.equal(projected.outcome,'succeeded');assert.equal((await service.taskDetail(taskId)).outcome,'succeeded');assert.equal((await service.boardTasks()).find(t=>t.taskId===taskId).outcome,'succeeded');assert.equal(projected.result,request.declaration);assert.equal(projected.completionConfirmation.previousControlState,'cancelled');assert.equal((await execution.store.query({kind:'run.list',taskId})).length,0);assert.deepEqual(await service.messages.state(received.runId),history);assert.deepEqual(await execution.store.query({kind:'task.owner',taskId}),{...owner,controlRevision:after.task.controlRevision});const replay=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});assert.equal(replay.status,200);assert.equal((await replay.json()).replayed,true);await assert.rejects(execution.store.command({id:'owner-must-not-reopen',kind:'task.owner.claim',args:{taskId,turnId:'forbidden-turn',expectedLeaseEpoch:owner.leaseEpoch}}),{code:'TASK_OWNER_NOT_CLAIMABLE'});
+ const server=createServer((q,r)=>handleRequest(q,r,{confirmWorkflowTaskCompletion:()=>assert.fail('retired completion')}));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));const url='http://127.0.0.1:'+server.address().port+'/tasks/'+taskId+'/confirm-completion';const response=await fetch(url,{method:'POST',headers:{Origin:'http://127.0.0.1:3080','Content-Type':'application/json'},body:JSON.stringify(request)});assert.equal(response.status,410);assert.equal((await service.confirmTaskCompletion({...request,taskId},identity)).result.outcome,'succeeded');const after=await execution.store.query({kind:'task.plan',taskId});assert.equal(after.task.status,'succeeded');assert.equal(after.task.controlState,'paused');assert.equal(after.task.userConfirmedCompletion.engineeringVerified,false);assert.equal(after.task.userConfirmedCompletion.basis,'user-declaration');const projected=(await service.tasks({taskId}))[0];assert.equal(projected.state,'completed');assert.equal(projected.outcome,'succeeded');assert.equal((await service.taskDetail(taskId)).outcome,'succeeded');assert.equal((await service.boardTasks()).find(t=>t.taskId===taskId).outcome,'succeeded');assert.equal(projected.result,request.declaration);assert.equal(projected.completionConfirmation.previousControlState,'cancelled');assert.equal((await execution.store.query({kind:'run.list',taskId})).length,0);assert.deepEqual(await service.messages.state(received.runId),history);assert.deepEqual(await execution.store.query({kind:'task.owner',taskId}),{...owner,controlRevision:after.task.controlRevision});const replay=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});assert.equal(replay.status,410);assert.equal((await service.confirmTaskCompletion({...request,taskId},identity)).replayed,true);await assert.rejects(execution.store.command({id:'owner-must-not-reopen',kind:'task.owner.claim',args:{taskId,turnId:'forbidden-turn',expectedLeaseEpoch:owner.leaseEpoch}}),{code:'TASK_OWNER_NOT_CLAIMABLE'});
 });
 
 test('当前工程排队、维护和新失败覆盖旧Owner诊断且不伪造完成', async t => {
@@ -7649,7 +7676,7 @@ for (const action of ['wait', 'block']) test(`Owner可观察可恢复工程故�
   assert.equal(saved.decision.action, action); assert.equal(saved.applicationStatus, 'applied')
 })
 
-test('task-session control glue and real HTTP preserve scope, state and persisted control',async t=>{
+test('historical task-session control preserves scope and persistence while public HTTP is retired',async t=>{
  let phase='initial',seenBinding,seenTool,seenResult
  const taskOwnerSessions={async close(){},async run({input,binding,tools,queryInput,onQueryEvidence,onSessionBound,onCandidate}){
    await onSessionBound()
@@ -7673,13 +7700,13 @@ test('task-session control glue and real HTTP preserve scope, state and persiste
  const originalOwner=await execution.store.query({kind:'task.owner',taskId});assert.ok(originalOwner?.sessionId)
  phase='controls';const recovered=await service.recover();const deadline=Date.now()+5000;while(!seenResult&&Date.now()<deadline)await new Promise(r=>setTimeout(r,10));assert.ok(seenResult,JSON.stringify({recovered,owner:await execution.store.query({kind:'task.owner',taskId})}));assert.equal(seenBinding.sessionId,originalOwner.sessionId)
  const state=await execution.controller.state(runId);assert.equal(state.run.control.actorId,seenBinding.sessionId)
- const plan=await execution.controller.taskPlan(taskId),runtime={controlWorkflowTaskExecution:request=>service.controlTaskExecution(request,{channel:'web',actorId:'owner'})}
+ const plan=await execution.controller.taskPlan(taskId),runtime={controlWorkflowTaskExecution:()=>assert.fail('retired execution control')}
  const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)))
  const url='http://127.0.0.1:'+server.address().port+'/tasks/'+taskId+'/execution-control',body={requestId:'http-continue',action:'continue',reason:'authorized web continue',runId,expectedRequirementRevision:plan.task.requirementRevision,expectedControlRevision:plan.task.controlRevision}
  const send=(value,origin='http://127.0.0.1:3080')=>fetch(url,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(value)})
- assert.equal((await send({...body,actorId:'spoof'})).status,400);assert.equal((await send(body,'https://foreign.invalid')).status,403)
- assert.equal((await send({...body,expectedRequirementRevision:body.expectedRequirementRevision+1})).status,409)
- const response=await send(body);assert.equal(response.status,200);const result=await response.json();assert.equal(result.control.source,'operator');assert.equal(result.state.run.pauseRequested,false);assert.equal((await execution.controller.state(runId)).run.control.reason,body.reason)
+ assert.equal((await send({...body,actorId:'spoof'})).status,410);assert.equal((await send(body,'https://foreign.invalid')).status,410)
+ assert.equal((await send({...body,expectedRequirementRevision:body.expectedRequirementRevision+1})).status,410)
+ assert.equal((await send(body)).status,410);await assert.rejects(service.controlTaskExecution({...body,taskId,expectedRequirementRevision:body.expectedRequirementRevision+1},{channel:'web',actorId:'owner'}),/STALE/);const result=await service.controlTaskExecution({...body,taskId},{channel:'web',actorId:'owner'});assert.equal(result.control.source,'operator');assert.equal(result.state.run.pauseRequested,false);assert.equal((await execution.controller.state(runId)).run.control.reason,body.reason)
  await assert.rejects(seenTool.execute({binding:seenBinding,args:{...body,requestId:'stale-session'}}),{code:'WORKFLOW_ACTION_FORBIDDEN'})
 })
 

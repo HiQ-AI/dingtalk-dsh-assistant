@@ -1,0 +1,65 @@
+---
+version: alpha
+name: 钉钉任务会话看板
+description: 嵌入 DeepSeek Harness 的群消息、任务会话与动态执行观察界面。
+typography:
+  sans:
+    fontFamily: "system-ui, sans-serif"
+rounded:
+  sm: "8px"
+  md: "12px"
+spacing:
+  compact: "8px"
+  field: "12px"
+  panel: "16px"
+  section: "24px"
+omitted:
+  - section: colors
+    reason: "宿主 dsw alias 主题变量为唯一运行时色彩来源；本文不生成或覆盖主题。"
+  - section: components
+    reason: "复用 @deepseek-ai/dsh-client-ui-primitives 与现有 observerCss，组件合同见正文。"
+---
+
+# 任务会话看板设计
+
+## Overview
+
+面向钉钉群助理的本机维护者，核心工作是核对真实处理状态、查找唯一任务会话、查看按需委派的执行和证据。视觉参照现有 DSH 原生插件页签与群消息表格，采用产品工具的克制信息层级，不另建品牌或固定流程图。
+
+界面使用简体中文；日期沿用宿主浏览器时区和 zh-CN。目标是键盘可操作、窄屏可读，不能以颜色替代文字状态。代码与业务来源为 packages/dingtalk-dsh-assistant/http.js、task-session-service.js 及 test/http.test.js。
+
+运行时主题以 DSH CSS aliases 为准，本文记录既有映射，不生成主题文件。observer 的 colors 对应 --dsw-alias-bg-base、--dsw-alias-bg-layer-1、--dsw-alias-border-l2、--dsw-alias-label-secondary、--dsw-alias-brand-primary、--dsw-alias-state-error-primary；设置页保留已发布的宿主别名兼容回退。
+
+## Colors
+
+灰阶表面承载信息，蓝色表示动作和当前活动，绿色用于已完成，黄色用于等待，红色用于失败。暗色模式继承宿主变量。可见焦点沿用品牌色 2px 描边；forced-colors 使用系统颜色。滚动条继承 observerCss 的主题前景和表面；任务列沿用原看板隐藏滚动条的方式，内容仍可滚动。
+
+## Typography
+
+继承宿主字体；正文 14px，辅助信息 12px，页面标题 24px。路径和长标识可换行，不以悬停作为查看完整内容的唯一方式。结果保留换行；证据链接只接受 http/https 文本形式。
+
+## Layout
+
+沿用 4/8/12/16/24px 间距与 8/12px 圆角。看板最大宽度 1320px，详情 1100px，新建表单 800px。任务看板与卡片视觉沿用重构前 15630d615ff01f651271b581fe23031a4e89e86a：四列最小宽度 300px、列头状态胶囊与计数、列内独立滚动，卡片 11px/13px 内边距、6px 间距、13px 两行标题、11px 三行目标、来源/话题胶囊与底栏时间。新建入口占用的高度只在列容器扣除，不把固定高度施加到新建或详情表单。统筹会话等待排队中、执行中或尚未排空的小目标时，任务仍归执行中；暂停、需要用户输入或业务阻塞归等待中。看板按实际任务状态分列，每列每页最多 10 项；执行列表每页最多 20 项。960px 以下两列，720px 以下单列。表单自然增高，由宿主内容区滚动，不受旧看板全视口固定高度限制。
+
+## Elevation & Depth
+
+面板主要使用细边框和轻表面差异，不为普通详情加浮层。新建草稿离开采用应用内非模态确认区域，不冒充焦点锁定的模态框。
+
+## Shapes
+
+按钮使用宿主 Button 的原生外观；任务、结果和会话路径面板使用现有卡片圆角。执行记录使用原生 details/summary 的键盘语义。
+
+## Components
+
+复用宿主 Button、Menu、Pill、StateDot。列表筛选使用既有 SelectMenu，创建任务来源群沿用设置页的原生 select，允许系统拥有展开菜单的外观。SessionLocation 统一任务与执行的会话入口、目录及日志展示；TaskResult 统一结果、证据和限制。表单禁用原生验证气泡，在字段关联错误文字并保留失败输入。提交使用同步 ref 防重复，网络失败保留同一个幂等键。
+
+所有新交互使用 button、label、input、textarea、details/summary。禁用状态不可点击；请求结果用 status/alert。新建任务草稿在离开前提示。任务详情仅观察会话、结果与执行，不提供补充需求或取消任务控件。人工介入页对当前任务问题提供必填原文答复，沿原任务继续；答复失败和修订冲突保留文本及原请求版本，不自动视为批准其他操作。历史任务和历史人工介入仍只读，不提供恢复、批准、模板、变量或运行快照操作。
+
+## Do's and Don'ts
+
+- 展示持久化的任务与执行身份、实际状态和证据；缺失日志或会话明确显示未记录。
+- 任务会话负责动态委派；不得把旧固定阶段改名为动态执行。卡片使用真实 executionCount，不能把按需独立执行次数当成固定检查点百分比；完整目标与执行详情仍从任务入口查阅。
+- 新执行的权限请求由对应 DSH 原生执行会话处理，历史批准不能授权新执行。
+- 不向浏览器结果区、日志、模型或普通设置投影秘密值。
+- 不将自动化组件测试称为真实钉钉部署验收；浏览器 fixture 验证边界必须记录。

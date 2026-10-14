@@ -1,0 +1,44 @@
+✔ legacy Host drained error plus bound real readonly observation proves failed partial effects only (13.4301ms)
+✔ readback context exposes only the digest-bound original native call and result (3.7855ms)
+✔ legacy unknown remains fenced: model text instead of tool receipt (1.2598ms)
+✔ legacy unknown remains fenced: printed error text in successful shell output (1.1138ms)
+✔ legacy unknown remains fenced: forged ledger result digest (1.2073ms)
+✔ legacy unknown remains fenced: wrong call (1.135ms)
+✔ legacy unknown remains fenced: changed arguments (0.9626ms)
+✔ legacy unknown remains fenced: wrong session identity (1.0548ms)
+✔ legacy unknown remains fenced: active original agent (0.7459ms)
+✔ legacy unknown remains fenced: live job still running (1.5659ms)
+✔ legacy unknown remains fenced: execution not drained (0.6167ms)
+✔ legacy unknown remains fenced: no actual readonly result (0.5234ms)
+✔ legacy unknown remains fenced: wrong readback operation (0.5515ms)
+✔ legacy unknown remains fenced: unrestricted readback (0.4114ms)
+✔ legacy unknown remains fenced: failed readback call (0.3508ms)
+✔ legacy unknown remains fenced: stale observation predates unknown (0.3634ms)
+✔ dispatch is durable and idempotent; execution IDs are independent and owner claims are single flight (112.1972ms)
+✔ a late result is audited and wakes atomically without accepting an obsolete requirement (99.6915ms)
+✔ cancel fences tools immediately and completion waits for physical drain and unresolved operations (60.1327ms)
+✔ continuation retains execution/session identity and versions inputs across requirement revisions (56.9024ms)
+✔ generic operations persist before dispatch, unknown never replays, locks survive restart and reconciliation releases them (90.649ms)
+✔ business completion creates a unique notification atomically; uncertain delivery does not restart business or resend (79.8622ms)
+✔ source route decisions are immutable and group sessions reclaim pending sources after restart (72.0875ms)
+✔ legacy unresolved effects and undrained native sessions become read-only blockers, never dynamic jobs (110.749ms)
+✔ result and wake roll back together on a failed SQLite write and the same command remains safely retryable (84.0644ms)
+✔ initialization marker rejects database loss and an accidental initialize flag cannot create a replacement ledger (74.1997ms)
+✔ question and status notifications are idempotent, independently durable, and obsolete questions never send (57.7648ms)
+✔ unclean process restart fences started operations and retains result/wake receipts without replay (285.8853ms)
+✔ an explicit Web routing intent is recorded atomically with its original source and cannot be reinterpreted (72.6161ms)
+✔ dispatch rollback before durable receipt creates no orphan, and lost post-commit acknowledgement replays one identity (104.4779ms)
+✔ result receipt failure rolls back both result and wake; post-commit restart retains one result/wake pair (108.5687ms)
+✔ native unknown fence is atomic at start even if two operations were prepared before the first became unknown (70.6683ms)
+✔ a definitively refused prepared request can be retired by its exact binding/key without clearing unknown writes (69.1251ms)
+✔ job reconciliation rejects absent and foreign proof; readonly continuation preserves unknown and forbids effects (65.2167ms)
+✔ terminal job receipt cannot reconcile an undrained execution; successful reconciliation preserves unknown evidence (61.979ms)
+✔ verified legacy stop closes only failed with retained unknown audit and never creates a replacement execution (65.3095ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2223.4564

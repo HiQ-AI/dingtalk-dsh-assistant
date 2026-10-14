@@ -1,0 +1,9 @@
+✔ offline deployment refuses a live owner and unfinished rounds, accepts retained dead-owner metadata without changing unknown facts (169.9756ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 298.0188

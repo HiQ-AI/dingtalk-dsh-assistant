@@ -31,7 +31,7 @@ export function coordinationTools(role) {
   return [...reads, ...submits]
 }
 
-export function createCoordinationSessions({ create, isCurrent, onError }) {
+export function createCoordinationSessions({ create, isCurrent, onError, eventPrefix = 'dingtalk' }) {
   const entries = new Map(), bySession = new Map(), tails = new Map(), queues = new Map(), active = new Map(), pending = new Set(), routeBursts = new Map()
   let closed = false
   const keyOf = request => `${request.groupId}:${request.requestId}`
@@ -87,7 +87,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
       if (cancel) entry.handle.agent.cancel({ kind: 'user' })
       await entry.handle.agent.whenIdle()
       await entry.handle.dispose()
-    }).catch(error => { if (error.message !== 'coordination_request_inactive') onError(error) }).finally(() => { settle(entry); entry.release?.(); bySession.delete(entry.sessionId); if (entries.get(keyOf(request)) === entry) entries.delete(keyOf(request)); pending.delete(disposal) })
+    }).catch(error => { if (error.message !== 'coordination_request_inactive') onError(Object.assign(error, { coordinationGroupId: entry.request.groupId })) }).finally(() => { settle(entry); entry.release?.(); bySession.delete(entry.sessionId); if (entries.get(keyOf(request)) === entry) entries.delete(keyOf(request)); pending.delete(disposal) })
     pending.add(disposal)
     entry.disposal = disposal
   }
@@ -141,7 +141,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
             const exists = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].some(item => item.id === message.id)
               || agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data?.id === message.id)
             if (!exists) {
-              agent.session.append('dingtalk/coordination-dispatched', { requestId: request.requestId, queuedAt, dispatchedAt: Date.now(), role: entry.role, fairnessTurn, priorRouteBurst, queueDepth: queue.length })
+              if (eventPrefix) agent.session.append(`${eventPrefix}/coordination-dispatched`, { requestId: request.requestId, queuedAt, dispatchedAt: Date.now(), role: entry.role, fairnessTurn, priorRouteBurst, queueDepth: queue.length })
               agent.steer(message)
             }
             resolve(agent)
@@ -153,7 +153,7 @@ export function createCoordinationSessions({ create, isCurrent, onError }) {
               queue.push({ request, message: createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '继续当前协调请求，读取已有工具结果并按当前请求约束提交。' }] }), resolve() {}, reject() {}, queuedAt: Date.now() })
             }
             if (!queue.some(item => keyOf(item.request) === keyOf(request))) settle(entry)
-          } catch (error) { settle(entry ?? entries.get(keyOf(request))); reject(error); if (error.message !== 'coordination_request_inactive') onError(error) }
+          } catch (error) { settle(entry ?? entries.get(keyOf(request))); reject(error); if (error.message !== 'coordination_request_inactive') onError(Object.assign(error, { coordinationGroupId: groupId })) }
           finally { if (active.get(groupId) === entry) active.delete(groupId) }
         }
         tails.delete(groupId); queues.delete(groupId)

@@ -1,0 +1,63 @@
+✔ new inbound image bytes become existing attachment references without losing quote facts (3.0745ms)
+✔ image references can be hydrated while documents remain lazy and failures are visible (0.4957ms)
+✔ already-loaded failure facts do not trigger another download during ingress (0.1658ms)
+✔ notification projections retain unknown and only verified delivery becomes sent (2.4495ms)
+✔ question and completion for the same source have separate stable timeline identities (0.226ms)
+✔ existing resident timeline persists new images, quotes and notification readback states across reopen (7.9944ms)
+✔ stable resource identity ignores transport enrichment and input ordering, but distinguishes real changes (0.3002ms)
+✔ resource merge preserves deep download hints only for identical real resource identities (0.284ms)
+✔ same image bytes reuse persisted refs across reopen, changed bytes produce a new fact (1.0276ms)
+✔ 任务等待小目标排队、执行或排空时仍在执行中，真正业务等待单独显示 (0.3353ms)
+✔ task provider transient classifier only accepts the exact verified provider errors (0.6868ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=false (680.7201ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=true (85.453ms)
+{"contextProof":{"ownerRequests":4,"latestInputBytes":16525,"totalRequestBytes":41086}}
+✔ owner keeps one current Host snapshot and delegates non-recursive execution context across three generations (6003.4908ms)
+✔ configured group responsibility reaches group and task models and its reply signature survives notification formatting (1451.2257ms)
+✖ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (6585.9289ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (5599.7384ms)
+✔ native service reopens an unknown notification for readback without resending completed business work (5958.3817ms)
+✔ native service cancellation stops the real execution process, drains the session, and rejects late completion (2104.1972ms)
+✔ native requirement update resumes the same owner with new sources and fences the interrupted old execution result (2981.2144ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (3706.5984ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (2746.6049ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (3129.9098ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (2328.6236ms)
+✔ recovering an idle owner with no pending wake does not consume a task slot (1135.7581ms)
+✔ native session creation failure has bounded recovery retries: persistent=false (6088.5033ms)
+✔ native session creation failure has bounded recovery retries: persistent=true (3951.8746ms)
+✔ native model failures settle without repeated owner requests: persistent=false (5225.5045ms)
+✔ native model failures settle without repeated owner requests: persistent=true (5374.9632ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=false (1791.5987ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=true (1957.283ms)
+✔ native topic routing rejects incomplete source coverage and accepts correction in the same real session (2527.2458ms)
+✔ resident.apply boots and disposes with only its declared native service dependencies (1070.7869ms)
+✔ resident listener startup failure disposes native resources and permits reopening the same task database (2355.2739ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (6925.2319ms)
+ℹ tests 35
+ℹ suites 0
+ℹ pass 34
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 81787.2101
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:15:38
+✖ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (6585.9289ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  3 !== 2
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-session-runtime-repair/dingtalk-dsh-assistant/test/task-session-service-native.test.js:194:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

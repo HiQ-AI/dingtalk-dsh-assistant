@@ -2,152 +2,87 @@
 
 # DingTalk DSH Assistant
 
-`dingtalk-dsh-assistant` 是一组运行在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 中的钉钉数字员工插件。它把钉钉群聊直接接入 DSH，让 Agent 不再只是等待 `@` 后回答问题的机器人，而是一个能够理解完整群聊上下文、主动参与协作并持续推进任务的团队成员。
+`dingtalk-dsh-assistant` 把钉钉群聊接入 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness)。当前 resident 使用“消息 → 话题 → 任务会话 → 独立执行会话”：消息只归属话题，既有话题协调器结合固定版本原文与新消息决定是否创建、续办、取消任务或仅讨论；任务会话持续负责完整目标，独立执行会话使用宿主实际工具完成受托工作。
 
-在 DSH 与 DWS 已完成安装和登录的前提下，插件接收群消息并维护话题事实。已切换到 workflow-v2 的群先拆分、关联和判断意图，再由消息事项的原生 Agent 会话完成问答；需要持续交付的工作进入 Task 与阶段编排。各项执行独立保存进度，支持查询、等待补充、恢复和交付。
+当前源码不再装配固定 workflow、DAG、阶段或节点调度器。按清洁启动使用全新任务库与 Resident domain，旧任务数据可恢复地移出运行路径；当前服务不读取、导入或兼容旧任务，也不重新发送旧通知。既有实例不能直接热切换，先读[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)。本文描述源码行为，不表示已发布、已部署或通过真实钉钉验收。
 
-插件不是独立 Agent 平台，也不自行实现第二套 Session、Agent 或任务执行引擎。Agent 身份、工作规则与可用工具由配置的工作区及其 `AGENTS.md` 决定，插件本身不包含个人姓名或数字分身设定。
+## 任务责任与执行边界
 
-同一事项的后续材料、点名和开发指令可以继续原话题；名称和摘要随有效信息更新，原消息及权限来源仍分别保留。看板列表与已打开详情同步刷新，历史缺失摘要显示为空。确定的历史话题误拆可在维护排空后按[受管话题修复流程](docs/ops/resident-review-local-deployment.md#历史话题归属与展示修复)处理，不重跑业务命令或发送消息。
+- 原消息、话题单元、归属版本、摘要及决策操作记录继续持久保存。原路由与话题决策按角色使用原生协调会话，只解释、归属和交办真实来源，不执行业务工作；消息不直接保存任务关联。
+- 每任务一个持久任务会话（Owner），独立维护当前目标、需求版本与控制版本。它可直接使用当前 Agent 配置提供的原生工具、按需读取技能，也可委派、读执行结果、取消执行及提交本轮结论；不另设统筹会话工具白名单。
+- 每个受托执行有自己的 `executionId`、原生 Session、租约和工作目录。同任务可并行多个执行，同一执行只能单飞；续办沿原 Session 与递增输入版本，不伪造 Run/节点。
+- 任务会话根据当前要求与真实结果自主判断继续、等待、提问或完成。Host 检查来源、版本、权限、未排空句柄与未决 operation 等一致性，不代替模型做业务阶段验收。
+- 任务与执行会话均挂载实际配置的 DSH Agent preset，恢复时沿已持久选择；任务和动态执行会话均保留该配置的原生工具，不额外设置会话工具白名单；工作区指引、沙箱、审批及操作账身份仍以宿主和当前真实授权为准。会话可使用实际已配置的原生委派工具，具体操作仍须有当前用户授权。
 
-单条消息可以同时包含多个任务、对已有澄清的补答和闲聊，分别按事项接纳；引用已解决的问题也会判断本条新交办。局部补答只续办原待答事项，保留其他已接纳命令。协调上下文显示最近30条历史及省略数量，可通过只读工具补读同群、当前来源之前的历史，保留有效版本、发送者、时间与附件；历史只用于解释，不授予新的执行权限。合同与验证边界见[消息上下文方案](docs/spec/message-intent-context-repair.md)。
+话题决策先落原话题账，任务与用户来源再落 SQLite 账，然后创建会话。每任务沿配置工作区的 tasks/<taskId> 使用固定工作区，原生 workspaceRegistry 以任务标题显示；任务与独立执行会话的原生归属均为同一任务根目录。同一任务的任务会话与全部执行会话也在同一任务根目录实际运行，文件可共享；不同任务使用不同根目录。恢复保留相同工作区、运行目录和会话身份。任务会话标题使用任务标题，执行会话标题使用受托小目标名称。执行结果与唤醒任务会话的事件在同一事务提交；旧需求的迟到结果只作为历史证据，不能改变新要求。暂停或取消使旧分派权限失效，只有真实工具、会话及受管进程排空后才能释放执行占位。“取消请求已记录”不代表外部动作已撤销。
 
-已切换群的入站门禁统一复用未变动的封存快照核验，并持续检查文件身份；追加群不再逐条消息重读完整历史快照。历史发件的替换关系使用邻接索引核对，保留环、未知目标和分叉拒绝。
+## 持久账、通知与恢复
 
-每次模型调用的执行窗口由当前 Host 显式传入并从该次节点实际领取开始，不沿用旧消息 policy 的调用时限，维护和重试排队不消耗执行窗口；真实失败按 lease 计入有界恢复次数，重复扫描不重复扣次数。无业务命令且纯状态通知已独立确认送达时，也可保留通知审计后重处理。旧消息可通过本机受控接口逐条重处理。没有业务命令、全消息澄清通知已独立确认送达且答复已接纳时，恢复会保留原通知并继承答复，不重复询问；发送结果未确认或已有业务命令时仍拒绝重处理。操作及回读要求见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
+动态控制库独立记录 task、execution、operation、source、wake 和 notification，不依赖旧 Run/节点外键。命令回执和稳定分派键防重复；结果已写入原生日志而回调尚未落账时，恢复可以重收已确认提交，不再调用模型重做工作。
 
-统一升级 DSH 与现有 Codex、钉钉、Convergent、Bytebase 时，按[联合升级规程](docs/ops/dsh-unified-host-upgrade.md)执行；先验证现场早期日志迁移及完整插件加载，再由原维护部署流程切换。
+外部 operation 先持久登记再执行。`starting` 在重启后成为 `unknown`；未知效果保留锁，只能核对原操作，不能换 ID 或换参数自动重放。只有 Host 明确证明安全的并发调用才不占通用写锁；“可并发”本身不证明没有副作用。
 
-## 本地安全重启
+业务完成与通知送达是两件事。完成结论和唯一完成通知意图同事务提交；话题确认、必要业务问题、用户主动状态查询也使用独立通知账，并投影回原群消息发件箱。发送后必须独立核对目标群、真实消息及身份/引用证据。ACK、工具返回成功或业务完成均不等于通知送达；未知通知只回读，不重发业务或原消息。Web-only 来源不自动转成群聊外发。
 
-Windows 正式启动通过 Node 原生同步模块加载，保持原始模块解析和内容；不使用诊断采样。`scripts/start-web.ps1` 支持显式 `-ProjectRoot`，持久启动文件统一部署到 `DSH_HOME/launchers`。
+收信箱过滤已关联的自身通知及当前发送身份的 DWS 回流，保留底层历史；本人手动发送的正常消息仍经监听和历史补拉接纳。仅账号相同不能判定为通知。DWS 不返回原生 `@` 元数据时，只有精确发送状态 SUCCESS、消息 ID、发送者、原群、原生引用及完整正文全部吻合才确认送达，同时记录 `mentionVerification=unavailable`，不声称 `@` 已核验；明确不符的元数据仍拒绝。无精确回执的历史匹配继续要求原生 `@` 证据。
 
-Windows 本地重启使用 `scripts/restart-web.ps1 -ProjectRoot <实际主检出路径>`，先加 `-Check` 做零副作用预检。桌面 `restart-dsh-web.ps1` 委托 `DSH_HOME/launchers/restart-web.ps1`，独立工作树交付后将正式脚本部署到该持久位置，不让桌面入口绑定临时工作树。
+更新运行实现后，启动时因未知操作而停住、没有人工问题且执行均已排空的任务，会按实现摘要和需求/控制版本补一次持久恢复唤醒。原任务先只读对账，不清除未知效果保护或重放原命令；同一实现的定时恢复和再次重启不重复唤醒。
 
-等待阶段先用原生监听快照和 HTTP；就绪时仍独立核验新 PID、双端口归属与健康。脚本显示初始化等待，并输出初查、排空、停机、服务就绪、恢复与总耗时；超时保留失败及维护状态，不重复启动。操作与诊断边界见[本地部署说明](docs/ops/resident-review-local-deployment.md#桌面安全重启及耗时)。
+开始、普通进度和内部诊断不会逐条群发。群内最终结果引用来源消息并按受信身份提及相关用户，正文使用业务语言；原始编号、诊断与过程留在任务详情。
 
-## 从群聊机器人到数字员工
+### 首版限制
 
-常见的群聊机器人或 Agent 接入方式通常需要被 `@` 才会唤醒，只能获得当前消息附近的片段上下文，更适合问答、检索等单次工作。`dingtalk-dsh-assistant` 通过 DSH 原生 Session、subagent 与 Goal，把群聊协作变成可持续、可并行、可追踪的任务闭环。
+- 不支持后台构建或后台 job/poll 协议。显式后台/脱离请求被拒绝；工具隐式返回后台 job 时会报告不支持，不能把已启动当完成。
+- 通过原生 subprocess 服务创建的进程按该 provider 的 `terminate` / `waitForExit` 合同排空；无法证明排空时保留占位。这个保证不超过 provider 的实际受管范围。
+- 原生文件工具的 Host 边界拒绝跨任务材料、其他执行私有目录、任务日志、中央路由与控制库路径，并检查符号链接。它不是任意 shell 程序的 OS 租户隔离，也不按命令字符串猜测全部文件访问。宿主若允许 shell 读取某路径，该文件工具边界不能替代 OS 沙箱；不要据此托管互不信任的租户。
+- 通用执行依赖实际 preset 能力；旧工程、UAT、Bytebase、文件交付等固定流程不再是新任务入口。保留源码和历史合同不代表动态任务已自动接通这些旧适配器。
 
-| 能力 | 普通机器人 / Agent | DingTalk DSH 数字员工 |
-| --- | --- | --- |
-| 参与方式 | 被 `@` 后响应 | 常驻群聊，主动判断并参与 |
-| 上下文 | 当前消息或片段上下文 | 持续维护完整群聊上下文 |
-| 工作范围 | 问答、检索等单次任务 | 讨论、方案、排障、工具执行、功能开发 |
-| 任务处理 | 一次处理一件事 | 多个独立叶子任务并行推进 |
-| 持续执行 | 回复结束后停止 | 通过 Goal 持续执行、等待、恢复和完成 |
-| 结果交付 | 返回一次性答案 | 回到原群引用回复，保留证据与任务状态 |
-
-## 与 DSH 的关系
-
-### workflow-v2 的问答与调查
-
-普通项目、代码、数据库问答使用 `answer.objective`：意图节点交付问题，执行 Agent 根据需要调用受信只读工具并组织答案，普通问答不创建业务 Task。一次问答拥有独立会话，同一执行的必要补充沿用会话；话题提供事实与来源，不维持永久增长的执行上下文。慢查询不阻塞后续消息的判断。
-
-明确要求持续排查或独立调查交付时，由同一个持久任务执行会话使用宿主实际挂载的全部工具，在任务授权范围内自行调查、编写验证、运行和纠错。创建和恢复执行会话时，在首次模型请求前设置并核验完全权限（`danger-full-access`，sandbox 同名、approval 为 `never`）；已有 `workspace-write` 会话也同步提升。Owner 不增加工具名称白名单或类型禁用，委派不转移任务的唯一责任。普通调查不再注册或调度 `task-investigation`，不为读取增加阶段；已有工程、生产数据库变更、发布和消息/文件投递继续遵循相应授权与受管合同。
-
-原生调用在执行前与返回后分别记录 Task、需求、会话、轮次、租约、工具参数及原始结果；暂停、取消或绑定过期阻止新调用。允许宿主提供的后台及委派工具，其启动回执只证明启动，原会话仍负责跟踪、核验与最终交付。宿主沙箱及审批继续生效；这不是网络只读沙箱，也不提供任意命令的效果去重。只有开始记录或被取消的调用按未知效果处理，由原会话先核对实际状态。真实工具回执证明调用来源，退出码和打印的成功标签不能替代独立业务结果；最终仍逐项验收。
-
-创建消息只负责持久接纳任务并返回，命令落账后唤醒原生待办扫描，不同步等待整轮调查。Owner 复用每任务单会话与租约，最多四个任务并行，完成后立即串行应用已验收动作并补充空位；后来接纳的任务可使用空位，不等旧恢复批次结束。只以数据库待办为权威，不另建内存任务队列。服务关闭取消运行并等待应用排空，重启由现有恢复计时器从原任务账继续。
-
-Task Owner 在同一持久会话持续负责目标、诊断和调整路径；工作流提供受管操作，不因一个节点失败就自动转人工。Host 为可纠正的只读 Agent 节点提供原会话续行，Owner 先读诊断并给出改变后的做法；成功前缀、原需求与权限保持。同一输入、同一问题再次出现时停止机械重放，交负责人换路径或定位实现问题。重复无效候选只让本轮退避，仍保留恢复责任。真实审批等待和未知外部效果沿原效果账处理；内部恢复不发群进度。设计与验证边界见 [持续任务执行方案](docs/spec/continuous-task-execution.md)。
-
-同一 Owner 会话已完整读取的不可变工件，可依据原生成功工具回执跨回合和重启复用；必须仍属于当前需求和阶段。新读取取得进展后可修正同一候选，重复读相同内容不算新进展。Owner 动作应用失败会保存完整诊断、已发生回执和当前计划，并反馈原会话下一轮重新选择策略；不再原样反复应用失败决定。已成功部分不回滚，已应用决定保持审计，未知效果先由原效果账对账，暂停或取消不唤醒执行。Owner 不提供工程修复或运行时流程调整能力。执行诊断交回原执行会话，按固定职责恢复失败步骤并保留成功节点；见[单任务执行恢复方案](docs/spec/single-task-execution-recovery.md)。
-
-新接纳的验收条件在消息、Web、Owner 与工程准备入口共用合同：1–32 条，每条原始长度不超过 2000 个字符，去除首尾空白后不能为空。只读工具结果由 Host 按 Task、需求版本、Owner 会话/轮次/租约保存原始证据，原生事件账支持重启读取。纯调查可以没有阶段或 Run，必须引用真实当前证据并通过逐项最终验收。受管操作的前序产物继续通过带类型、版本及生产阶段身份的 `handoff` 交接。退役调查的活动引用拒绝切换；已终态定义只作历史记录，不再提供兼容执行入口。
-
-任务会话完成前核对当前需求、真实查询及受管操作证据和必交文件。Host 核验精确身份、来源、需求版本、真人批准与实际执行状态，再共享一次最终业务语义验收，生成绑定当前决定及清单的 `businessValidation.status=accepted` 回执。没有读取、跨任务或过期证据拒绝完成；清单 `complete` 仅证明结构和证据绑定，不替代业务验收或外发后的独立渠道回读。调查失败在同会话纠正，内部过程静默；必要业务问题、插件私聊审批和最终结果保留。
-
-新通用阶段 v6、外部操作 Owner v2 和文件投递 v2 均检查分派给本领域的验收项，混合流程不跳过业务检查。通用材料整理保留确定性快速路径，其他分派项使用原生模型零工具限定判断，并独立核验逐项结果及引用；缺少模型、超限、协议异常或证据不足不放行。调查沿用显式逐项意见，工程匹配冻结原需求和实际业务用例回执。工程消费者声明支持的交接类型/版本，目录结果合同从权威 Owner 合同派生。整体完成仍要求全部验收项满足，没有新增部分成功终态。
-
-失败诊断记录恢复类别、责任方及下一步，但不新增自动重试权限；未知外部结果继续先对账。旧定义按原摘要恢复，仅完成准入采用当前修正规则；回执分别保存冻结执行摘要与实际验收 policyDigest，不补造历史回执或重跑效果。本次合同调整不需要存储 schema 迁移，受理范围、职责和恢复边界见[节点合同](docs/api/workflow-node-contracts.md#workflow-v2-领域准备与交付合同)及[升级说明](docs/ops/workflow-storage-migration.md#本次领域合同调整的适用边界)。协议夹具验证不等于真实模型语义质量、部署或渠道验收。
-
-消息处理详情显示“查询与答复”的状态、耗时和会话；结果正文与依据按需分页读取。取消问答时引用本人原问题；同一原消息有多个未完成事项时，先澄清选择，再核对身份和输入版本取消选定执行。
-
-### 任务产物发送到群聊
-
-明确要求“处理完成后把报告、Markdown、SQL或图片文件发到本群”时，工作进入同一个持久 Task。意图保存逐字引用的发送要求与完整文件清单；Owner 先生成并登记产物，再安排 `task-group-file-delivery`。目标绑定任务来源群与配置的 DWS profile。普通问答、Web-only 任务以及只要求生成文件的任务，不因此自动外发附件。
-
-`write-task-file` 可生成精确授权名称的 `.md/.txt/.sql/.csv/.json` 文件，UTF-8 内容最多 64 KiB。图片、Office、PDF 等传输保留真实原字节，但必须先有真实来源及已登记的产物；传输能力不提供这些格式的生成器，不能把文字改扩展名当文档。图片首版以可下载文件附件发送，不承诺聊天气泡预览。SQL 脚本交付不执行 SQL。
-
-已有文件可通过 `import-task-file` 纳入当前 Task：Host 在 `workflow.generalFileRead` 配置固定 `root` 和精确 `readablePaths`，Owner 输入仅为 `{role,fileName,relativePath}`，同时受当前任务的角色/名称及 `readableFiles` 授权约束。Host 只读真实来源后冻结大小/SHA-256，执行时再次核对并复制原字节到受管快照；Owner 不提供绝对根或猜摘要。导入保留真实扩展名，不能靠改名转换格式。Office、PDF、图片已有可信文件时可直接登记交付；没有源文件时仍需实际生成器。
-
-新任务的受管快照位于 `<Agent工作区>/tasks/<logicalTaskId>/outputs/<taskId>/<artifactId>/<fileName>`；升级前已有任务仍使用 `workflow.artifactDirectory/task-files/<taskId>/<artifactId>/<fileName>`。快照保留中文可读名称、需求版本、生产者和 SHA-256；文件元数据独立读回，二进制不塞入 JSON。当前 Host 默认每文件 20 MiB、每批 50 MiB、20 件，这些是本地保护值，不能当作租户平台上限。全部文件先预检，再逐件通过效果账发送；ACK 后查询真实消息并下载核对大小和摘要，全部必交文件通过才允许完成。未知发送保持待对账，不能重发来消除等待。
-
-文件发送授权必须是当前消息的精确连续原文，可含句末标点或跨句；完整源句中的否定与其他群限制仍拒绝。Owner 使用通用写入时每轮仅安排一个阶段，核验产物后下一轮追加发送。复合验收项可联合读取该项明确绑定的当前任务成功阶段证据，各领域的结构和效果仍独立校验；投递回执不能代替业务结果证明。
-
-本节描述源码能力，正式实例须按[本地部署与文件验收说明](docs/ops/resident-review-local-deployment.md#任务产物群聊文件交付切换与验收)完成安装和真实渠道回读。2026-09-29，PR #142 已合并，本地正式实例已安装合并版本，并完成专用群真实文件交付验收及重启后回读；结果见[最终验收报告](docs/acceptance/task-unified-file-storage/report.md)。其他实例仍须独立完成部署与渠道验收。
-
-### 一个任务一个文件目录
-
-新任务统一使用 `<Agent工作区>/tasks/<logicalTaskId>/`：`work/` 保存会话工作文件、JSON 工件、工程副本与验证记录，`tmp/` 保存受管检查和验收子进程的临时文件，`outputs/` 保存正式文件。逻辑任务 ID 复用现有任务关系；Web 重执行沿用同一个根目录，内部任务、节点及执行代次各自隔离。工程旁路证据位于源码副本之外。
-
-DSH 原始会话日志和公共附件仍由宿主管理。历史任务、工件及会话原路径恢复，不自动迁移；消息问答等非任务会话仍使用原职责目录。新 JSON 引用携带 `tasks/<logicalTaskId>/` 前缀，直接定位 `work/artifacts/`，无需额外索引。文件下载、发送和完成验收继续核对原有 descriptor、摘要和授权。目录约定覆盖插件受管入口；外部工具显式写入的其他绝对路径与公共缓存不因此被重定向。
-
-升级后备份必须同时保留控制库、原工件/会话目录和 Agent 工作区的 `tasks/`；部署参数与回退边界见[任务目录部署说明](docs/ops/resident-review-local-deployment.md#任务文件统一目录的部署与备份)。
-
-启用 workflow 后，在线切换 Agent 工作区会被拒绝，避免会话和工件落到不同根；同根配置及模型设置仍可更新。需要换根时先停稳并制定完整迁移方案，本次不提供自动迁移。任务备份明确排除受管工程源码副本中的可再生 `node_modules`，恢复后按锁文件重新安装依赖。
-
-只读资源通过 `workflow.directQueries` 登记，由 `permissions` 显式声明 Agent 自身的资源授权，与发送者身份无关。不同群成员使用同一 Agent 职责范围，每次调用仍重新校验资源权限。数据库默认使用低权限只读身份；用户明确指定使用现有 UAT 账号时，仅对显式登记的 UAT 资源启用 Host 强制只读事务模式。模型始终不能获得连接凭据或提交任意 SQL。配置合同见 [Agent 查询工具](docs/api/agent-query-tool-contract.md)，切换步骤见 [本地部署说明](docs/ops/resident-review-local-deployment.md)。
-
-旧材料分析、固定规划/执行循环及逐次只读能力阶段退出新入口；切换前必须确认没有活动引用。历史记录继续按原状态读取，不重放旧命令。以下常驻主会话与叶子 Goal 说明适用于尚未切换的旧 Resident 群。
-
-插件直接复用以下 DSH 机制：
-
-- `Session`：每个群一个常驻主会话，每个 Task 一个独立叶子会话。
-- `subagent`：主会话只协调，叶子会话独立执行任务。
-- `Goal`：维持叶子任务的持续执行、恢复和完成状态。
-- `systemPrompt.section`：向主会话注入群名称、群 ID、群职责与决策协议；向叶子会话注入任务流程和证据要求。
-- Agent Registry 与原生 descriptor：在 DSH Web 中展示并打开常驻会话、叶子对话和轨迹。
-- 默认模型、推理深度与权限 preset：由 DSH 原生服务保存和应用。
-- storage domain：持久化群订阅、消息、Task、可靠投递、人工介入事项和告警。
-- attachment service：将钉钉图片作为 DSH 原生多模态附件传入会话。
-
-插件只补充钉钉渠道和群聊工作流特有的能力：DWS 订阅与补拉、消息去重排序、任务准入与关联、可靠 outbox、人工介入、任务看板和运行告警。
-
-UAT 部署对已接入的 `dataset`、`dataset-web` 优先主动上传目标提交的源码包，直接触发 Woodpecker manual 构建，不等待 Poller 定时检查。Host 使用专用上传凭据，核对目标流水线具备源码包入口，发送前再次检查分支与等价构建；同提交成功或在途构建继续复用。上传受理后独立绑定流水线，成功构建还须证明实际执行源码准备且未执行 clone。缺少凭据或入口、请求结果未知时不会静默退回 Cron 或重传；具体接入与核验见[受信平台说明](docs/ops/trusted-platform-workflows.md#uat-主动源码包构建)。
-
-UAT 部署、生产发布、数据变更与 UAT 同提交重建采用显式目标白名单和受信平台端口。UAT 部署只确认精确提交在目标环境运行；业务回归、提测与验收另行记录。 普通 UAT 构建在完整同提交扫描确认流水线已失败、且无成功或进行中的等价流水线时，保留失败收据并将节点及运行收口为失败；读取异常和未决状态继续只读对账，不重发原操作。 同提交重建也核对超时前已成功构建并部分部署的精确镜像来源；整条流水线失败不抹去已验证的构建事实。生产发布在创建 Tag 前等待真人审批，并逐段核对提交到运行镜像的来源链；新数据变更 v6 的简单加列只核对准确目标、创建 Bytebase 工单并提交插件人工审批，复杂 SQL 保留 UAT 演练；Bytebase 可能在送审时创建未执行 Rollout/Task，只有插件对本次精确 SQL 真人批准后才发送执行；Bytebase 平台审批状态不作为插件批准，生产验收通过只读连接独立回读。配置、平台只读检查与执行后回读的要求见[本地受信平台接入说明](docs/ops/trusted-platform-workflows.md)；缺少任何必要能力时，流程目录保持不可发起。
+## 工作目录与原生日志
 
 ```text
-DWS 群消息
-  → dingtalk-dsh-assistant
-  → DSH resident 主 Session（判断、沟通、协调）
-  → DSH leaf Session + Goal（独立执行）
-  → 主 Session（组织结果）
-  → outbox + DWS 回读确认
-
-  → 原群引用回复并 @模型从任务历史选出的相关参与人
+<Agent工作区>/
+  .dsh/task-sessions.sqlite           默认动态控制库
+  .dsh/task-sessions.sqlite.initialized
+  tasks/.session-routes/              原生日志持久路由
+  tasks/<taskId>/materials/           共享材料
+  tasks/<taskId>/outputs/             任务产物
+  tasks/<taskId>/tmp/
+  tasks/<taskId>/                     原生工作区及所有任务会话 header.cwd
+  tasks/<taskId>/work/                工作文件容器
+  tasks/<taskId>/.dsh/sessions/        该任务全部原生会话日志
+  groups/<groupId的摘要>/             群会话 cwd
 ```
 
-未领取的 Owner 求助通知在扫描时独立核对报告时序：同任务后续已应用的结论会使旧求助失效，即使钉钉外发关闭也执行该核对。失效不代表新结论已送达；已领取、发送未知及已送达记录继续保留回读链路。
+任务与执行的日志由官方 JSONL 后端直接写入任务目录，保持原生 replay、恢复和压缩能力；不是日志副本。群会话使用新 profile 配置的原生持久化根；旧会话不接入当前运行时，不能一概认定在 `%DSH_HOME%/sessions`。会话 ID、路由、控制库与工作目录需一致恢复。在线更换 Agent 工作区被拒绝；离线搬迁与恢复要求见[清洁启动 Runbook](docs/ops/task-session-clean-start.md#回退)。
 
-不依赖 Agent Studio，也不要再并行启动另一套会话或任务 Runtime。
+## Web 看板与 HTTP 接口
+
+任务页展示一项完整任务、唯一任务会话和动态执行列表；支持独立新建任务，不把内部执行拆成多个业务任务。详情包含结果、执行状态、日志入口和未决阻塞，不展示补充需求与取消任务控件；群消息续办和后端控制 API 仍保留。模型会话入口是阅读上下文，不是绕过 Host 直接修改任务的控制口。
+
+- `GET /state/tasks/:taskId/detail`：当前任务及只读历史详情
+- `GET /state/tasks/:taskId/executions`：动态执行或历史执行记录
+- `POST /tasks`：Web 新任务，须配置受信 `webActorId`、指定订阅群并提供稳定 `requestId`
+- `POST /tasks/:taskId/context`：补充要求，携带 `expectedRequirementRevision` 与 `expectedControlRevision`
+- `POST /tasks/:taskId/cancel`：取消，携带 `expectedControlRevision`
+
+Web 写入限制本机合法请求来源；操作者由 Host 配置，不接受模型提供身份。CAS 冲突须重新读任务，不能覆盖新版本。Web 的原始操作意图与来源同事务保存，重启不会交给群模型改判。
+
+旧 `/workflows/*`、`/config/workflow-variables*`、`/config/workflow-bindings*`、工作流目录及旧阶段/重跑/暂停恢复/归档等写入口返回 HTTP 410。旧任务写入返回 `LEGACY_TASK_READONLY`；历史读取不赋予恢复权限。完整退役范围以 `http.js` 为准。
 
 ## 包结构
 
-- `packages/dingtalk-dsh-assistant`：核心业务插件。负责 DWS 接入、群与 Session 绑定、消息处理、Task 调度、阻塞时的人工介入、可靠回复和配置页面。
-- `packages/dingtalk-dsh-observer`：DSH Web 展示扩展。提供群聊会话、任务看板、工作流、配置、归档任务、人工介入和告警页面。所选页面保存在当前浏览器标签页中；自动/手动刷新、宿主重挂载及整页重载后重新打开看板均保留该页面（浏览器允许会话存储时）。
-- 工作流目录：在运行看板的“任务看板”旁打开“工作流”，按列表与详情查看用途、版本、可用状态、顺序节点、配置与维护文档，并进入关联的当前或归档任务；返回时保留流程选择。目录展示当前注册定义，工程流程的具体步骤与已有任务冻结版本以任务详情为准。定义仍由代码及受管配置维护，页面不提供定义编辑或发布接口。插件设置页保留“运行看板 → 工作流”指路，旧版叶子任务配置的适用范围及保存合同不变。
-- 托管配置：在独立“配置”页维护普通变量、秘密和工作流别名绑定。新执行冻结版本，更新或停用不改变旧执行；保存后的内容不再依赖导入来源文件，但旧文件消费点须显式接入托管读取。复用宿主 `ctx.credentials` 私有记录；默认 `credentials-local` 在 `$DSH_HOME/.credentials.yaml` 明文持久化，Windows 不额外加密，Web 脱敏不等于磁盘加密。管理 API 为 `GET /config/workflow-variables`、`PUT /config/workflow-variables/:name`、`POST /config/workflow-variables/:name/enabled`、`PUT /config/workflow-bindings/:workflowId`，均限制本机合法 Origin/Host、由 Resident 注入 `workflow.webActorId`；写入须携带文档 `expectedRevision`，冲突返回 409。秘密值不出现在读取、保存回执或执行快照中。单值最多 64 KiB、最多 100 个变量，含历史配置最多 4 MiB。
-- 配置记录以受信 `workflow.instanceId` 隔离；共享同一宿主凭据文件的不同实例各有自己的变量与运行快照。改变 instanceId 不会自动迁移配置或读取其他实例的历史值。
-- 工程 v26 的 `inspect-and-propose` 节点可消费托管数据库配置：Host 在 `directQueries.configurationConnections` 将已登记连接显式映射到普通 JSON 配置和秘密别名，且数据库仍须由原 `permissions.databaseIds` 授权。查询使用该 Run 冻结版本，不向模型提供连接参数或秘密；消息与 Owner 不消费这类托管连接，未映射连接仍按原文件配置读取。历史 v25 定义保持原合同。
-- DWS 文件卡片的监听与历史回补保留 `fileId` 资源；同版本消息仅允许同发送者、同文件名及同 fileId 的固定下载提示展示差异，按重复接收处理，保留原始正文与版本。其他正文或身份变化仍须可信编辑版本。
+- `packages/dingtalk-dsh-assistant`：DWS 传输、群配置、任务会话服务、动态 SQLite 账与设置页面
+- `packages/dingtalk-dsh-observer`：任务、来源消息、结果、执行会话和历史只读看板
+- `task-resident-runtime.js`：不含旧调度器的 resident 传输/配置边界
+- `task-session-service.js`、`task-session.js`：来源接纳、群关联、任务统筹与恢复
+- `execution-session.js`：复用 DSH create/resume、preset、租约、工具与排空
+- `dynamic-task-store.js`：事务账、效果锁、幂等回执、唤醒及通知
+- `task-session-persistence.js`：官方原生日志的任务级持久路由
+- `docs/ops/task-session-clean-start.md`：切换、核验、人工对账与恢复
 
-同一任务通过 Web 再次执行时，看板保持一张卡片。详情只展示当前完整计划的有效步骤与结果：保留未受影响的成功前段，重执行更新对应步骤，已移除步骤从列表删除，新增步骤按当前计划加入。不同阶段的同名步骤按工作流分组独立展示，并显示真实开始时间与本次耗时；需求变化后旧结果失效。卡片与详情使用最多32字符的简短标题，详情可展开完整任务目标；卡片内步骤列表使用中文名称及本次节点耗时。详情不提供历史切换，旧任务链接打开当前详情；完整正文、产物和当前步骤会话仍可读取。关联以已保存的重执行事件为准，不按相似标题合并。新的追加、取消、重执行和归档须携带当前执行版本；归档核对整项任务均结束且操作排空，底层运行记录保留。接口见[工作流节点契约](docs/api/workflow-node-contracts.md#任务汇总与当前完整详情)。
+旧 workflow/Goal/叶子调度文档仅供历史维护取证，不是当前 resident 的操作指引。不得同时装配旧 `workflow-service`、旧 Resident scheduler 或独立 execution 恢复进程写同一实例。
 
-任务详情采用步骤目录与阅读面板：顶部先显示任务状态、累计时长和当前结果；选择步骤后查看真实耗时、产出与会话。首次仅读取选中步骤产出，切换保留已读分页和展开状态；自动刷新保留选择，已移除步骤转到相邻位置。窄屏上下排列，提供“查看所选步骤”和“返回步骤目录”键盘入口。设计约定见[运行看板设计](docs/manual/observer-design.md)，部署后的只读核对见[本地部署说明](docs/ops/resident-review-local-deployment.md#任务详情阅读工作台切换核对)。
-
-“查看任务会话”进入负责整个任务的执行会话，“查看步骤会话”进入所选 Agent 步骤原会话，两者只在实际绑定成功后可用。任务会话可以直接完成查询而不生成流程；已结束的零流程任务显示“本任务未使用工作流”，未确定的计划仍提示待确定。维护中调整检查或验收配置会保留有效步骤的阅读身份、分页和展开状态；切到群消息等页面后的后台刷新也保留步骤选择，真正删除步骤时返回任务页再定位相邻步骤。
-
-旧版任务归档清理开发目录前核验提交已包含在 origin 当前公布的分支中，同名分支已推进或删除不等于代码未保存；无法证明提交保留、脏代码或未登记文件仍拒绝清理。目录已移除时，缺少归档摘要的登记文档只能从准确登记提交的普通文件恢复到任务专属归档目录，不使用同名文件猜测。预检不写文件，目标冲突、缺源或摘要不符会停止。
-
-登记后在原分支继续开发的提交必须是登记提交的后代且已保存到远端，才可归档；路径、Git目录、主库、分支和 origin 身份仍须一致。清理进度记录本次核验的实际提交，文档复制后再次固定核对该提交，期间出现新提交则停止删除。
-- `.dsh/profiles/resident`：resident Runtime 的参考 profile 与 Cordis patch。
-- `.dsh/profiles/web`：Web contribution 的参考 profile。
-- `docs/spec`：关键状态机和工作流设计说明。
-- `test`：插件单元测试和 Runtime 契约测试。
+发布清单采用当前入口依赖的显式白名单。退役工作流、私人平台适配器、历史业务源码和个人技能均不进入 Assistant npm 包，旧 `./execution` 与 `./platform-host` 导出已移除；它们只保留在源码中作历史取证。通用群消息、资源清理和当前来源规则独立成模块，避免无关的旧引擎被传递打包。`test/task-session-package-native.test.js` 实际打包、解压，以已安装依赖运行解压产物的任务和 resident 健康检查；不等于已经部署用户实例。
 
 ## 环境要求
 
@@ -161,21 +96,27 @@ DWS 群消息
 
 ### Skill 文件路径
 
-DSH 根据 Session 的 Agent 工作目录发现项目级 Skill，同时加载用户级 Skill。默认扫描顺序如下，靠前的同名 Skill 优先：
+插件不内置个人 Agent 设定、技能正文、业务技能名单或业务目录。技能使用已配置 DSH 原生 `dsh-skill`、`dsh-skill-filesystem`、`dsh-tool-skill`；没有配置这些能力时不会自动安装个人技能或回退加载仓库历史工作流。
 
-1. `<Agent工作区>\.dsh\skills\<skill-name>\SKILL.md`
-2. `<Agent工作区>\.agents\skills\<skill-name>\SKILL.md`
+DSH 根据 Session 的当前工作目录发现项目级 Skill，同时加载用户级 Skill。项目根是包含 `.git` 的最近祖先；没有 `.git` 时就是当前 Session cwd。每任务拥有独立的根目录 cwd，任务内所有会话共享此 cwd，因此不能假定 `<Agent工作区>/.agents/skills` 总会被自动发现。默认扫描顺序如下，靠前的同名 Skill 优先（不同 preset 的同名覆盖仍按 DSH 原生 scope 规则）：
+
+1. `<项目根>\.dsh\skills\<skill-name>\SKILL.md`
+2. `<项目根>\.agents\skills\<skill-name>\SKILL.md`
 3. profile 显式配置的 `customSkillDirs`
 4. `%DSH_HOME%\skills\<skill-name>\SKILL.md`，`DSH_HOME` 默认是 `%USERPROFILE%\.dsh`
 5. `%DSH_AGENTS_HOME%\skills\<skill-name>\SKILL.md`，`DSH_AGENTS_HOME` 默认是 `%USERPROFILE%\.agents`
 
-给本机所有 DSH 项目共享的 Skill，推荐安装到 `%USERPROFILE%\.agents\skills`；只服务当前 Agent 工作区的 Skill，推荐安装到 `<Agent工作区>\.agents\skills`。DSH 不扫描 `%USERPROFILE%\.codex\skills`，仅安装在 Codex Skill 目录中的 `write-pr`、`dingtalk-*` 等 Skill 不会进入 resident 或叶子 Session。
+给本机当前用户的 DSH 项目共享的 Skill，可安装到 `%DSH_AGENTS_HOME%\skills` 或默认 `%USERPROFILE%\.agents\skills`。只服务某个个人 Agent 的技能，配置该 Agent preset 内 `dsh-skill-filesystem` 的 `customSkillDirs` 为个人技能包的绝对目录；需要隔离时同时设 `includeDefaultRoots: false`。这些路径及正文保存在个人配置和插件仓库之外，不修改插件包。DSH 不扫描 `%USERPROFILE%\.codex\skills`。
 
-复制时必须保留完整的 `<skill-name>` 目录，不能只复制 `SKILL.md`，因为 Skill 可能引用同目录下的 `references`、`scripts` 或其他资源。目录被发现只表示 Skill 已进入会话目录；模型仍会在任务命中触发条件后调用 `skill` 工具加载完整指令。验证是否真正加载时，应在 Session JSONL 中同时确认对应的 `tool/call` 和 `isError: false` 的 `tool/result`，不能只检查文件存在。
+复制时必须保留完整的 `<skill-name>` 目录，不能只复制 `SKILL.md`，因为 Skill 可能引用同目录下的 `references`、`scripts` 或其他资源。原生目录只提供名称和描述，正文在 `skill(name)` 调用后才进入对应会话。任务会话据此分派小目标，可通过 `task_delegate.skillNames` 传递相关名称；独立执行会话自行加载适用入口，再通过实际文件工具按需读取引用资料。群会话只负责路由，不加载业务技能。
+
+Skill 不提供动作授权，不恢复固定 DAG、参数绑定、审批门槛或产物格式验收；任务会话仍负责整体完成判断。原生 loader 仅读取注册表与正文，附属脚本不会由 `skill` 自动执行。插件将所选可信 preset 中挂载的准确 `skill` 工具对象作为只读入口，后续同名替换不能继承任务会话调用许可或执行会话的只读效果分类；不要配置不受信任的 preset 插件代码。普通加载失败可纠正，不应生成未知外部写入。
+
+验证是否真正加载时，应在任务及执行 Session JSONL 中分别确认廉价目录，以及实际 `tool/call` / 成功 `tool/result`；还应确认无关正文没有自动注入、执行能读取所需引用资料、任务和执行会话均能使用已配置的原生文件与终端工具，取消、提交和租约变化仍阻止失效动作。`test/task-session-skills-native.test.js` 使用真实 DSH registry、filesystem provider、tool-skill 和会话运行时覆盖这些边界；它不代表具体个人技能的业务效果或真实平台发布已验证。
 
 ## 安装到 DSH
 
-从 0.5.x 升级到 1.0.0 前，先阅读[大版本升级边界](docs/ops/npm-release.md#100-升级边界)和[更新日志](CHANGELOG.md)。旧存储需要独立检查，不能仅替换包后直接打开。
+本分支的任务会话架构是源码切换，不能从包版本号推断某个已发布包已包含它。既有实例必须先按[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)停止旧调度、排空实际执行并审阅历史未决效果。历史版本安装方法仍见[大版本升级边界](docs/ops/npm-release.md#100-升级边界)与[更新日志](CHANGELOG.md)。
 
 
 推荐让 Web、resident Runtime 和看板运行在同一个 DSH Web 进程中，避免两个进程同时写同一份 Session JSONL 和 storage domain。
@@ -205,8 +146,8 @@ dsh plugin --profile web add dingtalk-dsh-assistant@1.0.0 --save-exact
 ```powershell
 git clone https://github.com/HiQ-AI/dingtalk-dsh-assistant.git
 Set-Location .\dingtalk-dsh-assistant
-pnpm install
-pnpm test
+pnpm install --frozen-lockfile
+node --test test/dynamic-task-store.test.js test/task-session-service-native.test.js test/task-session-http-integration.test.js
 ```
 
 #### 2. 将插件加入 DSH Web profile
@@ -240,7 +181,7 @@ pnpm test
 
 把 [`.dsh/profiles/resident/cordis.patch.yml`](.dsh/profiles/resident/cordis.patch.yml) 中的 resident 配置按需合并到实际使用的 Web profile patch。Web 基础 bundle 已包含 storage 相关插件，只覆盖 `storage-json` 配置并插入 `dingtalk-dsh-assistant/resident`，不要重复插入同名 storage 项。
 
-简单新增可空列也支持 `smallint`、`integer`、`bigint` 的范围内十进制整数常量默认值，例如 `ADD COLUMN is_deleted integer DEFAULT 0`。仍按准确表目录核对、Bytebase 送单、插件真人审批后执行；不增加 UAT 演练。函数、算术表达式、非整型默认值与 `NOT NULL` 不属于此路径。验收保留 `column_default` 的实际目录表达式，默认 `0` 必须核对为字符串 `"0"`，不能改写成无默认值。
+参考 patch 不替代任务控制库初始化。首次使用须在实际 resident 配置中明确设置 `taskSessions.dbPath`、`instanceId` 与经过确认的一次性 `initialize: true`；确认初始化成功后改回 `false`。必须显式配置 `ownerActorId`、`webActorId` 及现场记录的 `ingressEpoch`；不接入旧任务库。完整配置字段与停机边界见[清洁启动 Runbook](docs/ops/task-session-clean-start.md#必填配置和时间边界)。
 
 仓库模板有意保持以下安全默认值：
 
@@ -253,11 +194,21 @@ dws:
 
 不要把个人群 ID、DWS profile、Agent 名称、工作目录或职责写入仓库模板；这些内容应保存在本机 DSH 配置和插件 storage 中。
 
+### 可选的个人群回复署名
+
+在插件设置的“Agent 配置 → 群回复署名（可选）”填写完整署名，例如 `资料助理代回` 或 `Ada Support`，不用添加开头的 `-`。填写后统一使用该全局署名；留空保留群会话按对应群职责生成的正文和署名，不额外添加或删除署名。结构化字段为 `replySignature`，通过现有 `PUT /config/agent` 保存，`GET /state/agent-config` 回读；首次启动也可以在私人 profile 配置 `agentReplySignature`，已有存储值（包括明确清空）优先。
+
+插件不内置个人名，不从 `agentNames`、群职责或模型正文推断署名。任务结论、状态查询和需要补充信息的问题均读取当前配置，继续引用原消息、真实 @ 发起人，保留结论、证据和限制。签名仅影响新准备的通知，已准备或已发送正文不重写。
+
+“常驻群与会话职责”加载到对应群会话，并在任务统筹新建及续办时按当前所属群配置注入，让任务继承该群的授权边界、红线和回复要求。群会话按职责生成的署名属于原回复正文；格式器仅在显式配置全局署名时替换末尾署名。
+
+旧群职责中的署名要求继续由模型执行；仅在需要统一覆盖时显式配置全局署名。未配置时不补入历史人名。详细格式边界见[通用 Agent 身份边界](docs/spec/generic-agent-identity.md)。
+
 #### 4. 安装 profile 依赖
 
 ```powershell
 Set-Location "$env:USERPROFILE\.dsh\profiles\web"
-pnpm install
+pnpm install --frozen-lockfile
 ```
 
 #### 5. 启动 DSH Web
@@ -271,642 +222,41 @@ pwsh -NoProfile -File .\scripts\start-web.ps1
 
 `scripts/start-web.ps1` 使用当前用户的 `%USERPROFILE%\.dsh` 作为默认 `DSH_HOME`；若需要隔离 profile，可在启动前显式设置 `DSH_HOME`。脚本从当前项目根启动，并自动发现 `PATH` 中的 Node.js 和全局安装的 DSH。
 
-## 首次配置
-
-启动后，在 DSH Web 的“设置 → 插件 → 钉钉个人助理”中完成配置：
-
-![已选中的钉钉个人助理插件配置](docs/manual/images/dsh-web-plugin-selected-annotated.png)
-
-1. 设置 Agent 名称和别名，多个名称使用英文逗号分隔。群职责定义本群身份关系、负责范围和介入要求；需要作为任务称呼的名字同时加入别名配置。DWS 登录人姓名不享有特殊准入或静默规则。
-2. 设置 Agent 工作区绝对目录。DSH 会从该目录原生发现 `AGENTS.md`。
-
-群消息协调的原生常驻会话直接以 Agent 工作区根目录启动，原生权限为“完全权限”（`danger-full-access`，审批策略 `never`），名称使用完整群聊名称。旧职责子目录会话排空后由原生派生会话完整继承日志并切换绑定，原日志和任务身份保留；正常跨轮继续恢复同一会话。其他非任务新会话仍使用 `session-workspaces/` 职责目录，任务会话沿用下述任务目录。完全权限不扩大业务工具、数据库表列授权或生产审批范围。
-
-下一轮协调前，原生模型可见历史保留原始消息、引用和附件，收紧此前重复的后台快照；本轮完整事实与任务目录照常提供，完整原始事件仍在 JSONL 中。自身通知通过同群已登记的外发消息 ID 排除回声，不依赖发送账号与任务所有者相同，也不按正文或署名忽略普通消息。长任务继续由独立 Task Owner/执行会话推进。
-
-新任务接纳、排队和启动保持静默。补充、重评、恢复不逐条发送；旧启动通知在领取前按当前规则失效。执行期间调查/执行/验收进展、内部执行或能力受阻、群内审批等待均不自动汇报。最终完成后回复结果；明确需要用户补充业务信息或授权时才提问，插件真人审批仍走私聊。用户主动询问进展或发出控制指令时照常回复。详细过程与诊断保留在看板。通知准备与领取共用规则，升级前未发送的中间通知原生失效；已经发送或发送未知的记录仍只回读，不重发。
-
-职责目录继承根目录指引依赖 DSH 原生 `agent-instructions.projectRootMarkers`：Git 工作区可使用 `.git`；普通工作区应将 `AGENTS.md`、`CLAUDE.md` 或已有的根标记加入该配置。插件不复制指引、不写入个人身份，也不覆盖宿主的指引配置。
-3. 设置默认模型、推理深度和叶子任务并行上限，默认并行上限为 5。
-4. 按需设置网络代理。
-5. 已切换到 `workflow-v2` 的群使用代码注册的任务流程；配置页展示只读流程目录、消息处理阶段、准入状态、定义版本及节点职责。`GET /state/workflows/catalog` 提供该目录，不返回旧提示词正文。未切换群的旧版叶子任务配置折叠保留，历史 `taskPrompts` 数据不迁移或删除；只配置新流程群时，保存通用 Agent 配置不提交旧提示词字段。
-6. 查询已有任务进展由平台内置 `task-progress-query@1` 即时流程处理：校验同群范围、检索候选、回读状态与交付标记、生成答复。定义见目录接口的 `builtInWorkflows`，四步摘要写入消息命令结果供审计；它不会创建任务看板任务。候选超过 8 项时回复明确说明截取范围，标题匹配不等于业务归属已确认。
-7. 已切换群的身份识别读取当前 Agent 配置的 `agentNames` 名称和别名，状态问句、交办准入和恢复使用同一份配置；改名后不保留旧名称捷径，未配置不默认任何本机身份。通知首次准备时读取当前“会话职责”的确定性回复规则：明确指定唯一代回署名（例如 `- 资料助理代回`）时，持久正文末尾空一行附该署名；未指定则不自动添加，多个不同署名拒绝。要求引用回复时不允许缺来源而退化为普通群发。已保存通知的正文保持不可变，群职责后来调整不会阻断其发送或回读。第三方任务创建进展同步会静默入账，不生成追问或业务任务；引用能沿已送达通知定位唯一话题时，消息绑定该话题，否则在收信箱显示待归类。已完成的纯排查旧任务再次收到同一问题报告且没有明确修复交办时，先询问是否实施修复；肯定答复才准入新的工作流任务，不改写旧任务。澄清答复折叠进原消息后，结清答复留下的归类屏障；启动恢复以已送达澄清通知、引用消息和已解决请求三项持久证据补挂原话题，不重复派发业务任务。
-8. 新消息完成话题关联后，先等待本群已收消息完成归类；同话题消息进入同一个批量意图判断，不同话题各自判断。判断中到达的同话题新消息会使旧候选失效并集合重判。已执行中的任务收到补充时，已应用动作保留，剩余动作重新判断；来源编辑使旧话题约束失效。原任务发送者明确说“暂停/取消/恢复这个任务”且目标 Task 已绑定时，可经过 Host 与持久账双重授权后越过无关消息的归类等待。新 Task 与负责会话先原子落账，初始没有业务阶段；意图节点只交接目标、验收和约束，唯一的 Task Owner 再按受信目录初始化或调整计划。Owner 可组合排查、方案、工程、UAT 和通用能力，每个阶段由独立 Run 执行，并能读取当前 Task 已成功阶段的真实产物。阶段成功不自动等于任务完成；未解决的限制或缺来源证据会阻止整体完成。任务级暂停、取消与恢复阻止旧确认或后续 Run 越过控制状态。IM 与 Web 补充均递增 Task 要求版本，运行中的旧 Run 输入保持冻结，Owner 据新版要求调整后续计划。已完成任务仅更改报告语言时，Owner 基于已核验产物重新报告，不重跑流程；纠正须指定精确报告身份。所有 Task 均可在授权范围内调用 `task-general-capability`，包括受信本地 Markdown 文件生成及独立回读；缺少实际调查、写入或目标验收能力时明确阻塞。旧 `task-general` 和 `task-general-intake` 仅供历史 Run 恢复。迁移及本地验证见[执行底座运维说明](docs/ops/execution-foundation-local.md)。
-9. Task 看板区分流程结果与负责会话的整体验收；最终完成须覆盖全部当前验收项和真实阶段证据。负责人接纳的最终报告经原 Outbox 发送、ACK 与回读，单个流程成功不先冒充整体完成。历史承接和阶段结果保留各自证据，新增目标不自动撤回旧消息。通知撤回或补发仍经 `/workflows/notifications/operations` 逐条预检、执行与回读；群负责人授权消息须单独一行写 `撤回通知 <通知ID>` 或 `补发通知 <通知ID>`。ACK 后或外部结果未知时只查询原操作，不重发。
-6. 运行看板中的新任务点击后查看节点执行详情：每个节点的状态、等待原因、产出记录和任务最终结果。节点确有模型会话时可从该节点打开会话记录；旧任务继续使用原有会话入口，卡片上的任务进度样式不变。新发起的工程发现任务由“检查并提出修改”节点按需列路径、搜正文、分段读取文件，不再建立整仓目录索引或单独选文件；Host 在实际写入前校验准入目录和文件哈希。节点领取次数仅用于统计，不设持久上限。文件发现、读取及工件交接不设置插件层字节上限，模型和运行环境的实际容量仍需由节点状态回读。
-
-叶子的 `plan-confirmed` 必须用 `workflowAssessment` 绑定当前流程组合，说明沿用证据、不适用步骤以及例外依据。流程例外必须引用固定 Topic 中明确提出该要求的原始消息；主会话生成的目标、验收标准或旧摘要不能覆盖流程。常驻主会话结合可用流程索引和选择原因核查是否漏选，按需读取候选流程；允许有明确理由的无匹配和多个流程组合，不固化业务任务类型。读完已选流程后审阅计划，冲突时返回结构化拒绝。计划、阶段、审阅提交及最终落盘都核对当前启用流程的修订号；配置修改、停用或删除立即使受影响旧审阅失效，无需等待叶子重载。失效待审项归档到执行事件，历史证据保留，重新规划后才可推进。`stage-completed` 每次只提交上一检查点 `remainingItems` 的第一项，`completedItems` 不是累计历史。 checkpoint 按 kind 使用同源契约：plan-confirmed 才允许 workflowAssessment；stage-completed 必须有 stageTask 和非空 evidence；scope-conflict/evidence-gap/risk-changed 可用 stageTask/stageId 标明受影响阶段，但 completedItems 必须为空，不能推进阶段。工具 JSON Schema 由同一 Zod 投影到 DSH 支持的子集，kind/status 分支保留；长度及复杂关联约束由执行时 Zod 精确校验并返回字段路径。错误推进会得到 reviewStatus=rejected 的报告回执及具体缺口，原进度不变；核对该项真实证据并按回执修正，确认接受后再推进下一阶段。
-6. 通过群名称模糊搜索添加常驻群，并为每个群配置会话职责。
-
-确认页面的环境检查显示 DWS 已安装、已登录后，再在实际 profile 中启用：
-
-```yaml
-dws:
-  enabled: true
-  writesAuthorized: false
-```
-
-先验证真实消息能够进入固定 resident Session，再将 `writesAuthorized` 改为 `true` 开放群聊回复。修改 profile 后需要重启 DSH Web。
-
-完整的逐步安装、页面字段说明和“先收后发”验收流程见[安装插件并在 DSH Web 中完成配置](docs/manual/install-and-configure-dsh-web.md)。
-
-## 群聊工作流
-
-流程契约使用存储 domain v9。已有 v8 数据须按[工作流存储迁移](docs/ops/workflow-storage-migration.md)进行零写自检、独立目标转换和真实 SDK 回读；v6/v7 先按[旧 Topic 迁移](docs/ops/topic-storage-migration.md)得到 v8，再转换到 v9。不能直接用新 Runtime 打开旧存储。活动任务迁移后停在系统等待，显式恢复并重新确认结构化计划后才继续。下文说明代码契约，不代表该版本已发布或本机 profile 已升级。
-
-任务负责人读取成功工程阶段时，Host 先核对同一运行、候选和提交的交付证明，再提供构建检查、本地验收要求、业务结果和清理收据的原始节点引用；PR 结果不单独代表业务验收通过。此材料展开不改变已冻结的工作流或重跑成功节点。
-
-节点接口与恢复语义见[工作流节点契约](docs/api/workflow-node-contracts.md)。计划以稳定 criterionId/stageId、来源和版本为准；阶段产出引用产物及证据，完成提交包含逐项验收。报告 received、审阅批准、业务应用和通知送达分别记录。完成结果与通知意图同次持久化，通知失败恢复原意图，不重做业务。
-
-已接纳 Decision 的已知本地瞬时存储错误最多尝试三次；未知错误进入 blocked，保留原 operationId 和冲突保留记录。普通消息重试不能解锁未知结果，Host 必须对账后按原操作恢复。Task 取消先保存 stopRequest，未确定的外部动作继续对账，不能把“取消已请求”显示成副作用已撤销。执行许可与 Task 状态分离，等待审阅时停止叶子并释放许可，恢复必须重新排队取得许可。
-
-材料清单、版本和完整性检查由 Host 提前计算；只读注册检查器目前包含产物 SHA256 核验，摘要匹配不代表业务验收通过。外部动作账本只约束已注册适配器，未接入的任意 shell、SQL、部署不会自动获得去重或资源锁保障。
-
-### 常驻主会话
-
-每个群唯一绑定一个 resident Session。群名称、群 ID、职责和稳定决策协议通过 DSH `systemPrompt.section` 注入。消息明确指向已配置的 Agent 名称/别名、使用 `cc:`，或明确确认此前“是否需要我处理”的询问，并形成职责范围内的可验证目标时，主会话可以创建 Task；未明确指名但判断事项应形成任务时，主会话先在群里询问“这个事项是否需要我处理？”，收到肯定答复后再结合原消息和后续补充创建。Host 在接受 `new-task` 时再次校验群职责非空，并要求依据消息明确指向 Agent，或引用本插件此前持久化的 `task-proposal` 询问，不能只信任模型结论。主会话只负责选择 Task 路由；Runtime 使用原始群消息生成来源证据信封交给叶子，主会话生成的根因、完成度、方案优劣或排除性判断不作为叶子事实。
-
-每条新消息先可靠持久化到 Inbox，接收接口随后返回；Resident 使用 `group_topic_route_submit` 对冻结的消息批次先拆分可独立补充、取消、交付、验收和反馈的事项 unit，再分别匹配持久 Topic。一个消息可包含多个 unit，每个 unit 有精确来源、唯一动作 owner 和自己的 `unitId + unitRevision`；四个属于同一交付目标的验收点保持一个事项，独立需求分别处理。超长路由原文通过 `group_topic_route_context_get` 按固定坐标读完，Host 在完整读取、范围覆盖和归属校验前不会接受部分路由。Topic 跨 turn 存在，已归类的无关话题不会使当前话题决策失效。已有 Topic 可与待路由批次交错准备决策；同群模型仍串行，有竞争时每个请求执行一个原生步骤并在工具结果落稳后让出。提交仍核对全部未知输入；返回 `routing-required` 后 Host 保留未接纳草稿，路由完成即按当前来源、版本和回复审阅结果重新校验提交，无需模型重算。同话题新增输入使旧草稿失效，重启则按当前输入重建。无限未分类输入下不承诺提交等待有固定上限。已接受的业务意图仍独立恢复；归类、Topic 决策与 Task 执行分别维护进度，DWS 补拉完成只证明可靠接收。
-
-路由工具成功时只返回 `status` 和 `requestId`（重提已落盘请求另有 `recovered: true`），不在工具输出中复制待决策 Topic 的正文或临时 ID 映射。Host 将各 Topic 的 `[GROUP_TOPIC_DECISION]` 分别投递到常驻会话；`accepted` 仅证明路由落盘，不代表决策、Task 或群回复已完成。决策首屏优先提供本次事项、直接引用、原始点名和 Topic 摘要；同一消息的引用与原文只提供一份。超长段使用 `group_decision_context_get(requestId, section, offset)` 按固定请求连续续读；历史使用 `group_topic_context_get` 按需读取。
-
-Topic 的 `title` 是对齐 Task 名称的 8–20 字短语，最多 30 字，细节保存在 `summary`。v6 迁移形成的历史 Topic 如果摘要为空，Runtime 会先让 Resident 根据其固定版本引用消息生成独立摘要；随后再根据摘要重新概括标题并通过 `group_topic_title_submit` 原子写回，禁止直接截断摘要。摘要和标题分两步提交，每步都校验 Topic 快照，过期结果不会覆盖新内容。
-
-入站消息引用其他钉钉消息时，Steer 信封只携带稳定的引用消息 ID；正常情况下 Resident 直接使用同一会话已经收到的正文。如果该正文因消息传递异常、会话恢复或上下文压缩而不在当前可见上下文，Resident 必须加载 `dingtalk-chat` Skill，并使用插件配置的同一 DWS profile 执行 `chat +messages-mget` 主动读取；取回的消息仍有 `quotedMessage.messageId` 时继续向上查询，直至整条引用链结束。查询结果必须校验完整性，必要时读取链上的图片或文件。查询失败、结果不完整、未命中或检测到循环时，不得要求群成员补发原问题、正文或截图，也不得猜测并回复；本次判断进入 `decision-retrying`，由 Runtime 在故障恢复后自动重试。
-
-`group_decision_submit` 每次提交一个 Topic 的决策，绑定 topicId、revision 和持久 decisionId。决策及每个 Task action 都携带 `basisUnitRefs`，Host 按事项逐动作校验 owner、当前增量和执行版本；接受一个事项不会消费同消息的其他事项。Task 仍只保存 topicRefs，固定版本读取只投影本事项的来源与共享背景。任何 Task 动作都必须带非空确认；确认先可靠写入 Outbox，再创建、续接或重开 Task，但单独确认不消费后续业务动作资格。取消仍优先发送止损信号。决策接受后保留动作回执，按固定 operationId 恢复，不通过重建 ID 重复执行。Topic 工具参数错误返回精简的 `invalid-arguments` 字段问题；归类请求过期时返回当前请求，已落盘的重复提交从 RouteHistory 恢复原回执，Resident 不猜测或盲目重放未知请求。
-
-动作的条件必填字段由同一份规则生成协调工具 schema 和 Host 校验，例如 `report` 必须提供 `language`；缺参拒绝，不补默认值。
-
-历史主会话回复候选按 Topic 决策或 Task 通知绑定并有界读取，不随全群历史重复注入。Resident 准备回复时调用 `group_reply_review_get`，完整审阅绑定快照；Topic ID、引用 ID 或关键词不能替代语义判断。重启后从持久的归类进度、Topic 未处理版本和已接受决策恢复；已归类话题的失败只阻塞该话题及共享 Task 的关联操作。
-
-图片及其紧邻短消息在归类阶段共同理解；附件读取失败不能据标题或缩略图猜测正文并启动 Task。原始消息保存附件与事实版本，Topic 固定版本解析相应原始事实，重启后仍能追溯输入。
-
-Task 完成和信息阻塞通知使用 `group_reply_submit` 结构化提交，绑定 Task runSequence、inputVersion、事项来源、相关 Topic 版本及回复快照。每个事项完成后立即进入自己的验收和 Outbox 链路，不等待同消息其他事项；通知请求冻结创建时已接收入站的序号边界，边界后的无关新消息不会扩展旧请求。Resident 根据所引用 Topic 的原始消息选择 `replyToMessageId`；省略 `atOpenDingTalkIds` 时，Runtime 统一从被引用消息推导发送人，显式接收人仍必须属于当前 Topic。当前事项的 Topic 或执行版本变化会使旧通知失效，并在持久协调账中进入 `superseded` 终态。Outbox 待投递、DWS 发送和群回读确认分别计量；通知使用提交 requestId 派生稳定 Outbox 身份，运行层重启或调用方未收到返回值时可读取已接受回执，找不到回执的未知请求不会自动重发。
-
-Topic 决策产生非空回复时，Runtime 使用 DWS 原生引用回复，并验证选定消息属于当前 Topic 快照。原消息的引用链只提供上下文，不自动成为出站引用目标。发送人 ID 缺失时不得猜测引用参数。回读必须匹配正文与精确的引用消息 ID；同文但属于其他话题的引用回复不能认领为本次投递。
-
-任何非空回复提交前，Resident 必须通过 `group_reply_review_get` 按请求 ID 读取 Runtime 绑定的历史确认、近期回复、内容相关回复和当前 Task 关联回复。Resident 根据正文、目标、动作范围和时间线判断同一事项，引用 ID 和相似度只定位候选。等价确认没有新信息时保持静默；必须补全或纠正时，完整审阅后选择当前群真实 Outbox。接纳前校验替换图，原子持久化新通知与替换关系；旧 pending 进入 superseded，不再发送，但这不证明历史从未送达。历史发送未知只核验，迟到回执仍记录实际 messageId。
-
-替换通知先经原生幂等发送及 DWS 回读确认，再独立撤回已授权的旧消息（包括替换链）。撤回失败不再阻塞纠正通知，也不把旧消息伪标撤回：明确服务端拒绝停止自动重试；其它异常按 30 秒间隔最多尝试 3 次，之后等待核验。历史未知查询未命中保留 replacement_delivery_unknown，可由迟到回执继续恢复，不等于确认未发送。发送入口共享群级串行队列，实际外发前再原子检查旧意图未被替换。看板分别展示已替代、撤回待处理、待回读与已回读，保留审计原因。
-
-普通发送遇到明确服务端拒绝时持久化 deliveryBlockedAt，看板显示发送待处理，停止对相同意图自动重试；读取失败或送达未知不冒充明确拒绝，继续保留原生幂等与回读保护。
-
-无任何业务动作或投递记录的阻断通知，可由运维持证据通过 `reconsider` 重新决策；有副作用或结果未知的记录拒绝此操作。阶段成功事件沿用稳定身份，升级不会将相同完成观察当作新输入。若既有版本已产生重复事件，仅允许在维护排空后依据原完成决定和完全相同的事件内容原生对账，保留失败回合；不能据此重新判定业务完成。详见[本地部署与恢复规程](docs/ops/resident-review-local-deployment.md)。
-
-### 群聊协调决策
-
-决策首包提供固定版本的 `promptIndex` 和合法 `contextSections`；内联消息直接复用，只有分页指针需要 `group_decision_context_get`。流程正文通过同一请求的 `group_task_prompt_get` 批量读取，已有任务用 `group_task_list` / `group_task_context_get` 查询。流程版本改变会使旧读取失效并重新调度。
-
-同群模型保持串行。存在竞争时，决策与审阅每次可连续执行最多三步，或在累计30秒后的步骤边界让出；不会中断正在执行的模型或提交工具。路由仍在步骤边界优先，两批路由后给其他请求公平执行机会。这个预算控制轮转，不承诺真实渠道端到端30秒内完成。
-
-活动记录恢复在后台处理固定快照，再按序接续新事件；启动不等待运行任务的历史统计完全追平。失败保留水位并可恢复，关闭仍等待已排队记录落盘。
-
-### 性能观测与协调资源读取
-
-`GET /state/performance` 是只读观测接口，可按 `day`、`sessionId`、`groupId`、`taskId`、`requestId`、`submissionId` 精确筛选。`rows` 按上海自然日返回模型和工具调用、首流事件/响应/工具耗时分布、上下文及 token 用量；分布包含 `count/sum/max/p50/p95`。`inputTokens` 是未缓存输入；`totalInputTokens` 合计已报告的未缓存、缓存读取和缓存写入，缺失分项另计，不能把未知用量当作已确认的零。模型/工具资源累计耗时与区间并集分别展示，不能把跨行累计值当作端到端等待时间。已有 `/state/task-timings` 继续提供 Task 状态耗时。
-
-`workflow.taskWaits` 从持久状态历史和报告收发边界派生排队、运行、系统等待、人工等待、信息等待及审阅等待，按日对每类区间取并集。旧历史没有 `waitingKind` 时记为 `unknownWait`，不借当前状态猜测历史；报告等待可能与运行状态重叠，不能把这些列当作互斥阶段相加。状态历史没有精确请求/会话/报告关联时，相应筛选返回缺失说明。
-
-`workflow.responses` 只匹配 `replyToMessageId` 精确指向入站消息、且已经保存送达消息 ID 和送达时间的回复；按入站日期归组。`firstReplyMs` 包含确认回执，`firstLabeledSubstantiveReplyMs` 只采用 `replyKind=substantive` 标签，标签不等于人工验证了实质回复内容。未匹配消息返回空值与缺失原因，不记为零耗时。
-
-`coordination.requests` 按请求汇总会话数量、模型输入、未缓存输入及协调消息正文序列化后的字节数；不将字节数折算成 token 或费用。`rows.coordinationQueueMs` 使用 `dingtalk/coordination-dispatched` 中真实入队、分派时刻的差，包含等待轮到本请求及准备会话的时间；重复分派同一消息不重复记录。缺失、倒序时间或请求身份不符单列缺失；旧队列边界没有自动回填。
-
-`observedSince` 和 `coverage=observed-events-only` 标明本投影的观测范围。缺失 usage、首流事件、step 起点或工具配对由缺失计数明确记录；fork seed 和重复投影不计作新模型调用。投影在现有 scheduler 表按会话分区保存，逻辑上更新某会话不改变其它会话的历史，但 single-json 后端仍会重写整个 Domain 文件；计量写入使用全局单写入器，将等待中的同会话事件合成一次持久写，避免多会话计量占满业务写队列，回执仍在持久化后完成；step 结束清理配对状态并压缩已完成步骤身份，缺失工具结果仍保留计数。精确分位频数、去重范围与每日区间并集随保留历史增长，`retention` 明示这一限制，不作任意条数截断。只持久保存计量元数据，不保存正文或工具参数。首流事件不等于首个可见字，更不等于首次实质回复；人工内容标注、全部外部阶段归因和账单计价仍未完成，不能据此承诺费用或真实业务响应收益。
-
-请求会话通过 `group_message_get` 读取本请求消息及引用链，通过 `group_resource_get` 读取消息明确引用的附件或 URL。任意消息 ID、资源 ID 或 URL 被拒绝；分页须连续读取，身份、版本、格式或完整性不符会明确失败。公网文本读取仅允许无凭据的 HTTPS/443、公网 IPv4 DNS 结果；固定本次连接地址，不跟随重定向，不读取内网或环回地址。资源不支持、缺少读取器、图片不可用或正文未读完整时，不得猜测内容或当作证据齐全。
-
-本轮源码实现及验证状态见[性能优化目标与验收记录](docs/acceptance/performance-flow-optimization/goal.md)。本轮尚未部署；独立 DSH glob 责任包只产出本地补丁，未安装到运行 profile。22条带固定前缀的历史失败搜索已完成对照，8条无固定前缀及4条宽 worktrees 查询仍需准确目录输入。上下文、首次实质回复与费用等真实流量收益仍待部署后独立观测，不能由本地用例通过代替。
-
-### 叶子任务
-
-Task 可设置独立的简短标题用于看板展示；标题与 objective 分离，重命名不会改变任务授权范围、Goal 或验收标准。运行看板通过 DSH 官方 `sidebar.footer.action` 提供左侧菜单入口，并由 `shell.overlay` 承载右侧完整内容区域；点击运行看板时切换到看板并清除 Session 选中状态，点击任意 Session 时关闭看板、恢复该 Session 的选中状态与对话/轨迹。运行看板复用 Session 的实际选中背景色，不额外显示焦点边框。
-
-执行控制账使用 schema 8，按事件类型与序号建立原生索引，避免详情查询与后台通知轮询反复全表扫描。已有 schema 7 必须先按[受控部署说明](docs/ops/resident-review-local-deployment.md)执行零写预检、完整备份和封存迁移；启动不会自动升级数据库，缺失或错误索引会拒绝启动。
-
-运行看板 Header 的高度和字体规格与 Session 页面一致。各页不再重复显示页面标题和子标题；任务列按 Header 与主内容实际占用计算剩余视口高度，卡片在列内独立滚动，页面本身不会因状态桶高度产生额外补白或纵向滚动。人工介入列表区分待处理、已处理和已失效请求；只有待发送或等待回复的请求提供处理操作，未知状态以异常标记展示且不会导致整个看板崩溃。
-
-Runtime 使用 DSH 原生 subagent 和 Goal 创建叶子 Session。Task 保存标题、目标、验收标准、执行状态、结果，以及 `topicRefs: [{topicId, revision}]` 和 `inputVersion`；不保存 sourceMessageId、triggerHistory、messageHistory 或群消息正文副本。`group_task_context_get` 返回执行约定与 Topic 引用，原始上下文由 `group_topic_context_get` 按固定 revision 分页读取。只有确实影响任务的新增信息才推进 inputVersion，不向每个关联 Task 广播全部讨论。运行中和等待中的 Task 接纳上下文时继续原轮次；完成或归档 Task 只有被明确重开才开启新轮次。目标发生实质变化时，续接动作必须同时提交概括当前完整目标的新标题；Runtime 原子更新目标和标题，并由 objectiveHistory、titleHistory 与 runHistory 保留旧值。普通信息补充、等待恢复和异常唤醒不修改标题，归档不删除历史。叶子完成自身交付与必要自验证后即可提交 `completed`；原群参与者或其他机器人的后续检查属于 Topic 协作，不阻塞叶子 Task。若信息或人工介入确实阻塞本职交付，等待报告需列出 `blockedItems`（未完成要求、来源消息、必要依赖和原因），经 resident 内部审阅后才能进入 waiting。误把他人职责写入目标时，resident 按原消息修订 Task 目标、验收和阶段，保留已完成证据；外部反馈经正常 Topic 输入处理。历史 `coordination` 结果只读兼容，不再重发检查请求。
-
-内部审阅预算等确定性系统故障会将原报告记为 `failed`，Task 进入 `waitingKind=system` 并释放运行名额；Host 通过可靠 Outbox 通知暂停，同一轮次、版本和错误码不重复通知，也不要求叶子反复改稿。恢复入口仍为 `POST /tasks/<taskId>/reports/<submissionId>/retry`。恢复前在 Task 提交锁内只读重建审阅输入，复核报告版本、轮次、当前流程、待处理输入和人工授权；探测失败保持系统等待，不启动叶子或清除故障。通过后在并发容量允许时处理原 submissionId，不能靠创建新报告或会话绕过故障。
-
-派发及重开时，Runtime 从已登记的本地 worktree、已有报告工件、检查点证据和交接记录提取原生绝对路径，检查当前是否存在，随任务输入提供可确认的工作位置。不会遍历工作区寻找这些位置；无法确认时明确标记 unknown。位置存在不代表旧验收仍有效，也不扩大任务授权。优先在已确认的目录检索，避免重新扫描整个工作区。
-
-叶子新建受管理工作区 `worktrees/` 下的 Git linked worktree 后，调用 `task_worktree_register` 登记路径、当前执行版本、创建归属和应保留的 `docs/<类别>/...` 文件清单；文档形成后再次登记更新清单。Host 校验真实路径、Git 身份、当前叶子 Session 及任务归属，并把记录保存到 Task 的 `localWorktrees`。提交 completed 时，`localWorktrees` 列出所有仍登记的目录路径，与 Task 记录一致。任务完成时保留目录和开发分支。归档时先只读预检：Git HEAD 与登记一致、远端分支指向该提交、代码无未提交修改，未跟踪文件全部已列为待迁出文档。然后将文档按原分类复制到当前 Agent 工作区 `docs/<类别>/<taskId>/<仓库名>/`，核对 SHA256，正常执行 `git worktree remove`，并分别回查实际目录及 Git 登记。借用的目录仅记录、不删除；归档失败保留 completed 且不写 `archivedAt`，任务看板显示原因并支持重试。开发分支不会随目录删除；跨轮续作仍使用同一分支。此流程不依赖 `goal.md` 或个人绝对路径。
-
-消息的 `routingStatus` 表示待归类、已归类或归类失败；Topic 的 `processedRevision` 表示决策及所需动作已可靠落地；Task 的输入下发、输入确认与任务完成另行记录。任何一项均不能替代另一项。运行看板的“话题”页在左侧只展示名称与摘要，右侧分开展示完整标题、话题摘要、待解决问题和关联任务；固定版本消息列表直接展示并支持分页，每条消息所引用的上一条消息默认折叠。群消息状态由 `routingStatus`、Topic revision 与 `processedRevision` 投影为“待归类、话题处理中、已处理、归类失败”，不再把旧 `agentDeliveryStatus` 当成业务处理完成度。Task 卡片上的话题链接打开该任务接纳的版本。Topic 归属仅表示消息延续同一讨论目标，或实质改变该 Topic 的事实、范围、结论或动作；为回答问题查询旧分支、PR 或任务资料不会建立 Topic 归属。多 Topic 路由必须逐项声明关系和理由，并显式指定唯一动作主归属。路由回执最多 1 KiB，决策首屏及 `group_decision_context_get` 单页最多 12 KiB，均按完整 UTF-8 JSON 计费；Topic 历史分页仍按原有 40,000 字符预算读取。`omittedDeltaCount` 非零时，Resident 必须读完固定请求的 `messages` 段；其他标记为必要的来源或归属段也须读完。Host 在必要依据读完前拒绝决策，旧历史未读完不会阻塞本次事项。
-
-每个协调 requestId 使用独立的路由、决策或审阅 Session；同一请求的多步读取与有限重试复用该会话，终态释放运行句柄并保留原生日志。Host 继续拥有 Topic、Task、授权、版本和 Outbox 的唯一提交权。工具调用检查当前 groupId、requestId、角色及请求状态，旧会话不能提交新请求或跨群动作。常驻群主会话保留管理用途和原配置权限；请求会话只开放本角色的读取及结构化提交工具，不暴露工程写工具或 Goal 工具。完整工具权限不扩大群消息或 Task 的业务授权，Task 动作仍经 Topic 决策和 Runtime 校验。任务授权与“明确交给其他人”的校验按动作引用的事项判断：从固定版本原文读取该事项之前最近的点名，即使称呼列为 ignoredRefs 也保留证据；同一消息中后续改为点名其他人时，不得借用前一事项的授权。`sourceRefs.quote`、`contextRefs.quote` 只引用当前消息中唯一出现的原文；被引用消息作为独立的 `quotedMessage` 背景提供，不填入当前消息的 `contextRefs`。Task 叶子会话由 Runtime 使用 DSH Goal 管理执行、阻塞、恢复与完成，权限 preset 同为 `danger-full-access`，可按 Task objective 和工作区规则使用完整本机能力。DWS 群通知仍只有 Runtime 一个出口；叶子不得绕过结构化结果链路直接向来源群发送消息。
-
-主会话向运行中或等待中的叶子传递任务上下文、目标修订、真人批复、恢复提示和结果驳回时统一使用 DSH `steer`，在叶子的下一个 step 边界插入，不使用 `followup` 排队到下一 Turn。
-
-群成员明确撤销原任务授权，例如“不要处理、不用做、停止、取消、忽略刚才”时，Resident 将当前撤销消息关联到唯一的 queued、running 或 waiting Task，并提交 `task-cancel`，不得继续作为普通 `task-context` 发送给叶子。Runtime 在等待全局 Task 串行队列前同步调用 DSH `agent.cancel()`，立即中止叶子的当前 Turn 并清空尚未执行的输入；取消建立后拒绝叶子迟到提交的 checkpoint/result。任务随后持久化为已取消，撤销消息及其归属保存在 Topic 历史；叶子 handle 的 dispose 在状态落盘后异步收敛，不阻塞群消息回复或 Web 取消响应，Runtime 关闭时仍会等待其完成。没有待清理自有 worktree 时立即归档；有登记的自有 worktree 时在叶子释放后走同一归档清理流程，失败保留已取消但未归档状态和原因。模糊讨论、普通目标收窄或只暂停某一步不能推断为取消整个 Task。
-
-人工 Web Task 输入通过 `POST /tasks`、`POST /tasks/{taskId}/context` 和 `POST /tasks/{taskId}/reopen` 提交。三者均需由调用方提供稳定 `requestId` 与原始 `context`；新建还需 groupId、title、objective、acceptanceCriteria，可不提供 topicRefs，由 Runtime 建立 Web 来源 Topic。追加和重开需提供 topicRefs、inputVersion、runSequence，均从当前 Task/Topic 查询获得。相同 requestId 只可重试同一内容；版本或身份冲突返回 HTTP 409，持久接受但动作未完成返回 202。body 不接受 taskId、childSessionId 或伪造渠道来源。Resident 不持有这三个 Web 写入口，只通过带原始依据的 `group_decision_submit` 发起业务动作。
-
-取消入口 `POST /tasks/{taskId}/cancel` 同样要求 requestId、topicRefs、inputVersion、runSequence，以 reason 保存人工原文。Web 来源不伪造钉钉引用或 @。Resident 已移除 `group_task_create`、`group_task_context_append`、`group_task_reopen` 直写工具；误归类通过 `group_topic_route_review` 提交修订，所有非空回复必须带 `replyReview.kind`。Task 补充输入按实际值判断范围变化，同值目标、验收和阶段数组不触发重规划。`preserve` 保留仍有效的已确认 checkpoints 及其原 inputVersion，不改写成新版本验收。确需否定既有进展时通过 `impactEvidence` 提供原始 basisMessageIds、原因与 affectedStageIds；从最早受影响阶段失效后续进展，保留此前证据，重新确认实际阶段顺序。明确影响证据不能被 preserve 忽略；未提供依据的同范围 replan 会被拒绝。阶段按稳定 stageId 关联，重复标题或冲突 ID 拒绝。跨 Topic 补充会合并固定版本引用，不覆盖此前执行依据。
-
-叶子报告通过可选 submissionId 或规范内容身份持久接纳，同 ID 不同内容拒绝。回执 contractVersion=2，received:true 只表示已保存；reviewStatus=pending 表示尚未批准推进，approved/rejected/stale/failed 分别表示审阅通过、业务缺口、版本失效和系统故障；applicationStatus 单独表示是否应用；叶子等待 Runtime 事件，不重复提交探测状态。旧版本合法报告只归历史，不覆盖新目标；输入解除或重启从持久记录恢复，审阅和通知复用稳定身份。最终接受、阶段通过与业务验收仍独立核对。
-
-生产发布与数据变更流程的前置核验、离线 revision 候选和配置 CAS 操作见[发布准备证据与流程修订](docs/ops/release-preflight-evidence.md)。缺基础对象为 FAIL，证据或依赖清单不完整为 UNKNOWN，均不能进入生产执行；检查脚本 PASS 仅表示证据契约完整。
-
-Topic 查询的 `processing` 提供最新未完成意图的 decisionId、status、appliedOperations、totalOperations 和有界 error，不返回动作正文。Observer 对应显示处理失败或处理中及动作进度，便于区分消息已接收、Topic 已决策与动作实际完成。
-
-同一消息版本产生过已接受的 Task 动作或确认后，其执行归属保留在持久决策中；将消息从 Topic A 改归 Topic B 不会重新授予执行权。新的授权消息或新的事实版本需要重新判断，历史动作不会因归类修订而自动撤销。
-
-Task 创建和重开时即生成稳定 `stagePlan`，主会话查询与叶子输入使用同一份阶段身份；阶段 ID 的存在不代表计划已批准。`affectedStageIds` 只接受真实 ID，不接受标题或猜测值。创建、重开和上下文修订在 Store 原子接纳点校验阶段及修订参数，接纳和执行共用参数规范化；错误参数不会生成决策、预约或确认，主会话可读取当前上下文后用同一请求纠正重提。
-
-历史已接受的无效上下文修订，仅在整份决策都是 `task-context`、动作映射完整、所有动作未执行且 Task 幂等账本和执行版本均确认安全时，原子标记 `rejected` 并释放自身预约。原消息、Task、历史回复和 processedRevision 保留，Runtime 使用新的稳定请求身份重新判断尚未处理的输入。部分执行、含取消动作或结果不明的记录不会自动退回重放；存储错误仍按原错误链处理。`rejected` 是意图终态，不代表业务输入处理完成。
-
-### 阻塞与人工介入
-
-- 缺少任务信息：叶子进入 information waiting，由主会话结合 Task 所引用 Topic 固定版本的消息时间线，向真正能够补充该信息的一位或多位参与人询问。
-- Task 遇到操作红线、环境异常或需要真人判断时进入 `human-intervention`，页面“人工介入”和 DWS 登录人本人私聊共享同一阻塞状态机。批准只对应阻塞单中精确列出的动作；处理意见可以收窄执行方式，不能授权另一动作，和原动作冲突时任务必须继续停住并提交范围冲突。
-- waiting 不占 `maxConcurrentTasks` 执行名额；信息或人工回复到达时统一进入 FIFO queued，保留待恢复上下文。调度器把正在创建或恢复 Session 的 Task 计入容量，获得唯一名额后续接原叶子 Session 和 Goal。
-- 钉钉人工处理必须引用阻塞消息并提供非空意见；明确回复“拒绝”“不同意”或“不批准”时记为不执行，其余回复使 Task 继续，并保留完整原文。Runtime 使用独立的个人 IM 实时订阅按被引用消息的 `messageId` 精确关联并恢复 Task，历史查询仅用于离线恢复；等待不设超时。
-- 批准复用指纹绑定 taskId、runSequence、阻塞类别、规范化动作和风险；旧版本没有这些字段的记录不会自动授权当前轮次。
-
-### 完成通知
-
-任务完成后，叶子把结构化结果交回主会话。主会话结合 Task 所引用 Topic 固定版本的消息时间线选择最适合承接结果的历史消息，并通过结构化 `atOpenDingTalkIds` 通知所有确实需要获知结果或采取后续行动的参与人；Runtime 只接受所引用 Topic 版本中的消息和稳定人员 ID。发送前后均回读钉钉真实消息；包括组织未授权在内的读取失败不能绕过回读，发送受理或空回执不能代替送达证据。未确认的记录保持 pending。Outbox 记录尝试次数、最近尝试时间、失败环节和原因，看板区分待发送、发送受阻、投递异常与待回读。
-
-信息等待通知由 Runtime 固定说明任务已暂停、已完成阶段、剩余缺口、所需资料和恢复条件，并引用相关消息通知反馈人与任务发起人。只有 Outbox 独立回读确认后才标为已送达；30 分钟无新信息提醒一次，2 小时后向发起人升级一次，随后不再自动催促。任务版本变化或恢复会使旧待发通知失效。任务进度、阻塞和完成通知只有 Runtime 一个群聊发送出口；叶子会话不得自行调用 DWS 向来源群发送通知。叶子提交完成结果后，Runtime 会把摘要、证据、交付物、部署信息和Task 所引用 Topic 固定版本的消息时间线交给常驻主会话组织群通知。叶子根据 DSH 注入的 Skill 描述自主选择适用 Skill；Runtime 不绑定具体 Skill，只要求已加载的 Skill 完成其资格判断、必要操作和验证闭环。工作区规则授权范围内的内部维护不扩大业务 Task 授权，也不得借此修改未授权的业务代码、业务数据、环境或外部系统。通知可合并重复表述，但必须保留不同关注点、限定条件、失败项和未验证/未部署边界，不能为了简短只复述摘要。Web 与内部恢复来源只用于触发内部操作，不得伪造群消息或参与人；历史 Task 必须经离线迁移生成可追溯 Topic 引用，不猜测缺失历史。同事或其 AI 助理发送的回复、任务回执和状态通知不会按文案或发送者在模型外过滤，而是进入常驻模型，由模型结合引用、上下文和任务索引决定忽略、回答或关联任务。判断复用已有任务还是新建任务时，必须综合消息前后文、连续消息的信息组、当时场景，以及候选任务的目标、动作范围、状态、完整消息历史和已记录上下文；关键词、词面重合或标题相似只用于寻找候选任务，不能直接作为关联或新建结论。
-
-群消息中的图片、文档、文件、链接或其他外部资源承载实施规则时，必须完整读取后再据此实施，不得根据文件名、链接标题或缩略图猜测正文。目标已明确的交办可先建立 Task，由 Owner 读取和调查；读取失败按实际认证、权限、能力或执行故障记录，不自动要求用户重发，也不将内部故障混为业务补充。协调阶段显式声明为准入必需的材料仍须通过完整性检查。
-
-钉钉 `https://alidocs.dingtalk.com/i/nodes/<nodeId>` 链接归一化为 `dingtalkDoc`，协调器与 Task 复用现有消息资源读取工具及配置的 DWS profile。先 `drive +inspect` 核对真实类型：adoc 经 `doc +fetch --scope full --detail full` 保留 JSONML；明确的文本 FILE（含 HTML）经 `drive +download` 下载到独立临时目录，核对节点、路径、大小与 UTF-8 后读取全文，HTML 不执行。正文结构和元数据以内容摘要及二次回读校验记录 Task 查询证据；不使用公网登录页替代正文，未知类型明确失败。旧 Task 可从已冻结且当前版本一致的消息正文恢复文档引用，不重写历史来源。文档读取和需求分析不以 UAT 已确定为前提；依赖环境的工程准备仍执行原门禁。
-
-叶子提交 `completed` 后，Runtime 会以 coordinator 内部上下文注入的方式，让常驻模型对照当前目标、runSequence、inputVersion 和 Topic 输入版本审查本轮结果和证据，并通过一次 `group_task_review_submit` 同时返回审阅回执与群通知草稿。审阅与回退通知最多内联 20 条、12,000 字符的相关 Topic 消息，整个请求限制为 40,000 字符。超长目标、验收、结果和索引保留 section 指针，通过 group_task_review_context_get 按 nextOffset 续读固定快照；长消息可通过同一工具或固定 Topic 原文分页读取。不能把截断片段当作完整证据。Runtime 只有在审阅通过且 Task 按当前版本原子完成后才将草稿写入发信箱；若期间出现新消息、Topic 或历史回复候选变化，则放弃旧草稿并重新协调。若新增或修订范围未完成、缺少验证，Task 保持 `running`，缺口反馈给原叶子继续执行，不生成完成通知。
-
-除群成员明确撤销整个任务并提交 `task-cancel` 外，`running` 和 `waiting`（包括阻塞中）任务收到新增信息时只追加 `task-context`，继续同一执行轮次；只有 `completed` 任务（包括已归档展示）才允许 reopen 并初始化下一轮。完成轮次的 Session 空闲回收同时绑定 handle、Task 状态和 runSequence，不会释放已经重开的新轮次。Supervisor 发现 `running` Task 的叶子已 idle 时由 Runtime 幂等投递续执行请求；底层明确返回 Agent/Session unavailable 时，受控重建物理叶子并保留同一 Task、目标、Topic 固定版本和执行轮次，不让 Resident 绕用通用子代理消息接口。普通阶段 checkpoint 由 Host 校验版本、阶段身份和证据；按计划顺序推进可直接确认，跨序登记独立阶段必须交 Resident 审阅，不因此跳过业务前置条件。相同未审阅 checkpoint 以持久 checkpointId 复用同一审阅；Supervisor 只恢复该请求，不重复追加。scope-conflict、evidence-gap、risk-changed 在无计划、已拒绝或旧流程失效时仍可报告，不能携带完成项或修改剩余进度；新异常可抢占未确认审阅，旧待审项归档，迟到审阅不得回写。完成审阅发起时即记录 completion-review-requested，拒绝或失败也保留时间与关联尝试标识，Task 完成、通知入队及真实送达分别记录。
-
-### 只读状态问答与模型重试
-
-已明确关联 Task 的简单状态问答可使用独立、无工具的短模型请求，读取当前 Topic 增量、Task 事实快照、审批边界及回复候选；执行动作、授权、复杂冲突或上下文不足时交回常驻处理。短请求沿用当前 Provider、模型和推理设置，提交仍通过 Task 集合、事实版本、策略、Topic 及回复候选校验，并复用原有 Outbox。
-
-直接调用 DSH `LlmRuntime` 不经过 `agent/request-error`，不能假定 AgentLoop 的重试插件会替短请求重试。短问答 handler 是这一条调用链唯一的重试执行者：通过 `prepareCall()` 获取原生 Provider policy，遵守可重试错误码、次数、指数退避、抖动和 Retry-After；所有尝试共享同一请求与输入身份，并受总30秒模型预算限制。失败的部分正文不会提交；耗尽、不可重试或超时才交回常驻。遥测分别记录尝试次数、累计 usage、原生 finish kind/code/status，不记录 Provider 原始错误正文或凭据。
-
-重试规则的确定性测试与真实模型测量见[性能测量记录](docs/acceptance/resident-leaf-coordination-repair/performance-measurement.md)。短模型往返不含路由和钉钉发送，不能代替端到端响应指标。
-
-## Web 运行看板
-
-`dingtalk-dsh-observer` 在 DSH Web header 中提供：
-
-![钉钉个人助理任务看板](docs/manual/images/dsh-web-task-board-annotated.png)
-
-- 群聊会话：查看不同 resident Session 的分页收信箱和发信箱；状态固定在最左列，长内容最多显示两行，完整内容可通过悬停标题或详情查看。
-- 任务看板：按待执行、执行中、等待中、已完成展示 Task，并打开 DSH 原生叶子对话和轨迹。任务详情采用通栏步骤列表，每步左侧为编号、名称和状态，右侧显示耗时与业务产出；进入详情才读取产出，长文分页继续阅读，不展示原始 JSON。编号步骤显示本次执行耗时，运行中每秒更新，等待不累计后续等待时间，缺失记录明确提示；不增加诊断接口请求。无任务负责人会话且计划已成功的任务显示已完成，结果中保留“无法确认”等信息边界，不额外制造等待；有负责人会话的任务仍按当前版本验收结果展示。活动任务卡片中的“任务”面板默认收起，只显示完成数/总数和进度；展开后显示各阶段任务、状态和耗时。完成结果保留在卡片，完成通知已送达时不重复显示，待送达或受阻时显示状态；协调请求重试耗尽显示“系统协调受阻 · 待恢复”。执行轮次耗时统计不占用任务卡片空间，仍可通过 `/state/task-timings` 接口用于诊断。
-- 叶子活动投影写盘遇临时故障会有限重试并暂停该任务的后续投影；监督器按原 Session 事件序号补齐后解除当前故障。任务完成时先补齐活动再释放叶子 Session，持续故障保留恢复问题供排查。
-- Runtime 启动后还会逐个审计已完成 Task 的持久 Session；若曾在完成前后漏写活动，按原事件补齐。持续故障保留待审计队列和恢复问题，不会由下一条活动成功自动清除。
-- 若历史已完成 Task 的 Session 已不存在，审计将其标为不可回填并从重试队列移出；`/state/activity-audit` 显示待审计、已审计和不可回填项，`/health` 汇总数量。缺少历史来源不伪装成当前写盘故障。
-- Outbox 的 `deliveryAttemptCount` 表示投递流程轮数；`sendAttemptCount` 记录实际进入发送调用的次数，`readbackAttemptCount` 记录发送前后读群历史的次数。查询重复发送时应核对这两个计数和远端消息 ID，不能由投递轮数推断重复外发。
-- 工具活动从 DSH 的 `tool/call` 和 `tool/result` 关联工具名、错误位、耗时及结果字节数；缺少可关联调用时显示 `unknown`，不推断为成功。
-- Task 的 `activityProjection.aggregate` 保存上海本地日期的事件总数和类型计数；500 条活动明细裁剪后累计数仍在。旧存储若已裁剪历史，首次生成的聚合标为 `retained-only`，不可当作历史完整总量。
-- 同一消息拆出多个事项时，Resident 新建 Task 必须提供 `dispatchAssessment`：业务对象、当前 Agent 交付、他人后续、来源 Unit、当前流程引用与选择原因。Host 校验来源 Unit、流程启用和版本；单事项可选。业务对象及交付的语义仍由 Resident 按原消息判断。
-- Task 收到补充输入后，原版本待审报告转为历史并向仍在运行的叶子提示按当前版本核对后重提；不会自动重放业务操作。明确标记授权变化且有新来源消息时，原阶段批准保守失效，即使阶段名称不变也须重新核对。
-- 归档任务：查看已归档 Task，相关群消息仍可重新打开原任务。任务卡片不常驻展示工作目录和文档清单；有登记目录时点击“检查并归档”先核对迁出/清理范围，再确认操作。借用目录及其登记文档保留原处。归档失败在卡片提示，可查看原因后重试；归档后可按需查看目录记录。
-- 人工介入：以与消息表格一致的状态列、行高和内容密度分页查看阻塞事项，并在页面明确选择“批准该事项并继续”或“不执行”。
-- 告警：按类型查看当前异常和分页的已恢复历史。
-
-看板不读取或重建 DSH Session JSONL，只通过插件状态接口展示业务投影；对话与轨迹仍由 DSH 原生页面负责。
-
-## 状态与数据目录
-
-正式运行使用标准用户级 `DSH_HOME`：
-
-- 插件状态：`%USERPROFILE%\.dsh\storages\dingtalk-dsh-assistant\`
-- DSH Session：`%USERPROFILE%\.dsh\sessions\`
-- profile：`%USERPROFILE%\.dsh\profiles\`
-
-仓库不提交本机 Session、消息、Task、授权记录、DWS profile、群 ID、打包产物或凭据。
+## 首次配置与启动核验
+
+1. 在实际 profile 中设置 Agent 工作区、Agent preset 和模型；在插件设置中维护名称/别名、群订阅及职责。个人群 ID、DWS profile、操作者身份与凭据不要提交到仓库。
+2. 先按清洁启动 Runbook 初始化独立任务控制库；既有实例停稳旧执行并使用新 domain，确认 epoch 回补隔离后才开放新执行。不要用 `initialize: true` 绕过缺库或 epoch 身份不符。
+3. 默认保持 `dws.enabled: false`、`dws.writesAuthorized: false`。通过隔离夹具后，分别批准真实订阅与外发；配置开关不是新业务授权。
+4. 确认工作区根指引能通过 DSH 原生 `agent-instructions.projectRootMarkers` 被发现。插件不复制身份指引，也不把 Owner 提升为通用执行者。
+5. 核对实际安装包、唯一进程/PID、`GET /health`、`GET /state/dws-bridge`、新任务与执行日志、重启恢复和真实消息回读。任何一层证据不能替代其余层。
+
+启动脚本只负责启动，不证明旧工作已排空。既有 `restart-web.ps1`、`deploy-local.ps1` 及历史 maintenance/cutover 脚本可能依赖已退役接口，不能未经核对就用于这次架构切换。先执行[专用清洁启动步骤](docs/ops/task-session-clean-start.md#准备及隔离)。没有完成现场检查时，不报告部署或真实钉钉验收成功。
 
 ## 开发与测试
 
-新增或组合任务流程，请先阅读[新任务流程编排建设手册](packages/dingtalk-dsh-assistant/README.md)，按职责、业务阶段和验收合同设计，再查附录接入当前接口。领域合同随 Workflow digest 冻结，Owner 可以读取失败诊断；原会话可修正未执行的参数错误。设计依据见[职责与结果交接方案](docs/spec/workflow-session-responsibility.md)，实施证据见 [round-41](docs/acceptance/topic-context-completeness/round-41.md)。升级前需按运维说明核对旧无合同活动任务。
+使用 Node.js 24+ 与锁定依赖：
 
 ```powershell
-pnpm install
-pnpm test
+pnpm install --frozen-lockfile
+node --test test/dynamic-task-store.test.js test/dynamic-execution-session-native.test.js test/task-session-persistence-native.test.js test/task-session-service-native.test.js test/task-session-http-integration.test.js test/task-filesystem-boundary-native.test.js test/task-notification-readback.test.js
 ```
 
-`pnpm test` 以4个文件并发显式运行 `test/*.test.js`，避免自动扫描 `docs/tmp` 中隔离验证的其他业务仓库，以及按CPU核数启动大量真实Git/SQLite测试进程相互争用资源。
+默认运行与修改直接相关的测试。需要全量回归时运行 `pnpm test`；它限定 `test/*.test.js`，避免扫描 `docs/tmp` 中已有隔离业务仓库。保留已有 `.test-runs/` 与 `docs/tmp/` 数据。
 
-测试接口仅在 `testApiEnabled` 显式开启时可用。生产状态接口默认只监听本机地址，不应直接暴露到外网。
+测试覆盖真实原生 Session/preset/持久化、事务故障注入、独立进程重启、取消与动态调度，但脚本化模型、隔离平台和测试进程不能代替现场 provider、OS 沙箱、生产服务或钉钉交付验收。测试接口只在显式 `testApiEnabled` 时启用，resident 不应直接暴露公网。
 
-关键设计说明：
+历史实现与运维资料仍保留在 `docs/spec`、`docs/api` 和 `docs/ops`。遇到与本文冲突的固定工作流、阶段验收、Owner 原生工具或权限自动提升说明，以当前任务会话源码及专用清洁启动 Runbook 为准；不要据旧资料恢复已退役的写入口。
 
-- [DSH 原生常驻闭环](docs/spec/dsh-native-resident-closure.md)
-- [任务 Supervisor](docs/spec/running-task-supervisor.md)
-- [人工介入中心](docs/spec/authorization-approval-center.md)
-- [钉钉人工介入回复实时生效](docs/spec/approval-reply-live-events.md)
-- [运行看板](docs/spec/dingtalk-resident-observer.md)
+宿主 DSH 联合升级的历史验收与配置接纳证据见 [PR170 归档规程](docs/ops/dsh-unified-host-upgrade.md)及[离线续接记录](docs/acceptance/dsh-unified-upgrade/continuation.md)。这些资料保留宿主 alpha2 修复来源；本次任务数据仍执行清洁启动，不恢复旧任务迁移。
 
-## 原生流程执行底座
+任务统筹上下文只保留一份当前Host快照：旧快照经原生surface替换为历史标记，原始日志不删除。执行列表、读取结果及委派的previousExecutions只含身份、版本、当前目标/状态和当前结果，不递归传递完整input、定义及历史结果。当前用户来源、约束和群职责仍完整保留。
 
-独立入口 `@zzusp/dingtalk-dsh-assistant/execution` 提供 SQLite 控制账与受信顺序节点；消息业务由 `workflow-service.js` 装配 Task Owner、阶段计划、流程定义和交付适配器。独立 Host 注入与业务目录接入是不同步骤，详见[新任务流程编排建设手册](packages/dingtalk-dsh-assistant/README.md)和[执行底座本地运维](docs/ops/execution-foundation-local.md)。
+模型返回已识别的上游过载或fetch failed时，不标业务blocked、不消费唤醒，按现有退避沿原统筹会话继续；已提交决定优先。旧版已误标TASK_SESSION_NO_SUBMISSION的任务，仅在原session当前lease的末尾turn/end精确证明临时模型错误、任务排空且无业务问题时补一次持久唤醒；普通配置错误不自动恢复。
 
-当前实现已包含候选冻结、构建检查、本地业务验收、受控 Git/PR 交付及 UAT 平台适配，依赖显式受信配置。真实业务覆盖与运行配置须分别回读；这些能力不等于任意 shell/平台开放，也不代表生产发布已经真实验收。
+任务统筹wait等待排队、运行或未排空的小目标时，看板仍归执行中；真实问题、业务阻塞或暂停归等待中。
 
-受管代际目录从固定基线独立创建，新补充不会自动继承旧代的删除或未跟踪文件；目录归属和未知初始化结果通过同一控制账对账，保留旧目录及用户修改。
+任务统筹遇到无法自行解决的事项或授权边界时调用task_request_human，持久登记具体问题、原因、证据和已尝试动作并进入等待中。人工介入页只对当前任务待答事项开放原文答复；答复按受信Web身份留存来源，核对请求和版本后沿同任务/会话唤醒进入执行中。原群中被明确路由为该任务补充的本人答复也按相同来源核对闭环。答复仅针对申请事项，不代表无限授权或已完成验收，未知效果保护仍有效。
 
-### 消息同源编辑与接纳边界
+执行中的会话每10分钟进行一次真实日志巡检，十分钟时钟及观察序号保存在执行账中，重启不重置。Host从当前输入/租约对应的持久会话记录提取实际事件后唤醒统筹；统筹必须调用task_execution_progress读取记录，再对照目标判断进度和方向。最多返回最新8条、每条640字符的脱敏摘录及序号/摘要，未结束调用仅给引用；不重复注入整份日志。没有新日志不证明停止，running/进程存活不证明业务推进；不自动重放或取消。人工等待和暂停不会被巡检绕过。
 
-工作流以渠道认证的 `sourceKey + sourceVersion + actorId` 去重。高版本正文完全相同通过 `message.source.alias` 保留原任务与已接纳命令；别名不进入消息处理或通知扫描。正文改变后由同一个群协调会话结合原文和当前 Task 重新决定动作，提交时核验来源及任务事实版本。已有事项补充使用原 Task，内部等待不占住群消息队列。
-
-已完成的纯排查事项再次被报告且未明确交办修复时，工作流向原提问者澄清。原提问者和已配置的任务所有者可通过引用该澄清消息答复；其他成员的引用不会消费该请求，也不会阻断群消息补拉。肯定答复仅准入本次消息的新任务，旧任务仍为只读。
-
-明确交办的任务在目标足以确定下一步时即可承接；技术调查、文档读取和实施方案由 Owner 推进。协调澄清必须记录缺失字段、被阻止的动作和已检查来源；权限不足由 Host 生成“等待授权”，仅允许指定授权人答复当前请求，普通补充不能代替授权。请求通知按版本去重，回复继续原事项。开发环境尚未明确时可承接和读取材料，工程准备仍须核验仓库、UAT 与目标分支，不默认选择环境。
-
-在线主链为“消息持久接收 → 群原生常驻协调会话 → 现有 Task/执行后端 → 统一通知”。协调者一次连续处理身份、事项关系、下一步动作和必要澄清，可通过只读工具读取材料与任务事实；S/R/I/IB 不再运行，不保留旧判断链回退或自动降级。会话使用原生持久历史与上下文压缩，单轮默认 180 秒；来源、任务和话题版本在提交事务内核验。模型真实容量与工具失败保留依据，内部重试不产生群通知。
-
-每群同一时刻只运行一个协调轮次，新消息先落账，当前轮次排空后续行；不同群可独立推进。协调会话只整理消息承接、事项关联和交办条件；明确交办且原文与附件元数据足够时立即提交任务，完整工作簿核验、SQL 审查和交付由 Task Owner 推进。材料工具只用于确需查明的消息含义、任务关联或缺失条件，不把完整附件审查作为建任务前置。既有 Task 的本地事件也通过同一会话消费，按任务事件水位去重。纯任务事件轮不产生用户动作或新授权；长期执行由独立执行后端承担。协调提交成功通过原生 concludeTurn 结束本轮，排空后即派发持久命令，不等待额外输出或提交后的上下文压缩；被拒绝的候选仍允许同轮纠正。协调事务已提交但工具回执丢失时，以持久提交事实继续派发，不能重新创建命令。来源编辑终止旧领取；任务事实变化须通过只读工具刷新后再提交。
-
-尚未创建执行实例的任务由 `message.task.control` 原子修订或取消原命令；暂停状态在修订后保持暂停。已有实例的修订必须先由 Controller 接纳输入，才能释放编辑屏障。`message.command.reject` 只对 pending 命令生效，确定性拒绝不会进入未知执行状态。协调者读取已授权 Task 的事实与流程目录，Owner 只处理已承接任务的计划和验收。
-
-消息账分页 `message.list({limit,beforeSequenceId})` 返回 `sequenceId`；历史页与通知待发、未知回查使用独立游标，避免旧未知消息阻塞新通知。必需附件经 `message.material.record` 首次记录后成为同一消息运行内不可变材料，重复读取内容变化拒绝，不能在任务创建时重新读取不同正文。
-
-当前执行控制库使用 schema v7；v6 库须按[持续执行离线升级](docs/ops/execution-foundation-local.md#持续执行-v6--v7-离线升级)停机转换；v5 库须按[事项影响离线迁移](docs/ops/execution-foundation-local.md#事项影响-v5--v6-离线迁移)转换；更早的 v4 库先按[话题事实离线迁移](docs/ops/execution-foundation-local.md#话题事实-v4--v5-离线迁移)停机、自检、备份、转换并独立回读，服务启动不自动升级。话题事实按来源与状态保存于 `message_topic_facts`，历史不再受整个话题最多 256 条限制；`message.topic.facts` 提供分页原事实，`message.topic` 的前 256 条有效事实视图以 `hasMoreFacts` 标记未返回部分。来源失效与事实变化递增 `contextRevision`，接纳时拒绝基于过期上下文的判断。模型服务自身容量仍受提供方约束，失败保留原始依据及系统责任，不要求用户补交已经存在的材料。
-
-### 话题上下文与处理过程
-
-每个群的协调会话在原生历史中持续接收当前来源、身份、群职责、可见候选及任务事实。协调工具的读权限由 Host 限定，提交来源需要完整覆盖本轮领取消息，未知目标或失效版本不能落账。同批连续交办可引用同一新事项，仅建立一个 Task；已有任务补充通过事实或需求修订接续。补充 fact 动作未指定可选 kind 时按事实落账，显式 constraint 保持约束；材料关联错误直接返回创建来源及应使用的绑定目标，允许原生会话同轮纠正。
-
-话题和任务候选沿现有目录读取，必要详情通过精确材料引用补取。任务版本变化后只刷新受影响事实并修正当前决定；来源版本变化则结束旧领取，重新领取当前来源。已接纳命令与未知外部效果按持久账处理，不因模型重试重建或重发。
-
-看板“群消息”的“处理过程”直接展示步骤、判断结论、耗时与同批来源消息，不传输或渲染原始技术详情。话题页可独立翻阅事实与判断批次。任务详情以编号时间线完整展示当前计划的全部阶段及有效步骤，突出等待事项与当前结果；当前步骤正文分页加载并绑定详情版本，已绑定会话提供入口。尚未确定的动态阶段明确提示，不显示整个任务100%完成。步骤耗时取当前有效执行，任务时长注明累计口径。当前结果与消息送达状态分开展示。只读接口及游标合同见[工作流接口说明](docs/api/workflow-node-contracts.md#workflow-v2-上下文只读接口)。
-
-消息协调按事项影响范围等待。未判清的新来源阻挡可能相关的效果；完整来源证据证明独立后，其他话题可继续。一个事项缺材料或协议失败只标记其自身，共同限制不明仍阻挡受影响事项。Owner、计划和执行效果领取共同校验来源版本；无执行权参与者补充业务事实不会取得批准权。
-
-点名问候产生回应义务，Task 接纳产生持久承接责任，Owner 等待和终态产生生命周期通知；模型 `replyPolicy=none` 不吞掉这些责任。只有明确针对助手沟通的静默条件才抑制通知。看板分别显示等待责任、恢复条件及渠道回读状态；内部材料请求失败有界重试，受管重试接口只重读真实资源，不能把失败标成 ready。
-
-### 工作流任务的本机 Web 操作
-
-当前新入口可运行通用材料分析、五类按已提供材料区分的只读审查，以及已配置仓库的受管工程交付。五类只读审查分别对应排查、方案、PR 材料、数据口径材料和复盘；它们不读取实时 PR/数据库，也不创建导出文件。UAT 部署、生产发布、UAT 同提交重构建和数据变更已开始代码节点化，但没有可信平台适配器时不进入消息准入，不会假装完成外部操作。迁移矩阵与验证范围见[第 27 轮记录](docs/acceptance/runtime-redesign/round-27.md)。
-
-`POST /tasks/:taskId/context` 和 `/cancel` 对新工作流任务直接进入代码控制器，不调用旧话题协调器。配置须显式提供 `workflow.webActorId`，该本机操作者仍须拥有任务权限；仅接受 loopback 连接及允许的 Web Origin，不接受请求体伪造 actor、任务身份、执行目录或远端基线。
-
-请求必须包含稳定 `requestId`、任务视图中的 `inputVersion` 和 `runSequence`。补充请求传 `context`，取消请求传 `reason`；可附空 `topicRefs`，新任务不要求旧 Topic。相同请求重投复用持久事件，改变同一 requestId 的内容返回 409。补充完整保留旧需求字段和安全约束，仅追加新要求；暂停期间接纳补充不会自动恢复。待处理输入或陈旧版本返回 409。准备事件后进程中断由恢复通路续接稳定 Controller 命令。
-
-新工作流任务当前不支持 Web 归档、改名和重开，对应路径明确返回 `WORKFLOW_WEB_ACTION_UNSUPPORTED`，不写入旧任务账。旧任务仍使用原接口。执行器无法证明排空时，看板显示等待及 Controller 错误原因，不能继续显示为正常运行。
-
-工程固定检查和本地验收持续执行至完成或明确取消，不配置总时长或每步时长上限。日志采集保持有界并标记截断，结果核验独立于诊断日志；失败检查保留已采集证据。见[持续执行离线升级](docs/ops/execution-foundation-local.md#持续执行-v6--v7-离线升级)。
-
-Task、Owner 与 Run 不再按累计步数、领取次数、失败次数或总时长停止。原 continue-budget 接口、budgetContinuation 投影及 max_claims 字段已删除。暂态故障退避恢复，条件不变的实现错误等待修复，新输入或依赖变化唤醒原任务；取消仍排空原执行。
-
-话题事实 v4→v5 本地升级支持早期未显式保存状态的事实，按来源版本保留有效/失效状态；任务历史来源查询包含 answer 创建的任务。具体检查与回退见本地运维文档。
-
-消息处理详情默认展示原文、中文步骤结论及执行限制；耗时按本次实际开始/完成时间显示。连续同话题消息在共享判断内列出来源并高亮当前消息，可切换查看；页面不提供技术详情，接口只返回步骤结论、耗时和来源消息，不传原始输入输出。
-
-任务详情使用紧凑编号时间线：标题与耗时同排、产出按标签展开、进度条表示已完成步骤比例。节点产出补充材料正文、文件清单、变更和已记录检查结果；此次需同时安装 Assistant 与 Observer，沿用只读分页接口及既有备份/回读流程，无 schema 变更。
-
-新工程任务采用 v19：确认项目与修改起点、创建独立 Git 工作目录、编写修改方案、按方案修改文件、构建与检查修改结果。方案节点产出技术文档，说明需求、设计、影响范围和验证方法，可含示意代码，不要求逐文件修改前后补丁。取消独立“检查修改方案”节点；实施节点先核对方案与当前代码，再通过受管编辑工具执行修改，实际修改回执与方案文档分别保存。设计问题在未编辑前回到原方案节点修订；构建、测试和业务验收核对真实结果。工作目录回执包含实际位置和来源仓库，当前使用独立 Git 仓库而非 git worktree。检查报告明确打包、构建、测试及跳过测试的范围，不把命令成功当成业务验收通过。历史节点保留原定义；未保存方案说明时仅提供由实际补丁整理的 `修改记录.md`，不补造理由或重跑任务。
-
-无须改动的结论仍需 Host 核验实际读取与完整工作树，再继续构建和业务验收；空补丁或模型自述不能代替证明。仅配置文件白名单的项目沿用精确路径范围，不因新节点开放其他文件。
-
-节点产出统一核对当前分析/工程链：只读分页附带 overview，文件数量依据完整工件去重；默认显示读取、修改、索引或方案涉及数量，展开后才渲染正文与清单。提交/推送准备、执行回执、PR 草稿/创建/回读分别呈现，不相互冒充。未知结构标明“已保存节点产出，暂未提供可读展示”。
-
-方案节点显示实际技术文档工件；实施节点显示实际编辑回执和修改摘要。工件保存在 Task 共享目录，后续节点按引用读取。历史方案和补丁仍按旧定义展示，不虚构独立 Markdown 文件路径。
-
-新工程流程 v10 将“构建检查”和“业务验收”拆成两个节点。构建成功只允许进入业务验收；缺少受信验收用例、没有实际值或实际与预期不符时，业务验收保持等待，阻止后续提交，不自动循环重试。验收通过展示验收项、预期、实际和结论。既有 v1–v9 记录保持原定义，不补造历史业务验收节点；v10 用于新任务与受管重发。部署仍需双包更新、备份及独立回读，无 schema 迁移。
-
-## 开发 PR 的 UAT 环境选择
-
-开发任务必须由用户明确指定 `uat1`～`uat9` 中的一个环境。Host 固定映射为 `feature/uat1-base`～`feature/uat9-base`，例如 `uat4` 对应 `feature/uat4-base`。缺少环境、范围描述或多个候选时先询问，不能从仓库默认分支、历史部署环境或模型判断中猜测。
-
-消息参数使用 `uatEnvironment`，目标随任务要求及工程运行配置冻结；发起前检查对应远端分支存在，创建 PR 时核对冻结的精确目标。`baseRef` 仍表示开发代码基线，不作为 PR 目标的默认值。重发任务只可复用此前明确的环境，或提供新的明确环境。
-
-合并 `main` 使用独立 `task-main-pr-merge` 上线任务，要求精确 PR/SHA、UAT 和业务验收证据及真人批准。未配置受信 `mainMergeAdapter` 时该流程不可发起；普通开发流程不能代替上线流程。现存 PR 不会因规则更新自动改目标或合并。
-
-任务详情顶部右侧显示总耗时（包含排队、等待和重试）：未结束时每秒更新，已结束时截止到终态记录更新时间；缺失时间明确标注，沿用现有任务接口，不额外加载历史。
-
-任务详情同时显示总执行时长：累计全部业务步骤及重试的实际执行区间，并行区间只计一次，排除排队与等待；不含消息判断和任务负责会话。缺失记录会明确标注。
-
-## 开发流程的本地业务验收
-
-新工程流程 v11 在构建后依次核对本地验收条件、编写验收用例、准备验收环境、启动服务并执行验收、核对验收与清理结果，通过后才提交代码。用例必须覆盖本次任务的全部验收条件；运行修改后的本地服务，通过受信场景执行真实业务操作并记录预期、实际与判定。服务启动、业务操作、数据清理及进程停止在同一有界执行中管理，避免服务生命周期跨节点失控。
-
-Windows 本地验收以 PID 与创建时间共同核对进程归属和停止结果，排除历史父 PID 复用造成的无关进程关联；原任务子孙仍存活或创建时间无法确认时继续阻断。进程快照输出上限为 1 MiB，超限按检查失败处理。
-
-`uat1`～`uat9` 仍须用户明确指定并映射对应 PR 目标分支；九个环境共用同一套 UAT 数据库。本地验收使用任务专属数据标识，只清理本任务数据。验收失败、未得到实际结果、清理未确认或回执不属于当前代码与方案时，流程停止在提交之前。
-
-每个项目通过 `repositories[].localAcceptance` 配置固定命令及仓库外的共享 UAT 连接文件，详见 [受信平台工作流](docs/ops/trusted-platform-workflows.md)。缺少配置时显示待补充原因，不自动选择数据连接或生成任意执行命令。实际接入支持 `dataset` 与 `dataset-web` 两个项目，当前受信配置仅接受用户明确选择的 UAT2；配置生成、真实 runner 验收、profile 激活与实例重启分别回读，不把生成配置当成部署成功。
-
-
-### Dataset 与 Dataset Web 的受信只读验收
-
-两项目复用三个 Host 脚本：`scripts/local-acceptance-project.mjs` 准备候选并启动本地服务，`scripts/local-acceptance-readonly.mjs` 执行受限 API/浏览器读取及会话清理，`scripts/configure-project-local-acceptance.mjs` 将已验收配置接入目标 profile。项目配置与登录材料均在仓库外，Agent 只按登记场景提供参数。
-
-- Dataset 使用 JDK11/Maven 在候选目录构建，启用真实鉴权并显式关闭后台任务；执行真实 UAT2 登录及本地候选只读查询。
-- Dataset Web 使用固定 Node22、Yarn1.22.21 和锁文件准备真实前端，伴随启动按 SHA256 固定的本地后端 JAR；代理与浏览器回执核对后端 origin 和制品 SHA，SSO 明确使用 UAT2。
-- 当前场景不创建业务数据，只读接口限于登记的单位分页、草稿和工作区查询，浏览器禁止未登记请求及外发遥测。登录页或通用查询无法证明修改功能时，必须补对应场景，不能冒充业务验收通过。
-- 清理确认覆盖本次认证会话注销、独立失效回读、浏览器关闭及本地服务停止；当前无业务数据写入，因此不执行共享数据库删除。
-
-依赖路径、配置 bundle 生成、实际 runner 验收与激活命令见 [双项目接入步骤](docs/ops/trusted-platform-workflows.md#dataset-与-dataset-web-实际接入步骤)。只有实际回执、安装配置及重启后的独立回读均完成后，才能报告对应阶段完成。
-
-更新既有验收配置时，配置工具的 `--apply` 必须携带已审阅 profile 的 `--expected-sha256`；`--check` 零写入，应用使用独占锁、原文备份及回读，保留 `!!js`。本次后端 UAT3、前端 UAT2 的合并策略通过可选 `--merge-policy` 接入，仅接受已登记的业务场景；具体命令见 [历史任务配置更新](docs/ops/trusted-platform-workflows.md#两项历史任务的配置更新dataset-uat3--dataset-web-uat2)。
-
-开发流程 v12 在创建独立工作目录前检查本任务（重执行时为原任务）的已登记开发分支：存在则从远端最新提交继续开发，不新建分支；不存在才创建。任务身份与开发分支身份分开。目录产出显示开发分支、复用/新建结论及 UAT 提测目标；目录仍为独立 Git 仓库。远端分支有并发变更时停止，不能覆盖。
-
-工程流程 v14 补齐方案与应用修改节点的起点依赖，保留旧流程冻结定义。失败重执行通过正式取消与新请求保留审计；完整验证仍包含业务验收、清理、PR、UAT 合并及部署回读，见[部署规程](docs/ops/resident-review-local-deployment.md)。
-
-取消任务待执行排空后展示“已结束 / 已取消”，不再被历史 Owner 错误覆盖为等待。暂停和取消期间保留未读事件，但不领取 Owner 回合；重新授权恢复后才继续处理。正在取消仍显示等待执行结束，不提前宣告终态。
-
-工程失败诊断交回原执行会话；恢复沿固定职责继续，不交由 Owner 动态重排流程。Host 核对需求、Run、原会话与效果状态，保留成功节点及真实候选。验收计划产物纠正不重跑已通过构建；候选或检查配置实际变化后才重新验证。未知效果先对账，不换身份重发。
-
-### 工程恢复与 UAT 合入并发保护
-
-确定性节点失败不会由定时恢复反复重派；明确暂态错误最多三次持久化退避重试，未知外部效果只允许对账。工程补丁歧义/基线冲突由 Owner 在同 Run 新代读取冻结旧工作区与失败方案修复，保留预算消耗和证据。UAT 合入使用已验收 head、祖先关系及显式 expectedBase 租约，仅允许快进；保留 PR、required checks、分支保护和实际合入回读，不能借管理员权限绕过保护。详见 [受信平台运维](docs/ops/trusted-platform-workflows.md#uat-原子合入与确定性失败恢复)。
-
-### 编译产物的后台关闭证明与后端专项检查
-
-`prepare-dataset` 在打包后、启动共享 UAT 配置前运行受信 `LocalAcceptanceBackground.java`。探针利用候选 JAR 的 Spring 类库建立隔离上下文，验证关闭模式下七个既有后台入口不注册、黑名单缓存只执行首次读取而不定时刷新；同时检查开启及默认模式，扫描候选类中的调度、事件、消息监听与 Runner/Lifecycle 入口。新增未审阅入口直接阻断。探针禁止网络、外部进程和文件写入，不启动完整业务应用；普通 `@PostConstruct` 不自动认定为后台任务。证明记录 JAR 与探针 SHA256，不能用源文件注解字符串替代。
-
-后端专项 Host 检查使用 `scripts/verify-dataset-unit-tests.mjs --java <JDK11/java.exe> --maven-home <Maven目录>`，在当前候选目录运行 `MergePreviewCalculatorTest`、`MergeWeightAllocatorTest`。固定 Surefire 2.22.2，使用原生 `surefire.reportNameSuffix` 为每次执行分配唯一报告后缀；JDK XML 校验要求两类均有实际用例、零失败/错误/跳过。准备工具 `docs/acceptance/topic-context-completeness/scripts/prepare-backend-unit-checks.mjs <请求JSON绝对路径> <新提案JSON绝对路径>` 只生成 dataset-package 的新版本 steps 提案；请求含 checks、toolsDirectory、nodeExecutable、javaExecutable、mavenHome。提案必须经正式冻结配置流程接纳，旧任务检查不被改写。
-
-常规本地部署统一使用 `pwsh -NoProfile -File scripts/deploy-local.ps1 -ArgumentsFile <部署参数JSON绝对路径>`，一次执行预检、安装、独立回读和恢复派发，终端只输出阶段与汇总，详细日志位于证据目录旁的 `-runner` 目录。先加 `-Check` 可零写预检；已有部署仅加 `-Readback` 或 `-Resume` 接续，不重复安装。 恢复派发后再做一次轻量 health 与控制库维护状态回读，均通过才报告成功；不重复扫描全部任务，也不保证部署结束后的持续可用性。参数及已安装失败后的受控配置恢复见[部署规程](docs/ops/resident-review-local-deployment.md)。
-
-受控本地部署使用持久维护屏障和封存停机许可；新实例完成恢复、备份与认证 Web 回读后才恢复派发。包摘要和 profile 摘要分别核验，详情见 [部署规程](docs/ops/resident-review-local-deployment.md#维护屏障与部署许可)。
-
-宿主统一升级已封存但首次启动因缺少原生 core peer 失败时，使用[受控离线续接入口](docs/acceptance/dsh-unified-upgrade/continuation.md)，先零写 `-Check`。保持原冻结证据及正式 hoisted/autoInstallPeers=false 策略，新提案仅补经真实声明核验的 core 闭包；固定 Node 24 与 pnpm 10.13.1，锁内执行 `pnpm --dir <profile绝对路径> install`。新 CLI 静态导入 app-boot，缺依赖时不能先调用 CLI 再兜底；安装后分别核验实际入口/worker 字节、控制账、启动及 Readback/Resume。
-
-工程 v15 支持“已有实现符合要求，重新验收”：方案明确选择无需修改，Host 核实实际读取、工作区与冻结树后继续完整构建和本地验收，任务步骤会明确显示无需修改的结论。旧工作流不原地改变。
-
-工程节点猜错允许范围内的文件路径时会得到 `not_found` 与 list/search 提示，可在同会话纠正后继续；越界、权限、链接和身份错误仍立即停止，不把任意工具错误放宽为可重试。
-分页读取每次最多16000字符，list/search每次最多200条；正整数limit超限返回`invalid_limit`和建议参数，不读取正文，模型纠正后继续分页。
-
-交付节点等待 `DELIVERY_RECONCILIATION_REQUIRED` 时，任务恢复仅对同节点、同代、同输入的既有 unknown 操作执行只读对账。全部效果确认成功后才恢复原节点并复用持久回执；未知、明确失败或身份不一致均不重发写操作。GitHub 合并元数据短暂延迟、构建仍运行可由后续对账收敛。维护、暂停、停止、待处理新输入仍阻止派发；正常维护封存条件不变。
-
-UAT 构建提测和同提交重建的批准请求会展示在授权列表，包含冻结的 UAT 目标标识、仓库、服务及提交。可读 Web 任务与已配置群任务使用相同来源门禁；显示请求不增加批准权限。审批终态通知 Owner 使用固定长度身份摘要，重复或相反重复决策沿用首个持久终态，只产生一次 Owner 事件，避免批准已生效但接口因事件 ID 过长报错。
-
-Web 明确指定的“开发 → UAT 合并 → UAT 部署”任务，若第三阶段取得可信流水线失败终态，Host 保留成功开发和合并阶段，在原任务中仅将第三阶段替换为一次同提交重建。重建项目、环境和提交来自原失败部署的冻结证明，目标须与原部署配置唯一对应；仍执行原有预检、阶段确认和重建审批。旧失败运行保留，重建再次失败不会自动重复重建，也不会重新开发或合并。
-
-任务列表与详情的顶层等待原因、阶段确认和预算续行入口只在当前任务确实等待时展示。已完成、执行中或排队任务不显示历史恢复原因；原始运行与节点记录仍保留用于内部恢复和排错，任务详情仅展示当前有效信息。
-
-工程远端引用读取（仅 `git ls-remote`）对明确网络暂态最多尝试三次，每次 15 秒、间隔 250/500 毫秒。耗尽后显示 `ENGINEERING_REMOTE_READ_TRANSIENT`，受原有三次持久化退避限制；认证、权限、证书及不存在的分支不自动重试。其它 Git 命令没有新增重试。历史通用 `NODE_EXECUTION_FAILED` 不自动归类为网络错误，须按具体证据恢复。
-
-已封存工作流接入全新空群使用 `scripts/cutover-message-workflow.mjs --enroll-empty-group`；它保留旧群封存记录，独立保存新群快照并 CAS 更新 profile 的工作流群列表。维护、停机、checkpoint 与中断恢复要求见 [本地执行基础运维](docs/ops/execution-foundation-local.md#已封存实例接入全新空群)。
-
-### 群聊回复用语
-
-公开回复使用业务语言说明结果、限制、下一步和待确认问题，不展示插件任务/会话编号、内部调度机制或原始错误码。内部记录保留追踪信息；问答和负责人公开摘要在提交时检查，通知与恢复发送在外发前检查明确的内部标签。命中时拒绝发送，不自动改写已准备正文；需在内部诊断中排查并重新生成合适回复。正文检查是明确模式检查，不保证识别所有自然语言泄漏。业务代码、文件名和 PR 链接可正常提供。
-
-新版工作流任务可在 Web 完成或取消后归档，归档时间写入原生控制账并在重启后保留；运行中、等待中、未排空租约或未知外部效果会拒绝归档。归档不重新执行任务、不发送群消息、不删除工程产物。旧版任务仍沿已有登记工作目录的预检、文档迁出和清理规则归档，安全门禁失败须先处理原因。单目录直接在归档入口预检，多目录先全部预检再逐个处理；文档迁出后均重新核验目录身份、实时远端提交及文档校验值。
-
-Web重执行任务卡片保留可读取原任务的群聊名称；本次执行来源和通知渠道仍为Web，未关联可读群聊时显示Web任务。
-
-任务卡片显示创建任务命令绑定的真实话题；Web重执行继承可读取原任务的话题，点击或键盘打开使用原话题群聊。话题页的关联任务包含这些Web重执行卡片。
-
-话题创建规则：日常寒暄、随口聊天和无具体事项的泛泛感谢不创建话题、不强行关联已有话题，完整原文记为ignoredRefs并收口。混合消息只处理具体事项部分；与已有问题或任务相关的反馈、确认、继续跟进仍归入原话题，独立新事项才新建。此为Resident语义归类指引，不使用关键词正则判断。
-
-消息工作流的拆分节点允许以语义判断 `no_action` 结束无待办消息（闲聊、问候、无执行请求的收信测试等），必须完整覆盖原文并有成功节点记录，不创建话题、任务或澄清通知。明确的测试操作请求仍走正常事项流程。合法终态 `no_action` 不再占用未归类屏障；后续新消息可继续派发，真正尚未归类的消息仍阻断话题执行，无需改写历史状态。收信箱等待状态细分为“等待澄清”“等待补充材料”，提示显示当前待补充问题；真正失败仍显示“关联受阻”。
-
-协调器已消费且判定零事项的消息，在同一提交事务结清本来源拥有的输入屏障。历史零事项遗留屏障由恢复扫描核对当前来源、协调器消费记录及无待执行事项后，以完整快照摘要 CAS 结算；未判定、来源过期、存在待处理请求或命令时保持屏障，不重放消息、不伪造用户答复。
-
-
-领域完成验收的语义输入附带 Host 已核验的阶段执行事实：当前任务的阶段与 Run 身份、前驱输出、Run 时间/代次、节点执行器与状态，以及已应用的 Owner initialize/append 及原生 appendStages 规划回执。拒绝候选不作为已执行规划；超过 200 条规划回执时停止完成验收，不能用截断历史推断执行顺序。原始领域产物检查和冻结工作流定义不变。
-
-文件消息作为必需材料时，Host 沿原消息身份读取真实附件，不能以“[文件]”正文或旧正文缓存代替附件内容。文本附件支持 `.txt/.md/.sql/.json/.csv/.tsv/.xml/.html/.log`，严格按 UTF-8 读取；SQL 仅作为资料读取，不执行语句。xlsx 使用固定版本 ExcelJS 只读解析，保留所有工作表、稀疏行列位置、公式及文件内缓存结果，不执行公式或外链；内嵌媒体无法完整读取时明确失败。协调者可先通过工具读取已有附件，已接纳命令仍在执行层核验材料，读取失败进入可恢复材料等待。
-
-受控重处理不按来源版本或历史重处理次数拒绝，不再保留版本号例外；仍校验当前来源、业务命令、未知效果与通知对账，不能据此重复已执行任务。自动模型调用和连续失败保护保持有界。
-
-只读查询的 `QUERY_SCOPE_DENIED` 保留拒绝并返回可纠正反馈，执行 Agent 可在原步骤/超时预算内调整授权范围内的查询。Owner 提交错误的消息来源引用时会收到明确纠正反馈；旧租约、取消、未知持久化错误和业务写效果错误仍阻断。Owner 恢复时使用当前完整快照，原生会话投影将旧完整输入标记为 superseded，原始输入仍保留在追加式日志；不裁剪当前材料或扩大资源权限。
-
-尚未生成执行 run 的 Owner 系统失败可经本地 `POST /tasks/:taskId/retry-owner` 恢复。入口严格比对当前 Owner/需求/控制版本与失败状态，记录修复原因，保留原任务、需求与会话；相同请求幂等，不重放建任务消息。
-
-Task 调查也会核验材料来源并提供精确附件读取目录。已失败且排空的只读调查可经 `retry-investigation` 在原 run 重冻修复后的输入；保留历史失败产物，不覆盖成功结果，不改变业务需求或外部执行授权。
-
-系统等待、自动恢复和调查提交失败只更新内部事实及看板，不生成群进度；消息来源修改或重放也不恢复中间通知。
-
-Owner 当前输入同步提供经材料账及当前来源核验的附件目录，并标明旧失败调查输入的范围遗漏；目录可用不等于远端读取成功，旧失败产物仍保留审计。
-
-Host 精确确认旧调查输入的附件范围遗漏可修复后，Owner 当前 stageArtifacts 排除该旧失败诊断，改为明确失效提示并重新读取；未修复的失败仍按原流程处理。
-
-Owner 不接纳 repairCurrentStage 或工程故障导致的流程重排。真实用户需求变更沿显式需求更新处理，已有执行审计不回滚。
-
-调查与Owner共用来源解释原则：按用户明示字段用途核验实际值，标题差异不自动追问；已有信息自主查询，权限缺口明确阻塞；原定审批与工单顺序同样约束测试写入。正式话题关联的后续附件与先发附件使用同一材料读取路径，Task 原始来源冻结附件身份，调查和 Owner 按同群、当前来源版本及精确资源 ID 核验权限。
-
-新任务接纳通知一次；群聊补充更新、内部规划及恢复过程均静默。需要用户确认时明确说明待确认事项，不能把所有内部阻塞都解释成人工介入。群协调及 Owner 原生会话均不再附加固定时限或步数上限；仍由真实完成提交、用户取消、维护排空和当前租约控制生命周期。
-
-话题输入更新作废尚未执行的命令后，原来源以同版本回到群协调会话重评，不能把旧接纳标记当作当前执行完成而永久阻挡 Task。只有全部命令已作废且存在话题更新原因时开放；已有应用、运行或未知效果不进入该重评入口。
-
-Owner 当前需求保留原始条件，材料正文以冻结 artifactRef 传递，事件以 payloadRef 传递；不把历史需求及当前材料重复内联。`task_owner_read_artifact` 在当前 Task 白名单内按字符 offset/limit 分页，返回 totalLength 和 nextOffset；完整读取到 nextOffset=null 才能称材料读完。分页不裁掉正文，也不扩大来源授权。
-收信箱将答复执行结果的 blocked 显示为执行受阻；只有材料读取请求受阻仍显示材料读取受阻，详情保留真实能力或业务限制。
-
-群聊人际追问不会仅因第二人称被视为对助手的交办；群常驻协调会话依据原文证据静默结束无交办事项。明确任务补充及尚未解析的停止条件仍保留。待归类消息阻挡 Owner 时不领取模型会话、不消耗失败预算，输入处理后沿现有调度继续。
-已取消且排空、无执行效果及跨任务依赖的重复Task支持本机受管DELETE删除可执行实体；必须先checkOnly零写预检。来源消息、命令防重凭证及原生文件仍保留，归档不等同删除。
-通用来源解释指导在原生执行会话请求中生效。普通调查由 Task Owner 直接查询；旧调查定义不再注册执行，历史终态记录保留只读，活动旧调查必须先收尾再切换。
-
-问答及已启用查询记账的调查在读取证据前，按原生成功工具回执核对引用身份。模型截短或拼造引用时留在当前会话纠正，必须使用完整 evidenceRef（包括任务目录前缀）；真实返回工件丢失、摘要错误和权限变化继续阻断。普通问答只核对引用，不要求引用所有试探查询。
-
-群协调候选目录中的长任务卡使用已有任务历史引用按需回读全文；初始输入展示带缺省说明的投影，身份、版本和可回读引用保持一致。Host 不再为每条来源预写同一批候选详情材料，真正读取后才沿既有材料路径保存结果。没有历史引用的话题卡保留完整内容；尾部约束可通过 `read_material` / `read_task` 核对，不按摘要授权执行。
-
-引用机器人回复时，先核对同群已送达通知及精确消息回执，将其作为助手历史上下文；已隔离的外发回声不会作为有效用户来源参与协调提交。普通入站引用仍受当前来源版本与撤销状态检查，助手历史不构成新的用户交办或授权。
-
-同一任务承接的真实来源数量不设置固定 16 条上限，`read-topic-sources` 也允许读取全部已授权来源。每一项仍核对同群、当前版本、非撤销状态和授权 sourceKeys；放宽数量不扩大读取权限。单条话题事实的证据结构约束不等同于任务总来源数量。
-
-收信箱当前状态不再展示已被新版本替代的 superseded 消息运行，避免旧材料阻塞覆盖当前处理中状态；别名与有效来源版本不按版本号猜测删除。已发送通知仍在发信箱独立保留供审计，历史处理详情不重写。
-
-运行目录的消息阶段展示当前唯一主链：接收消息、准备上下文、群会话协调、按需读取材料、派发任务。旧 S/R/I/IB 不再作为新流程阶段展示；历史处理详情仍按真实历史节点呈现。
-
-创建任务时，目标参数或话题正式事实文本精确提到已关联来源的附件 ID，即纳入任务材料；Host 仍逐项核验当前群、来源版本与附件身份，实际读取完整正文后保存材料及可读资源权限。未关联附件不因同群出现而获得权限。
-
-授权的精确消息批次清理会为受影响群写入全新协调会话 ID，撤销旧领取并清空旧轮次来源及已删 Task 的事件水位；其他来源、其他 Task 水位和其他群保持不变。旧原生会话文件仅留审计，新会话根据保留的当前状态重建上下文，不恢复已清理任务的承接记忆。
-
-同批已有任务承接进度时，单纯询问在不在不另发问答或承接回复；真正的结果和状态查询仍正常处理。尚未开始时进度仅告知正在核对执行条件，不重复引用原文或要求重交材料。
-
-生产只读查询资源显式配置 environment: production；每次查询同时核验 pg_is_in_recovery()=true 和只读事务，主库拒绝。副本的角色目录权限不代表实际可写，不用 UAT 的 host-enforced-readonly 策略绕过副本核验。开始、阶段进展及内部受阻均不自动发送群消息。
-
-
-调查定义持久化冻结能力摘要和允许工具目录；资源配置更新后，旧定义使用其冻结元数据恢复，新阶段使用当前能力。已有定义只在重建摘要与原摘要完全一致时补齐缺失元数据，漂移继续拒绝；阶段 scope 同时冻结能力摘要，变更资源不能让旧执行静默扩大范围。
-
-### 任务名称、数据库结构调查与受阻反馈
-
-新任务动作 `arguments.title` 使用8–20字短名称，最多30字，完整需求写入 `objective`；名称保存在既有任务要求中，修订目标时同步短名称。历史任务读模型也限制名称30字，完整目标保留。看板关联任务、卡片和详情使用同一个显示函数。
-
-数据库调查通过 Host 已登记连接完成。表参数优先使用 `schema.table`；已登记范围内唯一的短表名会自动规范化，未知或歧义短表名按参数错误纠正，不要求重复业务授权。明确越权的表或列仍拒绝。资源可显式配置 `metadataSchemas: [public]`，允许读取这些 schema 的表目录及完整列结构：格式化类型、长度/精度、默认值、可空、identity/generated定义及列注释。固定操作 `constraints`、`indexes`、`dependencies`、`table_stats` 返回约束、索引、直接系统目录依赖和估算规模；依赖中的关联对象身份可跨 schema，但不读取这些对象的数据或代码，目录依赖不代表动态 SQL/应用代码引用已全部查清。估算行数和磁盘大小不等于精确行数。该授权不允许读取未登记表的业务数据，`select` 仍受原表列白名单限制。生产资源每次连接必须证明 `pg_is_in_recovery()=true` 和只读事务。模型目录显示环境、连接别名、结构及表列范围，不显示凭据。生产 Editor 的结构调查使用生产只读副本，不能改用主库；未提供查询操作须说明工具能力不足，不冒称数据库权限不足。
-
-调查由任务会话直接使用登记查询工具。Host 保存每次成功查询的原始结果和当前 Task 身份，最终验收只采用条目明确引用的受信证据，不另收调查完成声明。分页与覆盖范围按实际结果说明，单次查询成功不能冒充全量事实。历史调查定义不再注册执行；尚未终止的旧调查 Run 必须先处理再切换，历史取消或完成记录保留供查阅。
-
-Owner 的 wait/block 必须保留结构化受阻原因；仅 business-input/permission 明确需要用户操作时发送简短确认问题，execution/capability/approval 不作为群通知依据。
-
-普通任务与受管 `reassess-readonly` 使用相同的全局静默策略，通知不再依赖特定恢复事件。新的业务要求也不自动恢复中间进度。
-
-阶段执行成功与整体任务完成分别判断。Owner 在成功阶段后可追加后续计划，也可通过 `wait`/`block` 登记具体 `condition`：类别、缺失事项、责任方、恢复条件及证据。业务等待保留成功成果；新材料、审批结果或受管能力重评沿原任务事件唤醒。整体完成仍须逐项验收与实际证据，取消及授权门禁保持有效。
-
-领域验收合法未通过时，原始判定与对应证据保存在现有任务工件，候选反馈提供实际未通过项、具体依据及工件引用，执行会话可读取Host核验过的同任务诊断，不能仅以通用拒绝码要求人工提供系统已有记录。条件分支只在实际触发时验收；已批准的路径不需要制造一次驳回来证明驳回后的修订规则。
-
-Owner 候选提交和最终接纳共用状态校验，候选拒绝在同一轮反馈纠正；相同决定再次违反同一合同会停止为处理异常，保留原始诊断，避免无限重复。最终接纳事务再次检查版本。看板区分业务等待和处理程序异常，通知只说明具体所需行动；部署恢复通过既有 `reassess-readonly` 核对来源、版本、排空及未知效果，不直接改写执行状态。
-
-部署备份会按控制账中明确的终止历史清理记录检查工件生命周期，保留完整审计与当前任务的严格完整性校验；已应用配置后的启动修复按原launch及备份摘要恢复，见docs/ops/resident-review-local-deployment.md。
-
-群运行看板采用轻量消息状态查询及刷新去重；“打开群常驻会话”直接访问当前协调绑定。常驻会话空闲时保持原生展示挂接，使Agent工作目录、完全权限和完整群名在宿主页面可读，运行时仍按原生租约恢复工具，插件关闭时全部释放。
-
-明确的单列加列或删除使用 `task-data-change` v7：拟定明确候选 DDL → 按候选准确表列只读核验 → 创建 Bytebase 工单并提交插件真人审批 → 批准后执行并独立回读。`SKIPPED` 是 Bytebase 平台状态，不替代插件批准，也不阻塞插件送审；`DONE` 不代表 SQL 已执行。未指定且无冲突依据的字段属性作为建议展示；驳回在原 Task 按意见修订重审。新建工单前核对有效发布策略，自动执行或无法核验时不提交。复杂变更保留 UAT 演练，历史运行保留冻结恢复。普通调查不再创建独立工作流，历史调查记录不改写为原生查询证明。
-
-插件审批复用同一原生请求，同时展示在 Web 并投递到配置审批人的钉钉私聊。私聊按事项、目标、工单和回复方式分段展示，不包含执行SQL；完整SQL保留在工单及审批详情，使用短审批编号；完整请求ID与摘要保留在后台审计。审批人必须引用该消息明确回复“批准”或“拒绝：原因”。只有匹配持久私聊、引用消息与原生审批人身份才受理，普通聊天文字不会批准。发送未知保留回执并只读核对，重启不盲目重发；Web 与私聊共享首个审批终态，失效消息撤回。
-
-数据库变更的最终验收由 Host 只读汇集原成功节点、插件审批事件、执行事件、当前工单原始 SQL、Task/TaskRun 成功状态及生产回查，负责人和业务验收读取同一份受信证明。批准先于执行通过原生事件序号核对。历史定义保持冻结；已成功但因证据交接受阻的原任务可经 `reassess-readonly` 继续验收，要求当前来源和版本一致、节点排空、效果成功且批准有效，不新建工单或重新执行 DDL。
-
-语义验收的模型配置、调用、协议及取消错误保留原始系统错误码，不折叠为业务证据不足；明确业务未满足仍按验收结果处理。运行故障须先修复核验能力，再继续原任务，不要求人工重复提供系统已有记录。
-
-私聊发送幂等键采用固定长度的冻结通知摘要，并在派发前校验平台长度限制。未知投递只读核对；平台明确拒绝且可核验未发送时，沿同一通知登记负回执后恢复待投递，不新建审批请求。
-
-单列删除仅允许不带 CASCADE、IF EXISTS 或其他语句的精确 DROP COLUMN。Host 从生产只读副本核对普通表、目标列、继承和依赖；审批说明永久丢失该列全部数据，重建列不能恢复数据，不要求先读取整列或假设为空。批准与执行绑定本次SQL及目标，回查同时确认表仍存在且列不存在；有其他对象依赖等超出简单范围的情况继续拒绝。旧v6及既有工单接续定义保持冻结。
-
-任务request保存当前事项对应的用户原文，objective仅作摘要；当前明确更正优先于旧冲突投影。模型补充的调查方法不能自动成为用户硬条件，已有真实确认及审批顺序继续保留。
-
-
-任务最终验收组合当前任务各条目明确引用的原生查询与受管操作事实，所有领域共享一次语义判断。纯查询任务可以没有阶段和 Run；SQL 等操作仍核验原生批准、执行和回查证明。未引用、跨任务、旧需求和无来源证据不能补足验收。
-
-完成校验拒绝沿既有TASK_OWNER_COMPLETION_UNVERIFIED返回具体校验位置、阶段/合同、当前版本或缺失清单；领域已有原始诊断保持。负责人据此纠正引用或执行策略，内部诊断不作为用户缺资料或群中间进度发送。
-
-群常驻会话在创建及恢复后除保存Agent根目录为cwd，还须经原生workspaceRegistry登记对应工作区并attachSession。目录正确不代表页面工作区成员关系已建立；部署回读同时核对原生工作区sessionIds、群名及完全权限。已派生的旧常驻会话可原生归档隐藏，任务会话和历史证明保留。
-
-数据变更候选消费同一Task当前需求版本的原生查询事实，Host独立核验后交既有sources；缺证据或字段错误在候选提交前返回执行会话纠正。尚无任何外部效果的候选校验失败可在原Run新代次受管重做，冻结定义和失败证明保留；已有工单、审批或未知执行结果先对账，不重建。
-
-恢复提交必须读取并引用当前失败诊断，可附带当前 Task/需求版本的受信只读查询和精确当前阶段诊断证明；附带证明不再被误当成未知诊断而拒绝。未知效果和既有工单仍不能重做。
-
-
-历史 coordinator 错误澄清恢复：仅当原消息没有任何业务命令，当前 pending 澄清对应已送达通知已由原生撤回流程核验为 recalled 并保存 recallEvidenceRef 时，可使用本机 `POST /workflows/<runId>/reprocess`。其他未知、未撤回通知仍阻止恢复。重处理保留原来源、作者、正文和旧请求审计，递增 sourceVersion，并用当前群规则重建 compactPolicy；不伪造用户答复。先读回撤回证据和零命令，再逐条操作，最后读回新来源版本、旧请求 superseded、新任务数量及当前等待。此入口会启动正常协调与业务派发，操作授权须覆盖原业务承接。
-
-本机显式撤回/补发通知也可使用现有 `/workflows/notifications/operations`：prepare 使用 `reason: explicit_user` 并省略 `authorizationRef`，由 Host 配置的 `webActorId` 记录 `host-web:<编码actor>` 授权来源。execute 继续提交预检的 `expectedFactDigest`，execute/reconcile 同样省略 `authorizationRef`；身份不可由正文传入。此路径仍逐条调用 DWS 并回读后记账，未知结果仅 reconcile，不重新发送。原群负责人消息授权路径保持。
-
-
-群协调原生模型失败保留本轮结束原因；明确的 Codex 服务过载沿现有退避机制重试原 pending 来源，其他未提交或非暂态错误仍等待条件变化，已接纳决定不被晚到错误撤销。实现版本改变后，已有 condition 等待由常规恢复扫描重新核验，无需再次重处理消息。设计与边界见 [模型过载恢复](docs/spec/message-coordinator-provider-recovery.md)。
-
-阶段授权的 sourceQuote 与 stageAuthorizations.objective 是逐字来源证据，完整业务描述使用 arguments.objective；候选违反该约束时，协调器返回具体字段反馈并在同会话修正，不要求交办人重复解释，也不由 Host 自动改写授权。
-
-已有真实后续答复却被旧澄清阻塞的历史创建命令，可在排空维护中按原文来源核验恢复，保留原作者、来源版本、taskId与审计；不新增答复或重复建任务。新创建命令在领取前等待同话题旧澄清处理完成，避免将尚未执行的输入等待记为未知效果。操作见本地部署说明。
-
-公共话题事实与任务修改分别接纳：同群已有话题中的全 `fact`、`scope: conversation`、`replyPolicy: none` 单元只记录公共事实，不携带 Task 详情、不唤醒 Owner。需求方补充会改变执行目标的内容仍使用 `revise` 并核验原 Task 权限；第三人公共事实不能连带拒绝同批合法补充，权限拒绝也不能通过另建话题规避。
-
-环境短答通过 `revise.arguments.uatSourceRefs` 解释：每项包含 `sourceKey`、`sourceVersion`、完整正文 `sourceQuote`，按问答顺序排列且末项必须是当前有权修改 Task 的确认消息。Host 核验同群同话题当前来源；原文进入需求证据，上下文作者不获得授权。没有引用不能用模型猜测补齐 UAT，引用也不能覆盖当前明确的不同 UAT。当前原文直接给出 UAT 时继续使用原有来源核验。
-
-工程准备在写入计划之前失败时，维护者可在修复源仓库等前置环境后，使用同一 `reassess-readonly` 入口重新评估原 Task。仅接纳当前版本的受阻工程初始化候选，且必须证明没有计划收据、阶段、执行 Run 或外部效果；不按 Git 错误码自动重试，原需求、来源与阶段授权仍核验。
-
-用户明确要求更正已发通知时，本机受信维护身份可对已核验撤回的原通知执行 `restore + correction`，保存替换正文及原消息关联；其他自动撤回理由、伪造身份和未撤回消息仍拒绝。更正不能冒充原任务需求修改，也不能仅凭发送ACK声称送达。
-
-群回复先给结论或需要对方做的事，重点清晰，多项信息逐行列出。Owner 的业务补充通知直接展示 `condition.missing`：使用业务名称，写明需要回答的具体问题及必要选项、范围、链接；调查过程保留在内部摘要。通知保留完整清单和换行，不按固定字数截断；权限确认及完成结果也保留完整正文。内部执行、能力故障和审批等待继续沿既有静默策略处理。
-
-工程节点将本轮原生 provider 过载明确记录为 `EXECUTION_PROVIDER_TRANSIENT`，沿持久退避最多重领三次；已接纳结果优先，其他模型错误不自动重试。旧 `execution_no_submission` 仅在原生会话身份、最后本轮租约和输入摘要一致、会话已排空、没有提交或节点效果、任务来源与控制版本仍有效时，受管重分类后恢复同一 Run/Session；额外输入、活跃会话和未知效果均拒绝。源仓库缺失在 Git 与工作区创建之前报 `ENGINEERING_SOURCE_REPOSITORY_UNAVAILABLE`，须先修复已配置源仓库，再走原任务恢复入口。
-
-原生用户中断正在执行的只读工具时，节点记录 `EXECUTION_TURN_INTERRUPTED`，由 Owner 核对诊断后通过既有 `resume-agent` 续行同一节点、会话和代际；不进入 provider 自动重试。同一问题只允许一次续行。历史 `execution_tool_failed` 仅在最后本轮有唯一 `engineering_repo_inspect` 泛型失败、紧接原生 `aborted/user`，且无提交、新输入、节点效果并满足来源/租约/维护/CAS门禁时重分类。此证据只说明回合被用户中断，不证明工具失败一定由中断造成；旧错误和新核验工件都保留供 Owner 阅读。
-
-工程执行节点的新原生会话使用 `origin=subagent`，避免普通 Web 历史跟随取得其执行归属。旧会话仅在正式维护并卸载 Resident/API Session Controller 后，自行恢复冷会话验证身份、无额外输入与节点效果后，以完整历史派生受管子会话，并 CAS 换绑原节点；Task、Run 和成功前缀不变。内部维护准备接口只写换绑与排空证据，不运行模型，要求当前维护 id/revision；活跃会话、来源变化或已有输出均拒绝。详见 `docs/spec/managed-execution-session-ownership.md`。
-
-任务等待通知以当前缺项类别为准：内部工具缺失或执行故障不会因历史审批事件而转成“需要你确认”；只有当前确需业务补充或权限确认时才请求用户行动。
-
-同一逻辑任务的材料和产物共用 `tasks/<logicalTaskId>/work`、`tmp`、`outputs`，保持已有原生会话 cwd。`work/materials-index.json` 按需从本任务原工件重建，仅列材料、需求来源和产物，不复制正文。Owner 使用 `task_owner_read_artifact` 的 `task-materials-index` 刷新索引，工程通过 `engineering_repo_inspect` 的 `materials` 操作读取；按原 artifactRef 或任务相对路径分页读取。历史材料标记 history，仍可参考，不替代当前授权或验收证明。新增材料下次访问即可发现，无需提升需求代次或重跑成功步骤。
-
-原生执行仅将精确 `TRANSPORT` 且首行 `fetch failed` 的错误归入既有暂态恢复，最多三次退避；其他错误不泛化重试。已等待回合的受管重分类和实际恢复工具调用须另行回读。只读重评在当前来源、版本 CAS、无外部效果且属于当前能力等待时，可在尚无成功查询的情况下进行，避免“先成功读取才允许修复读取”的循环。
-
-已核验的会话换绑保留父会话历史；恢复检查承认换绑前已消费的父输入，不把正常继承误判为外来消息。换绑后额外输入、其他会话、较新租约和已有提交仍按当前回合检查。
-
-工程补充输入接纳后，同一事务同步执行记录和当前任务阶段的材料引用。历史记录若因旧版本漏同步而不一致，只凭正式逐代输入记录在既有恢复事务内对账；来源不明或当前计划已变化时拒绝，避免正常修复后的任务永久等待。
-
-工程检查引用不存在的测试文件时，保留失败日志并等待维护修正检查配置，避免从头重做需求准备和源码修改。维护检查 checkpoint 只重验原 Run 同一代的失败验证步骤，保留成功前缀、工作区及候选。仓库读取超出准入路径返回 scope_denied 和可用路径提示，路径穿越仍拒绝；已持久的旧读取错误仅凭最后原生回合的精确证据重分类，再由 Owner 原节点续行。缺少或尚未读取材料不能作为已满足需求的依据。
-
-后端单测检查按 Maven 单测命名发现实际测试，排除 `*IT`、`*ITCase`、`*E2ETest` 集成测试；逐份核验本轮随机后缀的 JUnit XML 并保存摘要，不绑定其他需求的测试类名。无测试报告、零用例或失败不得记为通过，业务集成验收仍独立执行。
-
-共享读取目录约定：work/tmp仅允许顶层共享文件，work/artifacts精确SHA引用沿原摘要校验读取；outputs可读取嵌套产物。engineering仓库及原生session内部目录仍通过原工具访问，不经共享材料入口绕过仓库范围限制。
-
-候选纯校验失败可由 Owner 在原节点纠正：保留已经提交的提案及失败证据，让原提案 Agent 修改无效条目，再只重验紧邻校验步骤。Task、Run、generation、原会话及成功准备/工作区保持不变；不会替模型删除条目，也不把含有效修改的候选误称为完全无修改。此路径复用原有 node.resume，无需人工维护入口。
-
-固定 UAT2 审核页面取证可通过已登记的 `query_runtime_status` 资源 `kind=uat-review-observation` 调用，返回独立测试账号的布局和截图证据，业务写入被拦截；配置及证据边界见 `docs/ops/trusted-platform-workflows.md`。
-
-工程验收场景修正使用受管local-acceptance checkpoint，在维护排空与版本校验下绑定当前Task、UAT和需求摘要；重算场景定义/计划，保留已完成候选检查。共享诊断材料不构成用户授权，静态API前置检查不等于真实业务验收。
-
-本地验收场景配置若冻结到其他Task，可在排空维护中对原Run调用内部`local-acceptance`检查点：精确绑定Task、UAT及当前需求/验收条件摘要，仅重算`define-local-acceptance`和`plan-local-acceptance`；成功工作区、提案及候选检查保留，后续本地验收必须尚未领取且无effects。新规划失败仍由原Owner正常`node.resume`纠正，只有检查点审计中的成功中段身份、lease、输入和输出均未变化时才可保留；不重做整代。
-
-### 生产活动合并结果 UI 验收
-
-`scripts/local-acceptance-activity-merge.mjs` 针对已绑定的生产活动合并结果Task/UAT3，使用候选原始Vue组件、父页面绑定/方法及状态机，在独立无头浏览器中验证失败弹窗、取消/继续、原确认和下载请求/Blob。`--check --config <绝对配置路径>`只读检查完整候选语法；运行入口为`initialize|execute|cleanup|verify-cleanup --config <路径>`，通过标准输入接收原验收runner上下文。配置需`taskId`、`uatEnvironment`、`evidenceRoot`、`playwrightModule`；从候选仓库cwd运行，不修改候选。
-
-固定API响应仅证明UI契约，返回明确`backendVerified:false`；不证明真实后端路由、权限、结果可信性或Excel内容。部分/全部失败与正常成功分别留截图和ledger，关闭浏览器后才允许cleanup通过。当前真实候选语法失败及后端接口缺口须由原工程任务修复，不以隔离测试夹具PASS替代交付。
-
-Owner纠正纯校验失败时，恢复目标仍为原Agent；Host明确提供原validator的节点/lease/输入身份，Owner须读取并引用该原失败工件。不会把恢复目标与失败节点混为一谈，普通Agent失败的同身份门禁保持不变。
-
-engineering_repo_inspect的materials读取当前Task共享目录；历史材料同样用source=current。source=previous仅用于上一代仓库。合法材料调用误用previous时按suggestedCall纠正即可，不应等待业务人员补充；跨Task或真实目录缺失仍拒绝。
-
-工程repair返回同时列出当前Task共享目录顶层文件元信息，帮助发现旧代诊断之后新增的Host材料；按提示调用materials读取正文。Host诊断须源码核实，不增加授权，也不重跑全流程。
-
-宿主历史操作回执可沿已登记 files 资源以 hostReceipts 精确绑定文件摘要、Task 和需求版本；读取及完成时核验来源，领域验收仍独立判断业务结果。配置与边界见 docs/ops/trusted-platform-workflows.md。
-
-仓库可配置 `taskLocalAcceptance: [{scope:{taskId,uatEnvironment,requestDigest},localAcceptance:{...}}]`；requestDigest沿用Task当前request+acceptanceCriteria的executionDigest。配置该列表后必须唯一精确匹配，不能回退同仓库默认场景；需求或环境改变需Host准备匹配的真实场景，不能复用旧业务证据。历史冻结Run仍用正式local-acceptance checkpoint更新，不随profile变化漂移。
-
-工程 verify-candidate 明确检查失败后的源码修复保留成功准备、场景和工作区，在同代候选上从 inspect-and-propose 重入并重新修改/检查；外部效果或后续已执行不走此路径。
-
-### 必要跨仓库工程依赖（schema 9）
-
-Owner 可在原工程 Run 已等待且排空时，以 `planChange.kind=insertDependency` 插入一个必要工程阶段。来源条件绑定原交办人当前 `sourceKey/sourceVersion/sourceQuote/objective`；`repositoryId` 必须属于原仓库显式配置的 `dependencyRepositories`，并给出只针对该阶段的 `acceptanceCriteria`。阶段继承原 UAT，Task 总体验收不改变。配置只限定实现路径，不能创造新业务授权或放开生产发布。
-
-原阶段、Run、generation、候选与成功节点保留。依赖完成后原阶段恢复，可沿原节点纠正和重新验收；不将前端 UI fixture 当成真实后端下载通过。Owner 不应为完成原目标必需的后端或前端实现重复索要交办授权。库升级须先执行正式 8→9 迁移，见部署说明。
-
-数据集合并七项交互使用独立 `scripts/local-acceptance-dataset-merge-ui.mjs`，绑定对应 Task/UAT3；配置与活动合并 UI runner 相同，支持 `--check|initialize|execute|cleanup|verify-cleanup --config <绝对路径>`。从真实候选 cwd 运行，编译实际 SFC/SCSS，记录七项浏览器断言与源码 SHA256。列表/API 输入明确为 fixture，报告 `backendVerified:false`；它不能替代后端 UAT 业务验收，也不能用于其他数据集需求。
-
-SG20 托管组件服务入口为 `serve --config <path> --host 127.0.0.1 --port <Hostport>`；`prepare` 在 runner 物化候选中按 lockfile 安装依赖，配置增加受信 `nodeExecutable`、`yarnCli`。execute 访问 Host 服务 URL 本身并核验就绪的 Task/UAT/namespace/PID 和源码 proof；不以另一个浏览器拦截站点替代实际服务。依赖安装前至少保留 1.6 GiB 可用空间。
-
-本地验收配置修订可在原代重评精确的 LOCAL_ACCEPTANCE_PLAN_INVALID 纯准备失败，保留成功候选/构建；须维护封存、前缀成功、零本地效果，失败原始引用留审计。真实v18准备节点的唯一workspace.prepare声明可沿此路径处理，但已有实际效果或其他声明效果仍拒绝。
-
-部署脚本现支持必要依赖索引迁移仅备份控制库和固定 profile；普通部署及 Readback/Resume 不扫描全部任务目录。工程配置提案通过 `-RepositoryPatches` 原生转发并绑定输入 SHA，操作边界见 `docs/ops/resident-review-local-deployment.md`。
-
-Owner 提交完成时，已配置 Host 完成验收的路径直接重新读取持久查询证据并核对当前 Task、需求版本、来源和结果摘要，再执行领域验收；不因未在本轮重复调用 readArtifact 拒绝原会话已知的不可变证据。未配置 Host 回调的路径保留原读取检查。旧版本、跨任务、未知或已丢失的证据仍不能用于完成；领域拒绝诊断仅接受当前已验证查询引用，不自动将任务完成。
-
-普通代码包替换不需要配置提案。将以下最小 JSON 保存到 `docs/tmp/deploy-arguments.json`（Package 使用本轮实际包绝对路径），运行上述统一入口；先加 `-Check` 零写核验：
-
-```json
-{"Package":"D:/dsh_home/packages/current-assistant.tgz"}
-```
-
-未提供配置提案时不调用配置编辑器，全部 profile 字段保留，并在安装后核对原字节摘要。工程配置变更仍须同时提供 Bundle、MergePolicy、ChecksProposal；只给其中部分或仅 RepositoryPatches 会拒绝，不能默默忽略。
-
-工程同代候选修复保留原工作区和成功编辑。新的增量编辑由控制账中的正式 `candidate-in-place` 修复事件、原成功效果及当前输入共同标识，重复派发沿同一效果回读，不重放旧补丁；缺失审计、未决或外部效果、原补丁重放均拒绝。历史 `DELIVERY_IDENTITY_CONFLICT` 不加入自动暂态重试，由受信 Host 对原 Run 调用既有恢复入口，仍受来源、控制状态与维护检查约束。
-
-Owner插入配置允许的必要工程依赖时，原交办原文可能主要描述前端；Host按该候选的当前Task/来源/阶段验收及同UAT核验后，以显式依赖仓库为准，不再让关键词路由覆盖已核候选。普通初次任务仍按原仓库路由检查，任意跨仓选择不因此获准。
-
-正式同代修复允许“本轮无新增修改”保留已成功编辑，但必须由 Host 核验完整候选树恰好等于原合并树叠加成功受管编辑。证明作为独立工件随节点提交留存；额外文件或未审计字节变化仍拒绝。该结论只表示本轮不重复补丁，仍继续完整构建和业务验收，不能据此宣称需求已实现。
-
-群聊最终结果沿用Owner的string摘要，以【结论】【结果】【下一步】及段落空行呈现；排查完成但未修复须明确说明，只列2–3个重点，不贴账号、hash和技术日志。完整报告和证据留在原事项详情，原消息引用保持可核验；没有公开地址时不编造链接。补充请求直接列明所缺信息、责任人及继续条件。旧长报告不按句子猜测压缩或硬截断。
-
-工程共享材料引用必须从索引完整复制。同Task截短SHA返回QUERY_ARGUMENT_INVALID及原错误引用，模型在原回合先查索引再读取，不自动补SHA；跨Task或范围错误仍拒绝。精确历史单次该错误可按原会话证据重分类，保留原错误工件和输入/租约，沿原Owner受管恢复，不重建任务。
-
-工作流控制库故障诊断：健康接口的executionStore显示真实可用性与首次故障机器码；运行期首因追加至控制库目录execution-store-failures.jsonl，包含时点/动作/SQLite码及请求摘要，不含原消息、SQL或凭据。正常关闭不记录故障；诊断不代替原生命令回执对账，不自动重放写入。
-
-### Owner 调整任务流程副本
-
-执行期间使用已确定的固定工作流，不提供模型增删节点或修改输入输出合同的接口。历史已接纳的定义及来源、理由、节点快照保留，用于原任务恢复与审计。内部故障由原执行会话纠正，成功前缀和效果身份保持；不因内存检查票据丢失而重复构建。
-
-依赖可绑定本 Run 同代成功节点的真实工件，不能用模型数据冒充验收。`resumeCurrent` 只续行零效果的纯/读取节点；`settleManagedCandidate` 先核原生读取回执、当前文件 SHA、正式修复审计及完整受管编辑树，再结算原候选。没有凭据时应让原会话实际读取，失败不按错误码抢先自动重试。Task 完成仍需原目标的真实业务证据。
-
-### 检查进程重启恢复
-
-受信工程检查记录本 Task 的子进程身份及退出证据。重启后先核原节点的检查进程已退出，再保存中断诊断并交 Owner 决定继续或修订检查；不会把排空等同检查成功，也不会自动重跑旧检查配置。历史无 PID 记录时按原登记命令、候选目录及原生进程快照核验；命中的未知进程仍须对账。
-
-本次旧 SG20 节点阻挡升级时，统一部署入口自动复用维护 witness/Resident 完整退出/原生排空桥，恢复原 profile 字节后继续完整预检和部署。零写 `-Check` 明确区分“可前置修复”与“完整预检通过”；具体边界及中断接续见部署 runbook。
-
-Owner 调整本任务本地验收时，可从 Host 公布的 `localAcceptanceProfiles` 选择 `localAcceptanceProfileDigest`；配置必须匹配当前 Task、UAT 和需求摘要。未完成节点的 `dependencyBindings` 只重定向原模板已声明依赖到同职责、同输出合同的真实前驱，`previousOutputNodeId` 保留实际候选构建输出；不能用模型值替代工件。同一依赖不能同时使用 `dependencyArtifacts`。这两种流程调整不能与 `resumeCurrent` 或 `settleManagedCandidate` 混用。
-
-Owner 观察与执行恢复分别使用独立的在途恢复链，复用同一个 5 秒周期；长检查或消息对账不会占住下一轮 Owner 观察。`/health` 的 `executionStore.recovery` 展示 `owners`/`tasks` 当前阶段、Task ID 和开始时间，用于定位未完成恢复；不代表业务验收已通过。
-
-生产活动合并结果 UI 验收使用固定 Task/UAT3 的真实候选组件和独立 loopback 服务。页面/资产由实际服务提供，业务 API 明确标为 fixture；结果始终包含 `backendVerified:false`。工具保留真实字段/模板错误，不为候选注入缺失常量；成功只证明所列 UI 交互，真实 Excel、权限及服务端结果需后端独立验收。Host 验证失败写 Task 共享诊断材料供原工程会话纠正，不修改业务候选或伪造节点成功回执。
-
-持久 Task Owner 是任务级唯一执行负责人，负责当前目标、沿既有计划推进、真实业务补充和有证据的交付；节点会话是其受托执行者，流程编排提供调度、持久化和客观核验。Owner 不提供 `repairCurrentStage` / `workflowRevision`，也不能以内部工程故障动态新增或重排已启动流程。通过既有安全准入的 Agent 故障由后台恢复扫描交回原节点会话，完整诊断进入持久恢复上下文，保留 sessionId、nodeRunId、generation、输入和成功前缀。同一问题无新进展时保留 `strategy-change-required`，不轮询重启模型。未提供受信修复能力的 code/工程失败保持明确阻塞，由任务负责人跟踪真实恢复条件；未知外部效果先对账。历史已应用修订继续可读、可恢复；未应用旧 Owner 修复决定保存诊断和回执后封存，不重放。真实用户目标改变仍走显式需求更新。以上取代此前 Owner 动态修订说明。
-
-固定工程流程的本地验收计划失败由原规划执行会话读取诊断并纠正；成功的编辑和验证不重跑。任务暂停/恢复使用正式 pause/resume 控制，保留原结果；未知外部效果仍先对账。工程源码搜索按冻结 Git OID 分批读取，保留原查询与分页语义。
-
-工程重启沿已登记的固定流程继续。Host 从同 Run 成功检查节点恢复已核验的候选/检查回执，代码及检查配置未变时提交阶段不重复构建；候选或检查改变仍需真实验证。动态节点/入出契约修改不再向模型开放，历史已接受定义仍可读取和恢复。
-
-冻结工程定义包含合同校验函数的源码摘要。发行包须保留 `.gitattributes` 指定的字节，包括 `engineering-output-contract.js` 的混合换行；Windows checkout 不得把已有合同统一转为 CRLF，否则无逻辑变化也会阻止历史工作流恢复。相关回归覆盖 `core.autocrlf=true/false` 的真实 Git checkout。
-
-Owner 的等待/阻塞候选必须将 condition.evidenceRefs 全部列入主 evidenceRefs；校验拒绝会指出具体字段或遗漏引用，原会话应修正候选继续，不能仅更换阻塞类别。
-
-Owner 提交等待/阻塞前，Host 使用当前需求、实际工具权限及执行证据核验停止依据。验证方案和隔离准备由原 Owner 自行推进；确实无法自行取得的信息，经常驻系统唯一群通知出口提出具体问题，群回复由常驻会话关联回原 Task。追问只说正在做什么、具体缺什么，不公开内部责任和恢复字段。
-
-执行会话按需读取较大的证据引用清单和流程目录，避免每轮重复注入完整历史索引；当前目标、约束、授权和未处理事件仍直接保留。该投影不改变Host原始证据清单或验收校验。
-
-Owner 新回合投影对完全相同的来源正文使用 `sameAs` 指向当前基础信息与本轮字段合成后的完整正文；来源身份、版本及不同要求独立保留。不可变材料引用省略重复路径和摘要元数据，Host 校验仍使用完整输入。
-
-Owner 原生工具凭据保存在后台，普通结果末尾附 evidenceRef，不再为每次调用追加 coordinator 通知；SDK value 替换保持原生校验与渲染，其凭据通过已有材料索引查询。固定解释只保留在系统提示。需求、来源和目录保留一份可见 ownerContextBase；续轮仅注入动态字段，基线变化时替换，压缩后缺失时从当前 Host 完整输入恢复。基线仍计入模型总输入，不能把续轮消息缩短等同于 token 同比例减少。
-
-Owner 自主判断调查收益：优先选择足以回答当前问题的直接验证；扩大调查或重复失败后，比较新增证据能否改变结论与时间、下载量、环境准备成本。低收益路径自行停止或改道，不新增征求意见或申请环节，不按工具名称禁止；停止路径不等于完成任务，必要业务信息确实无法自行取得时仍具体请求补充。停止依据核验同样不因存在低收益的理论路径而强制继续。
+任务会话记录的查看不拥有任务写入权。已注册的任务/执行会话只由Host原生create/resume取得写句柄；普通会话页面仍可读取历史，但其后台激活不能抢占这些会话。未排空任务的空重试不清除原故障告警。此约束针对会话生命周期归属，不限制会话已配置的原生业务工具。

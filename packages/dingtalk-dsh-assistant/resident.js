@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { applyResidentCorsHeaders, handleRequest, residentErrorStatus } from './http.js'
 import { openResidentStore } from './store.js'
-import { openResidentRuntime } from './runtime.js'
+import { openTaskResidentRuntime } from './task-resident-runtime.js'
 import { installFakeLlm } from './fake-llm.js'
 import { createDwsAdapter } from './dws-adapter.js'
 import { createNodeDwsRunner } from './dws-runner.js'
@@ -9,49 +9,14 @@ import { normalizeHistoryMessage, startDwsBridge } from './dws-bridge.js'
 import { inspectEnvironment } from './environment.js'
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
-import { openExecutionStore } from './execution-store.js'
-import { closeExecutionResources } from './execution.js'
-import { openWorkflowService } from './workflow-service.js'
-import { createTrustedWorkflowPlatforms } from './workflow-trusted-platforms.js'
-import { notificationOpenTaskId, sameDeliveredText, sendWorkflowNotification, workflowNotificationDisclosureAllowed } from './workflow-notifications.js'
-import { readWorkflowSeal, workflowSealPath, inspectLegacyDrain } from './workflow-cutover.js'
+import { closeExecutionResources } from './resource-close.js'
+import { readTaskNotificationDelivery } from './task-notification-readback.js'
+import { openTaskSessionService } from './task-session-service.js'
+import { sendWorkflowNotification } from './group-message.js'
 import { join, resolve } from 'node:path'
-import { createWorkflowConfiguration } from './workflow-configuration.js'
-import { taskWorkflowCatalog } from './message-context.js'
-import { taskProgressQueryDefinition } from './task-progress-query.js'
 
 export const name = 'dingtalk-dsh-assistant'
-export const inject = ['storage', 'storageDomain', 'credentials', 'agents', 'agentDefaultModel', 'agentPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'tools', 'subagents', 'goals', 'llm', 'systemPrompt', 'attachments', 'dingtalkTaskWorkflowPlatformClients']
-
-export async function verifyResidentWorkflowSeal(ctx, workflowConfig) {
-  const domain = ctx.storageDomain
-  const backendName = domain.config?.routes?.dingtalk_dsh_assistant ?? domain.config?.backend
-  const backend = ctx.storage?.backend.get(backendName)
-  if (!backend?.root) throw new Error('workflow_seal_storage_path_unavailable')
-  const sealPath = workflowSealPath(join(resolve(backend.root), 'dingtalk_dsh_assistant.json'))
-  const seal = await readWorkflowSeal({ sealPath })
-  if (seal) {
-    if (!workflowConfig || seal.groupIds.some(id => !workflowConfig.groupIds?.includes(id))) throw new Error('workflow_sealed_group_configuration_required')
-    if (resolve(workflowConfig.dbPath) !== resolve(seal.dbPath) || workflowConfig.instanceId !== seal.instanceId) throw new Error('workflow_seal_instance_mismatch')
-    if (seal.phase !== 'active') throw new Error('workflow_cutover_requires_offline_resume')
-  }
-  if (workflowConfig && (!seal || workflowConfig.groupIds.some(id => !seal.groupIds.includes(id)))) throw new Error('workflow_group_seal_required')
-  return { seal, sealPath }
-}
-
-export async function verifyWorkflowActivation(store, control, groupIds) {
-  for (const groupId of groupIds) {
-    const state = await control.query({ kind: 'message.group', conversationId: groupId })
-    if (state?.state !== 'active' || state.engine !== 'workflow' || !state.legacySealRef) throw new Error(`workflow_group_not_activated:${groupId}`)
-    const group = store.getGroup(groupId)
-    if (!group) throw new Error(`workflow_group_not_subscribed:${groupId}`)
-    const report = inspectLegacyDrain({ unit: { name: 'dingtalk_dsh_assistant', version: 9 }, tables: {
-      groups: { [groupId]: { ...group, groupId } },
-      tasks: Object.fromEntries(store.listTasks().map((task, index) => [task.taskId ?? index, task])),
-    } }, [groupId])
-    if (!report.ready) throw Object.assign(new Error(`workflow_legacy_not_drained:${groupId}`), { details: report.issues })
-  }
-}
+export const inject = ['storage', 'storageDomain', 'credentials', 'agents', 'agentDefaultModel', 'agentPresets', 'permissionPresets', 'agentLoop', 'sessions', 'sessionPersistence', 'sessionProjections', 'workspaceRegistry', 'tools', 'llm', 'systemPrompt', 'attachments']
 
 function applyProxyEnvironment(proxyUrl) {
   for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
@@ -82,37 +47,41 @@ export async function configureResidentGroups(runtime, groups = []) {
   await runtime.initializeGroupConfiguration()
 }
 
+function taskSessionConfiguration(config) {
+  const task = config.taskSessions
+  for (const field of ['dbPath', 'instanceId', 'ownerActorId', 'webActorId']) {
+    if (typeof task?.[field] !== 'string' || !task[field].trim() || task[field].trim().toLowerCase() === 'null')
+      throw Object.assign(new Error(`TASK_SESSION_CONFIGURATION_REQUIRED:${field}`), { code: 'TASK_SESSION_CONFIGURATION_REQUIRED' })
+  }
+  const epoch = task.ingressEpoch
+  if (typeof epoch !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/u.test(epoch) || !Number.isFinite(Date.parse(epoch))
+    || new Date(epoch.replace(/(?:Z|[+-]\d{2}:\d{2})$/u, 'Z')).toISOString().slice(0, 19) !== epoch.slice(0, 19))
+    throw Object.assign(new Error('TASK_SESSION_INGRESS_EPOCH_INVALID'), { code: 'TASK_SESSION_INGRESS_EPOCH_INVALID' })
+  return { ...task, ingressEpoch: new Date(epoch).toISOString(), initialize: task.initialize === true }
+}
+
 export async function apply(ctx, config = {}) {
   if ((config.taskProvenanceMigrations?.length ?? 0) > 0 || (config.taskContinuationMigrations?.length ?? 0) > 0) throw new Error('legacy_task_migrations_removed:use_offline_topic_storage_migration')
+  const taskConfig = taskSessionConfiguration(config)
+  if (config.humanBlockerReplyMigrations?.length) throw new Error('legacy_authorization_migration_requires_offline_review')
   const host = config.host ?? '127.0.0.1'
   const port = config.port ?? 18998
   if (config.fakeModel === true) installFakeLlm(ctx)
-  const { seal, sealPath } = await verifyResidentWorkflowSeal(ctx, config.workflow)
+  // This store retains group configuration and transport history only; task state is owned by taskSessions.
   const store = await openResidentStore(ctx.storageDomain)
-  const workflowConfig = config.workflow
-  if (workflowConfig) {
-    if (!Array.isArray(workflowConfig.groupIds) || !workflowConfig.groupIds.length || !workflowConfig.ownerActorId || !workflowConfig.artifactDirectory) throw new Error('workflow_configuration_incomplete')
-    const control = await openExecutionStore({ dbPath: workflowConfig.dbPath, instanceId: workflowConfig.instanceId })
-    try {
-      await verifyWorkflowActivation(store, control, workflowConfig.groupIds)
-      for (const groupId of workflowConfig.groupIds) {
-        const group = await control.query({ kind: 'message.group', conversationId: groupId })
-        if (group.legacySealRef !== (seal.sealRefs?.[groupId] ?? seal.sealRef)) throw new Error('workflow_group_seal_mismatch')
-      }
-    } finally { await control.close() }
-  }
   const configuredProxyUrl = store.getProxyUrl?.() ?? config.proxyUrl ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? ''
   if (store.getProxyUrl?.() === undefined && configuredProxyUrl) await store.setProxyUrl(configuredProxyUrl)
   applyProxyEnvironment(configuredProxyUrl)
   const dwsConfig = config.dws ?? {}
-  const runtime = await openResidentRuntime(ctx, store, process.cwd(), {
+  const runtime = await openTaskResidentRuntime(ctx, store, process.cwd(), {
     agentPreset: config.agentPreset ?? 'standard',
     agentWorkspaceDir: config.agentWorkspaceDir,
+    agentReplySignature: config.agentReplySignature,
     resumeTimeoutMs: config.resumeTimeoutMs ?? 10_000,
     maxConcurrentTasks: config.maxConcurrentTasks ?? 5,
     maxGoalRounds: config.maxGoalRounds ?? 24,
     supervisorIntervalMs: config.supervisorIntervalMs ?? 5_000,
-    workflowGroupIds: workflowConfig?.groupIds ?? [],
+    taskSessionMode: true,
   })
   runtime.setCurrentDwsProfile(dwsConfig.profile)
   const updateAgentConfig = runtime.updateAgentConfig
@@ -122,7 +91,6 @@ export async function apply(ctx, config = {}) {
     return result
   }
   await configureResidentGroups(runtime, config.groups)
-  for (const migration of config.humanBlockerReplyMigrations ?? []) await runtime.migrateHumanBlockerReply(migration)
   const dwsRunner = createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: tmpdir() })
   const dwsAdapter = createDwsAdapter({
     enabled: dwsConfig.enabled === true,
@@ -130,177 +98,50 @@ export async function apply(ctx, config = {}) {
     profile: dwsConfig.profile,
     runner: dwsRunner,
   })
-  const trustedPlatforms = workflowConfig?.platforms ? createTrustedWorkflowPlatforms({
-    config: workflowConfig.platforms, clients: ctx.get?.('dingtalkTaskWorkflowPlatformClients'),
-    ownerActorId: workflowConfig.ownerActorId,
-  }) : null
-  const configuration = workflowConfig ? createWorkflowConfiguration({ credentials: ctx.credentials, instanceId: workflowConfig.instanceId,
-    workflowIds: [...taskWorkflowCatalog.map(item => item.id), 'task-general-capability', taskProgressQueryDefinition.id], webActorId: workflowConfig.webActorId }) : undefined
-  if (configuration) {
-    const configurationIdentity = { channel: 'web', actorId: workflowConfig.webActorId }
-    runtime.getWorkflowConfiguration = () => configuration.state(configurationIdentity)
-    runtime.saveWorkflowVariable = args => configuration.saveVariable(args, configurationIdentity)
-    runtime.setWorkflowVariableEnabled = args => configuration.setVariableEnabled(args, configurationIdentity)
-    runtime.bindWorkflowConfiguration = args => configuration.bindWorkflow(args, configurationIdentity)
-  }
-  const workflow = workflowConfig ? await openWorkflowService({ ctx, config: { ...workflowConfig, profile: dwsConfig.profile, approvalRecipientUserId: dwsConfig.humanUserId }, legacy: runtime,
-    configuration,
-    external: workflowConfig.platforms ? trustedPlatforms : ctx.get?.('dingtalkTaskWorkflowExternal'),
-    generalCapabilities: ctx.get?.('dingtalkTaskGeneralCapabilities') ?? [],
-    generalCompletionCheck: ctx.get?.('dingtalkTaskGeneralCompletionCheck'),
-    generalCompletionIdentity: ctx.get?.('dingtalkTaskGeneralCompletionIdentity'),
-    readMessage: (groupId, messageId) => dwsAdapter.readMessage(groupId, messageId),
+  const tasks = await openTaskSessionService({ ctx, config: taskConfig, legacy: runtime, residentStore: store,
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
-    fileTransport: { createAdapter: ({ directory, profile }) => createDwsAdapter({
-      enabled: dwsConfig.enabled === true, writesAuthorized: dwsConfig.writesAuthorized === true,
-      profile, runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: directory }),
-    }) },
     notifications: {
-      canDisclose: async notification => workflowNotificationDisclosureAllowed(dwsConfig, workflowConfig, notification),
+      canDisclose: notification => dwsConfig.enabled === true && dwsConfig.writesAuthorized === true
+        && !!runtime.getGroup(notification.payload.conversationId),
       send: notification => sendWorkflowNotification(dwsAdapter, notification),
-      sendScoped: async (notification, scope) => {
-        if (!scope.authorizationRef || notification.id !== scope.notificationId
-          || notification.payload?.fact?.taskId !== scope.taskId || notification.payload.conversationId !== scope.conversationId
-          || !workflowConfig.groupIds.includes(scope.conversationId)) throw new Error('WORKFLOW_NOTIFICATION_FORBIDDEN')
-        const scopedAdapter = createDwsAdapter({ enabled: dwsConfig.enabled === true, writesAuthorized: true,
-          profile: dwsConfig.profile, runner: dwsRunner })
-        return sendWorkflowNotification(scopedAdapter, notification)
-      },
-      recall: async ({ messageId }) => dwsAdapter.recallMessage(messageId),
-      readbackRecall: async ({ conversationId, messageId, ack }) => {
-        if ((ack?.recallStatus ?? ack?.result?.recallStatus) !== 'SUCCESS') return undefined
-        const now = new Date()
-        const local = date => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date)
-        const start = local(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000))
-        const end = local(new Date(now.getTime() + 60 * 60 * 1000))
-        const messages = await dwsAdapter.readConversation(conversationId, { start, end })
-        if (messages.some(item => item.messageId === messageId)) return undefined
-        return { messageId, conversationId, recallStatus: 'SUCCESS', observedAt: now.toISOString(), queryStart: start, queryEnd: end, ack }
-      },
-      readback: async notification => {
-        const ack = notification.ack
-        let messageId = ack?.messageId ?? ack?.result?.messageId
-        const openTaskId = notificationOpenTaskId(ack)
-        if (!messageId && openTaskId) {
-          const result = await dwsRunner.run(dwsAdapter.compileSendStatus(openTaskId))
-          if (result.exitCode !== 0) return undefined
-          const status = JSON.parse(result.stdout)
-          const conversationId = status.messageRef?.openConversationId ?? status.result?.openConversationId
-          if (status.result?.sendStatus !== 'SUCCESS' || conversationId !== notification.payload.conversationId) return undefined
-          messageId = status.messageRef?.openMessageId ?? status.result?.openMessageId
-        }
-        if (!messageId) return undefined
-        const observed = await dwsAdapter.readMessage(notification.payload.conversationId, messageId)
-        const quoted = notification.payload.sourceMessageId && observed.quotedMessage?.messageId === notification.payload.sourceMessageId
-          && observed.quotedMessage?.conversationId === notification.payload.conversationId ? observed.quotedMessage : null
-        if (!sameDeliveredText(observed.text, notification.payload.text, quoted) || (observed.conversationId && observed.conversationId !== notification.payload.conversationId)) return undefined
-        return { messageId, conversationId: notification.payload.conversationId, observedAt: new Date().toISOString() }
-      },
+      readback: notification => readTaskNotificationDelivery(dwsAdapter, notification, { senderActorId: taskConfig.assistantActorId }),
     },
-  }) : null
-  if (workflow) {
-    const legacyIngest = runtime.ingest
-    runtime.ingest = async message => {
-      const currentSeal = await readWorkflowSeal({ sealPath, conversationId: message.groupId })
-      if (currentSeal?.blockLegacy && !workflow.isGroup(message.groupId)) throw new Error('workflow_sealed_group_legacy_ingest_forbidden')
-      return workflow.isGroup(message.groupId) ? workflow.ingest(message) : legacyIngest(message)
-    }
-    runtime.listTaskView = async () => [...runtime.listTasks(), ...await workflow.boardTasks()]
-    runtime.getWorkflowState = runId => workflow.state(runId)
-    runtime.getWorkflowMessageTrace = (runId, page) => workflow.messageTrace(runId, page)
-    runtime.getWorkflowMessageEvidence = (runId, resourceRef, page) => workflow.messageEvidence(runId, resourceRef, page)
-    runtime.getWorkflowTopicState = (topicId, page) => workflow.workflowTopicContext(topicId, page)
-    runtime.getWorkflowTaskRuns = (taskId, page) => workflow.taskRuns(taskId, page)
-    runtime.getWorkflowTaskDetail = taskId => workflow.taskDetail(taskId)
-    runtime.getWorkflowTaskExecutions = (taskId, page) => workflow.taskExecutions(taskId, page)
-    runtime.getWorkflowTaskNodeOutput = (taskId, runId, nodeRunId, page) => workflow.taskNodeOutput(taskId, runId, nodeRunId, page)
-    runtime.reprocessWorkflowMessage = runId => {
-      if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
-      return workflow.reprocessMessage(runId, { channel: 'web', actorId: workflowConfig.webActorId })
-    }
-    runtime.getWorkflowMailboxes = () => workflow.mailboxes()
-    runtime.sendScopedTaskCompletionNotification = args => workflow.sendScopedTaskCompletionNotification(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.prepareWorkflowNotificationOperation = args => workflow.prepareWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.retireWorkflowNotification = (args, check) => workflow.retireWorkflowNotification(args, { channel: 'web', actorId: workflowConfig.webActorId }, check)
-    runtime.executeWorkflowNotificationOperation = args => workflow.executeWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.reconcileWorkflowNotificationOperation = args => workflow.reconcileWorkflowNotificationOperation(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.listWorkflowTopics = groupId => workflow.topics(groupId)
-    runtime.getWorkflowTopicContext = args => workflow.topicContext(args)
-    runtime.getWorkflowCatalog = () => workflow.catalog()
-    runtime.isWorkflowTask = taskId => workflow.isTask(taskId)
-    runtime.getWorkflowMaintenance = () => workflow.maintenance()
-    runtime.getWorkflowExecutionHealth = () => workflow.executionHealth()
-    runtime.getCompletedWorkflowObservations = taskId => workflow.completedObservations(taskId)
-    runtime.reconcileCompletedWorkflowObservations = args => workflow.reconcileCompletedObservations(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.reconcileWorkflowTopic = (args, check) => workflow.reconcileTopic(args, { channel: 'web', actorId: workflowConfig.webActorId }, check)
-    runtime.changeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.sealWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'seal')
-    runtime.resumeWorkflowMaintenance = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'resume')
-    runtime.runScopedWorkflowTask = args => workflow.changeMaintenance(args, { channel: 'web', actorId: workflowConfig.webActorId }, 'task-run')
-    runtime.submitWorkflowTask = args => {
-      if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
-      return workflow.submitWebTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    }
-    runtime.controlWorkflowTaskExecution = args => workflow.controlTaskExecution(args,{channel:'web',actorId:workflowConfig.webActorId})
-  runtime.reviewWorkflowTaskDelivery = args => workflow.reviewTaskDelivery(args, { channel:'web', actorId:workflowConfig.webActorId })
-  runtime.confirmWorkflowTaskCompletion = args => workflow.confirmTaskCompletion(args,{channel:'web',actorId:workflowConfig.webActorId})
-    runtime.retryWorkflowInvestigation = args => workflow.retryInvestigation(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.repairWorkflowStageAuthorizations = args => workflow.repairStageAuthorizations(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.applyWorkflowMaintenanceConstraint = args => workflow.applyMaintenanceConstraint(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.reassessWorkflowReadonly = args => workflow.reassessReadonly(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.handoffWorkflowDataChangeApproval = args => workflow.handoffDataChangeApproval(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.retryWorkflowOwner = args => workflow.retryOwner(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.retireWorkflowPreparedEffect = args => workflow.retirePreparedEffect(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.resetWorkflowExecution = args => workflow.resetExecution(args,{channel:'web',actorId:workflowConfig.webActorId})
-    runtime.preparePurgedWorkflowRun = args => workflow.preparePurgedRun(args,{channel:'web',actorId:workflowConfig.webActorId})
-    runtime.purgeWorkflowExecution = args => workflow.purgeExecution(args,{channel:'web',actorId:workflowConfig.webActorId})
-    runtime.deleteWorkflowTask = args => workflow.deleteCancelledTask(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.retryWorkflowReadonlyAnswer = args => workflow.retryReadonlyAnswer(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.recoverWorkflowClarification = args => workflow.recoverClarification(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.retryWorkflowMaterialRequest = args => workflow.retryMaterialRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    runtime.resumeWorkflowRequest = args => {
-      if (!workflowConfig.webActorId) throw new Error('workflow_web_actor_not_configured')
-      return workflow.resumeRequest(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    }
-    const legacyDecideAuthorization = runtime.decideAuthorization
-    runtime.decideAuthorization = async args => {
-      if (!await workflow.isApprovalRequest(args.requestId)) return legacyDecideAuthorization(args)
-      if (!workflowConfig.webActorId) throw new Error('WORKFLOW_WEB_ACTOR_FORBIDDEN')
-      return workflow.decideApproval({ requestId: args.requestId, decision: args.decision, comment: args.comment,
-        eventId: `web:${args.requestId}:${args.decision}` }, { channel: 'web', actorId: workflowConfig.webActorId })
-    }
-    runtime.getWorkflowApprovalRequest = requestId => workflow.getApprovalRequest(requestId)
-    runtime.getWorkflowApprovalNotice = requestId => workflow.getApprovalNotice(requestId)
-    runtime.prepareWorkflowApprovalNotice = args => workflow.prepareApprovalNotice(args)
-    runtime.beginWorkflowApprovalNotice = args => workflow.approvalNoticeCommand('send', args)
-    runtime.recordWorkflowApprovalNoticeReceipt = args => workflow.approvalNoticeCommand('receipt', args)
-    runtime.recordWorkflowApprovalNoticeUnsent = args => workflow.approvalNoticeCommand('unsent', args)
-    runtime.recordWorkflowApprovalNoticeDelivery = args => workflow.approvalNoticeCommand('delivered', args)
-    runtime.recordWorkflowApprovalNoticeRecall = args => workflow.approvalNoticeCommand('recalled', args)
-    runtime.decideWorkflowApprovalReply = args => {
-      const { actorId, conversationId, quoteMessageId, ...decision } = args
-      return workflow.decideApproval(decision, { channel: 'im', actorId, conversationId, quoteMessageId })
-    }
-    const legacyReissueAuthorization = runtime.reissueAuthorization
-    runtime.reissueAuthorization = async args => {
-      if (!await workflow.isApprovalRequest(args.requestId)) return legacyReissueAuthorization(args)
-      return workflow.reissueApprovalNotice(args, { channel: 'web', actorId: workflowConfig.webActorId })
-    }
-    const legacyListAuthorizations = runtime.listAuthorizationRequests
-    runtime.listAuthorizationRequests = async () => [...legacyListAuthorizations(), ...await workflow.listApprovalRequests()]
-    const legacyCreateTask = runtime.createTask
-    runtime.createTask = args => workflow.isGroup(args.groupId) ? Promise.reject(new Error('workflow_group_use_message_input')) : legacyCreateTask(args)
-    // 恢复可能包含长外部对账；不能阻止同一实例注册正常监视 timer。
-    void workflow.recoverExecutionTasks().then(taskFailures => {
-      for (const failure of taskFailures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
-    }).catch(error => ctx.logger.warn(error.message))
-  }
-  const recoverWorkflow = () => workflow.recover().then(result => {
-    for (const failure of result.failures) ctx.logger.warn(`workflow recovery ${failure.scope}: ${failure.code}${failure.runId ? ` (${failure.runId})` : ''}`)
-  }).catch(error => ctx.logger.warn(error.message))
-  if (workflow) void recoverWorkflow()
-  const workflowTimer = workflow ? setInterval(recoverWorkflow, 5000) : null
-  workflowTimer?.unref()
+  })
+  const transportIssues = runtime.listRecoveryIssues
+  runtime.listAlerts = tasks.listAlerts
+  runtime.listActivities = tasks.listActivities
+  runtime.listTaskTimings = tasks.listTaskTimings
+  runtime.listPerformance = tasks.listPerformance
+  runtime.getActivityAuditStatus = tasks.getActivityAuditStatus
+  runtime.listRecoveryIssues = () => [...transportIssues(), ...tasks.listAlerts().map(alert => ({ kind: 'task-session', ...alert, error: alert.detail }))]
+  runtime.ingest = tasks.ingest
+  runtime.isOwnNotification = tasks.isOwnNotification
+  runtime.listTaskView = tasks.boardTasks
+  runtime.getTaskSessionDetail = tasks.taskDetail
+  runtime.getTaskSessionExecutions = tasks.taskExecutions
+  runtime.createTask = tasks.createTask
+  runtime.appendTaskContext = tasks.appendTaskContext
+  runtime.cancelTask = tasks.cancelTask
+  runtime.listAuthorizationRequests = tasks.listAuthorizationRequests
+  runtime.respondTaskHumanRequest = tasks.respondHumanRequest
+  runtime.retryDecisionFailedMessage = tasks.retryMessage
+  runtime.isTaskSessionMode = () => true
+  const recoverTasks = () => tasks.recover().catch(error => ctx.logger.warn(error.message))
+  const taskTimer = setInterval(recoverTasks, config.taskSessions?.recoveryIntervalMs ?? 5000)
+  taskTimer.unref()
+  let server, stopDws = async () => undefined
+  // Register disposal before any transport probe or listener can fail during startup.
+  ctx.effect(() => async () => {
+    clearInterval(taskTimer)
+    try {
+      await closeExecutionResources([
+        ['server', () => server?.listening ? new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())) : undefined],
+        ['dws', () => stopDws()],
+        ['task-sessions', () => tasks.close()], ['runtime', () => runtime.close()],
+      ])
+    } catch (error) { ctx.logger.error(error); throw error }
+  })
+  void recoverTasks()
   runtime.setGroupMessageReader(async (groupId, messageId) => {
     const message = await dwsAdapter.readMessage(groupId, messageId)
     return { ...normalizeHistoryMessage(message, groupId), resourceRefs: message.resourceRefs ?? [] }
@@ -314,7 +155,7 @@ export async function apply(ctx, config = {}) {
   await runtime.recoverInterruptedDecisions()
   const initialEnvironment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
   let dwsBridgeHealth = dwsConfig.enabled === true ? { healthy: false, groups: [] } : undefined
-  const stopDws = dwsConfig.enabled === true
+  stopDws = dwsConfig.enabled === true
     ? startDwsBridge({
       runtime,
       adapter: dwsAdapter,
@@ -343,7 +184,7 @@ export async function apply(ctx, config = {}) {
     const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
     return runtime.backfill(ordered.map((message) => normalizeHistoryMessage(message, groupId)))
   }
-  const server = createServer((request, response) => {
+  server = createServer((request, response) => {
     handleRequest(request, response, runtime, {
       testApiEnabled: config.testApiEnabled === true,
       transport: dwsConfig.enabled === true ? 'dws' : 'fake-dws',
@@ -370,23 +211,7 @@ export async function apply(ctx, config = {}) {
       resolve()
     })
   })
-  runtime.reconcileCompletedNotifications().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
   runtime.recoverInterruptedDecisions().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
 
-  ctx.effect(() => {
-    return async () => {
-      if (workflowTimer) clearInterval(workflowTimer)
-      try {
-        await closeExecutionResources([
-          ['server', () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))],
-          ['dws', () => stopDws()],
-          ['workflow', () => workflow?.close()], ['runtime', () => runtime.close()],
-        ])
-      } catch (error) {
-        // Host可能捕获dispose异常；显式记录原始cause，不能把partial-dispose当成功关闭证明。
-        ctx.logger.error(error)
-        throw error
-      }
-    }
-  })
+
 }

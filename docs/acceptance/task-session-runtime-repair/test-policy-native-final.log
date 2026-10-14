@@ -1,0 +1,42 @@
+✖ restart wakes technical unknown wait once per implementation and retains the effect fence (22139.3609ms)
+✔ concurrency-safe is not pure: an unknown native write never dispatches a second call (7881.3112ms)
+✔ native start-race rejection retires only its prepared request and completion resumes after the original effect is reconciled (9598.5306ms)
+✔ configured group responsibility reaches group and task models and its reply signature survives notification formatting (4280.9715ms)
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (27500.054ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (17615.8201ms)
+✔ native service reopens an unknown notification for readback without resending completed business work (8326.9845ms)
+✔ native service cancellation stops the real execution process, drains the session, and rejects late completion (7884.8217ms)
+✔ native requirement update resumes the same owner with new sources and fences the interrupted old execution result (9148.1091ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (14445.2115ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (10989.3238ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (11820.8075ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (9160.0637ms)
+✔ recovering an idle owner with no pending wake does not consume a task slot (4237.6641ms)
+✔ native session creation failure has bounded recovery retries: persistent=false (5293.4172ms)
+✔ native session creation failure has bounded recovery retries: persistent=true (4251.6127ms)
+✔ native model failures settle without repeated owner requests: persistent=false (6294.2408ms)
+✔ native model failures settle without repeated owner requests: persistent=true (6436.3088ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=false (2038.2388ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=true (2238.768ms)
+✔ native topic routing rejects incomplete source coverage and accepts correction in the same real session (2766.3919ms)
+✔ resident.apply boots and disposes with only its declared native service dependencies (1238.5406ms)
+✔ resident listener startup failure disposes native resources and permits reopening the same task database (1714.5823ms)
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (12020.1549ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (9017.4251ms)
+✔ task session permits late native tools and configured read and shell alongside skills (4403.9661ms)
+✔ unconfigured native profiles expose no bundled personal skills (2629.8199ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (6622.0454ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 27
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 158944.3165
+
+✖ failing tests:
+
+test at test\task-native-unknown-fence.test.js:9:1
+✖ restart wakes technical unknown wait once per implementation and retains the effect fence (22139.3609ms)
+  'test timed out after 20000ms'

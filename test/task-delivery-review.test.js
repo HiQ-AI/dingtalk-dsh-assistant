@@ -34,14 +34,14 @@ test('external evidence paths cannot escape authorized requirement',async()=>{
  await assert.rejects(verifyDeliveredEngineeringFacts({...f.options,input:{...f.options.input,cleanupPath:join(outside,'cleanup.json')}}),{code:'TASK_DELIVERY_REVIEW_EVIDENCE_SCOPE_INVALID'})
  await assert.rejects(verifyDeliveredEngineeringFacts({...f.options,input:{...f.options.input,verificationFile:'../verification.json'}}),{code:'TASK_DELIVERY_REVIEW_EVIDENCE_SCOPE_INVALID'})
 })
-test('HTTP review only accepts explicit local request schema and allowed origin',async()=>{
+test('retired HTTP review rejects valid and forged requests without invoking review',async()=>{
  const calls=[],server=createServer((request,response)=>handleRequest(request,response,{reviewWorkflowTaskDelivery:async args=>{calls.push(args);return {status:'pending'}}},{testApiEnabled:false}))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));try{
  const input={requestId:'review',expectedRequirementRevision:1,expectedControlRevision:2,reason:'Review delivered facts',facts:{runId:'run',directory:'D:/task',repository:'example/repository',commit:'a'.repeat(40),prNumber:1,verificationFile:'verification.json',businessJUnitPath:'D:/task/business.xml',cleanupPath:'D:/task/cleanup.json',cleanupSha256:'b'.repeat(64),jarPath:'D:/task/jar',jarSha256:'c'.repeat(64)}}
  const post=(body,origin)=>fetch(`http://127.0.0.1:${server.address().port}/tasks/task/review-delivery`,{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
- assert.equal((await post(input,'https://foreign.example')).status,403);assert.equal((await post({...input,actorId:'forged'})).status,400);assert.equal((await post({...input,facts:{...input.facts,passed:true}})).status,400)
- assert.equal((await post(input,'http://127.0.0.1:3080')).status,202);assert.equal(calls.length,1);assert.equal(calls[0].taskId,'task')
+ assert.equal((await post(input,'https://foreign.example')).status,410);assert.equal((await post({...input,actorId:'forged'})).status,410);assert.equal((await post({...input,facts:{...input.facts,passed:true}})).status,410)
+ assert.equal((await post(input,'http://127.0.0.1:3080')).status,410);assert.equal(calls.length,0)
  const generic={...input,facts:{kind:'project-evidence',runId:'run',projects:[{directory:'D:/task',repository:'example/repository',commit:'a'.repeat(40),sourceBase:'b'.repeat(40),prNumber:1}],evidence:[{path:'D:/task/dom.md',sha256:'c'.repeat(64),description:'Actual component DOM; fixture APIs'}],scope:'Component DOM only; not deployed'}}
- assert.equal((await post(generic,'http://127.0.0.1:3080')).status,202);assert.equal(calls.length,2)
+ assert.equal((await post(generic,'http://127.0.0.1:3080')).status,410);assert.equal(calls.length,0)
  }finally{await new Promise(resolve=>server.close(resolve))}
 })

@@ -48,7 +48,7 @@ test('constraint rejects incomplete run and foreign artifacts before provenance 
  assert.equal(f.event(),undefined);assert.equal(f.source(),undefined)
 })
 
-test('maintenance constraint HTTP route keeps local identity and does not accept client actor injection',async t=>{
+test('retired maintenance constraint HTTP rejects local and foreign requests without invoking service',async t=>{
  const {createServer}=await import('node:http'),{handleRequest}=await import('../packages/dingtalk-dsh-assistant/http.js')
  let seen
  const store={applyWorkflowMaintenanceConstraint:async r=>{seen=r;return{accepted:true}}}
@@ -57,7 +57,7 @@ test('maintenance constraint HTTP route keeps local identity and does not accept
  const url='http://127.0.0.1:'+server.address().port+'/tasks/task/maintenance-constraint'
  const body={requestId:'r',text:'Internal maintenance; Draft delivery only',expectedRequirementRevision:2,expectedControlRevision:50,evidenceRefs:['requirement','final']}
  const send=(value,origin='http://127.0.0.1:3080')=>fetch(url,{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify(value)})
- assert.equal((await send(body,'https://foreign.example')).status,403)
- assert.equal((await send({...body,actorId:'forged'})).status,400);assert.equal(seen,undefined)
- assert.equal((await send(body)).status,202);assert.equal(seen.taskId,'task');assert.deepEqual(seen.evidenceRefs,body.evidenceRefs)
+ assert.equal((await send(body,'https://foreign.example')).status,410)
+ assert.equal((await send({...body,actorId:'forged'})).status,410);assert.equal(seen,undefined)
+ assert.equal((await send(body)).status,410);assert.equal(seen,undefined)
 });

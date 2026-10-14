@@ -1,0 +1,9 @@
+✔ restart reconciles an original persisted native terminal receipt and resumes the same executor without replay (10565.8297ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12513.5893

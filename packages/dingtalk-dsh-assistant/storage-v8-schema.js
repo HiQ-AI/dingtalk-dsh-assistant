@@ -114,6 +114,7 @@ export const storedTaskCheckpointBaseSchema = z.object({
 
 const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), senderName: z.string().min(1).optional(), occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(), content: z.string() })
 const messageFactFields = {
+  resourceRefs: z.array(z.record(z.string(), z.unknown())).optional(),
   messageVersion: z.number().int().positive(), imageRefs: z.array(z.record(z.string(), z.unknown())).optional(), mediaUnavailable: z.array(z.string()).optional(),
   sourceKind: z.enum(['dingtalk', 'web', 'internal', 'migration']).optional(), migrationSource: z.string().optional(),
   ignoredRanges: z.array(sourceRangeSchema.extend({ reason: z.string().min(1) })).optional(),
@@ -134,6 +135,9 @@ const outboundSchema = z.object({
   taskInputVersion: z.number().int().positive().optional(), taskRunSequence: z.number().int().positive().optional(),
   supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), supersededReason: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
   readbackRequired: z.boolean().optional(),
+  notificationTaskId: z.string().min(1).optional(),
+  notificationState: z.enum(['prepared', 'starting', 'unknown', 'delivered', 'failed']).optional(),
+  notificationRetryAt: z.string().optional(), notificationFailurePhase: z.enum(['send', 'readback']).optional(), notificationKnownNotSent: z.boolean().optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
   sendAttemptCount: z.number().int().nonnegative().optional(), readbackAttemptCount: z.number().int().nonnegative().optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, writeFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
@@ -8,8 +8,8 @@ import { createServer } from 'node:net'
 import { LocalCredentialProvider } from '@deepseek-ai/dsh-credentials-local'
 import { createWorkflowConfiguration } from '../packages/dingtalk-dsh-assistant/workflow-configuration.js'
 import { apply as applyResident, inject as residentInject } from '../packages/dingtalk-dsh-assistant/resident.js'
-import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
-import { cutoverWorkflow } from '../packages/dingtalk-dsh-assistant/workflow-cutover.js'
+import { tmpdir } from 'node:os'
+import { available, reason, nativeTaskHost } from './fixtures/task-session-native-host.js'
 
 const actor = { channel: 'web', actorId: 'configuration-owner' }
 const workflowIds = ['task-engineering', 'task-data-change', 'task-general-capability', 'task-progress-query']
@@ -260,67 +260,40 @@ test('共享native凭据文件的不同实例隔离变量、相同runId快照及
   assert.equal((await context.credentials.readRecord(documentKey('instance-b'))).payload.instanceId, 'instance-b')
 })
 
-test('完整Resident按已激活workflow启动，原生credentials透传到配置HTTP且重启持久读取', async t => {
-  const parent = resolve('docs/tmp/workflow-configuration-tests')
-  await mkdir(parent, { recursive: true })
-  const directory = await mkdtemp(join(parent, 'resident-'))
-  const tables = new Map()
-  const domain = { table(name) {
-    if (!tables.has(name)) tables.set(name, new Map())
-    const data = tables.get(name)
-    return { get: key => data.get(key), entries: () => data.entries(), put: async (key, value) => { data.set(key, value) },
-      update: async (key, transform) => { const value = transform(data.get(key)); data.set(key, value); return value } }
-  }, close: async () => {} }
-  const storageDomain = { config: { backend: 'json' }, open: async () => domain }
-  const legacy = await openResidentStore(storageDomain)
-  await legacy.subscribe({ groupId: 'configuration-test', responsibility: '隔离配置测试' })
-  await legacy.close()
-  const legacyPath = join(directory, 'legacy.json'), dbPath = join(directory, 'control.db'), artifactDirectory = join(directory, 'artifacts')
-  await writeFile(legacyPath, JSON.stringify({ unit: { name: 'dingtalk_dsh_assistant', version: 9 }, tables: Object.fromEntries([...tables].map(([name, data]) => [name, Object.fromEntries(data)])) }))
-  await cutoverWorkflow({ legacyPath, journalPath: join(directory, 'dingtalk_dsh_assistant.workflow-seal.json'), dbPath, artifactDirectory,
-    instanceId: 'configuration-resident', groupIds: ['configuration-test'], probeStopped: async () => ({ stopped: true, pidPresent: false, listenerPresent: false, autostartDisabled: true }) })
-  let provider = new Context()
-  await provider.plugin(LocalCredentialProvider, { path: join(directory, 'credentials.yaml'), watch: false })
-  let dispose
-  t.after(async () => { await dispose?.(); await provider.fiber.dispose() })
+test('真实Resident以task-session启动，旧workflow配置HTTP返回410且保留历史凭据', { skip: !available ? reason : false }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'resident-retired-workflow-'))
+  const hosts = []
+  t.after(async () => { try { for (const host of hosts.toReversed()) await host.close() } finally { await rm(directory, { recursive: true, force: true }) } })
   assert.ok(residentInject.includes('credentials'))
-  const effects = [], logs = []
-  const ctx = { credentials: provider.credentials, effect: callback => effects.push(callback), get: () => undefined,
-    logger: { info: value => logs.push(value), warn: value => logs.push(value), error: value => logs.push(value) },
-    storage: { backend: new Map([['json', { root: directory }]]) }, storageDomain,
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fixture', model: 'fixture' }) },
-    agents: { create: async () => { throw Error('MODEL_NOT_EXPECTED') }, resume: async () => { throw Error('MODEL_NOT_EXPECTED') } },
-    subagents: { drainDescendants: async () => {} },
-  }
+  let first = true
   const start = async () => {
+    const host = await nativeTaskHost(directory, () => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true })
+    hosts.push(host)
+    if (first) await host.ctx.credentials.modifyRecord(documentKey('configuration-resident'), () => ({ kind: 'grant', payload: { retained: 'historical-configuration' } }))
     const reserve = createServer()
     await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve))
     const port = reserve.address().port
     await new Promise(resolve => reserve.close(resolve))
-    await applyResident(ctx, { host: '127.0.0.1', port, proxyUrl: '', agentWorkspaceDir: directory, dws: { enabled: false, writesAuthorized: false, profile: 'isolated-configuration-fixture' },
-      workflow: { groupIds: ['configuration-test'], ownerActorId: actor.actorId, webActorId: actor.actorId, dbPath, artifactDirectory, instanceId: 'configuration-resident' } })
-    dispose = effects.at(-1)()
-    return `http://127.0.0.1:${port}`
+    await applyResident(host.ctx, { host: '127.0.0.1', port, proxyUrl: '', agentWorkspaceDir: directory, agentPreset: 'native-test',
+      dws: { enabled: false, writesAuthorized: false }, groups: [{ groupId: 'configuration-test', responsibility: 'isolated test' }],
+      taskSessions: { dbPath: join(directory, 'task-sessions.db'), instanceId: 'configuration-resident', initialize: first } })
+    first = false
+    return { host, base: 'http://127.0.0.1:' + port }
   }
-  let base = await start()
-  const catalog = await (await fetch(base + '/state/workflows/catalog')).json()
-  assert.equal(catalog.engine, 'workflow-v2')
-  assert.deepEqual(catalog.groupIds, ['configuration-test'])
-  const initial = await fetch(base + '/config/workflow-variables')
-  assert.equal(initial.status, 200)
-  assert.equal((await initial.json()).revision, 0)
-  const response = await fetch(base + '/config/workflow-variables/endpoint', { method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ kind: 'plain', format: 'text', description: '仅测试', value: 'isolated-endpoint', expectedRevision: 0 }) })
-  assert.equal(response.status, 200)
-  assert.equal((await provider.credentials.readRecord(documentKey('configuration-resident'))).payload.variables[0].versions[0].value, 'isolated-endpoint')
-  await dispose(); dispose = undefined
-  await provider.fiber.dispose()
-  provider = new Context()
-  await provider.plugin(LocalCredentialProvider, { path: join(directory, 'credentials.yaml'), watch: false })
-  ctx.credentials = provider.credentials
-  base = await start()
-  const reloaded = await fetch(base + '/config/workflow-variables')
-  assert.equal(reloaded.status, 200)
-  assert.equal((await reloaded.json()).variables[0].value, 'isolated-endpoint')
-  assert.ok(logs.every(value => !String(value).includes('WORKFLOW_CONFIG_UNAVAILABLE')))
+  const initial = await start()
+  const original = await initial.host.ctx.credentials.readRecord(documentKey('configuration-resident'))
+  for (const path of ['/state/workflows/catalog', '/config/workflow-variables']) {
+    const response = await fetch(initial.base + path)
+    assert.equal(response.status, 410)
+    assert.equal((await response.json()).error, 'WORKFLOW_RETIRED')
+  }
+  const mutation = await fetch(initial.base + '/config/workflow-variables/endpoint', { method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ value: 'must-not-save', expectedRevision: 0 }) })
+  assert.equal(mutation.status, 410)
+  assert.deepEqual(await initial.host.ctx.credentials.readRecord(documentKey('configuration-resident')), original)
+  await initial.host.close()
+  const resumed = await start()
+  assert.equal((await fetch(resumed.base + '/config/workflow-variables')).status, 410)
+  assert.deepEqual(await resumed.host.ctx.credentials.readRecord(documentKey('configuration-resident')), original)
+  assert.equal(resumed.host.requests.length, 0)
 })

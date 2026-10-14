@@ -1,0 +1,55 @@
+{
+  "observedAt": "2026-10-14T09:52:54.2572795Z",
+  "sessions": [
+    {
+      "keys": [
+        "sessionId",
+        "updatedAt",
+        "agentAvailable",
+        "formatStatus",
+        "running",
+        "blank",
+        "cwd",
+        "projections"
+      ],
+      "id": "task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+      "running": false,
+      "agentAvailable": false,
+      "updatedAt": 1791955595164
+    },
+    {
+      "keys": [
+        "sessionId",
+        "updatedAt",
+        "agentAvailable",
+        "formatStatus",
+        "running",
+        "blank",
+        "cwd",
+        "projections"
+      ],
+      "id": "task-session-159171d8-1eef-40a6-b6f7-058eb956ee65",
+      "running": false,
+      "agentAvailable": true,
+      "updatedAt": 1791955586428
+    }
+  ],
+  "projections": [
+    {
+      "sessionId": "task-session-159171d8-1eef-40a6-b6f7-058eb956ee65",
+      "asOfSeq": 473,
+      "inbox": {
+        "next-turn": [],
+        "next-step": []
+      }
+    },
+    {
+      "sessionId": "task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+      "asOfSeq": 350,
+      "inbox": {
+        "next-turn": [],
+        "next-step": []
+      }
+    }
+  ]
+}

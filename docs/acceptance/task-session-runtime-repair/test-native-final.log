@@ -1,0 +1,32 @@
+✔ legacy Host drained error plus bound real readonly observation proves failed partial effects only (5.5217ms)
+✔ readback context exposes only the digest-bound original native call and result (4.2399ms)
+✔ legacy unknown remains fenced: model text instead of tool receipt (0.6654ms)
+✔ legacy unknown remains fenced: printed error text in successful shell output (0.4678ms)
+✔ legacy unknown remains fenced: forged ledger result digest (1.3467ms)
+✔ legacy unknown remains fenced: wrong call (0.2694ms)
+✔ legacy unknown remains fenced: changed arguments (0.1725ms)
+✔ legacy unknown remains fenced: wrong session identity (0.2091ms)
+✔ legacy unknown remains fenced: active original agent (0.1954ms)
+✔ legacy unknown remains fenced: live job still running (0.6832ms)
+✔ legacy unknown remains fenced: execution not drained (0.1604ms)
+✔ legacy unknown remains fenced: no actual readonly result (0.436ms)
+✔ legacy unknown remains fenced: wrong readback operation (1.2001ms)
+✔ legacy unknown remains fenced: unrestricted readback (0.3395ms)
+✔ legacy unknown remains fenced: failed readback call (0.2814ms)
+✔ legacy unknown remains fenced: stale observation predates unknown (0.2387ms)
+✔ restart wakes technical unknown wait once per implementation and retains the effect fence (10220.3332ms)
+✔ concurrency-safe is not pure: an unknown native write never dispatches a second call (4796.1839ms)
+✔ native start-race rejection retires only its prepared request and completion resumes after the original effect is reconciled (9276.5863ms)
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (5115.6646ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (4712.4792ms)
+✔ task session permits late native tools and configured read and shell alongside skills (3086.8647ms)
+✔ unconfigured native profiles expose no bundled personal skills (2634.9445ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (6142.2278ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25264.316

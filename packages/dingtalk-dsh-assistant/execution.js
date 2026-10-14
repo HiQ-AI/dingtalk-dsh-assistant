@@ -1,3 +1,5 @@
+import { closeExecutionResources } from './resource-close.js'
+export { closeExecutionResources } from './resource-close.js'
 import { openExecutionStore } from './execution-store.js'
 import { openExecutionArtifacts, parseArtifactReference } from './execution-artifacts.js'
 import { taskDirectories } from './session-workspaces.js'
@@ -27,16 +29,6 @@ export function createTaskDirectoryResolver({ store, workspaceRoot }) {
     logicalTaskId ??= (await store.query({ kind: 'task.family', taskId }))?.rootTaskId ?? taskId
     return taskDirectories(workspaceRoot, logicalTaskId)
   }
-}
-
-/** 按依赖顺序尝试全部清理；失败必须保留，不能让前项异常跳过数据库解锁。 */
-export async function closeExecutionResources(resources) {
-  const errors = []
-  for (const [name, close] of resources) {
-    try { await close() }
-    catch (cause) { errors.push(new Error(`RESOURCE_CLOSE_FAILED:${name}`, { cause })) }
-  }
-  if (errors.length) throw new AggregateError(errors, 'EXECUTION_RESOURCE_CLOSE_FAILED')
 }
 
 /** 独立入口；不读取、写回或迁移旧resident的Task账。 */

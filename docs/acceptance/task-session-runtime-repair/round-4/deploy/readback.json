@@ -1,0 +1,74 @@
+{
+  "profileSha256": "21eb086e00eed66943357e14516bb1ba1b506afad2fc8c9a6d084050d1fa921b",
+  "creationDate": "2026-10-14T17:56:01.540425+08:00",
+  "packageSha256": "d9b689a4ed16372b1eba8d523f37107aeb21226d8b97f8027cf4440b089e7ebf",
+  "newPid": 61872,
+  "taskEnabled": true,
+  "backupCreated": false,
+  "health": {
+    "status": "ok",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 0,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-14T09:56:28.227Z",
+            "readyAt": "2026-10-14T09:56:29.138Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-14T09:56:29.14Z",
+            "succeededAt": "2026-10-14T09:56:32.429Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-14T09:56:28.271Z",
+            "readyAt": "2026-10-14T09:56:29.188Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-14T09:56:29.189Z",
+            "succeededAt": "2026-10-14T09:56:30.348Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-14T09:56:28.316Z",
+        "readyAt": "2026-10-14T09:56:29.248Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "installedVersion": "1.0.0"
+}

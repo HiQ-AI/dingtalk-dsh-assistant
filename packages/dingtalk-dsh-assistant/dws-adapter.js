@@ -1,4 +1,5 @@
-import { assertGroupReply } from './workflow-notifications.js'
+import { safeNotificationDetail } from './notification-delivery.js'
+import { assertGroupReply, quotedSendRejectionProof } from './group-message.js'
 import { EventEmitter } from 'node:events'
 import { readFile, unlink, realpath, stat, mkdtemp, rm } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -26,11 +27,22 @@ function parseJson(stdout, operation) {
 }
 
 function commandError(prefix, result) {
-  let serverErrorCode
-  try { serverErrorCode = JSON.parse(result.stderr)?.error?.server_error_code } catch {}
+  let detail, serverErrorCode
+  try { detail = JSON.parse(result.stderr)?.error; serverErrorCode = detail?.server_error_code } catch {}
   const error = new Error(`${prefix}:${result.exitCode}${serverErrorCode ? `:${serverErrorCode}` : ''}`)
+  Object.assign(error, safeNotificationDetail({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }))
   if (serverErrorCode) error.serverErrorCode = serverErrorCode
+  if (detail) Object.assign(error, safeNotificationDetail({ reason: detail.reason, origin: detail.origin, operation: detail.operation, retryable: detail.retryable }))
   return error
+}
+
+function sendCommandReceipt(result, operation) {
+  const diagnostic = safeNotificationDetail({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr })
+  try {
+    const receipt = parseJson(result.stdout, operation)
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) throw new Error(`dws_send_contract_invalid:${operation}`)
+    return { ...receipt, sendDiagnostic: diagnostic }
+  } catch (error) { Object.assign(error, diagnostic); throw error }
 }
 
 function documentReadError(value = {}, exitCode) {
@@ -193,7 +205,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       assertGroupReply(request.text)
       const result = await runner.run(this.compileGroupSend(request))
       if (result.exitCode !== 0) throw commandError('dws_send_failed', result)
-      return parseJson(result.stdout, 'send')
+      return sendCommandReceipt(result, 'send')
     },
     async sendGroupFile(request) {
       requireEnabled()
@@ -206,7 +218,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       requireEnabled()
       const result = await runner.run(this.compileSendStatus(openTaskId))
       if (result.exitCode !== 0) throw commandError('dws_send_status_failed', result)
-      return parseJson(result.stdout, 'send-status')
+      try { return parseJson(result.stdout, 'send-status') }
+      catch (error) { Object.assign(error, safeNotificationDetail({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr })); throw error }
     },
     async readMessageFile({ groupId, messageId, expected }) {
       requireEnabled()
@@ -244,8 +257,13 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
       assertGroupReply(request.text)
       const result = await runner.run(this.compileGroupReply(request))
-      if (result.exitCode !== 0) throw commandError('dws_reply_failed', result)
-      return parseJson(result.stdout, 'reply')
+      if (result.exitCode !== 0) {
+        const error = commandError('dws_reply_failed', result)
+        const proof = quotedSendRejectionProof(result, request)
+        if (proof) { error.knownNotSent = true; error.proof = proof }
+        throw error
+      }
+      return sendCommandReceipt(result, 'reply')
     },
     async sendSelf(request) {
       const { openTaskId } = await this.sendSelfIntent(request)

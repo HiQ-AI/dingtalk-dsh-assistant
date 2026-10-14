@@ -1,10 +1,6 @@
-import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
-import { taskContextImpactFields } from './decision.js'
 import { isPendingDecision } from './topic-model.js'
-import { taskBoardProgress } from './task-progress.js'
-import { workflowVariableInputSchema, workflowVariableEnabledSchema, workflowBindingInputSchema, workflowConfigurationErrorCode } from './workflow-configuration.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
 
@@ -116,24 +112,31 @@ function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
 
 const requiredText = z.string().trim().min(1)
 const topicRefsSchema = z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).min(1)
-const taskInputFields = {
-  requestId: requiredText, context: requiredText, topicRefs: topicRefsSchema,
-  title: requiredText.max(120).optional(), objective: requiredText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional(), stageTasks: z.array(requiredText).min(1).optional(),
-}
-const createTaskInputSchema = z.strictObject({ ...taskInputFields, groupId: requiredText, title: requiredText, objective: requiredText, acceptanceCriteria: acceptanceCriteriaSchema, topicRefs: topicRefsSchema.optional() })
-const updateTaskInputSchema = z.strictObject({ ...taskInputFields, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() })
-const contextTaskInputSchema = updateTaskInputSchema.extend(taskContextImpactFields)
-const cancelTaskInputSchema = z.strictObject({ requestId: requiredText, reason: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().positive(), topicRefs: topicRefsSchema })
+const createTaskInputSchema = z.strictObject({
+  requestId: requiredText.max(200), groupId: requiredText, title: requiredText.max(120), objective: requiredText.max(16000),
+  context: z.string().max(32000).optional(), acceptanceCriteria: z.array(requiredText.max(2000)).max(100).optional(), topicRefs: topicRefsSchema.optional(),
+})
+const contextTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), context: requiredText.max(32000),
+  expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() })
+const cancelTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), reason: requiredText.max(2000), expectedControlRevision: z.number().int().positive() })
 
 export function residentErrorStatus(error) {
   const message = error instanceof Error ? error.message : String(error)
+  if (/^(?:DYNAMIC|TASK_SESSION)_.+(?:FORBIDDEN|AUTHENTICATED_SOURCE_REQUIRED|WEB_ACTOR_REQUIRED)$/.test(message)) return 403
+  if (/^DYNAMIC_.*(?:STALE|CONFLICT|BUSY|TERMINAL|NOT_ACTIVE|NOT_QUIESCENT|UNRESOLVED|FENCED|RECONCILIATION_REQUIRED)$/.test(message)) return 409
+  if (message === 'DYNAMIC_NOT_FOUND') return 404
+  if (/TASK_(?:REQUIREMENT|CONTROL|REQUEST|SESSION).*?(?:CONFLICT|STALE|BUSY)|TASK_SESSION_TERMINAL/.test(message)) return 409
+  if (/TASK_(?:SESSION_)?NOT_FOUND/.test(message)) return 404
+  if (/LEGACY_TASK_READONLY|WORKFLOW_RETIRED/.test(message)) return 410
   return /^(group_has_(active_tasks|referenced_topics|pending_decisions|pending_outbox)|task-stale|task_input_version_(conflict|stale)|task_request_identity_conflict|task_input_pending|task_topic_version_invalid|task_result_context_changed|task_prompts_version_conflict|task_web_(task-stale|topic-stale|routing-required)|web_task_version_conflict)(:|$)/u.test(message) ? 409 : 400
 }
 
 async function submitWebTask(request, response, runtime, kind, taskId) {
   try {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    if (taskId && ((await runtime.getTaskSessionDetail?.(taskId))?.legacyReadonly || !runtime.getTaskSessionDetail && await runtime.isWorkflowTask?.(taskId))) return send(response, 410, { error: 'LEGACY_TASK_READONLY' })
     const body = await readJson(request)
-    const parsed = (kind === 'createTask' ? createTaskInputSchema : kind === 'cancelTask' ? cancelTaskInputSchema : kind === 'appendTaskContext' ? contextTaskInputSchema : updateTaskInputSchema).safeParse(body)
+    const parsed = (kind === 'createTask' ? createTaskInputSchema : kind === 'cancelTask' ? cancelTaskInputSchema : contextTaskInputSchema).safeParse(body)
     if (!parsed.success) return send(response, 400, { error: 'web_task_request_invalid', issues: parsed.error.issues.map(({ path, message }) => ({ path, message })) })
     const value = await runtime[kind]({ ...parsed.data, ...(taskId ? { taskId } : {}) })
     return send(response, value?.status === 'task-stale' ? 409 : value?.status === 'accepted' ? 202 : 200, value)
@@ -143,363 +146,25 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
-  const variableRoute = /^\/config\/workflow-variables\/([^/]+)$/u.exec(url.pathname)
-  const enabledRoute = /^\/config\/workflow-variables\/([^/]+)\/enabled$/u.exec(url.pathname)
-  const bindingRoute = /^\/config\/workflow-bindings\/([^/]+)$/u.exec(url.pathname)
-  if (url.pathname === '/config/workflow-variables' || variableRoute || enabledRoute || bindingRoute) {
+  // Retired configuration and fixed-run controls must never reach a runtime fallback.
+  if (/^\/config\/workflow-(?:variables|bindings)(?:\/|$)/u.test(url.pathname)
+    || ['/state/workflows', '/state/workflows/catalog', '/runtime/execution-purge', '/runtime/maintenance/task-run', '/runtime/topics/reconcile', '/runtime/topics/reconcile/check', '/runtime/maintenance/seal', '/runtime/maintenance/resume'].includes(url.pathname)
+    || request.method !== 'GET' && url.pathname === '/runtime/maintenance'
+    || /^\/config\/groups\/[^/]+\/(?:topics\/[^/]+\/decisions\/[^/]+\/operations\/[^/]+|coordination\/[^/]+)\/retry$/u.test(url.pathname)
+    || testApiEnabled && /^\/test\/tasks(?:\/(?:wait|resume|followup|result))?$/u.test(url.pathname)
+    || /^\/runtime\/maintenance\/tasks\/[^/]+\/completed-observations$/u.test(url.pathname)
+    || /^\/tasks\/[^/]+\/(?:reset-execution|prepare-purged-run|rerun|execution-control|review-delivery|confirm-completion|confirm-stage|retry-investigation|handoff-data-change-approval|maintenance-constraint|reassess-readonly|repair-stage-authorizations|retire-prepared-effect|retry-owner|reissue-repository|reopen|pause|resume|archive|title)$/u.test(url.pathname)
+    || /^\/workflows(?:\/|$)/u.test(url.pathname)
+    || /^\/authorizations\/[^/]+\/(?:decision|reissue)$/u.test(url.pathname)
+    || request.method !== 'GET' && /^\/tasks\/[^/]+\/(?:reports\/[^/]+\/retry|notifications\/[^/]+\/(?:retry|send-completion)|information-wait-notice)$/u.test(url.pathname)
+    || request.method === 'DELETE' && /^\/tasks\/[^/]+$/u.test(url.pathname)) {
     response.setHeader('cache-control', 'no-store')
-    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'WORKFLOW_CONFIG_FORBIDDEN' })
-    if (request.method === 'OPTIONS') return send(response, 204, null)
-    if (url.search) return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
-    try {
-      if (request.method === 'GET' && url.pathname === '/config/workflow-variables') {
-        if (Number(request.headers['content-length'] ?? 0) !== 0 || request.headers['transfer-encoding']) return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
-        if (!store.getWorkflowConfiguration) return send(response, 503, { error: 'WORKFLOW_CONFIG_UNAVAILABLE' })
-        return send(response, 200, await store.getWorkflowConfiguration())
-      }
-      const operation = request.method === 'PUT' && variableRoute ? { method: 'saveWorkflowVariable', schema: workflowVariableInputSchema.omit({ name: true }), field: 'name', key: variableRoute[1] }
-        : request.method === 'POST' && enabledRoute ? { method: 'setWorkflowVariableEnabled', schema: workflowVariableEnabledSchema.omit({ name: true }), field: 'name', key: enabledRoute[1] }
-          : request.method === 'PUT' && bindingRoute ? { method: 'bindWorkflowConfiguration', schema: workflowBindingInputSchema.omit({ workflowId: true }), field: 'workflowId', key: bindingRoute[1] } : null
-      if (!operation) return send(response, 405, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
-      if (!store[operation.method]) return send(response, 503, { error: 'WORKFLOW_CONFIG_UNAVAILABLE' })
-      if (request.headers['content-type']?.split(';')[0].trim() !== 'application/json') return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
-      const parsed = operation.schema.safeParse(await readJson(request))
-      if (!parsed.success) return send(response, 400, { error: 'WORKFLOW_CONFIG_ARGUMENT_INVALID' })
-      return send(response, 200, await store[operation.method]({ ...parsed.data, [operation.field]: decodeURIComponent(operation.key) }))
-    } catch (error) {
-      const code = error instanceof SyntaxError || error instanceof URIError || error?.message === 'request_too_large' ? 'WORKFLOW_CONFIG_ARGUMENT_INVALID' : workflowConfigurationErrorCode(error)
-      return send(response, code === 'WORKFLOW_CONFIG_FORBIDDEN' ? 403 : code === 'WORKFLOW_CONFIG_REVISION_CONFLICT' ? 409
-        : ['WORKFLOW_CONFIG_STORAGE_FAILED', 'WORKFLOW_CONFIG_UNAVAILABLE', 'WORKFLOW_CONFIG_READONLY'].includes(code) ? 503 : 400, { error: code })
-    }
+    return send(response, 410, { error: 'WORKFLOW_RETIRED', message: '旧工作流与参数管理已清退；历史记录仅供读取。' })
   }
-  const completedObservations = /^\/runtime\/maintenance\/tasks\/([^/]+)\/completed-observations$/u.exec(url.pathname)
-  if (completedObservations) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.getCompletedWorkflowObservations || !store.reconcileCompletedWorkflowObservations) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
-    try {
-      const taskId = decodeURIComponent(completedObservations[1])
-      if (request.method === 'GET') return send(response, 200, await store.getCompletedWorkflowObservations(taskId))
-      if (request.method !== 'POST') return send(response, 405, { error: 'method_not_allowed' })
-      const body = z.strictObject({ requestId: requiredText.max(200), completeTurnId: requiredText.max(200),
-        expectedOwnerRevision: z.number().int().nonnegative(), expectedEventWatermark: z.number().int().nonnegative(),
-        maintenanceId: requiredText.max(200), expectedMaintenanceRevision: z.number().int().nonnegative(), reason: requiredText.max(2000) }).parse(await readJson(request))
-      return send(response, 200, await store.reconcileCompletedWorkflowObservations({ ...body, taskId }))
-    } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|NOT_DRAINED/.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  if (['/runtime/topics/reconcile/check', '/runtime/topics/reconcile'].includes(url.pathname)) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (request.method !== 'POST') return send(response, 405, { error: 'method_not_allowed' })
-    if (!store.reconcileWorkflowTopic) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
-    const check = url.pathname.endsWith('/check')
-    try {
-      const body = z.strictObject({ sourceTopicId: requiredText.max(200), targetTopicId: requiredText.max(200),
-        topicPresentation: z.strictObject({ title: requiredText.max(80), summary: requiredText.max(1200) }),
-        maintenanceId: requiredText.max(200), maintenanceRevision: z.number().int().nonnegative(), reason: requiredText.max(2000),
-        ...(check ? {} : { requestId: requiredText.max(200), expectedDigest: z.string().regex(/^[a-f0-9]{64}$/) }) }).parse(await readJson(request))
-      return send(response, 200, await store.reconcileWorkflowTopic(body, check))
-    } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|MAINTENANCE|ACTIVE/.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  if (['/runtime/maintenance','/runtime/maintenance/seal','/runtime/maintenance/resume','/runtime/maintenance/task-run'].includes(url.pathname)) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    const operation = url.pathname.split('/')[3] ?? 'change'
-    const method = {change:'changeWorkflowMaintenance',seal:'sealWorkflowMaintenance',resume:'resumeWorkflowMaintenance','task-run':'runScopedWorkflowTask'}[operation]
-    if (!store.getWorkflowMaintenance || !store[method]) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
-    if (request.method === 'GET' && operation === 'change') return send(response, 200, await store.getWorkflowMaintenance())
-    if (request.method !== 'POST') return send(response, 405, { error: 'method_not_allowed' })
-    try {
-      const body = z.strictObject({ requestId: requiredText.max(200), ...(operation === 'change' ? { active: z.boolean() } : {}), ...(operation==='task-run'?{taskId:requiredText,runId:requiredText,expectedRequirementRevision:z.number().int().positive(),expectedControlRevision:z.number().int().positive(),groupId:requiredText,allowedEffects:z.array(z.enum(['workspace','edit','external','commit','push','pr','progress']))}:{}), expectedRevision: z.number().int().nonnegative(),
-        maintenanceId: requiredText.max(200), reason: requiredText.max(4096) }).parse(await readJson(request))
-      return send(response, 200, await store[method](body))
-    } catch (error) { return send(response, /FORBIDDEN/.test(error.message) ? 403 : /STALE|CONFLICT|SEALED|NOT_DRAINED/.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const resetExecution=/^\/tasks\/([^/]+)\/reset-execution$/u.exec(url.pathname)
-  if(request.method==='POST'&&resetExecution){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
-    if(!store.resetWorkflowExecution)return send(response,404,{error:'workflow_disabled'})
-    try{
-      const body=z.strictObject({requestId:requiredText.max(200),expectedControlRevision:z.number().int().positive(),reason:requiredText.max(2000),checkOnly:z.boolean(),prepareNewRun:z.boolean()}).parse(await readJson(request))
-      return send(response,200,await store.resetWorkflowExecution({...body,taskId:decodeURIComponent(resetExecution[1])}))
-    }catch(error){return send(response,/FORBIDDEN/.test(error.message)?403:/STALE|CONFLICT|NOT_DRAINED/.test(error.message)?409:400,{error:error.message})}
-  }
-  if(request.method==='POST'&&url.pathname==='/runtime/execution-purge'){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
-    if(!store.purgeWorkflowExecution)return send(response,404,{error:'workflow_disabled'})
-    try{
-      const body=z.object({requestId:requiredText.max(200),reason:requiredText.max(2000),checkOnly:z.boolean(),tasks:z.array(z.object({taskId:requiredText,expectedControlRevision:z.number().int().positive()})).length(4)}).parse(await readJson(request))
-      return send(response,200,await store.purgeWorkflowExecution(body))
-    }catch(error){return send(response,/FORBIDDEN/.test(error.message)?403:/STALE|CONFLICT|NOT_DRAINED/.test(error.message)?409:400,{error:error.message})}
-  }
-  const purgedStart=/^\/tasks\/([^/]+)\/prepare-purged-run$/u.exec(url.pathname)
-  if(request.method==='POST'&&purgedStart){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
-    if(!store.preparePurgedWorkflowRun)return send(response,404,{error:'workflow_disabled'})
-    try{
-      const body=z.object({requestId:requiredText.max(200),expectedRequirementRevision:z.number().int().positive(),expectedControlRevision:z.number().int().positive(),checkOnly:z.boolean()}).parse(await readJson(request))
-      return send(response,200,await store.preparePurgedWorkflowRun({...body,taskId:decodeURIComponent(purgedStart[1])}))
-    }catch(error){return send(response,/FORBIDDEN/.test(error.message)?403:/STALE|NOT_DRAINED|PENDING/.test(error.message)?409:400,{error:error.message})}
-  }
-  const workflowRerun = /^\/tasks\/([^/]+)\/rerun$/u.exec(url.pathname)
-  if (request.method === 'POST' && workflowRerun) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.submitWorkflowTask) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ requestId: requiredText.max(200), expectedRunId: requiredText.max(200).nullable(),
-        objective: requiredText.max(12000), acceptanceCriteria: acceptanceCriteriaSchema,
-        constraints: z.array(requiredText.max(2000)).max(32).optional(), repositoryId: requiredText.max(64), developmentSourceRef: requiredText.optional(),
-        uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']),
-        stages: z.tuple([z.literal('task-engineering'), z.literal('task-uat-pr-merge'), z.literal('task-uat-deployment')]),
-        mergeTargetId: requiredText.max(200), deployTargetId: requiredText.max(200) }).parse(await readJson(request))
-      return send(response, 202, await store.submitWorkflowTask({ ...body, action: 'rerun', taskId: decodeURIComponent(workflowRerun[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|CHANGED|ACTIVE|STALE|TASK_RERUN_SOURCE_/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const deleteTask = /^\/tasks\/([^/]+)$/u.exec(url.pathname)
-  if (request.method === 'DELETE' && deleteTask) {
-    if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response,403,{error:'workflow_local_identity_required'})
-    if (!store.deleteWorkflowTask) return send(response,404,{error:'workflow_disabled'})
-    try {
-      const body = z.strictObject({ expectedControlRevision:z.number().int().positive(),checkOnly:z.boolean() }).parse(await readJson(request))
-      return send(response,200,await store.deleteWorkflowTask({...body,taskId:decodeURIComponent(deleteTask[1])}))
-    } catch(error) { return send(response,/FORBIDDEN/.test(error.message)?403:409,{error:error.message}) }
-  }
-  const executionControl=/^\/tasks\/([^/]+)\/execution-control$/u.exec(url.pathname)
-  if(request.method==='POST'&&executionControl){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
-    if(!store.controlWorkflowTaskExecution)return send(response,404,{error:'workflow_disabled'})
-    try{
-      const body=z.strictObject({requestId:requiredText.max(200),action:z.enum(['continue','stop','retire','retry','skip','reuse','takeover','submit-output','reconcile-failure']),reason:requiredText.max(2000),runId:requiredText.max(128),expectedRequirementRevision:z.number().int().positive(),expectedControlRevision:z.number().int().positive(),nodeRunId:requiredText.max(128).optional(),generation:z.number().int().positive().optional(),leaseEpoch:z.number().int().nonnegative().optional(),outputRef:requiredText.max(4096).optional(),evidenceRefs:z.array(requiredText.max(4096)).max(128).optional(),runRevision:z.number().int().nonnegative().optional(),inputDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),effectId:requiredText.max(200).optional(),expectedPlanRevision:z.number().int().positive().optional(),maintenanceId:requiredText.max(200).optional(),maintenanceRevision:z.number().int().nonnegative().optional()}).parse(await readJson(request))
-      return send(response,200,await store.controlWorkflowTaskExecution({...body,taskId:decodeURIComponent(executionControl[1])}))
-    }catch(error){return send(response,/FORBIDDEN|SCOPE/u.test(error.message)?403:/STALE|UNSAFE|PENDING|CONFLICT|DRAIN|REUSE_REQUIRED/u.test(error.message)?409:400,{error:error.message})}
-  }
-  const deliveryReview=/^\/tasks\/([^/]+)\/review-delivery$/u.exec(url.pathname)
-  if(request.method==='POST'&&deliveryReview){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
-    if(!store.reviewWorkflowTaskDelivery)return send(response,404,{error:'workflow_disabled'})
-    try{
-      const digest=z.string().regex(/^[a-f0-9]{64}$/), text=requiredText.max(4096)
-      const body=z.strictObject({requestId:requiredText.max(200),expectedControlRevision:z.number().int().positive(),expectedRequirementRevision:z.number().int().positive(),reason:requiredText.max(2000),
-        facts:z.union([z.strictObject({runId:text,directory:text,repository:text,commit:z.string().regex(/^[a-f0-9]{40}$/),prNumber:z.number().int().positive(),verificationFile:text,businessJUnitPath:text.optional(),cleanupPath:text.optional(),cleanupSha256:digest.optional(),jarPath:text.optional(),jarSha256:digest.optional()}),z.strictObject({kind:z.literal('project-evidence'),runId:text,projects:z.array(z.strictObject({directory:text,repository:text,commit:z.string().regex(/^[a-f0-9]{40}$/),sourceBase:z.string().regex(/^[a-f0-9]{40}$/),prNumber:z.number().int().positive()})).min(1).max(10),evidence:z.array(z.strictObject({path:text,sha256:digest,description:requiredText.max(2000)})).min(1).max(40),scope:requiredText.max(12000),acceptance:z.strictObject({scenarioIds:z.array(requiredText.max(200)).min(1).max(128)}).optional()})])}).parse(await readJson(request))
-      return send(response,202,await store.reviewWorkflowTaskDelivery({...body,taskId:decodeURIComponent(deliveryReview[1])}))
-    }catch(error){return send(response,/FORBIDDEN|SCOPE|NOT_AUTHORIZED/u.test(error.message)?403:/STALE|UNSAFE|CHANGED|MISMATCH/u.test(error.message)?409:400,{error:error.message})}
-  }
-  const completionCorrection=/^\/tasks\/([^/]+)\/confirm-completion$/u.exec(url.pathname)
-  if(request.method==='POST'&&completionCorrection){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin))return send(response,403,{error:'workflow_local_identity_required'})
-    if(!store.confirmWorkflowTaskCompletion)return send(response,404,{error:'workflow_disabled'})
-    try{
-      const body=z.strictObject({requestId:requiredText.max(200),expectedControlRevision:z.number().int().positive(),expectedRequirementRevision:z.number().int().positive(),topicId:requiredText.max(128),declaration:requiredText.max(16000)}).parse(await readJson(request))
-      return send(response,200,await store.confirmWorkflowTaskCompletion({...body,taskId:decodeURIComponent(completionCorrection[1])}))
-    }catch(error){return send(response,/FORBIDDEN|MISMATCH/u.test(error.message)?403:/STALE|UNSAFE/u.test(error.message)?409:400,{error:error.message})}
-  }
-  const workflowTaskAction = /^\/tasks\/([^/]+)\/(context|cancel|pause|resume|confirm-stage|reopen|archive|title)$/u.exec(url.pathname)
-  if (workflowTaskAction && ['POST', 'PUT'].includes(request.method) && await store.isWorkflowTask?.(decodeURIComponent(workflowTaskAction[1]))) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
-    const action = workflowTaskAction[2]
-    if (request.method !== 'POST' || !['cancel', 'pause', 'resume', 'context', 'confirm-stage', 'archive'].includes(action)) return send(response, 409, { error: 'WORKFLOW_WEB_ACTION_UNSUPPORTED' })
-    try {
-      if (['pause', 'resume'].includes(action)) {
-        const body = z.strictObject({ requestId: requiredText.max(200), reason: requiredText.max(16000), expectedControlRevision: z.number().int().positive() }).parse(await readJson(request))
-        return send(response, 202, await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) }))
-      }
-      if (action === 'archive') {
-        z.strictObject({}).parse(await readJson(request))
-        return send(response, 200, await store.submitWorkflowTask({ action, taskId: decodeURIComponent(workflowTaskAction[1]) }))
-      }
-      const fields = { requestId: requiredText, inputVersion: z.number().int().positive(), runSequence: z.number().int().nonnegative(), topicRefs: z.array(z.strictObject({ topicId: requiredText, revision: z.number().int().positive() })).optional() }
-      const body = (action === 'confirm-stage' ? z.strictObject({ requestId: requiredText.max(200),
-        requirementRevision: z.number().int().positive(), controlRevision: z.number().int().positive(),
-        planRevision: z.number().int().positive(), runSequence: z.number().int().nonnegative(),
-        stageId: requiredText.max(128), outputRef: requiredText.max(4096), confirmationText: requiredText.max(16000) })
-        : z.strictObject({ ...fields, ...(action === 'cancel' ? { reason: requiredText.max(16000) } : {
-          context: requiredText.max(16000), requirement: z.strictObject({
-            objective: requiredText.max(12000), acceptanceCriteria: acceptanceCriteriaSchema,
-            stageTargets: z.record(z.string(), z.union([requiredText,z.array(requiredText).min(1).max(10)])),
-            stageAuthorizations: z.array(z.strictObject({ workflowId: requiredText, sourceQuote: requiredText,
-              objective: requiredText, gate: z.enum(['none', 'confirmation']) })),
-          }).optional(),
-        }) })).parse(await readJson(request))
-      const result = await store.submitWorkflowTask({ ...body, action, taskId: decodeURIComponent(workflowTaskAction[1]) })
-      return send(response, 202, result)
-    } catch(error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|PENDING|TERMINAL|STALE|NOT_WAITING|TASK_ARCHIVE_|RUN_BUDGET_CONTINUATION_/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const investigationRetry = /^\/tasks\/([^/]+)\/retry-investigation$/u.exec(url.pathname)
-  if (request.method === 'POST' && investigationRetry) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.retryWorkflowInvestigation) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ retryKey: requiredText.max(200), reason: requiredText.max(16000), runId: requiredText, nodeRunId: requiredText,
-        generation: z.number().int().positive(), runRevision: z.number().int().nonnegative(), inputDigest: requiredText,
-        requirementRevision: z.number().int().positive(), controlRevision: z.number().int().positive(), planRevision: z.number().int().positive() }).parse(await readJson(request))
-      return send(response, 202, await store.retryWorkflowInvestigation({ ...body, taskId: decodeURIComponent(investigationRetry[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const approvalHandoff = /^\/tasks\/([^/]+)\/handoff-data-change-approval$/u.exec(url.pathname)
-  if (request.method === 'POST' && approvalHandoff) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.handoffWorkflowDataChangeApproval) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ runId: requiredText, recoveryKey: requiredText.max(200), reason: requiredText.max(16000), dryRun: z.boolean(),
-        expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
-        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
-        expectedPlanRevision: z.number().int().positive(), expectedRunRevision: z.number().int().nonnegative(), generation: z.number().int().positive() }).parse(await readJson(request))
-      return send(response, body.dryRun ? 200 : 202, await store.handoffWorkflowDataChangeApproval({ ...body, taskId: decodeURIComponent(approvalHandoff[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT|UNSAFE|MAINTENANCE/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const maintenanceConstraint = /^\/tasks\/([^/]+)\/maintenance-constraint$/u.exec(url.pathname)
-  if (request.method === 'POST' && maintenanceConstraint) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.applyWorkflowMaintenanceConstraint) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ requestId: requiredText.max(200), text: requiredText.max(16000),
-        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
-        evidenceRefs: z.array(requiredText.max(4096)).min(2).max(32) }).parse(await readJson(request))
-      return send(response, 202, await store.applyWorkflowMaintenanceConstraint({ ...body, taskId: decodeURIComponent(maintenanceConstraint[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN|SCOPE_REQUIRED/u.test(error.message) ? 403 : /STALE|CONFLICT|BUSY/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const readonlyReassessment = /^\/tasks\/([^/]+)\/reassess-readonly$/u.exec(url.pathname)
-  if (request.method === 'POST' && readonlyReassessment) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.reassessWorkflowReadonly) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ recoveryKey: requiredText.max(200), reason: requiredText.max(16000),
-        expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
-        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() }).parse(await readJson(request))
-      return send(response, 202, await store.reassessWorkflowReadonly({ ...body, taskId: decodeURIComponent(readonlyReassessment[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const authorizationRepair = /^\/tasks\/([^/]+)\/repair-stage-authorizations$/u.exec(url.pathname)
-  if (request.method === 'POST' && authorizationRepair) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.repairWorkflowStageAuthorizations) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ repairKey: requiredText.max(200), reason: requiredText.max(16000),
-        expectedRequirementRevision: z.number().int().positive(), expectedRequirementRef: requiredText,
-        stageAuthorizations: z.array(z.strictObject({ workflowId: requiredText, sourceKey: requiredText,
-          sourceVersion: z.number().int().positive(), sourceQuote: requiredText, objective: requiredText,
-          gate: z.enum(['none','confirmation']) })).min(1) }).parse(await readJson(request))
-      return send(response, 202, await store.repairWorkflowStageAuthorizations({ ...body, taskId: decodeURIComponent(authorizationRepair[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT|DRAINED/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const retirePrepared = /^\/tasks\/([^/]+)\/retire-prepared-effect$/u.exec(url.pathname)
-  if (request.method === 'POST' && retirePrepared) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.retireWorkflowPreparedEffect) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ runId: requiredText, effectId: requiredText, assessmentRef: requiredText,
-        reason: requiredText.max(16000), expectedRequirementRevision: z.number().int().positive(),
-        expectedControlRevision: z.number().int().positive() }).parse(await readJson(request))
-      return send(response, 202, await store.retireWorkflowPreparedEffect({ ...body, taskId: decodeURIComponent(retirePrepared[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|stale/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const ownerRetry = /^\/tasks\/([^/]+)\/retry-owner$/u.exec(url.pathname)
-  if (request.method === 'POST' && ownerRetry) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.retryWorkflowOwner) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ retryKey: requiredText.max(200), reason: requiredText.max(16000),
-        expectedOwnerRevision: z.number().int().positive(), expectedLeaseEpoch: z.number().int().nonnegative(),
-        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
-        expectedLastFailure: requiredText.max(200).nullable() }).parse(await readJson(request))
-      return send(response, 202, await store.retryWorkflowOwner({ ...body, taskId: decodeURIComponent(ownerRetry[1]) }))
-    } catch (error) { return send(response, /FORBIDDEN/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  if (request.method === 'POST' && url.pathname === '/workflows/clarifications/recover') {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.recoverWorkflowClarification) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ targetRunId: requiredText, requestId: requiredText, answerRunId: requiredText, commandId: requiredText,
-        recoveryKey: requiredText.max(200), reason: requiredText.max(16000), dryRun: z.boolean(), maintenanceId: requiredText,
-        maintenanceRevision: z.number().int().nonnegative(), expectedDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).parse(await readJson(request))
-      return send(response, body.dryRun ? 200 : 202, await store.recoverWorkflowClarification(body))
-    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /STALE|CONFLICT|MAINTENANCE|UNSAFE/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const answerRetry = /^\/workflows\/([^/]+)\/commands\/([^/]+)\/retry-readonly$/u.exec(url.pathname)
-  if (request.method === 'POST' && answerRetry) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.retryWorkflowReadonlyAnswer) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ sourceVersion: z.number().int().positive(), reason: requiredText.max(16000), retryKey: requiredText }).parse(await readJson(request))
-      return send(response, 202, await store.retryWorkflowReadonlyAnswer({ ...body, runId: decodeURIComponent(answerRetry[1]), commandId: decodeURIComponent(answerRetry[2]) }))
-    } catch (error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /STALE|CONFLICT/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const workflowRetry = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/retry$/u.exec(url.pathname)
-  if (request.method === 'POST' && workflowRetry) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.retryWorkflowMaterialRequest) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ sourceVersion: z.number().int().positive(), reason: requiredText.max(16000), dependencyRevision: requiredText }).parse(await readJson(request))
-      return send(response, 200, await store.retryWorkflowMaterialRequest({ ...body,
-        runId: decodeURIComponent(workflowRetry[1]), requestId: decodeURIComponent(workflowRetry[2]) }))
-    } catch (error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /STALE|UNCHANGED/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  const workflowReply = /^\/workflows\/([^/]+)\/requests\/([^/]+)\/answer$/u.exec(url.pathname)
-  const scopedCompletion = /^\/tasks\/([^/]+)\/notifications\/([^/]+)\/send-completion$/u.exec(url.pathname)
-  if (request.method === 'POST' && scopedCompletion) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.sendScopedTaskCompletionNotification) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ conversationId: requiredText,
-        authorization: z.strictObject({ confirmed: z.literal(true), confirmationRef: requiredText }) }).parse(await readJson(request))
-      return send(response, 202, await store.sendScopedTaskCompletionNotification({ ...body,
-        taskId: decodeURIComponent(scopedCompletion[1]), notificationId: decodeURIComponent(scopedCompletion[2]) }))
-    } catch (error) { return send(response, error instanceof z.ZodError ? 400 : /FORBIDDEN|AUTHORIZATION/u.test(error.message) ? 403 : 409, { error: error.message }) }
-  }
-  const notificationOperation = /^\/workflows\/notifications\/operations(?:\/([^/]+)\/(execute|reconcile))?$/u.exec(url.pathname)
-  const retirement=/^\/workflows\/notifications\/([^/]+)\/retirement$/u.exec(url.pathname)
-  if(retirement&&['GET','POST'].includes(request.method)){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||(request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin)))return send(response,403,{error:'workflow_local_identity_required'})
-    if(!store.retireWorkflowNotification)return send(response,404,{error:'workflow_disabled'})
-    try{
-      const check=request.method==='GET'
-      const fields=check?z.strictObject({supersededByNotificationId:requiredText}):z.strictObject({supersededByNotificationId:requiredText,requestId:requiredText,expectedFactDigest:requiredText.regex(/^[a-f0-9]{64}$/u)})
-      const input=fields.parse(check?Object.fromEntries(url.searchParams):await readJson(request))
-      return send(response,200,await store.retireWorkflowNotification({...input,notificationId:decodeURIComponent(retirement[1])},check))
-    }catch(error){return send(response,error instanceof z.ZodError?400:/FORBIDDEN/u.test(error.message)?403:409,{error:error.message})}
-  }
-  if(request.method==='POST'&&notificationOperation){
-    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)||(request.headers.origin&&!WEB_ORIGINS.has(request.headers.origin)))return send(response,403,{error:'workflow_local_identity_required'})
-    const operationId=notificationOperation[1]?decodeURIComponent(notificationOperation[1]):undefined,action=notificationOperation[2]??'prepare'
-    const method={prepare:'prepareWorkflowNotificationOperation',execute:'executeWorkflowNotificationOperation',reconcile:'reconcileWorkflowNotificationOperation'}[action]
-    if(!store[method])return send(response,404,{error:'workflow_disabled'})
-    try{
-      const fields=action==='prepare'
-        ? z.strictObject({operationId:requiredText,notificationId:requiredText,type:z.enum(['recall','restore']),reason:z.enum(['fact_conflict','duplicate_event','explicit_user','correction']),authorizationRef:requiredText.optional(),evidenceRef:requiredText.optional(),keepNotificationId:requiredText.optional(),body:requiredText.optional()})
-        : action==='execute'?z.strictObject({expectedFactDigest:requiredText,authorizationRef:requiredText.optional()})
-          :z.strictObject({authorizationRef:requiredText.optional()})
-      const body=fields.parse(await readJson(request))
-      return send(response,action==='execute'?202:200,await store[method]({...body,...(operationId?{operationId}:{})}))
-    }catch(error){return send(response,error instanceof z.ZodError?400:/AUTHORIZATION|FORBIDDEN/u.test(error.message)?403:/STALE|CONFLICT|READY|RECONCILE|RECALLED|DUPLICATE/u.test(error.message)?409:400,{error:error.message})}
-  }
-  const workflowReprocess = /^\/workflows\/([^/]+)\/reprocess$/u.exec(url.pathname)
-  if (request.method === 'POST' && workflowReprocess) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.reprocessWorkflowMessage) return send(response, 404, { error: 'workflow_disabled' })
-    try { return send(response, 200, await store.reprocessWorkflowMessage(decodeURIComponent(workflowReprocess[1]))) }
-    catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /PENDING|STALE|EXISTS/u.test(error.message) ? 409 : 400, { error: error.message }) }
-  }
-  if (request.method === 'POST' && workflowReply) {
-    const address = request.socket?.remoteAddress
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
-    if (!store.resumeWorkflowRequest) return send(response, 404, { error: 'workflow_disabled' })
-    try {
-      const body = z.strictObject({ eventId: requiredText, answer: requiredText.max(16000) }).parse(await readJson(request))
-      return send(response, 200, await store.resumeWorkflowRequest({ ...body, runId: decodeURIComponent(workflowReply[1]), requestId: decodeURIComponent(workflowReply[2]) }))
-    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : 400, { error: error.message }) }
+  if (request.method === 'GET' && url.pathname === '/runtime/maintenance') {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'workflow_local_identity_required' })
+    if (!store.getWorkflowMaintenance) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
+    return send(response, 200, { ...await store.getWorkflowMaintenance(), legacyReadonly: true })
   }
   if (request.method === 'OPTIONS') return send(response, 204, null)
   if (request.method === 'GET' && url.pathname === '/health') {
@@ -550,7 +215,35 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
-  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, (await (store.listTaskView?.() ?? store.listTasks())).map(task => ({ ...task, workflowProgress: taskBoardProgress(task) })))
+  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, await (store.listTaskView?.() ?? store.listTasks()))
+  const topicState = request.method === 'GET' && /^\/state\/topics\/([^/]+)\/context$/u.exec(url.pathname)
+  if (topicState) {
+    try {
+      const groupId = url.searchParams.get('groupId')
+      if (!groupId) return send(response, 400, { error: 'group_id_required' })
+      const topicId = decodeURIComponent(topicState[1]), topic = store.getTopic?.(groupId, topicId)
+      if (!topic) return send(response, 404, { error: 'topic_not_found' })
+      const revision = pageNumber(url, 'revision', topic.revision), offset = pageNumber(url, 'cursor', 0)
+      const limit = pageNumber(url, 'limit', 50, 100), intentCursor = pageNumber(url, 'intentCursor', 0)
+      if (revision !== topic.revision) return send(response, 409, { error: 'topic_context_stale' })
+      const context = await store.getTopicContext({ groupId, topicId, revision, offset, limit })
+      const decisions = context.topic.decisions ?? []
+      const tasks = await (store.listTaskView?.() ?? store.listTasks())
+      if (store.getTopic(groupId, topicId)?.revision !== revision) return send(response, 409, { error: 'topic_context_stale' })
+      const taskRefs = tasks.filter(task => task.groupId === groupId && task.topicRefs?.some(ref => ref.topicId === topicId))
+        .map(task => ({ taskId: task.taskId, title: task.title, state: task.state ?? task.status, inputVersion: task.inputVersion ?? task.requirementRevision }))
+      return send(response, 200, { groupId, topicId, revision, current: { topicTitle: context.topic.title,
+        summary: context.topic.summary, status: context.topic.status, openQuestions: context.topic.openQuestions,
+        sourceCount: context.total, hasMoreFacts: offset + context.messages.length < context.total, tasks: taskRefs },
+        facts: context.messages.map(message => ({ factId: message.messageId, kind: '来源消息', text: message.text,
+          sourceRefs: [{ groupId, messageId: message.messageId, messageVersion: message.messageVersion }] })),
+        intentRuns: decisions.slice(intentCursor, intentCursor + limit).map(item => ({ intentRunId: item.decisionId,
+          createdAt: item.createdAt, status: item.status, sourceRunIds: item.decision?.basisMessageIds ?? [],
+          reason: item.decision?.reason ?? item.error ?? null, decision: item.decision, operations: item.operations })),
+        intentNextCursor: intentCursor + limit < decisions.length ? intentCursor + limit : null,
+        nextCursor: offset + context.messages.length < context.total ? offset + context.messages.length : null, total: context.total })
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   const workflowTrace = request.method === 'GET' && /^\/state\/workflows\/([^/]+)\/trace$/u.exec(url.pathname)
   if (workflowTrace) {
     if (!store.getWorkflowMessageTrace) return send(response, 404, { error: 'workflow_disabled' })
@@ -586,14 +279,17 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, value ? 200 : 404, value ?? { error: 'output_not_found' }) }
     catch (error) { return send(response, error.code === 'TASK_OUTPUT_CHANGED' ? 409 : residentErrorStatus(error), { error: error.message }) }
   }
-  const workflowTaskHistory = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/(detail|executions)$/u.exec(url.pathname)
-  if (workflowTaskHistory) {
-    const detail = workflowTaskHistory[2] === 'detail'
-    const method = detail ? 'getWorkflowTaskDetail' : 'getWorkflowTaskExecutions'
-    if (!store[method]) return send(response, 404, { error: 'workflow_disabled' })
+  const taskHistory = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/(detail|executions)$/u.exec(url.pathname)
+  if (taskHistory) {
+    const detail = taskHistory[2] === 'detail'
+    const method = detail ? 'getTaskSessionDetail' : 'getTaskSessionExecutions'
+    const legacyMethod = detail ? 'getWorkflowTaskDetail' : 'getWorkflowTaskExecutions'
     try {
-      const value = await store[method](decodeURIComponent(workflowTaskHistory[1]),
-        detail ? undefined : { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) })
+      const options = detail ? undefined : { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) }
+      const taskId = decodeURIComponent(taskHistory[1])
+      const current = await store[method]?.(taskId, options)
+      const legacy = current == null ? await store[legacyMethod]?.(taskId, options) : undefined
+      const value = current ?? (legacy ? { ...legacy, legacyReadonly: true } : undefined)
       return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' })
     } catch (error) { return send(response, error.code === 'TASK_DETAIL_STALE' ? 409 : residentErrorStatus(error), { error: error.message }) }
   }
@@ -604,87 +300,52 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 20, 100) }); return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' }) }
     catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
-  if (request.method === 'GET' && url.pathname === '/state/workflows') return send(response, 200, await store.getWorkflowState?.(url.searchParams.get('runId') ?? undefined) ?? { enabled: false })
-  if (request.method === 'GET' && url.pathname === '/state/workflows/catalog') return send(response, 200, await store.getWorkflowCatalog?.() ?? { enabled: false })
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/performance') return send(response, 200, store.listPerformance(Object.fromEntries(['day', 'sessionId', 'groupId', 'taskId', 'requestId', 'submissionId'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]))))
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, await store.listAuthorizationRequests())
+  const humanReply = request.method === 'POST' && /^\/tasks\/([^/]+)\/human-requests\/([^/]+)\/reply$/u.exec(url.pathname)
+  if (humanReply) {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    if (!store.respondTaskHumanRequest) return send(response, 404, { error: 'task_session_disabled' })
+    try {
+      const parsed = z.strictObject({ requestId: requiredText.max(200), reply: requiredText.max(20000),
+        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() }).safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'human_reply_invalid' })
+      return send(response, 200, await store.respondTaskHumanRequest({ ...parsed.data,
+        taskId: decodeURIComponent(humanReply[1]), humanRequestId: decodeURIComponent(humanReply[2]) }))
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   if (request.method === 'GET' && url.pathname === '/state/activities') return send(response, 200, store.listActivities(url.searchParams.get('taskId') ?? undefined))
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())
-  if (request.method === 'GET' && url.pathname === '/state/agent-config') return send(response, 200, store.getAgentConfig())
+  if (request.method === 'GET' && url.pathname === '/state/agent-config') {
+    const { taskPrompts, taskPromptsVersion, taskGuidance, leafSessionPrompt, ...configuration } = store.getAgentConfig()
+    return send(response, 200, configuration)
+  }
   if (request.method === 'GET' && url.pathname === '/state/version') return send(response, 200, await checkForUpdatesImpl({ force: url.searchParams.get('refresh') === 'true' }))
   if (request.method === 'POST' && url.pathname === '/tasks') return submitWebTask(request, response, store, 'createTask')
   const reportRoute = /^\/tasks\/([^/]+)\/reports\/([^/]+)(\/retry)?$/u.exec(url.pathname)
-  const notificationRetry = request.method === 'POST' && /^\/tasks\/([^/]+)\/notifications\/([^/]+)\/retry$/u.exec(url.pathname)
-  if (notificationRetry) {
-    try {
-      await store.retryCompletionNotification({ taskId: decodeURIComponent(notificationRetry[1]), intentId: decodeURIComponent(notificationRetry[2]) })
-      return send(response, 202, { received: true })
-    } catch (error) { return send(response, 409, { error: error.message }) }
-  }
-  if (reportRoute && (request.method === 'GET' && !reportRoute[3] || request.method === 'POST' && reportRoute[3])) {
+  if (reportRoute && request.method === 'GET' && !reportRoute[3]) {
     try {
       // 此操作无 body 参数；身份仅由路径确定，禁止 body 覆盖 task/submission。
       const identity = { taskId: decodeURIComponent(reportRoute[1]), submissionId: decodeURIComponent(reportRoute[2]) }
-      const value = await store[request.method === 'GET' ? 'getTaskReport' : 'retryTaskReport'](identity)
-      return value === undefined ? send(response, 404, { error: 'task_report_not_found' }) : send(response, request.method === 'GET' ? 200 : 202, value)
+      const value = await store.getTaskReport(identity)
+      return value === undefined ? send(response, 404, { error: 'task_report_not_found' }) : send(response, 200, value)
     } catch (error) {
       const status = /^task_report_not_found(:|$)/u.test(error.message) ? 404 : /^task_report_retry_(stale|requires_failed)(:|$)/u.test(error.message) ? 409 : residentErrorStatus(error)
       return send(response, status, { error: error.message })
     }
   }
-  const operationRetry = request.method === 'POST' && /^\/config\/groups\/([^/]+)\/topics\/([^/]+)\/decisions\/([^/]+)\/operations\/([^/]+)\/retry$/u.exec(url.pathname)
-  if (operationRetry) {
-    try {
-      const body = z.strictObject({ resolution: z.enum(['not-applied', 'applied', 'reconsider']), reason: z.string().trim().min(1) }).parse(await readJson(request))
-      const value = await store.retryDecisionOperation({ ...body, groupId: decodeURIComponent(operationRetry[1]), topicId: decodeURIComponent(operationRetry[2]), decisionId: decodeURIComponent(operationRetry[3]), operationId: decodeURIComponent(operationRetry[4]) })
-      return send(response, 202, value)
-    } catch (error) { return send(response, error instanceof z.ZodError ? 400 : 409, { error: error.message }) }
-  }
-  const coordinationRetry = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/coordination\/([^/]+)\/retry$/u.exec(url.pathname) : null
-  if (coordinationRetry) {
-    try {
-      const value = await store.retryCoordinationRequest({ groupId: decodeURIComponent(coordinationRetry[1]), requestId: decodeURIComponent(coordinationRetry[2]) })
-      return send(response, 202, value)
-    } catch (error) { return send(response, error.message === 'topic_request_unknown_or_wrong_group' ? 404 : residentErrorStatus(error), { error: error.message }) }
-  }
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/context$/u.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/context'.length))
     return submitWebTask(request, response, store, 'appendTaskContext', taskId)
   }
-  if (request.method === 'POST' && /^\/tasks\/[^/]+\/reissue-repository$/u.test(url.pathname)) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress) || (request.headers.origin && !WEB_ORIGINS.has(request.headers.origin))) return send(response, 403, { error: 'workflow_local_identity_required' })
-    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/reissue-repository'.length))
-    try {
-      const body = z.strictObject({ repositoryId: requiredText, requestId: requiredText, developmentSourceRef: requiredText.optional(), uatEnvironment: z.enum(['uat1', 'uat2', 'uat3', 'uat4', 'uat5', 'uat6', 'uat7', 'uat8', 'uat9']).optional() }).parse(await readJson(request))
-      return send(response, 202, await store.submitWorkflowTask({ ...body, taskId, action: 'reissue-repository' }))
-    } catch (error) { return send(response, /FORBIDDEN|ACTOR/u.test(error.message) ? 403 : /CONFLICT|UNSAFE|NOT_REISSUABLE/u.test(error.message) ? 409 : 400, { error: error.message }) }
+  if (request.method === 'PUT' && url.pathname === '/config/agent') {
+    const body = await readJson(request)
+    if (['taskPrompts', 'taskPromptsVersion', 'taskGuidance', 'leafSessionPrompt', 'workflowVariables', 'workflowBindings'].some(field => Object.hasOwn(body, field))) return send(response, 410, { error: 'WORKFLOW_RETIRED' })
+    return send(response, 200, await store.updateAgentConfig(body))
   }
-  if (request.method === 'POST' && /^\/tasks\/[^/]+\/archive$/u.test(url.pathname)) {
-    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/archive'.length))
-    return send(response, 200, await store.archiveTask({ taskId }))
-  }
-  if (request.method === 'PUT' && /^\/tasks\/[^/]+\/title$/u.test(url.pathname)) {
-    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/title'.length))
-    return send(response, 200, await store.renameTask({ taskId, ...(await readJson(request)) }))
-  }
-  if (request.method === 'POST' && /^\/tasks\/[^/]+\/reopen$/u.test(url.pathname)) {
-    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/reopen'.length))
-    return submitWebTask(request, response, store, 'reopenTask', taskId)
-  }
-  if (request.method === 'POST' && /^\/authorizations\/[^/]+\/decision$/u.test(url.pathname)) {
-    const requestId = decodeURIComponent(url.pathname.slice('/authorizations/'.length, -'/decision'.length))
-    return send(response, 200, await store.decideAuthorization({ requestId, ...(await readJson(request)), source: 'web' }))
-  }
-  if (request.method === 'POST' && /^\/authorizations\/[^/]+\/reissue$/u.test(url.pathname)) {
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket?.remoteAddress)
-      || request.headers.origin && !WEB_ORIGINS.has(request.headers.origin)) return send(response, 403, { error: 'workflow_local_identity_required' })
-    const requestId = decodeURIComponent(url.pathname.slice('/authorizations/'.length, -'/reissue'.length))
-    return send(response, 200, await store.reissueAuthorization({ requestId, ...(await readJson(request)) }))
-  }
-  if (request.method === 'PUT' && url.pathname === '/config/agent') return send(response, 200, await store.updateAgentConfig(await readJson(request)))
   if (request.method === 'GET' && url.pathname === '/config/groups/search') return send(response, 200, await store.searchGroups(url.searchParams.get('q') ?? ''))
   if (request.method === 'POST' && url.pathname === '/config/groups') return send(response, 200, await store.subscribe(await readJson(request)))
   if (request.method === 'POST' && url.pathname.startsWith('/config/groups/') && url.pathname.endsWith('/backfill')) {
@@ -705,11 +366,6 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/cancel'.length))
     return submitWebTask(request, response, store, 'cancelTask', taskId)
   }
-  if (request.method === 'POST' && /^\/tasks\/[^/]+\/information-wait-notice$/u.test(url.pathname)) {
-    const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/information-wait-notice'.length))
-    try { return send(response, 202, await store.reconcileInformationWaitNotice({ taskId })) }
-    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
-  }
   if (request.method === 'POST' && url.pathname.startsWith('/config/groups/') && url.pathname.endsWith('/history/hydrate')) {
     const groupId = decodeURIComponent(url.pathname.slice('/config/groups/'.length, -'/history/hydrate'.length))
     return send(response, 200, await store.hydrateGroupHistory({ groupId }))
@@ -723,11 +379,6 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'POST' && url.pathname === '/test/subscriptions') return send(response, 200, await store.subscribe(await readJson(request)))
   if (request.method === 'POST' && url.pathname === '/test/inbound') return send(response, 200, await store.ingest(await readJson(request)))
   if (request.method === 'POST' && url.pathname === '/test/outbox/ack') return send(response, 200, await store.acknowledge(await readJson(request)))
-  if (request.method === 'POST' && url.pathname === '/test/tasks') return send(response, 200, await store.createTask(await readJson(request)))
-  if (request.method === 'POST' && url.pathname === '/test/tasks/wait') return send(response, 200, await store.waitTask(await readJson(request)))
-  if (request.method === 'POST' && url.pathname === '/test/tasks/resume') return send(response, 200, await store.resumeTask(await readJson(request)))
-  if (request.method === 'POST' && url.pathname === '/test/tasks/followup') return send(response, 200, await store.followupTask(await readJson(request)))
-  if (request.method === 'POST' && url.pathname === '/test/tasks/result') return send(response, 200, await store.submitTaskResult(await readJson(request)))
   if (request.method === 'POST' && url.pathname === '/test/supervisor/probe') return send(response, 200, await store.reportCarrierIssue(await readJson(request)))
   return send(response, 404, { error: 'not_found' })
 }

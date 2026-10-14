@@ -147,6 +147,9 @@ importers:
       '@deepseek-ai/dsh-llm':
         specifier: 0.2.1-alpha.2
         version: 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
+      '@deepseek-ai/dsh-session-persistence-jsonl':
+        specifier: 0.2.1-alpha.2
+        version: 0.2.1-alpha.2(5ace70429332cd7f5c0a1b872eef65ee)
       '@deepseek-ai/dsh-storage-domain':
         specifier: 0.2.1-alpha.2
         version: 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)(@deepseek-ai/dsh-storage@0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1))

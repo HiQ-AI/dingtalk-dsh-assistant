@@ -1,0 +1,12 @@
+{"contextProof":{"ownerRequests":4,"latestInputBytes":16565,"totalRequestBytes":42551}}
+✔ owner keeps one current Host snapshot and delegates non-recursive execution context across three generations (12889.1746ms)
+✔ configured group responsibility reaches group and task models and its reply signature survives notification formatting (1491.1691ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (3587.0438ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 19120.3119
