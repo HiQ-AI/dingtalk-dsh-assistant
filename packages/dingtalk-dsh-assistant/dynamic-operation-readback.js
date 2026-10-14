@@ -13,6 +13,28 @@ const inputFor = (events, binding) => events.findLast(event => event.type === 'u
   && event.data.source.executionSession.inputVersion === binding.inputVersion
   && event.data.source.executionSession.inputDigest === binding.inputDigest)
 
+/** 原调用作为调查材料提供，必须绑定真实日志和账本摘要；不把它当成效果成功证明。 */
+export async function readNativeOperationContext({ ctx, operation }) {
+  const binding = operation.dispatchBinding
+  if (!binding || !operation.result?.callId) return null
+  const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
+  if (!identity(events, binding)) return null
+  const input = inputFor(events, binding)
+  if (!input) return null
+  const callId = operation.result.callId
+  if (operation.key !== `native:${binding.executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${callId}`) return null
+  const call = events.find(event => event.seq > input.seq && event.type === 'tool/call' && event.data.callId === callId && event.data.name === operation.definition.toolName)
+  let args
+  try { args = JSON.parse(call?.data.arguments) } catch { return null }
+  if (hash(args) !== operation.definition.argumentsDigest) return null
+  const resultEvent = events.find(event => event.seq > call.seq && results(event).some(result => result.toolCallId === callId
+    && result.isError === operation.result.isError && hash(result.content) === operation.result.resultDigest))
+  if (!resultEvent) return null
+  return { operationId: operation.operationId, sessionId: binding.sessionId, toolName: call.data.name, arguments: args,
+    result: results(resultEvent).find(result => result.toolCallId === callId), callSequence: call.seq, resultSequence: resultEvent.seq,
+    limitation: '原生调用及结果仅用于定位调查对象，不证明命令成功或没有部分效果；不能重放原命令。' }
+}
+
 // Compatibility with the retired a5 promotion rejection only. That exact Host
 // path awaited terminate + waitForExit before throwing. A model summary, stderr,
 // arbitrary error, or an execution's self-reported result is never a drain proof.

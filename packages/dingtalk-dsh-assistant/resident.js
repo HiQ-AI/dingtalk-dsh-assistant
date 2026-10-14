@@ -115,6 +115,7 @@ export async function apply(ctx, config = {}) {
   runtime.getActivityAuditStatus = tasks.getActivityAuditStatus
   runtime.listRecoveryIssues = () => [...transportIssues(), ...tasks.listAlerts().map(alert => ({ kind: 'task-session', ...alert, error: alert.detail }))]
   runtime.ingest = tasks.ingest
+  runtime.isOwnNotification = tasks.isOwnNotification
   runtime.listTaskView = tasks.boardTasks
   runtime.getTaskSessionDetail = tasks.taskDetail
   runtime.getTaskSessionExecutions = tasks.taskExecutions

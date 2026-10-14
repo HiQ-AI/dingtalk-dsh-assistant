@@ -72,6 +72,7 @@ const messageFactFields = {
 const inboundSchema = z.object({
   ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed']).default('pending'), routingError: z.string().optional(),
   messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]),
+  messageAiSendFlag: z.literal('DWS').optional(),
   senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(),
   agentDeliveryStatus: z.enum(['pending', 'steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped']).optional(),
   agentDeliveryAt: z.string().min(1).optional(), agentDeliveryError: z.string().min(1).optional(),
@@ -561,7 +562,7 @@ export async function openResidentStore(storageDomain) {
       await groups.delete(entry[0])
       return { removed: true, groupId }
     }),
-    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
+    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       let duplicate = false, enriched = false, sequence
@@ -574,11 +575,11 @@ export async function openResidentStore(storageDomain) {
             ...(sameQuote && missingText(quotedMessage.content) && !missingText(previous.quotedMessage?.content) ? { content: previous.quotedMessage.content } : {}),
             ...(sameQuote && missingText(quotedMessage.senderName) && !missingText(previous.quotedMessage?.senderName) ? { senderName: previous.quotedMessage.senderName } : {}),
             ...(sameQuote && !quotedMessage.occurredAt && previous.quotedMessage?.occurredAt ? { occurredAt: previous.quotedMessage.occurredAt } : {}) } : previous.quotedMessage
-          const next = { ...previous, ...(messageVersion > previous.messageVersion ? { text } : {}), ...(resourceRefs !== undefined ? { resourceRefs: mergeTaskResources(previous.resourceRefs, resourceRefs) } : {}), ...(senderName ? { senderName } : {}), ...(senderOpenDingTalkId ? { senderOpenDingTalkId } : {}),
+          const next = { ...previous, ...(messageAiSendFlag ? { messageAiSendFlag } : {}), ...(messageVersion > previous.messageVersion ? { text } : {}), ...(resourceRefs !== undefined ? { resourceRefs: mergeTaskResources(previous.resourceRefs, resourceRefs) } : {}), ...(senderName ? { senderName } : {}), ...(senderOpenDingTalkId ? { senderOpenDingTalkId } : {}),
             ...(nextQuote ? { quotedMessage: nextQuote } : {}), ...(imageRefs !== undefined ? { imageRefs } : {}), ...(mediaUnavailable !== undefined ? { mediaUnavailable } : {}) }
           if (JSON.stringify(next) === JSON.stringify(previous) && !(messageVersion > previous.messageVersion)) return latest
-          const { resourceRefs: previousResources, ...previousFacts } = previous
-          const { resourceRefs: nextResources, ...nextFacts } = next
+          const { resourceRefs: previousResources, messageAiSendFlag: _previousSendFlag, ...previousFacts } = previous
+          const { resourceRefs: nextResources, messageAiSendFlag: _nextSendFlag, ...nextFacts } = next
           if (!(messageVersion > previous.messageVersion) && JSON.stringify(previousFacts) === JSON.stringify(nextFacts) && stableTaskResourceIdentity(previousResources) === stableTaskResourceIdentity(nextResources))
             return { ...latest, messages: latest.messages.map(item => item.messageId === messageId ? next : item) }
           enriched = true
@@ -597,7 +598,7 @@ export async function openResidentStore(storageDomain) {
             }) }
         }
         sequence = latest.nextSequence
-        const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, quotedMessage,
+        const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, quotedMessage,
           imageRefs, mediaUnavailable, resourceRefs, sourceKind, messageVersion: messageVersion ?? 1, facts: [], routingStatus: 'pending', agentDeliveryStatus: 'pending' })
         return { ...latest, nextSequence: sequence + 1, messages: [...latest.messages, accepted] }
       })

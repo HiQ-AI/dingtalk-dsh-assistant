@@ -579,35 +579,6 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'submit', disabled: busy, style: { minWidth: 100 } }, busy ? '提交中…' : '创建任务'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy, onClick: () => dirty ? setLeaving(true) : onCancel() }, '返回看板')),
         leaving ? React.createElement('section', { 'aria-label': '确认放弃草稿', style: { display: 'grid', gap: 8 } }, React.createElement('p', null, '返回看板会丢弃尚未提交的任务草稿。'), React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setLeaving(false) }, '继续填写'), React.createElement(Button, { type: 'button', onClick: () => { onDirtyChange?.(false); onCancel() } }, '放弃草稿并返回')) : null)
     }
-    function TaskControls({ task, onChanged, onDirtyChange }) {
-      const [context, setContext] = useState(''), [reason, setReason] = useState(''), [confirmation, setConfirmation] = useState(null)
-      const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false)
-      const attempt = useRef(null), pending = useRef(false)
-      const mutate = async (action, body) => {
-        if (pending.current) return
-        const fingerprint = JSON.stringify({ action, body })
-        if (attempt.current?.fingerprint !== fingerprint) attempt.current = { fingerprint, body: { ...body, requestId: crypto.randomUUID() } }
-        pending.current = true; setBusy(true); setError(''); setNotice('')
-        try { await post(`/tasks/${encodeURIComponent(task.taskId)}/${action}`, attempt.current.body); attempt.current = null; setContext(''); setReason(''); setConfirmation(null); setNotice(action === 'cancel' ? '取消请求已记录。' : '需求补充已记录。'); onChanged() }
-        catch (cause) { setError(cause.message) }
-        finally { pending.current = false; setBusy(false) }
-      }
-      useUnsavedTaskChanges(!!context.trim() || !!reason.trim(), onDirtyChange)
-      if (task.legacyReadonly) return React.createElement('p', { role: 'status', style: { color: colors.muted } }, '历史任务只读，不再接受旧执行操作。')
-      const terminal = ['completed', 'succeeded', 'cancelled', 'failed'].includes(task.state) || ['cancelled', 'completed'].includes(task.controlState)
-      return React.createElement('section', { 'aria-label': '任务控制', style: { ...card, display: 'grid', gap: 12 } },
-        React.createElement('h2', { style: { margin: 0, fontSize: 16 } }, '需求与控制'),
-        terminal ? React.createElement('p', null, '任务已结束。') : React.createElement(React.Fragment, null,
-          React.createElement('label', { className: 'observer-config-field' }, '补充需求', React.createElement('textarea', { className: 'observer-config-input', rows: 5, value: context, disabled: busy, onChange: event => setContext(event.target.value), maxLength: 32000 })),
-          React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' } }, React.createElement(Button, { type: 'button', disabled: busy || !context.trim(), onClick: () => mutate('context', { context: context.trim(), expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision }) }, '提交需求补充'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy || !!confirmation, onClick: () => setConfirmation({ revision: task.controlRevision }), style: { color: colors.danger } }, '取消任务')),
-          confirmation ? React.createElement('section', { 'aria-label': '确认取消任务', style: { display: 'grid', gap: 12, padding: 12, border: `1px solid ${colors.danger}`, borderRadius: 8 } },
-            React.createElement('p', { style: { margin: 0 } }, `取消“${taskDisplayTitle(task)}”？将停止后续执行；已经发生的外部操作不会自动撤销。`),
-            React.createElement('label', { className: 'observer-config-field' }, '取消原因', React.createElement('input', { className: 'observer-config-input', value: reason, disabled: busy, onChange: event => setReason(event.target.value), maxLength: 2000 })),
-            React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy, onClick: () => { setConfirmation(null); setReason('') } }, '继续保留任务'), React.createElement(Button, { type: 'button', disabled: busy || !reason.trim(), onClick: () => mutate('cancel', { reason: reason.trim(), expectedControlRevision: confirmation.revision }), style: { color: colors.danger } }, '确认取消任务'))) : null),
-        busy ? React.createElement('span', { role: 'status' }, '正在提交…') : null,
-        error ? React.createElement('p', { role: 'alert', style: { color: colors.danger, margin: 0 } }, error, '。输入已保留，请刷新任务后核对再试。') : null,
-        notice ? React.createElement('p', { role: 'status', style: { margin: 0 } }, notice) : null)
-    }
     function TaskExecutions({ taskId, updatedAt, onOpenSession }) {
       const [offset, setOffset] = useState(0), [page, setPage] = useState(), [error, setError] = useState(''), [retry, setRetry] = useState(0)
       const [loading, setLoading] = useState(true)
@@ -650,7 +621,7 @@ window.__ModuleLoader__.load({
         !items.length ? emptyState('暂无历史执行记录') : null,
         pages > 1 ? React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', disabled: current <= 1, onClick: () => setPage(value => value - 1) }, '上一页'), React.createElement('span', null, `${current}/${pages}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: current >= pages, onClick: () => setPage(value => value + 1) }, '下一页')) : null)
     }
-    function TaskSessionDetail({ task, onOpenSession, onChanged, onBack, updatedAt, onDirtyChange }) {
+    function TaskSessionDetail({ task, onOpenSession, onBack, updatedAt }) {
       return React.createElement('section', { 'aria-label': '任务会话详情', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 20, overflowWrap: 'anywhere' } },
         React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between' } }, statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state)), React.createElement(Button, { type: 'button', variant: 'outline', onClick: onBack }, '返回看板')),
         React.createElement('h1', { style: { margin: 0, fontSize: 24 } }, taskDisplayTitle(task)),
@@ -660,7 +631,7 @@ window.__ModuleLoader__.load({
         React.createElement(TaskResult, { result: task.result }),
         task.waitingReason ? React.createElement('p', { role: 'status', style: { color: colors.warning } }, traceReason(task.waitingReason)) : null,
         task.legacyReadonly ? React.createElement(LegacyTaskHistory, { key: task.taskId, task })
-          : React.createElement(React.Fragment, null, React.createElement(TaskControls, { key: task.taskId, task, onChanged, onDirtyChange }), React.createElement(TaskExecutions, { key: task.taskId, taskId: task.taskId, updatedAt, onOpenSession })))
+          : React.createElement(TaskExecutions, { key: task.taskId, taskId: task.taskId, updatedAt, onOpenSession }))
     }
     function ObserverContent({ openSession }) {
       const draftDirty = useRef(false)
@@ -956,7 +927,7 @@ window.__ModuleLoader__.load({
       const tasksPage = creatingTask ? React.createElement(CreateTaskForm, { groups: data?.groups || [], onDirtyChange: reportDirty, onCancel: returnFromTask, onCreated: result => { setCreatingTask(false); const task = result.task || result; if (task.taskId) openTask(task); void refresh() } })
         : selectedTaskId ? React.createElement(React.Fragment, null,
           detailError ? React.createElement('div', { role: 'alert', style: { ...card, color: colors.danger } }, `任务详情读取失败，已读取内容可能过期：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
-          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onChanged: () => { setDetailRetry(value => value + 1); void refresh() }, onBack: returnFromTask, updatedAt, onDirtyChange: reportDirty })
+          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, updatedAt })
             : React.createElement('section', { style: { minHeight: 200, display: 'grid', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', onClick: returnFromTask }, '返回看板'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : null))
         : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement(Button, { type: 'button', onClick: () => setCreatingTask(true), style: { justifySelf: 'start' } }, '新建任务'), React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
       const authorizationStatus = {

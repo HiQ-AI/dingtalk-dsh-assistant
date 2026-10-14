@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { inspectStoppedNativeOperation, legacyDrainedError } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, readNativeOperationContext, legacyDrainedError } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
 const canonical = value => value && typeof value==='object' ? Array.isArray(value) ? value.map(canonical) : Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])) : value
@@ -27,6 +27,25 @@ test('legacy Host drained error plus bound real readonly observation proves fail
  assert.equal(proof.kind,'legacy-host-drained-partial');assert.equal(proof.partialEffectsPossible,true)
  assert.equal(proof.observations[0].executionId,'readback')
  assert.match(proof.conclusion,/does not prove command success/)
+})
+
+test('readback context exposes only the digest-bound original native call and result', async () => {
+ const f=fixture()
+ f.operation.result.resultDigest=hash(f.original[3].data.message.content)
+ const context=await readNativeOperationContext(f)
+ assert.equal(context.arguments.command,'git fetch origin --prune')
+ assert.equal(context.result.isError,true)
+ assert.equal(context.callSequence,2)
+ for(const mutate of [
+  x=>{x.operation.result.resultDigest='wrong'},
+  x=>{x.original[2].data.arguments=JSON.stringify({command:'git push origin main'})},
+  x=>{x.original[3].data.message.toolCallId='other'},
+  x=>{x.original[0].data.identity.sessionId='other'},
+  x=>{x.operation.key='other'},
+ ]){
+  const changed=fixture();changed.operation.result.resultDigest=hash(changed.original[3].data.message.content);mutate(changed)
+  assert.equal(await readNativeOperationContext(changed),null)
+ }
 })
 for(const [name,mutate] of Object.entries({
  'model text instead of tool receipt':f=>{f.original[3]={seq:3,type:'assistant/message',data:{message:{content:[{type:'text',text:legacyDrainedError}]}}}},

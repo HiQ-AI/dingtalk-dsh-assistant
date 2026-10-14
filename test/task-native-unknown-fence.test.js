@@ -4,7 +4,49 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { available, reason, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
+
+test('restart wakes technical unknown wait once per implementation and retains the effect fence', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-runtime-wake-'))
+  let host, delegated = false, probed = false, writes = 0, ownerRounds = 0
+  t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+  const decide = async (request, h) => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    const topicCalls = topicTaskCalls(request)
+    if (topicCalls) return topicCalls
+    if (names.includes('group_coordinator_submit')) return [{ name: 'group_coordinator_submit', args: { decision: { actions: input.sources.map(source => ({ action: 'create', sourceId: source.sourceId, objective: source.text })) } } }]
+    if (names.includes('task_delegate')) {
+      ownerRounds++
+      if (!delegated) {
+        delegated = true
+        h.ctx.tools.register({ name: 'lost_effect', description: 'Unknown effect fixture', parameters: { type: 'object' },
+          output: { schema: { type: 'object' }, render: () => [] }, execute() { writes++; throw new Error('lost receipt') } })
+        return [{ name: 'task_delegate', args: { key: 'effect', objective: 'Observe one effect' } }]
+      }
+      return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '等待原操作对账。', evidence: [], limitations: [] } } }]
+    }
+    if (!probed) { probed = true; return [{ name: 'lost_effect', args: {} }] }
+    return [{ name: 'execution_submit', args: { output: { status: 'blocked', summary: '效果未知。', evidence: [], limitations: [], artifacts: [] } } }]
+  }
+  host = await nativeTaskHost(root, decide)
+  await host.service.ingest({ groupId: 'native-group', messageId: 'runtime-wait', senderOpenDingTalkId: 'native-user', text: '测试助手，执行原操作。', timestamp: '2026-10-13T11:00:00Z' })
+  await host.service.whenIdle()
+  const original = (await host.query('task.list'))[0], before = ownerRounds
+  assert.equal((await host.query('operation.list'))[0].state, 'unknown')
+  await host.close()
+  host = await nativeTaskHost(root, decide, { initialize: false })
+  await host.service.recover(); await host.service.whenIdle()
+  assert.equal(ownerRounds, before + 1)
+  assert.equal((await host.query('task.list'))[0].taskId, original.taskId)
+  assert.equal((await host.query('operation.list'))[0].state, 'unknown')
+  assert.equal(writes, 1)
+  for (let i = 0; i < 3; i++) { await host.service.recover(); await host.service.whenIdle() }
+  assert.equal(ownerRounds, before + 1)
+  await host.close()
+  host = await nativeTaskHost(root, decide, { initialize: false })
+  await host.service.recover(); await host.service.whenIdle()
+  assert.equal(ownerRounds, before + 1, 'same code restart must not manufacture another wake')
+})
 
 test('concurrency-safe is not pure: an unknown native write never dispatches a second call', { skip: !available ? reason : false, timeout: 15000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-unknown-native-'))
@@ -12,6 +54,8 @@ test('concurrency-safe is not pure: an unknown native write never dispatches a s
   t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
   host = await nativeTaskHost(root, async (request, h) => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    const topicCalls = topicTaskCalls(request)
+    if (topicCalls) return topicCalls
     if (names.includes('group_coordinator_submit')) return [{ name: 'group_coordinator_submit', args: { decision: { actions: input.sources.map(source => ({ action: 'create', sourceId: source.sourceId, objective: source.text })) } } }]
     if (names.includes('task_delegate')) {
       if (!delegated) {
@@ -27,7 +71,7 @@ test('concurrency-safe is not pure: an unknown native write never dispatches a s
     if (calls++ < 2) return [{ name: 'concurrent_write_probe', args: {} }]
     return [{ name: 'execution_submit', args: { output: { status: 'completed', summary: '原操作待对账。', evidence: [], limitations: ['没有重复写入。'], artifacts: [] } } }]
   })
-  await host.service.ingest({ groupId: 'native-group', messageId: 'unknown-write', senderOpenDingTalkId: 'native-user', text: '只执行一次授权动作。', timestamp: '2026-10-13T11:00:00Z' })
+  await host.service.ingest({ groupId: 'native-group', messageId: 'unknown-write', senderOpenDingTalkId: 'native-user', text: '测试助手，只执行一次授权动作。', timestamp: '2026-10-13T11:00:00Z' })
   await waitUntil(() => calls >= 3, 'second attempted tool call returns without re-dispatch')
   await host.service.whenIdle()
   assert.equal(writes, 1)
@@ -58,6 +102,8 @@ test('native start-race rejection retires only its prepared request and completi
   } }
   host = await nativeTaskHost(root, async (request, h) => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    const topicCalls = topicTaskCalls(request)
+    if (topicCalls) return topicCalls
     if (names.includes('group_coordinator_submit')) return [{ name: 'group_coordinator_submit', args: { decision: { actions: input.sources.map(source => ({ action: 'create', sourceId: source.sourceId, objective: source.text })) } } }]
     if (names.includes('task_delegate')) {
       if (!delegated) {
@@ -73,7 +119,7 @@ test('native start-race rejection retires only its prepared request and completi
     if (!executionCalled) { executionCalled = true; return [{ name: 'race_write_probe', args: {} }] }
     return [{ name: 'execution_submit', args: { output: { status: 'completed', summary: '本次没有派发新操作。', evidence: [], limitations: ['原操作待核对。'], artifacts: [] } } }]
   }, {store:wrappedStore})
-  await host.service.ingest({ groupId: 'native-group', messageId: 'unknown-race', senderOpenDingTalkId: 'native-user', text: '核对原动作，不要重复执行。', timestamp: '2026-10-13T11:00:00Z' })
+  await host.service.ingest({ groupId: 'native-group', messageId: 'unknown-race', senderOpenDingTalkId: 'native-user', text: '测试助手，核对原动作，不要重复执行。', timestamp: '2026-10-13T11:00:00Z' })
   await waitUntil(async () => (await host.query('execution.list'))[0]?.drained === true, 'native rejection and execution drain')
   await host.service.whenIdle()
   const operations = await host.query('operation.list'), refused = operations.find(item => item.definition.toolName === 'race_write_probe'), original = operations.find(item => item.key === 'other-effect')

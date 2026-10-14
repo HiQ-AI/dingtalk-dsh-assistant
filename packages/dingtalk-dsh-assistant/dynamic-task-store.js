@@ -438,7 +438,6 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'operation.prepare') {
       const task = assertScope(a.binding)
-      if (a.binding.executionId && get('dynamic_executions', a.binding.executionId).definition?.recoveryReadOnly) fail('DYNAMIC_RECOVERY_READONLY_REQUIRED')
       assertNoLegacy(task.taskId)
       const key = text(a.key, 'key'), definition = clone(record(a.definition))
       const resourceKeys = [...new Set(array(a.resourceKeys ?? []).map(value => text(value, 'resourceKey')))].sort()

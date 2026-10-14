@@ -9,7 +9,7 @@ import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
 import { available, reason, nativeShell, nativeTaskHost, latestInput, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
-import { findSessionLog } from './fixtures/session-persistence.js'
+import { findSessionLog, requestSystemText } from './fixtures/session-persistence.js'
 
 const call = (name, args) => ({ name, args })
 const test = (name, options, run) => testRunner(name, { ...options, ...(!available ? { skip: reason } : {}) }, run)
@@ -22,11 +22,33 @@ async function nativeCase(t, prefix) {
   return { root, async host(decide, options) { const host = await nativeTaskHost(root, decide, options); hosts.push(host); return host } }
 }
 
+test('configured group responsibility reaches group and task models and its reply signature survives notification formatting', { timeout: 15000 }, async t => {
+  const fixture = await nativeCase(t, 'task-group-reply-scope-')
+  const responsibility = 'GROUP_REPLY_SCOPE_PROOF：日常回复末尾空一行附 - 测试群助理代回。'
+  let groupRequests = 0, taskRequests = 0
+  const h = await fixture.host(async request => {
+    const calls = topicTaskCalls(request)
+    if (calls) {
+      groupRequests++
+      assert.ok(requestSystemText(request).includes(responsibility))
+      if (calls[0].args.decision) calls[0].args.decision.reply += '\n\n- 测试群助理代回'
+      return calls
+    }
+    taskRequests++
+    assert.ok(requestSystemText(request).includes(responsibility), '任务统筹继承所属群已配置的边界与红线')
+    return [decision('complete', '已完成当前目标。')]
+  })
+  await h.residentStore.updateGroup({ groupId: 'native-group', responsibility })
+  await h.service.ingest(message); await h.service.whenIdle()
+  assert.ok(groupRequests >= 2); assert.equal(taskRequests, 1, JSON.stringify(h.service.listAlerts()))
+  assert.ok(h.sent.find(notification => notification.kind === 'topic-reply').payload.text.endsWith('\n\n- 测试群助理代回'))
+})
+
 test('native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-service-native-'), { root } = fixture
   const steps = new Map(), executionStarted = new Set(), started = Promise.withResolvers()
   const wrappedFilesystems = new Set(), readOverlap = { active: 0, peak: 0, started: 0 }
-  let ownerRounds = 0, sawResultsBeforeWait = false, forbiddenWrites = 0
+  let ownerRounds = 0, sawResultsBeforeWait = false, lateNativeCalls = 0
   const h = await fixture.host(async (request, host) => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     const topicCalls = topicTaskCalls(request)
@@ -34,16 +56,17 @@ test('native service routes authenticated source, delegates parallel execution, 
     if (names.includes('task_delegate')) {
       const key = 'owner:' + input.task.leaseEpoch, step = steps.get(key) ?? 0
       steps.set(key, step + 1)
-      assert.ok(!names.includes(nativeShell) && !names.includes('write'), 'Owner must not expose native tools')
+      assert.ok(names.includes(nativeShell) && names.includes('write') && names.includes('read'), '任务会话继承原生工具')
       if (!input.executions.length) {
         if (step === 0) {
           ownerRounds++
           const owner = host.ctx.agents.get(input.task.sessionId)
-          owner.ctx.tools.register({ name: 'late_native_write', description: 'Must remain forbidden even after registration', parameters: { type: 'object' },
-            output: { schema: { type: 'object' }, render: () => [] }, execute() { forbiddenWrites++; return {} } })
-          return [call(nativeShell, { command: 'exit 99', description: 'owner must not execute' }), call('late_native_write', {})]
+          owner.ctx.tools.register({ name: 'late_native_write', description: 'Native tool registered after session setup', parameters: { type: 'object' },
+            output: { schema: { type: 'object' }, render: () => [] }, execute() { lateNativeCalls++; return {} } })
+          return [call('write', { file_path: 'owner-native-proof.txt', content: 'owner native proof' }), call('late_native_write', {})]
         }
-        if (step === 1) return ['alpha', 'beta'].map(key => call('task_delegate', { key, objective: key }))
+        if (step === 1) return [call('read', { file_path: 'owner-native-proof.txt' }), call(nativeShell, { command: nativeShell === 'pwsh' ? "Get-Content -LiteralPath 'owner-native-proof.txt'" : 'cat owner-native-proof.txt', description: 'Read the task session native proof through its configured shell' })]
+        if (step === 2) return ['alpha', 'beta'].map(key => call('task_delegate', { key, objective: key }))
         const executions = await waitUntil(async () => { const executions = await host.query('execution.list'); return executions.length === 2 && executions.every(e => e.drained && e.status === 'succeeded') ? executions : null }, 'both native executors persisted before owner wait')
         assert.equal(executions.length, 2); sawResultsBeforeWait = true
         return [decision('wait', '等待已落账结果唤醒')]
@@ -104,7 +127,7 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal(h.residentStore.getTopic(message.groupId, task.topicRefs[0].topicId).processedRevision, task.topicRefs[0].revision)
   assert.equal(ownerRounds, 2)
   assert.equal(sawResultsBeforeWait, true)
-  assert.equal(forbiddenWrites, 0)
+  assert.equal(lateNativeCalls, 1)
   assert.equal(readOverlap.peak, 2, 'Native concurrency-safe filesystem calls must overlap')
   assert.equal(h.sent.length, 2); assert.equal(h.readbacks.length, 2)
   const echo = await h.service.ingest({ ...message, messageId: 'native-notification-2', senderOpenDingTalkId: 'notification-sender', text: 'completion echo' })
@@ -124,7 +147,7 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal(ownerLog.events.findLast(event => event.type === 'session/title')?.data.title, task.title)
   assert.equal(ownerLog.events.filter(e => e.type === 'plugin:dingtalk/task-session').length, 1)
   assert.equal(ownerLog.events.filter(e => e.type === 'user/message' && e.data.source?.taskSession).length, 2)
-  assert.ok(h.toolResults.some(result => result.name === 'late_native_write' && result.result.isError))
+  assert.ok(h.toolResults.some(result => result.name === 'late_native_write' && !result.result.isError))
   for (const execution of executions) {
     const log = await inspectSession(h.ctx.sessionPersistence, execution.sessionId), cwd = join(root, 'tasks', task.taskId)
     assert.ok(log.events.some(event => event.type === 'permission/preset' && event.data.preset === 'danger-full-access'))

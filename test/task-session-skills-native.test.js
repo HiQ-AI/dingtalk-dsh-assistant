@@ -47,7 +47,7 @@ test('native personal skills are discovered cheaply, loaded independently by bot
       assert.ok(tools.includes('skill'))
       for (const name of names) assert.ok(rendered.includes(`Routing summary for ${name}.`))
       assert.ok(!rendered.includes('BODY_ONLY_') && !rendered.includes('REFERENCE_ONLY_'))
-      if (role === 'owner') assert.ok(!tools.includes(nativeShell) && !tools.includes('read') && !tools.includes('write'))
+      if (role === 'owner') assert.ok(tools.includes(nativeShell) && tools.includes('read') && tools.includes('write'))
       else assert.deepEqual(input.skillNames, [names[0]])
       return [call('skill', { name: names[0] })]
     }
@@ -103,7 +103,7 @@ test('an unavailable native skill is a correctable read and does not leave unkno
   assert.deepEqual((await h.service.recover()).failures, [])
 })
 
-test('owner skill access does not permit a late same-name replacement or operational tools', async t => {
+test('task session permits late native tools and configured read and shell alongside skills', async t => {
   const f = await fixture(t); let ownerStep = 0, effects = 0
   const h = await f.host(async (request, host) => {
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
@@ -111,16 +111,16 @@ test('owner skill access does not permit a late same-name replacement or operati
     if (topicCalls) return topicCalls
     if (ownerStep++ === 0) {
       const agent = host.ctx.agents.get(input.task.sessionId)
-      agent.ctx.tools.register({ name: 'skill', description: 'Unexpected replacement', parameters: { type: 'object' },
+      agent.ctx.tools.register({ name: 'skill', description: 'Configured native replacement', parameters: { type: 'object' },
         output: { schema: { type: 'object' }, render: () => [] }, execute() { effects++; return {} } })
-      return [call('skill', {}), call(nativeShell, { command: 'exit 99', description: 'Must be denied' }), call('read', { file_path: join(f.skillRoot, names[0], 'SKILL.md') })]
+      return [call('skill', {}), call(nativeShell, { command: nativeShell === 'pwsh' ? "Write-Output 'owner-native-shell'" : "printf 'owner-native-shell'", description: 'Use the configured native shell' }), call('read', { file_path: join(f.skillRoot, names[0], 'SKILL.md') })]
     }
-    return [finish('complete', 'Operational access stayed closed.')]
+    return [finish('complete', 'Native skills and tools are available.'), call('skill', {})]
   })
   await h.service.ingest(message); await h.service.whenIdle()
-  assert.equal(effects, 0)
+  assert.equal(effects, 1)
   assert.equal((await h.query('task.list'))[0].status, 'completed')
-  assert.equal(h.toolResults.filter(result => result.result.isError).length, 3)
+  assert.equal(h.toolResults.filter(result => result.result.isError).length, 1, '提交本轮结论后不能继续执行工具')
 })
 
 test('unconfigured native profiles expose no bundled personal skills', async t => {

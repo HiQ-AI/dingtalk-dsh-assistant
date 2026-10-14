@@ -55,6 +55,7 @@ function normalizeEvent(event) {
     text,
     occurredAt: normalizeMessageTime(event.event_time ?? event.create_time ?? event.timestamp ?? new Date().toISOString()),
     rawOccurredAt: event.event_time ?? event.create_time ?? event.timestamp ?? null,
+    ...(event.messageAiSendFlag === 'DWS' || event.message_ai_send_flag === 'DWS' ? { messageAiSendFlag: 'DWS' } : {}),
     senderName: meaningful(event.sender) ? event.sender : undefined,
     senderOpenDingTalkId: event.sender_open_dingtalk_id ?? event.sender_id ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),
@@ -71,6 +72,7 @@ export function normalizeHistoryMessage(message, fallbackGroupId) {
   const resourceRefs = normalizeResourceRefs(message.resourceRefs, text)
   return {
     groupId, messageId, text, occurredAt: normalizeMessageTime(message.createTime ?? new Date().toISOString()), rawOccurredAt: message.createTime ?? null,
+    ...(message.messageAiSendFlag === 'DWS' || message.message_ai_send_flag === 'DWS' ? { messageAiSendFlag: 'DWS' } : {}),
     senderName: meaningful(message.sender ?? message.senderName) ? message.sender ?? message.senderName : undefined,
     senderOpenDingTalkId: message.senderOpenDingTalkId ?? message.sender_open_dingtalk_id ?? message.senderId ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),

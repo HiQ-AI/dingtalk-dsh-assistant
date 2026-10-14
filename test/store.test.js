@@ -532,3 +532,20 @@ async function createRoutedTask(store, { sourceMessageId, sourceMessageIds, ...i
   const topic = routed.topics.find((item) => item.topicId === routed.topicIdsByKey[sourceMessageId])
   return store.createTask({ ...input, topicRefs: [{ topicId: topic.topicId, revision: topic.revision }] })
 }
+
+
+test('DWS发送标记是传输元数据，补拉补齐不产生消息事实新版本', async () => {
+  const store = await openResidentStore(memoryFacility().facility)
+  await store.subscribe({ groupId: 'send-flag' })
+  const input = { groupId: 'send-flag', messageId: 'm1', text: '通知', occurredAt: '2026-10-14T00:00:00Z' }
+  await store.ingest(input)
+  const result = await store.ingest({ ...input, messageAiSendFlag: 'DWS' })
+  assert.equal(result.duplicate, true)
+  assert.equal(result.enriched, false)
+  const message = store.getGroup('send-flag').messages[0]
+  assert.equal(message.messageAiSendFlag, 'DWS')
+  assert.equal(message.messageVersion, 1)
+  assert.deepEqual(message.facts, [])
+  assert.equal(residentDomainSpec.tables.groups.valueSchema.parse(store.getGroup('send-flag')).messages[0].messageAiSendFlag, 'DWS')
+  await store.close()
+})

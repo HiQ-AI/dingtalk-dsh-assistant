@@ -17,7 +17,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   const noListener = () => () => {}
   // Keep transport messages (including their cursor timestamps) and configuration, but
   // never expose historical task state to the HTTP board or DWS replay/approval loops.
-  const groupView = group => group && ({ ...group, taskReservations: [] })
+  const groupView = group => group && ({ ...group, messages: group.messages.filter(message => !api.isOwnNotification?.({ ...message, groupId: group.groupId })), taskReservations: [] })
   let closed = false, profile = '', groupReader, resourceReader
   const selection = () => ctx.agentDefaultModel.currentSelection()
   const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: root, ...selection(),

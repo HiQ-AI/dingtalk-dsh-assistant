@@ -1,0 +1,13 @@
+✔ echo before message receipt needs configured sender, exact native quote and complete body (830.8349ms)
+✔ clean ingress gates listener-ready history and raw missing timestamps before model, materials and legacy dedup (574.7982ms)
+✔ restart wakes technical unknown wait once per implementation and retains the effect fence (11000.8593ms)
+✔ concurrency-safe is not pure: an unknown native write never dispatches a second call (7265.1336ms)
+✔ native start-race rejection retires only its prepared request and completion resumes after the original effect is reconciled (8807.1881ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 27678.6053

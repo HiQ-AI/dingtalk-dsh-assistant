@@ -23,6 +23,8 @@ export function normalizeReplySignature(value = '') {
 }
 
 function withoutSessionSignature(text, signature) {
+  // Only an explicit global signature authorizes replacing the session's footer.
+  if (!signature) return text.trim()
   const rows = text.split(/\r?\n/u)
   let end = rows.length - 1
   while (end >= 0 && !rows[end].trim()) end--
@@ -63,7 +65,7 @@ export function formatTaskGroupReply({ source, summary, evidence, limitations, s
   const sections = [body]
   if (facts.length) sections.push(facts.map(fact => `- ${fact.replace(/^[-*•][ \t]+/u, '').replace(/\r?\n/gu, '\n  ')}`).join('\n\n'))
   if (boundaries.length) sections.push(boundaries.join('\n\n'))
-  // The formatter owns the final signature; an absent setting means no signature.
+  // An explicit global signature replaces the session footer; otherwise keep session text.
   if (sign) sections.push(`- ${sign}`)
   const text = sections.join('\n\n')
   assertGroupReply(text, internalIds)

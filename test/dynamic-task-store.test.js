@@ -311,7 +311,8 @@ test('job reconciliation rejects absent and foreign proof; readonly continuation
   const args={binding:owner.binding,executionId:binding.executionId,key:'readback',prompt:'Inspect without replay',input:{},definition:{recoveryReadOnly:true}}
   await f.command('execution.continue',args)
   const next=(await f.command('execution.claim',{executionId:binding.executionId})).result.binding
-  await assert.rejects(f.command('operation.prepare',{binding:next,operationId:'forbidden',key:'forbidden',definition:{toolName:'pwsh'}}),{code:'DYNAMIC_RECOVERY_READONLY_REQUIRED'})
+  await f.command('operation.prepare',{binding:next,operationId:'investigation',key:'investigation',definition:{toolName:'pwsh'}})
+  await assert.rejects(f.command('operation.start',{binding:next,operationId:'investigation'}),{code:'DYNAMIC_OPERATION_UNRESOLVED'})
   assert.equal((await f.query({kind:'operation.get',operationId})).state,'unknown')
 })
 

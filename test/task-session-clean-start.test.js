@@ -72,6 +72,11 @@ test('active transport facade exposes notification read models without legacy DW
     await new Promise(resolve => setTimeout(resolve, 30))
     assert.equal(backfills[0].start, '2026-10-12T23:58:30.000Z')
     assert.deepEqual(runtime.getGroup('g').messages, group.messages)
+    runtime.isOwnNotification = message => message.groupId === 'g' && message.messageId === 'old-message'
+    assert.deepEqual(runtime.getGroup('g').messages, [])
+    assert.deepEqual(runtime.listGroups()[0].messages, [])
+    assert.equal(group.messages.length, 1, '仅过滤投影，保留原始历史')
+    runtime.isOwnNotification = () => false
     assert.equal(runtime.getGroup('g').name, group.name)
     assert.equal(runtime.getGroup('g').responsibility, group.responsibility)
     assert.deepEqual(runtime.getGroup('g').outbox, group.outbox)

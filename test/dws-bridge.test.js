@@ -1106,3 +1106,30 @@ test('钉钉文档严格URL归一化，去query按nodeId去重并拒绝伪造域
   for (const invalid of ['http://alidocs.dingtalk.com/i/nodes/id', 'https://alidocs.dingtalk.com.evil.test/i/nodes/id', 'https://user@alidocs.dingtalk.com/i/nodes/id', 'https://alidocs.dingtalk.com:444/i/nodes/id', 'https://alidocs.dingtalk.com/i/nodes/id/extra', 'https://alidocs.dingtalk.com/i/nodes/%2Fetc']) assert.equal(parseDingtalkDocUrl(invalid), null)
   assert.deepEqual(normalizeResourceRefs([{ type: 'dingtalkDoc', resourceId: 'https://evil.test' }], 'https://example.com/manual'), [])
 })
+
+
+test('task-session补拉保留本人手动消息和DWS发送标记，由统一入口识别通知', async () => {
+  let callback
+  const received = []
+  const runtime = { isTaskSessionMode: () => true, taskSessionNotifications: true,
+    listGroups: () => [{ groupId: 'g', messages: [] }],
+    onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {},
+    async ingest(message) { received.push(message); return { accepted: true } },
+  }
+  const stop = startDwsBridge({ runtime, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0,
+    adapter: { startGroupSubscription(_group, handler) { callback = handler; return { stop() {} } },
+      async readGroupRange() { return { complete: true, messages: [
+        { messageId: 'manual', senderId: 'self', text: '本人要求', createTime: '2026-10-14T00:00:00Z' },
+        { messageId: 'notification', senderId: 'self', text: '通知', messageAiSendFlag: 'DWS', createTime: '2026-10-14T00:00:01Z' },
+      ] } },
+    },
+  })
+  try {
+    for (let i = 0; i < 20 && received.length < 2; i++) await new Promise(resolve => setImmediate(resolve))
+    assert.equal(received.find(message => message.messageId === 'manual').senderOpenDingTalkId, 'self')
+    assert.equal(received.find(message => message.messageId === 'manual').messageAiSendFlag, undefined)
+    assert.equal(received.find(message => message.messageId === 'notification').messageAiSendFlag, 'DWS')
+    await callback({ conversation_id: 'g', message_id: 'event', content: '通知事件', sender_id: 'self', message_ai_send_flag: 'DWS' })
+    assert.equal(received.find(message => message.messageId === 'event').messageAiSendFlag, 'DWS')
+  } finally { await stop() }
+})

@@ -65,10 +65,10 @@ test('two independent personal signatures never become defaults or derive from r
   }
 })
 
-test('formatter removes old standalone model signatures without hardcoding names or changing business prose', () => {
+test('explicit global signature replaces standalone model signatures without changing business prose', () => {
   for (const old of ['小小鹏代回', '阿明代回', '客服(乙)代回']) {
     for (const marker of ['-', '*', '•']) {
-      for (const signature of [undefined, '', 'Ada Support']) {
+      for (const signature of ['Ada Support']) {
         const result = format({ signature, summary: `已核验。\n\n${marker} ${old}`, evidence: [`证据仍有效。\n\n${marker} ${old}`], limitations: [`未部署。\n\n${marker} ${old}`] })
         assert.equal(result.text, `已核验。\n\n- 证据仍有效。\n\n未部署。${signature ? `\n\n- ${signature}` : ''}`)
         assert.doesNotMatch(result.text, /小小鹏|阿明|客服/u)
@@ -79,7 +79,7 @@ test('formatter removes old standalone model signatures without hardcoding names
   assert.equal(format({ summary }).text, summary)
   assert.equal(format({ evidence: ['小王代回', '阿明复核'], limitations: [] }).text, '核验结论：问题部分存在。\n\n- 小王代回\n\n- 阿明复核')
   assert.equal(format({ summary: '> - 小小鹏代回' }).text, '> - 小小鹏代回')
-  assert.throws(() => format({ summary: '- 旧助理代回' }), /SUMMARY_REQUIRED/u)
+  assert.equal(format({ summary: '- 旧助理代回' }).text, '- 旧助理代回')
 })
 
 test('explicit signature accepts a personal one-line label and rejects unsafe or ambiguous multiline values', () => {
@@ -104,4 +104,21 @@ test('signature cleanup preserves assignment lists and code examples rather than
     assert.equal(format({ summary }).text, summary)
     assert.equal(format({ summary, signature: 'Ada Support' }).text, `${summary}\n\n- Ada Support`)
   }
+})
+
+
+test('without a global signature each group retains its model footer and no default is inferred', () => {
+  for (const [groupId, footer] of [['group-a', '小小鹏代回'], ['group-b', '数据助理代回']]) {
+    for (const signature of [undefined, '', '   ']) {
+      const summary = `已核验。\n\n- ${footer}`
+      const result = format({ source: { ...source, groupId }, summary, signature, responsibility: '固定署名：无关助理代回' })
+      assert.equal(result.text, summary)
+      assert.equal(result.groupId, groupId)
+    }
+  }
+  assert.equal(format({ responsibility: '使用小小鹏代回署名' }).text, '核验结论：问题部分存在。')
+  const summary = '分工：\n\n- 小王代回\n\n- 阿明复核\n\n> - 引用助理代回\n\n```text\n- 示例助理代回\n```'
+  assert.equal(format({ summary, signature: '' }).text, summary)
+  assert.equal(format({ summary: '已核验。', evidence: ['证据仍有效。\n\n- 小小鹏代回'], limitations: ['未部署。\n\n- 数据助理代回'] }).text,
+    '已核验。\n\n- 证据仍有效。\n  \n  - 小小鹏代回\n\n未部署。\n\n- 数据助理代回')
 })

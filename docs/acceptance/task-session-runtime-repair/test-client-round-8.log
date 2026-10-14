@@ -1,0 +1,31 @@
+✔ 概览在已移除任务表格同步接口后仍加载完整状态 (26.4763ms)
+✔ Web client使用dsh原生插件页签slot注册唯一状态卡 (0.1957ms)
+✔ Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime (4.5678ms)
+✔ 设置页异步展示版本状态且版本检查不阻塞核心配置加载 (1.567ms)
+✔ 设置页清退工作流与参数编辑，仍保留Agent与群连接配置 (1.1619ms)
+✔ 插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点 (0.75ms)
+✔ 添加常驻群在操作位置反馈前置条件、进度和请求结果 (1.6039ms)
+✔ binds the native quote and true mention to the same source without faking display-name mentions (2.4572ms)
+✔ orders conclusion, evidence, explicit boundaries and signature while preserving supplied links and code (0.6041ms)
+✔ does not invent URLs, evidence, questions or acceptance messages (0.368ms)
+✔ emits one signature even when it was supplied in the summary (0.2485ms)
+✔ requires full source binding rather than silently falling back to unquoted sending (0.4291ms)
+✔ rejects private runtime references and UI chrome but preserves legitimate business identifiers (0.3608ms)
+✔ rejects malformed content rather than stringifying objects into a public message (0.1418ms)
+✔ uses the existing DWS quote and mention protocol without unsupported formatting flags (0.3142ms)
+✔ two independent personal signatures never become defaults or derive from responsibility text (0.2066ms)
+✔ explicit global signature replaces standalone model signatures without changing business prose (0.6344ms)
+✔ explicit signature accepts a personal one-line label and rejects unsafe or ambiguous multiline values (0.2157ms)
+✔ signature cleanup preserves assignment lists and code examples rather than deleting matching body lines (0.1198ms)
+✔ without a global signature each group retains its model footer and no default is inferred (0.155ms)
+✔ actual Web build emits one valid module, loads its factory, and matches the checked-in artifact (408.0239ms)
+✔ actual Web build rejects invalid generated JavaScript before overwriting a usable artifact (209.6075ms)
+✔ official DSH client registry serves the built resource and its real browser module system imports it (90.7897ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 946.5356

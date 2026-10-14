@@ -105,17 +105,19 @@ test('新建任务取消保护草稿，继续填写保留内容，IME不提前�
   assert.ok(h.events.some(([kind, event]) => kind === 'add' && event === 'beforeunload'))
 })
 
-test('取消确认绑定显示时控制修订，网络失败不清空原因或重复请求', async () => {
-  const task = { taskId: 't', title: '核对', state: 'running', requirementRevision: 2, controlRevision: 3 }
-  const h = harness('TaskControls', { task, onChanged() {} })
-  let tree = h.render(); button(tree, '取消任务').props.onClick(); tree = h.render()
-  assert.match(text(tree), /已经发生的外部操作不会自动撤销/)
-  input(tree, '取消原因').props.onChange({ target: { value: '计划取消' } }); tree = h.render({ task: { ...task, controlRevision: 4 }, onChanged() {} })
-  const operation = button(tree, '确认取消任务').props.onClick(); button(tree, '确认取消任务').props.onClick()
-  assert.equal(h.requests.length, 1)
-  assert.equal(JSON.parse(h.requests[0].options.body).expectedControlRevision, 3)
-  h.requests[0].reject(Error('TASK_CONTROL_REVISION_CONFLICT')); await operation
-  tree = h.render(); assert.equal(input(tree, '取消原因').props.value, '计划取消'); assert.ok(elements(tree).some(item => item.props.role === 'alert'))
+test('任务详情移除需求与控制区，同时保留会话、结果、执行及独立新建入口', () => {
+  const task = { taskId: 't', title: '核对', state: 'running', objective: '核对当前服务' }
+  const h = harness('TaskSessionDetail', { task, onBack() {}, onOpenSession() {} })
+  const tree = h.render(), children = elements(tree)
+  assert.equal(children.filter(item => item.props.label === '任务会话').length, 1)
+  assert.ok(children.some(item => item.props.taskId === 't'))
+  assert.ok(button(tree, '返回看板'))
+  assert.equal(children.some(item => ['textarea', 'input', 'form'].includes(item.type)), false)
+  assert.equal(h.requests.length, 0)
+  assert.doesNotMatch(source, /TaskControls|需求与控制|提交需求补充|确认取消任务|补充需求/)
+  const create = harness('CreateTaskForm', { groups: [], onCreated() {}, onCancel() {} }).render()
+  assert.ok(input(create, '任务目标'))
+  assert.ok(button(create, '创建任务'))
 })
 
 test('动态执行分页的失败可重试，离开后慢响应不能覆盖新查询', async () => {

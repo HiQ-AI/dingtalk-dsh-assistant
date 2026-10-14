@@ -158,7 +158,7 @@ async function nativePreset(h, options = {}) {
   h.ctx.provide('agentPresets', { serviceFor: (_agent, name) => name === 'subprocess' ? h.ctx.subprocess : undefined,
     async mount(agentCtx, id) { mounted.push(id); bindScopeParent(scopeOf(agentCtx), scopeOf(standing.ctx)); return { id: 'dynamic-native-fixture' } } })
   let delegated = 0
-  standing.ctx.tools.register({ name: 'subagent', description: 'Must be forbidden', parameters: { type: 'object' }, output,
+  standing.ctx.tools.register({ name: 'subagent', description: 'Configured native delegation fixture', parameters: { type: 'object' }, output,
     execute() { delegated++; return { started: true } } })
   standing.ctx.tools.register({ name: 'pwsh', description: 'Preset-only native shell fixture', parameters: { type: 'object', properties: {
     run_in_background: { type: 'boolean' }, valid: { type: 'boolean' } }, additionalProperties: false }, output,
@@ -184,8 +184,24 @@ test('native preset-only tools and workspace instructions are retained; managed 
   assert.deepEqual(trace, ['started','spawn','direct-exited','terminate','range-drained','settled','ledger-result'])
   assert.match(requestSystemText(h.requests[0]), /DYNAMIC_PRESET_WORKSPACE_RULES/)
   assert.equal(h.requests[0].tools.some(tool => tool.name === 'pwsh'), true)
-  assert.equal(h.requests[0].tools.some(tool => tool.name === 'subagent'), false)
+  assert.equal(h.requests[0].tools.some(tool => tool.name === 'subagent'), true)
   assert.equal(preset.delegated(), 0)
+})
+
+test('dynamic native sessions use configured shell and delegation without a session tool whitelist', async t => {
+  const h = await host({ script: [{ name: 'subagent', args: {} }, { name: 'pwsh', args: {} }, dynamicSubmit('done')] })
+  const preset = await nativePreset(h)
+  const receipts = []
+  t.after(async () => { await h.close(); await preset.standing.dispose() })
+  const result = await dynamicDrive(h, { definition: definition({ nativeTools: true, recoveryReadOnly: true, allowedTools: ['subagent'] }),
+    onNativeExecution: async event => { receipts.push(event); return {} } })
+  assert.equal(result.status, 'submitted')
+  assert.equal(preset.delegated(), 1)
+  assert.deepEqual(receipts.filter(event => event.phase === 'started').map(event => event.toolName), ['subagent', 'pwsh'])
+  assert.ok(receipts.every(event => event.binding.executionId === dynamic().executionId))
+  assert.match(requestSystemText(h.requests[0]), /动态委派/)
+  assert.doesNotMatch(requestSystemText(h.requests[0]), /不能再委派|不能.*子agent/)
+  assert.ok(h.requests[0].tools.some(tool => tool.name === 'pwsh'))
 })
 
 test('explicit background requests never execute a native tool and native errors can be corrected in the same conversation', async t => {
