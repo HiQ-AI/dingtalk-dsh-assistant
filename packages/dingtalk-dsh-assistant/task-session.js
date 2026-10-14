@@ -5,8 +5,23 @@ import { inspectSession } from './session-persistence.js'
 
 const identityEvent = 'plugin:dingtalk/task-session'
 const fail = code => Object.assign(new Error(code), { code })
+export const isTaskProviderTransient = cause => cause?.code === 'TRANSPORT' && String(cause.message).split('\n')[0].trim() === 'fetch failed'
+  || cause?.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.'
 const object = properties => ({ type: 'object', properties, additionalProperties: false })
 const text = { type: 'string' }
+// 只替换模型可见surface；完整来源和旧快照仍留在原生审计日志。
+export function retireTaskContext(session, binding) {
+  const visible = new Set(session.surface.nodes)
+  for (const event of session.snapshotEvents()) {
+    if (!visible.has(event.seq) || event.type !== 'user/message' || event.data.source?.taskContextHistory
+      || event.data.source?.taskSession?.taskId !== binding.taskId
+      || event.data.source.taskSession.sessionId !== binding.sessionId) continue
+    session.append('user/message', createUserMessage({ source: { ...event.data.source, taskContextHistory: true },
+      content: [{ type: 'text', text: JSON.stringify({ historicalTaskContext: { leaseEpoch: event.data.source.taskSession.leaseEpoch },
+        instruction: '此轮Host快照已由最新完整快照替代；旧内容保留在审计日志，不作为当前状态。' }) }] }),
+    { surfaceOp: { op: 'replace', startSeq: event.seq, endSeq: event.seq }, sourceEventSeqs: [event.seq] })
+  }
+}
 export const taskSessionDecisionSchema = { ...object({
   action: { type: 'string', enum: ['wait', 'complete', 'blocked'] }, summary: text,
   evidence: { type: 'array', items: { type: 'string' } }, limitations: { type: 'array', items: { type: 'string' } },
@@ -113,9 +128,18 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
       await ctx.sessions.flush(entry.handle.agent.session)
       await onSessionBound(binding)
       if (!await current(entry)) return { status: 'stale' }
+      retireTaskContext(entry.handle.agent.session, binding)
       entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', taskSession: binding },
         content: [{ type: 'text', text: JSON.stringify(input) }] }))
       await entry.handle.agent.whenIdle()
+      if (!entry.submitted && !entry.cancelled && !entry.halted) {
+        const events = entry.handle.agent.session.snapshotEvents()
+        const inputEvent = events.findLast(event => event.type === 'user/message' && event.data.source?.taskSession?.leaseEpoch === binding.leaseEpoch)
+        const end = events.findLast(event => event.type === 'turn/end' && inputEvent && event.seq > inputEvent.seq)
+        if (end?.data?.reason?.kind === 'error' && isTaskProviderTransient(end.data.reason.error)) {
+          throw Object.assign(fail('TASK_SESSION_PROVIDER_TRANSIENT'), { phase: 'provider', providerError: structuredClone(end.data.reason.error) })
+        }
+      }
       return entry.submitted ? { status: 'submitted', decision: entry.decision } : { status: entry.cancelled ? 'cancelled' : 'no_submission', ...(entry.halted ? { reason: entry.halted } : {}) }
     } finally {
       try { await drain(entry) } finally { active.delete(binding.taskId) }

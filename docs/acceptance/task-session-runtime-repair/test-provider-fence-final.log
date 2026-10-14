@@ -1,0 +1,22 @@
+✔ restart wakes technical unknown wait once per implementation and retains the effect fence (15937.1264ms)
+✔ concurrency-safe is not pure: an unknown native write never dispatches a second call (5720.781ms)
+✔ native start-race rejection retires only its prepared request and completion resumes after the original effect is reconciled (5978.7006ms)
+✔ task provider transient classifier only accepts the exact verified provider errors (0.9216ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=false (898.9004ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=true (178.0535ms)
+✔ service retries a transient native owner with its claimed wake and same session after cooldown (2680.7002ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: true (5672.1893ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: false (4014.8552ms)
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (7417.3954ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (7723.3181ms)
+✔ task session permits late native tools and configured read and shell alongside skills (4101.8629ms)
+✔ unconfigured native profiles expose no bundled personal skills (1770.1661ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (3778.5914ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 28246.2367

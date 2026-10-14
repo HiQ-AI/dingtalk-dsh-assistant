@@ -5,8 +5,8 @@ param(
  [Parameter(Mandatory)][int]$ExpectedPid,
  [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedProfileSha256,
  [Parameter(Mandatory)][string]$EvidenceDirectory,
- [string]$ObserverPackage,
- [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedObserverPackageSha256
+ [Parameter(Mandatory)][string]$ObserverPackage,
+ [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedObserverPackageSha256
 )
 $ErrorActionPreference='Stop'
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..'))

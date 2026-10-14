@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ingestTaskResidentMessage, taskNotificationOutbound, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
+import { ingestTaskResidentMessage, taskNotificationOutbound, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 
 function memoryFacility(seed = new Map()) {
@@ -132,4 +132,21 @@ test('same image bytes reuse persisted refs across reopen, changed bytes produce
   assert.equal(changed.enriched, true)
   assert.equal(store.getGroup('images').messages[0].messageVersion, 2)
   await store.close()
+})
+
+
+test('任务等待小目标排队、执行或排空时仍在执行中，真正业务等待单独显示', () => {
+  const task = { status: 'active', control: 'active', drained: true, lastDecision: { action: 'wait', summary: '等待执行结果' } }
+  for (const execution of [{ status: 'queued', drained: true }, { status: 'running', drained: false }, { status: 'succeeded', drained: false }]) {
+    assert.equal(taskBoardState(task, [execution]), 'running')
+  }
+  assert.equal(taskBoardState(task, [{ status: 'succeeded', drained: true }]), 'waiting')
+  assert.equal(taskBoardState(task, []), 'waiting')
+  assert.equal(taskBoardState({ ...task, drained: false }, []), 'running')
+  const active = [{ status: 'running', drained: false }]
+  assert.equal(taskBoardState({ ...task, lastDecision: { action: 'wait', question: '需要选择哪个目标？' } }, active), 'waiting')
+  assert.equal(taskBoardState({ ...task, lastDecision: { action: 'blocked' } }, active), 'waiting')
+  assert.equal(taskBoardState({ ...task, control: 'paused' }, active), 'waiting')
+  assert.equal(taskBoardState({ ...task, control: 'cancelled' }, active), 'cancelled')
+  assert.equal(taskBoardState({ ...task, status: 'completed' }, active), 'completed')
 })

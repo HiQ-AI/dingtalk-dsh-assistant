@@ -5,12 +5,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { openDynamicTaskStore, ingressTimestamp } from './dynamic-task-store.js'
-import { createTaskSessions } from './task-session.js'
+import { createTaskSessions, isTaskProviderTransient } from './task-session.js'
+import { inspectSession } from './session-persistence.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createTaskSessionObservability } from './task-session-observability.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { resolveTopicMessages, stableId } from './topic-model.js'
-import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources } from './task-message-projections.js'
+import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from './task-message-projections.js'
 import { taskWorkspace, taskExecutionWorkspace, taskDirectories, checkedTaskDirectory } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
@@ -21,6 +22,17 @@ const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clean = value => JSON.parse(JSON.stringify(value))
 const string = { type: 'string' }
 const texts = { type: 'array', items: string }
+// 模型只接收执行当前目标和结果；完整输入、旧输入及宿主凭据留在持久账。
+export function taskExecutionContext(execution) {
+  const fields = ['executionId', 'sessionId', 'taskId', 'key', 'inputVersion', 'requirementRevision', 'controlRevision',
+    'status', 'drained', 'recovering', 'cancelRequested', 'result', 'updatedAt']
+  return { ...Object.fromEntries(fields.filter(key => Object.hasOwn(execution, key)).map(key => [key, execution[key]])),
+    input: Object.fromEntries(['title', 'objective', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']
+      .filter(key => Object.hasOwn(execution.input ?? {}, key)).map(key => [key, execution.input[key]])) }
+}
+const taskOperationContext = operation => Object.fromEntries(['operationId', 'executionId', 'state', 'requirementRevision',
+  'controlRevision', 'definition', 'resourceKeys', 'evidenceRef', ...(operation.state === 'succeeded' ? [] : ['result'])]
+  .filter(key => Object.hasOwn(operation, key)).map(key => [key, operation[key]]))
 export const dynamicExecutionOutputSchema = { type: 'object', properties: {
   status: { type: 'string', enum: ['completed','blocked','needs_input'] }, summary: { type: 'string' },
   evidence: texts, limitations: texts, artifacts: texts, question: string,
@@ -72,8 +84,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const runtimeRevision = hash(await Promise.all(['task-session-service.js', 'task-session.js', 'execution-session.js', 'dynamic-native-job.js', 'dynamic-operation-readback.js']
     .map(file => readFile(new URL(file, import.meta.url), 'utf8'))))
   const recoveryCandidates = [...taskCache.values()].filter(task => task.status === 'active' && task.control === 'active'
-    && task.drained && task.lastDecision?.action === 'wait' && !task.lastDecision.question
-    && [...operationCache.values()].some(operation => operation.taskId === task.taskId && operation.state === 'unknown'))
+    && task.drained && !task.lastDecision?.question && (task.lastDecision?.action === 'blocked'
+      && task.lastDecision.limitations?.includes('TASK_SESSION_NO_SUBMISSION')
+      || task.lastDecision?.action === 'wait'
+      && [...operationCache.values()].some(operation => operation.taskId === task.taskId && operation.state === 'unknown')))
   const receiptMessageId = value => value?.messageId ?? value?.messageRef?.openMessageId ?? value?.sendReceipt?.messageId ?? value?.result?.messageId ?? value?.result?.openMessageId
   const isOwnNotification = message => {
     const actorId = message.senderOpenDingTalkId ?? message.actorId
@@ -128,7 +142,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const pending = await query('wake.list', { taskId: id }).catch(() => [])
         const task = await query('task.get', { taskId: id }).catch(() => null)
         again = task?.status === 'active' && task.control === 'active' && task.drained
-          && pending.some(item => item.state === 'pending')
+          && pending.some(item => item.state !== 'acked')
       }
       map.delete(id)
       if (!closed && (map === inflightTasks || map === inflightExecutions)) {
@@ -159,7 +173,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           if (closed) return
           if (!retryReady(task.taskId) || inflightTasks.has(task.taskId) || !task.drained || task.recovering || task.status !== 'active' || task.control !== 'active') continue
           if (!taskSlots.has(task.taskId) && taskSlots.size >= taskLimit()) continue
-          if ((await query('wake.list', { taskId: task.taskId })).some(item => item.state === 'pending')) void kickTask(task.taskId)
+          if ((await query('wake.list', { taskId: task.taskId })).some(item => item.state !== 'acked')) void kickTask(task.taskId)
         }
         for (const execution of await query('execution.list')) {
           if (closed || inflightExecutions.size >= executionLimit()) break
@@ -193,12 +207,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const authorize = (task, source) => {
     if (!source?.actorId || task.groupId !== source.groupId || ![task.ownerActorId, config.ownerActorId].filter(Boolean).includes(source.actorId)) fail('TASK_SESSION_SOURCE_FORBIDDEN')
   }
-  const taskDTO = async task => ({ ...task, state: task.status === 'completed' ? 'completed' : task.control === 'cancelled' ? 'cancelled'
-    : task.control === 'paused' ? 'waiting' : task.drained ? 'waiting' : 'running',
-    topicRefs: task.topicRefs ?? [], executionCount: (await query('execution.list', { taskId: task.taskId })).length, waitingReason: task.lastDecision?.summary ?? '',
+  const taskDTO = async task => {
+    const executions = await query('execution.list', { taskId: task.taskId }), state = taskBoardState(task, executions)
+    return { ...task, state,
+    topicRefs: task.topicRefs ?? [], executionCount: executions.length, waitingReason: state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
     controlState: task.control, inputVersion: task.requirementRevision, result: task.completion?.result ?? task.lastDecision ?? null,
     session: { sessionId: task.sessionId, sessionBound: task.sessionBound, status: task.drained ? 'idle' : 'running', workspaceDir: await taskWorkspace(root, task.taskId), logPath: taskSessionLogRoot(root, task.taskId) },
-    legacyReadonly: false })
+    legacyReadonly: false }
+  }
   async function taskDetail(taskId) {
     const task = await query('task.get', { taskId })
     if (!task) return null
@@ -512,8 +528,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       try {
         const sources = (await Promise.all(task.sourceRefs.map(sourceId => query('source.get', { sourceId })))).filter(Boolean)
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
-        const runResult = await taskSessions.run({ binding, input: { task, sources, materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: await query('execution.list', { taskId }),
-          operations: await query('operation.list', { taskId }), blockers: await query('task.blockers', { taskId }) }, ...models(), agentPreset: legacy.getAgentConfig().agentPreset,
+        const runResult = await taskSessions.run({ binding, input: { task, sources, materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: (await query('execution.list', { taskId })).map(taskExecutionContext),
+          operations: (await query('operation.list', { taskId })).map(taskOperationContext), blockers: await query('task.blockers', { taskId }) }, ...models(), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
@@ -541,14 +557,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             }
             const payload = { binding, key: args.key, prompt: `受托小目标：${args.objective}\n具体执行由你负责，可在同一会话内持续调查、操作、验证和纠错。不得再次委派；不能宣布整体任务完成。只依据当前任务真实来源和权限执行。结果包含实际证据、限制及产物。最后调用execution_submit。`,
               input: { task: { taskId, request: task.request, requirementRevision: binding.requirementRevision, ownerActorId: task.ownerActorId, authorizationSourceId: task.metadata?.authorizationSourceId }, sources,
-                title: args.key, objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), previousExecutions: await query('execution.list', { taskId }) },
+                title: args.key, objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), previousExecutions: (await query('execution.list', { taskId })).map(taskExecutionContext) },
               definition: { nativeTools: true, recoveryReadOnly: args.readOnly === true, protectedPaths: [config.dbPath, `${config.dbPath}-wal`, `${config.dbPath}-shm`, `${config.dbPath}.initialized`], agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, resourceKeys: args.resourceKeys ?? [] }
             const accepted = args.executionId ? await command('execution.continue', { ...payload, executionId: args.executionId }, dispatchId)
               : await command('execution.dispatch', payload, dispatchId)
             void kickExecution(accepted.result.execution.executionId)
             return { executionId: accepted.result.execution.executionId, status: accepted.result.execution.status, sessionId: accepted.result.execution.sessionId }
           },
-          readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return execution },
+          readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return taskExecutionContext(execution) },
           reconcileOperation: async operationId => {
             const operation = (await query('operation.list', { taskId })).find(item => item.operationId === operationId)
             if (!operation) fail('TASK_OPERATION_SCOPE_MISMATCH')
@@ -686,10 +702,23 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await refreshTasks()
       for (const candidate of recoveryCandidates) {
         const task = await query('task.get', { taskId: candidate.taskId })
-        if (task.status !== 'active' || task.control !== 'active' || !task.drained || task.lastDecision?.action !== 'wait'
+        if (task.status !== 'active' || task.control !== 'active' || !task.drained
           || task.lastDecision.question || task.requirementRevision !== candidate.requirementRevision || task.controlRevision !== candidate.controlRevision) continue
         const executions = await query('execution.list', { taskId: task.taskId })
         if (executions.some(execution => !execution.drained || execution.recovering || ['queued', 'running'].includes(execution.status))) continue
+        if (task.lastDecision.action === 'blocked' && task.lastDecision.limitations?.includes('TASK_SESSION_NO_SUBMISSION')) {
+          await persistence.register({ taskId: task.taskId, sessionId: task.sessionId, cwd: await taskWorkspace(root, task.taskId) })
+          const { events } = await inspectSession(ctx.sessionPersistence, task.sessionId)
+          if (!events.some(event => event.type === 'plugin:dingtalk/task-session' && event.data.taskId === task.taskId && event.data.sessionId === task.sessionId)) continue
+          const input = events.findLast(event => event.type === 'user/message' && event.data.source?.taskSession?.leaseEpoch === task.leaseEpoch)
+          const end = events.findLast(event => event.type === 'turn/end')
+          if (input && end?.seq > input.seq && end.data.reason?.kind === 'error' && isTaskProviderTransient(end.data.reason.error))
+            await command('task.wake', { taskId: task.taskId, kind: 'provider.recovered', payload: {
+              instruction: '上轮模型服务临时故障，未产生统筹决定。沿原任务、原执行结果继续，不重放已完成或未知效果。' } },
+            `provider-recovery:${task.taskId}:${task.requirementRevision}:${task.controlRevision}:${task.leaseEpoch}`)
+          continue
+        }
+        if (task.lastDecision.action !== 'wait') continue
         if (!(await query('operation.list', { taskId: task.taskId })).some(operation => operation.state === 'unknown')) continue
         await command('task.wake', { taskId: task.taskId, kind: 'runtime.updated', payload: { runtimeRevision,
           instruction: '运行实现已更新。先调用 task_operation_reconcile；证据不足时用 readOnly=true 和 readbackOperationId 委派原效果只读核验，再对账。此前只读核查若失败，可用executionId续原只读会话，依据Host新增的originalOperation原生材料和原生工具核对实际文件及原始效果。保留 unknown 保护，不能重放原操作。' } },

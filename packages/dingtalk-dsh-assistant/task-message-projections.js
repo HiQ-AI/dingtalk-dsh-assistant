@@ -36,6 +36,16 @@ async function saveStableImages(ctx, images, previousRefs = []) {
   return refs.map((ref, index) => ({ ...ref, taskMediaFingerprint: fingerprints[index] }))
 }
 
+/** 统筹会话排空只代表本轮结束；排队或仍在执行的小目标仍属于任务执行中。 */
+export function taskBoardState(task, executions = []) {
+  if (task.status === 'completed') return 'completed'
+  if (task.control === 'cancelled') return 'cancelled'
+  if (task.control === 'paused') return 'waiting'
+  if (!task.drained) return 'running'
+  if (task.lastDecision?.action === 'blocked' || task.lastDecision?.question?.trim()) return 'waiting'
+  return executions.some(execution => ['queued', 'running'].includes(execution.status) || execution.drained === false) ? 'running' : 'waiting'
+}
+
 /** Thin adapters into the existing group timeline. No dispatch or retry policy lives here. */
 export async function ingestTaskResidentMessage({ ctx, residentStore, message, readResource }) {
   if (!residentStore) return undefined

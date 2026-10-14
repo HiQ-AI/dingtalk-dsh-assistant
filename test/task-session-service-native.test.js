@@ -22,6 +22,51 @@ async function nativeCase(t, prefix) {
   return { root, async host(decide, options) { const host = await nativeTaskHost(root, decide, options); hosts.push(host); return host } }
 }
 
+test('owner keeps one current Host snapshot and delegates non-recursive execution context across three generations', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-context-native-'), ownerRequests = []
+  const scope = 'CURRENT_AUTHORIZATION_SCOPE_'.repeat(100)
+  const h = await fixture.host(async request => {
+    const topicCalls = topicTaskCalls(request)
+    if (topicCalls) return topicCalls
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      ownerRequests.push(structuredClone(request))
+      const snapshots = request.messages.filter(message => message.role === 'user').flatMap(message => message.content ?? [])
+        .filter(block => block.type === 'text').flatMap(block => { try { const value = JSON.parse(block.text); return value.task && value.executions ? [value] : [] } catch { return [] } })
+      assert.equal(snapshots.length, 1, '原生模型可见面只保留当前完整Host快照')
+      assert.match(JSON.stringify(snapshots[0].sources), /CURRENT_AUTHORIZATION_SCOPE_/)
+      for (const execution of input.executions) {
+        assert.equal(execution.input.previousExecutions, undefined)
+        assert.equal(execution.input.context, undefined)
+        assert.equal(execution.definition, undefined)
+        assert.equal(execution.results, undefined)
+        if (execution.result) assert.equal(execution.result.payload.output.summary, execution.input.objective)
+      }
+      if (input.executions.some(execution => !execution.drained || execution.status !== 'succeeded')) return [decision('wait', '等待原执行结果')]
+      if (input.executions.length === 3) return [decision('complete', '三代执行结果已核验')]
+      const key = 'generation-' + input.executions.length
+      return [call('task_delegate', { key, objective: key }), decision('wait', '等待原执行结果')]
+    }
+    for (const previous of input.previousExecutions) {
+      assert.equal(previous.input.previousExecutions, undefined)
+      assert.equal(previous.definition, undefined)
+      assert.equal(previous.results, undefined)
+    }
+    return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: [], limitations: [], artifacts: [] } })]
+  })
+  await h.service.ingest({ ...message, text: message.text + scope }); await h.service.whenIdle()
+  const [task] = await h.query('task.list')
+  assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal((await h.query('execution.list')).length, 3)
+  const log = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  assert.ok(log.events.filter(event => event.type === 'user/message' && event.data.source?.taskSession && !event.data.source.taskContextHistory).length >= 4,
+    '原始Host输入仍在审计日志')
+  assert.ok(log.events.some(event => event.data?.source?.taskContextHistory))
+  const last = ownerRequests.at(-1)
+  console.log(JSON.stringify({ contextProof: { ownerRequests: ownerRequests.length,
+    latestInputBytes: Buffer.byteLength(JSON.stringify(latestInput(last))), totalRequestBytes: Buffer.byteLength(JSON.stringify(last)) } }))
+})
+
 test('configured group responsibility reaches group and task models and its reply signature survives notification formatting', { timeout: 15000 }, async t => {
   const fixture = await nativeCase(t, 'task-group-reply-scope-')
   const responsibility = 'GROUP_REPLY_SCOPE_PROOF：日常回复末尾空一行附 - 测试群助理代回。'
@@ -146,7 +191,7 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal(ownerWorkspace.title, task.title)
   assert.equal(ownerLog.events.findLast(event => event.type === 'session/title')?.data.title, task.title)
   assert.equal(ownerLog.events.filter(e => e.type === 'plugin:dingtalk/task-session').length, 1)
-  assert.equal(ownerLog.events.filter(e => e.type === 'user/message' && e.data.source?.taskSession).length, 2)
+  assert.equal(ownerLog.events.filter(e => e.type === 'user/message' && e.data.source?.taskSession && !e.data.source.taskContextHistory).length, 2)
   assert.ok(h.toolResults.some(result => result.name === 'late_native_write' && !result.result.isError))
   for (const execution of executions) {
     const log = await inspectSession(h.ctx.sessionPersistence, execution.sessionId), cwd = join(root, 'tasks', task.taskId)
@@ -595,4 +640,33 @@ test('resident listener startup failure disposes native resources and permits re
   assert.equal(health.status, 200)
   assert.equal(health.body.status, 'ok')
   assert.equal(next.requests.length, 0)
+})
+
+
+test('native board keeps a drained coordinator running while its delegated target is executing', { timeout: 20000 }, async t => {
+  const fixture = await nativeCase(t, 'task-board-active-execution-'), release = Promise.withResolvers()
+  t.after(() => release.resolve())
+  let delegated = false
+  const h = await fixture.host(async request => {
+    const topicCalls = topicTaskCalls(request)
+    if (topicCalls) return topicCalls
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'board-target', objective: '核对执行中的任务状态' })] }
+      return [decision(input.executions.some(execution => execution.status === 'succeeded') ? 'complete' : 'wait', '等待小目标执行结果')]
+    }
+    await release.promise
+    return [call('execution_submit', { output: { status: 'completed', summary: '已核对', evidence: [], limitations: [], artifacts: [] } })]
+  })
+  try {
+    await h.service.ingest(message)
+    const task = await waitUntil(async () => {
+      const [task] = await h.query('task.list'), executions = await h.query('execution.list')
+      return task?.drained && task.lastDecision?.action === 'wait' && executions.some(execution => execution.status === 'running' && !execution.drained) ? task : null
+    }, 'coordinator waits while native execution remains running')
+    const view = (await h.service.boardTasks()).find(item => item.taskId === task.taskId)
+    assert.equal(view.state, 'running')
+    assert.equal(view.waitingReason, '')
+    assert.equal((await h.service.taskDetail(task.taskId)).state, 'running')
+  } finally { release.resolve(); await h.service.whenIdle() }
 })

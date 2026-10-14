@@ -1,0 +1,18 @@
+{
+  "health": "ok",
+  "recoveryIssueCount": 0,
+  "inboundProcessing": true,
+  "bridgeHealthy": true,
+  "pid": 62184,
+  "task": [
+    {
+      "state": "running",
+      "waitingReason": "",
+      "executionCount": 2
+    }
+  ],
+  "profileSha256": "21EB086E00EED66943357E14516BB1BA1B506AFAD2FC8C9A6D084050D1FA921B",
+  "assistantSha256": "6D2808C6B3263C58B25EEA165E257CD9604C2BB3DB85447D899AAA7B6A21F647",
+  "observerSha256": "E078BB4F2F54AF350726191E77C301B22845B65EFE3C9C5B3FCC723F6DA6A627",
+  "autostartEnabled": true
+}

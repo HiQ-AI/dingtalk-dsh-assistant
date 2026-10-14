@@ -248,3 +248,9 @@ node --test test/dynamic-task-store.test.js test/dynamic-execution-session-nativ
 历史实现与运维资料仍保留在 `docs/spec`、`docs/api` 和 `docs/ops`。遇到与本文冲突的固定工作流、阶段验收、Owner 原生工具或权限自动提升说明，以当前任务会话源码及专用清洁启动 Runbook 为准；不要据旧资料恢复已退役的写入口。
 
 宿主 DSH 联合升级的历史验收与配置接纳证据见 [PR170 归档规程](docs/ops/dsh-unified-host-upgrade.md)及[离线续接记录](docs/acceptance/dsh-unified-upgrade/continuation.md)。这些资料保留宿主 alpha2 修复来源；本次任务数据仍执行清洁启动，不恢复旧任务迁移。
+
+任务统筹上下文只保留一份当前Host快照：旧快照经原生surface替换为历史标记，原始日志不删除。执行列表、读取结果及委派的previousExecutions只含身份、版本、当前目标/状态和当前结果，不递归传递完整input、定义及历史结果。当前用户来源、约束和群职责仍完整保留。
+
+模型返回已识别的上游过载或fetch failed时，不标业务blocked、不消费唤醒，按现有退避沿原统筹会话继续；已提交决定优先。旧版已误标TASK_SESSION_NO_SUBMISSION的任务，仅在原session当前lease的末尾turn/end精确证明临时模型错误、任务排空且无业务问题时补一次持久唤醒；普通配置错误不自动恢复。
+
+任务统筹wait等待排队、运行或未排空的小目标时，看板仍归执行中；真实问题、业务阻塞或暂停归等待中。
