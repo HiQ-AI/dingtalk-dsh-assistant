@@ -1,6 +1,6 @@
 # 任务会话消息与恢复修复
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：task-session-runtime-repair
 > 最近维护：2026-10-14T15:50:00+08:00
 > 权威目标：goal.md
@@ -27,13 +27,13 @@
 | SG5 | 群职责与署名 | 群与任务继承当前群职责、署名不被误删 | 验证通过 | test-group-scope-round-9.log、test-client-round-8.log |
 | SG6 | 删除详情操作区 | 整个需求与控制区移除 | 源码验证通过 | Observer 41项回归 |
 | SG7 | 原生工具可用 | 统筹与执行无工具白名单 | 定向验证通过 | native定向回归 |
-| SG4 | 交付 | 包、安装、进程、运行功能读回 | 部署验证通过，待分支交付 | round-2.md |
+| SG4 | 交付 | 包、安装、进程、运行功能读回 | 已交付 | round-2.md |
 
 ## 当前检查点
 
 - 当前子目标：SG4
-- 唯一下一步：完成分支提交、推送并回读PR171。
-- 未闭环项：PR171更新和推送。
+- 唯一下一步：无；本轮运行时修复交付完成。
+- 未闭环项：无本轮修复遗留；原业务布局最终交付由原执行继续。
 
 ## 进展
 
@@ -58,3 +58,5 @@
 部署根因追加：profile内独占锁触发chokidar EBUSY，HMR fiber failed；失败的临时disabled已CAS恢复原字节且恢复自启，不把旧实例强停。部署锁已移到docs/tmp；改走唯一原生SIGINT退出路径。独立hidden helper零信号Check成功，控制台仅原Web、已核验计划任务父进程、helper三进程；必须继续核验owner释放与日志排空。
 
 2026-10-14最终现场：原生SIGINT退出及持久库只读排空核验完成，死owner保留由正式启动接管。双包安装49/4文件一致，新PID63692，health=ok、恢复告警0；原通知delivered且收信箱0条，原任务沿原执行inputVersion=2继续，业务最终交付尚未结束。最终打包运行2/2通过。详见round-2.md。
+
+分支交付：修复提交c9a8ec8已推送refactor/task-session-runtime，PR171保持OPEN并更新自包含验证与部署说明。原业务任务仍运行，不声明业务完成。
