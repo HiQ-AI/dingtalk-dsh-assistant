@@ -24,6 +24,7 @@ export async function inspectEnvironment({ runner, profile }) {
           tokenValid: status.token_valid === true,
           organization: status.corp_name,
           user: status.user_name,
+          userId: status.user_id,
           expiresAt: status.expires_at,
         }
       } catch { authentication.error = 'dws_auth_status_invalid_json' }

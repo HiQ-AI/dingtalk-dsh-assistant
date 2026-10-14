@@ -7,15 +7,54 @@ import { createServer } from 'node:http'
 import { available, reason, nativeTaskHost, latestInput, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 const call = (name, args) => ({ name, args })
-const requestHuman = () => call('task_request_human', { reason: '目标环境尚未明确，不能自行扩大授权', question: '请明确本次允许的环境和操作范围', evidence: ['已读取原始交办'], attemptedActions: ['核对现有需求，未执行外部修改'] })
+const requestHuman = (audience = 'operator') => call('task_request_human', { audience, reason: '目标环境尚未明确，不能自行扩大授权', question: '请明确本次允许的环境和操作范围', evidence: ['已读取原始交办'], attemptedActions: ['核对现有需求，未执行外部修改'] })
 const finish = summary => call('task_session_submit', { decision: { action: 'complete', summary, evidence: ['已核对人工原文和原执行结果'], limitations: [] } })
-async function fixture(t, decide) {
+async function fixture(t, decide, options) {
   const root = await mkdtemp(join(tmpdir(), 'task-human-native-'))
-  const h = await nativeTaskHost(root, decide)
+  const h = await nativeTaskHost(root, decide, options)
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
   return h
 }
 async function pending(h) { return (await h.service.listAuthorizationRequests()).find(item => item.status === 'waiting-reply') }
+
+test('技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  let ownerTurns = 0, resumed, h
+  const sent = []
+  h = await fixture(t, async request => {
+    const calls = topicTaskCalls(request)
+    if (calls) return calls
+    if (++ownerTurns === 1) return [call('task_request_human', { audience: 'operator', reason: '原生能力需修复', question: '请恢复GitHub查询能力', evidence: ['已核实Host拒绝'], attemptedActions: ['读取原操作日志'] })]
+    resumed = latestInput(request)
+    return [finish('人工技术处理结果已接纳')]
+  }, { config: { operatorUserId: 'actual-login-user' }, notifications: {
+    async send(notification) { sent.push(notification); return { messageId: notification.payload.audience === 'operator' ? 'operator-notice' : `group-${sent.length}` } },
+    async readback(notification) { return notification.payload.audience === 'operator'
+      ? { messageId: 'operator-notice', conversationId: 'self-private', senderActorId: 'actual-operator', observedAt: new Date().toISOString() }
+      : { messageId: notification.ack.messageId, visible: true } },
+  } })
+  await h.service.ingest({ groupId: 'native-group', messageId: 'business-request', senderOpenDingTalkId: 'native-user', text: '测试助手，核查既有业务目标', occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  const request = await pending(h), waiting = (await h.query('task.list'))[0]
+  assert.equal(request.audience, 'operator')
+  assert.equal(request.notification.state, 'delivered')
+  assert.equal(sent.find(item => item.payload.audience === 'operator').payload.recipientUserId, 'actual-login-user')
+  assert.equal(h.residentStore.getGroup('native-group').outbox.length, 1, '私聊通知不投影为业务群发件箱')
+  assert.ok(!h.residentStore.getGroup('native-group').outbox.some(item => item.text.includes('恢复GitHub')))
+  const reply = { groupId: 'self-private', messageId: 'human-private-answer', senderOpenDingTalkId: 'actual-operator',
+    quotedMessage: { messageId: 'operator-notice' }, text: '技术能力已修复，请沿原任务继续只读核查', occurredAt: new Date().toISOString() }
+  for (const change of [{ groupId: 'native-group' }, { senderOpenDingTalkId: 'native-user' }, { quotedMessage: { messageId: 'other' } }])
+    await assert.rejects(h.service.respondPrivateHumanReply({ ...reply, ...change }), /DYNAMIC_HUMAN_RESPONSE_FORBIDDEN|TASK_HUMAN_PRIVATE_REQUEST_NOT_FOUND/)
+  await h.service.respondPrivateHumanReply(reply); await h.service.whenIdle()
+  const completed = (await h.query('task.list'))[0]
+  assert.equal(completed.sessionId, waiting.sessionId)
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.humanRequests[0].replyChannel, 'private')
+  assert.equal(completed.humanRequests[0].actorId, 'actual-operator')
+  assert.equal(resumed.sources.find(item => item.messageId === reply.messageId).actorId, 'actual-operator')
+  await h.service.respondPrivateHumanReply(reply); await h.service.whenIdle()
+  assert.equal(ownerTurns, 2)
+  assert.equal(sent.filter(item => item.payload.audience === 'operator').length, 1)
+})
 
 test('native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   let turns = 0, replyInput
@@ -129,7 +168,7 @@ test('an authenticated reply in the original group answers the waiting request w
     }
     const input = latestInput(request); ownerTurns++
     if (ownerTurns === 1) return [call('task_delegate', { key: 'live-original', objective: '保持原有只读核对' })]
-    if (ownerTurns === 2) return [requestHuman()]
+    if (ownerTurns === 2) return [requestHuman('requester')]
     if (!input.executions.every(execution => execution.drained)) {
       answeredInput = input
       return [call('task_session_submit', { decision: { action: 'wait', summary: '已读取原群答复，等待原执行完成', evidence: [], limitations: [] } })]
@@ -142,7 +181,7 @@ test('an authenticated reply in the original group answers the waiting request w
   const [before] = await h.query('execution.list')
   assert.equal(before.drained, false)
   await h.service.ingest({ groupId: 'native-group', messageId: 'real-group-human-answer', senderOpenDingTalkId: 'native-user', text: replyText,
-    occurredAt: '2026-10-14T10:00:00Z', timestamp: '2026-10-14T10:00:00Z' })
+    occurredAt: new Date().toISOString(), timestamp: new Date().toISOString() })
   await waitUntil(() => answeredInput, 'owner receives authenticated group answer').catch(async error => {
     error.message += JSON.stringify({ toolErrors: h.toolResults.filter(item => item.name === 'group_decision_submit').slice(-1),
       alerts: await h.service.listAlerts(), task: (await h.query('task.get', { taskId: created.taskId })).humanRequests,

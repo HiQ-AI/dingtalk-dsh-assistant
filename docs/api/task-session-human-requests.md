@@ -6,6 +6,10 @@
 
 `GET /state/authorizations` 返回当前任务持久介入记录。新记录 `taskSessionRequest=true`，包含 `requestId`、`taskId`、`groupId`、`objective`、`question`、`reason`、`evidence`、`attemptedActions`、`requirementRevision`、`controlRevision`、`createdAt`。`status` 为 `waiting-reply`、`answered` 或 `superseded`。已答记录另含 `reply`、真实 `actorId`、`sourceId`、`decidedAt` 和 `decisionSource`；答复不等于批准其他操作。
 
+`audience` 为 `operator` 或 `requester`，未分类的旧记录按 `operator` 展示。技术问题使用 operator：Web 入口保持可用，当前登录人的私聊通知通过原生通知账发送/独立回读，不进入业务群发件箱。记录另含 `notification.notificationId/state/delivery`；只有 delivered 才有可信私聊身份。业务信息问题必须显式选 requester 才发到原群。群补充不能回答 operator 技术申请。
+
+私聊引用由现有 DWS 监听和历史补拉接纳，无新增公开写 API。必须引用该申请原通知，并匹配私聊会话和送达收据中的真实登录人身份；当前申请和需求/控制版本仍须有效。合法答复保存原文来源，`decisionSource=private`。错误作者、群聊、引用、过期申请均不恢复任务；重复事件不重复回答或执行。
+
 ## 答复
 
 `POST /tasks/:taskId/human-requests/:humanRequestId/reply`

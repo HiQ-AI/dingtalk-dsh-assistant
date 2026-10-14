@@ -311,7 +311,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       const message = await this.readMessage(conversationId, messageId)
       if (normalizeApprovalNoticeText(message.text) !== normalizeApprovalNoticeText(text)
         || message.recipientUserId !== undefined && message.recipientUserId !== recipientUserId) throw new Error('dws_self_delivery_content_mismatch')
-      return { openTaskId, conversationId, messageId, ...(message.createTime ? { sentAt: message.createTime } : {}) }
+      return { openTaskId, conversationId, messageId, ...(message.senderOpenDingTalkId ?? message.senderId ? { senderActorId: message.senderOpenDingTalkId ?? message.senderId } : {}), ...(message.createTime ? { sentAt: message.createTime } : {}) }
     },
     async findWorkflowApprovalNotice({ requestId, recipientUserId, text, conversationId }) {
       requireEnabled()
@@ -325,7 +325,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       if (!matches.length) return undefined
       const message = await this.readMessage(matches[0].conversationId, matches[0].messageId)
       if (normalizeApprovalNoticeText(message.text) !== normalizeApprovalNoticeText(text) || (!conversationId && message.recipientUserId !== recipientUserId)) throw new Error('dws_self_delivery_content_mismatch')
-      return { conversationId: message.conversationId, messageId: message.messageId, ...(message.createTime ? { sentAt: message.createTime } : {}) }
+      return { conversationId: message.conversationId, messageId: message.messageId, ...(message.senderOpenDingTalkId ?? message.senderId ? { senderActorId: message.senderOpenDingTalkId ?? message.senderId } : {}), ...(message.createTime ? { sentAt: message.createTime } : {}) }
     },
     async readConversation(conversationId, range) {
       requireEnabled()

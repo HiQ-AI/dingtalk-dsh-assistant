@@ -1,6 +1,42 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EventEmitter } from 'node:events'
+
+for (const mode of ['event', 'history']) test(`任务会话技术申请通过私聊${mode}引用恢复，拒绝群/作者/引用错配`, async () => {
+  const delivery = { messageId: 'operator-notice', conversationId: 'self-private', senderActorId: 'operator' }
+  const request = { taskSessionRequest: true, audience: 'operator', status: 'waiting-reply', createdAt: '2026-10-14T10:00:00Z',
+    notification: { state: 'delivered', delivery } }
+  const replies = [], errors = [], answered = Promise.withResolvers(), done = Promise.withResolvers()
+  let onReply
+  const runtime = { listGroups: () => [], listAuthorizationRequests: async () => [request],
+    onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {},
+    async respondTaskPrivateHumanReply(message) { replies.push(message); request.status = 'answered'; answered.resolve() } }
+  const message = { groupId: 'self-private', conversationId: 'self-private', messageId: 'private-reply', senderOpenDingTalkId: 'operator',
+    text: 'Host能力已经恢复，请继续原任务', quotedMessage: { messageId: 'operator-notice' }, createTime: '2026-10-14 18:01:00' }
+  const adapter = {
+    startHumanReplySubscription(callback) { onReply = callback; return { lifecycle: new EventEmitter(), done: done.promise, stop() { done.resolve() } } },
+    async readConversation() { return mode === 'history' ? [{ ...message, senderOpenDingTalkId: 'requester' }, message] : [] },
+  }
+  const stop = startDwsBridge({ runtime, adapter, logger: { warn(error) { errors.push(error.message) } },
+    humanPollIntervalMs: mode === 'history' ? 10 : 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  try {
+    if (mode === 'event') {
+      const event = value => ({ conversation_id: value.groupId, message_id: value.messageId, content: value.text,
+        sender_open_dingtalk_id: value.senderOpenDingTalkId, quotedMessage: value.quotedMessage, create_time: value.createTime })
+      for (const change of [{ groupId: 'business-group', conversationId: 'business-group' }, { senderOpenDingTalkId: 'requester' }, { quotedMessage: { messageId: 'other' } }])
+        await onReply(event({ ...message, ...change }))
+      assert.equal(replies.length, 0)
+      await onReply(event(message)); await onReply(event(message))
+    }
+    let timer
+    try { await Promise.race([answered.promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('private_reply_timeout')), 1000) })]) }
+    finally { clearTimeout(timer) }
+    assert.equal(replies.length, 1)
+    assert.equal(replies[0].senderOpenDingTalkId, 'operator')
+    assert.equal(replies[0].groupId, 'self-private')
+    assert.deepEqual(errors, [])
+  } finally { await stop() }
+})
 import { readFile } from 'node:fs/promises'
 import { normalizeHistoryMessage, parseRedlineDecision, parseWorkflowApprovalDecision, startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 

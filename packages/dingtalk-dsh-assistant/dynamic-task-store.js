@@ -343,7 +343,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (typeof question === 'string' && question.trim()) {
         if (!a.humanRequest) fail('DYNAMIC_HUMAN_REQUEST_REQUIRED')
         const requestId = text(a.humanRequest.requestId, 'requestId')
-        const request = { requestId, status: 'waiting-reply', question: question.trim(), reason: text(a.humanRequest.reason ?? question.trim(), 'reason'),
+        const audience = a.humanRequest.audience ?? 'operator'
+        if (!['operator', 'requester'].includes(audience)) fail('DYNAMIC_ARGUMENT_INVALID', 'audience')
+        const request = { requestId, audience, status: 'waiting-reply', question: question.trim(), reason: text(a.humanRequest.reason ?? question.trim(), 'reason'),
           waitingReason: text(a.humanRequest.waitingReason ?? a.summary, 'waitingReason'), objective: task.objective, evidence: clone(a.evidence ?? []),
           attemptedActions: clone(array(a.humanRequest.attemptedActions ?? [])),
           requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, createdAt: stamp }
@@ -367,10 +369,17 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const request = (task.humanRequests ?? []).find(item => item.requestId === text(a.requestId, 'requestId'))
       if (!request || request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision || request.controlRevision !== task.controlRevision) fail('DYNAMIC_HUMAN_REQUEST_STALE')
       const source = get('dynamic_sources', text(a.sourceId, 'sourceId'))
-      if (source.groupId !== task.groupId || !(source.actorId === task.ownerActorId || typeof webActorId === 'string' && webActorId.trim() && source.actorId === webActorId)) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
+      const notice = a.notificationId ? get('dynamic_notifications', a.notificationId, true) : null
+      const privateReply = (request.audience ?? 'operator') === 'operator' && source.channel === 'private' && notice?.state === 'delivered' && notice.taskId === task.taskId
+        && notice.payload.audience === 'operator' && notice.payload.humanRequestId === request.requestId
+        && notice.receipt?.senderActorId === source.actorId && notice.receipt.messageId === source.quote?.messageId
+        && notice.receipt.conversationId === source.quote?.conversationId
+      const webReply = source.channel === 'web' && typeof webActorId === 'string' && webActorId.trim() && source.actorId === webActorId
+      const requesterReply = request.audience === 'requester' && source.actorId === task.ownerActorId
+      if (source.groupId !== task.groupId || !(webReply || privateReply || requesterReply)) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
       const reply = text(source.text, 'reply')
       request.status = 'answered'; request.reply = reply; request.sourceId = source.sourceId; request.actorId = source.actorId; request.answeredAt = stamp
-      request.replyChannel = source.channel === 'web' ? 'web' : 'dingtalk'
+      request.replyChannel = source.channel === 'web' ? 'web' : privateReply ? 'private' : 'dingtalk'
       task.sourceRefs = [...new Set([...task.sourceRefs, source.sourceId])]; task.lastDecision = null
       if (a.topicRefs !== undefined) task.topicRefs = clone(array(a.topicRefs))
       if (a.operationId) task.appliedOperations = [...new Set([...(task.appliedOperations ?? []), text(a.operationId, 'operationId')])]
@@ -525,8 +534,6 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         || operation.requirementRevision !== task.requirementRevision || operation.controlRevision !== task.controlRevision) fail('DYNAMIC_OPERATION_SCOPE_STALE')
       assertNoLegacy(task.taskId)
       if (operation.state !== 'prepared') return changed({ operation })
-      // Native preflight is advisory: the final fence and transition must share one SQLite transaction.
-      if (ops().some(item => item.state === 'unknown')) fail('DYNAMIC_OPERATION_UNRESOLVED')
       lock(operation.resourceKeys, operation.operationId)
       operation.state = 'starting'; operation.dispatchBinding = clone(a.binding); operation.updatedAt = stamp
       put('dynamic_operations', operation)
@@ -673,7 +680,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (kind === 'notification.start') {
         if (notification.state !== 'prepared') return changed({ notification })
         const task = notification.kind === 'topic-reply' ? null : get('dynamic_tasks', notification.taskId)
-        if (notification.kind === 'question' && (notification.requirementRevision !== task.requirementRevision || task.status !== 'active' || task.control !== 'active')) {
+        const request = notification.kind === 'question' && task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
+        if (notification.kind === 'question' && (notification.requirementRevision !== task.requirementRevision || task.status !== 'active' || task.control !== 'active'
+          || !request || request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision
+          || request.controlRevision !== task.controlRevision || (request.audience ?? 'operator') !== notification.payload.audience)) {
           notification.state = 'failed'; notification.reason = 'stale_question'; notification.updatedAt = stamp
           put('dynamic_notifications', notification); return changed({ notification })
         }

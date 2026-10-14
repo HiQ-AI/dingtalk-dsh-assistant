@@ -371,7 +371,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const topicRefs = [...new Map([...(task.topicRefs ?? []), ...refs].map(ref => [ref.topicId, ref])).values()]
       const args = { taskId: task.taskId, expectedRequirementRevision: action.inputVersion, expectedControlRevision: task.controlRevision,
         topicRefs, operationId: operation.operationId }
-      const pendingHuman = action.kind === 'task-context' ? task.humanRequests?.findLast(request => request.status === 'waiting-reply') : null
+      const pendingHuman = action.kind === 'task-context' ? task.humanRequests?.findLast(request => request.status === 'waiting-reply'
+        && request.audience === 'requester' && Date.parse(source.timestamp) >= Date.parse(request.createdAt)) : null
       const receipt = action.kind === 'task-cancel'
         ? await command('task.control', { ...args, control: 'cancelled', reason: action.reason }, id)
         : pendingHuman
@@ -390,7 +391,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
     appendOutbox: async args => {
-      const reply = formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature })
+      const sourceText = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)?.text
+      const reply = formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature })
       args = { ...args, ...reply }
       const group = await residentStore.appendOutbox(args)
       const notificationId = args.outboundId
@@ -478,22 +480,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       return { operationId }
     }
     if (event.phase === 'started') {
-      if ((await query('operation.list')).some(item => item.state === 'unknown')) fail('DYNAMIC_OPERATION_UNRESOLVED')
       await command('operation.prepare', { binding, operationId, key, definition: { toolName, argumentsDigest: hash(args) },
-        authorizationRef: `task:${binding.taskId}:requirement:${binding.requirementRevision}`, resourceKeys: event.nativeConcurrencySafe === true ? [] : ['host-native-operation'] }, `prepare:${key}`)
-      let receipt
-      for (;;) {
-        try { receipt = await command('operation.start', { binding, operationId }, `start:${key}`); break }
-        catch (error) {
-          if (error.code === 'DYNAMIC_OPERATION_UNRESOLVED') {
-            // The atomic start gate refused dispatch. Retire only this exact still-prepared request;
-            // never clear the unrelated unknown operation or an operation that already started.
-            await command('operation.cancelPrepared', { binding, operationId, key, reason: error.code }, `not-dispatched:${key}`)
-          }
-          if (error.code !== 'DYNAMIC_RESOURCE_BUSY' || closed || !await query('execution.current', { binding })) throw error
-          await new Promise(resolve => setTimeout(resolve, 25))
-        }
-      }
+        authorizationRef: `task:${binding.taskId}:requirement:${binding.requirementRevision}`, resourceKeys: [] }, `prepare:${key}`)
+      const receipt = await command('operation.start', { binding, operationId }, `start:${key}`)
       if (!receipt.dispatchEligible) fail(receipt.result.operation.state === 'unknown' ? 'DYNAMIC_OPERATION_UNRESOLVED' : 'DYNAMIC_OPERATION_ALREADY_DISPATCHED')
       return { operationId }
     }
@@ -575,7 +564,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             const payload = { binding, key: args.key, prompt: `受托小目标：${args.objective}\n具体执行由你负责，可在同一会话内持续调查、操作、验证和纠错。不得再次委派；不能宣布整体任务完成。只依据当前任务真实来源和权限执行。结果包含实际证据、限制及产物。最后调用execution_submit。`,
               input: { task: { taskId, request: task.request, requirementRevision: binding.requirementRevision, ownerActorId: task.ownerActorId, authorizationSourceId: task.metadata?.authorizationSourceId }, sources,
                 title: args.key, objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), previousExecutions: (await query('execution.list', { taskId })).map(taskExecutionContext) },
-              definition: { nativeTools: true, recoveryReadOnly: args.readOnly === true, protectedPaths: [config.dbPath, `${config.dbPath}-wal`, `${config.dbPath}-shm`, `${config.dbPath}.initialized`], agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, resourceKeys: args.resourceKeys ?? [] }
+              definition: { nativeTools: true, recoveryReadOnly: args.readOnly === true, agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, resourceKeys: args.resourceKeys ?? [] }
             const accepted = args.executionId ? await command('execution.continue', { ...payload, executionId: args.executionId }, dispatchId)
               : await command('execution.dispatch', payload, dispatchId)
             void kickExecution(accepted.result.execution.executionId)
@@ -621,7 +610,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               const source = await sourceFor(task)
               let notification
               if (source && source.channel !== 'web' && !source.sourceId.startsWith('web:')) {
-                const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId, senderOpenDingTalkId: source.actorId, senderName: source.senderName },
+                const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId, senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text },
                   summary: decision.summary, evidence: decision.evidence, limitations: decision.limitations,
                   signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
                 notification = { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId, fact: { taskId }, kind: 'task-completed' }
@@ -630,10 +619,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             } else {
               await command('task.wait', { binding, ...decision, ...(decision.question?.trim() ? { humanRequest: {
                 requestId: `human-${hash([taskId, binding.requirementRevision, binding.controlRevision, binding.leaseEpoch])}`,
-                reason: decision.summary, attemptedActions: decision.attemptedActions ?? [] } } : {}) }, `wait:${taskId}:${binding.leaseEpoch}`)
+                reason: decision.summary, audience: decision.audience ?? 'operator', attemptedActions: decision.attemptedActions ?? [] } } : {}) }, `wait:${taskId}:${binding.leaseEpoch}`)
               if (decision.question?.trim()) {
-                const source = [...sources].reverse().find(item => item.actorId === task.ownerActorId) ?? await sourceFor(task)
-                await queueReply(task, source, { summary: decision.question, evidence: [], limitations: [] }, `question:${taskId}:${binding.requirementRevision}:${hash(decision.question)}`, 'question')
+                const current = await requireTask(taskId)
+                await queueHumanRequest(current, current.humanRequests.findLast(request => request.status === 'waiting-reply'))
               }
             }
             submitted = true
@@ -659,14 +648,32 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return [task.taskId, task.sessionId, ...task.sourceRefs,
       ...executions.flatMap(item => [item.executionId, item.sessionId])].filter(Boolean)
   }
-  async function queueReply(task, source, decision, id, kind) {
+  async function queueReply(task, source, decision, id, kind, humanRequest) {
     if (!source || source.channel === 'web' || source.sourceId.startsWith('web:')) return
     const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId,
-      senderOpenDingTalkId: source.actorId, senderName: source.senderName }, summary: decision.summary,
+      senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text }, summary: decision.summary,
       evidence: decision.evidence, limitations: decision.limitations,
       signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
     await command('notification.prepare', { notificationId: id, taskId: task.taskId, requirementRevision: task.requirementRevision,
-      kind, payload: { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId, fact: { taskId: task.taskId }, kind } }, `prepare-notification:${id}`)
+      kind, payload: { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId,
+        ...(humanRequest ? { audience: humanRequest.audience, humanRequestId: humanRequest.requestId } : {}), fact: { taskId: task.taskId }, kind } }, `prepare-notification:${id}`)
+    void deliverNotifications()
+  }
+  async function queueHumanRequest(task, request) {
+    if (!request) return
+    if (request.audience === 'requester') {
+      const source = await sourceFor(task)
+      return queueReply(task, source, { summary: request.question, evidence: [], limitations: [] },
+        `question:${task.taskId}:${request.requestId}`, 'question', request)
+    }
+    if (!config.operatorUserId) return // 未配置/登录时仍保留Web人工介入，不能转发给需求提出人。
+    const notificationId = `operator-request:${request.requestId}`
+    const text = ['【任务技术问题，需要操作人处理】', `任务：${task.title}`, `申请：${request.requestId}`,
+      request.question, ...(request.attemptedActions?.length ? ['已尝试：', ...request.attemptedActions] : []),
+      '请在Web人工介入页答复，或在本私聊中引用本申请回复处理结果。'].join('\n\n')
+    await command('notification.prepare', { notificationId, taskId: task.taskId, requirementRevision: request.requirementRevision,
+      kind: 'question', payload: { text, audience: 'operator', humanRequestId: request.requestId,
+        recipientUserId: config.operatorUserId, fact: { taskId: task.taskId }, kind: 'question' } }, `prepare-notification:${notificationId}`)
     void deliverNotifications()
   }
   let notificationTransportRetryAt = 0
@@ -726,6 +733,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         } catch (error) { failures.set(execution.executionId, { id: execution.executionId, code: error.code ?? error.message }) }
       }
       await refreshTasks()
+      for (const task of taskCache.values()) if (task.status === 'active' && task.control === 'active')
+        for (const request of task.humanRequests ?? []) if (request.status === 'waiting-reply') await queueHumanRequest(task, request)
       for (const candidate of recoveryCandidates) {
         const task = await query('task.get', { taskId: candidate.taskId })
         if (task.status !== 'active' || task.control !== 'active' || !task.drained
@@ -819,8 +828,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return requireTask(current.operations[0].taskId)
   }
   async function listHumanRequests() {
-    return (await query('task.list')).flatMap(task => (task.humanRequests ?? []).map(request => ({ ...request,
+    const notices = await query('notification.list')
+    return (await query('task.list')).flatMap(task => (task.humanRequests ?? []).map(request => ({ ...request, audience: request.audience ?? 'operator',
       taskSessionRequest: true, taskId: task.taskId, groupId: task.groupId, objective: task.objective,
+      notification: (() => { const notice = notices.find(item => item.payload.humanRequestId === request.requestId && item.payload.audience === 'operator')
+        return notice ? { notificationId: notice.id, state: notice.state, delivery: notice.state === 'delivered' ? notice.receipt : null } : undefined })(),
       waitingReason: request.question, evidence: request.evidence ?? [], attemptedActions: request.attemptedActions ?? [],
       decidedAt: request.answeredAt, decision: request.status === 'answered' ? 'answered' : undefined,
       decisionSource: request.status === 'answered' ? request.replyChannel : undefined })))
@@ -844,8 +856,29 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     void kickTask(task.taskId)
     return taskDTO(result.result.task)
   }
+  async function respondPrivateHumanReply(message) {
+    if (!message.messageId || !message.text?.trim() || !message.quotedMessage?.messageId) fail('TASK_HUMAN_REPLY_REQUIRED')
+    const requests = await listHumanRequests()
+    const request = requests.find(item => item.audience === 'operator' && item.notification?.delivery?.messageId === message.quotedMessage.messageId)
+    if (!request) fail('TASK_HUMAN_PRIVATE_REQUEST_NOT_FOUND')
+    const delivery = request.notification.delivery
+    if (delivery.conversationId !== message.groupId || delivery.senderActorId !== message.senderOpenDingTalkId) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
+    const sourceId = `private-human:${hash([request.requestId, message.groupId, message.messageId])}`, receiptId = `human-reply:${sourceId}`
+    const task = await requireTask(request.taskId), prior = await query('receipt.get', { id: receiptId })
+    if (!prior && (request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision
+      || request.controlRevision !== task.controlRevision)) fail('DYNAMIC_HUMAN_REQUEST_STALE')
+    await command('source.record', { sourceId, groupId: task.groupId, messageId: message.messageId,
+      actorId: message.senderOpenDingTalkId, text: message.text, timestamp: message.occurredAt, channel: 'private',
+      quote: { messageId: delivery.messageId, conversationId: delivery.conversationId } }, `source:${sourceId}`)
+    if (prior) return taskDTO(task)
+    const result = await command('task.human.respond', { taskId: task.taskId, requestId: request.requestId, notificationId: request.notification.notificationId,
+      sourceId, expectedRequirementRevision: request.requirementRevision, expectedControlRevision: request.controlRevision }, receiptId)
+    await command('source.routed', { sourceId, receipt: [{ taskId: task.taskId, humanRequestId: request.requestId }] }, `human-source-routed:${sourceId}`)
+    if (!prior) void kickTask(task.taskId)
+    return taskDTO(result.result.task)
+  }
   return {
-    listAuthorizationRequests: listHumanRequests, respondHumanRequest,
+    listAuthorizationRequests: listHumanRequests, respondHumanRequest, respondPrivateHumanReply,
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,
     listAlerts: () => [

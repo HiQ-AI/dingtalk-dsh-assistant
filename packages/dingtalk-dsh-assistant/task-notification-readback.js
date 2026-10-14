@@ -2,6 +2,14 @@ import { matchesOutbound } from './dws-adapter.js'
 import { notificationOpenTaskId } from './group-message.js'
 import { sameDeliveredText } from './group-message.js'
 
+export async function readOperatorNotificationDelivery(adapter, notification) {
+  const payload = notification.payload, openTaskId = notificationOpenTaskId(notification.ack ?? notification.receipt)
+  const proof = openTaskId
+    ? await adapter.confirmSelfDelivery({ openTaskId, recipientUserId: payload.recipientUserId, text: payload.text })
+    : await adapter.findWorkflowApprovalNotice({ requestId: payload.humanRequestId, recipientUserId: payload.recipientUserId, text: payload.text })
+  return proof?.senderActorId ? proof : undefined
+}
+
 /** Never infer a native quote or mention merely from matching prose. */
 export function verifyTaskNotificationReadback(notification, observed, { acknowledgedMessageId, senderActorId, sendStatusConfirmed = false } = {}) {
   const payload = notification.payload

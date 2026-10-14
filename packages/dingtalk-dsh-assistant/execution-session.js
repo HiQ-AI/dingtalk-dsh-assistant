@@ -311,7 +311,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         permissions.set(agent.session, 'danger-full-access')
         presetService = presets.serviceFor?.(agent, 'subprocess') ?? agentCtx.get?.('subprocess') ?? ctx.get?.('subprocess')
         const filesystem = presets.serviceFor?.(agent, 'fs') ?? agentCtx.get?.('fs') ?? ctx.get?.('fs')
-        if (filesystem) {
+        if (filesystem && !dynamicExecution(entry.binding)) {
           if (!isAbsolute(entry.cwd ?? '')) throw failure('execution_workspace_invalid')
           const taskRoot = resolve(entry.cwd)
           if (basename(taskRoot) !== entry.binding.taskId || basename(dirname(taskRoot)) !== 'tasks') throw failure('execution_workspace_invalid')

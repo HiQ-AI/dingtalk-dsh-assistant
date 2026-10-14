@@ -6,6 +6,17 @@ import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter
 const source = { groupId: 'cid-group', messageId: 'm-original', senderName: '原发起人', senderOpenDingTalkId: 'od-sender' }
 const format = options => formatTaskGroupReply({ source, summary: '核验结论：问题部分存在。', ...options })
 
+test('原生引用已绑定时删除正文重复原文，保留其他证据引文', () => {
+  const original = { ...source, text: '先查清楚开发分之再说' }
+  const args = { source: original, summary: '> 先查清楚开发分之再说\n\n收到，先核清开发分支。', signature: '小小鹏代回' }
+  const value = formatTaskGroupReply(args)
+  assert.equal(value.text, '收到，先核清开发分支。\n\n- 小小鹏代回')
+  assert.equal(value.replyToMessageId, source.messageId)
+  assert.deepEqual(value.atOpenDingTalkIds, ['od-sender'])
+  assert.equal(formatTaskGroupReply({ source: original, summary: '> 另一份资料的证据\n\n结论。' }).text, '> 另一份资料的证据\n\n结论。')
+  assert.equal(formatTaskGroupReply({ source: { ...source, text: '第一行\n第二行' }, summary: '> 第一行\n> 第二行\n\n已核验。' }).text, '已核验。')
+})
+
 test('binds the native quote and true mention to the same source without faking display-name mentions', () => {
   assert.deepEqual(format(), { groupId: 'cid-group', text: '核验结论：问题部分存在。', replyToMessageId: 'm-original', replyToSenderOpenDingTalkId: 'od-sender', atOpenDingTalkIds: ['od-sender'] })
 })
