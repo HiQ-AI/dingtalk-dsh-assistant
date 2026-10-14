@@ -549,6 +549,28 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       operation.job = clone(job); operation.updatedAt = stamp; put('dynamic_operations', operation)
       return changed({ operation })
     }
+    if (kind === 'operation.reconcile-web-read') {
+      const task = currentTask(a.binding), operation = get('dynamic_operations', a.operationId), proof = record(a.proof)
+      const execution = get('dynamic_executions', operation.executionId)
+      if (operation.taskId !== task.taskId || operation.state !== 'unknown' || digest(operation) !== proof.operationDigest
+        || proof.kind !== 'native-web-read-failed' || proof.operationId !== operation.operationId
+        || proof.taskId !== task.taskId || proof.executionId !== execution.executionId || proof.sessionId !== execution.sessionId
+        || !execution.drained || execution.recovering || operation.result?.isError !== true || operation.result.cancelled === true
+        || !['web_fetch', 'web_search'].includes(operation.definition.toolName) || proof.toolName !== operation.definition.toolName
+        || operation.definition.effectClass !== undefined && !['read', 'pure'].includes(operation.definition.effectClass)
+        || proof.callId !== operation.result.callId || proof.resultDigest !== operation.result.resultDigest
+        || proof.argumentsDigest !== operation.definition.argumentsDigest
+        || !Number.isSafeInteger(proof.resultSequence) || proof.resultSequence < 0
+        || !Number.isSafeInteger(proof.turnEndSequence) || proof.turnEndSequence <= proof.resultSequence) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
+      const previousObservation = clone(operation)
+      operation.state = 'failed'; operation.updatedAt = stamp
+      operation.evidenceRef = `native-web-read:${operation.operationId}:${digest(proof)}`
+      operation.result = { reconciled: true, previousObservation, proof,
+        instruction: 'The original web read returned an error and its native turn ended. This is not success and does not replay the request.' }
+      put('dynamic_operations', operation); release(operation.operationId)
+      wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed' }, `wake:${commandId}`)
+      return changed({ operation })
+    }
     if (kind === 'operation.reconcile-stopped') {
       const task = currentTask(a.binding), operation = get('dynamic_operations', a.operationId), proof = record(a.proof)
       const execution = get('dynamic_executions', operation.executionId)

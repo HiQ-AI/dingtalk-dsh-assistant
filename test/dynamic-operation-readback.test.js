@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { inspectStoppedNativeOperation, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
 const canonical = value => value && typeof value==='object' ? Array.isArray(value) ? value.map(canonical) : Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])) : value
@@ -22,6 +22,36 @@ function fixture(){
   sessionPersistence:sessionPersistenceFixture(async id=>({meta:{id},events:id==='session'?original:readEvents}))}
  return {ctx,operation,execution,executions:[execution,readback],original,readEvents,live,jobs,readback}
 }
+function webFailure() {
+ const f=fixture()
+ f.operation.definition.toolName=f.operation.result.toolName=f.original[2].data.name='web_fetch'
+ f.original[2].data.arguments=JSON.stringify({url:'https://example.invalid/document'})
+ f.operation.definition.argumentsDigest=hash(JSON.parse(f.original[2].data.arguments))
+ f.original[3].data.message.content=[{type:'text',text:'Error: unsupported content type "unknown"'}]
+ f.operation.result.resultDigest=hash(f.original[3].data.message.content)
+ f.original[2].data.turn=f.original[3].data.turn=1
+ for(const event of f.original.slice(1))event.seq++
+ f.input=f.original[1];f.call=f.original[2];f.result=f.original[3]
+ f.original.splice(1,0,{seq:1,type:'turn/start',data:{turn:1}})
+ f.end={seq:5,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}};f.original.push(f.end)
+ return f
+}
+test('原网页读取错误以精确调用及正常回合结束证明失败，不要求新调查或重放', async()=>{
+ const f=webFailure(), proof=await inspectFailedNativeWebRead(f)
+ assert.equal(proof.kind,'native-web-read-failed'); assert.equal(proof.resultSequence,4); assert.equal(proof.turnEndSequence,5)
+ assert.equal(proof.operationDigest,hash(f.operation))
+ for(const mutate of [
+  f=>{f.operation.definition.toolName='pwsh'}, f=>{f.operation.definition.effectClass='write'}, f=>{f.operation.definition.effectClass='unknown'}, f=>{f.operation.result.resultDigest='wrong'},
+  f=>{f.call.data.arguments='{"url":"https://different.invalid"}'},
+  f=>{f.original[0].data.identity.sessionId='wrong'}, f=>{f.input.data.source.executionSession.leaseEpoch++},
+  f=>{f.result.data.message.isError=false}, f=>{f.result.data.message.toolCallId='wrong'},
+  f=>{f.original.pop()}, f=>{f.end.data.reason.kind='aborted'}, f=>{f.end.data.turn=2},
+  f=>{f.original.splice(1,1)}, f=>{f.original.splice(3,0,{seq:2.5,type:'turn/start',data:{turn:2}})},
+  f=>{f.execution.drained=false}, f=>{f.execution.recovering=true}, f=>{f.live.add('session')},
+  f=>{f.jobs.push({status:'running'})}, f=>{f.operation.result.cancelled=true},
+ ]) {const bad=webFailure();mutate(bad);assert.equal(await inspectFailedNativeWebRead(bad),null)}
+})
+
 test('legacy Host drained error plus bound real readonly observation proves failed partial effects only',async()=>{
  const f=fixture(),proof=await inspectStoppedNativeOperation(f)
  assert.equal(proof.kind,'legacy-host-drained-partial');assert.equal(proof.partialEffectsPossible,true)

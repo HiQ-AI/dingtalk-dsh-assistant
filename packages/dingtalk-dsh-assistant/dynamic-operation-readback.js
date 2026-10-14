@@ -36,6 +36,35 @@ export async function readNativeOperationContext({ ctx, operation }) {
     limitation: '原生调用及结果仅用于定位调查对象，不证明命令成功或没有部分效果；不能重放原命令。' }
 }
 
+/** 仅对账已结束的原生网页读取错误；写工具的错误结果仍不能证明效果。 */
+export async function inspectFailedNativeWebRead({ ctx, operation, execution }) {
+  const binding = operation.dispatchBinding
+  if (operation.state !== 'unknown' || !binding || !['web_fetch', 'web_search'].includes(operation.definition?.toolName)
+    || operation.definition.effectClass !== undefined && !['read', 'pure'].includes(operation.definition.effectClass)
+    || operation.executionId !== execution?.executionId || operation.taskId !== execution.taskId
+    || binding.sessionId !== execution.sessionId || !execution.drained || execution.recovering
+    || ctx.agents.get(execution.sessionId) || ctx.sessions.get(execution.sessionId)
+    || operation.result?.isError !== true || operation.result.cancelled === true
+    || operation.result.toolName !== operation.definition.toolName) return null
+  const jobs = ctx.get?.('jobs')
+  if (!jobs?.list || jobs.list(execution.sessionId).some(job => ['running', 'stopping'].includes(job.status))) return null
+  const original = await readNativeOperationContext({ ctx, operation })
+  if (!original || original.result.isError !== true) return null
+  const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
+  const input = inputFor(events, binding)
+  const start = events.findLast(event => event.seq < original.callSequence && event.type === 'turn/start')
+  const result = events.find(event => event.seq === original.resultSequence && event.type === 'tool/result')
+  const end = events.find(event => event.seq > original.resultSequence && event.type === 'turn/end')
+  if (!input || !start || input.seq < start.seq || !Number.isSafeInteger(start.data.turn) || result?.data.turn !== start.data.turn
+    || end?.data.turn !== start.data.turn || end.data.reason?.kind !== 'completed'
+    || events.some(event => event.seq > start.seq && event.seq < end.seq && (event.type === 'turn/end' || event.type === 'turn/start'))) return null
+  return { kind: 'native-web-read-failed', operationId: operation.operationId, operationDigest: hash(operation),
+    taskId: operation.taskId, executionId: execution.executionId, sessionId: binding.sessionId,
+    callId: operation.result.callId, toolName: operation.definition.toolName,
+    argumentsDigest: operation.definition.argumentsDigest, resultDigest: operation.result.resultDigest,
+    resultSequence: original.resultSequence, turnEndSequence: end.seq }
+}
+
 // Compatibility with the retired a5 promotion rejection only. That exact Host
 // path awaited terminate + waitForExit before throwing. A model summary, stderr,
 // arbitrary error, or an execution's self-reported result is never a drain proof.

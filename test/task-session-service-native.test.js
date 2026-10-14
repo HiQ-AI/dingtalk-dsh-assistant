@@ -9,6 +9,32 @@ import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
 import { available, reason, nativeShell, nativeTaskHost, latestInput, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
+
+testRunner('原生网页工具错误不建立未知效果，仍可完成后续读取', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+ const root=await mkdtemp(join(tmpdir(),'native-web-read-'))
+ let host, delegated=false, calls=0
+ t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+ host=await nativeTaskHost(root, async(request,h)=>{
+  const topics=topicTaskCalls(request);if(topics)return topics
+  const names=request.tools.map(tool=>tool.name)
+  if(names.includes('task_delegate')) {
+   if(!delegated){
+    delegated=true
+    for(const name of ['web_fetch','web_search']) h.ctx.tools.register({name,description:'Native readonly web contract fixture',parameters:{type:'object'},
+     output:{schema:{type:'object'},render:()=>[]},execute(){calls++;throw new Error('unsupported content type')}})
+    return [{name:'task_delegate',args:{key:'read',objective:'读取网页并如实记录错误'}}]
+   }
+   return [{name:'task_session_submit',args:{decision:{action:'complete',summary:'已核对读取失败，未重放请求',evidence:[],limitations:['网页内容不支持']}}}]
+  }
+  if(calls===0)return [{name:'web_fetch',args:{}}]
+  if(calls===1)return [{name:'web_search',args:{}}]
+  return [{name:'execution_submit',args:{output:{status:'completed',summary:'已记录两次读取失败',evidence:[],limitations:['内容不可读'],artifacts:[]}}}]
+ })
+ await host.service.ingest({groupId:'native-group',messageId:'web-failure',senderOpenDingTalkId:'native-user',text:'测试助手，读取并报告结果',timestamp:'2026-10-13T11:00:00Z'})
+ await host.service.whenIdle()
+ assert.equal(calls,2);assert.equal((await host.query('operation.list')).length,0)
+ assert.equal((await host.query('task.list'))[0].status,'completed')
+})
 import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { findSessionLog, requestSystemText } from './fixtures/session-persistence.js'
 
