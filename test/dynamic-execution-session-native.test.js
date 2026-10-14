@@ -97,6 +97,71 @@ const dynamicSubmit = answer => ({ name: 'execution_submit', args: { output: { a
 const dynamicDrive = (h, extra = {}) => h.manager.run({ binding: dynamic(), input: { objective: 'Dynamic delegated goal' },
   definition: definition(), onSessionBound: async () => {}, onResult: async () => {}, ...extra })
 
+test('32 continued inputs retire recursive Host snapshots on actual SDK requests and replay', async t => {
+  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
+  const root = await temp(), history = [], metrics = []
+  let allInputs = 0
+  for (let version = 1; version <= 32; version++) {
+    const h = await host({ root, script: [dynamicSubmit('preserved-result-' + version)] })
+    try {
+      const input = { objective: 'current-goal-' + version, sources: [{ body: 'AUTHORIZATION: analysis only' }],
+        previousExecutions: version < 4 ? [{ input: { previousExecutions: [{ input: { context: ('OLD_RECURSIVE_V' + version).repeat(3000) } }] } }] : [],
+        originalOperation: { state: 'unknown', evidenceRef: 'UNKNOWN_EFFECT_EVIDENCE', instruction: 'Never replay' } }
+      allInputs += Buffer.byteLength(JSON.stringify(input))
+      const b = dynamic({ leaseEpoch: version, inputVersion: version, inputDigest: 'dynamic-input-v' + version, inputHistory: structuredClone(history), sessionBound: version > 1 })
+      assert.equal((await dynamicDrive(h, { binding: b, input })).status, 'submitted')
+      const request = h.requests[0], hostMessages = request.messages.filter(m => m.source?.executionSession)
+      assert.equal(hostMessages.length, 1, 'only the current complete Host snapshot reaches the adapter')
+      assert.match(JSON.stringify(request.messages), /AUTHORIZATION: analysis only/)
+      assert.match(JSON.stringify(request.messages), /UNKNOWN_EFFECT_EVIDENCE/)
+      if (version >= 4) assert.doesNotMatch(JSON.stringify(request.messages), /OLD_RECURSIVE_V/)
+      if (version > 1) assert.match(JSON.stringify(request.messages), /preserved-result-1/)
+      const stored = await inspectSession(h.ctx.sessionPersistence, b.sessionId)
+      const folded = foldSurface(stored.events)
+      const messages = folded.nodes.map(seq => deriveEventMessage(stored.events[seq], folded.projectedMessages)).filter(Boolean)
+      assert.equal(messages.filter(m => m.source?.executionSession).length, 1)
+      assert.equal(stored.events.filter(e => e.type === 'user/message' && e.data.source?.executionSession).length, version, 'original inputs remain auditable')
+      metrics.push({ version, currentInputBytes: Buffer.byteLength(JSON.stringify(input)), hostBytes: Buffer.byteLength(JSON.stringify(hostMessages)), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+      history.push({ inputVersion: version, inputDigest: b.inputDigest, requirementRevision: 1, controlRevision: 1 })
+    } finally { await h.close() }
+  }
+  assert.ok(metrics.slice(3).every(item => item.hostBytes < 1500))
+  assert.ok(metrics.at(-1).messagesBytes - metrics[4].messagesBytes < 27 * 550, 'only preserved result history grows, within a per-turn budget')
+  t.diagnostic(JSON.stringify({ scope: 'scripted adapter request, UTF-8 JSON bytes; no provider tokens', beforeHostInputTextBytes: allInputs, metrics: metrics.filter(item => item.version <= 5 || item.version === 32) }))
+})
+
+test('upgrade shadows every already stored recursive v1/v2/v3 input without rewriting originals', async t => {
+  const { createSystemMessage } = await import('@deepseek-ai/dsh-llm')
+  const h = await host({ script: [dynamicSubmit('upgraded')] }); t.after(() => h.close())
+  const b = dynamic(), identity = Object.fromEntries(['kind', 'taskId', 'executionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'inputDigest', 'sessionId'].map(key => [key, b[key]]))
+  const session = h.ctx.sessions.prepare(b.sessionId, { seed: [{ type: 'plugin:dingtalk/execution-session', seq: 0, time: Date.now(), ignorable: true, data: { version: 2, identity, creationLease: 1 } }] })
+  session.append('turn/start', { turn: 1 }); session.append('step/start', { turn: 1, step: 1 })
+  session.append('system/message', { turn: 1, step: 1, message: createSystemMessage('original system') }, { surfaceOp: 'append' })
+  const inputHistory = []
+  for (let version = 1; version <= 3; version++) {
+    const prior = { inputVersion: version, inputDigest: 'dynamic-input-v' + version, requirementRevision: 1, controlRevision: 1 }
+    session.append('user/message', createUserMessage({ source: { kind: 'coordinator', executionSession: { sessionId: b.sessionId, leaseEpoch: version, ...prior } },
+      content: [{ type: 'text', text: JSON.stringify({ objective: 'old', previousExecutions: [{ input: { previousExecutions: [{ marker: 'LEGACY_RECURSION'.repeat(4000) }] } }] }) }] }), { surfaceOp: 'append' })
+    inputHistory.push(prior)
+  }
+  session.append('user/message', createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'INDEPENDENT_AUTHORIZATION_BOUNDARY: no production changes' }] }), { surfaceOp: 'append' })
+  session.append('step/end', { turn: 1, step: 1 }); session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const writer = await h.ctx.sessionPersistence.create(session.header)
+  await writer.append(session.snapshotEvents()); await writer.close()
+  const originals = (await inspectSession(h.ctx.sessionPersistence, b.sessionId)).events
+  const result = await dynamicDrive(h, { binding: dynamic({ inputVersion: 4, inputDigest: 'dynamic-input-v4', inputHistory, leaseEpoch: 4, sessionBound: true }),
+    input: { objective: 'current', sources: [{ text: 'only analysis' }], originalOperation: { state: 'unknown', evidenceRef: 'uncertain-effect' } } })
+  assert.equal(result.status, 'submitted')
+  assert.doesNotMatch(JSON.stringify(h.requests[0]), /LEGACY_RECURSION/)
+  assert.match(JSON.stringify(h.requests[0]), /INDEPENDENT_AUTHORIZATION_BOUNDARY/)
+  assert.equal(h.requests[0].messages.filter(m => m.source?.executionSession).length, 1)
+  const saved = await inspectSession(h.ctx.sessionPersistence, b.sessionId)
+  assert.deepEqual(saved.events.slice(0, originals.length), originals)
+  assert.equal(saved.events.filter(e => e.type === 'developer/message' && e.data.message.source.kind === 'dingtalk-host-context').length, 3)
+  t.diagnostic(JSON.stringify({ scope: 'execution Host messages, UTF-8 JSON bytes', beforeBytes: Buffer.byteLength(JSON.stringify(originals.filter(e => e.type === 'user/message' && e.data.source?.executionSession).map(e => e.data))),
+    afterBytes: Buffer.byteLength(JSON.stringify(h.requests[0].messages.filter(m => m.source?.executionSession))) }))
+})
+
 test('dynamic execution uses independent identities, task-parallel sessions and a generic submit tool', async t => {
   const h = await host({ script: [dynamicSubmit('one'), dynamicSubmit('two')] })
   t.after(() => h.close())

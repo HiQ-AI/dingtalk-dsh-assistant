@@ -16,20 +16,14 @@ import { taskWorkspace, taskExecutionWorkspace, taskDirectories, checkedTaskDire
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
 import { sameDeliveredText } from './group-message.js'
+import { taskExecutionContext } from './execution-context.js'
+export { taskExecutionContext } from './execution-context.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clean = value => JSON.parse(JSON.stringify(value))
 const string = { type: 'string' }
 const texts = { type: 'array', items: string }
-// 模型只接收执行当前目标和结果；完整输入、旧输入及宿主凭据留在持久账。
-export function taskExecutionContext(execution) {
-  const fields = ['executionId', 'sessionId', 'taskId', 'key', 'inputVersion', 'requirementRevision', 'controlRevision',
-    'leaseEpoch', 'inputDigest', 'status', 'drained', 'recovering', 'cancelRequested', 'result', 'updatedAt', 'progressReview']
-  return { ...Object.fromEntries(fields.filter(key => Object.hasOwn(execution, key)).map(key => [key, execution[key]])),
-    input: Object.fromEntries(['title', 'objective', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']
-      .filter(key => Object.hasOwn(execution.input ?? {}, key)).map(key => [key, execution.input[key]])) }
-}
 const taskOperationContext = operation => Object.fromEntries(['operationId', 'executionId', 'state', 'requirementRevision',
   'controlRevision', 'definition', 'resourceKeys', 'evidenceRef', ...(operation.state === 'succeeded' ? [] : ['result'])]
   .filter(key => Object.hasOwn(operation, key)).map(key => [key, operation[key]]))
