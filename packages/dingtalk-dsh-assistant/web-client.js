@@ -4,7 +4,6 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const React = require('react')
     const { useCallback, useEffect, useState } = React
-    const { IconRefreshOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives')
 
     const name = 'dingtalk-dsh-assistant-client'
     const inject = ['slots']
@@ -29,6 +28,8 @@ window.__ModuleLoader__.load({
     `
     const UPDATE_PROMPT = '请按 https://github.com/HiQ-AI/dingtalk-dsh-assistant 的 docs/ops/npm-release.md 与 docs/ops/resident-review-local-deployment.md 升级本机 web profile。先核对当前安装形态、目标正式版本和在途任务；按规程完成零写预检、维护排空、安全停机与备份，再安装同一版本的精确包。重启后分别回读安装内容、进程、Runtime 与认证 Web；任何门禁失败即停止并报告。'
 
+    const IconRefreshOutline16 = ({ size = 16 }) => React.createElement('span', { 'aria-hidden': true, style: { fontSize: size } }, '↻')
+
     function UpdateDot() {
       return React.createElement('span', { 'aria-hidden': true, style: { width: 7, height: 7, borderRadius: '50%', background: colors.danger, flex: 'none' } })
     }
@@ -40,8 +41,8 @@ window.__ModuleLoader__.load({
       return value
     }
     async function readResidentOverview() {
-      const [health, groups, tasks, alerts, environment, agentConfig, workflows] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config', '/state/workflows/catalog'].map((path) => request(path)))
-      return { health, groups, tasks, alerts, environment, agentConfig, workflows }
+      const [health, groups, tasks, alerts, environment, agentConfig] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config'].map((path) => request(path)))
+      return { health, groups, tasks, alerts, environment, agentConfig }
     }
 
     function Environment({ value }) {
@@ -53,34 +54,15 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function TaskPromptEditor({ prompts, onChange }) {
-      const update = (index, patch) => onChange(prompts.map((item, position) => position === index ? { ...item, ...patch } : item))
-      return React.createElement('div', { style: { display: 'grid', gap: 10 } },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
-          React.createElement('div', null, React.createElement('strong', { style: { fontSize: 13 } }, '任务流程提示词'), React.createElement('div', { style: { color: colors.muted, fontSize: 12, marginTop: 3 } }, '系统提示仅列名称和适用说明；叶子按需读取正文，选中后持续注入当前任务。')),
-          React.createElement('button', { type: 'button', style: button, onClick: () => onChange([...prompts, { name: '', description: '', prompt: '', enabled: true }]) }, '添加流程')),
-        prompts.length === 0 ? React.createElement('div', { style: { border: `1px dashed ${colors.border}`, borderRadius: 8, padding: 12, color: colors.muted, fontSize: 12 } }, '尚未配置专用流程。叶子按通用提示词执行。') : null,
-        ...prompts.map((item, index) => React.createElement('details', { key: item.id ?? `new-${index}`, style: { border: `1px solid ${colors.border}`, borderRadius: 8, padding: 12 } },
-          React.createElement('summary', { style: { cursor: 'pointer', fontSize: 13, overflowWrap: 'anywhere' } }, item.name.trim() || `新流程 ${index + 1}`, item.enabled ? null : React.createElement('span', { style: { color: colors.muted, marginLeft: 8, fontSize: 12 } }, '已停用')),
-          React.createElement('div', { style: { display: 'grid', gap: 8, marginTop: 12 } },
-          React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '名称', React.createElement('input', { style: input, value: item.name, maxLength: 80, onChange: (event) => update(index, { name: event.target.value }) })),
-          React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '适用说明', React.createElement('textarea', { style: { ...input, resize: 'none', minHeight: 64 }, value: item.description, maxLength: 400, onChange: (event) => update(index, { description: event.target.value }) })),
-          React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '流程与验收提示词', React.createElement('textarea', { style: { ...input, resize: 'none', minHeight: 150 }, value: item.prompt, maxLength: 40000, onChange: (event) => update(index, { prompt: event.target.value }) })),
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 } },
-            React.createElement('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12 } }, React.createElement('input', { type: 'checkbox', checked: item.enabled, onChange: (event) => update(index, { enabled: event.target.checked }) }), '在流程索引中启用'),
-            React.createElement('button', { type: 'button', style: { ...button, color: colors.danger }, onClick: () => onChange(prompts.filter((_, position) => position !== index)) }, '移除'))))))
-    }
-
     function DingTalkDshAssistantCard() {
       const [overview, setOverview] = useState()
       const [drafts, setDrafts] = useState({})
       const [agentWorkspace, setAgentWorkspace] = useState('')
       const [agentNames, setAgentNames] = useState('')
+      const [replySignature, setReplySignature] = useState('')
       const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
           const [proxyUrl, setProxyUrl] = useState('')
-          const [leafSessionPrompt, setLeafSessionPrompt] = useState('')
-          const [taskPrompts, setTaskPrompts] = useState([])
-          const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(5)
+      const [deletingGroupId, setDeletingGroupId] = useState('')
       const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
       const [query, setQuery] = useState('')
       const [searchResults, setSearchResults] = useState([])
@@ -90,7 +72,7 @@ window.__ModuleLoader__.load({
       const [updateFeedback, setUpdateFeedback] = useState()
       const [checkingVersion, setCheckingVersion] = useState(false)
       const refresh = useCallback(async () => {
-        try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setLeafSessionPrompt(next.agentConfig.leafSessionPrompt ?? ''); setTaskPrompts(next.agentConfig.taskPrompts ?? []); setMaxConcurrentTasks(next.agentConfig.maxConcurrentTasks ?? 5); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+        try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
         catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       }, [])
       useEffect(() => { refresh() }, [refresh])
@@ -126,11 +108,8 @@ window.__ModuleLoader__.load({
         }
       }
       const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
-      const workflowGroups = new Set(overview?.workflows?.groupIds ?? [])
-      const legacyGroups = (overview?.groups ?? []).filter(group => !workflowGroups.has(group.groupId))
-      const legacyConfigValid = !legacyGroups.length || Number.isInteger(maxConcurrentTasks) && maxConcurrentTasks >= 1 && maxConcurrentTasks <= 50 && taskPrompts.every(item => item.name.trim() && item.description.trim() && item.prompt.trim())
-      const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '') || !!legacyGroups.length && (leafSessionPrompt !== (overview?.agentConfig?.leafSessionPrompt ?? '') || JSON.stringify(taskPrompts) !== JSON.stringify(overview?.agentConfig?.taskPrompts ?? []) || maxConcurrentTasks !== (overview?.agentConfig?.maxConcurrentTasks ?? 5))
-      const saveAgentConfig = () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), workspaceDir: agentWorkspace, ...agentModel, proxyUrl, ...(legacyGroups.length ? { leafSessionPrompt, taskPrompts, taskPromptsVersion: overview?.agentConfig?.taskPromptsVersion ?? 0, maxConcurrentTasks } : {}) }) }))
+      const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '')
+      const saveAgentConfig = () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl }) }))
       return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
         React.createElement('section', { style: panel },
           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
@@ -143,7 +122,7 @@ window.__ModuleLoader__.load({
         React.createElement('section', { style: panel },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
             React.createElement('strong', null, '版本与更新'),
-            React.createElement('button', { type: 'button', style: { ...button, display: 'inline-flex', alignItems: 'center', gap: 6 }, disabled: checkingVersion, onClick: checkVersion }, checkingVersion ? '检查中…' : '检查更新', React.createElement(IconRefreshOutlineRegular, { size: 16 }))),
+            React.createElement('button', { type: 'button', style: { ...button, display: 'inline-flex', alignItems: 'center', gap: 6 }, disabled: checkingVersion, onClick: checkVersion }, checkingVersion ? '检查中…' : '检查更新', React.createElement(IconRefreshOutline16, { size: 16 }))),
           React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '当前版本'), React.createElement('span', null, overview?.version?.currentVersion ?? '读取中')),
           overview?.version?.error
             ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, `新版本检查失败：${overview.version.error}`)
@@ -164,9 +143,12 @@ window.__ModuleLoader__.load({
           React.createElement('strong', { style: { fontSize: 13 } }, 'Agent 名称 / 别名'),
           React.createElement('input', { 'aria-label': 'Agent 名称和别名', placeholder: '例如 数字助理,小助手', style: input, value: agentNames, onChange: (event) => setAgentNames(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '多个名称使用英文逗号分隔；任一名称被明确提及时可参与新任务判断。'),
+          React.createElement('label', { htmlFor: 'dingtalk-agent-reply-signature', style: { fontSize: 13, fontWeight: 600 } }, '群回复署名（可选）'),
+          React.createElement('input', { id: 'dingtalk-agent-reply-signature', 'aria-label': 'Agent 群回复署名', 'aria-describedby': 'dingtalk-agent-reply-signature-help', maxLength: 80, placeholder: '留空不署名', style: input, value: replySignature, onChange: (event) => setReplySignature(event.target.value) }),
+          React.createElement('div', { id: 'dingtalk-agent-reply-signature-help', style: { fontSize: 12, color: colors.muted } }, '填写完整署名，不用加开头的“-”；保存后用于新回复，留空关闭。名称和群职责不会自动生成署名。'),
           React.createElement('strong', { style: { fontSize: 13 } }, '工作目录'),
           React.createElement('input', { 'aria-label': 'Agent 工作区目录', placeholder: '现有绝对目录', style: input, value: agentWorkspace, onChange: (event) => setAgentWorkspace(event.target.value) }),
-          React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '旧 Resident 会话使用此工作区；新工程工作流使用已登记的受管仓库。'),
+          React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '群常驻会话使用此工作区；每个任务及其动态执行使用独立工作目录。'),
           React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '默认处理模型'),
           React.createElement('input', { 'aria-label': 'Agent 默认模型', placeholder: '例如 gpt-5.6-sol', style: input, value: agentModel.model, onChange: (event) => setAgentModel((current) => ({ ...current, model: event.target.value })) }),
           React.createElement('select', { 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
@@ -175,20 +157,18 @@ window.__ModuleLoader__.load({
           React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
           React.createElement('input', { 'aria-label': 'Agent 网络代理', placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
-          legacyGroups.length ? React.createElement('details', { style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
-            React.createElement('summary', { style: { cursor: 'pointer', fontSize: 13, fontWeight: 600 } }, `旧版叶子任务配置 · ${legacyGroups.length} 个未切换群`),
-            React.createElement('div', { style: { display: 'grid', gap: 10, marginTop: 12 } },
-              React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '叶子任务并行上限', React.createElement('input', { type: 'number', min: 1, max: 50, step: 1, style: input, value: maxConcurrentTasks, onChange: event => setMaxConcurrentTasks(Number(event.target.value)) })),
-              React.createElement('label', { style: { display: 'grid', gap: 4, fontSize: 12 } }, '叶子会话提示词', React.createElement('textarea', { style: { ...input, resize: 'vertical', minHeight: 100 }, value: leafSessionPrompt, onChange: event => setLeafSessionPrompt(event.target.value) })),
-              React.createElement(TaskPromptEditor, { prompts: taskPrompts, onChange: setTaskPrompts }))) : null,
-          React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !legacyConfigValid || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
-        React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 工作流”查看流程目录、步骤、可用状态及配置与维护说明。'),
+    React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
+        React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 任务看板”查看任务会话、动态执行、结果与日志路径。'),
         React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),
           ...(overview?.groups ?? []).map((group) => React.createElement('div', { key: group.groupId, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
             React.createElement('div', null, group.name ? React.createElement('strong', { style: { fontSize: 13 } }, group.name) : null, React.createElement('code', { style: { display: 'block', fontSize: 12, overflowWrap: 'anywhere', color: colors.muted } }, group.groupId)),
-            React.createElement('textarea', { 'aria-label': `${group.groupId} 会话职责`, rows: 4, style: { ...input, resize: 'vertical' }, value: drafts[group.groupId] ?? '', onChange: (event) => setDrafts((current) => ({ ...current, [group.groupId]: event.target.value })) }),
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
-              React.createElement('button', { type: 'button', style: { ...button, color: colors.danger }, onClick: () => { if (window.confirm(`确认删除常驻群 ${group.groupId}？历史群配置将被移除。`)) mutate(() => request(`/config/groups/${encodeURIComponent(group.groupId)}`, { method: 'DELETE' })) } }, '删除'),
+            React.createElement('textarea', { 'aria-label': `${group.groupId} 会话职责`, rows: 4, style: { ...input, resize: 'none' }, value: drafts[group.groupId] ?? '', onChange: (event) => setDrafts((current) => ({ ...current, [group.groupId]: event.target.value })) }),
+            deletingGroupId === group.groupId ? React.createElement('section', { 'aria-label': '确认删除常驻群', style: { ...panel, borderColor: colors.danger } },
+              React.createElement('p', null, `删除 ${group.name || group.groupId} 的常驻配置？历史引用或在途事项未清理时服务会拒绝删除。`),
+              React.createElement('button', { type: 'button', style: button, onClick: () => setDeletingGroupId('') }, '保留常驻群'),
+              React.createElement('button', { type: 'button', style: { ...button, color: colors.danger }, onClick: () => { setDeletingGroupId(''); mutate(() => request(`/config/groups/${encodeURIComponent(group.groupId)}`, { method: 'DELETE' })) } }, '确认删除')) : null,
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
+              React.createElement('button', { type: 'button', style: { ...button, color: colors.danger }, onClick: () => setDeletingGroupId(group.groupId) }, '删除'),
               React.createElement('button', { type: 'button', style: { ...button, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: drafts[group.groupId] === group.responsibility, onClick: () => mutate(() => request(`/config/groups/${encodeURIComponent(group.groupId)}`, { method: 'PUT', body: JSON.stringify({ responsibility: drafts[group.groupId] }) })) }, '保存职责')))),
           React.createElement('div', { style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
             React.createElement('strong', { style: { fontSize: 13 } }, '添加常驻群'),
@@ -197,7 +177,7 @@ window.__ModuleLoader__.load({
               React.createElement('button', { type: 'button', style: button, disabled: query.trim().length < 2, onClick: () => mutate(async () => { const result = await request(`/config/groups/search?q=${encodeURIComponent(query.trim())}`); setSearchResults(result.groups) }) }, '搜索')),
             ...searchResults.map((group) => React.createElement('button', { key: group.groupId, type: 'button', style: { ...button, textAlign: 'left', background: newGroup.groupId === group.groupId ? 'color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 12%, transparent)' : 'transparent' }, onClick: () => { setNewGroup((current) => ({ ...current, groupId: group.groupId, name: group.name })); setGroupFeedback({ kind: 'hint', message: `已选择“${group.name}”，填写会话职责后即可开始常驻。` }) } }, `${group.name} · ${group.memberCount ?? '-'}人\n${group.groupId}`)),
             newGroup.groupId ? React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, `已选择：${newGroup.name}（${newGroup.groupId}）`) : null,
-            React.createElement('textarea', { 'aria-label': '新群会话职责', placeholder: '描述该群中个人助理的职责、参与条件和升级边界', rows: 4, style: { ...input, resize: 'vertical' }, value: newGroup.responsibility, onChange: (event) => setNewGroup((current) => ({ ...current, responsibility: event.target.value })) }),
+            React.createElement('textarea', { 'aria-label': '新群会话职责', placeholder: '描述该群中个人助理的职责、参与条件和升级边界', rows: 4, style: { ...input, resize: 'none' }, value: newGroup.responsibility, onChange: (event) => setNewGroup((current) => ({ ...current, responsibility: event.target.value })) }),
             React.createElement('div', { role: groupFeedback.kind === 'error' ? 'alert' : 'status', style: { fontSize: 12, color: groupFeedback.kind === 'error' ? colors.danger : groupFeedback.kind === 'success' ? 'var(--dsw-alias-status-success, #168544)' : colors.muted } }, groupFeedback.message),
             React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: addingGroup ? colors.border : colors.accent, color: '#fff', borderColor: addingGroup ? colors.border : colors.accent, cursor: addingGroup ? 'wait' : 'pointer' }, disabled: addingGroup, onClick: addGroup }, addingGroup ? '正在添加…' : '添加并开始常驻'))))
     }

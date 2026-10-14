@@ -11,7 +11,6 @@ test('概览在已移除任务表格同步接口后仍加载完整状态', async
     '/state/supervisor/alerts': [],
     '/state/environment': { dws: { installed: true } },
     '/state/agent-config': { agentNames: ['助理'], model: 'test-model' },
-    '/state/workflows/catalog': { engine: 'workflow-v2', workflows: [] },
   }
   const requested = []
   t.mock.method(globalThis, 'fetch', async (url) => {
@@ -26,7 +25,7 @@ test('概览在已移除任务表格同步接口后仍加载完整状态', async
   assert.deepEqual(overview, {
     health: responses['/health'], groups: responses['/state/groups'], tasks: responses['/state/tasks'],
     alerts: responses['/state/supervisor/alerts'], environment: responses['/state/environment'],
-    agentConfig: responses['/state/agent-config'], workflows: responses['/state/workflows/catalog'],
+    agentConfig: responses['/state/agent-config'],
   })
 })
 
@@ -73,42 +72,21 @@ test('设置页异步展示版本状态且版本检查不阻塞核心配置加�
   assert.doesNotMatch(source, /dingtalkPluginUpdate/u)
   assert.doesNotMatch(source, /sidebar\.footer\.action/u)
   assert.doesNotMatch(source, /IconDownloadOutline16/u)
-  assert.match(source, /IconRefreshOutlineRegular/u)
+  assert.match(source, /IconRefreshOutline16/u)
   assert.match(source, /检查更新/u)
   assert.doesNotMatch(source, />↑</u)
   assert.match(source, /查看 CHANGELOG/u)
 })
 
-test('设置页指向运行看板工作流，保留未迁移群的旧配置和保存合同', async () => {
+test('设置页清退工作流与参数编辑，仍保留Agent与群连接配置', async () => {
   for (const file of ['client.js', 'web-client.js']) {
     const source = await readFile(new URL(`../packages/dingtalk-dsh-assistant/${file}`, import.meta.url), 'utf8')
-    assert.match(source, /\/state\/workflows\/catalog/u)
-    assert.doesNotMatch(source, /WorkflowCatalog/u)
-    assert.match(source, /运行看板 → 工作流/u)
-    assert.match(source, /new Set\(overview\?\.workflows\?\.groupIds \?\? \[\]\)/u)
-    assert.match(source, /legacyGroups\.length \? React\.createElement\('details'/u)
-    assert.match(source, /legacyGroups\.length \? \{ leafSessionPrompt, taskPrompts, taskPromptsVersion: overview\?\.agentConfig\?\.taskPromptsVersion \?\? 0, maxConcurrentTasks \} : \{\}/u)
-    assert.match(source, /TaskPromptEditor/u)
-    assert.match(source, /旧版叶子任务配置/u)
-    assert.match(source, /任务流程/u)
-    assert.doesNotMatch(source, /'aria-label': '任务流程引导'/u)
-    assert.doesNotMatch(source, /'aria-label': '完成证据要求'/u)
-    assert.doesNotMatch(source, /taskGuidance/u)
+    assert.doesNotMatch(source, /workflow|Workflow|taskPrompts|TaskPromptEditor|leafSessionPrompt/)
+    assert.match(source, /运行看板 → 任务看板/)
+    assert.match(source, /网络代理/)
+    assert.match(source, /常驻群与会话职责/)
+    assert.doesNotMatch(source, /window\.confirm\(/)
   }
-})
-
-test('设置页读取目录群归属以区分旧配置，不加载完整工作流运行状态', async (t) => {
-  const paths = []
-  const catalog = { engine: 'workflow-v2', groupIds: ['workflow-group'], workflows: [] }
-  t.mock.method(globalThis, 'fetch', async (url) => {
-    const path = new URL(url).pathname
-    paths.push(path)
-    return { ok: true, json: async () => path === '/state/workflows/catalog' ? catalog : {} }
-  })
-  const overview = await readResidentOverview()
-  assert.equal(overview.workflows, catalog)
-  assert.equal(paths.filter(path => path === '/state/workflows/catalog').length, 1)
-  assert.equal(paths.includes('/state/workflows'), false)
 })
 
 test('插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点', async () => {

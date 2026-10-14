@@ -4,29 +4,18 @@ import test from 'node:test'
 import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { runInNewContext } from 'node:vm'
 
-test('工作流目录按当前流程和完整计划关联任务，不靠名称推断且保留归档任务', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const code = source.slice(source.indexOf('    const workflowRelatedTasks ='), source.indexOf('    const configurationError ='))
-  const related = runInNewContext(`${code}; workflowRelatedTasks`)
-  const direct = { taskId: 'direct', engine: 'workflow-v2', workflowId: 'task-data-change' }
-  const archived = { taskId: 'archived', engine: 'workflow-v2', archivedAt: '2026-10-13', workflowId: 'task-engineering', plan: { stages: [{ workflowId: 'task-data-change' }, { workflowId: 'task-data-change' }] } }
-  const sameTitle = { taskId: 'same-title', engine: 'workflow-v2', title: '数据变更', workflowId: 'task-engineering' }
-  const legacy = { taskId: 'legacy', workflowId: 'task-data-change' }
-  assert.deepEqual(related([direct, archived, sameTitle, legacy], 'task-data-change'), [direct, archived])
-  assert.deepEqual(related([direct, archived], 'task-production-release'), [])
-  for (const suffix of ['a1b2c3', 'revision-a1b2c3', 'checkpoint-a1b2c3', 'reissue-a1b2c3']) {
-    const frozen = { taskId: suffix, engine: 'workflow-v2', workflowId: `task-engineering-${suffix}` }
-    const laterStage = { taskId: `later-${suffix}`, engine: 'workflow-v2', workflowId: 'task-data-change', plan: { stages: [{ workflowId: frozen.workflowId }] } }
-    assert.deepEqual(related([frozen, laterStage, direct], 'task-engineering'), [frozen, laterStage])
-  }
-})
-
 test('消息与话题详情只展示有绑定的会话并支持分页', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /message\.runId \? React\.createElement\(Button[\s\S]*'处理过程'/)
   assert.match(source, /\/state\/workflows\/\$\{encodeURIComponent\(runId\)\}\/trace/)
-  assert.match(source, /\/state\/workflows\/topics\/\$\{encodeURIComponent\(selection\.topicId\)\}\/context/)
-  assert.match(source, /node\.sessionId \? React\.createElement\(Button/)
+  const topicContextRequest = source.slice(source.indexOf("        setContextLoading(true); setContextError('')"), source.indexOf('      const selectTopic ='))
+  assert.match(topicContextRequest, /new URLSearchParams\(\{ groupId: selection\.groupId \}\)/)
+  assert.match(topicContextRequest, /get\(`\/state\/topics\/\$\{encodeURIComponent\(selection\.topicId\)\}\/context\?\$\{params\}`\)/)
+  assert.match(topicContextRequest, /params\.set\('cursor', contextCursor\)/)
+  assert.match(topicContextRequest, /params\.set\('intentCursor', intentCursor\)/)
+  assert.match(topicContextRequest, /params\.set\('revision', String\(contextRevision\)\)/)
+  assert.doesNotMatch(topicContextRequest, /\/state\/workflows\/topics\//)
+  assert.match(source, /session\?\.sessionId && session\.sessionBound !== false \? React\.createElement\(Button/)
   assert.match(source, /setCursorHistory\(\(items\) => \[\.\.\.items, cursor\]\)/)
   assert.match(source, /intentNextCursor/)
   assert.match(source, /判断批次分页/)
@@ -45,16 +34,13 @@ test('精简判断轨迹不包含技术详情，并展示容量受阻原因', as
   assert.match(reason('ENGINEERING_ACCEPTANCE_FAILED'), /业务验收未通过.*后续提交已停止/)
 })
 
-test('收信箱区分话题关联等待与意图重判，任务详情展示业务计划阶段', async () => {
+test('收信箱仍区分话题关联等待与意图重判', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /message\.workflowStatus/)
   assert.match(source, /waiting_routing_barrier: \{ label: '核对相关输入'/)
   assert.match(source, /intent_judging: \{ label: '话题意图判断中'/)
   assert.match(source, /intent_rejudging: \{ label: '新消息加入 · 重新判断'/)
   assert.match(source, /routing_blocked: \{ label: '关联受阻'/)
-  assert.match(source, /selectedWorkflowTask\.plan\.stages\.map/)
-  assert.match(source, /waiting_confirmation: '等待人工确认'/)
-  assert.match(source, /'aria-label': '任务阶段'/)
 })
 
 test('收信箱分开表达材料读取责任及通知回读，详情可用键盘展开', async () => {
@@ -72,275 +58,17 @@ test('收信箱分开表达材料读取责任及通知回读，详情可用键�
   assert.match(source, /delivered: '已回读送达'/)
 })
 
-test('运行看板保留左侧菜单并替换右侧整体内容', async () => {
+test('运行看板复用宿主插槽与共享导航，清退流程目录和变量配置', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  assert.match(source, /ctx\.slots\.inject\('main\.conversation'/)
-  assert.match(source, /name: 'main\.conversation'/)
-  assert.match(source, /name: 'sidebar\.footer\.action'/)
-  assert.match(source, /id: 'dingtalk-dsh-observer-entry'/)
-  assert.match(source, /钉钉群聊运行看板/)
-  assert.match(source, /onClick: onOpen/)
-  assert.match(source, /closest\('\[role="treeitem"\]'\)/)
-  assert.match(source, /await openSession\(sessionId, parentSessionId\); setOpen\(false\)/)
-  assert.match(source, /getComputedStyle\(element\)\.backgroundColor/)
-  assert.match(source, /element\.setAttribute\('aria-selected', 'false'\)/)
-  assert.match(source, /name\.endsWith\('_selected'\)/)
-  assert.match(source, /restoreSessionSelection\(\)/)
-  assert.match(source, /outline: 'none', boxShadow: 'none'/)
-  assert.match(source, /display: 'grid', gap: 4, padding: '12px 28px 0 20px'/)
-  assert.match(source, /height: 32, boxSizing: 'border-box'/)
-  assert.match(source, /padding: '4px 8px', fontSize: 14, fontWeight: 500, lineHeight: '20px'[\s\S]*'运行看板'/)
-  assert.match(source, /height: 27[\s\S]*gap: 36[\s\S]*padding: '0 0 0 8px'/)
-  assert.match(source, /padding: `0 0 \$\{paddingBottom\}px`[\s\S]*fontSize: ui\.textMd, fontWeight: 500, lineHeight: '20px'/)
-  assert.match(source, /React\.createElement\(StateDot, \{ state: updatedAt \? 'done' : 'ongoing', size: 7 \}\)/)
-  assert.match(source, /const refreshIcon = React\.createElement\('svg'/)
-  assert.match(source, /const manualRefresh = useCallback/)
-  assert.match(source, /disabled: refreshState === 'refreshing', onClick: manualRefresh/)
-  assert.match(source, /refreshState === 'refreshing' \? '刷新中' : refreshState === 'done' \? '已刷新' : '刷新'/)
-  assert.match(source, /'aria-label': updatedAt[\s\S]*gap: 12[\s\S]*React\.createElement\('span', \{ style: \{ display: 'inline-flex', alignItems: 'center', gap: 7 \} \}/u)
-  assert.match(source, /updatedAt \? '运行正常' : '正在连接'/)
-  assert.match(source, /`更新于 \$\{fmtTime\(updatedAt\)\}`/)
-  assert.doesNotMatch(source, /`运行态 · \$\{updatedAt/)
-  assert.match(source, /height: 27, display: 'flex'/)
-  assert.doesNotMatch(source, /const pageHeader = \(title, description\)/)
-  assert.doesNotMatch(source, /Pill, null, String\(count\)/)
-  assert.match(source, /const main = React\.createElement\('main', \{ className: 'observer-main', style: \{ width: '100%'/)
-  assert.doesNotMatch(source, /maxWidth: activePage === 'tasks'/)
-  assert.match(source, /style: navigationTabStyle\(activePage === page\.id\)/)
-  assert.match(source, /borderRadius: 999/)
-  assert.doesNotMatch(source, /conversation\.view/)
-  assert.match(source, /disposeContent = ctx\.slots\.register/)
+  assert.match(source, /inject: \['slots', 'sessions', 'uiWorkspace', 'layout'\]/)
   assert.match(source, /priority: -10/)
-  assert.match(source, /disposeContent\(\)/)
-  assert.doesNotMatch(source, /shell\.overlay/)
-  assert.doesNotMatch(source, /position: 'fixed', inset: 0, paddingLeft/)
-  assert.doesNotMatch(source, /ResizeObserver/)
-  assert.doesNotMatch(source, /MutationObserver/)
-  assert.doesNotMatch(source, /data-dingtalk-board-backdrop/)
-  assert.match(source, /运行看板/)
-  assert.match(source, /require\('@deepseek-ai\/dsh-client-ui-primitives'\)/)
-  assert.match(source, /React\.createElement\(Button, \{ variant: 'outline', size: 'sm'/)
-  assert.match(source, /React\.createElement\(StateDot/)
-  assert.match(source, /React\.createElement\(Pill/)
+  assert.match(source, /restoreSessionSelection\(\)/)
+  assert.match(source, /style: navigationTabStyle\(activePage === page\.id\)/)
+  assert.match(source, /'aria-label': '运行看板视图'/)
   assert.match(source, /\/state\/groups/)
   assert.match(source, /\/state\/tasks/)
-  assert.doesNotMatch(source, /\/state\/activities/)
-  assert.match(source, /\/state\/supervisor\/alerts/)
-  assert.match(source, /state: 'queued'/)
-  assert.match(source, /state: 'running'/)
-  assert.match(source, /state: 'waiting'/)
-  assert.doesNotMatch(source, /正在调用工具|当前工具/)
-  assert.match(source, /'aria-label': '任务目标'/)
-  assert.doesNotMatch(source, /IconGoalOutline16/)
-  assert.doesNotMatch(source, /\), '任务目标'\)/)
-  assert.match(source, /display: 'block', maxHeight: '4\.5em', overflow: 'hidden'/)
-  assert.match(source, /role: 'img', 'aria-label': '任务目标', style: \{ display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors\.muted \}/)
-  assert.match(source, /React\.createElement\('circle', \{ cx: 8, cy: 8, r: 5\.5 \}\)/)
-  assert.match(source, /IconChecklistOutlineRegular/)
-  assert.match(source, /'aria-label': '任务' \}\), '任务'/)
-  assert.match(source, /role: 'progressbar', 'aria-label': '检查点进度'/)
-  assert.match(source, /style: \{ minHeight: 24, boxSizing: 'border-box', display: 'flex'/)
-  assert.match(source, /flex: '1 1 auto', minWidth: 24, height: 4/)
-  assert.match(source, /IconChevronDownOutlineRegular/)
-  assert.match(source, /IconChevronUpOutlineRegular/)
-  assert.match(source, /data-task-card-action.*toggle-checkpoints/)
-  assert.match(source, /'aria-expanded': checkpointsExpanded/)
-  assert.match(source, /showCheckpoints \? React\.createElement\('section', null/)
-  assert.doesNotMatch(source, /paddingTop: showCheckpoints \? 3 : 0/)
-  assert.doesNotMatch(source, /gap: 8, padding: '7px 9px', fontSize: 10\.5/)
-  assert.match(source, /checkpointsExpanded \? React\.createElement\('div', \{ style: \{ display: 'grid', gap: 4, padding: '2px 9px 9px'/)
-  assert.doesNotMatch(source, /checkpoints\.slice\(0, 4\)/)
-  assert.match(source, /maxWidth: 1320.*margin: '0 auto'/)
-  assert.match(source, /repeat\(4, minmax\(300px, 1fr\)\)/)
-  assert.match(source, /background: bucket\.background, padding: '8px 4px'/)
-  assert.match(source, /repeat\(4, minmax\(300px, 1fr\)\)', gap: ui\.space3/)
-  assert.doesNotMatch(source, /background: bucket\.background, boxShadow:/)
-  assert.match(source, /color-mix\(in srgb, \$\{colors\.muted\} 22%, transparent\)/)
-  assert.match(source, /startsWith\('\[TASK_SOURCE_EVIDENCE\]'\) \? \(task\.title \|\| task\.objective\) : task\.objective/)
-  assert.match(source, /completedCheckpointCount.*checkpoints\.length/su)
-  assert.match(source, /const completedCheckpointNames = new Set\(boardStages\.filter\(stage => stage\.completed\)/)
-  assert.doesNotMatch(source, /new Set\(task\.state === 'completed' \? checkpoints/)
-  assert.match(source, /群通知待确认送达/)
-  assert.match(source, /currentCheckpoint = task\.state === 'running' \? checkpoints\.find/)
-  assert.doesNotMatch(source, /latestCheckpoint\?\.nextStep === checkpoint/)
-  assert.match(source, /style: \{ color: 'inherit', display: '-webkit-box'/)
-  assert.match(source, /StateDot, \{ state: 'ongoing', size: 10 \}/)
-  assert.match(source, /checkpointDuration\(checkpointLabel\(checkpoint\), currentCheckpointEvents, Date\.now\(\)\)/)
-  assert.match(source, /title: node \? '本次执行耗时' : `执行时长 \$\{duration\}`/)
-  assert.match(source, /gridTemplateColumns: '12px minmax\(0,1fr\) max-content'/)
-  assert.match(source, /const CheckpointDoneIcon = \(\{ size = 12 \}\)/)
-  assert.match(source, /completed \? React\.createElement\(CheckpointDoneIcon, \{ size: 12 \}\)/)
-  assert.match(source, /color: colors\.muted, textAlign: 'right', whiteSpace: 'nowrap'/)
-  assert.match(source, /'aria-label': '最后活动时间'/)
-  assert.match(source, /marginTop: 0, paddingTop: 6, borderTop:/)
-  assert.match(source, /'aria-label': '任务目标'/)
-  assert.doesNotMatch(source, /`最后活动 \$\{fmt\(task\.updatedAt\)\}`\),/)
-  assert.match(source, /checkpointEvents\.findLastIndex\(\(checkpoint\) => checkpoint\.kind === 'plan-confirmed'\)/)
-  assert.match(source, /const checkpoints = boardStages\.map\(stage => stage\.stageId\)/)
-  assert.doesNotMatch(source, /checkpointEvents\.flatMap\(\(checkpoint\) => \[\.\.\.\(checkpoint\.completedItems/)
-  assert.doesNotMatch(source, /\$\{selectedGroup\.messages\?\.length \|\| 0\} 条消息/)
-  assert.doesNotMatch(source, /selectedGroup\.messages\?\.at\?\.\(-1\)/)
-  assert.match(source, /state: 'completed', label: '已结束'/)
-  assert.match(source, /task\.state === 'completed'/)
-  assert.match(source, /id: 'groups', label: '群消息'/)
-  assert.match(source, /任务看板/)
-  assert.match(source, /height: 'calc\(100dvh - 116px\)', minHeight: 420, maxHeight: 'calc\(100dvh - 116px\)'/)
-  assert.doesNotMatch(source, /const pageHeader/)
-  assert.doesNotMatch(source, /const sectionHeader/)
-  assert.match(source, /const tableBodyContent = \{ display: '-webkit-box', WebkitLineClamp: 2/)
-  assert.match(source, /const clampTableContent = \(\.\.\.children\)/)
-  assert.match(source, /'话题处理'\), React\.createElement\('th',[\s\S]*'发送人 \/ 时间'\), React\.createElement\('th',[\s\S]*'消息内容'/)
-  assert.match(source, /gridTemplateColumns: '104px minmax\(220px, 1\.1fr\) minmax\(280px, 1\.5fr\) 126px 52px'/)
-  assert.match(source, /minHeight: 'calc\(100dvh - 138px\)'/)
-  assert.match(source, /minHeight: 'calc\(100dvh - 90px\)'/)
-  assert.match(source, /padding: activePage === 'tasks' \? `\$\{ui\.space6\}px \$\{ui\.space6\}px 0` : `\$\{ui\.space6\}px \$\{ui\.space6\}px \$\{ui\.space6 \+ ui\.space2\}px`/)
-  assert.doesNotMatch(source, /max\(1000px/)
-  assert.match(source, /boxSizing: 'border-box'/)
-  assert.match(source, /overflowY: 'auto', scrollbarWidth: 'none'/)
-  assert.doesNotMatch(source, /activePage === 'tasks' \? 1480 : 1240/)
-  assert.match(source, /归档任务/)
-  assert.match(source, /id: 'alerts', label: '告警'/)
-  assert.match(source, /id: 'tasks', label: '任务看板' \}, \{ id: 'workflows', label: '工作流' \}, \{ id: 'configuration', label: '配置' \}, \{ id: 'authorizations', label: '人工介入'/)
-  assert.match(source, /\/state\/authorizations/)
-  assert.match(source, /\/authorizations\/\$\{encodeURIComponent\(requestId\)\}\/decision/)
-  assert.match(source, /const authorizationPageSize = 10/)
-  assert.match(source, /style: \{ \.\.\.toolbar, justifyContent: 'flex-end' \}/)
-  assert.match(source, /label: '筛选处理状态'[\s\S]*?fitContent: true \}\)\),/)
-  assert.match(source, /setSelectedAuthorizationId\(item\.requestId\)/)
-  assert.match(source, /aria-label': '人工介入事项详情'/)
-  assert.match(source, /approved: \{ label: '已继续'/)
-  assert.match(source, /rejected: \{ label: '不执行'/)
-  assert.match(source, /superseded: \{ label: '已失效', state: 'neutral' \}/)
-  assert.match(source, /const isPendingAuthorization = \(item\) => item\.status === 'pending-send' \|\| item\.status === 'sending-unknown' \|\| item\.status === 'waiting-reply'/)
-  assert.match(source, /authorizationStatus\[item\.status\] \|\| \{ label: '状态异常', state: 'error' \}/)
-  assert.match(source, /authorizationFilter === 'superseded' \? item\.status === 'superseded'/)
-  assert.match(source, /selectedAuthorizationPending \? React\.createElement\('footer'/)
-  assert.match(source, /'处理结果'/)
-  assert.match(source, /'批准该事项并继续'/)
-  assert.match(source, /执行限制或拒绝原因（可选）/)
-  assert.match(source, /'暂无人工介入事项'/)
-  assert.doesNotMatch(source, /授权审批|授权申请单详情|筛选审批状态|审批意见/)
-  assert.match(source, /现场证据 ·/)
-  assert.match(source, /selectedAuthorization\.evidence/)
-  assert.match(source, /已尝试 ·/)
-  assert.match(source, /selectedAuthorization\.attemptedActions/)
-  assert.match(source, /finally \{ setNavigatingSessionId\(''\) \}/)
-  assert.match(source, /currentAuthorizationPage/)
-  assert.match(source, /style: \{ marginRight: 'auto', fontSize: 11, color: colors\.muted \} \}, `当前显示 \$\{filteredAuthorizationItems\.length\} 条 · 每页 \$\{authorizationPageSize\} 条`/)
-  assert.match(source, /React\.createElement\('span', null, '阻塞事项'\)/)
-  assert.match(source, /当前异常/)
-  assert.match(source, /label: `当前异常 · \$\{filteredActiveAlerts\.length\}`/)
-  assert.match(source, /label: `恢复历史 · \$\{filteredResolvedAlerts\.length\}`/)
-  assert.match(source, /aria-label': '告警状态视图'/)
-  assert.match(source, /navigationTabStyle\(alertView === item\.id, \{ paddingBottom: 4 \}\)/)
-  assert.match(source, /tableStatusTag\(active \? '当前异常' : '已恢复', active \? 'error' : 'done', \{ fontWeight: 600 \}\)/)
-  assert.match(source, /Pill, \{ style: \{ border: 0, fontSize: 12, fontWeight: 600 \} \}, category\.label/)
-  assert.match(source, /fontSize: 11, color: colors\.muted \} \}, fmt\(active \? alert\.lastSeenAt/)
-  assert.match(source, /marginTop: 5, fontSize: 14/)
-  assert.match(source, /marginTop: 6, fontSize: 11, color: colors\.muted/)
-  assert.match(source, /const resolvedAlertPageSize = 10/)
-  assert.match(source, /筛选告警类型/)
-  assert.match(source, /label: '筛选告警类型'[\s\S]*?fitContent: true \}\)\),/)
-  assert.match(source, /id: 'message-channel', label: '消息通道'/)
-  assert.match(source, /id: 'leaf-session', label: '叶子会话'/)
-  assert.match(source, /id: 'goal', label: '任务目标'/)
-  assert.match(source, /setResolvedAlertPage\(1\)/)
-  assert.match(source, /群聊消息/)
-  assert.match(source, /message\.senderName/)
-  assert.match(source, /message\.occurredAt/)
-  assert.match(source, /const pageSize = 10/)
-  assert.match(source, /选择群聊/)
-  assert.match(source, /role: 'tablist', 'aria-label': '群聊数据视图'/)
-  assert.match(source, /筛选处理状态/)
-  assert.match(source, /筛选发件状态/)
-  assert.match(source, /话题处理/)
-  assert.match(source, /messageWorkflowState/)
-  assert.match(source, /label: `收信箱 · \$\{selectedMessages\.length\}`/)
-  assert.match(source, /label: `发信箱 · \$\{selectedOutbox\.length\}`/)
-  assert.match(source, /navigationTabStyle\(groupTableView === item\.id, \{ paddingBottom: 4 \}\)/)
-  assert.match(source, /const selectedOutbox/)
-  assert.match(source, /const outboxPageSize = 10/)
-  assert.match(source, /已回读/)
-  assert.match(source, /待回读/)
-  assert.match(source, /已撤回/)
-  assert.match(source, /message\.recallStatus === 'recalled'/)
-  assert.match(source, /message\.deliveryPendingReason/)
-  assert.match(source, /message\.sourceMessageId/)
-  assert.match(source, /message\.replyToMessageId/)
-  assert.match(source, /message\.deliveredMessageId/)
-  assert.match(source, /message\.outboundId/)
-  assert.match(source, /setOutboxPage\(1\)/)
-  assert.doesNotMatch(source, /label: 'Resident'/)
-  assert.match(source, /ctx\.uiWorkspace\.openSession\(address\)/)
-  assert.match(source, /ctx\.uiWorkspace\.openSession\(sessionId\)/)
-  assert.match(source, /refreshProjections\(parentSessionId\)/)
-  assert.match(source, /正在打开会话…/)
-  assert.match(source, /border: `1px solid \$\{colors\.border\}`/)
-  assert.match(source, /background: colors\.cardSurface/)
-  assert.doesNotMatch(source, /transform: hovered/)
-  assert.doesNotMatch(source, /scale\(/)
-  assert.match(source, /const statusTag =/)
-  assert.match(source, /const tableStatusTag = \(label, state, \{ fontWeight = 500 \} = \{\}\) => statusTag\(label, state, \{ borderless: true, fontSize: 12, fontWeight \}\)/)
-  assert.equal((source.match(/tableStatusTag\(status\.label, status\.state, \{ fontWeight: 600 \}\)/g) || []).length, 3)
-  assert.match(source, /border: borderless \? 0 : `1px solid color-mix/)
-  assert.equal((source.match(/tableStatusTag\(status\.label, status\.state/g) || []).length, 3)
-  assert.doesNotMatch(source, /const authorizationTag =/)
-  assert.match(source, /justifySelf: 'start'[\s\S]*tableStatusTag\(status\.label, status\.state, \{ fontWeight: 600 \}\)/)
-  assert.match(source, /gridTemplateColumns: '104px minmax\(220px, 1\.1fr\) minmax\(280px, 1\.5fr\) 126px 52px'/)
-  assert.doesNotMatch(source, /copyButton\(task\.taskId, ' Id'\)/)
-  assert.match(source, /检查点进度/)
-  assert.match(source, /fontSize: 13, fontWeight: 600 \} \}, React\.createElement\('span', null, '状态'\)/)
-  assert.doesNotMatch(source, /\$\{group\.messages\?\.length \?\? 0\} 条消息/)
-  assert.match(source, /const tableFrame =/)
-  assert.match(source, /const tableHeadCell =/)
-  assert.match(source, /const tableBodyCell =/)
-  assert.match(source, /const tableFooter =/)
-  assert.match(source, /const toolbar =/)
-  assert.match(source, /const navigationTabStyle =/)
-  assert.match(source, /borderBottom: selected \? `2px solid \$\{colors\.accent\}`[\s\S]*color: selected \? colors\.accent/)
-  assert.equal((source.match(/style: navigationTabStyle\(/g) || []).length, 3)
-  assert.match(source, /const tableHeadCell = \{[^\n]*fontSize: ui\.textSm, fontWeight: 600/)
-  assert.match(source, /const tableBodyCell = \{[^\n]*fontSize: ui\.textMd/)
-  assert.match(source, /React\.createElement\('strong', \{ style: \{ fontSize: 14, fontWeight: 600 \} \}/)
-  assert.match(source, /marginTop: 3, fontSize: 11, color: colors\.muted/)
-  assert.match(source, /title: message\.messageId, style: \{ fontSize: 14, color: colors\.muted, whiteSpace: 'nowrap' \}/)
-  assert.match(source, /const singleLineTableContent =/)
-  assert.match(source, /width: 240 \} \}, singleLineTableContent/)
-  assert.match(source, /minWidth: 910/)
-  assert.match(source, /minWidth: 1100/)
-  assert.equal((source.match(/title: message\.(?:sourceMessageId|deliveredMessageId \|\| ''|outboundId), style: \{ fontSize: 14, color: colors\.muted, whiteSpace: 'nowrap' \}/g) || []).length, 3)
-  assert.match(source, /fontSize: 14, fontWeight: 600, lineHeight: 1\.5/)
-  assert.match(source, /title: item\.requestedAction[\s\S]*fontSize: 14, lineHeight: 1\.55/)
-  assert.match(source, /筛选处理状态/)
-  assert.match(source, /style: tableFrame/)
-  assert.match(source, /style: tableFooter/)
-  assert.match(source, /React\.createElement\(Button, \{ variant: 'outline', size: 'sm'/)
-  assert.match(source, /0 8px 20px rgba\(15,23,42,\.08\), 0 2px 6px rgba\(15,23,42,\.05\)/)
-  assert.match(source, /padding: '8px 8px 12px 8px'/)
-  assert.match(source, /navigator\.clipboard\.writeText/)
-  assert.match(source, /document\.execCommand\('copy'\)/)
-  assert.doesNotMatch(source, /copyButton\(task\.taskId, ' Id'\)/)
-  assert.match(source, /task\.title \|\| task\.objective/)
-  assert.doesNotMatch(source, /copyButton\(task\.childSessionId/)
-  assert.match(source, /overflowWrap: 'anywhere'/)
-  assert.match(source, /maxHeight: '4\.5em'/)
-  assert.doesNotMatch(source, /task\.childSessionId \|\| '—'/)
-  assert.doesNotMatch(source, /常驻 Session|copyButton\(selectedGroup\.residentSessionId, '会话 ID'\)|const selectedGroupSummary/)
-  assert.match(source, /\(data\?\.groups \|\| \[\]\)\.length \? React\.createElement\(SelectMenu, \{ label: '选择群聊'/)
-  assert.match(source, /label: '选择群聊'[\s\S]*fitContent: true/)
-  assert.match(source, /width: fitContent \? 'fit-content' : undefined/)
-  assert.match(source, /gap: fitContent \? 8 : 16/)
-  assert.doesNotMatch(source, /\(data\?\.groups \|\| \[\]\)\.length > 1/)
-  assert.match(source, /\/tasks\/\$\{encodeURIComponent\(task\.taskId\)\}\/archive/)
-  assert.match(source, /task\.state === 'completed' && task\.archivedAt/)
-  assert.doesNotMatch(source, /打开常驻对话 \/ 轨迹/)
-  assert.doesNotMatch(source, /打开对话 \/ 轨迹/)
-  assert.match(source, /inject: \['slots', 'sessions', 'uiWorkspace', 'layout'\]/)
-  // 补充表单使用 ref 保留重试幂等标识及输入焦点；仍不依赖布局测量。
-  assert.doesNotMatch(source, /useLayoutEffect/)
-  assert.match(source, /get\('\/config\/workflow-variables'/)
-  assert.doesNotMatch(source, /\/config\/(?:groups|agents|workflows)(?:['"/]|\b)/)
-  assert.match(source, /method: 'POST'/)
+  assert.doesNotMatch(source, /WorkflowBrowser|ConfigurationBrowser|WorkflowConfigurationBindings|workflow-variables|workflow-bindings|state\/workflows\/catalog/)
+  assert.doesNotMatch(source, /window\.(confirm|alert|prompt)\(/)
 })
 
 test('任务卡不请求或展示执行轮次耗时统计', async () => {
@@ -359,14 +87,6 @@ test('运行看板提供统一视觉尺度、响应式布局和可见键盘焦�
   assert.match(source, /observer-task-board/u)
   assert.match(source, /observer-topics-layout/u)
   assert.match(source, /actionLabel: '重新读取'/u)
-})
-
-test('Agent配置页面提供叶子任务并行上限且默认值为5', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/web-client.js', import.meta.url), 'utf8')
-  assert.match(source, /叶子任务并行上限/)
-  assert.match(source, /useState\(5\)/)
-  assert.match(source, /maxConcurrentTasks/)
-  assert.match(source, /min: 1, max: 50/)
 })
 
 test('发件状态按实际投递环节展示，pending不会伪装为已回读', async () => {
@@ -400,6 +120,101 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
   assert.match(source, /message\.deliveryError/)
   assert.match(source, /最近尝试.*fmt\(message\.deliveryAttemptedAt\)/)
   assert.match(source, /message\.deliveryAttemptCount/)
+})
+
+test('任务通知明确区分待发送、发送中、结果未知和确定的发送前阻止', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const expression = source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))
+  const classify = runInNewContext(`(${expression})`)
+  const scenarios = [
+    [{ notificationState: 'prepared', deliveryPendingReason: 'task-notification-prepared' }, 'queued', '待发送'],
+    [{ notificationState: 'starting', deliveryPendingReason: 'task-notification-starting' }, 'sending', '发送中'],
+    [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown' }, 'waiting', '发送结果待核对'],
+    [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown', deliveryError: 'send timed out', notificationFailurePhase: 'send' }, 'waiting', '发送结果待核对'],
+    [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown', deliveryError: 'collection missing', notificationFailurePhase: 'readback' }, 'waiting', '待回读'],
+    [{ notificationState: 'unknown', deliveryBlockedAt: '2026-10-14T00:00:00Z', notificationKnownNotSent: false }, 'waiting', '发送结果待核对'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-pre-send-rejected', notificationKnownNotSent: true }, 'failed', '发送前受阻'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-failed', deliveryError: 'delivery failed' }, 'failed', '投递异常'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-task-terminal', notificationKnownNotSent: true }, 'stopped', '已停止发送'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-superseded', notificationKnownNotSent: true }, 'stopped', '已停止发送'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required', notificationKnownNotSent: true }, 'reassessment', '已停止，需核验'],
+    [{ notificationState: 'delivered', deliveredMessageId: 'observed-message' }, 'confirmed', '已回读'],
+    [{ deliveryPendingReason: 'task-notification-prepared' }, 'queued', '待发送'],
+    [{ deliveryPendingReason: 'task-notification-starting' }, 'sending', '发送中'],
+    [{ deliveryPendingReason: 'task-notification-unknown', deliveryError: 'readback failed' }, 'waiting', '发送结果待核对'],
+    [{ deliveryPendingReason: 'task-notification-pre-send-rejected' }, 'failed', '发送前受阻'],
+    [{ deliveryPendingReason: 'task-notification-failed' }, 'failed', '投递异常'],
+    [{ deliveryPendingReason: 'task-notification-task-terminal' }, 'stopped', '已停止发送'],
+    [{ deliveryPendingReason: 'task-notification-superseded' }, 'stopped', '已停止发送'],
+    [{ deliveryPendingReason: 'task-notification-confirmation-reassessment-required' }, 'reassessment', '已停止，需核验'],
+  ]
+  for (const [facts, id, label] of scenarios) {
+    const result = classify({ status: 'pending', ...facts })
+    assert.equal(result.id, id)
+    assert.equal(result.label, label)
+    if (id === 'stopped' || id === 'reassessment') {
+      assert.equal(result.retryDisabled, true)
+      assert.doesNotMatch(result.label, /已发送|已回读|待发送/)
+    }
+    if (facts.notificationState === 'unknown' || facts.deliveryPendingReason === 'task-notification-unknown') {
+      assert.doesNotMatch(`${result.label} ${result.detail}`, /待发送|未发送|发送前受阻/)
+      assert.equal(result.state, 'warning')
+    }
+  }
+  assert.match(classify({ notificationState: 'failed', deliveryPendingReason: 'task-notification-pre-send-rejected' }).detail, /本次未发送/)
+  assert.doesNotMatch(classify({ notificationState: 'failed', notificationKnownNotSent: false }).detail, /未发送/)
+  assert.match(classify({ notificationState: 'failed', notificationKnownNotSent: true }).detail, /已确认本次未发送/)
+  assert.equal(classify({ notificationState: 'unknown', recallStatus: 'recalled' }).id, 'recalled')
+  assert.equal(classify({ notificationState: 'unknown', supersededByOutboundId: 'replacement' }).id, 'superseded')
+  const filter = source.slice(source.indexOf("label: '筛选发件状态'"), source.indexOf('      const messagesTable ='))
+  assert.match(filter, /id: 'sending', label: '发送中'/)
+  assert.match(filter, /id: 'waiting', label: '待回读 \/ 核对'/)
+  assert.match(filter, /id: 'stopped', label: '已停止发送'/)
+  assert.match(filter, /id: 'reassessment', label: '已停止，需核验'/)
+})
+
+test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不读取 ACK 原文', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const expression = source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))
+  const outboxDelivery = runInNewContext(`(${expression})`)
+  const rows = source.slice(source.indexOf('      const outboxRows ='), source.indexOf('      const renderTaskCard ='))
+  const diagnostic = 'CLI_READBACK_FAILED: authorization=[redacted]'
+  const message = { outboundId: 'notice', sourceMessageId: 'task-notification:notice', text: '通知正文', status: 'pending',
+    notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown', notificationFailurePhase: 'readback',
+    deliveryError: diagnostic, notificationRetryAt: '2026-10-14T00:01:00.000Z',
+    get ack() { throw new Error('ACK must not be read by the UI') },
+  }
+  const render = value => runInNewContext(`${rows}; outboxRows`, {
+    visibleOutbox: [value], outboxDelivery,
+    React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }) },
+    colors: { warning: 'warning', danger: 'danger', muted: 'muted', cardSurface: 'surface' }, tableBodyCell: {},
+    clampTableContent: (...children) => children, singleLineTableContent: value => value,
+    tableStatusTag: (label, state) => ({ type: 'tag', props: { state }, children: [label] }),
+    fmt: value => `本地时间 ${value}`, short: value => value || '—',
+  })
+  const withFacts = facts => Object.assign(Object.create(message), facts)
+  const text = tree => flattenElements(tree).flatMap(item => item.children.filter(value => typeof value === 'string')).join('\n')
+  const row = render(message)[0]
+  assert.equal(row.children.filter(child => child?.type === 'td').length, 5)
+  const rendered = text(row)
+  assert.match(rendered, /待回读/)
+  assert.ok(rendered.includes(diagnostic))
+  assert.match(rendered, /计划核验 本地时间 2026-10-14T00:01:00\.000Z/)
+  assert.doesNotMatch(rendered, /待发送|\[object Object\]/)
+  assert.doesNotMatch(text(render(withFacts({ deliveryError: { stdout: 'RAW_ACK_SECRET' } }))[0]), /RAW_ACK_SECRET|\[object Object\]/)
+  const blocked = text(render(withFacts({ notificationState: 'failed', deliveryPendingReason: 'task-notification-pre-send-rejected', notificationKnownNotSent: true }))[0])
+  assert.match(blocked, /发送前受阻/)
+  assert.match(blocked, /本次未发送/)
+  assert.match(blocked, /计划重试 本地时间 2026-10-14T00:01:00\.000Z/)
+  for (const [reason, label] of [['task-notification-task-terminal', '已停止发送'], ['task-notification-superseded', '已停止发送'], ['task-notification-confirmation-reassessment-required', '已停止，需核验']]) {
+    const retired = text(render(withFacts({ notificationState: 'failed', deliveryPendingReason: reason, notificationKnownNotSent: true }))[0])
+    assert.ok(retired.includes(label))
+    assert.doesNotMatch(retired, /计划重试|计划核验|已发送|已回读/)
+  }
+  const delivered = text(render(withFacts({ status: 'sent', notificationState: 'delivered', deliveredMessageId: 'observed' }))[0])
+  assert.doesNotMatch(delivered, /计划重试|计划核验|CLI_READBACK_FAILED/)
+  const superseded = text(render(withFacts({ supersededByOutboundId: 'replacement' }))[0])
+  assert.doesNotMatch(superseded, /计划重试|计划核验|CLI_READBACK_FAILED/)
 })
 
 test('处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果', async () => {
@@ -464,74 +279,13 @@ function flattenElements(tree) {
   return [tree, ...(tree.children || []).flatMap(flattenElements)]
 }
 
-test('私聊投递待确认仍出现在待处理列表并可从详情批准或拒绝', async () => {
+test('历史人工介入只读且明确新执行使用原生权限流程', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const fragment = source.slice(source.indexOf('      const authorizationStatus ='), source.indexOf('      const archivedTasks ='))
-  for (const [status, decision, label, pending] of [
-    ['pending-send', 'pending', '待发送', true],
-    ['sending-unknown', 'pending', '投递待确认', true],
-    ['waiting-reply', 'pending', '等待处理', true],
-    ['answered', 'approved', '已继续', false],
-    ['answered', 'rejected', '不执行', false],
-    ['superseded', 'pending', '已失效', false],
-  ]) {
-    const requests = []
-    const createElement = (type, props, ...children) => ({ type, props: props || {}, children: children.flat() })
-    const result = runInNewContext(`${fragment}; ({ rows: authorizationRows, detail: authorizationDetail })`, {
-      React: { createElement, Fragment: 'fragment' }, Button: 'button', SelectMenu: 'select',
-      colors: {}, tableFrame: {}, toolbar: {}, tableFooter: {},
-      statusTag: label => createElement('tag', null, label), tableStatusTag: label => createElement('tag', null, label), fmt: value => value || '',
-      data: { authorizations: [{ requestId: 'approval-857', status, decision, objective: '添加 name 列', requestedAction: '批准 DDL', groupId: 'group' }] },
-      authorizationFilter: 'pending', authorizationPage: 1, selectedAuthorizationId: 'approval-857',
-      groupsById: new Map(), authorizationComments: { 'approval-857': '已核对 SQL' }, decidingAuthorizationId: '',
-      setNavigationError() {}, setDecidingAuthorizationId() {}, refresh: async () => {},
-      post: async (path, body) => requests.push({ path, body }),
-    })
-    assert.equal(result.rows.length, pending ? 1 : 0, status)
-    const detail = flattenElements(result.detail)
-    assert.ok(detail.some(element => element.type === 'tag' && element.children.includes(label)), status)
-    const approve = detail.find(element => element.type === 'button' && element.children.includes('批准该事项并继续'))
-    const reject = detail.find(element => element.type === 'button' && element.children.includes('不执行'))
-    assert.equal(Boolean(approve), pending, status)
-    assert.equal(Boolean(reject), pending, status)
-    if (pending) {
-      await approve.props.onClick()
-      await reject.props.onClick()
-      assert.deepEqual(JSON.parse(JSON.stringify(requests)), [
-        { path: '/authorizations/approval-857/decision', body: { decision: 'approved', comment: '已核对 SQL' } },
-        { path: '/authorizations/approval-857/decision', body: { decision: 'rejected', comment: '已核对 SQL' } },
-      ])
-    }
-  }
+  assert.match(source, /历史人工介入/)
+  assert.match(source, /历史介入记录只读。新执行的权限请求请在对应执行会话中处理。/)
+  assert.doesNotMatch(source, /decideAuthorization|批准该事项并继续|\/authorizations\/.*\/decision/)
 })
 const settle = () => new Promise(resolve => setImmediate(resolve))
-
-test('任务详情只展示当前步骤，支持旧详情别名并保持稳定步骤身份', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /TaskExecutionHistory|TaskHistoryDisclosure|TaskRunHistory|历史记录|返回最新执行|executionNumber/)
-  assert.match(source, /workflowTaskDetail\?\.requestedTaskId === selectedWorkflowTaskId/)
-  assert.match(source, /key: node\.stepKey/)
-  assert.match(source, /'当前结果'/)
-  assert.match(source, /当前详情刷新失败，以下内容尚未刷新/)
-  assert.match(source, /setWorkflowTaskDetail\(value\)/)
-  assert.match(source, /\[selectedWorkflowTaskId, updatedAt, workflowDetailRetry\]/)
-  const code = source.slice(source.indexOf('      const taskNodes ='), source.indexOf('      const taskTone ='))
-  const progress = task => runInNewContext(`${code}; ({ completedSteps, stepsResolved, stepProgress })`, { selectedWorkflowTask: task })
-  assert.equal(progress({ plan: { stepsResolved: false }, executionNodes: [{ status: 'succeeded' }] }).stepProgress, 99)
-  const pending = progress({ plan: { stepsResolved: false }, executionNodes: [{ status: 'succeeded' }, { definitionPending: true, status: 'succeeded' }] })
-  assert.equal(pending.completedSteps, 1)
-  assert.equal(pending.stepProgress, 50)
-  assert.equal(progress({ plan: { stepsResolved: true }, executionNodes: [{ status: 'succeeded' }] }).stepProgress, 100)
-  assert.equal(progress({ plan: { stepsResolved: false }, executionNodes: [] }).stepProgress, 0)
-  assert.match(source, /taskNodes.length \|\| !stepsResolved/)
-  const future = progress({ plan: { stepsResolved: true }, executionNodes: [{ stepKey: 'stage-a:analyze', stageId: 'stage-a', nodeId: 'analyze', status: 'succeeded' }, { stepKey: 'stage-b:analyze', stageId: 'stage-b', nodeId: 'analyze', status: 'pending' }] })
-  assert.equal(future.completedSteps, 1)
-  assert.equal(future.stepProgress, 50)
-  assert.match(source, /groupTaskSteps\(taskNodes\)/)
-  assert.match(source, /累计执行时长/)
-  assert.match(source, /累计总耗时/)
-
-})
 
 test('任务正文分页绑定当前详情版本，失败保留正文且旧版本慢响应被隔离', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
@@ -595,29 +349,9 @@ test('未变产物的详情版本推进保留已读正文与分页，新页使�
   assert.ok(!flattenElements(tree).some(item => item.children.includes('保留正文过期页')))
 })
 
-test('阅读步骤移除后定位相邻步骤，未移除步骤不改变阅读位置', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const fragment = source.slice(source.indexOf('    const adjacentCurrentStep ='), source.indexOf('    function ObserverContent('))
-  const adjacent = runInNewContext(`${fragment}; adjacentCurrentStep`)
-  assert.equal(adjacent(['a', 'b', 'c'], ['a', 'c', 'd'], 'b'), 'c')
-  assert.equal(adjacent(['a', 'b', 'c'], ['a', 'b'], 'c'), 'b')
-  assert.equal(adjacent(['a'], [], 'a'), '')
-  assert.equal(adjacent(['a', 'b'], ['a', 'b', 'c'], 'a'), null)
-  assert.match(source, /正在阅读的步骤已从当前计划移除/)
-  assert.match(source, /'aria-live': 'polite'/)
-  assert.match(source, /observer-task-step-button\[aria-pressed="true"\]/)
-  const preferred = runInNewContext(`${fragment}; preferredTaskStep`)
-  const nodes = [{ stepKey: 'a', status: 'succeeded' }, { stepKey: 'b', status: 'waiting' }, { stepKey: 'c', status: 'pending' }]
-  assert.equal(preferred(nodes)?.stepKey, 'b')
-  assert.equal(preferred(nodes, 'a')?.stepKey, 'a')
-  assert.equal(preferred(nodes.filter(node => node.status !== 'waiting'))?.stepKey, 'c')
-  assert.equal(preferred([{ stepKey: 'a', status: 'succeeded' }, { stepKey: 'b', status: 'succeeded' }])?.stepKey, 'b')
-  assert.equal(preferred([]), undefined)
-})
-
 test('简短任务标题保留可读首句，完整目标仍可展开且不写回原任务', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const fragment = source.slice(source.indexOf('    const taskDisplayTitle ='), source.indexOf('    const taskStepStart ='))
+  const fragment = source.slice(source.indexOf('    const taskDisplayTitle ='), source.indexOf('    const traceElapsed ='))
   const title = runInNewContext(`${fragment}; taskDisplayTitle`)
   assert.equal(title({ title: '核对部署结果' }), '核对部署结果')
   const task = { title: '核对当前服务部署结果。' + '补充验收条件'.repeat(30), objective: '完整目标' }
@@ -625,70 +359,7 @@ test('简短任务标题保留可读首句，完整目标仍可展开且不写�
   assert.ok(Array.from(title({ title: '发布并部署'.repeat(30) })).length <= 32)
   assert.equal(title({ title: '   ' }), '未命名任务')
   assert.equal(task.objective, '完整目标')
-  assert.match(source, /'summary'.*'任务目标'/)
-  assert.match(source, /selectedWorkflowTask.objective\)\) : null/)
-})
-
-test('工作流分组保留全局顺序和跨工作流同名步骤，开始时间不借用任务创建时间', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const fragment = source.slice(source.indexOf('    const taskStepStart ='), source.indexOf('    function TaskStepElapsed('))
-  const { group, start } = runInNewContext(`${fragment}; ({ group: groupTaskSteps, start: taskStepStart })`, { fmt: value => `格式化(${value})` })
-  const groups = group([{ stageId: 'a', stageTitle: '开发与验证', nodeId: 'prepare', startedAt: '2026-09-29T00:00:00Z', status: 'succeeded' },
-    { stageId: 'a', stageTitle: '开发与验证', nodeId: 'verify', status: 'succeeded' },
-    { stageId: 'b', stageTitle: '部署UAT', nodeId: 'prepare', status: 'pending' }])
-  assert.deepEqual(Array.from(groups, item => item.title), ['开发与验证', '部署UAT'])
-  assert.deepEqual(Array.from(groups, item => Array.from(item.steps, step => step.index)), [[0, 1], [2]])
-  assert.equal(groups[0].steps[0].node.nodeId, groups[1].steps[0].node.nodeId)
-  assert.equal(start(groups[0].steps[0].node), '开始 格式化(2026-09-29T00:00:00Z)')
-  assert.equal(start({ status: 'pending', createdAt: '2026-09-29T00:00:00Z' }), '未开始')
-  assert.equal(start({ status: 'succeeded' }), '开始时间未记录')
-  assert.equal(start({ status: 'failed', startedAt: 'invalid' }), '开始时间未记录')
-  assert.match(source, /'time', \{ dateTime: node.startedAt \}/)
-})
-
-test('卡片原生步骤复用中文名称和本次节点耗时，不从历史检查点猜测', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const fragment = source.match(/    const nodeTitle = (\{[^\n]+\})/)[1]
-  const titles = runInNewContext(`(${fragment})`)
-  assert.equal(titles['execute-build'], '执行构建')
-  assert.equal(titles['inspect-runtime'], '核对运行版本')
-  assert.equal(titles['accept-result'], '校验调查结果')
-  const labelExpression = source.match(/node\.title \|\| nodeTitle\[node\.templateNodeId \?\? node\.nodeId\] \|\| '执行步骤'/)[0]
-  assert.equal(runInNewContext(labelExpression, { nodeTitle: titles,
-    node: { nodeId: 'task-specific-check', templateNodeId: 'verify-candidate' } }), '构建检查')
-  assert.deepEqual(['prepare-delivery', 'send-files', 'verify-delivery'].map(id => titles[id]),
-    ['核对待交付文件', '发送群文件', '回读并核验文件'])
-  assert.match(source, /const node = \(task.executionNodes \|\| \[\]\).find/)
-  assert.match(source, /node \? React.createElement\(TaskStepElapsed, \{ node, fontSize: 10.5 \}\)/)
-  assert.match(source, /const checkpointLabel = id => nodeTitle\[id\]/)
-})
-
-test('Web重执行卡片显示原群名，缺少可读群来源时不暴露Web标识', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const fragment = source.slice(source.indexOf('const sourceGroup ='), source.indexOf('const waitingNotice ='))
-  const label = task => runInNewContext(`(() => { ${fragment}; return groupLabel })()`, { task, groupsById: new Map([['g', { name: '工程群' }]]) })
-  assert.equal(label({ groupId: 'web:actor', sourceGroupId: 'g' }), '工程群')
-  assert.equal(label({ groupId: 'web:actor', sourceGroupId: null }), 'Web 任务')
-  assert.equal(label({ groupId: 'g' }), '工程群')
-  assert.match(source, /title: task.sourceChannel === 'web' \? `\$\{groupLabel\} · Web 重新执行`/u)
-})
-
-test('Web任务话题按钮和键盘均使用原话题群聊，话题页能反查关联任务', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const fragment = source.match(/\.\.\.(\(task\.topicRefs \|\| \[\]\)\.map\(\(ref\) => \{[\s\S]*?label\) \}\))/u)[1]
-  const targets = [], pages = []
-  const [button] = runInNewContext(`(() => { return ${fragment} })()`, {
-    task: { groupId: 'web:actor', sourceGroupId: 'g', topicRefs: [{ groupId: 'g', topicId: 'topic', revision: 2, title: '真实话题' }] },
-    topicsById: new Map(), React: { createElement: (type, props, ...children) => ({ type, props, children }) },
-    colors: { accent: 'blue' }, pill: () => ({}), short: v => v,
-    setTopicTarget: v => targets.push(v), setActivePage: v => pages.push(v),
-  })
-  assert.equal(button.children[0], '真实话题')
-  button.props.onClick({ stopPropagation() {} })
-  button.props.onKeyDown({ key: 'Enter', preventDefault() {}, stopPropagation() {} })
-  assert.deepEqual(targets.map(t => t.groupId), ['g', 'g'])
-  assert.deepEqual(pages, ['topics', 'topics'])
-  assert.match(source, /ref\.groupId \|\| task\.sourceGroupId \|\| task\.groupId\) === selection\?\.groupId/u)
+  assert.match(source, /task\.objective/)
 })
 
 test('已读取材料但执行受阻走实际状态分支与显示标签，不回落已处理',async()=>{
@@ -726,51 +397,17 @@ test('自动与手动刷新共用一个请求，失败后可重新读取',async(
  const recovered=refresh();resolve({groups:[1]});await recovered;assert.equal(calls,3);assert.equal(updates.length,2);
 });
 
-test('详情慢查询跨刷新复用，切换任务不接受旧响应',async()=>{
- const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
- const start=source.indexOf('      const pendingDetail = '),end=source.lastIndexOf('      useEffect(() => {',source.indexOf('        const target = detailFocusTarget.current',start));
- const effects=[],requests=[],details=[],pending={current:null};
- const environment={useRef:()=>pending,useEffect:fn=>effects.push(fn),selectedWorkflowTaskId:'one',workflowDetailRetry:0,updatedAt:0,get:path=>new Promise(resolve=>requests.push({path,resolve})),setWorkflowTaskDetail:v=>details.push(v),setWorkflowDetailError:()=>{},setStepReadingNotice:()=>{},setReadingStep:()=>{},preferredTaskStep:()=>undefined,detailFocusTarget:{current:null},latestReading:{current:null},adjacentCurrentStep:()=>null,encodeURIComponent};
- const effect=()=>{runInNewContext(`(()=>{${source.slice(start,end)}})()`,environment);return effects.pop()()};
- const first=effect();first();const refresh=effect();assert.equal(requests.length,1);refresh();
- environment.selectedWorkflowTaskId='two';effect();assert.equal(requests.length,2);
- requests[0].resolve({taskId:'one'});requests[1].resolve({taskId:'two'});await new Promise(resolve=>setImmediate(resolve));
- assert.deepEqual(details.map(v=>v.taskId),['two']);
-});
-
-test('详情不可见及请求中改变选择时仍保留最新阅读，真正删除才回退', async () => {
+test('详情慢查询跨刷新复用，切换任务不接受旧响应', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const start = source.indexOf('      const pendingDetail = '), end = source.lastIndexOf('      useEffect(() => {', source.indexOf('        const target = detailFocusTarget.current', start))
-  const helpers = source.slice(source.indexOf('    const adjacentCurrentStep ='), source.indexOf('    function TaskStepDetail('))
-  const nodes = [{ stepKey: 'a', status: 'succeeded' }, { stepKey: 'b', status: 'waiting' }, { stepKey: 'c', status: 'pending' }]
-  const reading = { current: { readingStep: { taskId: 'task', stepKey: 'a' }, detail: { taskId: 'task', executionNodes: nodes } } }
-  const requests = [], selected = [], notices = [], effects = [], focus = { current: null }
-  const environment = { useRef: () => ({ current: null }), useEffect: fn => effects.push(fn), latestReading: reading,
-    selectedWorkflowTaskId: 'task', workflowDetailRetry: 0, updatedAt: 0, detailFocusTarget: focus,
-    get: () => new Promise(resolve => requests.push(resolve)), setWorkflowTaskDetail() {}, setWorkflowDetailError() {},
-    setReadingStep: value => selected.push(value), setStepReadingNotice: value => notices.push(value), encodeURIComponent,
-    document: { querySelector() { throw Error('hidden detail has no DOM') }, querySelectorAll() { throw Error('hidden detail has no DOM') } } }
-  const refresh = async value => {
-    runInNewContext(`(()=>{${helpers};${source.slice(start, end)}})()`, environment)
-    effects.pop()(); requests.pop()(value); await settle()
-  }
-  await refresh({ taskId: 'task', executionNodes: nodes })
-  assert.equal(selected.at(-1).stepKey, 'a')
-  assert.equal(focus.current, null)
-  runInNewContext(`(()=>{${helpers};${source.slice(start, end)}})()`, environment)
-  effects.pop()()
-  reading.current.readingStep.stepKey = 'c'
-  requests.pop()({ taskId: 'task', executionNodes: nodes }); await settle()
-  assert.equal(selected.at(-1).stepKey, 'c', '慢响应不覆盖等待期间的新选择')
-  await refresh({ taskId: 'task', executionNodes: nodes.slice(0, 2) })
-  assert.equal(selected.at(-1).stepKey, 'b')
-  assert.equal(focus.current.stepKey, 'b')
-  assert.match(notices.at(-1), /步骤已从当前计划移除/)
-  environment.selectedWorkflowTaskId = 'another-task'
-  await refresh({ taskId: 'another-task', executionNodes: [{ stepKey: 'other', status: 'running' }] })
-  assert.equal(selected.at(-1).stepKey, 'other')
-  assert.equal(notices.at(-1), '', '其他任务不能继承删除提示')
-  assert.equal(focus.current, null, '其他任务不能继承待恢复焦点')
+  const start = source.indexOf('      const pendingDetail = '), end = source.indexOf('      useEffect(() => {\n        refresh()', start)
+  const effects = [], requests = [], details = [], pending = { current: null }
+  const environment = { useRef: () => pending, useEffect: fn => effects.push(fn), selectedTaskId: 'one', detailRetry: 0, updatedAt: 0,
+    get: path => new Promise(resolve => requests.push({ path, resolve })), setTaskDetail: value => details.push(value), setDetailError() {}, encodeURIComponent }
+  const effect = () => { runInNewContext(`(()=>{${source.slice(start,end)}})()`, environment); return effects.pop()() }
+  const first = effect(); first(); const refresh = effect(); assert.equal(requests.length, 1); refresh()
+  environment.selectedTaskId = 'two'; effect(); assert.equal(requests.length, 2)
+  requests[0].resolve({ taskId: 'one' }); requests[1].resolve({ taskId: 'two' }); await settle()
+  assert.deepEqual(details.map(value => value.taskId), ['two'])
 })
 
 test('已选话题新版本刷新详情并重置旧分页，同版本及其他话题不打断阅读', async () => {
@@ -793,4 +430,16 @@ test('已选话题新版本刷新详情并重置旧分页，同版本及其他�
   assert.equal(changes.find(([name]) => name === 'setContextRevision')[1], undefined)
   assert.equal(changes.find(([name]) => name === 'setMessageOffset')[1], 0)
   assert.equal(changes.find(([name]) => name === 'setTopicContext')[1], undefined)
+})
+
+test('unlinked retired confirmation explicitly requires manual verification instead of promising an owner wake', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const expression = source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))
+  const classify = runInNewContext(`(${expression})`)
+  const result = classify({ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required', notificationKnownNotSent: true })
+  assert.equal(result.label, '已停止，需核验')
+  assert.match(result.detail, /已停止发送.*关联不足.*人工核验/)
+  assert.match(result.detail, /不会自动恢复或发送/)
+  assert.doesNotMatch(result.detail, /等待负责人|自动重评估|计划重试|计划核验/)
+  assert.equal(result.retryDisabled, true)
 })

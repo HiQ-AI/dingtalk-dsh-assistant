@@ -54,7 +54,7 @@ function normalizeEvent(event) {
     messageId,
     text,
     occurredAt: normalizeMessageTime(event.event_time ?? event.create_time ?? event.timestamp ?? new Date().toISOString()),
-    rawOccurredAt: event.event_time ?? event.create_time ?? event.timestamp,
+    rawOccurredAt: event.event_time ?? event.create_time ?? event.timestamp ?? null,
     senderName: meaningful(event.sender) ? event.sender : undefined,
     senderOpenDingTalkId: event.sender_open_dingtalk_id ?? event.sender_id ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),
@@ -70,7 +70,7 @@ export function normalizeHistoryMessage(message, fallbackGroupId) {
   const text = message.text ?? ''
   const resourceRefs = normalizeResourceRefs(message.resourceRefs, text)
   return {
-    groupId, messageId, text, occurredAt: normalizeMessageTime(message.createTime ?? new Date().toISOString()), rawOccurredAt: message.createTime,
+    groupId, messageId, text, occurredAt: normalizeMessageTime(message.createTime ?? new Date().toISOString()), rawOccurredAt: message.createTime ?? null,
     senderName: meaningful(message.sender ?? message.senderName) ? message.sender ?? message.senderName : undefined,
     senderOpenDingTalkId: message.senderOpenDingTalkId ?? message.sender_open_dingtalk_id ?? message.senderId ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),
@@ -127,6 +127,9 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     const existing = inflightMessages.get(key)
     if (existing !== undefined) return existing
     const operation = (async () => {
+      // New task ingress owns durable deduplication and the immutable cutover epoch.
+      // Do this before legacy message/outbox matching or any resource download.
+      if (runtime.isTaskSessionMode?.()) return runtime.ingest(message)
       const group = runtime.getGroup?.(message.groupId)
       const persisted = group?.messages?.find((item) => item.messageId === message.messageId)
       const deliveredOutbound = group?.outbox?.find((item) => item.deliveredMessageId === message.messageId)
@@ -367,6 +370,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     }
   }
   const processOutbound = (event) => {
+    if (runtime.taskSessionNotifications === true) return Promise.resolve()
     const previous = outboundTails.get(event.groupId) ?? Promise.resolve()
     const operation = previous.catch(() => {}).then(() => stopping ? undefined : deliverOutbound(event))
     outboundTails.set(event.groupId, operation)
@@ -375,7 +379,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
   const processPendingCompletedOutbox = () => {
     outboxRetryTail = outboxRetryTail.then(async () => {
-      if (stopping) return
+      if (stopping || runtime.taskSessionNotifications === true) return
       const jobs = []
       for (const group of runtime.listGroups()) {
         const pending = (runtime.getGroup?.(group.groupId) ?? group).outbox ?? []

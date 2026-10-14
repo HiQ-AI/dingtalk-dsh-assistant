@@ -6,7 +6,7 @@ const taskSegment = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-
 
 /** 只由受信任务身份计算路径，标题及消息文本不参与目录命名。 */
 export function taskFilePath(root, logicalTaskId, area, ...segments) {
-  if (!isAbsolute(root ?? '') || !taskSegment(logicalTaskId) || !['work', 'tmp', 'outputs'].includes(area)
+  if (!isAbsolute(root ?? '') || !taskSegment(logicalTaskId) || !['materials', 'work', 'tmp', 'outputs'].includes(area)
     || segments.some(value => !taskSegment(value))) throw new Error('TASK_DIRECTORY_INVALID')
   return join(resolve(root), 'tasks', logicalTaskId, area, ...segments)
 }
@@ -27,11 +27,23 @@ export async function checkedTaskDirectory(path, create = false) {
 }
 
 export async function taskDirectories(workspaceRoot, logicalTaskId) {
+  const materials = taskFilePath(workspaceRoot, logicalTaskId, 'materials')
   const work = taskFilePath(workspaceRoot, logicalTaskId, 'work')
   const tmp = taskFilePath(workspaceRoot, logicalTaskId, 'tmp')
   const outputs = taskFilePath(workspaceRoot, logicalTaskId, 'outputs')
-  for (const path of [work, tmp, outputs]) await checkedTaskDirectory(path, true)
-  return { logicalTaskId, root: dirname(work), work, tmp, outputs }
+  for (const path of [materials, work, tmp, outputs]) await checkedTaskDirectory(path, true)
+  return { logicalTaskId, root: dirname(work), materials, work, tmp, outputs }
+}
+
+/** A task owns one durable workspace; neither its title nor its model can choose the path. */
+export async function taskWorkspace(root, taskId) {
+  return (await taskDirectories(root, taskId)).root
+}
+
+/** Every execution of a task shares its task's native workspace and runtime directory. */
+export async function taskExecutionWorkspace(root, taskId, sessionId) {
+  if (!taskSegment(sessionId)) throw new Error('TASK_DIRECTORY_INVALID')
+  return taskWorkspace(root, taskId)
 }
 
 export const sessionPurposes = Object.freeze({
@@ -69,4 +81,10 @@ export function sessionTitle(purpose, subject = '') {
 export function nameSession(ctx, session, purpose, subject) {
   const titles = ctx.get?.('sessionTitle') ?? ctx.sessionTitle
   if (titles) titles.rename(session, sessionTitle(purpose, subject))
+}
+
+/** Use the native title service without adding role suffixes to task-owned names. */
+export function renameTaskSession(ctx, session, title) {
+  const titles = ctx.get?.('sessionTitle') ?? ctx.sessionTitle
+  if (titles && typeof title === 'string' && title.trim()) titles.rename(session, title.trim())
 }

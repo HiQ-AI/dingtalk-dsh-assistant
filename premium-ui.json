@@ -1,0 +1,11 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["packages/dingtalk-dsh-observer", "packages/dingtalk-dsh-assistant"],
+  "locale": "zh-CN",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": { "Select/Listbox": "native" },
+  "requiredCommands": ["unit"],
+  "commands": { "unit": "node --test test/client.test.js test/http.test.js test/observer-client.test.js test/observer-node-control-display.test.js test/observer-slot-compatibility.test.js" },
+  "evidence": { "crudFullFlow": "test/http.test.js", "failurePaths": "test/observer-node-control-display.test.js" }
+}

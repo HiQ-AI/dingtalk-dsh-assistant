@@ -3,83 +3,50 @@ import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { apply, name } from '../packages/dingtalk-dsh-assistant/resident.js'
+import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
+import { available, reason, nativeTaskHost } from './fixtures/task-session-native-host.js'
+const { apply, name } = resident
 import { buildTaskAssociationIndex } from '../packages/dingtalk-dsh-assistant/runtime.js'
 
-test('单一业务插件正常启停，历史启用配置不再启动任务表格同步', async (t) => {
-  const storageRoot = await mkdtemp(join(tmpdir(), 'resident-health-'))
-  t.after(() => rm(storageRoot, { recursive: true, force: true }))
-  const effects = []
-  const logs = []
-  const historical = {
-    tasks: [],
-    taskSheetSyncConfig: { enabled: true, documentUrl: 'https://alidocs.dingtalk.com/i/nodes/node', nodeId: 'node', documentName: '任务表', sheetId: 'sheet', sheetTitle: 'Sheet1', intervalMs: 180000 },
-    taskSheetSyncStatus: { state: 'success', taskCount: 3, lastSuccessAt: '2026-09-14T04:00:00Z' },
-  }
-  const records = new Map([['scheduler:runtime', structuredClone(historical)]])
+test('单一业务插件以原生任务会话启停，不恢复已移除的任务表格同步', { skip: !available ? reason : false }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'resident-health-'))
+  let host
+  t.after(async () => { try { await host?.close() } finally { await rm(root, { recursive: true, force: true }) } })
   const interval = t.mock.method(globalThis, 'setInterval')
-  const table = (name) => ({
-    get: (key) => records.get(`${name}:${key}`),
-    entries: () => [...records.entries()].filter(([key]) => key.startsWith(`${name}:`)).map(([key, value]) => [key.slice(name.length + 1), value])[Symbol.iterator](),
-    async put(key, value) { records.set(`${name}:${key}`, value) },
-    async update(key, transform) { const storageKey = `${name}:${key}`; const value = transform(records.get(storageKey)); records.set(storageKey, value); return value },
-  })
-  const ctx = {
-    effect(callback) {
-      effects.push(callback)
-    },
-    logger: {
-      info(message) {
-        logs.push(message)
-      },
-    },
-    storage: { backend: new Map([['json', { root: storageRoot }]]) },
-    storageDomain: {
-      config: { backend: 'json' },
-      async open() {
-        return { table, close: async () => undefined }
-      },
-    },
-    agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
-    agents: {
-      async create() { throw new Error('not expected') },
-      async resume() { throw new Error('not expected') },
-    },
-    subagents: { drainDescendants: async () => undefined },
-  }
-
-  await apply(ctx, { host: '127.0.0.1', port: 0 })
-  const dispose = effects[0]()
-  try {
-    assert.equal(name, 'dingtalk-dsh-assistant')
-    assert.equal(effects.length, 1)
-    assert.match(logs[0], /DingTalk group assistant listening/)
-    assert.equal(interval.mock.calls.some(call => call.arguments[1] === 180000), false)
-  } finally { await dispose() }
-  assert.deepEqual(records.get('scheduler:runtime').taskSheetSyncConfig, historical.taskSheetSyncConfig)
-  assert.deepEqual(records.get('scheduler:runtime').taskSheetSyncStatus, historical.taskSheetSyncStatus)
+  host = await nativeTaskHost(root, () => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true })
+  const plugin = await host.ctx.plugin(resident, { host: '127.0.0.1', port: 0, agentWorkspaceDir: root,
+    agentPreset: 'native-test', dws: { enabled: false }, taskSessions: { dbPath: join(root, 'tasks.db'), instanceId: 'resident-health', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true } })
+  assert.equal(name, 'dingtalk-dsh-assistant')
+  assert.equal(interval.mock.calls.some(call => call.arguments[1] === 180000), false)
+  assert.equal(host.ctx.get('execution'), undefined)
+  assert.equal(host.ctx.get('subagents'), undefined)
+  assert.equal(host.requests.length, 0)
+  await plugin.dispose()
 })
 
-test('完成通知签名由 Agent 工作区规则决定且插件不写死身份', async () => {
+test('通用生产源码不绑定个人姓名，群回复签名仅来自明确个人配置', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /签名、口吻和身份声明由 Agent 自身工作区规则决定/)
   assert.doesNotMatch(source, /小小鹏|孙鹏/u)
   const root=new URL('../packages/',import.meta.url)
   const files=await readdir(root,{recursive:true})
   for(const file of files.filter(name=>name.endsWith('.js'))){
-    assert.doesNotMatch(await readFile(new URL(file.replaceAll('\\','/'),root),'utf8'),/小小鹏|孙鹏/u,file)
+    const body = await readFile(new URL(file.replaceAll('\\','/'),root),'utf8')
+    assert.doesNotMatch(body, /孙鹏/u, file)
+    assert.doesNotMatch(body, /小小鹏/u, file)
   }
 })
 
-test('resident重启通过Topic协调器恢复归类和已接受决策', async () => {
-  const runtimeSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
+test('resident重启只恢复任务会话，不重新加载历史Topic任务调度器', async () => {
+  const runtimeSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/task-resident-runtime.js', import.meta.url), 'utf8')
   const residentSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/resident.js', import.meta.url), 'utf8')
-  const topicSource = await readFile(new URL('../packages/dingtalk-dsh-assistant/topic-runtime.js', import.meta.url), 'utf8')
-  assert.match(runtimeSource, /recoverInterruptedDecisions: \(\) => topics\.recover\(\)/)
-  assert.match(topicSource, /routingStatus !== 'routed'/)
-  assert.match(topicSource, /const commit = unfinished\(topic\)/)
+  assert.match(residentSource, /openTaskResidentRuntime\(ctx, store/)
+  assert.match(residentSource, /openTaskSessionService\(/)
+  assert.match(residentSource, /const recoverTasks = \(\) => tasks\.recover\(\)/)
+  assert.match(runtimeSource, /recoverInterruptedDecisions: async \(\) => \[\]/)
+  assert.doesNotMatch(residentSource, /openResidentRuntime\(|openWorkflowService\(/)
   assert.doesNotMatch(residentSource, /runtime\.recoverPendingMessages\(\)/)
-  assert.ok(residentSource.indexOf('await runtime.recoverInterruptedDecisions()') < residentSource.indexOf('startDwsBridge({'), '中断收敛必须先于DWS入站启动')
+  assert.ok(residentSource.indexOf('void recoverTasks()') < residentSource.indexOf('startDwsBridge({'), '任务恢复必须先于DWS入站启动')
 })
 
 test('DWS profile在恢复遗留判断前注入引用消息查询协议', async () => {

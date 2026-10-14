@@ -1,19 +1,9 @@
+import { groupReplyInstructions, assertGroupReply, sameDeliveredText, notificationOpenTaskId, sendWorkflowNotification } from './group-message.js'
+export { groupReplyInstructions, assertGroupReply, sameDeliveredText, notificationOpenTaskId, sendWorkflowNotification } from './group-message.js'
 import { randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
 
-export const groupReplyInstructions = '对外以原群事项的真实业务名称说明已完成什么、交付到哪里和当前轮次范围；从原群正文、所指文档名称和 goal.title 核对名称，不编造。维护材料中的 SG18 等调度编号、Owner/run/req 等内部标识不得当作事项标题或结果；也不能只说“核心功能修复完成”代替业务描述。业务名称中合法的型号、标准、工单号和交付 PR 编号应原样保留，不做编号批量替换。完成回复应自包含完成内容、实际交付结果和必要的未验证或获准省略项；只引用已知群成员可访问的交付链接，不引导查看 Agent 本地任务详情、本地路径或内部证据。发给群成员的回复、summary 和 question 使用直白的业务语言：先说结论或需要对方做什么，再给必要背景；突出重点，不堆分析过程。需要业务人员补充时，用大白话说清正在做什么业务动作、具体缺什么信息以及用来做什么，不使用完成报告的三段模板，不公开缺少、责任方、继续条件等内部格式；涉及账号时说明哪个系统和环境、需要什么角色或权限、与已有身份的关系，不泛称测试专家或夹具，不索要在群里公开密码、令牌或其他凭据。明确列出每项信息及要回答的问题，多项逐行列出，清单项之间留空行以保持渠道渲染清晰，保留业务名称、选项和必要链接；不要只说“请补充信息”或“需要确认”。不要披露插件内部任务或会话编号、任务会话/执行会话、调度、Outbox、Task Owner、Host 等内部机制或原始错误码。内部结构字段和证据引用仍按接口填写，不放进公开正文。业务所需技术细节、文件名、SQL、PR链接和业务编号可以保留；任务接纳、排队和启动保持静默；所有任务流的中间进度、内部受阻和审批等待均不主动发群消息；审批由插件私聊渠道发起，群仅保留最终结果、明确需要用户补充信息或授权的问题及用户主动查询/控制的回复；详细责任人与恢复条件填结构化 condition，不逐项拼进群正文。用户明确询问插件实现时可以解释相关技术，但不附带本次运行的内部编号。'
-
 // 只识别明确的插件运行标签与机制，避免把业务代码、普通编号当成内部数据。
-export function assertGroupReply(text, internalIds = []) {
-  if (typeof text !== 'string') return
-  if (internalIds.some(id => typeof id === 'string' && id.length >= 8 && text.includes(id))
-    || /(?:task|owner|run|session)-[a-f0-9]{32,}\b|(?:任务|会话|执行|流程)(?:编号|[ _-]?id)\s*[:：=]\s*\S+|(?:taskId|sessionId|runId|leaseEpoch|inputDigest)\s*[:：=]\s*\S+|任务会话|执行会话|叶子会话|平台机制|(?:Task Owner|Outbox|IntentRun)\s*(?:已|将|正在|等待|调度|提交|写入)/iu.test(text)) {
-    const error = new Error('GROUP_REPLY_INTERNAL_DETAILS: 请将公开正文改成群成员能理解的业务进展，不包含插件内部编号或机制。')
-    error.code = 'GROUP_REPLY_INTERNAL_DETAILS'
-    throw error
-  }
-}
-
 export function groupStatusText(status) {
   return ({ 'deployed-and-handed-to-testing':'已部署并交付测试', verified:'已核验', awaiting_confirmation:'等待确认', accepted:'已收到', pending:'等待处理', planned:'等待处理', ready:'等待处理', running:'正在处理', active:'正在处理', waiting:'等待补充信息或确认', paused:'已暂停', succeeded:'已完成', completed:'已完成', failed:'未完成，需要排查原因', blocked:'暂时无法继续', cancelled:'已取消', cancelling:'正在取消', pausing:'正在暂停', unknown:'暂未确认' })[status] ?? '暂未确认'
 }
@@ -47,36 +37,6 @@ export function taskDecisionConditionText(condition) {
   const clean = value => value.replace(/\s+/gu, ' ').trim()
   return `缺少：${clean(condition.missing)}；需由${clean(condition.responsibleParty)}处理；继续条件：${clean(condition.resumeWhen)}。`
 }
-export function sameDeliveredText(observed, expected, quoted = false) {
-  const normalize = text => typeof text === 'string' ? text.replace(/\s+/gu, ' ').trim() : null
-  const actual = normalize(observed), wanted = normalize(expected)
-  if (actual === null || wanted === null) return false
-  // 钉钉回读把单行 inline-code 表示成粗体；只变换期望的成对单反引号，保留正文。
-  const inlineRendered = expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**')
-  // 已实证 DWS 将连续有序列表的项间单换行移除；只变换期望正文，保留编号和每个字符。
-  const listRendered = text => {
-    const lines = text.split(/\r?\n/u), rendered = []
-    let fence = null
-    for (let index = 0; index < lines.length; index++) {
-      const marker = lines[index].match(/^\s*(`{3,}|~{3,})/u)?.[1]
-      if (marker) { if (!fence) fence = marker; else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null }
-      if (!fence && /^1\. .+/u.test(lines[index])) {
-        let end = index + 1
-        while (end < lines.length && lines[end].startsWith(`${end - index + 1}. `) && lines[end].length > `${end - index + 1}. `.length) end++
-        if (end > index + 1) { rendered.push(lines.slice(index, end).join('')); index = end - 1; continue }
-      }
-      rendered.push(lines[index])
-    }
-    return normalize(rendered.join('\n'))
-  }
-  const prefix = typeof quoted === 'object' && quoted?.sender ? normalize(`@${quoted.sender} `) + ' ' : null
-  const body = prefix && actual.startsWith(prefix) ? actual.slice(prefix.length) : actual
-  return [wanted, normalize(inlineRendered), listRendered(expected), listRendered(inlineRendered)].some(candidate => body === candidate)
-}
-export function notificationOpenTaskId(ack) {
-  return ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
-}
-
 // 只把明确指向助手沟通的原文作为静默依据；“不发审核消息”等业务限制不扩张。
 export function notificationSilence(run, phase) {
   const text = run.body ?? run.snapshot?.source?.text ?? ''
@@ -119,17 +79,6 @@ export function formatGroupReply(text, responsibility = '') {
   assertGroupReply(formatted)
   return formatted
 }
-export function sendWorkflowNotification(adapter, notification) {
-  const payload = notification.payload
-  if (payload.reportChannel === 'web' || payload.externalMessaging === false
-    || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) throw new Error('WORKFLOW_WEB_NOTIFICATION_FORBIDDEN')
-  assertGroupReply(payload.text)
-  const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id }
-  return payload.sourceMessageId && payload.actorId
-    ? adapter.sendGroupReply({ ...base, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId })
-    : adapter.sendGroup(base)
-}
-
 /** 只执行预检过的单条操作。领取后异常进入待核对，调用方不能重试外部动作。 */
 export async function executeNotificationOperation({ store, adapter, operationId, expectedFactDigest, authorizationRef }) {
   const operation=await store.query({kind:'message.notificationOperation',operationId})

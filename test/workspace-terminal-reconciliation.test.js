@@ -101,21 +101,26 @@ test('terminal reconciliation requires exact current maintenance permit', async 
   await assert.rejects(store.command({ id: 'wrong-permit', kind: 'node.failure.reconcile-workspace', args: { ...args, maintenanceRevision: args.maintenanceRevision + 1 } }), { code: 'WORKSPACE_TERMINAL_MAINTENANCE_REQUIRED' })
 })
 
-test('real loopback control route finalizes via already-owned Store and reuses genuine receipt', async t => {
+test('retired loopback control is inert; historical service finalizes via owned Store and reuses genuine receipt', async t => {
   const { store, controller, args } = await fixture(t)
-  const server = createServer((request,response) => handleRequest(request,response,{controlWorkflowTaskExecution:async input=>{
+  let calls=0
+  const control=async input=>{
     const receipt=await reconcilePausedWorkspaceFailure({store,taskId:input.taskId,request:input})
     return {status:receipt.result.status,state:await controller.state(input.runId)}
-  }}))
+  }
+  const server = createServer((request,response) => handleRequest(request,response,{controlWorkflowTaskExecution:()=>{calls++;assert.fail('retired reconciliation')}}))
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
   t.after(()=>new Promise(resolve=>server.close(resolve)))
   const {taskId,...binding}=args,url=`http://127.0.0.1:${server.address().port}/tasks/${taskId}/execution-control`
   const call=async(body,origin='http://127.0.0.1:3080')=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:JSON.stringify(body)})
   const body={requestId:'native-finalize',action:'reconcile-failure',reason:'Actual synthetic native preflight failure fixture',...binding}
-  assert.equal((await call(body,'https://foreign.example')).status,403)
-  let response=await call(body);assert.equal(response.status,200);assert.equal((await response.json()).state.run.status,'failed')
+  assert.equal((await call(body,'https://foreign.example')).status,410)
+  assert.equal((await call({...body,actorId:'forged'})).status,410)
+  assert.equal((await call(body)).status,410);assert.equal(calls,0)
+  assert.equal((await control({...body,taskId})).state.run.status,'failed')
   const current=await controller.state(args.runId)
-  response=await call({...body,runRevision:current.run.revision,requestId:'native-retry'})
-  assert.equal(response.status,200);assert.equal((await response.json()).state.run.status,'failed')
+  assert.equal((await call({...body,runRevision:current.run.revision,requestId:'native-retry'})).status,410)
+  assert.equal((await control({...body,taskId,runRevision:current.run.revision,requestId:'native-retry'})).state.run.status,'failed')
+  assert.equal(calls,0)
   assert.equal((await store.query({kind:'effect.get',effectId:args.effectId})).state,'failed')
 })

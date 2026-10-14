@@ -115,20 +115,24 @@ test('real worker refuses an unauthorized effect prepared before scope activatio
  assert.equal((await s.query({kind:'runtime.maintenance'})).taskRunScope,undefined)
 })
 
-test('supported local HTTP task-run endpoint enforces origin, exact effect enum and actor fields before atomic grant',async t=>{
+test('retired HTTP task-run denies all inputs; historical store retains atomic scoped grant and CAS',async t=>{
  const f=await fixture(t,false)
- const runtime={getWorkflowMaintenance:()=>f.store.query({kind:'runtime.maintenance'}),runScopedWorkflowTask:async request=>{
- const {requestId,...a}=request;const receipt=await f.store.command({id:'http:'+requestId,kind:'runtime.maintenance.task-run',args:{...a,actorId:'actor'}});return {receipt,state:await f.store.query({kind:'runtime.maintenance'})}}}
+ let calls=0
+ const grant=async request=>{const {requestId,...a}=request;const receipt=await f.store.command({id:'http:'+requestId,kind:'runtime.maintenance.task-run',args:{...a,actorId:'actor'}});return {receipt,state:await f.store.query({kind:'runtime.maintenance'})}}
+ const runtime={getWorkflowMaintenance:()=>f.store.query({kind:'runtime.maintenance'}),runScopedWorkflowTask:async()=>{calls++;assert.fail('retired scoped grant')}}
  const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
  const {actorId,...a}=f.args,body={...a,requestId:'approved-scope'},url=`http://127.0.0.1:${server.address().port}/runtime/maintenance/task-run`
  const post=(b,origin='http://127.0.0.1:3080')=>fetch(url,{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify(b)})
- assert.equal((await post(body,'https://evil.invalid')).status,403)
- assert.equal((await post({...body,actorId:'spoof'})).status,400)
- assert.equal((await post({...body,allowedEffects:['deploy']})).status,400)
- assert.equal((await post({...body,allTasks:true})).status,400)
- const response=await post(body);assert.equal(response.status,200);const granted=await response.json();assert.equal(granted.state.taskRunScope.taskId,'one');assert.equal(granted.state.taskRunPermitted,true);assert.equal(granted.state.dispatchRestricted,true)
- assert.equal((await post(body)).status,200)
- assert.equal((await post({...body,requestId:'stale-scope'})).status,409)
+ assert.equal((await post(body,'https://evil.invalid')).status,410)
+ assert.equal((await post({...body,actorId:'spoof'})).status,410)
+ assert.equal((await post({...body,allowedEffects:['deploy']})).status,410)
+ assert.equal((await post({...body,allTasks:true})).status,410)
+ assert.equal((await post(body)).status,410);assert.equal(calls,0);const granted=await grant(body);assert.equal(granted.state.taskRunScope.taskId,'one');assert.equal(granted.state.taskRunPermitted,true);assert.equal(granted.state.dispatchRestricted,true)
+ assert.equal((await post(body)).status,410)
+ assert.equal((await grant(body)).state.taskRunScope.taskId,'one')
+ assert.equal((await post({...body,requestId:'stale-scope'})).status,410)
+ await assert.rejects(grant({...body,requestId:'stale-scope'}),/STALE|CONFLICT/)
+ assert.equal(calls,0)
 })
 
 test('completed original run binds only Owner/progress and denies every execution or unrelated dispatch',async t=>{
@@ -199,15 +203,15 @@ test('completed original run binds only Owner/progress and denies every executio
 
 });
 
-test('HTTP owner retry preserves actual failure text and enforces origin/actor schema',async t=>{
+test('retired HTTP owner retry rejects exact failure, null failure and forged identity without runtime calls',async t=>{
  const calls=[]
  const server=createServer((req,res)=>handleRequest(req,res,{retryWorkflowOwner:async args=>{calls.push(args);return {schemaTestOnly:true}}}))
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
  const url=`http://127.0.0.1:${server.address().port}/tasks/one/retry-owner`,failure="Cannot read properties of undefined (reading 'id')"
  const body={retryKey:'original-recovery',reason:'recover exact definition',expectedOwnerRevision:220,expectedLeaseEpoch:70,expectedRequirementRevision:2,expectedControlRevision:50,expectedLastFailure:failure}
  const send=(value,origin='http://127.0.0.1:3080')=>fetch(url,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify(value)})
- assert.equal((await send(body,'https://foreign.invalid')).status,403);assert.equal((await send({...body,actorId:'forged'})).status,400)
- assert.equal(calls.length,0);assert.equal((await send(body)).status,202);assert.equal(calls[0].expectedLastFailure,failure);assert.equal(calls[0].taskId,'one');assert.equal((await send({...body,expectedLastFailure:null})).status,202);assert.equal(calls[1].expectedLastFailure,null)
+ assert.equal((await send(body,'https://foreign.invalid')).status,410);assert.equal((await send({...body,actorId:'forged'})).status,410)
+ assert.equal((await send(body)).status,410);assert.equal((await send({...body,expectedLastFailure:null})).status,410);assert.equal(calls.length,0)
 })
 
 test('Owner binding block recovers once only for successful scoped child receipts',async t=>{

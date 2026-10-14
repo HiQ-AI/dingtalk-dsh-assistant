@@ -1,0 +1,161 @@
+{
+  "baseline": {
+    "commit": "b2fb1acfeb9771a8ed9df7646b79133bd91e5430",
+    "tests": 3401,
+    "passed": 3273,
+    "failed": 95,
+    "skipped": 33
+  },
+  "broadRegression": {
+    "tests": 3458,
+    "passed": 3332,
+    "failed": 93,
+    "skipped": 33,
+    "durationMs": 356811.665323,
+    "command": "node --test --test-concurrency=4 'test/*.test.js'",
+    "scope": "Broad run began before the final atomic operation.start fence. Two source files changed during that run; prepared-only cancellation and its native recovery regression were added afterward. Five files differ from the broad-run starting snapshot, all covered by the final 91-test immutable targeted run."
+  },
+  "finalTargeted": {
+    "tests": 91,
+    "passed": 91,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 5182.165216,
+    "sourceManifest": "task-session-runtime-source-sha256.txt",
+    "all370SourceChecksumsUnchangedDuringRun": true
+  },
+  "finalDelta": {
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": {
+      "broadRunStartSha256": "469e0a8c05e259d475a59c1aede68ff96881884cf18c4b850cedb6ab1195bba5",
+      "finalSha256": "19fcb6e9eecb36515c171a6edf646a19c5782dcbbcd6c358926ffa70dfad9a65"
+    },
+    "packages/dingtalk-dsh-assistant/task-session-service.js": {
+      "broadRunStartSha256": "82f12b0a2cd6dbb28108fa93d27b4c82311ddf17bcf9d2ea94d3915acb52aa9b",
+      "finalSha256": "bca5cce69797d665d37566c2c93a61b988625a604ff7488249e7cba5fe4d7740"
+    },
+    "test/dynamic-task-store.test.js": {
+      "broadRunStartSha256": "5d732b4d99b8b618b974212de27437a90e017c3fff0898127f077d37b7c0cd18",
+      "finalSha256": "7c7a01de391893b455da4d5d18cb10bbddc0bac2977bf0b2d203167ef2c4d96a"
+    },
+    "test/fixtures/task-session-native-host.js": {
+      "broadRunStartSha256": "aa6b552480aca82ecec55be9d9efd54ef93eba1129b48ffab2a510311878a97b",
+      "finalSha256": "8053e4827468a3706cf36a038a9d91d2eef8bb8a03740f2c7227947a4b71931f"
+    },
+    "test/task-native-unknown-fence.test.js": {
+      "broadRunStartSha256": "7847e3efad7b450e240efffbad66a31172379395fba886da45ad94606f20044a",
+      "finalSha256": "f45951a4a6d6f66105324ed29cc8cd34a215c09b2ad4ebb742c2c3cd24312470"
+    }
+  },
+  "newFailureNames": [],
+  "baselineFailureNamesNotObservedInBroadRun": [
+    "A28 v5→v6检查零写，迁移保留原账，独占锁防在线旧进程，重试不重放",
+    "historical UAT workflow still uses its original merge semantics, source-only bypasses them"
+  ],
+  "matchedFailureNames": [
+    "Bytebase 原生审批 Service 自动对账 BYTEBASE_APPROVAL_PENDING/approved",
+    "Bytebase 原生审批 Service 自动对账 BYTEBASE_APPROVAL_PENDING/rejected",
+    "Bytebase 原生审批 Service 自动对账 BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED/approved",
+    "Bytebase 原生审批 Service 自动对账 BYTEBASE_HUMAN_APPROVAL_NOT_CONFIGURED/rejected",
+    "Host 仅从本机 JSON 读取 Bytebase 凭据并隔离于发布客户端",
+    "Host 仅从本机路径装配凭据并只提供客户端对象",
+    "Host 只用本机连接凭据装配精确三个 UAT PostgreSQL 库",
+    "Host 将三个 Bytebase 生产目标分别绑定天翼云只读从库凭据",
+    "Owner不能删除I已落账的原发送人验证门槛：confirmation",
+    "Owner不能删除I已落账的原发送人验证门槛：none",
+    "SG22 seven-stage session selects prepared rebuild after terminal pipeline 326 without replay",
+    "UAT补充绑定同一开发Task并更新目标，不新建澄清请求或第二任务",
+    "a frozen tracked deletion remains absent, including ignored/generated restored paths, in build and acceptance preparation",
+    "analysis rebuild interrupted before migration resumes from persisted decision with fresh generation",
+    "artifact formats are not admission gates; Owner receives actual failed report bytes",
+    "cross repository reissue reuses destination development head and its real registered PR binding",
+    "existing UAT runner rejects wrong task, namespace, remote service and extra case parameters before access",
+    "explicit non-main source flows through workspace/candidate/commit identity",
+    "foreign task, repository, changed code and changed PR head are rejected",
+    "held restart stop continuation requires current process same maintenance and every drained effect boundary",
+    "linear other-feature pollution: existing analysis rebuilds same Run into fresh source workspace and PR",
+    "local development head ahead of remote retains complete work and remote lease",
+    "native evidence works from arbitrary project directory and preserves real nonzero exit",
+    "normal parent exit waits for detached child and orphan grandchild; later source drift fails verification",
+    "parent exit with a harmless child advances only after all descendants exit; real nonzero exit retained",
+    "paused legacy v22 with actual managed edit/build migrates same Run and retains immutable full feature, dependency, staged edit/history",
+    "rebuilt polluted branch: existing Agent -> actual edit/check/commit/push/PR identity end to end",
+    "reissue cross repository resets each source/workspace/head/remote/PR identity",
+    "reissue explicit source wins and rebinds candidate/head/remote/PR through actual Controller",
+    "reissue omitted source resolves real remote default through actual Controller",
+    "remote complete feature reuses development head with full diff in existing Agent",
+    "remote-only 16-node two-repository flow retains actual workspaces, receipts and side-effect idempotency across cold restart",
+    "request explicit source overrides configured source through production Controller",
+    "shared worktrees retain durable verification across cold restart and iterative edits without source exports",
+    "stage-bound analysis rebuild keeps current stage and same Run binding",
+    "stage-bound cross repository reissue keeps stage/workflow/requirement identity",
+    "test/local-acceptance-project.test.js",
+    "two repositories advance sequentially through real edits checks acceptance Git and isolated PR adapters",
+    "v25 actual reset preserves pending source; own commit cold-restores without redoing prefix and rejects foreign drift",
+    "v25 real checks and local checkpoints retain succeeded edits, reject unsafe refresh and restore cold definitions",
+    "worktree acceptance does not copy source and accepts long actual business prose",
+    "任务投影只在真实等待时显示原因，完成后隐藏遗留原因且不改历史",
+    "冻结v4完成策略保留部署前函数正文及原v6工作流定义摘要，新作用域使用v5",
+    "加列验收先独立确认Bytebase执行，再查询生产只读连接；未完成不读列",
+    "只关联话题时意图仍读到已执行Task及结果限制，运行成功不冒充目标达成",
+    "后端配置提案仅更换指定check版本与steps，不触碰其他仓库配置",
+    "固定工程重启后复用同Run成功检查回执且无动态改图入口 runner升级",
+    "固定工程重启后复用同Run成功检查回执且无动态改图入口 原实现",
+    "工程交付后补充：固定分支祖先条件续写、PR原位修订且新代读取旧代结果",
+    "已安装失败只转发受控恢复原收据，不进入重复安装模式",
+    "常驻协调跨turn澄清同群唤醒原取消事项，不自锁且精确取消已选项",
+    "开发环境缺失或不明确先承接Task再由Owner询问具体UAT：修复合并问题/uat1",
+    "开发环境缺失或不明确先承接Task再由Owner询问具体UAT：修复合并问题/undefined",
+    "开发环境缺失或不明确先承接Task再由Owner询问具体UAT：提交到uat1或uat2/uat1",
+    "开发环境缺失或不明确先承接Task再由Owner询问具体UAT：提交到uat1～9/uat1",
+    "开发缺UAT先承接并等待具体环境，补充后原Task恢复且不提前准备工程",
+    "执行中收到追加文件意图时保留当前Run，完成后从核验产物启动后继",
+    "授权提交绑定最终批次版本并在原子接纳前核对授权：当前接纳",
+    "排空桥与正式Owner使用同一工件路径，workspace根不能重复tasks",
+    "新任务验收runner及依赖跨LF/CRLF打包身份一致，真实源码变化仍改变身份",
+    "新生产加列正常候选由执行会话送审，旧无效候选保持等待且Owner不改图：preconditions",
+    "新生产加列正常候选由执行会话送审，旧无效候选保持等待且Owner不改图：true",
+    "无run的退避Owner可显式恢复且精确幂等，不改原需求与session",
+    "明确开发缺目标仓库先通过协调schema承接，Owner读取来源后等待仓库且无工程副作用",
+    "最小Package JSON默认生成证据目录且Check保持profile原字节",
+    "正式configure修改验收配置仍完整保留末尾禁用屏障，只移除屏障不回滚新配置",
+    "源码上传仅使用受信目录专用令牌，不混用平台凭据",
+    "独立Readback不能将未就绪当成功",
+    "独立Resume不能将未就绪当成功",
+    "生产与 UAT 的 Kubernetes 身份按固定命名空间选择且默认不启用 Tag 写入",
+    "生产与重建旧定义摘要仍可恢复，新定义使用稳定换行摘要",
+    "直接Task附件scope仅纳入已证明材料，拒绝无关附件和旧会话读取",
+    "直接查询成功仍由任务最终决定验收，业务等待与完成独立：false",
+    "真实工程受管noChange保留固定节点并完成候选检查本地业务验收与交付",
+    "真实工程受管验收配置纠正保留已验证候选完成交付",
+    "统一入口Check实际核SHA且目录零写",
+    "统一入口不能占用未指定的已有维护",
+    "统一入口单调用顺序完成并仅输出汇总；重复Readback/Resume不安装",
+    "统一入口失败不继续或伪报恢复：check-wrote",
+    "统一入口失败不继续或伪报恢复：fail-check",
+    "统一入口失败不继续或伪报恢复：fail-deploy",
+    "统一入口失败不继续或伪报恢复：fail-readback",
+    "统一入口失败不继续或伪报恢复：not-resumed",
+    "统一入口失败不继续或伪报恢复：pending",
+    "统一入口失败不继续或伪报恢复：resume-not-ready",
+    "统一入口旧检查先受管排空再完整部署且profile原字节不变",
+    "统一入口旧检查排空预览零写且不冒称完整部署Check通过",
+    "统一入口显式保留维护时不自动恢复其它任务，只有Resume才派发",
+    "统一入口普通活跃节点不进入旧事故桥且保留未排空原因",
+    "缺失或歧义凭据时拒绝装配且异常不回显内容",
+    "群协调等待不重复消费，真实回答后重评且无动作可收口",
+    "补充通知逐项提出信息并保留责任方与下一步，不贴内部分析",
+    "阶段间取消后经原发送人重新授权，只替换未完成后缀"
+  ],
+  "knownFlakyTest": {
+    "name": "验证取消终止真实父子进程，后续step不执行",
+    "baselineIsolatedSamples": {
+      "runs": 30,
+      "failed": 1
+    },
+    "candidateIsolatedSamples": {
+      "runs": 30,
+      "failed": 1
+    },
+    "observedCause": "At the failing kill(pid,0) assertion /proc reported State Z, PPid 1, FDSize 0; the controlled PIDs were subsequently absent. No assertion was relaxed."
+  }
+}

@@ -3,165 +3,156 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 
-const source = (await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
-const mappingCode = source.slice(source.indexOf('    const taskStepControl ='), source.indexOf('    const taskDisplayTitle ='))
-const control = runInNewContext(`${mappingCode}; taskStepControl`)
-const progressCode = source.slice(source.indexOf('      const taskNodes ='), source.indexOf('      const taskTone ='))
-const progress = task => runInNewContext(`${progressCode}; ({ completedSteps, skippedSteps, stepsResolved, stepProgress, stepProgressText })`, { selectedWorkflowTask: task })
-const stateCode = source.match(/      const nodeState = (\{[^\n]+\})/)[1]
-const states = runInNewContext(`(${stateCode})`)
-const reasonCode = source.slice(source.indexOf('    const traceReason ='), source.indexOf('    const readableValue ='))
-const traceReason = runInNewContext(`${reasonCode}; traceReason`)
-const rowCode = source.slice(source.indexOf('    function TaskStepDetail('), source.indexOf('    function ObserverContent('))
-const children = tree => tree && typeof tree === 'object' ? [tree, ...(tree.children || []).flatMap(children)] : []
-const text = tree => tree === null || tree === undefined ? '' : typeof tree === 'object' ? (tree.children || []).map(text).join('\n') : String(tree)
-const navigation = []
-const render = (node, active = true, visited = active) => runInNewContext(`${rowCode}; TaskStepDetail({ taskId: 'task', node, index: 0, detailRevision: 'current', active, tone: stepColor(taskStepControl(node).skipped ? 'skipped' : node.status), statusLabel: taskStepControl(node).label || nodeState[node.status], onOpenSession: navigate, onBack: () => {} })`, {
-  node, index: 0, taskStepControl: control, nodeState: states, nodeTitle: {},
-  active, useState: () => [visited, () => {}], useEffect: () => {},
-  colors: { surface: 'surface', muted: 'muted', warning: 'warning', accent: 'accent' },
-  stepColor: status => status === 'succeeded' ? 'success' : status,
-  React: { createElement: (type, props, ...items) => ({ type, props: props || {}, children: items.flat() }) },
-  TaskStepElapsed: 'existing-elapsed', TaskStepOutput: 'existing-output',
-  Button: 'button', pill: color => ({ color }),
-  selectedWorkflowTask: { taskId: 'task', detailRevision: 'current' }, traceReason,
-  taskStepStart: () => '开始时间未记录', fmt: value => value,
-  navigate: id => navigation.push(id),
-})
-const base = { stepKey: 'task:stage:workflow:node', nodeRunId: 'node', nodeId: 'apply-changes', status: 'succeeded' }
+const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+const elements = tree => tree && typeof tree === 'object' ? [tree, ...(tree.children || []).flatMap(elements)] : []
+const text = tree => tree == null ? '' : typeof tree === 'object' ? (tree.children || []).map(text).join('\n') : String(tree)
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
-test('完成方式取自现有control，接管、复用和跳过不能混为新执行成功', () => {
-  for (const [action, label] of [['submit-output', '会话接管完成'], ['reuse', '已复用产出'], ['skip', '不适用 · 已跳过']]) {
-    const node = Object.freeze({ ...base, control: Object.freeze({ action, reason: '仅处理当前节点', source: 'task-session' }) })
-    const result = control(node)
-    assert.equal(result.label, label)
-    assert.equal(result.skipped, action === 'skip')
-    assert.match(text(render(node)), new RegExp(label.replace(' · ', '.*')))
-    const row = render(node)
-    assert.equal(row.props['data-step-key'], base.stepKey)
-    assert.equal(children(row).find(item => item.children.includes(label)).props.style.color, action === 'skip' ? 'skipped' : 'success')
+function harness(componentName, initialProps = {}) {
+  const states = [], effects = [], scheduled = [], requests = [], events = []
+  let cursor = 0, component, props = initialProps, uuid = 0
+  const React = {
+    createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }), Fragment: 'fragment',
+    useState(initial) { const index = cursor++; if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial; return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value }] },
+    useRef(initial) { const index = cursor++; if (!(index in states)) states[index] = { current: initial }; return states[index] },
+    useCallback(fn) { cursor++; return fn },
+    useEffect(fn, deps) { const index = cursor++, previous = effects[index]; if (!previous || deps.some((value, position) => value !== previous.deps[position])) { previous?.cleanup?.(); effects[index] = { deps }; scheduled.push(() => { effects[index].cleanup = fn() }) } },
   }
-})
-
-test('运行、失败、阻塞和取消优先于旧control完成记录', () => {
-  for (const status of ['running', 'waiting', 'failed', 'blocked', 'cancelled', 'ready', 'pending']) {
-    for (const action of ['skip', 'reuse', 'submit-output']) {
-      const node = { ...base, status, control: { action, reason: '先前操作原因' }, waitReason: { reference: '当前实际原因' } }
-      assert.equal(control(node).label, undefined)
-      assert.equal(control(node).skipped, false)
-      const row = text(render(node))
-      assert.ok(row.includes(states[status]), `${status}/${action} preserves real status`)
-      assert.ok(row.includes('当前实际原因'))
-      assert.doesNotMatch(row, /会话接管完成|已复用产出|不适用 · 已跳过/)
-    }
+  runInNewContext(source.replace('return module.exports', `return { ...module.exports, testComponent: ${componentName} }`), {
+    AbortController, URL, console, crypto: { randomUUID: () => `request-${++uuid}` },
+    fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, resolve: value => resolve({ ok: true, json: async () => value }), reject })) },
+    window: { addEventListener: (...args) => events.push(['add', ...args]), removeEventListener: (...args) => events.push(['remove', ...args]),
+      __ModuleLoader__: { load: ({ factory }) => { component = factory(name => name === 'react' ? React : { Button: 'button', StateDot: 'dot' }).testComponent } } },
+  })
+  return { requests, events,
+    render(next = props) { props = next; cursor = 0; const tree = component(props); scheduled.splice(0).forEach(effect => effect()); return tree },
+    unmount() { effects.forEach(effect => effect?.cleanup?.()) },
   }
-  assert.equal(control({ ...base, definitionPending: true, control: { action: 'skip' } }).label, undefined)
+}
+const button = (tree, label) => elements(tree).find(item => item.type === 'button' && text(item) === label)
+const input = (tree, label) => elements(tree).find(item => item.type === 'label' && item.children[0] === label)?.children.find(item => typeof item === 'object')
+
+test('任务详情只有一个任务会话入口，动态执行与结果拥有独立数据', () => {
+  const task = { taskId: 't', title: '核对服务', objective: '按实际情况核对', state: 'running', requirementRevision: 2, controlRevision: 3, controlState: 'active', session: { sessionId: 'task-session', workspaceDir: '/task', logPath: '/task/log' }, result: { summary: '进行中', evidence: ['proof'], limitations: ['尚未完成'] } }
+  const h = harness('TaskSessionDetail', { task, onOpenSession() {}, onChanged() {}, onBack() {} })
+  const tree = h.render(), children = elements(tree)
+  assert.equal(children.filter(item => item.props.label === '任务会话').length, 1)
+  assert.equal(children.find(item => item.props.label === '任务会话').props.session.sessionId, 'task-session')
+  assert.ok(children.some(item => item.props.taskId === 't'))
+  assert.match(text(tree), /需求修订 2/)
+  assert.match(text(tree), /控制修订 3/)
+  assert.doesNotMatch(source, /WorkflowBrowser|ConfigurationBrowser|groupTaskSteps|taskStepControl|planStageState/)
 })
 
-test('接管等待明确尚未提交，保留实际等待原因及操作来源', () => {
-  const node = { ...base, status: 'waiting', control: { action: 'takeover', reason: ' 自动执行受阻\n由原会话纠正 ', source: 'task-session' }, waitReason: { reference: 'controller_timeout' } }
-  const row = text(render(node))
-  assert.match(row, /会话接管中 · 等待提交/)
-  assert.match(row, /controller_timeout/)
-  assert.match(row, /操作原因（原任务会话）：自动执行受阻\n由原会话纠正/)
-  assert.doesNotMatch(row, /接管完成/)
-  assert.match(text(render({ ...node, control: { ...node.control, source: 'operator' } })), /操作原因（维护操作）/)
+test('历史任务只读且保留产出读取，没有控制或动态新执行入口', () => {
+  const task = { taskId: 'old', title: '旧任务', legacyReadonly: true, result: '历史结果', executionNodes: [{ nodeRunId: 'old-node', title: '历史步骤', status: 'succeeded', outputRef: 'old-output' }] }
+  const tree = harness('TaskSessionDetail', { task, onBack() {} }).render()
+  assert.ok(elements(tree).some(item => item.props.task?.legacyReadonly === true))
+  const history = harness('LegacyTaskHistory', { task }).render()
+  assert.match(text(history), /历史任务只读/)
+  assert.ok(elements(history).some(item => item.props.node?.outputRef === 'old-output'))
+  assert.equal(elements(tree).some(item => item.props.label === '任务会话'), false)
+  assert.equal(elements(tree).some(item => item.props.onChanged), false)
 })
 
-test('无control、未知操作及不完整旧记录保留原状态，不猜完成方式或伪造产物', () => {
-  for (const value of [undefined, null, {}, { action: 'future-action', reason: '未知操作' }, { action: 'toString' }, { action: 'constructor' }]) {
-    const node = { ...base, control: value }
-    assert.equal(control(node).label, undefined)
-    assert.equal(control(node).reason, '')
-    assert.ok(text(render(node)).includes('已完成'))
-    assert.doesNotMatch(text(render(node)), /接管完成|已复用产出|不适用/)
-    assert.ok(children(render(node)).some(item => item.children.includes('暂未记录产出')))
-  }
-  for (const reason of [null, undefined, {}, 123, '  ']) assert.equal(control({ ...base, control: { action: 'reuse', reason } }).reason, '')
-  assert.equal(control({ status: 'skipped' }).skipped, true)
-  const legacy = progress({ executionNodes: [{ status: 'skipped' }] })
-  assert.equal(legacy.skippedSteps, 0)
-  assert.equal(legacy.stepProgress, 0)
-})
-
-test('跳过单列为已处理，完整进度不能声称全部执行成功', () => {
-  const nodes = [base, { ...base, control: { action: 'reuse' } }, { ...base, control: { action: 'skip' } }]
-  const result = progress({ executionNodes: nodes })
-  assert.equal(result.completedSteps, 2)
-  assert.equal(result.skippedSteps, 1)
-  assert.equal(result.stepProgress, 100)
-  assert.equal(result.stepProgressText, '步骤处理 100%')
-  const blocked = progress({ executionNodes: [{ ...base, status: 'blocked', control: { action: 'skip' } }] })
-  assert.equal(blocked.completedSteps, 0)
-  assert.equal(blocked.skippedSteps, 0)
-  assert.equal(blocked.stepProgress, 0)
-  const pending = progress({ plan: { stepsResolved: false }, executionNodes: [nodes[2]] })
-  assert.equal(pending.stepProgress, 99)
-  assert.equal(pending.stepProgressText, '步骤待确定')
-  const undefinedStep = progress({ executionNodes: [{ ...nodes[2], definitionPending: true }] })
-  assert.equal(undefinedStep.skippedSteps, 0)
-  assert.equal(undefinedStep.stepProgress, 0)
-})
-
-test('状态展示保持已有产出绑定和键盘会话入口，不增加控制请求', () => {
-  const node = { ...base, outputRef: 'accepted-output', sessionBound: true, sessionId: 'original-session', control: { action: 'reuse', reason: '沿用有效成果' } }
-  const tree = render(node)
-  const output = children(tree).find(item => item.type === 'existing-output')
-  assert.equal(output.props.node, node)
-  assert.equal(output.props.taskId, 'task')
-  assert.equal(output.props.detailRevision, 'current')
-  const button = children(tree).find(item => item.type === 'button' && item.children.includes('查看步骤会话'))
-  assert.equal(button.props.type, 'button')
-  button.props.onClick()
-  assert.equal(navigation.at(-1), 'original-session')
-  assert.doesNotMatch(mappingCode + rowCode, /fetch\(|post\(|\/node-control|confirm\(|alert\(/)
-})
-
-test('预分配但未绑定的步骤会话不提供跳转入口', () => {
-  for (const sessionBound of [false, undefined]) {
-    const tree = render({ ...base, sessionId: 'reserved-session', sessionBound })
-    assert.equal(children(tree).some(item => item.type === 'button' && item.children.includes('查看步骤会话')), false)
-  }
-})
-
-test('任务会话单独导航且尚未绑定时没有入口', () => {
-  const fragment = source.slice(source.indexOf('    function TaskOwnerSession('), source.indexOf('    function ObserverContent('))
+test('任务与执行会话明确显示ID目录和日志，缺失会话不伪造入口', async () => {
   const opened = []
-  const view = (owner, navigatingSessionId = '') => runInNewContext(`${fragment}; TaskOwnerSession({owner,navigatingSessionId,onOpenSession:id=>opened.push(id)})`, {
-    owner, navigatingSessionId, opened, colors: {}, Button: 'button',
-    React: { createElement: (type, props, ...items) => ({ type, props: props || {}, children: items.flat() }) },
-  })
-  assert.equal(view(null), null)
-  for (const sessionBound of [false, undefined]) {
-    const tree = view({ sessionId: 'reserved-owner', sessionBound })
-    assert.match(text(tree), /会话尚未建立/)
-    assert.equal(children(tree).some(item => item.type === 'button'), false)
-  }
-  const owner = { sessionId: 'task-owner', sessionBound: true }
-  const button = children(view(owner)).find(item => item.type === 'button')
-  assert.equal(button.children.join(''), '查看任务会话')
-  button.props.onClick()
-  assert.deepEqual(opened, ['task-owner'])
-  assert.equal(children(view(owner, owner.sessionId)).find(item => item.type === 'button').props.disabled, true)
+  const h = harness('SessionLocation', { session: { sessionId: 's', workspaceDir: '/task/work', logPath: '/task/log.jsonl' }, label: '任务会话', onOpenSession: async id => opened.push(id) })
+  let tree = h.render()
+  assert.match(text(tree), /\/task\/work/); assert.match(text(tree), /\/task\/log.jsonl/)
+  await button(tree, '打开任务会话').props.onClick()
+  assert.deepEqual(opened, ['s'])
+  tree = h.render({ session: {}, label: '执行会话' })
+  assert.match(text(tree), /尚未建立/)
+  assert.equal(elements(tree).filter(item => item.type === 'button').length, 0)
 })
 
-test('整个Observer模块可加载，最小展示未加入新计时算法', () => {
-  let module
-  runInNewContext(source, {
-    window: { __ModuleLoader__: { load: options => { module = options.factory(name => name === 'react' ? {} : {}) } } },
-  })
-  assert.equal(module.name, 'dingtalk-dsh-observer-client')
-  assert.equal(typeof module.apply, 'function')
-  assert.doesNotMatch(mappingCode + progressCode + rowCode, /waitingMs|waitingElapsedMs|sampledAt|new Date\(control|Date\.parse\(control/)
-  assert.match(rowCode, /React\.createElement\(TaskStepElapsed, \{ node \}\)/)
+test('结果区分结论、证据与限制，不把限制当作已完成结果', () => {
+  const tree = harness('TaskResult', { result: { summary: '服务状态已核对', evidence: ['https://example.test/evidence'], limitations: ['尚未部署'] } }).render()
+  assert.match(text(tree), /服务状态已核对/)
+  assert.match(text(tree), /证据/); assert.match(text(tree), /限制与未验证项/); assert.match(text(tree), /尚未部署/)
+  assert.equal(elements(tree).find(item => item.type === 'a').props.href, 'https://example.test/evidence')
 })
 
-test('未读步骤不请求正文，已读步骤切换后保留输出组件与当前版本绑定', () => {
-  const node = { ...base, outputRef: 'saved-output' }
-  assert.equal(render(node, false, false).props.hidden, true)
-  assert.equal(children(render(node, false, false)).some(item => item.type === 'existing-output'), false)
-  const retained = render(node, false, true)
-  assert.equal(retained.props.hidden, true)
-  assert.equal(children(retained).find(item => item.type === 'existing-output').props.detailRevision, 'current')
-  assert.equal(render(node).props.hidden, false)
+test('新建任务校验字段，重复提交仅一次，失败保留草稿和幂等键', async () => {
+  const created = [], dirty = [], h = harness('CreateTaskForm', { groups: [{ groupId: 'g', name: '测试群' }], onCreated: value => created.push(value), onCancel() {}, onDirtyChange: value => dirty.push(value) })
+  let tree = h.render(), form = tree
+  await form.props.onSubmit({ preventDefault() {} })
+  tree = h.render(); assert.equal(h.requests.length, 0); assert.ok(elements(tree).some(item => item.props.role === 'alert'))
+  assert.equal(input(tree, '任务名称').props['aria-invalid'], true)
+  for (const [label, value] of [['来源群', 'g'], ['任务名称', '检查服务'], ['任务目标', '核对状态'], ['验收要求（每行一项，可选）', '可读取\n状态准确']]) { input(tree, label).props.onChange({ target: { value } }); tree = h.render() }
+  const submit = tree.props.onSubmit({ preventDefault() {} }); tree.props.onSubmit({ preventDefault() {} })
+  assert.equal(h.requests.length, 1)
+  const firstBody = JSON.parse(h.requests[0].options.body)
+  assert.deepEqual(firstBody.acceptanceCriteria, ['可读取', '状态准确'])
+  assert.equal('workflowId' in firstBody, false)
+  h.requests[0].reject(Error('temporary network failure')); await submit
+  tree = h.render(); assert.equal(input(tree, '任务目标').props.value, '核对状态')
+  const retry = tree.props.onSubmit({ preventDefault() {} })
+  assert.equal(JSON.parse(h.requests[1].options.body).requestId, firstBody.requestId)
+  h.requests[1].resolve({ taskId: 'created' }); await retry
+  assert.deepEqual(created, [{ taskId: 'created' }]); assert.equal(dirty.at(-1), false)
+})
+
+test('新建任务取消保护草稿，继续填写保留内容，IME不提前提交', async () => {
+  let cancelled = 0
+  const h = harness('CreateTaskForm', { groups: [], onCreated() {}, onCancel: () => cancelled++ })
+  let tree = h.render(); input(tree, '任务名称').props.onChange({ target: { value: '未提交任务' } }); tree = h.render()
+  await tree.props.onSubmit({ preventDefault() {}, nativeEvent: { isComposing: true } }); assert.equal(h.requests.length, 0)
+  button(tree, '返回看板').props.onClick(); tree = h.render(); assert.equal(cancelled, 0)
+  button(tree, '继续填写').props.onClick(); tree = h.render(); assert.equal(input(tree, '任务名称').props.value, '未提交任务')
+  button(tree, '返回看板').props.onClick(); tree = h.render(); button(tree, '放弃草稿并返回').props.onClick(); assert.equal(cancelled, 1)
+  assert.ok(h.events.some(([kind, event]) => kind === 'add' && event === 'beforeunload'))
+})
+
+test('取消确认绑定显示时控制修订，网络失败不清空原因或重复请求', async () => {
+  const task = { taskId: 't', title: '核对', state: 'running', requirementRevision: 2, controlRevision: 3 }
+  const h = harness('TaskControls', { task, onChanged() {} })
+  let tree = h.render(); button(tree, '取消任务').props.onClick(); tree = h.render()
+  assert.match(text(tree), /已经发生的外部操作不会自动撤销/)
+  input(tree, '取消原因').props.onChange({ target: { value: '计划取消' } }); tree = h.render({ task: { ...task, controlRevision: 4 }, onChanged() {} })
+  const operation = button(tree, '确认取消任务').props.onClick(); button(tree, '确认取消任务').props.onClick()
+  assert.equal(h.requests.length, 1)
+  assert.equal(JSON.parse(h.requests[0].options.body).expectedControlRevision, 3)
+  h.requests[0].reject(Error('TASK_CONTROL_REVISION_CONFLICT')); await operation
+  tree = h.render(); assert.equal(input(tree, '取消原因').props.value, '计划取消'); assert.ok(elements(tree).some(item => item.props.role === 'alert'))
+})
+
+test('动态执行分页的失败可重试，离开后慢响应不能覆盖新查询', async () => {
+  const h = harness('TaskExecutions', { taskId: 't', updatedAt: 1, onOpenSession() {} })
+  h.render(); assert.match(h.requests[0].url, /executions\?offset=0&limit=20/)
+  h.requests[0].resolve({ executions: [{ executionId: 'e1', objective: '检查依赖', status: 'running' }], total: 21 }); await settle()
+  let tree = h.render(); assert.match(text(tree), /检查依赖/)
+  button(tree, '下一页').props.onClick(); h.render(); assert.match(h.requests[1].url, /offset=20/)
+  h.requests[1].reject(Error('offline')); await settle(); tree = h.render(); assert.ok(button(tree, '重试读取执行'))
+  button(tree, '重试读取执行').props.onClick(); h.render(); assert.equal(h.requests.length, 3)
+  h.requests[2].resolve({ executions: [{ executionId: 'e21', objective: '读取日志', status: 'succeeded' }], total: 21 }); await settle()
+  tree = h.render(); assert.match(text(tree), /读取日志/)
+  assert.equal(button(tree, '下一页').props.disabled, true)
+  h.render({ taskId: 't', updatedAt: 2, onOpenSession() {} }); h.unmount()
+  h.requests[3].resolve({ executions: [{ executionId: 'stale', objective: '过期' }], total: 1 }); await settle()
+  assert.doesNotMatch(text(h.render()), /过期/)
+})
+
+test('已取消任务仍出现在已结束桶，所有历史记录进入只读历史页', () => {
+  assert.match(source, /\['completed', 'cancelled', 'succeeded', 'failed'\]\.includes\(task\.state\)/)
+  assert.match(source, /filter\(task => task\.legacyReadonly \|\| task\.archivedAt\)/)
+  assert.match(source, /slice\(\(currentHistoryPage - 1\) \* 20, currentHistoryPage \* 20\)/)
+  assert.match(source, /message\.taskSessionRefs \|\| \[\]/)
+  assert.match(source, /onClick: \(\) => openTask\(tasksById\.get\(taskId\) \|\| \{ taskId \}\)/)
+})
+
+test('预分配会话尚未绑定时只展示路径，不提供可继续的会话入口', () => {
+  const tree = harness('SessionLocation', { session: { sessionId: 'reserved', sessionBound: false, workspaceDir: '/task/work' }, label: '任务会话' }).render()
+  assert.match(text(tree), /尚未绑定/)
+  assert.equal(elements(tree).filter(item => item.type === 'button').length, 0)
+})
+
+
+test('历史正文只在打开时读取，不因列表刷新读取全部旧工件', () => {
+  const node = { nodeRunId: 'node', status: 'succeeded', outputRef: 'output' }
+  const h = harness('LegacyTaskOutput', { taskId: 'old', node, detailRevision: 'v1' })
+  let tree = h.render(); assert.equal(elements(tree).some(item => item.props.node), false)
+  tree.props.onToggle({ currentTarget: { open: true } }); tree = h.render()
+  assert.equal(elements(tree).find(item => item.props.node).props.node.outputRef, 'output')
 })

@@ -50,15 +50,36 @@ window.__ModuleLoader__.load({
     const fmt = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
     const fmtTime = (value) => value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
     const fmtDuration = (value) => { const seconds = Math.max(0, Math.floor(value / 1000)); if (seconds < 60) return `${seconds}秒`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}分${seconds % 60}秒`; const hours = Math.floor(minutes / 60); return `${hours}小时${minutes % 60}分` }
-    const checkpointDuration = (checkpoint, events, now) => { let startedAt; for (const event of events) { const submittedAt = Date.parse(event.submittedAt); const remainingItems = event.remainingItems || []; if (startedAt === undefined && remainingItems[0] === checkpoint && Number.isFinite(submittedAt)) startedAt = submittedAt; if (startedAt !== undefined && !remainingItems.includes(checkpoint) && Number.isFinite(submittedAt)) return fmtDuration(submittedAt - startedAt) } return startedAt === undefined ? '—' : fmtDuration(now - startedAt) }
     const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'
     const outboxDelivery = (message) => {
       if (message.recallStatus === 'recalled') return { id: 'recalled', label: '已撤回', state: 'neutral' }
       if (message.recallStatus === 'failed') return { id: 'recall-failed', label: '撤回待处理', state: 'warning', detail: message.recallError === 'replacement_delivery_unknown' ? '已停止旧意图发送；历史是否送达仍未知，等待核验' : `旧消息撤回失败${message.recallRetryAt ? '，将有限重试' : '，需核验后处理'}：${message.recallError || '原因未记录'}` }
       if (message.supersededByOutboundId || message.status === 'superseded') return { id: 'superseded', label: '已替代', state: 'neutral', detail: message.deliveredMessageId ? '已记录送达，等待替换通知送达后撤回' : '已停止旧意图发送；未声称历史消息未送达' }
       if (message.status === 'sent') return { id: 'confirmed', label: message.deliveredMessageId ? '已回读' : '已发送', state: 'done' }
-      if (message.deliveryBlockedAt) return { id: 'failed', label: '发送待处理', state: 'error', detail: '服务端已拒绝发送，停止自动重试；需核验失败原因' }
       const reason = message.deliveryPendingReason
+      const notificationState = message.notificationState || ({
+        'task-notification-prepared': 'prepared',
+        'task-notification-starting': 'starting',
+        'task-notification-unknown': 'unknown',
+        'task-notification-failed': 'failed',
+        'task-notification-pre-send-rejected': 'failed',
+        'task-notification-task-terminal': 'failed',
+        'task-notification-superseded': 'failed',
+        'task-notification-confirmation-reassessment-required': 'failed',
+      })[reason]
+      if (notificationState === 'unknown') return { id: 'waiting', label: message.notificationFailurePhase === 'readback' ? '待回读' : '发送结果待核对', state: 'warning', detail: message.notificationFailurePhase === 'readback' ? '发送后回读尚未确认送达' : '发送结果未知，等待核验' }
+      if (notificationState === 'starting') return { id: 'sending', label: '发送中', state: 'ongoing' }
+      if (notificationState === 'prepared') return { id: 'queued', label: '待发送', state: 'ongoing' }
+      if (notificationState === 'failed') {
+        if (reason === 'task-notification-task-terminal') return { id: 'stopped', label: '已停止发送', state: 'neutral', detail: '关联任务已结束，停止旧通知发送；本次未发送', retryDisabled: true }
+        if (reason === 'task-notification-superseded') return { id: 'stopped', label: '已停止发送', state: 'neutral', detail: '通知意图已被替代，停止旧通知发送；本次未发送', retryDisabled: true }
+        if (reason === 'task-notification-confirmation-reassessment-required') return { id: 'reassessment', label: '已停止，需核验', state: 'warning', detail: '已停止发送，旧确认意图关联不足，需人工核验；不会自动恢复或发送', retryDisabled: true }
+        return reason === 'task-notification-pre-send-rejected'
+          ? { id: 'failed', label: '发送前受阻', state: 'error', detail: '发送前检查已拒绝，本次未发送' }
+          : { id: 'failed', label: '投递异常', state: 'error', detail: message.notificationKnownNotSent === true ? '已确认本次未发送' : '尚未确认送达，需核验失败原因' }
+      }
+      if (notificationState === 'delivered') return { id: 'confirmed', label: '已回读', state: 'done' }
+      if (message.deliveryBlockedAt) return { id: 'failed', label: '发送待处理', state: 'error', detail: '服务端已拒绝发送，停止自动重试；需核验失败原因' }
       const details = {
         preflight_history_partial: '发送前检查：历史消息不完整，本次未发送',
         preflight_failed: '发送前检查失败，本次未发送',
@@ -105,24 +126,15 @@ window.__ModuleLoader__.load({
       [data-dingtalk-observer] .observer-task-output-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; }
       [data-dingtalk-observer] .observer-task-overview { padding: 28px 0 24px; }
       [data-dingtalk-observer] .observer-task-detail :is(summary, a):hover { color: ${colors.accent}; }
+      @media (prefers-reduced-motion: reduce) { [data-dingtalk-observer] article { transition: none !important; } }
       @media (forced-colors: active) {
         [data-dingtalk-observer] { scrollbar-color: auto; }
         [data-dingtalk-observer] .observer-task-step-button[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
       }
-      [data-dingtalk-observer] .observer-workflow-layout { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 2fr); align-items: start; gap: 24px; }
-      [data-dingtalk-observer] .observer-workflow-choice { width: 100%; min-width: 0; border: 0; border-left: 3px solid transparent; padding: 16px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
-      [data-dingtalk-observer] .observer-workflow-choice:hover { background: var(--dsw-alias-bg-layer-1, #f7f7f8); }
-      [data-dingtalk-observer] .observer-workflow-choice[aria-pressed="true"] { border-left-color: var(--dsw-alias-brand-primary, #4d6bfe); background: color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 8%, transparent); }
-      [data-dingtalk-observer] .observer-workflow-choice:active { background: color-mix(in srgb, var(--dsw-alias-brand-primary, #4d6bfe) 14%, transparent); }
-      [data-dingtalk-observer] .observer-workflow-choice:focus-visible { outline-offset: -3px !important; }
-      [data-dingtalk-observer] .observer-workflow-doc { color: var(--dsw-alias-brand-primary, #4d6bfe); text-underline-offset: 3px; }
-      [data-dingtalk-observer] .observer-workflow-doc:hover { text-decoration-thickness: 2px; }
       [data-dingtalk-observer] .observer-config-field { display: grid; gap: 8px; min-width: 0; font-size: 14px; }
       [data-dingtalk-observer] .observer-config-input { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px 12px; border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.surface}; color: inherit; font: inherit; line-height: 1.6; }
-      [data-dingtalk-observer] textarea.observer-config-input { resize: vertical; }
+      [data-dingtalk-observer] textarea.observer-config-input { resize: none; }
       [data-dingtalk-observer] .observer-config-input:disabled { opacity: .65; cursor: not-allowed; }
-      [data-dingtalk-observer] .observer-config-binding { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 12px; align-items: end; }
-      @media (max-width: 720px) { [data-dingtalk-observer] .observer-config-binding { grid-template-columns: minmax(0, 1fr); } }
       @media (max-width: 960px) {
         [data-dingtalk-observer] .observer-task-layout { grid-template-columns: 264px minmax(0, 1fr); gap: 20px; }
         [data-dingtalk-observer] .observer-task-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
@@ -135,7 +147,6 @@ window.__ModuleLoader__.load({
         [data-dingtalk-observer] .observer-task-board { grid-template-columns: repeat(2, minmax(280px, 1fr)) !important; }
       }
       @media (max-width: 720px) {
-        [data-dingtalk-observer] .observer-workflow-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
         [data-dingtalk-observer] .observer-task-layout { grid-template-columns: minmax(0, 1fr); }
         [data-dingtalk-observer] .observer-task-navigation { max-height: 360px; overflow: auto; scrollbar-gutter: stable; padding: 2px; }
         [data-dingtalk-observer] .observer-task-reading { position: static; }
@@ -217,75 +228,14 @@ window.__ModuleLoader__.load({
       { state: 'waiting', label: '等待中', tone: colors.warning, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary, #a56500) 8%, var(--dsw-alias-bg-layer-1, #fff))' },
       { state: 'completed', label: '已结束', tone: 'var(--dsw-alias-state-success-primary, #248a3d)', background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary, #248a3d) 8%, var(--dsw-alias-bg-layer-1, #fff))' }
     ]
-    const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'workflows', label: '工作流' }, { id: 'configuration', label: '配置' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '归档任务' }, { id: 'alerts', label: '告警' }]
+    const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '历史人工介入' }, { id: 'archive', label: '历史任务' }, { id: 'alerts', label: '告警' }]
     const traceStatus = (status) => ({ succeeded: '已完成', applied: '已接纳', settled: '处理已结束', processed: '处理已结束', running: '处理中', claimed: '处理中', pending: '等待处理', queued: '等待处理', waiting: '等待继续', waiting_user: '待补充', interrupted: '待恢复', cancelling: '正在停止', ready: '等待执行', needs_attention: '需要处理', failed: '失败', blocked: '已阻塞', superseded: '已被新消息替代', cancelled: '已取消', rejected: '未接纳', accepted: '已接纳' }[status] || '状态未记录')
-    function TaskTotalElapsed({ task }) {
-      const [now, setNow] = useState(Date.now)
-      const ended = task.state === 'completed'
-      useEffect(() => {
-        if (ended || !task.createdAt) return
-        setNow(Date.now())
-        const timer = setInterval(() => setNow(Date.now()), 1000)
-        return () => clearInterval(timer)
-      }, [task.taskId, task.createdAt, ended])
-      const elapsed = traceElapsed({ startedAt: task.createdAt, completedAt: task.updatedAt,
-        status: ended ? 'succeeded' : 'running' }, now)
-      const timing = task.executionTiming
-      const executionMs = timing?.elapsedMs + (timing?.running && !ended ? Math.max(0, now - Date.parse(timing.sampledAt)) : 0)
-      const execution = Number.isFinite(executionMs) ? traceElapsed({ startedAt: new Date(0).toISOString(),
-        completedAt: new Date(executionMs).toISOString(), status: 'succeeded' }, now).replace(/^耗时 /, '') : '未记录'
-      return React.createElement('div', { style: { marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '4px 16px', color: colors.muted, fontVariantNumeric: 'tabular-nums' } },
-        React.createElement('span', { title: '累计业务步骤实际执行时间，包含重试；排除排队及等待，并行区间只计一次，不含消息判断和任务负责会话' },
-          `累计执行时长 ${execution}${timing?.complete === false ? '（记录不完整）' : ''}`),
-        React.createElement('span', {
-        title: ended ? '从任务创建至终态记录更新时间，包含排队、等待与重试' : '从任务创建至现在，包含排队、等待与重试',
-        style: { marginLeft: 'auto', textAlign: 'right', color: colors.muted, fontVariantNumeric: 'tabular-nums' },
-      }, elapsed === '耗时未记录' ? '累计总耗时未记录' : `累计总耗时 ${elapsed.replace(/^(?:已用时|耗时) /, '')}`))
-    }
-    const nodeTitle = { 'prepare-delivery': '核对待交付文件', 'send-files': '发送群文件', 'verify-delivery': '回读并核验文件', 'prepare-merge-main': '准备合并主分支', 'execute-merge-main': '合并主分支', 'prepare-verify-main-merge': '准备核验主分支合并', 'execute-verify-main-merge': '核验主分支合并', 'inspect-merged': '回读合并结果', 'prepare-approval-gate': '准备审批', 'execute-approval-gate': '等待真人审批', 'inspect-approved': '回读审批结果', 'prepare-tag': '准备发布标签', 'execute-tag': '创建发布标签', 'inspect-tagged': '回读标签结果', 'prepare-build': '准备构建', 'execute-build': '执行构建', 'inspect-built': '核对构建产物', 'inspect-runtime': '核对运行版本', investigate: '调查与分析', 'accept-result': '校验调查结果', execute: '执行任务', 'prepare-rebuild': '准备重新构建', 'execute-rebuild': '执行重新构建', 'prepare-workspace': '创建独立工作目录', 'read-files': '读取相关文件', 'propose-changes': '编写修改方案', 'inspect-and-propose': '编写修改方案', 'validate-proposal': '检查修改方案', 'apply-changes': '按方案修改文件', 'verify-candidate': '构建检查', 'business-acceptance': '业务验收', 'define-local-acceptance': '核对本地验收条件', 'plan-local-acceptance': '编写本地验收用例', 'prepare-local-acceptance': '准备本地验收环境', 'run-local-acceptance': '启动服务并执行本地验收', 'finalize-local-acceptance': '核对验收与清理结果', 'index-files': '索引可修改文件', 'select-files': '选择改动文件', 'validate-selection': '检查文件范围', 'prepare-commit': '检查提交条件', commit: '提交代码', 'prepare-push': '检查推送条件', push: '推送代码', 'prepare-pr': '编写合并请求', 'create-pr': '创建合并请求', 'prepare-generation': '确认项目与修改起点', prepare: '校验输入', assess: '审查材料', analyze: '分析材料', 'validate-result': '校验结果', 'inspect-preflight': '核对合并条件', 'prepare-merge': '准备合并', 'execute-merge': '执行合并', 'verify-source': '回读合并结果', 'freeze-target': '冻结目标', 'freeze-input': '冻结输入', 'propose-sql': '编写 SQL 候选', 'validate-package': '校验变更包', 'prepare-rehearsal': '核对 UAT 演练条件', 'run-rehearsal': '在 UAT 数据库演练', 'readback-rehearsal': '回读 UAT 演练', 'prepare-issue': '准备工单', 'create-issue': '提交工单', 'readback-issue': '回读工单', 'approval-gate': '等待真人审批', 'prepare-execute': '准备执行', 'execute-task': '执行受控任务', 'readback-production': '生产只读回查', finalize: '核对交付结果' }
-    const taskStepControl = node => {
-      const control = node.control
-      const action = control?.action
-      const accepted = !node.definitionPending && node.status === 'succeeded'
-      const skipped = !node.definitionPending && (node.status === 'skipped' || accepted && action === 'skip')
-      const label = accepted && action === 'submit-output' ? '会话接管完成'
-        : accepted && action === 'reuse' ? '已复用产出' : accepted && action === 'skip' ? '不适用 · 已跳过'
-          : node.status === 'waiting' && action === 'takeover' ? '会话接管中 · 等待提交' : undefined
-      const knownAction = ['retry', 'skip', 'reuse', 'takeover', 'submit-output'].includes(action)
-      const reason = knownAction && typeof control.reason === 'string' ? control.reason.trim() : ''
-      const source = control?.source === 'task-session' ? '原任务会话' : control?.source === 'operator' ? '维护操作' : ''
-      return { label, skipped, reason, source }
-    }
     const taskDisplayTitle = task => {
       const text = String(task.title || task.objective || '未命名任务').replace(/\s+/gu, ' ').trim() || '未命名任务'
       const first = text.split(/[。！？\n]/u)[0]
       if (Array.from(first).length >= 8 && Array.from(first).length <= 32) return first
       const characters = Array.from(text)
       return characters.length <= 32 ? text : `${characters.slice(0, 31).join('')}…`
-    }
-    const taskStepStart = node => Number.isFinite(Date.parse(node.startedAt)) ? `开始 ${fmt(node.startedAt)}`
-      : !node.startedAt && ['pending', 'ready', 'blocked'].includes(node.status) ? '未开始' : '开始时间未记录'
-    const groupTaskSteps = nodes => {
-      const groups = new Map()
-      nodes.forEach((node, index) => {
-        const key = node.stageId || node.runId || 'current'
-        if (!groups.has(key)) groups.set(key, { key, title: node.stageTitle || '当前工作流', steps: [] })
-        groups.get(key).steps.push({ node, index })
-      })
-      return [...groups.values()]
-    }
-    function TaskStepElapsed({ node, fontSize = 12 }) {
-      const [now, setNow] = useState(Date.now)
-      useEffect(() => {
-        if (node.status !== 'running' || !node.startedAt) return
-        setNow(Date.now())
-        const timer = setInterval(() => setNow(Date.now()), 1000)
-        return () => clearInterval(timer)
-      }, [node.status, node.startedAt])
-      const notStarted = !node.startedAt && ['pending', 'ready', 'blocked'].includes(node.status)
-      const label = notStarted ? '尚未开始' : traceElapsed({ ...node, attempt: node.leaseEpoch }, now)
-      return React.createElement('span', { style: { color: colors.muted, fontSize, fontVariantNumeric: 'tabular-nums' } },
-        node.status === 'waiting' && node.completedAt ? `本次执行${label}` : label)
     }
     const traceElapsed = (item, now) => {
       const start = Date.parse(item.startedAt), end = Date.parse(item.completedAt)
@@ -307,41 +257,6 @@ window.__ModuleLoader__.load({
     }
     const readableValue = (value) => value === undefined || value === null ? '历史未记录' : typeof value === 'string' ? value : JSON.stringify(value, null, 2)
     const readout = (label, value) => React.createElement('details', { style: { borderTop: `1px solid ${colors.border}`, padding: '8px 0', overflowWrap: 'anywhere' } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, label), React.createElement('pre', { style: { margin: '8px 0 0', padding: 10, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: colors.surface2, borderRadius: ui.radiusSm, font: 'inherit', fontSize: 12 } }, readableValue(value)))
-    function WorkflowClarification({ request, onSubmitted }) {
-      const [answer, setAnswer] = useState('')
-      const [busy, setBusy] = useState(false)
-      const [submitted, setSubmitted] = useState(false)
-      const [error, setError] = useState('')
-      const field = useRef(null), pending = useRef(false), attempt = useRef(null)
-      const fieldId = `clarification-${request.requestId}`, errorId = `${fieldId}-error`
-      const submit = async event => {
-        event.preventDefault()
-        if (pending.current || submitted) return
-        const value = answer.trim()
-        if (!value) { setError('请填写需要补充的信息。'); field.current?.focus(); return }
-        if (!attempt.current || attempt.current.answer !== value) attempt.current = { answer: value, eventId: `web-answer:${crypto.randomUUID()}` }
-        pending.current = true; setBusy(true); setError('')
-        try {
-          await post(`/workflows/${encodeURIComponent(request.runId)}/requests/${encodeURIComponent(request.requestId)}/answer`, attempt.current)
-          setSubmitted(true)
-          onSubmitted?.()
-        } catch { setError('补充信息提交未确认，内容已保留。请重试或刷新核对处理状态。') }
-        finally { pending.current = false; setBusy(false) }
-      }
-      return React.createElement('section', { 'aria-label': '补充调查信息', style: { margin: '12px 0 16px', padding: 16, background: colors.surface2, borderLeft: `3px solid ${colors.warning}`, borderRadius: ui.radiusSm } },
-        React.createElement('strong', { style: { display: 'block', marginBottom: 8 } }, '需要你补充'),
-        React.createElement('p', { style: { margin: '0 0 12px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, request.question),
-        submitted ? React.createElement('p', { role: 'status', style: { margin: 0 } }, '补充已提交，后续执行情况请查看处理记录。')
-          : request.canAnswer !== true ? React.createElement('p', { style: { margin: 0, color: colors.muted } }, '请由任务发起人或负责人在原群回复补充信息。')
-          : React.createElement('form', { noValidate: true, onSubmit: submit },
-            React.createElement('label', { htmlFor: fieldId, style: { display: 'block', marginBottom: 6, fontSize: 13 } }, '补充信息'),
-            React.createElement('textarea', { id: fieldId, ref: field, value: answer, rows: 4, maxLength: 16000, disabled: busy,
-              'aria-invalid': !!error, 'aria-describedby': error ? errorId : undefined,
-              onChange: event => { setAnswer(event.target.value); setError('') },
-              style: { width: '100%', boxSizing: 'border-box', minHeight: 96, resize: 'none', padding: 10, color: 'inherit', background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: ui.radiusSm, font: 'inherit', lineHeight: 1.6 } }),
-            error ? React.createElement('p', { id: errorId, role: 'alert', style: { color: colors.danger, margin: '8px 0' } }, error) : null,
-            React.createElement(Button, { variant: 'outline', size: 'sm', type: 'submit', disabled: busy, 'aria-busy': busy, style: { marginTop: 8, minWidth: 120 } }, busy ? '正在提交…' : '提交补充并继续')))
-    }
     function TraceReadout({ runId, resourceRef, label }) {
       const [expanded, setExpanded] = useState(false)
       const [page, setPage] = useState()
@@ -415,7 +330,7 @@ window.__ModuleLoader__.load({
               React.createElement('p', { style: { margin: '10px 0 0', color: colors.muted, fontSize: 12 } }, '以上消息共享下面这次判断，判断耗时只记录一次。后续重判保留为另一条判断记录。')) : null,
             React.createElement('p', { style: { margin: '10px 0', fontWeight: 600, lineHeight: 1.6 } }, view.conclusion),
             view.rows.length ? React.createElement('dl', { style: { margin: '0 0 12px', display: 'grid', gap: 10 } }, ...view.rows.map((row, i) => React.createElement('div', { key: i }, React.createElement('dt', { style: { color: colors.muted, fontSize: 12, marginBottom: 4 } }, row.label), React.createElement('dd', { style: { margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.65 } }, row.value)))) : null,
-            item.clarification ? React.createElement(WorkflowClarification, { key: item.clarification.requestId, request: item.clarification, onSubmitted: () => setRetry(value => value + 1) }) : null,
+            item.clarification ? readout('历史补充请求（只读）', item.clarification.question) : null,
             item.kind === 'agent' ? React.createElement('div', { style: { display: 'grid', gap: 8, margin: '8px 0' } },
               item.outputRef ? React.createElement(TraceReadout, { key: item.outputRef, runId, resourceRef: item.outputRef, label: `查看答复与依据${item.evidenceCount ? `（${item.evidenceCount} 条）` : ''}` }) : null,
               item.sessionId && onOpenSession ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', style: { justifySelf: 'start' }, onClick: () => onOpenSession(item.sessionId) }, '查看会话记录') : null) : null,
@@ -426,291 +341,6 @@ window.__ModuleLoader__.load({
         ready ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, `本页 ${page.items?.length ?? 0} 条${Number.isFinite(page.total) ? `，共 ${page.total} 条处理记录` : ''}；按记录时间排列，多事项可能分别判断。`) : null,
         ready ? React.createElement('p', { style: { color: colors.muted, fontSize: 12, margin: 0 } }, '耗时按本次开始到完成计算，包含工具等待；重试显示最近一次处理，不代表纯模型耗时。进行中记录可刷新查看最新状态。') : null,
         React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page?.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null))
-    }
-    const workflowRelatedTasks = (tasks, workflowId) => {
-      const matches = id => id === workflowId || workflowId === 'task-engineering' && id?.startsWith('task-engineering-')
-      return tasks.filter(task => task.engine === 'workflow-v2' && (matches(task.workflowId) || task.plan?.stages?.some(stage => matches(stage.workflowId))))
-    }
-    const configurationError = cause => ({
-      WORKFLOW_CONFIG_REVISION_CONFLICT: '配置已被其他操作更新，输入已保留。请重新读取并核对后再保存。',
-      WORKFLOW_CONFIG_FORBIDDEN: '当前访问未获配置管理授权，请核对 Web 操作者及本机访问设置。',
-      WORKFLOW_CONFIG_READONLY: '当前宿主凭据存储只读，无法保存。',
-      WORKFLOW_CONFIG_UNAVAILABLE: '当前实例未提供托管配置服务。',
-      WORKFLOW_CONFIG_JSON_INVALID: '值不是有效的 JSON，请检查后重试。',
-      WORKFLOW_CONFIG_SECRET_REQUIRED: '替换凭据时必须输入新值，空白不会清除原凭据。',
-      WORKFLOW_CONFIG_VARIABLE_DISABLED: '引用中有已停用变量，请启用或移除该引用。',
-      WORKFLOW_CONFIG_ALIAS_DUPLICATE: '同一流程内的读取别名不能重复。',
-      WORKFLOW_CONFIG_LIMIT_EXCEEDED: '已达到配置存储上限，请联系维护者处理历史版本。',
-      WORKFLOW_CONFIG_ARGUMENT_INVALID: '配置内容不符合要求，请检查名称、格式和长度。',
-      WORKFLOW_CONFIG_VARIABLE_UNKNOWN: '引用的变量不存在，请重新读取并核对。',
-      WORKFLOW_CONFIG_WORKFLOW_UNKNOWN: '该流程不可绑定变量，请重新读取目录。',
-    }[cause?.message] || '配置请求失败，输入已保留。请重试或重新读取。')
-    async function saveConfiguration(path, body, method = 'PUT') {
-      const response = await fetch(`${ENDPOINT}${path}`, { method, headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(body) })
-      const value = await response.json()
-      if (!response.ok) throw new Error(value.error || 'WORKFLOW_CONFIG_STORAGE_FAILED')
-      return value
-    }
-    const configurationNameValid = name => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) && !['constructor', 'prototype', '__proto__'].includes(name)
-    const configurationDraft = variable => variable
-      ? { name: variable.name, kind: variable.kind, format: variable.format, description: variable.description, value: variable.kind === 'secret' ? '' : variable.value, existing: true }
-      : { name: '', kind: 'plain', format: 'text', description: '', value: '', existing: false }
-    function WorkflowConfigurationBindings({ active, workflowId, retry, onOpenConfiguration }) {
-      const [state, setState] = useState()
-      const [error, setError] = useState('')
-      useEffect(() => {
-        if (!active) return
-        let current = true
-        const controller = new AbortController()
-        setState(undefined); setError('')
-        get('/config/workflow-variables', { signal: controller.signal }).then(value => { if (current) setState(value) }, cause => { if (current) setError(configurationError(cause)) })
-        return () => { current = false; controller.abort() }
-      }, [active, workflowId, retry])
-      const bindings = state?.bindings.find(item => item.workflowId === workflowId)?.variables || []
-      return React.createElement('section', { 'aria-label': '流程变量', style: { borderTop: `1px solid ${colors.border}`, paddingTop: 16, display: 'grid', gap: 12, fontSize: ui.textMd } },
-        React.createElement('h3', { style: { margin: 0, fontSize: ui.textMd } }, '流程变量'),
-        error ? React.createElement('p', { role: 'alert', style: { margin: 0, color: colors.danger } }, error)
-          : !state ? React.createElement('span', { role: 'status', style: { color: colors.muted } }, '正在读取变量引用…')
-            : bindings.length ? React.createElement('ul', { style: { margin: 0, paddingLeft: 20, display: 'grid', gap: 12 } }, ...bindings.map(binding => {
-              const variable = state.variables.find(item => item.name === binding.name)
-              return React.createElement('li', { key: binding.alias }, React.createElement('span', null, `${binding.alias} → ${binding.name} · ${variable?.kind === 'secret' ? '凭据' : '普通变量'} · v${variable?.revision ?? '—'}${variable?.enabled === false ? ' · 已停用' : ''} `),
-                React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenConfiguration(binding.name, workflowId) }, '查看配置'))
-            })) : React.createElement('p', { style: { color: colors.muted, margin: 0 } }, '尚未绑定托管变量。流程代码需通过读取别名使用配置。'),
-        React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', style: { justifySelf: 'start' }, onClick: () => onOpenConfiguration('', workflowId) }, '管理变量绑定'))
-    }
-    function ConfigurationBrowser({ active, target }) {
-      const [state, setState] = useState()
-      const [workflows, setWorkflows] = useState([])
-      const [loading, setLoading] = useState(false)
-      const [error, setError] = useState('')
-      const [catalogError, setCatalogError] = useState('')
-      const [notice, setNotice] = useState('')
-      const [draft, setDraft] = useState()
-      const [dirty, setDirty] = useState(false)
-      const [revealed, setRevealed] = useState(false)
-      const [busy, setBusy] = useState(false)
-      const [confirmDisable, setConfirmDisable] = useState(false)
-      const [workflowId, setWorkflowId] = useState('')
-      const [bindings, setBindings] = useState([])
-      const [bindingDirty, setBindingDirty] = useState(false)
-      const [pendingAction, setPendingAction] = useState()
-      const [retry, setRetry] = useState(0)
-      const request = useRef()
-      const saving = useRef(false)
-      const errorRegion = useRef()
-      const nameInput = useRef()
-      const lastTarget = useRef()
-      const selection = useRef({ name: '', workflowId: '' })
-      const labelStyle = { color: colors.muted, fontSize: ui.textSm, lineHeight: 1.7, margin: 0 }
-      const selectVariable = (name, data = state) => { selection.current.name = name || ''; setDraft(configurationDraft(data?.variables.find(item => item.name === name))); setDirty(false); setRevealed(false); setConfirmDisable(false); setError(''); setNotice('') }
-      const selectWorkflow = (id, data = state) => { selection.current.workflowId = id; setWorkflowId(id); setBindings((data?.bindings.find(item => item.workflowId === id)?.variables || []).map(item => ({ ...item }))); setBindingDirty(false) }
-      const applyAction = action => {
-        setPendingAction(undefined)
-        if (action.type === 'reload') { setLoading(true); setDirty(false); setBindingDirty(false); setRetry(value => value + 1); return }
-        if (action.type === 'workflow') { selectWorkflow(action.id); return }
-        if (action.type === 'target') { if (action.name) selectVariable(action.name); if (action.workflowId) selectWorkflow(action.workflowId); return }
-        selectVariable(action.name)
-        requestAnimationFrame(() => nameInput.current?.focus())
-      }
-      const navigate = action => { if (busy) return; if (dirty || bindingDirty) setPendingAction(action); else applyAction(action) }
-      useEffect(() => {
-        if (!active) { request.current?.abort(); return }
-        // 保留草稿及其读取版本，切回页面不能悄悄接受新 revision 后覆盖他人更新。
-        if (dirty || bindingDirty || saving.current) return
-        let current = true
-        const controller = new AbortController()
-        request.current = controller
-        setLoading(true); setError(''); setCatalogError('')
-        Promise.allSettled([get('/config/workflow-variables', { signal: controller.signal }), get('/state/workflows/catalog', { signal: controller.signal })]).then(results => {
-          if (!current) return
-          const [configuration, catalog] = results
-          let nextWorkflows = workflows
-          if (catalog.status === 'fulfilled') { nextWorkflows = catalog.value.engine === 'workflow-v2' ? [...catalog.value.workflows, ...(catalog.value.builtInWorkflows || [])] : []; setWorkflows(nextWorkflows) }
-          else setCatalogError('工作流目录读取失败，请重新读取后维护绑定。')
-          if (configuration.status === 'rejected') { setError(configurationError(configuration.reason)); return }
-          const data = configuration.value
-          setState(data)
-          const incomingTarget = target !== lastTarget.current ? target : undefined
-          if (!dirty) selectVariable(incomingTarget?.name || selection.current.name || data.variables[0]?.name, data)
-          if (!bindingDirty) selectWorkflow(incomingTarget?.workflowId || selection.current.workflowId || nextWorkflows[0]?.id || '', data)
-          lastTarget.current = target
-        }).finally(() => { if (current) setLoading(false) })
-        return () => { current = false; controller.abort() }
-      }, [active, retry])
-      useEffect(() => {
-        if (!active || busy || !state || !target || lastTarget.current === target) return
-        lastTarget.current = target
-        navigate({ type: 'target', ...target })
-      }, [active, busy, target, state])
-      useEffect(() => {
-        if (!dirty && !bindingDirty) return
-        const beforeUnload = event => { event.preventDefault(); event.returnValue = '' }
-        window.addEventListener('beforeunload', beforeUnload)
-        return () => window.removeEventListener('beforeunload', beforeUnload)
-      }, [dirty, bindingDirty])
-      useEffect(() => { if (!dirty && !bindingDirty) setPendingAction(undefined) }, [dirty, bindingDirty])
-      useEffect(() => { if (error && active) errorRegion.current?.focus() }, [error, active])
-      const changeDraft = (key, value) => { setDraft(previous => ({ ...previous, [key]: value })); setDirty(true); setNotice(''); setConfirmDisable(false) }
-      const mutate = async (path, body, method, done) => {
-        if (saving.current || loading || !state?.writable) return
-        saving.current = true; setBusy(true); setError(''); setNotice('')
-        try { const data = await saveConfiguration(path, { ...body, expectedRevision: state.revision }, method); setState(data); done(data) }
-        catch (cause) { setError(configurationError(cause)) }
-        finally { saving.current = false; setBusy(false) }
-      }
-      const saveVariable = event => {
-        event.preventDefault()
-        if (!configurationNameValid(draft.name)) { setError('名称须以英文字母开头，仅含字母、数字、下划线或短横线，最多 64 字符；不可使用保留名称。'); return }
-        if (draft.kind === 'secret' && !draft.value.trim()) { setError('请输入新凭据；留空不会清除或替换已有值。'); return }
-        if (new TextEncoder().encode(draft.value).length > 65536) { setError('变量值不能超过 64 KiB。'); return }
-        if (draft.format === 'json') { try { JSON.parse(draft.value) } catch { setError('值不是有效的 JSON，请检查后重试。'); return } }
-        if (!draft.existing && state.variables.some(item => item.name === draft.name)) { setError('该名称已存在，请选择已有变量进行编辑。'); return }
-        const { name, kind, format, description, value } = draft
-        void mutate(`/config/workflow-variables/${encodeURIComponent(name)}`, { kind, format, description, value }, 'PUT', data => { selectVariable(name, data); setNotice('变量已保存，后续新运行采用新版本。') })
-      }
-      const saveBindings = event => {
-        event.preventDefault()
-        if (!workflowId || bindings.some(item => !configurationNameValid(item.alias) || !item.name) || new Set(bindings.map(item => item.alias)).size !== bindings.length) { setError('请为每条引用填写有效且不重复的读取别名，并选择变量。'); return }
-        void mutate(`/config/workflow-bindings/${encodeURIComponent(workflowId)}`, { variables: bindings }, 'PUT', data => { selectWorkflow(workflowId, data); setNotice('变量绑定已保存，后续新运行采用本次绑定。') })
-      }
-      const selected = state?.variables.find(item => draft?.existing && item.name === draft.name)
-      const disabled = busy || loading || !state?.writable
-      const button = (label, onClick, props = {}) => React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick, ...props }, label)
-      const field = (label, id, element, help) => React.createElement('div', { className: 'observer-config-field' }, React.createElement('label', { htmlFor: id }, label), element, help ? React.createElement('p', { id: `${id}-help`, style: labelStyle }, help) : null)
-      const input = (id, props) => React.createElement('input', { id, className: 'observer-config-input', ...props })
-      return React.createElement('section', { hidden: !active, 'aria-label': '配置管理', style: { display: active ? 'grid' : 'none', gap: 24, minWidth: 0 } },
-        React.createElement('header', { style: { ...toolbar, border: 0, padding: 0, flexWrap: 'wrap' } },
-          React.createElement('div', null, React.createElement('h2', { style: { fontSize: ui.textLg, margin: '0 0 6px' } }, '配置'), React.createElement('p', { style: labelStyle }, '集中维护普通变量与凭据，按工作流分配读取别名。')),
-          button(loading ? '读取中…' : '重新读取配置', () => navigate({ type: 'reload' }), { disabled: loading || busy })),
-        error ? React.createElement('div', { role: 'alert', ref: errorRegion, tabIndex: -1, style: { color: colors.danger, fontSize: ui.textMd } }, error) : null,
-        notice ? React.createElement('div', { role: 'status', style: { color: statusTone.done, fontSize: ui.textMd } }, notice) : null,
-        pendingAction ? React.createElement('section', { 'aria-label': '未保存修改', style: { ...tableFrame, padding: 16, display: 'grid', gap: 12 } },
-          React.createElement('p', { style: { margin: 0 } }, '有未保存修改。继续编辑并保存，或放弃修改后继续。'),
-          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12 } }, button('继续编辑', () => setPendingAction(undefined)), button('放弃修改并继续', () => { setDirty(false); setBindingDirty(false); selectVariable(draft?.existing ? draft.name : '', state); selectWorkflow(workflowId, state); applyAction(pendingAction) }))) : null,
-        !state ? emptyState(loading ? '正在读取配置…' : '配置尚未读取', { detail: '授权和存储就绪后，可在此维护流程变量。' }) : React.createElement(React.Fragment, null,
-          !state.writable ? React.createElement('p', { role: 'status', style: labelStyle }, '当前存储只读，可查看配置与引用，无法修改。') : null,
-          React.createElement('div', { className: 'observer-workflow-layout' },
-            React.createElement('section', { 'aria-label': '变量列表', style: { display: 'grid', gap: 16, minWidth: 0 } },
-              React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } }, React.createElement('span', { style: labelStyle }, `${state.variables.length} 个变量 · 配置版本 ${state.revision}`), button('新建变量', () => navigate({ type: 'variable', name: '' }), { disabled })),
-              !state.variables.length ? emptyState('暂无变量', { detail: '在右侧填写首个变量，再将读取别名绑定到流程。' })
-                : React.createElement('ul', { style: { ...tableFrame, listStyle: 'none', margin: 0, padding: 0 } }, ...state.variables.map(variable => React.createElement('li', { key: variable.name, style: { borderBottom: `1px solid ${colors.border}` } },
-                  React.createElement('button', { type: 'button', className: 'observer-workflow-choice', 'aria-label': variable.name, 'aria-pressed': draft?.existing && variable.name === draft.name, disabled: busy || loading, onClick: () => navigate({ type: 'variable', name: variable.name }) },
-                    React.createElement('strong', { style: { display: 'block', fontSize: ui.textMd } }, variable.name),
-                    React.createElement('span', { style: { display: 'block', marginTop: 8, ...labelStyle } }, `${variable.kind === 'secret' ? '凭据 · 已设置' : '普通变量'} · ${variable.format === 'json' ? 'JSON' : '文本'} · v${variable.revision} · ${variable.enabled ? '启用' : '停用'}`),
-                    React.createElement('span', { style: { display: 'block', marginTop: 4, ...labelStyle } }, `${state.bindings.filter(item => item.variables.some(binding => binding.name === variable.name)).length} 个流程引用`)))))),
-            draft ? React.createElement('form', { 'aria-label': '变量编辑', onSubmit: saveVariable, style: { display: 'grid', gap: 16, minWidth: 0 } },
-              React.createElement('h3', { style: { fontSize: ui.textLg, margin: 0 } }, draft.existing ? `编辑 ${draft.name}` : '新建变量'),
-              field('变量名称', 'workflow-variable-name', input('workflow-variable-name', { ref: nameInput, value: draft.name, readOnly: draft.existing, disabled, autoComplete: 'off', maxLength: 64, 'aria-describedby': 'workflow-variable-name-help', onChange: event => changeDraft('name', event.target.value) }), '字母开头，使用字母、数字、下划线或短横线；创建后不可改名。'),
-              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 24 } },
-                field('类型', 'workflow-variable-kind', React.createElement('select', { id: 'workflow-variable-kind', className: 'observer-config-input', value: draft.kind, disabled: disabled || draft.existing, onChange: event => { changeDraft('kind', event.target.value); changeDraft('value', ''); setRevealed(false) } }, React.createElement('option', { value: 'plain' }, '普通变量'), React.createElement('option', { value: 'secret' }, '凭据'))),
-                field('值格式', 'workflow-variable-format', React.createElement('select', { id: 'workflow-variable-format', className: 'observer-config-input', value: draft.format, disabled: disabled || draft.existing, onChange: event => changeDraft('format', event.target.value) }, React.createElement('option', { value: 'text' }, '文本'), React.createElement('option', { value: 'json' }, 'JSON')))),
-              field('用途说明', 'workflow-variable-description', input('workflow-variable-description', { value: draft.description, disabled, maxLength: 500, onChange: event => changeDraft('description', event.target.value) })),
-              field(draft.kind === 'secret' ? draft.existing ? '替换凭据值' : '凭据值' : '变量值', 'workflow-variable-value', React.createElement('textarea', { id: 'workflow-variable-value', className: 'observer-config-input', rows: 5, disabled, autoComplete: 'off', spellCheck: false, value: draft.value, 'aria-describedby': 'workflow-variable-value-help', style: { WebkitTextSecurity: draft.kind === 'secret' && !revealed ? 'disc' : 'none' }, onChange: event => changeDraft('value', event.target.value) }), draft.kind === 'secret' ? '已保存凭据不回显。替换需重新输入；留空不会清除原值。' : '最多 64 KiB；JSON 保存前会校验格式。'),
-              draft.kind === 'secret' ? button(revealed ? '隐藏输入' : '显示输入', () => setRevealed(value => !value), { 'aria-pressed': revealed, disabled, style: { justifySelf: 'start' } }) : null,
-              React.createElement('p', { style: labelStyle }, '保存后，新运行使用新版本；已启动的运行继续读取其冻结版本。'),
-              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12 } },
-                React.createElement(Button, { type: 'submit', size: 'sm', disabled: disabled || !dirty }, busy ? '保存中…' : '保存变量'),
-                button('取消修改', () => { selectVariable(selected?.name, state) }, { disabled: busy || !dirty })),
-              selected ? React.createElement('section', { style: { borderTop: `1px solid ${colors.border}`, paddingTop: 16, display: 'grid', gap: 12 } },
-                React.createElement('p', { style: labelStyle }, selected.enabled ? '停用会阻止引用此变量的新运行启动；已经冻结的运行仍可读取旧版本。' : '该变量已停用。重新启用后可用于新运行。'),
-                confirmDisable ? React.createElement('div', { role: 'group', 'aria-label': '确认停用变量', style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
-                  button('确认停用', () => void mutate(`/config/workflow-variables/${encodeURIComponent(selected.name)}/enabled`, { enabled: false }, 'POST', () => { setConfirmDisable(false); setNotice('变量已停用，已冻结运行不受影响。') }), { disabled }), button('取消停用', () => setConfirmDisable(false), { disabled }))
-                  : button(selected.enabled ? '停用变量' : '启用变量', () => { if (selected.enabled) setConfirmDisable(true); else void mutate(`/config/workflow-variables/${encodeURIComponent(selected.name)}/enabled`, { enabled: true }, 'POST', () => setNotice('变量已启用。')) }, { disabled: disabled || dirty, style: { justifySelf: 'start' } })) : null) : null),
-          React.createElement('form', { 'aria-label': '工作流变量绑定', onSubmit: saveBindings, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 24, display: 'grid', gap: 16, minWidth: 0 } },
-            React.createElement('h3', { style: { fontSize: ui.textLg, margin: 0 } }, '工作流变量绑定'),
-            React.createElement('p', { style: labelStyle }, '流程通过约定的读取别名使用配置，凭据只交给受信执行代码。已有文件读取需先接入托管配置，绑定本身不会自动迁移。'),
-            catalogError ? React.createElement('p', { role: 'alert', style: { color: colors.danger, margin: 0 } }, catalogError) : null,
-            field('选择工作流', 'workflow-binding-workflow', React.createElement('select', { id: 'workflow-binding-workflow', className: 'observer-config-input', value: workflowId, disabled: disabled || !!catalogError || !workflows.length, onChange: event => navigate({ type: 'workflow', id: event.target.value }) }, !workflows.length ? React.createElement('option', { value: '' }, '暂无可绑定工作流') : null, ...workflows.map(item => React.createElement('option', { key: item.id, value: item.id }, item.label)))),
-            ...bindings.map((binding, index) => React.createElement('div', { key: index, className: 'observer-config-binding' },
-              field(`读取别名 ${index + 1}`, `workflow-binding-alias-${index}`, input(`workflow-binding-alias-${index}`, { value: binding.alias, maxLength: 64, disabled, onChange: event => { setBindings(items => items.map((item, position) => position === index ? { ...item, alias: event.target.value } : item)); setBindingDirty(true) } })),
-              field(`引用变量 ${index + 1}`, `workflow-binding-name-${index}`, React.createElement('select', { id: `workflow-binding-name-${index}`, className: 'observer-config-input', value: binding.name, disabled, onChange: event => { setBindings(items => items.map((item, position) => position === index ? { ...item, name: event.target.value } : item)); setBindingDirty(true) } }, React.createElement('option', { value: '' }, '请选择变量'), ...state.variables.filter(variable => variable.enabled || variable.name === binding.name).map(variable => React.createElement('option', { key: variable.name, value: variable.name }, `${variable.name}（${variable.kind === 'secret' ? '凭据' : '普通'}${variable.enabled ? '' : ' · 已停用'}）`)))),
-              button(`移除引用 ${index + 1}`, () => { setBindings(items => items.filter((_, position) => position !== index)); setBindingDirty(true) }, { disabled }))),
-            !bindings.length ? React.createElement('p', { style: labelStyle }, '该流程尚无托管变量引用。') : null,
-            React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
-              button('添加引用', () => { setBindings(items => [...items, { alias: '', name: '' }]); setBindingDirty(true) }, { disabled: disabled || !!catalogError || !workflowId || bindings.length >= 100 }),
-              React.createElement(Button, { type: 'submit', size: 'sm', disabled: disabled || !!catalogError || !bindingDirty || !workflowId }, busy ? '保存中…' : '保存绑定'),
-              button('取消绑定修改', () => selectWorkflow(workflowId), { disabled: busy || !bindingDirty }))),
-          React.createElement('p', { style: { ...labelStyle, borderTop: `1px solid ${colors.border}`, paddingTop: 16 } }, '凭据由宿主管理，页面不会读回已保存的值。默认本地存储为明文，请限制宿主目录的访问权限。')))
-    }
-    function WorkflowBrowser({ active, updatedAt, tasks, selectedId, onSelect, onOpenTask, restoreFocus, onFocusRestored, onOpenConfiguration }) {
-      const [catalog, setCatalog] = useState()
-      const [error, setError] = useState('')
-      const [loading, setLoading] = useState(false)
-      const [retry, setRetry] = useState(0)
-      const pending = useRef(null)
-      const selectedButton = useRef(null)
-      useEffect(() => {
-        if (!active) { pending.current?.controller.abort(); pending.current = null; return }
-        let current = true
-        setLoading(true)
-        if (!pending.current) {
-          const request = { controller: new AbortController() }
-          request.promise = get('/state/workflows/catalog', { signal: request.controller.signal }).then(value => {
-            if (value.engine === 'workflow-v2' && !Array.isArray(value.workflows)) throw new Error('工作流目录数据不完整')
-            return value
-          }).finally(() => { if (pending.current === request) pending.current = null })
-          pending.current = request
-        }
-        pending.current.promise.then(value => { if (current) { setCatalog(value); setError('') } },
-          cause => { if (current) setError(cause.message) }).finally(() => { if (current) setLoading(false) })
-        return () => { current = false }
-      }, [active, updatedAt, retry])
-      useEffect(() => () => pending.current?.controller.abort(), [])
-      const workflows = React.useMemo(() => catalog?.engine === 'workflow-v2' ? [...catalog.workflows, ...(catalog.builtInWorkflows || [])] : [], [catalog])
-      const selected = workflows.find(item => item.id === selectedId)
-      useEffect(() => { if (active && !selectedId && workflows.length) onSelect(workflows[0].id) }, [active, selectedId, workflows, onSelect])
-      useEffect(() => {
-        if (active && restoreFocus && selectedButton.current) { selectedButton.current.focus(); onFocusRestored() }
-      }, [active, restoreFocus, selected?.id, onFocusRestored])
-      const relatedTasks = selected ? workflowRelatedTasks(tasks, selected.id) : []
-      const availableCount = workflows.filter(item => item.status === 'available').length
-      const availability = item => tableStatusTag(item.mode === 'built-in' ? '内置能力' : item.status === 'available' ? '可发起' : '待接入', item.mode === 'built-in' ? 'neutral' : item.status === 'available' ? 'done' : 'warning')
-      const version = item => item.version ? item.mode === 'built-in' ? item.version : `v${item.version}` : item.mode === 'engineering' ? '随任务确定' : '版本未提供'
-      const retryButton = React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => setRetry(value => value + 1) }, loading ? '读取中…' : '重新读取')
-      const docs = 'https://github.com/HiQ-AI/dingtalk-dsh-assistant/blob/main/'
-      const documentLink = (path, label) => React.createElement('a', { className: 'observer-workflow-doc', href: docs + path, target: '_blank', rel: 'noopener noreferrer' }, `${label}（新窗口）`)
-      const heading = title => React.createElement('h3', { style: { margin: '0 0 12px', fontSize: ui.textMd } }, title)
-      return React.createElement('section', { hidden: !active, 'aria-label': '工作流目录', style: { display: active ? 'grid' : 'none', gap: ui.space4, minWidth: 0 } },
-        React.createElement('div', { style: { ...toolbar, border: 0, padding: 0, flexWrap: 'wrap' } },
-          React.createElement('div', null, React.createElement('h2', { style: { margin: '0 0 6px', fontSize: ui.textLg } }, '工作流'),
-            React.createElement('span', { style: { color: colors.muted, fontSize: ui.textSm } }, '查看流程用途、执行步骤和配置就绪情况。')), retryButton),
-        error ? React.createElement('div', { role: 'alert', style: { color: colors.danger, fontSize: ui.textSm } }, catalog ? `目录刷新失败，以下内容尚未刷新：${error}` : `工作流目录读取失败：${error}`) : null,
-        React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: ui.textSm } }, loading ? '正在读取工作流目录…' : catalog?.engine === 'workflow-v2' ? `${workflows.length} 个流程 · ${availableCount} 个可发起 · ${workflows.filter(item => item.mode !== 'built-in' && item.status !== 'available').length} 个待接入 · ${workflows.filter(item => item.mode === 'built-in').length} 个内置能力` : ''),
-        !catalog ? (!error ? emptyState('正在读取工作流目录…') : null)
-          : catalog.engine !== 'workflow-v2' ? emptyState('工作流目录尚未启用', { detail: '当前运行实例未提供工作流目录，请核对插件运行配置。' })
-          : !workflows.length ? emptyState('暂无工作流', { detail: '当前运行实例未登记可展示的流程。' })
-          : React.createElement('div', { className: 'observer-workflow-layout' },
-            React.createElement('section', { 'aria-label': '工作流列表', 'aria-busy': loading, style: { ...tableFrame, minWidth: 0 } },
-              React.createElement('ul', { style: { listStyle: 'none', padding: 0, margin: 0 } }, ...workflows.map(item => React.createElement('li', { key: item.id, style: { borderBottom: `1px solid ${colors.border}` } },
-                React.createElement('button', { type: 'button', className: 'observer-workflow-choice', 'aria-label': item.label, 'aria-pressed': selectedId === item.id, ref: selectedId === item.id ? selectedButton : undefined, onClick: () => onSelect(item.id) },
-                  React.createElement('span', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' } }, React.createElement('strong', { style: { fontSize: ui.textMd } }, item.label), availability(item)),
-                  React.createElement('span', { style: { display: 'block', marginTop: 8, color: colors.muted, fontSize: ui.textSm, lineHeight: 1.6 } }, item.purpose),
-                  React.createElement('span', { style: { display: 'block', marginTop: 8, color: colors.muted, fontSize: ui.textSm } }, version(item))))))),
-            React.createElement('section', { 'aria-label': '工作流详情', style: { minWidth: 0, overflowWrap: 'anywhere', display: 'grid', gap: ui.space6 } },
-              !selected ? emptyState('请选择工作流', { detail: selectedId ? '所选工作流已不在当前目录，请重新选择。' : '从列表选择流程查看详情。' }) : React.createElement(React.Fragment, null,
-                React.createElement('header', null, React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 } }, React.createElement('h2', { style: { margin: 0, fontSize: ui.textLg } }, selected.label), availability(selected)),
-                  React.createElement('p', { style: { fontSize: ui.textMd, lineHeight: 1.7, margin: '12px 0' } }, selected.purpose),
-                  React.createElement('span', { style: { color: colors.muted, fontSize: ui.textSm } }, `定义版本：${version(selected)}`)),
-                React.createElement('section', null, heading('执行步骤'),
-                  selected.mode === 'engineering' ? React.createElement('p', { style: { margin: 0, color: colors.muted, lineHeight: 1.7, fontSize: ui.textMd } }, '具体步骤随任务和仓库配置冻结，请从相关任务查看本次执行步骤。')
-                    : selected.nodes?.length ? React.createElement('ol', { style: { margin: 0, paddingLeft: 24, display: 'grid', gap: 12 } }, ...selected.nodes.map((node, index) => React.createElement('li', { key: node.id, style: { lineHeight: 1.6, fontSize: ui.textMd } },
-                      React.createElement('span', null, node.label || nodeTitle[node.id] || `步骤 ${index + 1}（名称未登记）`),
-                      React.createElement('span', { style: { marginLeft: 12, color: colors.muted, fontSize: ui.textSm } }, node.executor === 'agent' ? '模型处理' : node.executor !== 'code' ? '执行方式未提供' : node.effects?.some(effect => !['pure', 'read'].includes(effect)) ? '受控操作' : '代码校验'))))
-                    : React.createElement('p', { style: { margin: 0, color: colors.muted, fontSize: ui.textMd } }, '当前目录未提供可展示的节点定义。')),
-                React.createElement('section', { 'aria-label': '配置与维护', style: { borderTop: `1px solid ${colors.border}`, paddingTop: ui.space4, fontSize: ui.textMd, lineHeight: 1.7 } }, heading('配置与维护'),
-                  selected.reason ? React.createElement('p', { style: { margin: '0 0 12px', color: selected.status === 'available' ? colors.muted : colors.warning } }, selected.reason) : null,
-                  selected.repositories?.length ? React.createElement('p', { style: { margin: '0 0 12px' } }, `已登记仓库：${selected.repositories.join('、')}`) : null,
-                  React.createElement('p', { style: { margin: '0 0 12px', color: colors.muted } }, selected.mode === 'engineering' ? '由维护者核对受信工程仓库与验收环境配置；更新后重新读取目录。' : selected.mode === 'external' ? '由维护者核对受信平台目标、客户端与验证配置；目录可发起后仍需满足具体任务的授权条件。' : '流程随插件代码维护；变更需验证并更新插件，已有任务按其冻结定义执行。'),
-                  React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 20px', fontSize: ui.textSm } },
-                    selected.mode === 'engineering' || selected.mode === 'external' ? documentLink('docs/ops/trusted-platform-workflows.md', '配置维护说明') : null,
-                    documentLink('packages/dingtalk-dsh-assistant/README.md', '工作流开发说明'))),
-                React.createElement(WorkflowConfigurationBindings, { active, workflowId: selected.id, retry, onOpenConfiguration }),
-                React.createElement('section', { 'aria-label': '相关任务', style: { borderTop: `1px solid ${colors.border}`, paddingTop: ui.space4 } }, heading('相关任务'),
-                  React.createElement('p', { style: { color: colors.muted, fontSize: ui.textSm, margin: '0 0 12px' } }, '按任务及计划阶段的实际流程关联，包含归档任务；执行步骤和版本以任务详情为准。'),
-                  relatedTasks.length ? React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 } }, ...relatedTasks.map(task => React.createElement('li', { key: task.taskId, style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 } },
-                    React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', style: { whiteSpace: 'normal', textAlign: 'left', overflowWrap: 'anywhere', maxWidth: '100%' }, onClick: () => onOpenTask(task) }, taskDisplayTitle(task)),
-                    React.createElement('span', { style: { color: colors.muted, fontSize: ui.textSm } }, task.archivedAt ? '已归档' : ({ queued: '待执行', running: '执行中', waiting: '等待处理', completed: '已结束' }[task.state] || '状态未记录')))))
-                    : emptyState('暂无相关任务', { detail: '任务使用此流程后会显示在这里。' }))))))
     }
     function TopicBrowser({ groups, tasks, target, updatedAt, onOpenTask, onOpenSession }) {
       const [groupId, setGroupId] = useState(target?.groupId || '')
@@ -772,11 +402,11 @@ window.__ModuleLoader__.load({
         if (!selection) { setTopicContext(undefined); return }
         let active = true
         setContextLoading(true); setContextError('')
-        const params = new URLSearchParams()
+        const params = new URLSearchParams({ groupId: selection.groupId })
         if (contextCursor) params.set('cursor', contextCursor)
         if (intentCursor) params.set('intentCursor', intentCursor)
         if (contextRevision !== undefined) params.set('revision', String(contextRevision))
-        get(`/state/workflows/topics/${encodeURIComponent(selection.topicId)}/context?${params}`).then((value) => { if (active) { setTopicContext(value); setContextRevision(value.revision) } }, (cause) => { if (active) setContextError(cause.message) }).finally(() => { if (active) setContextLoading(false) })
+        get(`/state/topics/${encodeURIComponent(selection.topicId)}/context?${params}`).then((value) => { if (active) { setTopicContext(value); setContextRevision(value.revision) } }, (cause) => { if (active) setContextError(cause.message) }).finally(() => { if (active) setContextLoading(false) })
         return () => { active = false }
       }, [selection, contextCursor, intentCursor, retry])
       const selectTopic = (topic) => { setSelection({ groupId: topic.groupId, topicId: topic.topicId, revision: topic.revision }); setMessageOffset(0); setContextCursor(''); setContextCursorHistory([]); setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined); setTopicContext(undefined) }
@@ -812,7 +442,7 @@ window.__ModuleLoader__.load({
                   React.createElement('div', { style: { display: 'flex', gap: 8 } }, contextCursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursor(contextCursorHistory.at(-1)); setContextCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, topicContext.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursorHistory((items) => [...items, contextCursor]); setContextCursor(topicContext.nextCursor) } }, '下一页') : null)) : React.createElement('span', { style: { color: colors.muted } }, '历史未记录')),
               React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 12, padding: '16px 0', borderBottom: `1px solid ${colors.border}` } },
                 React.createElement('section', { 'aria-label': '当前待解决问题', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `待解决问题 · ${topic?.openQuestions?.length || 0}`), topic?.openQuestions?.length ? React.createElement('ul', { style: { margin: 0, paddingLeft: 18, display: 'grid', gap: 6, fontSize: 12, lineHeight: 1.6 } }, ...topic.openQuestions.map((question, index) => React.createElement('li', { key: index }, question))) : React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '当前没有待解决问题')),
-                React.createElement('section', { 'aria-label': '关联任务', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `关联任务 · ${relatedTasks.length}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', disabled: task.engine !== 'workflow-v2' && (!task.childSessionId || task.state === 'queued'), onClick: () => onOpenTask(task), style: { maxWidth: '100%' } }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: task.title || task.objective }, taskDisplayTitle(task)))), relatedTasks.length === 0 ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '暂无关联任务') : null))),
+                React.createElement('section', { 'aria-label': '关联任务', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `关联任务 · ${relatedTasks.length}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask(task), style: { maxWidth: '100%' } }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: task.title || task.objective }, taskDisplayTitle(task)))), relatedTasks.length === 0 ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '暂无关联任务') : null))),
               React.createElement('section', { 'aria-label': '群聊消息', style: { marginTop: 4 } },
                 React.createElement('strong', { style: { display: 'block', padding: '14px 0', fontSize: 13, fontWeight: 600 } }, `群聊消息 · ${context.total} 条`),
                 React.createElement('div', { style: { display: 'grid' } }, ...(context.messages?.length ? context.messages.map((message, index) => React.createElement('article', { key: `${message.messageId}:${index}`, style: { position: 'relative', minWidth: 0, padding: '10px 0 15px 22px', borderLeft: `1px solid ${colors.border}` } }, React.createElement('span', { 'aria-hidden': true, style: { position: 'absolute', top: 15, left: -4, width: 7, height: 7, borderRadius: '50%', background: index === 0 ? colors.accent : colors.cardSurface, border: `1px solid ${index === 0 ? colors.accent : colors.border}` } }), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', color: colors.muted, fontSize: 11 } }, React.createElement('strong', { style: { color: 'inherit', fontWeight: 600 } }, message.senderName || message.sourceKind || '未知发送人'), React.createElement('time', { dateTime: message.occurredAt || undefined, style: { fontVariantNumeric: 'tabular-nums' } }, fmt(message.occurredAt))), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, lineHeight: 1.7 } }, message.text || '（空消息）'), message.quotedMessage?.content ? React.createElement('details', { style: { marginTop: 9, color: colors.muted, fontSize: 12 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, '查看引用消息'), React.createElement('blockquote', { style: { margin: '7px 0 0', padding: '8px 10px', borderLeft: `2px solid ${colors.border}`, background: colors.surface2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.6 } }, message.quotedMessage.content)) : null)) : [emptyState('此版本没有消息')])),
@@ -870,35 +500,6 @@ window.__ModuleLoader__.load({
         parts.push(content.slice(offset))
         return parts
       }
-    const adjacentCurrentStep = (previousKeys, currentKeys, readingKey) => {
-      if (!readingKey || currentKeys.includes(readingKey) || !previousKeys.includes(readingKey)) return null
-      return currentKeys[Math.min(previousKeys.indexOf(readingKey), currentKeys.length - 1)] || ''
-    }
-    const preferredTaskStep = (nodes, readingKey) => nodes.find(node => node.stepKey === readingKey)
-      || nodes.find(node => ['running', 'waiting', 'failed', 'blocked'].includes(node.status))
-      || nodes.find(node => node.definitionPending || ['ready', 'pending'].includes(node.status))
-      || nodes.at(-1)
-    function TaskStepDetail({ taskId, node, index, detailRevision, active, tone, statusLabel, onOpenSession, onBack }) {
-      const [visited, setVisited] = useState(active)
-      useEffect(() => { if (active) setVisited(true) }, [active])
-      const presentation = taskStepControl(node)
-      return React.createElement('section', { id: `observer-task-reading-${index}`, 'aria-label': '步骤详情', 'data-step-key': node.stepKey, hidden: !active, className: 'observer-task-panel' },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 20, fontSize: 12 } },
-          React.createElement('span', { style: { color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, `步骤 ${String(index + 1).padStart(2, '0')} · ${node.stageTitle || '当前工作流'}`),
-          React.createElement('span', { style: pill(tone) }, statusLabel)),
-        React.createElement('h3', { tabIndex: -1, style: { margin: '0 0 16px', fontSize: 20, lineHeight: 1.5, fontWeight: 650, scrollMarginTop: 20 } }, node.title || nodeTitle[node.templateNodeId ?? node.nodeId] || '执行步骤'),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 20px', color: colors.muted, fontSize: 12, fontVariantNumeric: 'tabular-nums' } },
-          Number.isFinite(Date.parse(node.startedAt)) ? React.createElement('time', { dateTime: node.startedAt }, taskStepStart(node)) : React.createElement('span', null, taskStepStart(node)),
-          React.createElement(TaskStepElapsed, { node })),
-        node.waitReason?.reference ? React.createElement('p', { style: { padding: 12, borderLeft: `3px solid ${tone}`, background: colors.surface2, margin: '20px 0 0', fontSize: 14, lineHeight: 1.7 } }, traceReason(node.waitReason.reference)) : null,
-        presentation.reason ? React.createElement('p', { style: { margin: '16px 0 0', fontSize: 13, lineHeight: 1.7, color: colors.muted, whiteSpace: 'pre-wrap' } }, `操作原因${presentation.source ? `（${presentation.source}）` : ''}：${traceReason(presentation.reason)}`) : null,
-        React.createElement('div', { className: 'observer-task-readout' },
-          React.createElement('h4', { style: { margin: '0 0 16px', fontSize: 14, fontWeight: 600 } }, '步骤产出'),
-          active || visited ? node.outputRef ? React.createElement(TaskStepOutput, { taskId, node, detailRevision }) : React.createElement('p', { style: { margin: 0, padding: '12px 0 24px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } }, node.definitionPending ? '该阶段步骤待确定' : ['pending', 'ready', 'blocked'].includes(node.status) ? '执行后将在这里展示产出' : '暂未记录产出') : null),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 24 } },
-          node.sessionBound === true && node.sessionId ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenSession(node.sessionId) }, '查看步骤会话') : null,
-          React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: onBack }, '返回步骤目录')))
-    }
     const activePageStorageKey = 'dingtalk-dsh-observer.active-page'
     const readActivePage = () => {
       try {
@@ -906,28 +507,173 @@ window.__ModuleLoader__.load({
         return pages.some(item => item.id === page) ? page : 'groups'
       } catch { return 'groups' }
     }
-    function TaskOwnerSession({ owner, onOpenSession, navigatingSessionId }) {
-      if (!owner) return null
-      const available = owner.sessionBound === true && owner.sessionId
-      return React.createElement('section', { 'aria-label': '任务执行会话', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 20, padding: '12px 0', borderBottom: `1px solid ${colors.border}` } },
-        React.createElement('div', null,
-          React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, '任务执行会话'),
-          React.createElement('p', { style: { margin: '6px 0 0', color: colors.muted, fontSize: 12, lineHeight: 1.7 } }, '查看任务整体的分析、安排与执行记录。')),
-        available ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: navigatingSessionId === owner.sessionId,
-          onClick: () => onOpenSession(owner.sessionId) }, navigatingSessionId === owner.sessionId ? '正在打开会话…' : '查看任务会话')
-          : React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '会话尚未建立'))
+    const taskStateLabel = state => ({ running: '执行中', queued: '待处理', waiting: '等待处理', paused: '已暂停', completed: '已结束', succeeded: '已完成', failed: '失败', cancelled: '已取消', blocked: '受阻', pending: '待执行', interrupted: '已中断' })[state] || state || '状态未记录'
+    const taskStateTone = state => ['completed', 'succeeded'].includes(state) ? 'done' : ['failed', 'blocked'].includes(state) ? 'error' : ['waiting', 'paused', 'interrupted'].includes(state) ? 'warning' : ['running', 'queued', 'pending'].includes(state) ? 'ongoing' : 'neutral'
+    const taskSession = task => task.session || { sessionId: task.sessionId, workspaceDir: task.workspaceDir, logPath: task.logPath }
+    function SessionLocation({ session, label, onOpenSession }) {
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const pending = useRef(false)
+      const open = async () => {
+        if (pending.current || !session?.sessionId || session.sessionBound === false) return
+        pending.current = true; setBusy(true); setError('')
+        try { await onOpenSession(session.sessionId, session.parentSessionId) }
+        catch (cause) { setError(cause.message) }
+        finally { pending.current = false; setBusy(false) }
+      }
+      return React.createElement('section', { 'aria-label': label, style: { ...card, display: 'grid', gap: 10, overflowWrap: 'anywhere' } },
+        React.createElement('strong', null, label),
+        React.createElement('div', null, '会话 ID：', session?.sessionId ? `${session.sessionId}${session.sessionBound === false ? '（尚未绑定）' : ''}` : '尚未建立'),
+        React.createElement('div', null, '工作目录：', session?.workspaceDir || '尚未分配'),
+        React.createElement('div', null, '日志路径：', session?.logPath || '尚未记录'),
+        session?.sessionId && session.sessionBound !== false ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: busy, onClick: open, style: { justifySelf: 'start', minWidth: 110 } }, busy ? '正在打开…' : `打开${label}`) : null,
+        error ? React.createElement('p', { role: 'alert', style: { color: colors.danger } }, error) : null)
+    }
+    function TaskResult({ result }) {
+      const value = typeof result === 'string' ? { summary: result } : result
+      const values = items => Array.isArray(items) ? items : items ? [items] : []
+      return React.createElement('section', { className: 'observer-task-result', 'aria-label': '当前结果' },
+        React.createElement('h2', { style: { margin: '0 0 12px', fontSize: 16 } }, '当前结果'),
+        React.createElement('div', { className: 'observer-task-result-text', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, ...linkedTaskText(value?.summary || '尚未形成结果。')),
+        values(value?.evidence).length ? React.createElement('div', null, React.createElement('h3', { style: { fontSize: 14 } }, '证据'), React.createElement('ul', null, ...values(value.evidence).map((item, index) => React.createElement('li', { key: index, style: { overflowWrap: 'anywhere' } }, ...linkedTaskText(typeof item === 'string' ? item : item.description || item.path || item.ref || '证据已记录'))))) : null,
+        values(value?.limitations).length ? React.createElement('div', null, React.createElement('h3', { style: { fontSize: 14 } }, '限制与未验证项'), React.createElement('ul', null, ...values(value.limitations).map((item, index) => React.createElement('li', { key: index }, typeof item === 'string' ? item : readableValue(item))))) : null)
+    }
+    function useUnsavedTaskChanges(dirty, onDirtyChange) {
+      useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false) }, [dirty, onDirtyChange])
+      useEffect(() => {
+        if (!dirty) return
+        const warn = event => { event.preventDefault(); event.returnValue = '' }
+        window.addEventListener('beforeunload', warn)
+        return () => window.removeEventListener('beforeunload', warn)
+      }, [dirty])
+    }
+    function CreateTaskForm({ groups, onCreated, onCancel, onDirtyChange }) {
+      const [draft, setDraft] = useState({ groupId: '', title: '', objective: '', context: '', acceptance: '' })
+      const [busy, setBusy] = useState(false), [error, setError] = useState('')
+      const attempt = useRef(null), pending = useRef(false), fields = useRef({})
+      const [errors, setErrors] = useState({}), [leaving, setLeaving] = useState(false)
+      const dirty = Object.values(draft).some(Boolean)
+      useUnsavedTaskChanges(dirty, onDirtyChange)
+      const change = (field, value) => { setDraft(current => ({ ...current, [field]: value })); setErrors(current => ({ ...current, [field]: false })); attempt.current = null }
+      const submit = async event => {
+        event.preventDefault()
+        if (event.nativeEvent?.isComposing || pending.current) return
+        const invalid = { groupId: !draft.groupId, title: !draft.title.trim(), objective: !draft.objective.trim() }
+        setErrors(invalid)
+        if (Object.values(invalid).some(Boolean)) { setError('请选择来源群，并填写任务名称和目标。'); fields.current[Object.keys(invalid).find(name => invalid[name])]?.focus(); return }
+        const body = { groupId: draft.groupId, title: draft.title.trim(), objective: draft.objective.trim(), ...(draft.context.trim() ? { context: draft.context.trim() } : {}), acceptanceCriteria: draft.acceptance.split('\n').map(text => text.trim()).filter(Boolean) }
+        attempt.current ||= { ...body, requestId: crypto.randomUUID() }
+        pending.current = true; setBusy(true); setError('')
+        try { const result = await post('/tasks', attempt.current); onDirtyChange?.(false); onCreated(result) }
+        catch (cause) { setError(cause.message) }
+        finally { pending.current = false; setBusy(false) }
+      }
+      const field = (label, name, multiline = false, required = false) => React.createElement('label', { className: 'observer-config-field' }, label,
+        React.createElement(multiline ? 'textarea' : 'input', { className: 'observer-config-input', ref: element => { fields.current[name] = element }, 'aria-invalid': !!errors[name], 'aria-describedby': errors[name] ? 'task-create-error' : undefined, value: draft[name], required, maxLength: name === 'title' ? 120 : 16000, rows: multiline ? 5 : undefined, disabled: busy, onChange: event => change(name, event.target.value) }))
+      return React.createElement('form', { noValidate: true, 'aria-label': '新建任务', onSubmit: submit, style: { ...card, display: 'grid', gap: 16, maxWidth: 800 } },
+        React.createElement('h2', { style: { margin: 0, fontSize: 20 } }, '新建任务'),
+        React.createElement('p', { style: { margin: 0, color: colors.muted } }, '描述目标与约束。任务会话会按实际需要创建独立执行。'),
+        React.createElement('label', { className: 'observer-config-field' }, '来源群', React.createElement('select', { className: 'observer-config-input', ref: element => { fields.current.groupId = element }, 'aria-invalid': !!errors.groupId, 'aria-describedby': errors.groupId ? 'task-create-error' : undefined, required: true, value: draft.groupId, disabled: busy, onChange: event => change('groupId', event.target.value) }, React.createElement('option', { value: '' }, '请选择群聊'), ...groups.map(group => React.createElement('option', { key: group.groupId, value: group.groupId }, group.name || group.groupId)))),
+        field('任务名称', 'title', false, true), field('任务目标', 'objective', true, true), field('参考资料（不代表执行授权）', 'context', true), field('验收要求（每行一项，可选）', 'acceptance', true),
+        error ? React.createElement('p', { id: 'task-create-error', role: 'alert', style: { margin: 0, color: colors.danger } }, error) : null,
+        React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'submit', disabled: busy, style: { minWidth: 100 } }, busy ? '提交中…' : '创建任务'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy, onClick: () => dirty ? setLeaving(true) : onCancel() }, '返回看板')),
+        leaving ? React.createElement('section', { 'aria-label': '确认放弃草稿', style: { display: 'grid', gap: 8 } }, React.createElement('p', null, '返回看板会丢弃尚未提交的任务草稿。'), React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setLeaving(false) }, '继续填写'), React.createElement(Button, { type: 'button', onClick: () => { onDirtyChange?.(false); onCancel() } }, '放弃草稿并返回')) : null)
+    }
+    function TaskControls({ task, onChanged, onDirtyChange }) {
+      const [context, setContext] = useState(''), [reason, setReason] = useState(''), [confirmation, setConfirmation] = useState(null)
+      const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false)
+      const attempt = useRef(null), pending = useRef(false)
+      const mutate = async (action, body) => {
+        if (pending.current) return
+        const fingerprint = JSON.stringify({ action, body })
+        if (attempt.current?.fingerprint !== fingerprint) attempt.current = { fingerprint, body: { ...body, requestId: crypto.randomUUID() } }
+        pending.current = true; setBusy(true); setError(''); setNotice('')
+        try { await post(`/tasks/${encodeURIComponent(task.taskId)}/${action}`, attempt.current.body); attempt.current = null; setContext(''); setReason(''); setConfirmation(null); setNotice(action === 'cancel' ? '取消请求已记录。' : '需求补充已记录。'); onChanged() }
+        catch (cause) { setError(cause.message) }
+        finally { pending.current = false; setBusy(false) }
+      }
+      useUnsavedTaskChanges(!!context.trim() || !!reason.trim(), onDirtyChange)
+      if (task.legacyReadonly) return React.createElement('p', { role: 'status', style: { color: colors.muted } }, '历史任务只读，不再接受旧执行操作。')
+      const terminal = ['completed', 'succeeded', 'cancelled', 'failed'].includes(task.state) || ['cancelled', 'completed'].includes(task.controlState)
+      return React.createElement('section', { 'aria-label': '任务控制', style: { ...card, display: 'grid', gap: 12 } },
+        React.createElement('h2', { style: { margin: 0, fontSize: 16 } }, '需求与控制'),
+        terminal ? React.createElement('p', null, '任务已结束。') : React.createElement(React.Fragment, null,
+          React.createElement('label', { className: 'observer-config-field' }, '补充需求', React.createElement('textarea', { className: 'observer-config-input', rows: 5, value: context, disabled: busy, onChange: event => setContext(event.target.value), maxLength: 32000 })),
+          React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' } }, React.createElement(Button, { type: 'button', disabled: busy || !context.trim(), onClick: () => mutate('context', { context: context.trim(), expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision }) }, '提交需求补充'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy || !!confirmation, onClick: () => setConfirmation({ revision: task.controlRevision }), style: { color: colors.danger } }, '取消任务')),
+          confirmation ? React.createElement('section', { 'aria-label': '确认取消任务', style: { display: 'grid', gap: 12, padding: 12, border: `1px solid ${colors.danger}`, borderRadius: 8 } },
+            React.createElement('p', { style: { margin: 0 } }, `取消“${taskDisplayTitle(task)}”？将停止后续执行；已经发生的外部操作不会自动撤销。`),
+            React.createElement('label', { className: 'observer-config-field' }, '取消原因', React.createElement('input', { className: 'observer-config-input', value: reason, disabled: busy, onChange: event => setReason(event.target.value), maxLength: 2000 })),
+            React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy, onClick: () => { setConfirmation(null); setReason('') } }, '继续保留任务'), React.createElement(Button, { type: 'button', disabled: busy || !reason.trim(), onClick: () => mutate('cancel', { reason: reason.trim(), expectedControlRevision: confirmation.revision }), style: { color: colors.danger } }, '确认取消任务'))) : null),
+        busy ? React.createElement('span', { role: 'status' }, '正在提交…') : null,
+        error ? React.createElement('p', { role: 'alert', style: { color: colors.danger, margin: 0 } }, error, '。输入已保留，请刷新任务后核对再试。') : null,
+        notice ? React.createElement('p', { role: 'status', style: { margin: 0 } }, notice) : null)
+    }
+    function TaskExecutions({ taskId, updatedAt, onOpenSession }) {
+      const [offset, setOffset] = useState(0), [page, setPage] = useState(), [error, setError] = useState(''), [retry, setRetry] = useState(0)
+      const [loading, setLoading] = useState(true)
+      useEffect(() => {
+        const controller = new AbortController(); let active = true
+        setLoading(true); setError('')
+        get(`/state/tasks/${encodeURIComponent(taskId)}/executions?offset=${offset}&limit=20`, { signal: controller.signal }).then(value => { if (active) { const items = value.executions || value.items || (Array.isArray(value) ? value : []); const total = value.total ?? items.length; if (offset > 0 && offset >= total) { setOffset(Math.max(0, Math.floor((total - 1) / 20) * 20)); return } setPage({ items, total, offset }); } }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
+        return () => { active = false; controller.abort() }
+      }, [taskId, offset, updatedAt, retry])
+      const ready = page?.offset === offset
+      return React.createElement('section', { 'aria-label': '动态执行列表', style: { display: 'grid', gap: 16, minHeight: 160 } },
+        React.createElement('h2', { style: { margin: 0, fontSize: 18 } }, '动态执行'),
+        React.createElement('p', { style: { margin: 0, color: colors.muted } }, '执行由任务会话按需安排，每次执行保留独立会话、目录、结果与日志。'),
+        loading ? React.createElement('span', { role: 'status' }, '正在读取执行记录…') : null,
+        error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `执行记录读取失败：${error}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setRetry(value => value + 1) }, '重试读取执行')) : null,
+        ready ? React.createElement('ol', { style: { margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 12 } }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, style: { ...card, overflowWrap: 'anywhere' } },
+          React.createElement('details', null, React.createElement('summary', { style: { cursor: 'pointer', lineHeight: 1.7 } }, `${execution.objective || execution.executionId} · ${taskStateLabel(execution.status)}`),
+            React.createElement('p', { style: { color: colors.muted } }, `执行 ${execution.executionId} · 需求修订 ${execution.requirementRevision ?? '未记录'} · ${fmt(execution.createdAt)}`),
+            React.createElement(SessionLocation, { session: execution, label: '执行会话', onOpenSession }),
+            execution.error ? React.createElement('p', { role: 'status', style: { color: colors.danger } }, traceReason(execution.error)) : null,
+            React.createElement(TaskResult, { result: execution.result }))))) : null,
+        ready && !page.items.length && !loading ? emptyState('尚无动态执行', { detail: '任务会话尚未分派执行；任务可直接形成结果。' }) : null,
+        ready ? React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } }, React.createElement('span', { style: { marginRight: 'auto', color: colors.muted } }, `${page.total} 条执行记录`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset === 0, onClick: () => setOffset(value => Math.max(0, value - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset + page.items.length >= page.total, onClick: () => setOffset(value => value + 20) }, '下一页')) : null)
+    }
+    function LegacyTaskOutput({ taskId, node, detailRevision }) {
+      const [opened, setOpened] = useState(false)
+      return React.createElement('details', { style: card, onToggle: event => { if (event.currentTarget.open) setOpened(true) } },
+        React.createElement('summary', { style: { cursor: 'pointer' } }, `${node.title || node.nodeId || '历史执行'} · ${taskStateLabel(node.status)}`),
+        opened ? node.outputRef ? React.createElement(TaskStepOutput, { taskId, node, detailRevision }) : React.createElement('p', null, '历史未记录产出') : null)
+    }
+    function LegacyTaskHistory({ task }) {
+      const [page, setPage] = useState(1)
+      const items = [...(task.executions || []).map(execution => ({ execution })), ...(task.executionNodes || []).map(node => ({ node }))]
+      const pages = Math.max(1, Math.ceil(items.length / 20)), current = Math.min(page, pages)
+      return React.createElement('section', { 'aria-label': '只读历史执行', style: { display: 'grid', gap: 12 } },
+        React.createElement('p', { role: 'status' }, '历史任务只读，不再接受旧执行操作。'),
+        task.session?.sessionId ? React.createElement('p', { style: { color: colors.muted } }, `历史任务会话：${task.session.sessionId}`) : null,
+        ...items.slice((current - 1) * 20, current * 20).map(({ execution, node }, index) => node ? React.createElement(LegacyTaskOutput, { key: node.nodeRunId || index, taskId: task.taskId, node, detailRevision: task.detailRevision })
+          : React.createElement('details', { key: execution.executionId, style: card }, React.createElement('summary', { style: { cursor: 'pointer' } }, `历史执行 ${execution.executionId} · ${taskStateLabel(execution.status)}`), React.createElement('p', null, `记录时间 ${fmt(execution.createdAt)}`), ...(execution.sessions || []).map(session => React.createElement('p', { key: session.sessionId }, `历史会话 ${session.sessionId} · ${taskStateLabel(session.status)}`)), execution.result ? React.createElement(TaskResult, { result: execution.result }) : null)),
+        !items.length ? emptyState('暂无历史执行记录') : null,
+        pages > 1 ? React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', disabled: current <= 1, onClick: () => setPage(value => value - 1) }, '上一页'), React.createElement('span', null, `${current}/${pages}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: current >= pages, onClick: () => setPage(value => value + 1) }, '下一页')) : null)
+    }
+    function TaskSessionDetail({ task, onOpenSession, onChanged, onBack, updatedAt, onDirtyChange }) {
+      return React.createElement('section', { 'aria-label': '任务会话详情', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 20, overflowWrap: 'anywhere' } },
+        React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between' } }, statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state)), React.createElement(Button, { type: 'button', variant: 'outline', onClick: onBack }, '返回看板')),
+        React.createElement('h1', { style: { margin: 0, fontSize: 24 } }, taskDisplayTitle(task)),
+        React.createElement('p', { style: { margin: 0, whiteSpace: 'pre-wrap' } }, task.objective),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 16, color: colors.muted } }, `需求修订 ${task.requirementRevision ?? task.inputVersion ?? '未记录'}`, `控制修订 ${task.controlRevision ?? '未记录'}`, `控制状态 ${taskStateLabel(task.controlState || task.control?.state || task.state)}`),
+        !task.legacyReadonly ? React.createElement(SessionLocation, { session: taskSession(task), label: '任务会话', onOpenSession }) : null,
+        React.createElement(TaskResult, { result: task.result }),
+        task.waitingReason ? React.createElement('p', { role: 'status', style: { color: colors.warning } }, traceReason(task.waitingReason)) : null,
+        task.legacyReadonly ? React.createElement(LegacyTaskHistory, { key: task.taskId, task })
+          : React.createElement(React.Fragment, null, React.createElement(TaskControls, { key: task.taskId, task, onChanged, onDirtyChange }), React.createElement(TaskExecutions, { key: task.taskId, taskId: task.taskId, updatedAt, onOpenSession })))
     }
     function ObserverContent({ openSession }) {
+      const draftDirty = useRef(false)
+      const [pendingNavigation, setPendingNavigation] = useState(null)
+      const reportDirty = useCallback(value => { draftDirty.current = value }, [])
       const [activePage, updateActivePage] = useState(readActivePage)
       const setActivePage = useCallback(page => {
+        if (draftDirty.current) { setPendingNavigation({ page }); return }
         updateActivePage(page)
         // 导航属于看板，不能随宿主 conversation 插槽重挂载而丢失。
         try { window.sessionStorage.setItem(activePageStorageKey, page) }
         catch { /* 浏览器禁用存储时仍允许正常切页。 */ }
       }, [])
-      const [selectedCatalogWorkflowId, setSelectedCatalogWorkflowId] = useState('')
-      const [taskReturnWorkflowId, setTaskReturnWorkflowId] = useState('')
-      const [configurationTarget, setConfigurationTarget] = useState()
       const [topicTarget, setTopicTarget] = useState()
       const [data, setData] = useState()
       const [error, setError] = useState()
@@ -941,24 +687,19 @@ window.__ModuleLoader__.load({
       const [messageDeliveryFilter, setMessageDeliveryFilter] = useState('all')
       const [outboxStatusFilter, setOutboxStatusFilter] = useState('all')
       const [hoveredTaskId, setHoveredTaskId] = useState('')
-      const [expandedCheckpointTaskId, setExpandedCheckpointTaskId] = useState('')
-      const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState('')
-      const [workflowTaskDetail, setWorkflowTaskDetail] = useState()
-      const [workflowDetailError, setWorkflowDetailError] = useState('')
-      const [workflowDetailRetry, setWorkflowDetailRetry] = useState(0)
-      const [stepReadingNotice, setStepReadingNotice] = useState('')
-      const [readingStep, setReadingStep] = useState(null)
-      const detailFocusTarget = useRef(null)
+      const [creatingTask, setCreatingTask] = useState(false)
+      const [taskPages, setTaskPages] = useState({})
+      const [selectedTaskId, setSelectedTaskId] = useState('')
+      const [taskDetail, setTaskDetail] = useState()
+      const [detailError, setDetailError] = useState('')
+      const [detailRetry, setDetailRetry] = useState(0)
       const [selectedMessageRunId, setSelectedMessageRunId] = useState('')
       const [copiedId, setCopiedId] = useState('')
       const [navigatingSessionId, setNavigatingSessionId] = useState('')
-      const [archivingTaskId, setArchivingTaskId] = useState('')
-      const [archiveDetailTaskId, setArchiveDetailTaskId] = useState('')
+      const [historyPage, setHistoryPage] = useState(1)
       const [alertType, setAlertType] = useState('all')
       const [alertView, setAlertView] = useState('active')
       const [resolvedAlertPage, setResolvedAlertPage] = useState(1)
-      const [authorizationComments, setAuthorizationComments] = useState({})
-      const [decidingAuthorizationId, setDecidingAuthorizationId] = useState('')
       const [authorizationPage, setAuthorizationPage] = useState(1)
       const [authorizationFilter, setAuthorizationFilter] = useState('all')
       const [selectedAuthorizationId, setSelectedAuthorizationId] = useState('')
@@ -977,54 +718,19 @@ window.__ModuleLoader__.load({
         setRefreshState('done')
         window.setTimeout(() => setRefreshState('idle'), 1200)
       }, [refresh, refreshState])
-      const latestReading = useRef(null)
-      useEffect(() => { latestReading.current = { readingStep, detail: workflowTaskDetail } }, [readingStep, workflowTaskDetail])
       const pendingDetail = useRef(null)
       useEffect(() => {
-        if (!selectedWorkflowTaskId) { setWorkflowTaskDetail(undefined); setWorkflowDetailError(''); setReadingStep(null); setStepReadingNotice(''); detailFocusTarget.current = null; return }
+        if (!selectedTaskId) { setTaskDetail(undefined); setDetailError(''); return }
         let active = true
-        setWorkflowDetailError('')
-        if (pendingDetail.current?.taskId !== selectedWorkflowTaskId || pendingDetail.current?.retry !== workflowDetailRetry) {
-          const request = { taskId: selectedWorkflowTaskId, retry: workflowDetailRetry }
-          request.promise = get(`/state/tasks/${encodeURIComponent(selectedWorkflowTaskId)}/detail`)
-            .finally(() => { if (pendingDetail.current === request) pendingDetail.current = null })
+        setDetailError('')
+        if (pendingDetail.current?.taskId !== selectedTaskId || pendingDetail.current?.retry !== detailRetry) {
+          const request = { taskId: selectedTaskId, retry: detailRetry }
+          request.promise = get(`/state/tasks/${encodeURIComponent(selectedTaskId)}/detail`).finally(() => { if (pendingDetail.current === request) pendingDetail.current = null })
           pendingDetail.current = request
         }
-        pendingDetail.current.promise.then(value => {
-          if (!active) return
-          const previous = latestReading.current?.detail?.taskId === value.taskId ? latestReading.current : null
-          if (!previous || detailFocusTarget.current?.taskId !== selectedWorkflowTaskId) detailFocusTarget.current = null
-          const readingKey = previous?.readingStep?.taskId === selectedWorkflowTaskId ? previous.readingStep.stepKey : undefined
-          const adjacentKey = adjacentCurrentStep((previous?.detail?.executionNodes || []).map(node => node.stepKey), (value.executionNodes || []).map(node => node.stepKey), readingKey)
-          if (adjacentKey !== null) { setStepReadingNotice('正在阅读的步骤已从当前计划移除，已转到相邻步骤。'); detailFocusTarget.current = { taskId: selectedWorkflowTaskId, stepKey: adjacentKey } }
-          else if (!detailFocusTarget.current) setStepReadingNotice('')
-          setReadingStep({ taskId: selectedWorkflowTaskId, stepKey: preferredTaskStep(value.executionNodes || [], adjacentKey ?? readingKey)?.stepKey || '' })
-          setWorkflowTaskDetail(value)
-        }, cause => { if (active) setWorkflowDetailError(cause.message) })
+        pendingDetail.current.promise.then(value => { if (active) setTaskDetail(value) }, cause => { if (active) setDetailError(cause.message) })
         return () => { active = false }
-      }, [selectedWorkflowTaskId, updatedAt, workflowDetailRetry])
-      useEffect(() => {
-        const target = detailFocusTarget.current
-        if (!target || target.taskId !== selectedWorkflowTaskId || activePage !== 'tasks') return
-        detailFocusTarget.current = null
-        const steps = [...document.querySelectorAll('[aria-label="任务执行详情"] li.observer-task-step')]
-        const adjacent = steps.find(element => element.dataset.stepKey === target.stepKey)
-        ;(adjacent?.querySelector('button') || document.querySelector('[aria-label="执行步骤"] h2'))?.focus()
-      }, [workflowTaskDetail, selectedWorkflowTaskId, activePage])
-      useEffect(() => {
-        const revealSelection = () => {
-          const button = document.querySelector('[aria-label="任务执行详情"] .observer-task-step-button[aria-pressed="true"]')
-          const directory = button?.closest('nav')
-          if (!directory || directory.scrollHeight <= directory.clientHeight) return
-          const bounds = button.getBoundingClientRect(), viewport = directory.getBoundingClientRect()
-          if (bounds.top < viewport.top) directory.scrollTop -= viewport.top - bounds.top + 4
-          else if (bounds.bottom > viewport.bottom) directory.scrollTop += bounds.bottom - viewport.bottom + 4
-        }
-        revealSelection()
-        const narrow = window.matchMedia('(max-width: 720px)')
-        narrow.addEventListener('change', revealSelection)
-        return () => narrow.removeEventListener('change', revealSelection)
-      }, [readingStep?.stepKey, selectedWorkflowTaskId, activePage])
+      }, [selectedTaskId, updatedAt, detailRetry])
       useEffect(() => {
         refresh()
         const timer = window.setInterval(refresh, 5000)
@@ -1038,20 +744,15 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener('click', closeForSession, true)
       }, [])
       const groupsById = new Map((data?.groups || []).map((group) => [group.groupId, group]))
+      const tasksById = new Map((data?.tasks || []).map(task => [task.taskId, task]))
       const topicsById = new Map((data?.topics || []).map((topic) => [`${topic.groupId}:${topic.topicId}`, topic]))
       const navigate = async (sessionId, parentSessionId) => {
         try { setNavigationError(undefined); setNavigatingSessionId(sessionId); await openSession(sessionId, parentSessionId); setOpen(false) }
         catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
         finally { setNavigatingSessionId('') }
       }
-      const openTask = (task, returnWorkflowId = '') => {
-        if (task.engine === 'workflow-v2') { setTaskReturnWorkflowId(returnWorkflowId); setSelectedWorkflowTaskId(task.taskId); setActivePage('tasks'); return }
-        if (task.childSessionId) navigate(task.childSessionId, groupsById.get(task.groupId)?.residentSessionId)
-      }
-      const returnFromTask = () => {
-        setSelectedWorkflowTaskId('')
-        if (taskReturnWorkflowId) { setSelectedCatalogWorkflowId(taskReturnWorkflowId); setActivePage('workflows') }
-      }
+      const openTask = task => { setCreatingTask(false); setSelectedTaskId(task.taskId); setActivePage('tasks') }
+      const returnFromTask = () => { if (draftDirty.current) { setPendingNavigation({ back: true }); return } setSelectedTaskId(''); setCreatingTask(false) }
       const copyId = async (value) => {
         let copied = false
         try {
@@ -1074,7 +775,7 @@ window.__ModuleLoader__.load({
       }
       const copyButton = (value, label) => React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: !value, onClick: (event) => { event.stopPropagation(); copyId(value).catch((cause) => setNavigationError(cause instanceof Error ? cause.message : String(cause))) }, style: { color: copiedId === value ? 'var(--dsw-alias-state-success-primary, #248a3d)' : undefined, cursor: value ? 'pointer' : 'default', fontSize: 10.5 } }, copiedId === value ? '已复制' : `复制${label}`)
       const selectedGroup = groupsById.get(selectedGroupId) || (data?.groups || [])[0]
-      const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || message.sourceKind === 'workflow-v2' || !message.sourceKind).sort((left, right) => (new Date(right.occurredAt).getTime() || 0) - (new Date(left.occurredAt).getTime() || 0) || Number(right.sequence || 0) - Number(left.sequence || 0))
+      const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || message.sourceKind === 'workflow-v2' || message.sourceKind === 'task-session' || !message.sourceKind).sort((left, right) => (new Date(right.occurredAt).getTime() || 0) - (new Date(left.occurredAt).getTime() || 0) || Number(right.sequence || 0) - Number(left.sequence || 0))
       const messageWorkflowState = (message) => {
         if (['routing', 'waiting_clarification', 'waiting_authorization', 'waiting_context', 'waiting_system', 'execution_blocked', 'routing_blocked', 'waiting_routing_barrier', 'intent_judging', 'intent_rejudging', 'processed'].includes(message.workflowStatus)) return message.workflowStatus
         if (message.routingStatus === 'failed') return 'failed'
@@ -1124,7 +825,7 @@ window.__ModuleLoader__.load({
         return React.createElement('tr', { key: message.messageId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
           React.createElement('td', { style: { ...tableBodyCell, width: 144 }, title: traceReason(message.workflowStatusDetail || message.agentDeliveryError) || '' }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, fmt(message.occurredAt)))),
-          React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, messageWorkflowState(message) === 'processed' ? '—' : '待归类')]))),
+          React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.taskSessionRefs || []).map(taskId => React.createElement(Button, { key: `task:${taskId}`, type: 'button', variant: 'outline', size: 'sm', onClick: () => openTask(tasksById.get(taskId) || { taskId }), style: { maxWidth: 140, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }, 'aria-label': `查看任务 ${tasksById.get(taskId)?.title || taskId}` }, taskDisplayTitle(tasksById.get(taskId) || { title: taskId }))), ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : message.taskSessionRefs?.length ? [] : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, messageWorkflowState(message) === 'processed' ? '—' : '待归类')]))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）')),
           React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : React.createElement('span', { style: { color: colors.muted, fontSize: 11, display: 'block' } }, '历史未记录处理过程'), messageFacts))
       })
@@ -1140,104 +841,38 @@ window.__ModuleLoader__.load({
         return React.createElement('tr', { key: message.outboundId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
           React.createElement('td', { style: { ...tableBodyCell, width: 124 } }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）'),
-            status.detail ? React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: status.state === 'error' ? colors.danger : colors.warning, overflowWrap: 'anywhere' } }, status.detail, !message.supersededByOutboundId && !message.recallStatus && message.deliveryError ? `：${message.deliveryError}` : '') : null,
+            status.detail || !['confirmed', 'superseded', 'recalled', 'recall-failed'].includes(status.id) && typeof message.deliveryError === 'string' && message.deliveryError ? React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: status.state === 'error' ? colors.danger : colors.warning, overflowWrap: 'anywhere' } }, status.detail || '', !message.supersededByOutboundId && !message.recallStatus && typeof message.deliveryError === 'string' && message.deliveryError ? `${status.detail ? '：' : ''}${message.deliveryError}` : '') : null,
+            !status.retryDisabled && !['confirmed', 'superseded', 'recalled', 'recall-failed'].includes(status.id) && message.notificationRetryAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `计划${status.id === 'waiting' ? '核验' : '重试'} ${fmt(message.notificationRetryAt)}`) : null,
             message.deliveryAttemptedAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `最近尝试 ${fmt(message.deliveryAttemptedAt)} · 共 ${message.deliveryAttemptCount || 1} 次`) : null),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } },
             React.createElement('div', { style: { minWidth: 0 } }, singleLineTableContent(React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, short(message.sourceMessageId))), message.replyToMessageId ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null)),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } }, singleLineTableContent(React.createElement('code', { title: message.deliveredMessageId || '', style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, message.deliveredMessageId ? short(message.deliveredMessageId) : message.status === 'sent' ? '历史未记录' : '尚未确认'))),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } }, singleLineTableContent(React.createElement('code', { title: message.outboundId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, short(message.outboundId)))))
       })
-      const renderTaskCard = (task) => {
-        const group = groupsById.get(task.groupId)
+      const renderTaskCard = task => {
         const sourceGroup = groupsById.get(task.sourceGroupId || task.groupId)
         const groupLabel = sourceGroup?.name || (task.groupId?.startsWith('web:') ? 'Web 任务' : task.groupId) || '未关联群聊'
-        const waitingNotice = task.state === 'waiting' && task.waitingKind === 'information'
-          ? group?.outbox?.findLast(message => message.sourceMessageId?.startsWith(`task-result:${task.taskId}:waiting:`) && !message.sourceMessageId.includes(':followup:')
-            && message.status !== 'superseded' && message.taskInputVersion === task.inputVersion && message.taskRunSequence === task.runSequence) : undefined
-        const waitingNoticeLabel = waitingNotice?.status === 'sent' && waitingNotice.deliveredMessageId ? `群通知已送达 · ${fmt(waitingNotice.deliveredAt)}`
-          : waitingNotice?.deliveryBlockedAt || waitingNotice?.deliveryError ? '群通知发送失败，请检查' : waitingNotice ? '群通知待确认送达' : '群通知尚未生成'
-        const queued = task.state === 'queued'
-        const checkpointEvents = task.checkpoints || []
-        const planCheckpointIndex = checkpointEvents.findLastIndex((checkpoint) => checkpoint.kind === 'plan-confirmed')
-        const planCheckpoint = checkpointEvents[planCheckpointIndex]
-        const currentCheckpointEvents = checkpointEvents.slice(Math.max(0, planCheckpointIndex))
-        const boardStages = task.workflowProgress?.stages || []
-        const checkpoints = boardStages.map(stage => stage.stageId)
-        const checkpointLabel = id => nodeTitle[id] || (boardStages.find(stage => stage.stageId === id)?.title !== id ? boardStages.find(stage => stage.stageId === id)?.title : null) || '执行步骤'
-        const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
-        const completedCheckpointNames = new Set(boardStages.filter(stage => stage.completed).map(stage => stage.stageId))
-        const currentCheckpoint = task.state === 'running' ? checkpoints.find((checkpoint) => !completedCheckpointNames.has(checkpoint)) : undefined
-        const completedCheckpointCount = checkpoints.filter((checkpoint) => completedCheckpointNames.has(checkpoint)).length
-        const progress = checkpoints.length ? Math.round((completedCheckpointCount / checkpoints.length) * 100) : 0
-        const showCheckpoints = checkpoints.length > 0 && !task.archivedAt
-        const checkpointsExpanded = expandedCheckpointTaskId === task.taskId
+        const session = taskSession(task)
         const hovered = hoveredTaskId === task.taskId
-        const navigating = navigatingSessionId === task.childSessionId
-        const worktreesByPath = new Map()
-        for (const item of Array.isArray(task.localWorktrees) ? task.localWorktrees : []) {
-          const previous = worktreesByPath.get(item.path)
-          worktreesByPath.set(item.path, previous ? { ...item, documents: [...(previous.documents || []), ...(item.documents || [])] } : item)
-        }
-        const worktrees = [...worktreesByPath.values()]
-        const ownedWorktrees = worktrees.filter(item => item.createdByTask && item.status === 'registered')
-        const borrowedWorktrees = worktrees.filter(item => !item.createdByTask)
-        const ownedDocumentCount = ownedWorktrees.reduce((count, item) => count + new Set((item.documents || []).map(document => document.source)).size, 0)
-        const notifications = (task.notificationIntents || []).filter(intent => intent.inputVersion === task.inputVersion && intent.runSequence === task.runSequence && intent.status !== 'superseded')
-        const notificationCounts = new Map()
-        for (const intent of notifications.filter(item => item.status !== 'delivered')) notificationCounts.set(intent.status, (notificationCounts.get(intent.status) || 0) + 1)
-        const retryExhausted = task.waitingReason?.startsWith('topic_request_retry_exhausted:')
-        const waitingLabel = retryExhausted ? '系统协调受阻 · 待恢复' : `等待 · ${traceReason(task.waitingReason)}`
-        const cleanup = task.archiveCleanup
-        const cleanupRunning = cleanup?.status === 'running' || archivingTaskId === task.taskId
-        const archiveDetailOpen = archiveDetailTaskId === task.taskId
-        const archiveNeedsReview = worktrees.length > 0 || cleanup?.status === 'failed'
-        const archiveTask = async () => {
-          if (cleanupRunning) return
-          setArchivingTaskId(task.taskId)
-          setNavigationError('')
-          try { await post(`/tasks/${encodeURIComponent(task.taskId)}/archive`); setArchiveDetailTaskId(''); await refresh() }
-          catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)); await refresh().catch(() => {}) }
-          finally { setArchivingTaskId('') }
-        }
-        const archiveDetail = archiveDetailOpen ? React.createElement('section', { 'aria-label': task.archivedAt ? '归档记录' : '归档前核对', style: { display: 'grid', gap: 10, minWidth: 0, padding: 10, border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2, fontSize: 11, lineHeight: 1.5 } },
-          React.createElement('strong', { style: { fontSize: 12 } }, task.archivedAt ? '归档记录' : '归档前核对'),
-          !task.archivedAt ? React.createElement('span', null, ownedWorktrees.length ? `将迁出 ${ownedDocumentCount} 份文档并清理 ${ownedWorktrees.length} 个任务自建目录。` : '本次仅归档任务记录。', borrowedWorktrees.length ? ` ${borrowedWorktrees.length} 个借用目录及其登记文档会保留原处。` : '') : null,
-          cleanup?.error ? React.createElement('span', { role: 'alert', style: { color: colors.danger, overflowWrap: 'anywhere' } }, cleanup.error) : null,
-          ...worktrees.map(worktree => {
-            const documents = [...new Map((worktree.documents || []).map(document => [document.source, document])).values()]
-            const label = !worktree.createdByTask ? '借用 · 保留原处' : worktree.status === 'cleaned' ? '已清理' : '任务自建 · 归档时清理'
-            return React.createElement('div', { key: worktree.path, style: { display: 'grid', gap: 4, minWidth: 0, paddingTop: 8, borderTop: `1px solid ${colors.border}` } },
-              React.createElement('strong', { style: { fontSize: 11, fontWeight: 600 } }, label, ` · ${documents.length} 份登记文档`),
-              worktree.branch ? React.createElement('span', { style: { color: colors.muted } }, `分支 ${worktree.branch}`) : null,
-              React.createElement('code', { style: { overflowWrap: 'anywhere' } }, worktree.path),
-              documents.length ? React.createElement('div', { style: { display: 'grid', gap: 3, maxHeight: 160, overflowY: 'auto', paddingLeft: 8, borderLeft: `2px solid ${colors.border}` } }, ...documents.map(document => React.createElement('div', { key: document.source, style: { overflowWrap: 'anywhere', color: colors.muted } }, document.source, document.archivePath ? React.createElement('div', { style: { fontSize: 10.5 } }, `归档至 ${document.archivePath}`) : null))) : null)
-          }),
-          !task.archivedAt ? React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
-            React.createElement('button', { type: 'button', onClick: () => setArchiveDetailTaskId(''), style: { border: `1px solid ${colors.border}`, borderRadius: 7, background: colors.cardSurface, color: 'inherit', padding: '5px 9px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 } }, '取消'),
-            React.createElement('button', { type: 'button', disabled: cleanupRunning, onClick: archiveTask, style: { border: `1px solid ${colors.accent}`, borderRadius: 7, background: colors.accent, color: '#fff', padding: '5px 9px', cursor: cleanupRunning ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 11 } }, cleanupRunning ? '归档中…' : '确认归档')) : null) : null
-        return React.createElement('div', { key: task.taskId, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
-          React.createElement('button', { type: 'button', disabled: task.engine !== 'workflow-v2' && (queued || navigating), onClick: (event) => { if (event.target.closest('[data-task-card-action]')) return; openTask(task) }, style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: task.engine === 'workflow-v2' || !queued && !navigating ? 'pointer' : 'default', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
-          React.createElement('strong', { title: task.title || task.objective, style: { fontSize: 13, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, taskDisplayTitle(task)),
+        const queued = task.state === 'queued'
+        const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
+        return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
+          React.createElement('button', { type: 'button', onClick: () => openTask(task), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
+            React.createElement('strong', { title: task.title || task.objective, style: { fontSize: 13, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, taskDisplayTitle(task))),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, overflow: 'hidden' } },
-            React.createElement('span', { title: task.sourceChannel === 'web' ? `${groupLabel} · Web 重新执行` : groupLabel, style: { ...pill(colors.muted), flex: '0 1 auto', maxWidth: 150, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, groupLabel),
-            ...(task.topicRefs || []).map((ref) => { const topicGroupId = ref.groupId || task.sourceGroupId || task.groupId; const topic = topicsById.get(`${topicGroupId}:${ref.topicId}`); const label = topic?.title || ref.title || `话题 ${short(ref.topicId)}`; return React.createElement('span', { key: ref.topicId, role: 'button', tabIndex: 0, title: label, 'aria-label': `话题 ${label}`, 'data-task-card-action': 'open-topic', onClick: (event) => { event.stopPropagation(); setTopicTarget({ groupId: topicGroupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, onKeyDown: (event) => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); event.stopPropagation(); setTopicTarget({ groupId: topicGroupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 96, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' } }, label) })),
-          React.createElement('div', { title: displayObjective, style: { minWidth: 0, display: 'block', maxHeight: '4.5em', overflow: 'hidden', overflowWrap: 'anywhere', fontSize: 11, lineHeight: 1.5 } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', role: 'img', 'aria-label': '任务目标', style: { display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors.muted } }, React.createElement('circle', { cx: 8, cy: 8, r: 5.5 }), React.createElement('circle', { cx: 8, cy: 8, r: 2 }), React.createElement('path', { d: 'M8 1v2M15 8h-2' })), displayObjective),
-          React.createElement('div', null,
-            task.workflowProgress?.outcomeLabel || notificationCounts.size ? React.createElement('div', { role: 'status', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, fontSize: 11, lineHeight: 1.5 } },
-              task.workflowProgress?.outcomeLabel ? React.createElement('strong', { style: { color: task.workflowProgress.outcome === 'succeeded' ? statusTone.done : colors.muted, fontWeight: 600 } }, task.workflowProgress.outcomeLabel) : null,
-              ...[...notificationCounts].map(([status, count], index) => React.createElement('span', { key: status, style: { color: status === 'blocked' ? colors.warning : colors.muted } }, `${task.workflowProgress?.outcomeLabel || index ? '· ' : ''}${count > 1 ? `${count} 条` : ''}${({ pending: '通知待生成', enqueued: '通知待送达', delivered: '通知已送达', blocked: '通知受阻' })[status] || status}`))) : null,
-            showCheckpoints ? React.createElement('section', null,
-              React.createElement('div', { role: 'button', tabIndex: 0, 'aria-expanded': checkpointsExpanded, 'aria-label': checkpointsExpanded ? '收起检查点' : `展开全部 ${checkpoints.length} 个检查点`, 'data-task-card-action': 'toggle-checkpoints', onClick: (event) => { event.stopPropagation(); setExpandedCheckpointTaskId(checkpointsExpanded ? '' : task.taskId) }, onKeyDown: (event) => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); event.stopPropagation(); setExpandedCheckpointTaskId(checkpointsExpanded ? '' : task.taskId) }, style: { minHeight: 24, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, cursor: 'pointer' } }, React.createElement('span', { style: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 4, color: colors.muted } }, React.createElement(IconChecklistOutlineRegular, { size: 12, 'aria-label': '任务' }), '任务'), React.createElement('div', { role: 'progressbar', 'aria-label': '检查点进度', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': progress, style: { flex: '1 1 auto', minWidth: 24, height: 4, borderRadius: 999, overflow: 'hidden', background: `color-mix(in srgb, ${colors.muted} 22%, transparent)` } }, React.createElement('div', { style: { width: `${progress}%`, height: '100%', borderRadius: 'inherit', background: completedCheckpointCount === checkpoints.length ? statusTone.done : colors.accent, transition: 'width 180ms ease' } })), React.createElement('span', { style: { flex: '0 0 auto', color: completedCheckpointCount === checkpoints.length ? statusTone.done : colors.muted } }, `${completedCheckpointCount} / ${checkpoints.length}`), React.createElement(checkpointsExpanded ? IconChevronUpOutlineRegular : IconChevronDownOutlineRegular, { size: 14, 'aria-hidden': true, style: { flex: '0 0 auto', color: colors.muted } })),
-              checkpointsExpanded ? React.createElement('div', { style: { display: 'grid', gap: 4, padding: '2px 9px 9px' } }, ...checkpoints.map((checkpoint, index) => { const completed = completedCheckpointNames.has(checkpoint); const current = !completed && currentCheckpoint === checkpoint; const tone = completed ? statusTone.done : current ? colors.accent : colors.muted; const node = (task.executionNodes || []).find(node => node.nodeId === checkpoint); const duration = node ? React.createElement(TaskStepElapsed, { node, fontSize: 10.5 }) : checkpointDuration(checkpointLabel(checkpoint), currentCheckpointEvents, Date.now()); return React.createElement('div', { key: `${index}:${checkpoint}`, title: checkpointLabel(checkpoint), style: { minWidth: 0, display: 'grid', gridTemplateColumns: '12px minmax(0,1fr) max-content', gap: 5, alignItems: 'start', fontSize: 10.5, lineHeight: 1.4 } }, React.createElement('span', { 'aria-hidden': true, style: { width: 12, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: tone } }, completed ? React.createElement(CheckpointDoneIcon, { size: 12 }) : current ? React.createElement(StateDot, { state: 'ongoing', size: 10 }) : '○'), React.createElement('span', { style: { color: 'inherit', display: '-webkit-box', WebkitLineClamp: 'unset', WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, checkpointLabel(checkpoint)), React.createElement('span', { title: node ? '本次执行耗时' : `执行时长 ${duration}`, style: { color: colors.muted, textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } }, duration)) })) : null) : null,
-          task.waitingReason ? React.createElement('div', { title: task.waitingReason, style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, waitingLabel) : null,
-          task.waitingReason && task.waitingKind === 'information' ? React.createElement('div', { style: { fontSize: 10.5, color: colors.muted } }, waitingNoticeLabel, task.requesterName ? ` · 发起人 ${task.requesterName}` : '') : null),
-          ),
-          cleanup?.status === 'failed' && !task.archivedAt ? React.createElement('div', { role: 'alert', style: { fontSize: 11, color: colors.danger } }, '归档失败 · 查看原因后重试') : null,
-          React.createElement('div', { style: { minWidth: 0, marginTop: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
-            React.createElement('span', { title: `最后活动 ${fmt(task.updatedAt)}`, style: { minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt)),
-            task.state === 'completed' && (!task.archivedAt || worktrees.length) ? React.createElement('button', { type: 'button', disabled: cleanupRunning, 'aria-busy': cleanupRunning, 'aria-expanded': archiveNeedsReview || task.archivedAt ? archiveDetailOpen : undefined, onClick: (event) => { event.stopPropagation(); archiveNeedsReview || task.archivedAt ? setArchiveDetailTaskId(archiveDetailOpen ? '' : task.taskId) : archiveTask() }, style: { flex: '0 0 auto', border: `1px solid ${colors.border}`, borderRadius: 7, background: colors.surface2, color: cleanupRunning ? colors.muted : colors.accent, padding: '3px 7px', cursor: cleanupRunning ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 10.5 } }, cleanupRunning ? '归档中…' : task.archivedAt ? archiveDetailOpen ? '收起记录' : '归档记录' : archiveDetailOpen ? '收起预览' : cleanup?.status === 'failed' ? '查看并重试' : archiveNeedsReview ? '检查并归档' : '归档') : null),
-          archiveDetail,
-          navigating && task.engine !== 'workflow-v2' ? React.createElement('div', { role: 'status', style: { fontSize: 11.5, color: colors.accent } }, '正在打开会话…') : queued && task.engine !== 'workflow-v2' ? React.createElement('div', { style: { fontSize: 11.5, color: colors.muted } }, '等待执行，尚无对话和轨迹') : null)
+            React.createElement('span', { title: groupLabel, style: { ...pill(colors.muted), flex: '0 1 auto', maxWidth: 150, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, groupLabel),
+            ...(task.topicRefs || []).map(ref => {
+              const groupId = ref.groupId || task.sourceGroupId || task.groupId
+              const label = topicsById.get(`${groupId}:${ref.topicId}`)?.title || ref.title || `话题 ${short(ref.topicId)}`
+              return React.createElement('button', { key: ref.topicId, type: 'button', title: label, 'aria-label': `话题 ${label}`, onClick: event => { event.stopPropagation(); setTopicTarget({ groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', border: 0, fontFamily: 'inherit', flex: '0 1 auto', minWidth: 0, maxWidth: 96, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' } }, label)
+            })),
+          React.createElement('button', { type: 'button', title: displayObjective, 'aria-label': '查看完整任务目标', onClick: () => openTask(task), style: { border: 0, padding: 0, background: 'transparent', color: 'inherit', textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', minWidth: 0, display: 'block', maxHeight: '4.5em', overflow: 'hidden', overflowWrap: 'anywhere', fontSize: 11, lineHeight: 1.5 } },
+            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: { display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors.muted } }, React.createElement('circle', { cx: 8, cy: 8, r: 5.5 }), React.createElement('circle', { cx: 8, cy: 8, r: 2 }), React.createElement('path', { d: 'M8 1v2M15 8h-2' })), displayObjective),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 5, fontSize: 10.5, lineHeight: 1.5, color: colors.muted } },
+            React.createElement(StateDot, { state: taskStateTone(task.state), size: 7 }), taskStateLabel(task.state), ' · ', task.legacyReadonly ? '历史只读 · 可查阅历史产出' : `任务会话 ${session.sessionId ? short(session.sessionId) : '待建立'} · ${task.executionCount ?? (task.executions || []).length} 次动态执行`),
+          task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,
+          React.createElement('div', { style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted } },
+            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt)))
       }
       const alertCategories = [
         { id: 'all', label: '全部类型' },
@@ -1270,12 +905,14 @@ window.__ModuleLoader__.load({
       const resolvedAlertPageCount = Math.max(1, Math.ceil(filteredResolvedAlerts.length / resolvedAlertPageSize))
       const currentResolvedAlertPage = Math.min(resolvedAlertPage, resolvedAlertPageCount)
       const visibleResolvedAlerts = filteredResolvedAlerts.slice((currentResolvedAlertPage - 1) * resolvedAlertPageSize, currentResolvedAlertPage * resolvedAlertPageSize)
-      const bucketColumns = taskBuckets.map((bucket) => {
-        const tasks = (data?.tasks || []).filter((task) => task.state === bucket.state && !task.archivedAt).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
-        const taskCards = tasks.length ? tasks.map(renderTaskCard) : [React.createElement('div', { key: 'empty', style: { border: `1px dashed ${colors.border}`, borderRadius: 10, minHeight: 90, display: 'grid', placeItems: 'center', color: colors.muted, fontSize: 12 } }, '暂无任务')]
-        return React.createElement('div', { key: bucket.state, style: { boxSizing: 'border-box', borderRadius: 14, background: bucket.background, padding: '8px 4px', display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 116px)', minHeight: 420, maxHeight: 'calc(100dvh - 116px)', overflow: 'hidden' } },
+      const bucketColumns = taskBuckets.map(bucket => {
+        const tasks = (data?.tasks || []).filter(task => (bucket.state === 'completed' ? ['completed', 'cancelled', 'succeeded', 'failed'].includes(task.state) : bucket.state === 'waiting' ? ['waiting', 'paused', 'blocked', 'interrupted'].includes(task.state) : task.state === bucket.state) && !task.archivedAt && !task.legacyReadonly).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
+        const totalPages = Math.max(1, Math.ceil(tasks.length / 10)), page = Math.min(taskPages[bucket.state] || 1, totalPages)
+        const visible = tasks.slice((page - 1) * 10, page * 10)
+        return React.createElement('section', { key: bucket.state, style: { boxSizing: 'border-box', borderRadius: 14, background: bucket.background, padding: '8px 4px', minWidth: 0, display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 164px)', minHeight: 420, maxHeight: 'calc(100dvh - 164px)', overflow: 'hidden' } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px 10px' } }, React.createElement('strong', { style: { display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, fontWeight: 650, lineHeight: 1.4, color: 'var(--dsw-alias-label-primary-inverted, #fff)', background: bucket.tone } }, bucket.label), React.createElement('span', { style: { borderRadius: 999, background: colors.cardSurface, padding: '2px 7px', fontSize: 10.5, color: colors.muted } }, tasks.length)),
-          React.createElement('div', { style: { flex: 1, minHeight: 0, padding: '8px 8px 12px 8px', display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', scrollbarWidth: 'none' } }, ...taskCards))
+          React.createElement('div', { style: { flex: 1, minHeight: 0, padding: '8px 8px 12px 8px', display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', scrollbarWidth: 'none' } }, ...(visible.length ? visible.map(renderTaskCard) : [React.createElement('div', { key: 'empty', style: { border: `1px dashed ${colors.border}`, borderRadius: 10, minHeight: 90, display: 'grid', placeItems: 'center', color: colors.muted, fontSize: 12 } }, '暂无任务')])),
+          totalPages > 1 ? React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8 } }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: page <= 1, onClick: () => setTaskPages(value => ({ ...value, [bucket.state]: page - 1 })) }, '上一页'), React.createElement('span', null, `${page}/${totalPages}`), React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: page >= totalPages, onClick: () => setTaskPages(value => ({ ...value, [bucket.state]: page + 1 })) }, '下一页')) : null)
       })
       const menu = React.createElement('nav', { 'aria-label': '运行看板视图', style: { minWidth: 0, height: 27, display: 'flex', alignItems: 'stretch', gap: 36, overflowX: 'auto', padding: '0 0 0 8px' } },
         ...pages.map((page) => React.createElement('button', { key: page.id, type: 'button', onClick: () => setActivePage(page.id), 'aria-current': activePage === page.id ? 'page' : undefined, style: navigationTabStyle(activePage === page.id) }, page.label)))
@@ -1291,7 +928,8 @@ window.__ModuleLoader__.load({
             updatedAt ? React.createElement('span', { 'aria-hidden': true, style: { width: 1, height: 12, background: colors.border } }) : null,
             updatedAt ? React.createElement('span', { title: fmt(updatedAt) }, `更新于 ${fmtTime(updatedAt)}`) : null),
           React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: refreshState === 'refreshing', onClick: manualRefresh, 'aria-live': 'polite', style: { gap: 6, minWidth: 78, fontSize: 13, lineHeight: '20px' } }, refreshState === 'refreshing' ? '刷新中' : refreshState === 'done' ? '已刷新' : '刷新', refreshIcon)),
-        menu)
+        menu,
+        pendingNavigation ? React.createElement('section', { 'aria-label': '未提交的修改', style: { padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' } }, React.createElement('span', null, '离开会丢弃尚未提交的修改。'), React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setPendingNavigation(null) }, '继续编辑'), React.createElement(Button, { type: 'button', onClick: () => { const target = pendingNavigation; draftDirty.current = false; setPendingNavigation(null); if (target.back) returnFromTask(); else setActivePage(target.page) } }, '放弃修改并离开')) : null)
       const dataViewTabs = React.createElement('div', { role: 'tablist', 'aria-label': '群聊数据视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } },
         ...[{ id: 'messages', label: `收信箱 · ${selectedMessages.length}` }, { id: 'outbox', label: `发信箱 · ${selectedOutbox.length}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': groupTableView === item.id, type: 'button', onClick: () => setGroupTableView(item.id), style: navigationTabStyle(groupTableView === item.id, { paddingBottom: 4 }) }, item.label)))
       const groupTableToolbar = React.createElement('div', { style: toolbar },
@@ -1302,10 +940,10 @@ window.__ModuleLoader__.load({
             onClick: () => navigate(selectedGroup.coordinator.sessionId) }, navigatingSessionId === selectedGroup.coordinator.sessionId ? '正在打开…' : '打开群常驻会话') : null,
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '核对相关输入' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'waiting_clarification', label: '等待用户补充' }, { id: 'waiting_authorization', label: '等待授权' }, { id: 'waiting_context', label: '正在读取材料' }, { id: 'waiting_system', label: '材料读取受阻' }, { id: 'execution_blocked', label: '执行受阻' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
-            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
+            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'sending', label: '发送中' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读 / 核对' }, { id: 'stopped', label: '已停止发送' }, { id: 'reassessment', label: '已停止，需核验' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },
-          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 144 } }, '话题处理'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '话题'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),
+          React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 144 } }, '处理状态'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '关联任务 / 历史话题'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),
           React.createElement('tbody', null, ...(messageRows.length ? messageRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 5, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的群聊消息'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredMessages.length} 条 · 每页 ${pageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage <= 1, onClick: () => setMessagePage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentMessagePage} / ${pageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage >= pageCount, onClick: () => setMessagePage((page) => Math.min(pageCount, page + 1)) }, '下一页')))
       const outboxTable = React.createElement(React.Fragment, null,
@@ -1314,87 +952,13 @@ window.__ModuleLoader__.load({
           React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 5, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的 Agent 发件记录'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
       const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
-      const selectedWorkflowTask = (workflowTaskDetail?.taskId === selectedWorkflowTaskId || workflowTaskDetail?.requestedTaskId === selectedWorkflowTaskId) ? workflowTaskDetail : undefined
-      const nodeState = { succeeded: '已完成', running: '执行中', ready: '待执行', waiting: '等待处理', failed: '失败', pending: '未开始', cancelled: '已取消', skipped: '已跳过', blocked: '已阻塞' }
-      const planStageState = { ready: '待执行', waiting_confirmation: '等待人工确认', running: '执行中', succeeded: '已完成', invalidated: '需重新执行', blocked: '受阻' }
-
-      const taskNodes = selectedWorkflowTask?.executionNodes || []
-      const completedSteps = taskNodes.filter(node => !node.definitionPending && node.status === 'succeeded' && node.control?.action !== 'skip').length
-      const skippedSteps = taskNodes.filter(node => !node.definitionPending && node.status === 'succeeded' && node.control?.action === 'skip').length
-      const stepsResolved = selectedWorkflowTask?.plan?.stepsResolved !== false && !taskNodes.some(node => node.definitionPending)
-      const noWorkflow = stepsResolved && selectedWorkflowTask?.plan?.stages?.length === 0
-      const stepProgress = taskNodes.length ? Math.min(stepsResolved ? 100 : 99, Math.round((completedSteps + skippedSteps) / taskNodes.length * 100)) : 0
-      const stepProgressText = !stepsResolved ? '步骤待确定' : `${skippedSteps ? '步骤处理' : '步骤完成'} ${stepProgress}%`
-      const taskTone = selectedWorkflowTask?.outcome === 'failed' ? colors.danger : selectedWorkflowTask?.state === 'waiting' ? colors.warning : selectedWorkflowTask?.outcome === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : colors.accent
-      const taskStatus = selectedWorkflowTask?.workflowProgress?.outcomeLabel || ({ succeeded: '已完成', failed: '执行失败', cancelled: '已取消' }[selectedWorkflowTask?.outcome]) || ({ completed: '已结束', running: '执行中', waiting: '等待处理', queued: '待执行' }[selectedWorkflowTask?.state]) || '状态未记录'
-      const activeStep = taskNodes.find(node => ['running', 'waiting', 'failed'].includes(node.status))
-      const readingNode = preferredTaskStep(taskNodes, readingStep?.taskId === selectedWorkflowTaskId ? readingStep.stepKey : '')
-      const focusReadingStep = () => document.querySelector('.observer-task-panel:not([hidden]) h3')?.focus()
-      const focusStepDirectory = () => document.querySelector('.observer-task-step-button[aria-pressed="true"]')?.focus()
-      const stepColor = (status) => status === 'succeeded' ? 'var(--dsw-alias-state-success-primary, #248a3d)' : status === 'failed' ? colors.danger : status === 'waiting' ? colors.warning : status === 'running' ? colors.accent : colors.muted
-      const workflowDetail = selectedWorkflowTask ? React.createElement('section', { className: 'observer-task-detail', 'aria-label': '任务执行详情', style: { maxWidth: 1200, margin: '0 auto', minWidth: 0, overflowWrap: 'anywhere' } },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, fontSize: 12, color: colors.muted } },
-          React.createElement('span', null, '任务看板 / 任务详情'),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: returnFromTask }, taskReturnWorkflowId ? '返回工作流' : '返回看板')),
-        stepReadingNotice ? React.createElement('p', { role: 'status', 'aria-live': 'polite', style: { color: colors.muted, fontSize: 12 } }, stepReadingNotice) : null,
-        workflowDetailError ? React.createElement('div', { role: 'alert', style: { marginTop: 12, color: colors.danger, fontSize: 12 } }, `当前详情刷新失败，以下内容尚未刷新：${workflowDetailError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setWorkflowDetailRetry(value => value + 1) }, '重试读取详情')) : null,
-        React.createElement('header', { className: 'observer-task-overview', style: { borderBottom: `1px solid ${colors.border}`, marginBottom: 24 } },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12, fontSize: 12 } },
-            React.createElement('span', { style: { ...pill(taskTone), fontWeight: 600 } }, taskStatus),
-            React.createElement('span', { style: { color: colors.muted } }, `最近更新 ${fmt(selectedWorkflowTask.updatedAt)}`)),
-          React.createElement('div', { className: 'observer-task-summary' },
-            React.createElement('div', { style: { minWidth: 0 } },
-              React.createElement('h1', { title: selectedWorkflowTask.title || selectedWorkflowTask.objective, style: { margin: 0, fontSize: 24, fontWeight: 650, lineHeight: 1.45, letterSpacing: '-.02em' } }, taskDisplayTitle(selectedWorkflowTask)),
-              activeStep ? React.createElement('p', { style: { margin: '12px 0 0', fontSize: 14, color: stepColor(activeStep.status) } }, `当前 · ${activeStep.title || nodeTitle[activeStep.templateNodeId ?? activeStep.nodeId] || '执行步骤'}`) : null),
-            React.createElement('div', { className: 'observer-task-statistics' },
-              React.createElement('span', { style: { fontWeight: 600 } }, taskNodes.length ? skippedSteps ? `已处理 ${completedSteps + skippedSteps} / ${taskNodes.length} 个步骤（完成 ${completedSteps}，不适用跳过 ${skippedSteps}）` : `已完成 ${completedSteps} / ${taskNodes.length} 个步骤` : noWorkflow ? '未使用工作流' : stepsResolved ? '暂无步骤记录' : '步骤待确定'),
-              React.createElement(TaskTotalElapsed, { key: selectedWorkflowTask.taskId, task: selectedWorkflowTask })))),
-        selectedWorkflowTask.objective ? React.createElement('details', { style: { margin: '0 0 16px', color: colors.muted, fontSize: 14, lineHeight: 1.7 } },
-          React.createElement('summary', { style: { cursor: 'pointer' } }, '任务目标'),
-          React.createElement('p', { style: { margin: '8px 0 0', whiteSpace: 'pre-wrap' } }, selectedWorkflowTask.objective)) : null,
-        React.createElement(TaskOwnerSession, { owner: selectedWorkflowTask.taskOwner, onOpenSession: navigate, navigatingSessionId }),
-        selectedWorkflowTask.waitingReason ? React.createElement('div', { role: 'status', style: { marginBottom: 16, padding: '14px 18px', borderLeft: `3px solid ${colors.warning}`, background: colors.surface2, fontSize: 14, lineHeight: 1.7 } }, traceReason(selectedWorkflowTask.waitingReason)) : null,
-        selectedWorkflowTask.investigationRequest ? React.createElement(WorkflowClarification, { key: selectedWorkflowTask.investigationRequest.requestId, request: selectedWorkflowTask.investigationRequest, onSubmitted: manualRefresh }) : null,
-        React.createElement('section', { className: 'observer-task-result', 'aria-label': '当前结果' },
-          React.createElement('h2', { style: { margin: '0 0 12px', fontSize: 14, fontWeight: 650 } }, '当前结果'),
-          React.createElement('div', { className: 'observer-task-result-text', tabIndex: selectedWorkflowTask.result ? 0 : undefined, style: { fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, ...linkedTaskText(selectedWorkflowTask.result || (selectedWorkflowTask.state === 'completed' ? '暂未记录产出' : '任务尚未形成最终结果，可在下方查看各步骤产出。'))),
-          selectedWorkflowTask.result ? React.createElement('p', { style: { margin: '12px 0 0', color: colors.muted, fontSize: 12 } }, '送达情况请查看发件记录。') : null),
-        selectedWorkflowTask.plan?.stages?.length ? React.createElement('div', { 'aria-label': '任务阶段', style: { display: 'flex', flexWrap: 'wrap', gap: '8px 24px', marginBottom: 16, fontSize: 12, color: colors.muted } }, ...selectedWorkflowTask.plan.stages.map((stage, index) => React.createElement('span', { key: stage.stageId }, `${String(index + 1).padStart(2, '0')} · ${stage.title || '任务阶段'} · ${planStageState[stage.status] || '状态未记录'}`))) : null,
-        React.createElement('section', { 'aria-label': '执行步骤' },
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16, marginBottom: 16 } },
-            React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 16 } },
-              React.createElement('h2', { style: { margin: 0, fontSize: 16, fontWeight: 650 }, tabIndex: -1 }, '执行步骤'),
-              taskNodes.length || !stepsResolved ? React.createElement('span', { style: { fontSize: 12, color: colors.muted, fontVariantNumeric: 'tabular-nums' } }, stepProgressText) : null),
-            readingNode ? React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: focusReadingStep }, '查看所选步骤') : null),
-          taskNodes.length ? React.createElement('div', { role: 'progressbar', 'aria-label': skippedSteps ? '步骤处理情况' : '步骤完成情况', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': stepProgress, 'aria-valuetext': stepProgressText, style: { height: 3, background: colors.border, marginBottom: 24, borderRadius: 4 } }, React.createElement('div', { style: { width: `${stepProgress}%`, height: '100%', background: taskTone, borderRadius: 4 } })) : null,
-          !taskNodes.length ? React.createElement('p', { style: { padding: '32px 0', color: colors.muted, fontSize: 14 } }, noWorkflow ? '本任务未使用工作流' : stepsResolved ? '暂无执行步骤记录' : '该阶段步骤待确定') : null,
-          taskNodes.length ? React.createElement('div', { className: 'observer-task-layout' },
-            React.createElement('nav', { className: 'observer-task-navigation', 'aria-label': '步骤目录' },
-              ...groupTaskSteps(taskNodes).map((group, groupIndex) => React.createElement('section', {
-                key: group.key, className: 'observer-task-workflow', 'aria-label': `工作流 ${group.title}`, style: { marginBottom: 24 } },
-                React.createElement('h3', { style: { margin: '0 0 12px', padding: '0 12px', fontSize: 12, fontWeight: 600, lineHeight: 1.6, color: colors.muted } },
-                  `工作流 ${groupIndex + 1} · ${group.title}`, React.createElement('span', { style: { marginLeft: 8, fontWeight: 400 } }, `${group.steps.length} 个步骤`)),
-                React.createElement('ol', { style: { margin: 0, padding: 0, listStyle: 'none' } }, ...group.steps.map(({ node, index }) => {
-                  const presentation = taskStepControl(node)
-                  const tone = stepColor(presentation.skipped ? 'skipped' : node.status)
-                  return React.createElement('li', { key: node.stepKey, 'data-step-key': node.stepKey, className: 'observer-task-step' },
-                    React.createElement('button', { type: 'button', className: 'observer-task-step-button', 'aria-pressed': readingNode?.stepKey === node.stepKey, 'aria-controls': `observer-task-reading-${index}`, 'aria-current': node.status === 'running' ? 'step' : undefined,
-                      onClick: () => setReadingStep({ taskId: selectedWorkflowTaskId, stepKey: node.stepKey }) },
-                      React.createElement('span', { 'aria-label': `步骤 ${index + 1}`, style: { display: 'grid', placeItems: 'center', width: 28, height: 28, boxSizing: 'border-box', borderRadius: '50%', border: `${node.status === 'running' ? 2 : 1}px solid ${tone}`, background: colors.surface, color: tone, fontSize: 12, fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, String(index + 1).padStart(2, '0')),
-                      React.createElement('span', { style: { minWidth: 0 } },
-                        React.createElement('strong', { style: { display: 'block', fontSize: 14, lineHeight: 1.6, fontWeight: readingNode?.stepKey === node.stepKey ? 650 : 500 } }, node.title || nodeTitle[node.templateNodeId ?? node.nodeId] || '执行步骤'),
-                        React.createElement('span', { style: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '4px 12px', marginTop: 4, fontSize: 12 } },
-                          React.createElement('span', { style: { color: tone } }, presentation.label || nodeState[node.status] || '状态未记录'),
-                          React.createElement(TaskStepElapsed, { node, fontSize: 12 })))))
-                }))))),
-            React.createElement('div', { className: 'observer-task-reading' }, ...taskNodes.map((node, index) => {
-              const presentation = taskStepControl(node)
-              return React.createElement(TaskStepDetail, { key: `${selectedWorkflowTask.taskId}:${node.stepKey}`, taskId: selectedWorkflowTask.taskId, node, index, detailRevision: selectedWorkflowTask.detailRevision,
-                active: readingNode?.stepKey === node.stepKey, tone: stepColor(presentation.skipped ? 'skipped' : node.status), statusLabel: presentation.label || nodeState[node.status] || '状态未记录', onOpenSession: navigate, onBack: focusStepDirectory })
-            }))) : null))
-        : null
-      const workflowDetailPending = selectedWorkflowTaskId && !selectedWorkflowTask ? React.createElement('section', { 'aria-label': '任务详情读取', style: { display: 'grid', gap: 12 } }, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: returnFromTask }, taskReturnWorkflowId ? '返回工作流' : '返回看板'), workflowDetailError ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `任务详情读取失败：${workflowDetailError}`, React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setWorkflowDetailRetry(value => value + 1) }, '重试读取详情')) : React.createElement('span', { role: 'status' }, '正在读取当前任务详情…')) : null
-      const tasksPage = workflowDetailPending || workflowDetail || React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns)
+      const selectedTask = taskDetail?.taskId === selectedTaskId ? taskDetail : undefined
+      const tasksPage = creatingTask ? React.createElement(CreateTaskForm, { groups: data?.groups || [], onDirtyChange: reportDirty, onCancel: returnFromTask, onCreated: result => { setCreatingTask(false); const task = result.task || result; if (task.taskId) openTask(task); void refresh() } })
+        : selectedTaskId ? React.createElement(React.Fragment, null,
+          detailError ? React.createElement('div', { role: 'alert', style: { ...card, color: colors.danger } }, `任务详情读取失败，已读取内容可能过期：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
+          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onChanged: () => { setDetailRetry(value => value + 1); void refresh() }, onBack: returnFromTask, updatedAt, onDirtyChange: reportDirty })
+            : React.createElement('section', { style: { minHeight: 200, display: 'grid', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', onClick: returnFromTask }, '返回看板'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : null))
+        : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement(Button, { type: 'button', onClick: () => setCreatingTask(true), style: { justifySelf: 'start' } }, '新建任务'), React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
         'sending-unknown': { label: '投递待确认', state: 'warning' },
@@ -1407,14 +971,6 @@ window.__ModuleLoader__.load({
       const authorizationPresentation = (item) => item.status === 'answered'
         ? authorizationDecision[item.decision] || authorizationStatus.answered
         : authorizationStatus[item.status] || { label: '状态异常', state: 'error' }
-      const decideAuthorization = async (requestId, decision) => {
-        try {
-          setNavigationError(undefined); setDecidingAuthorizationId(requestId)
-          await post(`/authorizations/${encodeURIComponent(requestId)}/decision`, { decision, comment: authorizationComments[requestId] || '' })
-          await refresh()
-        } catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
-        finally { setDecidingAuthorizationId('') }
-      }
       const authorizationItems = [...(data?.authorizations || [])].sort((left, right) => {
         const leftPending = isPendingAuthorization(left) ? 1 : 0; const rightPending = isPendingAuthorization(right) ? 1 : 0
         return rightPending - leftPending || String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
@@ -1425,7 +981,6 @@ window.__ModuleLoader__.load({
       const currentAuthorizationPage = Math.min(authorizationPage, authorizationPageCount)
       const visibleAuthorizationItems = filteredAuthorizationItems.slice((currentAuthorizationPage - 1) * authorizationPageSize, currentAuthorizationPage * authorizationPageSize)
       const selectedAuthorization = authorizationItems.find((item) => item.requestId === selectedAuthorizationId)
-      const selectedAuthorizationPending = selectedAuthorization ? isPendingAuthorization(selectedAuthorization) : false
       const authorizationDetailField = (label, value) => React.createElement('div', { style: { display: 'grid', gap: 5 } },
         React.createElement('strong', { style: { fontSize: 11, color: colors.muted } }, label),
         React.createElement('div', { style: { fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, value || '—'))
@@ -1452,10 +1007,7 @@ window.__ModuleLoader__.load({
             React.createElement('details', { style: { padding: '18px 0', borderBottom: `1px solid ${colors.border}` } }, React.createElement('summary', { style: { cursor: 'pointer', fontSize: 12, fontWeight: 600 } }, `已尝试 · ${(selectedAuthorization.attemptedActions || []).length}`), React.createElement('div', { style: { marginTop: 14 } }, authorizationDetailField('', (selectedAuthorization.attemptedActions || []).map((value, index) => `${index + 1}. ${value}`).join('\n')))),
             React.createElement('section', { style: { padding: '20px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('关联信息', `Task ID：${selectedAuthorization.taskId || '—'}\n群聊：${groupsById.get(selectedAuthorization.groupId)?.name || selectedAuthorization.groupId || '—'}`)),
             selectedAuthorization.status === 'answered' ? React.createElement('section', { style: { padding: '20px 0' } }, authorizationDetailField('处理结果', `${selectedAuthorization.decision === 'approved' ? '继续任务' : selectedAuthorization.decision === 'rejected' ? '不执行' : selectedAuthorization.decision || '已处理'}\n处理渠道：${selectedAuthorization.decisionSource === 'web' ? '运行看板' : selectedAuthorization.decisionSource === 'dingtalk' ? '钉钉私聊' : selectedAuthorization.decisionSource || '历史迁移'}\n处理时间：${fmt(selectedAuthorization.decidedAt)}\n处理意见：${selectedAuthorization.reply || '—'}`)) : null),
-          selectedAuthorizationPending ? React.createElement('footer', { style: { flex: '0 0 auto', display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10, alignItems: 'center', padding: '16px 24px', borderTop: `1px solid ${colors.border}`, background: colors.surface2 } },
-            React.createElement('input', { 'aria-label': `执行限制或拒绝原因 ${selectedAuthorization.requestId}`, value: authorizationComments[selectedAuthorization.requestId] || '', onChange: (event) => setAuthorizationComments((current) => ({ ...current, [selectedAuthorization.requestId]: event.target.value })), placeholder: '执行限制或拒绝原因（可选）', style: { minWidth: 0, border: `1px solid ${colors.border}`, borderRadius: 9, background: colors.surface2, color: 'inherit', padding: '9px 11px', fontFamily: 'inherit', fontSize: 12 } }),
-            React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: decidingAuthorizationId === selectedAuthorization.requestId, onClick: () => decideAuthorization(selectedAuthorization.requestId, 'rejected'), style: { color: colors.danger } }, '不执行'),
-            React.createElement(Button, { variant: 'primary', size: 'sm', type: 'button', disabled: decidingAuthorizationId === selectedAuthorization.requestId, onClick: () => decideAuthorization(selectedAuthorization.requestId, 'approved') }, decidingAuthorizationId === selectedAuthorization.requestId ? '处理中…' : '批准该事项并继续')) : null)) : null
+          React.createElement('p', { role: 'status', style: { padding: 16, color: colors.muted } }, '历史介入记录只读。新执行的权限请求请在对应执行会话中处理。'))) : null
       const authorizationsPage = React.createElement(React.Fragment, null, React.createElement('section', null,
         React.createElement('div', { style: tableFrame },
           React.createElement('div', { style: { ...toolbar, justifyContent: 'flex-end' } }, React.createElement(SelectMenu, { label: '筛选处理状态', value: authorizationFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'pending', label: '等待处理' }, { id: 'approved', label: '已继续' }, { id: 'rejected', label: '不执行' }, { id: 'superseded', label: '已失效' }], onChange: (value) => { setAuthorizationFilter(value); setAuthorizationPage(1) }, fitContent: true })),
@@ -1467,8 +1019,13 @@ window.__ModuleLoader__.load({
             React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentAuthorizationPage} / ${authorizationPageCount}`),
             React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentAuthorizationPage >= authorizationPageCount, onClick: () => setAuthorizationPage((page) => Math.min(authorizationPageCount, page + 1)) }, '下一页')))
       ), authorizationDetail)
-      const archivedTasks = (data?.tasks || []).filter((task) => task.state === 'completed' && task.archivedAt).sort((left, right) => String(right.archivedAt).localeCompare(String(left.archivedAt)))
-      const archivePage = React.createElement('section', null, React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 } }, ...(archivedTasks.length ? archivedTasks.map(renderTaskCard) : [React.createElement(React.Fragment, { key: 'empty' }, emptyState('暂无归档任务'))])))
+      const archivedTasks = (data?.tasks || []).filter(task => task.legacyReadonly || task.archivedAt).sort((left, right) => String(right.updatedAt || right.archivedAt).localeCompare(String(left.updatedAt || left.archivedAt)))
+      const historyPageCount = Math.max(1, Math.ceil(archivedTasks.length / 20)), currentHistoryPage = Math.min(historyPage, historyPageCount)
+      const archivePage = React.createElement('section', { style: { display: 'grid', gap: 16 } },
+        React.createElement('p', { role: 'status', style: { margin: 0, color: colors.muted } }, '历史任务只读。旧流程、参数和执行操作已停止。'),
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 12 } }, ...archivedTasks.slice((currentHistoryPage - 1) * 20, currentHistoryPage * 20).map(renderTaskCard)),
+        !archivedTasks.length ? emptyState('暂无历史任务') : null,
+        React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } }, React.createElement('span', { style: { marginRight: 'auto' } }, `${archivedTasks.length} 条 · ${currentHistoryPage}/${historyPageCount}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: currentHistoryPage <= 1, onClick: () => setHistoryPage(value => value - 1) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: currentHistoryPage >= historyPageCount, onClick: () => setHistoryPage(value => value + 1) }, '下一页')))
       const alertsPage = React.createElement(React.Fragment, null,
         React.createElement('section', null, React.createElement('div', { style: tableFrame },
           React.createElement('div', { style: toolbar },
@@ -1478,12 +1035,8 @@ window.__ModuleLoader__.load({
           alertView === 'resolved' ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredResolvedAlerts.length} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
       )
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: openTask, onOpenSession: navigate })
-      const pageContent = ['workflows', 'configuration'].includes(activePage) ? null : activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
-      const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 'calc(100dvh - 138px)', boxSizing: 'border-box', margin: '0 auto' } }, pageContent,
-        React.createElement(WorkflowBrowser, { active: activePage === 'workflows', updatedAt, tasks: data?.tasks || [], selectedId: selectedCatalogWorkflowId, onSelect: setSelectedCatalogWorkflowId,
-          onOpenTask: task => openTask(task, selectedCatalogWorkflowId), restoreFocus: !!taskReturnWorkflowId, onFocusRestored: () => setTaskReturnWorkflowId(''),
-          onOpenConfiguration: (name, workflowId) => { setConfigurationTarget({ name, workflowId }); setActivePage('configuration') } }),
-        React.createElement(ConfigurationBrowser, { active: activePage === 'configuration', target: configurationTarget }))
+      const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
+      const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
         navigationError ? React.createElement('div', { role: 'alert', style: { ...card, borderColor: colors.danger, color: colors.danger } }, `操作失败：${navigationError}`) : null,
