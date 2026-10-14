@@ -400,6 +400,29 @@ test('verified legacy stop closes only failed with retained unknown audit and ne
   assert.equal((await f.query({kind:'resource.list'})).length,0)
 })
 
+test('网页读取正式对账保留原unknown记录，原执行可续办且不生成或重放操作', async t => {
+ const f=await fixture(t), owner=await f.task(), binding=await f.execution(owner.binding), operationId='web-read'
+ const hash=value=>createHash('sha256').update(JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item)).digest('hex')
+ await f.command('operation.prepare',{binding,operationId,key:'original-read',definition:{toolName:'web_fetch',argumentsDigest:'args'},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName:'web_fetch',resultDigest:'result',isError:true}})
+ await f.command('execution.result',{binding,output:{status:'completed'}});await f.command('execution.drained',{binding})
+ const original=await f.query({kind:'operation.get',operationId})
+ const proof={kind:'native-web-read-failed',operationId,operationDigest:hash(original),taskId:binding.taskId,executionId:binding.executionId,sessionId:binding.sessionId,
+  callId:'call',toolName:'web_fetch',argumentsDigest:'args',resultDigest:'result',resultSequence:3,turnEndSequence:4}
+ const continueArgs={binding:owner.binding,executionId:binding.executionId,key:'continue',prompt:'Continue original work',input:{objective:'original'},definition:{}}
+ await assert.rejects(f.command('execution.continue',continueArgs),{code:'DYNAMIC_OPERATION_UNRESOLVED'})
+ for(const patch of [{operationDigest:'wrong'},{sessionId:'wrong'},{toolName:'pwsh'},{resultDigest:'wrong'},{turnEndSequence:3},{resultSequence:-1}])
+  await assert.rejects(f.command('operation.reconcile-web-read',{binding:owner.binding,operationId,proof:{...proof,...patch}}),{code:'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT'})
+ const value=(await f.command('operation.reconcile-web-read',{binding:owner.binding,operationId,proof},'reconcile-web')).result.operation
+ assert.equal(value.state,'failed');assert.deepEqual(value.result.previousObservation,original)
+ assert.equal((await f.command('operation.reconcile-web-read',{binding:owner.binding,operationId,proof},'reconcile-web')).result.operation.state,'failed')
+ const continued=(await f.command('execution.continue',continueArgs)).result.execution
+ assert.equal(continued.executionId,binding.executionId)
+ assert.equal((await f.query({kind:'operation.list'})).length,1)
+ assert.equal((await f.query({kind:'execution.list'})).length,1)
+})
+
 async function humanWaiting(f, requestId = 'human-request') {
   await f.command('task.create', { taskId: 'human-task', groupId: 'g', ownerActorId: 'owner', request: 'Resolve the original task' })
   const owner = (await f.command('task.claim', { taskId: 'human-task' })).result

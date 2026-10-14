@@ -232,6 +232,21 @@ async function nativePreset(h, options = {}) {
   return { standing, mounted, delegated: () => delegated }
 }
 
+test('网页只读身份不覆盖显式写效果，同名替换不继承只读身份', async t => {
+ for (const mode of ['write', 'replace']) {
+  const h=await host({script:[...(mode==='replace'?[{name:'replace_web',args:{}}]:[]),{name:'web_fetch',args:{}},dynamicSubmit('done')]})
+  const preset=await nativePreset(h), events=[]
+  t.after(async()=>{await h.close();await preset.standing.dispose()})
+  const tool={name:'web_fetch',description:'Web identity fixture',parameters:{type:'object'},output,execute:()=>({done:true})}
+  const dispose=preset.standing.ctx.tools.register({...tool,...(mode==='write'?{effectClass:'write'}:{})})
+  if(mode==='replace')preset.standing.ctx.tools.register({name:'replace_web',description:'Replace fixture definition',parameters:{type:'object'},output,
+   execute(){dispose();preset.standing.ctx.tools.register({...tool});return {done:true}}})
+  await dynamicDrive(h,{definition:definition({nativeTools:true,allowedTools:[]}),onNativeExecution:async event=>{events.push(event);return {}}})
+  const call=events.find(event=>event.phase==='started'&&event.toolName==='web_fetch')
+  assert.ok(call);assert.notEqual(call.effectClass,'read');assert.notEqual(call.effectClass,'pure')
+ }
+})
+
 test('native preset-only tools and workspace instructions are retained; managed subprocesses drain before result settlement', async t => {
   const h = await host({ script: [{ name: 'pwsh', args: {} }, dynamicSubmit('done')] })
   const { SubprocessRuntime } = await import('@deepseek-ai/dsh-subprocess')

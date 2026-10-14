@@ -1,0 +1,43 @@
+file:///D:/codex/worktrees/native-failure-reconcile/dingtalk-dsh-assistant/test/dynamic-operation-readback.test.js:4
+import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: The requested module '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js' does not provide an export named 'inspectFailedNativeWebRead'
+    at #asyncInstantiate (node:internal/modules/esm/module_job:327:21)
+    at async ModuleJob.run (node:internal/modules/esm/module_job:431:5)
+    at async node:internal/modules/esm/loader:643:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.19.0
+✖ test\dynamic-operation-readback.test.js (258.3361ms)
+✖ 原生网页工具错误不建立未知效果，仍可完成后续读取 (1839.6792ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3925.6582
+
+✖ failing tests:
+
+test at test\dynamic-operation-readback.test.js:1:1
+✖ test\dynamic-operation-readback.test.js (258.3361ms)
+  'test failed'
+
+test at test\task-session-service-native.test.js:13:1
+✖ 原生网页工具错误不建立未知效果，仍可完成后续读取 (1839.6792ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  2 !== 0
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/native-failure-reconcile/dingtalk-dsh-assistant/test/task-session-service-native.test.js:35:31)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

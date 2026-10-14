@@ -1,0 +1,51 @@
+{
+  "task": {
+    "taskId": "task-c435b5b9dd11dc414114680254f6c8f7",
+    "state": "running",
+    "requirementRevision": 3,
+    "leaseEpoch": 73
+  },
+  "operation": {
+    "operationId": "operation-aead256604a2310a2b00ad91152f426cec400daf",
+    "state": "failed",
+    "evidenceRef": "native-web-read:operation-aead256604a2310a2b00ad91152f426cec400daf:f1293eaf62bc07d23634f43cf0bbfe71bc49406bdc4f70d788cf6daefbc8fcbd",
+    "previousState": "unknown",
+    "proof": {
+      "argumentsDigest": "209ddf34ed504f0112182391c144ad5ff28ae5d3baf588d2997fb6c17a4a4183",
+      "callId": "call_42de997bac084f8f82fa7ccff760c66d|fc_02b9e66ba45ee944016acf643219ac819b82e7b0ab244ba522",
+      "executionId": "431a837d-6a49-42f5-9f5f-90f559be3ba0",
+      "kind": "native-web-read-failed",
+      "operationDigest": "b90b7da494c35bf33e04cd37887ced16d82560c7e8dd0fd6cd1446feefc7eba4",
+      "operationId": "operation-aead256604a2310a2b00ad91152f426cec400daf",
+      "resultDigest": "72d3fdeb6adcdc69d1b92858c96de9995fd1f8a4fa94bd830e4c8af955c7bbe0",
+      "resultSequence": 528,
+      "sessionId": "task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+      "taskId": "task-c435b5b9dd11dc414114680254f6c8f7",
+      "toolName": "web_fetch",
+      "turnEndSequence": 540
+    }
+  },
+  "health": {
+    "bridgeHealthy": true,
+    "status": "ok",
+    "inboundProcessing": true,
+    "recoveryIssueCount": 0
+  },
+  "originalExecution": {
+    "skillCallSequence": 581,
+    "skillIsError": false,
+    "readResultSequence": 577,
+    "sessionId": "task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+    "inputVersion": 8,
+    "readIsError": false,
+    "readCallSequence": 576,
+    "inputSequence": 573,
+    "skillResultSequence": 582
+  },
+  "deployment": {
+    "pid": 49172,
+    "packageSha256": "2aafee809445f886c1b4ba0b79b700106b5ca34643866965156d2683ea1f5315",
+    "version": "1.0.0",
+    "taskEnabled": true
+  }
+}

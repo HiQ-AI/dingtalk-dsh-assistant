@@ -65,6 +65,10 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 任务会话因查看记录而被普通空闲Agent占用时，不热抢Agent、不改SQLite的drained字段。先读取原生API核实running=false、inbox为空、所有执行已结束，再走精确进程的SIGINT退出。部署检查对未开始的新lease须同时核验原生日志：没有当前lease输入、上一回合已结束、工具调用全部结束；停机后还必须独立证实旧PID消失。保留未开始lease，由正式重启恢复路径接管。同任务出现新Host输入才算恢复，health=ok不替代此项证据。
 
+## 原生网页读取错误恢复
+
+本修复无 schema 迁移，沿上述静止实例双包流程 Check、原生退出、安装和回读。部署后对仍待答的原技术申请说明修复已安装，要求原统筹先调用 task_operation_reconcile，再续办原执行。Host 只读核验原网页工具调用身份、参数和错误结果摘要、同轮 completed 结束记录及当前排空状态，以正式事务将该笔旧 unknown 转为 failed，并保留原记录。未知写操作、取消回合、仍活动 job、摘要不符继续拒绝。不得手写 SQLite、重放原 URL 或拿新的读取代替原终态。独立回读 operation 的 failed/previousObservation/proof，以及原任务的新执行输入；健康恢复不能替代业务交付。
+
 ## 2026-10-14 恢复统一工作区及现有数据
 
 当前Agent工作区和taskSessions.workspaceDir均为`D:\baibu-agent`，数据库位于`D:\baibu-agent\.dsh\task-sessions.sqlite`，resident storage位于`.dsh\resident`，任务及会话在`tasks\<taskId>\.dsh\sessions`，共享会话工作目录在`session-workspaces`。上文clean根是当时清洁启动步骤的历史记录；当前`task-session-runtime-clean`已完整迁出并移除，不再作为运行入口。

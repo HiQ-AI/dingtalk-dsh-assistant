@@ -1,0 +1,7 @@
+case,round-1,round-2,round-3,round-4,round-5,round-6,evidence
+native-web-failure,PASS,PASS,NA,PASS,NA,PASS,round-1.log;round-2.log;round-4.log;round-6.log
+bound-original-receipt,PASS,PASS,PASS,PASS,PASS,NA,round-3.log;runtime-proof.json
+ledger-continue-same-execution,PASS,PASS,NA,PASS,PASS,PASS,round-1.log;round-4.log;runtime-proof.json;round-6.md
+write-cancel-and-identity-guards,PASS,PASS,PASS,PASS,NA,NA,round-2.log;round-3.log;round-4.log
+package-runtime,NA,PASS,NA,NA,NA,NA,package-test.log
+live-deployment-and-original-task,NA,NA,NA,NA,PASS,PASS,round-5.md;round-6.md

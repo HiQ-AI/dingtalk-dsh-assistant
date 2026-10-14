@@ -325,9 +325,9 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       // a later same-name shadow must not inherit this read-only accounting exception.
       // alpha2's native loader is registry list/get only but lacks effectClass metadata.
       const skillTool = nativeEnabled ? agentCtx.tools.get('skill', agent) : undefined
-      // alpha2's filesystem read tools lack effect metadata. Pin the mounted
+      // alpha2's filesystem and web read tools lack effect metadata. Pin the mounted
       // definitions, so a later same-name shadow cannot acquire read privileges.
-      const readonlyTools = new Map(['read', 'read_image', 'glob', 'grep', 'ls', 'skill'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool))
+      const readonlyTools = new Map(['read', 'read_image', 'glob', 'grep', 'ls', 'skill', 'web_fetch', 'web_search'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool && (tool.effectClass === undefined || ['read', 'pure'].includes(tool.effectClass))))
       const isReadonly = exec => {
         const tool = agentCtx.tools.get(exec.name, exec.agent)
         return !!tool && (readonlyTools.get(exec.name) === tool || ['read', 'pure'].includes(tool.effectClass))
