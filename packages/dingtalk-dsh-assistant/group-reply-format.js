@@ -49,6 +49,15 @@ function withoutSessionSignature(text, signature) {
   return rows.slice(0, end).join('\n').trim()
 }
 
+function withoutSourceQuote(text, sourceText) {
+  if (typeof sourceText !== 'string') return text
+  const match = text.match(/^((?:[ \t]*>[^\r\n]*(?:\r?\n|$))+)(?:\r?\n)*([\s\S]*)$/u)
+  if (!match) return text
+  const quote = match[1].split(/\r?\n/u).map(line => line.replace(/^[ \t]*>[ \t]?/u, '')).join('\n').trim()
+  const normalize = value => value.replace(/\s+/gu, ' ').trim()
+  return normalize(quote) === normalize(sourceText) ? match[2].trim() : text
+}
+
 /**
  * Presentation only: the caller decides whether and when a notification is allowed.
  * DWS owns the native quote and mention; do not duplicate either as display-name text.
@@ -59,7 +68,7 @@ export function formatTaskGroupReply({ source, summary, evidence, limitations, s
   const replyToMessageId = required(source?.messageId, 'SOURCE_MESSAGE_ID')
   const replyToSenderOpenDingTalkId = required(source?.senderOpenDingTalkId, 'SOURCE_SENDER_ID')
   const sign = normalizeReplySignature(signature)
-  const body = required(withoutSessionSignature(required(summary, 'SUMMARY'), sign), 'SUMMARY')
+  const body = required(withoutSourceQuote(withoutSessionSignature(required(summary, 'SUMMARY'), sign), source.text), 'SUMMARY')
   const facts = lines(evidence, 'EVIDENCE').map(value => withoutSessionSignature(value, sign)).filter(Boolean)
   const boundaries = lines(limitations, 'LIMITATIONS').map(value => withoutSessionSignature(value, sign)).filter(Boolean)
   const sections = [body]

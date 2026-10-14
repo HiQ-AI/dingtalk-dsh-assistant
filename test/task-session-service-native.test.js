@@ -76,7 +76,7 @@ for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知
   assert.ok(!(await h.query('source.list')).some(source => source.messageId === echo.messageId))
   if (ownEcho) {
     assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
-    assert.equal(task.humanRequests[0].status, 'answered')
+    assert.equal(task.humanRequests[0].status, 'superseded', '群补充是需求修订，不能作为operator技术申请答复')
     assert.equal(ownerCalls, 2)
     assert.equal(h.residentStore.getTopic(message.groupId, topicId).processedRevision, 3)
   } else {

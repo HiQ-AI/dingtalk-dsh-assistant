@@ -3,6 +3,7 @@ import { createCoordinationSessions, createCoordinationStepGate, coordinationToo
 import { createCoordinationResourceTools } from './coordination-resources.js'
 import { buildReplyReviewCandidates } from './decision.js'
 import { sessionWorkspace, nameSession } from './session-workspaces.js'
+import { groupReplyInstructions } from './group-message.js'
 
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const sameStringSet = (a, b) => a.length === b.length && a.every(value => b.includes(value))
@@ -65,6 +66,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           const allowed = new Set(coordinationTools(role))
           agentCtx.tools.restrict({ allow: [...allowed].filter(name => agentCtx.tools.get(name)) })
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
+          agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions })
           agentCtx.systemPrompt.section({ name: 'dingtalk-topic-coordination', order: 120, text: () => {
             const group = store.getGroup(request.groupId)
             return `当前仅处理 ${role} 请求 ${request.requestId}。群职责：${group?.responsibility ?? ''}。收到 [GROUP_TOPIC_ROUTE] 时结合整批原文和已有 Topic，通过 group_topic_route_submit 提交完整归属。归属表示同一讨论目标的延续或实质影响；读取旧资料不构成归属。独立事项可新建 Topic，同一事项追加已有 Topic，多话题归属必须指定唯一 effectOwner。无关噪声可无归属并说明原因。新 title 使用简短对象加事项，不超过30字。收到 [GROUP_TOPIC_DECISION] 后根据固定 Topic 版本及当前增量，通过 group_decision_submit 提交。basisMessageIds 必须包含当前增量原文。已有任务先读取 group_task_list/context；任务动作使用 topicRefs 和当前 inputVersion/runSequence。纯讨论可以 actions:[] 加 reason。routing-required 先完成路由；topic-stale/task-stale 读取当前版本重做判断。accepted 只表示意图持久接受，不表示完成或送达。仅处理原文真实授权，不能把同事间聊天变成交办。当前消息明确指名或提及已配置的 Agent 名称/别名、以 cc: 开头，或者明确确认了此前提出的“是否需要我处理”询问，且属于本群职责并形成可验证目标时，才允许选择 new-task。未明确指名、但判断事项应形成任务时，必须选择 task-proposal，在群里询问“这个事项是否需要我处理？”，暂不创建任务。task-proposal 回复只询问是否交办，不承诺“我会处理”、已开始、已执行或已完成；new-task 的接收确认也不表示执行完成。消息明确 @其他同事且未指向 Agent 时必须忽略，不创建 task-proposal/new-task，也不主动回答；只有后续明确指向 Agent 并直接引用该消息，才视为转交。当前 Agent 名称/别名：${JSON.stringify(store.getAgentNames?.() ?? [])}。任务目标忠实保留原请求动作范围，不把诊断/观察扩写成修复、实施、发布，不追加未经授权的业务验收。附件只沿本请求明确引用，通过 group_message_get/group_resource_get 读取；读取失败须保留限制，不能猜测正文。`

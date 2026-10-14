@@ -1,8 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readTaskNotificationDelivery, verifyTaskNotificationReadback } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
+import { readTaskNotificationDelivery, verifyTaskNotificationReadback, readOperatorNotificationDelivery } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
 const notification = { id: 'n', payload: { conversationId: 'g', sourceMessageId: 's', text: '核验完成。', atOpenDingTalkIds: ['u'] } }
 const observed = { messageId: 'm', conversationId: 'g', text: '核验完成。', quotedMessage: { messageId: 's', conversationId: 'g' }, atOpenDingTalkIds: ['u'] }
+
+test('私聊申请按原发送收据回读，发送结果未知仅精确查找，不退回群聊或重发', async () => {
+  const calls = [], privateNotice = { payload: { humanRequestId: 'human-request', recipientUserId: 'login-user', text: '技术申请' } }
+  const proof = { messageId: 'notice', conversationId: 'self', senderActorId: 'actual-login-actor' }
+  const adapter = { async confirmSelfDelivery(args) { calls.push(['confirm', args]); return proof },
+    async findWorkflowApprovalNotice(args) { calls.push(['find', args]); return proof } }
+  assert.deepEqual(await readOperatorNotificationDelivery(adapter, { ...privateNotice, ack: { openTaskId: 'send-ack' } }), proof)
+  assert.deepEqual(await readOperatorNotificationDelivery(adapter, privateNotice), proof)
+  assert.deepEqual(calls.map(item => item[0]), ['confirm', 'find'])
+  assert.equal(calls[0][1].recipientUserId, 'login-user')
+  adapter.confirmSelfDelivery = async () => ({ messageId: 'notice', conversationId: 'self' })
+  assert.equal(await readOperatorNotificationDelivery(adapter, { ...privateNotice, ack: { openTaskId: 'send-ack' } }), undefined)
+})
 test('native quote and mention must be verified independently of text', () => {
   const verify = value => verifyTaskNotificationReadback(notification, value, { acknowledgedMessageId: 'm' })
   assert.ok(verify(observed))

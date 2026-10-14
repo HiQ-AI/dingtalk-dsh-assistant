@@ -1,0 +1,10 @@
+case,round,status,evidence
+native-source-quote-removal,1,PASS,round-1.md
+operator-web-private-routing,1,PASS,round-1.md
+private-quote-author-version-idempotency,1,PASS,round-1.md
+native-access-with-existing-unknown-lock,1,PASS,round-1.md
+requester-business-question,1,PASS,round-1.md
+package-process-transport-readback,2,PASS,round-2.md
+actual-private-notice-delivery,2,PASS,round-2.md
+original-task-web-resume,2,PASS,round-2.md
+actual-native-github-log-read,2,PASS,round-2.md

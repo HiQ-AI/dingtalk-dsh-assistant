@@ -10,7 +10,7 @@ import { inspectEnvironment } from './environment.js'
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
 import { closeExecutionResources } from './resource-close.js'
-import { readTaskNotificationDelivery } from './task-notification-readback.js'
+import { readTaskNotificationDelivery, readOperatorNotificationDelivery } from './task-notification-readback.js'
 import { openTaskSessionService } from './task-session-service.js'
 import { sendWorkflowNotification } from './group-message.js'
 import { join, resolve } from 'node:path'
@@ -98,13 +98,18 @@ export async function apply(ctx, config = {}) {
     profile: dwsConfig.profile,
     runner: dwsRunner,
   })
-  const tasks = await openTaskSessionService({ ctx, config: taskConfig, legacy: runtime, residentStore: store,
+  const initialEnvironment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
+  const tasks = await openTaskSessionService({ ctx, config: { ...taskConfig, operatorUserId: initialEnvironment.dws.userId }, legacy: runtime, residentStore: store,
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {
       canDisclose: notification => dwsConfig.enabled === true && dwsConfig.writesAuthorized === true
-        && !!runtime.getGroup(notification.payload.conversationId),
-      send: notification => sendWorkflowNotification(dwsAdapter, notification),
-      readback: notification => readTaskNotificationDelivery(dwsAdapter, notification, { senderActorId: taskConfig.assistantActorId }),
+        && (notification.payload.audience === 'operator' || !!runtime.getGroup(notification.payload.conversationId)),
+      send: notification => notification.payload.audience === 'operator'
+        ? dwsAdapter.sendSelfIntent({ userId: notification.payload.recipientUserId, text: notification.payload.text, idempotencyKey: notification.id })
+        : sendWorkflowNotification(dwsAdapter, notification),
+      readback: notification => notification.payload.audience === 'operator'
+        ? readOperatorNotificationDelivery(dwsAdapter, notification)
+        : readTaskNotificationDelivery(dwsAdapter, notification, { senderActorId: taskConfig.assistantActorId }),
     },
   })
   const transportIssues = runtime.listRecoveryIssues
@@ -124,6 +129,7 @@ export async function apply(ctx, config = {}) {
   runtime.cancelTask = tasks.cancelTask
   runtime.listAuthorizationRequests = tasks.listAuthorizationRequests
   runtime.respondTaskHumanRequest = tasks.respondHumanRequest
+  runtime.respondTaskPrivateHumanReply = tasks.respondPrivateHumanReply
   runtime.retryDecisionFailedMessage = tasks.retryMessage
   runtime.isTaskSessionMode = () => true
   const recoverTasks = () => tasks.recover().catch(error => ctx.logger.warn(error.message))
@@ -153,7 +159,6 @@ export async function apply(ctx, config = {}) {
     return { imageRefs }
   })
   await runtime.recoverInterruptedDecisions()
-  const initialEnvironment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
   let dwsBridgeHealth = dwsConfig.enabled === true ? { healthy: false, groups: [] } : undefined
   stopDws = dwsConfig.enabled === true
     ? startDwsBridge({

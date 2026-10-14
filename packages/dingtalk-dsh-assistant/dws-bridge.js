@@ -432,8 +432,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     ].join('\n')
   }
   const quotedMessageId = (message) => message.quotedMessage?.messageId ?? message.quotedMessage?.message_id ?? message.quoted_message?.messageId ?? message.quoted_message?.message_id
-  const processHumanReplyEvent = (event) => {
-    const message = normalizeEvent(event)
+  const processHumanReplyMessage = (message) => {
     const quotedId = quotedMessageId(message)
     const reply = typeof message.text === 'string' ? message.text.trim() : ''
     if (!quotedId || !reply) return Promise.resolve()
@@ -441,6 +440,14 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     if (existing !== undefined) return existing
     const operation = (async () => {
       const approvals = await runtime.listAuthorizationRequests?.() ?? []
+      const taskRequest = approvals.find(item => item.taskSessionRequest && item.audience === 'operator' && item.status === 'waiting-reply'
+        && item.notification?.state === 'delivered' && item.notification.delivery?.messageId === quotedId)
+      if (taskRequest) {
+        const delivery = taskRequest.notification.delivery
+        if (message.groupId !== delivery.conversationId || message.senderOpenDingTalkId !== delivery.senderActorId) return
+        await runtime.respondTaskPrivateHumanReply(message)
+        return
+      }
       const approval = approvals.find(item => item.kind === 'workflow-approval'
         && item.notification?.status === 'waiting-reply' && item.notification.delivery?.messageId === quotedId)
       if (approval) {
@@ -470,6 +477,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     operation.finally(() => { if (inflightHumanReplies.get(message.messageId) === operation) inflightHumanReplies.delete(message.messageId) }).catch(() => undefined)
     return operation
   }
+  const processHumanReplyEvent = event => processHumanReplyMessage(normalizeEvent(event))
   const recallInactiveAuthorization = async (authorization) => {
     if (authorization?.kind === 'workflow-approval') {
       const notice = await runtime.getWorkflowApprovalNotice(authorization.requestId)
@@ -550,6 +558,17 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         .filter((task) => task.humanBlocker)
         .map((task) => ({ ...task.humanBlocker, taskId: task.taskId }))
       for (const authorization of authorizations) {
+        if (authorization.taskSessionRequest) {
+          if (authorization.status !== 'waiting-reply' || authorization.audience !== 'operator' || authorization.notification?.state !== 'delivered') continue
+          const delivery = authorization.notification.delivery
+          const messages = await adapter.readConversation(delivery.conversationId, { start: delivery.observedAt ?? authorization.createdAt, end: new Date().toISOString() })
+          for (const raw of messages) {
+            const message = normalizeHistoryMessage(raw, delivery.conversationId)
+            if (quotedMessageId(message) === delivery.messageId && message.senderOpenDingTalkId === delivery.senderActorId)
+              await processHumanReplyMessage(message)
+          }
+          continue
+        }
         if (authorization.kind === 'workflow-approval') {
           try { await processWorkflowApproval(authorization) } catch (error) { logger.warn(error) }
           continue

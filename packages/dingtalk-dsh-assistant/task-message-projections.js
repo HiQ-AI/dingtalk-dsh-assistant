@@ -108,6 +108,7 @@ export function taskNotificationOutbound(notification) {
 }
 
 export async function projectTaskNotification({ residentStore, notification }) {
+  if (notification?.payload?.audience === 'operator') return undefined
   if (!residentStore || !notification?.payload?.conversationId) return undefined
   return residentStore.projectTaskNotification({ groupId: notification.payload.conversationId,
     outbound: taskNotificationOutbound(notification) })

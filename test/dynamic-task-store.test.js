@@ -311,18 +311,18 @@ test('result receipt failure rolls back both result and wake; post-commit restar
   assert.deepEqual((await f.query({ kind: 'execution.get', executionId: binding.executionId })).result.payload.output, args.output)
 })
 
-test('native unknown fence is atomic at start even if two operations were prepared before the first became unknown', async t => {
+test('未知操作保持原记录，但不全局阻断另一原生调用', async t => {
   const f = await fixture(t), owner = await f.task(), a = await f.execution(owner.binding, 'writer-a'), b = await f.execution(owner.binding, 'writer-b')
   const prepare = async (binding, key) => (await f.command('operation.prepare', { binding, key,
     definition: { toolName: 'concurrency_safe_write' }, resourceKeys: [] })).result.operation
   const first = await prepare(a, 'a'), second = await prepare(b, 'b')
   await f.command('operation.start', { binding: a, operationId: first.operationId })
   await f.command('operation.settle', { binding: a, operationId: first.operationId, state: 'unknown', result: { lostReceipt: true } })
-  await assert.rejects(f.command('operation.start', { binding: b, operationId: second.operationId }, 'pending-native-start'), { code: 'DYNAMIC_OPERATION_UNRESOLVED' })
-  assert.equal((await f.query({ kind: 'operation.get', operationId: second.operationId })).state, 'prepared')
-  assert.equal(await f.query({ kind: 'receipt.get', id: 'pending-native-start' }), null)
-  await f.command('operation.reconcile', { operationId: first.operationId, state: 'succeeded', result: { confirmed: true }, evidenceRef: 'verified-external-receipt' })
   assert.equal((await f.command('operation.start', { binding: b, operationId: second.operationId }, 'pending-native-start')).dispatchEligible, true)
+  assert.equal((await f.query({ kind: 'operation.get', operationId: second.operationId })).state, 'starting')
+  assert.equal((await f.query({ kind: 'operation.get', operationId: first.operationId })).state, 'unknown')
+  await f.command('operation.reconcile', { operationId: first.operationId, state: 'succeeded', result: { confirmed: true }, evidenceRef: 'verified-external-receipt' })
+  assert.equal((await f.command('operation.start', { binding: b, operationId: second.operationId }, 'pending-native-start')).dispatchEligible, false)
 })
 
 test('a definitively refused prepared request can be retired by its exact binding/key without clearing unknown writes', async t => {
@@ -332,7 +332,6 @@ test('a definitively refused prepared request can be retired by its exact bindin
   await f.command('operation.start', { binding: a, operationId: first.operationId })
   await assert.rejects(f.command('operation.cancelPrepared', { binding: a, operationId: first.operationId, key: 'first', reason: 'not-started' }), { code: 'DYNAMIC_OPERATION_ALREADY_DISPATCHED' })
   await f.command('operation.settle', { binding: a, operationId: first.operationId, state: 'unknown' })
-  await assert.rejects(f.command('operation.start', { binding: b, operationId: second.operationId }), { code: 'DYNAMIC_OPERATION_UNRESOLVED' })
   const cancel = { binding: b, operationId: second.operationId, key: 'second', reason: 'atomic-start-refused' }
   for (const override of [{binding:a}, {key:'other-request'}, {binding:{...b,leaseEpoch:b.leaseEpoch+1}}])
     await assert.rejects(f.command('operation.cancelPrepared', {...cancel,...override}), { code: 'DYNAMIC_OPERATION_SCOPE_STALE' })
@@ -345,7 +344,7 @@ test('a definitively refused prepared request can be retired by its exact bindin
   assert.equal((await f.query({ kind: 'task.blockers', taskId: 'task' })).operations.length, 0)
 })
 
-test('job reconciliation rejects absent and foreign proof; readonly continuation preserves unknown and forbids effects', async t => {
+test('原操作对账拒绝缺失/外来证据，调查续办保留unknown并可调用原生能力', async t => {
   const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
   const operationId='unknown-effect'
   await f.command('operation.prepare',{binding,operationId,key:'original',definition:{toolName:'pwsh'},resourceKeys:[]})
@@ -359,7 +358,7 @@ test('job reconciliation rejects absent and foreign proof; readonly continuation
   await f.command('execution.continue',args)
   const next=(await f.command('execution.claim',{executionId:binding.executionId})).result.binding
   await f.command('operation.prepare',{binding:next,operationId:'investigation',key:'investigation',definition:{toolName:'pwsh'}})
-  await assert.rejects(f.command('operation.start',{binding:next,operationId:'investigation'}),{code:'DYNAMIC_OPERATION_UNRESOLVED'})
+  assert.equal((await f.command('operation.start',{binding:next,operationId:'investigation'})).dispatchEligible,true)
   assert.equal((await f.query({kind:'operation.get',operationId})).state,'unknown')
 })
 
@@ -404,7 +403,7 @@ test('verified legacy stop closes only failed with retained unknown audit and ne
 async function humanWaiting(f, requestId = 'human-request') {
   await f.command('task.create', { taskId: 'human-task', groupId: 'g', ownerActorId: 'owner', request: 'Resolve the original task' })
   const owner = (await f.command('task.claim', { taskId: 'human-task' })).result
-  const args = { binding: owner.binding, action: 'blocked', summary: '等待有权人员补充', question: '请选择目标环境', humanRequest: { requestId, reason: '缺少目标环境', attemptedActions: ['已读取原始交办及当前环境配置'] } }
+  const args = { binding: owner.binding, action: 'blocked', summary: '等待有权人员补充', question: '请选择目标环境', humanRequest: { requestId, audience: 'requester', reason: '缺少目标环境', attemptedActions: ['已读取原始交办及当前环境配置'] } }
   await f.command('task.wait', args)
   await f.command('task.drained', { binding: owner.binding })
   return { owner, args, respond: { taskId: 'human-task', requestId, sourceId: 'human-answer', expectedRequirementRevision: 1, expectedControlRevision: 1 } }
@@ -470,7 +469,7 @@ test('waiting human request identities conflict on changed questions and an answ
   await f.command('operation.start', { binding: execution, operationId: operation.operationId })
   await f.command('operation.settle', { binding: execution, operationId: operation.operationId, state: 'unknown', result: { uncertain: true } })
   await f.command('execution.drained', { binding: execution })
-  const args = { binding, summary: '等待人工判断', question: '确认目标', humanRequest: { requestId: 'stable-question' } }
+  const args = { binding, summary: '等待人工判断', question: '确认目标', humanRequest: { requestId: 'stable-question', audience: 'requester' } }
   await f.command('task.wait', args)
   await f.command('task.wait', args)
   assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests.length, 1)
