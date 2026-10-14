@@ -617,12 +617,16 @@ window.__ModuleLoader__.load({
         get(`/state/tasks/${encodeURIComponent(taskId)}/executions?offset=${offset}&limit=20`, { signal: controller.signal }).then(value => { if (active) { const items = value.executions || value.items || (Array.isArray(value) ? value : []); const total = value.total ?? items.length; if (offset > 0 && offset >= total) { setOffset(Math.max(0, Math.floor((total - 1) / 20) * 20)); return } setPage({ items, total, offset }); } }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
         return () => { active = false; controller.abort() }
       }, [taskId, offset, updatedAt, retry])
-      const ready = page?.offset === offset
+      const ready = !!page
+      const visibleOffset = page?.offset ?? 0
       return React.createElement('section', { className: 'detail-executions', 'aria-label': '动态执行列表', style: { display: 'grid', gap: 16, minHeight: 160 } },
         React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h2', null, '独立执行'), ready ? React.createElement('span', { className: 'detail-muted' }, `${page.total} 条记录`) : null),
         React.createElement('p', { className: 'detail-muted' }, '由任务会话按需安排；展开可查看本次结果与独立会话。'),
-        loading ? React.createElement('span', { role: 'status' }, '正在读取执行记录…') : null,
-        error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `执行记录读取失败：${error}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setRetry(value => value + 1) }, '重试读取执行')) : null,
+        React.createElement('div', { className: 'detail-execution-feedback' },
+          React.createElement('span', { role: 'status', className: 'detail-muted' }, error ? '' : loading ? `${ready && page.offset !== offset ? '正在读取另一页，暂显示已读取记录' : '正在读取执行记录'}…` : '执行记录已更新'),
+          error ? React.createElement('span', { role: 'alert', className: 'detail-execution-error' }, `执行记录读取失败${ready ? '，暂显示已读取记录' : ''}：${error}`) : null,
+          error ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => setRetry(value => value + 1) }, '重试读取执行') : null),
+        React.createElement('div', { className: 'detail-pagination' }, React.createElement('span', { className: 'detail-muted', style: { marginRight: 'auto' } }, ready ? `${page.total} 条执行记录 · ${page.total ? visibleOffset + 1 : 0}–${visibleOffset + page.items.length}` : '尚未读取执行记录'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset === 0, onClick: () => setOffset(Math.max(0, visibleOffset - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset + page.items.length >= page.total, onClick: () => setOffset(visibleOffset + 20) }, '下一页')),
         ready ? React.createElement('ol', { className: 'detail-execution-list' }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, className: 'detail-execution' },
           React.createElement('details', null, React.createElement('summary', { className: 'detail-execution-summary' },
             React.createElement('span', { className: 'detail-execution-title' }, execution.objective || execution.executionId),
@@ -634,8 +638,8 @@ window.__ModuleLoader__.load({
             execution.error ? React.createElement('p', { role: 'status', style: { color: colors.danger } }, traceReason(execution.error)) : null,
             React.createElement(TaskResult, { result: execution.result }),
             React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '执行记录信息'), React.createElement('p', { className: 'detail-muted' }, `执行 ${execution.executionId} · 需求修订 ${execution.requirementRevision ?? '未记录'}`))))))) : null,
-        ready && !page.items.length && !loading ? emptyState('尚无动态执行', { detail: '任务会话尚未分派执行；任务可直接形成结果。' }) : null,
-        ready ? React.createElement('div', { className: 'detail-pagination' }, React.createElement('span', { className: 'detail-muted', style: { marginRight: 'auto' } }, `${page.total} 条执行记录 · ${page.total ? offset + 1 : 0}–${offset + page.items.length}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset === 0, onClick: () => setOffset(value => Math.max(0, value - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset + page.items.length >= page.total, onClick: () => setOffset(value => value + 20) }, '下一页')) : null)
+        ready && !page.items.length ? emptyState('尚无动态执行', { detail: '任务会话尚未分派执行；任务可直接形成结果。' }) : null,
+        !ready ? emptyState(loading ? '正在读取执行记录' : '尚未读取到执行记录', { detail: '读取完成后在此显示独立执行。' }) : null)
     }
     function LegacyTaskOutput({ taskId, node, detailRevision }) {
       const [opened, setOpened] = useState(false)
@@ -703,6 +707,10 @@ window.__ModuleLoader__.load({
       .observer-session-detail .detail-execution-time { grid-column: 2 / 4; font-size: 12px; color: ${colors.muted}; }
       .observer-session-detail .detail-execution-body { padding: 16px; display: grid; gap: 16px; border-top: 1px solid ${colors.border}; }
       .observer-session-detail .detail-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      .observer-session-detail .detail-execution-feedback { height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+      .observer-session-detail .detail-execution-feedback > span { grid-column: 1; grid-row: 1; min-width: 0; max-height: 36px; overflow: auto; font-size: 12px; line-height: 18px; }
+      .observer-session-detail .detail-execution-feedback > button { grid-column: 2; grid-row: 1; }
+      .observer-session-detail .detail-execution-error { color: ${colors.danger}; }
       .observer-task-detail-route .detail-fetch-error { padding: 16px; border: 1px solid ${colors.danger}; border-radius: 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; color: ${colors.danger}; font-size: 14px; line-height: 1.65; }
       .observer-task-detail-route .detail-fetch-state { min-height: 200px; align-content: start; }
       @media (max-width: 800px) { .observer-session-detail .detail-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
