@@ -1,0 +1,42 @@
+✔ dispatch is durable and idempotent; execution IDs are independent and owner claims are single flight (71.9788ms)
+✔ a late result is audited and wakes atomically without accepting an obsolete requirement (59.8992ms)
+✔ cancel fences tools immediately and completion waits for physical drain and unresolved operations (41.5938ms)
+✔ continuation retains execution/session identity and versions inputs across requirement revisions (48.5368ms)
+✔ generic operations persist before dispatch, unknown never replays, locks survive restart and reconciliation releases them (84.047ms)
+✔ business completion creates a unique notification atomically; uncertain delivery does not restart business or resend (60.336ms)
+✔ source route decisions are immutable and group sessions reclaim pending sources after restart (54.2225ms)
+✔ legacy unresolved effects and undrained native sessions become read-only blockers, never dynamic jobs (84.8574ms)
+✔ result and wake roll back together on a failed SQLite write and the same command remains safely retryable (66.1715ms)
+✔ initialization marker rejects database loss and an accidental initialize flag cannot create a replacement ledger (59.9841ms)
+✔ question and status notifications are idempotent, independently durable, and obsolete questions never send (52.5729ms)
+✔ unclean process restart fences started operations and retains result/wake receipts without replay (262.9095ms)
+✔ an explicit Web routing intent is recorded atomically with its original source and cannot be reinterpreted (54.2718ms)
+✔ dispatch rollback before durable receipt creates no orphan, and lost post-commit acknowledgement replays one identity (84.3187ms)
+✔ result receipt failure rolls back both result and wake; post-commit restart retains one result/wake pair (90.1116ms)
+✔ native unknown fence is atomic at start even if two operations were prepared before the first became unknown (56.4169ms)
+✔ a definitively refused prepared request can be retired by its exact binding/key without clearing unknown writes (72.6008ms)
+✔ job reconciliation rejects absent and foreign proof; readonly continuation preserves unknown and forbids effects (61.7725ms)
+✔ terminal job receipt cannot reconcile an undrained execution; successful reconciliation preserves unknown evidence (56.2465ms)
+✔ verified legacy stop closes only failed with retained unknown audit and never creates a replacement execution (63.5446ms)
+✔ human request freezes the question and resumes the same task from its authorized original source idempotently (64.0814ms)
+✔ human response rejects an invalid or superseded request: other-actor (46.5808ms)
+✔ human response rejects an invalid or superseded request: other-group (50.6224ms)
+✔ human response rejects an invalid or superseded request: stale-requirement (50.0542ms)
+✔ human response rejects an invalid or superseded request: stale-control (48.2683ms)
+✔ human response rejects an invalid or superseded request: not-drained (49.2901ms)
+✔ human response rejects an invalid or superseded request: revised (46.353ms)
+✔ human response rejects an invalid or superseded request: cancelled (53.7567ms)
+✔ human response rejects an invalid or superseded request: completed (49.0081ms)
+✔ human request requires an explicit stable identity and accepts only configured web actor without impersonation (54.216ms)
+✔ waiting human request identities conflict on changed questions and an answer never reconciles unknown operations (62.4517ms)
+✔ native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text (6131.6417ms)
+✔ an execution result cannot bypass human waiting; reply reads the original execution and continues the original task (6850.0098ms)
+✔ a native blocked decision without a human question is corrected into an explicit durable request (2161.465ms)
+ℹ tests 34
+ℹ suites 0
+ℹ pass 34
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16357.5433

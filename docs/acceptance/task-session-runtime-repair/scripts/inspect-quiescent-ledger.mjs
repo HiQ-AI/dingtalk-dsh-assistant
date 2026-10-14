@@ -26,24 +26,32 @@ export function inspectPackage(packagePath, source, installed) {
   if (names.some(name => (name.endsWith('.js') || name.endsWith('.ps1')) && !files.includes(name.slice('package/'.length)))) throw Error('PACKAGE_UNEXPECTED_SOURCE')
   return { verifiedFiles: files.length, sha256: hash(readFileSync(packagePath)) }
 }
-export function inspectLedger(dbPath, workspace, offline = false) {
+export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerPid) {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
     if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok') throw Error('DEPLOY_DATABASE_CORRUPT')
     const owner = db.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get()?.value
     const tables = Object.fromEntries(['tasks','executions','groups','operations','notifications'].map(name => [name, db.prepare(`SELECT body FROM dynamic_${name}`).all().map(row => JSON.parse(row.body))]))
-    const busy = ['tasks','executions','groups'].flatMap(name => tables[name].filter(row => row.drained === false).map(row => ({ table: name, id: row.taskId ?? row.executionId ?? row.groupId })))
+    const busy = ['executions','groups'].flatMap(name => tables[name].filter(row => row.drained === false).map(row => ({ table: name, id: row.taskId ?? row.executionId ?? row.groupId })))
     if (busy.length || tables.operations.some(row => row.state === 'starting') || tables.notifications.some(row => row.state === 'starting')) throw Error('DEPLOY_NOT_DRAINED')
     let ownerProcessExited = !owner
+    const processExited = pid => { try { process.kill(pid, 0); return false } catch (error) { if (error.code === 'ESRCH') return true; throw error } }
+    if (offline) {
+      if (!Number.isSafeInteger(expectedOwnerPid) || expectedOwnerPid < 1) throw Error('DEPLOY_EXPECTED_OWNER_PID_REQUIRED')
+      if (!processExited(expectedOwnerPid)) throw Error('DEPLOY_OWNER_NOT_RELEASED')
+    }
     if (owner) {
       const ownerPid = Number(owner.split(':')[0])
       if (!Number.isSafeInteger(ownerPid) || ownerPid < 1) throw Error('DEPLOY_OWNER_INVALID')
+      if (offline && ownerPid !== expectedOwnerPid) throw Error('DEPLOY_OWNER_IDENTITY_MISMATCH')
       try { process.kill(ownerPid, 0) } catch (error) { if (error.code === 'ESRCH') ownerProcessExited = true; else throw error }
     }
     // 与动态库自身启动接管合同一致：保留失效owner行，由正式启动事务接管，绝不手工清账。
     // 下方仍独立核验所有持久回合结束；部署脚本另核验精确旧进程及子进程均退出。
     if (offline && !ownerProcessExited) throw Error('DEPLOY_OWNER_NOT_RELEASED')
     let verifiedSessions = 0
+    const unstartedTaskClaims = []
+    if (tables.tasks.some(row => row.drained === false && !row.sessionBound)) throw Error('DEPLOY_NOT_DRAINED')
     for (const row of [...tables.tasks, ...tables.executions].filter(row => row.sessionBound)) {
       const root = join(workspace, 'tasks', row.taskId, '.dsh', 'sessions')
       const matches = []
@@ -65,12 +73,32 @@ export function inspectLedger(dbPath, workspace, offline = false) {
       if (matches.length !== 1) throw Error('DEPLOY_NATIVE_LOG_IDENTITY')
       const events = matches[0], start = events.findLastIndex(event => event.type === 'turn/start'), end = events.findLastIndex(event => event.type === 'turn/end')
       if (start < 0 || end < start) throw Error('DEPLOY_NATIVE_TURN_NOT_ENDED')
+      if (tables.tasks.includes(row) && row.drained === false) {
+        if (!Number.isSafeInteger(row.leaseEpoch) || row.leaseEpoch < 2 || !events.some(event => event.type === 'plugin:dingtalk/task-session'
+          && event.data?.taskId === row.taskId && event.data?.sessionId === row.sessionId)) throw Error('DEPLOY_NATIVE_LOG_IDENTITY')
+        const inputs = events.flatMap((event, index) => (event.type === 'user/message' ? [event.data]
+          : event.type === 'agent/inbox/spliced' ? event.data?.inserted ?? [] : []).map(message => ({ message, index })))
+          .filter(item => item.message?.source?.taskSession)
+        if (inputs.some(item => item.message.source.taskSession.leaseEpoch >= row.leaseEpoch)) throw Error('DEPLOY_TASK_CLAIM_ALREADY_STARTED')
+        const previousInput = inputs.at(-1), previous = previousInput?.message.source.taskSession
+        if (previous?.leaseEpoch !== row.leaseEpoch - 1 || previous.sessionId !== row.sessionId || previous.taskId !== row.taskId || previousInput.index >= end) throw Error('DEPLOY_TASK_PREVIOUS_LEASE_UNPROVEN')
+        const completed = new Set(events.filter(event => event.type === 'tool/result').flatMap(event => {
+          const message = event.data?.message
+          return (message?.role === 'tool' ? [message] : message?.content ?? []).map(result => result.toolCallId)
+        }))
+        if (events.some(event => event.type === 'tool/call' && !completed.has(event.data?.callId))) throw Error('DEPLOY_NATIVE_TOOL_NOT_ENDED')
+        unstartedTaskClaims.push({ taskId: row.taskId, sessionId: row.sessionId, leaseEpoch: row.leaseEpoch,
+          requirementRevision: row.requirementRevision, controlRevision: row.controlRevision,
+          previousInputLeaseEpoch: previous.leaseEpoch, previousTurnEndSequence: events[end].seq,
+          lastNativeSequence: events.at(-1)?.seq, currentLeaseInputAbsent: true })
+      }
       verifiedSessions++
     }
-    return { ownerReleased: !owner, ownerProcessExited, staleOwner: !!owner && ownerProcessExited, drained: true, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
+    return { quiescent: true, candidateOnly: !offline, ownerReleased: !owner, ownerProcessExited, staleOwner: !!owner && ownerProcessExited,
+      drained: unstartedTaskClaims.length === 0, unstartedTaskClaims, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
   } finally { db.close() }
 }
 if (process.argv[1]?.endsWith('inspect-quiescent-ledger.mjs')) {
-  try { console.log(JSON.stringify(process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline'))) }
+  try { console.log(JSON.stringify(process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5])))) }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }

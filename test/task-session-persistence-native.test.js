@@ -23,7 +23,7 @@ const run = promisify(execFile)
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const test = process.argv[2] === '--task-native-child' ? () => {} : testRunner
-const artifacts = resolve('.test-runs/task-session-native-persistence')
+const artifacts = resolve('docs/tmp/task-session-native-persistence')
 async function temporary() { await mkdir(artifacts, { recursive: true }); return mkdtemp(join(artifacts, 'run-')) }
 const message = text => createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text }] })
 
@@ -68,15 +68,22 @@ async function host(root) {
   async function create(taskId, sessionId, execution = false) {
     const cwd = execution ? await taskExecutionWorkspace(root, taskId, sessionId) : await taskWorkspace(root, taskId)
     await registerTaskSessionPersistence(ctx, { taskId, sessionId, cwd })
-    const handle = await ctx.agents.create({ sessionId, meta: { cwd }, agentOptions: { provider: 'task-native-fixture', model: 'fixture' } })
+    const handle = await router.runOwned({ taskId, sessionId }, () => ctx.agents.create({ sessionId, meta: { cwd }, agentOptions: { provider: 'task-native-fixture', model: 'fixture' } }))
     handles.push(handle); return handle.agent
   }
   async function resume(sessionId) {
     // No registration call: restart must recover routing solely from the durable binding index.
-    const handle = await ctx.agents.resume({ resumeSessionId: sessionId, agentOptions: { provider: 'task-native-fixture', model: 'fixture' } })
+    const saved = await inspectSession(ctx.sessionPersistence, sessionId)
+    const taskId = relative(join(root, 'tasks'), saved.meta.cwd).split(/[\\/]/u)[0]
+    const handle = await router.runOwned({ taskId, sessionId }, () => ctx.agents.resume({ resumeSessionId: sessionId, agentOptions: { provider: 'task-native-fixture', model: 'fixture' } }))
     handles.push(handle); return handle.agent
   }
-  return { ctx, router, requests, actualCwds, create, resume, async close() {
+  return { ctx, router, requests, actualCwds, create, resume, async createLog(header, options) {
+    const taskId = relative(join(root, 'tasks'), header.cwd).split(/[\\/]/u)[0]
+    if (!taskId || taskId === '..') return ctx.sessionPersistence.create(header, options)
+    const activeRouter = await installTaskSessionPersistence(ctx, { root })
+    return activeRouter.runOwned({ taskId, sessionId: header.id }, () => ctx.sessionPersistence.create(header, options))
+  }, async close() {
     for (const handle of handles) await handle.dispose()
     await router.close(); await ctx.fiber.dispose()
   } }
@@ -114,7 +121,7 @@ test('native AgentLoop and live flush write each task log only to its task while
     assert.ok(saved.events.some(event => event.type === 'tool/result'))
     assert.ok((await findSessionLog(root, agent.id)).startsWith(taskSessionLogRoot(root, taskId)))
     assert.equal((await h.ctx.sessionPersistence.stat(agent.id)).header.cwd, saved.meta.cwd)
-    await assert.rejects(h.ctx.sessionPersistence.open(agent.id, 'write'), { name: 'SessionAlreadyOwnedError' })
+    await assert.rejects(h.router.runOwned({ taskId, sessionId: agent.id }, () => h.ctx.sessionPersistence.open(agent.id, 'write')), { name: 'SessionAlreadyOwnedError' })
   }
   assert.equal((await readdir(join(root, 'legacy-sessions')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error))).length, 0)
 })
@@ -128,19 +135,19 @@ test('durable registration precedes session creation, survives router close/rein
   const next = await installTaskSessionPersistence(h.ctx, { root })
   t.after(() => next.close())
   const session = h.ctx.sessions.prepare('not-yet-created', { meta: { cwd } })
-  const writer = await h.ctx.sessionPersistence.create(session.header)
+  const writer = await h.createLog(session.header)
   await writer.flush(); await writer.close()
   assert.equal((await h.ctx.sessionPersistence.stat(session.id)).header.cwd, cwd)
   await assert.rejects(next.register({ taskId: 'task-b', sessionId: session.id, cwd: await taskWorkspace(root, 'task-b') }), { code: 'TASK_SESSION_BINDING_CONFLICT' })
-  await assert.rejects(h.ctx.sessionPersistence.create({ ...session.header, cwd: root }), { code: 'TASK_SESSION_CWD_MISMATCH' })
+  await assert.rejects(h.createLog({ ...session.header, cwd: root }), { code: 'TASK_SESSION_CWD_MISMATCH' })
   const unbound = h.ctx.sessions.prepare('unregistered', { meta: { cwd } })
-  await assert.rejects(h.ctx.sessionPersistence.create(unbound.header), { code: 'TASK_SESSION_BINDING_REQUIRED' })
+  await assert.rejects(h.createLog(unbound.header), { code: 'TASK_SESSION_BINDING_REQUIRED' })
 })
 
 test('legacy records are inspectable but cannot be silently adopted into task persistence', async t => {
   const root = await temporary(), h = await host(root); t.after(() => h.close())
   const legacy = h.ctx.sessions.prepare('legacy', { meta: { cwd: root } })
-  const writer = await h.ctx.sessionPersistence.create(legacy.header)
+  const writer = await h.createLog(legacy.header)
   await writer.flush(); await writer.close()
   const path = await findSessionLog(root, 'legacy'), before = await readFile(path)
   await assert.rejects(h.router.register({ taskId: 'task-a', sessionId: 'legacy', cwd: await taskWorkspace(root, 'task-a') }), { code: 'TASK_SESSION_LEGACY_LOCATION' })
@@ -163,7 +170,7 @@ test('concurrent installation and conflicting registrations keep one native rout
   assert.equal(registrations.find(result => result.status === 'rejected').reason.code, 'TASK_SESSION_BINDING_CONFLICT')
   const winner = registrations.find(result => result.status === 'fulfilled').value
   const session = h.ctx.sessions.prepare('one-id', { meta: { cwd: winner.cwd } })
-  const writer = await h.ctx.sessionPersistence.create(session.header)
+  const writer = await h.createLog(session.header)
   await writer.flush(); await writer.close()
   await a.close()
   const next = await installTaskSessionPersistence(h.ctx, { root })
@@ -179,7 +186,7 @@ test('cancelled native persistence calls retain their abort reason and never cre
   const session = h.ctx.sessions.prepare('cancelled', { meta: { cwd } })
   const signal = AbortSignal.abort(new Error('test abort'))
   for (const operation of [
-    () => h.ctx.sessionPersistence.create(session.header, { signal }),
+    () => h.createLog(session.header, { signal }),
     () => h.ctx.sessionPersistence.open(session.id, 'read', { signal }),
     () => h.ctx.sessionPersistence.stat(session.id, { signal }),
     () => h.ctx.sessionPersistence.list({ signal }),
@@ -201,7 +208,7 @@ for (const replaced of ['root', 'project', 'session', 'log']) test(`cached nativ
   await h.router.register({ taskId: 'task-a', sessionId: 'before', cwd })
   await h.router.register({ taskId: 'task-a', sessionId: 'after', cwd })
   const session = h.ctx.sessions.prepare('before', { meta: { cwd } })
-  const writer = await h.ctx.sessionPersistence.create(session.header)
+  const writer = await h.createLog(session.header)
   await writer.flush(); await writer.close()
   const log = await findSessionLog(root, 'before'), before = await readFile(log)
   const selected = replaced === 'root' ? taskSessionLogRoot(root, 'task-a') : replaced === 'project' ? dirname(dirname(log)) : replaced === 'session' ? dirname(log) : log
@@ -211,9 +218,9 @@ for (const replaced of ['root', 'project', 'session', 'log']) test(`cached nativ
   const nextHeader = h.ctx.sessions.prepare('after', { meta: { cwd } }).header
   for (const operation of [
     () => h.router.register({ taskId: 'task-a', sessionId: 'new-binding', cwd }),
-    () => h.ctx.sessionPersistence.create(nextHeader),
+    () => h.createLog(nextHeader),
     () => h.ctx.sessionPersistence.open('before', 'read'),
-    () => h.ctx.sessionPersistence.open('before', 'write'),
+    () => h.router.runOwned({ taskId: 'task-a', sessionId: 'before' }, () => h.ctx.sessionPersistence.open('before', 'write')),
     () => h.ctx.sessionPersistence.stat('before'),
     () => h.ctx.sessionPersistence.list(),
   ]) await assert.rejects(operation(), /TASK_DIRECTORY_OUTSIDE_ROOT/)
@@ -274,3 +281,25 @@ test('unclean native process exit resumes original task session with compaction 
 })
 
 if (process.argv[2] === '--task-native-child') await processPhase(process.argv[3], process.argv[4])
+
+
+test('registered task writers require exact active Host scope while readonly access and unrelated legacy sessions remain available', async t => {
+  const root = await temporary(), h = await host(root); t.after(() => h.close())
+  const cwd = await taskWorkspace(root, 'scope-task')
+  for (const sessionId of ['owned-a', 'owned-b']) await h.router.register({ taskId: 'scope-task', sessionId, cwd })
+  const header = h.ctx.sessions.prepare('owned-a', { meta: { cwd } }).header
+  await assert.rejects(h.ctx.sessionPersistence.create(header), { code: 'TASK_SESSION_HOST_WRITER_REQUIRED' })
+  await assert.rejects(h.router.runOwned({ taskId: 'scope-task', sessionId: 'owned-b' }, () => h.ctx.sessionPersistence.create(header)), { code: 'TASK_SESSION_HOST_WRITER_REQUIRED' })
+  await assert.rejects(h.router.runOwned({ taskId: 'wrong-task', sessionId: 'owned-a' }, () => h.ctx.sessionPersistence.create(header)), { code: 'TASK_SESSION_BINDING_REQUIRED' })
+  const writer = await h.router.runOwned({ taskId: 'scope-task', sessionId: 'owned-a' }, () => h.ctx.sessionPersistence.create(header))
+  await writer.flush(); await writer.close()
+  const reader = await h.ctx.sessionPersistence.open('owned-a', 'read'); await reader.close()
+  await assert.rejects(h.ctx.sessionPersistence.open('owned-a', 'write'), { code: 'TASK_SESSION_HOST_WRITER_REQUIRED' })
+  const gate = Promise.withResolvers()
+  let detached
+  await h.router.runOwned({ taskId: 'scope-task', sessionId: 'owned-a' }, async () => { detached = gate.promise.then(() => h.ctx.sessionPersistence.open('owned-a', 'write')) })
+  gate.resolve()
+  await assert.rejects(detached, { code: 'TASK_SESSION_HOST_WRITER_REQUIRED' })
+  const legacy = h.ctx.sessions.prepare('legacy-unbound', { meta: { cwd: root } })
+  const legacyWriter = await h.ctx.sessionPersistence.create(legacy.header); await legacyWriter.close()
+})

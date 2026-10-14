@@ -126,6 +126,6 @@ test('restart reconciles an original persisted native terminal receipt and resum
  assert.equal(after.state,'succeeded');assert.equal(after.result.reconciled,true)
  assert.equal(execution.executionId,original.executionId);assert.equal(execution.sessionId,original.sessionId)
  assert.equal(execution.inputVersion,2);assert.equal(execution.status,'succeeded')
- assert.equal(await readFile(join(root,'tasks',created.taskId,'once.txt'),'utf8'),'once\n')
+ assert.equal(await readFile(join(root,'tasks',created.taskId,'once.txt'),'utf8'),process.platform==='win32'?'once\r\n':'once\n')
  assert.equal((await second.query('operation.list')).length,1)
 })

@@ -187,7 +187,7 @@ function validateHistory(events, binding) {
  * 补充递增 inputVersion；原生 step 事件累计预算，已结束执行间的等待不计耗时。
  * outputSchema 使用 dsh-tools 支持的 JSON Schema。工具仅提交 { output }，不接受模型身份。
  */
-export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution }) {
+export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, withPersistenceWriter = (_binding, action) => action() }) {
   if (typeof isCurrent !== 'function') throw failure('execution_current_check_required')
   if (getWorkspaceDir !== undefined && typeof getWorkspaceDir !== 'function') throw failure('execution_workspace_provider_invalid')
   if (!Array.isArray(tools)) throw failure('execution_tool_registry_invalid')
@@ -609,12 +609,12 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (!stored && getWorkspaceDir && (typeof workspaceDir !== 'string' || !isAbsolute(workspaceDir))) throw failure('execution_workspace_invalid')
         entry.cwd = resolvedWorkspace ?? stored?.meta.cwd ?? workspaceDir
         if (dynamicExecution(binding) && stored && resolvedWorkspace && stored.meta.cwd !== resolvedWorkspace) throw failure('execution_workspace_invalid')
-        entry.handle = stored
+        entry.handle = await withPersistenceWriter(binding, async () => stored
           ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
           : await ctx.agents.create({ ...options, sessionId: binding.sessionId, meta: { ...(workspaceDir ? { cwd: workspaceDir } : {}), ...(binding.kind === undefined ? { origin: 'subagent' } : {}) },
             // 当前原生 append 不提供 ignorable 参数；用受支持 seed 保留不参与原生投影的插件身份。
             seed: [{ type: IDENTITY_EVENT, seq: 0, time: Date.now(), ignorable: true, data: { version: binding.kind ? 2 : 1, identity: identityOf(entry.binding), creationLease: binding.leaseEpoch } }],
-          })
+          }))
         const session = entry.handle.agent.session
         if (dynamicExecution(binding)) renameTaskSession(ctx, session, entry.input.title ?? entry.input.objective)
         else if (!stored) nameSession(ctx, session, binding.kind === 'message-unit' ? 'answer' : 'execution', entry.input.request ?? entry.input.objective)

@@ -158,3 +158,46 @@ test('历史正文只在打开时读取，不因列表刷新读取全部旧工�
   tree.props.onToggle({ currentTarget: { open: true } }); tree = h.render()
   assert.equal(elements(tree).find(item => item.props.node).props.node.outputRef, 'output')
 })
+
+
+test('当前人工问题答复必填、防重且失败保留原文和原修订，成功刷新原任务', async () => {
+  const request = { requestId: 'question-1', taskId: 'task-1', taskSessionRequest: true, status: 'waiting-reply', requirementRevision: 2, controlRevision: 3 }
+  let changed = 0
+  const h = harness('HumanRequestReply', { request, onChanged: () => changed++ })
+  let tree = h.render()
+  await tree.props.onSubmit({ preventDefault() {} }); tree = h.render()
+  assert.equal(h.requests.length, 0)
+  assert.equal(input(tree, '答复内容').props.maxLength, 20000)
+  assert.match(text(tree), /请填写答复内容/)
+  input(tree, '答复内容').props.onChange({ target: { value: '选择目标 A，保持其他约束' } }); tree = h.render()
+  const operation = tree.props.onSubmit({ preventDefault() {} }); tree.props.onSubmit({ preventDefault() {} })
+  assert.equal(h.requests.length, 1)
+  assert.match(h.requests[0].url, /tasks\/task-1\/human-requests\/question-1\/reply$/)
+  const body = JSON.parse(h.requests[0].options.body)
+  assert.equal(body.reply, '选择目标 A，保持其他约束')
+  assert.equal(body.expectedRequirementRevision, 2); assert.equal(body.expectedControlRevision, 3)
+  assert.equal(button(h.render(), '提交答复中…').props.disabled, true)
+  h.requests[0].reject(Error('DYNAMIC_TASK_REVISION_STALE')); await operation
+  tree = h.render({ request: { ...request, requirementRevision: 4 }, onChanged: () => changed++ })
+  assert.equal(input(tree, '答复内容').props.value, body.reply)
+  assert.match(text(tree), /DYNAMIC_TASK_REVISION_STALE.*内容已保留/)
+  const retry = tree.props.onSubmit({ preventDefault() {} })
+  assert.deepEqual(JSON.parse(h.requests[1].options.body), body)
+  h.requests[1].resolve({ taskId: 'task-1' }); await retry
+  tree = h.render(); assert.equal(changed, 1)
+  assert.match(text(tree), /答复已记录，原任务将继续处理/)
+  assert.equal(button(tree, '提交答复').props.disabled, true)
+})
+
+test('历史、已答复及失效问题只读，任务问题能导航人工介入页', () => {
+  for (const request of [{ status: 'waiting-reply' }, { taskSessionRequest: true, status: 'answered', reply: '已核实' }, { taskSessionRequest: true, status: 'superseded' }]) {
+    const tree = harness('HumanRequestReply', { request }).render()
+    assert.equal(elements(tree).some(item => item.type === 'textarea'), false)
+    assert.equal(elements(tree).some(item => item.type === 'form'), false)
+  }
+  const opened = []
+  const tree = harness('TaskSessionDetail', { task: { taskId: 't', lastDecision: { question: '选择哪个目标？' } }, onOpenHumanRequest: id => opened.push(id) }).render()
+  button(tree, '查看人工介入问题').props.onClick()
+  assert.deepEqual(opened, ['t'])
+  assert.doesNotMatch(source, /需求与控制|TaskControls/)
+})

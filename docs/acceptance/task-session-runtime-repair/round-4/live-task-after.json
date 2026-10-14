@@ -1,0 +1,120 @@
+[
+  {
+    "lastInput": {
+      "task": 2087,
+      "sources": 1911,
+      "materials": 1989,
+      "wakes": 4929,
+      "executions": 5599,
+      "operations": 3981,
+      "operationCounts": 27,
+      "blockers": 45
+    }
+  },
+  {
+    "taskState": [
+      {
+        "status": "active",
+        "drained": true,
+        "leaseEpoch": 30,
+        "action": "wait",
+        "limitations": [
+          "尚不能确认原请求对应页面已满足布局要求；未进行 UAT 部署或正式业务验收。"
+        ],
+        "summary": "已退回补验：隔离字段测试不能替代实际合并预览页面验证，需核对原截图对应页面并补齐交付说明。"
+      }
+    ]
+  },
+  {
+    "executions": [
+      {
+        "executionId": "431a837d-6a49-42f5-9f5f-90f559be3ba0",
+        "status": "running",
+        "drained": false,
+        "inputVersion": 5,
+        "updatedAt": "2026-10-14T09:56:50.384Z"
+      },
+      {
+        "executionId": "e294677f-430c-420c-b0cc-4d7e298025f4",
+        "status": "succeeded",
+        "drained": true,
+        "inputVersion": 1,
+        "updatedAt": "2026-10-14T07:56:18.047Z"
+      }
+    ]
+  },
+  {
+    "ownerActual": {
+      "lastEvents": [
+        {
+          "type": "request/header",
+          "seq": 490,
+          "time": 1791971809045
+        },
+        {
+          "type": "developer/message",
+          "seq": 491,
+          "time": 1791971809050
+        },
+        {
+          "type": "assistant/message",
+          "seq": 492,
+          "time": 1791971816393
+        },
+        {
+          "type": "tool/call",
+          "seq": 493,
+          "time": 1791971816395
+        },
+        {
+          "type": "tool/result",
+          "seq": 494,
+          "time": 1791971816415
+        },
+        {
+          "type": "step/end",
+          "seq": 495,
+          "time": 1791971816417
+        },
+        {
+          "type": "turn/end",
+          "seq": 496,
+          "time": 1791971816551
+        }
+      ],
+      "lastCall": {
+        "sequence": 493,
+        "toolName": "task_session_submit",
+        "time": 1791971816395,
+        "argumentKeys": [
+          "decision"
+        ]
+      },
+      "lastEnd": {
+        "seq": 496,
+        "time": 1791971816551,
+        "kind": "blocked"
+      }
+    }
+  },
+  {
+    "ownerFiles": {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--\\task-session-159171d8-1eef-40a6-b6f7-058eb956ee65\\session.v4.jsonl",
+      "bytes": 4572396,
+      "lastSeq": 496,
+      "lastType": "turn/end",
+      "lastTime": 1791971816551,
+      "lastInputLease": 30
+    }
+  },
+  {
+    "taskTimes": [
+      {
+        "leaseEpoch": 30,
+        "updatedAt": "2026-10-14T09:56:56.61Z",
+        "drained": true,
+        "lastDecisionAt": "2026-10-14T09:56:56.409Z"
+      }
+    ]
+  }
+]

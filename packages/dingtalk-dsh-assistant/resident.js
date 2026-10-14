@@ -122,6 +122,8 @@ export async function apply(ctx, config = {}) {
   runtime.createTask = tasks.createTask
   runtime.appendTaskContext = tasks.appendTaskContext
   runtime.cancelTask = tasks.cancelTask
+  runtime.listAuthorizationRequests = tasks.listAuthorizationRequests
+  runtime.respondTaskHumanRequest = tasks.respondHumanRequest
   runtime.retryDecisionFailedMessage = tasks.retryMessage
   runtime.isTaskSessionMode = () => true
   const recoverTasks = () => tasks.recover().catch(error => ctx.logger.warn(error.message))

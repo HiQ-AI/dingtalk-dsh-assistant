@@ -1,0 +1,169 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createServer } from 'node:http'
+import { available, reason, nativeTaskHost, latestInput, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
+const call = (name, args) => ({ name, args })
+const requestHuman = () => call('task_request_human', { reason: '目标环境尚未明确，不能自行扩大授权', question: '请明确本次允许的环境和操作范围', evidence: ['已读取原始交办'], attemptedActions: ['核对现有需求，未执行外部修改'] })
+const finish = summary => call('task_session_submit', { decision: { action: 'complete', summary, evidence: ['已核对人工原文和原执行结果'], limitations: [] } })
+async function fixture(t, decide) {
+  const root = await mkdtemp(join(tmpdir(), 'task-human-native-'))
+  const h = await nativeTaskHost(root, decide)
+  t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  return h
+}
+async function pending(h) { return (await h.service.listAuthorizationRequests()).find(item => item.status === 'waiting-reply') }
+
+test('native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  let turns = 0, replyInput
+  const h = await fixture(t, async request => {
+    const input = latestInput(request); turns++
+    if (turns === 1) return [requestHuman()]
+    replyInput = input
+    return [finish('仅按人工明确的 UAT3 范围完成核对')]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'human-native', objective: '按明确范围核对' })
+  await h.service.whenIdle()
+  const request = await pending(h), waiting = await h.query('task.get', { taskId: created.taskId })
+  assert.ok(request)
+  assert.equal(waiting.lastDecision.action, 'blocked')
+  assert.equal(waiting.drained, true)
+  assert.deepEqual(request.attemptedActions, ['核对现有需求，未执行外部修改'])
+  for (let i = 0; i < 3; i++) { await h.service.recover(); await h.service.whenIdle() }
+  assert.equal(turns, 1)
+  const server = createServer((req, res) => handleRequest(req, res, { respondTaskHumanRequest: args => h.service.respondHumanRequest(args) }))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => server.close(resolve)))
+  const url = `http://127.0.0.1:${server.address().port}/tasks/${created.taskId}/human-requests/${encodeURIComponent(request.requestId)}/reply`
+  const body = { requestId: 'real-human-response', reply: '仅允许 UAT3 的只读核对；不得修改生产或发布', expectedRequirementRevision: waiting.requirementRevision, expectedControlRevision: waiting.controlRevision }
+  const forbidden = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://outside.invalid' }, body: JSON.stringify(body) })
+  assert.equal(forbidden.status, 403)
+  const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  assert.equal(response.status, 200, JSON.stringify(await response.json()))
+  await h.service.whenIdle()
+  const completed = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.sessionId, waiting.sessionId)
+  assert.equal(completed.requirementRevision, 1)
+  assert.equal(completed.humanRequests[0].status, 'answered')
+  assert.equal(replyInput.sources.find(source => source.text === body.reply)?.actorId, 'native-user')
+  assert.ok(!JSON.stringify(replyInput).includes('unlimitedApproval'))
+  assert.equal((await h.query('task.list')).length, 1)
+  assert.equal((await h.query('execution.list')).length, 0)
+})
+
+test('an execution result cannot bypass human waiting; reply reads the original execution and continues the original task', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const released = Promise.withResolvers(); let turns = 0, executionId, afterReply
+  t.after(() => released.resolve())
+  const h = await fixture(t, async request => {
+    if (!request.tools.some(tool => tool.name === 'task_delegate')) {
+      await released.promise
+      return [call('execution_submit', { output: { status: 'completed', summary: '原执行已完成只读核对', evidence: ['原执行事实'], limitations: [], artifacts: [] } })]
+    }
+    const input = latestInput(request)
+    turns++
+    if (turns === 1) return [call('task_delegate', { key: 'original-inspection', objective: '只读核对原目标' })]
+    if (turns === 2) return [requestHuman()]
+    afterReply = input
+    return [finish('已读取原执行结果并按人工范围收束')]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'human-execution', objective: '核对原目标，边界不清时申请人工' })
+  const request = await waitUntil(() => pending(h), 'persisted human request')
+  released.resolve()
+  await h.service.whenIdle(); await h.service.recover(); await h.service.whenIdle()
+  assert.equal(turns, 2, 'execution-result wake must remain held while waiting for the human reply')
+  const [execution] = await h.query('execution.list'); executionId = execution.executionId
+  assert.equal(execution.status, 'succeeded')
+  const waiting = await h.query('task.get', { taskId: created.taskId })
+  await h.service.respondHumanRequest({ taskId: created.taskId, humanRequestId: request.requestId, requestId: 'reply-original-execution', reply: '仅使用现有只读结果，不追加写入', expectedRequirementRevision: waiting.requirementRevision, expectedControlRevision: waiting.controlRevision })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
+  assert.equal(afterReply.executions[0].executionId, executionId)
+  assert.equal(afterReply.executions[0].result.payload.output.summary, '原执行已完成只读核对')
+  assert.equal((await h.query('execution.list')).length, 1)
+})
+
+test('a native blocked decision without a human question is corrected into an explicit durable request', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  let steps = 0
+  const h = await fixture(t, async request => {
+    steps++
+    if (steps === 1) return [call('task_session_submit', { decision: { action: 'blocked', summary: '需要人工', evidence: [], limitations: [] } })]
+    assert.match(JSON.stringify(request.messages), /blocked requires a specific human question/)
+    return [requestHuman()]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'human-correction', objective: '按实际边界处理' })
+  await h.service.whenIdle()
+  assert.equal(steps, 2)
+  const task = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(task.humanRequests.length, 1)
+  assert.equal(task.humanRequests[0].status, 'waiting-reply')
+  assert.equal(task.lastDecision.question, '请明确本次允许的环境和操作范围')
+  assert.ok(h.toolResults.some(item => item.name === 'task_session_submit' && item.result.isError))
+})
+
+test('an authenticated reply in the original group answers the waiting request without revising the task or cancelling its live execution', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const release = Promise.withResolvers(); t.after(() => release.resolve())
+  let ownerTurns = 0, originalTask, originalTopic, answeredInput
+  const replyText = '测试助手，本次只允许 UAT3 只读核对，保持现有执行，不得发布生产。'
+  const h = await fixture(t, async request => {
+    const names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit')) {
+      const calls = topicTaskCalls(request)
+      for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: originalTopic }]
+      return calls
+    }
+    if (names.includes('group_decision_submit')) {
+      const calls = topicTaskCalls(request), submitted = calls[0].args
+      submitted.decision.actions = [{ kind: 'task-context', taskId: originalTask.taskId, inputVersion: originalTask.requirementRevision,
+        runSequence: originalTask.runSequence, context: replyText, progressImpact: 'preserve', topicRefs: [{ topicId: submitted.topicId, revision: submitted.revision }],
+        basisUnitRefs: submitted.decision.basisUnitRefs }]
+      submitted.decision.reply = '已收到本次范围答复，将沿原任务继续。'
+      return calls
+    }
+    if (!names.includes('task_delegate')) {
+      await release.promise
+      return [call('execution_submit', { output: { status: 'completed', summary: '原执行按只读范围完成', evidence: ['原执行结果'], limitations: [], artifacts: [] } })]
+    }
+    const input = latestInput(request); ownerTurns++
+    if (ownerTurns === 1) return [call('task_delegate', { key: 'live-original', objective: '保持原有只读核对' })]
+    if (ownerTurns === 2) return [requestHuman()]
+    if (!input.executions.every(execution => execution.drained)) {
+      answeredInput = input
+      return [call('task_session_submit', { decision: { action: 'wait', summary: '已读取原群答复，等待原执行完成', evidence: [], limitations: [] } })]
+    }
+    return [finish('原任务与原执行沿人工明确范围完成')]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'original-group-answer', objective: '原群原任务核对' })
+  await waitUntil(() => pending(h), 'human wait before original-group reply')
+  originalTask = await h.query('task.get', { taskId: created.taskId }); originalTopic = originalTask.topicRefs[0].topicId
+  const [before] = await h.query('execution.list')
+  assert.equal(before.drained, false)
+  await h.service.ingest({ groupId: 'native-group', messageId: 'real-group-human-answer', senderOpenDingTalkId: 'native-user', text: replyText,
+    occurredAt: '2026-10-14T10:00:00Z', timestamp: '2026-10-14T10:00:00Z' })
+  await waitUntil(() => answeredInput, 'owner receives authenticated group answer').catch(async error => {
+    error.message += JSON.stringify({ toolErrors: h.toolResults.filter(item => item.name === 'group_decision_submit').slice(-1),
+      alerts: await h.service.listAlerts(), task: (await h.query('task.get', { taskId: created.taskId })).humanRequests,
+      topics: h.residentStore.listTopics('native-group').map(topic => ({ id: topic.topicId, decisions: topic.decisions?.map(decision => ({ status: decision.status, error: decision.error })) })) })
+    throw error
+  })
+  const answered = await h.query('task.get', { taskId: created.taskId }), [stillLive] = await h.query('execution.list')
+  assert.equal(answered.humanRequests[0].status, 'answered')
+  assert.equal(answered.humanRequests[0].actorId, 'native-user')
+  assert.equal(answered.requirementRevision, originalTask.requirementRevision)
+  assert.equal(answered.controlRevision, originalTask.controlRevision)
+  assert.equal(answered.sessionId, originalTask.sessionId)
+  assert.equal(stillLive.executionId, before.executionId)
+  assert.equal(stillLive.sessionId, before.sessionId)
+  assert.equal(stillLive.cancelRequested, false)
+  assert.equal(stillLive.drained, false)
+  assert.equal(answeredInput.sources.find(source => source.messageId === 'real-group-human-answer')?.text, replyText)
+  assert.equal(answered.topicRefs[0].topicId, originalTopic)
+  assert.ok(answered.appliedOperations.length > originalTask.appliedOperations.length)
+  release.resolve(); await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
+  assert.equal((await h.query('task.list')).length, 1)
+  assert.equal((await h.query('execution.list')).length, 1)
+})

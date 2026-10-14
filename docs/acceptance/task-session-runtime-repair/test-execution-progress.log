@@ -1,0 +1,27 @@
+✔ legacy Host drained error plus bound real readonly observation proves failed partial effects only (2.7209ms)
+✔ readback context exposes only the digest-bound original native call and result (1.7822ms)
+✔ legacy unknown remains fenced: model text instead of tool receipt (0.5142ms)
+✔ legacy unknown remains fenced: printed error text in successful shell output (0.3714ms)
+✔ legacy unknown remains fenced: forged ledger result digest (0.3148ms)
+✔ legacy unknown remains fenced: wrong call (0.1854ms)
+✔ legacy unknown remains fenced: changed arguments (0.2117ms)
+✔ legacy unknown remains fenced: wrong session identity (0.2906ms)
+✔ legacy unknown remains fenced: active original agent (0.1913ms)
+✔ legacy unknown remains fenced: live job still running (0.2709ms)
+✔ legacy unknown remains fenced: execution not drained (0.1584ms)
+✔ legacy unknown remains fenced: no actual readonly result (0.1887ms)
+✔ legacy unknown remains fenced: wrong readback operation (0.1511ms)
+✔ legacy unknown remains fenced: unrestricted readback (0.1704ms)
+✔ legacy unknown remains fenced: failed readback call (0.1428ms)
+✔ legacy unknown remains fenced: stale observation predates unknown (0.1344ms)
+✔ execution progress reads exact current input with real bounded excerpts and unfinished call facts (5.0574ms)
+✔ execution progress rejects wrong identity, stale input version or lease and unavailable persistence (1.5295ms)
+✔ execution progress limits excerpts to latest eight real events without copying full logs (0.7224ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 339.5378

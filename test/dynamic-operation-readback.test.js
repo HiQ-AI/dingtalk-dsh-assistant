@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { inspectStoppedNativeOperation, readNativeOperationContext, legacyDrainedError } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
 const canonical = value => value && typeof value==='object' ? Array.isArray(value) ? value.map(canonical) : Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])) : value
@@ -12,7 +12,7 @@ function fixture(){
  const execution={...binding,drained:true,recovering:false}
  const readback={...binding,executionId:'readback',sessionId:'readback-session',inputDigest:'readback-input',status:'succeeded',drained:true,definition:{recoveryReadOnly:true},input:{readbackOperationId:'operation'},updatedAt:'2026-10-14T02:00:00Z'}
  const seed=b=>({seq:0,type:'plugin:dingtalk/execution-session',data:{identity:b}})
- const input=b=>({seq:1,type:'user/message',data:{source:{executionSession:b}}})
+ const input=b=>({seq:1,type:'user/message',data:{source:{executionSession:{sessionId:b.sessionId,leaseEpoch:b.leaseEpoch,inputVersion:b.inputVersion,inputDigest:b.inputDigest,requirementRevision:1,controlRevision:1}}}})
  const original=[seed(binding),input(binding),{seq:2,type:'tool/call',data:{callId:'call-1',name:'pwsh',arguments:JSON.stringify({command:'git fetch origin --prune',timeoutMs:20000})}},
   {seq:3,type:'tool/result',data:{message:{role:'tool',toolCallId:'call-1',isError:true,content:[{type:'text',text:'Error: '+legacyDrainedError}]}}}]
  const readEvents=[seed(readback),input(readback),{seq:2,type:'tool/call',data:{callId:'read-1',name:'read',arguments:JSON.stringify({file_path:'.git/FETCH_HEAD'})}},
@@ -63,3 +63,51 @@ for(const [name,mutate] of Object.entries({
  'failed readback call':f=>{f.readEvents[3].data.message.isError=true},
  'stale observation predates unknown':f=>{f.readback.updatedAt='2026-10-14T00:00:00Z'},
 }))test(`legacy unknown remains fenced: ${name}`,async()=>{const f=fixture();mutate(f);assert.equal(await inspectStoppedNativeOperation(f),null)})
+
+
+test('execution progress reads exact current input with real bounded excerpts and unfinished call facts', async () => {
+ const f=fixture()
+ assert.equal('taskId' in f.original[1].data.source.executionSession,false)
+ assert.equal('executionId' in f.original[1].data.source.executionSession,false)
+ f.original[2].time=1000;f.original[3].time=1100
+ const data={message:{content:[{type:'text',text:'正在核对目标接口；password=private-secret '+ '业务证据'.repeat(300)}]}}
+ f.original.push({seq:4,type:'assistant/message',time:1200,data},{seq:5,type:'tool/call',time:1300,data:{callId:'pending',name:'read',arguments:'{"file_path":"proof.txt"}'}})
+ f.execution.progressReview={lastSequence:3}
+ const progress=await readExecutionProgress(f)
+ assert.equal(progress.lastSequence,5);assert.equal(progress.previousSequence,3);assert.equal(progress.newEventCount,2)
+ assert.equal(progress.lastActivityAt,'1970-01-01T00:00:01.300Z');assert.equal(progress.pendingToolCallCount,1)
+ assert.equal(progress.pendingToolCalls[0].callId,'pending')
+ assert.equal('preview' in progress.pendingToolCalls[0],false)
+ assert.equal(progress.pendingToolCalls[0].digest,hash(f.original.at(-1).data))
+ const excerpt=progress.excerpts.find(item=>item.sequence===4)
+ assert.equal(excerpt.digest,hash(data));assert.equal(excerpt.truncated,true);assert.ok(excerpt.preview.length<=640)
+ assert.match(excerpt.preview,/核对目标接口/);assert.ok(!excerpt.preview.includes('private-secret'))
+ assert.ok(progress.excerpts.find(item=>item.type==='tool/result').preview.includes('isError'))
+ assert.equal(progress.inputDigest,'original')
+ f.execution.progressReview.lastSequence=5
+ const unchanged=await readExecutionProgress(f)
+ assert.equal(unchanged.newEventCount,0);assert.equal(unchanged.hasNewEvents,false)
+ assert.equal(unchanged.pendingToolCallCount,1);assert.equal(unchanged.changed,false);assert.match(unchanged.limitations[0],/无新日志不证明停止/)
+ f.original.at(-1).time='2026-10-14T09:00:00Z'
+ assert.equal((await readExecutionProgress(f)).lastActivityAt,'2026-10-14T09:00:00.000Z')
+ f.original.at(-1).time='invalid-time'
+ assert.equal((await readExecutionProgress(f)).lastActivityAt,null)
+})
+
+test('execution progress rejects wrong identity, stale input version or lease and unavailable persistence', async () => {
+ for(const mutate of [
+  f=>{f.original[0].data.identity.sessionId='other'},
+  f=>{f.execution.inputVersion=2},f=>{f.execution.leaseEpoch=2},f=>{f.execution.inputDigest='changed'},
+  f=>{f.original.push({seq:4,type:'user/message',data:{source:{executionSession:{...f.execution,inputVersion:2}}}})},
+ ]) { const f=fixture();mutate(f);await assert.rejects(readExecutionProgress(f),/EXECUTION_PROGRESS_(IDENTITY|INPUT)_MISMATCH/) }
+ const f=fixture();f.ctx.sessionPersistence.open=async()=>{throw Error('missing')}
+ await assert.rejects(readExecutionProgress(f),{code:'EXECUTION_PROGRESS_LOG_UNREADABLE'})
+})
+
+test('execution progress limits excerpts to latest eight real events without copying full logs', async () => {
+ const f=fixture()
+ for(let seq=4;seq<20;seq++)f.original.push({seq,time:seq,type:'assistant/message',data:{message:{content:[{type:'text',text:'业务检查 '+seq}]}}})
+ const view=await readExecutionProgress(f)
+ assert.equal(view.excerpts.length,8);assert.ok(view.excerpts.reduce((sum,item)=>sum+item.preview.length,0)<=8*640);assert.equal(view.excerpts[0].sequence,12);assert.equal(view.excerpts.at(-1).sequence,19)
+ assert.equal(view.excerpts.at(-1).digest,hash(f.original.at(-1).data));assert.equal('events' in view,false)
+})

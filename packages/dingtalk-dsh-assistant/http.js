@@ -303,6 +303,18 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/performance') return send(response, 200, store.listPerformance(Object.fromEntries(['day', 'sessionId', 'groupId', 'taskId', 'requestId', 'submissionId'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]))))
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, await store.listAuthorizationRequests())
+  const humanReply = request.method === 'POST' && /^\/tasks\/([^/]+)\/human-requests\/([^/]+)\/reply$/u.exec(url.pathname)
+  if (humanReply) {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    if (!store.respondTaskHumanRequest) return send(response, 404, { error: 'task_session_disabled' })
+    try {
+      const parsed = z.strictObject({ requestId: requiredText.max(200), reply: requiredText.max(20000),
+        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() }).safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'human_reply_invalid' })
+      return send(response, 200, await store.respondTaskHumanRequest({ ...parsed.data,
+        taskId: decodeURIComponent(humanReply[1]), humanRequestId: decodeURIComponent(humanReply[2]) }))
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   if (request.method === 'GET' && url.pathname === '/state/activities') return send(response, 200, store.listActivities(url.searchParams.get('taskId') ?? undefined))
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })

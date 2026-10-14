@@ -353,3 +353,131 @@ test('verified legacy stop closes only failed with retained unknown audit and ne
   assert.equal((await f.query({kind:'execution.list'})).length,1)
   assert.equal((await f.query({kind:'resource.list'})).length,0)
 })
+
+async function humanWaiting(f, requestId = 'human-request') {
+  await f.command('task.create', { taskId: 'human-task', groupId: 'g', ownerActorId: 'owner', request: 'Resolve the original task' })
+  const owner = (await f.command('task.claim', { taskId: 'human-task' })).result
+  const args = { binding: owner.binding, action: 'blocked', summary: '等待有权人员补充', question: '请选择目标环境', humanRequest: { requestId, reason: '缺少目标环境', attemptedActions: ['已读取原始交办及当前环境配置'] } }
+  await f.command('task.wait', args)
+  await f.command('task.drained', { binding: owner.binding })
+  return { owner, args, respond: { taskId: 'human-task', requestId, sourceId: 'human-answer', expectedRequirementRevision: 1, expectedControlRevision: 1 } }
+}
+async function humanSource(f, actorId = 'owner', groupId = 'g') {
+  await f.command('source.record', { sourceId: 'human-answer', groupId, messageId: 'reply-original', actorId, text: '仅在 UAT3 执行已说明的修改', channel: actorId === 'web-user' ? 'web' : 'im' })
+}
+
+test('human request freezes the question and resumes the same task from its authorized original source idempotently', async t => {
+  const f = await fixture(t), { owner, args, respond } = await humanWaiting(f)
+  const waiting = await f.query({ kind: 'task.get', taskId: 'human-task' })
+  assert.equal(waiting.humanRequests[0].status, 'waiting-reply')
+  assert.equal(waiting.humanRequests[0].question, args.question)
+  assert.deepEqual(waiting.humanRequests[0].attemptedActions, ['已读取原始交办及当前环境配置'])
+  await humanSource(f)
+  const first = await f.command('task.human.respond', respond, 'stable-human-response')
+  assert.equal(first.result.request.status, 'answered')
+  assert.equal(first.result.request.reply, '仅在 UAT3 执行已说明的修改')
+  assert.equal(first.result.request.actorId, 'owner')
+  assert.equal(first.result.task.sessionId, owner.task.sessionId)
+  assert.equal(first.result.task.lastDecision, null)
+  assert.deepEqual(first.result.task.sourceRefs, ['human-answer'])
+  assert.equal(first.result.task.requirementRevision, 1)
+  assert.deepEqual((await f.command('task.human.respond', respond, 'stable-human-response')).result, first.result)
+  await assert.rejects(f.command('task.human.respond', respond), { code: 'DYNAMIC_HUMAN_REQUEST_STALE' })
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'human-task' })).filter(wake => wake.kind === 'human.responded').length, 1)
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests[0].status, 'answered')
+})
+
+for (const testCase of ['other-actor','other-group','stale-requirement','stale-control','not-drained','revised','cancelled','completed']) test(`human response rejects an invalid or superseded request: ${testCase}`, async t => {
+  const f = await fixture(t), { owner, respond } = await humanWaiting(f)
+  await humanSource(f, testCase === 'other-actor' ? 'outsider' : 'owner', testCase === 'other-group' ? 'other' : 'g')
+  if (testCase === 'stale-requirement') respond.expectedRequirementRevision = 2
+  if (testCase === 'stale-control') respond.expectedControlRevision = 2
+  if (testCase === 'not-drained') await f.command('task.claim', { taskId: 'human-task', force: true })
+  if (testCase === 'revised') { await f.command('task.revise', { taskId: 'human-task', request: 'new requirement' }); respond.expectedRequirementRevision = 2 }
+  if (testCase === 'cancelled') { await f.command('task.control', { taskId: 'human-task', control: 'cancelled' }); respond.expectedControlRevision = 2 }
+  if (testCase === 'completed') {
+    const claim = (await f.command('task.claim', { taskId: 'human-task', force: true })).result
+    await f.command('task.complete', { binding: claim.binding, summary: 'done' })
+  }
+  await assert.rejects(f.command('task.human.respond', respond))
+  if (['revised','cancelled','completed'].includes(testCase)) assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests[0].status, 'superseded')
+})
+
+test('human request requires an explicit stable identity and accepts only configured web actor without impersonation', async t => {
+  const f = await fixture(t, { webActorId: 'web-user' }), { owner, respond } = await humanWaiting(f)
+  const fresh = await f.task('other-task')
+  await assert.rejects(f.command('task.wait', { binding: fresh.binding, summary: 'ask', question: 'who?' }), { code: 'DYNAMIC_HUMAN_REQUEST_REQUIRED' })
+  await humanSource(f, 'web-user')
+  const result = await f.command('task.human.respond', respond)
+  assert.equal(result.result.request.actorId, 'web-user')
+  assert.equal(result.result.task.ownerActorId, 'owner')
+})
+
+test('waiting human request identities conflict on changed questions and an answer never reconciles unknown operations', async t => {
+  const f = await fixture(t)
+  await f.command('task.create', { taskId: 'human-task', groupId: 'g', ownerActorId: 'owner', request: 'original task' })
+  const { binding } = (await f.command('task.claim', { taskId: 'human-task' })).result
+  const execution = await f.execution(binding)
+  const operation = (await f.command('operation.prepare', { binding: execution, key: 'original-write', definition: { toolName: 'write' }, resourceKeys: ['repo:unknown'] })).result.operation
+  await f.command('operation.start', { binding: execution, operationId: operation.operationId })
+  await f.command('operation.settle', { binding: execution, operationId: operation.operationId, state: 'unknown', result: { uncertain: true } })
+  await f.command('execution.drained', { binding: execution })
+  const args = { binding, summary: '等待人工判断', question: '确认目标', humanRequest: { requestId: 'stable-question' } }
+  await f.command('task.wait', args)
+  await f.command('task.wait', args)
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests.length, 1)
+  await assert.rejects(f.command('task.wait', { ...args, question: '其他目标' }), { code: 'DYNAMIC_HUMAN_REQUEST_CONFLICT' })
+  await f.command('task.drained', { binding })
+  await humanSource(f)
+  await f.command('task.human.respond', { taskId: 'human-task', requestId: 'stable-question', sourceId: 'human-answer', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  assert.equal((await f.query({ kind: 'operation.get', operationId: operation.operationId })).state, 'unknown')
+  assert.equal((await f.query({ kind: 'resource.list' })).length, 1)
+})
+
+test('execution progress review is durable and idempotent without changing results, unknown effects or locks', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const operation = (await f.command('operation.prepare', { binding, key: 'uncertain', definition: { toolName: 'pwsh' }, resourceKeys: ['repo:original'] })).result.operation
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'unknown', result: { uncertain: true } })
+  const args = { executionId: binding.executionId, inputVersion: binding.inputVersion, leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
+    observation: { lastSequence: 12, lastActivityAt: '2026-10-14T09:00:00Z', newEventCount: 3, changed: true, records: ['must not persist actual log text'] } }
+  const first = await f.command('execution.progressReviewed', args, 'progress-slot-one')
+  assert.equal(first.result.execution.status, 'running')
+  assert.equal(first.result.execution.drained, false)
+  assert.equal(first.result.execution.result, undefined)
+  assert.equal(first.result.execution.progressReview.lastSequence, 12)
+  assert.equal(first.result.execution.progressReview.records, undefined)
+  assert.deepEqual((await f.command('execution.progressReviewed', args, 'progress-slot-one')).result, first.result)
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).filter(wake => wake.kind === 'execution.progress.review').length, 1)
+  assert.equal((await f.query({ kind: 'operation.get', operationId: operation.operationId })).state, 'unknown')
+  assert.equal((await f.query({ kind: 'resource.list' })).length, 1)
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'execution.get', executionId: binding.executionId })).progressReview, first.result.execution.progressReview)
+})
+
+for (const field of ['executionId', 'inputVersion', 'leaseEpoch', 'inputDigest']) test(`progress review rejects a foreign execution identity field: ${field}`, async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const args = { executionId: binding.executionId, inputVersion: binding.inputVersion, leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
+    observation: { lastSequence: -1, lastActivityAt: null, newEventCount: 0, changed: false } }
+  args[field] = typeof args[field] === 'number' ? args[field] + 1 : 'foreign'
+  await assert.rejects(f.command('execution.progressReviewed', args))
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).progressReview, undefined)
+})
+
+test('an unchanged or unreadable execution observation wakes review without claiming success; continuation clears the old review clock', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const args = { executionId: binding.executionId, inputVersion: binding.inputVersion, leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
+    observation: { lastSequence: -1, lastActivityAt: null, newEventCount: 0, changed: false, readError: 'NATIVE_LOG_UNAVAILABLE' } }
+  const result = await f.command('execution.progressReviewed', args)
+  assert.equal(result.result.execution.progressReview.changed, false)
+  assert.equal(result.result.execution.progressReview.readError, 'NATIVE_LOG_UNAVAILABLE')
+  assert.equal(result.result.execution.status, 'running')
+  assert.equal(result.result.execution.result, undefined)
+  assert.ok((await f.query({ kind: 'wake.list', taskId: 'task' })).some(wake => wake.kind === 'execution.progress.review' && wake.payload.executionId === binding.executionId))
+  await f.command('execution.result', { binding, output: { summary: 'actual completed result' } })
+  await f.command('execution.drained', { binding })
+  await assert.rejects(f.command('execution.progressReviewed', args), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  await f.command('execution.continue', { binding: owner.binding, executionId: binding.executionId, key: 'follow-up', prompt: 'follow-up', input: {} })
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).progressReview, null)
+})

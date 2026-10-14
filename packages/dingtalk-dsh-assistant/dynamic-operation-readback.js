@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { inspectSession } from './session-persistence.js'
+import { safeNotificationDetail } from './notification-delivery.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
 const results = event => event.type !== 'tool/result' ? [] : event.data.message?.role === 'tool' ? [event.data.message] : event.data.message?.content ?? []
@@ -83,4 +84,43 @@ export async function inspectStoppedNativeOperation({ ctx, operation, execution,
     argumentsDigest: operation.definition.argumentsDigest, resultDigest: operation.result.resultDigest,
     originalResultSequence: resultEvent.seq, observations, partialEffectsPossible: true,
     conclusion: 'The original Host stopped and drained this command. Partial effects remain possible; readback does not prove command success. Do not automatically replay it.' }
+}
+
+
+/** 读取当前输入对应的真实执行日志；摘录供统筹判断方向，不把活跃或沉默当作进展结论。 */
+export async function readExecutionProgress({ ctx, execution }) {
+  const reject = code => { throw Object.assign(new Error(code), { code }) }
+  if (!execution?.sessionId || !execution.taskId || !execution.executionId || !Number.isSafeInteger(execution.inputVersion)
+    || !Number.isSafeInteger(execution.leaseEpoch) || !execution.inputDigest) reject('EXECUTION_PROGRESS_BINDING_INVALID')
+  const binding = { kind: 'task-execution', taskId: execution.taskId, executionId: execution.executionId,
+    sessionId: execution.sessionId, inputVersion: execution.inputVersion, leaseEpoch: execution.leaseEpoch, inputDigest: execution.inputDigest }
+  let saved
+  try { saved = await inspectSession(ctx.sessionPersistence, execution.sessionId) }
+  catch (cause) { throw Object.assign(new Error('EXECUTION_PROGRESS_LOG_UNREADABLE'), { code: 'EXECUTION_PROGRESS_LOG_UNREADABLE', cause }) }
+  const { events } = saved
+  if (saved.meta.id !== binding.sessionId || !identity(events, binding)) reject('EXECUTION_PROGRESS_IDENTITY_MISMATCH')
+  const input = inputFor(events, binding)
+  const latestInput = events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
+  if (!input || input !== latestInput) reject('EXECUTION_PROGRESS_INPUT_MISMATCH')
+  const currentEvents = events.filter(event => event.seq >= input.seq)
+  const lastSequence = currentEvents.reduce((sequence, event) => Math.max(sequence, event.seq), -1)
+  const previousSequence = execution.progressReview?.lastSequence ?? -1
+  const newEvents = currentEvents.filter(event => event.seq > previousSequence)
+  const meaningful = new Set(['assistant/message', 'tool/call', 'tool/result', 'step/end', 'turn/end', 'agent/error', 'session/end-seed'])
+  const excerpt = event => {
+    const raw = JSON.stringify(event.data ?? null), safe = JSON.stringify(safeNotificationDetail(event.data))
+    return { sequence: event.seq, type: event.type, time: event.time ?? null, digest: hash(event.data),
+      preview: safe.slice(0, 640), truncated: safe.length > 640 || raw.length > 640 }
+  }
+  const completedCalls = new Set(currentEvents.flatMap(event => results(event).map(result => result.toolCallId)))
+  const pendingCalls = currentEvents.filter(event => event.type === 'tool/call' && !completedCalls.has(event.data.callId))
+  const activityTime = currentEvents.findLast(event => event.time !== undefined)?.time
+  const activityTimestamp = typeof activityTime === 'number' ? activityTime : typeof activityTime === 'string' ? Date.parse(activityTime) : NaN
+  const lastActivityAt = Number.isFinite(activityTimestamp) && Number.isFinite(new Date(activityTimestamp).getTime()) ? new Date(activityTimestamp).toISOString() : null
+  return { ...binding, previousSequence, lastSequence, newEventCount: newEvents.length, changed: newEvents.length > 0, hasNewEvents: newEvents.length > 0,
+    lastActivityAt,
+    excerpts: currentEvents.filter(event => meaningful.has(event.type)).slice(-8).map(excerpt),
+    pendingToolCallCount: pendingCalls.length, pendingToolCalls: pendingCalls.slice(-8).map(event => ({ callId: event.data.callId, toolName: event.data.name, sequence: event.seq, time: event.time ?? null, digest: hash(event.data) })),
+    pendingToolCallsTruncated: pendingCalls.length > 8,
+    limitations: ['摘录来自当前输入的持久日志；无新日志不证明停止，有新事件不证明业务推进。请结合实际内容判断进度、错误和方向；未结束调用不证明进程仍运行。较旧未结束调用仅给出日志引用，未摘录部分需按原日志进一步读取。'] }
 }

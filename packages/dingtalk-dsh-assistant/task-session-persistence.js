@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { link, lstat, open, readFile, readdir, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { checkedTaskDirectory, taskDirectories, taskFilePath } from './session-workspaces.js'
 
+const writerScope = new AsyncLocalStorage()
 const installations = new Map()
 const installing = new Map()
 const methods = ['create', 'open', 'stat', 'list', 'flush']
@@ -185,8 +187,19 @@ async function install(ctx, { root, compression } = {}) {
   async function legacyConflict(id) {
     if (await legacy.stat(id)) throw failure('TASK_SESSION_LEGACY_LOCATION')
   }
+  const assertWriter = route => {
+    const token = writerScope.getStore()
+    if (!token?.active || token.owner !== key || token.taskId !== route.taskId || token.sessionId !== route.sessionId) throw failure('TASK_SESSION_HOST_WRITER_REQUIRED')
+  }
   const api = {
     root,
+    async runOwned({ taskId, sessionId }, action) {
+      assertOpen()
+      const route = await routeFor(sessionId)
+      if (!route || route.taskId !== taskId) throw failure('TASK_SESSION_BINDING_REQUIRED')
+      const token = { owner: key, taskId, sessionId, active: true }
+      try { return await writerScope.run(token, action) } finally { token.active = false }
+    },
     async register({ taskId, sessionId, cwd }) {
       assertOpen()
       const route = validate({ version: 1, taskId, sessionId, cwd })
@@ -221,22 +234,24 @@ async function install(ctx, { root, compression } = {}) {
   const wrappers = {
     async create(header, options) {
       assertOpen(); options?.signal?.throwIfAborted()
-      const target = await routed(header.id)
-      if (!target) {
+      const route = await routeFor(header.id)
+      if (!route) {
         if (header.cwd && within(join(root, 'tasks'), resolve(header.cwd))) throw failure('TASK_SESSION_BINDING_REQUIRED')
         return legacy.create(header, options)
       }
-      if (header.cwd !== target.route.cwd) throw failure('TASK_SESSION_CWD_MISMATCH')
+      if (header.cwd !== route.cwd) throw failure('TASK_SESSION_CWD_MISMATCH')
+      assertWriter(route)
       await legacyConflict(header.id)
-      return target.backend.create(header, options)
+      return (await backendFor(route.taskId)).create(header, options)
     },
     async open(id, access, options) {
       assertOpen(); options?.signal?.throwIfAborted()
-      const target = await routed(id)
-      if (!target) return legacy.open(id, access, options)
+      const route = await routeFor(id)
+      if (!route) return legacy.open(id, access, options)
+      if (access !== 'read') assertWriter(route)
       await legacyConflict(id)
-      const handle = await target.backend.open(id, access, options)
-      if (handle.header.cwd !== target.route.cwd) {
+      const handle = await (await backendFor(route.taskId)).open(id, access, options)
+      if (handle.header.cwd !== route.cwd) {
         await handle.close()
         throw failure('TASK_SESSION_CWD_MISMATCH')
       }

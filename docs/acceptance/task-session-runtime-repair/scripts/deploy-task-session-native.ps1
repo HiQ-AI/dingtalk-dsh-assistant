@@ -90,7 +90,7 @@ try{
  WaitFor {
   if(Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue){return $false}
   if((PortOwners 3080).Count-or(PortOwners 18998).Count){return $false}
-  try{$script:offlineProof=RunNode @($ledger,$db,$agentWorkspace,'offline');return $true}catch{return $false}
+  try{$script:offlineProof=RunNode @($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid);return $true}catch{return $false}
  } 'DEPLOY_NATIVE_NOT_QUIESCENT'
  if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
  Record 'quiescent' @{ledger=($offlineProof|ConvertFrom-Json);pid=$ExpectedPid;creationDate=$original.CreationDate;remainingDescendants=0;runtimePortClosed=$true;observedAt=[DateTime]::UtcNow.ToString('o');shutdown='SIGINT'}

@@ -58,7 +58,7 @@ function durableMarker(path, value, initial = false) {
 
 /** New-instance initialization is explicit. An ingress epoch can only be bound to a new ledger.
  * legacyDbPath is an offline, read-only inspection API, not a production compatibility path. */
-export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, legacyDbPath, ingressEpoch } = {}) {
+export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, legacyDbPath, ingressEpoch, webActorId } = {}) {
   if (!isAbsolute(dbPath ?? '') || !text(instanceId, 'instanceId') || typeof initialize !== 'boolean'
     || legacyDbPath !== undefined && !isAbsolute(legacyDbPath)) fail('DYNAMIC_STORE_OPTIONS_INVALID')
   const configuredIngressEpoch = ingressEpoch === undefined ? null : ingressTimestamp(ingressEpoch, false)
@@ -267,7 +267,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         sourceRefs: a.sourceRefs ?? [], topicRefs: a.topicRefs ?? [], appliedOperations: a.operationId ? [a.operationId] : [], runSequence: 1, ownerActorId: a.ownerActorId ?? null, title: a.title ?? a.objective ?? a.request ?? taskId,
         objective: a.objective ?? a.request ?? '', request: a.request ?? a.objective ?? '', requirements: a.requirements ?? [], metadata: a.metadata ?? {},
         requirementRevision: 1, controlRevision: 1, status: 'active', control: 'active', leaseEpoch: 0, sessionBound: false, drained: true,
-        createdAt: stamp, updatedAt: stamp }
+        humanRequests: [], createdAt: stamp, updatedAt: stamp }
       text(task.request, 'request'); array(task.sourceRefs); array(task.requirements)
       saveTask(task); wake(taskId, 'task.created', { sourceRefs: task.sourceRefs }, `wake:${commandId}`)
       return changed({ task })
@@ -293,6 +293,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       if (a.topicRefs !== undefined) task.topicRefs = clone(array(a.topicRefs))
       if (a.operationId) task.appliedOperations = [...new Set([...(task.appliedOperations ?? []), text(a.operationId, 'operationId')])]
+      for (const request of task.humanRequests ?? []) if (request.status === 'waiting-reply') { request.status = 'superseded'; request.supersededAt = stamp }
       for (const execution of execs(task.taskId)) if (!terminalExecutions.has(execution.status)) {
         execution.cancelRequested = true
         if (execution.drained) execution.status = 'stale'
@@ -337,15 +338,51 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.wait') {
       const task = currentTask(a.binding, { active: false })
+      const question = a.question ?? a.decision?.question ?? null
+      if (typeof question === 'string' && question.trim()) {
+        if (!a.humanRequest) fail('DYNAMIC_HUMAN_REQUEST_REQUIRED')
+        const requestId = text(a.humanRequest.requestId, 'requestId')
+        const request = { requestId, status: 'waiting-reply', question: question.trim(), reason: text(a.humanRequest.reason ?? question.trim(), 'reason'),
+          waitingReason: text(a.humanRequest.waitingReason ?? a.summary, 'waitingReason'), objective: task.objective, evidence: clone(a.evidence ?? []),
+          attemptedActions: clone(array(a.humanRequest.attemptedActions ?? [])),
+          requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, createdAt: stamp }
+        task.humanRequests ??= []
+        const previous = task.humanRequests.find(item => item.requestId === requestId)
+        if (previous && (previous.status !== 'waiting-reply' || digest({ ...previous, createdAt: null }) !== digest({ ...request, createdAt: null }))) fail('DYNAMIC_HUMAN_REQUEST_CONFLICT')
+        if (!previous) {
+          for (const item of task.humanRequests) if (item.status === 'waiting-reply') { item.status = 'superseded'; item.supersededAt = stamp }
+          task.humanRequests.push(request)
+        }
+      }
       task.lastDecision = { action: a.action ?? 'wait', summary: text(a.summary, 'summary'), decision: a.decision ?? null, question: a.question ?? a.decision?.question ?? null,
         evidence: a.evidence ?? [], limitations: a.limitations ?? [], requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, at: stamp }
       saveTask(task); return changed({ task })
+    }
+    if (kind === 'task.human.respond') {
+      const task = get('dynamic_tasks', text(a.taskId, 'taskId'))
+      if (a.expectedRequirementRevision !== task.requirementRevision || a.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
+      if (task.status !== 'active' || task.control !== 'active') fail('DYNAMIC_TASK_NOT_ACTIVE')
+      if (!task.drained || task.recovering) fail('DYNAMIC_TASK_BUSY')
+      const request = (task.humanRequests ?? []).find(item => item.requestId === text(a.requestId, 'requestId'))
+      if (!request || request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision || request.controlRevision !== task.controlRevision) fail('DYNAMIC_HUMAN_REQUEST_STALE')
+      const source = get('dynamic_sources', text(a.sourceId, 'sourceId'))
+      if (source.groupId !== task.groupId || !(source.actorId === task.ownerActorId || typeof webActorId === 'string' && webActorId.trim() && source.actorId === webActorId)) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
+      const reply = text(source.text, 'reply')
+      request.status = 'answered'; request.reply = reply; request.sourceId = source.sourceId; request.actorId = source.actorId; request.answeredAt = stamp
+      request.replyChannel = source.channel === 'web' ? 'web' : 'dingtalk'
+      task.sourceRefs = [...new Set([...task.sourceRefs, source.sourceId])]; task.lastDecision = null
+      if (a.topicRefs !== undefined) task.topicRefs = clone(array(a.topicRefs))
+      if (a.operationId) task.appliedOperations = [...new Set([...(task.appliedOperations ?? []), text(a.operationId, 'operationId')])]
+      saveTask(task)
+      const wakeId = wake(task.taskId, 'human.responded', { requestId: request.requestId, sourceId: source.sourceId }, `wake:${commandId}`)
+      return changed({ task, request, wakeId })
     }
     if (kind === 'task.complete') {
       const task = currentTask(a.binding)
       assertClear(task.taskId)
       task.status = 'completed'; task.completion = { summary: text(a.summary, 'summary'), result: a.result ?? null, at: stamp,
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, leaseEpoch: task.leaseEpoch }
+      for (const request of task.humanRequests ?? []) if (request.status === 'waiting-reply') { request.status = 'superseded'; request.supersededAt = stamp }
       saveTask(task)
       let notification = null
       if (a.notification !== undefined && a.notification !== null) {
@@ -392,13 +429,30 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       execution.inputHistory.push({ inputVersion: execution.inputVersion, inputDigest: execution.inputDigest,
         requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision })
       if (execution.result) execution.results.push(execution.result)
-      execution.result = null; execution.inputVersion++; execution.inputDigest = digest(payload.input)
+      execution.result = null; execution.progressReview = null; execution.inputVersion++; execution.inputDigest = digest(payload.input)
       execution.prompt = payload.prompt; execution.input = clone(payload.input)
       execution.definition = { ...execution.definition, recoveryReadOnly: a.definition?.recoveryReadOnly === true }
       execution.requirementRevision = task.requirementRevision; execution.controlRevision = task.controlRevision
       execution.cancelRequested = false; execution.status = 'queued'; execution.updatedAt = stamp
       execution.continuations = [...(execution.continuations ?? []), { key, digest: continuationDigest, inputVersion: execution.inputVersion }]
       put('dynamic_executions', execution); return changed({ execution })
+    }
+    if (kind === 'execution.progressReviewed') {
+      const execution = get('dynamic_executions', text(a.executionId, 'executionId'))
+      if (execution.inputVersion !== a.inputVersion || execution.leaseEpoch !== a.leaseEpoch || execution.inputDigest !== a.inputDigest) fail('DYNAMIC_EXECUTION_LEASE_STALE')
+      if (execution.status !== 'running' || execution.drained || execution.recovering || execution.cancelRequested || !executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      const observation = record(a.observation)
+      if (!Number.isSafeInteger(observation.lastSequence) || observation.lastSequence < -1
+        || !Number.isSafeInteger(observation.newEventCount) || observation.newEventCount < 0 || typeof observation.changed !== 'boolean'
+        || observation.lastActivityAt !== null && (typeof observation.lastActivityAt !== 'string' || !Number.isFinite(Date.parse(observation.lastActivityAt)))
+        || observation.readError !== undefined && (typeof observation.readError !== 'string' || !observation.readError.trim())) fail('DYNAMIC_ARGUMENT_INVALID')
+      execution.progressReview = { checkedAt: stamp, lastSequence: observation.lastSequence, lastActivityAt: observation.lastActivityAt,
+        newEventCount: observation.newEventCount, changed: observation.changed, ...(observation.readError === undefined ? {} : { readError: observation.readError }) }
+      put('dynamic_executions', execution)
+      const wakeId = wake(execution.taskId, 'execution.progress.review', { executionId: execution.executionId, inputVersion: execution.inputVersion,
+        leaseEpoch: execution.leaseEpoch, lastSequence: observation.lastSequence,
+        instruction: '读取本执行会话的真实执行记录，对照原目标检查进度和方向；不能仅按运行状态判断进展或完成。' }, `wake:${commandId}`)
+      return changed({ execution, wakeId })
     }
     if (kind === 'execution.claim') {
       const execution = get('dynamic_executions', a.executionId)

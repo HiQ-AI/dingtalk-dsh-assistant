@@ -1,0 +1,19 @@
+✔ offline deployment refuses a live owner and unfinished rounds, accepts retained dead-owner metadata without changing unknown facts (190.877ms)
+✔ a provably unstarted task claim is quiescent but remains undrained and unchanged; offline requires exact dead owner (209.0025ms)
+✔ unstarted claim exception rejects current-user (230.0778ms)
+✔ unstarted claim exception rejects current-inbox (249.7889ms)
+✔ unstarted claim exception rejects unfinished-turn (223.7205ms)
+✔ unstarted claim exception rejects unfinished-tool (204.8192ms)
+✔ unstarted claim exception rejects previous-not-ended (219.8082ms)
+✔ unstarted claim exception rejects busy-execution (208.8469ms)
+✔ unstarted claim exception rejects busy-group (206.8798ms)
+✔ unstarted claim exception rejects starting-operation (206.352ms)
+✔ unstarted claim exception rejects starting-notification (196.8681ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2497.6502

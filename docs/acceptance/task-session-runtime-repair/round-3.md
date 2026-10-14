@@ -34,4 +34,4 @@
 
 新PID62184、health=ok、恢复告警0、入站/桥接正常、自启开启，profile摘要保持不变。原任务同一统筹session从lease20的误blocked恢复至lease21，已再次委派原执行；API state=running、waitingReason为空。业务最终交付仍进行中。
 
-现场模型可见surface消息正文605176→127576字节，约减少79%；原4份巨大Host快照仅保留短历史标记，当前完整输入24016字节（旧末轮126788字节）。这不等于总token数，仍保留必要system、compaction摘要与工具历史。摘要见context-baseline-summary.json、context-after-summary.json及deployment-context-summary.json。部署只读证明测试1/1通过。
+首轮恢复现场消息正文605176→127576字节，约减少79%，Host输入24016字节；随后业务增加结果及操作，落盘摘要采样为146983字节、Host输入40964字节，仍约减少76%/68%（旧末轮126788字节）。原巨大Host快照只保留短历史标记，新业务事实会使当前快照变化。这不等于总token数，仍保留必要system、compaction摘要与工具历史。摘要见context-baseline-summary.json、context-after-summary.json及deployment-context-summary.json。部署只读证明测试1/1通过。

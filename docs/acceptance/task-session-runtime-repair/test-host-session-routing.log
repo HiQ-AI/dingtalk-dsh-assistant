@@ -1,0 +1,14 @@
+✔ native AgentLoop and live flush write each task log only to its task while same-task real parallel subprocesses share cwd and other tasks stay isolated (2037.6979ms)
+✔ durable registration precedes session creation, survives router close/reinstall and rejects cwd or task rebinding (448.3682ms)
+✔ legacy records are inspectable but cannot be silently adopted into task persistence (190.4244ms)
+✔ concurrent installation and conflicting registrations keep one native routing owner and immutable durable task binding (453.0925ms)
+✔ cancelled native persistence calls retain their abort reason and never create a session (260.4895ms)
+✔ unclean native process exit resumes original task session with compaction preserved and no global duplicate log (2069.4234ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6218.5916

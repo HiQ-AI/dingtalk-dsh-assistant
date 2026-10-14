@@ -1,5 +1,5 @@
 import { deliverTaskNotification } from './notification-delivery.js'
-import { inspectStoppedNativeOperation, readNativeOperationContext } from './dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
@@ -25,7 +25,7 @@ const texts = { type: 'array', items: string }
 // 模型只接收执行当前目标和结果；完整输入、旧输入及宿主凭据留在持久账。
 export function taskExecutionContext(execution) {
   const fields = ['executionId', 'sessionId', 'taskId', 'key', 'inputVersion', 'requirementRevision', 'controlRevision',
-    'status', 'drained', 'recovering', 'cancelRequested', 'result', 'updatedAt']
+    'leaseEpoch', 'inputDigest', 'status', 'drained', 'recovering', 'cancelRequested', 'result', 'updatedAt', 'progressReview']
   return { ...Object.fromEntries(fields.filter(key => Object.hasOwn(execution, key)).map(key => [key, execution[key]])),
     input: Object.fromEntries(['title', 'objective', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']
       .filter(key => Object.hasOwn(execution.input ?? {}, key)).map(key => [key, execution.input[key]])) }
@@ -33,6 +33,11 @@ export function taskExecutionContext(execution) {
 const taskOperationContext = operation => Object.fromEntries(['operationId', 'executionId', 'state', 'requirementRevision',
   'controlRevision', 'definition', 'resourceKeys', 'evidenceRef', ...(operation.state === 'succeeded' ? [] : ['result'])]
   .filter(key => Object.hasOwn(operation, key)).map(key => [key, operation[key]]))
+export function executionProgressDue(execution, now = Date.now()) {
+  const last = Date.parse(execution.progressReview?.checkedAt ?? execution.updatedAt)
+  return execution.status === 'running' && !execution.drained && !execution.recovering && !execution.cancelRequested
+    && Number.isFinite(last) && now - last >= 10 * 60 * 1000
+}
 export const dynamicExecutionOutputSchema = { type: 'object', properties: {
   status: { type: 'string', enum: ['completed','blocked','needs_input'] }, summary: { type: 'string' },
   evidence: texts, limitations: texts, artifacts: texts, question: string,
@@ -48,7 +53,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const root = resolve(config.workspaceDir ?? legacy.getAgentConfig().workspaceDir)
   await mkdir(dirname(config.dbPath), { recursive: true })
   const store = suppliedStore ?? await openDynamicTaskStore({ dbPath: config.dbPath, instanceId: config.instanceId,
-    initialize: config.initialize === true, ingressEpoch: config.ingressEpoch })
+    initialize: config.initialize === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId })
   let persistence
   try {
     persistence = suppliedPersistence ?? await installTaskSessionPersistence(ctx, { root })
@@ -120,17 +125,18 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return !!task && !task.recovering && !task.drained && task.status === 'active' && task.control === 'active' && task.sessionId === binding.sessionId
       && task.leaseEpoch === binding.leaseEpoch && task.requirementRevision === binding.requirementRevision && task.controlRevision === binding.controlRevision
   }
-  const taskSessions = suppliedTaskSessions ?? createTaskSessions({ ctx, isCurrent: currentTask,
+  const taskSessions = suppliedTaskSessions ?? createTaskSessions({ ctx, isCurrent: currentTask, withPersistenceWriter: (binding, action) => persistence.runOwned(binding, action),
     getWorkspaceDir: ({ binding }) => taskWorkspace(root, binding.taskId), registerPersistence: value => persistence.register(value) })
-  const executionSessions = suppliedExecutionSessions ?? createExecutionSessions({ ctx, registerPersistence: value => persistence.register(value),
+  const executionSessions = suppliedExecutionSessions ?? createExecutionSessions({ ctx, withPersistenceWriter: (binding, action) => persistence.runOwned(binding, action), registerPersistence: value => persistence.register(value),
     isCurrent: binding => query('execution.current', { binding }),
     getWorkspaceDir: ({ binding }) => taskExecutionWorkspace(root, binding.taskId, binding.sessionId),
   })
   const track = (map, id, action) => {
     if (map.has(id)) return map.get(id)
     const previousFailure = failures.get(id)
-    const promise = Promise.resolve().then(action).then(value => {
-      if (failures.get(id) === previousFailure) failures.delete(id)
+    const promise = Promise.resolve().then(action).then(async value => {
+      const settled = map !== inflightTasks || (await query('task.get', { taskId: id }))?.drained
+      if (settled && failures.get(id) === previousFailure) failures.delete(id)
       return value
     }).catch(error => {
       failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString(), retryAfter: Date.now() + Math.max(100, config.retryIntervalMs ?? 5000) })
@@ -142,6 +148,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const pending = await query('wake.list', { taskId: id }).catch(() => [])
         const task = await query('task.get', { taskId: id }).catch(() => null)
         again = task?.status === 'active' && task.control === 'active' && task.drained
+          && !task.humanRequests?.some(request => request.status === 'waiting-reply')
           && pending.some(item => item.state !== 'acked')
       }
       map.delete(id)
@@ -172,6 +179,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         for (const task of await query('task.list')) {
           if (closed) return
           if (!retryReady(task.taskId) || inflightTasks.has(task.taskId) || !task.drained || task.recovering || task.status !== 'active' || task.control !== 'active') continue
+          if (task.humanRequests?.some(request => request.status === 'waiting-reply')) continue
           if (!taskSlots.has(task.taskId) && taskSlots.size >= taskLimit()) continue
           if ((await query('wake.list', { taskId: task.taskId })).some(item => item.state !== 'acked')) void kickTask(task.taskId)
         }
@@ -208,7 +216,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (!source?.actorId || task.groupId !== source.groupId || ![task.ownerActorId, config.ownerActorId].filter(Boolean).includes(source.actorId)) fail('TASK_SESSION_SOURCE_FORBIDDEN')
   }
   const taskDTO = async task => {
-    const executions = await query('execution.list', { taskId: task.taskId }), state = taskBoardState(task, executions)
+    const executions = await query('execution.list', { taskId: task.taskId })
+    const pendingWake = !task.lastDecision && (await query('wake.list', { taskId: task.taskId })).some(wake => wake.state !== 'acked')
+    const state = taskBoardState(task, executions, pendingWake)
     return { ...task, state,
     topicRefs: task.topicRefs ?? [], executionCount: executions.length, waitingReason: state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
     controlState: task.control, inputVersion: task.requirementRevision, result: task.completion?.result ?? task.lastDecision ?? null,
@@ -362,15 +372,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const topicRefs = [...new Map([...(task.topicRefs ?? []), ...refs].map(ref => [ref.topicId, ref])).values()]
       const args = { taskId: task.taskId, expectedRequirementRevision: action.inputVersion, expectedControlRevision: task.controlRevision,
         topicRefs, operationId: operation.operationId }
+      const pendingHuman = action.kind === 'task-context' ? task.humanRequests?.findLast(request => request.status === 'waiting-reply') : null
       const receipt = action.kind === 'task-cancel'
         ? await command('task.control', { ...args, control: 'cancelled', reason: action.reason }, id)
+        : pendingHuman
+        ? await command('task.human.respond', { ...args, requestId: pendingHuman.requestId,
+          sourceId: source.sourceId }, id)
         : await command(action.kind === 'task-reopen' ? 'task.reopen' : 'task.revise', { ...args,
           request: `${task.request}\n\n[话题补充]\n${action.context ?? source.text}`,
           sourceRefs: [...new Set([...task.sourceRefs, ...sources.map(item => item.sourceId)])],
           ...(action.title ? { title: action.title } : {}), ...(action.objective ? { objective: action.objective } : {}),
           ...(action.acceptanceCriteria ? { requirements: action.acceptanceCriteria } : {}) }, id)
       task = receipt.result.task
-      await cancelLiveTask(task.taskId)
+      if (!pendingHuman) await cancelLiveTask(task.taskId)
     }
     for (const item of sources) await materializeSource(task.taskId, item)
     if (action.kind !== 'task-cancel') void kickTask(task.taskId)
@@ -519,6 +533,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return track(inflightTasks, taskId, async () => {
       let task = await requireTask(taskId)
       if (task.status !== 'active' || task.control !== 'active') { taskSlots.delete(taskId); return }
+      if (task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
       if (!task.drained) return
       if (!(await query('wake.list', { taskId })).some(item => item.state !== 'acked')) return
       const claimed = await command('task.claim', { taskId })
@@ -528,8 +543,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       try {
         const sources = (await Promise.all(task.sourceRefs.map(sourceId => query('source.get', { sourceId })))).filter(Boolean)
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
-        const runResult = await taskSessions.run({ binding, input: { task, sources, materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: (await query('execution.list', { taskId })).map(taskExecutionContext),
-          operations: (await query('operation.list', { taskId })).map(taskOperationContext), blockers: await query('task.blockers', { taskId }) }, ...models(), agentPreset: legacy.getAgentConfig().agentPreset,
+        const operations = await query('operation.list', { taskId })
+        const runResult = await taskSessions.run({ binding, input: { task: { ...task, humanRequests: task.humanRequests?.slice(-1) }, sources, materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: (await query('execution.list', { taskId })).map(taskExecutionContext),
+          operations: operations.filter(operation => operation.state !== 'succeeded').map(taskOperationContext),
+          operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
+          blockers: await query('task.blockers', { taskId }) }, ...models(), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
@@ -565,6 +583,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             return { executionId: accepted.result.execution.executionId, status: accepted.result.execution.status, sessionId: accepted.result.execution.sessionId }
           },
           readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return taskExecutionContext(execution) },
+          readProgress: async executionId => {
+            const execution = await query('execution.get', { executionId })
+            if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
+            try { return { available: true, sessionLogRoot: taskSessionLogRoot(root, taskId), ...await readExecutionProgress({ ctx, execution }) } }
+            catch (error) { return { available: false, executionId, sessionId: execution.sessionId,
+              readError: error.code ?? 'EXECUTION_PROGRESS_LOG_UNREADABLE', limitation: '未能读取真实执行日志，不能据运行状态判断进展；先调查记录不可读原因。' } }
+          },
           reconcileOperation: async operationId => {
             const operation = (await query('operation.list', { taskId })).find(item => item.operationId === operationId)
             if (!operation) fail('TASK_OPERATION_SCOPE_MISMATCH')
@@ -604,7 +629,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               }
               await command('task.complete', { binding, summary: decision.summary, result: decision, ...(notification ? { notification } : {}) }, `complete:${taskId}:${binding.requirementRevision}`)
             } else {
-              await command('task.wait', { binding, ...decision }, `wait:${taskId}:${binding.leaseEpoch}`)
+              await command('task.wait', { binding, ...decision, ...(decision.question?.trim() ? { humanRequest: {
+                requestId: `human-${hash([taskId, binding.requirementRevision, binding.controlRevision, binding.leaseEpoch])}`,
+                reason: decision.summary, attemptedActions: decision.attemptedActions ?? [] } } : {}) }, `wait:${taskId}:${binding.leaseEpoch}`)
               if (decision.question?.trim()) {
                 const source = [...sources].reverse().find(item => item.actorId === task.ownerActorId) ?? await sourceFor(task)
                 await queueReply(task, source, { summary: decision.question, evidence: [], limitations: [] }, `question:${taskId}:${binding.requirementRevision}:${hash(decision.question)}`, 'question')
@@ -739,6 +766,23 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         await projectSource(source)
         if (!source.routed) void kickGroup(source.groupId)
       }
+      for (const execution of await query('execution.list')) {
+        const task = await query('task.get', { taskId: execution.taskId })
+        if (!task || task.status !== 'active' || task.control !== 'active' || !executionProgressDue(execution)) continue
+        let observation
+        try { observation = await readExecutionProgress({ ctx, execution }) }
+        catch (error) { observation = { lastSequence: execution.progressReview?.lastSequence ?? -1, lastActivityAt: null,
+          newEventCount: 0, changed: false, readError: error.code ?? 'EXECUTION_PROGRESS_LOG_UNREADABLE' } }
+        try {
+          const { lastSequence, lastActivityAt, newEventCount, changed, readError } = observation
+          await command('execution.progressReviewed', { executionId: execution.executionId, inputVersion: execution.inputVersion,
+            leaseEpoch: execution.leaseEpoch, inputDigest: execution.inputDigest,
+            observation: { lastSequence, lastActivityAt, newEventCount, changed, ...(readError ? { readError } : {}) } },
+          `execution-progress:${execution.executionId}:${execution.inputVersion}:${execution.leaseEpoch}:${execution.progressReview?.checkedAt ?? execution.updatedAt}`)
+        } catch (error) {
+          if (!['DYNAMIC_EXECUTION_LEASE_STALE', 'DYNAMIC_EXECUTION_NOT_CURRENT'].includes(error.code)) throw error
+        }
+      }
       for (const task of await query('task.list')) void kickTask(task.taskId)
       for (const execution of await query('execution.list')) if (execution.drained && execution.status === 'queued') void kickExecution(execution.executionId)
       await deliverNotifications()
@@ -775,7 +819,34 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     await command('source.routed', { sourceId, receipt: [{ topicId: accepted.topicId, revision: current.revision }] }, `topic-routed:${sourceId}`)
     return requireTask(current.operations[0].taskId)
   }
+  async function listHumanRequests() {
+    return (await query('task.list')).flatMap(task => (task.humanRequests ?? []).map(request => ({ ...request,
+      taskSessionRequest: true, taskId: task.taskId, groupId: task.groupId, objective: task.objective,
+      waitingReason: request.question, evidence: request.evidence ?? [], attemptedActions: request.attemptedActions ?? [],
+      decidedAt: request.answeredAt, decision: request.status === 'answered' ? 'answered' : undefined,
+      decisionSource: request.status === 'answered' ? request.replyChannel : undefined })))
+  }
+  async function respondHumanRequest(args) {
+    if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
+    if (!args.requestId?.trim() || !args.reply?.trim()) fail('TASK_HUMAN_REPLY_REQUIRED')
+    const task = await requireTask(args.taskId)
+    const sourceId = `web-human:${hash([config.webActorId, task.taskId, args.humanRequestId, args.requestId])}`
+    const receiptId = `human-reply:${sourceId}`
+    const prior = await query('receipt.get', { id: receiptId })
+    const request = task.humanRequests?.find(request => request.requestId === args.humanRequestId)
+    if (!request) fail('DYNAMIC_NOT_FOUND')
+    if (!prior && (request.status !== 'waiting-reply' || args.expectedRequirementRevision !== task.requirementRevision
+      || args.expectedControlRevision !== task.controlRevision)) fail('DYNAMIC_HUMAN_REQUEST_STALE')
+    await command('source.record', { sourceId, groupId: task.groupId, messageId: sourceId,
+      actorId: config.webActorId, text: args.reply, timestamp: '', channel: 'web' }, `source:${sourceId}`)
+    const result = await command('task.human.respond', { taskId: task.taskId, requestId: args.humanRequestId,
+      sourceId, expectedRequirementRevision: args.expectedRequirementRevision, expectedControlRevision: args.expectedControlRevision }, receiptId)
+    await command('source.routed', { sourceId, receipt: [{ taskId: task.taskId, humanRequestId: args.humanRequestId }] }, `human-source-routed:${sourceId}`)
+    void kickTask(task.taskId)
+    return taskDTO(result.result.task)
+  }
   return {
+    listAuthorizationRequests: listHumanRequests, respondHumanRequest,
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,
     listAlerts: () => [

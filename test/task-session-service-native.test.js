@@ -670,3 +670,24 @@ test('native board keeps a drained coordinator running while its delegated targe
     assert.equal((await h.service.taskDetail(task.taskId)).state, 'running')
   } finally { release.resolve(); await h.service.whenIdle() }
 })
+
+
+test('native recovery no-op preserves an undrained task writer conflict alert', { timeout: 10000 }, async t => {
+  const fixture = await nativeCase(t, 'task-live-conflict-alert-')
+  const h = await fixture.host(async () => [decision('complete', '不应执行')], { config: { retryIntervalMs: 100 } })
+  const registry = h.ctx.agents, create = registry.create
+  h.ctx.agents.create = async function (options) {
+    if (options.meta?.cwd && basename(options.meta.cwd).startsWith('task-')) throw Object.assign(new Error('TASK_SESSION_ALREADY_LIVE'), { code: 'TASK_SESSION_ALREADY_LIVE', taskSessionDrained: false })
+    return create.call(this, options)
+  }
+  t.after(() => { registry.create = create })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'live-conflict', objective: '保留原写者冲突诊断' })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).drained, false)
+  const original = (await h.service.recover()).failures.find(item => item.id === task.taskId)
+  assert.equal(original.code, 'TASK_SESSION_ALREADY_LIVE')
+  await new Promise(resolve => setTimeout(resolve, 150))
+  const recovered = await h.service.recover()
+  assert.equal(recovered.failures.find(item => item.id === task.taskId)?.code, original.code)
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).drained, false)
+})

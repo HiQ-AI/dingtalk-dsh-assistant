@@ -1,0 +1,25 @@
+✔ new inbound image bytes become existing attachment references without losing quote facts (3.9922ms)
+✔ image references can be hydrated while documents remain lazy and failures are visible (0.8596ms)
+✔ already-loaded failure facts do not trigger another download during ingress (0.1966ms)
+✔ notification projections retain unknown and only verified delivery becomes sent (0.4576ms)
+✔ question and completion for the same source have separate stable timeline identities (0.1543ms)
+✔ existing resident timeline persists new images, quotes and notification readback states across reopen (8.8414ms)
+✔ stable resource identity ignores transport enrichment and input ordering, but distinguishes real changes (0.549ms)
+✔ resource merge preserves deep download hints only for identical real resource identities (0.5444ms)
+✔ same image bytes reuse persisted refs across reopen, changed bytes produce a new fact (1.1821ms)
+✔ 任务等待小目标排队、执行或排空时仍在执行中，真正业务等待单独显示 (0.4114ms)
+✔ 任务会话HTTP端到端：唯一会话、动态执行、需求修订、CAS取消与旧写入口退役 (2157.3019ms)
+✔ task provider transient classifier only accepts the exact verified provider errors (0.7693ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=false (1041.1081ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=true (230.4402ms)
+✔ service retries a transient native owner with its claimed wake and same session after cooldown (3782.6439ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: true (6738.0202ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: false (4025.8336ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16524.1204

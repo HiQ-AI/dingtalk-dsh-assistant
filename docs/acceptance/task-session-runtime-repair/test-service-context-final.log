@@ -48,9 +48,9 @@
 test at test\task-session-service-native.test.js:15:38
 ✖ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (6585.9289ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
-  
+
   3 !== 2
-  
+
       at TestContext.<anonymous> (file:///D:/codex/worktrees/task-session-runtime-repair/dingtalk-dsh-assistant/test/task-session-service-native.test.js:194:10)
       at async Test.run (node:internal/test_runner/test:1389:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {

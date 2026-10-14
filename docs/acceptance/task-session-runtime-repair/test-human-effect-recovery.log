@@ -1,0 +1,37 @@
+✔ restart wakes technical unknown wait once per implementation and retains the effect fence (17143.9885ms)
+✔ concurrency-safe is not pure: an unknown native write never dispatches a second call (7453.5645ms)
+✔ native start-race rejection retires only its prepared request and completion resumes after the original effect is reconciled (8707.5577ms)
+✔ promoted native shell retains its original process, reads output to terminal and persists the owned job receipt (8148.2247ms)
+✔ cancelling a promoted native job records terminal cancellation and drains the actual owned process (3978.3841ms)
+✔ unknown operation keeps native reads available; owner can investigate readonly but cannot clear missing evidence or replay (8265.2775ms)
+✖ restart reconciles an original persisted native terminal receipt and resumes the same executor without replay (12380.9851ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 6
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 34068.2791
+
+✖ failing tests:
+
+test at test\task-session-job-recovery-native.test.js:7:28
+✖ restart reconciles an original persisted native terminal receipt and resumes the same executor without replay (12380.9851ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'once\r\n'
+  - 'once\n'
+          ^
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-session-runtime-repair/dingtalk-dsh-assistant/test/task-session-job-recovery-native.test.js:129:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'once\r\n',
+    expected: 'once\n',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

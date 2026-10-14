@@ -14,10 +14,10 @@ test at test\task-session-service-native.test.js:15:38
 ✖ owner keeps one current Host snapshot and delegates non-recursive execution context across three generations (1832.1223ms)
   AssertionError [ERR_ASSERTION]: [{"alertId":"failure:task-4e610d4cc9d23e801dfba4cfa2fcd9bf","taskId":"task-4e610d4cc9d23e801dfba4cfa2fcd9bf","fingerprint":"task-session:task-4e610d4cc9d23e801dfba4cfa2fcd9bf","detail":"TASK_SESSION_NO_SUBMISSION","status":"active","lastSeenAt":"2026-10-14T08:43:35.487Z"},{"alertId":"task-blocked:task-4e610d4cc9d23e801dfba4cfa2fcd9bf","taskId":"task-4e610d4cc9d23e801dfba4cfa2fcd9bf","fingerprint":"task-blocked:task-4e610d4cc9d23e801dfba4cfa2fcd9bf","detail":"任务会话本轮未能提交有效决定，原任务和执行结果已保留。","status":"active","lastSeenAt":"2026-10-14T08:43:35.466Z"}]
   + actual - expected
-  
+
   + 'active'
   - 'completed'
-  
+
       at TestContext.<anonymous> (file:///D:/codex/worktrees/task-session-runtime-repair/dingtalk-dsh-assistant/test/task-session-service-native.test.js:58:10)
       at async Test.run (node:internal/test_runner/test:1389:7)
       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {

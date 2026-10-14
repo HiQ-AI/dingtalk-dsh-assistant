@@ -281,7 +281,7 @@ function flattenElements(tree) {
 
 test('历史人工介入只读且明确新执行使用原生权限流程', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  assert.match(source, /历史人工介入/)
+  assert.match(source, /id: 'authorizations', label: '人工介入'/)
   assert.match(source, /历史介入记录只读。新执行的权限请求请在对应执行会话中处理。/)
   assert.doesNotMatch(source, /decideAuthorization|批准该事项并继续|\/authorizations\/.*\/decision/)
 })
