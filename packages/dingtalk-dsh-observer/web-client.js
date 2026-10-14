@@ -510,7 +510,7 @@ window.__ModuleLoader__.load({
     const taskStateLabel = state => ({ running: '执行中', queued: '待处理', waiting: '等待处理', paused: '已暂停', completed: '已结束', succeeded: '已完成', failed: '失败', cancelled: '已取消', blocked: '受阻', pending: '待执行', interrupted: '已中断' })[state] || state || '状态未记录'
     const taskStateTone = state => ['completed', 'succeeded'].includes(state) ? 'done' : ['failed', 'blocked'].includes(state) ? 'error' : ['waiting', 'paused', 'interrupted'].includes(state) ? 'warning' : ['running', 'queued', 'pending'].includes(state) ? 'ongoing' : 'neutral'
     const taskSession = task => task.session || { sessionId: task.sessionId, workspaceDir: task.workspaceDir, logPath: task.logPath }
-    function SessionLocation({ session, label, onOpenSession }) {
+    function SessionLocation({ session, label, onOpenSession, compact = false }) {
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const pending = useRef(false)
@@ -521,11 +521,16 @@ window.__ModuleLoader__.load({
         catch (cause) { setError(cause.message) }
         finally { pending.current = false; setBusy(false) }
       }
-      return React.createElement('section', { 'aria-label': label, style: { ...card, display: 'grid', gap: 10, overflowWrap: 'anywhere' } },
-        React.createElement('strong', null, label),
+      const location = React.createElement(React.Fragment, null,
         React.createElement('div', null, '会话 ID：', session?.sessionId ? `${session.sessionId}${session.sessionBound === false ? '（尚未绑定）' : ''}` : '尚未建立'),
         React.createElement('div', null, '工作目录：', session?.workspaceDir || '尚未分配'),
-        React.createElement('div', null, '日志路径：', session?.logPath || '尚未记录'),
+        compact && session?.workingDirectory ? React.createElement('div', null, '执行目录：', session.workingDirectory) : null,
+        React.createElement('div', null, '日志路径：', session?.logPath || '尚未记录'))
+      return React.createElement('section', { className: compact ? 'detail-session' : undefined, 'aria-label': label, style: compact ? undefined : { ...card, display: 'grid', gap: 10, overflowWrap: 'anywhere' } },
+        React.createElement('strong', null, label),
+        compact ? React.createElement('p', { className: 'detail-muted' }, label === '任务会话' ? '统筹目标、安排独立执行并汇总结果。' : '本次执行的独立会话、工作目录与日志。') : null,
+        compact ? React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '会话信息与路径'), React.createElement('div', { className: 'detail-location' }, location)) : location,
+        compact && (!session?.sessionId || session.sessionBound === false) ? React.createElement('p', { className: 'detail-muted' }, session?.sessionId ? '会话尚未绑定，暂不可打开。' : '会话尚未建立。') : null,
         session?.sessionId && session.sessionBound !== false ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: busy, onClick: open, style: { justifySelf: 'start', minWidth: 110 } }, busy ? '正在打开…' : `打开${label}`) : null,
         error ? React.createElement('p', { role: 'alert', style: { color: colors.danger } }, error) : null)
     }
@@ -613,19 +618,24 @@ window.__ModuleLoader__.load({
         return () => { active = false; controller.abort() }
       }, [taskId, offset, updatedAt, retry])
       const ready = page?.offset === offset
-      return React.createElement('section', { 'aria-label': '动态执行列表', style: { display: 'grid', gap: 16, minHeight: 160 } },
-        React.createElement('h2', { style: { margin: 0, fontSize: 18 } }, '动态执行'),
-        React.createElement('p', { style: { margin: 0, color: colors.muted } }, '执行由任务会话按需安排，每次执行保留独立会话、目录、结果与日志。'),
+      return React.createElement('section', { className: 'detail-executions', 'aria-label': '动态执行列表', style: { display: 'grid', gap: 16, minHeight: 160 } },
+        React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h2', null, '独立执行'), ready ? React.createElement('span', { className: 'detail-muted' }, `${page.total} 条记录`) : null),
+        React.createElement('p', { className: 'detail-muted' }, '由任务会话按需安排；展开可查看本次结果与独立会话。'),
         loading ? React.createElement('span', { role: 'status' }, '正在读取执行记录…') : null,
         error ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, `执行记录读取失败：${error}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setRetry(value => value + 1) }, '重试读取执行')) : null,
-        ready ? React.createElement('ol', { style: { margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 12 } }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, style: { ...card, overflowWrap: 'anywhere' } },
-          React.createElement('details', null, React.createElement('summary', { style: { cursor: 'pointer', lineHeight: 1.7 } }, `${execution.objective || execution.executionId} · ${taskStateLabel(execution.status)}`),
-            React.createElement('p', { style: { color: colors.muted } }, `执行 ${execution.executionId} · 需求修订 ${execution.requirementRevision ?? '未记录'} · ${fmt(execution.createdAt)}`),
-            React.createElement(SessionLocation, { session: execution, label: '执行会话', onOpenSession }),
+        ready ? React.createElement('ol', { className: 'detail-execution-list' }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, className: 'detail-execution' },
+          React.createElement('details', null, React.createElement('summary', { className: 'detail-execution-summary' },
+            React.createElement('span', { className: 'detail-execution-title' }, execution.objective || execution.executionId),
+            statusTag(taskStateLabel(execution.status), taskStateTone(execution.status)),
+            React.createElement('span', { className: 'detail-execution-time' }, `创建 ${fmt(execution.createdAt)}`)),
+            React.createElement('div', { className: 'detail-execution-body' },
+            execution.progressReview ? React.createElement('p', { className: 'detail-muted' }, `最近活动 ${fmt(execution.progressReview.lastActivityAt)} · 进展检查 ${fmt(execution.progressReview.checkedAt)}`, execution.progressReview.readError ? ` · 记录读取失败：${traceReason(execution.progressReview.readError)}` : '') : null,
+            React.createElement(SessionLocation, { session: execution, label: '执行会话', onOpenSession, compact: true }),
             execution.error ? React.createElement('p', { role: 'status', style: { color: colors.danger } }, traceReason(execution.error)) : null,
-            React.createElement(TaskResult, { result: execution.result }))))) : null,
+            React.createElement(TaskResult, { result: execution.result }),
+            React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '执行记录信息'), React.createElement('p', { className: 'detail-muted' }, `执行 ${execution.executionId} · 需求修订 ${execution.requirementRevision ?? '未记录'}`))))))) : null,
         ready && !page.items.length && !loading ? emptyState('尚无动态执行', { detail: '任务会话尚未分派执行；任务可直接形成结果。' }) : null,
-        ready ? React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } }, React.createElement('span', { style: { marginRight: 'auto', color: colors.muted } }, `${page.total} 条执行记录`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset === 0, onClick: () => setOffset(value => Math.max(0, value - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset + page.items.length >= page.total, onClick: () => setOffset(value => value + 20) }, '下一页')) : null)
+        ready ? React.createElement('div', { className: 'detail-pagination' }, React.createElement('span', { className: 'detail-muted', style: { marginRight: 'auto' } }, `${page.total} 条执行记录 · ${page.total ? offset + 1 : 0}–${offset + page.items.length}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset === 0, onClick: () => setOffset(value => Math.max(0, value - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || offset + page.items.length >= page.total, onClick: () => setOffset(value => value + 20) }, '下一页')) : null)
     }
     function LegacyTaskOutput({ taskId, node, detailRevision }) {
       const [opened, setOpened] = useState(false)
@@ -645,17 +655,85 @@ window.__ModuleLoader__.load({
         !items.length ? emptyState('暂无历史执行记录') : null,
         pages > 1 ? React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', disabled: current <= 1, onClick: () => setPage(value => value - 1) }, '上一页'), React.createElement('span', null, `${current}/${pages}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: current >= pages, onClick: () => setPage(value => value + 1) }, '下一页')) : null)
     }
+    const taskDetailCss = `
+      [data-dingtalk-observer] .observer-session-detail { width: 100%; box-sizing: border-box; max-width: 1100px; margin: 0 auto; padding-bottom: 24px; display: grid; gap: 24px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+      .observer-session-detail :is(h1, h2, h3, p, ul) { margin: 0; }
+      .observer-session-detail h1 { font-size: 24px; line-height: 1.4; font-weight: 650; }
+      .observer-session-detail h2 { font-size: 16px; line-height: 1.5; font-weight: 600; }
+      .observer-session-detail h3 { font-size: 14px; font-weight: 600; }
+      .observer-session-detail ul { padding-left: 20px; }
+      .observer-session-detail li + li { margin-top: 4px; }
+      .observer-session-detail .detail-header { display: grid; gap: 12px; padding-bottom: 24px; border-bottom: 1px solid ${colors.border}; }
+      .observer-session-detail .detail-topline { display: flex; gap: 12px; align-items: center; }
+      .observer-session-detail .detail-title-row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+      .observer-session-detail .detail-meta { display: flex; gap: 8px 20px; flex-wrap: wrap; color: ${colors.muted}; font-size: 12px; font-variant-numeric: tabular-nums; }
+      .observer-session-detail .detail-muted { color: ${colors.muted}; font-size: 12px; }
+      .observer-session-detail .detail-columns { display: grid; grid-template-columns: minmax(0, 1fr) 288px; gap: 24px; align-items: start; }
+      .observer-session-detail :is(.detail-primary, .detail-sidebar) { display: grid; gap: 16px; min-width: 0; }
+      .observer-session-detail :is(.detail-panel, .detail-session, .detail-records) { padding: 16px; border: 1px solid ${colors.border}; border-radius: 12px; background: ${colors.surface}; min-width: 0; }
+      .observer-session-detail :is(.detail-panel, .detail-session) { display: grid; gap: 12px; }
+      .observer-session-detail .detail-objective { white-space: pre-wrap; }
+      .observer-session-detail .detail-requirements { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid ${colors.border}; }
+      .observer-session-detail .observer-task-result { display: grid; gap: 12px; margin: 0; padding: 16px; border: 1px solid ${colors.border}; border-radius: 12px; background: ${colors.surface2}; }
+      /* The shared result heading has an inline margin; only this page uses grid gaps. */
+      .observer-session-detail .observer-task-result h2 { margin-bottom: 0 !important; }
+      .observer-session-detail .observer-task-result h3 { margin: 0 0 8px; }
+      .observer-session-detail .observer-task-result-text { max-height: 320px; overflow: auto; scrollbar-gutter: stable; }
+      .observer-session-detail .detail-attention { display: grid; gap: 8px; padding: 16px; border: 1px solid color-mix(in srgb, ${colors.warning} 32%, ${colors.border}); border-left: 3px solid ${colors.warning}; border-radius: 8px; background: color-mix(in srgb, ${colors.warning} 6%, ${colors.surface}); }
+      .observer-session-detail .detail-attention h2 { color: ${colors.warning}; }
+      .observer-session-detail .detail-attention button { justify-self: start; }
+      .observer-session-detail .detail-question { font-weight: 500; white-space: pre-wrap; }
+      .observer-session-detail :is(summary, button, a) { cursor: pointer; }
+      .observer-session-detail button:disabled { cursor: default; }
+      .observer-session-detail summary { font-size: 12px; font-weight: 500; }
+      .observer-session-detail summary:hover { color: ${colors.accent}; }
+      .observer-session-detail summary:active { color: ${colors.accent}; }
+      .observer-session-detail .detail-disclosure { padding-top: 12px; border-top: 1px solid ${colors.border}; }
+      .observer-session-detail .detail-location { display: grid; gap: 8px; padding-top: 12px; font-size: 12px; color: ${colors.muted}; }
+      .observer-session-detail .detail-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .observer-session-detail .detail-executions { border-top: 1px solid ${colors.border}; padding-top: 24px; }
+      .observer-session-detail .detail-execution-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+      .observer-session-detail .detail-execution { border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.surface}; overflow-wrap: anywhere; }
+      .observer-session-detail .detail-execution-summary { padding: 12px 16px; display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; list-style: none; }
+      .observer-session-detail .detail-execution-summary::-webkit-details-marker { display: none; }
+      .observer-session-detail .detail-execution-summary::before { content: '›'; grid-row: 1 / 3; font-size: 18px; line-height: 24px; color: ${colors.muted}; }
+      .observer-session-detail details[open] > .detail-execution-summary::before { content: '⌄'; }
+      .observer-session-detail .detail-execution-summary:hover { background: ${colors.surface2}; border-radius: 8px; }
+      .observer-session-detail .detail-execution-title { font-size: 14px; font-weight: 500; color: inherit; }
+      .observer-session-detail .detail-execution-time { grid-column: 2 / 4; font-size: 12px; color: ${colors.muted}; }
+      .observer-session-detail .detail-execution-body { padding: 16px; display: grid; gap: 16px; border-top: 1px solid ${colors.border}; }
+      .observer-session-detail .detail-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      .observer-task-detail-route .detail-fetch-error { padding: 16px; border: 1px solid ${colors.danger}; border-radius: 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; color: ${colors.danger}; font-size: 14px; line-height: 1.65; }
+      .observer-task-detail-route .detail-fetch-state { min-height: 200px; align-content: start; }
+      @media (max-width: 800px) { .observer-session-detail .detail-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
+      @media (max-width: 520px) { [data-dingtalk-observer] .observer-session-detail { gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: minmax(0, 1fr); } .observer-session-detail .detail-header { padding-bottom: 16px; } .observer-session-detail .detail-title-row { align-items: start; } .observer-session-detail .detail-execution-summary { padding: 12px; gap: 4px 8px; } }
+    `
     function TaskSessionDetail({ task, onOpenSession, onBack, updatedAt, onOpenHumanRequest }) {
-      return React.createElement('section', { 'aria-label': '任务会话详情', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 20, overflowWrap: 'anywhere' } },
-        React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between' } }, statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state)), React.createElement(Button, { type: 'button', variant: 'outline', onClick: onBack }, '返回看板')),
-        React.createElement('h1', { style: { margin: 0, fontSize: 24 } }, taskDisplayTitle(task)),
-        React.createElement('p', { style: { margin: 0, whiteSpace: 'pre-wrap' } }, task.objective),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 16, color: colors.muted } }, `需求修订 ${task.requirementRevision ?? task.inputVersion ?? '未记录'}`, `控制修订 ${task.controlRevision ?? '未记录'}`, `控制状态 ${taskStateLabel(task.controlState || task.control?.state || task.state)}`),
-        !task.legacyReadonly ? React.createElement(SessionLocation, { session: taskSession(task), label: '任务会话', onOpenSession }) : null,
-        React.createElement(TaskResult, { result: task.result }),
-        task.waitingReason ? React.createElement('p', { role: 'status', style: { color: colors.warning } }, traceReason(task.waitingReason)) : null,
-        task.lastDecision?.question && !task.legacyReadonly ? React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => onOpenHumanRequest(task.taskId), style: { justifySelf: 'start' } }, '查看人工介入问题') : null,
-        task.legacyReadonly ? React.createElement(LegacyTaskHistory, { key: task.taskId, task })
+      const requirements = task.requirements || task.acceptanceCriteria || []
+      const question = !task.legacyReadonly && task.lastDecision?.question
+      return React.createElement('section', { className: 'observer-session-detail', 'aria-label': '任务会话详情' },
+        React.createElement('style', null, taskDetailCss),
+        React.createElement('header', { className: 'detail-header' },
+          React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: onBack }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')),
+          React.createElement('div', { className: 'detail-title-row' }, React.createElement('h1', null, task.title?.trim() || taskDisplayTitle(task)), statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state))),
+          React.createElement('div', { className: 'detail-meta' }, React.createElement('span', null, `创建 ${fmt(task.createdAt)}`), React.createElement('span', null, `更新 ${fmt(task.updatedAt)}`), !task.legacyReadonly ? React.createElement('span', null, `${task.executionCount ?? '未记录'} 次独立执行`) : null)),
+        task.waitingReason || question ? React.createElement('section', { className: 'detail-attention', 'aria-label': '阻塞与待处理', role: 'status' },
+          React.createElement('h2', null, question ? '等待答复' : '当前等待 / 阻塞'),
+          task.waitingReason ? React.createElement('p', null, traceReason(task.waitingReason)) : null,
+          question ? React.createElement('p', { className: 'detail-question' }, question) : null,
+          question ? React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => onOpenHumanRequest(task.taskId) }, '查看人工介入问题') : null) : null,
+        React.createElement('div', { className: 'detail-columns' },
+          React.createElement('div', { className: 'detail-primary' },
+            React.createElement('section', { className: 'detail-panel', 'aria-label': '目标与要求' }, React.createElement('h2', null, '目标与要求'), React.createElement('p', { className: 'detail-objective' }, task.objective || '尚未记录任务目标。'),
+              requirements.length ? React.createElement('div', { className: 'detail-requirements' }, React.createElement('h3', null, '验收要求'), React.createElement('ul', null, ...requirements.map((item, index) => React.createElement('li', { key: index }, readableValue(item))))) : null,
+              task.context ? React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '参考资料'), React.createElement('p', { className: 'detail-objective' }, readableValue(task.context))) : null),
+            React.createElement(TaskResult, { result: task.result })),
+          React.createElement('aside', { className: 'detail-sidebar', 'aria-label': '统筹会话与记录' },
+            !task.legacyReadonly ? React.createElement(SessionLocation, { session: taskSession(task), label: '任务会话', onOpenSession, compact: true }) : null,
+            React.createElement('details', { className: 'detail-records' }, React.createElement('summary', null, '任务记录与修订'), React.createElement('div', { className: 'detail-location' },
+              React.createElement('div', null, `任务 ID：${task.taskId}`), React.createElement('div', null, `需求修订 ${task.requirementRevision ?? task.inputVersion ?? '未记录'}`), React.createElement('div', null, `控制修订 ${task.controlRevision ?? '未记录'}`), React.createElement('div', null, `控制状态 ${taskStateLabel(task.controlState || task.control?.state || task.state)}`),
+              task.blockers ? readout('待排空记录（原始信息）', task.blockers) : null)))),
+        task.legacyReadonly ? React.createElement('div', { className: 'detail-panel' }, React.createElement('h2', null, '历史执行'), React.createElement(LegacyTaskHistory, { key: task.taskId, task }))
           : React.createElement(TaskExecutions, { key: task.taskId, taskId: task.taskId, updatedAt, onOpenSession }))
     }
     function ObserverContent({ openSession }) {
@@ -950,10 +1028,11 @@ window.__ModuleLoader__.load({
       const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
       const selectedTask = taskDetail?.taskId === selectedTaskId ? taskDetail : undefined
       const tasksPage = creatingTask ? React.createElement(CreateTaskForm, { groups: data?.groups || [], onDirtyChange: reportDirty, onCancel: returnFromTask, onCreated: result => { setCreatingTask(false); const task = result.task || result; if (task.taskId) openTask(task); void refresh() } })
-        : selectedTaskId ? React.createElement(React.Fragment, null,
-          detailError ? React.createElement('div', { role: 'alert', style: { ...card, color: colors.danger } }, `任务详情读取失败，已读取内容可能过期：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
+        : selectedTaskId ? React.createElement('div', { className: 'observer-task-detail-route', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 16 } },
+          React.createElement('style', null, taskDetailCss),
+          detailError ? React.createElement('div', { className: 'detail-fetch-error', role: 'alert' }, `${selectedTask ? '详情刷新失败，已读取内容可能过期' : '详情读取失败'}：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
           selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, updatedAt, onOpenHumanRequest: taskId => { setSelectedAuthorizationId((data?.authorizations || []).find(item => item.taskId === taskId && item.taskSessionRequest && item.status === 'waiting-reply')?.requestId || ''); setActivePage('authorizations') } })
-            : React.createElement('section', { style: { minHeight: 200, display: 'grid', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', onClick: returnFromTask }, '返回看板'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : null))
+            : React.createElement('section', { className: 'observer-session-detail detail-fetch-state', 'aria-label': '任务详情读取状态' }, React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: returnFromTask }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')), React.createElement('h1', null, '任务详情'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : React.createElement('p', { className: 'detail-muted' }, '未读取到任务内容，请重试或返回看板。')))
         : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement(Button, { type: 'button', onClick: () => setCreatingTask(true), style: { justifySelf: 'start' } }, '新建任务'), React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
