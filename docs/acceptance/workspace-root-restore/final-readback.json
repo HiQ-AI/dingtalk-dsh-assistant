@@ -1,0 +1,22 @@
+{
+  "observedAt": "2026-10-14T10:37:22.8235081Z",
+  "workspaceDir": "D:\\baibu-agent",
+  "databasePath": "D:/baibu-agent/.dsh/task-sessions.sqlite",
+  "databaseExists": true,
+  "oldRootExists": false,
+  "newPid": 19072,
+  "health": "degraded",
+  "bridgeHealthy": true,
+  "inboundProcessing": true,
+  "recoveryIssueCount": 1,
+  "tasks": [
+    {
+      "taskId": "task-c435b5b9dd11dc414114680254f6c8f7",
+      "state": "waiting",
+      "sessionId": "task-session-159171d8-1eef-40a6-b6f7-058eb956ee65",
+      "workspaceDir": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7",
+      "logPath": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions"
+    }
+  ],
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96"
+}

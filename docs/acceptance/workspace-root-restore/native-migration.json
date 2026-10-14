@@ -1,0 +1,74 @@
+[
+  {
+    "sessionId": "session-coordination-9e8faab8d1a954d7f5e9e487-f7eefb8b",
+    "cwd": "D:\\baibu-agent\\session-workspaces\\消息归类",
+    "originalEventCount": 30,
+    "originalEventDigest": "6bb3e5d4792b2c4e432c1933471342076d13f6d0bbe6970493b3a84bb7d4a427",
+    "newEventCount": 31,
+    "backendRoot": "D:\\dsh_home\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\session-coordination-9e8faab8d1a954d7f5e9e487-f7eefb8b-31f63083-aaaa-430b-9a82-b40116ae7adc"
+  },
+  {
+    "sessionId": "session-coordination-e8e1c612769d490e074196f5-f41fb514",
+    "cwd": "D:\\baibu-agent\\session-workspaces\\消息归类",
+    "originalEventCount": 45,
+    "originalEventDigest": "f093e5d6879d4b4388bf5c1a1eb5ac3f1c9199fcddfe7da97fb245b1a0d414f5",
+    "newEventCount": 46,
+    "backendRoot": "D:\\dsh_home\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\session-coordination-e8e1c612769d490e074196f5-f41fb514-5e1afb1d-64b6-4cee-bc42-0e19617c531c"
+  },
+  {
+    "sessionId": "session-coordination-f789e7de0f330a7c46d5311a-cb665fe2",
+    "cwd": "D:\\baibu-agent\\session-workspaces\\消息归类",
+    "originalEventCount": 45,
+    "originalEventDigest": "dc8846e11d918a4af72632e082adf7c1f5671872c0110a9780043e7bd81d5e3a",
+    "newEventCount": 46,
+    "backendRoot": "D:\\dsh_home\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\session-coordination-f789e7de0f330a7c46d5311a-cb665fe2-1584a0f8-5459-45c2-b5df-ce96ae191d8b"
+  },
+  {
+    "sessionId": "session-coordination-cbfd30db8ab31b7de85062b8-0ab7dab9",
+    "cwd": "D:\\baibu-agent\\session-workspaces\\话题决策",
+    "originalEventCount": 40,
+    "originalEventDigest": "6b14e193181f30f32f8e056b0be483986e0eccd65e66bd0fca94288a13c204de",
+    "newEventCount": 41,
+    "backendRoot": "D:\\dsh_home\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\session-coordination-cbfd30db8ab31b7de85062b8-0ab7dab9-29244767-eab0-4077-8e3c-c36d6d88c3ef"
+  },
+  {
+    "sessionId": "session-coordination-f218b24bc13a06f9bc04bb0a-54d21b91",
+    "cwd": "D:\\baibu-agent\\session-workspaces\\话题决策",
+    "originalEventCount": 34,
+    "originalEventDigest": "5df4217997cd8563bf724c9810fb545ffc63be245790f1c504f58117b717eaa1",
+    "newEventCount": 35,
+    "backendRoot": "D:\\dsh_home\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\session-coordination-f218b24bc13a06f9bc04bb0a-54d21b91-25268552-6127-4a72-980b-b18b3a3182af"
+  },
+  {
+    "sessionId": "task-execution-2245d420-316d-4bbe-92a7-6b43690cb256",
+    "cwd": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7",
+    "originalEventCount": 35,
+    "originalEventDigest": "977d974ae700fa903772260a59528a118e40fc33c39011bcf23faffd9dc0deec",
+    "newEventCount": 36,
+    "backendRoot": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\task-execution-2245d420-316d-4bbe-92a7-6b43690cb256-18243ea7-787e-49e9-ab3f-938011d84be0"
+  },
+  {
+    "sessionId": "task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+    "cwd": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7",
+    "originalEventCount": 453,
+    "originalEventDigest": "95f3fd7f1934cf677801bd3e15ebed1b0e85163608d83d9fed3d5d94320a6cd4",
+    "newEventCount": 454,
+    "backendRoot": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008-1b52eb11-155d-4096-90c3-cd514e35f647"
+  },
+  {
+    "sessionId": "task-session-159171d8-1eef-40a6-b6f7-058eb956ee65",
+    "cwd": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7",
+    "originalEventCount": 671,
+    "originalEventDigest": "dcaffce27528e2fe30557b5c9aece6693efb500afbcd96df5acbb2d8a54c6e06",
+    "newEventCount": 672,
+    "backendRoot": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions",
+    "stage": "D:\\baibu-agent\\task-session-runtime-clean\\.migration-staging\\task-session-159171d8-1eef-40a6-b6f7-058eb956ee65-a415add3-929f-4e3a-8161-383047985390"
+  }
+]

@@ -1,0 +1,12 @@
+✔ check is read-only and the exact offline data migration keeps native and historical facts unchanged (398.6716ms)
+✔ migration refuses live-pid before moving data (247.2628ms)
+✔ migration refuses collision before moving data (161.8348ms)
+✔ migration refuses profile-drift before moving data (194.7237ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1201.2908
