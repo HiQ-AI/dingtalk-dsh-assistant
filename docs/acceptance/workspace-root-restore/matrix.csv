@@ -1,0 +1,14 @@
+case,round-1,evidence
+metadata-migration-isolated,PASS,metadata-tests.log
+native-same-identity-resume,PASS,native-proof-final.log
+native-actual-pwd-material-read,PASS,native-proof-final.log
+zero-write-check,PASS,final-check.json
+old-process-offline-drained,PASS,pre-migration-offline.json
+destination-no-collision,PASS,migration-plan.json
+metadata-and-current-guard-bindings,PASS,metadata-migration.json
+history-input-receipts-preserved,PASS,metadata-migration.json
+native-original-event-prefixes,PASS,native-migration.json
+old-root-removed-no-alias,PASS,migration-proof.json
+workspace-and-task-path-api,PASS,final-readback.json
+native-eight-session-api,PASS,native-api-readback.jsonl
+new-root-future-deploy-check,PASS,deploy-check.json

@@ -1,0 +1,73 @@
+{
+  "moved": [
+    {
+      "source": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh",
+      "target": "D:\\baibu-agent\\.dsh"
+    },
+    {
+      "source": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\.session-routes",
+      "target": "D:\\baibu-agent\\tasks\\.session-routes"
+    },
+    {
+      "source": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7",
+      "target": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7"
+    },
+    {
+      "source": "D:\\baibu-agent\\task-session-runtime-clean\\session-workspaces\\消息归类",
+      "target": "D:\\baibu-agent\\session-workspaces\\消息归类"
+    },
+    {
+      "source": "D:\\baibu-agent\\task-session-runtime-clean\\session-workspaces\\话题决策",
+      "target": "D:\\baibu-agent\\session-workspaces\\话题决策"
+    }
+  ],
+  "edited": [
+    {
+      "path": "D:\\baibu-agent\\tasks\\.session-routes\\6abdd463080a3db2337c44aac2a44b593088c0df586272406ddad7f60c518371.json",
+      "beforeSha256": "29e8a4678fac6c0a166e280c254ae3420f7207ff84616d0d9e49592be0117e44",
+      "afterSha256": "712d38e3125fc74db485dfb1a3028cb0447a9b57e05346df9f0669f2c873215c"
+    },
+    {
+      "path": "D:\\baibu-agent\\tasks\\.session-routes\\833819ec763e730759813795e2aa3ec18d196e0a959b67533204ac62bdc4a119.json",
+      "beforeSha256": "e3280d169fc3bafc7191a962bff0fac1faf8c091403118904aed0e580b0bf49f",
+      "afterSha256": "3a8251103a89a225d177ff0a5787a14088602d9e86169988e932606b419d7758"
+    },
+    {
+      "path": "D:\\baibu-agent\\tasks\\.session-routes\\c908ad8af3e9ef1e6d7c39fb10ff66b2110efe8b112acc47d7fdb10568a65e02.json",
+      "beforeSha256": "9b5fdf70727bc4578de415420b7beb80ae2743f781735b576f8291e9da2f2142",
+      "afterSha256": "190ae0099fa1b7d5c09b225bbff430d9c674fe9ca7bf5148cff3d4d6a6cf2948"
+    },
+    {
+      "path": "D:\\baibu-agent\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json",
+      "beforeSha256": "67871f600c7ed3852bdcdba925e74954fec9d762c59d6d6f2c708a023c67dcff",
+      "afterSha256": "21e7d336064ac3a5b3664626de5ab294d6e57036b52d0f8c8b9a9d64295da162"
+    },
+    {
+      "path": "D:/dsh_home/profiles/web/cordis.patch.yml",
+      "beforeSha256": "79fb33b335d26950faacf5578e39a8e1319e49ee154f94afde262d3c4b2324f4",
+      "afterSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96"
+    },
+    {
+      "path": "D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116/workspace.json",
+      "beforeSha256": "8c29617f824b71a535b034d205bc5daafcf0e4832efa03070ea59c2460f43b8d",
+      "afterSha256": "ba245fa7f853d898b93d005d5dfa018fe5ad0cf5ca13e23567b9d768a055903d"
+    }
+  ],
+  "database": {
+    "quickCheck": "ok",
+    "protectedPathRows": [
+      {
+        "id": "431a837d-6a49-42f5-9f5f-90f559be3ba0",
+        "beforeSha256": "ec77b50db70ba39b6f73f53f22ea22d40040d34d1ff37b47969e2a2832481f97",
+        "afterSha256": "8c17bfa8b9dd27d7b420f0dc1042a705367acc8b620be0ba659b32c57005cf89"
+      },
+      {
+        "id": "e294677f-430c-420c-b0cc-4d7e298025f4",
+        "beforeSha256": "d859bd5fc63c00f2056d094eaac5082c1a626269452c6ea0d782f4f09fe4b5f9",
+        "afterSha256": "43e59e9567b9f4193281da3f38a73d358835a713d9bf1e9a42c6ce6048bda9d8"
+      }
+    ],
+    "historicalTablesUnchanged": true
+  },
+  "nativeLogsUnchanged": true
+}

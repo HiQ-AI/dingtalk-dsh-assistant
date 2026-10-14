@@ -1,0 +1,2654 @@
+{
+  "observedAt": "2026-10-14T10:23:39.655Z",
+  "readOnly": true,
+  "source": "D:/baibu-agent/task-session-runtime-clean",
+  "target": "D:/baibu-agent",
+  "note": "在线只读清单，SQLite/WAL及日志摘要不是跨文件原子停机快照；未跟随reparse。",
+  "summary": {
+    "files": 13,
+    "bytes": 18669273,
+    "reparse": 0,
+    "gitEntries": 0,
+    "collisions": 2,
+    "conflictingFiles": 0
+  },
+  "entries": [
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh",
+      "relative": ".dsh",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh\\resident",
+      "relative": ".dsh/resident",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh\\resident\\dingtalk_dsh_assistant.json",
+      "relative": ".dsh/resident/dingtalk_dsh_assistant.json",
+      "type": "file",
+      "bytes": 109841,
+      "sha256": "978094fe3f804c6312a3b5513c6a83176d311a225834b1c74525ddcf87ee0bb2",
+      "modifiedAt": "2026-10-14T10:23:36.103Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh\\task-sessions.sqlite",
+      "relative": ".dsh/task-sessions.sqlite",
+      "type": "file",
+      "bytes": 6504448,
+      "sha256": "a346e299146b1784f1d849aaa58bb9b36ffbc5a8a899e8cf19521e9654745815",
+      "modifiedAt": "2026-10-14T09:20:11.075Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh\\task-sessions.sqlite-shm",
+      "relative": ".dsh/task-sessions.sqlite-shm",
+      "type": "file",
+      "bytes": 32768,
+      "sha256": "669d415930fa399acd7b091db8ad6d1677f9f83f37c0fb006ae17fbb376d0c8e",
+      "modifiedAt": "2026-10-14T10:19:48.902Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh\\task-sessions.sqlite-wal",
+      "relative": ".dsh/task-sessions.sqlite-wal",
+      "type": "file",
+      "bytes": 4152992,
+      "sha256": "296be88baf21089d4dc7ac916fb1d9007bfdcbaf45b27555ef99cdfd295556af",
+      "modifiedAt": "2026-10-14T10:19:49.052Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\.dsh\\task-sessions.sqlite.initialized",
+      "relative": ".dsh/task-sessions.sqlite.initialized",
+      "type": "file",
+      "bytes": 165,
+      "sha256": "3eece5a8b4ac7dca755a7067148024172a16c81c9a2d4c31c9c44012d9d61364",
+      "modifiedAt": "2026-10-14T05:18:34.463Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks",
+      "relative": "tasks",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\.session-routes",
+      "relative": "tasks/.session-routes",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\.session-routes\\6abdd463080a3db2337c44aac2a44b593088c0df586272406ddad7f60c518371.json",
+      "relative": "tasks/.session-routes/6abdd463080a3db2337c44aac2a44b593088c0df586272406ddad7f60c518371.json",
+      "type": "file",
+      "bytes": 227,
+      "sha256": "29e8a4678fac6c0a166e280c254ae3420f7207ff84616d0d9e49592be0117e44",
+      "modifiedAt": "2026-10-14T07:55:57.218Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\.session-routes\\833819ec763e730759813795e2aa3ec18d196e0a959b67533204ac62bdc4a119.json",
+      "relative": "tasks/.session-routes/833819ec763e730759813795e2aa3ec18d196e0a959b67533204ac62bdc4a119.json",
+      "type": "file",
+      "bytes": 225,
+      "sha256": "e3280d169fc3bafc7191a962bff0fac1faf8c091403118904aed0e580b0bf49f",
+      "modifiedAt": "2026-10-14T05:26:26.332Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\.session-routes\\c908ad8af3e9ef1e6d7c39fb10ff66b2110efe8b112acc47d7fdb10568a65e02.json",
+      "relative": "tasks/.session-routes/c908ad8af3e9ef1e6d7c39fb10ff66b2110efe8b112acc47d7fdb10568a65e02.json",
+      "type": "file",
+      "bytes": 227,
+      "sha256": "9b5fdf70727bc4578de415420b7beb80ae2743f781735b576f8291e9da2f2142",
+      "modifiedAt": "2026-10-14T05:26:34.933Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--\\task-execution-2245d420-316d-4bbe-92a7-6b43690cb256",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-execution-2245d420-316d-4bbe-92a7-6b43690cb256",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--\\task-execution-2245d420-316d-4bbe-92a7-6b43690cb256\\session.v4.jsonl",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-execution-2245d420-316d-4bbe-92a7-6b43690cb256/session.v4.jsonl",
+      "type": "file",
+      "bytes": 157146,
+      "sha256": "0584dab3c5ae73bed4e2ddc3493b3b18fcc21072b7c28efd44e3237aea3fd9a7",
+      "modifiedAt": "2026-10-14T07:57:15.244Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--\\task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--\\task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008\\session.v4.jsonl",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008/session.v4.jsonl",
+      "type": "file",
+      "bytes": 1463744,
+      "sha256": "fe8e30fa6cfe00822e450112f672f1493a73e5e13c9f325ca7f3e2b01b55d9e2",
+      "modifiedAt": "2026-10-14T10:11:50.101Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--\\task-session-159171d8-1eef-40a6-b6f7-058eb956ee65",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-session-159171d8-1eef-40a6-b6f7-058eb956ee65",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\.dsh\\sessions\\--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--\\task-session-159171d8-1eef-40a6-b6f7-058eb956ee65\\session.v4.jsonl",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-session-159171d8-1eef-40a6-b6f7-058eb956ee65/session.v4.jsonl",
+      "type": "file",
+      "bytes": 6005021,
+      "sha256": "b79d9037fb7af69945f89b5ac12f000dfd5d03b52d455b03b5ea28a4da8f6afd",
+      "modifiedAt": "2026-10-14T10:12:14.902Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/materials",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\resource-3fb08e37de3a36c6-e95d6dc9647042d8.png",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/materials/resource-3fb08e37de3a36c6-e95d6dc9647042d8.png",
+      "type": "file",
+      "bytes": 240119,
+      "sha256": "e95d6dc9647042d89b8a28aa25eb49b52654b4bd2051abce0bdc8ab59ae8090b",
+      "modifiedAt": "2026-10-14T05:26:26.046Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/materials/source-07e3d8266e2201f6e6ef196da2d790bc.json",
+      "type": "file",
+      "bytes": 2350,
+      "sha256": "67871f600c7ed3852bdcdba925e74954fec9d762c59d6d6f2c708a023c67dcff",
+      "modifiedAt": "2026-10-14T05:26:26.153Z"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\outputs",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/outputs",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\tmp",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/tmp",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\work",
+      "relative": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/work",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\session-workspaces",
+      "relative": "session-workspaces",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\session-workspaces\\消息归类",
+      "relative": "session-workspaces/消息归类",
+      "type": "directory"
+    },
+    {
+      "path": "D:\\baibu-agent\\task-session-runtime-clean\\session-workspaces\\话题决策",
+      "relative": "session-workspaces/话题决策",
+      "type": "directory"
+    }
+  ],
+  "reparse": [],
+  "repositories": [],
+  "collisions": [
+    {
+      "relative": "tasks",
+      "sourceType": "directory",
+      "target": "D:\\baibu-agent\\tasks",
+      "targetType": "directory"
+    },
+    {
+      "relative": "session-workspaces",
+      "sourceType": "directory",
+      "target": "D:\\baibu-agent\\session-workspaces",
+      "targetType": "directory"
+    }
+  ],
+  "database": [
+    {
+      "table": "dynamic_meta",
+      "rows": 4
+    },
+    {
+      "table": "dynamic_tasks",
+      "rows": 1
+    },
+    {
+      "table": "dynamic_executions",
+      "rows": 2
+    },
+    {
+      "table": "dynamic_operations",
+      "rows": 44
+    },
+    {
+      "table": "dynamic_wakes",
+      "rows": 56
+    },
+    {
+      "table": "dynamic_notifications",
+      "rows": 2
+    },
+    {
+      "table": "dynamic_legacy_blockers",
+      "rows": 0
+    },
+    {
+      "table": "dynamic_sources",
+      "rows": 2
+    },
+    {
+      "table": "dynamic_groups",
+      "rows": 0
+    },
+    {
+      "table": "dynamic_receipts",
+      "rows": 1170
+    },
+    {
+      "table": "dynamic_resource_locks",
+      "rows": 0
+    }
+  ],
+  "pathFields": [
+    {
+      "origin": "sqlite:dynamic_executions:431a837d-6a49-42f5-9f5f-90f559be3ba0",
+      "field": "body.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:431a837d-6a49-42f5-9f5f-90f559be3ba0",
+      "field": "body.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:431a837d-6a49-42f5-9f5f-90f559be3ba0",
+      "field": "body.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:431a837d-6a49-42f5-9f5f-90f559be3ba0",
+      "field": "body.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:431a837d-6a49-42f5-9f5f-90f559be3ba0",
+      "field": "body.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:94cca8ca-2fda-4c49-8f2c-623e362991d1",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:94cca8ca-2fda-4c49-8f2c-623e362991d1",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:94cca8ca-2fda-4c49-8f2c-623e362991d1",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:94cca8ca-2fda-4c49-8f2c-623e362991d1",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:94cca8ca-2fda-4c49-8f2c-623e362991d1",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:trace-original-main-development-source",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:trace-original-main-development-source",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:trace-original-main-development-source",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:trace-original-main-development-source",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:trace-original-main-development-source",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:1d5327c3-f08f-48a1-bbdc-556838de4c17",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:1d5327c3-f08f-48a1-bbdc-556838de4c17",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:1d5327c3-f08f-48a1-bbdc-556838de4c17",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:1d5327c3-f08f-48a1-bbdc-556838de4c17",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:1d5327c3-f08f-48a1-bbdc-556838de4c17",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:4",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:complete-full-merge-preview-layout-verification",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:complete-full-merge-preview-layout-verification",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:complete-full-merge-preview-layout-verification",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:complete-full-merge-preview-layout-verification",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:complete-full-merge-preview-layout-verification",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:4591123d-fd1f-4173-8855-26a70d03d61e",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:4591123d-fd1f-4173-8855-26a70d03d61e",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:4591123d-fd1f-4173-8855-26a70d03d61e",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:4591123d-fd1f-4173-8855-26a70d03d61e",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:4591123d-fd1f-4173-8855-26a70d03d61e",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-progress:431a837d-6a49-42f5-9f5f-90f559be3ba0:5:5:2026-10-14T09:56:50.384Z",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-progress:431a837d-6a49-42f5-9f5f-90f559be3ba0:5:5:2026-10-14T09:56:50.384Z",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-progress:431a837d-6a49-42f5-9f5f-90f559be3ba0:5:5:2026-10-14T09:56:50.384Z",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-progress:431a837d-6a49-42f5-9f5f-90f559be3ba0:5:5:2026-10-14T09:56:50.384Z",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-progress:431a837d-6a49-42f5-9f5f-90f559be3ba0:5:5:2026-10-14T09:56:50.384Z",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[0]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[1]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-wal"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[2]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite-shm"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.definition.protectedPaths[3]",
+      "value": "D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite.initialized"
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:5",
+      "field": "body.result.execution.input.materialPaths[0]",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    },
+    {
+      "origin": "tasks/.session-routes/6abdd463080a3db2337c44aac2a44b593088c0df586272406ddad7f60c518371.json",
+      "field": "$.cwd",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7"
+    },
+    {
+      "origin": "tasks/.session-routes/833819ec763e730759813795e2aa3ec18d196e0a959b67533204ac62bdc4a119.json",
+      "field": "$.cwd",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7"
+    },
+    {
+      "origin": "tasks/.session-routes/c908ad8af3e9ef1e6d7c39fb10ff66b2110efe8b112acc47d7fdb10568a65e02.json",
+      "field": "$.cwd",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7"
+    },
+    {
+      "origin": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/materials/source-07e3d8266e2201f6e6ef196da2d790bc.json",
+      "field": "$.resources[0].path",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\resource-3fb08e37de3a36c6-e95d6dc9647042d8.png"
+    },
+    {
+      "origin": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/materials/source-07e3d8266e2201f6e6ef196da2d790bc.json",
+      "field": "$.resources[0].value.image.path",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\resource-3fb08e37de3a36c6-e95d6dc9647042d8.png"
+    },
+    {
+      "origin": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/materials/source-07e3d8266e2201f6e6ef196da2d790bc.json",
+      "field": "$.path",
+      "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7\\materials\\source-07e3d8266e2201f6e6ef196da2d790bc.json"
+    }
+  ],
+  "embeddedPathCounts": [
+    {
+      "origin": "sqlite:dynamic_executions:e294677f-430c-420c-b0cc-4d7e298025f4",
+      "field": "body.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:94cca8ca-2fda-4c49-8f2c-623e362991d1",
+      "field": "body.result.execution.input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:1",
+      "field": "body.result.execution.input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:delegate:task-c435b5b9dd11dc414114680254f6c8f7:1:readback-unknown-fetch",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:22544562-b861-4134-b3de-150d839d9b1a",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:e294677f-430c-420c-b0cc-4d7e298025f4:1",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:adjust-merged-description-layout",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:64e06410-747f-4977-bdfa-71075a849741",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:2",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:continue:task-c435b5b9dd11dc414114680254f6c8f7:1:verify-layout-branch-rule-conflict",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution.claim:3ca3b011-7ec2-449f-88fa-fcc872dbf45e",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-bound:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-result:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[0].input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    },
+    {
+      "origin": "sqlite:dynamic_receipts:execution-drained:431a837d-6a49-42f5-9f5f-90f559be3ba0:3",
+      "field": "body.result.execution.input.previousExecutions[1].input.previousExecutions[0].input.context",
+      "characters": 359
+    }
+  ],
+  "bindings": [
+    {
+      "file": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-execution-2245d420-316d-4bbe-92a7-6b43690cb256/session.v4.jsonl",
+      "sessionId": "task-execution-2245d420-316d-4bbe-92a7-6b43690cb256",
+      "cwd": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7"
+    },
+    {
+      "file": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008/session.v4.jsonl",
+      "sessionId": "task-execution-df86aab8-f15a-4d3e-b212-dbbe0c3d0008",
+      "cwd": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7"
+    },
+    {
+      "file": "tasks/task-c435b5b9dd11dc414114680254f6c8f7/.dsh/sessions/--D-baibu-agent-task-session-runtime-clean-tasks-task-c435b5b9dd11dc414114680254f6c8f7--/task-session-159171d8-1eef-40a6-b6f7-058eb956ee65/session.v4.jsonl",
+      "sessionId": "task-session-159171d8-1eef-40a6-b6f7-058eb956ee65",
+      "cwd": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7"
+    }
+  ],
+  "profilePaths": [
+    "root: D:/baibu-agent/task-session-runtime-clean/.dsh/resident",
+    "workspaceDir: D:/baibu-agent/task-session-runtime-clean",
+    "dbPath: D:/baibu-agent/task-session-runtime-clean/.dsh/task-sessions.sqlite"
+  ],
+  "globalWorkspaceBindings": {
+    "file": "D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116/workspace.json",
+    "sha256": "8c29617f824b71a535b034d205bc5daafcf0e4832efa03070ea59c2460f43b8d",
+    "fields": [
+      {
+        "field": "$.tables.workspaces.14990941-5d23-4a16-9627-9c3f32d05f94.path",
+        "value": "D:\\baibu-agent\\task-session-runtime-clean\\tasks\\task-c435b5b9dd11dc414114680254f6c8f7",
+        "embedded": false
+      }
+    ]
+  },
+  "currentPathFieldSummary": [
+    {
+      "field": "dynamic_executions:body.definition.protectedPaths[]",
+      "count": 8
+    },
+    {
+      "field": "dynamic_executions:body.input.materialPaths[]",
+      "count": 2
+    },
+    {
+      "field": "dynamic_executions:body.input.previousExecutions[].definition.protectedPaths[]",
+      "count": 4
+    },
+    {
+      "field": "dynamic_executions:body.input.previousExecutions[].input.materialPaths[]",
+      "count": 1
+    },
+    {
+      "field": "undefined:$.cwd",
+      "count": 3
+    },
+    {
+      "field": "undefined:$.resources[].path",
+      "count": 1
+    },
+    {
+      "field": "undefined:$.resources[].value.image.path",
+      "count": 1
+    },
+    {
+      "field": "undefined:$.path",
+      "count": 1
+    }
+  ]
+}

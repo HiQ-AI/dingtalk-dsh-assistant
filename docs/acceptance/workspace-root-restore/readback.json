@@ -1,0 +1,10 @@
+{
+  "observedAt": "2026-10-14T10:20:07.3923232Z",
+  "workspaceDir": "D:\\baibu-agent",
+  "pid": 46748,
+  "health": "degraded",
+  "inboundProcessing": true,
+  "bridgeHealthy": true,
+  "recoveryIssueCount": 1,
+  "profileSha256": "79fb33b335d26950faacf5578e39a8e1319e49ee154f94afde262d3c4b2324f4"
+}

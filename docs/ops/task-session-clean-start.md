@@ -52,3 +52,9 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 进度巡检核验：execution.progressReview.checkedAt为持久上次检查时间，running当前版本到期600000毫秒后由既有recovery tick读取原生日志；wake.kind=execution.progress.review。统筹未调用task_execution_progress就提交会收到TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED纠正。缺文件、身份/输入不匹配或无新记录如实呈现，不能仅查状态宣布推进。巡检不发额外群进度消息，不清unknown效果。
 
 任务会话因查看记录而被普通空闲Agent占用时，不热抢Agent、不改SQLite的drained字段。先读取原生API核实running=false、inbox为空、所有执行已结束，再走精确进程的SIGINT退出。部署检查对未开始的新lease须同时核验原生日志：没有当前lease输入、上一回合已结束、工具调用全部结束；停机后还必须独立证实旧PID消失。保留未开始lease，由正式重启恢复路径接管。同任务出现新Host输入才算恢复，health=ok不替代此项证据。
+
+## 2026-10-14 恢复统一工作区及现有数据
+
+当前Agent工作区和taskSessions.workspaceDir均为`D:\baibu-agent`，数据库位于`D:\baibu-agent\.dsh\task-sessions.sqlite`，resident storage位于`.dsh\resident`，任务及会话在`tasks\<taskId>\.dsh\sessions`，共享会话工作目录在`session-workspaces`。上文clean根是当时清洁启动步骤的历史记录；当前`task-session-runtime-clean`已完整迁出并移除，不再作为运行入口。
+
+迁根必须先零写入Check、确认唯一写者和原生回合停稳，再迁当前路由/材料/Workspace/数据库保护路径绑定。原生记录通过官方persistence.create新cwd+append原事件，并核验原事件前缀摘要；历史input、收据和业务正文不全文替换。既有目标子项不能覆盖；所有新位置独立读回后才清除迁移暂存。一次性脚本与原生续办证明在`docs/acceptance/workspace-root-restore/`，固定旧源不存在时不可重复apply。普通部署不需要重做数据迁移。

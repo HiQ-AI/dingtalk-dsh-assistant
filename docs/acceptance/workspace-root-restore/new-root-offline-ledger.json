@@ -1,0 +1,12 @@
+{
+  "quiescent": true,
+  "candidateOnly": false,
+  "ownerReleased": false,
+  "ownerProcessExited": true,
+  "staleOwner": true,
+  "drained": true,
+  "unstartedTaskClaims": [],
+  "verifiedSessions": 3,
+  "unknownOperations": 0,
+  "unknownNotifications": 0
+}
