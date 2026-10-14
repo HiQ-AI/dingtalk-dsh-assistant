@@ -34,6 +34,7 @@ testRunner('原生网页工具错误不建立未知效果，仍可完成后续�
  await host.service.whenIdle()
  assert.equal(calls,2);assert.equal((await host.query('operation.list')).length,0)
  assert.equal((await host.query('task.list'))[0].status,'completed')
+ assert.equal((await host.query('task.list'))[0].humanRequests?.length ?? 0,0)
 })
 import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { findSessionLog, requestSystemText } from './fixtures/session-persistence.js'
