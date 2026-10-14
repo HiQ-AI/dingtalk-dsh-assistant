@@ -71,6 +71,24 @@ test('question and completion for the same source have separate stable timeline 
     taskNotificationOutbound({ id: 'completion', state: 'prepared', payload }).sourceMessageId)
 })
 
+test('话题回复投影改写来源后沿 outboundId 恢复，拒绝正文或引用冲突', async () => {
+  const store = await openResidentStore(memoryFacility())
+  try {
+    await store.subscribe({ groupId: 'g' })
+    const args = { groupId: 'g', outboundId: 'reply', decisionId: 'decision', sourceMessageId: 'topic-decision:decision',
+      text: '原回复', replyToMessageId: 'm', replyToSenderOpenDingTalkId: 'u' }
+    await store.appendOutbox(args)
+    await projectTaskNotification({ residentStore: store, notification: { id: 'reply', state: 'delivered',
+      receipt: { messageId: 'delivered-reply' }, payload: { conversationId: 'g', sourceMessageId: 'm', actorId: 'u', text: '原回复' } } })
+    assert.equal(store.getGroup('g').outbox[0].sourceMessageId, 'task-notification:reply')
+    await store.appendOutbox(args)
+    for (const change of [{ text: '其他回复' }, { decisionId: 'other' }, { replyToMessageId: 'other' }, { replyToSenderOpenDingTalkId: 'other' }])
+      await assert.rejects(store.appendOutbox({ ...args, ...change }), /outbox_identity_conflict/)
+    assert.equal(store.getGroup('g').outbox.length, 1)
+    assert.equal(store.getGroup('g').outbox[0].deliveredMessageId, 'delivered-reply')
+  } finally { await store.close() }
+})
+
 test('existing resident timeline persists new images, quotes and notification readback states across reopen', async () => {
   const seed = new Map()
   let store = await openResidentStore(memoryFacility(seed))

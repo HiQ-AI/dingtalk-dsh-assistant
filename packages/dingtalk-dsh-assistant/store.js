@@ -989,6 +989,12 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
+      const sameId = outboundId && current.outbox.find(item => item.outboundId === outboundId)
+      if (sameId) {
+        if (sameId.text !== text || sameId.decisionId !== decisionId || sameId.replyToMessageId !== replyToMessageId
+          || sameId.replyToSenderOpenDingTalkId !== replyToSenderOpenDingTalkId) throw new Error('outbox_identity_conflict')
+        return current
+      }
       const existing = current.outbox.find((item) => item.sourceMessageId === sourceMessageId)
       if (existing !== undefined) return current
       let veto

@@ -1,0 +1,12 @@
+case,round-1,round-2,round-3,round-4,round-5
+action-failure-no-reply,FAIL,PASS,PASS,NOT_RUN,PASS
+committed-action-restart-once,FAIL,PASS,PASS,NOT_RUN,PASS
+own-echo-manual-followup,NOT_RUN,PASS,PASS,NOT_RUN,PASS
+unadmitted-source-fail-closed,NOT_RUN,FAIL,PASS,NOT_RUN,PASS
+explicit-retry-idempotent,NOT_RUN,PASS,PASS,NOT_RUN,PASS
+outbox-failure-retains-action,NOT_RUN,FAIL,PASS,NOT_RUN,PASS
+projected-delivered-reply-recovery,NOT_RUN,NOT_RUN,NOT_RUN,FAIL,PASS
+notification-current-state-on-replay,NOT_RUN,NOT_RUN,NOT_RUN,NOT_RUN,PASS
+targeted-suite,NOT_RUN,FAIL,PASS,NOT_RUN,PASS
+local-deployment,NOT_RUN,NOT_RUN,NOT_RUN,PASS,PASS
+original-message-recovery,NOT_RUN,NOT_RUN,NOT_RUN,FAIL,PASS
