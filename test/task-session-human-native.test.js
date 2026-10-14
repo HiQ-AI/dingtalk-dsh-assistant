@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
-import { available, reason, nativeTaskHost, latestInput, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, modelToolValues, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 const call = (name, args) => ({ name, args })
 const requestHuman = (audience = 'operator') => call('task_request_human', { audience, reason: '目标环境尚未明确，不能自行扩大授权', question: '请明确本次允许的环境和操作范围', evidence: ['已读取原始交办'], attemptedActions: ['核对现有需求，未执行外部修改'] })
@@ -95,7 +95,7 @@ test('native human request waits without repeat wakes; authenticated HTTP reply 
 })
 
 test('an execution result cannot bypass human waiting; reply reads the original execution and continues the original task', { skip: !available ? reason : false, timeout: 30000 }, async t => {
-  const released = Promise.withResolvers(); let turns = 0, executionId, afterReply
+  const released = Promise.withResolvers(); let turns = 0, executionId, afterReply, originalSummary
   t.after(() => released.resolve())
   const h = await fixture(t, async request => {
     if (!request.tools.some(tool => tool.name === 'task_delegate')) {
@@ -107,6 +107,10 @@ test('an execution result cannot bypass human waiting; reply reads the original 
     if (turns === 1) return [call('task_delegate', { key: 'original-inspection', objective: '只读核对原目标' })]
     if (turns === 2) return [requestHuman()]
     afterReply = input
+    const ref = input.executions[0].resultRef.contentRef
+    const page = modelToolValues(request).find(value => value.contentRef === ref && value.path === '/payload/output/summary')
+    if (!page) return [call('model_content_read', { contentRef: ref, path: '/payload/output/summary' })]
+    originalSummary = page.text
     return [finish('已读取原执行结果并按人工范围收束')]
   })
   const created = await h.service.createTask({ groupId: 'native-group', requestId: 'human-execution', objective: '核对原目标，边界不清时申请人工' })
@@ -121,7 +125,7 @@ test('an execution result cannot bypass human waiting; reply reads the original 
   await h.service.whenIdle()
   assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
   assert.equal(afterReply.executions[0].executionId, executionId)
-  assert.equal(afterReply.executions[0].result.payload.output.summary, '原执行已完成只读核对')
+  assert.equal(originalSummary, '原执行已完成只读核对')
   assert.equal((await h.query('execution.list')).length, 1)
 })
 

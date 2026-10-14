@@ -307,8 +307,16 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (kind === 'task.claim') {
       const task = get('dynamic_tasks', a.taskId)
       if (!task.drained) fail('DYNAMIC_TASK_BUSY')
+      if (task.providerRecovery?.requirementRevision === task.requirementRevision
+        && (!task.providerRecovery.nextAttemptAt || Date.parse(stamp) < Date.parse(task.providerRecovery.nextAttemptAt))) fail('DYNAMIC_TASK_PROVIDER_RETRY_NOT_DUE')
       task.leaseEpoch++; task.drained = false; task.recovering = false
       task.claimRequirementRevision = task.requirementRevision; task.claimControlRevision = task.controlRevision
+      if (task.providerRecovery) {
+        // Consume every admission before entering native runtime. A different
+        // runtime fault must not reuse an already due provider timer in a hot loop.
+        task.providerRecovery = { ...task.providerRecovery, requirementRevision: task.requirementRevision,
+          nextAttemptAt: null, suspended: true, admission: { kind: task.providerRecovery.requirementRevision !== task.requirementRevision ? 'new-input' : 'scheduled', leaseEpoch: task.leaseEpoch, at: stamp } }
+      }
       const pending = wakes(task.taskId).filter(item => item.state !== 'acked')
       if (!pending.length && !a.force) fail('DYNAMIC_TASK_NO_WAKE')
       for (const item of pending) { item.state = 'claimed'; item.leaseEpoch = task.leaseEpoch; put('dynamic_wakes', item) }
@@ -341,6 +349,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const task = currentTask(a.binding, { active: false })
       const question = a.question ?? a.decision?.question ?? null
       if (typeof question === 'string' && question.trim()) {
+        const executions = execs(task.taskId).filter(executionCurrent)
+        const providerWait = executions.some(item => ['EXECUTION_PROVIDER_TRANSIENT','EXECUTION_PROVIDER_FAILED'].includes(item.result?.payload.error?.code))
+        const actionable = executions.some(item => item.result?.payload.error
+          && (['credentials','quota','configuration'].includes(item.result.payload.error.recovery?.category)
+            || !['EXECUTION_PROVIDER_TRANSIENT','EXECUTION_PROVIDER_FAILED'].includes(item.result.payload.error.code)))
+          || ops(task.taskId).some(item => item.state === 'unknown')
+        if (a.humanRequest?.audience !== 'requester' && providerWait && !actionable) fail('DYNAMIC_PROVIDER_TECHNICAL_WAIT')
         if (!a.humanRequest) fail('DYNAMIC_HUMAN_REQUEST_REQUIRED')
         const requestId = text(a.humanRequest.requestId, 'requestId')
         const audience = a.humanRequest.audience ?? 'operator'
@@ -359,6 +374,16 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       task.lastDecision = { action: a.action ?? 'wait', summary: text(a.summary, 'summary'), decision: a.decision ?? null, question: a.question ?? a.decision?.question ?? null,
         evidence: a.evidence ?? [], limitations: a.limitations ?? [], requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, at: stamp }
+      task.providerRecovery = null
+      saveTask(task); return changed({ task })
+    }
+    if (kind === 'task.provider-failure') {
+      const task = currentTask(a.binding, { active: false, current: false })
+      const attempts = (task.providerRecovery?.attempts ?? 0) + 1
+      const delays = [5000, 10000, 20000, 600000, 1800000, 3600000]
+      task.providerRecovery = { attempts, failure: clone(record(a.failure)), requirementRevision: a.binding.requirementRevision,
+        nextAttemptAt: attempts <= delays.length ? new Date(Date.parse(stamp) + delays[attempts - 1]).toISOString() : null,
+        suspended: attempts > delays.length }
       saveTask(task); return changed({ task })
     }
     if (kind === 'task.human.respond') {
@@ -393,6 +418,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       task.status = 'completed'; task.completion = { summary: text(a.summary, 'summary'), result: a.result ?? null, at: stamp,
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, leaseEpoch: task.leaseEpoch }
       for (const request of task.humanRequests ?? []) if (request.status === 'waiting-reply') { request.status = 'superseded'; request.supersededAt = stamp }
+      task.providerRecovery = null
       saveTask(task)
       let notification = null
       if (a.notification !== undefined && a.notification !== null) {
@@ -426,6 +452,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const task = currentTask(a.binding), execution = get('dynamic_executions', a.executionId)
       if (execution.taskId !== task.taskId) fail('DYNAMIC_EXECUTION_SCOPE_INVALID')
       if (!execution.drained || execution.leaseEpoch === 0) fail('DYNAMIC_EXECUTION_BUSY')
+      const replyClaimed = wakes(task.taskId).some(item => item.kind === 'human.responded' && item.state === 'claimed' && item.leaseEpoch === task.leaseEpoch)
+      if (execution.providerRecovery?.nextAttemptAt && !replyClaimed) fail('DYNAMIC_EXECUTION_RECOVERY_PENDING')
       assertNoLegacy(task.taskId)
       if (a.definition?.recoveryReadOnly !== true && ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       const key = text(a.key, 'key')
@@ -436,16 +464,70 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (previous.digest !== continuationDigest) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
         return changed({ execution })
       }
+      if (execution.result?.payload.error?.code === 'EXECUTION_PROVIDER_TRANSIENT' && execution.providerRecovery?.exhausted) {
+        if (Date.parse(stamp) < Date.parse(execution.providerRecovery.retryNotBefore)) fail('DYNAMIC_PROVIDER_COOLDOWN_REQUIRED')
+        execution.providerRecovery.coldAttempts = (execution.providerRecovery.coldAttempts ?? 0) + 1
+      }
       execution.inputHistory.push({ inputVersion: execution.inputVersion, inputDigest: execution.inputDigest,
         requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision })
       if (execution.result) execution.results.push(execution.result)
       execution.result = null; execution.progressReview = null; execution.inputVersion++; execution.inputDigest = digest(payload.input)
       execution.prompt = payload.prompt; execution.input = clone(payload.input)
+      if (execution.providerRecovery) execution.providerRecovery = { ...execution.providerRecovery, nextAttemptAt: null, nextReviewAt: null, activeInputVersion: null }
       execution.definition = { ...execution.definition, recoveryReadOnly: a.definition?.recoveryReadOnly === true }
       execution.requirementRevision = task.requirementRevision; execution.controlRevision = task.controlRevision
       execution.cancelRequested = false; execution.status = 'queued'; execution.updatedAt = stamp
       execution.continuations = [...(execution.continuations ?? []), { key, digest: continuationDigest, inputVersion: execution.inputVersion }]
       put('dynamic_executions', execution); return changed({ execution })
+    }
+    if (kind === 'execution.retry-provider') {
+      const execution = boundExecution(a.binding)
+      const task = get('dynamic_tasks', execution.taskId)
+      if (!execution.drained || execution.recovering || !executionCurrent(execution)
+        || execution.status !== 'queued' || !execution.providerRecovery?.nextAttemptAt || task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      if (wakes(task.taskId).some(item => item.kind === 'human.responded' && item.state !== 'acked')) fail('DYNAMIC_OWNER_INPUT_PENDING')
+      assertNoLegacy(task.taskId)
+      if (ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
+      if (Date.parse(stamp) < Date.parse(execution.providerRecovery.nextAttemptAt)) fail('DYNAMIC_EXECUTION_RETRY_NOT_DUE')
+      execution.inputHistory.push({ inputVersion: execution.inputVersion, inputDigest: execution.inputDigest,
+        requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision })
+      execution.results.push(execution.result)
+      execution.result = null; execution.progressReview = null; execution.inputVersion++
+      execution.status = 'queued'; execution.providerRecovery.nextAttemptAt = null
+      execution.providerRecovery.activeInputVersion = execution.inputVersion
+      execution.updatedAt = stamp; put('dynamic_executions', execution)
+      return changed({ execution })
+    }
+    if (kind === 'execution.review-provider') {
+      const execution = boundExecution(a.binding)
+      const task = get('dynamic_tasks', execution.taskId)
+      if (!execution.drained || execution.recovering || !executionCurrent(execution) || execution.status !== 'failed'
+        || !execution.providerRecovery?.nextReviewAt || task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      if (Date.parse(stamp) < Date.parse(execution.providerRecovery.nextReviewAt)) fail('DYNAMIC_EXECUTION_RETRY_NOT_DUE')
+      if (ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
+      const reviews = (execution.providerRecovery.reviewAttempts ?? 0) + 1
+      if (reviews > 3) fail('DYNAMIC_PROVIDER_REVIEW_LIMIT')
+      execution.providerRecovery.reviewAttempts = reviews
+      execution.providerRecovery.nextReviewAt = reviews < 3 ? new Date(Date.parse(stamp) + [1_800_000, 3_600_000][reviews - 1]).toISOString() : null
+      execution.providerRecovery.reviewedAt = stamp
+      execution.result.recovery = { ...execution.result.recovery, decision: 'review-ready', reviewAttempts: reviews, nextReviewAt: execution.providerRecovery.nextReviewAt }
+      put('dynamic_executions', execution)
+      const wakeId = wake(execution.taskId, 'execution.provider.review', { executionId: execution.executionId,
+        instruction: '通用模型/传输故障的冷却已结束，先核对原失败、目标、操作账和当前恢复条件。可用原executionId受管续办，不重放成功或未知效果；不得仅因短重试耗尽要求人工恢复服务。' }, `wake:${commandId}`)
+      return changed({ execution, wakeId })
+    }
+    if (kind === 'execution.provider-recovery-blocked') {
+      const execution = boundExecution(a.binding)
+      if (!execution.providerRecovery?.nextAttemptAt && !execution.providerRecovery?.nextReviewAt) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      execution.providerRecovery.blocked = { code: text(a.code, 'code'), at: stamp }
+      execution.providerRecovery.nextAttemptAt = null
+      execution.providerRecovery.nextReviewAt = null
+      execution.result.recovery = { ...execution.result.recovery, decision: 'blocked', blocked: clone(execution.providerRecovery.blocked), nextAttemptAt: null }
+      execution.status = 'failed'; execution.updatedAt = stamp
+      put('dynamic_executions', execution)
+      const wakeId = wake(execution.taskId, 'execution.recovery.blocked', { executionId: execution.executionId, code: a.code,
+        instruction: '自动恢复证据未通过核验，原始失败与效果记录保留。先调查原生终态、会话归属或未知效果，不重放操作，不据此推断凭据失效。' }, `wake:${commandId}`)
+      return changed({ execution, wakeId })
     }
     if (kind === 'execution.progressReviewed') {
       const execution = get('dynamic_executions', text(a.executionId, 'executionId'))
@@ -467,12 +549,27 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (kind === 'execution.claim') {
       const execution = get('dynamic_executions', a.executionId)
       assertNoLegacy(execution.taskId)
+      if (execution.result || execution.providerRecovery?.nextAttemptAt) fail('DYNAMIC_EXECUTION_RECOVERY_PENDING')
       if (!execution.drained || terminalExecutions.has(execution.status)) fail('DYNAMIC_EXECUTION_BUSY')
       if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (!execution.definition?.recoveryReadOnly && ops(execution.taskId).some(item => item.executionId === execution.executionId && ['starting','unknown'].includes(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       execution.leaseEpoch++; execution.status = 'running'; execution.drained = false; execution.recovering = false
       execution.updatedAt = stamp; put('dynamic_executions', execution)
       return { result: { execution, binding: executionBinding(execution) }, dispatchEligible: true }
+    }
+    if (kind === 'execution.progressReported') {
+      const execution = boundExecution(a.binding)
+      if (execution.drained || execution.status !== 'running' || !executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      const summary = text(a.summary, 'summary').trim(), evidence = array(a.evidence)
+      if (summary.length > 2000 || evidence.length > 4 || evidence.some(item => typeof item !== 'string' || !item.trim() || item.length > 512)) fail('DYNAMIC_EXECUTION_PROGRESS_INVALID')
+      const sequence = integer(a.sequence, 'sequence')
+      if (execution.stageProgress?.inputVersion === execution.inputVersion && execution.stageProgress?.leaseEpoch === execution.leaseEpoch && sequence <= execution.stageProgress.sequence) fail('DYNAMIC_EXECUTION_PROGRESS_STALE')
+      const report = { summary, evidence: clone(evidence), sequence, recordedAt: stamp, inputVersion: execution.inputVersion,
+        leaseEpoch: execution.leaseEpoch, requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision }
+      execution.stageProgress = report
+      put('dynamic_executions', execution)
+      const wakeId = wake(execution.taskId, 'execution.stage.progress', { executionId: execution.executionId, ...report }, `execution-stage:${commandId}`)
+      return changed({ execution, wakeId })
     }
     if (kind === 'execution.sessionBound' || kind === 'execution.drained' || kind === 'execution.result' || kind === 'execution.cancel') {
       const execution = kind === 'execution.cancel' && a.binding?.kind === 'task-session' ? (() => {
@@ -494,7 +591,39 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           execution.result = { payload, current, requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
             leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion, receivedAt: stamp }
           execution.status = current ? a.error ? 'failed' : 'succeeded' : 'stale'
-          wake(execution.taskId, 'execution.result', { executionId: execution.executionId, current }, `execution-result:${execution.executionId}:${execution.inputVersion}`)
+          // Only native terminal evidence can admit provider recovery. Preserve the
+          // original failure and successful effects; unresolved operations go to reconciliation.
+          const terminal = a.error?.terminal
+          const recoverable = current && a.error?.code === 'EXECUTION_PROVIDER_TRANSIENT'
+            && terminal?.sessionId === execution.sessionId && terminal.inputVersion === execution.inputVersion
+            && terminal.reason === 'error' && Number.isSafeInteger(terminal.endSeq) && terminal.endSeq >= 0
+            && execution.sessionBound && !ops(execution.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))
+            && !get('dynamic_tasks', execution.taskId).humanRequests?.some(item => item.status === 'waiting-reply')
+          const attempts = execution.providerRecovery?.attempts ?? 0
+          if (recoverable && attempts < 3) {
+            execution.status = 'queued'
+            execution.providerRecovery = { attempts: attempts + 1, nextAttemptAt: new Date(Date.parse(stamp) + 5000 * 2 ** attempts).toISOString(),
+              failureInputVersion: execution.inputVersion, terminal: clone(terminal) }
+          } else {
+            if (recoverable) {
+              const coldAttempts = execution.providerRecovery?.coldAttempts ?? 0
+              const reviewAttempts = execution.providerRecovery?.reviewAttempts ?? 0
+              const retryNotBefore = new Date(Date.parse(stamp) + [600_000, 1_800_000, 3_600_000][Math.min(Math.max(coldAttempts, reviewAttempts), 2)]).toISOString()
+              execution.providerRecovery = { ...execution.providerRecovery, exhausted: true, nextAttemptAt: null, coldAttempts, retryNotBefore,
+                terminal: clone(terminal), nextReviewAt: reviewAttempts < 3 && coldAttempts < 3 ? retryNotBefore : null }
+            }
+            wake(execution.taskId, 'execution.result', { executionId: execution.executionId, current }, `execution-result:${execution.executionId}:${execution.inputVersion}`)
+          }
+          if (a.error?.phase === 'provider') execution.result.recovery = { decision: execution.providerRecovery?.nextAttemptAt ? 'scheduled'
+            : recoverable ? 'exhausted' : 'not-admitted', attempts: execution.providerRecovery?.attempts ?? 0,
+            maxAttempts: 3, nextAttemptAt: execution.providerRecovery?.nextAttemptAt ?? null,
+            coldAttempts: execution.providerRecovery?.coldAttempts ?? 0, retryNotBefore: execution.providerRecovery?.retryNotBefore ?? null,
+            reviewAttempts: execution.providerRecovery?.reviewAttempts ?? 0,
+            nextReviewAt: execution.providerRecovery?.nextReviewAt ?? null }
+          if (!a.error && execution.providerRecovery) {
+            execution.result.recovery = { decision: 'recovered', attempts: execution.providerRecovery.attempts, maxAttempts: 3, nextAttemptAt: null }
+            execution.providerRecovery = null
+          }
         }
       }
       execution.updatedAt = stamp; put('dynamic_executions', execution)

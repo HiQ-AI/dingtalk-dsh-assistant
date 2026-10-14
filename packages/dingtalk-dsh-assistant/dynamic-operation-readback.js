@@ -124,7 +124,13 @@ export async function readExecutionProgress({ ctx, execution }) {
   const binding = { kind: 'task-execution', taskId: execution.taskId, executionId: execution.executionId,
     sessionId: execution.sessionId, inputVersion: execution.inputVersion, leaseEpoch: execution.leaseEpoch, inputDigest: execution.inputDigest }
   let saved
-  try { saved = await inspectSession(ctx.sessionPersistence, execution.sessionId) }
+  try {
+    // Active turns buffer JSONL events. Flush the existing native writer before
+    // opening the read-only handle; do not claim a second writer or replay work.
+    const live = ctx.sessions?.get?.(execution.sessionId)
+    if (live && ctx.sessions?.flush) await ctx.sessions.flush(live)
+    saved = await inspectSession(ctx.sessionPersistence, execution.sessionId)
+  }
   catch (cause) { throw Object.assign(new Error('EXECUTION_PROGRESS_LOG_UNREADABLE'), { code: 'EXECUTION_PROGRESS_LOG_UNREADABLE', cause }) }
   const { events } = saved
   if (saved.meta.id !== binding.sessionId || !identity(events, binding)) reject('EXECUTION_PROGRESS_IDENTITY_MISMATCH')

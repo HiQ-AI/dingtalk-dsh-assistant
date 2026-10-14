@@ -155,6 +155,72 @@ test('执行加载状态区域与分页始终存在，空记录刷新及失败�
   assert.ok(elements(tree).some(item => item.props.role === 'alert'))
 })
 
+test('当前进展合并活跃阻塞记录，包含详情分页外的并行执行且不把已完成结果当进展', () => {
+  const task = { state: 'running', requirementRevision: 3, controlRevision: 1, result: { summary: '已完成的历史结论' },
+    executions: [{ executionId: 'old', status: 'succeeded', drained: true, objective: '已完成事项' }, { executionId: 'stale', status: 'stale', drained: true, objective: '旧修订事项' }, { executionId: 'one', status: 'running', sessionBound: true, input: { title: '检查甲', objective: '核对甲配置' }, progressReview: { newEventCount: 2 } }],
+    blockers: { executions: [{ executionId: 'one', status: 'running', input: { title: '检查甲', objective: '核对甲配置' } }, { executionId: 'two', status: 'running', sessionId: 'unverified', input: { title: '检查乙', objective: '核对乙日志' } }] } }
+  const view = harness('taskProgressView', task).render()
+  assert.equal(view.executions.length, 2); assert.equal(view.summary, '2 项执行中 · 0 项待执行')
+  assert.equal(view.executions[0].sessionBound, true); assert.equal(view.executions[1].sessionBound, false)
+  const tree = harness('TaskProgress', { task }).render()
+  assert.match(text(tree), /核对甲配置/); assert.match(text(tree), /核对乙日志/); assert.match(text(tree), /新增 2 条会话事件/)
+  assert.doesNotMatch(text(tree), /已完成的历史结论|已完成事项|旧修订事项|%/)
+})
+
+test('当前进展准确区分暂停、完成、恢复、旧修订收尾与暂无数据', () => {
+  const base = { state: 'running', requirementRevision: 3, executions: [{ executionId: 'one', status: 'running', requirementRevision: 3 }] }
+  const view = task => harness('taskProgressView', task).render()
+  const paused = view({ ...base, state: 'waiting', controlState: 'paused' })
+  assert.match(paused.summary, /任务已暂停/); assert.equal(paused.executions[0].running, false)
+  assert.equal(view({ ...base, state: 'completed' }).executions.length, 0)
+  assert.equal(view({ ...base, recovering: true }).executions[0].running, false)
+  const outdated = view({ ...base, requirementRevision: 4 })
+  assert.equal(outdated.executions[0].running, false); assert.equal(outdated.executions[0].label, '等待停止 / 收尾')
+  assert.match(view({ state: 'running' }).summary, /暂无当前执行进展/)
+  const tree = harness('TaskProgress', { task: { ...base, executions: [{ ...base.executions[0], progressReview: { readError: 'fixture_read_failure', newEventCount: 0 } }] } }).render()
+  assert.match(text(tree), /进展记录读取失败/); assert.doesNotMatch(text(tree), /新增 0 条/)
+})
+
+test('整体进展不从目标或结果推断，新回合保留已确认快照并标注非实时', () => {
+  const task = { state: 'running', drained: false, requirementRevision: 3, controlRevision: 1,
+    result: { summary: '修复已经完成' }, executions: [{ objective: '准备验证修复' }],
+    lastDecision: { action: 'wait', summary: '正在排查原因', at: '2026-10-14T09:15:00Z', requirementRevision: 3, controlRevision: 1 } }
+  const view = harness('taskOverallProgressView', task).render()
+  assert.equal(view.description, task.lastDecision.summary)
+  assert.equal(view.recordedAt, task.lastDecision.at); assert.equal(view.missing, false)
+  assert.equal(view.updating, true); assert.equal(view.heading, '最近已确认进展')
+  assert.doesNotMatch(view.description, /修复已经完成|准备验证/)
+})
+
+test('整体进展校验修订和记录时间，更新中不隐藏快照，暂停完成不误报实时', () => {
+  const task = { state: 'waiting', drained: true, requirementRevision: 3, controlRevision: 1,
+    lastDecision: { action: 'wait', summary: '已核对修复边界，等待确认验证范围。', at: '2026-10-14T09:15:00Z', requirementRevision: 3, controlRevision: 1 } }
+  const view = value => harness('taskOverallProgressView', value).render()
+  assert.equal(view(task).description, task.lastDecision.summary); assert.equal(view(task).recordedAt, task.lastDecision.at)
+  assert.equal(view({ ...task, state: 'running' }).description, task.lastDecision.summary)
+  assert.equal(view({ ...task, state: 'running' }).heading, '最新统筹进展')
+  assert.equal(view({ ...task, requirementRevision: 4 }).missing, true)
+  assert.equal(view({ ...task, controlRevision: 2 }).missing, true)
+  assert.equal(view({ ...task, drained: false }).missing, false)
+  assert.equal(view({ ...task, drained: false }).updating, true)
+  assert.equal(view({ ...task, lastDecision: { ...task.lastDecision, at: undefined } }).missing, true)
+  assert.match(view({ ...task, controlState: 'paused' }).description, /任务已暂停/)
+  assert.match(view({ ...task, state: 'completed' }).description, /结果与执行记录见下方/)
+})
+
+test('新回合暂缺统筹记录时保留已读确认说明，跨任务或修订不得沿用', () => {
+  const task = { taskId: 'one', state: 'running', drained: true, requirementRevision: 3, controlRevision: 1,
+    lastDecision: { action: 'wait', summary: '已定位原因，正在验证修复。', at: '2026-10-14T09:15:00Z', requirementRevision: 3, controlRevision: 1 } }
+  const h = harness('TaskProgress', { task })
+  assert.match(text(h.render()), /已定位原因，正在验证修复/)
+  let tree = h.render({ task: { ...task, drained: false, lastDecision: null } })
+  assert.match(text(tree), /已定位原因，正在验证修复/); assert.match(text(tree), /不代表实时工作/)
+  tree = h.render({ task: { ...task, requirementRevision: 4, drained: false, lastDecision: null } })
+  assert.doesNotMatch(text(tree), /已定位原因/)
+  tree = h.render({ task: { ...task, taskId: 'two', drained: false, lastDecision: null } })
+  assert.doesNotMatch(text(tree), /已定位原因/)
+})
+
 test('已取消任务仍出现在已结束桶，所有历史记录进入只读历史页', () => {
   assert.match(source, /\['completed', 'cancelled', 'succeeded', 'failed'\]\.includes\(task\.state\)/)
   assert.match(source, /filter\(task => task\.legacyReadonly \|\| task\.archivedAt\)/)

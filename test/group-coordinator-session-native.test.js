@@ -2,7 +2,7 @@ import { findSessionLog } from './fixtures/session-persistence.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -18,11 +18,169 @@ import PermissionPresetService from '@deepseek-ai/dsh-permission-presets'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import { createGroupCoordinatorSessions } from '../packages/dingtalk-dsh-assistant/group-coordinator-session.js'
+import { createModelContentIndex } from '../packages/dingtalk-dsh-assistant/model-context.js'
+
+function indexedText(session, root, value) {
+  if (typeof value === 'string') return value
+  const page = createModelContentIndex(session, { root: join(root, 'model-content') }).read({ contentRef: value.contentRef, limit: 16000 })
+  assert.equal(page.nextOffset, null)
+  return page.text
+}
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
 const decision = { kind: 'no_action', reason: '人际闲聊' }
 const decisionSchema = { type: 'object', properties: { kind: { type: 'string' }, reason: { type: 'string' } }, required: ['kind', 'reason'], additionalProperties: false }
+
+test('group single-input nested quotes, policy and read-tool copies share resolvable content', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'group-index-')); t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root); t.after(() => h.close())
+  const body = 'SOURCE_BODY_UNIQUE ' + 'authorization '.repeat(200), policy = 'POLICY_UNIQUE ' + 'only analysis '.repeat(200)
+  const source = { sourceKey: 'message', sourceVersion: 1, actorId: 'owner', text: body }
+  const input = { sources: [{ ...source, body, context: { source, policy, history: [source], quotes: [{ ...source, quoteRefs: [source] }] } }], groupResponsibility: policy }
+  await h.sessions.run({ binding: { conversationId: 'group', sessionId: 'indexed-group', turnId: 'one', leaseEpoch: 1, sessionBound: false }, input,
+    provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {},
+    readTools: [{ name: 'read_material', effectClass: 'read', description: 'read', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }, execute: async () => input }] })
+  const text = JSON.stringify(h.requests.at(-1).messages)
+  assert.equal(text.split(body).length - 1, 1, 'nested source and tool readback do not repeat the source body')
+  assert.equal(text.split(policy).length - 1, 1, 'policy has one authoritative content entry')
+})
+
+test('all group read bypasses preserve first evidence once, repeat as references and resolve after native reopen', async t => {
+  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
+  const root = await mkdtemp(join(tmpdir(), 'group-read-index-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  const bodies = ['source original ', 'history evidence ', 'material evidence ', 'task evidence '].map(text => text.repeat(200))
+  const names = ['group_coordinator_read_tasks', 'group_coordinator_read_history', 'group_coordinator_read_material', 'group_coordinator_read_task']
+  const values = bodies.map((text, index) => ({ actorId: 'author-' + index, sourceVersion: index + 1, text, authorization: { approved: false }, unknownEffect: 'original-effect-' + index }))
+  const readTools = names.map((name, index) => ({ name, effectClass: 'read', description: name, parameters: { type: 'object' },
+    output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }, execute: async () => structuredClone(values[index]) }))
+  const original = structuredClone(values), metrics = []
+  let reference
+  const first = await host(root, { call: (number, request) => {
+    if (number <= 8) return { name: names[(number - 1) % 4], args: {} }
+    if (number === 9) {
+      const last = request.messages.filter(message => message.role === 'tool').at(-1)
+      reference = JSON.parse(last.content[0].text).contentRef
+      assert.ok(reference, 'repeat read returns an exact resolvable record reference')
+      return { name: 'model_content_read', args: { contentRef: reference, path: '/text' } }
+    }
+    assert.match(JSON.stringify(request.messages.at(-1)), /alreadyVisible/)
+    return { name: 'group_coordinator_submit', args: { decision } }
+  } }); hosts.push(first)
+  const binding = { conversationId: 'group', sessionId: 'group-content-reopen', turnId: 'first', leaseEpoch: 1, sessionBound: false }
+  const run = (h, binding) => h.sessions.run({ binding, input: { sources: [{ runId: 'run', sourceKey: 'source', sourceVersion: 1, actorId: 'author-0', body: bodies[0] }], groupResponsibility: 'only analyze' },
+    provider: 'group-fixture', model: 'scripted', decisionSchema, readTools, onSessionBound: async () => {}, onCandidate: async () => {} })
+  assert.equal((await run(first, binding)).status, 'submitted')
+  assert.deepEqual(values, original)
+  for (const text of bodies) assert.equal(JSON.stringify(first.requests.at(-1).messages).split(text).length - 1, 1)
+  await first.close()
+  const second = await host(root, { call: number => number === 1 ? { name: 'model_content_read', args: { contentRef: reference, path: '/text' } } : { name: 'group_coordinator_submit', args: { decision } } }); hosts.push(second)
+  second.setLease(2)
+  assert.equal((await run(second, { ...binding, leaseEpoch: 2, sessionBound: true, turnId: 'second' })).status, 'submitted')
+  const saved = await inspectSession(second.ctx.sessionPersistence, binding.sessionId), folded = foldSurface(saved.events)
+  const messages = folded.nodes.map(seq => deriveEventMessage(saved.events[seq], folded.projectedMessages)).filter(Boolean)
+  for (const text of bodies.slice(1)) assert.equal(JSON.stringify(messages).split(text).length - 1, 1)
+  for (const request of [first.requests[0], first.requests[4], first.requests.at(-1), second.requests.at(-1)]) metrics.push({
+    currentHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinator && !message.source.groupCoordinatorHistory))),
+    oldHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinatorHistory))),
+    toolHistoryBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.role === 'tool'))),
+    systemBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.role === 'system'))), schemaBytes: Buffer.byteLength(JSON.stringify(request.tools)),
+    adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+  t.diagnostic(JSON.stringify({ scope: 'actual SDK scripted adapter UTF-8 JSON bytes; not provider tokens', metrics }))
+})
+
+test('native json-index pages reach exact previously unseen text, quoted author/version, and remain readable after reopen', async t => {
+  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
+  const root = await mkdtemp(join(tmpdir(), 'group-json-index-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  const body = Array.from({ length: 1200 }, (_, i) => `证据段${i}🙂：仅分析，不发布；`).join('')
+  const quote = { actorId: 'quoted-author', sourceVersion: 2, text: '旧引用只是背景，不构成授权。' }
+  const record = { actorId: 'authorized-owner', sourceVersion: 3, corrects: 'source-v2', text: body, quoted: quote,
+    ...Object.fromEntries(Array.from({ length: 25 }, (_, i) => ['extra-' + i.toString().padStart(2, '0'), 'fact-' + i])) }
+  let reference, buffer = '', phase = 'root', offset = 0, rootPages = 0, observedQuote
+  const entries = new Map(), metrics = []
+  const decode = (request, value) => {
+    if (typeof value === 'string') return value
+    for (const message of request.messages) for (const block of message.content ?? []) if (block.type === 'text') {
+      try { const definition = JSON.parse(block.text).contentIndex?.[value.contentRef]; if (definition !== undefined) return definition } catch {}
+    }
+    assert.fail('text reference must have an exact visible definition after the real read tool')
+  }
+  const first = await host(root, { call: (number, request) => {
+    if (number === 1) return { name: 'group_coordinator_read_material', args: {} }
+    const last = JSON.parse(request.messages.filter(message => message.role === 'tool').at(-1).content[0].text)
+    if (!reference) reference = last.materialRef.contentRef
+    else if (phase === 'root') {
+      assert.equal(last.format, 'json-index'); rootPages++
+      for (const item of last.entries) entries.set(item.key, item)
+      if (last.nextOffset !== null) return { name: 'model_content_read', args: { contentRef: reference, offset: last.nextOffset, limit: 20 } }
+      assert.equal(entries.get('actorId').value, 'authorized-owner'); assert.equal(entries.get('sourceVersion').value, 3)
+      assert.equal(entries.get('corrects').value, 'source-v2'); phase = 'body'
+    } else if (phase === 'body') {
+      assert.equal(last.offset, offset)
+      buffer += decode(request, last.text)
+      if (last.nextOffset === null) { assert.equal(buffer, body); phase = 'quoted' } else offset = last.nextOffset
+    } else if (phase === 'quoted') {
+      assert.equal(last.format, 'json-index')
+      const fields = new Map(last.entries.map(item => [item.key, item]))
+      assert.equal(fields.get('actorId').value, 'quoted-author'); assert.equal(fields.get('sourceVersion').value, 2)
+      observedQuote = fields.get('text').valueRef.contentRef; phase = 'quote-text'
+    } else if (phase === 'quote-text') {
+      assert.equal(decode(request, last.text), quote.text); phase = 'done'
+    }
+    if (!reference) assert.fail('material capability missing')
+    if (phase === 'root') return { name: 'model_content_read', args: { contentRef: reference, limit: 20 } }
+    if (phase === 'body') return { name: 'model_content_read', args: { contentRef: entries.get('text').valueRef.contentRef, offset, limit: 1000 } }
+    if (phase === 'quoted') return { name: 'model_content_read', args: { contentRef: reference, path: '/quoted' } }
+    if (phase === 'quote-text') return { name: 'model_content_read', args: { contentRef: observedQuote } }
+    return { name: 'group_coordinator_submit', args: { decision } }
+  } }); hosts.push(first)
+  const readTools = [{ name: 'group_coordinator_read_material', effectClass: 'read', description: 'read indexed material', parameters: { type: 'object' },
+    output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute: async () => ({ materialRef: createModelContentIndex(first.ctx.sessions.get('json-index-group'), { root: join(root, 'model-content') }).store(record) }) }]
+  const binding = { conversationId: 'group', sessionId: 'json-index-group', turnId: 'one', leaseEpoch: 1, sessionBound: false }
+  const run = (h, binding) => h.sessions.run({ binding, input: { sources: [] }, provider: 'group-fixture', model: 'scripted', decisionSchema, readTools, onSessionBound: async () => {}, onCandidate: async () => {} })
+  assert.equal((await run(first, binding)).status, 'submitted'); assert.equal(rootPages, 2); assert.equal(buffer, body)
+  await first.close()
+  let recoveredText
+  const next = await host(root, { call: (number, request) => {
+    if (number === 1) return { name: 'model_content_read', args: { contentRef: reference, path: '/quoted/text' } }
+    const result = JSON.parse(request.messages.filter(message => message.role === 'tool').at(-1).content[0].text)
+    recoveredText = result.alreadyVisible ? decode(request, result.resolvedRef) : decode(request, result.text)
+    return { name: 'group_coordinator_submit', args: { decision } }
+  } }); hosts.push(next); next.setLease(2)
+  assert.equal((await run(next, { ...binding, turnId: 'two', leaseEpoch: 2, sessionBound: true })).status, 'submitted')
+  assert.equal(recoveredText, quote.text)
+  const saved = await inspectSession(next.ctx.sessionPersistence, binding.sessionId), surface = foldSurface(saved.events)
+  assert.ok(surface.nodes.map(seq => deriveEventMessage(saved.events[seq], surface.projectedMessages)).filter(Boolean).length > 1)
+  for (const request of [first.requests[0], first.requests[3], first.requests.at(-1), next.requests.at(-1)]) {
+    const bytes = role => Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.role === role)))
+    metrics.push({ currentHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinator && !message.source.groupCoordinatorHistory))),
+      oldHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinatorHistory))), toolHistoryBytes: bytes('tool'), systemBytes: bytes('system'), schemaBytes: Buffer.byteLength(JSON.stringify(request.tools)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+  }
+  t.diagnostic(JSON.stringify({ scope: 'real SDK json-index directory and UTF-16 text pages; measured UTF-8 JSON bytes, no provider tokens', textLength: body.length, metrics }))
+})
+
+test('invalid migrated assistant provenance is rejected by SDK replay before any model wake or rewrite', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'group-invalid-replay-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  const first = await host(root, { call: () => ({ name: 'group_coordinator_submit', args: { decision } }) }); hosts.push(first)
+  const binding = { conversationId: 'group', sessionId: 'invalid-migration', turnId: 'first', leaseEpoch: 1, sessionBound: false }
+  const run = (h, binding) => h.sessions.run({ binding, input: { sources: [] }, provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {} })
+  await run(first, binding); await first.close()
+  const path = await findSessionLog(join(root, 'sessions'), binding.sessionId)
+  const rows = (await readFile(path, 'utf8')).trimEnd().split('\n').map(line => JSON.parse(line))
+  const assistant = rows.find(row => row.type === 'assistant/message')
+  assert.ok(assistant)
+  assistant.sourceEventSeqs = [rows.find(row => row.type === 'user/message').seq]
+  const invalid = rows.map(row => JSON.stringify(row)).join('\n') + '\n'
+  await writeFile(path, invalid)
+  const next = await host(root); hosts.push(next); next.setLease(2)
+  await assert.rejects(run(next, { ...binding, leaseEpoch: 2, sessionBound: true, turnId: 'next' }), /assistant\/message embeds its source stream and cannot carry sourceEventSeqs/)
+  assert.equal(next.requests.length, 0)
+  assert.equal(await readFile(path, 'utf8'), invalid, 'invalid original is not silently repaired or reinterpreted')
+})
 
 test('repeated and empty source wakes keep one copy across SDK requests, including dynamic mode', async t => {
   for (const dynamic of [false, true]) {
@@ -42,7 +200,9 @@ test('repeated and empty source wakes keep one copy across SDK requests, includi
       const hostInputs = messages.filter(m => m.source?.groupCoordinator)
       const sourceCopies = hostInputs.flatMap(m => m.content).flatMap(b => b.type === 'text' ? JSON.parse(b.text).sources ?? [] : [])
       assert.equal(sourceCopies.length, 1, `same source must occur once, dynamic=${dynamic}, wake=${leaseEpoch}`)
-      assert.match(JSON.stringify(messages), /quoted boundary/)
+      const retained = sourceCopies[0]
+      const quote = (retained.quotes ?? retained.context?.quotes)[0]
+      assert.equal(indexedText(h.ctx.sessions.get('growth'), root, quote.text), 'quoted boundary')
       assert.match(JSON.stringify(messages), /UNKNOWN_EFFECT: do not replay/)
       assert.ok(hostInputs.length <= 2, 'empty histories must not accumulate')
       metrics.push({ wake: leaseEpoch, hostMessagesBytes: Buffer.byteLength(JSON.stringify(hostInputs)), messagesBytes: Buffer.byteLength(JSON.stringify(messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(h.requests.at(-1))) })
@@ -129,8 +289,9 @@ async function host(root, options = {}) {
       const failure=optionsForHost.providerFailure?.(requests.length)
       if(failure){yield {type:'finish',reason:{kind:'error',failure}};return}
       if (optionsForHost.noSubmission) { yield { type: 'finish', reason: { kind: 'stop' } }; return }
-      const id = `call-${requests.length}`, name = requests.length === 1 ? 'read_material' : 'group_coordinator_submit'
-      const args = JSON.stringify(name === 'read_material' ? { ref: 'file' } : { decision: optionsForHost.decision?.(requests.length, options) ?? decision })
+      const selected = optionsForHost.call?.(requests.length, options)
+      const id = `call-${requests.length}`, name = selected?.name ?? (requests.length === 1 ? 'read_material' : 'group_coordinator_submit')
+      const args = JSON.stringify(selected?.args ?? (name === 'read_material' ? { ref: 'file' } : { decision: optionsForHost.decision?.(requests.length, options) ?? decision }))
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
       yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
@@ -139,7 +300,7 @@ async function host(root, options = {}) {
   }
   ctx.llm.registerAdapter(['group-fixture'], new Scripted())
   let lease = 1
-  const sessions = createGroupCoordinatorSessions({ ctx, isCurrent: async b => b.leaseEpoch === lease, ...options })
+  const sessions = createGroupCoordinatorSessions({ ctx, isCurrent: async b => b.leaseEpoch === lease, contentRoot: join(root, 'model-content'), ...options })
   return { ctx, requests, sessions, memberships, setLease(n) { lease = n }, async close() { await sessions.close(); await ctx.fiber.dispose() } }
 }
 
@@ -285,7 +446,7 @@ test('旧职责目录派生到Agent根，完整继承日志，恢复群名和完
   assert.deepEqual(child.events.slice(0, parent.events.length), parent.events)
   assert.deepEqual(await readFile(parentPath), originalBytes)
   const history = child.events.findLast(e => e.data?.source?.groupCoordinatorHistory)
-  assert.equal(JSON.parse(history.data.content[0].text).sources[0].body, args.input.sources[0].body)
+  assert.equal(indexedText(h.ctx.sessions.get(relocated.sessionId), root, JSON.parse(history.data.content[0].text).sources[0].body), args.input.sources[0].body)
   assert.deepEqual(JSON.parse(history.data.content[0].text).sources[0].attachments, args.input.sources[0].context.attachments)
   assert.ok(!history.data.content[0].text.includes('obsoleteSnapshot'))
   h.setLease(3); name = '广场与编辑器迭代'
@@ -314,7 +475,8 @@ test('每轮完整输入保留，下一轮原生surface只保留历史来源而�
   await h.sessions.run({ ...args, input: { sources: [{ ...input.sources[0], runId: 'm2', body: '补充事实' }], candidates: [{ currentSnapshot: '本轮完整目录' }] },
     binding: { ...args.binding, turnId: 'next', leaseEpoch: 2, sessionBound: true } })
   const current = JSON.stringify(h.requests.at(-1).messages)
-  assert.ok(current.includes('完整原文：仅分析、不执行'))
+  const historyMessage = h.requests.at(-1).messages.find(message => message.source?.groupCoordinatorHistory)
+  assert.equal(indexedText(h.ctx.sessions.get('history-group'), root, JSON.parse(historyMessage.content[0].text).sources[0].body), input.sources[0].body)
   assert.ok(current.includes('currentSnapshot'))
   assert.ok(!current.includes('fullHostSnapshot'))
   assert.ok(current.length < before.length / 2)

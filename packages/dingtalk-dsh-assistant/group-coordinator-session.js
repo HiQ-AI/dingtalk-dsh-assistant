@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { retireHostContext } from './host-context.js'
+import { createModelContentIndex, modelContentScope, modelContentRoot, modelHostMessage, modelHostInput } from './model-context.js'
 
 const IDENTITY = 'plugin:dingtalk/group-coordinator-session'
 const SUBMIT = 'group_coordinator_submit'
@@ -60,7 +61,7 @@ function retainCoordinatorSources(session, currentSources = [], position) {
 }
 
 // 每群一个原生逻辑会话；Host负责来源、版本和动作接纳，本层没有任务或群消息写入工具。
-export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir, getGroupName }) {
+export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir, getGroupName, contentRoot }) {
   if (typeof isCurrent !== 'function') throw fail('GROUP_COORDINATOR_CURRENT_CHECK_REQUIRED')
   const entries = new Map()
   const idleSessions = new Map()
@@ -200,7 +201,8 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
         seed: [...stored.events,
           { type: 'session/end-seed', seq: stored.events.length, time: Date.now(), data: { inherited: true } },
           { type: IDENTITY, seq: stored.events.length + 1, time: Date.now(), ignorable: true,
-            data: { version: 1, conversationId: binding.conversationId, sessionId, parentSessionId: binding.sessionId, creationLease: binding.leaseEpoch + 1 } }] })
+            data: { version: 1, conversationId: binding.conversationId, sessionId, parentSessionId: binding.sessionId,
+              parentContentScope: modelContentScope(stored.meta), parentContentRoot: contentRoot ?? modelContentRoot(stored.meta), creationLease: binding.leaseEpoch + 1 } }] })
     try {
       permissions(handle); title(handle.agent.session, binding.conversationId)
       retainCoordinatorSources(handle.agent.session)
@@ -224,22 +226,30 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
     if (entries.has(binding.conversationId)) throw fail('GROUP_COORDINATOR_BUSY')
     const entry = { binding: Object.freeze(structuredClone(binding)), abort: new AbortController(), drained: Promise.withResolvers() }
     entries.set(binding.conversationId, entry)
-    const setup = agentCtx => {
+    const setup = (agentCtx, agent) => {
+      entry.content = createModelContentIndex(agent.session, contentRoot ? { root: contentRoot } : undefined)
       agentCtx.systemPrompt.section({ name: 'group:coordinator', order: 0, complete: true,
         text: instructions ?? `你是本群常驻协调助手。根据当前身份别名、群职责、原消息和连续上下文一次完成是否介入、任务关联、查询、补充、新建或必要澄清。群聊中的“你”不自动指助手，但明确点名助手和明确交办不得忽略。units=[]表示完全忽略来源，不会将其并入Task；需要承接的补充、附件来源和阶段条件应使用fact单元绑定同批source:<runId>且replyPolicy:none。初次承接时非空units的spans合计必须覆盖sourceLength完整原文；存在continuation时仅提交指定待续办单元的原unitId和原spans，其他单元不重提。requiredExecutionMaterials只接受真实resourceRef，待取得证据或表结构属于调查objective而不是发起前置条件。附件与后续请求结合阅读，原需求方更正应更新同一任务；同一目标的准备、审批、测试、原发送者验证、正式执行属于同一Task的阶段，不重复建任务。职责止于消息承接、事项关联和交办条件整理。请求提供任务、随后提供文档、点名和明确开发可以逐步补足同一交办链；根据语义、引用和已知话题事实续接同一topic，不因每条消息信息不完整拆成新话题，也不按时间相邻或同群强行合并无关事项。同批同一链选择一个source:<runId>为共同话题锚点，fact与create/research都用conversation绑定该锚点；跨轮复用当前已有话题candidateId。创建Task不等于新建话题：已有无Task话题可承接create，只有已有Task才禁止再次create；new/null只用于独立新话题。不同作者可以讨论同一话题，但逐条保留来源身份、分别核验授权，话题关联不继承别人的权限。公共讨论补充用fact且scope=conversation、replyPolicy=none关联当前已有话题，不读取或控制Task。需求方明确补齐已有Task缺少的执行字段时，用revise携带对应结构化参数更新原需求，不仅记fact；依据连续问答解释省略表达，不新增任务或部署授权。若当前确认省略环境全名，revise填写uatEnvironment及uatSourceRefs，按问答顺序引用同话题当前sourceKey/sourceVersion/sourceQuote，sourceQuote必须是完整原文、末条必须是当前有权确认消息；上下文仅作解释不授予权限，不覆盖当前明确不同环境。只有材料加单纯点名、尚未表达要做什么时，记录为同话题fact和处理指向，等待后续明确动作；不得自行推断需要评审、调查或实施建议而创建research。“授权不明按分析”仅限制已表达动作的执行范围，不能凭空生成分析任务。初次命名或新增实质信息时，在一个unit的topicPresentation提交累计事项的title和summary（不是仅复述最新一句）；同topic每批最多一个显式更新，其他unit省略该字段。名称概括事项，摘要反映当前目标、已给材料和明确约束；不臆造文档正文，不把承接写成完成。新建任务的arguments.title用8–20字、最多30字的业务短名称，直接概括动作和对象，不以“针对某人要求”起头；完整需求放objective。业务objective可以完整概括需求；stageAuthorizations[].objective是授权依据，必须使用sourceQuote中的逐字来源片段，不得改写、扩展或借其他作者的原文补足授权。明确交办且原文与附件元数据足够时，立即提交create/research，由Task Owner继续调查、工作簿核验、SQL审核和交付；不要先在群协调会话完成这些业务工作再发起Task。“边做边修”等是工作方式约束；已有事项则关联，没有具体事项则保留对话事实，不虚构插件专项任务、不要求先提供插件bug。任务准入由Host核验，actorPermissions为空不表示无权；提出明确交办候选，不自行要求负责人确认。needs_clarification仅用于target_conflict、scope_conflict、required_parameter_missing、no_actionable_target，必须给出missingField、blockedAction和checkedSourceRefs（使用当前原消息sourceKey及实际检查的resourceRef，不使用source:<runId>候选ID）；先读已有必要材料，权限、读取故障、能力缺失不能作为需求澄清。只读材料工具仅用于确需查明的消息含义、任务关联或缺失业务条件，不把整个附件审查当成承接前置。使用本轮只读工具核验相关任务事实，不猜测数据或读取权限。仅人际闲聊静默处理，不主动追问；已经提供的材料不可重复索取。提交动作只代表候选，Host接纳后由已有任务后端执行；received:true仅表示协调决定已落账，不能据此认定Task存在或执行完成。每轮sources.processing为当前后端权威事实，旧superseded命令且taskExists=false不能作为忽略重放来源的依据；不得声称已执行或替人审批。长任务交给既有Task，不等待其完成来阻塞群消息。严格保留来源身份、版本、原文约束和授权边界；历史工具结果是当时事实，当前版本冲突时重新读取相关任务。不要重复通知或自行发送群消息，所有通知由唯一出口处理。${groupReplyInstructions}最后调用 ${SUBMIT} 提交协调决定。` })
       if (dynamic) agentCtx.tools.presentAs('native')
       agentCtx.tools.restrict({ allow: [] })
       if (!dynamic) agentCtx.systemPrompt.section({ name: 'group:progress', order: 1, text: '已有任务的催促或进度询问不启动新的调查回答：确需回复时使用 status/result 查询已有任务当前事实；只含情绪反馈且没有查询或交办时作为 fact 静默关联。answer.objective 填真正要调查的问题，不能填你拟发送的回复。群里仅通知简洁的实际进度，详细业务分析留在任务产物，不复述原文、不道歉铺垫、不说“已收到”或“不用重复提交材料”。' })
       if (!dynamic) agentCtx.systemPrompt.section({ name: 'group:mixed-input', order: 2, text: '一条消息可包含多个独立任务、对旧问题的补答和闲聊。逐项分段承接：clarification仅绑定facts.quotedRequest或clarificationRequests中当前pending且有权回答的请求，只覆盖补答原文；独立新任务正常建单元，闲聊用no_action单元完成覆盖。同一句表达不同目标可以共享跨度，但相同跨度和相同动作不得重复提交。引用已resolved/superseded请求不会再次回答旧问题，不得因此忽略同条新交办。sources[].continuation存在时，仅提交其中每个unit的原unitId和原spans；其他已接纳单元保持，不重新提交，也不要求覆盖整条sourceLength。续办沿原话题，只有明确核验了已有候选目标才改绑；新消息的额外任务在新来源中承接，不塞入旧请求的答案。' })
-      const allowed = new Set([SUBMIT, ...readTools.map(t => t.name)])
+      entry.content.install(agentCtx, () => current(entry))
+      const allowed = new Set([SUBMIT, 'model_content_read', ...readTools.map(t => t.name)])
       agentCtx.tools.guard(exec => !allowed.has(exec.name) || entry.submitted || entry.staleReason || entry.cancelled || closed ? 'group_coordinator_tool_not_allowed' : undefined)
       agentCtx.on('agent/pre-step', async (_event, next) => {
         if (!await current(entry) || entry.staleReason || entry.submitted || dynamic && entry.submissionAttempts >= 3) return { kind: 'reject' }
-        return next()
+        const decision = await next()
+        if (decision.kind !== 'enter') return decision
+        return { ...decision, messages: decision.messages.map(message => {
+          if (message.source?.kind !== 'coordinator' || message.source.groupCoordinator?.sessionId !== binding.sessionId) return message
+          entry.projectedInput = entry.content.project(modelHostInput(message), { reuseVisible: false })
+          return modelHostMessage(message, entry.projectedInput)
+        }) }
       })
       agentCtx.on('agent/request', (position, next) => {
         if (!entry.contextRetired) {
-          retainCoordinatorSources(entry.handle.agent.session, input.sources, position)
+          retainCoordinatorSources(entry.handle.agent.session, entry.projectedInput.sources, position)
           entry.contextRetired = true
         }
         return next()
@@ -248,7 +258,7 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
       agentCtx.on('tools/result', (exec, result) => { if (exec.name === SUBMIT && exec.callId === entry.submitCallId && !result.isError) entry.accepted = true })
       for (const tool of readTools) {
         const { effectClass, execute, ...definition } = tool
-        agentCtx.tools.register({ ...definition, execute: async (args, exec) => {
+        agentCtx.tools.register({ ...definition, output: entry.content.wrapOutput(definition.output), execute: async (args, exec) => {
           if (!await current(entry)) throw fail('GROUP_COORDINATOR_STALE')
           exec.signal.throwIfAborted()
           return execute(args, exec)

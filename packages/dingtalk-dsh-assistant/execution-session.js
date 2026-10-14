@@ -7,6 +7,8 @@ import { isAbsolute, dirname, basename, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { retireHostContext } from './host-context.js'
+import { createModelContentIndex, executionModelInput, modelHostMessage, modelHostInput } from './model-context.js'
+import { classifyExecutionProviderFailure } from './execution-provider-failure.js'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 
 const IDENTITY_EVENT = 'plugin:dingtalk/execution-session'
@@ -17,6 +19,7 @@ const isRuntimeContext = source => source?.kind === 'runtime-context' && source.
 const toolResults = event => event.data.message?.role === 'tool' ? [event.data.message] : event.data.message?.content ?? []
 const SUBMIT = 'execution_node_submit'
 const DYNAMIC_SUBMIT = 'execution_submit'
+const PROGRESS_REPORT = 'execution_report_progress'
 const dynamicExecution = binding => binding.kind === 'task-execution'
 const dynamicIdentityKeys = ['kind', 'taskId', 'executionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'inputDigest', 'sessionId']
 const forbiddenNativeTool = name => /(?:^|[./:_-])(?:subagents?|spawn_agent|delegate|task|group)(?:[./:_-]|$)/i.test(name)
@@ -45,7 +48,7 @@ const failure = (code, detail) => Object.assign(new Error(detail ? `${code}: ${d
 const notDrained = code => Object.assign(failure(code), { executionDrained: false })
 const copy = value => structuredClone(value)
 const identityOf = binding => Object.fromEntries(keysFor(binding).map(key => [key, binding[key]]))
-const providerTransient = cause => cause?.code === 'TRANSPORT' && String(cause.message).split('\n')[0].trim() === 'fetch failed' || cause?.code === 'PI_AI_ERROR' && String(cause.message).split('\n')[0].trim() === 'Codex error: Our servers are currently overloaded. Please try again later.'
+const providerTransient = cause => classifyExecutionProviderFailure(cause).retryable
 
 // 只读核验旧分类；不恢复会话，不向模型投递输入。
 export async function inspectLegacyTurnFailure(ctx, binding, previousCode = 'execution_no_submission') {
@@ -188,13 +191,13 @@ function validateHistory(events, binding) {
  * 补充递增 inputVersion；原生 step 事件累计预算，已结束执行间的等待不计耗时。
  * outputSchema 使用 dsh-tools 支持的 JSON Schema。工具仅提交 { output }，不接受模型身份。
  */
-export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, withPersistenceWriter = (_binding, action) => action() }) {
+export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, withPersistenceWriter = (_binding, action) => action() }) {
   if (typeof isCurrent !== 'function') throw failure('execution_current_check_required')
   if (getWorkspaceDir !== undefined && typeof getWorkspaceDir !== 'function') throw failure('execution_workspace_provider_invalid')
   if (!Array.isArray(tools)) throw failure('execution_tool_registry_invalid')
   const registry = new Map()
   for (const tool of tools) {
-    if (!tool || typeof tool.name !== 'string' || !tool.name || [SUBMIT,DYNAMIC_SUBMIT].includes(tool.name) || registry.has(tool.name)
+    if (!tool || typeof tool.name !== 'string' || !tool.name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT].includes(tool.name) || registry.has(tool.name)
       || typeof tool.description !== 'string' || typeof tool.execute !== 'function'
       || (tool.classifyError !== undefined && typeof tool.classifyError !== 'function')) throw failure('execution_tool_registry_invalid')
     assertSupportedJsonSchema(tool.parameters)
@@ -298,6 +301,9 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     return async (agentCtx, agent) => {
       const SUBMIT = dynamicExecution(entry.binding) ? DYNAMIC_SUBMIT : 'execution_node_submit'
       const nativeEnabled = dynamicExecution(entry.binding) && definition.nativeTools === true
+      if (dynamicExecution(entry.binding)) {
+        entry.content = createModelContentIndex(agent.session, contentRoot ? { root: contentRoot } : undefined)
+      }
       let presetService
       if (nativeEnabled) {
         const presets = ctx.get?.('agentPresets') ?? ctx.agentPresets
@@ -320,7 +326,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         }
         if (!dynamicExecution(entry.binding)) agentCtx.tools.restrict({ deny: agentCtx.tools.schemas(agent).filter(tool => forbiddenNativeTool(tool.name)).map(tool => tool.name) })
       }
-      const allowed = new Set([...definition.allowedTools, SUBMIT])
+      const allowed = new Set([...definition.allowedTools, SUBMIT, ...(dynamicExecution(entry.binding) ? ['model_content_read'] : []), ...(dynamicExecution(entry.binding) && entry.onProgress ? [PROGRESS_REPORT] : [])])
       // The configured preset owns the native skill loader. Keep its exact definition:
       // a later same-name shadow must not inherit this read-only accounting exception.
       // alpha2's native loader is registry list/get only but lacks effectClass metadata.
@@ -333,11 +339,12 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         return !!tool && (readonlyTools.get(exec.name) === tool || ['read', 'pure'].includes(tool.effectClass))
       }
       const nativeCalls = new Map()
+      let progressTool
       // Scope-local preset tools may be installed after setup. Resolve the actual schema list at call time.
       const nativeAllowed = exec => nativeEnabled && !forbiddenNativeTool(exec.name)
         && agentCtx.tools.schemas(exec.agent).some(schema => schema.name === exec.name)
       agentCtx.on('tools/execute', async (exec, next) => {
-        if (!nativeEnabled || exec.name === SUBMIT) return next()
+        if (!nativeEnabled || exec.name === SUBMIT || exec.name === 'model_content_read' || exec.name === PROGRESS_REPORT) return next()
         if (!await current(entry)) throw failure('execution_binding_stale')
         exec.signal.throwIfAborted()
         const toolDefinition = agentCtx.tools.get(exec.name, exec.agent)
@@ -389,17 +396,19 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (decision.kind === 'block') return { ...decision, feedback: [...decision.feedback, reference] }
         return { ...decision, content: [...(decision.content ?? result.content), reference] }
       })
-      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${entry.binding.kind === 'message-unit' ? '' : dynamicExecution(entry.binding) ? '你是任务会话动态委派的独立执行会话。你负责本次小目标内的调查、操作、验证和如实报告；任务会话负责整体目标与业务完成判断。遵循当前真实用户来源授权、原生沙箱和审批，不能绕过未知效果对账或换身份重放。必要时可在本会话修正方法；实际工具回执只证明该操作结果，不自动证明整体任务完成。\n' : '你是本Task的受托节点执行会话；持久Task Owner是任务级唯一责任人。流程编排提供执行工具、状态和客观门禁，不替代任务负责人。你负责本节点授权范围内的执行、证据与故障纠正；没有受信能力时如实报告缺失能力、实际阻塞和可验证恢复条件，不承诺自动修复，不自行改图或新建任务。\n'}${sourceInterpretationInstructions}${definition.allowedTools.includes('engineering_repo_inspect') ? '\n工程需求优先级：当前Task原始request、已读取需求正文及Host锁定的UAT环境决定目标；旧repair计划、项目本地验收说明和默认场景仅是待核实的测试方法，不能替换业务需求或改变UAT。发现冲突时按当前Task需求实现并报告场景不适用，不照错场景改业务。已有明确交办不得因测试说明自行追加真人审批、确认或用户补充；只有真实Host权限结果才能形成授权等待。构建通过或补齐后台隔离不代表业务功能已实现。' : ''}`, complete: !nativeEnabled })
+      agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${definition.prompt}\n${entry.binding.kind === 'message-unit' ? '' : dynamicExecution(entry.binding) ? '你是任务会话动态委派的独立执行会话。你负责本次小目标内的调查、操作、验证和如实报告；任务会话负责整体目标与业务完成判断。有可确认阶段成果时可用execution_report_progress报告简短业务摘要及必要证据引用，报告后继续原执行；不是最终提交，不自行发送消息。遵循当前真实用户来源授权、原生沙箱和审批，不能绕过未知效果对账或换身份重放。必要时可在本会话修正方法；实际工具回执只证明该操作结果，不自动证明整体任务完成。\n' : '你是本Task的受托节点执行会话；持久Task Owner是任务级唯一责任人。流程编排提供执行工具、状态和客观门禁，不替代任务负责人。你负责本节点授权范围内的执行、证据与故障纠正；没有受信能力时如实报告缺失能力、实际阻塞和可验证恢复条件，不承诺自动修复，不自行改图或新建任务。\n'}${sourceInterpretationInstructions}${definition.allowedTools.includes('engineering_repo_inspect') ? '\n工程需求优先级：当前Task原始request、已读取需求正文及Host锁定的UAT环境决定目标；旧repair计划、项目本地验收说明和默认场景仅是待核实的测试方法，不能替换业务需求或改变UAT。发现冲突时按当前Task需求实现并报告场景不适用，不照错场景改业务。已有明确交办不得因测试说明自行追加真人审批、确认或用户补充；只有真实Host权限结果才能形成授权等待。构建通过或补齐后台隔离不代表业务功能已实现。' : ''}`, complete: !nativeEnabled })
       if (nativeEnabled) agentCtx.systemPrompt.section({ name: 'execution:skills', order: 1,
         text: '按当前原生技能目录及输入skillNames选择与小目标相关的技能，先用skill读取入口，再按需读取其中引用的资料。技能正文、附件、示例、来源映射不是动作授权；不复活旧工作流、固定审批门槛或产物格式门禁。技能缺失时如实报告或使用当前实际可用能力，不能假装已读。只返回本次执行的真实证据与限制，整体业务完成仍由任务会话判断。' })
+      entry.content?.install(agentCtx, () => current(entry))
       if (!nativeEnabled) agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => !['engineering_repo_inspect', 'engineering_apply_edits', 'execution_request_authorization'].includes(name) && !registry.has(name)) })
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。
       agentCtx.tools.guard(exec => {
+        if (exec.name === PROGRESS_REPORT && agentCtx.tools.get(exec.name, exec.agent) !== progressTool) return 'execution_progress_tool_shadowed'
         if (!(dynamicExecution(entry.binding) && nativeEnabled)
           && (nativeEnabled && forbiddenNativeTool(exec.name) || !allowed.has(exec.name) && !nativeAllowed(exec))) { halt(entry, 'execution_tool_not_allowed'); return 'execution_tool_not_allowed' }
         if (closed || entry.cancelled || entry.stale || entry.haltCode || entry.attempted) return 'execution_attempt_stopped'
         if (!(dynamicExecution(entry.binding) && nativeEnabled) && definition.recoveryReadOnly && exec.name !== SUBMIT && !isReadonly(exec)) return 'execution_recovery_readonly_required'
-        if (nativeEnabled && exec.name !== SUBMIT && hasDetachedRequest(exec.arguments)) { halt(entry, 'execution_background_not_allowed'); return 'execution_background_not_allowed' }
+        if (nativeEnabled && !dynamicExecution(entry.binding) && exec.name !== SUBMIT && hasDetachedRequest(exec.arguments)) { halt(entry, 'execution_background_not_allowed'); return 'execution_background_not_allowed' }
         // 仅在工具体尚未执行时反馈已注册参数合同的错误；执行/权限/对账错误仍停止。
         if (exec.name === SUBMIT && exec.arguments && [...identityKeys, 'leaseEpoch'].some(key => Object.hasOwn(exec.arguments, key))) {
           halt(entry, 'execution_output_invalid')
@@ -419,7 +428,10 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       agentCtx.on('agent/pre-step', async (_event, next) => {
         if (!await current(entry) || entry.attempted || entry.haltCode) return { kind: 'reject' }
         entry.steps++
-        return next()
+        const decision = await next()
+        if (!entry.content || decision.kind !== 'enter') return decision
+        return { ...decision, messages: decision.messages.map(message => message.source?.kind === 'coordinator' && message.source.executionSession?.sessionId === entry.binding.sessionId
+          ? modelHostMessage(message, entry.content.project(executionModelInput(modelHostInput(message), entry.binding), { reuseVisible: false })) : message) }
       })
       agentCtx.on('agent/request', (position, next) => {
         if (dynamicExecution(entry.binding) && !entry.contextRetired) {
@@ -450,6 +462,21 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         }
         if (exec.name === SUBMIT && exec.callId === entry.submissionCallId && !result.isError) entry.accepted = true
       })
+      if (dynamicExecution(entry.binding) && typeof entry.onProgress === 'function') {
+        agentCtx.tools.register({
+          name: PROGRESS_REPORT,
+          description: '向任务统筹报告有证据的阶段成果，原执行继续；不代表整体完成、不发送消息。仅可公开业务摘要和必要证据引用，不含凭据、内部调用参数或原始日志。',
+          effectClass: 'pure',
+          parameters: { type: 'object', properties: { summary: { type: 'string', minLength: 1, maxLength: 2000 }, evidence: { type: 'array', maxItems: 4, items: { type: 'string', minLength: 1, maxLength: 512 } } }, required: ['summary', 'evidence'], additionalProperties: false },
+          output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+          async execute(args, exec) {
+            if (!await current(entry)) throw failure('execution_binding_stale')
+            exec.signal.throwIfAborted()
+            return entry.onProgress({ summary: args.summary, evidence: copy(args.evidence), reportId: exec.callId })
+          },
+        })
+        progressTool = agentCtx.tools.get(PROGRESS_REPORT, agent)
+      }
       agentCtx.tools.register({
         name: SUBMIT,
         description: dynamicExecution(entry.binding) ? '提交本次执行的结果、证据与限制；身份由Host绑定，不传任务或租约。' : '提交此节点的业务输出；参数错误可按反馈修正，合法提交结束本次执行，不传任务、代际或租约身份。',
@@ -557,23 +584,23 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, definition, onSessionBound, onResult, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
+  async function run({ binding, input, definition, onSessionBound, onResult, onProgress, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
       if (!definition || typeof definition.prompt !== 'string' || !definition.provider || !definition.model
-        || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || [SUBMIT,DYNAMIC_SUBMIT].includes(name))) throw failure('execution_definition_invalid')
+        || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT].includes(name))) throw failure('execution_definition_invalid')
       assertSupportedJsonSchema(definition.outputSchema)
       if (definition.nativeTools && (!dynamicExecution(binding) || typeof nativeExecutionHook !== 'function')) throw failure('execution_native_ledger_required')
       if (dynamicExecution(binding) && !definition.nativeTools && definition.allowedTools.some(forbiddenNativeTool)) throw failure('execution_tool_not_allowed')
       if (definition.allowedTools.includes('engineering_apply_edits') && (typeof applyEdits !== 'function' || registry.has('engineering_apply_edits'))) throw failure('execution_edit_executor_required')
       if (definition.allowedTools.includes('execution_request_authorization') && (typeof requestAuthorization !== 'function' || registry.has('execution_request_authorization'))) throw failure('execution_authorization_request_not_admitted')
       if (typeof onSessionBound !== 'function' || typeof onResult !== 'function') throw failure('execution_callbacks_required')
-      if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function')) throw failure('execution_callbacks_invalid')
+      if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function') || (onProgress !== undefined && typeof onProgress !== 'function')) throw failure('execution_callbacks_invalid')
       if (entries.has(executionKey(binding)) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), validateOutput, classifyOutputError, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
+    const entry = { binding, input: copy(input), validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
       correctableCalls: new Map(), submissionCorrections: 0, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, ...(definition.agentPreset === undefined ? {} : { agentPreset: definition.agentPreset }), nativeTools: definition.nativeTools === true, recoveryReadOnly: definition.recoveryReadOnly === true, protectedPaths: definition.protectedPaths ?? [], allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })
@@ -661,7 +688,9 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           if (end?.data?.reason?.kind === 'error') {
             const cause = end.data.reason.error, message = String(cause?.message ?? 'Native execution provider failed')
             const transient = providerTransient(cause)
-            entry.failure = { code: transient ? 'EXECUTION_PROVIDER_TRANSIENT' : 'EXECUTION_PROVIDER_FAILED', phase: 'provider', message: message.slice(0, 2000) }
+            entry.failure = { code: transient ? 'EXECUTION_PROVIDER_TRANSIENT' : 'EXECUTION_PROVIDER_FAILED', phase: 'provider', message: message.slice(0, 2000),
+              providerError: copy(cause), recovery: classifyExecutionProviderFailure(cause),
+              terminal: { sessionId: binding.sessionId, inputVersion: binding.inputVersion ?? 1, endSeq: end.seq, reason: 'error' } }
           }
         }
         if (!entry.accepted || entry.haltCode) return { status: 'no_submission', reason: entry.haltCode ?? (entry.failure?.phase === 'provider' || entry.failure?.code === 'EXECUTION_TURN_INTERRUPTED' ? entry.failure.code : 'execution_no_submission'), ...(entry.failure ? { failure: entry.failure } : {}) }

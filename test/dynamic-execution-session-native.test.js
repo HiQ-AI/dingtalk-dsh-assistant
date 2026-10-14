@@ -86,7 +86,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
     async execute(_args, exec) { const text = await readFile(join(root, 'fixture.txt'), { encoding: 'utf8', signal: exec.signal }); reads.push(exec.agent.session.id); return { text } },
   })
   ctx.tools.register({ name: 'unsafe_write', description: '用于拒绝测试的副作用', parameters: { type: 'object' }, output, execute() { effects.push('root-write'); return {} } })
-  const manager = createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools, getWorkspaceDir })
+  const manager = createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools, getWorkspaceDir, contentRoot: join(root, 'model-content') })
   return { ctx, root, manager, requests, reads, effects, handles, async close() { await manager.close(); await ctx.fiber.dispose() } }
 }
 
@@ -104,7 +104,7 @@ test('32 continued inputs retire recursive Host snapshots on actual SDK requests
   for (let version = 1; version <= 32; version++) {
     const h = await host({ root, script: [dynamicSubmit('preserved-result-' + version)] })
     try {
-      const input = { objective: 'current-goal-' + version, sources: [{ body: 'AUTHORIZATION: analysis only' }],
+      const input = { task: { authorizationSourceId: 'authority' }, objective: 'current-goal-' + version, sources: [{ sourceId: 'authority', body: 'AUTHORIZATION: analysis only' }],
         previousExecutions: version < 4 ? [{ input: { previousExecutions: [{ input: { context: ('OLD_RECURSIVE_V' + version).repeat(3000) } }] } }] : [],
         originalOperation: { state: 'unknown', evidenceRef: 'UNKNOWN_EFFECT_EVIDENCE', instruction: 'Never replay' } }
       allInputs += Buffer.byteLength(JSON.stringify(input))
@@ -117,17 +117,21 @@ test('32 continued inputs retire recursive Host snapshots on actual SDK requests
       if (version >= 4) assert.doesNotMatch(JSON.stringify(request.messages), /OLD_RECURSIVE_V/)
       if (version > 1) assert.match(JSON.stringify(request.messages), /preserved-result-1/)
       const stored = await inspectSession(h.ctx.sessionPersistence, b.sessionId)
+      const raw = stored.events.flatMap(event => event.type === 'agent/inbox/spliced' ? event.data.inserted : []).find(message => message.id === hostMessages[0].source.rawHostMessageId)
+      assert.ok(raw, 'model message links to the original unmodified Host inbox audit')
+      assert.deepEqual(JSON.parse(raw.content[0].text), input)
+      assert.notEqual(raw.id, hostMessages[0].id)
       const folded = foldSurface(stored.events)
       const messages = folded.nodes.map(seq => deriveEventMessage(stored.events[seq], folded.projectedMessages)).filter(Boolean)
       assert.equal(messages.filter(m => m.source?.executionSession).length, 1)
       assert.equal(stored.events.filter(e => e.type === 'user/message' && e.data.source?.executionSession).length, version, 'original inputs remain auditable')
-      metrics.push({ version, currentInputBytes: Buffer.byteLength(JSON.stringify(input)), hostBytes: Buffer.byteLength(JSON.stringify(hostMessages)), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+      metrics.push({ version, rawInputBytes: Buffer.byteLength(JSON.stringify(input)), currentInputBytes: Buffer.byteLength(hostMessages[0].content[0].text), hostBytes: Buffer.byteLength(JSON.stringify(hostMessages)), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
       history.push({ inputVersion: version, inputDigest: b.inputDigest, requirementRevision: 1, controlRevision: 1 })
     } finally { await h.close() }
   }
-  assert.ok(metrics.slice(3).every(item => item.hostBytes < 1500))
+  assert.ok(metrics.slice(3).every(item => item.hostBytes < 2500))
   assert.ok(metrics.at(-1).messagesBytes - metrics[4].messagesBytes < 27 * 550, 'only preserved result history grows, within a per-turn budget')
-  t.diagnostic(JSON.stringify({ scope: 'scripted adapter request, UTF-8 JSON bytes; no provider tokens', beforeHostInputTextBytes: allInputs, metrics: metrics.filter(item => item.version <= 5 || item.version === 32) }))
+  t.diagnostic(JSON.stringify({ scope: 'scripted adapter request, UTF-8 JSON bytes; no provider tokens', rawAuditInputTextBytes: allInputs, metrics: metrics.filter(item => item.version <= 5 || item.version === 32) }))
 })
 
 test('upgrade shadows every already stored recursive v1/v2/v3 input without rewriting originals', async t => {
@@ -284,15 +288,15 @@ test('dynamic native sessions use configured shell and delegation without a sess
   assert.ok(h.requests[0].tools.some(tool => tool.name === 'pwsh'))
 })
 
-test('explicit background requests never execute a native tool and native errors can be corrected in the same conversation', async t => {
+test('dynamic background requests retain native capability and native errors can be corrected in the same conversation', async t => {
   for (const background of [true, false]) await t.test(String(background), async t => {
-    const h = await host({ script: background ? [{ name: 'pwsh', args: { run_in_background: true } }] : [{ name: 'pwsh', args: { valid: false } }, { name: 'pwsh', args: { valid: true } }, dynamicSubmit('corrected')] })
+    const h = await host({ script: background ? [{ name: 'pwsh', args: { run_in_background: true, valid: true } }, dynamicSubmit('background done')] : [{ name: 'pwsh', args: { valid: false } }, { name: 'pwsh', args: { valid: true } }, dynamicSubmit('corrected')] })
     let executed = 0
     const preset = await nativePreset(h, { execute: args => { executed++; if (!args.valid) throw new Error('known fixture failure'); return { done: true } } })
     t.after(async () => { await h.close(); await preset.standing.dispose() })
     const result = await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async () => ({}) })
-    assert.equal(executed, background ? 0 : 2)
-    assert.equal(result.status, background ? 'no_submission' : 'submitted')
+    assert.equal(executed, background ? 1 : 2)
+    assert.equal(result.status, 'submitted')
   })
 })
 
@@ -370,4 +374,16 @@ test('configured native preset is chosen once and resume retains the persisted p
   await dynamicDrive(second, { binding, input: { objective: 'Follow-up' }, definition: definition({ nativeTools: true, allowedTools: [], agentPreset: 'changed-config' }), onNativeExecution: async () => ({}) })
   assert.deepEqual(two.mounted, ['dynamic-native-fixture'])
   assert.match(requestSystemText(second.requests[0]), /DYNAMIC_PRESET_WORKSPACE_RULES/)
+})
+
+test('anonymous field v12 native failure retains raw diagnostics and derives failure independently of HTTP200', async t => {
+  const { fieldV12Error } = await import('./fixtures/execution-provider-field-sample.js')
+  const h = await host({ script: [{ providerFailure: fieldV12Error }] }); t.after(() => h.close())
+  let outputs = 0
+  const result = await dynamicDrive(h, { onResult: () => outputs++ })
+  assert.equal(result.status, 'no_submission'); assert.equal(result.reason, 'EXECUTION_PROVIDER_TRANSIENT')
+  assert.equal(result.failure.phase, 'provider'); assert.deepEqual(result.failure.providerError, fieldV12Error)
+  assert.equal(result.failure.providerError.phase, undefined); assert.equal(result.failure.providerError.status, undefined)
+  assert.equal(result.failure.terminal.reason, 'error'); assert.equal(outputs, 0)
+  assert.equal(h.manager.assertDrained(dynamic()), true)
 })

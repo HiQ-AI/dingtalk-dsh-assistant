@@ -6,7 +6,7 @@ import { basename, join } from 'node:path'
 import { createServer } from 'node:net'
 import { get as httpGet } from 'node:http'
 import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
-import { available, reason, nativeShell, nativeTaskHost, latestInput, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeShell, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
 
@@ -49,6 +49,42 @@ async function nativeCase(t, prefix) {
   t.after(async () => { try { for (const host of hosts.toReversed()) await host.close() } finally { await rm(root, { recursive: true, force: true }) } })
   return { root, async host(decide, options) { const host = await nativeTaskHost(root, decide, options); hosts.push(host); return host } }
 }
+
+test('owner injects one authoritative source body across task, Web identity and materials', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-content-index-')
+  const body = ('AUTHORIZATION_CORRECTION: analyze only; ' + 'boundary evidence '.repeat(150)).trim()
+  const counts = [], metrics = []
+  const h = await fixture.host(async request => {
+    const routed = topicTaskCalls(request)
+    if (routed) return routed
+    const text = JSON.stringify(request.messages)
+    counts.push(text.split(body).length - 1)
+    const bytes = messages => Buffer.byteLength(JSON.stringify(messages))
+    metrics.push({ currentHostBytes: bytes(request.messages.filter(message => message.source?.taskSession && !message.source.taskContextHistory)),
+      oldHostBytes: bytes(request.messages.filter(message => message.source?.taskContextHistory)), toolHistoryBytes: bytes(request.messages.filter(message => message.role === 'tool')),
+      systemBytes: bytes(request.messages.filter(message => message.role === 'system')), schemaBytes: Buffer.byteLength(JSON.stringify(request.tools)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+    return [decision('complete', 'only analysis')]
+  })
+  await h.service.createTask({ groupId: 'native-group', requestId: 'indexed-web', objective: body, context: body })
+  await h.service.whenIdle()
+  assert.ok(counts.length > 0, JSON.stringify(h.service.listAlerts()))
+  t.diagnostic(JSON.stringify({ scope: 'actual native owner scripted adapter UTF-8 JSON bytes', bodyCopies: counts, metrics }))
+  assert.deepEqual(counts, counts.map(() => 1), 'one complete authority body in each real model request')
+  assert.equal(h.service.listAlerts().length, 0)
+  const [source] = await h.query('source.list'), [task] = await h.query('task.list')
+  assert.equal(source.text, body)
+  assert.equal(source.requestIdentity.request.args.context, body, 'Web admission identity remains raw in the ledger')
+  const dto = await h.service.taskDetail(task.taskId)
+  assert.equal(dto.request, task.request)
+  assert.deepEqual(dto.completion, task.completion, 'Observer still receives the original task completion')
+  assert.equal(dto.executions.length, 0)
+  const saved = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  const current = h.requests.at(-1).messages.find(message => message.source?.taskSession && !message.source.taskContextHistory)
+  const raw = saved.events.flatMap(event => event.type === 'agent/inbox/spliced' ? event.data.inserted : []).find(message => message.id === current.source.rawHostMessageId)
+  assert.ok(raw)
+  assert.ok(raw.content[0].text.split(body).length - 1 > 1, 'raw admission audit is not deduplicated to shrink display')
+  assert.equal(JSON.parse(raw.content[0].text).sources[0].requestIdentity.request.args.context, body)
+})
 
 for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知不阻断同账号人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}`, { timeout: 15000 }, async t => {
   const fixture = await nativeCase(t, 'task-topic-source-')
@@ -171,13 +207,17 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
       const snapshots = request.messages.filter(message => message.role === 'user').flatMap(message => message.content ?? [])
         .filter(block => block.type === 'text').flatMap(block => { try { const value = JSON.parse(block.text); return value.task && value.executions ? [value] : [] } catch { return [] } })
       assert.equal(snapshots.length, 1, '原生模型可见面只保留当前完整Host快照')
-      assert.match(JSON.stringify(snapshots[0].sources), /CURRENT_AUTHORIZATION_SCOPE_/)
+      assert.match(JSON.stringify(snapshots[0]), /CURRENT_AUTHORIZATION_SCOPE_/)
       for (const execution of input.executions) {
         assert.equal(execution.input.previousExecutions, undefined)
         assert.equal(execution.input.context, undefined)
         assert.equal(execution.definition, undefined)
         assert.equal(execution.results, undefined)
-        if (execution.result) assert.equal(execution.result.payload.output.summary, execution.input.objective)
+        if (execution.resultRef) {
+          const page = modelToolValues(request).find(value => value.contentRef === execution.resultRef.contentRef && value.path === '/payload/output/summary')
+          if (!page) return [call('model_content_read', { contentRef: execution.resultRef.contentRef, path: '/payload/output/summary' })]
+          assert.equal(page.text ?? page.resolvedRef, execution.input.objective, 'original result is read through the admitted content tool')
+        }
       }
       if (input.executions.some(execution => !execution.drained || execution.status !== 'succeeded')) return [decision('wait', '等待原执行结果')]
       if (input.executions.length === 3) return [decision('complete', '三代执行结果已核验')]
@@ -206,6 +246,7 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
 
 test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-five-context-'), metrics = []
+  let ownerSteps = 0
   const scope = 'ONLY_ANALYZE_AUTHORIZATION_'.repeat(300)
   const h = await fixture.host(async request => {
     const routed = topicTaskCalls(request)
@@ -219,13 +260,21 @@ test('32 continuations bound owner Host input and execution-read tool results wh
       assert.equal(e.input.previousExecutions, undefined); assert.equal(e.input.context, undefined); assert.equal(e.results, undefined); assert.equal(e.inputHistory, undefined)
     }
     const execution = input.executions[0]
-    const reads = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content).filter(b => b.type === 'text').flatMap(b => { try { const value = JSON.parse(b.text); return value.executionId && value.input ? [value] : [] } catch { return [] } })
-    for (const e of reads) { assert.equal(e.input.previousExecutions, undefined); assert.equal(e.results, undefined); assert.equal(e.input.context, undefined) }
-    metrics.push({ lease: input.task.leaseEpoch, inputVersion: execution?.inputVersion ?? 0, currentInputBytes: Buffer.byteLength(JSON.stringify(input)), hostMessagesBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(m => m.source?.taskSession))), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+    const values = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content).filter(b => b.type === 'text').flatMap(b => { try { return [JSON.parse(b.text)] } catch { return [] } })
+    const reads = values.filter(value => value.executionId && value.record)
+    if (++ownerSteps > 200) throw new Error(JSON.stringify({ inputVersion: execution?.inputVersion, values: values.slice(-3).map(value => ({ keys: Object.keys(value), inputVersion: value.inputVersion, contentRef: value.contentRef, record: value.record })) }))
+    for (const e of reads) { assert.ok(e.record.contentRef); assert.equal(e.input, undefined); assert.equal(e.results, undefined) }
+    const currentHost = host[0].content.find(block => block.type === 'text').text
+    metrics.push({ lease: input.task.leaseEpoch, inputVersion: execution?.inputVersion ?? 0, currentInputBytes: Buffer.byteLength(currentHost), hostMessagesBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(m => m.source?.taskSession))), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
     if (execution && !execution.drained) return [decision('wait', 'wait for physical drain')]
     if (execution && !reads.some(e => e.inputVersion === execution.inputVersion)) return [call('task_execution_read', { executionId: execution.executionId })]
+    if (execution) {
+      const path = ['/payload/output', '/payload/output/summary', '/payload/output/evidence/0']
+        .find(path => !values.some(value => value.contentRef === execution.resultRef?.contentRef && value.path === path))
+      if (path) return [call('model_content_read', { contentRef: execution.resultRef.contentRef, path })]
+    }
     if (execution?.inputVersion === 32) {
-      assert.match(JSON.stringify(reads), /UNKNOWN_EFFECT/)
+      assert.match(JSON.stringify(request.messages), /UNKNOWN_EFFECT/)
       return [decision('complete', '32 inputs reviewed')]
     }
     return [call('task_delegate', { key: 'continue-' + (execution?.inputVersion ?? 0), objective: 'generation-' + ((execution?.inputVersion ?? 0) + 1),
