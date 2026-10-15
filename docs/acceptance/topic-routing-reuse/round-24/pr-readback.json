@@ -1,0 +1,11 @@
+{
+  "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/182",
+  "number": 182,
+  "state": "OPEN",
+  "headRefOid": "bf442f381539991ea4ca88380ad0faaff74b3182",
+  "headRefName": "worktree-native-background-receipt",
+  "baseRefName": "main",
+  "title": "fix: 恢复原生工具收据与任务授权并复用话题",
+  "statusCheckRollup": [],
+  "bodyMatches": true
+}

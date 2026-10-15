@@ -23,3 +23,5 @@
 部署时health仍degraded：两条历史通知读回unknown及当时的业务等待。原重复审批现已纠正，任务真实继续；未重发历史通知。新提交及原PR推进有独立证据，仍不证明业务UAT发布或真实业务E2E；此前越界全仓测试的共享影响仍未核实。它们不作为本次技术验收成功项。
 
 话题归并新增mergedInto/mergeReceipt；不能让不理解该字段的旧包重写domain。本轮上下文与呈现修订无schema迁移，回退须先排空原执行并保留当前审计，不自动重放操作。权威目标与交付检查点为同目录goal.md。
+
+修订bf442f3已推送原PR182并更新正文；round-24/pr-readback.json独立证实OPEN、base/head和正文一致，未合并。SG1至SG4完成。
