@@ -19,7 +19,7 @@ test('原看板紧凑卡片恢复，完整目标及话题仍能通过原有入�
  nodes.find(x=>x.props['aria-label']==='查看完整任务目标').props.onClick()
  nodes.find(x=>x.props['aria-label']==='话题 服务上线').props.onClick({stopPropagation(){}})
  assert.deepEqual(actions,[['task','t'],['task','t'],['topic','topic'],['page','topics']])
- assert.doesNotMatch(JSON.stringify(tree),/次动态执行|任务会话 session/);assert.ok(nodes.some(x=>x.props['aria-label']==='任务状态：queued'));assert.doesNotMatch(JSON.stringify(tree),/progressbar|workflowProgress/)
+ assert.doesNotMatch(JSON.stringify(tree),/次动态执行|任务会话 session/);assert.equal(nodes.some(x=>x.props['aria-label']?.startsWith('任务状态：')),false);assert.doesNotMatch(JSON.stringify(tree),/progressbar|workflowProgress/)
 })
 test('历史卡片保留只读状态，不恢复旧归档或工作流写入口',()=>{
  const {tree}=card({taskId:'old',title:'历史任务',objective:'历史目标',state:'completed',legacyReadonly:true})
@@ -70,10 +70,12 @@ test('内嵌执行列表只按真实成功会话计数，支持原生折叠和�
  nodes.find(x=>x.type==='button'&&x.children.includes('复制Id')).props.onClick();assert.deepEqual(actions,[['copy','card-copy']])
 })
 
-test('独立卡片标题旁保留任务状态，移除内部ID与重复计数整行',()=>{
+test('卡片不展示整体状态badge或内部元信息，保留执行行状态',()=>{
  const {tree}=card({taskId:'t',title:'核对',state:'waiting',session:{sessionId:'INTERNAL_SECRET_SESSION'},executionCount:123,executionSessions:[{sessionId:'e',title:'会话甲',status:'running'}]})
- const nodes=flatten(tree),state=nodes.find(x=>x.props['aria-label']==='任务状态：waiting')
- assert.ok(state);assert.equal(tree.children[0].props.style.gridTemplateColumns,'minmax(0, 1fr) auto')
+ const nodes=flatten(tree)
+ assert.equal(nodes.some(x=>x.props['aria-label']?.startsWith('任务状态：')),false)
+ assert.equal(tree.children[0].type,'button')
  assert.doesNotMatch(JSON.stringify(tree),/INTERNAL_SECRET_SESSION|次动态执行/)
  assert.ok(nodes.some(x=>x.props['aria-label']==='全部执行会话'))
+ assert.match(JSON.stringify(tree),/running/)
 })

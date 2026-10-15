@@ -1041,12 +1041,11 @@ window.__ModuleLoader__.load({
         const completedSessions = sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
         const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
         return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button, summary, details')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'start', gap: 8 } },
           React.createElement('button', { type: 'button', onClick: () => openTask(task), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
             React.createElement('strong', { title: task.title || task.objective, style: { fontSize: 13, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, taskDisplayTitle(task))),
-          React.createElement('span', { 'aria-label': `任务状态：${taskStateLabel(task.state)}`, style: { whiteSpace: 'nowrap' } }, statusTag(task.legacyReadonly ? `历史只读 · ${taskStateLabel(task.state)}` : taskStateLabel(task.state), taskStateTone(task.state)))),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, overflow: 'hidden' } },
             React.createElement('span', { title: groupLabel, style: { ...pill(colors.muted), flex: '0 1 auto', maxWidth: 150, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, groupLabel),
+            task.legacyReadonly ? React.createElement('span', { style: { color: colors.muted, fontSize: 10.5, whiteSpace: 'nowrap' } }, '历史只读') : null,
             ...(task.topicRefs || []).map(ref => {
               const groupId = ref.groupId || task.sourceGroupId || task.groupId
               const label = topicsById.get(`${groupId}:${ref.topicId}`)?.title || ref.title || `话题 ${short(ref.topicId)}`
