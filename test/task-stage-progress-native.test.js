@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { available, reason, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, modelToolValues, waitUntil } from './fixtures/task-session-native-host.js'
 const call = (name, args) => ({ name, args })
 const submit = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
 
@@ -61,7 +61,7 @@ test('integrated stage evidence survives same-session provider recovery with new
   assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
   assert.equal((await h.query('operation.list', { taskId: task.taskId })).length, 0, 'reads and internal reports do not create business effects')
   const input = ownerInputs.findLast(input => input.executions[0]?.stageProgress?.inputVersion === 2)
-  assert.equal(input.executions[0].inputDigest, after.inputDigest)
+  assert.equal(input.executions[0].inputDigest, undefined, 'full native record is available through the catalog')
   assert.deepEqual(input.executions[0].stageProgress.evidence, [proof])
   assert.equal(input.executions[0].stageProgress.summary, '恢复后已复核原证据')
   gate.resolve(); await h.service.whenIdle()
@@ -72,7 +72,7 @@ test('integrated stage evidence survives same-session provider recovery with new
 for (const humanWait of [false, true]) test(`native nonterminal stage report continues execution and updates owner summary; human wait=${humanWait}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'native-stage-report-')), gate = Promise.withResolvers()
   await writeFile(join(root, 'stage-proof.txt'), 'ACTUAL_STAGE_PROOF')
-  let ownerCalls = 0, executionCalls = 0, stageOwnerInput
+  let ownerCalls = 0, executionCalls = 0, stageOwnerInput, stageEvidence, stageSummary
   const h = await nativeTaskHost(root, async request => {
     if (!request.tools.some(tool => tool.name === 'task_delegate')) {
       const step = ++executionCalls
@@ -92,6 +92,22 @@ for (const humanWait of [false, true]) test(`native nonterminal stage report con
     if (humanWait && !input.task.humanRequests?.some(item => item.status === 'answered')) return [call('task_request_human', { reason: '测试后续范围需原操作人明确', question: '是否继续原只读验证？', evidence: [], attemptedActions: ['已委派原只读验证'] })]
     if (input.wakes.some(wake => wake.kind === 'execution.stage.progress')) {
       stageOwnerInput = input
+      const wake = input.wakes.find(wake => wake.kind === 'execution.stage.progress')
+      const report = wake.payload.reportRef
+      if (!report) {
+        const stage = input.executions.find(item => item.executionId === wake.payload.executionId).stageProgress
+        assert.equal(stage.sequence, wake.payload.sequence)
+        stageSummary = stage.summary; stageEvidence = stage.evidence[0]
+        return [submit('wait', '已核对阶段证据，正在验证整体修复边界。')]
+      }
+      const pages = modelToolValues(request).filter(page => page.contentRef === report.contentRef)
+      for (const path of ['/evidence/0', '/summary']) {
+        const page = pages.find(page => page.path === path)
+        if (!page) return [call('model_content_read', { contentRef: report.contentRef, path })]
+        assert.equal(typeof page.text, 'string', 'report body is rendered directly by the real SDK tool')
+        if (path === '/summary') stageSummary = page.text
+        else stageEvidence = page.text
+      }
       return [submit('wait', '已核对阶段证据，正在验证整体修复边界。')]
     }
     return [submit('wait', '已安排核对，等待执行进展。')]
@@ -111,14 +127,19 @@ for (const humanWait of [false, true]) test(`native nonterminal stage report con
   await waitUntil(async () => (await h.query('task.get', { taskId: task.taskId })).lastDecision?.summary === '已核对阶段证据，正在验证整体修复边界。', 'owner persists a new overall progress summary before execution completion')
   assert.ok(stageOwnerInput)
   const wake = stageOwnerInput.wakes.find(item => item.kind === 'execution.stage.progress')
-  assert.equal(wake.payload.executionId, execution.executionId); assert.equal(wake.payload.inputVersion, execution.inputVersion)
-  assert.deepEqual(wake.payload.evidence, [join(root, 'stage-proof.txt')])
+  assert.equal(wake.payload.executionId, execution.executionId); assert.equal(wake.payload.sequence, execution.stageProgress.sequence)
+  assert.equal(wake.payload.evidence, undefined, 'notification does not duplicate the current execution evidence')
+  assert.equal(wake.payload.reportRef, undefined, 'matching current stage needs no extra read')
+  assert.equal(stageEvidence, join(root, 'stage-proof.txt'))
+  assert.equal(stageSummary, execution.stageProgress.summary)
   const visibleExecution = stageOwnerInput.executions.find(item => item.executionId === execution.executionId)
-  assert.deepEqual(visibleExecution.stageProgress.evidence, wake.payload.evidence)
+  assert.deepEqual(visibleExecution.stageProgress.evidence, [stageEvidence])
   assert.equal(visibleExecution.stageProgress.summary, execution.stageProgress.summary)
+  assert.equal(visibleExecution.stageProgress.inputVersion, execution.inputVersion)
+  assert.equal(visibleExecution.stageProgress.leaseEpoch, execution.leaseEpoch)
   assert.equal(visibleExecution.inputVersion, execution.inputVersion)
   assert.equal(visibleExecution.leaseEpoch, execution.leaseEpoch)
-  assert.equal(visibleExecution.inputDigest, execution.inputDigest)
+  assert.equal(visibleExecution.inputDigest, undefined, 'the native identity digest remains in the catalog rather than the default status row')
   assert.equal((await h.query('execution.get', { executionId: execution.executionId })).status, 'running')
   assert.ok((await h.service.taskDetail(task.taskId)).lastDecision.at)
   gate.resolve(); await h.service.whenIdle()

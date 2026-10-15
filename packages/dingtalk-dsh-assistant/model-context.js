@@ -30,10 +30,10 @@ const syncDirectory = path => {
   try { fsyncSync(fd) } finally { closeSync(fd) }
 }
 
-export const modelContextInstructions = `Host输入和只读工具使用contentRef标识精确内容。contentIndex只定义正文一次；相同正文的作者、来源版本、授权与更正关系仍由各自记录决定，内容相同不等于同一授权。没有内联定义的引用须用model_content_read读取；path为JSON Pointer，json-index按条目、文本按字符分页直到nextOffset=null，不能将目录、摘要或未读取的内容当作完整证据。历史来源/结果不改变当前授权。目录仅列前20项，catalogRef可读取全部记录（按ID访问）。必须核对未展示的未处理要求及仍有效授权/更正，不能把未展开当作不存在；执行按小目标选择所需内容。引用不是丢弃或截断。`
+export const modelContextInstructions = `Host输入和只读工具使用contentRef标识精确内容。相同正文不等于同一作者、来源版本或授权，历史资料不改变当前授权。执行resultInCatalog表示完整结果在catalogRef的/executions/<原ID>/result，按当前问题定位证据或诊断，不必整包读取。当前目标或要求为sourceId时，从对应sources.textFile定位原文；若来源在当前窗口外，沿catalogRef的/materials按sourceId定位textPath或/sources/<原ID>读取原始来源；requestIdentityInCatalog表示完整请求身份在相应source目录的/requestIdentity，不得省略授权核对。统筹快照catalogRef是完整原始目录：/task、/sources/<sourceId>、/executions/<executionId>、/operations/<operationId>、/materials、/wakes；例如/executions/<executionId>/input/objective。路径段的~与/须分别转义为~0与~1。sources保守保留近期及原授权来源，sourceCount可大于展示数量；核对目录中仍有效的要求/授权/撤销，不能把未展开当作不存在。当前task/sources/executions中的readRequired=true表示长正文无损延迟，表示本轮要求/证据尚待核对：优先用既有原生文件工具读取path、textFile或sourceFile，定位与当前判断相关的字段/段落，不必整文件回灌；重要新要求、撤销及授权条件必须核对，未读部分不能当作已知。统筹executions只展示运行/未排空、本轮唤醒关联或当前结果，历史执行仍完整可读；operations只展示unknown及本轮事件关联的操作，其他状态用operationCounts计数，blockers保留未决成员准确ID，未展开不是无阻塞。阶段wake仅有executionId/sequence时，对应executions.stageProgress就是经过全部字段核对的同一报告；有reportRef时须读取该次原报告，可能早于当前阶段，不可混用。执行会话仍用executionHistory.catalogRef及sourceCatalog等原目录。过长且无法精简的正文、结果、证据、诊断与日志只提供已有不可变JSON文件path（文本内容为JSON字符串，按字段解析后定位），不以contentIndex自动展开；用户长消息优先使用原source JSON及原文txt文件。使用已有原生文件/shell能力，注意原生read的行长/总量截断提示，按需定位或分段读取；不要把截断当全文。contentRef与model_content_read仅保留兼容读取，不要求按其分页把长正文整包读回。显式读取返回正文，不能把引用或未读内容当证据。引用不是丢弃或截断。`
 
-// References are capabilities of this native session, not filesystem paths or
-// globally readable hashes. Original inputs/ledger receipts are never rewritten.
+// contentRef remains a native-session capability. Paths point only to existing
+// admitted immutable files; native filesystem permission policy remains unchanged.
 export function createModelContentIndex(session, { root = modelContentRoot(session.header) } = {}) {
   root = resolve(root)
   const values = new Map()
@@ -88,33 +88,19 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
       catch (error) { if (error.code !== 'EEXIST') throw error; if (load(ref) !== json) fail('MODEL_CONTENT_DIGEST_MISMATCH') }
       values.set(ref, json)
     }
-    return { contentRef: ref, format: typeof value === 'string' ? 'text' : 'json', bytes: Buffer.byteLength(json) }
-  }
-  function visibleDefinitions() {
-    const refs = new Set(), events = session.snapshotEvents()
-    for (const seq of session.surface.nodes) {
-      const message = session.deriveEventMessage(events[seq])
-      for (const block of message?.content ?? []) if (block.type === 'text') {
-        try {
-          for (const [ref, text] of Object.entries(JSON.parse(block.text)?.contentIndex ?? {})) {
-            const match = /^([a-f0-9]{64}):sha256:([a-f0-9]{64})$/.exec(ref)
-            if (match && scopes.has(match[1]) && typeof text === 'string' && ref.endsWith(digest(JSON.stringify(text)))) refs.add(ref)
-          }
-        } catch { /* ordinary prose */ }
-      }
-    }
-    return refs
+    return { contentRef: ref, path: filename(ref), format: typeof value === 'string' ? 'text' : 'json', bytes: Buffer.byteLength(json) }
   }
   function project(value, { reuseVisible = true } = {}) {
-    const known = reuseVisible ? visibleDefinitions() : new Set(), contentIndex = {}
     const localObjects = reuseVisible ? objects : new Set()
+    const reference = value => { const stored = store(value); return { contentRef: stored.contentRef, path: stored.path, format: 'json' } }
     function visit(item, key) {
-      if (item && Object.hasOwn(item, deferred)) return store(item[deferred])
+      if (item && Object.hasOwn(item, deferred)) return reference(item[deferred])
+      if (item && typeof item === 'object' && ['entries', 'events', 'logs', 'diagnostics', 'context', 'results', 'payload', 'output', 'data', 'evidence'].includes(key)
+        && Buffer.byteLength(JSON.stringify(item)) >= 2048) return reference(item)
       if (typeof item === 'string' && indexText(item)) {
-        const reference = store(item)
-        if (!known.has(reference.contentRef)) contentIndex[reference.contentRef] = item
-        known.add(reference.contentRef)
-        return reference
+        const ref = reference(item)
+        // The immutable file is the definition; never eagerly reinject a long body.
+        return ref
       }
       if (item && typeof item === 'object') {
         let hasDeferred = false
@@ -124,16 +110,19 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
         })
         if (!hasDeferred && json.length >= 240) {
           const ref = scope + ':' + digest(json)
-          if (localObjects.has(ref)) return store(item)
+          if (localObjects.has(ref)) return reference(item)
           localObjects.add(ref); objects.add(ref)
         }
       }
-      if (Array.isArray(item)) return item.map(child => visit(child))
+      if (Array.isArray(item)) {
+        if (key === undefined && Buffer.byteLength(JSON.stringify(item)) >= 2048) return reference(item)
+        return item.map(child => visit(child))
+      }
       if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, key === 'contentRef' ? child : visit(child, key)]))
       return item
     }
     const projected = visit(value)
-    return Object.keys(contentIndex).length ? { ...(Array.isArray(projected) ? { value: projected } : projected), contentIndex } : projected
+    return projected
   }
   function selected(contentRef, path) {
     if (typeof path !== 'string' || path && !path.startsWith('/')) fail('MODEL_CONTENT_READ_INVALID')
@@ -192,29 +181,48 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
       return { ...block, text: JSON.stringify(project(payload)) }
     }) }
   }
-  return { project, store, read, install, render, wrapOutput }
+  function instruction(text, label = '详细上下文') {
+    if (typeof text !== 'string' || !indexText(text)) return text
+    const file = store(text)
+    return `${label}已保存在${file.path}（JSON字符串；contentRef=${file.contentRef}）。按当前问题用已有文件能力定位相关段落，先核对授权边界，不必整包回灌；未读取部分不能当作已知。`
+  }
+  return { project, store, read, install, render, wrapOutput, instruction }
 }
 
 function directory(records, identity, summary) {
   return { total: records.length, items: records.slice(0, 20).map(summary),
     catalogRef: deferModelContent(Object.fromEntries(records.map((record, index) => [record[identity] ?? 'unidentified-' + index, record]))) }
 }
-export function executionDirectory(executions) {
+export function executionDirectory(executions, { historical = false } = {}) {
   return directory(executions, 'executionId', execution => terminalExecutions.has(execution.status) ? {
     ...fields(execution, ['executionId', 'key', 'status', 'drained', 'inputVersion', 'requirementRevision', 'controlRevision']),
-    input: fields(execution.input ?? {}, ['title', 'objective', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']),
+    input: executionInputDirectory(execution.input, true),
     ...(execution.result ? { result: fields(execution.result, ['current', 'receivedAt', 'recovery']), resultRef: deferModelContent(execution.result) } : {}),
   } : ({ ...fields(execution,
     ['executionId', 'sessionId', 'taskId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'inputDigest', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'progressReview', 'providerRecovery']),
     ...(execution.stageProgress ? { stageProgress: execution.stageProgress } : {}),
-    input: fields(execution.input ?? {}, ['title', 'objective', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']),
+    input: executionInputDirectory(execution.input, historical),
     // Keep the Host recovery decision visible without reinjecting the full result.
     ...(execution.result ? { result: fields(execution.result, ['current', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'inputVersion', 'receivedAt', 'recovery']), resultRef: deferModelContent(execution.result) } : {}) }))
 }
+function executionInputDirectory(input = {}, historical = false) {
+  return { ...fields(input, ['title', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']),
+    ...(!historical && input.objective !== undefined ? { objective: input.objective } : {}) }
+}
+// A blocker is membership, not another copy of the execution/operation record.
+function mergeRecords(records, blockers, identity) {
+  const merged = new Map(records.map(record => [record[identity], record]))
+  for (const record of blockers) if (!merged.has(record[identity])) merged.set(record[identity], record)
+  return [...merged.values()]
+}
+function stageWake(wake) {
+  if (wake.kind !== 'execution.stage.progress' || !wake.payload) return wake
+  return { ...wake, payload: { ...fields(wake.payload, ['executionId', 'sequence', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision']),
+    reportRef: deferModelContent(wake.payload) } }
+}
 export function operationDirectory(operations) {
   return directory(operations, 'operationId', operation => ({ ...fields(operation, ['operationId', 'executionId', 'state', 'requirementRevision', 'controlRevision', 'resourceKeys', 'evidenceRef', 'authorizationRef']),
-    toolName: operation.definition?.toolName ?? operation.definition?.tool, effectClass: operation.definition?.effectClass,
-    terminal: terminal.has(operation.state), evidence: deferModelContent(operation) }))
+    toolName: operation.definition?.toolName ?? operation.definition?.tool, effectClass: operation.definition?.effectClass }))
 }
 // 保留各已接纳作者的近期补充；最初需求人未必是后来调整授权范围的操作人。
 function currentTaskSources(sources, authorizationSourceId) {
@@ -227,32 +235,125 @@ function sourceContext(source) {
   return { ...fields(source, ['sourceId', 'actorId', 'senderName', 'channel', 'messageId', 'version', 'timestamp', 'corrects', 'supersedes', 'text', 'body', 'quote', 'resources']),
     ...(source.requestIdentity ? { requestIdentityRef: deferModelContent(source.requestIdentity) } : {}) }
 }
-export function taskModelInput(input) {
-  const task = input.task ?? {}, operations = input.operations ?? [], executions = input.executions ?? []
-  const executionIndex = executionDirectory(executions), operationIndex = operationDirectory(operations.filter(operation => !terminal.has(operation.state)))
-  const blockerExecutions = executionDirectory(input.blockers?.executions ?? []), blockerOperations = operationDirectory(input.blockers?.operations ?? [])
-  return { ...input, sourceReviewRequired: true, task: { ...fields(task, ['taskId', 'sessionId', 'groupId', 'title', 'objective', 'requirements', 'status', 'control', 'ownerActorId', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'drained', 'runSequence', 'updatedAt']),
-    ...(task.request !== undefined ? { request: deferModelContent(task.request) } : {}),
-    ...(task.lastDecision ? { lastDecision: fields(task.lastDecision, ['action', 'summary', 'question', 'audience', 'at', 'recordedAt', 'requirementRevision', 'controlRevision', 'binding']), lastDecisionRef: deferModelContent(task.lastDecision) } : {}),
-    authorizationSourceId: task.metadata?.authorizationSourceId, fullRecord: deferModelContent(task),
-    humanRequests: (task.humanRequests ?? []).filter((request, index, requests) => request.status === 'waiting-reply' || index === requests.length - 1)
-      .map(request => ({ ...fields(request, ['requestId', 'status', 'audience', 'requirementRevision', 'controlRevision', 'sourceId', 'responseSourceId']),
-        ...(request.status === 'waiting-reply' ? fields(request, ['reason', 'question']) : {}), requestRef: deferModelContent(request) })) },
-    sourceCatalog: { total: (input.sources ?? []).length, catalogRef: deferModelContent(Object.fromEntries((input.sources ?? []).map(source => [source.sourceId, source]))) },
-    sources: currentTaskSources(input.sources ?? [], task.metadata?.authorizationSourceId).map(sourceContext),
-    materialCatalogRef: deferModelContent(input.materials ?? []),
-    materials: (input.materials ?? []).filter(material => material.resources?.length).slice(0, 20).map(material => fields(material, ['sourceId', 'path', 'resources'])),
-    executions: executionIndex.items, executionIndex: { total: executionIndex.total, catalogRef: executionIndex.catalogRef },
-    operations: operationIndex.items, operationIndex: { total: operationIndex.total, catalogRef: operationIndex.catalogRef },
-    operationHistory: { total: operations.length, catalogRef: deferModelContent(Object.fromEntries(operations.map(operation => [operation.operationId, operation]))) },
-    blockers: { ...input.blockers, executions: blockerExecutions.items, executionIndex: { total: blockerExecutions.total, catalogRef: blockerExecutions.catalogRef },
-      operations: blockerOperations.items, operationIndex: { total: blockerOperations.total, catalogRef: blockerOperations.catalogRef } } }
+// The catalog retains the unabridged records under their original identities.
+const recordsById = (records, identity) => Object.fromEntries(records.map((record, i) => [record[identity] ?? 'unidentified-' + i, record]))
+function decisionContent(value) {
+  let readRequired = false
+  function visit(item, key) {
+    if (typeof item === 'string' && indexText(item) && (key === undefined || contentFields.has(key))) { readRequired = true; return deferModelContent(item) }
+    if (Array.isArray(item)) {
+      if (Buffer.byteLength(JSON.stringify(item)) >= 2048) { readRequired = true; return deferModelContent(item) }
+      return item.map(child => visit(child, key))
+    }
+    if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, visit(child, key)]))
+    return item
+  }
+  return { value: visit(value), readRequired }
 }
+function taskSourceContext(source, material) {
+  if (material?.path && typeof source.text === 'string' && indexText(source.text)) {
+    const { text: _text, quote: _quote, requestIdentityRef: _requestIdentity, ...identity } = sourceContext(source)
+    return { ...identity,
+      textFile: material.textPath ?? material.path, readRequired: true,
+      ...(source.requestIdentity ? { requestIdentityInCatalog: true } : {}),
+      ...(source.quote || source.resources?.length ? { sourceFile: material.path } : {}),
+      ...(source.quote ? { quoteInSourceFile: true } : {}) }
+  }
+  const projected = sourceContext(source)
+  let readRequired = false
+  for (const key of ['text', 'body', 'quote']) if (Object.hasOwn(projected, key)) {
+    const content = decisionContent(projected[key])
+    projected[key] = content.value; readRequired ||= content.readRequired
+  }
+  return { ...projected, ...(readRequired ? { readRequired: true } : {}) }
+}
+export function taskModelInput(input) {
+  const task = input.task ?? {}, sources = input.sources ?? [], wakes = input.wakes ?? [],
+    operations = mergeRecords(input.operations ?? [], input.blockers?.operations ?? [], 'operationId'),
+    executions = mergeRecords(input.executions ?? [], input.blockers?.executions ?? [], 'executionId')
+  const wokenExecutions = new Set(wakes.map(wake => wake.payload?.executionId).filter(Boolean))
+  const wokenOperations = new Set(wakes.map(wake => wake.payload?.operationId).filter(Boolean))
+  // Only definitely historical terminal records leave the default decision view.
+  // A current result is not presumed reviewed from a timestamp or lastDecision.
+  const relevant = executions.filter(execution => !terminalExecutions.has(execution.status) || !execution.drained
+    || wokenExecutions.has(execution.executionId) || execution.status !== 'stale' && execution.result?.current !== false)
+  const currentExecutions = relevant.map(execution => {
+    const active = !terminalExecutions.has(execution.status)
+    const source = sources.find(source => source.text === execution.input?.objective && indexText(source.text ?? ''))
+    const material = source && (input.materials ?? []).find(material => material.sourceId === source.sourceId && material.path)
+    const objective = material ? { value: { sourceId: source.sourceId }, readRequired: true } : decisionContent(execution.input?.objective)
+    const stage = decisionContent(execution.stageProgress)
+    return { ...fields(execution,
+      ['executionId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'providerRecovery']),
+      ...(active ? { input: { ...executionInputDirectory(execution.input),
+        ...(execution.input?.objective !== undefined ? { objective: objective.value } : {}) } } : {}),
+      ...(active && execution.stageProgress ? { stageProgress: stage.value } : {}),
+      ...(active && (objective.readRequired || stage.readRequired) ? { readRequired: true } : {}),
+      ...(execution.result ? { result: fields(execution.result, ['current', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'receivedAt', 'recovery']), resultInCatalog: true } : {}) }
+  })
+  const projectedWakes = wakes.map(wake => {
+    if (wake.kind !== 'execution.stage.progress' || !wake.payload) return wake
+    const execution = relevant.find(item => item.executionId === wake.payload.executionId)
+    const { executionId, ...report } = wake.payload
+    const canonical = value => JSON.stringify(value, (_key, child) => ordered(child))
+    if (execution && !terminalExecutions.has(execution.status) && canonical(execution.stageProgress) === canonical(report))
+      return { ...wake, payload: { executionId, sequence: report.sequence } }
+    return stageWake(wake)
+  })
+  const goal = task.objective ?? task.request
+  const goalSource = sources.find(source => source.text === goal && indexText(source.text ?? ''))
+  const goalMaterial = goalSource && (input.materials ?? []).find(material => material.sourceId === goalSource.sourceId && material.path)
+  const objective = goalMaterial ? { value: { sourceId: goalSource.sourceId }, readRequired: true } : decisionContent(goal), requirements = decisionContent(task.requirements)
+  if (Array.isArray(task.requirements)) {
+    const mapped = task.requirements.map(requirement => {
+    const source = sources.find(source => source.text === requirement && indexText(source.text ?? ''))
+    const file = source && (input.materials ?? []).find(material => material.sourceId === source.sourceId && material.path)
+    return file ? { sourceId: source.sourceId } : requirement
+    })
+    Object.assign(requirements, decisionContent(mapped))
+  }
+  const currentTask = { ...fields(task, ['taskId', 'sessionId', 'groupId', 'title', 'status', 'control', 'ownerActorId', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'drained', 'runSequence']),
+    ...(task.objective !== undefined || task.request !== undefined ? { objective: objective.value } : {}),
+    ...(task.requirements !== undefined ? { requirements: requirements.value } : {}),
+    ...(objective.readRequired || requirements.readRequired ? { readRequired: true } : {}),
+    ...(task.lastDecision ? { lastDecision: fields(task.lastDecision, ['action', 'summary', 'question', 'audience', 'at', 'recordedAt', 'requirementRevision', 'controlRevision', 'binding']) } : {}),
+    authorizationSourceId: task.metadata?.authorizationSourceId,
+    humanRequests: (task.humanRequests ?? []).filter((request, i, all) => request.status === 'waiting-reply' || i === all.length - 1)
+      .map(request => ({ ...fields(request, ['requestId', 'status', 'audience', 'requirementRevision', 'controlRevision', 'sourceId', 'responseSourceId']),
+        ...(request.status === 'waiting-reply' ? fields(request, ['reason', 'question']) : {}) })) }
+  const materials = (input.materials ?? []).filter(material => material.resources?.length).map(material => fields(material, ['sourceId', 'path', 'resources']))
+  return { task: currentTask, sources: currentTaskSources(sources, task.metadata?.authorizationSourceId).map(source => taskSourceContext(source, (input.materials ?? []).find(material => material.sourceId === source.sourceId))), sourceCount: sources.length, sourceReviewRequired: true,
+    ...(materials.length ? { materials } : {}), executionCount: executions.length,
+    wakes: projectedWakes, executions: currentExecutions,
+    // Ordinary pending operations need no coordinator decision yet; their exact
+    // identities remain in blockers and the catalog. Unknown effects stay visible.
+    operations: operations.filter(operation => operation.state === 'unknown' || wokenOperations.has(operation.operationId))
+      .map(operation => operationDirectory([operation]).items[0]),
+    operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
+    blockers: { ...input.blockers,
+      executions: (input.blockers?.executions ?? []).map(record => ({ executionId: record.executionId })),
+      operations: (input.blockers?.operations ?? []).map(record => ({ operationId: record.operationId })) },
+    catalogRef: deferModelContent({ ...input, task, sources: recordsById(sources, 'sourceId'), executions: recordsById(executions, 'executionId'),
+      operations: recordsById(operations, 'operationId'), materials: input.materials ?? [] }) }
+}
+
 export function executionModelInput(input, binding) {
   const all = input.sources ?? [], current = currentTaskSources(all, input.task?.authorizationSourceId)
   const selected = new Set(current.map(source => source.sourceId))
-  const history = executionDirectory((input.previousExecutions ?? []).filter(execution => execution.executionId !== binding.executionId))
-  return { ...input, sourceReviewRequired: true, sources: current.map(sourceContext), sourceCatalog: {
+  const history = executionDirectory((input.previousExecutions ?? []).filter(execution => execution.executionId !== binding.executionId), { historical: true })
+  const { sourceFiles, ...rest } = input
+  if (sourceFiles) {
+    rest.task = { ...input.task }
+    for (const source of current) {
+      const file = sourceFiles[source.sourceId]
+      if (!file?.path || typeof source.text !== 'string' || !indexText(source.text)) continue
+      const reference = { sourceId: source.sourceId, path: file.textPath ?? file.path }
+      for (const key of ['objective', 'request']) if (rest.task[key] === source.text) rest.task[key] = reference
+      for (const key of ['objective', 'context']) if (rest[key] === source.text) rest[key] = reference
+      if (Array.isArray(rest.task.requirements)) rest.task.requirements = rest.task.requirements.map(item => item === source.text ? reference : item)
+    }
+  }
+  return { ...rest, sourceReviewRequired: true, sources: current.map(source => taskSourceContext(source, sourceFiles?.[source.sourceId])), sourceCatalog: {
     total: all.length, items: current.map(source => fields(source, ['sourceId', 'actorId', 'version', 'messageId', 'corrects', 'supersedes'])),
     catalogRef: deferModelContent(Object.fromEntries(all.map(source => [source.sourceId, source]))) },
     materialPaths: (input.materialPaths ?? []).filter((_path, index) => selected.has(all[index]?.sourceId)),

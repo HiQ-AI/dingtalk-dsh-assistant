@@ -315,7 +315,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       let material
       try { material = JSON.parse(await readFile(target, 'utf8')) } catch { fail('TASK_MATERIAL_SNAPSHOT_INVALID') }
       if (!material || material.sourceId !== source.sourceId || material.path !== target || material.taskId !== undefined && material.taskId !== taskId
-        || material.actorId !== source.actorId || material.messageId !== source.messageId || material.text !== source.text
+        || material.version !== undefined && material.version !== source.version || material.actorId !== source.actorId || material.messageId !== source.messageId || material.text !== source.text
         || hash(material.quote ?? null) !== hash(source.quote ?? null) || !Array.isArray(material.resources)
         || material.resources.length !== (source.resources ?? []).length) fail('TASK_MATERIAL_SOURCE_MISMATCH')
       for (const [index, resource] of material.resources.entries()) {
@@ -338,6 +338,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           || resource.value?.image && resource.value.image.path !== resource.path) fail('TASK_MATERIAL_CONTENT_CHANGED')
       }
       await checkedTaskDirectory(directories.materials)
+      if (typeof source.text === 'string' && Buffer.byteLength(source.text) >= 512) {
+        const textPath = target.replace(/\.json$/, '.txt')
+        await publish(textPath, Buffer.from(source.text, 'utf8'))
+        return { ...material, version: source.version, textPath }
+      }
       return material
     }
     const publish = async (path, bytes) => {
@@ -375,7 +380,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       }
       catch (error) { resources.push({ resource, status: 'unavailable', reason: error.code ?? 'RESOURCE_READ_FAILED' }) }
     }
-    const material = clean({ taskId, sourceId: source.sourceId, actorId: source.actorId, messageId: source.messageId,
+    const material = clean({ taskId, sourceId: source.sourceId, version: source.version, actorId: source.actorId, messageId: source.messageId,
       text: source.text, quote: source.quote, resources, path: target })
     await publish(target, Buffer.from(JSON.stringify(material)))
     return readSnapshot()
@@ -664,9 +669,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               if (!operation) fail('TASK_OPERATION_SCOPE_MISMATCH')
               originalOperation = safeNotificationDetail(await readNativeOperationContext({ ctx, operation }))
             }
-            const payload = { binding, key: args.key, prompt: `受托小目标：${args.objective}\n具体执行由你负责，可在同一会话内持续调查、操作、验证和纠错。不得再次委派；不能宣布整体任务完成。只依据当前任务真实来源和权限执行。结果包含实际证据、限制及产物。最后调用execution_submit。`,
+            const payload = { binding, key: args.key, prompt: `当前小目标见结构化input.objective。\n具体执行由你负责，可在同一会话内持续调查、操作、验证和纠错。不得再次委派；不能宣布整体任务完成。只依据当前任务真实来源和权限执行。结果包含实际证据、限制及产物。最后调用execution_submit。`,
               input: { task: { taskId, request: task.request, objective: task.objective, requirements: task.requirements, requirementRevision: binding.requirementRevision, ownerActorId: task.ownerActorId, authorizationSourceId: task.metadata?.authorizationSourceId }, sources,
-                title: existingTitle || executionSessionTitle({ input: { title: args.title, objective: args.objective }, key: args.key }), objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), previousExecutions: (await query('execution.list', { taskId })).map(taskExecutionContext) },
+                title: existingTitle || executionSessionTitle({ input: { title: args.title, objective: args.objective }, key: args.key }), objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), sourceFiles: Object.fromEntries(materials.map(item => [item.sourceId, { path: item.path, textPath: item.textPath }])), previousExecutions: (await query('execution.list', { taskId })).map(taskExecutionContext) },
               definition: { nativeTools: true, recoveryReadOnly: args.readOnly === true, agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, resourceKeys: args.resourceKeys ?? [] }
             const accepted = args.executionId ? await command('execution.continue', { ...payload, executionId: args.executionId }, dispatchId)
               : await command('execution.dispatch', payload, dispatchId)
