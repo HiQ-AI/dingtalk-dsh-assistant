@@ -53,9 +53,9 @@ window.__ModuleLoader__.load({
     const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'
     const outboxDelivery = (message) => {
       if (message.recallStatus === 'recalled') return { id: 'recalled', label: '已撤回', state: 'neutral' }
-      if (message.recallStatus === 'failed') return { id: 'recall-failed', label: '撤回待处理', state: 'warning', detail: message.recallError === 'replacement_delivery_unknown' ? '已停止旧意图发送；历史是否送达仍未知，等待核验' : `旧消息撤回失败${message.recallRetryAt ? '，将有限重试' : '，需核验后处理'}：${message.recallError || '原因未记录'}` }
+      if (message.recallStatus === 'failed') return { id: 'recall-failed', label: '撤回受阻', state: 'warning', detail: message.recallError === 'replacement_delivery_unknown' ? '已停止旧意图发送；历史是否送达仍未知，等待核验' : `旧消息撤回失败${message.recallRetryAt ? '，将有限重试' : '，需核验后处理'}：${message.recallError || '原因未记录'}` }
       if (message.supersededByOutboundId || message.status === 'superseded') return { id: 'superseded', label: '已替代', state: 'neutral', detail: message.deliveredMessageId ? '已记录送达，等待替换通知送达后撤回' : '已停止旧意图发送；未声称历史消息未送达' }
-      if (message.status === 'sent') return { id: 'confirmed', label: message.deliveredMessageId ? '已回读' : '已发送', state: 'done' }
+      if (message.status === 'sent') return { id: 'confirmed', label: message.deliveredMessageId ? '已送达' : '已发送', state: 'done', hint: message.deliveredMessageId ? '回读已确认送达' : '历史发送记录，未记录回读消息 ID' }
       const reason = message.deliveryPendingReason
       const notificationState = message.notificationState || ({
         'task-notification-prepared': 'prepared',
@@ -67,18 +67,18 @@ window.__ModuleLoader__.load({
         'task-notification-superseded': 'failed',
         'task-notification-confirmation-reassessment-required': 'failed',
       })[reason]
-      if (notificationState === 'unknown') return { id: 'waiting', label: message.notificationFailurePhase === 'readback' ? '待回读' : '发送结果待核对', state: 'warning', detail: message.notificationFailurePhase === 'readback' ? '发送后回读尚未确认送达' : '发送结果未知，等待核验' }
-      if (notificationState === 'starting') return { id: 'sending', label: '发送中', state: 'ongoing' }
-      if (notificationState === 'prepared') return { id: 'queued', label: '待发送', state: 'ongoing' }
+      if (notificationState === 'unknown') return { id: message.notificationFailurePhase === 'readback' ? 'waiting' : 'checking', label: message.notificationFailurePhase === 'readback' ? '待回读' : '待核对', state: 'warning', detail: message.notificationFailurePhase === 'readback' ? '发送后回读尚未确认送达' : '发送结果未知，等待核验' }
+      if (notificationState === 'starting') return { id: 'sending', label: '发送中', state: 'ongoing', hint: '正在执行发送，尚未确认送达' }
+      if (notificationState === 'prepared') return { id: 'queued', label: '待发送', state: 'ongoing', hint: '通知已准备，等待发送' }
       if (notificationState === 'failed') {
-        if (reason === 'task-notification-task-terminal') return { id: 'stopped', label: '已停止发送', state: 'neutral', detail: '关联任务已结束，停止旧通知发送；本次未发送', retryDisabled: true }
-        if (reason === 'task-notification-superseded') return { id: 'stopped', label: '已停止发送', state: 'neutral', detail: '通知意图已被替代，停止旧通知发送；本次未发送', retryDisabled: true }
-        if (reason === 'task-notification-confirmation-reassessment-required') return { id: 'reassessment', label: '已停止，需核验', state: 'warning', detail: '已停止发送，旧确认意图关联不足，需人工核验；不会自动恢复或发送', retryDisabled: true }
+        if (reason === 'task-notification-task-terminal') return { id: 'stopped', label: '已停止', state: 'neutral', detail: '关联任务已结束，停止旧通知发送；本次未发送', retryDisabled: true }
+        if (reason === 'task-notification-superseded') return { id: 'stopped', label: '已停止', state: 'neutral', detail: '通知意图已被替代，停止旧通知发送；本次未发送', retryDisabled: true }
+        if (reason === 'task-notification-confirmation-reassessment-required') return { id: 'reassessment', label: '待核验', state: 'warning', detail: '已停止发送，旧确认意图关联不足，需人工核验；不会自动恢复或发送', retryDisabled: true }
         return reason === 'task-notification-pre-send-rejected'
           ? { id: 'failed', label: '发送前受阻', state: 'error', detail: '发送前检查已拒绝，本次未发送' }
           : { id: 'failed', label: '投递异常', state: 'error', detail: message.notificationKnownNotSent === true ? '已确认本次未发送' : '尚未确认送达，需核验失败原因' }
       }
-      if (notificationState === 'delivered') return { id: 'confirmed', label: '已回读', state: 'done' }
+      if (notificationState === 'delivered') return { id: 'confirmed', label: '已送达', state: 'done', hint: '回读已确认送达' }
       if (message.deliveryBlockedAt) return { id: 'failed', label: '发送待处理', state: 'error', detail: '服务端已拒绝发送，停止自动重试；需核验失败原因' }
       const details = {
         preflight_history_partial: '发送前检查：历史消息不完整，本次未发送',
@@ -90,10 +90,10 @@ window.__ModuleLoader__.load({
         message_not_observed: '已调用发送，回读尚未找到对应消息',
       }
       const detail = details[reason] || reason || (message.deliveryError ? '投递异常' : '')
-      if (['delivery_unknown', 'postflight_history_partial', 'postflight_failed', 'message_not_observed'].includes(reason)) return { id: 'waiting', label: '待回读', state: 'warning', detail }
+      if (['delivery_unknown', 'postflight_history_partial', 'postflight_failed', 'message_not_observed'].includes(reason)) return { id: reason === 'delivery_unknown' ? 'checking' : 'waiting', label: reason === 'delivery_unknown' ? '待核对' : '待回读', state: 'warning', detail }
       if (reason === 'preflight_failed' || reason === 'preflight_history_partial') return { id: 'failed', label: '发送受阻', state: 'error', detail }
       if (message.deliveryError || reason === 'send_failed') return { id: 'failed', label: '投递异常', state: 'error', detail }
-      return { id: 'queued', label: '待发送', state: 'ongoing', detail }
+      return { id: 'queued', label: '待发送', state: 'ongoing', hint: '通知已准备，等待发送', detail }
     }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
     const observerCss = `
@@ -1109,10 +1109,10 @@ window.__ModuleLoader__.load({
       const outboxRows = visibleOutbox.map((message, rowIndex) => {
         const status = outboxDelivery(message)
         return React.createElement('tr', { key: message.outboundId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
-          React.createElement('td', { style: { ...tableBodyCell, width: 124 } }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
+          React.createElement('td', { title: status.hint || status.detail, style: { ...tableBodyCell, width: 124 } }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）'),
             status.detail || !['confirmed', 'superseded', 'recalled', 'recall-failed'].includes(status.id) && typeof message.deliveryError === 'string' && message.deliveryError ? React.createElement('div', { style: { marginTop: 6, fontSize: 12, color: status.state === 'error' ? colors.danger : colors.warning, overflowWrap: 'anywhere' } }, status.detail || '', !message.supersededByOutboundId && !message.recallStatus && typeof message.deliveryError === 'string' && message.deliveryError ? `${status.detail ? '：' : ''}${message.deliveryError}` : '') : null,
-            !status.retryDisabled && !['confirmed', 'superseded', 'recalled', 'recall-failed'].includes(status.id) && message.notificationRetryAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `计划${status.id === 'waiting' ? '核验' : '重试'} ${fmt(message.notificationRetryAt)}`) : null,
+            !status.retryDisabled && !['confirmed', 'superseded', 'recalled', 'recall-failed'].includes(status.id) && message.notificationRetryAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `计划${['waiting', 'checking'].includes(status.id) ? '核验' : '重试'} ${fmt(message.notificationRetryAt)}`) : null,
             message.deliveryAttemptedAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `最近尝试 ${fmt(message.deliveryAttemptedAt)} · 共 ${message.deliveryAttemptCount || 1} 次`) : null),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } },
             React.createElement('div', { style: { minWidth: 0 } }, singleLineTableContent(React.createElement('code', { title: message.sourceMessageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, short(message.sourceMessageId))), message.replyToMessageId ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, '回复 ', React.createElement('code', { title: message.replyToMessageId }, short(message.replyToMessageId))) : null)),
@@ -1232,7 +1232,7 @@ window.__ModuleLoader__.load({
             onClick: () => navigate(selectedGroup.coordinator.sessionId) }, navigatingSessionId === selectedGroup.coordinator.sessionId ? '正在打开…' : '打开群常驻会话') : null,
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
-            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'sending', label: '发送中' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读 / 核对' }, { id: 'stopped', label: '已停止发送' }, { id: 'reassessment', label: '已停止，需核验' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
+            : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'sending', label: '发送中' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读' }, { id: 'checking', label: '待核对' }, { id: 'stopped', label: '已停止' }, { id: 'reassessment', label: '待核验' }, { id: 'confirmed', label: '已送达' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回受阻' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 144 } }, '处理状态'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '关联任务 / 历史话题'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),
