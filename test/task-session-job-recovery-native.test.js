@@ -41,6 +41,24 @@ for (const background of [false, true]) test(`native shell retains its original 
  assert.equal(step,background ? 3 : 2)
 })
 
+test('native missing-job read stays a real error without creating unknown effects or blocking later work', async t => {
+ let step=0
+ const h=await fixture(t,async request=>{
+  const input=latestInput(request)
+  if(request.tools.some(tool=>tool.name==='task_delegate'))return !input.executions.length&&!input.task.lastDecision
+   ?[call('task_delegate',{key:'read-job',objective:'inspect missing job'}),decide('wait','waiting')]
+   :[decide(input.executions.every(e=>e.status==='succeeded')?'complete':'wait','verified')]
+  if(step++===0)return [call('job_output',{job_id:'pwsh-777777'})]
+  if(step===2){assert.match(JSON.stringify(request),/unknown job pwsh-777777/);return [call('job_list',{})]}
+  return [call('execution_submit',{output:{status:'completed',summary:'Missing read remains failed, no external effects',evidence:['original missing-job receipt'],limitations:[],artifacts:[]}})]
+ })
+ await h.service.createTask({groupId:'native-group',requestId:'read-job',objective:'inspect job'})
+ await h.service.whenIdle()
+ assert.equal((await h.query('operation.list')).length,0)
+ assert.ok(h.toolResults.some(row=>row.name==='job_output'&&row.result.isError))
+ assert.equal((await h.query('execution.list'))[0].status,'succeeded')
+})
+
 for (const explicitStop of [false, true]) test(`native background HTTP service remains usable by the next tool and drains its original job: explicitStop=${explicitStop}`, async t => {
  let step = 0, originalJob, serverPid
  const h = await fixture(t, async (request, host) => {

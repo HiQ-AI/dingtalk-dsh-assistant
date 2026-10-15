@@ -1,13 +1,13 @@
 {
-  "at": "2026-10-15T03:44:37.983Z",
+  "at": "2026-10-15T03:54:00.889Z",
   "task": {
     "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
     "sessionId": "task-session-c1283783-eac0-41cd-b16b-bf6ca60833f0",
     "status": "active",
     "drained": true,
-    "decision": "原会话仍在继续隔离回归与清理核验，等待完整结果后验收；不重放旧操作或重复派发。",
+    "decision": "原会话正在按最新范围核验停止终态及清理证据，后续仅限确认无共享依赖的Approval定向验证；等待完整结果。",
     "pending": [],
-    "requirementRevision": 2,
+    "requirementRevision": 3,
     "controlRevision": 1
   },
   "original": {
@@ -140,7 +140,7 @@
       "sessionId": "task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6",
       "status": "running",
       "drained": false,
-      "inputVersion": 2
+      "inputVersion": 3
     },
     {
       "executionId": "9a953741-1721-40cc-bb0c-9fe3bd72eab5",
@@ -152,7 +152,7 @@
     }
   ],
   "log": {
-    "lastSeq": 470,
+    "lastSeq": 576,
     "end": {
       "kind": "aborted",
       "reason": {
@@ -297,6 +297,88 @@
       {
         "seq": 467,
         "name": "glob"
+      },
+      {
+        "seq": 472,
+        "name": "pwsh",
+        "arguments": "{\"description\":\"核对框架原生关联查询注入入口\",\"command\":\"& D:\\\\soft\\\\jdk-11.0.2\\\\bin\\\\javap.exe -classpath D:\\\\soft\\\\apache-maven-3.9.6\\\\repository\\\\com\\\\github\\\\yulichang\\\\mybatis-plus-join-core\\\\1.4.13\\\\mybatis-plus-join-core-1.4.13.jar com.github.yulichang.injector.MPJSqlInjector\",\"workdir\":\"D:\\\\baibu-agent\\\\worktrees\\\\dataset-audit-draft-outbox-main\"}"
+      },
+      {
+        "seq": 477,
+        "name": "edit"
+      },
+      {
+        "seq": 482,
+        "name": "edit"
+      },
+      {
+        "seq": 487,
+        "name": "pwsh",
+        "arguments": "{\"description\":\"重跑含列表一致性的隔离审核回归\",\"command\":\"& D:\\\\soft\\\\apache-maven-3.9.6\\\\bin\\\\mvn.cmd '-Dtest=Approval*Test' '-DexpertWithdrawalDatabase=true' test *> D:\\\\baibu-agent\\\\tasks\\\\task-4c4780a541c5ea7c51024975de5f121d\\\\docs\\\\acceptance\\\\expert-withdraw-fix\\\\round-3\\\\database-test-mpj-corrected.log; exit $LASTEXITCODE\",\"workdir\":\"D:\\\\baibu-agent\\\\worktrees\\\\dataset-audit-draft-outbox-main\",\"timeoutMs\":1000}"
+      },
+      {
+        "seq": 492,
+        "name": "grep"
+      },
+      {
+        "seq": 497,
+        "name": "read"
+      },
+      {
+        "seq": 502,
+        "name": "edit"
+      },
+      {
+        "seq": 507,
+        "name": "pwsh",
+        "arguments": "{\"description\":\"验证修正事务夹具与列表映射配置\",\"command\":\"& D:\\\\soft\\\\apache-maven-3.9.6\\\\bin\\\\mvn.cmd '-Dtest=ApprovalWholeWithdrawalDatabaseTest' '-DexpertWithdrawalDatabase=true' test *> D:\\\\baibu-agent\\\\tasks\\\\task-4c4780a541c5ea7c51024975de5f121d\\\\docs\\\\acceptance\\\\expert-withdraw-fix\\\\round-3\\\\database-test-mpj-defaults.log; exit $LASTEXITCODE\",\"workdir\":\"D:\\\\baibu-agent\\\\worktrees\\\\dataset-audit-draft-outbox-main\",\"timeoutMs\":1000}"
+      },
+      {
+        "seq": 512,
+        "name": "grep"
+      },
+      {
+        "seq": 517,
+        "name": "pwsh",
+        "arguments": "{\"description\":\"实跑全仓测试及隔离数据库回归\",\"command\":\"& D:\\\\soft\\\\apache-maven-3.9.6\\\\bin\\\\mvn.cmd '-DexpertWithdrawalDatabase=true' test *> D:\\\\baibu-agent\\\\tasks\\\\task-4c4780a541c5ea7c51024975de5f121d\\\\docs\\\\acceptance\\\\expert-withdraw-fix\\\\round-3\\\\all-tests.log; exit $LASTEXITCODE\",\"workdir\":\"D:\\\\baibu-agent\\\\worktrees\\\\dataset-audit-draft-outbox-main\",\"timeoutMs\":1000}"
+      },
+      {
+        "seq": 523,
+        "name": "grep"
+      },
+      {
+        "seq": 525,
+        "name": "read"
+      },
+      {
+        "seq": 527,
+        "name": "pwsh",
+        "arguments": "{\"description\":\"独立回查隔离测试表连接与进程身份\",\"command\":\"& D:\\\\soft\\\\PostgreSQL\\\\16\\\\bin\\\\psql.exe -h 127.0.0.1 -p 55432 -U postgres -d expertwithdraw -c \\\"select current_database(),inet_server_addr(),inet_server_port(); select count(*) as remaining_fixture_tables from information_schema.tables where table_schema='public'; select count(*) as remaining_clients from pg_stat_activity where datname='expertwithdraw' and pid<>pg_backend_pid();\\\" *> D:\\\\baibu-agent\\\\tasks\\\\task-4c4780a541c5ea7c51024975de5f121d\\\\docs\\\\acceptance\\\\expert-withdraw-fix\\\\round-3\\\\final-cleanup-readback.txt; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'postgres.exe' -and $_.CommandLine -like '*expert-withdraw-fix*' } | Select-Object ProcessId,ParentProcessId,CommandLine; git diff --check\",\"workdir\":\"D:\\\\baibu-agent\\\\worktrees\\\\dataset-audit-draft-outbox-main\"}"
+      },
+      {
+        "seq": 532,
+        "name": "read"
+      },
+      {
+        "seq": 537,
+        "name": "pwsh",
+        "arguments": "{\"description\":\"正常停止已核实任务数据库并保留终态\",\"command\":\"& D:\\\\soft\\\\PostgreSQL\\\\16\\\\bin\\\\pg_ctl.exe -D D:\\\\baibu-agent\\\\tasks\\\\task-4c4780a541c5ea7c51024975de5f121d\\\\docs\\\\acceptance\\\\expert-withdraw-fix\\\\round-3\\\\pgdata -m fast -w stop\",\"workdir\":\"D:\\\\baibu-agent\\\\worktrees\\\\dataset-audit-draft-outbox-main\",\"timeoutMs\":1000}"
+      },
+      {
+        "seq": 545,
+        "name": "job_output"
+      },
+      {
+        "seq": 563,
+        "name": "job_list"
+      },
+      {
+        "seq": 568,
+        "name": "model_content_read"
+      },
+      {
+        "seq": 573,
+        "name": "model_content_read"
       }
     ]
   },
@@ -307,11 +389,5 @@
       "status": "running"
     }
   ],
-  "starting": [
-    {
-      "operationId": "operation-627c2a5ed97c70938e2b6d8820ba627252c1b0ad",
-      "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
-      "tool": "pwsh"
-    }
-  ]
+  "starting": []
 }

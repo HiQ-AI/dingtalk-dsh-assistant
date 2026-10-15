@@ -1,5 +1,5 @@
 import { deliverTaskNotification } from './notification-delivery.js'
-import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -541,7 +541,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       return { operationId }
     }
     if (event.phase === 'started') {
-      await command('operation.prepare', { binding, operationId, key, definition: { toolName, argumentsDigest: hash(args), effectClass: event.effectClass ?? 'unknown' },
+      await command('operation.prepare', { binding, operationId, key, definition: { toolName, argumentsDigest: hash(args), effectClass: event.effectClass ?? 'unknown',
+        ...(['job_output', 'job_list'].includes(toolName) ? { nativeJobRead: false } : {}) },
         authorizationRef: `task:${binding.taskId}:requirement:${binding.requirementRevision}`, resourceKeys: [] }, `prepare:${key}`)
       const receipt = await command('operation.start', { binding, operationId }, `start:${key}`)
       if (!receipt.dispatchEligible) fail(receipt.result.operation.state === 'unknown' ? 'DYNAMIC_OPERATION_UNRESOLVED' : 'DYNAMIC_OPERATION_ALREADY_DISPATCHED')
@@ -681,6 +682,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             catch (error) {
               if (error.code !== 'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT') throw error
               const executions = await query('execution.list', { taskId })
+              const jobReadProof = await inspectFailedNativeJobRead({ ctx, operation,
+                execution: executions.find(item => item.executionId === operation.executionId) })
+              if (jobReadProof) return (await command('operation.reconcile-job-read', { binding, operationId, proof: jobReadProof }, `reconcile-job-read:${operationId}:${hash(jobReadProof)}`)).result
               const fileProof = await inspectFailedNativeFileMutation({ ctx, operation,
                 execution: executions.find(item => item.executionId === operation.executionId) })
               if (fileProof) return (await command('operation.reconcile-file-precondition', { binding, operationId, proof: fileProof }, `reconcile-file-precondition:${operationId}:${hash(fileProof)}`)).result

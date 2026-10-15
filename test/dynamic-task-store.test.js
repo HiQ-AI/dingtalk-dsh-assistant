@@ -711,6 +711,28 @@ for (const category of ['credentials', 'quota', 'configuration', 'unclassified']
   else assert.equal((await f.command('task.wait', request)).result.task.humanRequests.length, 1)
 })
 
+for(const mode of ['legacy','write','shadow']) test('job读取缺失旧账恢复只允许历史原生读取: '+mode,async t=>{
+ const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='job-read'
+ const hash=value=>createHash('sha256').update(JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item)).digest('hex')
+ await f.command('operation.prepare',{binding,operationId,key:'job-read',definition:{toolName:'job_output',argumentsDigest:'args',
+  effectClass:mode==='write'?'write':'unknown',...(mode==='shadow'?{nativeJobRead:false}:{})},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName:'job_output',resultDigest:'result',isError:true}})
+ await f.command('execution.result',{binding,output:{status:'blocked'}});await f.command('execution.drained',{binding})
+ const original=await f.query({kind:'operation.get',operationId})
+ const proof={kind:'native-job-read-missing',operationId,operationDigest:hash(original),taskId:binding.taskId,executionId:binding.executionId,sessionId:binding.sessionId,
+  callId:'call',toolName:'job_output',argumentsDigest:'args',resultDigest:'result',resultSequence:3,turnEndSequence:4,jobId:'pwsh-7',noEffect:true}
+ if(mode!=='legacy'){
+  await assert.rejects(f.command('operation.reconcile-job-read',{binding:owner.binding,operationId,proof}),{code:'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT'})
+  return
+ }
+ for(const patch of [{operationDigest:'wrong'},{toolName:'job_kill'},{jobId:''},{noEffect:false},{resultDigest:'wrong'},{turnEndSequence:3}])
+  await assert.rejects(f.command('operation.reconcile-job-read',{binding:owner.binding,operationId,proof:{...proof,...patch}}),{code:'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT'})
+ const result=(await f.command('operation.reconcile-job-read',{binding:owner.binding,operationId,proof})).result.operation
+ assert.equal(result.state,'failed');assert.equal(result.result.noEffect,true);assert.deepEqual(result.result.previousObservation,original)
+ assert.equal((await f.query({kind:'operation.list'})).length,1)
+})
+
 for(const toolName of ['edit','write']) test('文件前置拒绝旧账精确对账保留审计并允许原执行续办: '+toolName,async t=>{
  const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='file-precondition'
  const hash=value=>createHash('sha256').update(JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item)).digest('hex')

@@ -10,4 +10,6 @@ local-deployment,4,FAIL,round-4.md
 local-deployment,5,FAIL,round-5.md
 local-deployment,6,PASS,round-6.md
 live-background-handoff,6,PASS,round-6.md
-original-task-verification,7,PENDING,round-7.md
+isolated-database-regression,7,PASS,round-7.md
+shared-environment-boundary,7,FAIL,round-7.md
+original-task-verification,8,PENDING,round-8.md

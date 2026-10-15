@@ -79,6 +79,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 显式 run_in_background 返回原生 job 身份及 running 收据，不等待常驻服务退出；前台超时提升仍等待终态。服务归单个 execution，使用原生 job_output/job_kill 检查与停止；提交前应清理服务，执行排空也会停止残留原 job 并记录真实终态。后台 operation 在排空结算前保持 starting，running 不是业务验收。
 
+job_list/job_output 只读取原生注册表。会话释放后job已移除是实际查询失败，原持久终态仍在operation/job收据中，不能据此重启生产者。旧版将该查询误记unknown时，原统筹调用task_operation_reconcile；Host仅接受精确missing-job拒绝、原调用摘要、正常回合结束及排空证明，记failed/noEffect并保留原始账。同名不受信工具、job_kill、写效果和任意其他错误不在恢复范围。
+
 部署脚本在实际执行阶段自动创建工作树缺省的 docs/tmp 锁目录；Check 阶段仍为零写入。失败轮次证据保留，修复后使用新的证据目录。
 
 显式指定Observer包时，安装后以该包及源码核验安装内容，不要求旧Observer manifest字节摘要保持：pnpm pack可能仅格式化JSON。profile仍要求原字节摘要。若安装已成功却因旧manifest字节门禁误报，先独立核验两包、profile、旧PID和离线账本，再沿原计划任务启动阶段完成；不重新安装或手改账。

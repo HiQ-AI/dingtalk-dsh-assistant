@@ -64,7 +64,8 @@ async function inspectFailedNativeOperation({ ctx, operation, execution }, { kin
     callId: operation.result.callId, toolName: operation.definition.toolName,
     argumentsDigest: operation.definition.argumentsDigest, resultDigest: operation.result.resultDigest,
     resultSequence: original.resultSequence, turnEndSequence: end.seq,
-    ...(kind === 'native-file-precondition-failed' ? { errorCode: original.resultError.code, noEffect: true } : {}) }
+    ...(kind === 'native-file-precondition-failed' ? { errorCode: original.resultError.code, noEffect: true } : {}),
+    ...(kind === 'native-job-read-missing' ? { jobId: original.arguments.job_id, noEffect: true } : {}) }
 }
 
 export const inspectFailedNativeWebRead = args => inspectFailedNativeOperation(args, {
@@ -74,6 +75,17 @@ export const inspectFailedNativeWebRead = args => inspectFailedNativeOperation(a
 export const inspectFailedNativeFileMutation = args => inspectFailedNativeOperation(args, {
   kind: 'native-file-precondition-failed', accepts: original => isNativeFilePrecondition(args.operation.definition?.toolName, original.resultError)
     && (!args.operation.result.errorCode || args.operation.result.errorCode === original.resultError.code) })
+
+// Native registry rejects a missing job before consuming output or contacting any producer.
+// This historical recovery is restricted to that exact rejection, not arbitrary job errors.
+export const inspectFailedNativeJobRead = args => inspectFailedNativeOperation(args, {
+  kind: 'native-job-read-missing', accepts: original => args.operation.definition?.toolName === 'job_output'
+    && args.operation.definition.nativeJobRead === undefined
+    && args.operation.definition.effectClass === 'unknown'
+    && typeof original.arguments.job_id === 'string' && original.arguments.job_id.length > 0
+    && Object.keys(original.arguments).every(key => ['job_id', 'wait', 'timeout_ms'].includes(key))
+    && original.result.content?.length === 1 && original.result.content[0].type === 'text'
+    && original.result.content[0].text === `Error: unknown job ${original.arguments.job_id}` })
 
 // Compatibility with the retired a5 promotion rejection only. That exact Host
 // path awaited terminate + waitForExit before throwing. A model summary, stderr,

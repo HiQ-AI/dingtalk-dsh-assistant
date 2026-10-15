@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：native-background-receipt
-> 最近维护：2026-10-15T11:42:00+08:00
+> 最近维护：2026-10-15T12:04:00+08:00
 > 权威目标：D:/codex/worktrees/native-background-receipt/dingtalk-dsh-assistant/docs/acceptance/native-background-receipt/goal.md
 
 ## 总目标
@@ -28,12 +28,13 @@
 | SG2 | 原调用排空及本地部署 | 原调用真实终态，包/进程/健康独立读回 | 完成 | round-4/recovered-start.json；新PID42240 |
 | SG3 | 恢复原任务并验证 | 原 session 继续，业务测试和清理有真实结果 | 进行中 | original-predeploy.json；原执行已开始数据库回归 |
 | SG4 | PR交付 | 测试证据自包含，真实PR状态读回 | 进行中 | PR182 OPEN，待追加现场证据 |
+| SG5 | 修复原生job读取误记未知 | 固定读取身份及旧拒绝对账测试通过，部署并恢复原查询 | 进行中 | round-10-native.log；124通过，待部署 |
 
 ## 当前检查点
 
-- 当前子目标：SG3
-- 唯一下一步：核对原execution输入版本2修正后隔离回归和清理结果。
-- 未闭环项：业务验收及PR追加现场证据。运行时另有1条恢复告警，需分类说明。
+- 当前子目标：SG5
+- 唯一下一步：部署job读取分类及历史missing-job精确恢复修订，再沿原请求对账并交付原任务。
+- 未闭环项：查询对账及原任务最终证据；全仓已自然完成且退出，共享副作用未核实。另一任务有1条历史恢复告警，未改动。
 
 ## 进展
 
@@ -41,6 +42,8 @@
 - 2026-10-15 11:15：119项本地定向测试全绿，复审无阻断问题。正常停止精确PG后，原operation自然succeeded、pwsh-10 completed/exit0。原执行同session继续，已明确以启动-回归-finally停止的独立后续生命周期测试同一pgdata；原收据保持不变。
 - 2026-10-15 11:35：原隔离业务回归已运行两轮（5项/1错误；65项/1失败），均为夹具问题并由原执行修正。表/连接清理为0。现有技术申请已答复要求维护排空，原执行drained；第二次部署Check通过、原生SIGINT排空成功，正在安装双包。首次apply因缺锁目录在停机前失败，已修复部署脚本自动创建父目录并保留失败证据。
 - 2026-10-15 11:42：双包安装后因Observer manifest格式化触发旧字节门禁误报，profile未变；旧Observer manifest与源码原字节摘要相同，新manifest语义及包内容均经核验。修正门禁，零写Check后完成原安装的启动阶段，没有重装。新PID42240，接入/DWS就绪，旧edit已原生对账failed/noEffect。维护完成输入已接纳；原execution同session输入版本2续跑。
+- 2026-10-15 11:54：核心数据库9项全绿。原执行追加全仓测试加载Spring local并连接共享服务，发现后经原任务停止排空，Java/Maven及专用PG退出；共享副作用未核实，不声称无影响。原execution/session inputVersion3继续仅限隔离Approval定向验证；16个候选测试文件无Spring上下文注解。
+- 2026-10-15 12:04：回查全仓真实终态为400项/0失败/0错误/1跳过，11:52:06已自然完成，并非被取消；停止要求生效后原任务核对退出，不改写原收据。job_output读取已释放pwsh-7被误记unknown，根因是遗漏原生job读取的read身份。补固定定义、未来同名不受信标志及历史精确拒绝恢复；124定向测试通过。已核对原session选择standard preset、未变profile及原生tool-jobs来源；历史来源不能仅凭错误文字推断。
 
 ## 重大决策
 
