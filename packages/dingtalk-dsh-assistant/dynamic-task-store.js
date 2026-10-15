@@ -115,7 +115,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (binding.kind !== 'task-session' || binding.sessionId !== task.sessionId || binding.leaseEpoch !== task.leaseEpoch || task.drained) fail('DYNAMIC_TASK_LEASE_STALE')
     if (current && task.recovering) fail('DYNAMIC_TASK_LEASE_STALE')
     if (current && (binding.requirementRevision !== task.requirementRevision || binding.controlRevision !== task.controlRevision)) fail('DYNAMIC_TASK_REVISION_STALE')
-    if (active && (task.control !== 'active' || task.status !== 'active')) fail('DYNAMIC_TASK_NOT_ACTIVE')
+    if (active && (task.archivedAt || task.control !== 'active' || task.status !== 'active')) fail('DYNAMIC_TASK_NOT_ACTIVE')
     return task
   }
   const boundExecution = binding => {
@@ -126,7 +126,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   }
   const executionCurrent = execution => {
     const task = get('dynamic_tasks', execution.taskId)
-    return !execution.recovering && task.status === 'active' && task.control === 'active' && execution.requirementRevision === task.requirementRevision
+    return !task.archivedAt && !execution.recovering && task.status === 'active' && task.control === 'active' && execution.requirementRevision === task.requirementRevision
       && execution.controlRevision === task.controlRevision && !execution.cancelRequested
   }
   const blockers = taskId => ({
@@ -276,8 +276,20 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       saveTask(task); wake(taskId, 'task.created', { sourceRefs: task.sourceRefs }, `wake:${commandId}`)
       return changed({ task })
     }
+    if (kind === 'task.archive') {
+      const task = get('dynamic_tasks', a.taskId)
+      text(a.actorId, 'actorId')
+      if (task.archivedAt) return changed({ task })
+      // Archive is a view lifecycle change; never cancel or drain a live session.
+      if (task.status !== 'completed' && task.control !== 'cancelled' || !task.drained) fail('DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT')
+      if (Object.values(blockers(task.taskId)).some(items => items.length)) fail('DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT')
+      task.archivedAt = stamp; task.archivedBy = a.actorId
+      saveTask(task)
+      return changed({ task })
+    }
     if (kind === 'task.revise' || kind === 'task.reopen' || kind === 'task.control') {
       const task = get('dynamic_tasks', a.taskId)
+      if (task.archivedAt) fail('DYNAMIC_TASK_ARCHIVED_CONFLICT')
       if (kind === 'task.revise' || kind === 'task.reopen') {
         if (a.expectedRequirementRevision !== undefined && a.expectedRequirementRevision !== task.requirementRevision
           || a.expectedControlRevision !== undefined && a.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
@@ -309,6 +321,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.claim') {
       const task = get('dynamic_tasks', a.taskId)
+      if (task.archivedAt) fail('DYNAMIC_TASK_ARCHIVED_CONFLICT')
       if (!task.drained) fail('DYNAMIC_TASK_BUSY')
       if (task.providerRecovery?.requirementRevision === task.requirementRevision
         && (!task.providerRecovery.nextAttemptAt || Date.parse(stamp) < Date.parse(task.providerRecovery.nextAttemptAt))) fail('DYNAMIC_TASK_PROVIDER_RETRY_NOT_DUE')

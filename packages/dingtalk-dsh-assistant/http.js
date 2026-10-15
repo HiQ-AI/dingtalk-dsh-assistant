@@ -147,6 +147,17 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
+  // Only current task sessions may use this endpoint. Legacy archive stays retired.
+  if (request.method === 'POST' && /^\/tasks\/[^/]+\/archive$/u.test(url.pathname) && store.isTaskSessionMode?.()) {
+    try {
+      if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+      const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/archive'.length))
+      const task = await store.getTaskSessionDetail(taskId)
+      if (task?.legacyReadonly || !task && (await store.getTask?.(taskId) || await store.isWorkflowTask?.(taskId))) return send(response, 410, { error: 'LEGACY_TASK_READONLY' })
+      if (!z.strictObject({}).safeParse(await readJson(request)).success) return send(response, 400, { error: 'web_task_request_invalid' })
+      return send(response, 200, await store.archiveTask({ taskId }))
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   // Retired configuration and fixed-run controls must never reach a runtime fallback.
   if (/^\/config\/workflow-(?:variables|bindings)(?:\/|$)/u.test(url.pathname)
     || ['/state/workflows', '/state/workflows/catalog', '/runtime/execution-purge', '/runtime/maintenance/task-run', '/runtime/topics/reconcile', '/runtime/topics/reconcile/check', '/runtime/maintenance/seal', '/runtime/maintenance/resume'].includes(url.pathname)

@@ -1,0 +1,187 @@
+{
+  "checks": [
+    "first-asynchronous-load-default-matches-running-sort",
+    "cross-bucket-single-expand-keyboard",
+    "manual-collapse-survives-refresh",
+    "running-archive-rejected-without-cancel",
+    "archive-click-does-not-open-detail",
+    "inflight-disabled-and-duplicate-guard",
+    "failure-keeps-task-and-database-unmodified",
+    "archived-task-reopen-rejected-without-state-change",
+    "expanded-archived-task-cleared-without-redefault",
+    "durable-sqlite-service-restart-and-browser-reload",
+    "history-preserves-result-and-executions-without-restore",
+    "no-running-default-all-collapsed",
+    "narrow-original-card-spacing"
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/state/groups"
+    },
+    {
+      "method": "GET",
+      "path": "/state/supervisor/alerts"
+    },
+    {
+      "method": "GET",
+      "path": "/state/authorizations"
+    },
+    {
+      "method": "GET",
+      "path": "/state/topics"
+    },
+    {
+      "method": "GET",
+      "path": "/state/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/state/groups"
+    },
+    {
+      "method": "GET",
+      "path": "/state/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/state/supervisor/alerts"
+    },
+    {
+      "method": "GET",
+      "path": "/state/authorizations"
+    },
+    {
+      "method": "GET",
+      "path": "/state/topics"
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/running-new/archive"
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/done/archive"
+    },
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/state/groups"
+    },
+    {
+      "method": "GET",
+      "path": "/state/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/state/supervisor/alerts"
+    },
+    {
+      "method": "GET",
+      "path": "/state/authorizations"
+    },
+    {
+      "method": "GET",
+      "path": "/state/topics"
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/running-new/archive"
+    },
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/state/groups"
+    },
+    {
+      "method": "GET",
+      "path": "/state/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/state/supervisor/alerts"
+    },
+    {
+      "method": "GET",
+      "path": "/state/authorizations"
+    },
+    {
+      "method": "GET",
+      "path": "/state/topics"
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/done/archive"
+    },
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/state/groups"
+    },
+    {
+      "method": "GET",
+      "path": "/state/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/state/supervisor/alerts"
+    },
+    {
+      "method": "GET",
+      "path": "/state/authorizations"
+    },
+    {
+      "method": "GET",
+      "path": "/state/topics"
+    },
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/state/groups"
+    },
+    {
+      "method": "GET",
+      "path": "/state/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/state/supervisor/alerts"
+    },
+    {
+      "method": "GET",
+      "path": "/state/authorizations"
+    },
+    {
+      "method": "GET",
+      "path": "/state/topics"
+    }
+  ],
+  "errors": [],
+  "geometry": {
+    "padding": "11px 13px",
+    "gap": "6px",
+    "width": 342
+  },
+  "baseCommit": "3c028dd",
+  "fixture": "temporary SQLite, real service + HTTP; semantic host primitives only; external requests blocked"
+}

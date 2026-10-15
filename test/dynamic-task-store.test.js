@@ -905,3 +905,54 @@ test('investigated terminal error retains unknown audit and partial effects with
   assert.equal((await f.query({kind:'execution.list'})).length,1)
   assert.equal((await f.query({kind:'resource.list'})).length,0)
 })
+
+
+test('archive retains durable task and execution history, refuses live tasks and never cancels them', async t => {
+  const f = await fixture(t)
+  const owner = await f.task()
+  await assert.rejects(f.command('task.archive', { taskId: 'task', actorId: 'operator' }), { code: 'DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT' })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).control, 'active')
+  await f.command('task.complete', { binding: owner.binding, summary: 'Verified done' })
+  await assert.rejects(f.command('task.archive', { taskId: 'task', actorId: 'operator' }), { code: 'DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT' })
+  await f.command('task.drained', { binding: owner.binding })
+  const archived = (await f.command('task.archive', { taskId: 'task', actorId: 'operator' })).result.task
+  assert.ok(archived.archivedAt); assert.equal(archived.archivedBy, 'operator')
+  assert.equal(archived.completion.summary, 'Verified done')
+  assert.equal((await f.command('task.archive', { taskId: 'task', actorId: 'operator' })).result.task.archivedAt, archived.archivedAt)
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'task.list' }))[0], archived)
+})
+
+
+test('cancelled and drained tasks may be archived without changing cancellation or execution history', async t => {
+  const f = await fixture(t), owner = await f.task()
+  await f.command('task.control', { taskId: 'task', control: 'cancelled' })
+  await f.command('task.drained', { binding: owner.binding })
+  const task = (await f.command('task.archive', { taskId: 'task', actorId: 'operator' })).result.task
+  assert.equal(task.control, 'cancelled'); assert.ok(task.archivedAt)
+})
+
+test('archived lifecycle rejects reopen and concurrent pending-wake admission; unarchived tasks still reopen', async t => {
+  const f = await fixture(t)
+  for (const taskId of ['archived', 'normal']) {
+    const owner = await f.task(taskId)
+    await f.command('task.complete', { binding: owner.binding, summary: 'Done' })
+    await f.command('task.drained', { binding: owner.binding })
+  }
+  await f.command('wake.enqueue', { taskId: 'archived', kind: 'new-message', payload: { fixture: true } })
+  const [archive, claim] = await Promise.allSettled([
+    f.command('task.archive', { taskId: 'archived', actorId: 'operator' }),
+    f.command('wake.claim', { taskId: 'archived' }),
+  ])
+  assert.equal(archive.status, 'fulfilled'); assert.equal(claim.status, 'rejected'); assert.equal(claim.reason.code, 'DYNAMIC_TASK_ARCHIVED_CONFLICT')
+  for (const kind of ['task.reopen', 'task.revise', 'task.claim', 'task.control'])
+    await assert.rejects(f.command(kind, { taskId: 'archived', request: 'new message', control: 'active' }), { code: 'DYNAMIC_TASK_ARCHIVED_CONFLICT' })
+  const before = await f.query({ kind: 'task.get', taskId: 'archived' })
+  await f.reopen()
+  await assert.rejects(f.command('task.reopen', { taskId: 'archived', request: 'after restart' }), { code: 'DYNAMIC_TASK_ARCHIVED_CONFLICT' })
+  assert.deepEqual(await f.query({ kind: 'task.get', taskId: 'archived' }), before)
+  const [reopened, racingArchive] = await Promise.allSettled([f.command('task.reopen', { taskId: 'normal', request: 'authorized follow-up' }), f.command('task.archive', { taskId: 'normal', actorId: 'operator' })])
+  assert.equal(reopened.status, 'fulfilled'); assert.equal(racingArchive.status, 'rejected'); assert.equal(racingArchive.reason.code, 'DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT')
+  const normal = await f.query({ kind: 'task.get', taskId: 'normal' })
+  assert.equal(normal.status, 'active'); assert.equal(normal.archivedAt, undefined)
+})

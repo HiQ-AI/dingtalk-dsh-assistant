@@ -876,6 +876,35 @@ window.__ModuleLoader__.load({
       }, [])
       const [topicTarget, setTopicTarget] = useState()
       const [data, setData] = useState()
+      const [expandedTaskId, setExpandedTaskId] = useState('')
+      const expansionInitialized = useRef(false)
+      const archivedTasksRef = useRef(new Map())
+      const archivePending = useRef(new Set())
+      const [archivingIds, setArchivingIds] = useState([])
+      const [archiveFeedback, setArchiveFeedback] = useState(null)
+      useEffect(() => {
+        if (!data) return
+        const visible = data.tasks.filter(task => !task.archivedAt && !task.legacyReadonly)
+        if (!expansionInitialized.current) {
+          expansionInitialized.current = true
+          setExpandedTaskId(visible.filter(task => task.state === 'running').sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0]?.taskId || '')
+        } else setExpandedTaskId(id => visible.some(task => task.taskId === id) ? id : '')
+      }, [data])
+      const archiveTask = async task => {
+        if (archivePending.current.has(task.taskId)) return
+        archivePending.current.add(task.taskId); setArchivingIds([...archivePending.current]); setArchiveFeedback(null)
+        try {
+          const archived = await post(`/tasks/${encodeURIComponent(task.taskId)}/archive`)
+          if (!archived?.archivedAt || archived.taskId !== task.taskId) throw new Error('归档响应无效，请刷新核对')
+          archivedTasksRef.current.set(task.taskId, { archivedAt: archived.archivedAt, archivedBy: archived.archivedBy })
+          setData(current => ({ ...current, tasks: current.tasks.map(item => item.taskId === task.taskId ? { ...item, ...archived } : item) }))
+          setExpandedTaskId(id => id === task.taskId ? '' : id)
+          setArchiveFeedback({ text: `已归档：${task.title || task.taskId}` })
+        } catch (cause) {
+          const message = cause instanceof Error ? cause.message : String(cause)
+          setArchiveFeedback({ error: true, text: /NOT_QUIESCENT/.test(message) ? '归档失败：任务须已完成或已取消，且所有执行已结束；归档不会停止活动执行。' : `归档失败：${message}` })
+        } finally { archivePending.current.delete(task.taskId); setArchivingIds([...archivePending.current]) }
+      }
       const [error, setError] = useState()
       const [navigationError, setNavigationError] = useState()
       const [updatedAt, setUpdatedAt] = useState()
@@ -906,7 +935,7 @@ window.__ModuleLoader__.load({
       const pendingRefresh = useRef(null)
       const refresh = useCallback(() => {
         if (pendingRefresh.current) return pendingRefresh.current
-        pendingRefresh.current = load().then(value => { setData(value); setUpdatedAt(new Date()); setError(undefined) },
+        pendingRefresh.current = load().then(value => { setData({ ...value, tasks: (value.tasks || []).map(task => archivedTasksRef.current.has(task.taskId) ? { ...task, ...archivedTasksRef.current.get(task.taskId) } : task) }); setUpdatedAt(new Date()); setError(undefined) },
           cause => { setError(cause instanceof Error ? cause.message : String(cause)) })
           .finally(() => { pendingRefresh.current = null })
         return pendingRefresh.current
@@ -1061,8 +1090,8 @@ window.__ModuleLoader__.load({
             })),
           React.createElement('button', { type: 'button', title: displayObjective, 'aria-label': '查看完整任务目标', onClick: () => openTask(task), style: { border: 0, padding: 0, background: 'transparent', color: 'inherit', textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', minWidth: 0, display: 'block', maxHeight: '4.5em', overflow: 'hidden', overflowWrap: 'anywhere', fontSize: 11, lineHeight: 1.5 } },
             React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: { display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors.muted } }, React.createElement('circle', { cx: 8, cy: 8, r: 5.5 }), React.createElement('circle', { cx: 8, cy: 8, r: 2 }), React.createElement('path', { d: 'M8 1v2M15 8h-2' })), displayObjective),
-          !task.legacyReadonly && sessions.length ? React.createElement('details', { className: 'observer-card-sessions', open: true, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
-            React.createElement('summary', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', fontSize: 11, color: colors.muted, listStyle: 'none' } },
+          !task.legacyReadonly && sessions.length ? React.createElement('details', { className: 'observer-card-sessions', open: expandedTaskId === task.taskId, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
+            React.createElement('summary', { onClick: event => { event.preventDefault(); event.stopPropagation(); setExpandedTaskId(id => id === task.taskId ? '' : task.taskId) }, style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', fontSize: 11, color: colors.muted, listStyle: 'none' } },
               React.createElement('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, 'aria-hidden': true }, React.createElement('path', { d: 'M2 3h2v2H2zM6 4h8M2 7h2v2H2zM6 8h8M2 11h2v2H2zM6 12h8' })),
               React.createElement('span', null, '执行会话'),
               React.createElement('meter', { min: 0, max: sessions.length, value: completedSessions, 'aria-label': '已完成执行会话数量', style: { flex: 1, minWidth: 20, maxWidth: 80, height: 5, marginLeft: 'auto' } }),
@@ -1082,7 +1111,7 @@ window.__ModuleLoader__.load({
             }))) : null,
           task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,
           React.createElement('div', { style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted } },
-            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt), React.createElement('span', { style: { marginLeft: 'auto' } }, copyButton(task.taskId, 'Id'))))
+            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt), React.createElement('span', { style: { marginLeft: 'auto' } }, !task.legacyReadonly && !task.archivedAt ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', title: '归档任务（仅限已完成或已取消且执行已结束的任务）', 'aria-label': `归档任务：${task.title || task.taskId}`, 'aria-busy': archivingIds.includes(task.taskId), disabled: archivingIds.includes(task.taskId), onClick: event => { event.stopPropagation(); archiveTask(task) }, style: { minWidth: 58, fontSize: 10.5, cursor: archivingIds.includes(task.taskId) ? 'wait' : 'pointer' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, 'aria-hidden': true, style: { verticalAlign: -2, marginRight: 4 } }, React.createElement('path', { d: 'M3 3h18v5H3zM5 8v13h14V8M9 12h6' })), '归档') : React.createElement('span', { style: { color: colors.muted, fontSize: 10.5 } }, task.legacyReadonly ? '历史只读' : '已归档'))))
       }
       const alertCategories = [
         { id: 'all', label: '全部类型' },
@@ -1246,6 +1275,7 @@ window.__ModuleLoader__.load({
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
+        archiveFeedback ? React.createElement('div', { role: archiveFeedback.error ? 'alert' : 'status', style: { ...card, color: archiveFeedback.error ? colors.danger : colors.muted } }, archiveFeedback.text) : null,
         navigationError ? React.createElement('div', { role: 'alert', style: { ...card, borderColor: colors.danger, color: colors.danger } }, `操作失败：${navigationError}`) : null,
         pageViewport
       )

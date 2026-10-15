@@ -12,7 +12,7 @@ const sameStringSet = (a, b) => a.length === b.length && a.every(value => b.incl
 export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, onError = () => {} }) {
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
-  store = new Proxy(store, { get(target, key) { return key === 'getTaskPrompts' ? () => [] : Reflect.get(target, key) } })
+  store = new Proxy(store, { get(target, key) { return key === 'getTaskPrompts' ? () => [] : key === 'listTasks' ? () => target.listTasks().filter(task => !task.archivedAt) : Reflect.get(target, key) } })
   let closed = false, topics, serial = Promise.resolve()
   const handles = new Set(), dispatches = new Set()
   const report = (groupId, error) => onError(groupId, error)
