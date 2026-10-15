@@ -1,0 +1,82 @@
+{
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T06:47:00.031Z",
+            "readyAt": "2026-10-15T06:47:00.746Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T06:48:00.197Z",
+            "succeededAt": "2026-10-15T06:48:00.851Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T06:47:00.088Z",
+            "readyAt": "2026-10-15T06:47:00.836Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T06:48:00.222Z",
+            "succeededAt": "2026-10-15T06:48:00.74Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T06:47:00.126Z",
+        "readyAt": "2026-10-15T06:47:00.875Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 43072
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 43072
+    }
+  ],
+  "observedAt": "2026-10-15T06:48:05.8637260Z",
+  "packageSha256": "9b1ce88f4e93c12611fbb8e5d615a4d8a3cbd5060d5893025c3b5b1509b60f0b",
+  "version": "1.0.0",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "oldProcessExists": false
+}

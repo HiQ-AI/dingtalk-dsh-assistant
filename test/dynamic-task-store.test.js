@@ -25,6 +25,20 @@ async function fixture(t, options = {}) {
   return { root, config, command, query, task, execution, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }); return store } }
 }
 
+test('legacy persisted English names remain stable across continuation and reopen; no implicit migration',async t=>{
+ const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding,'legacy-check')
+ await f.command('execution.result',{binding,output:{done:true}})
+ await f.command('execution.drained',{binding})
+ // Emulate a record written by the previously deployed naming policy, in this isolated fixture only.
+ const db=new DatabaseSync(f.config.dbPath)
+ db.prepare("UPDATE dynamic_executions SET body=json_set(body,'$.title',?) WHERE id=?").run('legacy-check',binding.executionId);db.close()
+ await f.command('execution.continue',{binding:owner.binding,executionId:binding.executionId,key:'next',prompt:'Continue',input:{title:'新的中文建议',objective:'Verify API'}})
+ assert.equal((await f.query({kind:'execution.get',executionId:binding.executionId})).title,'legacy-check')
+ await f.reopen()
+ assert.equal((await f.query({kind:'execution.get',executionId:binding.executionId})).title,'legacy-check')
+})
+
+
 test('nonterminal stage reports persist and wake once without completing the execution', async t => {
   const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
   const args = { binding, summary: '已定位差异，正在验证修复边界。', evidence: ['fixture-proof'], sequence: 1 }

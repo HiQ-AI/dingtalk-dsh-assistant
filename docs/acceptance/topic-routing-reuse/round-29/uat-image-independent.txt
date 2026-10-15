@@ -1,0 +1,3 @@
+Name:      registry.cn-sh1.ctyun.cn/hiq-ai/dataset@sha256:c0d744d93eec0acfadc2976732f3ee78d5cfd0390de439ee25c266bf3657ad28
+MediaType: application/vnd.docker.distribution.manifest.v2+json
+Digest:    sha256:c0d744d93eec0acfadc2976732f3ee78d5cfd0390de439ee25c266bf3657ad28

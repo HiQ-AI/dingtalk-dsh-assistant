@@ -1,0 +1,35 @@
+{
+  "uid": "af1a2e54-a557-4ded-a948-a117960b58e2",
+  "generation": 521,
+  "observedGeneration": 521,
+  "desired": 1,
+  "ready": 1,
+  "updated": 1,
+  "images": [
+    {
+      "name": "dataset",
+      "image": "registry.cn-sh1.ctyun.cn/hiq-ai/dataset@sha256:c0d744d93eec0acfadc2976732f3ee78d5cfd0390de439ee25c266bf3657ad28"
+    }
+  ],
+  "pods": [
+    {
+      "name": "dataset-69c84cbf79-qjp82",
+      "uid": "df4fdb81-9401-4afc-bc12-bd2e1c8e103f",
+      "owner": "dataset-69c84cbf79",
+      "deleting": null,
+      "phase": "Running",
+      "ready": "True",
+      "containers": [
+        {
+          "name": "dataset",
+          "ready": true,
+          "image": "sha256:c8282581720dd8193a62dbf85e6f21d1555559eb6a3b3ada156314815f6b90b1",
+          "imageID": "registry.cn-sh1.ctyun.cn/hiq-ai/dataset@sha256:c0d744d93eec0acfadc2976732f3ee78d5cfd0390de439ee25c266bf3657ad28",
+          "restartCount": 0
+        }
+      ]
+    }
+  ]
+}
+{"status":"UP","components":{"db:admin":{"status":"UP"},"db:hiq_lcd":{"status":"UP"},"db:hiq_background_db":{"status":"UP"},"redis":{"status":"UP"},"grpc:calculate":{"status":"UP"},"grpc:calc":{"status":"UP"}}}
+entry_http=200

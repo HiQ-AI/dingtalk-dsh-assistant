@@ -560,6 +560,7 @@ test('native executor resumes in the same titled task workspace and all task ses
   assert.equal(log.meta.cwd, taskRoot)
   assert.ok(!log.events.some(event => event.type === 'working-directory/change'))
   assert.equal(log.events.findLast(event => event.type === 'session/title').data.title, execution.title, '同一执行保留稳定名称，续办key不改名')
+  assert.equal(resumed.input.title, execution.title)
 })
 
 test('native service reopens an unknown notification for readback without resending completed business work', { timeout: 15000 }, async t => {

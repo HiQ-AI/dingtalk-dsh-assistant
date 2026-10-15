@@ -46,3 +46,6 @@ Host与话题整组,15,PASS,round-15-all-related.log
 已有UAT授权实际发布判断,28,PASS,round-28/uat-pr-readback.json
 冷启动部署就绪,28,FAIL,round-28/deployment/failure.json
 冷启动部署就绪,29,PASS,round-29.md
+原任务UAT实际发布及原身份完成,29,PASS,round-29/uat-runtime-independent.txt
+主分支中文短名与授权目标合流,30,PASS,round-30/merge-service-name-tests.log
+最终合流包部署与原任务不重执行,30,PASS,round-30/runtime-readback.json

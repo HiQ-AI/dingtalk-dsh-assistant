@@ -1,0 +1,58 @@
+{
+  "scope": "exact native Host JSON UTF-8 bytes; not tokens, billing or complete model request",
+  "leaseEpoch": 178,
+  "originalAuditBytes": 1145426,
+  "beforeBytes": 59587,
+  "afterBytes": 26798,
+  "reductionPercent": 55,
+  "before": {
+    "contentIndex": 21742,
+    "executions": 12462,
+    "sources": 9913,
+    "materials": 8588,
+    "task": 4293,
+    "blockers": 674,
+    "wakes": 629,
+    "operationHistory": 211,
+    "sourceCatalog": 209,
+    "executionIndex": 209,
+    "operationIndex": 204,
+    "materialCatalogRef": 183,
+    "operationCounts": 28,
+    "sourceReviewRequired": 4,
+    "operations": 2
+  },
+  "after": {
+    "contentIndex": 9149,
+    "executions": 6603,
+    "sources": 6165,
+    "task": 2346,
+    "blockers": 674,
+    "wakes": 573,
+    "operationHistory": 211,
+    "sourceCatalog": 209,
+    "executionIndex": 209,
+    "operationIndex": 204,
+    "materialCatalogRef": 183,
+    "operationCounts": 28,
+    "sourceReviewRequired": 4,
+    "materials": 2,
+    "operations": 2
+  },
+  "nativeVisibleHost": {
+    "count": 1,
+    "historicalMarkers": 0,
+    "textBytes": 27317,
+    "leaseEpochs": [
+      190
+    ]
+  },
+  "checks": {
+    "originalAuditUnchanged": true,
+    "sourceIdentitiesAndBodiesExact": 11,
+    "completeCatalogSources": 11,
+    "taskAndMaterialsExact": true,
+    "executionCatalogExact": 8,
+    "activeOperations": 0
+  }
+}
