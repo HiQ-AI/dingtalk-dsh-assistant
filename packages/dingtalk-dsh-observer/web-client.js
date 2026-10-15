@@ -510,7 +510,7 @@ window.__ModuleLoader__.load({
     const taskStateLabel = state => ({ running: '执行中', queued: '待处理', waiting: '等待处理', paused: '已暂停', completed: '已结束', succeeded: '已完成', failed: '失败', cancelled: '已取消', blocked: '受阻', pending: '待执行', interrupted: '已中断' })[state] || state || '状态未记录'
     const taskStateTone = state => ['completed', 'succeeded'].includes(state) ? 'done' : ['failed', 'blocked'].includes(state) ? 'error' : ['waiting', 'paused', 'interrupted'].includes(state) ? 'warning' : ['running', 'queued', 'pending'].includes(state) ? 'ongoing' : 'neutral'
     const taskSession = task => task.session || { sessionId: task.sessionId, workspaceDir: task.workspaceDir, logPath: task.logPath }
-    function SessionLocation({ session, label, onOpenSession, compact = false }) {
+    function SessionLocation({ session, label, onOpenSession, compact = false, entryOnly = false, actionLabel }) {
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const pending = useRef(false)
@@ -521,6 +521,9 @@ window.__ModuleLoader__.load({
         catch (cause) { setError(cause.message) }
         finally { pending.current = false; setBusy(false) }
       }
+      const entry = session?.sessionId && session.sessionBound !== false ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: busy, onClick: open, 'aria-label': actionLabel, style: { justifySelf: 'start', minWidth: 110 } }, busy ? '正在打开…' : `打开${label}`) : null
+      const failure = error ? React.createElement('p', { role: 'alert', style: { color: colors.danger } }, error) : null
+      if (entryOnly) return React.createElement('div', null, entry, failure)
       const location = React.createElement(React.Fragment, null,
         React.createElement('div', null, '会话 ID：', session?.sessionId ? `${session.sessionId}${session.sessionBound === false ? '（尚未绑定）' : ''}` : '尚未建立'),
         React.createElement('div', null, '工作目录：', session?.workspaceDir || '尚未分配'),
@@ -531,8 +534,7 @@ window.__ModuleLoader__.load({
         compact ? React.createElement('p', { className: 'detail-muted' }, label === '任务会话' ? '统筹目标、安排独立执行并汇总结果。' : '本次执行的独立会话、工作目录与日志。') : null,
         compact ? React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '会话信息与路径'), React.createElement('div', { className: 'detail-location' }, location)) : location,
         compact && (!session?.sessionId || session.sessionBound === false) ? React.createElement('p', { className: 'detail-muted' }, session?.sessionId ? '会话尚未绑定，暂不可打开。' : '会话尚未建立。') : null,
-        session?.sessionId && session.sessionBound !== false ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: busy, onClick: open, style: { justifySelf: 'start', minWidth: 110 } }, busy ? '正在打开…' : `打开${label}`) : null,
-        error ? React.createElement('p', { role: 'alert', style: { color: colors.danger } }, error) : null)
+        entry, failure)
     }
     function TaskResult({ result }) {
       const value = typeof result === 'string' ? { summary: result } : result
@@ -659,6 +661,80 @@ window.__ModuleLoader__.load({
         !items.length ? emptyState('暂无历史执行记录') : null,
         pages > 1 ? React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', disabled: current <= 1, onClick: () => setPage(value => value - 1) }, '上一页'), React.createElement('span', null, `${current}/${pages}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: current >= pages, onClick: () => setPage(value => value + 1) }, '下一页')) : null)
     }
+    const taskProgressView = task => {
+      const terminal = ['completed', 'succeeded', 'failed', 'cancelled', 'stale']
+      const ended = task.legacyReadonly || terminal.includes(task.state)
+      const paused = (task.controlState || task.control?.state || task.control) === 'paused' || task.state === 'paused'
+      const records = new Map()
+      for (const item of [...(Array.isArray(task.executions) ? task.executions : []), ...(Array.isArray(task.blockers?.executions) ? task.blockers.executions : [])]) {
+        if (item.executionId) records.set(item.executionId, { ...records.get(item.executionId), ...item, sessionBound: item.sessionBound ?? records.get(item.executionId)?.sessionBound ?? false })
+      }
+      const executions = ended ? [] : [...records.values()].filter(item => !terminal.includes(item.status) || item.drained === false).map(item => {
+        const outdated = item.requirementRevision != null && task.requirementRevision != null && item.requirementRevision !== task.requirementRevision
+          || item.controlRevision != null && task.controlRevision != null && item.controlRevision !== task.controlRevision
+        const stopping = item.cancelRequested || outdated
+        const running = !paused && !stopping && !task.recovering && !item.recovering && item.status === 'running' && item.drained !== true
+        const label = stopping ? '等待停止 / 收尾' : task.recovering || item.recovering ? '会话恢复中' : paused ? '任务已暂停' : terminal.includes(item.status) ? '执行结束，等待收尾' : taskStateLabel(item.status)
+        return { ...item, running, outdated, label, objective: item.input?.objective || item.objective || item.input?.title || item.executionId }
+      })
+      const running = executions.filter(item => item.running).length
+      const queued = executions.filter(item => ['queued', 'pending'].includes(item.status) && !item.cancelRequested && !item.outdated && !paused).length
+      const summary = ended ? task.legacyReadonly ? '历史任务只读，不展示实时执行进展。' : `任务${taskStateLabel(task.state)}，当前没有正在执行的事项。`
+        : paused ? '任务已暂停；以下为尚未结束的执行记录。'
+        : task.recovering ? '任务会话恢复中，当前处理步骤尚未记录。'
+        : ['waiting', 'blocked', 'interrupted'].includes(task.state) ? `任务${taskStateLabel(task.state)}${executions.length ? '；以下为尚未结束的执行记录。' : '，暂无活跃执行记录。'}`
+        : running || queued ? `${running} 项执行中 · ${queued} 项待执行`
+        : task.drained === false && taskSession(task)?.sessionBound === true && taskSession(task)?.sessionId ? '统筹会话正在处理任务，具体步骤尚未记录。'
+        : '暂无当前执行进展记录。'
+      return { ended, paused, executions, summary }
+    }
+    const taskOverallProgressView = task => {
+      const ended = task.legacyReadonly || ['completed', 'succeeded', 'failed', 'cancelled'].includes(task.state)
+      const paused = (task.controlState || task.control?.state || task.control) === 'paused' || task.state === 'paused'
+      const decision = task.lastDecision
+      const hasRecord = typeof decision?.summary === 'string' && !!decision.summary.trim()
+      const verified = hasRecord && Number.isSafeInteger(task.requirementRevision) && Number.isSafeInteger(task.controlRevision)
+        && decision.requirementRevision === task.requirementRevision && decision.controlRevision === task.controlRevision
+        && Number.isFinite(Date.parse(decision.at))
+      const currentRecord = ['wait', 'blocked'].includes(decision?.action) && verified && !ended && !paused
+      const updating = currentRecord && (task.drained === false || task.recovering === true)
+      const waiting = ['waiting', 'blocked', 'interrupted'].includes(task.state)
+      return {
+        description: ended ? task.legacyReadonly ? '历史任务只读，不展示当前工作。' : `任务${taskStateLabel(task.state)}，结果与执行记录见下方。`
+          : paused ? '任务已暂停，等待后续指示。'
+          : currentRecord ? decision.summary
+          : task.recovering ? '任务会话恢复中，当前整体工作尚未记录。' : '当前整体工作尚未记录。',
+        heading: ended || paused ? '当前状态' : updating ? '最近已确认进展' : currentRecord ? waiting ? '当前等待 / 阻塞' : '最新统筹进展' : '当前工作',
+        recordedAt: currentRecord ? decision.at : null,
+        missing: !ended && !paused && !currentRecord,
+        updating,
+        lastRecord: !ended && hasRecord ? { summary: decision.summary, at: decision.at, verified } : null,
+      }
+    }
+    function TaskProgress({ task, onOpenSession }) {
+      const view = taskProgressView(task)
+      const confirmed = useRef(null)
+      let overall = taskOverallProgressView(task)
+      const identity = `${task.taskId}:${task.requirementRevision}:${task.controlRevision}`
+      if (confirmed.current?.identity !== identity) confirmed.current = null
+      if (overall.recordedAt) confirmed.current = { identity, description: overall.description, recordedAt: overall.recordedAt }
+      else if (overall.missing && confirmed.current && (task.drained === false || task.recovering === true)) {
+        overall = { ...overall, description: confirmed.current.description, recordedAt: confirmed.current.recordedAt,
+          heading: '最近已确认进展', missing: false, updating: true }
+      }
+      const time = value => value ? fmt(value) : '未记录'
+      return React.createElement('section', { className: 'detail-panel detail-progress', 'aria-label': '当前进展' },
+        React.createElement('h2', null, '当前进展'),
+        React.createElement('div', { className: 'detail-progress-content', tabIndex: 0, 'aria-label': '当前进展记录，可滚动查看' },
+          React.createElement('div', { className: 'detail-overall-progress' }, React.createElement('h3', null, overall.heading), React.createElement('p', { className: 'detail-progress-state' }, overall.description), React.createElement('p', { className: 'detail-muted' }, `整体进展记录时间 ${time(overall.recordedAt)}`), overall.updating ? React.createElement('p', { className: 'detail-muted' }, '统筹正在更新；以上为最近已确认进展，不代表实时工作。') : null, React.createElement('p', { className: 'detail-muted' }, `任务状态记录更新 ${time(task.updatedAt)}`), overall.missing ? React.createElement('p', { className: 'detail-muted' }, '当前没有可确认的整体工作说明，请在任务会话中查看。') : null),
+          overall.lastRecord && !overall.recordedAt ? React.createElement('details', { className: 'detail-progress-note' }, React.createElement('summary', null, overall.lastRecord.verified ? '最近统筹说明（不代表当前工作）' : '历史统筹说明（当前版本或轮次未核验）'), React.createElement('p', null, traceReason(overall.lastRecord.summary)), React.createElement('p', { className: 'detail-muted' }, `记录时间 ${time(overall.lastRecord.at)}`)) : null,
+          view.executions.length ? React.createElement('details', { className: 'detail-progress-note' }, React.createElement('summary', null, `辅助：执行记录（${view.executions.length} 项）`), React.createElement('p', { className: 'detail-muted' }, '以下是执行事项与会话活动记录，不代表任务整体当前步骤。'), React.createElement('ul', { className: 'detail-progress-list' }, ...view.executions.map(item => React.createElement('li', { key: item.executionId },
+            React.createElement('div', { className: 'detail-progress-heading' }, React.createElement('strong', null, item.input?.title || item.key || '执行事项'), statusTag(item.label, item.running ? 'ongoing' : view.paused || item.outdated || item.cancelRequested || item.recovering ? 'warning' : taskStateTone(item.status)), React.createElement(SessionLocation, { session: item, label: '执行会话', onOpenSession, entryOnly: true, actionLabel: `打开执行会话 ${item.input?.title || item.key || item.executionId}` })),
+            React.createElement('p', { className: 'detail-objective' }, item.objective),
+            React.createElement('p', { className: 'detail-muted' }, `最近活动 ${time(item.progressReview?.lastActivityAt)} · 进展检查 ${time(item.progressReview?.checkedAt)}`),
+            React.createElement('p', { className: 'detail-muted' }, item.progressReview?.readError ? `进展记录读取失败：${traceReason(item.progressReview.readError)}` : Number.isSafeInteger(item.progressReview?.newEventCount) && item.progressReview.newEventCount >= 0 ? `本次检查新增 ${item.progressReview.newEventCount} 条会话事件。` : '尚无可读的当前步骤摘要。'),
+            React.createElement('details', null, React.createElement('summary', null, '会话与记录信息'), React.createElement('p', { className: 'detail-muted' }, `执行记录更新 ${time(item.updatedAt)} · 会话 ${item.sessionId || '尚未建立'}`)))))) : null))
+    }
     const taskDetailCss = `
       [data-dingtalk-observer] .observer-session-detail { width: 100%; box-sizing: border-box; max-width: 1100px; margin: 0 auto; padding-bottom: 24px; display: grid; gap: 24px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
       .observer-session-detail :is(h1, h2, h3, p, ul) { margin: 0; }
@@ -711,6 +787,16 @@ window.__ModuleLoader__.load({
       .observer-session-detail .detail-execution-feedback > span { grid-column: 1; grid-row: 1; min-width: 0; max-height: 36px; overflow: auto; font-size: 12px; line-height: 18px; }
       .observer-session-detail .detail-execution-feedback > button { grid-column: 2; grid-row: 1; }
       .observer-session-detail .detail-execution-error { color: ${colors.danger}; }
+      .observer-session-detail .detail-progress { height: 320px; grid-template-rows: 24px minmax(0, 1fr); }
+      .observer-session-detail .detail-progress-content { min-height: 0; overflow: auto; scrollbar-gutter: stable; display: grid; gap: 8px; align-content: start; }
+      .observer-session-detail .detail-progress-state { font-weight: 500; }
+      .observer-session-detail .detail-overall-progress { display: grid; gap: 8px; }
+      .observer-session-detail .detail-progress-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+      .observer-session-detail .detail-progress-heading > strong { margin-right: auto; }
+      .observer-session-detail .detail-progress-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+      .observer-session-detail .detail-progress-list > li { margin: 0; padding-top: 12px; border-top: 1px solid ${colors.border}; display: grid; gap: 4px; }
+      .observer-session-detail .detail-progress-list button { justify-self: start; margin-top: 4px; }
+      .observer-session-detail .detail-progress-note { border-top: 1px solid ${colors.border}; padding-top: 8px; }
       .observer-task-detail-route .detail-fetch-error { padding: 16px; border: 1px solid ${colors.danger}; border-radius: 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; color: ${colors.danger}; font-size: 14px; line-height: 1.65; }
       .observer-task-detail-route .detail-fetch-state { min-height: 200px; align-content: start; }
       @media (max-width: 800px) { .observer-session-detail .detail-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
@@ -735,6 +821,7 @@ window.__ModuleLoader__.load({
             React.createElement('section', { className: 'detail-panel', 'aria-label': '目标与要求' }, React.createElement('h2', null, '目标与要求'), React.createElement('p', { className: 'detail-objective' }, task.objective || '尚未记录任务目标。'),
               requirements.length ? React.createElement('div', { className: 'detail-requirements' }, React.createElement('h3', null, '验收要求'), React.createElement('ul', null, ...requirements.map((item, index) => React.createElement('li', { key: index }, readableValue(item))))) : null,
               task.context ? React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '参考资料'), React.createElement('p', { className: 'detail-objective' }, readableValue(task.context))) : null),
+            React.createElement(TaskProgress, { task, onOpenSession }),
             React.createElement(TaskResult, { result: task.result })),
           React.createElement('aside', { className: 'detail-sidebar', 'aria-label': '统筹会话与记录' },
             !task.legacyReadonly ? React.createElement(SessionLocation, { session: taskSession(task), label: '任务会话', onOpenSession, compact: true }) : null,

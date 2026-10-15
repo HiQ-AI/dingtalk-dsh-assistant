@@ -94,12 +94,31 @@ export async function nativeTaskHost(root, decide, options = {}) {
   } catch (error) { await h.close(); throw error }
 }
 
+export function modelToolValues(request) {
+  const definitions = Object.assign({}, ...request.messages.flatMap(message => (message.content ?? []).flatMap(part => {
+    if (part.type !== 'text') return []
+    try { return [JSON.parse(part.text).contentIndex ?? {}] } catch { return [] }
+  })))
+  const inline = value => value && typeof value === 'object' ? value.contentRef && Object.hasOwn(definitions, value.contentRef)
+    ? definitions[value.contentRef] : Array.isArray(value) ? value.map(inline) : Object.fromEntries(Object.entries(value).map(([key, child]) => [key, inline(child)])) : value
+  return request.messages.filter(message => message.role === 'tool').flatMap(message => message.content ?? []).filter(part => part.type === 'text')
+    .flatMap(part => { try { return [inline(JSON.parse(part.text))] } catch { return [] } })
+}
+
 export function latestInput(request) {
+  // Scripted models understand the same inline dictionary as a real model.
+  // Deferred catalogues remain references and must be read with the model tool.
+  const definitions = Object.assign({}, ...request.messages.flatMap(message => (message.content ?? []).flatMap(part => {
+    if (part.type !== 'text') return []
+    try { return [JSON.parse(part.text).contentIndex ?? {}] } catch { return [] }
+  })))
+  const inline = value => value && typeof value === 'object' ? value.contentRef && Object.hasOwn(definitions, value.contentRef)
+    ? definitions[value.contentRef] : Array.isArray(value) ? value.map(inline) : Object.fromEntries(Object.entries(value).map(([key, child]) => [key, inline(child)])) : value
   for (const message of request.messages.toReversed()) {
     if (message.role !== 'user') continue
     for (const part of message.content ?? []) {
       if (part.type !== 'text') continue
-      try { const parsed = JSON.parse(part.text); if (parsed.task || parsed.sources) return parsed } catch {}
+      try { const parsed = JSON.parse(part.text); if (parsed.task || parsed.sources) return inline(parsed) } catch {}
       const topicLine = part.text.split('\n').find(line => line.startsWith('Topic 请求：'))
       if (topicLine) return JSON.parse(topicLine.slice('Topic 请求：'.length))
     }

@@ -8,7 +8,7 @@ import { available, reason, nativeTaskHost } from './fixtures/task-session-nativ
 import { createTaskSessions, isTaskProviderTransient } from '../packages/dingtalk-dsh-assistant/task-session.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { registerTaskSessionPersistence } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
+import { installTaskSessionPersistence } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
 import { taskWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 const overloaded = { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.\n[Codex diagnostics: {"clientRequestId":"fixture","httpStatus":200}]' }
 const decision = { action: 'wait', summary: '保留原任务继续处理', evidence: [], limitations: [] }
@@ -62,14 +62,14 @@ for (const trailing of [false, true]) test(`native owner provider error keeps th
   assert.equal(submitted, 1)
 })
 
-async function providerServiceHost(root, { legacyNoSubmission = false, transient = true, failFirst = true, initialize = true } = {}) {
+async function providerServiceHost(root, { legacyNoSubmission = false, transient = true, failFirst = true, initialize = true, failCount = 1 } = {}) {
   let requests = 0
   const h = await nativeTaskHost(root, async () => [], { initialize, config: { retryIntervalMs: 100 }, agentConfig: { provider: 'service-provider-fixture' },
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
         async *stream() {
           requests++
-          if (failFirst && requests === 1) {
+          if (failFirst && requests <= failCount) {
             yield { type: 'finish', reason: { kind: 'error', failure: transient ? overloaded : { code: 'PI_AI_ERROR', message: 'Invalid account configuration' } } }; return
           }
           const args = JSON.stringify({ decision: { ...decision, action: 'complete' } })
@@ -81,9 +81,14 @@ async function providerServiceHost(root, { legacyNoSubmission = false, transient
       }
       options.ctx.llm.registerAdapter(['service-provider-fixture'], new Provider())
       if (legacyNoSubmission) {
+        // The legacy-result adapter still uses today's real Host writer boundary.
+        // Without runOwned it fails before any model turn, not at no-submission.
+        const persistence = await installTaskSessionPersistence(options.ctx, { root })
+        options.persistence = persistence
         const manager = createTaskSessions({ ctx: options.ctx, isCurrent: async () => true,
+          withPersistenceWriter: (binding, action) => persistence.runOwned(binding, action),
           getWorkspaceDir: ({ binding }) => taskWorkspace(root, binding.taskId),
-          registerPersistence: value => registerTaskSessionPersistence(options.ctx, value) })
+          registerPersistence: value => persistence.register(value) })
         options.taskSessions = { ...manager, async run(args) {
           try { return await manager.run(args) }
           catch (error) { if (error.code === 'TASK_SESSION_PROVIDER_TRANSIENT') return { status: 'no_submission' }; throw error }
@@ -137,4 +142,68 @@ for (const transient of [true, false]) test(`restart recovers only a legacy ackn
   assert.equal((await next.query('task.list')).length, 1)
   assert.equal((await next.query('execution.list')).length, 0)
   assert.equal((await next.query('notification.list')).length, 0)
+})
+
+test('owner provider failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const root = await mkdtemp(join(tmpdir(), 'owner-provider-budget-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  let h = await providerServiceHost(root, { failCount: 20 }); hosts.push(h)
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'owner-budget', objective: 'Original task' })
+  await h.service.whenIdle()
+  const sessionId = (await h.query('task.get', { taskId: created.taskId })).sessionId
+  for (let failure = 1; failure <= 7; failure++) {
+    const task = await h.query('task.get', { taskId: created.taskId })
+    assert.equal(task.providerRecovery.attempts, failure)
+    assert.equal(task.humanRequests.length, 0)
+    if (failure === 7) break
+    if (failure === 3) {
+      await h.close(); h = await providerServiceHost(root, { initialize: false, failCount: 20 }); hosts.push(h)
+      const restored = await h.query('task.get', { taskId: created.taskId })
+      assert.deepEqual(restored.providerRecovery, task.providerRecovery)
+    }
+    t.mock.timers.setTime(Date.parse(task.providerRecovery.nextAttemptAt) + 1)
+    await h.service.recover(); await h.service.whenIdle()
+  }
+  const suspended = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(suspended.providerRecovery.suspended, true); assert.equal(suspended.providerRecovery.nextAttemptAt, null)
+  const count = h.providerRequests()
+  for (let tick = 0; tick < 4; tick++) { t.mock.timers.setTime(Date.now() + 3600000); await h.service.recover(); await h.service.whenIdle() }
+  assert.equal(h.providerRequests(), count)
+  await h.close(); h = await providerServiceHost(root, { initialize: false, failFirst: false }); hosts.push(h)
+  await h.service.store.command({ id: 'actual-followup', kind: 'task.revise', args: { taskId: created.taskId, request: 'Actual new user followup after availability restored' } })
+  await h.service.recover(); await h.service.whenIdle()
+  const restored = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(restored.sessionId, sessionId); assert.equal(restored.status, 'completed'); assert.equal(restored.humanRequests.length, 0)
+  assert.equal(h.providerRequests(), 1)
+})
+
+for (const newInput of [true, false]) test(`owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=${newInput}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const root = await mkdtemp(join(tmpdir(), 'owner-single-admission-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  const h = await providerServiceHost(root, { failFirst: false }); hosts.push(h)
+  // Establish the suspended state through real Host commands, not a patched database.
+  await h.service.store.command({ id: 'create-suspended', kind: 'task.create', args: { taskId: 'suspended', groupId: 'native-group', request: 'Original task' } })
+  for (let attempt = 1; attempt <= (newInput ? 7 : 1); attempt++) {
+    const binding = (await h.service.store.command({ id: 'claim-' + attempt, kind: 'task.claim', args: { taskId: 'suspended' } })).result.binding
+    await h.service.store.command({ id: 'provider-' + attempt, kind: 'task.provider-failure', args: { binding, failure: { code: 'TASK_SESSION_PROVIDER_TRANSIENT', providerError: overloaded } } })
+    await h.service.store.command({ id: 'drain-' + attempt, kind: 'task.drained', args: { binding } })
+    if (attempt < (newInput ? 7 : 1)) t.mock.timers.setTime(Date.parse((await h.query('task.get', { taskId: 'suspended' })).providerRecovery.nextAttemptAt) + 1)
+  }
+  if (newInput) await h.service.store.command({ id: 'new-input', kind: 'task.revise', args: { taskId: 'suspended', request: 'Actual new user input' } })
+  else t.mock.timers.setTime(Date.parse((await h.query('task.get', { taskId: 'suspended' })).providerRecovery.nextAttemptAt) + 1)
+  let admissions = 0
+  const agents = h.ctx.agents, originalCreate = agents.create.bind(agents)
+  agents.create = () => { admissions++; throw Object.assign(new Error('Injected native persistence/create fault'), { code: 'TEST_NON_PROVIDER_RUNTIME' }) }
+  t.after(() => { agents.create = originalCreate })
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal(admissions, 1)
+  for (let tick = 0; tick < 4; tick++) { await h.service.recover(); await h.service.whenIdle() }
+  assert.equal(admissions, 1)
+  const current = await h.query('task.get', { taskId: 'suspended' })
+  assert.equal(current.providerRecovery.requirementRevision, newInput ? 2 : 1)
+  assert.equal(current.providerRecovery.suspended, true)
+  assert.equal(current.providerRecovery.admission.kind, newInput ? 'new-input' : 'scheduled')
+  assert.equal(h.providerRequests(), 0)
 })

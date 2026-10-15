@@ -24,9 +24,6 @@ const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clean = value => JSON.parse(JSON.stringify(value))
 const string = { type: 'string' }
 const texts = { type: 'array', items: string }
-const taskOperationContext = operation => Object.fromEntries(['operationId', 'executionId', 'state', 'requirementRevision',
-  'controlRevision', 'definition', 'resourceKeys', 'evidenceRef', ...(operation.state === 'succeeded' ? [] : ['result'])]
-  .filter(key => Object.hasOwn(operation, key)).map(key => [key, operation[key]]))
 export function executionProgressDue(execution, now = Date.now()) {
   const last = Date.parse(execution.progressReview?.checkedAt ?? execution.updatedAt)
   return execution.status === 'running' && !execution.drained && !execution.recovering && !execution.cancelRequested
@@ -60,8 +57,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const taskLimit = () => legacy.getAgentConfig().maxConcurrentTasks ?? config.maxConcurrentTasks ?? 5
   const executionLimit = () => config.maxConcurrentExecutions ?? taskLimit()
   const reserveTask = taskId => taskSlots.has(taskId) || taskSlots.size < taskLimit() && (taskSlots.add(taskId), true)
-  const retryReady = id => (failures.get(id)?.retryAfter ?? 0) <= Date.now()
-  let closed = false, recovering, scheduling, scheduleRequested = false
+  const retryReady = id => {
+    const task = taskCache.get(id), recovery = task?.providerRecovery
+    if (recovery) return recovery.requirementRevision !== task.requirementRevision
+      || !!recovery.nextAttemptAt && Date.parse(recovery.nextAttemptAt) <= Date.now()
+    return (failures.get(id)?.retryAfter ?? 0) <= Date.now()
+  }
+  let closed = false, recovering, scheduling, scheduleRequested = false, providerRetryTimer
   const query = (kind, args = {}) => store.query({ kind, ...args })
   const taskCache = new Map(), operationCache = new Map(), notificationCache = new Map(), executionCache = new Map()
   const refreshTasks = async () => { taskCache.clear(); for (const task of await query('task.list')) taskCache.set(task.taskId, topicTaskView(task)) }
@@ -71,7 +73,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     // 幂等收据保存的是当时快照；通知当前态须独立回读，不能用旧 prepared 覆盖已送达缓存。
     if (receipt.replayed && receipt.result?.notification)
       receipt.result.notification = await query('notification.get', { notificationId: receipt.result.notification.id })
-    if (receipt.result?.execution) executionCache.set(receipt.result.execution.executionId, receipt.result.execution)
+    if (receipt.result?.execution) executionCache.set(receipt.result.execution.executionId,
+      receipt.replayed && kind === 'execution.progressReported' ? await query('execution.get', { executionId: receipt.result.execution.executionId }) : receipt.result.execution)
     if (receipt.result?.operation) operationCache.set(receipt.result.operation.id ?? receipt.result.operation.operationId, receipt.result.operation)
     if (receipt.result?.notification) notificationCache.set(receipt.result.notification.id, receipt.result.notification)
     if (receipt.result?.notification) await projectTaskNotification({ residentStore, notification: receipt.result.notification })
@@ -136,7 +139,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (settled && failures.get(id) === previousFailure) failures.delete(id)
       return value
     }).catch(error => {
-      failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString(), retryAfter: Date.now() + Math.max(100, config.retryIntervalMs ?? 5000) })
+      const recovery = taskCache.get(id)?.providerRecovery
+      failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString(),
+        ...(recovery ? { retryAfter: recovery.nextAttemptAt ? Date.parse(recovery.nextAttemptAt) : null, suspended: recovery.suspended }
+          : { retryAfter: Date.now() + Math.max(100, config.retryIntervalMs ?? 5000) }) })
       ctx.logger?.warn?.(`task-session ${id}: ${error.code ?? error.message}`)
       throw error
     }).finally(async () => {
@@ -145,6 +151,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const pending = await query('wake.list', { taskId: id }).catch(() => [])
         const task = await query('task.get', { taskId: id }).catch(() => null)
         again = task?.status === 'active' && task.control === 'active' && task.drained
+          && retryReady(id)
           && !task.humanRequests?.some(request => request.status === 'waiting-reply')
           && pending.some(item => item.state !== 'acked')
       }
@@ -154,7 +161,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         if (taskId && !inflightTasks.has(taskId)) {
           const task = await query('task.get', { taskId }).catch(() => null)
           const executions = await query('execution.list', { taskId }).catch(() => [])
-          if (!task || task.drained && !executions.some(item => !item.drained || item.status === 'queued')) taskSlots.delete(taskId)
+          if (!task || task.drained && !executions.some(item => !item.drained || item.status === 'queued' && !item.providerRecovery?.nextAttemptAt)) taskSlots.delete(taskId)
         }
       }
       if (again) void kickTask(id)
@@ -164,6 +171,34 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     promise.catch(() => {})
     return promise
   }
+  async function verifyProviderTerminal(execution, binding = undefined) {
+    binding ??= await query('execution.binding', { executionId: execution.executionId })
+    executionSessions.assertDrained(binding)
+    const jobs = ctx.get?.('jobs')
+    if (jobs?.list?.(execution.sessionId).some(job => ['running','stopping'].includes(job.status))) fail('DYNAMIC_JOB_DRAIN_UNPROVEN')
+    const stored = await inspectSession(ctx.sessionPersistence, execution.sessionId)
+    const end = stored.events.findLast(event => event.type === 'turn/end')
+    const input = stored.events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
+    if (end?.seq !== execution.providerRecovery.terminal.endSeq || end.data.reason?.kind !== 'error'
+      || hash(end.data.reason.error) !== hash(execution.result.payload.error.providerError)
+      || input?.data.source.executionSession.inputVersion !== binding.inputVersion
+      || input.data.source.executionSession.inputDigest !== binding.inputDigest
+      || input.data.source.executionSession.leaseEpoch !== binding.leaseEpoch || end.seq <= input.seq) fail('DYNAMIC_PROVIDER_TERMINAL_EVIDENCE_CHANGED')
+    return binding
+  }
+  function armProviderRetry() {
+    clearTimeout(providerRetryTimer)
+    if (closed) return
+    const now = Date.now(), due = [...executionCache.values()].filter(execution => ['queued','failed'].includes(execution.status)
+      && (execution.providerRecovery?.nextAttemptAt || execution.providerRecovery?.nextReviewAt) && !execution.cancelRequested)
+      .map(execution => Date.parse(execution.providerRecovery.nextAttemptAt ?? execution.providerRecovery.nextReviewAt))
+      .concat([...taskCache.values()].filter(task => task.status === 'active' && task.control === 'active' && task.providerRecovery?.nextAttemptAt)
+        .map(task => Date.parse(task.providerRecovery.nextAttemptAt))).filter(at => at > now)
+    if (due.length) {
+      providerRetryTimer = setTimeout(() => { void schedulePending() }, Math.min(...due) - now)
+      providerRetryTimer.unref()
+    }
+  }
   function schedulePending() {
     if (closed) return Promise.resolve()
     scheduleRequested = true
@@ -171,6 +206,31 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     scheduling = (async () => {
       while (scheduleRequested && !closed) {
         scheduleRequested = false
+        for (const execution of await query('execution.list')) {
+          if (closed) return
+          const review = execution.status === 'failed' && execution.providerRecovery?.nextReviewAt
+          if (!(review || execution.status === 'queued' && execution.providerRecovery?.nextAttemptAt) || !execution.drained || execution.recovering
+            || Date.parse(review || execution.providerRecovery.nextAttemptAt) > Date.now()) continue
+          const task = await requireTask(execution.taskId)
+          if (task.status !== 'active' || task.control !== 'active' || task.humanRequests?.some(item => item.status === 'waiting-reply')
+            || execution.requirementRevision !== task.requirementRevision || execution.controlRevision !== task.controlRevision) continue
+          if ((await query('wake.list', { taskId: task.taskId })).some(item => item.kind === 'human.responded' && item.state !== 'acked')) continue
+          let binding
+          try {
+            binding = await query('execution.binding', { executionId: execution.executionId })
+            await verifyProviderTerminal(execution, binding)
+            await command(review ? 'execution.review-provider' : 'execution.retry-provider', { binding },
+              `provider-${review ? 'review' : 'retry'}:${execution.executionId}:${execution.inputVersion}${review ? ':' + execution.providerRecovery.nextReviewAt : ''}`)
+            failures.delete(execution.executionId)
+          } catch (error) {
+            failures.set(execution.executionId, { id: execution.executionId, code: error.code ?? error.message, at: new Date().toISOString() })
+            if (binding) {
+              try { await command('execution.provider-recovery-blocked', { binding, code: error.code ?? error.message }, `provider-recovery-blocked:${execution.executionId}:${execution.inputVersion}`) }
+              catch (recordError) { failures.set(execution.executionId, { id: execution.executionId, code: 'DYNAMIC_PROVIDER_RECOVERY_RECORD_FAILED',
+                cause: error.code ?? error.message, recordError: recordError.code ?? recordError.message, at: new Date().toISOString() }) }
+            }
+          }
+        }
         // SQLite is the durable queue. A freed slot promotes existing work immediately,
         // without depending on a periodic recovery tick or manufacturing another wake.
         for (const task of await query('task.list')) {
@@ -182,13 +242,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         }
         for (const execution of await query('execution.list')) {
           if (closed || inflightExecutions.size >= executionLimit()) break
-          if (!retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested) continue
+          if (execution.providerRecovery?.nextAttemptAt || !retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested) continue
           if (!taskSlots.has(execution.taskId) && taskSlots.size >= taskLimit()) continue
           void kickExecution(execution.executionId)
         }
       }
     })().catch(error => { failures.set('scheduler', { id: 'scheduler', code: error.code ?? error.message }) })
-      .finally(() => { scheduling = undefined })
+      .finally(() => { scheduling = undefined; armProviderRetry() })
     return scheduling
   }
   async function attachWorkspace(sessionId, cwd, title) {
@@ -495,20 +555,37 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (closed || !retryReady(executionId) || !inflightExecutions.has(executionId) && inflightExecutions.size >= executionLimit()) return Promise.resolve()
     return track(inflightExecutions, executionId, async () => {
       const candidate = await query('execution.get', { executionId })
-      if (!candidate || candidate.status !== 'queued' || !candidate.drained || candidate.cancelRequested || !reserveTask(candidate.taskId)) return
+      if (!candidate || candidate.status !== 'queued' || candidate.providerRecovery?.nextAttemptAt || !candidate.drained || candidate.cancelRequested || !reserveTask(candidate.taskId)) return
       const claimed = await command('execution.claim', { executionId })
       const { binding, execution } = claimed.result
       let drained = true
+      let stageSequence = 0
+      const stageReports = new Map()
       try {
         const result = await executionSessions.run({ binding, input: execution.input, definition: { ...models(), ...execution.definition,
           prompt: execution.prompt, allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title); return command('execution.sessionBound', { binding }, `execution-bound:${executionId}:${binding.leaseEpoch}`) },
           onNativeExecution: nativeOperation,
+          onProgress: async ({ summary, evidence, reportId }) => {
+            if (typeof reportId !== 'string' || !reportId.trim() || reportId.length > 2000) fail('EXECUTION_PROGRESS_REPORT_ID_INVALID')
+            if (!await query('execution.current', { binding })) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+            if (!stageReports.has(reportId)) stageReports.set(reportId, ++stageSequence)
+            const receipt = await command('execution.progressReported', { binding, summary, evidence, sequence: stageReports.get(reportId) },
+              `execution-stage:${executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${hash(reportId)}`)
+            if (!receipt.replayed) void kickTask(binding.taskId)
+            return { recorded: true, sequence: receipt.result.execution.stageProgress.sequence }
+          },
+          ...(execution.providerRecovery?.activeInputVersion === execution.inputVersion ? { recoveryContext: { kind: 'provider-recovery', attempt: execution.providerRecovery.attempts,
+            failure: execution.results.at(-1)?.payload.error,
+            instruction: '模型服务暂态失败后的同会话恢复。沿原小目标继续，保留原工具结果；不得重放成功操作或未知效果。原生终态与排空已核验，这不是新的业务授权。' } } : {}),
           onResult: output => command('execution.result', { binding, output }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`) })
-        if (result.status !== 'submitted') await command('execution.result', { binding, error: { code: result.reason ?? result.status } }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`)
+        if (result.status !== 'submitted') await command('execution.result', { binding, error: { ...result.failure, code: result.reason ?? result.status } }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`)
       } catch (error) {
         drained = error.executionDrained !== false
-        if (drained) await command('execution.result', { binding, error: { code: error.code ?? error.message } }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`).catch(() => {})
+        if (drained) {
+          try { await command('execution.result', { binding, error: { code: error.code ?? error.message, message: String(error.message), phase: error.phase ?? 'runtime' } }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`) }
+          catch (recordError) { throw Object.assign(new AggregateError([error, recordError], 'DYNAMIC_EXECUTION_FAILURE_RECORD_FAILED'), { code: 'DYNAMIC_EXECUTION_FAILURE_RECORD_FAILED' }) }
+        }
         throw error
       } finally {
         if (drained) await command('execution.drained', { binding }, `execution-drained:${executionId}:${binding.leaseEpoch}`)
@@ -532,8 +609,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const sources = (await Promise.all(task.sourceRefs.map(sourceId => query('source.get', { sourceId })))).filter(Boolean)
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
         const operations = await query('operation.list', { taskId })
-        const runResult = await taskSessions.run({ binding, input: { task: { ...task, humanRequests: task.humanRequests?.slice(-1) }, sources, materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: (await query('execution.list', { taskId })).map(taskExecutionContext),
-          operations: operations.filter(operation => operation.state !== 'succeeded').map(taskOperationContext),
+        const runResult = await taskSessions.run({ binding, input: { task, sources, materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: await query('execution.list', { taskId }),
+          operations,
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...models(), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
@@ -555,6 +632,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
                 || hash(prior.result.execution.input.skillNames ?? []) !== hash(args.skillNames ?? [])) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
               return { executionId: prior.result.execution.executionId, status: prior.result.execution.status, sessionId: prior.result.execution.sessionId }
             }
+            if (args.executionId) {
+              const original = await query('execution.get', { executionId: args.executionId })
+              if (original?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
+              if (original.result?.payload.error?.code === 'EXECUTION_PROVIDER_TRANSIENT') await verifyProviderTerminal(original)
+            }
             let originalOperation
             if (args.readOnly === true && args.readbackOperationId) {
               const operation = (await query('operation.list', { taskId })).find(item => item.operationId === args.readbackOperationId)
@@ -570,7 +652,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             void kickExecution(accepted.result.execution.executionId)
             return { executionId: accepted.result.execution.executionId, status: accepted.result.execution.status, sessionId: accepted.result.execution.sessionId }
           },
-          readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return taskExecutionContext(execution) },
+          readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return execution },
           readProgress: async executionId => {
             const execution = await query('execution.get', { executionId })
             if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
@@ -638,7 +720,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           submitted = true
         }
         if (submitted) await command('wake.ack', { binding, wakeIds }, `wake-ack:${taskId}:${binding.leaseEpoch}`)
-      } catch (error) { drained = error.taskSessionDrained !== false; throw error }
+      } catch (error) {
+        drained = error.taskSessionDrained !== false
+        if (drained && error.code === 'TASK_SESSION_PROVIDER_TRANSIENT') await command('task.provider-failure', { binding,
+          failure: { code: error.code, phase: error.phase, providerError: error.providerError } }, `task-provider-failure:${taskId}:${binding.leaseEpoch}`)
+        throw error
+      }
       finally {
         if (drained) await command('task.drained', { binding }, `task-drained:${taskId}:${binding.leaseEpoch}`)
         if (!closed) void deliverNotifications()
@@ -796,6 +883,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       }
       for (const task of await query('task.list')) void kickTask(task.taskId)
       for (const execution of await query('execution.list')) if (execution.drained && execution.status === 'queued') void kickExecution(execution.executionId)
+      void schedulePending()
       await deliverNotifications()
       return { failures: [...failures.values()], recovery: pending }
     })().finally(() => { recovering = undefined })
@@ -932,6 +1020,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     },
     async close() {
       closed = true
+      clearTimeout(providerRetryTimer)
       stopObservation?.()
       await observationTail
       await topicCoordinator.close()

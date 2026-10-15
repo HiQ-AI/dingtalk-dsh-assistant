@@ -13,13 +13,13 @@ async function fixture(t, model) {
  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
  return h
 }
-test('promoted native shell retains its original process, reads output to terminal and persists the owned job receipt', async t => {
+for (const background of [false, true]) test(`native shell retains its original process, reads output to terminal and persists the owned job receipt: background=${background}`, async t => {
  let step = 0
  const h = await fixture(t, async request => {
   const input = latestInput(request), owner = request.tools.some(tool => tool.name === 'task_delegate')
   if (owner) return !input.executions.length && !input.task.lastDecision ? [call('task_delegate', { key: 'long', objective: 'long' }), decide('wait','waiting')]
    : [decide(input.executions.every(e => e.status === 'succeeded') ? 'complete' : 'wait','verified')]
-  if (step++ === 0) return [call(nativeShell, { command: nativeShell === 'pwsh' ? "Write-Output 'before'; Start-Sleep -Milliseconds 400; Set-Content result.txt 'after'; Write-Output 'after'" : "printf 'before\\n'; sleep 0.4; printf 'after\\n' | tee result.txt", timeoutMs: 80, description: 'Promote and retain original command' })]
+  if (step++ === 0) return [call(nativeShell, { command: nativeShell === 'pwsh' ? "Write-Output 'before'; Start-Sleep -Milliseconds 400; Set-Content result.txt 'after'; Write-Output 'after'" : "printf 'before\\n'; sleep 0.4; printf 'after\\n' | tee result.txt", ...(background ? { run_in_background: true } : {}), timeoutMs: 80, description: 'Promote and retain original command' })]
   assert.match(JSON.stringify(request), /nativeJobReceipt/)
   assert.match(JSON.stringify(request), /after/)
   return [call('execution_submit',{output:{status:'completed',summary:'done',evidence:['actual terminal output'],limitations:[],artifacts:['result.txt']}})]

@@ -124,6 +124,15 @@ test('execution progress reads exact current input with real bounded excerpts an
  assert.equal((await readExecutionProgress(f)).lastActivityAt,null)
 })
 
+test('running execution progress flushes its existing native writer before the read-only snapshot', async () => {
+ const f=fixture(),buffer=f.original.splice(1),live={id:f.execution.sessionId},order=[]
+ f.ctx.sessions={get:id=>id===live.id?live:undefined,flush:async session=>{assert.equal(session,live);order.push('flush');f.original.push(...buffer)}}
+ const persistence=f.ctx.sessionPersistence,open=persistence.open.bind(persistence)
+ persistence.open=async(...args)=>{order.push('read');assert.equal(args[1],'read');return open(...args)}
+ const progress=await readExecutionProgress(f)
+ assert.deepEqual(order,['flush','read']);assert.ok(progress.excerpts.some(item=>item.type==='tool/call'))
+})
+
 test('execution progress rejects wrong identity, stale input version or lease and unavailable persistence', async () => {
  for(const mutate of [
   f=>{f.original[0].data.identity.sessionId='other'},

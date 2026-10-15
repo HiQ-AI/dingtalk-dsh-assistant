@@ -25,6 +25,47 @@ async function fixture(t, options = {}) {
   return { root, config, command, query, task, execution, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }); return store } }
 }
 
+test('nonterminal stage reports persist and wake once without completing the execution', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const args = { binding, summary: '已定位差异，正在验证修复边界。', evidence: ['fixture-proof'], sequence: 1 }
+  const first = await f.command('execution.progressReported', args, 'stage-report-one')
+  assert.equal((await f.command('execution.progressReported', args, 'stage-report-one')).replayed, true)
+  const execution = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(execution.status, 'running'); assert.equal(execution.drained, false); assert.equal(execution.result, undefined)
+  assert.equal(execution.stageProgress.summary, args.summary)
+  const wakes = await f.query({ kind: 'wake.list', taskId: 'task' })
+  assert.equal(wakes.filter(item => item.kind === 'execution.stage.progress').length, 1)
+  assert.equal(wakes.find(item => item.id === first.result.wakeId).payload.inputVersion, binding.inputVersion)
+  await assert.rejects(f.command('execution.progressReported', { ...args, summary: 'late' }), { code: 'DYNAMIC_EXECUTION_PROGRESS_STALE' })
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.summary, args.summary)
+})
+
+test('stage reports reject forged input/lease, superseded requirements and cancellation', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const report = changes => f.command('execution.progressReported', { binding, summary: '阶段事实', evidence: [], sequence: 1, ...changes })
+  for (const changes of [{ leaseEpoch: binding.leaseEpoch + 1 }, { inputVersion: binding.inputVersion + 1 }, { taskId: 'other' }]) {
+    await assert.rejects(report({ binding: { ...binding, ...changes } }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+  }
+  await f.command('task.revise', { taskId: 'task', expectedRequirementRevision: 1, request: '新要求' })
+  await assert.rejects(report({}), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  await f.command('task.control', { taskId: 'task', control: 'cancelled', expectedControlRevision: 1 })
+  await assert.rejects(report({}), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).filter(item => item.kind === 'execution.stage.progress').length, 0)
+})
+
+test('stage reporting after continuation accepts only the new input and lease', async t => {
+  const f = await fixture(t), owner = await f.task(), old = await f.execution(owner.binding)
+  await f.command('execution.progressReported', { binding: old, summary: '原回合阶段证据', evidence: [], sequence: 1 })
+  await f.command('execution.result', { binding: old, output: { summary: '原回合结果' } })
+  await f.command('execution.drained', { binding: old })
+  await f.command('execution.continue', { binding: owner.binding, executionId: old.executionId, key: 'next', prompt: '继续验证', input: { objective: '继续验证' } })
+  const binding = (await f.command('execution.claim', { executionId: old.executionId })).result.binding
+  await assert.rejects(f.command('execution.progressReported', { binding: old, summary: '延迟旧报告', evidence: [], sequence: 2 }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+  await f.command('execution.progressReported', { binding, summary: '新回合证据', evidence: [], sequence: 1 })
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.inputVersion, binding.inputVersion)
+})
+
 test('active blockers never re-inject recursive execution inputs or historical results', async t => {
   const f = await fixture(t), owner = await f.task()
   const raw = { objective: 'Current goal', previousExecutions: [{ input: { previousExecutions: [{ secret: 'recursive-input' }] } }], context: 'large-context'.repeat(2000) }
@@ -549,4 +590,123 @@ test('an unchanged or unreadable execution observation wakes review without clai
   await assert.rejects(f.command('execution.progressReviewed', args), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
   await f.command('execution.continue', { binding: owner.binding, executionId: binding.executionId, key: 'follow-up', prompt: 'follow-up', input: {} })
   assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).progressReview, null)
+})
+
+const providerFailure = binding => ({ code: 'EXECUTION_PROVIDER_TRANSIENT', phase: 'provider', message: 'fetch failed',
+  providerError: { code: 'TRANSPORT', message: 'fetch failed' },
+  terminal: { sessionId: binding.sessionId, inputVersion: binding.inputVersion, endSeq: 12, reason: 'error' } })
+
+test('provider recovery persists bounded backoff, history and session identity across restart without human escalation', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const f = await fixture(t), owner = await f.task()
+  let binding = await f.execution(owner.binding)
+  const first = structuredClone(binding)
+  await f.command('execution.sessionBound', { binding })
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await f.command('execution.result', { binding, error: providerFailure(binding) })
+    let e = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+    assert.equal(e.result.payload.error.providerError.code, 'TRANSPORT')
+    assert.equal(e.status, attempt < 3 ? 'queued' : 'failed')
+    if (attempt === 3) {
+      assert.equal(e.providerRecovery.attempts, 3); assert.equal(e.providerRecovery.exhausted, true)
+      assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).filter(w => w.kind === 'execution.result').length, 1)
+      await f.command('execution.drained', { binding }); break
+    }
+    await assert.rejects(f.command('execution.retry-provider', { binding }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+    await f.command('execution.drained', { binding })
+    await assert.rejects(f.command('execution.claim', { executionId: binding.executionId }), { code: 'DYNAMIC_EXECUTION_RECOVERY_PENDING' })
+    if (attempt === 0) await assert.rejects(f.command('task.wait', { binding: owner.binding, summary: 'Ask operator', question: 'Restore model' }), { code: 'DYNAMIC_PROVIDER_TECHNICAL_WAIT' })
+    await assert.rejects(f.command('execution.retry-provider', { binding }), { code: 'DYNAMIC_EXECUTION_RETRY_NOT_DUE' })
+    assert.equal(Date.parse(e.providerRecovery.nextAttemptAt) - Date.now(), 5000 * 2 ** attempt)
+    if (attempt === 0) { await f.reopen(); assert.deepEqual((await f.query({ kind: 'execution.get', executionId: binding.executionId })).providerRecovery, e.providerRecovery) }
+    t.mock.timers.setTime(Date.parse(e.providerRecovery.nextAttemptAt))
+    await f.command('execution.retry-provider', { binding }, `retry-${attempt}`)
+    assert.equal((await f.command('execution.retry-provider', { binding }, `retry-${attempt}`)).replayed, true)
+    e = (await f.command('execution.claim', { executionId: binding.executionId })).result.execution
+    binding = await f.query({ kind: 'execution.binding', executionId: e.executionId })
+    assert.equal(binding.sessionId, first.sessionId); assert.equal(binding.executionId, first.executionId)
+    assert.equal(binding.inputDigest, first.inputDigest); assert.equal(binding.inputVersion, attempt + 2)
+    assert.equal(e.results.length, attempt + 1)
+  }
+})
+
+for (const variant of ['missing-proof', 'foreign-proof', 'permanent', 'unknown-effect', 'cancelled']) test(`provider automatic recovery rejects ${variant}`, async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.command('execution.sessionBound', { binding })
+  const error = providerFailure(binding)
+  if (variant === 'missing-proof') delete error.terminal
+  if (variant === 'foreign-proof') error.terminal.sessionId = 'other-session'
+  if (variant === 'permanent') { error.code = 'EXECUTION_PROVIDER_FAILED'; error.providerError = { code: 'INVALID_CREDENTIAL', message: 'invalid credential' } }
+  if (variant === 'unknown-effect') {
+    await f.command('operation.prepare', { binding, operationId: 'effect', key: 'effect', definition: { effectClass: 'write' } })
+    await f.command('operation.start', { binding, operationId: 'effect' })
+  }
+  if (variant === 'cancelled') await f.command('execution.cancel', { binding })
+  await f.command('execution.result', { binding, error })
+  await f.command('execution.drained', { binding })
+  const e = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(e.providerRecovery, undefined)
+  assert.ok(['failed', 'stale'].includes(e.status))
+  await assert.rejects(f.command('execution.retry-provider', { binding }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+})
+
+for (const control of ['paused', 'cancelled', 'revised']) test(`provider backoff cannot resume after task ${control}`, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.command('execution.sessionBound', { binding })
+  await f.command('execution.result', { binding, error: providerFailure(binding) })
+  await f.command('execution.drained', { binding })
+  const before = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  if (control === 'revised') await f.command('task.revise', { taskId: 'task', request: 'Updated requirement' })
+  else await f.command('task.control', { taskId: 'task', control })
+  t.mock.timers.setTime(Date.parse(before.providerRecovery.nextAttemptAt) + 1)
+  await assert.rejects(f.command('execution.retry-provider', { binding }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  const after = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(after.inputVersion, 1); assert.equal(after.leaseEpoch, 1)
+  assert.equal(after.result.payload.error.message, 'fetch failed')
+})
+
+for (const changeInput of [false, true]) test(`requester answer must be consumed by owner before provider recovery: changeInput=${changeInput}`, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const f = await fixture(t)
+  await f.command('task.create', { taskId: 'human-task', groupId: 'g', ownerActorId: 'owner', request: 'Original task' })
+  const owner = (await f.command('task.claim', { taskId: 'human-task' })).result
+  const binding = await f.execution(owner.binding)
+  await f.command('execution.sessionBound', { binding })
+  await f.command('execution.result', { binding, error: providerFailure(binding) })
+  await f.command('execution.drained', { binding })
+  const before = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  await f.command('task.wait', { binding: owner.binding, summary: 'Required business input', question: 'Which target?',
+    humanRequest: { requestId: 'business-input', audience: 'requester', reason: 'Required target' } })
+  await f.command('task.drained', { binding: owner.binding })
+  t.mock.timers.setTime(Date.parse(before.providerRecovery.nextAttemptAt))
+  await assert.rejects(f.command('execution.retry-provider', { binding }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  await humanSource(f)
+  await f.command('task.human.respond', { taskId: 'human-task', requestId: 'business-input', sourceId: 'human-answer', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  await assert.rejects(f.command('execution.retry-provider', { binding }), { code: 'DYNAMIC_OWNER_INPUT_PENDING' })
+  const nextOwner = (await f.command('task.claim', { taskId: 'human-task' })).result
+  let continued
+  if (changeInput) {
+    continued = (await f.command('execution.continue', { binding: nextOwner.binding, executionId: binding.executionId, key: 'actual-answer',
+      prompt: 'Use authenticated UAT3 target', input: { objective: 'Use UAT3 target' } })).result.execution
+    assert.equal(continued.input.objective, 'Use UAT3 target'); assert.equal(continued.providerRecovery.nextAttemptAt, null)
+  } else {
+    await f.command('task.wait', { binding: nextOwner.binding, summary: 'Answer reviewed; original goal remains valid' })
+    await f.command('wake.ack', { binding: nextOwner.binding, wakeIds: nextOwner.wakeIds })
+    continued = (await f.command('execution.retry-provider', { binding })).result.execution
+  }
+  assert.equal(continued.executionId, binding.executionId); assert.equal(continued.sessionId, binding.sessionId)
+  assert.equal(continued.inputVersion, 2); assert.equal(continued.providerRecovery.attempts, 1)
+})
+
+for (const category of ['credentials', 'quota', 'configuration', 'unclassified']) test(`provider operator intervention needs concrete native action evidence: ${category}`, async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.command('execution.sessionBound', { binding })
+  await f.command('execution.result', { binding, error: { code: 'EXECUTION_PROVIDER_FAILED', phase: 'provider',
+    providerError: { code: category === 'credentials' ? 'AUTH' : category === 'quota' ? 'QUOTA' : category === 'configuration' ? 'NO_ADAPTER' : 'PI_AI_ERROR', message: 'Native diagnosis' },
+    recovery: { category, retryable: false } } })
+  await f.command('execution.drained', { binding })
+  const request = { binding: owner.binding, summary: 'Specific provider action', question: 'Handle diagnosed provider condition', humanRequest: { requestId: 'action', audience: 'operator' } }
+  if (category === 'unclassified') await assert.rejects(f.command('task.wait', request), { code: 'DYNAMIC_PROVIDER_TECHNICAL_WAIT' })
+  else assert.equal((await f.command('task.wait', request)).result.task.humanRequests.length, 1)
 })
