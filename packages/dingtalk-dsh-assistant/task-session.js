@@ -123,7 +123,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
               throw error
             }
           } })
-        register('task_delegate', '委派小目标，或用executionId续原执行会话。key须稳定，以便重试去重。新执行可用title提供简短中文业务名称（可保留技术专名）；无中文短名则沿用key名称。objective是完整目标，不截断作名称。续办保留原名。', { ...object({
+        register('task_delegate', '委派小目标，或用executionId续原执行会话。executionId标识原执行；key标识本次委派请求，不是会话身份。同一次请求重试必须复用key及相同目标；已完成后依据新输入开展新的续办步骤，保留executionId并为新步骤使用新的稳定key。不得换key重放未知效果或已完成动作。同key不同目标会被拒绝，应核对原回执与新输入，不因此索取额外业务授权。新执行可用title提供简短中文业务名称（可保留技术专名）；无中文短名则沿用key名称。objective是完整目标，不截断作名称。续办保留原名。', { ...object({
           key: text, title: { type: 'string', description: '可选中文业务短名，建议4至16字；技术专名可保留英文。没有中文短名时省略，沿用key；不要复制完整目标。续办不是改名操作。' }, objective: text, executionId: text, context: { type: 'string' }, resourceKeys: { type: 'array', items: text },
           readOnly: { type: 'boolean', description: '标记原操作调查会话，用于绑定对账证据，不限制原生工具名单。未知效果仍须核验，不得重放原操作。' },
           readbackOperationId: { type: 'string', description: 'Bind readOnly investigation to this task operation; inspect its actual partial effects and report limits. This is not permission to replay it.' },
