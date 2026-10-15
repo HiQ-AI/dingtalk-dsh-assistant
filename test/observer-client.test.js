@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/workflow-service.js'
 import { runInNewContext } from 'node:vm'
+import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 
 test('消息与话题详情只展示有绑定的会话并支持分页', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
@@ -102,20 +103,33 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
     [{ status: 'pending', deliveryError: 'legacy_error' }, 'failed', '投递异常'],
     [{ status: 'pending', deliveryBlockedAt: '2026-09-11T00:00:00Z', deliveryError: 'server_rejected' }, 'failed', '发送待处理'],
     [{ status: 'pending', deliveryPendingReason: 'postflight_failed', deliveryError: 'CLI_ORG_NOT_AUTHORIZED' }, 'waiting', '待回读'],
-    [{ status: 'pending', deliveryPendingReason: 'delivery_unknown' }, 'waiting', '待回读'],
+    [{ status: 'pending', deliveryPendingReason: 'delivery_unknown' }, 'checking', '待核对'],
     [{ status: 'pending', deliveryPendingReason: 'message_not_observed' }, 'waiting', '待回读'],
-    [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已回读'],
+    [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已送达'],
     [{ status: 'sent' }, 'confirmed', '已发送'],
     [{ status: 'sent', recallStatus: 'recalled' }, 'recalled', '已撤回'],
     [{ status: 'superseded', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
     [{ status: 'sent', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
-    [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'recall-failed', '撤回待处理'],
-    [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'recall-failed', '撤回待处理'],
+    [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'recall-failed', '撤回受阻'],
+    [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'recall-failed', '撤回受阻'],
   ]
   for (const [message, id, label] of scenarios) {
     const result = classify(message)
     assert.equal(result.id, id)
     assert.equal(result.label, label)
+  }
+  for (const [state, phase, id, label] of [
+    ['prepared', undefined, 'queued', '待发送'], ['starting', undefined, 'sending', '发送中'],
+    ['unknown', 'send', 'checking', '待核对'], ['unknown', 'readback', 'waiting', '待回读'],
+    ['delivered', undefined, 'confirmed', '已送达'],
+  ]) {
+    const outbound = taskNotificationOutbound({ id: 'notice', state, payload: { text: '通知', conversationId: 'g' },
+      ...(phase ? { deliveryError: { phase, message: '诊断' } } : {}),
+      ...(state === 'delivered' ? { receipt: { messageId: 'verified' } } : {}) })
+    const result = classify(outbound)
+    assert.equal(result.id, id)
+    assert.equal(result.label, label)
+    assert.ok(result.hint || result.detail)
   }
   assert.match(source, /message\.deliveryError/)
   assert.match(source, /最近尝试.*fmt\(message\.deliveryAttemptedAt\)/)
@@ -129,24 +143,24 @@ test('任务通知明确区分待发送、发送中、结果未知和确定的�
   const scenarios = [
     [{ notificationState: 'prepared', deliveryPendingReason: 'task-notification-prepared' }, 'queued', '待发送'],
     [{ notificationState: 'starting', deliveryPendingReason: 'task-notification-starting' }, 'sending', '发送中'],
-    [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown' }, 'waiting', '发送结果待核对'],
-    [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown', deliveryError: 'send timed out', notificationFailurePhase: 'send' }, 'waiting', '发送结果待核对'],
+    [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown' }, 'checking', '待核对'],
+    [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown', deliveryError: 'send timed out', notificationFailurePhase: 'send' }, 'checking', '待核对'],
     [{ notificationState: 'unknown', deliveryPendingReason: 'task-notification-unknown', deliveryError: 'collection missing', notificationFailurePhase: 'readback' }, 'waiting', '待回读'],
-    [{ notificationState: 'unknown', deliveryBlockedAt: '2026-10-14T00:00:00Z', notificationKnownNotSent: false }, 'waiting', '发送结果待核对'],
+    [{ notificationState: 'unknown', deliveryBlockedAt: '2026-10-14T00:00:00Z', notificationKnownNotSent: false }, 'checking', '待核对'],
     [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-pre-send-rejected', notificationKnownNotSent: true }, 'failed', '发送前受阻'],
     [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-failed', deliveryError: 'delivery failed' }, 'failed', '投递异常'],
-    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-task-terminal', notificationKnownNotSent: true }, 'stopped', '已停止发送'],
-    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-superseded', notificationKnownNotSent: true }, 'stopped', '已停止发送'],
-    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required', notificationKnownNotSent: true }, 'reassessment', '已停止，需核验'],
-    [{ notificationState: 'delivered', deliveredMessageId: 'observed-message' }, 'confirmed', '已回读'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-task-terminal', notificationKnownNotSent: true }, 'stopped', '已停止'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-superseded', notificationKnownNotSent: true }, 'stopped', '已停止'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required', notificationKnownNotSent: true }, 'reassessment', '待核验'],
+    [{ notificationState: 'delivered', deliveredMessageId: 'observed-message' }, 'confirmed', '已送达'],
     [{ deliveryPendingReason: 'task-notification-prepared' }, 'queued', '待发送'],
     [{ deliveryPendingReason: 'task-notification-starting' }, 'sending', '发送中'],
-    [{ deliveryPendingReason: 'task-notification-unknown', deliveryError: 'readback failed' }, 'waiting', '发送结果待核对'],
+    [{ deliveryPendingReason: 'task-notification-unknown', deliveryError: 'readback failed' }, 'checking', '待核对'],
     [{ deliveryPendingReason: 'task-notification-pre-send-rejected' }, 'failed', '发送前受阻'],
     [{ deliveryPendingReason: 'task-notification-failed' }, 'failed', '投递异常'],
-    [{ deliveryPendingReason: 'task-notification-task-terminal' }, 'stopped', '已停止发送'],
-    [{ deliveryPendingReason: 'task-notification-superseded' }, 'stopped', '已停止发送'],
-    [{ deliveryPendingReason: 'task-notification-confirmation-reassessment-required' }, 'reassessment', '已停止，需核验'],
+    [{ deliveryPendingReason: 'task-notification-task-terminal' }, 'stopped', '已停止'],
+    [{ deliveryPendingReason: 'task-notification-superseded' }, 'stopped', '已停止'],
+    [{ deliveryPendingReason: 'task-notification-confirmation-reassessment-required' }, 'reassessment', '待核验'],
   ]
   for (const [facts, id, label] of scenarios) {
     const result = classify({ status: 'pending', ...facts })
@@ -168,9 +182,10 @@ test('任务通知明确区分待发送、发送中、结果未知和确定的�
   assert.equal(classify({ notificationState: 'unknown', supersededByOutboundId: 'replacement' }).id, 'superseded')
   const filter = source.slice(source.indexOf("label: '筛选发件状态'"), source.indexOf('      const messagesTable ='))
   assert.match(filter, /id: 'sending', label: '发送中'/)
-  assert.match(filter, /id: 'waiting', label: '待回读 \/ 核对'/)
-  assert.match(filter, /id: 'stopped', label: '已停止发送'/)
-  assert.match(filter, /id: 'reassessment', label: '已停止，需核验'/)
+  assert.match(filter, /id: 'waiting', label: '待回读'/)
+  assert.match(filter, /id: 'checking', label: '待核对'/)
+  assert.match(filter, /id: 'stopped', label: '已停止'/)
+  assert.match(filter, /id: 'reassessment', label: '待核验'/)
 })
 
 test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不读取 ACK 原文', async () => {
@@ -198,6 +213,11 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
   assert.equal(row.children.filter(child => child?.type === 'td').length, 5)
   const rendered = text(row)
   assert.match(rendered, /待回读/)
+  assert.match(row.children[0].props.title, /发送后回读/)
+  const checking = text(render(withFacts({ notificationFailurePhase: 'send' }))[0])
+  assert.match(checking, /待核对/)
+  assert.match(checking, /计划核验/)
+  assert.doesNotMatch(checking, /计划重试/)
   assert.ok(rendered.includes(diagnostic))
   assert.match(rendered, /计划核验 本地时间 2026-10-14T00:01:00\.000Z/)
   assert.doesNotMatch(rendered, /待发送|\[object Object\]/)
@@ -206,7 +226,7 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
   assert.match(blocked, /发送前受阻/)
   assert.match(blocked, /本次未发送/)
   assert.match(blocked, /计划重试 本地时间 2026-10-14T00:01:00\.000Z/)
-  for (const [reason, label] of [['task-notification-task-terminal', '已停止发送'], ['task-notification-superseded', '已停止发送'], ['task-notification-confirmation-reassessment-required', '已停止，需核验']]) {
+  for (const [reason, label] of [['task-notification-task-terminal', '已停止'], ['task-notification-superseded', '已停止'], ['task-notification-confirmation-reassessment-required', '待核验']]) {
     const retired = text(render(withFacts({ notificationState: 'failed', deliveryPendingReason: reason, notificationKnownNotSent: true }))[0])
     assert.ok(retired.includes(label))
     assert.doesNotMatch(retired, /计划重试|计划核验|已发送|已回读/)
@@ -437,7 +457,7 @@ test('unlinked retired confirmation explicitly requires manual verification inst
   const expression = source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))
   const classify = runInNewContext(`(${expression})`)
   const result = classify({ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required', notificationKnownNotSent: true })
-  assert.equal(result.label, '已停止，需核验')
+  assert.equal(result.label, '待核验')
   assert.match(result.detail, /已停止发送.*关联不足.*人工核验/)
   assert.match(result.detail, /不会自动恢复或发送/)
   assert.doesNotMatch(result.detail, /等待负责人|自动重评估|计划重试|计划核验/)
