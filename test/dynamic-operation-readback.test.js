@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { isNativeFilePrecondition } from '../packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
 const canonical = value => value && typeof value==='object' ? Array.isArray(value) ? value.map(canonical) : Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])) : value
@@ -36,6 +37,29 @@ function webFailure() {
  f.end={seq:5,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}};f.original.push(f.end)
  return f
 }
+
+function fileFailure(code = 'FS_NOT_OBSERVED') {
+ const f=webFailure()
+ f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='edit'
+ f.operation.definition.effectClass='unknown'
+ f.result.data.error={name:'FsError',code}
+ return f
+}
+for(const code of ['FS_NOT_OBSERVED','FS_STALE_VERSION','FS_NOT_FOUND','FS_NOT_DIRECTORY','FS_NOT_REGULAR_FILE','FS_NOT_TEXT','FS_TOO_LARGE','FS_EDIT_NOT_FOUND','FS_AMBIGUOUS_EDIT'])
+ test(`文件前置拒绝按Host错误码对账而非文字或当前文件: ${code}`,async()=>{
+  const f=fileFailure(code), proof=await inspectFailedNativeFileMutation(f)
+  assert.equal(proof.kind,'native-file-precondition-failed');assert.equal(proof.errorCode,code);assert.equal(proof.noEffect,true)
+  assert.equal(isNativeFilePrecondition('write',{code}),true)
+ })
+test('IO/权限/取消/未知错误及伪造正文不能证明无文件效果',async()=>{
+ for(const code of ['FS_IO_ERROR','FS_PERMISSION_DENIED','FS_SANDBOX_DENIED','FS_ABORTED','NEW_ERROR',null])
+  assert.equal(await inspectFailedNativeFileMutation(fileFailure(code)),null)
+ for(const change of [f=>{delete f.result.data.error},f=>{f.operation.result.errorCode='FS_IO_ERROR'},
+  f=>{f.operation.result.cancelled=true},f=>{f.live.add('session')},f=>{f.end.data.reason.kind='aborted'},
+  f=>{f.operation.definition.toolName='pwsh'},f=>{f.operation.result.resultDigest='changed'}]) {
+  const f=fileFailure();change(f);assert.equal(await inspectFailedNativeFileMutation(f),null)
+ }
+})
 test('原网页读取错误以精确调用及正常回合结束证明失败，不要求新调查或重放', async()=>{
  const f=webFailure(), proof=await inspectFailedNativeWebRead(f)
  assert.equal(proof.kind,'native-web-read-failed'); assert.equal(proof.resultSequence,4); assert.equal(proof.turnEndSequence,5)

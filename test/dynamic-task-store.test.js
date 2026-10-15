@@ -710,3 +710,21 @@ for (const category of ['credentials', 'quota', 'configuration', 'unclassified']
   if (category === 'unclassified') await assert.rejects(f.command('task.wait', request), { code: 'DYNAMIC_PROVIDER_TECHNICAL_WAIT' })
   else assert.equal((await f.command('task.wait', request)).result.task.humanRequests.length, 1)
 })
+
+for(const toolName of ['edit','write']) test('文件前置拒绝旧账精确对账保留审计并允许原执行续办: '+toolName,async t=>{
+ const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='file-precondition'
+ const hash=value=>createHash('sha256').update(JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item)).digest('hex')
+ await f.command('operation.prepare',{binding,operationId,key:'file',definition:{toolName,argumentsDigest:'args'},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName,resultDigest:'result',isError:true}})
+ await f.command('execution.result',{binding,output:{status:'blocked'}});await f.command('execution.drained',{binding})
+ const original=await f.query({kind:'operation.get',operationId})
+ const proof={kind:'native-file-precondition-failed',operationId,operationDigest:hash(original),taskId:binding.taskId,executionId:binding.executionId,sessionId:binding.sessionId,
+  callId:'call',toolName,argumentsDigest:'args',resultDigest:'result',resultSequence:3,turnEndSequence:4,errorCode:'FS_NOT_OBSERVED',noEffect:true}
+ for(const patch of [{operationDigest:'wrong'},{sessionId:'wrong'},{toolName:'pwsh'},{errorCode:'FS_IO_ERROR'},{noEffect:false},{resultDigest:'wrong'},{turnEndSequence:3},{resultSequence:-1}])
+  await assert.rejects(f.command('operation.reconcile-file-precondition',{binding:owner.binding,operationId,proof:{...proof,...patch}}),{code:'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT'})
+ const result=(await f.command('operation.reconcile-file-precondition',{binding:owner.binding,operationId,proof})).result.operation
+ assert.equal(result.state,'failed');assert.equal(result.result.noEffect,true);assert.deepEqual(result.result.previousObservation,original)
+ const continued=(await f.command('execution.continue',{binding:owner.binding,executionId:binding.executionId,key:'continue',prompt:'Read and correct',input:{objective:'original'},definition:{}})).result.execution
+ assert.equal(continued.executionId,binding.executionId);assert.equal((await f.query({kind:'operation.list'})).length,1)
+})

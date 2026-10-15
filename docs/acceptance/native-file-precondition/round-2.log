@@ -1,0 +1,141 @@
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_OBSERVED (4.5847ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_STALE_VERSION (0.5982ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_FOUND (0.3918ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_DIRECTORY (0.4152ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_REGULAR_FILE (0.4954ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_TEXT (0.4097ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_TOO_LARGE (0.4067ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_EDIT_NOT_FOUND (0.5566ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_AMBIGUOUS_EDIT (0.4457ms)
+✔ IO/权限/取消/未知错误及伪造正文不能证明无文件效果 (1.6031ms)
+✔ 原网页读取错误以精确调用及正常回合结束证明失败，不要求新调查或重放 (2.7812ms)
+✔ legacy Host drained error plus bound real readonly observation proves failed partial effects only (1.1691ms)
+✔ readback context exposes only the digest-bound original native call and result (1.8156ms)
+✔ legacy unknown remains fenced: model text instead of tool receipt (0.3246ms)
+✔ legacy unknown remains fenced: printed error text in successful shell output (0.2227ms)
+✔ legacy unknown remains fenced: forged ledger result digest (0.2313ms)
+✔ legacy unknown remains fenced: wrong call (0.2331ms)
+✔ legacy unknown remains fenced: changed arguments (0.1963ms)
+✔ legacy unknown remains fenced: wrong session identity (0.1879ms)
+✔ legacy unknown remains fenced: active original agent (0.1714ms)
+✔ legacy unknown remains fenced: live job still running (0.3816ms)
+✔ legacy unknown remains fenced: execution not drained (0.3052ms)
+✔ legacy unknown remains fenced: no actual readonly result (0.5112ms)
+✔ legacy unknown remains fenced: wrong readback operation (0.5433ms)
+✔ legacy unknown remains fenced: unrestricted readback (0.3213ms)
+✔ legacy unknown remains fenced: failed readback call (0.3835ms)
+✔ legacy unknown remains fenced: stale observation predates unknown (0.1549ms)
+✔ execution progress reads exact current input with real bounded excerpts and unfinished call facts (6.89ms)
+✔ running execution progress flushes its existing native writer before the read-only snapshot (1.4493ms)
+✔ execution progress rejects wrong identity, stale input version or lease and unavailable persistence (1.7324ms)
+✔ execution progress limits excerpts to latest eight real events without copying full logs (0.6583ms)
+✔ nonterminal stage reports persist and wake once without completing the execution (94.8936ms)
+✔ stage reports reject forged input/lease, superseded requirements and cancellation (63.1171ms)
+✔ stage reporting after continuation accepts only the new input and lease (61.2713ms)
+✔ active blockers never re-inject recursive execution inputs or historical results (54.4741ms)
+ℹ {"scope":"owner active blocker executions, UTF-8 JSON bytes","beforeBytes":26818,"afterBytes":444}
+✔ continued and recovering blockers keep current result and unknown operation evidence without recursive history (216.1635ms)
+✔ dispatch is durable and idempotent; execution IDs are independent and owner claims are single flight (97.4125ms)
+✔ a late result is audited and wakes atomically without accepting an obsolete requirement (88.0559ms)
+✔ cancel fences tools immediately and completion waits for physical drain and unresolved operations (72.1836ms)
+✔ continuation retains execution/session identity and versions inputs across requirement revisions (71.77ms)
+✔ generic operations persist before dispatch, unknown never replays, locks survive restart and reconciliation releases them (122.2373ms)
+✔ business completion creates a unique notification atomically; uncertain delivery does not restart business or resend (90.6214ms)
+✔ source route decisions are immutable and group sessions reclaim pending sources after restart (80.7429ms)
+✔ legacy unresolved effects and undrained native sessions become read-only blockers, never dynamic jobs (113.599ms)
+✔ result and wake roll back together on a failed SQLite write and the same command remains safely retryable (112.7811ms)
+✔ initialization marker rejects database loss and an accidental initialize flag cannot create a replacement ledger (99.3418ms)
+✔ question and status notifications are idempotent, independently durable, and obsolete questions never send (75.0526ms)
+✔ unclean process restart fences started operations and retains result/wake receipts without replay (388.4927ms)
+✔ an explicit Web routing intent is recorded atomically with its original source and cannot be reinterpreted (63.3137ms)
+✔ dispatch rollback before durable receipt creates no orphan, and lost post-commit acknowledgement replays one identity (101.3048ms)
+✔ result receipt failure rolls back both result and wake; post-commit restart retains one result/wake pair (104.7971ms)
+✖ 未知操作保持原记录，但不全局阻断另一原生调用 (62.4108ms)
+✔ a definitively refused prepared request can be retired by its exact binding/key without clearing unknown writes (65.2066ms)
+✖ 原操作对账拒绝缺失/外来证据，调查续办保留unknown并可调用原生能力 (59.2718ms)
+✔ terminal job receipt cannot reconcile an undrained execution; successful reconciliation preserves unknown evidence (61.5408ms)
+✔ verified legacy stop closes only failed with retained unknown audit and never creates a replacement execution (70.7769ms)
+✔ 网页读取正式对账保留原unknown记录，原执行可续办且不生成或重放操作 (69.7024ms)
+✔ human request freezes the question and resumes the same task from its authorized original source idempotently (71.9619ms)
+✔ human response rejects an invalid or superseded request: other-actor (46.3641ms)
+✔ human response rejects an invalid or superseded request: other-group (45.5248ms)
+✔ human response rejects an invalid or superseded request: stale-requirement (47.3205ms)
+✔ human response rejects an invalid or superseded request: stale-control (58.6738ms)
+✔ human response rejects an invalid or superseded request: not-drained (78.3766ms)
+✔ human response rejects an invalid or superseded request: revised (89.7417ms)
+✔ human response rejects an invalid or superseded request: cancelled (72.1775ms)
+✔ human response rejects an invalid or superseded request: completed (64.8164ms)
+✔ human request requires an explicit stable identity and accepts only configured web actor without impersonation (85.372ms)
+✔ waiting human request identities conflict on changed questions and an answer never reconciles unknown operations (92.3866ms)
+✔ execution progress review is durable and idempotent without changing results, unknown effects or locks (125.6292ms)
+✔ progress review rejects a foreign execution identity field: executionId (97.0122ms)
+✔ progress review rejects a foreign execution identity field: inputVersion (73.8174ms)
+✔ progress review rejects a foreign execution identity field: leaseEpoch (73.3007ms)
+✔ progress review rejects a foreign execution identity field: inputDigest (69.132ms)
+✔ an unchanged or unreadable execution observation wakes review without claiming success; continuation clears the old review clock (82.8269ms)
+✔ provider recovery persists bounded backoff, history and session identity across restart without human escalation (198.0289ms)
+✔ provider automatic recovery rejects missing-proof (88.0812ms)
+✔ provider automatic recovery rejects foreign-proof (95.0595ms)
+✔ provider automatic recovery rejects permanent (92.045ms)
+✔ provider automatic recovery rejects unknown-effect (79.0305ms)
+✔ provider automatic recovery rejects cancelled (70.7804ms)
+✔ provider backoff cannot resume after task paused (77.6752ms)
+✔ provider backoff cannot resume after task cancelled (79.3331ms)
+✔ provider backoff cannot resume after task revised (77.871ms)
+✔ requester answer must be consumed by owner before provider recovery: changeInput=false (92.6808ms)
+✔ requester answer must be consumed by owner before provider recovery: changeInput=true (103.0081ms)
+✔ provider operator intervention needs concrete native action evidence: credentials (119.5921ms)
+✔ provider operator intervention needs concrete native action evidence: quota (104.1879ms)
+✔ provider operator intervention needs concrete native action evidence: configuration (106.0402ms)
+✔ provider operator intervention needs concrete native action evidence: unclassified (95.5794ms)
+✖ restart wakes technical unknown wait once per implementation and retains the effect fence (21212.6345ms)
+✔ concurrency-safe is not pure: an unknown native write never dispatches a second call (9344.9039ms)
+✔ native start-race rejection retires only its prepared request and completion resumes after the original effect is reconciled (10920.6673ms)
+✔ 原生文件前置拒绝后同会话读取纠正，无人工处理: edit (7004.8487ms)
+✔ 原生文件前置拒绝后同会话读取纠正，无人工处理: write (6666.1035ms)
+ℹ tests 94
+ℹ suites 0
+ℹ pass 91
+ℹ fail 2
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 56735.193
+
+✖ failing tests:
+
+test at test\dynamic-task-store.test.js:355:1
+✖ 未知操作保持原记录，但不全局阻断另一原生调用 (62.4108ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:362:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\dynamic-task-store.test.js:388:1
+✖ 原操作对账拒绝缺失/外来证据，调查续办保留unknown并可调用原生能力 (59.2718ms)
+  Error: DYNAMIC_OPERATION_UNRESOLVED
+      at fail (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:17:61)
+      at reduce (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:644:68)
+      at file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:945:28
+      at transaction (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:158:21)
+      at Object.command (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:939:20)
+      at Object.command (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:15:71)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:401:11)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'DYNAMIC_OPERATION_UNRESOLVED'
+  }
+
+test at test\task-native-unknown-fence.test.js:9:1
+✖ restart wakes technical unknown wait once per implementation and retains the effect fence (21212.6345ms)
+  'test timed out after 20000ms'

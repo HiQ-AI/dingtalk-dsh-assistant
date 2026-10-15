@@ -54,6 +54,7 @@ export async function nativeTaskHost(root, decide, options = {}) {
       isolate: { fs: true, workingDirectory: true, shellEnv: true }, config: [
       row('fs-local', { cwd: root }), row('working-directory', { defaultDirectory: root }),
       row('shell-env'), row('tool-fs'), row('tool-' + nativeShell, { enableRunInBackground: options.promoteOnTimeout === true, promoteOnTimeout: options.promoteOnTimeout === true }),
+      ...(options.fsObservationPolicy ? [row('fs-observation-policy')] : []),
       ...(options.skillDirs ? [row('skill-filesystem', { includeDefaultRoots: false, customSkillDirs: options.skillDirs, watch: false }), row('tool-skill')] : []),
     ] }] })
   } })

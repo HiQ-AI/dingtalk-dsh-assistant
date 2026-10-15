@@ -1,0 +1,159 @@
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_OBSERVED (2.6584ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_STALE_VERSION (0.3701ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_FOUND (0.224ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_DIRECTORY (0.3472ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_REGULAR_FILE (0.6914ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_NOT_TEXT (0.2981ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_TOO_LARGE (0.2388ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_EDIT_NOT_FOUND (0.2392ms)
+✔ 文件前置拒绝按Host错误码对账而非文字或当前文件: FS_AMBIGUOUS_EDIT (0.2146ms)
+✔ IO/权限/取消/未知错误及伪造正文不能证明无文件效果 (1.2383ms)
+✔ 原网页读取错误以精确调用及正常回合结束证明失败，不要求新调查或重放 (1.2455ms)
+✔ legacy Host drained error plus bound real readonly observation proves failed partial effects only (1.2089ms)
+✔ readback context exposes only the digest-bound original native call and result (0.4182ms)
+✔ legacy unknown remains fenced: model text instead of tool receipt (0.1328ms)
+✔ legacy unknown remains fenced: printed error text in successful shell output (0.0732ms)
+✔ legacy unknown remains fenced: forged ledger result digest (0.078ms)
+✔ legacy unknown remains fenced: wrong call (0.0819ms)
+✔ legacy unknown remains fenced: changed arguments (0.084ms)
+✔ legacy unknown remains fenced: wrong session identity (0.0808ms)
+✔ legacy unknown remains fenced: active original agent (0.0624ms)
+✔ legacy unknown remains fenced: live job still running (0.0548ms)
+✔ legacy unknown remains fenced: execution not drained (0.0533ms)
+✔ legacy unknown remains fenced: no actual readonly result (0.1058ms)
+✔ legacy unknown remains fenced: wrong readback operation (0.1139ms)
+✔ legacy unknown remains fenced: unrestricted readback (0.1093ms)
+✔ legacy unknown remains fenced: failed readback call (0.1015ms)
+✔ legacy unknown remains fenced: stale observation predates unknown (0.0657ms)
+✔ execution progress reads exact current input with real bounded excerpts and unfinished call facts (4.8592ms)
+✔ running execution progress flushes its existing native writer before the read-only snapshot (0.8995ms)
+✔ execution progress rejects wrong identity, stale input version or lease and unavailable persistence (0.9352ms)
+✔ execution progress limits excerpts to latest eight real events without copying full logs (0.3924ms)
+✔ nonterminal stage reports persist and wake once without completing the execution (65.9199ms)
+✔ stage reports reject forged input/lease, superseded requirements and cancellation (27.122ms)
+✔ stage reporting after continuation accepts only the new input and lease (34.581ms)
+✔ active blockers never re-inject recursive execution inputs or historical results (29.7032ms)
+ℹ {"scope":"owner active blocker executions, UTF-8 JSON bytes","beforeBytes":26818,"afterBytes":444}
+✔ continued and recovering blockers keep current result and unknown operation evidence without recursive history (88.6632ms)
+✔ dispatch is durable and idempotent; execution IDs are independent and owner claims are single flight (47.3705ms)
+✔ a late result is audited and wakes atomically without accepting an obsolete requirement (54.5311ms)
+✔ cancel fences tools immediately and completion waits for physical drain and unresolved operations (27.7679ms)
+✔ continuation retains execution/session identity and versions inputs across requirement revisions (35.4238ms)
+✔ generic operations persist before dispatch, unknown never replays, locks survive restart and reconciliation releases them (49.3356ms)
+✔ business completion creates a unique notification atomically; uncertain delivery does not restart business or resend (58.716ms)
+✔ source route decisions are immutable and group sessions reclaim pending sources after restart (36.3056ms)
+✔ legacy unresolved effects and undrained native sessions become read-only blockers, never dynamic jobs (62.8498ms)
+✔ result and wake roll back together on a failed SQLite write and the same command remains safely retryable (72.9816ms)
+✔ initialization marker rejects database loss and an accidental initialize flag cannot create a replacement ledger (49.4366ms)
+✔ question and status notifications are idempotent, independently durable, and obsolete questions never send (33.5172ms)
+✔ unclean process restart fences started operations and retains result/wake receipts without replay (173.3277ms)
+✔ an explicit Web routing intent is recorded atomically with its original source and cannot be reinterpreted (35.0784ms)
+✔ dispatch rollback before durable receipt creates no orphan, and lost post-commit acknowledgement replays one identity (53.7414ms)
+✔ result receipt failure rolls back both result and wake; post-commit restart retains one result/wake pair (61.9232ms)
+✔ 未知操作保持原记录，但不全局阻断另一原生调用 (39.7992ms)
+✔ a definitively refused prepared request can be retired by its exact binding/key without clearing unknown writes (51.8944ms)
+✔ 原操作对账拒绝缺失/外来证据，调查续办保留unknown并可调用原生能力 (46.4596ms)
+✔ terminal job receipt cannot reconcile an undrained execution; successful reconciliation preserves unknown evidence (43.9301ms)
+✔ verified legacy stop closes only failed with retained unknown audit and never creates a replacement execution (55.5817ms)
+✔ 网页读取正式对账保留原unknown记录，原执行可续办且不生成或重放操作 (52.3082ms)
+✔ human request freezes the question and resumes the same task from its authorized original source idempotently (53.8819ms)
+✔ human response rejects an invalid or superseded request: other-actor (36.8749ms)
+✔ human response rejects an invalid or superseded request: other-group (33.6079ms)
+✔ human response rejects an invalid or superseded request: stale-requirement (29.6623ms)
+✔ human response rejects an invalid or superseded request: stale-control (32.0447ms)
+✔ human response rejects an invalid or superseded request: not-drained (27.6733ms)
+✔ human response rejects an invalid or superseded request: revised (27.6883ms)
+✔ human response rejects an invalid or superseded request: cancelled (29.7693ms)
+✔ human response rejects an invalid or superseded request: completed (38.0127ms)
+✔ human request requires an explicit stable identity and accepts only configured web actor without impersonation (34.5071ms)
+✔ waiting human request identities conflict on changed questions and an answer never reconciles unknown operations (47.9412ms)
+✔ execution progress review is durable and idempotent without changing results, unknown effects or locks (60.4211ms)
+✔ progress review rejects a foreign execution identity field: executionId (36.7483ms)
+✔ progress review rejects a foreign execution identity field: inputVersion (39.7755ms)
+✔ progress review rejects a foreign execution identity field: leaseEpoch (40.0405ms)
+✔ progress review rejects a foreign execution identity field: inputDigest (40.4144ms)
+✔ an unchanged or unreadable execution observation wakes review without claiming success; continuation clears the old review clock (46.4633ms)
+✔ provider recovery persists bounded backoff, history and session identity across restart without human escalation (79.3594ms)
+✔ provider automatic recovery rejects missing-proof (37.7294ms)
+✔ provider automatic recovery rejects foreign-proof (39.1002ms)
+✔ provider automatic recovery rejects permanent (37.534ms)
+✔ provider automatic recovery rejects unknown-effect (42.4233ms)
+✔ provider automatic recovery rejects cancelled (41.7064ms)
+✔ provider backoff cannot resume after task paused (46.5662ms)
+✔ provider backoff cannot resume after task cancelled (57.0009ms)
+✔ provider backoff cannot resume after task revised (54.843ms)
+✔ requester answer must be consumed by owner before provider recovery: changeInput=false (69.4985ms)
+✔ requester answer must be consumed by owner before provider recovery: changeInput=true (67.8846ms)
+✔ provider operator intervention needs concrete native action evidence: credentials (54.0534ms)
+✔ provider operator intervention needs concrete native action evidence: quota (46.0493ms)
+✔ provider operator intervention needs concrete native action evidence: configuration (43.6197ms)
+✔ provider operator intervention needs concrete native action evidence: unclassified (40.5585ms)
+✔ native provider retry contract: SERVER (1.53ms)
+✔ native provider retry contract: RATE_LIMIT (0.2155ms)
+✔ native provider retry contract: TIMEOUT (0.1047ms)
+✔ native provider retry contract: TRANSPORT (0.1511ms)
+✔ native provider retry contract: EMPTY_RESPONSE (0.1077ms)
+✔ provider operation evidence: AUTH (0.1467ms)
+✔ provider operation evidence: MISSING_CREDENTIAL (0.0725ms)
+✔ provider operation evidence: INVALID_CREDENTIAL (0.1482ms)
+✔ provider operation evidence: QUOTA (0.114ms)
+✔ provider operation evidence: ACCOUNT_QUOTA (0.1481ms)
+✔ provider operation evidence: NO_ADAPTER (0.1135ms)
+✔ provider operation evidence: INVALID_REQUEST (0.0553ms)
+✔ in-band provider processing error requires verified envelope: Codex error: Our servers are currently overloaded. Please try again later.
+[Codex diagnostics: {"httpStatus":200}] (0.1749ms)
+✔ in-band provider processing error requires verified envelope: Codex error: An error occurred while processing your request. You can retry your request.
+[Codex diagnostics: {"httpStatus":200}] (0.0516ms)
+✔ in-band provider processing error requires verified envelope: Codex error: An error occurred while processing your request. You can retry your request.
+[Codex diagnostics: {"httpStatus":401}] (0.0745ms)
+✔ in-band provider processing error requires verified envelope: Codex error: An error occurred while processing your request. You can retry your request.
+[Codex diagnostics: {"httpStatus":429}] (0.0766ms)
+✔ in-band provider processing error requires verified envelope: Codex error: An error occurred while processing your request. You can retry your request. (0.0558ms)
+✔ in-band provider processing error requires verified envelope: authentication failed (0.0454ms)
+✔ in-band provider processing error requires verified envelope: fetch failed (0.025ms)
+✔ in-band provider processing error requires verified envelope: Codex error: invalid account
+[Codex diagnostics: {"httpStatus":200}] (0.0268ms)
+✔ in-band provider processing error requires verified envelope: Codex error: An error occurred while processing your request. You can retry your request.
+[Codex diagnostics: invalid] (0.0219ms)
+✔ contradictory transport cannot retry authentication failed (0.1053ms)
+✔ contradictory transport cannot retry permission denied (0.0275ms)
+✔ contradictory transport cannot retry invalid credential (0.0206ms)
+✔ contradictory transport cannot retry insufficient quota (0.0203ms)
+✔ overload special case does not override contradictory HTTP 401 (0.0738ms)
+✔ overload special case does not override contradictory HTTP 403 (0.025ms)
+✔ overload special case does not override contradictory HTTP 429 (0.0221ms)
+✔ overload special case does not override contradictory HTTP 503 (0.023ms)
+✔ malformed diagnostic envelope cannot admit overload special case (0.0381ms)
+✔ anonymous field v12 HTTP200 in-band processing error is a failure with transient recovery, not success/auth/quota (1.0566ms)
+✔ restart wakes technical unknown wait once per implementation and retains the effect fence (5641.2542ms)
+✖ 未知写保留unknown，独立原生终端调查仍可执行 (1622.9523ms)
+✔ 同一原生操作已派发时拒绝再次执行，原账对账后可完成 (5843.1956ms)
+✔ 原生文件前置拒绝后同会话读取纠正，无人工处理: edit (6863.0285ms)
+✔ 原生文件前置拒绝后同会话读取纠正，无人工处理: write (7081.182ms)
+ℹ tests 125
+ℹ suites 0
+ℹ pass 124
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 27822.907
+
+✖ failing tests:
+
+test at test\task-native-unknown-fence.test.js:51:1
+✖ 未知写保留unknown，独立原生终端调查仍可执行 (1622.9523ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 2
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/native-edit-terminal-reconcile/dingtalk-dsh-assistant/test/task-native-unknown-fence.test.js:80:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

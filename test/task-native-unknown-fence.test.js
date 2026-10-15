@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { available, reason, nativeTaskHost, latestInput, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, nativeShell, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 test('restart wakes technical unknown wait once per implementation and retains the effect fence', { skip: !available ? reason : false, timeout: 20000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-runtime-wake-'))
@@ -48,7 +48,7 @@ test('restart wakes technical unknown wait once per implementation and retains t
   assert.equal(ownerRounds, before + 1, 'same code restart must not manufacture another wake')
 })
 
-test('concurrency-safe is not pure: an unknown native write never dispatches a second call', { skip: !available ? reason : false, timeout: 15000 }, async t => {
+test('未知写保留unknown，独立原生终端调查仍可执行', { skip: !available ? reason : false, timeout: 15000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-unknown-native-'))
   let host, delegated = false, calls = 0, writes = 0
   t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
@@ -68,21 +68,23 @@ test('concurrency-safe is not pure: an unknown native write never dispatches a s
       }
       return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '等待原操作对账，不能重放。', evidence: [], limitations: ['原操作结果未知。'] } } }]
     }
-    if (calls++ < 2) return [{ name: 'concurrent_write_probe', args: {} }]
+    if (calls++ === 0) return [{ name: 'concurrent_write_probe', args: {} }]
+    if (calls === 2) return [{ name: nativeShell, args: { command: nativeShell === 'pwsh' ? "Write-Output 'independent investigation'" : "printf 'independent investigation'", description: 'Independent read-only investigation' } }]
     return [{ name: 'execution_submit', args: { output: { status: 'completed', summary: '原操作待对账。', evidence: [], limitations: ['没有重复写入。'], artifacts: [] } } }]
   })
   await host.service.ingest({ groupId: 'native-group', messageId: 'unknown-write', senderOpenDingTalkId: 'native-user', text: '测试助手，只执行一次授权动作。', timestamp: '2026-10-13T11:00:00Z' })
-  await waitUntil(() => calls >= 3, 'second attempted tool call returns without re-dispatch')
+  await waitUntil(() => calls >= 3, 'independent investigation returns without replay')
   await host.service.whenIdle()
   assert.equal(writes, 1)
   const operations = await host.query('operation.list')
-  assert.equal(operations.length, 1)
+  assert.equal(operations.length, 2)
   assert.equal(operations[0].state, 'unknown')
-  assert.ok(host.toolResults.some(item => JSON.stringify(item.result).includes('DYNAMIC_OPERATION_UNRESOLVED')))
+  assert.equal(operations[1].state, 'succeeded')
+  assert.ok(host.toolResults.some(item => item.name === nativeShell && !item.result.isError))
   assert.equal((await host.query('task.list'))[0].status, 'active')
 })
 
-test('native start-race rejection retires only its prepared request and completion resumes after the original effect is reconciled', { skip: !available ? reason : false, timeout: 15000 }, async t => {
+test('同一原生操作已派发时拒绝再次执行，原账对账后可完成', { skip: !available ? reason : false, timeout: 15000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-unknown-race-'))
   let host, ledger, delegated = false, executionCalled = false, writes = 0, injected = false, reconciled = false
   t.after(async () => { await host?.close(); await ledger?.close(); await rm(root, { recursive: true, force: true }) })
@@ -94,7 +96,7 @@ test('native start-race rejection retires only its prepared request and completi
     if (!injected && command.kind === 'operation.start') {
       injected = true
       const binding = command.args.binding
-      const { result: { operation } } = await originalCommand({ id: 'race-other-prepare', kind: 'operation.prepare', args: { binding, key: 'other-effect', definition: { toolName: 'external-effect-fixture' }, resourceKeys: [] } })
+      const operation = { operationId: command.args.operationId }
       await originalCommand({ id: 'race-other-start', kind: 'operation.start', args: { binding, operationId: operation.operationId } })
       await originalCommand({ id: 'race-other-unknown', kind: 'operation.settle', args: { binding, operationId: operation.operationId, state: 'unknown', result: { lostReceipt: true } } })
     }
@@ -122,14 +124,47 @@ test('native start-race rejection retires only its prepared request and completi
   await host.service.ingest({ groupId: 'native-group', messageId: 'unknown-race', senderOpenDingTalkId: 'native-user', text: '测试助手，核对原动作，不要重复执行。', timestamp: '2026-10-13T11:00:00Z' })
   await waitUntil(async () => (await host.query('execution.list'))[0]?.drained === true, 'native rejection and execution drain')
   await host.service.whenIdle()
-  const operations = await host.query('operation.list'), refused = operations.find(item => item.definition.toolName === 'race_write_probe'), original = operations.find(item => item.key === 'other-effect')
+  const operations = await host.query('operation.list'), original = operations[0]
   assert.equal(writes, 0)
-  assert.equal(refused.state, 'cancelled')
-  assert.equal(refused.result.notDispatched, true)
+  assert.equal(operations.length, 1)
   assert.equal(original.state, 'unknown')
   reconciled = true
   await originalCommand({ id: 'race-real-readback', kind: 'operation.reconcile', args: { operationId: original.operationId, state: 'succeeded', result: { verified: true }, evidenceRef: 'trusted-original-receipt' } })
   await host.service.recover(); await host.service.whenIdle()
   assert.equal((await host.query('task.list'))[0].status, 'completed')
   assert.equal(writes, 0)
+})
+
+for (const mutation of ['edit', 'write']) test('原生文件前置拒绝后同会话读取纠正，无人工处理: ' + mutation, { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-file-correction-'))
+  const { writeFile, readFile } = await import('node:fs/promises')
+  let host, delegated=false, step=0, sessionId
+  t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+  const file=join(root,'existing.txt');await writeFile(file,'before')
+  host=await nativeTaskHost(root,async(request,h)=>{
+    const names=request.tools.map(tool=>tool.name),topic=topicTaskCalls(request)
+    if(topic)return topic
+    if(names.includes('group_coordinator_submit'))return [{name:'group_coordinator_submit',args:{decision:{actions:latestInput(request).sources.map(source=>({action:'create',sourceId:source.sourceId,objective:source.text}))}}}]
+    if(names.includes('task_delegate')){
+      if(!delegated){delegated=true;return [{name:'task_delegate',args:{key:'correct-file',objective:'Read and correct the file after a precondition failure'}}]}
+      return [{name:'task_session_submit',args:{decision:{action:latestInput(request).executions.every(x=>x.status==='succeeded')?'complete':'wait',summary:'文件已读取并修改',evidence:[],limitations:[]}}}]
+    }
+    const args=mutation==='edit'?{file_path:file,old_string:'before',new_string:'after'}:{file_path:file,content:'after'}
+    if(step++===0)return [{name:mutation,args}]
+    if(step===2){
+      assert.equal(await readFile(file,'utf8'),'before')
+      const operations=await h.query('operation.list');assert.equal(operations.length,1)
+      assert.equal(operations[0].state,'failed');assert.equal(operations[0].result.errorCode,'FS_NOT_OBSERVED');assert.equal(operations[0].result.noEffect,true)
+      sessionId=(await h.query('execution.list'))[0].sessionId
+      return [{name:'read',args:{file_path:file}}]
+    }
+    if(step===3)return [{name:mutation,args}]
+    return [{name:'execution_submit',args:{output:{status:'completed',summary:'读取后已完成',evidence:[],limitations:[],artifacts:[]}}}]
+  },{fsObservationPolicy:true})
+  await host.service.ingest({groupId:'native-group',messageId:'correct-'+mutation,senderOpenDingTalkId:'native-user',text:'测试助手，修改指定文件',timestamp:'2026-10-15T01:00:00Z'})
+  await host.service.whenIdle()
+  assert.equal(await readFile(file,'utf8'),'after')
+  const operations=await host.query('operation.list');assert.deepEqual(operations.map(x=>x.state),['failed','succeeded'])
+  assert.equal((await host.query('execution.list')).length,1);assert.equal((await host.query('execution.list'))[0].sessionId,sessionId)
+  const task=(await host.query('task.list'))[0];assert.equal(task.status,'completed');assert.equal(task.humanRequests?.length??0,0)
 })

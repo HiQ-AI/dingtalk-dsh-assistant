@@ -3,6 +3,11 @@ import { realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 const scopes = new AsyncLocalStorage(), installations = new Map()
+// Host FS 合同：这些检查在发布文件内容之前拒绝。IO、权限、沙箱及取消
+// 可能发生在提交之后，不能由错误码推断没有效果，也不按错误文案分类。
+const filePreconditions = new Set(['FS_NOT_OBSERVED', 'FS_STALE_VERSION', 'FS_NOT_FOUND',
+  'FS_NOT_DIRECTORY', 'FS_NOT_REGULAR_FILE', 'FS_NOT_TEXT', 'FS_TOO_LARGE', 'FS_EDIT_NOT_FOUND', 'FS_AMBIGUOUS_EDIT'])
+export const isNativeFilePrecondition = (toolName, error) => ['edit', 'write'].includes(toolName) && filePreconditions.has(error?.code)
 const fail = () => { throw Object.assign(new Error('TASK_FILESYSTEM_SCOPE_FORBIDDEN'), { code: 'TASK_FILESYSTEM_SCOPE_FORBIDDEN' }) }
 const inside = (root, path) => { const part = relative(root, path); return part === '' || part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part) }
 async function canonical(path) {
