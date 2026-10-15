@@ -1,0 +1,10 @@
+{
+  "state": "OPEN",
+  "bodyReadbackMatches": true,
+  "headSha": "62cc48b88d9372316acd8ac90366b77b66d46037",
+  "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/182",
+  "base": "main",
+  "title": "fix: 恢复原生工具失败并复用任务话题上下文",
+  "head": "worktree-native-background-receipt",
+  "number": 182
+}
