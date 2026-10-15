@@ -1,0 +1,71 @@
+✔ 公开正文拒绝明确内部标签，生成错误可修正 (1.666ms)
+✔ 业务代码、文件、PR及业务编号保留，签名和回读正文不被重写 (0.3826ms)
+✔ 外发与恢复在领取和发送前拒绝违规正文，未发生外部动作 (0.4177ms)
+✔ 公开提示覆盖问答与澄清，状态不回显未知内部码 (0.1959ms)
+✔ 完成通知用既有string摘要展示重点，排查与修复结论不互相改写 (108.2499ms)
+✖ 补充通知逐项提出信息并保留责任方与下一步，不贴内部分析 (1.0641ms)
+✖ 完成群回复自包含交付与未验证边界，不追加本地详情引导 (3.437ms)
+✖ 群完成正文使用真实业务名称，内部报告身份不进入格式化输出，合法业务编号保留 (0.423ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 5
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 572.802
+
+✖ failing tests:
+
+test at docs\tmp\signature-baseline\test\group-reply-audience.test.js:63:1
+✖ 补充通知逐项提出信息并保留责任方与下一步，不贴内部分析 (1.0641ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程'
+  - '【需补充】\n\n请原交办人补充以下信息：\n\n1. 数据集编号。\n\n2. 操作发生的大致时间。\n\n【下一步】\n\n收到以上信息后继续核对原操作记录。'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/remove-global-signature/dingtalk-dsh-assistant/docs/tmp/signature-baseline/test/group-reply-audience.test.js:66:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程内部调查过程',
+    expected: '【需补充】\n\n请原交办人补充以下信息：\n\n1. 数据集编号。\n\n2. 操作发生的大致时间。\n\n【下一步】\n\n收到以上信息后继续核对原操作记录。',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at docs\tmp\signature-baseline\test\group-reply-audience.test.js:71:1
+✖ 完成群回复自包含交付与未验证边界，不追加本地详情引导 (3.437ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(groupReplyInstructions.includes('自包含完成内容、实际交付结果'))
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/remove-global-signature/dingtalk-dsh-assistant/docs/tmp/signature-baseline/test/group-reply-audience.test.js:79:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at docs\tmp\signature-baseline\test\group-reply-audience.test.js:85:1
+✖ 群完成正文使用真实业务名称，内部报告身份不进入格式化输出，合法业务编号保留 (0.423ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(groupReplyInstructions.includes('原群事项的真实业务名称'))
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/remove-global-signature/dingtalk-dsh-assistant/docs/tmp/signature-baseline/test/group-reply-audience.test.js:100:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

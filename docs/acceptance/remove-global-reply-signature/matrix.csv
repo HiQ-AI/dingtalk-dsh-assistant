@@ -1,0 +1,8 @@
+case,round-1,round-2,evidence
+format-and-ui,PASS,PASS,round-2.md
+config-http,PASS,PASS,round-2.md
+native-completion-and-status,FAIL,PASS,round-2.md
+native-requester-question,FAIL,PASS,round-2.md
+group-responsibility-input,NOT_RUN,PASS,round-2.md
+browser-settings,NOT_RUN,PASS,round-2.md
+legacy-baseline-comparison,NOT_RUN,PASS,round-2.md

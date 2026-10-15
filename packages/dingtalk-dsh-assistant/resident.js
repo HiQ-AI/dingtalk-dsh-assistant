@@ -76,7 +76,6 @@ export async function apply(ctx, config = {}) {
   const runtime = await openTaskResidentRuntime(ctx, store, process.cwd(), {
     agentPreset: config.agentPreset ?? 'standard',
     agentWorkspaceDir: config.agentWorkspaceDir,
-    agentReplySignature: config.agentReplySignature,
     resumeTimeoutMs: config.resumeTimeoutMs ?? 10_000,
     maxConcurrentTasks: config.maxConcurrentTasks ?? 5,
     maxGoalRounds: config.maxGoalRounds ?? 24,

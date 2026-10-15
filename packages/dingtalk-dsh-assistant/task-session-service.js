@@ -457,7 +457,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
     appendOutbox: async args => {
       const sourceText = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)?.text
-      const reply = formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature })
+      const reply = formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [] })
       args = { ...args, ...reply }
       const group = await residentStore.appendOutbox(args)
       const notificationId = args.outboundId
@@ -717,7 +717,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               if (source && source.channel !== 'web' && !source.sourceId.startsWith('web:')) {
                 const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId, senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text },
                   summary: decision.summary, evidence: decision.evidence, limitations: decision.limitations,
-                  signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
+                  internalIds: await replyInternalIds(task) })
                 notification = { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId, fact: { taskId }, kind: 'task-completed' }
               }
               await command('task.complete', { binding, summary: decision.summary, result: decision, ...(notification ? { notification } : {}) }, `complete:${taskId}:${binding.requirementRevision}`)
@@ -763,7 +763,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId,
       senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text }, summary: decision.summary,
       evidence: decision.evidence, limitations: decision.limitations,
-      signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
+      internalIds: await replyInternalIds(task) })
     await command('notification.prepare', { notificationId: id, taskId: task.taskId, requirementRevision: task.requirementRevision,
       kind, payload: { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId,
         ...(humanRequest ? { audience: humanRequest.audience, humanRequestId: humanRequest.requestId } : {}), fact: { taskId: task.taskId }, kind } }, `prepare-notification:${id}`)

@@ -1,0 +1,33 @@
+✔ 设置页移除署名入口，普通配置仍可保存且失败保留草稿 (9.1183ms)
+✔ 单一业务插件以原生任务会话启停，不恢复已移除的任务表格同步 (819.5001ms)
+✔ 通用生产源码不绑定个人姓名，群回复署名遵循工作区与群职责 (1596.3005ms)
+✔ resident重启只恢复任务会话，不重新加载历史Topic任务调度器 (5.0937ms)
+✔ DWS profile在恢复遗留判断前注入引用消息查询协议 (3.3407ms)
+✔ 旧任务来源和续接迁移配置在打开存储前明确拒绝 (3.5345ms)
+✔ 生产HTTP提供精确的单消息重试入口 (4.297ms)
+✔ 叶子会话使用DSH原生descriptor且恢复旧会话时补齐 (5.8033ms)
+✔ Task上下文只引用固定Topic版本，不再构造消息正文持久副本 (2.6239ms)
+✔ 原生引用已绑定时删除正文重复原文，保留其他证据引文 (2.4873ms)
+✔ binds the native quote and true mention to the same source without faking display-name mentions (0.161ms)
+✔ orders conclusion, evidence and explicit boundaries while preserving supplied links and code (0.2128ms)
+✔ does not invent URLs, evidence, questions or acceptance messages (0.1128ms)
+✔ requires full source binding rather than silently falling back to unquoted sending (0.3713ms)
+✔ rejects private runtime references and UI chrome but preserves legitimate business identifiers (0.528ms)
+✔ rejects malformed content rather than stringifying objects into a public message (0.1513ms)
+✔ uses the existing DWS quote and mention protocol without unsupported formatting flags (0.3194ms)
+✔ 正文列表、引用与代码中的署名样例原样保留 (0.2243ms)
+✔ 不同群模型署名保持原文，历史全局字段不追加或覆盖署名 (0.32ms)
+✔ 历史全局署名不再暴露，旧字段提交拒绝且不影响其它配置 (59.0649ms)
+✔ 完成及状态保留模型署名，历史全局字段无效，引用和真实@不变 (2138.8556ms)
+▶ 任务提问保留模型署名且不借用历史全局字段
+  ✔ Mira Support (2264.1689ms)
+  ✔ unconfigured (2658.6874ms)
+✔ 任务提问保留模型署名且不借用历史全局字段 (4925.3677ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7944.3793
