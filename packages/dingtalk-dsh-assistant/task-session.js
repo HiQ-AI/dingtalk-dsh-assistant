@@ -92,7 +92,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         agentCtx.systemPrompt.section({ name: 'task:responsibility', order: 0, text: instructions })
         agentCtx.systemPrompt.section({ name: 'task:sources', order: 1, text: sourceInterpretationInstructions })
         if (groupResponsibility) agentCtx.systemPrompt.section({ name: 'task:group-responsibility', order: 1,
-          text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${groupResponsibility}` })
+          text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${entry.content.instruction(groupResponsibility, '所属群职责、授权边界与回复要求')}` })
         agentCtx.tools.presentAs('native')
         entry.content.install(agentCtx, () => current(entry))
         agentCtx.tools.guard(() => entry.submitted || entry.cancelled || closed ? 'task_session_inactive' : undefined)

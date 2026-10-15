@@ -43,6 +43,29 @@ import { findSessionLog, requestSystemText } from './fixtures/session-persistenc
 const call = (name, args) => ({ name, args })
 const test = (name, options, run) => testRunner(name, { ...options, ...(!available ? { skip: reason } : {}) }, run)
 const decision = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: ['实际文件和进程输出已核验'], limitations: [] } })
+
+// The scripted coordinator obeys the same required-read contract as a real model.
+function requiredDecisionRead(request, input) {
+  for (const source of input.sources ?? []) if (source.textFile && source.readRequired) {
+    const alreadyLocated = request.messages.filter(message => message.role === 'tool').some(message => JSON.stringify(message.content).includes(source.textFile))
+    if (!alreadyLocated) return call('read', { file_path: source.textFile, offset: 1, limit: 1 })
+  }
+  const refs = new Set()
+  function visit(value) {
+    if (!value || typeof value !== 'object') return
+    if (value.contentRef) refs.add(value.contentRef)
+    else for (const child of Object.values(value)) visit(child)
+  }
+  if (input.task?.readRequired) { visit(input.task.objective); visit(input.task.requirements) }
+  for (const source of input.sources ?? []) if (source.readRequired) { visit(source.text); visit(source.body); visit(source.quote) }
+  for (const execution of input.executions ?? []) if (execution.readRequired) { visit(execution.input?.objective); visit(execution.stageProgress) }
+  const pages = modelToolValues(request)
+  for (const ref of refs) {
+    const textPages = pages.filter(page => page.contentRef === ref && page.format === 'text')
+    if (!textPages.some(page => page.nextOffset === null)) return call('model_content_read', { contentRef: ref, offset: textPages.at(-1)?.nextOffset ?? 0, limit: 16000 })
+  }
+}
+
 const message = { groupId: 'native-group', messageId: 'native-message-1', senderOpenDingTalkId: 'native-user', senderName: '真实用户', text: '测试助手，分别生成 alpha 和 beta 的文件并用终端验证，再汇总结论。', occurredAt: '2026-10-13T10:00:00Z', timestamp: '2026-10-13T10:00:00Z' }
 
 async function nativeCase(t, prefix) {
@@ -64,13 +87,17 @@ test('owner injects one authoritative source body across task, Web identity and 
     metrics.push({ currentHostBytes: bytes(request.messages.filter(message => message.source?.taskSession && !message.source.taskContextHistory)),
       oldHostBytes: bytes(request.messages.filter(message => message.source?.taskContextHistory)), toolHistoryBytes: bytes(request.messages.filter(message => message.role === 'tool')),
       systemBytes: bytes(request.messages.filter(message => message.role === 'system')), schemaBytes: Buffer.byteLength(JSON.stringify(request.tools)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+    const required = requiredDecisionRead(request, latestInput(request))
+    if (required) return [required]
     return [decision('complete', 'only analysis')]
   })
   await h.service.createTask({ groupId: 'native-group', requestId: 'indexed-web', objective: body, context: body })
   await h.service.whenIdle()
   assert.ok(counts.length > 0, JSON.stringify(h.service.listAlerts()))
   t.diagnostic(JSON.stringify({ scope: 'actual native owner scripted adapter UTF-8 JSON bytes', bodyCopies: counts, metrics }))
-  assert.deepEqual(counts, counts.map(() => 1), 'one complete authority body in each real model request')
+  assert.equal(counts[0], 0, 'long authority is explicitly marked for lossless read')
+  assert.ok(counts.every(count => count === 0), 'targeted native reads do not reinject the entire long authority body')
+  assert.ok(h.toolResults.some(result => result.name === 'read'), 'the existing native file reader is used')
   assert.equal(h.service.listAlerts().length, 0)
   const [source] = await h.query('source.list'), [task] = await h.query('task.list')
   assert.equal(source.text, body)
@@ -253,16 +280,20 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
       const snapshots = request.messages.filter(message => message.role === 'user').flatMap(message => message.content ?? [])
         .filter(block => block.type === 'text').flatMap(block => { try { const value = JSON.parse(block.text); return value.task && value.executions ? [value] : [] } catch { return [] } })
       assert.equal(snapshots.length, 1, '原生模型可见面只保留当前完整Host快照')
-      assert.match(JSON.stringify(snapshots[0]), /CURRENT_AUTHORIZATION_SCOPE_/)
+      assert.ok(latestInput(request).sources.some(source => source.readRequired || JSON.stringify(source).includes('CURRENT_AUTHORIZATION_SCOPE_')))
+      const required = requiredDecisionRead(request, input)
+      if (required) return [required]
       for (const execution of input.executions) {
-        assert.equal(execution.input.previousExecutions, undefined)
-        assert.equal(execution.input.context, undefined)
+        assert.equal(execution.input?.previousExecutions, undefined)
+        assert.equal(execution.input?.context, undefined)
         assert.equal(execution.definition, undefined)
         assert.equal(execution.results, undefined)
-        if (execution.resultRef) {
-          const page = modelToolValues(request).find(value => value.contentRef === execution.resultRef.contentRef && value.path === '/payload/output/summary')
-          if (!page) return [call('model_content_read', { contentRef: execution.resultRef.contentRef, path: '/payload/output/summary' })]
-          assert.equal(page.text ?? page.resolvedRef, execution.input.objective, 'original result is read through the admitted content tool')
+        if (execution.resultRef || execution.resultInCatalog) {
+          const resultRef = execution.resultRef ?? input.catalogRef
+          const resultPath = execution.resultRef ? '/payload/output/summary' : '/executions/' + execution.executionId + '/result/payload/output/summary'
+          const page = modelToolValues(request).find(value => value.contentRef === resultRef.contentRef && value.path === resultPath)
+          if (!page) return [call('model_content_read', { contentRef: resultRef.contentRef, path: resultPath })]
+          assert.equal(page.text, execution.key, 'original result is read through the admitted content tool')
         }
       }
       if (input.executions.some(execution => !execution.drained || execution.status !== 'succeeded')) return [decision('wait', '等待原执行结果')]
@@ -305,9 +336,11 @@ test('32 continuations bound owner Host input and execution-read tool results wh
     if (!request.tools.some(tool => tool.name === 'task_delegate')) return [call('execution_submit', { output: { status: 'completed', summary: 'done-' + input.objective, evidence: ['UNKNOWN_EFFECT: observed, never replay'], limitations: ['analysis only'], artifacts: [] } })]
     const host = request.messages.filter(m => m.source?.taskSession && !m.source.taskContextHistory)
     assert.equal(host.length, 1)
-    assert.match(JSON.stringify(input.sources), /ONLY_ANALYZE_AUTHORIZATION_/)
-    for (const e of [...input.executions, ...input.blockers.executions]) {
-      assert.equal(e.input.previousExecutions, undefined); assert.equal(e.input.context, undefined); assert.equal(e.results, undefined); assert.equal(e.inputHistory, undefined)
+    assert.ok(input.sources.some(source => source.readRequired || JSON.stringify(source).includes('ONLY_ANALYZE_AUTHORIZATION_')))
+    const required = requiredDecisionRead(request, input)
+    if (required) return [required]
+    for (const e of input.executions) {
+      assert.equal(e.input?.previousExecutions, undefined); assert.equal(e.input?.context, undefined); assert.equal(e.results, undefined); assert.equal(e.inputHistory, undefined)
     }
     const execution = input.executions[0]
     const values = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content).filter(b => b.type === 'text').flatMap(b => { try { return [JSON.parse(b.text)] } catch { return [] } })
@@ -321,9 +354,11 @@ test('32 continuations bound owner Host input and execution-read tool results wh
     if (execution && !execution.drained) return [decision('wait', 'wait for physical drain')]
     if (execution && !reads.some(e => e.inputVersion === execution.inputVersion)) return [call('task_execution_read', { executionId: execution.executionId })]
     if (execution) {
-      const path = ['/payload/output', '/payload/output/summary', '/payload/output/evidence/0']
-        .find(path => !values.some(value => value.contentRef === execution.resultRef?.contentRef && value.path === path))
-      if (path) return [call('model_content_read', { contentRef: execution.resultRef.contentRef, path })]
+      const ref = execution.resultRef ?? input.catalogRef
+      const prefix = execution.resultRef ? '' : '/executions/' + execution.executionId + '/result'
+      const path = ['/payload/output', '/payload/output/summary', '/payload/output/evidence/0'].map(path => prefix + path)
+        .find(path => !values.some(value => value.contentRef === ref.contentRef && value.path === path))
+      if (path) return [call('model_content_read', { contentRef: ref.contentRef, path })]
     }
     if (execution?.inputVersion === 32) {
       assert.match(JSON.stringify(request.messages), /UNKNOWN_EFFECT/)
@@ -519,9 +554,10 @@ test('native executor resumes in the same titled task workspace and all task ses
         const step = steps.get('owner:' + input.task.leaseEpoch) ?? 0
         steps.set('owner:' + input.task.leaseEpoch, step + 1)
         if (!input.executions.length && step === 0) return [call('task_delegate', { key: '初次核对', objective: 'first' })]
-        if (continuing && input.executions[0]?.input.objective === 'first' && step === 0)
+        const objective = (await host.query('execution.list')).find(e => e.executionId === input.executions[0]?.executionId)?.input.objective
+        if (continuing && objective === 'first' && step === 0)
           return [call('task_delegate', { key: '继续核对', objective: 'second', executionId: input.executions[0].executionId })]
-        if (input.executions[0]?.input.objective === 'second' && input.executions[0].status === 'succeeded') return [decision('complete', '第二次核对已完成')]
+        if (objective === 'second' && input.executions[0].status === 'succeeded') return [decision('complete', '第二次核对已完成')]
         return [decision(input.executions.every(execution => execution.drained) ? 'blocked' : 'wait', '等待下一次明确输入')]
       }
       const liveExecution = (await host.query('execution.list')).find(item => item.input.objective === input.objective)

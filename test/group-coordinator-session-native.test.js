@@ -84,8 +84,8 @@ test('group single-input nested quotes, policy and read-tool copies share resolv
     provider: 'group-fixture', model: 'scripted', decisionSchema, onSessionBound: async () => {}, onCandidate: async () => {},
     readTools: [{ name: 'read_material', effectClass: 'read', description: 'read', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }, execute: async () => input }] })
   const text = JSON.stringify(h.requests.at(-1).messages)
-  assert.equal(text.split(body).length - 1, 1, 'nested source and tool readback do not repeat the source body')
-  assert.equal(text.split(policy).length - 1, 1, 'policy has one authoritative content entry')
+  assert.equal(text.split(body).length - 1, 0, 'nested source and ordinary tool readback keep long bodies in files')
+  assert.equal(text.split(policy).length - 1, 0, 'long policy has a readable file instead of eager contentIndex')
 })
 
 test('ordinary group reads deduplicate while explicit content reads return literal evidence, including after reopen', async t => {
@@ -116,14 +116,14 @@ test('ordinary group reads deduplicate while explicit content reads return liter
     provider: 'group-fixture', model: 'scripted', decisionSchema, readTools, onSessionBound: async () => {}, onCandidate: async () => {} })
   assert.equal((await run(first, binding)).status, 'submitted')
   assert.deepEqual(values, original)
-  for (const [i, text] of bodies.entries()) assert.equal(JSON.stringify(first.requests.at(-1).messages).split(text).length - 1, i === 3 ? 2 : 1)
+  for (const [i, text] of bodies.entries()) assert.equal(JSON.stringify(first.requests.at(-1).messages).split(text).length - 1, i === 3 ? 1 : 0)
   await first.close()
   const second = await host(root, { call: number => number === 1 ? { name: 'model_content_read', args: { contentRef: reference, path: '/text' } } : { name: 'group_coordinator_submit', args: { decision } } }); hosts.push(second)
   second.setLease(2)
   assert.equal((await run(second, { ...binding, leaseEpoch: 2, sessionBound: true, turnId: 'second' })).status, 'submitted')
   const saved = await inspectSession(second.ctx.sessionPersistence, binding.sessionId), folded = foldSurface(saved.events)
   const messages = folded.nodes.map(seq => deriveEventMessage(saved.events[seq], folded.projectedMessages)).filter(Boolean)
-  for (const [i, text] of bodies.entries()) if (i > 0) assert.equal(JSON.stringify(messages).split(text).length - 1, i === 3 ? 3 : 1)
+  for (const [i, text] of bodies.entries()) if (i > 0) assert.equal(JSON.stringify(messages).split(text).length - 1, i === 3 ? 2 : 0)
   for (const request of [first.requests[0], first.requests[4], first.requests.at(-1), second.requests.at(-1)]) metrics.push({
     currentHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinator && !message.source.groupCoordinatorHistory))),
     oldHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinatorHistory))),
@@ -527,7 +527,7 @@ test('每轮完整输入保留，下一轮原生surface只保留历史来源而�
   assert.equal(indexedText(h.ctx.sessions.get('history-group'), root, JSON.parse(historyMessage.content[0].text).sources[0].body), input.sources[0].body)
   assert.ok(current.includes('currentSnapshot'))
   assert.ok(!current.includes('fullHostSnapshot'))
-  assert.ok(current.length < before.length / 2)
+  assert.ok(current.length < before.length + 1500, 'file references bound both snapshots without copying old bodies')
   t.diagnostic(`模型可见输入字符：完整旧快照=${before.length}，下一轮保留原文与当前快照=${current.length}`)
   const saved = await inspectSession(h.ctx.sessionPersistence, 'history-group')
   assert.ok(saved.events.some(e => e.type === 'user/message' && e.surfaceOp === 'append' && JSON.stringify(e.data).includes('fullHostSnapshot')))
