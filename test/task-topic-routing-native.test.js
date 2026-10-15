@@ -7,7 +7,7 @@ import { resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.j
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { available, reason, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
 
-const call = (name, args) => ({ name, args })
+const call = (name, args) => ({ name, args: name === 'group_decision_submit' ? { ...args, decision: { ...args.decision, topicUpdate: { summary: '围绕原始事项持续核对，当前结论以任务真实进展为准。' } } } : args })
 function envelope(request, prefix) {
   for (const message of request.messages.toReversed()) for (const part of message.content ?? []) {
     if (part.type !== 'text' || !part.text.startsWith(prefix)) continue
@@ -227,6 +227,7 @@ testRunner('native proposal prompt preserves original authorization and asks wit
   const topic = h.residentStore.listTopics('native-group')[0]
   assert.equal(topic.decisions[0].decision.actions[0].kind, 'task-proposal')
   assert.equal(topic.decisions[0].status, 'completed')
+  assert.equal(topic.summary, '围绕原始事项持续核对，当前结论以任务真实进展为准。')
   assert.equal(h.sent.length, 1)
   assert.equal(h.sent[0].kind, 'topic-reply')
   assert.ok(h.sent[0].payload.text.includes('这个事项是否需要我处理？'))
