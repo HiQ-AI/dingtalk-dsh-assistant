@@ -2089,3 +2089,17 @@ test('混合消息只为具体事项建话题，闲聊片段保留在忽略范�
   assert.equal(routed.status, 'accepted')
   assert.equal(h.store.getGroup('g').topics.length, 1)
 })
+
+test('new messages cannot reopen archived tasks; normal new-task path remains available', async t => {
+  const h = await setup(t), { task, request: original } = await taskFixture(h)
+  await h.store.updateTask(task.taskId, value => ({ ...value, state: 'completed', archivedAt: '2026-10-15T00:00:00Z' }))
+  await ingest(h, 'archive-followup', { text: '@助理 请继续核验这个事项' })
+  const current = (await route(h, { 'archive-followup': original.topicId })).pendingDecisions[0]
+  const action = { kind: 'task-reopen', taskId: task.taskId, inputVersion: 1, runSequence: 1, topicRefs: [{ topicId: original.topicId, revision: current.revision }], context: '继续核验' }
+  await assertDecisionIssue(h.call('group_decision_submit', submission(current, { actions: [action], reply: '' })), /task_archived/)
+  assert.equal(h.applications.length, 0)
+  const newTask = { kind: 'new-task', title: '后续核验', objective: '重新核验', acceptanceCriteria: ['证据可查'], topicRefs: action.topicRefs }
+  const accepted = await h.call('group_decision_submit', submission(current, { actions: [newTask], reply: '已创建后续核验任务' }))
+  assert.equal(accepted.status, 'accepted'); await h.coordinator.drain(); assert.equal(h.applications.length, 1)
+  assert.equal(h.store.getTask(task.taskId).archivedAt, '2026-10-15T00:00:00Z')
+})

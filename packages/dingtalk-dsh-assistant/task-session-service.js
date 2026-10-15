@@ -89,7 +89,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   // 仅为启动时已停住的技术等待补一次唤醒；同一实现重启不能反复驱动模型。
   const runtimeRevision = hash(await Promise.all(['task-session-service.js', 'task-session.js', 'execution-session.js', 'dynamic-native-job.js', 'dynamic-operation-readback.js']
     .map(file => readFile(new URL(file, import.meta.url), 'utf8'))))
-  const recoveryCandidates = [...taskCache.values()].filter(task => task.status === 'active' && task.control === 'active'
+  const recoveryCandidates = [...taskCache.values()].filter(task => !task.archivedAt && task.status === 'active' && task.control === 'active'
     && task.drained && !task.lastDecision?.question && (task.lastDecision?.action === 'blocked'
       && task.lastDecision.limitations?.includes('TASK_SESSION_NO_SUBMISSION')
       || task.lastDecision?.action === 'wait'
@@ -124,7 +124,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const models = () => { const { provider, model, reasoningEffort } = legacy.getAgentConfig(); return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } }
   const currentTask = async binding => {
     const task = await query('task.get', { taskId: binding.taskId })
-    return !!task && !task.recovering && !task.drained && task.status === 'active' && task.control === 'active' && task.sessionId === binding.sessionId
+    return !!task && !task.archivedAt && !task.recovering && !task.drained && task.status === 'active' && task.control === 'active' && task.sessionId === binding.sessionId
       && task.leaseEpoch === binding.leaseEpoch && task.requirementRevision === binding.requirementRevision && task.controlRevision === binding.controlRevision
   }
   const taskSessions = suppliedTaskSessions ?? createTaskSessions({ ctx, isCurrent: currentTask, withPersistenceWriter: (binding, action) => persistence.runOwned(binding, action),
@@ -152,7 +152,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!closed && map === inflightTasks) {
         const pending = await query('wake.list', { taskId: id }).catch(() => [])
         const task = await query('task.get', { taskId: id }).catch(() => null)
-        again = task?.status === 'active' && task.control === 'active' && task.drained
+        again = !task?.archivedAt && task?.status === 'active' && task.control === 'active' && task.drained
           && retryReady(id)
           && !task.humanRequests?.some(request => request.status === 'waiting-reply')
           && pending.some(item => item.state !== 'acked')
@@ -194,7 +194,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const now = Date.now(), due = [...executionCache.values()].filter(execution => ['queued','failed'].includes(execution.status)
       && (execution.providerRecovery?.nextAttemptAt || execution.providerRecovery?.nextReviewAt) && !execution.cancelRequested)
       .map(execution => Date.parse(execution.providerRecovery.nextAttemptAt ?? execution.providerRecovery.nextReviewAt))
-      .concat([...taskCache.values()].filter(task => task.status === 'active' && task.control === 'active' && task.providerRecovery?.nextAttemptAt)
+      .concat([...taskCache.values()].filter(task => !task.archivedAt && task.status === 'active' && task.control === 'active' && task.providerRecovery?.nextAttemptAt)
         .map(task => Date.parse(task.providerRecovery.nextAttemptAt))).filter(at => at > now)
     if (due.length) {
       providerRetryTimer = setTimeout(() => { void schedulePending() }, Math.min(...due) - now)
@@ -214,7 +214,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           if (!(review || execution.status === 'queued' && execution.providerRecovery?.nextAttemptAt) || !execution.drained || execution.recovering
             || Date.parse(review || execution.providerRecovery.nextAttemptAt) > Date.now()) continue
           const task = await requireTask(execution.taskId)
-          if (task.status !== 'active' || task.control !== 'active' || task.humanRequests?.some(item => item.status === 'waiting-reply')
+          if (task.archivedAt || task.status !== 'active' || task.control !== 'active' || task.humanRequests?.some(item => item.status === 'waiting-reply')
             || execution.requirementRevision !== task.requirementRevision || execution.controlRevision !== task.controlRevision) continue
           if ((await query('wake.list', { taskId: task.taskId })).some(item => item.kind === 'human.responded' && item.state !== 'acked')) continue
           let binding
@@ -237,7 +237,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         // without depending on a periodic recovery tick or manufacturing another wake.
         for (const task of await query('task.list')) {
           if (closed) return
-          if (!retryReady(task.taskId) || inflightTasks.has(task.taskId) || !task.drained || task.recovering || task.status !== 'active' || task.control !== 'active') continue
+          if (task.archivedAt || !retryReady(task.taskId) || inflightTasks.has(task.taskId) || !task.drained || task.recovering || task.status !== 'active' || task.control !== 'active') continue
           if (task.humanRequests?.some(request => request.status === 'waiting-reply')) continue
           if (!taskSlots.has(task.taskId) && taskSlots.size >= taskLimit()) continue
           if ((await query('wake.list', { taskId: task.taskId })).some(item => item.state !== 'acked')) void kickTask(task.taskId)
@@ -418,6 +418,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       .filter(message => (action.basisUnitRefs ?? record.decision.basisUnitRefs).some(ref => ref.unitId === message.unitId && ref.unitRevision === message.unitRevision))
     const basis = sources.filter(source => actionUnits.some(message => message.messageId === source.messageId))
     const existingTask = action.kind === 'new-task' ? null : await requireTask(operation.taskId)
+    if (existingTask?.archivedAt) fail('DYNAMIC_TASK_ARCHIVED_CONFLICT')
     const source = existingTask ? basis.findLast(item => item.actorId === existingTask.ownerActorId || item.actorId === config.ownerActorId)
       : basis.findLast(item => item.channel !== 'web' && item.channel !== 'internal') ?? basis.at(-1)
     if (!source) fail('TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
@@ -568,6 +569,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return track(inflightExecutions, executionId, async () => {
       const candidate = await query('execution.get', { executionId })
       if (!candidate || candidate.status !== 'queued' || candidate.providerRecovery?.nextAttemptAt || !candidate.drained || candidate.cancelRequested || !reserveTask(candidate.taskId)) return
+      if ((await requireTask(candidate.taskId)).archivedAt) return
       const claimed = await command('execution.claim', { executionId })
       const { binding, execution } = claimed.result
       let drained = true
@@ -609,7 +611,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (closed || !retryReady(taskId) || !reserveTask(taskId)) return Promise.resolve()
     return track(inflightTasks, taskId, async () => {
       let task = await requireTask(taskId)
-      if (task.status !== 'active' || task.control !== 'active') { taskSlots.delete(taskId); return }
+      if (task.archivedAt || task.status !== 'active' || task.control !== 'active') { taskSlots.delete(taskId); return }
       if (task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
       if (!task.drained) return
       if (!(await query('wake.list', { taskId })).some(item => item.state !== 'acked')) return
@@ -843,11 +845,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         } catch (error) { failures.set(execution.executionId, { id: execution.executionId, code: error.code ?? error.message }) }
       }
       await refreshTasks()
-      for (const task of taskCache.values()) if (task.status === 'active' && task.control === 'active')
+      for (const task of taskCache.values()) if (!task.archivedAt && task.status === 'active' && task.control === 'active')
         for (const request of task.humanRequests ?? []) if (request.status === 'waiting-reply') await queueHumanRequest(task, request)
       for (const candidate of recoveryCandidates) {
         const task = await query('task.get', { taskId: candidate.taskId })
-        if (task.status !== 'active' || task.control !== 'active' || !task.drained
+        if (task.archivedAt || task.status !== 'active' || task.control !== 'active' || !task.drained
           || task.lastDecision.question || task.requirementRevision !== candidate.requirementRevision || task.controlRevision !== candidate.controlRevision) continue
         const executions = await query('execution.list', { taskId: task.taskId })
         if (executions.some(execution => !execution.drained || execution.recovering || ['queued', 'running'].includes(execution.status))) continue
@@ -886,7 +888,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       }
       for (const execution of await query('execution.list')) {
         const task = await query('task.get', { taskId: execution.taskId })
-        if (!task || task.status !== 'active' || task.control !== 'active' || !executionProgressDue(execution)) continue
+        if (!task || task.archivedAt || task.status !== 'active' || task.control !== 'active' || !executionProgressDue(execution)) continue
         let observation
         try { observation = await readExecutionProgress({ ctx, execution }) }
         catch (error) { observation = { lastSequence: execution.progressReview?.lastSequence ?? -1, lastActivityAt: null,
@@ -1062,6 +1064,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       return { groupId, messageId, recoveryRequested: true }
     },
     isGroup: groupId => !!legacy.getGroup(groupId),
+    async archiveTask({ taskId }) {
+      const task = await requireTask(taskId)
+      if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
+      const result = await command('task.archive', { taskId: task.taskId, actorId: config.webActorId })
+      return taskDTO(result.result.task)
+    },
     async boardTasks() { return Promise.all((await query('task.list')).map(taskDTO)) },
     async reconcileWebTaskTopics(args) {
       if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
