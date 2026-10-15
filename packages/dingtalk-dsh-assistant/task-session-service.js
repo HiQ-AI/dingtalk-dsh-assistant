@@ -1,5 +1,5 @@
 import { deliverTaskNotification } from './notification-delivery.js'
-import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -119,7 +119,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const stopObservation = ctx.on?.('session/event', (session, event) => {
     observationTail = observationTail.then(() => observation.observe(session, event)).catch(error => failures.set('observability', { id: 'observability', code: error.code ?? error.message }))
   })
-  residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()] })
+  residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()],
+    isTaskQuiescent: taskId => [...executionCache.values()].filter(item => item.taskId === taskId).every(item => item.drained && !item.recovering) })
   const models = () => { const { provider, model, reasoningEffort } = legacy.getAgentConfig(); return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } }
   const currentTask = async binding => {
     const task = await query('task.get', { taskId: binding.taskId })
@@ -922,7 +923,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const text = args.context?.trim() || args.objective || args.reason || ''
     const messageId = stableId('web', `${groupId}:${args.requestId}`)
     await refreshTasks()
-    const action = previous?.requestIdentity?.action ?? { kind, topicRefs: args.topicRefs ?? task?.topicRefs ?? [],
+    const inheritedRefs = task ? [...new Map((task.topicRefs ?? []).map(ref => {
+      const original = residentStore.getTopic(groupId, ref.topicId)
+      const current = original?.mergedInto ? residentStore.getTopic(groupId, original.mergedInto) : original
+      if (!current) fail('TASK_TOPIC_SOURCE_MISSING')
+      return [current.topicId, { topicId: current.topicId, revision: current.revision }]
+    })).values()] : []
+    const action = previous?.requestIdentity?.action ?? { kind, topicRefs: args.topicRefs ?? inheritedRefs,
       ...(task ? { taskId: task.taskId, inputVersion: args.expectedRequirementRevision ?? args.inputVersion ?? task.requirementRevision, runSequence: task.runSequence ?? 1,
         ...(kind === 'task-cancel' ? { reason: text } : { context: text }) } : { title: args.title || (args.objective ?? text).slice(0, 80), objective: args.objective ?? text, acceptanceCriteria: args.acceptanceCriteria ?? [text] }) }
     await command('source.record', { sourceId, groupId, messageId, actorId: config.webActorId, text, timestamp: '', channel: 'web',
@@ -956,11 +963,43 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (!request) fail('DYNAMIC_NOT_FOUND')
     if (!prior && (request.status !== 'waiting-reply' || args.expectedRequirementRevision !== task.requirementRevision
       || args.expectedControlRevision !== task.controlRevision)) fail('DYNAMIC_HUMAN_REQUEST_STALE')
-    await command('source.record', { sourceId, groupId: task.groupId, messageId: sourceId,
-      actorId: config.webActorId, text: args.reply, timestamp: '', channel: 'web' }, `source:${sourceId}`)
-    const result = await command('task.human.respond', { taskId: task.taskId, requestId: args.humanRequestId,
-      sourceId, expectedRequirementRevision: args.expectedRequirementRevision, expectedControlRevision: args.expectedControlRevision }, receiptId)
-    await command('source.routed', { sourceId, receipt: [{ taskId: task.taskId, humanRequestId: args.humanRequestId }] }, `human-source-routed:${sourceId}`)
+    if (prior && !args.checkOnly) {
+      const originalSource = await query('source.get', { sourceId })
+      if (originalSource?.text !== args.reply || hash(originalSource.requestIdentity?.nativeFailureResolutions ?? []) !== hash(args.nativeFailureResolutions ?? [])) fail('DYNAMIC_COMMAND_ID_CONFLICT')
+      return taskDTO(prior.result.task)
+    }
+    const resolutions = args.nativeFailureResolutions ?? []
+    if (resolutions.length && request.audience !== 'operator') fail('TASK_OPERATION_OPERATOR_REQUIRED')
+    const proofs = []
+    for (const resolution of resolutions) {
+      const operation = await query('operation.get', { operationId: resolution.operationId })
+      if (operation?.taskId !== task.taskId) fail('TASK_OPERATION_SCOPE_MISMATCH')
+      if (operation.state === 'failed' && operation.result.operatorSourceId === sourceId
+        && hash(operation.result.previousObservation) === resolution.expectedOperationDigest) continue
+      if (hash(operation) !== resolution.expectedOperationDigest) fail('DYNAMIC_OPERATION_SCOPE_STALE')
+      const executions = await query('execution.list', { taskId: task.taskId })
+      const proof = await inspectInvestigatedNativeFailure({ ctx, operation, executions,
+        execution: executions.find(item => item.executionId === operation.executionId) })
+      if (!proof) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
+      proofs.push({ operationId: operation.operationId, proof })
+    }
+    if (args.checkOnly) return { checkOnly: true, writes: 0, taskId: task.taskId,
+      resolutions: proofs.map(({ operationId, proof }) => ({ operationId, operationDigest: proof.operationDigest,
+        resultSequence: proof.resultSequence, turnEndSequence: proof.turnEndSequence,
+        investigationCount: new Set(proof.observations.map(item => item.executionId)).size,
+        outcome: 'failed', partialEffectsPossible: true })) }
+    const source = { sourceId, groupId: task.groupId, messageId: sourceId, actorId: config.webActorId,
+      text: args.reply, timestamp: '', channel: 'web',
+      ...(resolutions.length ? { requestIdentity: { humanRequestId: args.humanRequestId, nativeFailureResolutions: resolutions } } : {}) }
+    const response = { taskId: task.taskId, requestId: args.humanRequestId, sourceId,
+      expectedRequirementRevision: args.expectedRequirementRevision, expectedControlRevision: args.expectedControlRevision }
+    let result
+    if (resolutions.length) result = await command('task.human.resolve-failures', { ...response, source, resolutions: proofs }, receiptId)
+    else {
+      await command('source.record', source, `source:${sourceId}`)
+      result = await command('task.human.respond', response, receiptId)
+      await command('source.routed', { sourceId, receipt: [{ taskId: task.taskId, humanRequestId: args.humanRequestId }] }, `human-source-routed:${sourceId}`)
+    }
     void kickTask(task.taskId)
     return taskDTO(result.result.task)
   }
@@ -1022,6 +1061,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     },
     isGroup: groupId => !!legacy.getGroup(groupId),
     async boardTasks() { return Promise.all((await query('task.list')).map(taskDTO)) },
+    async reconcileWebTaskTopics(args) {
+      if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
+      await refreshTasks()
+      for (const item of await query('execution.list')) executionCache.set(item.executionId, item)
+      return residentStore.reconcileWebTaskTopics(args)
+    },
     async createTask(args) { return taskDTO(await webTopicAction(args, null, 'new-task')) },
     async appendTaskContext(args) { return taskDTO(await webTopicAction(args, await requireTask(args.taskId), 'task-context')) },
     async cancelTask(args) { return taskDTO(await webTopicAction(args, await requireTask(args.taskId), 'task-cancel')) },

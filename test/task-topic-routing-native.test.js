@@ -195,7 +195,7 @@ testRunner('native Web Topic edits reject stale requirement and control revision
   const revised = await h.query('task.get', { taskId: created.taskId })
   assert.equal(revised.requirementRevision, 2)
   const topics = h.residentStore.listTopics('native-group')
-  assert.equal(topics.length, 2, 'Successful Web supplement retains its own original input Topic')
+  assert.equal(topics.length, 1, 'Successful Web supplement retains the original Topic and source identity')
   const topicSnapshot = JSON.stringify(topics)
   await assert.rejects(h.service.appendTaskContext({ taskId: created.taskId, requestId: 'web-stale-append', expectedRequirementRevision: 1, expectedControlRevision: original.controlRevision, context: '这条过期补充必须拒绝' }), { code: 'DYNAMIC_TASK_REVISION_STALE' })
   await assert.rejects(h.service.cancelTask({ taskId: created.taskId, requestId: 'web-stale-cancel', expectedRequirementRevision: revised.requirementRevision,

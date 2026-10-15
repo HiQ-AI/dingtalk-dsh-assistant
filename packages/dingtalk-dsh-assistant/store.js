@@ -4,7 +4,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
 
@@ -733,13 +733,46 @@ export async function openResidentStore(storageDomain) {
       })
       return result
     }),
+    reconcileWebTaskTopics: ({ groupId, requestId, expectedDigest, checkOnly = false }) => serialize(groupId, async () => {
+      if (!taskSessionReader) throw new Error('task_session_required')
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      const inspect = group => { const plan = webTaskTopicReusePlan(group, currentTasks().map(task => ({ ...task,
+        drained: task.drained && (taskSessionReader.isTaskQuiescent?.(task.taskId) ?? true) }))); return { ...plan, expectedDigest: fingerprint(plan) } }
+      if (checkOnly) return { checkOnly: true, writes: 0, ...inspect(entry[1]) }
+      if (!requestId?.trim() || !expectedDigest) throw new Error('task_topic_reconcile_identity_required')
+      let result
+      await groups.update(entry[0], latest => {
+        const previous = latest.topics.filter(topic => topic.mergeReceipt?.requestId === requestId)
+        if (previous.length) {
+          if (previous.some(topic => topic.mergeReceipt.digest !== expectedDigest)) throw new Error('task_topic_reconcile_identity_conflict')
+          result = { replayed: true, expectedDigest, mergedTopicIds: previous.map(topic => topic.topicId) }; return latest
+        }
+        const plan = inspect(latest)
+        if (!plan.transfers.length) throw new Error('task_topic_reconcile_empty')
+        if (plan.expectedDigest !== expectedDigest) throw new Error('task_topic_reconcile_stale')
+        const topics = structuredClone(latest.topics), now = new Date().toISOString()
+        for (const transfer of plan.transfers) {
+          const source = topics.find(topic => topic.topicId === transfer.sourceTopicId), target = topics.find(topic => topic.topicId === transfer.targetTopicId)
+          target.revision++; target.processedRevision = target.revision; target.updatedAt = now
+          target.entries.push({ ...transfer.entry, revision: target.revision, reason: `web-task-reuse-reconciled:${source.topicId}` })
+          source.revision++; source.processedRevision = source.revision
+          source.entries.push({ ...transfer.entry, revision: source.revision, action: 'remove', reason: `web-task-reuse-reconciled:${target.topicId}` })
+          source.status = 'closed'; source.mergedInto = target.topicId; source.updatedAt = now
+          source.mergeReceipt = { requestId, digest: expectedDigest, targetRevision: target.revision, at: now }
+        }
+        result = { replayed: false, expectedDigest, mergedTopicIds: plan.transfers.map(item => item.sourceTopicId), transfers: plan.transfers }
+        return { ...latest, topics }
+      })
+      return result
+    }),
     submitWebTaskInput: ({ groupId, requestId, text, action, topicRefs = [] }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (typeof requestId !== 'string' || !requestId.trim() || typeof text !== 'string' || !text.trim()) throw new Error('web_task_input_invalid')
       const identity = `${groupId}:${requestId}`
       const messageId = stableId('web', identity), decisionId = stableId('decision', identity)
-      const reuseTopics = !!taskSessionReader && action.kind === 'new-task' && topicRefs.length > 0
+      const reuseTopics = !!taskSessionReader && topicRefs.length > 0
       const topicId = reuseTopics ? topicRefs[0].topicId : stableId('topic', `web:${identity}`)
       const digest = fingerprint({ text, action, topicRefs })
       let result
@@ -751,12 +784,15 @@ export async function openResidentStore(storageDomain) {
         }
         if (latest.messages.some((message) => message.routingStatus !== 'routed')) { result = { status: 'routing-required' }; return latest }
         if (new Set(topicRefs.map((ref) => ref.topicId)).size !== topicRefs.length) throw new Error('task_topic_duplicate')
+        const task = action.taskId ? currentTask(action.taskId) : undefined
         for (const ref of topicRefs) {
           const topic = latest.topics.find((item) => item.topicId === ref.topicId)
-          if (!topic || topic.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
-          if (reuseTopics && topic.decisions.some(isPendingDecision)) { result = { status: 'topic-busy', topicId: ref.topicId }; return latest }
+          if (!topic || topic.mergedInto || topic.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
+          if (reuseTopics && topic.decisions.some(isPendingDecision) && !(action.kind === 'task-cancel' && task
+            && blockedReservationsOnly(latest, task.taskId) && topic.decisions.filter(isPendingDecision).every(record => record.status === 'blocked'
+              && record.operations.length === 1 && record.operations[0].taskId === task.taskId
+              && latest.taskReservations.filter(item => item.decisionId === record.decisionId).every(item => item.taskId === task.taskId)))) { result = { status: 'topic-busy', topicId: ref.topicId }; return latest }
         }
-        const task = action.taskId ? currentTask(action.taskId) : undefined
         if (action.kind === 'new-task') taskSessionReader ? validateTaskMetadata(action) : assertNewTaskMetadata(action)
         if (action.kind !== 'new-task') {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }

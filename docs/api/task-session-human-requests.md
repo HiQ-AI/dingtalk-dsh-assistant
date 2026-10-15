@@ -30,3 +30,18 @@
 ## 状态语义
 
 `task_request_human` 登记待答问题并结束统筹回合。任务归等待中，执行结果可以落账但不驱动统筹绕过人工等待。收到合法答复后保留原文来源并沿同一任务/会话继续，未知外部效果仍须原生证据对账。普通修订、取消、完成使旧申请失效。等待受控小目标本身不创建人工申请，仍归执行中。
+
+
+## 操作人结算已结束原生失败
+
+`POST /tasks/:taskId/human-requests/:requestId/reply/check` 使用与reply相同的严格正文，新增可选 `nativeFailureResolutions: [{operationId, expectedOperationDigest}]`，最多8项且身份不可重复。受信本机Web及已配置webActorId必需。Check只读、无恢复或API重放，返回原响应/正常turn结束序号、绑定调查数和failed/partialEffectsPossible预检快照；不能承诺提交时状态不变。
+
+正式reply只对当前operator申请接受该字段。Host核验原isError、精确参数/结果/会话摘要、正常回合结束、无活跃job及已结束绑定只读调查；单个持久事务记录来源、全部指定失败、申请答复和来源路由，任一项漂移整批回滚。结果保留previousObservation、proof、operatorSourceId和partialEffectsPossible；不声明noEffect、成功或新业务授权。模型的task_operation_reconcile不调用这条人工路径。
+
+## Web话题续办与历史归并
+
+Web新建/补充/重开/取消在提供有效topicRefs时复用首个话题，新增Web原文及独立decision/operation身份；其他refs保留为来源背景，不能据此把一个任务补充复制成多个业务动作。隐式继承的refs沿原任务绑定解析到当前版本并将已归并话题映射去重，显式传入版本仍严格校验。活跃决策不允许覆盖；取消仅沿原有blockedReservationsOnly规则处理已经阻塞的保留项。
+
+本机 `POST /runtime/task-topics/reconcile/check` 正文 `{groupId}`，零写返回可归并旧Web续办的精确关系和expectedDigest。正式 `/runtime/task-topics/reconcile` 正文 `{groupId,requestId,expectedDigest}`，原子迁移当前话题归属并关闭来源重复话题。仅识别旧web-task-input单来源单已完成续办、原task明确applied及唯一原群话题，拒绝活跃任务/执行、未处理消息/决策、保留项和摘要漂移；空计划拒绝apply。
+
+原消息/决策/operation/task身份与旧话题版本保留；新版本为来源remove、目标add并直接processed，不重新路由或执行旧意图。来源记录mergedInto及mergeReceipt；任务旧refs仍是有效历史快照。默认GET /state/topics及群进度排除已归并话题，`includeMerged=true`可读归并档案，按ID读取旧版本仍可审计。

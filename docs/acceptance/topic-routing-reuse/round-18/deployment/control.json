@@ -1,0 +1,13 @@
+{
+  "observerManifestSha256": "9ec51b6e9d591d4c435be7bb4cbb650aa96693edab119739ac7e2f1cfba85e60",
+  "pid": 7792,
+  "package": {
+    "verifiedFiles": 53,
+    "sha256": "90a21792f7d2c03824bb1214015a160f4aa18ea9d7008515d3c285a787618fc2"
+  },
+  "packageSha256": "90a21792f7d2c03824bb1214015a160f4aa18ea9d7008515d3c285a787618fc2",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "creationDate": "2026-10-15T12:47:08.36767+08:00",
+  "backupCreated": false,
+  "taskEnabled": true
+}

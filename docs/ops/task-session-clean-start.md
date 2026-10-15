@@ -92,3 +92,13 @@ job_list/job_output 只读取原生注册表。会话释放后job已移除是实
 本修复仅修改 Assistant，无 schema 迁移。按本页静止实例原生退出切换流程打包、零写Check、排空退出、双包安装与独立回读。即使Observer未改也需显式提供当前已核验的包及摘要。安装后先检查精确包摘要、新进程与健康；旧 edit/write unknown 由 task_operation_reconcile 读取原生工具日志中的结构化错误码及同轮结束记录，不凭文件内容判成功。对账只记原调用 failed/noEffect 并保留审计，由原执行会话读取当前文件后按原授权补缺，不在部署脚本重放编辑或重复业务UAT部署。
 
 Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR，插件针对已识别暂时故障另有3次持久恢复。原始结果、实际恢复次数、成功效果及未知效果分别核对。HTTP200不是业务成功，也不能单独证明可重试。
+
+## 操作人确认原生失败终态
+
+仅对当前operator技术申请，受信本机Web回复可携带 `nativeFailureResolutions: [{ operationId, expectedOperationDigest }]`。先向原reply路径加 `/check` 提交同一正文，返回 `writes:0`、精确原响应和正常turn结束序号及调查数；Check不能恢复会话或发API。核对原操作未知态、原isError、摘要、原会话排空及绑定只读调查后，正式reply才在同一事务内记录受信webActorId来源、结算全部指定操作为failed/partialEffectsPossible并回答申请。任何一项漂移或申请/任务版本变化整批回滚；不能由模型工具调用这条操作人路径，不记noEffect、成功或自动重放。独立读回原账previousObservation、operatorSourceId、proof和同会话新输入，不把技术结算当业务提交/部署批准。
+
+## 旧Web补充重复话题收口
+
+先部署精确包并核验入口和原任务/子执行均已排空。调用本机 `/runtime/task-topics/reconcile/check` 只读取得每项来源、目标、原任务、原decision/operation及摘要；只接受旧Web续办已applied且唯一原事项关系，不能按同标题猜测。确认这次四个重复话题只属于现场两任务后，使用同摘要和固定requestId调用正式reconcile。正式命令单次group事务写来源remove新版本、目标add新版本、closed/mergedInto及收据，不触发业务动作。
+
+独立回读默认话题数、includeMerged档案、群消息唯一归属、原task refs与operation状态不变；旧话题revision1仍须可读。状态漂移或任务/执行活跃时停止apply，待原执行自然停稳再重新Check，不停止业务执行来强行合并。旧二进制不了解mergedInto，不应直接回退并重写该domain；保留兼容该字段的受控包。

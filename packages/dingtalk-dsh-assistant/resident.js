@@ -129,6 +129,7 @@ export async function apply(ctx, config = {}) {
   runtime.cancelTask = tasks.cancelTask
   runtime.listAuthorizationRequests = tasks.listAuthorizationRequests
   runtime.respondTaskHumanRequest = tasks.respondHumanRequest
+  runtime.reconcileWebTaskTopics = tasks.reconcileWebTaskTopics
   runtime.respondTaskPrivateHumanReply = tasks.respondPrivateHumanReply
   runtime.retryDecisionFailedMessage = tasks.retryMessage
   runtime.isTaskSessionMode = () => true

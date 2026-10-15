@@ -1,0 +1,30 @@
+{
+  "ledger": {
+    "quiescent": true,
+    "candidateOnly": true,
+    "ownerReleased": false,
+    "ownerProcessExited": false,
+    "staleOwner": false,
+    "drained": true,
+    "unstartedTaskClaims": [],
+    "verifiedSessions": 15,
+    "unknownOperations": 0,
+    "unknownNotifications": 2
+  },
+  "writes": 0,
+  "packageSha256": "90a21792f7d2c03824bb1214015a160f4aa18ea9d7008515d3c285a787618fc2",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "signals": 0,
+  "checkOnly": true,
+  "pid": 7792,
+  "console": {
+    "targetPid": 7792,
+    "checkOnly": true,
+    "signals": 0,
+    "consolePids": [
+      43944,
+      7792,
+      49336
+    ]
+  }
+}

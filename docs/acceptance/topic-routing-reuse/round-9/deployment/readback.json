@@ -1,0 +1,74 @@
+{
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "creationDate": "2026-10-15T12:47:08.36767+08:00",
+  "backupCreated": false,
+  "packageSha256": "8d9a24dd319a724cd9f3c1f19fdea6b4b7a4e4f2dd53fc27aad735dbd256fff3",
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 5,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T04:48:57.01Z",
+            "readyAt": "2026-10-15T04:48:57.44Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T04:48:57.441Z",
+            "succeededAt": "2026-10-15T04:48:58.152Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T04:48:57.03Z",
+            "readyAt": "2026-10-15T04:48:57.462Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T04:48:57.463Z",
+            "succeededAt": "2026-10-15T04:48:58.046Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T04:48:57.052Z",
+        "readyAt": "2026-10-15T04:48:57.486Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "installedVersion": "1.0.0",
+  "taskEnabled": true,
+  "newPid": 7792
+}

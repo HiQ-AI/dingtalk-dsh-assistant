@@ -566,3 +566,86 @@ test('重判原子门禁拒绝任何相关 Outbox、业务动作和未知进度'
     } finally { await store.close() }
   }
 })
+
+
+async function legacyWebContinuationFixture() {
+ const {store,snapshot}=await setup();await ingest(store,'original',{sourceKind:'dingtalk'})
+ const target=(await route(store,'original-route',[['original',{newTopicKey:'matter',title:'同一业务事项'}]])).topicIdsByKey.matter
+ await store.acceptTopicDecision(decision('original-decision',target,1));await store.completeTopicDecision({groupId:'g',topicId:target,decisionId:'original-decision'})
+ const {task}=await store.createTask({groupId:'g',topicRefs:[{topicId:target,revision:1}],title:'同一业务事项',objective:'验证同一目标',acceptanceCriteria:['完成']})
+ // Native mode used this legacy creation branch for every context input before the fix.
+ const input={groupId:'g',requestId:'old-web-context',text:'继续原任务，仅补充验收',topicRefs:task.topicRefs,
+  action:{kind:'task-context',taskId:task.taskId,inputVersion:1,runSequence:1,context:'继续原任务，仅补充验收'}}
+ const accepted=await store.submitWebTaskInput(input)
+ await store.updateTopicDecision({groupId:'g',topicId:accepted.topicId,decisionId:accepted.record.decisionId,
+  patch:{operations:accepted.record.operations.map(item=>({...item,status:'applied'}))}})
+ await store.completeTopicDecision({groupId:'g',topicId:accepted.topicId,decisionId:accepted.record.decisionId})
+ const current={...task,state:'completed',drained:true,topicRefs:accepted.record.decision.actions[0].topicRefs,
+  appliedOperations:accepted.record.operations.map(item=>item.operationId)}
+ store.setTaskSessionReader({getTask:id=>id===task.taskId?current:undefined,listTasks:()=>[current]})
+ return {store,snapshot,target,source:accepted.topicId,current}
+}
+
+test('历史Web续办只归并明确原任务关系，保留原来源/决策/操作和历史版本，不重做意图',async()=>{
+ const {store,snapshot,target,source,current}=await legacyWebContinuationFixture()
+ const before=structuredClone(store.getGroup('g')),taskBefore=structuredClone(current)
+ const check=await store.reconcileWebTaskTopics({groupId:'g',checkOnly:true})
+ assert.equal(check.writes,0);assert.equal(check.transfers.length,1);assert.deepEqual(store.getGroup('g'),before)
+ await assert.rejects(store.reconcileWebTaskTopics({groupId:'g',requestId:'merge-old-web',expectedDigest:'wrong'}),/reconcile_stale/)
+ const result=await store.reconcileWebTaskTopics({groupId:'g',requestId:'merge-old-web',expectedDigest:check.expectedDigest})
+ assert.deepEqual(result.mergedTopicIds,[source]);assert.equal(store.getTopic('g',source).status,'closed');assert.equal(store.getTopic('g',source).mergedInto,target)
+ assert.deepEqual(store.getTopic('g',source).decisions,before.topics.find(topic=>topic.topicId===source).decisions)
+ assert.deepEqual(current,taskBefore,'任务与原操作不重放、不改版')
+ assert.equal((await store.getTopicContext({groupId:'g',topicId:source,revision:1})).messages.length,1,'旧归属仍可审计')
+ assert.equal((await store.getTopicContext({groupId:'g',topicId:source,revision:2})).messages.length,0,'当前归属只保留一个效果所有者')
+ assert.equal(store.getTopic('g',target).revision,2);assert.equal(store.getTopic('g',target).processedRevision,2)
+ assert.equal((await store.getTopicContext({groupId:'g',topicId:target,revision:1})).messages.length,1)
+ assert.equal((await store.getTopicContext({groupId:'g',topicId:target,revision:2})).messages.length,2)
+ assert.equal((await store.reconcileWebTaskTopics({groupId:'g',requestId:'merge-old-web',expectedDigest:check.expectedDigest})).replayed,true)
+ await assert.rejects(store.reconcileWebTaskTopics({groupId:'g',requestId:'merge-old-web',expectedDigest:'different'}),/identity_conflict/)
+ await store.close()
+ const reopened=await openResidentStore(facility(snapshot));assert.equal(reopened.getTopic('g',source).mergedInto,target);await reopened.close()
+})
+
+test('历史归并拒绝活跃任务与未完成决策，不以相同标题合并独立群事项',async()=>{
+ const {store,current,target}=await legacyWebContinuationFixture()
+ current.drained=false;await assert.rejects(store.reconcileWebTaskTopics({groupId:'g',checkOnly:true}),/reconcile_busy/);current.drained=true
+ await ingest(store,'independent',{sourceKind:'dingtalk'})
+ await assert.rejects(store.reconcileWebTaskTopics({groupId:'g',checkOnly:true}),/reconcile_busy/)
+ const other=(await route(store,'independent-route',[['independent',{newTopicKey:'same-title',title:'同一业务事项'}]])).topicIdsByKey['same-title']
+ const check=await store.reconcileWebTaskTopics({groupId:'g',checkOnly:true})
+ assert.equal(check.transfers.length,1);assert.equal(check.transfers[0].targetTopicId,target);assert.notEqual(check.transfers[0].targetTopicId,other)
+ await store.close()
+})
+
+
+test('Web取消复用原话题，保留仅阻塞保留项可取消的语义且不越过活跃决策',async()=>{
+ const {store,current,target}=await legacyWebContinuationFixture();current.state='waiting'
+ const pending=await store.submitWebTaskInput({groupId:'g',requestId:'pending-context',text:'补充原目标',topicRefs:[{topicId:target,revision:1}],
+  action:{kind:'task-context',taskId:current.taskId,inputVersion:1,runSequence:1,context:'补充原目标'}})
+ const cancel={groupId:'g',requestId:'cancel-blocked',text:'停止本任务',topicRefs:[{topicId:target,revision:2}],
+  action:{kind:'task-cancel',taskId:current.taskId,inputVersion:1,runSequence:1,reason:'停止本任务'}}
+ assert.equal((await store.submitWebTaskInput(cancel)).status,'topic-busy')
+ await store.updateTopicDecision({groupId:'g',topicId:target,decisionId:pending.record.decisionId,
+  patch:{status:'blocked',operations:pending.record.operations.map(item=>({...item,status:'blocked'}))}})
+ const accepted=await store.submitWebTaskInput(cancel)
+ assert.equal(accepted.status,'accepted');assert.equal(accepted.topicId,target);assert.equal(store.listTopics('g').length,2)
+ assert.equal(store.getTopic('g',target).revision,3)
+ assert.equal(store.getTopic('g',target).decisions.find(item=>item.decisionId===pending.record.decisionId).status,'blocked')
+ await store.close()
+})
+
+
+test('Web取消不能借同一blocked决策中的本任务保留项越过其他任务',async()=>{
+ const {store,current,target}=await legacyWebContinuationFixture();current.state='waiting'
+ const other={...current,taskId:'other-task',appliedOperations:[]}
+ store.setTaskSessionReader({getTask:id=>id===current.taskId?current:id===other.taskId?other:undefined,listTasks:()=>[current,other]})
+ const accepted=await store.acceptTopicDecision({groupId:'g',topicId:target,revision:1,decisionId:'shared-blocked',expectedTaskVersions:[current,other].map(task=>({taskId:task.taskId,inputVersion:1,runSequence:1})),decision:{basisMessageIds:['original'],
+  actions:[current,other].map(task=>({kind:'task-context',taskId:task.taskId,inputVersion:1,runSequence:1,context:'共享决策',topicRefs:[{topicId:target,revision:1}]}))}})
+ assert.equal(accepted.status,'accepted')
+ await store.updateTopicDecision({groupId:'g',topicId:target,decisionId:'shared-blocked',patch:{status:'blocked',operations:accepted.record.operations.map(item=>({...item,status:'blocked'}))}})
+ const result=await store.submitWebTaskInput({groupId:'g',requestId:'cancel-one-of-shared',text:'只取消本任务',topicRefs:[{topicId:target,revision:1}],
+  action:{kind:'task-cancel',taskId:current.taskId,inputVersion:1,runSequence:1,reason:'只取消本任务'}})
+ assert.equal(result.status,'topic-busy');assert.equal(store.getGroup('g').taskReservations.length,2)
+ await store.close()
+})

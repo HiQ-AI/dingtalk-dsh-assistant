@@ -20,12 +20,42 @@ export const topicDecisionSchema = z.object({
 })
 export const topicSchema = z.object({
   topicId: z.string().min(1), groupId: z.string().min(1), title: z.string().min(1), revision: z.number().int().nonnegative(), processedRevision: z.number().int().nonnegative(),
+  mergedInto: z.string().min(1).optional(), mergeReceipt: z.object({ requestId: z.string().min(1), digest: z.string(), targetRevision: z.number().int().positive(), at: z.string() }).optional(),
   status: z.enum(['active', 'waiting', 'closed']), summary: z.string(), summaryRevision: z.number().int().nonnegative(), openQuestions: z.array(z.string()),
   entries: z.array(topicEntrySchema), decisions: z.array(topicDecisionSchema), createdAt: z.string(), updatedAt: z.string(), migrationBaseline: z.boolean().optional(),
 })
 export const stableId = (prefix, value) => `${prefix}-${createHash('sha256').update(value).digest('hex').slice(0, 32)}`
 export const fingerprint = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const isPendingDecision = record => !['completed', 'rejected'].includes(record.status)
+
+// Only the former deterministic Web continuation path is eligible. Never merge by title.
+export function webTaskTopicReusePlan(group, tasks) {
+  if (group.messages.some(message => message.routingStatus !== 'routed')) throw new Error('task_topic_reconcile_busy')
+  const synthetic = topic => topic.entries.length === 1 && topic.entries[0].reason === 'web-task-input'
+    && topic.decisions.length === 1 && ['task-context', 'task-reopen', 'task-cancel'].includes(topic.decisions[0].decision.actions?.[0]?.kind)
+  const transfers = []
+  for (const source of group.topics.filter(topic => !topic.mergedInto && synthetic(topic))) {
+    const record = source.decisions[0], action = record.decision.actions[0], task = tasks.find(task => task.taskId === action.taskId)
+    if (record.decision.actions.length !== 1 || record.status !== 'completed' || record.operations.length !== 1
+      || record.operations[0].status !== 'applied' || record.operations[0].taskId !== task?.taskId
+      || !task?.appliedOperations?.includes(record.operations[0].operationId) || task.groupId !== group.groupId) continue
+    const message = group.messages.find(message => message.messageId === source.entries[0].messageId)
+    if (message?.sourceKind !== 'web' || message.routingStatus !== 'routed') continue
+    const targets = group.topics.filter(topic => topic.topicId !== source.topicId && !topic.mergedInto && !synthetic(topic)
+      && action.topicRefs?.some(ref => ref.topicId === topic.topicId)
+      && task.topicRefs?.some(ref => ref.topicId === topic.topicId)
+      && topic.entries.some(entry => group.messages.some(message => message.messageId === entry.messageId && message.sourceKind === 'dingtalk')))
+    if (targets.length !== 1) continue
+    const target = targets[0]
+    if (!task.drained || task.recovering || source.processedRevision !== source.revision || target.processedRevision !== target.revision
+      || source.decisions.some(isPendingDecision) || target.decisions.some(isPendingDecision)
+      || group.taskReservations.some(item => item.taskId === task.taskId)) throw new Error('task_topic_reconcile_busy')
+    transfers.push({ sourceTopicId: source.topicId, targetTopicId: target.topicId, taskId: task.taskId,
+      taskInputVersion: task.inputVersion, sourceRevision: source.revision, targetRevision: target.revision,
+      entry: source.entries[0], decisionId: record.decisionId, operationId: record.operations[0].operationId })
+  }
+  return { groupId: group.groupId, routingRevision: group.routingRevision, transfers }
+}
 
 export function topicMessages(group, topic, revision) {
   if (!Number.isInteger(revision) || revision < 1 || revision > topic.revision) throw new Error('topic_revision_invalid')
@@ -132,7 +162,7 @@ export function resolveRouteBatch(latest, { groupId, routeId, routes }) {
       const selected = new Set()
       for (const ref of unit.topics) {
         if (!!ref.topicId === !!ref.newTopicKey) throw new Error('topic_route_target_invalid')
-        if (ref.topicId && !latest.topics.some((topic) => topic.topicId === ref.topicId)) throw new Error(`topic_not_found:${ref.topicId}`)
+        if (ref.topicId && !latest.topics.some((topic) => topic.topicId === ref.topicId && !topic.mergedInto)) throw new Error(`topic_not_found:${ref.topicId}`)
         if (ref.newTopicKey) {
           if (!ref.title?.trim()) throw new Error('topic_title_required')
           if (newTopics.has(ref.newTopicKey) && newTopics.get(ref.newTopicKey).title !== ref.title.trim()) throw new Error('topic_title_conflict')

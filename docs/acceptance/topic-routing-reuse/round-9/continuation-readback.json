@@ -1,0 +1,75 @@
+{
+  "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+  "status": "active",
+  "drained": true,
+  "requirementRevision": 4,
+  "controlRevision": 2,
+  "waiting": "原会话仍在完成部署准备核对，等待完整结果；本地仓库读取及UAT数据库直连均正常，历史失败查询已结算，不再使用Bytebase。",
+  "executions": [
+    {
+      "executionId": "29a0219b-3d30-471b-a0d0-05a9121b9565",
+      "sessionId": "task-execution-9eda8c31-8472-46d8-bdd3-621256c030c1",
+      "inputVersion": 2,
+      "status": "succeeded",
+      "drained": true,
+      "recovering": false
+    },
+    {
+      "executionId": "40b052e6-963e-415b-aedc-8d25415399c0",
+      "sessionId": "task-execution-3e5ef98c-486a-461c-b742-635dc3afba8e",
+      "inputVersion": 1,
+      "status": "succeeded",
+      "drained": true,
+      "recovering": false
+    },
+    {
+      "executionId": "642cfe66-5379-4496-b71d-3db34dabfb26",
+      "sessionId": "task-execution-eebb29cd-b74e-4a0d-bc61-6b9f5d7bc802",
+      "inputVersion": 1,
+      "status": "succeeded",
+      "drained": true,
+      "recovering": false
+    },
+    {
+      "executionId": "bdb7b510-4a09-4cd3-9a06-8ac8dda42608",
+      "sessionId": "task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6",
+      "inputVersion": 8,
+      "status": "running",
+      "drained": false,
+      "recovering": false
+    },
+    {
+      "executionId": "9a953741-1721-40cc-bb0c-9fe3bd72eab5",
+      "sessionId": "task-execution-e174811e-eca8-4032-af9c-703c6229761f",
+      "inputVersion": 1,
+      "status": "succeeded",
+      "drained": true,
+      "recovering": false
+    },
+    {
+      "executionId": "421914f5-e953-435e-bf16-a89afe066456",
+      "sessionId": "task-execution-cf4f620f-511d-4fe9-ad83-64cd0b4931e7",
+      "inputVersion": 1,
+      "status": "succeeded",
+      "drained": true,
+      "recovering": false
+    },
+    {
+      "executionId": "675c9b93-c0b3-43d7-b897-727c35e9d1f2",
+      "sessionId": "task-execution-79db7940-86c8-49a2-982c-0247dc693f77",
+      "inputVersion": 1,
+      "status": "succeeded",
+      "drained": true,
+      "recovering": false
+    },
+    {
+      "executionId": "c19c2a4d-7dd7-4786-8e8f-231af061490b",
+      "sessionId": "task-execution-5e145710-a855-4ee5-bcc9-93f3a04c6b94",
+      "inputVersion": 1,
+      "status": "succeeded",
+      "drained": true,
+      "recovering": false
+    }
+  ],
+  "unknownOperations": []
+}

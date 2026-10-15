@@ -753,3 +753,46 @@ for(const toolName of ['edit','write']) test('文件前置拒绝旧账精确对�
  const continued=(await f.command('execution.continue',{binding:owner.binding,executionId:binding.executionId,key:'continue',prompt:'Read and correct',input:{objective:'original'},definition:{}})).result.execution
  assert.equal(continued.executionId,binding.executionId);assert.equal((await f.query({kind:'operation.list'})).length,1)
 })
+
+test('investigated terminal error retains unknown audit and partial effects without replay', async t => {
+  const f=await fixture(t,{webActorId:'web-user'});await f.command('task.create',{taskId:'task',groupId:'g',request:'original'})
+  const owner=(await f.command('task.claim',{taskId:'task'})).result,binding=await f.execution(owner.binding),operationId='native-error'
+  const hash = value => createHash('sha256').update(JSON.stringify(value, (_key,item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])) : item)).digest('hex')
+  await f.command('operation.prepare',{binding,operationId,key:'original',definition:{toolName:'mcp__bytebase__get_schema',argumentsDigest:'args'},resourceKeys:['host-native-operation']})
+  await f.command('operation.start',{binding,operationId})
+  await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName:'mcp__bytebase__get_schema',resultDigest:'original-result',isError:true}})
+  await f.command('execution.result',{binding,output:{status:'blocked'}});await f.command('execution.drained',{binding})
+  await f.command('execution.continue',{binding:owner.binding,executionId:binding.executionId,key:'readback',prompt:'Read evidence',input:{readbackOperationId:operationId},definition:{recoveryReadOnly:true}})
+  const readBinding=(await f.command('execution.claim',{executionId:binding.executionId})).result.binding
+  await f.command('execution.result',{binding:readBinding,output:{status:'completed'}});await f.command('execution.drained',{binding:readBinding})
+  const original=await f.query({kind:'operation.get',operationId})
+  const proof={kind:'native-investigated-failure',toolName:'mcp__bytebase__get_schema',resultSequence:3,turnEndSequence:5,operationId,operationDigest:hash(original),taskId:binding.taskId,executionId:binding.executionId,sessionId:binding.sessionId,
+    callId:'call',resultDigest:'original-result',argumentsDigest:'args',partialEffectsPossible:true,
+    observations:[{executionId:binding.executionId,sessionId:binding.sessionId,inputVersion:2}]}
+  await f.command('task.wait',{binding:owner.binding,summary:'原生错误待操作人结算',question:'结算此操作',humanRequest:{requestId:'resolution-request',audience:'operator'}})
+  await f.command('task.drained',{binding:owner.binding})
+  const sourceCount=(await f.query({kind:'source.list'})).length,wakeCount=(await f.query({kind:'wake.list'})).length
+  const atomicSource={sourceId:'atomic-source',groupId:'g',messageId:'atomic-reply',actorId:'web-user',channel:'web',text:'仅结算指定失败',
+    requestIdentity:{humanRequestId:'resolution-request',nativeFailureResolutions:[{operationId,expectedOperationDigest:proof.operationDigest}]}}
+  const atomic={taskId:binding.taskId,requestId:'resolution-request',source:atomicSource,expectedRequirementRevision:1,expectedControlRevision:1,
+    resolutions:[{operationId,proof},{operationId:'missing-second',proof}]}
+  await assert.rejects(f.command('task.human.resolve-failures',atomic),{code:'DYNAMIC_NOT_FOUND'})
+  assert.deepEqual(await f.query({kind:'operation.get',operationId}),original,'second failure rolls back first release')
+  assert.equal((await f.query({kind:'source.list'})).length,sourceCount,'source is rolled back too')
+  assert.equal((await f.query({kind:'wake.list'})).length,wakeCount,'no partial wake')
+  assert.equal((await f.query({kind:'task.get',taskId:binding.taskId})).humanRequests[0].status,'waiting-reply')
+  await f.command('source.record',{sourceId:'operator-source',groupId:'g',messageId:'operator-reply',actorId:'web-user',channel:'web',text:'仅结算原失败，部分效果保留',
+    requestIdentity:{humanRequestId:'resolution-request',nativeFailureResolutions:[{operationId,expectedOperationDigest:proof.operationDigest}]}})
+  const resolution={taskId:binding.taskId,operatorSourceId:'operator-source',operatorActorId:'web-user',humanRequestId:'resolution-request',expectedRequirementRevision:1,expectedControlRevision:1}
+  await assert.rejects(f.command('operation.resolve-investigated-failure',{...resolution,expectedControlRevision:99,operationId,proof}),{code:'DYNAMIC_OPERATION_OPERATOR_RESOLUTION_REQUIRED'})
+  await assert.rejects(f.command('operation.resolve-investigated-failure',{...resolution,operationId,proof:{...proof,observations:[]}}),{code:'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT'})
+  for(const patch of [{resultDigest:'wrong'},{toolName:'pwsh'},{turnEndSequence:3},{partialEffectsPossible:false}])
+    await assert.rejects(f.command('operation.resolve-investigated-failure',{...resolution,operationId,proof:{...proof,...patch}}),{code:'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT'})
+  const value=(await f.command('operation.resolve-investigated-failure',{...resolution,operationId,proof})).result.operation
+  assert.equal(value.state,'failed');assert.equal(value.result.partialEffectsPossible,true)
+  assert.deepEqual(value.result.previousObservation,original)
+  assert.equal(value.result.noEffect,undefined)
+  assert.equal(value.result.previousObservation.result.isError,true)
+  assert.equal((await f.query({kind:'execution.list'})).length,1)
+  assert.equal((await f.query({kind:'resource.list'})).length,0)
+})

@@ -264,3 +264,7 @@ node --test test/dynamic-task-store.test.js test/dynamic-execution-session-nativ
 任务会话记录的查看不拥有任务写入权。已注册的任务/执行会话只由Host原生create/resume取得写句柄；普通会话页面仍可读取历史，但其后台激活不能抢占这些会话。未排空任务的空重试不清除原故障告警。此约束针对会话生命周期归属，不限制会话已配置的原生业务工具。
 
 原生网页读取和搜索沿固定工具对象身份识别为只读，普通读取错误不再进入未知写效果账。旧版误记的网页读取错误通过 task_operation_reconcile 核验原调用、参数/结果摘要及同轮正常结束记录，执行已排空且无活动会话/job 才转为 failed；保留原 unknown 审计，不重放请求、不视为读取成功。原生 edit/write 的读取、版本、文件类型/大小和字面匹配前置拒绝按 Host 结构化 FS 错误码记为 failed/noEffect，保留错误与结果摘要，由原会话读取当前文件、纠正请求后继续，不因这类错误转人工。旧文件 unknown 通过同一 task_operation_reconcile 核验原生日志 data.error 错误码、精确调用与同轮正常结束证据后转 failed，保留审计，不按错误文字或当前文件内容推断原调用成功。取消、IO/权限/沙箱、未知错误及缺失真实终态仍保留未知保护。
+
+原生工具错误若仍为未知效果，模型不能凭错误文字自行清账。操作人可在当前技术申请的本机Web回复中显式提供 `nativeFailureResolutions`（原operationId及摘要）；`POST /tasks/:taskId/human-requests/:requestId/reply/check` 零写核验原日志、正常回合结束、排空和绑定只读调查。正式reply在单个事务内记录受信来源、结算全部指定失败并答复申请，保留完整原账和 `partialEffectsPossible`，不标成功或无效果、不重放。未确认的写效果仍受unknown保护。
+
+Web对原任务的补充、重开和取消沿已有话题继续，保留原文和独立意图收据。旧版本产生的Web重复话题可按原任务/applied关系在本机Check后归并；默认列表只展示当前话题，历史归并记录可通过includeMerged及原ID读取，不删除来源或重放动作。

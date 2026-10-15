@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
+import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { available, reason, nativeShell, nativeTaskHost, latestInput, waitUntil, modelToolValues } from './fixtures/task-session-native-host.js'
 const test = (name, fn) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
@@ -187,4 +190,60 @@ test('restart reconciles an original persisted native terminal receipt and resum
  assert.equal(execution.inputVersion,2);assert.equal(execution.status,'succeeded')
  assert.equal(await readFile(join(root,'tasks',created.taskId,'once.txt'),'utf8'),process.platform==='win32'?'once\r\n':'once\n')
  assert.equal((await second.query('operation.list')).length,1)
+})
+
+
+test('operator exact error resolution has zero-write HTTP check, retains partial effects and resumes original execution without replay', async t => {
+ let originalStep=0, readStep=0, errorCalls=0, replied=false, resumed=false
+ const h=await fixture(t,async(request,host)=>{
+  const input=latestInput(request)
+  if(request.tools.some(tool=>tool.name==='task_delegate')) {
+   const executions=await host.query('execution.list'),operations=await host.query('operation.list')
+   if(!executions.length)return [call('task_delegate',{key:'original-error',objective:'original-error'}),decide('wait','waiting')]
+   const operation=operations.find(op=>op.definition.toolName==='test_remote_write')
+   if(!executions.some(e=>e.key==='inspect-error'))return [call('task_delegate',{key:'inspect-error',objective:'inspect-error',readOnly:true,readbackOperationId:operation.operationId}),decide('wait','inspect original receipt')]
+   if(!replied)return [call('task_request_human',{audience:'operator',reason:'Original response failed; effects remain uncertain',question:'Settle only the recorded failure, retain possible partial effects',evidence:[],attemptedActions:['Completed bound read-only investigation']})]
+   if(!resumed){resumed=true;return [call('task_delegate',{key:'resume-original',objective:'resume-original',executionId:executions.find(e=>e.key==='original-error').executionId,readOnly:true}),decide('wait','resume same execution')]}
+   return [decide('complete','original resumed without replay')]
+  }
+  if(input.objective==='inspect-error') {
+   if(readStep++===0)return [call('read',{file_path:'evidence.txt'})]
+   return [call('execution_submit',{output:{status:'completed',summary:'Original error read; effects unverified',evidence:['evidence.txt'],limitations:['partial effects possible'],artifacts:[]}})]
+  }
+  if(input.objective==='resume-original')return [call('execution_submit',{output:{status:'completed',summary:'Same execution resumed',evidence:[],limitations:['partial effects possible'],artifacts:[]}})]
+  if(originalStep++===0){
+   const execution=(await host.query('execution.list'))[0],agent=host.ctx.agents.get(execution.sessionId)
+   agent.ctx.tools.register({name:'test_remote_write',description:'Simulated remote write with failed acknowledgement',parameters:{type:'object'},output:{schema:{type:'object'},render:()=>[]},execute(){errorCalls++;throw new Error('DATABASE_NOT_FOUND')}})
+   return [call('write',{file_path:'evidence.txt',content:'original failure evidence'})]
+  }
+  if(originalStep===2)return [call('test_remote_write',{})]
+  return [call('execution_submit',{output:{status:'blocked',summary:'Original request failed',evidence:[],limitations:['partial effects possible'],artifacts:[]}})]
+ })
+ const created=await h.service.createTask({groupId:'native-group',requestId:'operator-resolution',objective:'investigate original'})
+ await h.service.whenIdle()
+ const waiting=await h.query('task.get',{taskId:created.taskId}),original=(await h.query('execution.list')).find(e=>e.key==='original-error')
+ const operation=(await h.query('operation.list')).find(op=>op.state==='unknown')
+ const hash=value=>createHash('sha256').update(JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item)).digest('hex')
+ const human=waiting.humanRequests.find(item=>item.status==='waiting-reply')
+ const body={requestId:'operator-exact-resolution',reply:'Settle original failed response; partial effects remain unverified; no replay or deployment authorization',expectedRequirementRevision:waiting.requirementRevision,expectedControlRevision:waiting.controlRevision,
+  nativeFailureResolutions:[{operationId:operation.operationId,expectedOperationDigest:hash(operation)}]}
+ const server=createServer((req,res)=>handleRequest(req,res,{respondTaskHumanRequest:args=>h.service.respondHumanRequest(args)}))
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
+ const url=`http://127.0.0.1:${server.address().port}/tasks/${created.taskId}/human-requests/${human.requestId}/reply`
+ const post=(suffix,value=body,headers={})=>fetch(url+suffix,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(value)})
+ assert.equal((await post('/check',body,{origin:'https://outside.invalid'})).status,403)
+ const check=await post('/check'),checked=await check.json();assert.equal(check.status,200,JSON.stringify(checked));assert.equal(checked.writes,0)
+ assert.equal((await h.query('operation.get',{operationId:operation.operationId})).state,'unknown')
+ assert.equal((await h.query('source.list')).some(item=>item.requestIdentity?.nativeFailureResolutions),false)
+ const bad=await post('/check',{...body,nativeFailureResolutions:[{operationId:operation.operationId,expectedOperationDigest:'0'.repeat(64)}]});assert.equal(bad.status,409)
+ replied=true
+ const response=await post('');assert.equal(response.status,200,JSON.stringify(await response.json()))
+ await h.service.whenIdle()
+ const after=await h.query('operation.get',{operationId:operation.operationId})
+ assert.equal(after.state,'failed');assert.equal(after.result.partialEffectsPossible,true);assert.equal(after.result.noEffect,undefined);assert.deepEqual(after.result.previousObservation,operation)
+ assert.ok(after.result.operatorSourceId);assert.equal(errorCalls,1)
+ assert.equal((await post('')).status,200)
+ assert.equal((await post('',{...body,reply:'changed scope'})).status,409)
+ const continued=await h.query('execution.get',{executionId:original.executionId});assert.equal(continued.sessionId,original.sessionId);assert.equal(continued.inputVersion,2)
+ assert.equal((await h.query('task.get',{taskId:created.taskId})).status,'completed')
 })

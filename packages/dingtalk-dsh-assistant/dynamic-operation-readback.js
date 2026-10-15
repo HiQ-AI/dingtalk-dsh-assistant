@@ -87,6 +87,36 @@ export const inspectFailedNativeJobRead = args => inspectFailedNativeOperation(a
     && original.result.content?.length === 1 && original.result.content[0].type === 'text'
     && original.result.content[0].text === `Error: unknown job ${original.arguments.job_id}` })
 
+async function boundReadbackObservations({ ctx, operation, execution, executions }, resultSequence) {
+  const observations = []
+  const live = sessionId => ctx.agents.get(sessionId) || ctx.sessions.get(sessionId)
+  const saved = await inspectSession(ctx.sessionPersistence, execution.sessionId)
+  for (const candidate of executions) {
+    if (candidate.taskId !== operation.taskId || !candidate.drained || candidate.recovering || live(candidate.sessionId)
+      || candidate.definition?.recoveryReadOnly !== true || candidate.input?.readbackOperationId !== operation.operationId
+      || candidate.status !== 'succeeded' || Date.parse(candidate.updatedAt) < Date.parse(operation.updatedAt)) continue
+    const log = candidate.sessionId === execution.sessionId ? saved : await inspectSession(ctx.sessionPersistence, candidate.sessionId)
+    const current = { ...candidate, kind: 'task-execution' }
+    if (!identity(log.events, current)) continue
+    const readInput = inputFor(log.events, current)
+    if (!readInput || candidate.sessionId === execution.sessionId && readInput.seq <= resultSequence) continue
+    for (const read of log.events.filter(event => event.seq > readInput.seq && event.type === 'tool/call' && ['read','read_image','glob','grep','ls'].includes(event.data.name))) {
+      const observed = log.events.find(event => event.seq > read.seq && results(event).some(result => result.toolCallId === read.data.callId && result.isError === false))
+      if (observed) observations.push({ executionId: candidate.executionId, sessionId: candidate.sessionId,
+        inputVersion: candidate.inputVersion, callId: read.data.callId, toolName: read.data.name, callDigest: hash(read.data), resultDigest: hash(observed.data), sequence: observed.seq })
+    }
+  }
+  return observations
+}
+
+/** A completed error is a failed call, not proof that all effects were absent. */
+export async function inspectInvestigatedNativeFailure(args) {
+  const proof = await inspectFailedNativeOperation(args, { kind: 'native-investigated-failure', accepts: () => true })
+  if (!proof) return null
+  const observations = await boundReadbackObservations(args, proof.resultSequence)
+  return observations.length ? { ...proof, observations, partialEffectsPossible: true } : null
+}
+
 // Compatibility with the retired a5 promotion rejection only. That exact Host
 // path awaited terminate + waitForExit before throwing. A model summary, stderr,
 // arbitrary error, or an execution's self-reported result is never a drain proof.
@@ -113,22 +143,7 @@ export async function inspectStoppedNativeOperation({ ctx, operation, execution,
     && result.content?.length === 1 && result.content[0].type === 'text'
     && [legacyDrainedError, `Error: ${legacyDrainedError}`].includes(result.content[0].text)))
   if (!resultEvent || ![hash([{type:'text',text:legacyDrainedError}]), hash([{type:'text',text:`Error: ${legacyDrainedError}`}])].includes(operation.result.resultDigest)) return null
-  const observations = []
-  for (const candidate of executions) {
-    if (candidate.taskId !== operation.taskId || !candidate.drained || candidate.recovering || live(candidate.sessionId)
-      || candidate.definition?.recoveryReadOnly !== true || candidate.input?.readbackOperationId !== operation.operationId
-      || candidate.status !== 'succeeded' || Date.parse(candidate.updatedAt) < Date.parse(operation.updatedAt)) continue
-    const log = candidate.sessionId === execution.sessionId ? saved : await inspectSession(ctx.sessionPersistence, candidate.sessionId)
-    const current = { ...candidate, kind: 'task-execution' }
-    if (!identity(log.events, current)) continue
-    const readInput = inputFor(log.events, current)
-    if (!readInput || candidate.sessionId === execution.sessionId && readInput.seq <= resultEvent.seq) continue
-    for (const read of log.events.filter(event => event.seq > readInput.seq && event.type === 'tool/call' && ['read','read_image','glob','grep','ls'].includes(event.data.name))) {
-      const observed = log.events.find(event => event.seq > read.seq && results(event).some(result => result.toolCallId === read.data.callId && result.isError === false))
-      if (observed) observations.push({ executionId: candidate.executionId, sessionId: candidate.sessionId,
-        inputVersion: candidate.inputVersion, callId: read.data.callId, toolName: read.data.name, callDigest: hash(read.data), resultDigest: hash(observed.data), sequence: observed.seq })
-    }
-  }
+  const observations = await boundReadbackObservations({ ctx, operation, execution, executions }, resultEvent.seq)
   if (!observations.length) return null
   return { kind: 'legacy-host-drained-partial', operationId: operation.operationId, operationDigest: hash(operation),
     taskId: operation.taskId, executionId: execution.executionId, sessionId: execution.sessionId, callId,

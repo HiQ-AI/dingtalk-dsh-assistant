@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 import { isNativeFilePrecondition } from '../packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
@@ -195,4 +195,23 @@ test('execution progress limits excerpts to latest eight real events without cop
  const view=await readExecutionProgress(f)
  assert.equal(view.excerpts.length,8);assert.ok(view.excerpts.reduce((sum,item)=>sum+item.preview.length,0)<=8*640);assert.equal(view.excerpts[0].sequence,12);assert.equal(view.excerpts.at(-1).sequence,19)
  assert.equal(view.excerpts.at(-1).digest,hash(f.original.at(-1).data));assert.equal('events' in view,false)
+})
+
+
+test('investigated native error closes failed with partial effects, never infers noEffect from DATABASE_NOT_FOUND', async () => {
+ const make=()=>{const f=webFailure(); f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='mcp__bytebase__get_schema';
+  f.call.data.arguments=JSON.stringify({database:'uat2',include:'summary'});f.operation.definition.argumentsDigest=hash(JSON.parse(f.call.data.arguments));
+  f.result.data.message.content=[{type:'text',text:'Error: {"code":"DATABASE_NOT_FOUND"}'}];f.operation.result.resultDigest=hash(f.result.data.message.content);return f}
+ const f=make(),proof=await inspectInvestigatedNativeFailure(f)
+ assert.equal(proof.kind,'native-investigated-failure');assert.equal(proof.partialEffectsPossible,true);assert.equal(proof.noEffect,undefined)
+ assert.equal(proof.observations[0].executionId,'readback')
+ for(const mutate of [x=>{x.operation.result.isError=false},x=>{x.operation.result.cancelled=true},x=>{x.end.data.reason.kind='aborted'},
+  x=>{x.operation.result.resultDigest='wrong'},x=>{x.execution.drained=false},x=>{x.live.add('readback-session')},
+  x=>{x.readback.definition.recoveryReadOnly=false},x=>{x.readback.input.readbackOperationId='other'},x=>{x.readback.status='running'},
+  x=>{x.readEvents.pop()},x=>{x.readEvents[3].data.message.isError=true},x=>{x.readback.updatedAt='2026-10-14T00:00:00Z'}]){
+  const bad=make();mutate(bad);assert.equal(await inspectInvestigatedNativeFailure(bad),null)
+ }
+ // Arbitrary tool names and write failures do not become noEffect: failed is only a terminal observation.
+ const write=make();write.operation.definition.toolName=write.operation.result.toolName=write.call.data.name='edit';write.operation.definition.effectClass='write'
+ assert.equal((await inspectInvestigatedNativeFailure(write)).partialEffectsPossible,true)
 })

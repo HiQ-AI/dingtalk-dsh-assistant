@@ -1,0 +1,51 @@
+✔ 无替换的大量发件只按线性次数读取邻接关系 (6.9292ms)
+✔ 明确发送阻塞重启保留，普通错误不清阻塞，真实晚回执清阻塞但保留替换终态 (8.1091ms)
+✔ 替换图在决策接纳前拒绝未知目标，重复协调不产生持久写入 (4.9586ms)
+✔ 替换pending原子停止旧发送，发送领取与替换串行且晚回执保留终态 (1.8499ms)
+✔ 历史替换图先完整校验，拒绝环与分叉且保留已有有效链 (2.0266ms)
+✔ 阶段修订在原子接纳前拒绝未知ID，修正同请求可接受；Web遵循相同校验 (8.4984ms)
+✔ 新建与重开都拒绝重复阶段，不能先接受后破坏主叶上下文 (1.9411ms)
+✔ 同group串行队列使用最新Task阶段与版本校验，不接纳排队前的旧计划 (1.4137ms)
+✔ 接纳与执行共用参数规范化，空数组默认值可用而trim后重复阶段在接纳前拒绝 (1.2516ms)
+✔ 拒绝旧决策的持久写入失败时不释放预约，不把内存结果当已恢复 (2.3277ms)
+✔ 重开旧坏决策仅释放自己的预约，保留输入、Task和Outbox且rejected不可复活 (2.2807ms)
+✔ 旧坏决策出现已执行账本、部分应用、取消副作用或版本变化时不能退回 (3.6624ms)
+✔ A/B交错归类跨turn延续、固定快照及Task不复制消息 (1.1773ms)
+✔ 归类整批预检拒绝跨群/重复/过时事实且幂等重试不重复Topic (0.4724ms)
+✔ 未知输入阻止提交，已归类无关B允许A提交，同A补充使旧版本失效 (0.7691ms)
+✔ 附件与身份补齐产生新事实版本，重开仍可读取旧Topic快照 (0.9248ms)
+✔ 错误归属追加remove/add保留原版本 (0.4917ms)
+✔ 决策固定动作身份、失败后重开恢复、Task变更恰好一次 (1.5925ms)
+✔ 共享Task版本和保留项阻止其他Topic覆盖 (0.9317ms)
+✔ 一条共享消息只存一份并更新两个Topic，归类与决策排队按最新状态检查 (0.7643ms)
+✔ 回复快照preflight在Group原子更新内拒绝，决策和Outbox均零副作用 (0.4038ms)
+✔ 重复引用补齐保留已知正文，改变引用ID不串用旧正文和身份 (0.5035ms)
+✔ 固定版本不暴露后来摘要，旧决策完成不关闭已收到新输入的话题 (0.6893ms)
+✔ 不同Topic不能同时接受撤回同一Outbox的意图 (0.4775ms)
+✔ Web输入与Topic决策一次写入，持久失败零副作用且重试固定身份 (1.4494ms)
+✔ Web输入原子复核未知消息、Topic版本、Task版本状态与保留项 (1.0732ms)
+✔ Task通知并发替换同一旧回复时只有首个Outbox接受，pending意图也阻止Topic决策 (0.4881ms)
+✔ 已接受Topic意图阻止其他通知抢占回复，但自身Outbox允许落盘 (0.4338ms)
+✔ Topic已完成但Outbox未送达时退订拒绝，确认送达后才允许删除 (0.5267ms)
+✔ 新Outbox结果指纹通过真实domain schema保存且重开可查询 (0.3021ms)
+✔ 重判原子门禁拒绝任何相关 Outbox、业务动作和未知进度 (4.666ms)
+✔ 历史Web续办只归并明确原任务关系，保留原来源/决策/操作和历史版本，不重做意图 (2.8785ms)
+✔ 历史归并拒绝活跃任务与未完成决策，不以相同标题合并独立群事项 (1.172ms)
+✔ Web取消复用原话题，保留仅阻塞保留项可取消的语义且不越过活跃决策 (1.5254ms)
+✖ Web取消不能借同一blocked决策中的本任务保留项越过其他任务 (0.9774ms)
+ℹ tests 35
+ℹ suites 0
+ℹ pass 34
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 468.2539
+
+✖ failing tests:
+
+test at test\topic-store.test.js:639:1
+✖ Web取消不能借同一blocked决策中的本任务保留项越过其他任务 (0.9774ms)
+  Error: topic_task_version_required
+      at file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/store.js:712:107
+      at file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-storage-do_4aecde8121552132be84eb5ae06afc06/node_modules/@deepseek-ai/dsh-storage-domain/lib/index.js:281:17

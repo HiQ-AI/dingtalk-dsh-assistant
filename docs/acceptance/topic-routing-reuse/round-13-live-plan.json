@@ -1,0 +1,86 @@
+{
+  "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+  "routingRevision": 16,
+  "transfers": [
+    {
+      "sourceTopicId": "topic-a72609923d9c7b0866eaec2a13f72746",
+      "targetTopicId": "topic-67793cdea8c52283a5f9e091be48e082",
+      "taskId": "task-c435b5b9dd11dc414114680254f6c8f7",
+      "taskInputVersion": 4,
+      "sourceRevision": 1,
+      "targetRevision": 6,
+      "entry": {
+        "revision": 1,
+        "messageId": "web-ba660cbf44c63ff95a66e33d392aed8c",
+        "messageVersion": 1,
+        "unitId": "unit-a72609923d9c7b0866eaec2a13f72746",
+        "unitRevision": 1,
+        "action": "add",
+        "effectOwner": true,
+        "reason": "web-task-input"
+      },
+      "decisionId": "decision-ba660cbf44c63ff95a66e33d392aed8c",
+      "operationId": "decision-ba660cbf44c63ff95a66e33d392aed8c:action:0"
+    },
+    {
+      "sourceTopicId": "topic-dc379b80553376530fa6141c1c12b846",
+      "targetTopicId": "topic-67793cdea8c52283a5f9e091be48e082",
+      "taskId": "task-c435b5b9dd11dc414114680254f6c8f7",
+      "taskInputVersion": 4,
+      "sourceRevision": 1,
+      "targetRevision": 6,
+      "entry": {
+        "revision": 1,
+        "messageId": "web-d4d66da35dd326cbceac75e2231655d4",
+        "messageVersion": 1,
+        "unitId": "unit-dc379b80553376530fa6141c1c12b846",
+        "unitRevision": 1,
+        "action": "add",
+        "effectOwner": true,
+        "reason": "web-task-input"
+      },
+      "decisionId": "decision-d4d66da35dd326cbceac75e2231655d4",
+      "operationId": "decision-d4d66da35dd326cbceac75e2231655d4:action:0"
+    },
+    {
+      "sourceTopicId": "topic-4bb83a4fd21032a0f5fa00e43fae7af2",
+      "targetTopicId": "topic-bb20243613e5cf31f6b5c786b6d2b6fa",
+      "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+      "taskInputVersion": 4,
+      "sourceRevision": 1,
+      "targetRevision": 2,
+      "entry": {
+        "revision": 1,
+        "messageId": "web-7700eda18a18da62a8f70c68c4f5e4d2",
+        "messageVersion": 1,
+        "unitId": "unit-4bb83a4fd21032a0f5fa00e43fae7af2",
+        "unitRevision": 1,
+        "action": "add",
+        "effectOwner": true,
+        "reason": "web-task-input"
+      },
+      "decisionId": "decision-7700eda18a18da62a8f70c68c4f5e4d2",
+      "operationId": "decision-7700eda18a18da62a8f70c68c4f5e4d2:action:0"
+    },
+    {
+      "sourceTopicId": "topic-02f8eef7c2e0248d6faf58f4d192bfe8",
+      "targetTopicId": "topic-bb20243613e5cf31f6b5c786b6d2b6fa",
+      "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+      "taskInputVersion": 4,
+      "sourceRevision": 1,
+      "targetRevision": 2,
+      "entry": {
+        "revision": 1,
+        "messageId": "web-3577f164a277cfc9bf7205fb2505afd5",
+        "messageVersion": 1,
+        "unitId": "unit-02f8eef7c2e0248d6faf58f4d192bfe8",
+        "unitRevision": 1,
+        "action": "add",
+        "effectOwner": true,
+        "reason": "web-task-input"
+      },
+      "decisionId": "decision-3577f164a277cfc9bf7205fb2505afd5",
+      "operationId": "decision-3577f164a277cfc9bf7205fb2505afd5:action:0"
+    }
+  ]
+}

@@ -388,6 +388,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         suspended: attempts > delays.length }
       saveTask(task); return changed({ task })
     }
+    if (kind === 'task.human.resolve-failures') {
+      const resolutions = array(a.resolutions)
+      if (!resolutions.length || resolutions.length > 8 || new Set(resolutions.map(item => item.operationId)).size !== resolutions.length) fail('DYNAMIC_ARGUMENT_INVALID', 'resolutions')
+      // One outer command transaction owns source, all releases and the human answer.
+      // Any stale second item or competing reply rolls back every prior write/wake.
+      reduce('source.record', record(a.source), `${commandId}:source`)
+      for (const resolution of resolutions) reduce('operation.resolve-investigated-failure', {
+        ...a, ...resolution, operatorSourceId: a.source.sourceId, humanRequestId: a.requestId,
+      }, `${commandId}:${resolution.operationId}`)
+      const result = reduce('task.human.respond', { ...a, sourceId: a.source.sourceId }, `${commandId}:reply`)
+      reduce('source.routed', { sourceId: a.source.sourceId, receipt: [{ taskId: a.taskId, humanRequestId: a.requestId }] }, `${commandId}:routed`)
+      return result
+    }
     if (kind === 'task.human.respond') {
       const task = get('dynamic_tasks', text(a.taskId, 'taskId'))
       if (a.expectedRequirementRevision !== task.requirementRevision || a.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
@@ -715,11 +728,28 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed' }, `wake:${commandId}`)
       return changed({ operation })
     }
-    if (kind === 'operation.reconcile-stopped') {
-      const task = currentTask(a.binding), operation = get('dynamic_operations', a.operationId), proof = record(a.proof)
+    if (kind === 'operation.reconcile-stopped' || kind === 'operation.resolve-investigated-failure') {
+      const investigated = kind === 'operation.resolve-investigated-failure'
+      const task = investigated ? get('dynamic_tasks', a.taskId) : currentTask(a.binding)
+      const operation = get('dynamic_operations', a.operationId), proof = record(a.proof)
       const execution = get('dynamic_executions', operation.executionId)
+      if (investigated) {
+        const source = get('dynamic_sources', a.operatorSourceId), request = task.humanRequests?.find(item => item.requestId === a.humanRequestId)
+        if (typeof webActorId !== 'string' || !webActorId.trim() || source.channel !== 'web' || source.actorId !== webActorId || source.groupId !== task.groupId
+          || task.status !== 'active' || task.control !== 'active' || !task.drained || task.recovering
+          || source.requestIdentity?.humanRequestId !== a.humanRequestId
+          || !source.requestIdentity.nativeFailureResolutions?.some(item => item.operationId === operation.operationId && item.expectedOperationDigest === proof.operationDigest)
+          || request?.status !== 'waiting-reply' || request.audience !== 'operator'
+          || request.requirementRevision !== task.requirementRevision || request.controlRevision !== task.controlRevision
+          || task.requirementRevision !== a.expectedRequirementRevision || task.controlRevision !== a.expectedControlRevision)
+          fail('DYNAMIC_OPERATION_OPERATOR_RESOLUTION_REQUIRED')
+      }
       if (operation.taskId !== task.taskId || operation.state !== 'unknown' || digest(operation) !== proof.operationDigest
-        || proof.kind !== 'legacy-host-drained-partial' || proof.operationId !== operation.operationId
+        || proof.kind !== (investigated ? 'native-investigated-failure' : 'legacy-host-drained-partial')
+        || investigated && (operation.result?.isError !== true || operation.result.cancelled === true
+          || proof.toolName !== operation.definition.toolName
+          || !Number.isSafeInteger(proof.resultSequence) || proof.resultSequence < 0
+          || !Number.isSafeInteger(proof.turnEndSequence) || proof.turnEndSequence <= proof.resultSequence) || proof.operationId !== operation.operationId
         || proof.taskId !== task.taskId || proof.executionId !== execution.executionId || proof.sessionId !== execution.sessionId
         || !execution.drained || execution.recovering || proof.partialEffectsPossible !== true
         || proof.callId !== operation.result?.callId || proof.resultDigest !== operation.result?.resultDigest
@@ -733,9 +763,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         })) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
       const previousObservation = clone(operation)
       operation.state = 'failed'; operation.updatedAt = stamp
-      operation.evidenceRef = `host-stopped-readback:${operation.operationId}:${digest(proof)}`
+      operation.evidenceRef = `${investigated ? 'native-investigated-failure' : 'host-stopped-readback'}:${operation.operationId}:${digest(proof)}`
       operation.result = { reconciled: true, partialEffectsPossible: true, previousObservation, proof,
-        instruction: 'The original operation was stopped and may have partial effects. Review the recorded readback before further work. This is not success or authorization to replay.' }
+        ...(investigated ? { operatorSourceId: a.operatorSourceId, humanRequestId: a.humanRequestId } : {}),
+        instruction: investigated ? 'The original native call returned an error and its turn ended. Bound read-only investigation completed; partial effects remain possible. Retain the failed receipt and limitations. This is not success, noEffect, permission to replay, or authorization for new effects.' : 'The original operation was stopped and may have partial effects. Review the recorded readback before further work. This is not success or authorization to replay.' }
       put('dynamic_operations', operation); release(operation.operationId)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed', partialEffectsPossible: true }, `wake:${commandId}`)
       return changed({ operation })

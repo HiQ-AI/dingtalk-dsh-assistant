@@ -1,0 +1,106 @@
+✔ nonterminal stage reports persist and wake once without completing the execution (54.9451ms)
+✔ stage reports reject forged input/lease, superseded requirements and cancellation (27.1453ms)
+✔ stage reporting after continuation accepts only the new input and lease (30.1605ms)
+✔ active blockers never re-inject recursive execution inputs or historical results (24.4162ms)
+ℹ {"scope":"owner active blocker executions, UTF-8 JSON bytes","beforeBytes":26836,"afterBytes":444}
+✔ continued and recovering blockers keep current result and unknown operation evidence without recursive history (84.7324ms)
+✔ dispatch is durable and idempotent; execution IDs are independent and owner claims are single flight (54.6741ms)
+✔ a late result is audited and wakes atomically without accepting an obsolete requirement (49.5435ms)
+✔ cancel fences tools immediately and completion waits for physical drain and unresolved operations (27.1722ms)
+✔ continuation retains execution/session identity and versions inputs across requirement revisions (39.4982ms)
+✔ generic operations persist before dispatch, unknown never replays, locks survive restart and reconciliation releases them (41.07ms)
+✔ business completion creates a unique notification atomically; uncertain delivery does not restart business or resend (36.6446ms)
+✔ source route decisions are immutable and group sessions reclaim pending sources after restart (43.1722ms)
+✔ legacy unresolved effects and undrained native sessions become read-only blockers, never dynamic jobs (44.4089ms)
+✔ result and wake roll back together on a failed SQLite write and the same command remains safely retryable (48.4834ms)
+✔ initialization marker rejects database loss and an accidental initialize flag cannot create a replacement ledger (39.9813ms)
+✔ question and status notifications are idempotent, independently durable, and obsolete questions never send (26.5468ms)
+✔ unclean process restart fences started operations and retains result/wake receipts without replay (155.0657ms)
+✔ an explicit Web routing intent is recorded atomically with its original source and cannot be reinterpreted (28.217ms)
+✔ dispatch rollback before durable receipt creates no orphan, and lost post-commit acknowledgement replays one identity (43.7708ms)
+✔ result receipt failure rolls back both result and wake; post-commit restart retains one result/wake pair (49.7166ms)
+✔ 未知操作保持原记录，但不全局阻断另一原生调用 (33.1839ms)
+✔ a definitively refused prepared request can be retired by its exact binding/key without clearing unknown writes (29.4089ms)
+✔ 原操作对账拒绝缺失/外来证据，调查续办保留unknown并可调用原生能力 (26.8072ms)
+✔ terminal job receipt cannot reconcile an undrained execution; successful reconciliation preserves unknown evidence (27.141ms)
+✔ verified legacy stop closes only failed with retained unknown audit and never creates a replacement execution (30.9634ms)
+✔ 网页读取正式对账保留原unknown记录，原执行可续办且不生成或重放操作 (32.3812ms)
+✔ human request freezes the question and resumes the same task from its authorized original source idempotently (33.0307ms)
+✔ human response rejects an invalid or superseded request: other-actor (22.1864ms)
+✔ human response rejects an invalid or superseded request: other-group (23.6646ms)
+✔ human response rejects an invalid or superseded request: stale-requirement (22.7513ms)
+✔ human response rejects an invalid or superseded request: stale-control (23.3169ms)
+✔ human response rejects an invalid or superseded request: not-drained (21.9801ms)
+✔ human response rejects an invalid or superseded request: revised (22.1653ms)
+✔ human response rejects an invalid or superseded request: cancelled (22.3233ms)
+✔ human response rejects an invalid or superseded request: completed (25.5952ms)
+✔ human request requires an explicit stable identity and accepts only configured web actor without impersonation (27.9292ms)
+✔ waiting human request identities conflict on changed questions and an answer never reconciles unknown operations (32.803ms)
+✔ execution progress review is durable and idempotent without changing results, unknown effects or locks (33.5296ms)
+✔ progress review rejects a foreign execution identity field: executionId (22.7109ms)
+✔ progress review rejects a foreign execution identity field: inputVersion (23.2145ms)
+✔ progress review rejects a foreign execution identity field: leaseEpoch (21.5625ms)
+✔ progress review rejects a foreign execution identity field: inputDigest (21.4102ms)
+✔ an unchanged or unreadable execution observation wakes review without claiming success; continuation clears the old review clock (24.6479ms)
+✔ provider recovery persists bounded backoff, history and session identity across restart without human escalation (45.5857ms)
+✔ provider automatic recovery rejects missing-proof (23.2819ms)
+✔ provider automatic recovery rejects foreign-proof (25.9579ms)
+✔ provider automatic recovery rejects permanent (26.9216ms)
+✔ provider automatic recovery rejects unknown-effect (25.7095ms)
+✔ provider automatic recovery rejects cancelled (25.0393ms)
+✔ provider backoff cannot resume after task paused (25.1955ms)
+✔ provider backoff cannot resume after task cancelled (24.0856ms)
+✔ provider backoff cannot resume after task revised (27.1162ms)
+✔ requester answer must be consumed by owner before provider recovery: changeInput=false (40.5097ms)
+✔ requester answer must be consumed by owner before provider recovery: changeInput=true (39.3934ms)
+✔ provider operator intervention needs concrete native action evidence: credentials (36.6947ms)
+✔ provider operator intervention needs concrete native action evidence: quota (32.0461ms)
+✔ provider operator intervention needs concrete native action evidence: configuration (35.5809ms)
+✔ provider operator intervention needs concrete native action evidence: unclassified (34.5998ms)
+✔ job读取缺失旧账恢复只允许历史原生读取: legacy (36.2204ms)
+✔ job读取缺失旧账恢复只允许历史原生读取: write (27.822ms)
+✔ job读取缺失旧账恢复只允许历史原生读取: shadow (27.464ms)
+✔ 文件前置拒绝旧账精确对账保留审计并允许原执行续办: edit (30.2861ms)
+✔ 文件前置拒绝旧账精确对账保留审计并允许原执行续办: write (30.6283ms)
+✖ investigated terminal error retains unknown audit and partial effects without replay (33.2061ms)
+ℹ tests 64
+ℹ suites 0
+ℹ pass 63
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2400.3175
+
+✖ failing tests:
+
+test at test\dynamic-task-store.test.js:757:1
+✖ investigated terminal error retains unknown audit and partial effects without replay (33.2061ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  +   code: 'DYNAMIC_OPERATION_OPERATOR_RESOLUTION_REQUIRED'
+  -   code: 'DYNAMIC_NOT_FOUND'
+    }
+  
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:778:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: DYNAMIC_OPERATION_OPERATOR_RESOLUTION_REQUIRED
+        at fail (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:18:61)
+        at reduce (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:745:11)
+        at reduce (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:397:45)
+        at file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:978:28
+        at transaction (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:159:21)
+        at Object.command (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:972:20)
+        at Object.command (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:15:71)
+        at TestContext.<anonymous> (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:778:26)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7),
+    expected: { code: 'DYNAMIC_NOT_FOUND' },
+    operator: 'rejects',
+    diff: 'simple'
+  }
