@@ -10,4 +10,6 @@ origin/main新合PR184（d5b45c9）加入可选中文执行短名。本轮解决
 
 重启后独立读回task-final.json：原任务completed/drained，原执行succeeded/drained，lease190、inputVersion11保持，waiting0、unknown操作0，没有重复执行已完成UAT部署。实际业务发布证据在round-29：新digest、521/521、1/1 Ready、入口200；唯一流水线整体killed如实保留。
 
-health仍degraded来自3条完成通知unknown，包括本次完成通知；notification-state.json记录原状态，没有重发或伪记送达。真实申请撤回E2E及历史共享测试影响未核实。最终PR推送与中文正文独立回读另存本轮pr-readback.json。
+health仍degraded来自3条完成通知unknown，包括本次完成通知；notification-state.json记录原状态，没有重发或伪记送达。真实申请撤回E2E及历史共享测试影响未核实。
+
+合流提交ce1b929已推送原PR182。pr-readback.json独立确认URL/number/state/head、中文正文精确匹配，OPEN/MERGEABLE/CLEAN，检查列表为空。主检出仍f6d366a和原有未提交文件。矩阵36个用例最新均PASS，goal全部子目标完成；后续仅归档该回读的文档提交，不改变已验证、已安装的源码。

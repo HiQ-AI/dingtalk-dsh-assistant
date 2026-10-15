@@ -1,0 +1,15 @@
+{
+  "baseRefName": "main",
+  "headRefName": "worktree-native-background-receipt",
+  "headRefOid": "ce1b929c4bd7695bf9d9a1af050943751296ef06",
+  "mergeStateStatus": "CLEAN",
+  "mergeable": "MERGEABLE",
+  "mergedAt": null,
+  "number": 182,
+  "state": "OPEN",
+  "statusCheckRollup": [],
+  "title": "fix: 恢复原生收据、继承部署授权并减少统筹唤醒",
+  "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/182",
+  "bodyMatches": true,
+  "observedAt": "2026-10-15T06:57:01.2964646Z"
+}
