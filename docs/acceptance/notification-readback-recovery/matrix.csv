@@ -1,0 +1,8 @@
+case,round,status,evidence
+original-goal-resolution,1,PASS,original result seq65 and turn end892 validated by reply/check; formal reply retained original task/session and unknown audit
+list-readback-boundaries,1,FAIL,test fixture indentation whitespace normalized by pre-existing rule
+list-readback-boundaries,2,PASS,corrected negative fixture; task-notification-readback 7/7
+notification-delivery,2,PASS,task-notification-delivery/readback/completion 47/47
+workflow-notification-obligations,1,PASS,65/65 independent cases passed
+real-nine-readback,2,PASS,nine original SUCCESS receipts and message bodies accepted; no sends
+local-deployment,2,PENDING,waiting for original execution drain
