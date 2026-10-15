@@ -19,13 +19,14 @@ function harness(componentName, initialProps = {}) {
     useEffect(fn, deps) { const index = cursor++, previous = effects[index]; if (!previous || deps.some((value, position) => value !== previous.deps[position])) { previous?.cleanup?.(); effects[index] = { deps }; scheduled.push(() => { effects[index].cleanup = fn() }) } },
   }
   runInNewContext(source.replace('return module.exports', `return { ...module.exports, testComponent: ${componentName} }`), {
+    document: initialProps.testDocument,
     AbortController, URL, console, crypto: { randomUUID: () => `request-${++uuid}` },
     fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, resolve: value => resolve({ ok: true, json: async () => value }), reject })) },
     window: { addEventListener: (...args) => events.push(['add', ...args]), removeEventListener: (...args) => events.push(['remove', ...args]),
       __ModuleLoader__: { load: ({ factory }) => { component = factory(name => name === 'react' ? React : { Button: 'button', StateDot: 'dot' }).testComponent } } },
   })
   return { requests, events,
-    render(next = props) { props = next; cursor = 0; const tree = component(props); scheduled.splice(0).forEach(effect => effect()); return tree },
+    render(next = props) { props = next; cursor = 0; const tree = component(props); if (props.testDialog && tree.props?.ref) tree.props.ref.current = props.testDialog; scheduled.splice(0).forEach(effect => effect()); return tree },
     unmount() { effects.forEach(effect => effect?.cleanup?.()) },
   }
 }
@@ -329,4 +330,23 @@ test('人工请求不把问题重复作为原因，不产生非HTTP链接或执�
   assert.equal(text(tree.children[1]), `需要你决定\n${question}`)
   assert.equal(elements(tree).some(item => item.type === 'a' || item.type === 'img' || item.props.dangerouslySetInnerHTML), false)
   assert.equal(elements(tree).filter(item => item.type === 'details').length, 1)
+})
+
+
+test('人工详情使用原生Modal隔离背景，关闭恢复焦点和滚动，内部点击不关闭', () => {
+  const calls = []
+  const testDialog = { showModal: () => calls.push('open'), close: () => calls.push('close'), getBoundingClientRect: () => ({ left: 20, right: 900, top: 20, bottom: 800 }) }
+  const testDocument = { activeElement: { isConnected: true, focus: () => calls.push('focus') }, documentElement: { style: { overflow: 'auto' } } }
+  const h = harness('HumanRequestModal', { children: ['正文'], onClose: () => calls.push('dismiss'), testDialog, testDocument })
+  const tree = h.render()
+  assert.equal(tree.type, 'dialog')
+  assert.deepEqual(calls, ['open'])
+  assert.equal(testDocument.documentElement.style.overflow, 'hidden')
+  tree.props.onClick({ target: testDialog, currentTarget: testDialog, clientX: 40, clientY: 40 })
+  assert.deepEqual(calls, ['open'])
+  tree.props.onClick({ target: testDialog, currentTarget: testDialog, clientX: 10, clientY: 10 })
+  tree.props.onCancel({ preventDefault: () => calls.push('prevent') })
+  h.unmount()
+  assert.deepEqual(calls, ['open', 'dismiss', 'prevent', 'dismiss', 'close', 'focus'])
+  assert.equal(testDocument.documentElement.style.overflow, 'auto')
 })

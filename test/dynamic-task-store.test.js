@@ -971,3 +971,42 @@ test('新续办步骤使用新请求键但保留原执行，会拒绝旧键改�
  assert.equal(continued.executionId,first.executionId);assert.equal(continued.sessionId,first.sessionId);assert.equal(continued.inputVersion,3)
  assert.equal((await f.query({kind:'execution.list'})).length,1)
 })
+
+test('Web operator notice recall is exact, single-flight, durable and independent of the committed answer', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const f = await fixture(t, { webActorId: 'web-user' })
+  await f.command('task.create', { taskId: 'human-task', groupId: 'g', ownerActorId: 'owner', request: 'Original task' })
+  const { binding } = (await f.command('task.claim', { taskId: 'human-task' })).result
+  await f.command('task.wait', { binding, summary: '等待技术处理', question: '恢复工具', humanRequest: { requestId: 'operator', audience: 'operator' } })
+  await f.command('task.drained', { binding })
+  for (const [notificationId, audience] of [['private', 'operator'], ['group', 'requester']]) {
+    await f.command('notification.prepare', { notificationId, taskId: 'human-task', requirementRevision: 1,
+      kind: 'question', payload: { humanRequestId: 'operator', audience, text: '恢复工具' } })
+    if (audience === 'operator') {
+      const started = await f.command('notification.start', { notificationId })
+      await f.command('notification.receipt', { notificationId, dispatchToken: started.result.notification.dispatchToken,
+        state: 'delivered', receipt: { messageId: 'exact-private', conversationId: 'self-private', senderActorId: 'operator' } })
+    }
+  }
+  await assert.rejects(f.command('notification.recall.start', { notificationId: 'private' }), { code: 'DYNAMIC_NOTIFICATION_RECALL_NOT_REQUIRED' })
+  await humanSource(f, 'web-user')
+  await f.command('task.human.respond', { taskId: 'human-task', requestId: 'operator', sourceId: 'human-answer', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  await assert.rejects(f.command('notification.recall.start', { notificationId: 'group' }), { code: 'DYNAMIC_NOTIFICATION_RECALL_NOT_REQUIRED' })
+  const claimed = await f.command('notification.recall.start', { notificationId: 'private' })
+  assert.equal(claimed.dispatchEligible, true)
+  assert.equal((await f.command('notification.recall.start', { notificationId: 'private' })).dispatchEligible, false)
+  await f.reopen()
+  assert.equal((await f.command('notification.recall.start', { notificationId: 'private' })).dispatchEligible, false)
+  t.mock.timers.tick(300001)
+  const recovered = await f.command('notification.recall.start', { notificationId: 'private' })
+  await assert.rejects(f.command('notification.recall.result', { notificationId: 'private', token: claimed.result.notification.recall.token, state: 'recalled', evidenceRef: 'stale' }), { code: 'DYNAMIC_NOTIFICATION_RECALL_STALE' })
+  await f.command('notification.recall.result', { notificationId: 'private', token: recovered.result.notification.recall.token,
+    state: 'failed', error: { message: 'platform recall window exceeded' }, nextAttemptAt: new Date(Date.now() + 5000).toISOString() })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests[0].status, 'answered')
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'notification.get', notificationId: 'private' })).recall.state, 'failed')
+  t.mock.timers.tick(5001)
+  const retry = await f.command('notification.recall.start', { notificationId: 'private' })
+  await f.command('notification.recall.result', { notificationId: 'private', token: retry.result.notification.recall.token, state: 'recalled', evidenceRef: 'complete-private-absence' })
+  assert.equal((await f.command('notification.recall.start', { notificationId: 'private' })).dispatchEligible, false)
+})

@@ -66,3 +66,25 @@ export async function readTaskNotificationDelivery(adapter, notification, { send
   const observed = await adapter.readMessage(notification.payload.conversationId, messageId)
   return verifyTaskNotificationReadback(notification, observed, { acknowledgedMessageId, senderActorId, sendStatusConfirmed })
 }
+
+/** Uses the existing DWS recall contract; complete private history is mandatory. */
+export async function recallOperatorNotification(adapter, notification) {
+  if (notification.kind !== 'question' || notification.payload.audience !== 'operator'
+    || notification.state !== 'delivered') throw new Error('TASK_NOTIFICATION_RECALL_SCOPE_INVALID')
+  const delivery = notification.receipt
+  if (!delivery?.messageId || !delivery.conversationId || !delivery.senderActorId)
+    throw new Error('TASK_NOTIFICATION_RECALL_DELIVERY_REQUIRED')
+  const range = { start: delivery.sentAt ?? notification.createdAt, end: new Date().toISOString() }
+  const find = async () => (await adapter.readConversation(delivery.conversationId, range)).find(item => item.messageId === delivery.messageId)
+  const current = await find()
+  if (current) {
+    if ((current.senderOpenDingTalkId ?? current.senderId) !== delivery.senderActorId
+      || current.conversationId && current.conversationId !== delivery.conversationId)
+      throw new Error('TASK_NOTIFICATION_RECALL_IDENTITY_MISMATCH')
+    const ack = await adapter.recallMessage(delivery.messageId)
+    if ((ack?.recallStatus ?? ack?.result?.recallStatus) !== 'SUCCESS') throw new Error('TASK_NOTIFICATION_RECALL_UNCONFIRMED')
+    if (await find()) throw new Error('TASK_NOTIFICATION_RECALL_PENDING')
+  }
+  return { messageId: delivery.messageId, conversationId: delivery.conversationId, recallStatus: 'SUCCESS',
+    observation: current ? 'recall-and-absence' : 'already-absent' }
+}

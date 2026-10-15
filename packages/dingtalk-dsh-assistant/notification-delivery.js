@@ -85,3 +85,24 @@ export async function deliverTaskNotification({ notification, notifications, com
     throw error
   }
 }
+
+// Recall is a separate durable effect: the human answer is already committed.
+export async function recallTaskOperatorNotification({ notification, notifications, command }) {
+  if (!notifications?.recall || notification.recall?.state === 'recalled'
+    || Date.parse(notification.recall?.nextAttemptAt ?? '') > Date.now()) return
+  const started = await command('notification.recall.start', { notificationId: notification.id })
+  if (!started.dispatchEligible) return
+  const claimed = started.result.notification
+  try {
+    const proof = await notifications.recall(claimed)
+    if (proof?.messageId !== claimed.receipt.messageId || proof.conversationId !== claimed.receipt.conversationId
+      || proof.recallStatus !== 'SUCCESS') throw new Error('TASK_NOTIFICATION_RECALL_UNCONFIRMED')
+    await command('notification.recall.result', { notificationId: claimed.id, token: claimed.recall.token,
+      state: 'recalled', evidenceRef: evidence(proof), proof: safeNotificationDetail(proof) })
+  } catch (error) {
+    await command('notification.recall.result', { notificationId: claimed.id, token: claimed.recall.token,
+      state: 'failed', error: notificationErrorDetail(error, 'recall'),
+      nextAttemptAt: notificationRetryAt({ readbackAttemptCount: claimed.recall.attempts }, error, 'readback') })
+    throw error
+  }
+}

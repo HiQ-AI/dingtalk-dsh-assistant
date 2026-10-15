@@ -97,6 +97,21 @@ window.__ModuleLoader__.load({
     }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
     const observerCss = `
+      .observer-human-modal { box-sizing: border-box; width: min(1040px, calc(100vw - 48px)); height: min(900px, calc(100dvh - 48px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 1px solid ${colors.border}; border-radius: 12px; background: ${colors.surface}; color: inherit; box-shadow: 0 24px 80px rgba(0,0,0,.22); overflow: hidden; }
+      .observer-human-modal[open] { display: flex; flex-direction: column; }
+      .observer-human-modal::backdrop { background: rgba(0,0,0,.28); backdrop-filter: blur(2px); }
+      .observer-human-modal > header { max-height: 30%; overflow-y: auto; }
+      .observer-human-modal > form, .observer-human-modal > p { flex: 0 0 auto; margin: 0; padding: 16px 24px; border-top: 1px solid ${colors.border}; background: ${colors.surface2}; }
+      .observer-human-modal > form { gap: 8px !important; max-height: 45%; overflow-y: auto; }
+      .observer-human-modal textarea { min-height: 64px; height: 80px; resize: none; }
+      .observer-human-modal form > button { min-width: 120px; }
+      .observer-human-modal form :is([role=alert], [role=status]) { grid-area: feedback; }
+      .observer-human-modal form { grid-template-areas: 'hint' 'field' 'feedback' 'action'; grid-template-rows: auto auto minmax(42px, auto) auto; }
+      .observer-human-modal form > p:first-child { grid-area: hint; }
+      .observer-human-modal form > label { grid-area: field; }
+      .observer-human-modal form > button { grid-area: action; }
+      @media (max-width: 600px) { .observer-human-modal { width: calc(100vw - 16px); height: calc(100dvh - 16px); border-radius: 8px; } .observer-human-modal > header { padding: 16px !important; gap: 12px !important; } .observer-human-modal > div { padding: 0 16px 16px !important; } .observer-human-modal > form, .observer-human-modal > p { padding: 12px 16px; } }
+
       [data-dingtalk-observer] .observer-card-sessions summary::-webkit-details-marker { display: none; }
       [data-dingtalk-observer] .observer-card-sessions:not([open]) .observer-card-session-chevron { transform: rotate(-90deg); }
       [data-dingtalk-observer] .observer-card-sessions summary:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; border-radius: 4px; }
@@ -614,6 +629,28 @@ window.__ModuleLoader__.load({
         error ? React.createElement('p', { id: 'task-create-error', role: 'alert', style: { margin: 0, color: colors.danger } }, error) : null,
         React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'submit', disabled: busy, style: { minWidth: 100 } }, busy ? '提交中…' : '创建任务'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy, onClick: () => dirty ? setLeaving(true) : onCancel() }, '返回看板')),
         leaving ? React.createElement('section', { 'aria-label': '确认放弃草稿', style: { display: 'grid', gap: 8 } }, React.createElement('p', null, '返回看板会丢弃尚未提交的任务草稿。'), React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setLeaving(false) }, '继续填写'), React.createElement(Button, { type: 'button', onClick: () => { onDirtyChange?.(false); onCancel() } }, '放弃草稿并返回')) : null)
+    }
+    function HumanRequestModal({ children, onClose }) {
+      const dialog = useRef(null)
+      useEffect(() => {
+        const element = dialog.current
+        const previous = document.activeElement
+        const overflow = document.documentElement.style.overflow
+        element.showModal()
+        document.documentElement.style.overflow = 'hidden'
+        return () => {
+          element.close()
+          document.documentElement.style.overflow = overflow
+          if (previous?.isConnected) previous.focus({ preventScroll: true })
+        }
+      }, [])
+      return React.createElement('dialog', { ref: dialog, className: 'observer-human-modal', onKeyDown: event => {
+        if (event.key !== 'Tab') return
+        const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex="0"]')].filter(element => element.getClientRects().length)
+        const first = controls[0], last = controls[controls.length - 1]
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+      }, 'aria-label': '人工介入事项详情', onCancel: event => { event.preventDefault(); onClose() }, onClick: event => { if (event.target === event.currentTarget) { const bounds = event.currentTarget.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose() } } }, ...children)
     }
     function HumanRequestReply({ request, onChanged }) {
       const [reply, setReply] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
@@ -1234,16 +1271,16 @@ window.__ModuleLoader__.load({
           React.createElement('span', { style: { color: colors.muted, fontSize: 11, lineHeight: 1.5 } }, fmt(item.createdAt)),
           React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', onClick: () => setSelectedAuthorizationId(item.requestId) }, '查看'))
       })
-      const authorizationDetail = selectedAuthorization ? React.createElement('div', { role: 'presentation', onMouseDown: (event) => { if (event.target === event.currentTarget) setSelectedAuthorizationId('') }, style: { position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', justifyContent: 'flex-end', background: 'rgba(0,0,0,.28)', backdropFilter: 'blur(2px)' } },
-        React.createElement('section', { role: 'dialog', 'aria-modal': true, 'aria-label': '人工介入事项详情', style: { width: 'min(640px, 100%)', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderLeft: `1px solid ${colors.border}`, background: colors.surface, boxShadow: '-20px 0 60px rgba(0,0,0,.2)' } },
+      const authorizationDetail = selectedAuthorization ? React.createElement(HumanRequestModal, { key: selectedAuthorization.requestId, onClose: () => setSelectedAuthorizationId('') },
           React.createElement('header', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, padding: '24px 24px 20px', borderBottom: `1px solid ${colors.border}`, background: colors.surface } },
-            React.createElement('div', { style: { minWidth: 0 } }, React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } }, statusTag(authorizationPresentation(selectedAuthorization).label, authorizationPresentation(selectedAuthorization).state), React.createElement('span', { style: { color: colors.muted, fontSize: 11.5 } }, fmt(selectedAuthorization.createdAt))), React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: 1.5 } }, selectedAuthorization.objective || '人工介入事项'), React.createElement('code', { style: { display: 'block', marginTop: 10, color: colors.muted, fontSize: 10.5 } }, selectedAuthorization.requestId)),
+            React.createElement('div', { style: { minWidth: 0 } }, React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } }, statusTag(authorizationPresentation(selectedAuthorization).label, authorizationPresentation(selectedAuthorization).state), React.createElement('span', { style: { color: colors.muted, fontSize: 11.5 } }, fmt(selectedAuthorization.createdAt))), React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: 1.5, overflowWrap: 'anywhere', maxHeight: '15dvh', overflowY: 'auto' } }, selectedAuthorization.objective || '人工介入事项'), React.createElement('code', { style: { display: 'block', marginTop: 10, color: colors.muted, fontSize: 10.5, overflowWrap: 'anywhere' } }, selectedAuthorization.requestId)),
             React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', 'aria-label': '关闭人工介入事项', onClick: () => setSelectedAuthorizationId(''), style: { flex: '0 0 auto', minWidth: 52, whiteSpace: 'nowrap' } }, '关闭')),
-          React.createElement('div', { style: { flex: '1 1 auto', overflowY: 'auto', padding: '0 24px 24px' } },
+          React.createElement('div', { style: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', scrollbarGutter: 'stable', padding: '0 24px 24px' } },
             React.createElement('section', { style: { padding: '24px 0', borderBottom: `1px solid ${colors.border}` } }, React.createElement(HumanRequestContent, { request: selectedAuthorization })),
             React.createElement('section', { style: { padding: '20px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('关联信息', `Task ID：${selectedAuthorization.taskId || '—'}\n群聊：${groupsById.get(selectedAuthorization.groupId)?.name || selectedAuthorization.groupId || '—'}`)),
             selectedAuthorization.status === 'answered' ? React.createElement('section', { style: { padding: '20px 0' } }, authorizationDetailField('处理结果', `${selectedAuthorization.taskSessionRequest ? '已答复' : selectedAuthorization.decision === 'approved' ? '继续任务' : selectedAuthorization.decision === 'rejected' ? '不执行' : selectedAuthorization.decision || '已处理'}\n处理渠道：${selectedAuthorization.decisionSource === 'web' ? '运行看板' : selectedAuthorization.decisionSource === 'dingtalk' ? '钉钉私聊' : selectedAuthorization.decisionSource || '历史迁移'}\n处理时间：${fmt(selectedAuthorization.decidedAt)}\n处理意见：${selectedAuthorization.reply || '—'}`)) : null),
-          React.createElement(HumanRequestReply, { key: selectedAuthorization.requestId, request: selectedAuthorization, onChanged: () => { setDetailRetry(value => value + 1); void refresh() } }))) : null
+          selectedAuthorization.notification?.recall ? React.createElement('p', { role: selectedAuthorization.notification.recall.state === 'failed' ? 'alert' : 'status', style: { color: selectedAuthorization.notification.recall.state === 'failed' ? colors.danger : colors.muted } }, selectedAuthorization.notification.recall.state === 'recalled' ? '对应私聊通知已撤回。' : selectedAuthorization.notification.recall.state === 'failed' ? '申请已处理，私聊通知撤回失败，将重试。' : '申请已处理，正在撤回对应私聊通知。') : null,
+          React.createElement(HumanRequestReply, { key: selectedAuthorization.requestId, request: selectedAuthorization, onChanged: () => { setDetailRetry(value => value + 1); void refresh() } })) : null
       const authorizationsPage = React.createElement(React.Fragment, null, React.createElement('section', null,
         React.createElement('div', { style: tableFrame },
           React.createElement('div', { style: { ...toolbar, justifyContent: 'flex-end' } }, React.createElement(SelectMenu, { label: '筛选处理状态', value: authorizationFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'pending', label: '等待处理' }, { id: 'answered', label: '已答复' }, { id: 'approved', label: '已继续' }, { id: 'rejected', label: '不执行' }, { id: 'superseded', label: '已失效' }], onChange: (value) => { setAuthorizationFilter(value); setAuthorizationPage(1) }, fitContent: true })),

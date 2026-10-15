@@ -1,4 +1,4 @@
-import { deliverTaskNotification } from './notification-delivery.js'
+import { deliverTaskNotification, recallTaskOperatorNotification } from './notification-delivery.js'
 import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { safeNotificationDetail } from './notification-delivery.js'
@@ -801,6 +801,18 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   let notificationTransportRetryAt = 0
   async function deliverNotifications(attempted) {
     for (const notification of await query('notification.list')) {
+      if (notifications?.recall && notification.kind === 'question' && notification.payload.audience === 'operator'
+        && notification.state === 'delivered' && notification.recall?.state !== 'recalled'
+        && !(Date.parse(notification.recall?.nextAttemptAt ?? '') > Date.now())
+        && retryReady(notification.id) && !inflightNotifications.has(notification.id) && !attempted?.has(notification.id)) {
+        const task = await query('task.get', { taskId: notification.taskId })
+        const request = task?.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
+        if (request?.status === 'answered' && request.replyChannel === 'web') {
+          attempted?.add(notification.id)
+          void track(inflightNotifications, notification.id, () => recallTaskOperatorNotification({ notification, notifications, command }))
+        }
+      }
+
       const previousOutbound = residentStore?.getGroup(notification.payload.conversationId)?.outbox.find(item => item.outboundId === notification.id)
       if (notification.state === 'failed' && notification.deliveryError?.knownNotSent === true && notification.deliveryError?.retryable === true) {
         let reason, taskIds = previousOutbound?.taskIds ?? []
@@ -960,8 +972,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const notices = await query('notification.list')
     return (await query('task.list')).flatMap(task => (task.humanRequests ?? []).map(request => ({ ...request, audience: request.audience ?? 'operator',
       taskSessionRequest: true, taskId: task.taskId, groupId: task.groupId, objective: task.objective,
-      notification: (() => { const notice = notices.find(item => item.payload.humanRequestId === request.requestId && item.payload.audience === 'operator')
-        return notice ? { notificationId: notice.id, state: notice.state, delivery: notice.state === 'delivered' ? notice.receipt : null } : undefined })(),
+      notification: (() => { const notice = notices.find(item => item.taskId === task.taskId && item.payload.humanRequestId === request.requestId && item.payload.audience === 'operator')
+        return notice ? { notificationId: notice.id, state: notice.state, recall: notice.recall ?? null, delivery: notice.state === 'delivered' ? notice.receipt : null } : undefined })(),
       waitingReason: request.question, evidence: request.evidence ?? [], attemptedActions: request.attemptedActions ?? [],
       decidedAt: request.answeredAt, decision: request.status === 'answered' ? 'answered' : undefined,
       decisionSource: request.status === 'answered' ? request.replyChannel : undefined })))
@@ -1014,6 +1026,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       result = await command('task.human.respond', response, receiptId)
       await command('source.routed', { sourceId, receipt: [{ taskId: task.taskId, humanRequestId: args.humanRequestId }] }, `human-source-routed:${sourceId}`)
     }
+    void deliverNotifications().catch(error => {
+      ctx.logger?.warn?.(`task-session recall scan ${task.taskId}: ${error.code ?? error.message}`)
+    })
     void kickTask(task.taskId)
     return taskDTO(result.result.task)
   }
