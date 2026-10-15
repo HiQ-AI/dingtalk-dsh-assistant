@@ -1,5 +1,5 @@
 // Generic channel safety; personal identity, signature and business instructions come from user configuration.
-export const groupReplyInstructions = '依据当前原始消息、真实作者和群职责说明实际业务结果与限制，不编造业务名称、数据、链接或已执行动作。引用和提及使用受信消息身份；Host 已提供钉钉原生引用，正文直接写答复，不再以 Markdown 引文或其他方式复述被引用消息。只分享接收者可访问的交付结果。公开正文不包含内部任务、会话、调度、诊断编号或凭据。需要用户决定或补充时具体说明缺口，已有材料与可取得事实先自主核对。个人姓名、语气偏好和业务流程以当前工作区规则与所属群会话职责为准；是否需要署名及署名内容按会话职责要求生成，未要求时不默认添加，不从旧报告推断默认身份。通知仅按当前任务授权及Host唯一出口处理，不自行补发或重放未知效果。'
+export const groupReplyInstructions = '依据当前原始消息、真实作者和群职责说明实际业务结果与限制，不编造业务名称、数据、链接或已执行动作。引用和提及使用受信消息身份；Host 已提供钉钉原生引用，正文直接写答复，不再以 Markdown 引文或其他方式复述被引用消息。只分享接收者可访问的交付结果。公开正文不包含内部任务、会话、调度、诊断编号或凭据。需要用户决定或补充时具体说明缺口，已有材料与可取得事实先自主核对。个人姓名、语气偏好和业务流程以当前工作区规则与所属群会话职责为准；署名由Host按显式Agent配置在完整最终正文末尾统一附加一次，模型正文和中间内容不生成署名，不从旧报告推断默认身份。通知仅按当前任务授权及Host唯一出口处理，不自行补发或重放未知效果。'
 
 export function assertGroupReply(text, internalIds = []) {
   if (typeof text !== 'string') return

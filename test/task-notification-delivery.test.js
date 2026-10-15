@@ -8,15 +8,16 @@ import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic
 import { deliverTaskNotification, notificationRetryAt, safeNotificationDetail } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 import { readTaskNotificationDelivery } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { formatTaskGroupReply } from '../packages/dingtalk-dsh-assistant/group-reply-format.js'
 
-async function fixture(t) {
+async function fixture(t, text = 'done') {
   const root = await mkdtemp(join(tmpdir(), 'notice-receipt-'))
   const config = { dbPath: join(root, 'tasks.sqlite'), instanceId: 'receipt-test', initialize: true }
   let store = await openDynamicTaskStore(config), sequence = 0
   t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }) })
   const command = (kind, args, id = `c-${++sequence}`) => store.command({ kind, args, id })
   const notification = (await command('notification.prepare', { notificationId: 'notice', taskId: null, requirementRevision: 1, kind: 'topic-reply',
-    payload: { conversationId: 'g', text: 'done', sourceMessageId: 'source', actorId: 'owner', atOpenDingTalkIds: ['owner'], fact: { topicRefs: [{ topicId: 'topic', revision: 1 }] } } })).result.notification
+    payload: { conversationId: 'g', text, sourceMessageId: 'source', actorId: 'owner', atOpenDingTalkIds: ['owner'], fact: { topicRefs: [{ topicId: 'topic', revision: 1 }] } } })).result.notification
   const read = async () => (await store.query({ kind: 'notification.list' }))[0]
   return { command, notification, read, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }) } }
 }
@@ -172,7 +173,9 @@ const guardError = { category: 'api', code: 1, hint: '确认消息与会话信�
   message: '无法确认引用回复目标是否属于话题圈，已阻止发送', operation: 'chat/get_conversation_info', origin: 'mcp_gateway', reason: 'topic_quote_guard_unavailable', retryable: true }
 
 test('exact quote-guard refusal is durable not-sent, waits, and retries the same quoted send without fallback', async t => {
-  const f = await fixture(t)
+  const signed = formatTaskGroupReply({ source: { groupId: 'g', messageId: 'source', senderOpenDingTalkId: 'owner' },
+    summary: 'done\n\n- Ada Support', evidence: ['verified'], limitations: ['not deployed'], signature: 'Ada Support' }).text
+  const f = await fixture(t, signed)
   let blocked = true, reads = 0
   const calls = []
   const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { async run(args) {
@@ -191,6 +194,11 @@ test('exact quote-guard refusal is durable not-sent, waits, and retries the same
   for (let i = 0; i < 5; i++) await deliverTaskNotification({ notification: await f.read(), command: f.command, notifications })
   assert.equal(calls.length, 1)
   const due = Date.parse(row.nextAttemptAt)
+  const digest = row.payloadDigest
+  assert.equal(typeof digest, 'string')
+  await f.reopen()
+  assert.equal((await f.read()).payload.text, signed)
+  assert.equal((await f.read()).payloadDigest, digest)
   t.mock.timers.enable({ apis: ['Date'], now: due + 1 })
   blocked = false
   await deliverTaskNotification({ notification: await f.read(), command: f.command, notifications })
@@ -198,6 +206,7 @@ test('exact quote-guard refusal is durable not-sent, waits, and retries the same
   assert.equal(row.state, 'delivered'); assert.equal(row.sendAttemptCount, 2); assert.equal(reads, 1)
   assert.equal(calls.length, 2)
   assert.deepEqual(calls[0], calls[1], 'Retry preserves quote, owner mention, text and outbound idempotency key')
+  assert.equal(calls[1][calls[1].indexOf('--content') + 1], signed)
   assert.deepEqual(calls[1].slice(0, 3), ['chat', 'message', 'reply'])
   assert.equal(calls[1][calls[1].indexOf('--ref-msg-id') + 1], 'source')
   assert.equal(calls[1][calls[1].indexOf('--at-open-dingtalk-ids') + 1], 'owner')
