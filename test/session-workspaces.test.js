@@ -43,3 +43,13 @@ test('执行名称统一复用原生简短清理逻辑，持久名称优先于�
  assert.equal(executionSessionTitle({key:'检查服务',input:{objective:'完整目标'.repeat(100)}}),'检查服务')
  assert.equal(executionSessionTitle({}),'任务执行')
 })
+
+test('仅显式中文title作为新短名，否则沿用key，不以长目标或动作词替代',()=>{
+ assert.equal(executionSessionTitle({input:{title:'验证 PostgreSQL 连接',objective:'Verify connection'},key:'verify-db'}),'验证 PostgreSQL 连接')
+ assert.equal(executionSessionTitle({input:{title:'english-new-title',objective:'Verify API behavior'},key:'api-check'}),'api-check')
+ assert.equal(executionSessionTitle({input:{title:'  ',objective:'Read logs'},key:'read-logs'}),'read-logs')
+ assert.equal(executionSessionTitle({input:{objective:'核对完整目标'.repeat(30)},key:'legacy-inspection'}),'legacy-inspection')
+ assert.equal(executionSessionTitle({input:{objective:'Investigate database timeout'},key:'inspect-db'}),'inspect-db')
+ assert.equal(executionSessionTitle({title:'legacy-english',input:{title:'新名称',objective:'New goal'}}),'legacy-english')
+ assert.equal(executionSessionTitle({executionId:'legacy-no-title-field',input:{title:'legacy-english',objective:'Verify API'}}),'legacy-english')
+})

@@ -85,8 +85,13 @@ export function nameSession(ctx, session, purpose, subject) {
 
 /** One compact name shared by the durable execution, DTO and native session. */
 export function executionSessionTitle(execution = {}) {
-  const subject = execution.title || execution.input?.title || execution.key || execution.input?.objective || execution.objective || ''
-  return sessionTitle('execution', subject).replace(/ · 任务执行$/, '')
+  // Continuation is not a rename operation, including for legacy English titles.
+  if (typeof execution.title === 'string' && execution.title.trim()) return execution.title.trim()
+  if (execution.executionId) return sessionTitle('execution', execution.input?.title || execution.key || '').replace(/ · 任务执行$/, '')
+  const title = sessionTitle('execution', execution.input?.title ?? '').replace(/ · 任务执行$/, '')
+  if (/[\u3400-\u9fff]/u.test(title) && title !== '任务执行') return title
+  // No Chinese name supplied: retain the original key naming path, never derive from objective.
+  return sessionTitle('execution', execution.key || '').replace(/ · 任务执行$/, '')
 }
 
 /** Use the native title service without adding role suffixes to task-owned names. */
