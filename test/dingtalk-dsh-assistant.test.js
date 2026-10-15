@@ -24,7 +24,7 @@ test('单一业务插件以原生任务会话启停，不恢复已移除的任�
   await plugin.dispose()
 })
 
-test('通用生产源码不绑定个人姓名，群回复签名仅来自明确个人配置', async () => {
+test('通用生产源码不绑定个人姓名，群回复署名遵循工作区与群职责', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')
   assert.match(source, /签名、口吻和身份声明由 Agent 自身工作区规则决定/)
   assert.doesNotMatch(source, /小小鹏|孙鹏/u)

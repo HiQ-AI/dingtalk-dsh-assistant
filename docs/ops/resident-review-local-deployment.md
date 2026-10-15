@@ -1,5 +1,11 @@
 # 常驻通知修复本地部署
 
+## 移除全局回复署名
+
+本次删除 Assistant 的全局署名字段、配置入口和发送端覆盖逻辑，无执行库 schema 迁移。沿本文普通本地部署安装 Assistant，并刷新设置页加载新 bundle；旧客户端提交 `replySignature` 会被拒绝。历史 storage 与 profile 的署名值不再使用，不需要清理历史通知或重发消息。
+
+切换后只读核对 `/state/agent-config` 不再返回 `replySignature`、设置页没有署名字段，再核对新群回复/任务提问保留模型按工作区和所属群职责生成的署名。原生引用及真实 @ 继续保持。Host 不承诺自动补齐模型遗漏；已有通知保持原文。源码测试不能替代安装包、新进程、健康和真实渠道核验。
+
 ## 群协调器外发引用修复
 
 本次仅更新 Assistant，无 schema 迁移。沿普通部署进入维护并等待协调回合排空，先 `scripts/deploy-local.ps1 -ArgumentsFile <绝对JSON> -Check`，再执行安装、Readback 与 Resume。已进入维护时提供当前 `ContinueMaintenanceId` 和 `ExpectedMaintenanceRevision`，不覆盖其他维护身份。

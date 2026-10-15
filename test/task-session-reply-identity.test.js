@@ -20,47 +20,30 @@ function memoryFacility(seed = new Map()) {
   return { seed, facility: { async open() { return { table, close: async () => {} } } } }
 }
 
-test('Agent signature config saves, clears and reloads without profile fallback or cross-Agent values', async t => {
+test('历史全局署名不再暴露，旧字段提交拒绝且不影响其它配置', async t => {
   const root = await mkdtemp(join(tmpdir(), 'reply-config-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const ctx = { agentDefaultModel: { currentSelection: () => ({ provider: 'fixture', model: 'fixture' }) } }
-  const { facility, seed } = memoryFacility()
-  let runtime = await openTaskResidentRuntime(ctx, await openResidentStore(facility), root)
-  assert.equal(runtime.getAgentConfig().replySignature, '')
+  const { facility, seed } = memoryFacility(new Map([['scheduler:runtime', { tasks: [], agentNames: ['原名称'], replySignature: '旧全局代回' }]]))
+  const runtime = await openTaskResidentRuntime(ctx, await openResidentStore(facility), root, { agentReplySignature: '旧Profile代回' })
   const server = createServer((req, res) => handleRequest(req, res, runtime).catch(error => {
     res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: error.message }))
   }))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await runtime.close() })
   const base = `http://127.0.0.1:${server.address().port}`
-  const put = async body => {
-    const response = await fetch(base + '/config/agent', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-    return { status: response.status, body: await response.json() }
-  }
-  for (const [name, signature] of [['资料助理', '资料助理代回'], ['Ada', 'Ada Support']]) {
-    const response = await put({ agentNames: [name], replySignature: signature })
-    assert.equal(response.status, 200)
-    assert.equal(response.body.replySignature, signature)
-    assert.deepEqual(response.body.agentNames, [name])
-    const stored = residentDomainSpec.tables.scheduler.valueSchema.parse(seed.get('scheduler:runtime'))
-    assert.equal(stored.replySignature, signature)
-    await runtime.close()
-    runtime = await openTaskResidentRuntime(ctx, await openResidentStore(memoryFacility(seed).facility), root, { agentReplySignature: 'Profile fallback' })
-    assert.equal((await (await fetch(base + '/state/agent-config')).json()).replySignature, signature)
-  }
-  const invalid = await put({ agentNames: ['Must not save'], replySignature: 'Ada\nMira' })
+  const read = async () => (await fetch(base + '/state/agent-config')).json()
+  assert.equal(Object.hasOwn(await read(), 'replySignature'), false)
+  const invalid = await fetch(base + '/config/agent', { method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agentNames: ['不得保存'], replySignature: '覆盖代回' }) })
   assert.equal(invalid.status, 400)
-  assert.match(invalid.body.error, /SIGNATURE_INVALID/u)
-  assert.deepEqual(runtime.getAgentConfig().agentNames, ['Ada'])
-  assert.equal(runtime.getAgentConfig().replySignature, 'Ada Support')
-  assert.equal((await put({ replySignature: '' })).status, 200)
-  await runtime.close()
-  runtime = await openTaskResidentRuntime(ctx, await openResidentStore(memoryFacility(seed).facility), root, { agentReplySignature: 'Profile fallback' })
-  assert.equal(runtime.getAgentConfig().replySignature, '', 'explicit clear must survive restart, not re-enable the profile default')
-  const other = await openTaskResidentRuntime(ctx, await openResidentStore(memoryFacility().facility), root, { agentReplySignature: 'Mira Support' })
-  assert.equal(other.getAgentConfig().replySignature, 'Mira Support')
-  assert.equal(runtime.getAgentConfig().replySignature, '')
-  await other.close()
+  assert.equal((await invalid.json()).error, 'agent_reply_signature_removed')
+  assert.deepEqual((await read()).agentNames, ['原名称'])
+  const valid = await fetch(base + '/config/agent', { method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agentNames: ['新名称'] }) })
+  assert.equal(valid.status, 200)
+  assert.deepEqual((await valid.json()).agentNames, ['新名称'])
+  assert.equal(Object.hasOwn(residentDomainSpec.tables.scheduler.valueSchema.parse(seed.get('scheduler:runtime')), 'replySignature'), false)
 })
 
 function jsonValues(value) {
@@ -112,8 +95,10 @@ async function serviceFixture(t, replySignature, action = 'complete') {
             replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map(candidate => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }]
       }
       assert.ok(names.includes('task_session_submit'), 'Completion and questions must use the real native task owner')
+      assert.match(JSON.stringify(request.messages.filter(message => message.role === 'system')), /公开回复及requester问题是否需要署名、署名内容由你按当前工作区规则与所属群会话职责决定/u)
+      assert.doesNotMatch(JSON.stringify(request.messages.filter(message => message.role === 'system')), /显式全局署名由Host统一附加/u)
       return [{ name: 'task_session_submit', args: { decision: { action, summary: '核验完成。\n\n• 小小鹏代回', evidence: ['材料已核对。'], limitations: [],
-        ...(action === 'wait' ? { question: '请提供目标日期。\n\n- 小小鹏代回' } : {}) } } }]
+        ...(action === 'wait' ? { question: '请提供目标日期。\n\n- 小小鹏代回', audience: 'requester' } : {}) } } }]
     } catch (error) { modelFailure = error; return [] }
   }, { agentConfig: config })
   await host.residentStore.setAgentNames(config.agentNames)
@@ -139,41 +124,41 @@ async function serviceFixture(t, replySignature, action = 'complete') {
   return { service: host.service, config, host, get sent() { return host.sent.filter(notification => notification.payload.kind !== 'topic-reply' || notification.payload.replyKind === 'substantive') }, ingest }
 }
 
-test('real service completion and later status use only the current explicit signature and retain quote/mention', nativeOptions, async t => {
+test('完成及状态保留模型署名，历史全局字段无效，引用和真实@不变', nativeOptions, async t => {
   const f = await serviceFixture(t, '资料助理代回')
   await f.ingest('original', '核对材料')
   assert.equal(f.sent.length, 1)
   assert.equal(f.sent[0].payload.replyToMessageId, 'original')
   assert.equal(f.sent[0].payload.replyToSenderOpenDingTalkId, 'owner')
   assert.deepEqual(f.sent[0].payload.atOpenDingTalkIds, ['owner'])
-  assert.equal(f.sent[0].payload.text, '核验完成。\n\n- 材料已核对。\n\n- 资料助理代回')
+  assert.equal(f.sent[0].payload.text, '核验完成。\n\n• 小小鹏代回\n\n- 材料已核对。')
   for (const [messageId, signature] of [['renamed', 'Ada Support'], ['cleared', ''], ['unset', undefined]]) {
     f.config.replySignature = signature
     await f.ingest(messageId, '状态')
     const payload = f.sent.at(-1).payload
-    assert.equal(payload.text, `核验完成。${signature ? `\n\n- ${signature}` : ''}`)
+    assert.equal(payload.text, '核验完成。\n\n• 小小鹏代回')
     assert.equal(payload.replyToMessageId, messageId)
     assert.equal(payload.replyToSenderOpenDingTalkId, 'owner')
     assert.deepEqual(payload.atOpenDingTalkIds, ['owner'])
-    assert.doesNotMatch(payload.text, /小小鹏|旧职责助理/u)
+    assert.doesNotMatch(payload.text, /Ada Support|资料助理代回|旧职责助理/u)
   }
   const persisted = await f.service.store.query({ kind: 'notification.list' })
   assert.equal(persisted.filter(row => row.payload.kind !== 'topic-reply' || row.payload.replyKind === 'substantive').length, 4)
   assert.equal(persisted.find(row => row.payload.kind === 'task-completed').payload.text, f.sent[0].payload.text, 'already prepared delivery remains immutable')
 })
 
-test('questions and separate service instances do not borrow another Agent signature', nativeOptions, async t => {
+test('任务提问保留模型署名且不借用历史全局字段', nativeOptions, async t => {
   for (const signature of ['Mira Support', undefined]) {
     await t.test(signature ?? 'unconfigured', async t => {
       const f = await serviceFixture(t, signature, 'wait')
       await f.ingest('question-source', '请核对日期')
       assert.equal(f.sent.length, 1)
       const payload = f.sent[0].payload
-      assert.equal(payload.text, `请提供目标日期。${signature ? `\n\n- ${signature}` : ''}`)
+      assert.equal(payload.text, '请提供目标日期。\n\n- 小小鹏代回')
       assert.equal(payload.replyToMessageId, 'question-source')
       assert.equal(payload.replyToSenderOpenDingTalkId, 'owner')
       assert.deepEqual(payload.atOpenDingTalkIds, ['owner'])
-      assert.doesNotMatch(payload.text, /小小鹏|资料助理|Ada|旧职责助理/u)
+      assert.doesNotMatch(payload.text, /Mira Support|资料助理|Ada|旧职责助理/u)
     })
   }
 })

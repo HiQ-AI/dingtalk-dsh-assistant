@@ -193,7 +193,7 @@ const taskSchema = z.object({
 })
 const schedulerSchema = z.object({
   performanceProjection: performanceProjectionSchema.optional(),
-  tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), replySignature: z.string().max(80).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
+  tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
   leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
   // 已移除任务表格同步；仅保留历史字段声明，避免读取旧数据时剥离配置和状态。
   taskSheetSyncConfig: z.object({ enabled: z.boolean(), documentUrl: z.string().url(), nodeId: z.string().min(1), documentName: z.string().min(1), sheetId: z.string().min(1), sheetTitle: z.string().min(1), intervalMs: z.literal(180000) }).optional(),
@@ -454,11 +454,6 @@ export async function openResidentStore(storageDomain) {
     hasGroupConfiguration: () => scheduler.get('runtime')?.groupConfigurationInitialized === true,
     getAgentWorkspaceDir: () => scheduler.get('runtime')?.agentWorkspaceDir,
     getAgentNames: () => scheduler.get('runtime')?.agentNames ?? [],
-    getReplySignature: () => scheduler.get('runtime')?.replySignature,
-    setReplySignature: async (replySignature) => {
-      await scheduler.update('runtime', (current) => ({ ...current, replySignature }))
-      return { replySignature }
-    },
     getMaxConcurrentTasks: () => scheduler.get('runtime')?.maxConcurrentTasks,
     setMaxConcurrentTasks: async (maxConcurrentTasks) => {
       await scheduler.update('runtime', (current) => ({ ...current, maxConcurrentTasks }))
