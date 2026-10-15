@@ -230,6 +230,8 @@ test('operator exact error resolution has zero-write HTTP check, retains partial
  let originalStep=0, readStep=0, errorCalls=0, replied=false, resumed=false
  const h=await fixture(t,async(request,host)=>{
   const input=latestInput(request)
+  if(request.tools.some(tool=>tool.name==='group_topic_summary_submit'))return [call('group_topic_summary_submit',{requestId:input.requestId,topicId:input.topicId,summary:'核对原失败回执并沿原任务恢复。'})]
+  if(request.tools.some(tool=>tool.name==='group_decision_submit'))return [call('group_decision_submit',{requestId:input.requestId,topicId:input.topicId,revision:input.revision,decision:{actions:[],topicUpdate:{summary:'核对原失败回执并沿原任务恢复。'}}})]
   if(request.tools.some(tool=>tool.name==='task_delegate')) {
    const executions=await host.query('execution.list'),operations=await host.query('operation.list')
    if(!executions.length)return [call('task_delegate',{key:'original-error',objective:'original-error'}),decide('wait','waiting')]
@@ -275,8 +277,10 @@ test('operator exact error resolution has zero-write HTTP check, retains partial
  const after=await h.query('operation.get',{operationId:operation.operationId})
  assert.equal(after.state,'failed');assert.equal(after.result.partialEffectsPossible,true);assert.equal(after.result.noEffect,undefined);assert.deepEqual(after.result.previousObservation,operation)
  assert.ok(after.result.operatorSourceId);assert.equal(errorCalls,1)
+ assert.equal(h.service.listAlerts().some(item=>item.alertId===`operation:${operation.operationId}`),false)
  assert.equal((await post('')).status,200)
  assert.equal((await post('',{...body,reply:'changed scope'})).status,409)
  const continued=await h.query('execution.get',{executionId:original.executionId});assert.equal(continued.sessionId,original.sessionId);assert.equal(continued.inputVersion,2)
  assert.equal((await h.query('task.get',{taskId:created.taskId})).status,'completed')
 })
+

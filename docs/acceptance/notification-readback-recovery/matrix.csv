@@ -6,3 +6,4 @@ notification-delivery,2,PASS,task-notification-delivery/readback/completion 47/4
 workflow-notification-obligations,1,PASS,65/65 independent cases passed
 real-nine-readback,2,PASS,nine original SUCCESS receipts and message bodies accepted; no sends
 local-deployment,2,PENDING,waiting for original execution drain
+operator-alert-cache,2,PASS,native HTTP original resolution regression; old source fails alert assertion and fixed source passes

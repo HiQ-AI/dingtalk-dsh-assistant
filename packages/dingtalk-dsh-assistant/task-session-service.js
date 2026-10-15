@@ -77,6 +77,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (receipt.result?.execution) executionCache.set(receipt.result.execution.executionId,
       receipt.replayed && kind === 'execution.progressReported' ? await query('execution.get', { executionId: receipt.result.execution.executionId }) : receipt.result.execution)
     if (receipt.result?.operation) operationCache.set(receipt.result.operation.id ?? receipt.result.operation.operationId, receipt.result.operation)
+    // 人工结清是复合事务，只返回任务；从账本刷新其中已结清的操作，避免残留 unknown 告警。
+    if (kind === 'task.human.resolve-failures') for (const resolution of args.resolutions) {
+      const operation = await query('operation.get', { operationId: resolution.operationId })
+      operationCache.set(operation.id ?? operation.operationId, operation)
+    }
     if (receipt.result?.notification) notificationCache.set(receipt.result.notification.id, receipt.result.notification)
     if (receipt.result?.notification) await projectTaskNotification({ residentStore, notification: receipt.result.notification })
     if (receipt.result?.task) taskCache.set(receipt.result.task.taskId, topicTaskView(receipt.result.task))
