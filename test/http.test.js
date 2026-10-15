@@ -550,3 +550,20 @@ test('历史维护仅允许受信只读GET，旧test动作无旁路而inbound仍
   assert.equal(writes, 0)
   assert.equal(inbound, 1)
 })
+
+test('current task archive checks local identity, strict body, legacy protection and conflict feedback', async () => {
+  let writes = 0
+  await withServer(false, async base => {
+    const post = (body, headers = {}) => fetch(`${base}/tasks/current/archive`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
+    assert.equal((await post({}, { origin: 'https://untrusted.example' })).status, 403)
+    assert.equal((await post({ actorId: 'spoof' })).status, 400)
+    assert.equal(writes, 0)
+    assert.equal((await fetch(`${base}/tasks/legacy/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 410)
+    const success = await post({}); assert.equal(success.status, 200); assert.ok((await success.json()).archivedAt)
+    assert.equal(writes, 1)
+  }, { overrides: { isTaskSessionMode: () => true, getTaskSessionDetail: async id => ({ legacyReadonly: id === 'legacy' }), archiveTask: async ({ taskId }) => { writes++; return { taskId, archivedAt: '2026-10-15T00:00:00Z' } } } })
+  await withServer(false, async base => {
+    const response = await fetch(`${base}/tasks/live/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    assert.equal(response.status, 409); assert.equal((await response.json()).error, 'DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT')
+  }, { overrides: { isTaskSessionMode: () => true, getTaskSessionDetail: async () => ({}), archiveTask: async () => { throw new Error('DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT') } } })
+})

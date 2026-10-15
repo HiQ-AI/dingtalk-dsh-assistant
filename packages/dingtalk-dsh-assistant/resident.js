@@ -126,6 +126,7 @@ export async function apply(ctx, config = {}) {
   runtime.createTask = tasks.createTask
   runtime.appendTaskContext = tasks.appendTaskContext
   runtime.cancelTask = tasks.cancelTask
+  runtime.archiveTask = tasks.archiveTask
   runtime.listAuthorizationRequests = tasks.listAuthorizationRequests
   runtime.respondTaskHumanRequest = tasks.respondHumanRequest
   runtime.reconcileWebTaskTopics = tasks.reconcileWebTaskTopics

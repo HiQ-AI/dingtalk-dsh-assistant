@@ -335,6 +335,7 @@ export function collectDecisionIssues(request, decision, { store, delta, ownersh
     if (action.taskId) {
       const task = store.getTask(action.taskId)
       if (!task || task.groupId !== request.groupId) addIssue(field, 'task_topic_wrong_group')
+      if (task?.archivedAt) addIssue(field, 'task_archived')
       if (action.kind === 'task-reopen' && task?.state !== 'completed') addIssue(field, 'task_not_completed')
       if (['task-context', 'task-cancel'].includes(action.kind) && task?.state === 'completed') addIssue(field, 'task_not_active')
     }
