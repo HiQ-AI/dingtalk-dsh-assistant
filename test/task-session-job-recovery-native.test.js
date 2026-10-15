@@ -283,4 +283,3 @@ test('operator exact error resolution has zero-write HTTP check, retains partial
  const continued=await h.query('execution.get',{executionId:original.executionId});assert.equal(continued.sessionId,original.sessionId);assert.equal(continued.inputVersion,2)
  assert.equal((await h.query('task.get',{taskId:created.taskId})).status,'completed')
 })
-
