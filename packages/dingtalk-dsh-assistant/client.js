@@ -54,6 +54,7 @@ export function DingTalkDshAssistantCard() {
   const [drafts, setDrafts] = useState({})
   const [agentWorkspace, setAgentWorkspace] = useState('')
   const [agentNames, setAgentNames] = useState('')
+  const [replySignature, setReplySignature] = useState('')
   const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
       const [proxyUrl, setProxyUrl] = useState('')
   const [deletingGroupId, setDeletingGroupId] = useState('')
@@ -66,7 +67,7 @@ export function DingTalkDshAssistantCard() {
   const [updateFeedback, setUpdateFeedback] = useState()
   const [checkingVersion, setCheckingVersion] = useState(false)
   const refresh = useCallback(async () => {
-    try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+    try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }, [])
   useEffect(() => { refresh() }, [refresh])
@@ -102,8 +103,8 @@ export function DingTalkDshAssistantCard() {
     }
   }
   const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
-  const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '')
-  const saveAgentConfig = () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), workspaceDir: agentWorkspace, ...agentModel, proxyUrl }) }))
+  const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '')
+  const saveAgentConfig = () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl }) }))
   return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
     React.createElement('section', { style: panel },
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
@@ -137,6 +138,9 @@ export function DingTalkDshAssistantCard() {
       React.createElement('strong', { style: { fontSize: 13 } }, 'Agent 名称 / 别名'),
       React.createElement('input', { 'aria-label': 'Agent 名称和别名', placeholder: '例如 数字助理,小助手', style: input, value: agentNames, onChange: (event) => setAgentNames(event.target.value) }),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '多个名称使用英文逗号分隔；任一名称被明确提及时可参与新任务判断。'),
+      React.createElement('label', { htmlFor: 'dingtalk-agent-reply-signature', style: { fontSize: 13, fontWeight: 600 } }, '群回复署名（可选）'),
+      React.createElement('input', { id: 'dingtalk-agent-reply-signature', 'aria-label': 'Agent 群回复署名', 'aria-describedby': 'dingtalk-agent-reply-signature-help', maxLength: 80, placeholder: '留空不追加署名', style: input, value: replySignature, onChange: (event) => setReplySignature(event.target.value) }),
+      React.createElement('div', { id: 'dingtalk-agent-reply-signature-help', style: { fontSize: 12, color: colors.muted } }, '完整最终回复末尾统一附加一次，不用加开头的“-”；中间消息不追加，留空不额外署名。'),
       React.createElement('strong', { style: { fontSize: 13 } }, '工作目录'),
       React.createElement('input', { 'aria-label': 'Agent 工作区目录', placeholder: '现有绝对目录', style: input, value: agentWorkspace, onChange: (event) => setAgentWorkspace(event.target.value) }),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '群常驻会话使用此工作区；每个任务及其动态执行使用独立工作目录。'),

@@ -1,10 +1,43 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { formatTaskGroupReply } from '../packages/dingtalk-dsh-assistant/group-reply-format.js'
+import { formatTaskGroupReply, normalizeReplySignature } from '../packages/dingtalk-dsh-assistant/group-reply-format.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 
 const source = { groupId: 'cid-group', messageId: 'm-original', senderName: '原发起人', senderOpenDingTalkId: 'od-sender' }
 const format = options => formatTaskGroupReply({ source, summary: '核验结论：问题部分存在。', ...options })
+
+test('显式署名在完整结论、证据和限制后仅附加一次，清理摘要中间及重复落款', () => {
+  assert.equal(format({ summary: '处理中。\n\n- Ada Support', signature: 'Ada Support', includeSignature: false }).text, '处理中。')
+  for (const summary of ['结论。', '结论。\n\n- Ada Support', '结论。\n\n- Ada Support\n\n- Ada Support', '结论。\n\n- Ada Support\n- Ada Support', '结论。\n\n• Ada Support\n\n补充说明。']) {
+    const text = format({ summary, evidence: ['已核验。\n\n- Ada Support'], limitations: ['未部署。\n\n- Ada Support'], signature: 'Ada Support' }).text
+    assert.ok(text.endsWith('未部署。\n\n- Ada Support'))
+    assert.equal(text.match(/Ada Support/gu).length, 1)
+    assert.equal(format({ summary: text, signature: 'Ada Support' }).text, text)
+  }
+})
+
+test('只识别当前配置独立署名，引用代码和业务列表不被删除', () => {
+  for (const summary of ['正文。\n\n> - Ada Support', '正文。\n\n```text\n\n- Ada Support\n```', '正文。\n\n~~~\n- Ada Support\n~~~', '分工：\n\n- Ada Support', '分工。\n\n- Bob\n\n- Ada Support', '正文。\n\n    - Ada Support', 'Ada Support 是联系人。', '正文。\n\n- Other Agent']) {
+    assert.equal(format({ summary, signature: 'Ada Support' }).text, summary + '\n\n- Ada Support')
+  }
+  for (const invalid of ['- bad', 'a\nb', 'a\u200bb', 'x'.repeat(81), null]) assert.throws(() => normalizeReplySignature(invalid), /SIGNATURE_INVALID/)
+  assert.equal(format({ signature: '' }).text, format().text)
+  assert.equal(format({ signature: '甲' }).text, format().text + '\n\n- 甲')
+  assert.equal(format({ signature: '乙' }).text, format().text + '\n\n- 乙')
+})
+
+test('长正文交给原DWS出口时只在完整payload末尾有署名', () => {
+  const text = format({ summary: '长消息正文。\n'.repeat(10000), signature: 'Ada Support' }).text
+  const adapter = createDwsAdapter({ runner: { run: async () => { throw new Error('no external send') } } })
+  const args = adapter.compileGroupReply({ ...format({ summary: text, signature: 'Ada Support' }), idempotencyKey: 'long-reply' })
+  assert.equal(args[args.indexOf('--content') + 1], text)
+  assert.equal(text.match(/Ada Support/gu).length, 1)
+})
+
+test('围栏内伪关闭行不会让代码中的署名被删除', () => {
+  const summary = '代码示例。\n\n```text\n```not-a-closing-fence\n\n- Ada Support\n\n```'
+  assert.equal(format({ summary, signature: 'Ada Support' }).text, summary + '\n\n- Ada Support')
+})
 
 test('原生引用已绑定时删除正文重复原文，保留其他证据引文', () => {
   const original = { ...source, text: '先查清楚开发分之再说' }
@@ -78,12 +111,12 @@ test('正文列表、引用与代码中的署名样例原样保留', () => {
     '示例命令：\n\n```text\n\n- 示例助理代回',
   ]) {
     assert.equal(format({ summary }).text, summary)
-    assert.equal(format({ summary, signature: 'Ada Support' }).text, summary)
+    assert.equal(format({ summary, signature: 'Ada Support' }).text, summary + '\n\n- Ada Support')
   }
 })
 
 
-test('不同群模型署名保持原文，历史全局字段不追加或覆盖署名', () => {
+test('未配置署名时不同群模型原文保持不变，不从职责推断身份', () => {
   for (const [groupId, footer] of [['group-a', '小小鹏代回'], ['group-b', '数据助理代回']]) {
     for (const signature of [undefined, '', '   ']) {
       const summary = `已核验。\n\n- ${footer}`

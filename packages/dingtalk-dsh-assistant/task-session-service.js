@@ -469,8 +469,17 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
     appendOutbox: async args => {
+      const prepared = (await query('notification.list')).find(item => item.id === args.outboundId)
+      if (prepared) {
+        // Recovery must reuse the frozen payload even if Agent configuration changed.
+        const group = await residentStore.appendOutbox({ ...args, text: prepared.payload.text })
+        void deliverNotifications()
+        return group
+      }
       const sourceText = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)?.text
-      const reply = formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [] })
+      const previous = residentStore.getGroup(args.groupId)?.outbox.find(item => item.outboundId === args.outboundId)
+      // The resident outbox can survive a crash before notification.prepare.
+      const reply = previous ? { text: previous.text } : formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature, includeSignature: args.replyKind === 'substantive' })
       args = { ...args, ...reply }
       const group = await residentStore.appendOutbox(args)
       const notificationId = args.outboundId
@@ -731,7 +740,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               if (source && source.channel !== 'web' && !source.sourceId.startsWith('web:')) {
                 const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId, senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text },
                   summary: decision.summary, evidence: decision.evidence, limitations: decision.limitations,
-                  internalIds: await replyInternalIds(task) })
+                  signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
                 notification = { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId, fact: { taskId }, kind: 'task-completed' }
               }
               await command('task.complete', { binding, summary: decision.summary, result: decision, ...(notification ? { notification } : {}) }, `complete:${taskId}:${binding.requirementRevision}`)
@@ -774,10 +783,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   async function queueReply(task, source, decision, id, kind, humanRequest) {
     if (!source || source.channel === 'web' || source.sourceId.startsWith('web:')) return
+    if ((await query('notification.list')).some(item => item.id === id)) {
+      void deliverNotifications()
+      return
+    }
     const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId,
       senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text }, summary: decision.summary,
       evidence: decision.evidence, limitations: decision.limitations,
-      internalIds: await replyInternalIds(task) })
+      signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
     await command('notification.prepare', { notificationId: id, taskId: task.taskId, requirementRevision: task.requirementRevision,
       kind, payload: { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId,
         ...(humanRequest ? { audience: humanRequest.audience, humanRequestId: humanRequest.requestId } : {}), fact: { taskId: task.taskId }, kind } }, `prepare-notification:${id}`)

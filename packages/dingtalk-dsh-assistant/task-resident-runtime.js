@@ -2,13 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { listPerformance } from './performance.js'
+import { normalizeReplySignature } from './group-reply-format.js'
 
 const retired = () => { throw Object.assign(new Error('WORKFLOW_RETIRED'), { code: 'WORKFLOW_RETIRED' }) }
 /** Group transport/configuration facade. It has no legacy task scheduler, stage engine or Owner. */
-export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', maxConcurrentTasks = 5 } = {}) {
+export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5 } = {}) {
+  const initialSignature = normalizeReplySignature(store.getReplySignature?.() ?? agentReplySignature)
   const root = resolve(store.getAgentWorkspaceDir?.() ?? agentWorkspaceDir ?? cwd)
   if (!isAbsolute(root) || !(await stat(root)).isDirectory()) throw new Error('agent_workspace_not_directory')
   if (store.getAgentWorkspaceDir?.() !== root) await store.setAgentWorkspaceDir(root)
+  if (store.getReplySignature?.() === undefined && agentReplySignature !== undefined) await store.setReplySignature(initialSignature)
   const subscribed = new Set(), unsubscribed = new Set(), issues = new Map()
   const listen = listeners => listener => { listeners.add(listener); return () => listeners.delete(listener) }
   const noListener = () => () => {}
@@ -18,19 +21,21 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   let closed = false, profile = '', groupReader, resourceReader
   const selection = () => ctx.agentDefaultModel.currentSelection()
   const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: root, ...selection(),
+    replySignature: store.getReplySignature?.() ?? initialSignature,
     proxyUrl: store.getProxyUrl?.() ?? '', maxConcurrentTasks: store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks })
   const api = {
     taskSessionNotifications: true,
     getAgentConfig,
     async updateAgentConfig(input) {
       if (closed) throw new Error('resident_runtime_closed')
-      if (Object.hasOwn(input, 'replySignature')) throw new Error('agent_reply_signature_removed')
       if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
       if (input.workspaceDir !== undefined && resolve(input.workspaceDir) !== root) throw new Error('task_workspace_change_requires_offline_migration')
+      const replySignature = input.replySignature === undefined ? undefined : normalizeReplySignature(input.replySignature)
       if (input.agentNames !== undefined) {
         if (!Array.isArray(input.agentNames) || input.agentNames.some(name => typeof name !== 'string')) throw new Error('agent_names_must_be_array')
         await store.setAgentNames([...new Set(input.agentNames.map(name => name.trim()).filter(Boolean))])
       }
+      if (replySignature !== undefined) await store.setReplySignature(replySignature)
       if (input.maxConcurrentTasks !== undefined) {
         if (!Number.isSafeInteger(input.maxConcurrentTasks) || input.maxConcurrentTasks < 1 || input.maxConcurrentTasks > 50) throw new Error('agent_max_concurrent_tasks_invalid')
         await store.setMaxConcurrentTasks(input.maxConcurrentTasks)
