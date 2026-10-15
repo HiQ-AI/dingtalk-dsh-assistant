@@ -83,6 +83,12 @@ export function nameSession(ctx, session, purpose, subject) {
   if (titles) titles.rename(session, sessionTitle(purpose, subject))
 }
 
+/** One compact name shared by the durable execution, DTO and native session. */
+export function executionSessionTitle(execution = {}) {
+  const subject = execution.title || execution.input?.title || execution.key || execution.input?.objective || execution.objective || ''
+  return sessionTitle('execution', subject).replace(/ · 任务执行$/, '')
+}
+
 /** Use the native title service without adding role suffixes to task-owned names. */
 export function renameTaskSession(ctx, session, title) {
   const titles = ctx.get?.('sessionTitle') ?? ctx.sessionTitle

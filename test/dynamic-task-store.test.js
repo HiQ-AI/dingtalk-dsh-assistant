@@ -169,6 +169,9 @@ test('continuation retains execution/session identity and versions inputs across
   const nextOwner = (await f.command('task.claim', { taskId: 'task' })).result
   await f.command('execution.continue', { binding: nextOwner.binding, executionId: first.executionId, key: 'next', prompt: 'Second goal', input: { objective: 'Second goal' } })
   const next = (await f.command('execution.claim', { executionId: first.executionId })).result.binding
+  assert.equal((await f.query({ kind: 'execution.get', executionId: first.executionId })).title, 'inspect')
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'execution.get', executionId: first.executionId })).title, 'inspect')
   assert.equal(next.sessionId, first.sessionId)
   assert.equal(next.inputVersion, 2)
   assert.equal(next.requirementRevision, 2)
