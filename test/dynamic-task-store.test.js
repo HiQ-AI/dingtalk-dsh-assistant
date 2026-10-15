@@ -197,6 +197,101 @@ test('generic operations persist before dispatch, unknown never replays, locks s
   assert.equal((await f.command('operation.start', { binding: resumed, operationId: second.operationId })).dispatchEligible, true)
 })
 
+test('current execution consumes ordinary success and failure receipts; only stage and final results wake its coordinator', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.command('wake.ack', { binding: owner.binding, wakeIds: owner.wakeIds })
+  await f.command('task.drained', { binding: owner.binding })
+  for (const state of ['succeeded', 'failed']) {
+    const { operation } = (await f.command('operation.prepare', { binding, key: state, definition: { toolName: 'arbitrary_native_capability' }, resourceKeys: ['fixture-resource'] })).result
+    await f.command('operation.start', { binding, operationId: operation.operationId })
+    const args = { binding, operationId: operation.operationId, state, result: { receipt: state } }
+    await f.command('operation.settle', args, `settle-${state}`)
+    await f.command('operation.settle', args, `settle-${state}`)
+    assert.equal((await f.query({ kind: 'operation.get', operationId: operation.operationId })).state, state)
+    assert.equal((await f.query({ kind: 'resource.list' })).length, 0)
+  }
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task', state: 'pending' })).length, 0)
+  await assert.rejects(f.command('task.claim', { taskId: 'task' }), { code: 'DYNAMIC_TASK_NO_WAKE' })
+  await f.command('execution.progressReported', { binding, sequence: 1, summary: '阶段核验已完成，继续处理后续项。', evidence: ['original-tool-receipts'] }, 'stage-boundary')
+  const stage = (await f.command('task.claim', { taskId: 'task' })).result
+  assert.deepEqual(stage.wakes.map(item => item.kind), ['execution.stage.progress'])
+  await f.command('wake.ack', { binding: stage.binding, wakeIds: stage.wakeIds })
+  await f.command('task.drained', { binding: stage.binding })
+  const result = { binding, output: { summary: '阶段及最终证据已核实' } }
+  await f.command('execution.result', result, 'final-result')
+  await f.command('execution.drained', { binding })
+  await f.command('execution.result', result, 'final-result')
+  const final = (await f.command('task.claim', { taskId: 'task' })).result
+  assert.deepEqual(final.wakes.map(item => item.kind), ['execution.result'])
+  assert.equal(final.task.sessionId, owner.task.sessionId)
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).some(item => item.kind === 'operation.result'), false)
+})
+
+test('unknown, cancellation, reconciliation and independently owned operation results retain causal wakes', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const start = async (scope, key) => {
+    const operation = (await f.command('operation.prepare', { binding: scope, key, definition: { toolName: 'arbitrary_native_capability' }, resourceKeys: [] })).result.operation
+    await f.command('operation.start', { binding: scope, operationId: operation.operationId })
+    return operation.operationId
+  }
+  const unknown = await start(binding, 'uncertain')
+  await f.command('operation.settle', { binding, operationId: unknown, state: 'unknown', result: { receiptLost: true } }, 'uncertain-result')
+  const cancelled = await start(binding, 'cancelled')
+  await f.command('operation.settle', { binding, operationId: cancelled, state: 'cancelled' }, 'cancelled-result')
+  const independent = await start(owner.binding, 'independent')
+  await f.command('operation.settle', { binding: owner.binding, operationId: independent, state: 'succeeded' }, 'independent-result')
+  await f.command('operation.reconcile', { operationId: unknown, state: 'failed', result: { observed: true }, evidenceRef: 'original-receipt' }, 'reconciled-result')
+  const operationWakes = (await f.query({ kind: 'wake.list', taskId: 'task' })).filter(item => item.kind === 'operation.result')
+  assert.deepEqual(operationWakes.map(item => [item.payload.operationId, item.payload.state]), [[unknown, 'unknown'], [cancelled, 'cancelled'], [independent, 'succeeded'], [unknown, 'failed']])
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'wake.list', taskId: 'task' })).filter(item => item.kind === 'operation.result'), operationWakes)
+})
+
+for (const boundary of ['drained', 'terminal', 'revised', 'cancelled', 'continued']) test(`late operation result still wakes after its original consumer is ${boundary}`, async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const operation = (await f.command('operation.prepare', { binding, key: 'late', definition: { toolName: 'arbitrary_native_capability' }, resourceKeys: [] })).result.operation
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  if (boundary === 'drained' || boundary === 'continued') await f.command('execution.drained', { binding })
+  if (boundary === 'terminal') await f.command('execution.result', { binding, output: { summary: '结果已提交' } })
+  if (boundary === 'revised') await f.command('task.revise', { taskId: 'task', request: 'Changed requirement' })
+  if (boundary === 'cancelled') await f.command('execution.cancel', { binding })
+  if (boundary === 'continued') {
+    await f.command('execution.continue', { binding: owner.binding, executionId: binding.executionId, key: 'readback', prompt: 'Read back original operation', input: { objective: 'Inspect' }, definition: { recoveryReadOnly: true } })
+    const next = (await f.command('execution.claim', { executionId: binding.executionId })).result.binding
+    assert.equal(next.sessionId, binding.sessionId)
+    assert.equal(next.inputVersion, binding.inputVersion + 1)
+    assert.equal(next.leaseEpoch, binding.leaseEpoch + 1)
+  }
+  await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'succeeded', result: { originalReceipt: true } }, 'late-result')
+  const resultWakes = (await f.query({ kind: 'wake.list', taskId: 'task' })).filter(item => item.kind === 'operation.result')
+  assert.equal(resultWakes.length, 1)
+  assert.equal(resultWakes[0].payload.operationId, operation.operationId)
+  assert.deepEqual((await f.query({ kind: 'operation.get', operationId: operation.operationId })).dispatchBinding, binding)
+})
+
+test('restart after a consumed tool receipt preserves its identity and recovers through one terminal execution wake', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const operation = (await f.command('operation.prepare', { binding, key: 'original', definition: { toolName: 'arbitrary_native_capability' }, resourceKeys: ['fixture-resource'] })).result.operation
+  await f.command('operation.start', { binding, operationId: operation.operationId }, 'original-start')
+  const settled = await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'succeeded', result: { originalReceipt: true } }, 'original-settle')
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'recovery.pending' })).executions[0].executionId, binding.executionId)
+  assert.deepEqual(await f.query({ kind: 'operation.get', operationId: operation.operationId }), settled.result.operation)
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).some(item => item.kind === 'operation.result'), false)
+  await f.command('execution.drained', { binding })
+  const resumed = (await f.command('execution.claim', { executionId: binding.executionId })).result.binding
+  assert.equal(resumed.sessionId, binding.sessionId)
+  assert.equal(resumed.inputVersion, binding.inputVersion)
+  assert.equal((await f.command('operation.start', { binding, operationId: operation.operationId }, 'original-start')).dispatchEligible, false)
+  const result = { binding: resumed, output: { summary: '使用原持久回执完成恢复' } }
+  await f.command('execution.result', result, 'recovered-result')
+  await f.reopen()
+  await f.command('execution.result', result, 'recovered-result')
+  const wakes = (await f.query({ kind: 'wake.list', taskId: 'task' })).filter(item => item.kind === 'execution.result')
+  assert.equal(wakes.length, 1)
+  assert.equal(wakes[0].payload.executionId, binding.executionId)
+})
+
 test('business completion creates a unique notification atomically; uncertain delivery does not restart business or resend', async t => {
   const f = await fixture(t), owner = await f.task()
   const done = await f.command('task.complete', { binding: owner.binding, summary: 'Verified done', notification: { destination: 'group-1', text: 'Done' } }, 'complete')

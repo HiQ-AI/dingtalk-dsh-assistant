@@ -1,0 +1,145 @@
+{
+  "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+  "taskSessionId": "task-session-c1283783-eac0-41cd-b16b-bf6ca60833f0",
+  "status": "active",
+  "drained": false,
+  "leaseEpoch": 187,
+  "runSequence": 2,
+  "requirementRevision": 4,
+  "controlRevision": 2,
+  "originalRequest": {
+    "requestId": "human-2ad2ef903950518a02ccfccb3d5bc1e25f86096f1e5c57262d0a899436e10b92",
+    "status": "answered",
+    "reply": "当前用户明确纠正，原文：『我的意思是这个申请不应该提，说了让部署到UAT，那就部署到UAT，就这么简单』。结合原已入账孙鹏『部署到uat』，请沿原任务和原execution/session完成本次UAT2实际发布及验证，不再对同一部署的提交推送、UAT集成、构建、产物核验和工作负载镜像更新分段申请。此前恢复说明中的『最终批准』不构成本任务第二道发布门槛，原执行的仅准备小目标已被本次纠正明确扩至完成原部署目标。按实际交接和部署规程核对当前基线、唯一构建、镜像及现场版本，保留原效果账和排空清理；不要重复已成功操作或越过未知效果。原生产、main、SQL、共享业务测试及真实申请的限制继续有效。请给出真实发布结果与证据，不以受托步骤完成代替整体部署完成。"
+  },
+  "waiting": [],
+  "execution": {
+    "executionId": "bdb7b510-4a09-4cd3-9a06-8ac8dda42608",
+    "sessionId": "task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6",
+    "inputVersion": 10,
+    "status": "running",
+    "drained": false,
+    "objective": "沿原会话完成已交办的UAT2实际集成发布、构建产物核验、精确镜像更新及运行验证，返回完整证据链。",
+    "sourceIds": [
+      "im:4ebf8f0d29d1dfdb4080367f018f8ee758f194dd13c6cd13098042227f93d9b6",
+      "web-human:d08b77123b42900b2e16ac3a62d4dd331fa372ce1d105fcca96a6d6c7150d30f",
+      "web-human:9da4d9813b5fd6678c29d730f83d2e8dc3e6915613b448c381ede0794cd2b3b4",
+      "web-human:72d60cb800d20acd6ac532c611fe90a57aeb916063082f1ed8f855af44103f01",
+      "web:1a08c83d5935a5985447372ee1f6d4e0fd992fdc88a2c3282d768b9ee5fe2b4f",
+      "web:b409755bb6250114466f38af9fdfce5da630e2225e158514ac422e6463f95145",
+      "web-human:7139f798c19c4d0c40d898406b2e4a6f042326451f7aa88bd4fe565eaa76084e",
+      "im:db8aff36986c204958b55aa8e5a7c5611f84f2fb71c8cca59126b36ad588e166",
+      "private-human:a2c9e91c65f00fa085db9c40dec9f4a4271bc41f27f0c0cc39ea756700cc2e72",
+      "web-human:3d8247bb66ef4f74d66969ed760107c25209e0ce110b0d79affeeb585bc14824",
+      "web-human:82187ba2c5295adedae0564c63b4a6b7ac8e519c94637b9207a6ce13f56db7a0",
+      "web-human:c396d4b9d9a3352590990eccefb8fd1f047c211128d443cdb48d39f73240eb9d"
+    ]
+  },
+  "unknownOperations": [],
+  "wakeCounts": {
+    "task.created": 1,
+    "operation.result": 176,
+    "execution.result": 17,
+    "human.responded": 8,
+    "execution.stage.progress": 5,
+    "execution.progress.review": 10,
+    "runtime.updated": 1,
+    "operation.reconciled": 5,
+    "task.revise": 2,
+    "task.reopen": 1
+  },
+  "recentWakes": [
+    {
+      "wakeId": "wake:execution-progress:bdb7b510-4a09-4cd3-9a06-8ac8dda42608:9:9:2026-10-15T05:39:36.209Z",
+      "kind": "execution.progress.review",
+      "state": "acked",
+      "createdAt": "2026-10-15T05:49:36.866Z"
+    },
+    {
+      "wakeId": "wake:settle:native:bdb7b510-4a09-4cd3-9a06-8ac8dda42608:9:9:call_4cb7e748972f4a7a8f24c5a5e53c20dc|fc_003bd8d3a5ef1786016ad0680ee120819a984ce860ea309fd7",
+      "kind": "operation.result",
+      "state": "acked",
+      "createdAt": "2026-10-15T05:50:57.272Z"
+    },
+    {
+      "wakeId": "wake:settle:native:bdb7b510-4a09-4cd3-9a06-8ac8dda42608:9:9:call_e8769592626748cdaf8f494b22bb8c6b|fc_003bd8d3a5ef1786016ad069d16fa4819abf3567fdfedfa22e",
+      "kind": "operation.result",
+      "state": "acked",
+      "createdAt": "2026-10-15T05:51:21.579Z"
+    },
+    {
+      "wakeId": "wake:settle:native:bdb7b510-4a09-4cd3-9a06-8ac8dda42608:9:9:call_a860b37d68f24004b1239bbd9eb06df5|fc_003bd8d3a5ef1786016ad069ea0494819aa9057a43b4788870",
+      "kind": "operation.result",
+      "state": "acked",
+      "createdAt": "2026-10-15T05:52:08.166Z"
+    },
+    {
+      "wakeId": "wake:settle:native:bdb7b510-4a09-4cd3-9a06-8ac8dda42608:9:9:call_a9e64aff0b7a49b5ba81b2bb6fe2747c|fc_003bd8d3a5ef1786016ad06802be74819ab7ba845bed2996ad",
+      "kind": "operation.result",
+      "state": "acked",
+      "createdAt": "2026-10-15T05:52:24.742Z"
+    },
+    {
+      "wakeId": "execution-result:bdb7b510-4a09-4cd3-9a06-8ac8dda42608:9",
+      "kind": "execution.result",
+      "state": "acked",
+      "createdAt": "2026-10-15T05:52:24.769Z"
+    },
+    {
+      "wakeId": "wake:human-reply:web-human:c396d4b9d9a3352590990eccefb8fd1f047c211128d443cdb48d39f73240eb9d",
+      "kind": "human.responded",
+      "state": "acked",
+      "createdAt": "2026-10-15T06:22:23.734Z"
+    },
+    {
+      "wakeId": "execution-stage:execution-stage:bdb7b510-4a09-4cd3-9a06-8ac8dda42608:10:10:8c1f69b10b80fde5296418abbc5603272f64507a43f52b5181e19c8e3ab69f43",
+      "kind": "execution.stage.progress",
+      "state": "claimed",
+      "createdAt": "2026-10-15T06:26:45.902Z"
+    }
+  ],
+  "recentOperations": [
+    {
+      "operationId": "operation-a2984bf39a287e83d7920d4c3f8c455ed078d057",
+      "state": "succeeded",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T06:25:29.660Z",
+      "updatedAt": "2026-10-15T06:25:41.429Z"
+    },
+    {
+      "operationId": "operation-a66e826ca0468a37f5c2e04418ae21ada83089b1",
+      "state": "succeeded",
+      "toolName": "write",
+      "createdAt": "2026-10-15T06:25:51.908Z",
+      "updatedAt": "2026-10-15T06:25:52.058Z"
+    },
+    {
+      "operationId": "operation-6b186db36ea3a906fca8e7670564484738a37e02",
+      "state": "succeeded",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T06:26:08.015Z",
+      "updatedAt": "2026-10-15T06:26:09.762Z"
+    },
+    {
+      "operationId": "operation-7d57798b4bfde6c26cbc0a25ff893293707f3428",
+      "state": "succeeded",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T06:26:27.789Z",
+      "updatedAt": "2026-10-15T06:26:29.622Z"
+    },
+    {
+      "operationId": "operation-05219825e82fe632678f6d9990728adf43108809",
+      "state": "starting",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T06:26:36.001Z",
+      "updatedAt": "2026-10-15T06:26:36.106Z"
+    },
+    {
+      "operationId": "operation-59fe3e70d098abf8b38124b9b1e5f2899133401f",
+      "state": "succeeded",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T06:26:55.013Z",
+      "updatedAt": "2026-10-15T06:26:57.294Z"
+    }
+  ]
+}

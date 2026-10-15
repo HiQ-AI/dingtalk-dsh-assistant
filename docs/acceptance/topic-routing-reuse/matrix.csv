@@ -36,3 +36,13 @@ Host与话题整组,15,PASS,round-15-all-related.log
 授权继承双包部署,24,PASS,round-24/runtime-readback.json
 等待说明真实浏览器及窄屏,24,PASS,round-24.md
 重复审批纠正及原会话实际推进,24,PASS,round-24/business-progress-readback.json
+真实统筹输入与证据预算,26,FAIL,round-26.md
+真实统筹输入与证据预算,27,PASS,round-27/context-metrics.json
+旧Host与历史标记退出模型输入,27,PASS,round-27/context-native-tests.log
+阶段唤醒保留恢复及迟到边界,26,PASS,round-26/store-native-wake-tests.log
+原生授权来源与终态结果契约,26,FAIL,round-26/context-native-tests.log
+原生授权来源与终态结果契约,27,PASS,round-27/context-native-tests.log
+安装包真实输入及普通工具零唤醒,28,PASS,round-28/stage-wake-readback.json
+已有UAT授权实际发布判断,28,PASS,round-28/uat-pr-readback.json
+冷启动部署就绪,28,FAIL,round-28/deployment/failure.json
+冷启动部署就绪,29,PASS,round-29.md

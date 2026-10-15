@@ -1,0 +1,118 @@
+✔ 32 continued inputs retire recursive Host snapshots on actual SDK requests and replay (8106.4543ms)
+ℹ {"scope":"scripted adapter request, UTF-8 JSON bytes; no provider tokens","rawAuditInputTextBytes":153256,"metrics":[{"version":1,"rawInputBytes":48342,"currentInputBytes":1192,"hostBytes":1645,"messagesBytes":4920,"adapterRequestBytes":6786},{"version":2,"rawInputBytes":48342,"currentInputBytes":1192,"hostBytes":1645,"messagesBytes":5395,"adapterRequestBytes":7261},{"version":3,"rawInputBytes":48342,"currentInputBytes":1192,"hostBytes":1645,"messagesBytes":5870,"adapterRequestBytes":7736},{"version":4,"rawInputBytes":283,"currentInputBytes":1176,"hostBytes":1627,"messagesBytes":6327,"adapterRequestBytes":8193},{"version":5,"rawInputBytes":283,"currentInputBytes":1176,"hostBytes":1627,"messagesBytes":6802,"adapterRequestBytes":8668},{"version":32,"rawInputBytes":284,"currentInputBytes":1177,"hostBytes":1631,"messagesBytes":19653,"adapterRequestBytes":21519}]}
+✔ upgrade shadows every already stored recursive v1/v2/v3 input without rewriting originals (181.5075ms)
+ℹ {"scope":"execution Host messages, UTF-8 JSON bytes","beforeBytes":193198,"afterBytes":1494}
+✔ dynamic execution uses independent identities, task-parallel sessions and a generic submit tool (195.9366ms)
+✔ durable native submit is recollected without another model turn after result callback crash (261.6722ms)
+✔ continuation preserves native history while new input and requirement revisions remain authenticated (362.9133ms)
+✔ 原生网页及job只读身份不覆盖显式写效果，同名替换不继承只读身份 (985.9516ms)
+✔ native preset-only tools and workspace instructions are retained; managed subprocesses drain before result settlement (225.1755ms)
+✔ dynamic native sessions use configured shell and delegation without a session tool whitelist (156.2876ms)
+▶ dynamic background requests retain native capability and native errors can be corrected in the same conversation
+  ✔ true (159.5377ms)
+  ✔ false (171.8078ms)
+✔ dynamic background requests retain native capability and native errors can be corrected in the same conversation (333.8894ms)
+✔ native process drain failure retains the execution slot and cannot report a settled result (195.8217ms)
+✔ process tracking handles async terminal allocation and isolates parallel native call ownership (33.5611ms)
+✔ a later foreground drain failure still stops the same executors retained background processes (167.6771ms)
+✔ retained process scopes keep services alive between tools and isolate parallel execution cleanup (3.6958ms)
+✔ native recovery validates durable identity and refuses missing bound sessions before releasing a lease (228.9843ms)
+✔ unverifiable background job without its native registry cannot report false success (152.8184ms)
+✔ one failed process termination still attempts cleanup of every other managed handle (3.0966ms)
+✔ configured native preset is chosen once and resume retains the persisted preset without changing permissions (295.7419ms)
+✔ anonymous field v12 native failure retains raw diagnostics and derives failure independently of HTTP200 (227.9873ms)
+✔ explicit source reads return literal final SDK text and survive reopen: same-path-repeat (1134.8722ms)
+✔ explicit source reads return literal final SDK text and survive reopen: root-and-five-distinct-paths (591.6956ms)
+✔ group single-input nested quotes, policy and read-tool copies share resolvable content (335.4828ms)
+✔ ordinary group reads deduplicate while explicit content reads return literal evidence, including after reopen (768.66ms)
+ℹ {"scope":"actual SDK scripted adapter UTF-8 JSON bytes; not provider tokens","metrics":[{"currentHostBytes":4036,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":6160,"schemaBytes":1262,"adapterRequestBytes":12872},{"currentHostBytes":4036,"oldHostBytes":2,"toolHistoryBytes":12320,"systemBytes":6160,"schemaBytes":1262,"adapterRequestBytes":26151},{"currentHostBytes":4036,"oldHostBytes":2,"toolHistoryBytes":17256,"systemBytes":6160,"schemaBytes":1262,"adapterRequestBytes":32450},{"currentHostBytes":4036,"oldHostBytes":2,"toolHistoryBytes":21028,"systemBytes":6160,"schemaBytes":1262,"adapterRequestBytes":36926}]}
+✔ native json-index pages reach exact previously unseen text, quoted author/version, and remain readable after reopen (833.4072ms)
+ℹ {"scope":"real SDK json-index directory and UTF-16 text pages; measured UTF-8 JSON bytes, no provider tokens","textLength":20490,"metrics":[{"currentHostBytes":333,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":6160,"schemaBytes":902,"adapterRequestBytes":8445},{"currentHostBytes":333,"oldHostBytes":2,"toolHistoryBytes":3005,"systemBytes":6160,"schemaBytes":902,"adapterRequestBytes":12499},{"currentHostBytes":333,"oldHostBytes":2,"toolHistoryBytes":69909,"systemBytes":6160,"schemaBytes":902,"adapterRequestBytes":88932},{"currentHostBytes":332,"oldHostBytes":2,"toolHistoryBytes":70926,"systemBytes":6160,"schemaBytes":902,"adapterRequestBytes":90659}]}
+✔ invalid migrated assistant provenance is rejected by SDK replay before any model wake or rewrite (304.8554ms)
+✔ repeated and empty source wakes keep one copy across SDK requests, including dynamic mode (10520.9182ms)
+ℹ {"scope":"group scripted adapter UTF-8 JSON bytes","dynamic":false,"metrics":[{"wake":1,"hostMessagesBytes":13152,"messagesBytes":19774,"adapterRequestBytes":21647},{"wake":6,"hostMessagesBytes":13151,"messagesBytes":22863,"adapterRequestBytes":24736},{"wake":7,"hostMessagesBytes":10442,"messagesBytes":20772,"adapterRequestBytes":22645},{"wake":32,"hostMessagesBytes":10444,"messagesBytes":36293,"adapterRequestBytes":38166}]}
+ℹ {"scope":"group scripted adapter UTF-8 JSON bytes","dynamic":true,"metrics":[{"wake":1,"hostMessagesBytes":13152,"messagesBytes":19774,"adapterRequestBytes":21647},{"wake":6,"hostMessagesBytes":13151,"messagesBytes":22863,"adapterRequestBytes":24736},{"wake":7,"hostMessagesBytes":10442,"messagesBytes":20772,"adapterRequestBytes":22645},{"wake":32,"hostMessagesBytes":10444,"messagesBytes":36293,"adapterRequestBytes":38166}]}
+✔ upgrade deduplicates stored histories but preserves independent versions, actors and authorization evidence (495.4424ms)
+ℹ {"scope":"group Host source history, UTF-8 JSON bytes","beforeBytes":70328,"afterBytes":4951,"originalHistoryCount":177,"visibleHistoryCount":10}
+✔ 原生群会话同轮读取材料后提交，跨轮恢复同一session并保留历史 (377.55ms)
+✔ 原生群会话候选任务版本过期可反馈并重新提交，不新建会话 (216.3483ms)
+✔ 群逻辑会话跨原生宿主重启恢复，禁止注入写工具 (384.1813ms)
+✔ 同群会话互斥，cancel等待原生工具排空后释放会话 (187.5802ms)
+✔ 同群会话互斥，close等待原生工具排空后释放会话 (182.7902ms)
+✔ 来源版本过期结束旧claim，不在旧来源上反复提交 (226.2926ms)
+✔ 原生会话超过32次合法反馈仍可继续提交，不设自造步数上限 (495.0871ms)
+✔ 旧职责目录派生到Agent根，完整继承日志，恢复群名和完全权限且不调用模型 (1289.427ms)
+✔ 每轮完整输入保留，下一轮原生surface只保留历史来源而不重复Host快照 (2434.3852ms)
+ℹ 模型可见输入字符：完整旧快照=33549，下一轮保留原文与当前快照=4700
+✔ 常驻空闲挂接保留原生投影、拒绝任意模型步进，关闭释放全部句柄 (249.9483ms)
+✔ 原生正常结束但不提交仍保持no_submission，接纳后晚到错误不否定决定 (335.0088ms)
+✔ 上一轮原生错误不污染本轮正常无提交 (244.543ms)
+✔ 阶段授权原文不匹配在同会话反馈修正，不改写来源或转澄清 (229.5716ms)
+✔ 外部观察会话受管派生保留原实例并核验边界：idle (716.6727ms)
+✔ 外部观察会话受管派生保留原实例并核验边界：active (270.3674ms)
+✔ 外部观察会话受管派生保留原实例并核验边界：running (267.3825ms)
+✔ 外部观察会话受管派生保留原实例并核验边界：foreign-input (272.0865ms)
+✔ 外部观察会话受管派生保留原实例并核验边界：identity (275.049ms)
+✔ 外部观察会话受管派生保留原实例并核验边界：lease (321.379ms)
+✔ 外部观察会话受管派生保留原实例并核验边界：changed-during-fork (412.8162ms)
+✔ Task权限拒绝反馈保持原话题并区分公共fact与合法revise (188.4076ms)
+✔ integrated projection keeps stage evidence and provider decisions bound to the original versions (57.1622ms)
+✔ source content is unique while identities, Web request, human correction and material references remain exact (48.4733ms)
+✔ short authority bodies stay literal with exact authors instead of larger hash dictionaries (33.3354ms)
+✔ completed stage reports and routing internals stay readable without inflating the current task snapshot (41.2863ms)
+✔ result size, execution/failed counts and continuation self-result stay in lazy bounded catalogues (329.7487ms)
+ℹ {"scope":"projected current Host JSON UTF-8 bytes, catalogues are not eagerly expanded","metrics":[{"count":1,"beforeOwnerBytes":2341,"ownerBytes":3045,"executionBytes":36267},{"count":20,"beforeOwnerBytes":645711,"ownerBytes":9021,"executionBytes":42239},{"count":120,"beforeOwnerBytes":23072071,"ownerBytes":9027,"executionBytes":42557}]}
+✔ current source windows retain operator authorization and later restrictions beyond the first twenty sources (58.6105ms)
+✔ first read is available, repeated readback uses references, reopen resolves and other sessions/tampering fail closed (95.6816ms)
+✔ nested quote graphs and identical bodies across distinct authors grow by identities and edges, not copied text (534.4757ms)
+ℹ {"scope":"nested source current Host UTF-8 JSON bytes","metrics":[{"depth":2,"beforeBytes":173630,"afterBytes":13490},{"depth":5,"beforeBytes":1470478,"afterBytes":14852},{"depth":9,"beforeBytes":23702160,"afterBytes":16675}]}
+✔ operator technical reply retains business sources and shared scope protocol in the same resumed execution (27202.2158ms)
+✔ 技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问 (4599.4458ms)
+✔ native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text (6233.9307ms)
+✔ an execution result cannot bypass human waiting; reply reads the original execution and continues the original task (7486.7236ms)
+✔ a native blocked decision without a human question is corrected into an explicit durable request (2297.4909ms)
+✔ an authenticated reply in the original group answers the waiting request without revising the task or cancelling its live execution (7266.1835ms)
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.0315ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: false (19598.8326ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: true (13803.4736ms)
+✔ 原生网页工具错误不建立未知效果，仍可完成后续读取 (9286.5221ms)
+✔ owner injects one authoritative source body across task, Web identity and materials (2437.9266ms)
+ℹ {"scope":"actual native owner scripted adapter UTF-8 JSON bytes","bodyCopies":[1],"metrics":[{"currentHostBytes":7733,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":9871,"schemaBytes":9386,"adapterRequestBytes":37180}]}
+✔ 话题历史自身通知不阻断同账号人工补充 (5388.6986ms)
+✔ 话题历史未准入真实消息仍拒绝更新且不发送成功回复 (7088.2829ms)
+✔ 180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay (555.5474ms)
+ℹ {"scope":"actual native foldSurface UTF-8 JSON message bytes; source/task identity retained","legacyHostCount":180,"beforeBytes":65206,"afterBytes":983,"newInputBytes":282,"retainedBaselineBytes":0,"afterCompactionBytes":1170,"rawAuditEvents":367}
+{"contextProof":{"ownerRequests":7,"latestInputBytes":16875,"totalRequestBytes":45796}}
+✔ owner keeps one current Host snapshot and delegates non-recursive execution context across three generations (15640.1846ms)
+✔ 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects (72113.3456ms)
+ℹ {"scope":"native owner scripted adapter, UTF-8 JSON bytes; no provider tokens","metrics":[{"lease":1,"inputVersion":0,"currentInputBytes":12075,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":12795,"messagesBytes":23281,"adapterRequestBytes":42240},{"lease":2,"inputVersion":1,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":33370,"adapterRequestBytes":52329},{"lease":2,"inputVersion":1,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":34168,"adapterRequestBytes":53127},{"lease":2,"inputVersion":1,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":36031,"adapterRequestBytes":54990},{"lease":2,"inputVersion":1,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":37161,"adapterRequestBytes":56120},{"lease":2,"inputVersion":1,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":38318,"adapterRequestBytes":57277},{"lease":6,"inputVersion":5,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":90282,"adapterRequestBytes":109241},{"lease":6,"inputVersion":5,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":91083,"adapterRequestBytes":110042},{"lease":6,"inputVersion":5,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":92949,"adapterRequestBytes":111908},{"lease":6,"inputVersion":5,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":94082,"adapterRequestBytes":113041},{"lease":6,"inputVersion":5,"currentInputBytes":12867,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13676,"messagesBytes":95242,"adapterRequestBytes":114201},{"lease":33,"inputVersion":32,"currentInputBytes":12874,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13684,"messagesBytes":474931,"adapterRequestBytes":493890},{"lease":33,"inputVersion":32,"currentInputBytes":12874,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13684,"messagesBytes":475736,"adapterRequestBytes":494695},{"lease":33,"inputVersion":32,"currentInputBytes":12874,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13684,"messagesBytes":477605,"adapterRequestBytes":496564},{"lease":33,"inputVersion":32,"currentInputBytes":12874,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13684,"messagesBytes":478742,"adapterRequestBytes":497701},{"lease":33,"inputVersion":32,"currentInputBytes":12874,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":13684,"messagesBytes":479905,"adapterRequestBytes":498864}]}
+✔ configured group responsibility reaches group and task models and its reply signature survives notification formatting (790.7499ms)
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (7188.1662ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (5497.418ms)
+✔ native service reopens an unknown notification for readback without resending completed business work (5878.8452ms)
+✔ native service cancellation stops the real execution process, drains the session, and rejects late completion (1938.0632ms)
+✔ native requirement update resumes the same owner with new sources and fences the interrupted old execution result (2399.2382ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (3883.617ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (3044.5408ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (3263.7224ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (2708.5334ms)
+✔ recovering an idle owner with no pending wake does not consume a task slot (992.212ms)
+✔ native session creation failure has bounded recovery retries: persistent=false (2765.0974ms)
+✔ native session creation failure has bounded recovery retries: persistent=true (2399.3983ms)
+✔ native model failures settle without repeated owner requests: persistent=false (1178.9975ms)
+✔ native model failures settle without repeated owner requests: persistent=true (1515.1562ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=false (656.9347ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=true (596.5344ms)
+✔ native topic routing rejects incomplete source coverage and accepts correction in the same real session (764.82ms)
+✔ resident.apply boots and disposes with only its declared native service dependencies (454.4949ms)
+✔ resident listener startup failure disposes native resources and permits reopening the same task database (679.9255ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (1487.0041ms)
+✔ native recovery no-op preserves an undrained task writer conflict alert (550.2841ms)
+ℹ tests 95
+ℹ suites 0
+ℹ pass 95
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 240331.8619

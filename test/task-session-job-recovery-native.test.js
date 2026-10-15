@@ -16,6 +16,39 @@ async function fixture(t, model) {
  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
  return h
 }
+test('native execution consumes serial tool results and wakes the coordinator only for a reported stage and final result', async t => {
+ let step = 0, ownerTurns = 0
+ const h = await fixture(t, async (request, host) => {
+  if (request.tools.some(tool => tool.name === 'task_delegate')) {
+   ownerTurns++
+   const input = latestInput(request)
+   if (!input.executions.length) return [call('task_delegate', { key: 'serial', objective: '完成多个操作并报告阶段成果' }), decide('wait', '执行已开始')]
+   return [decide(input.executions.every(item => item.status === 'succeeded') ? 'complete' : 'wait', '已收到阶段或最终成果')]
+  }
+  const currentStep = step++
+  assert.equal((await host.query('wake.list')).filter(item => item.kind === 'operation.result').length, 0, '普通原生工具结果留给原执行，不产生统筹空转唤醒')
+  await host.service.recover()
+  if (currentStep === 3) await waitUntil(() => ownerTurns === 2, 'coordinator observes the explicit stage report')
+  if (currentStep === 2) return [call('execution_report_progress', { summary: '前两项已落盘并回读，继续完成最后一项。', evidence: ['serial-results.txt'] })]
+  if (currentStep === 4) return [call('execution_submit', { output: { status: 'completed', summary: '三项原生操作完成并核验', evidence: ['serial-results.txt'], limitations: [], artifacts: ['serial-results.txt'] } })]
+  const value = currentStep === 3 ? 3 : currentStep + 1
+  return [call(nativeShell, { command: nativeShell === 'pwsh' ? `Add-Content serial-results.txt '${value}'; Get-Content serial-results.txt` : `printf '${value}\\n' >> serial-results.txt; cat serial-results.txt`, description: '写入并回读本执行的隔离证据' })]
+ })
+ const task = await h.service.createTask({ groupId: 'native-group', requestId: 'serial-operation-wakes', objective: '阶段成果驱动统筹' })
+ await h.service.whenIdle()
+ assert.equal(ownerTurns, 3, '仅初次委派、阶段成果、最终成果各一次统筹回合')
+ assert.equal(step, 5)
+ const operations = await h.query('operation.list', { taskId: task.taskId }), executions = await h.query('execution.list', { taskId: task.taskId })
+ assert.equal(operations.length, 3)
+ assert.ok(operations.every(item => item.state === 'succeeded' && item.executionId === executions[0].executionId))
+ assert.equal(executions.length, 1); assert.equal(executions[0].inputVersion, 1); assert.equal(executions[0].drained, true)
+ const wakes = await h.query('wake.list', { taskId: task.taskId })
+ assert.equal(wakes.filter(item => item.kind === 'operation.result').length, 0)
+ assert.equal(wakes.filter(item => item.kind === 'execution.stage.progress').length, 1)
+ assert.equal(wakes.filter(item => item.kind === 'execution.result').length, 1)
+ assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
+ assert.deepEqual((await readFile(join(h.root, 'tasks', task.taskId, 'serial-results.txt'), 'utf8')).trim().split(/\r?\n/), ['1', '2', '3'])
+})
 for (const background of [false, true]) test(`native shell retains its original process, reads output to terminal and persists the owned job receipt: background=${background}`, async t => {
  let step = 0, backgroundCollected = false
  const h = await fixture(t, async request => {

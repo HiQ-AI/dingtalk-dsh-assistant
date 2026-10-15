@@ -57,7 +57,9 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 任务与动态执行会话直接使用配置的原生工具，不添加工具白名单；readOnly/readbackOperationId仅用于关联原操作调查与对账材料，不用工具种类代替事实核验。原生权限、来源版本、真实生命周期及未决效果账继续按实际状态判断。即使Observer源码没有变，也必须显式提供当前已核验的ObserverPackage及摘要：官方安装会重新解析profile既有overrides，单独安装Assistant可能回退Observer。两个包均经源码/安装读回核验。
 
-统筹更新核验需区分新增Host输入与整个模型请求。检查原生surface仅保留当前完整Host快照、原审计输入仍存在、执行previousExecutions不递归。对模型过载查看本lease的turn/end：临时过载保留wake，按现有retryIntervalMs退避后续办同会话，不把其写为业务blocked；旧版误blocked仅凭原生日志精确识别恢复。看板中统筹等待尚在执行的小目标仍为执行中。
+统筹更新核验需区分新增Host输入、保留的旧Host内容与整个模型请求。检查原生surface仅保留当前Host快照，旧快照及旧版历史标记不再占模型消息，原审计输入仍存在，执行previousExecutions不递归。目录里的终态不是业务验收证据，须沿resultRef读取原结果。对模型过载查看本lease的turn/end：临时过载保留wake，按现有retryIntervalMs退避后续办同会话，不把其写为业务blocked；旧版误blocked仅凭原生日志精确识别恢复。看板中统筹等待尚在执行的小目标仍为执行中。
+
+阶段唤醒更新无schema迁移，按本页静止实例双包流程部署。普通operation.settle仅在原绑定完全匹配、执行仍运行且未排空/取消/恢复/修订失效时省略统筹唤醒；执行自己消费真实成功/失败。unknown、cancelled、对账、独立操作、迟到结果、阶段成果、执行结束和用户输入仍唤醒。验证时比较实际wake账与统筹回合数，不能仅断言工具返回成功。现场已等待真实人工决定时保持原请求，不为测试制造一次无意义统筹回合；可用精确原生输入对安装包做只读投影复验。此修复不删除已有会话历史，正常历史仍沿原生压缩处理。
 
 人工介入核验：待答请求在/state/authorizations返回taskSessionRequest=true、status=waiting-reply，任务归等待中；POST /tasks/:taskId/human-requests/:requestId/reply只接纳本机受信Web请求，body含幂等requestId、reply及expectedRequirementRevision/expectedControlRevision。原文保留真实配置webActorId，旧版本/已答/非当前请求拒绝，成功后原task/session继续。修订或终态将旧申请superseded；不得通过手改账或伪造答复绕过边界。
 
@@ -106,3 +108,7 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 ## 授权连续性与等待说明核验
 
 沿静止实例双包Check及正式切换部署，无schema迁移。恢复前读回当前申请、原始有权来源和任务版本；用户已经纠正重复审批时，走既有Web原申请reply记录纠正，不写SQLite、不自动批量关闭申请。恢复后核验原task/session及原execution新input包含相关授权和技术答复，既有unknown未被普通回复结算；以实际后续操作证明推进。敏感动作真实最终批准、后续撤销/暂停和共享环境限制仍保留。旧申请长文本仅改善展示，不改历史正文或授权事实。
+
+一般“上线需批准”规则不能直接推导当前尚未批准：须与原用户已交办的同一UAT部署及后续纠正合并判断。部署修复后，沿当前原申请记录用户“部署到UAT就部署到UAT”的真实纠正，要求原执行完成实际发布及核验；不得仅改申请状态或以测试夹具代替真实推进。当前纠正不变更外部工作区规则，不新增Host关键词放行或自动批准机制。
+
+本机完整冷启动可能超过两分钟；部署脚本对新进程端口就绪等待最多五分钟，退出排空仍为两分钟。若安装已核验且脚本只在启动等待超时，先回读原新PID、端口、profile和健康。该进程随后自然就绪时补记恢复证据即可，不重新安装或启动第二个实例；原超时证据保留。

@@ -1,0 +1,17 @@
+{
+  "inputVersion": 10,
+  "stageProgress": {
+    "controlRevision": 2,
+    "evidence": [
+      "https://github.com/HiQ-AI/dataset/pull/391：MERGED，merge SHA 4e2a1b56c33fbb0e86b8f5842aeeea9224e47576",
+      "合入tree=5bfe8b92d06d3e358b8e3e4c063dc94ab9b690e2，与17项通过候选一致",
+      "流水线289：feature/uat2-base，commit4e2a1b56，running"
+    ],
+    "inputVersion": 10,
+    "leaseEpoch": 10,
+    "recordedAt": "2026-10-15T06:26:45.893Z",
+    "requirementRevision": 4,
+    "sequence": 1,
+    "summary": "UAT2集成已实际合入PR391，合入提交4e2a1b56与已验证候选tree完全一致。Poller已自动产生唯一流水线289，正在源码准备；没有重复触发。构建后继续核验镜像并更新固定digest工作负载。"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "backupCreated": false,
+  "taskEnabled": true,
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "package": {
+    "verifiedFiles": 53,
+    "sha256": "391bc5ddc706577ef4f67dd07ad1ac9dbbd36f9843b6c660feccbfa0a7f6267f"
+  },
+  "packageSha256": "391bc5ddc706577ef4f67dd07ad1ac9dbbd36f9843b6c660feccbfa0a7f6267f",
+  "pid": 64388,
+  "observerManifestSha256": "9ec51b6e9d591d4c435be7bb4cbb650aa96693edab119739ac7e2f1cfba85e60",
+  "creationDate": "2026-10-15T13:36:34.648195+08:00"
+}

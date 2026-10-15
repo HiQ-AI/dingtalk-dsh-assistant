@@ -1,0 +1,7 @@
+{
+  "humanRequestId": "human-2ad2ef903950518a02ccfccb3d5bc1e25f86096f1e5c57262d0a899436e10b92",
+  "requestId": "uat-authorization-correction-20261015-v2",
+  "expectedRequirementRevision": 4,
+  "expectedControlRevision": 2,
+  "reply": "当前用户明确纠正，原文：『我的意思是这个申请不应该提，说了让部署到UAT，那就部署到UAT，就这么简单』。结合原已入账孙鹏『部署到uat』，请沿原任务和原execution/session完成本次UAT2实际发布及验证，不再对同一部署的提交推送、UAT集成、构建、产物核验和工作负载镜像更新分段申请。此前恢复说明中的『最终批准』不构成本任务第二道发布门槛，原执行的仅准备小目标已被本次纠正明确扩至完成原部署目标。按实际交接和部署规程核对当前基线、唯一构建、镜像及现场版本，保留原效果账和排空清理；不要重复已成功操作或越过未知效果。原生产、main、SQL、共享业务测试及真实申请的限制继续有效。请给出真实发布结果与证据，不以受托步骤完成代替整体部署完成。"
+}

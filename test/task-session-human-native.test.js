@@ -20,7 +20,7 @@ async function pending(h) { return (await h.service.listAuthorizationRequests())
 
 test('operator technical reply retains business sources and shared scope protocol in the same resumed execution', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const objective = '测试助手，修复后部署到UAT2，隔离验证，不操作真实申请'
-  const reply = '技术已恢复；本答复不新增部署批准，不撤销此前明确交办范围'
+  const reply = '技术已恢复；本答复不新增部署批准，不撤销此前明确交办范围。用户纠正：说了部署到UAT就部署到UAT，这个申请不应该提。'
   const seen = [], scopes = []
   const h = await fixture(t, async request => {
     const routed = topicTaskCalls(request)
@@ -28,10 +28,11 @@ test('operator technical reply retains business sources and shared scope protoco
     const input = latestInput(request)
     scopes.push(requestSystemText(request))
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      assert.match(request.tools.find(tool => tool.name === 'task_request_human').description, /已授权的目标持续完成/)
       const execution = input.executions[0]
       if (!execution) return [call('task_delegate', { key: 'prepare', objective: '准备原交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '准备中', evidence: [], limitations: [] } })]
       if (!input.task.humanRequests.length) return [call('task_request_human', { reason: '准备已完成，工具配置需操作人恢复', question: '请恢复原工具配置', evidence: ['原生配置诊断'], attemptedActions: ['原配置检查'] })]
-      if (execution.inputVersion === 1) return [call('task_delegate', { executionId: execution.executionId, key: 'continue', objective: '按原来源继续交付准备' }), call('task_session_submit', { decision: { action: 'wait', summary: '沿原执行继续', evidence: [], limitations: [] } })]
+      if (execution.inputVersion === 1) return [call('task_delegate', { executionId: execution.executionId, key: 'continue', objective: '按原来源继续完整UAT交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '沿原执行继续', evidence: [], limitations: [] } })]
       return [finish('原执行已收到完整来源')]
     }
     seen.push(input)
@@ -59,6 +60,9 @@ test('operator technical reply retains business sources and shared scope protoco
     assert.match(scope, /明确暂停、撤销、仅准备或改变目标环境则优先/)
     assert.match(scope, /真实原生权限拒绝和尚未满足的审批条件不得绕过/)
     assert.match(scope, /作出任何授权判断前（包括认定可以继续）/)
+    assert.match(scope, /用户说“部署到UAT”就是该任务的UAT部署授权/)
+    assert.match(scope, /规则写“需批准”不等于当前“尚未批准”/)
+    assert.match(scope, /具体规则、触发条件与已有授权尚缺什么/)
   }
   assert.deepEqual(await h.query('operation.list'), [], '输入与恢复证明不冒充真实发布或工具效果')
 })

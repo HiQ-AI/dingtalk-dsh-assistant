@@ -106,6 +106,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const executionBinding = execution => ({ kind: 'task-execution', taskId: execution.taskId, executionId: execution.executionId,
     requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, inputDigest: execution.inputDigest,
     sessionId: execution.sessionId, sessionBound: execution.sessionBound, leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion, inputHistory: execution.inputHistory })
+  const matchesExecutionBinding = (execution, binding) => binding?.kind === 'task-execution' && !!execution
+    && ['taskId', 'executionId', 'sessionId', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'inputDigest', 'inputVersion']
+      .every(key => binding[key] === execution[key])
   const currentTask = (binding, { active = true, current = true } = {}) => {
     record(binding)
     const task = get('dynamic_tasks', binding.taskId)
@@ -118,9 +121,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const boundExecution = binding => {
     record(binding)
     const execution = get('dynamic_executions', binding.executionId)
-    if (binding.kind !== 'task-execution' || binding.taskId !== execution.taskId || binding.sessionId !== execution.sessionId
-      || binding.leaseEpoch !== execution.leaseEpoch || binding.requirementRevision !== execution.requirementRevision
-      || binding.controlRevision !== execution.controlRevision || binding.inputDigest !== execution.inputDigest || binding.inputVersion !== execution.inputVersion) fail('DYNAMIC_EXECUTION_LEASE_STALE')
+    if (!matchesExecutionBinding(execution, binding)) fail('DYNAMIC_EXECUTION_LEASE_STALE')
     return execution
   }
   const executionCurrent = execution => {
@@ -799,7 +800,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       operation.state = a.state; operation.result = a.result ?? null; operation.evidenceRef = a.evidenceRef ?? null; operation.updatedAt = stamp
       put('dynamic_operations', operation)
       if (terminalOperations.has(operation.state)) release(operation.operationId)
-      wake(operation.taskId, 'operation.result', { operationId: operation.operationId, state: operation.state }, `wake:${commandId}`)
+      const execution = operation.executionId ? get('dynamic_executions', operation.executionId, true) : null
+      // 当前原执行会消费普通工具回执；统筹在执行终态或明确进度事件醒来。
+      // 未知效果、对账、独立操作及失去原消费方的迟到结果仍须可靠唤醒。
+      const executionConsumesResult = kind === 'operation.settle' && ['succeeded', 'failed'].includes(operation.state)
+        && matchesExecutionBinding(execution, operation.dispatchBinding) && execution.status === 'running'
+        && !execution.drained && executionCurrent(execution)
+      if (!executionConsumesResult) wake(operation.taskId, 'operation.result', { operationId: operation.operationId, state: operation.state }, `wake:${commandId}`)
       return changed({ operation })
     }
     if (kind === 'legacy.import') {

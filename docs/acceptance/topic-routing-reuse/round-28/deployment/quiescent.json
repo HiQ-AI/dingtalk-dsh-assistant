@@ -1,0 +1,20 @@
+{
+  "shutdown": "SIGINT",
+  "creationDate": "2026-10-15T13:36:34.648195+08:00",
+  "observedAt": "2026-10-15T06:17:35.5522996Z",
+  "ledger": {
+    "quiescent": true,
+    "candidateOnly": false,
+    "ownerReleased": false,
+    "ownerProcessExited": true,
+    "staleOwner": true,
+    "drained": true,
+    "unstartedTaskClaims": [],
+    "verifiedSessions": 15,
+    "unknownOperations": 0,
+    "unknownNotifications": 2
+  },
+  "runtimePortClosed": true,
+  "remainingDescendants": 0,
+  "pid": 64388
+}
