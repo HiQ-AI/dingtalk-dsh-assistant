@@ -7,8 +7,8 @@ const flatten = tree => typeof tree !== 'object' || !tree ? [] : [tree, ...tree.
 function card(task) {
  const actions = []
  const render = runInNewContext(`(()=>{${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {
-  React: {createElement:(type, props,...children)=>({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
-  openTask:task=>actions.push(['task',task.taskId]),setTopicTarget:value=>actions.push(['topic',value.topicId]),setActivePage:value=>actions.push(['page',value])
+  copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
+  navigatingSessionId:'',navigate:(id,parent)=>actions.push(['session',id,parent]), statusTag:(label)=>({type:'span',props:{},children:[label]}),openTask:task=>actions.push(['task',task.taskId]),setTopicTarget:value=>actions.push(['topic',value.topicId]),setActivePage:value=>actions.push(['page',value])
  }); return {tree:render(task),actions}
 }
 test('原看板紧凑卡片恢复，完整目标及话题仍能通过原有入口查看',()=>{
@@ -19,7 +19,7 @@ test('原看板紧凑卡片恢复，完整目标及话题仍能通过原有入�
  nodes.find(x=>x.props['aria-label']==='查看完整任务目标').props.onClick()
  nodes.find(x=>x.props['aria-label']==='话题 服务上线').props.onClick({stopPropagation(){}})
  assert.deepEqual(actions,[['task','t'],['task','t'],['topic','topic'],['page','topics']])
- assert.match(JSON.stringify(tree),/7 次动态执行/);assert.doesNotMatch(JSON.stringify(tree),/progressbar|workflowProgress/)
+ assert.doesNotMatch(JSON.stringify(tree),/次动态执行|任务会话 session/);assert.ok(nodes.some(x=>x.props['aria-label']==='任务状态：queued'));assert.doesNotMatch(JSON.stringify(tree),/progressbar|workflowProgress/)
 })
 test('历史卡片保留只读状态，不恢复旧归档或工作流写入口',()=>{
  const {tree}=card({taskId:'old',title:'历史任务',objective:'历史目标',state:'completed',legacyReadonly:true})
@@ -50,4 +50,30 @@ test('卡片空白与底栏可点，内部按钮不会重复导航，等待原�
  assert.deepEqual(actions,[['task','t']])
  const reason=flatten(tree).find(x=>x.children.includes('等待原因'.repeat(50)))
  assert.equal(reason.props.style.WebkitLineClamp,2);assert.equal(reason.props.style.overflow,'hidden')
+})
+
+test('真实任务卡片展示全部会话名称及状态；点击原生入口不重复导航',()=>{
+ const executionSessions=Array.from({length:43},(_,i)=>({executionId:`e${i}`,sessionId:`s${i}`,title:`核对服务${i}`,status:i%2?'running':'succeeded'}))
+ const {tree,actions}=card({taskId:'t',title:'完整列表',state:'running',executionSessions})
+ const list=flatten(tree).find(x=>x.props['aria-label']==='全部执行会话')
+ const buttons=flatten(list).filter(x=>x.type==='button')
+ assert.equal(buttons.length,43);assert.match(JSON.stringify(list),/核对服务42/);assert.match(JSON.stringify(list),/succeeded/)
+ buttons[42].props.onClick();assert.deepEqual(actions,[['session','s42',undefined]])
+})
+
+test('内嵌执行列表只按真实成功会话计数，支持原生折叠和复制Id',()=>{
+ const {tree,actions}=card({taskId:'card-copy',title:'检查',state:'running',executionSessions:[{executionId:'a',sessionId:'sa',title:'会话甲',status:'succeeded'},{executionId:'b',sessionId:'sb',title:'会话乙',status:'running'},{executionId:'c',sessionId:'sc',title:'会话丙',status:'failed'}]})
+ const nodes=flatten(tree),list=nodes.find(x=>x.props['aria-label']==='全部执行会话')
+ assert.equal(list.type,'details');assert.equal(list.props.open,true)
+ const meter=nodes.find(x=>x.type==='meter');assert.equal(meter.props.max,3);assert.equal(meter.props.value,1);assert.equal(meter.props['aria-label'],'已完成执行会话数量')
+ assert.match(JSON.stringify(list),/1\/3/);assert.equal(flatten(list).filter(x=>x.type==='svg').length,5)
+ nodes.find(x=>x.type==='button'&&x.children.includes('复制Id')).props.onClick();assert.deepEqual(actions,[['copy','card-copy']])
+})
+
+test('独立卡片标题旁保留任务状态，移除内部ID与重复计数整行',()=>{
+ const {tree}=card({taskId:'t',title:'核对',state:'waiting',session:{sessionId:'INTERNAL_SECRET_SESSION'},executionCount:123,executionSessions:[{sessionId:'e',title:'会话甲',status:'running'}]})
+ const nodes=flatten(tree),state=nodes.find(x=>x.props['aria-label']==='任务状态：waiting')
+ assert.ok(state);assert.equal(tree.children[0].props.style.gridTemplateColumns,'minmax(0, 1fr) auto')
+ assert.doesNotMatch(JSON.stringify(tree),/INTERNAL_SECRET_SESSION|次动态执行/)
+ assert.ok(nodes.some(x=>x.props['aria-label']==='全部执行会话'))
 })

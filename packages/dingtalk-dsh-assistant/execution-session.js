@@ -1,7 +1,7 @@
 import { trackDynamicProcesses } from './dynamic-process-scope.js'
 import { collectNativeJob } from './dynamic-native-job.js'
 import { inspectSession, inboxHasPending } from './session-persistence.js'
-import { nameSession, renameTaskSession } from './session-workspaces.js'
+import { executionSessionTitle, nameSession, renameTaskSession } from './session-workspaces.js'
 import { sourceInterpretationInstructions } from './task-source-instructions.js'
 import { isAbsolute, dirname, basename, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -584,7 +584,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, definition, onSessionBound, onResult, onProgress, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
+  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
@@ -656,7 +656,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             seed: [{ type: IDENTITY_EVENT, seq: 0, time: Date.now(), ignorable: true, data: { version: binding.kind ? 2 : 1, identity: identityOf(entry.binding), creationLease: binding.leaseEpoch } }],
           }))
         const session = entry.handle.agent.session
-        if (dynamicExecution(binding)) renameTaskSession(ctx, session, entry.input.title ?? entry.input.objective)
+        if (dynamicExecution(binding)) renameTaskSession(ctx, session, executionSessionTitle({ title, input: entry.input }))
         else if (!stored) nameSession(ctx, session, binding.kind === 'message-unit' ? 'answer' : 'execution', entry.input.request ?? entry.input.objective)
         // prepare/resume 可能追加原生恢复事件；再次核对已发布句柄的同一历史身份。
         if (stored) validateHistory(session.snapshotEvents(), entry.binding)

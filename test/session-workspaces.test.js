@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdtemp, symlink, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import { sessionWorkspace, sessionPurposes, sessionTitle, nameSession } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
+import { executionSessionTitle, sessionWorkspace, sessionPurposes, sessionTitle, nameSession } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 
 test('七种实际会话职责各有独立工作区，未知职责不创建目录', async () => {
   const root = await mkdtemp(join(tmpdir(), 'session-purposes-'))
@@ -35,4 +35,11 @@ test('原生标题包含事项和职责，去除内部身份、网址与本机�
   let saved
   nameSession({ sessionTitle: { rename: (session, title) => { saved = { session, title } } } }, { id: 'internal' }, 'owner', '导出报告')
   assert.equal(saved.title, '导出报告 · 任务负责')
+})
+
+test('执行名称统一复用原生简短清理逻辑，持久名称优先于续办输入',()=>{
+ assert.equal(executionSessionTitle({title:'核对配置',input:{title:'续办目标'}}),'核对配置')
+ assert.equal([...executionSessionTitle({input:{title:'核对😀'.repeat(30)}})].length,28)
+ assert.equal(executionSessionTitle({key:'检查服务',input:{objective:'完整目标'.repeat(100)}}),'检查服务')
+ assert.equal(executionSessionTitle({}),'任务执行')
 })

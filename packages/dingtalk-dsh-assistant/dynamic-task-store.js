@@ -1,3 +1,4 @@
+import { executionSessionTitle } from './session-workspaces.js'
 import { quotedSendRejectionProof } from './group-message.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
@@ -443,7 +444,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       const executionId = a.executionId ?? randomUUID()
       if (get('dynamic_executions', executionId, true)) fail('DYNAMIC_EXECUTION_EXISTS')
-      const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), dispatchDigest, inputDigest: digest(payload.input),
+      const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), title: executionSessionTitle({ input: payload.input, key }), dispatchDigest, inputDigest: digest(payload.input),
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, sessionId: `task-execution-${randomUUID()}`,
         status: 'queued', inputVersion: 1, inputHistory: [], results: [], leaseEpoch: 0, sessionBound: false, drained: true, cancelRequested: false, createdAt: stamp, updatedAt: stamp }
       put('dynamic_executions', execution)
@@ -473,6 +474,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision })
       if (execution.result) execution.results.push(execution.result)
       execution.result = null; execution.progressReview = null; execution.inputVersion++; execution.inputDigest = digest(payload.input)
+      execution.title ||= executionSessionTitle(execution)
       execution.prompt = payload.prompt; execution.input = clone(payload.input)
       if (execution.providerRecovery) execution.providerRecovery = { ...execution.providerRecovery, nextAttemptAt: null, nextReviewAt: null, activeInputVersion: null }
       execution.definition = { ...execution.definition, recoveryReadOnly: a.definition?.recoveryReadOnly === true }

@@ -97,6 +97,17 @@ window.__ModuleLoader__.load({
     }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
     const observerCss = `
+      [data-dingtalk-observer] .observer-card-sessions summary::-webkit-details-marker { display: none; }
+      [data-dingtalk-observer] .observer-card-sessions:not([open]) .observer-card-session-chevron { transform: rotate(-90deg); }
+      [data-dingtalk-observer] .observer-card-sessions summary:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; border-radius: 4px; }
+      [data-dingtalk-observer] .observer-card-sessions meter { appearance: none; border: 0; border-radius: 3px; background: ${colors.border}; }
+      [data-dingtalk-observer] .observer-card-sessions meter::-webkit-meter-bar { height: 5px; border: 0; border-radius: 3px; background: ${colors.border}; }
+      [data-dingtalk-observer] .observer-card-sessions meter::-webkit-meter-optimum-value { background: ${colors.accent}; border-radius: 3px; }
+      [data-dingtalk-observer] .observer-card-sessions meter::-moz-meter-bar { background: ${colors.accent}; border-radius: 3px; }
+      [data-dingtalk-observer] .observer-execution-session:hover:enabled { background: ${colors.surface2} !important; }
+      [data-dingtalk-observer] .observer-execution-session:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
+      [data-dingtalk-observer] .observer-execution-session:active:enabled { opacity: .8; }
+
       [data-dingtalk-observer] :is(button, input, select, textarea, summary, [tabindex]):focus-visible {
         outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;
         outline-offset: 2px !important;
@@ -622,19 +633,20 @@ window.__ModuleLoader__.load({
       const ready = !!page
       const visibleOffset = page?.offset ?? 0
       return React.createElement('section', { className: 'detail-executions', 'aria-label': '动态执行列表', style: { display: 'grid', gap: 16, minHeight: 160 } },
-        React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h2', null, '独立执行'), ready ? React.createElement('span', { className: 'detail-muted' }, `${page.total} 条记录`) : null),
+        React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h2', null, '独立执行'),
+          React.createElement('div', { className: 'detail-execution-feedback' },
+            React.createElement('span', { role: error ? 'alert' : 'status', className: error ? 'detail-execution-error' : 'detail-muted', tabIndex: error ? 0 : undefined },
+              error ? `执行记录读取失败${ready ? '，暂显示已读取记录' : ''}：${error}` : loading ? `${ready && page.offset !== offset ? '正在读取另一页，暂显示已读取记录' : '正在读取执行记录'}…` : '执行记录已更新'),
+            React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'aria-label': '重试读取执行', disabled: !error || loading, style: { visibility: error ? 'visible' : 'hidden' }, onClick: () => setRetry(value => value + 1) }, '重试'))),
         React.createElement('p', { className: 'detail-muted' }, '由任务会话按需安排；展开可查看本次结果与独立会话。'),
-        React.createElement('div', { className: 'detail-execution-feedback' },
-          React.createElement('span', { role: 'status', className: 'detail-muted' }, error ? '' : loading ? `${ready && page.offset !== offset ? '正在读取另一页，暂显示已读取记录' : '正在读取执行记录'}…` : '执行记录已更新'),
-          error ? React.createElement('span', { role: 'alert', className: 'detail-execution-error' }, `执行记录读取失败${ready ? '，暂显示已读取记录' : ''}：${error}`) : null,
-          error ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => setRetry(value => value + 1) }, '重试读取执行') : null),
         React.createElement('div', { className: 'detail-pagination' }, React.createElement('span', { className: 'detail-muted', style: { marginRight: 'auto' } }, ready ? `${page.total} 条执行记录 · ${page.total ? visibleOffset + 1 : 0}–${visibleOffset + page.items.length}` : '尚未读取执行记录'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset === 0, onClick: () => setOffset(Math.max(0, visibleOffset - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset + page.items.length >= page.total, onClick: () => setOffset(visibleOffset + 20) }, '下一页')),
         ready ? React.createElement('ol', { className: 'detail-execution-list' }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, className: 'detail-execution' },
           React.createElement('details', null, React.createElement('summary', { className: 'detail-execution-summary' },
-            React.createElement('span', { className: 'detail-execution-title' }, execution.objective || execution.executionId),
+            React.createElement('span', { className: 'detail-execution-title' }, execution.title || execution.objective || execution.executionId),
             statusTag(taskStateLabel(execution.status), taskStateTone(execution.status)),
             React.createElement('span', { className: 'detail-execution-time' }, `创建 ${fmt(execution.createdAt)}`)),
             React.createElement('div', { className: 'detail-execution-body' },
+            React.createElement('p', { className: 'detail-objective' }, execution.input?.objective || execution.objective || '尚未记录执行目标。'),
             execution.progressReview ? React.createElement('p', { className: 'detail-muted' }, `最近活动 ${fmt(execution.progressReview.lastActivityAt)} · 进展检查 ${fmt(execution.progressReview.checkedAt)}`, execution.progressReview.readError ? ` · 记录读取失败：${traceReason(execution.progressReview.readError)}` : '') : null,
             React.createElement(SessionLocation, { session: execution, label: '执行会话', onOpenSession, compact: true }),
             execution.error ? React.createElement('p', { role: 'status', style: { color: colors.danger } }, traceReason(execution.error)) : null,
@@ -770,7 +782,8 @@ window.__ModuleLoader__.load({
       .observer-session-detail summary:active { color: ${colors.accent}; }
       .observer-session-detail .detail-disclosure { padding-top: 12px; border-top: 1px solid ${colors.border}; }
       .observer-session-detail .detail-location { display: grid; gap: 8px; padding-top: 12px; font-size: 12px; color: ${colors.muted}; }
-      .observer-session-detail .detail-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .observer-session-detail .detail-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+      .observer-session-detail .detail-section-heading h2 { flex-shrink: 0; }
       .observer-session-detail .detail-executions { border-top: 1px solid ${colors.border}; padding-top: 24px; }
       .observer-session-detail .detail-execution-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
       .observer-session-detail .detail-execution { border: 1px solid ${colors.border}; border-radius: 8px; background: ${colors.surface}; overflow-wrap: anywhere; }
@@ -782,8 +795,9 @@ window.__ModuleLoader__.load({
       .observer-session-detail .detail-execution-title { font-size: 14px; font-weight: 500; color: inherit; }
       .observer-session-detail .detail-execution-time { grid-column: 2 / 4; font-size: 12px; color: ${colors.muted}; }
       .observer-session-detail .detail-execution-body { padding: 16px; display: grid; gap: 16px; border-top: 1px solid ${colors.border}; }
-      .observer-session-detail .detail-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-      .observer-session-detail .detail-execution-feedback { height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+      .observer-session-detail .detail-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 36px; }
+      .observer-session-detail .detail-pagination > span { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+      .observer-session-detail .detail-execution-feedback { height: 36px; flex: 1; min-width: 0; max-width: 520px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
       .observer-session-detail .detail-execution-feedback > span { grid-column: 1; grid-row: 1; min-width: 0; max-height: 36px; overflow: auto; font-size: 12px; line-height: 18px; }
       .observer-session-detail .detail-execution-feedback > button { grid-column: 2; grid-row: 1; }
       .observer-session-detail .detail-execution-error { color: ${colors.danger}; }
@@ -821,7 +835,6 @@ window.__ModuleLoader__.load({
             React.createElement('section', { className: 'detail-panel', 'aria-label': '目标与要求' }, React.createElement('h2', null, '目标与要求'), React.createElement('p', { className: 'detail-objective' }, task.objective || '尚未记录任务目标。'),
               requirements.length ? React.createElement('div', { className: 'detail-requirements' }, React.createElement('h3', null, '验收要求'), React.createElement('ul', null, ...requirements.map((item, index) => React.createElement('li', { key: index }, readableValue(item))))) : null,
               task.context ? React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '参考资料'), React.createElement('p', { className: 'detail-objective' }, readableValue(task.context))) : null),
-            React.createElement(TaskProgress, { task, onOpenSession }),
             React.createElement(TaskResult, { result: task.result })),
           React.createElement('aside', { className: 'detail-sidebar', 'aria-label': '统筹会话与记录' },
             !task.legacyReadonly ? React.createElement(SessionLocation, { session: taskSession(task), label: '任务会话', onOpenSession, compact: true }) : null,
@@ -1024,10 +1037,14 @@ window.__ModuleLoader__.load({
         const session = taskSession(task)
         const hovered = hoveredTaskId === task.taskId
         const queued = task.state === 'queued'
+        const sessions = task.executionSessions || []
+        const completedSessions = sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
         const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
-        return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
+        return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button, summary, details')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'start', gap: 8 } },
           React.createElement('button', { type: 'button', onClick: () => openTask(task), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
             React.createElement('strong', { title: task.title || task.objective, style: { fontSize: 13, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, taskDisplayTitle(task))),
+          React.createElement('span', { 'aria-label': `任务状态：${taskStateLabel(task.state)}`, style: { whiteSpace: 'nowrap' } }, statusTag(task.legacyReadonly ? `历史只读 · ${taskStateLabel(task.state)}` : taskStateLabel(task.state), taskStateTone(task.state)))),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, overflow: 'hidden' } },
             React.createElement('span', { title: groupLabel, style: { ...pill(colors.muted), flex: '0 1 auto', maxWidth: 150, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, groupLabel),
             ...(task.topicRefs || []).map(ref => {
@@ -1037,11 +1054,28 @@ window.__ModuleLoader__.load({
             })),
           React.createElement('button', { type: 'button', title: displayObjective, 'aria-label': '查看完整任务目标', onClick: () => openTask(task), style: { border: 0, padding: 0, background: 'transparent', color: 'inherit', textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', minWidth: 0, display: 'block', maxHeight: '4.5em', overflow: 'hidden', overflowWrap: 'anywhere', fontSize: 11, lineHeight: 1.5 } },
             React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: { display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors.muted } }, React.createElement('circle', { cx: 8, cy: 8, r: 5.5 }), React.createElement('circle', { cx: 8, cy: 8, r: 2 }), React.createElement('path', { d: 'M8 1v2M15 8h-2' })), displayObjective),
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 5, fontSize: 10.5, lineHeight: 1.5, color: colors.muted } },
-            React.createElement(StateDot, { state: taskStateTone(task.state), size: 7 }), taskStateLabel(task.state), ' · ', task.legacyReadonly ? '历史只读 · 可查阅历史产出' : `任务会话 ${session.sessionId ? short(session.sessionId) : '待建立'} · ${task.executionCount ?? (task.executions || []).length} 次动态执行`),
+          !task.legacyReadonly && sessions.length ? React.createElement('details', { className: 'observer-card-sessions', open: true, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
+            React.createElement('summary', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', fontSize: 11, color: colors.muted, listStyle: 'none' } },
+              React.createElement('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, 'aria-hidden': true }, React.createElement('path', { d: 'M2 3h2v2H2zM6 4h8M2 7h2v2H2zM6 8h8M2 11h2v2H2zM6 12h8' })),
+              React.createElement('span', null, '执行会话'),
+              React.createElement('meter', { min: 0, max: sessions.length, value: completedSessions, 'aria-label': '已完成执行会话数量', style: { flex: 1, minWidth: 20, maxWidth: 80, height: 5, marginLeft: 'auto' } }),
+              React.createElement('span', { style: { fontVariantNumeric: 'tabular-nums' } }, `${completedSessions}/${sessions.length}`),
+              React.createElement('svg', { className: 'observer-card-session-chevron', width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, 'aria-hidden': true }, React.createElement('path', { d: 'm4 6 4 4 4-4' }))),
+            React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
+              const done = ['succeeded', 'completed'].includes(execution.status)
+              const running = execution.status === 'running'
+              const failed = execution.status === 'failed'
+              const tone = done ? 'var(--dsw-alias-state-success-primary, #248a3d)' : running ? colors.accent : failed ? colors.danger : colors.muted
+              return React.createElement('button', { key: execution.sessionId || execution.executionId, className: 'observer-execution-session', type: 'button', disabled: !execution.sessionId || navigatingSessionId === execution.sessionId, 'aria-busy': navigatingSessionId === execution.sessionId, onClick: () => navigate(execution.sessionId, session.sessionId), style: { display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) auto', alignItems: 'start', gap: 7, minWidth: 0, padding: '6px 0', border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5, textAlign: 'left', cursor: execution.sessionId ? 'pointer' : 'default' } },
+                React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, 'aria-hidden': true, style: { marginTop: 1 } },
+                  React.createElement('circle', { cx: 8, cy: 8, r: 5.6, fill: done ? tone : 'none' }),
+                  done ? React.createElement('path', { d: 'm5 8 2 2 4-4', stroke: 'white' }) : running ? React.createElement('circle', { cx: 8, cy: 8, r: 2, fill: tone, stroke: 'none' }) : failed ? React.createElement('path', { d: 'M8 4.5v4M8 10v1' }) : null),
+                React.createElement('span', { style: { minWidth: 0, overflowWrap: 'anywhere' } }, execution.title),
+                React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, taskStateLabel(execution.status)))
+            }))) : null,
           task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,
           React.createElement('div', { style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted } },
-            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt)))
+            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt), React.createElement('span', { style: { marginLeft: 'auto' } }, copyButton(task.taskId, 'Id'))))
       }
       const alertCategories = [
         { id: 'all', label: '全部类型' },

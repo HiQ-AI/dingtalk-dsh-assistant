@@ -13,7 +13,7 @@ import { createTaskSessionObservability } from './task-session-observability.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { resolveTopicMessages, stableId } from './topic-model.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from './task-message-projections.js'
-import { taskWorkspace, taskExecutionWorkspace, taskDirectories, checkedTaskDirectory } from './session-workspaces.js'
+import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, checkedTaskDirectory } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
 import { sameDeliveredText } from './group-message.js'
@@ -278,7 +278,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const pendingWake = !task.lastDecision && (await query('wake.list', { taskId: task.taskId })).some(wake => wake.state !== 'acked')
     const state = taskBoardState(task, executions, pendingWake)
     return { ...task, state,
-    topicRefs: task.topicRefs ?? [], executionCount: executions.length, waitingReason: state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
+    topicRefs: task.topicRefs ?? [], executionCount: executions.length,
+    executionSessions: [...new Map(executions.map(execution => [execution.sessionId || execution.executionId, {
+      executionId: execution.executionId, sessionId: execution.sessionId, title: executionSessionTitle(execution), status: execution.status, createdAt: execution.createdAt,
+    }])).values()].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.executionId.localeCompare(b.executionId)), waitingReason: state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
     controlState: task.control, inputVersion: task.requirementRevision, result: task.completion?.result ?? task.lastDecision ?? null,
     session: { sessionId: task.sessionId, sessionBound: task.sessionBound, status: task.drained ? 'idle' : 'running', workspaceDir: await taskWorkspace(root, task.taskId), logPath: taskSessionLogRoot(root, task.taskId) },
     legacyReadonly: false }
@@ -291,7 +294,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   async function taskExecutions(taskId, { offset = 0, limit = 50 } = {}) {
     const all = await query('execution.list', { taskId })
-    const executions = await Promise.all(all.slice(offset, offset + limit).map(async execution => ({ ...execution, objective: execution.prompt,
+    const executions = await Promise.all(all.slice(offset, offset + limit).map(async execution => ({ ...execution, title: executionSessionTitle(execution), objective: execution.prompt,
       workspaceDir: await taskWorkspace(root, taskId), workingDirectory: await taskExecutionWorkspace(root, taskId, execution.sessionId), logPath: taskSessionLogRoot(root, taskId),
       result: execution.result?.payload?.output ?? execution.result?.payload?.error ?? null })))
     return { executions, total: all.length, offset, limit }
@@ -567,7 +570,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       let stageSequence = 0
       const stageReports = new Map()
       try {
-        const result = await executionSessions.run({ binding, input: execution.input, definition: { ...models(), ...execution.definition,
+        const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: execution.input, definition: { ...models(), ...execution.definition,
           prompt: execution.prompt, allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title); return command('execution.sessionBound', { binding }, `execution-bound:${executionId}:${binding.leaseEpoch}`) },
           onNativeExecution: nativeOperation,

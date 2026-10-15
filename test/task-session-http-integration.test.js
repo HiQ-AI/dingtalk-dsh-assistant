@@ -28,7 +28,7 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
   const service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } }, legacy, residentStore,
     config: { dbPath: join(root, 'control.sqlite'), workspaceDir: root, instanceId: 'http-fixture', initialize: true, webActorId: 'owner' },
     persistence: { register: noop, close: noop }, groupSessions: { run: noop, close: noop },
-    taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) await delegate({ key: 'inspect', objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
+    taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 43; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
     executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult }) => { await onSessionBound(); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
   })
   const runtime = { ...legacy, listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args),
@@ -53,7 +53,14 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.ok(detail.session.workspaceDir.startsWith(root))
     assert.ok(detail.session.logPath.startsWith(root))
     const page = await (await fetch(base + `/state/tasks/${taskId}/executions?offset=0&limit=20`)).json()
-    assert.equal(page.total, 1)
+    assert.equal(page.total, 43)
+    assert.equal(page.executions.length, 20)
+    const board = await (await fetch(base + '/state/tasks')).json()
+    assert.equal(board[0].executionSessions.length, 43)
+    assert.equal(new Set(board[0].executionSessions.map(item => item.sessionId)).size, 43)
+    assert.deepEqual(board[0].executionSessions, detail.executionSessions)
+    assert.ok(board[0].executionSessions.every(item => /^核对服务\d{2}$/.test(item.title)))
+    assert.deepEqual((await service.boardTasks())[0].executionSessions, board[0].executionSessions)
     assert.equal(page.executions[0].status, 'succeeded')
     assert.notEqual(page.executions[0].sessionId, sessionId)
     assert.equal(page.executions[0].result.summary, '核对成功')
