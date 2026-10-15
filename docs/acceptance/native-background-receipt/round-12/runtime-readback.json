@@ -1,0 +1,13 @@
+{
+  "bridge": true,
+  "runtimePid": 63408,
+  "issues": 2,
+  "at": "2026-10-15T12:12:14.1943628+08:00",
+  "databaseListeners": 0,
+  "inbound": true,
+  "issueTaskIds": [
+    "task-c435b5b9dd11dc414114680254f6c8f7",
+    "task-4c4780a541c5ea7c51024975de5f121d"
+  ],
+  "health": "degraded"
+}

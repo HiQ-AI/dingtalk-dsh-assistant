@@ -24,11 +24,14 @@
 - [x] 配置真实本地原生profile运行 `node --test test/task-session-job-recovery-native.test.js test/dynamic-execution-session-native.test.js test/dynamic-task-store.test.js test/dynamic-operation-readback.test.js`：最终124通过、0失败、0跳过。
 - [x] 真实HTTP服务在原job下供下一工具访问；显式停止、执行结束清理、后台取消、并行作用域隔离和前台清理失败仍清后台均通过。
 - [x] 前台超时提升、原job收据重启恢复、未知效果保护及文件前置拒绝对账回归通过。
-- [x] 本地双包部署：Assistant SHA256 `971e078f8b774de11fb6cfb8d02952b60fef895e9311f79b6c735abef4f6e5fc`，Observer `c8b70537e04798a7c8783bdf2dd68305d97728a4f3c8ac4092580096d58bedc9`；新PID42240、原profile摘要保持、接入及DWS就绪。
+- [x] 最终本地双包部署：Assistant SHA256 `2168cc5604bc9c1ee0311bbd6b62bbbe01d1bc085f5991705ac0959454c69266`，Observer `c8b70537e04798a7c8783bdf2dd68305d97728a4f3c8ac4092580096d58bedc9`；新PID63408、原profile摘要保持、接入及DWS就绪。
 - [x] 原数据库job真实completed，原operation自然结算，旧edit按原生前置拒绝收据failed/noEffect。原任务与执行session保留，inputVersion推进2。
 - [x] 更新后真实任务日志：452显式启动数据库，453立即返回原job/running，457进入下一工具核验并运行隔离回归，服务未被提前清理。
 - [x] 原任务核心隔离数据库/控制器回归9项通过、0失败/错误/跳过，实际数据库退出及清理有记录；完整Spring HTTP和鉴权不在此证明范围。
-- [ ] 补充job读取修订的本地部署及旧查询对账：正在执行，完成后更新读回。
+- [x] 补充job读取修订已部署；原查询正式failed/noEffect，保留原unknown previousObservation和result599/turnEnd709证明，原execution同session继续inputVersion4，无重放。
+- [x] 原任务最终completed/drained，同一execution/session完成交付；专用PG/控制器9项及限定单测8项通过，夹具表/连接/监听均清理。业务候选仅本地，未部署UAT/生产。
+- [ ] 共享环境副作用：已确认越界连接，未核实影响；未执行共享修复或回滚，不作为隔离验收通过项。
+- [ ] 完成通知：原任务已completed，但通知尚未读回确认，保留unknown且未重发。另有其他任务历史恢复告警，不能宣称整体health=ok。
 
 原执行另自行运行全仓测试，日志400项/0失败/0错误/1跳过，但加载local profile并连接共享服务。发现后明确收缩范围并核对退出；全仓在停止要求生效前已自然完成，不伪记取消，也不作为隔离验收。共享副作用尚未核实，没有执行共享修复或回滚。
 

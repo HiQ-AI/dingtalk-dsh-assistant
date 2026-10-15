@@ -12,4 +12,10 @@ local-deployment,6,PASS,round-6.md
 live-background-handoff,6,PASS,round-6.md
 isolated-database-regression,7,PASS,round-7.md
 shared-environment-boundary,7,FAIL,round-7.md
-original-task-verification,8,PENDING,round-8.md
+original-task-verification,8,FAIL,round-8.md
+native-job-read-classification,9,PASS,round-9.md
+native-job-read-reconciliation,10,PASS,round-10.md
+local-deployment,11,PASS,round-11.md
+legacy-job-read-recovery,11,PASS,round-11.md
+original-task-verification,12,PASS,round-12.md
+completion-notification-readback,12,FAIL,round-12.md
