@@ -1,0 +1,74 @@
+{
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T05:05:33.204Z",
+            "readyAt": "2026-10-15T05:05:33.652Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T05:05:33.656Z",
+            "succeededAt": "2026-10-15T05:05:34.433Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T05:05:33.238Z",
+            "readyAt": "2026-10-15T05:05:33.699Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T05:05:33.701Z",
+            "succeededAt": "2026-10-15T05:05:34.31Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T05:05:33.284Z",
+        "readyAt": "2026-10-15T05:05:33.741Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "taskEnabled": true,
+  "creationDate": "2026-10-15T13:05:16.725728+08:00",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "installedVersion": "1.0.0",
+  "packageSha256": "7ed96f75702cd75fce18d2df4e0e51d016f4429c3bd5b2bfb93b18df09939c89",
+  "backupCreated": false,
+  "newPid": 55216
+}

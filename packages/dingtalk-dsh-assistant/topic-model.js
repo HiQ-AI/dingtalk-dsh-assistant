@@ -67,7 +67,8 @@ export function topicMessages(group, topic, revision) {
     if (entry.action === 'remove') refs.delete(entryUnitId)
     else refs.set(entryUnitId, normalized)
   }
-  return [...refs].map(([unitId, entry]) => {
+  const sourceOrder = new Map(group.messages.map(message => [message.messageId, message.sequence]))
+  return [...refs].sort(([, a], [, b]) => (sourceOrder.get(a.messageId) ?? 0) - (sourceOrder.get(b.messageId) ?? 0)).map(([unitId, entry]) => {
     const { messageId, messageVersion: version, unitRevision } = entry
     const current = group.messages.find((message) => message.messageId === messageId)
     const fact = current?.messageVersion === version ? current : current?.facts?.find((item) => item.messageVersion === version)

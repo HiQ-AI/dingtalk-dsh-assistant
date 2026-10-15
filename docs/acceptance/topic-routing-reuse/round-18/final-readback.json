@@ -1,0 +1,85 @@
+{
+  "activeTopics": 2,
+  "archiveTopics": 6,
+  "mergedTopics": 4,
+  "targets": [
+    {
+      "topicId": "topic-67793cdea8c52283a5f9e091be48e082",
+      "title": "数据集合并描述框位置",
+      "revision": 8,
+      "previousMessages": 6,
+      "currentMessages": 8
+    },
+    {
+      "topicId": "topic-bb20243613e5cf31f6b5c786b6d2b6fa",
+      "title": "专家审核后申请撤回限制修复",
+      "revision": 4,
+      "previousMessages": 2,
+      "currentMessages": 4
+    }
+  ],
+  "histories": [
+    {
+      "topicId": "topic-a72609923d9c7b0866eaec2a13f72746",
+      "mergedInto": "topic-67793cdea8c52283a5f9e091be48e082",
+      "oldRevisionMessages": 1,
+      "currentMessages": 0
+    },
+    {
+      "topicId": "topic-dc379b80553376530fa6141c1c12b846",
+      "mergedInto": "topic-67793cdea8c52283a5f9e091be48e082",
+      "oldRevisionMessages": 1,
+      "currentMessages": 0
+    },
+    {
+      "topicId": "topic-4bb83a4fd21032a0f5fa00e43fae7af2",
+      "mergedInto": "topic-bb20243613e5cf31f6b5c786b6d2b6fa",
+      "oldRevisionMessages": 1,
+      "currentMessages": 0
+    },
+    {
+      "topicId": "topic-02f8eef7c2e0248d6faf58f4d192bfe8",
+      "mergedInto": "topic-bb20243613e5cf31f6b5c786b6d2b6fa",
+      "oldRevisionMessages": 1,
+      "currentMessages": 0
+    }
+  ],
+  "groupTopicTotal": 2,
+  "originalTaskExecutionAndOperationStatesUnchanged": true,
+  "taskCount": 2,
+  "executionCount": 13,
+  "unknownOperations": 0,
+  "allDrained": true,
+  "originalFailures": [
+    {
+      "operationId": "operation-d00a661cc36bc0273e26a716090954b4ef8df1fb",
+      "state": "failed",
+      "partialEffectsPossible": true
+    },
+    {
+      "operationId": "operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835",
+      "state": "failed",
+      "partialEffectsPossible": true
+    }
+  ],
+  "health": {
+    "status": "degraded",
+    "inboundProcessing": true,
+    "dwsBridgeHealthy": true,
+    "recoveryIssueCount": 3
+  },
+  "issues": [
+    {
+      "kind": "task-session",
+      "taskId": "task-c435b5b9dd11dc414114680254f6c8f7"
+    },
+    {
+      "kind": "task-session",
+      "taskId": "task-4c4780a541c5ea7c51024975de5f121d"
+    },
+    {
+      "kind": "task-session",
+      "taskId": "task-4c4780a541c5ea7c51024975de5f121d"
+    }
+  ]
+}

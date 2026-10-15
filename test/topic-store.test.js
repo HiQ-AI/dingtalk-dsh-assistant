@@ -649,3 +649,16 @@ test('Web取消不能借同一blocked决策中的本任务保留项越过其他�
  assert.equal(result.status,'topic-busy');assert.equal(store.getGroup('g').taskReservations.length,2)
  await store.close()
 })
+
+
+test('历史Web补充归并后按原来源顺序读上下文，晚到归并不能排在更新指令之后',async()=>{
+ const {store,target}=await legacyWebContinuationFixture()
+ await ingest(store,'later-in-same-matter',{sourceKind:'dingtalk'});await route(store,'later-route',[['later-in-same-matter',target]])
+ await store.acceptTopicDecision(decision('later-decision',target,2));await store.completeTopicDecision({groupId:'g',topicId:target,decisionId:'later-decision'})
+ const check=await store.reconcileWebTaskTopics({groupId:'g',checkOnly:true})
+ await store.reconcileWebTaskTopics({groupId:'g',requestId:'chronology',expectedDigest:check.expectedDigest})
+ const current=await store.getTopicContext({groupId:'g',topicId:target,revision:3}),old=await store.getTopicContext({groupId:'g',topicId:target,revision:2})
+ assert.deepEqual(current.messages.map(message=>message.sequence),[1,2,3])
+ assert.deepEqual(old.messages.map(message=>message.sequence),[1,3],'旧快照不加入当时未归属的Web来源')
+ assert.equal(current.messages[2].messageId,'later-in-same-matter');await store.close()
+})

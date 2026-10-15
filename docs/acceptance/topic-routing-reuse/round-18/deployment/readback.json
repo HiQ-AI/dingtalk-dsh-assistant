@@ -1,0 +1,74 @@
+{
+  "taskEnabled": true,
+  "packageSha256": "90a21792f7d2c03824bb1214015a160f4aa18ea9d7008515d3c285a787618fc2",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "newPid": 29832,
+  "creationDate": "2026-10-15T12:58:52.148284+08:00",
+  "backupCreated": false,
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T04:58:58.401Z",
+            "readyAt": "2026-10-15T04:58:58.887Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T04:58:58.889Z",
+            "succeededAt": "2026-10-15T04:58:59.838Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T04:58:58.424Z",
+            "readyAt": "2026-10-15T04:58:58.919Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T04:58:58.92Z",
+            "succeededAt": "2026-10-15T04:58:59.737Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T04:58:58.449Z",
+        "readyAt": "2026-10-15T04:58:58.947Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "installedVersion": "1.0.0"
+}
