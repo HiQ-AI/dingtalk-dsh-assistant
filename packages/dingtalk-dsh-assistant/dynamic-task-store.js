@@ -30,6 +30,15 @@ const canonical = value => {
 const digest = value => createHash('sha256').update(canonical(value)).digest('hex')
 const clone = value => JSON.parse(JSON.stringify(value))
 const changed = result => ({ result, dispatchEligible: false })
+// Host-owned active intervals only. Never reconstruct legacy/restarted intervals.
+function stopExecutionTiming(execution, stamp) {
+  const timing = execution.runTiming
+  if (!timing?.startedAt) return
+  const delta = Date.parse(stamp) - Date.parse(timing.startedAt)
+  if (!Number.isFinite(delta) || delta < 0) timing.recorded = false
+  else timing.elapsedMs += delta
+  timing.startedAt = null
+}
 // Only trusted envelope fields reach this parser. Do not infer dates from message text,
 // or let Date.parse interpret a missing timezone / a numeric string as a calendar date.
 export function ingressTimestamp(value, allowMilliseconds = true) {
@@ -243,7 +252,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
       for (const operation of ops()) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
       for (const notification of all('dynamic_notifications')) if (notification.state === 'starting') { notification.state = 'unknown'; put('dynamic_notifications', notification) }
-      for (const execution of all('dynamic_executions')) if (!execution.drained) { execution.recovering = true; put('dynamic_executions', execution) }
+      for (const execution of all('dynamic_executions')) if (!execution.drained) {
+        execution.recovering = true
+        if (execution.runTiming?.startedAt) { execution.runTiming.recorded = false; execution.runTiming.startedAt = null }
+        put('dynamic_executions', execution)
+      }
       for (const task of all('dynamic_tasks')) if (!task.drained) { task.recovering = true; saveTask(task) }
       for (const group of all('dynamic_groups')) if (!group.drained) { group.recovering = true; put('dynamic_groups', group) }
       importLegacy()
@@ -473,7 +486,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (get('dynamic_executions', executionId, true)) fail('DYNAMIC_EXECUTION_EXISTS')
       const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), title: executionSessionTitle({ input: payload.input, key }), dispatchDigest, inputDigest: digest(payload.input),
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, sessionId: `task-execution-${randomUUID()}`,
-        status: 'queued', inputVersion: 1, inputHistory: [], results: [], leaseEpoch: 0, sessionBound: false, drained: true, cancelRequested: false, createdAt: stamp, updatedAt: stamp }
+        status: 'queued', inputVersion: 1, inputHistory: [], results: [], leaseEpoch: 0, sessionBound: false, drained: true, cancelRequested: false, createdAt: stamp, updatedAt: stamp,
+        runTiming: { recorded: true, elapsedMs: 0, startedAt: null } }
       put('dynamic_executions', execution)
       return changed({ execution })
     }
@@ -584,6 +598,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (!execution.definition?.recoveryReadOnly && ops(execution.taskId).some(item => item.executionId === execution.executionId && ['starting','unknown'].includes(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       execution.leaseEpoch++; execution.status = 'running'; execution.drained = false; execution.recovering = false
+      if (execution.runTiming?.recorded) execution.runTiming.startedAt = stamp
       execution.updatedAt = stamp; put('dynamic_executions', execution)
       return { result: { execution, binding: executionBinding(execution) }, dispatchEligible: true }
     }
@@ -609,6 +624,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (kind === 'execution.sessionBound') execution.sessionBound = true
       if (kind === 'execution.cancel') { execution.cancelRequested = true; if (execution.drained) execution.status = 'cancelled' }
       if (kind === 'execution.drained') {
+        stopExecutionTiming(execution, stamp)
         execution.drained = true; execution.recovering = false
         if (execution.cancelRequested && !terminalExecutions.has(execution.status)) execution.status = 'cancelled'
         else if (execution.status === 'running' && !execution.result) execution.status = 'queued'
@@ -617,6 +633,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const payload = { output: a.output ?? null, error: a.error ?? null }
         if (execution.result && digest(execution.result.payload) !== digest(payload)) fail('DYNAMIC_EXECUTION_RESULT_CONFLICT')
         if (!execution.result) {
+          stopExecutionTiming(execution, stamp)
           const current = executionCurrent(execution)
           execution.result = { payload, current, requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
             leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion, receivedAt: stamp }

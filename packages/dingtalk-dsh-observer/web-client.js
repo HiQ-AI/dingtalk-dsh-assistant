@@ -580,6 +580,20 @@ window.__ModuleLoader__.load({
         compact && (!session?.sessionId || session.sessionBound === false) ? React.createElement('p', { className: 'detail-muted' }, session?.sessionId ? '会话尚未绑定，暂不可打开。' : '会话尚未建立。') : null,
         entry, failure)
     }
+    function ExecutionSessionDuration({ timing }) {
+      const [clock, setClock] = useState(Date.now)
+      useEffect(() => {
+        if (!timing?.recorded || !timing.startedAt) return
+        setClock(Date.now())
+        const timer = setInterval(() => setClock(Date.now()), 1000)
+        return () => clearInterval(timer)
+      }, [timing?.recorded, timing?.startedAt])
+      const delta = timing?.startedAt ? clock - Date.parse(timing.startedAt) : 0
+      const recorded = timing?.recorded === true && Number.isFinite(timing.elapsedMs) && timing.elapsedMs >= 0 && Number.isFinite(delta) && delta >= 0
+      const value = recorded ? fmtDuration(timing.elapsedMs + delta) : '—'
+      const description = recorded ? `累计实际运行时长：${value}` : '时长未记录：缺少完整的实际运行计时证据。'
+      return React.createElement('span', { className: 'observer-execution-duration', title: description, 'aria-label': description, style: { color: colors.muted, fontVariantNumeric: 'tabular-nums', display: 'inline-block', minWidth: '8em', textAlign: 'right' } }, value)
+    }
     function TaskResult({ result }) {
       const value = typeof result === 'string' ? { summary: result } : result
       const values = items => Array.isArray(items) ? items : items ? [items] : []
@@ -1137,14 +1151,16 @@ window.__ModuleLoader__.load({
             React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
               const done = ['succeeded', 'completed'].includes(execution.status)
               const running = execution.status === 'running'
+              const active = running && !execution.drained && !execution.recovering
               const failed = execution.status === 'failed'
               const tone = done ? 'var(--dsw-alias-state-success-primary, #248a3d)' : running ? colors.accent : failed ? colors.danger : colors.muted
               return React.createElement('button', { key: execution.sessionId || execution.executionId, className: 'observer-execution-session', type: 'button', disabled: !execution.sessionId || navigatingSessionId === execution.sessionId, 'aria-busy': navigatingSessionId === execution.sessionId, onClick: () => navigate(execution.sessionId, session.sessionId), style: { display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) auto', alignItems: 'start', gap: 7, minWidth: 0, padding: '6px 0', border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5, textAlign: 'left', cursor: execution.sessionId ? 'pointer' : 'default' } },
-                React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, 'aria-hidden': true, style: { marginTop: 1 } },
+                active ? React.createElement('span', { role: 'img', 'aria-label': taskStateLabel(execution.status), title: taskStateLabel(execution.status), style: { display: 'inline-flex', width: 14, height: 14, marginTop: 1 } }, React.createElement(StateDot, { state: 'ongoing', size: 14 })) : React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, role: 'img', 'aria-label': taskStateLabel(execution.status), style: { marginTop: 1 } },
+                  React.createElement('title', null, taskStateLabel(execution.status)),
                   React.createElement('circle', { cx: 8, cy: 8, r: 5.6, fill: done ? tone : 'none' }),
                   done ? React.createElement('path', { d: 'm5 8 2 2 4-4', stroke: 'white' }) : running ? React.createElement('circle', { cx: 8, cy: 8, r: 2, fill: tone, stroke: 'none' }) : failed ? React.createElement('path', { d: 'M8 4.5v4M8 10v1' }) : null),
-                React.createElement('span', { style: { minWidth: 0, overflowWrap: 'anywhere' } }, execution.title),
-                React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, taskStateLabel(execution.status)))
+                React.createElement('span', { title: execution.title, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, execution.title),
+                React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, React.createElement(ExecutionSessionDuration, { timing: execution.runTiming })))
             }))) : null,
           task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,
           React.createElement('div', { style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted } },

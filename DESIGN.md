@@ -52,6 +52,8 @@ omitted:
 
 ## Components
 
+任务卡片执行会话使用左图标、中间名称、右时间值单行布局；名称超长以 ellipsis 省略并提供完整 tooltip，320px 也不换行；原状态文字位置仅显示累计运行时间数值，不显示状态文字或“时长”前缀；状态图标以 tooltip 和无障碍标签保留含义；仅 running 且未排空、未恢复中的执行复用宿主 StateDot ongoing（14px 固定占位），动画形态由宿主版本决定，数字采用等宽数字及预留宽度。复用 fmtDuration；排队不计时，历史或崩溃区间缺少证据显示“—”并以 tooltip 及无障碍标签解释时长未记录，计时口径见 docs/spec/execution-session-duration.md。
+
 复用宿主 Button、Menu、Pill、StateDot。列表筛选使用既有 SelectMenu，创建任务来源群沿用设置页的原生 select，允许系统拥有展开菜单的外观。SessionLocation 统一任务与执行的会话入口、目录及日志展示；TaskResult 统一结果、证据和限制。表单禁用原生验证气泡，在字段关联错误文字并保留失败输入。提交使用同步 ref 防重复，网络失败保留同一个幂等键。
 
 所有新交互使用 button、label、input、textarea、details/summary。禁用状态不可点击；请求结果用 status/alert。新建任务草稿在离开前提示。任务详情仅观察会话、结果与执行，不提供补充需求或取消任务控件。人工介入页对当前任务问题提供必填原文答复，沿原任务继续；答复失败和修订冲突保留文本及原请求版本，不自动视为批准其他操作。历史任务和历史人工介入仍只读，不提供恢复、批准、模板、变量或运行快照操作。
