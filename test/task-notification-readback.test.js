@@ -56,3 +56,34 @@ test('send status cannot replace a different acknowledged message identity', asy
     readMessage: async () => { throw new Error('must not read a conflicting message') } }
   assert.equal(await readTaskNotificationDelivery(adapter, { ...notification, ack: { messageId: 'm', openTaskId: 'send-task' } }), undefined)
 })
+
+test('DWS无序列表只消除项间换行，正文、围栏和段落边界不可吞并', async () => {
+  const { sameDeliveredText } = await import('../packages/dingtalk-dsh-assistant/group-message.js')
+  const expected = '结论。\n\n- 验证 A B 通过。\n\n- 版本 `v1` 已读回。\n\n范围有限。\n\n- 署名'
+  const rendered = '结论。\n- 验证 A B 通过。- 版本 **v1** 已读回。\n范围有限。\n- 署名'
+  assert.equal(sameDeliveredText('@用户 '+rendered, expected, {sender:'用户'}), true)
+  assert.equal(sameDeliveredText('- A- B', '- A\n- B'), true)
+  assert.equal(sameDeliveredText('- A- B', '- A\r\n\r\n- B'), true)
+  for (const changed of [rendered.replace('A B','AB'), rendered.replace('v1','v2'), rendered.replace('- 版本','版本'),
+    rendered.replace('。\n范围','。范围'), rendered+'附加内容']) assert.equal(sameDeliveredText(changed, expected), false)
+  for (const fence of ['```','~~~']) assert.equal(sameDeliveredText(`${fence}\n- A- B\n${fence}`,`${fence}\n- A\n\n- B\n${fence}`),false)
+  assert.equal(sameDeliveredText('  - A- B','  - A\n  - B'),false)
+  assert.equal(sameDeliveredText('- A正文- B','- A\n正文\n- B'),false)
+})
+
+test('未知列表通知仅按原发送回执回读结清，内容或身份不符不结清且不重发', async () => {
+  const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
+  const pending = {...notification, state:'unknown', sendAttemptCount:1, ack:{openTaskId:'original-send'}, payload:{...notification.payload,text:'- A B\n\n- C'}}
+  const message = {...observed, senderId:'bot', text:'- A B- C'}
+  const adapter = {querySendStatus:async id=>{assert.equal(id,'original-send');return {result:{sendStatus:'SUCCESS'},messageRef:{openConversationId:'g',openMessageId:'m'}}}, readMessage:async()=>message}
+  const notifications={send:async()=>assert.fail('unknown must never resend'),readback:n=>readTaskNotificationDelivery(adapter,n,{senderActorId:'bot'})}
+  const commands=[]
+  await deliverTaskNotification({notification:pending,notifications,command:async(kind,args)=>commands.push({kind,args})})
+  assert.equal(commands[0].kind,'notification.reconcile');assert.equal(commands[0].args.receipt.messageId,'m')
+  assert.equal(pending.sendAttemptCount,1)
+  for(const patch of [{text:'- AB- C'},{senderId:'other'},{quotedMessage:{messageId:'wrong',conversationId:'g'}},{atOpenDingTalkIds:['wrong']}]) {
+    const before={...message};Object.assign(message,patch);commands.length=0
+    await deliverTaskNotification({notification:pending,notifications,command:async(kind,args)=>commands.push({kind,args})})
+    assert.equal(commands[0].kind,'notification.diagnostic');Object.assign(message,before)
+  }
+})

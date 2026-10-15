@@ -956,3 +956,18 @@ test('archived lifecycle rejects reopen and concurrent pending-wake admission; u
   const normal = await f.query({ kind: 'task.get', taskId: 'normal' })
   assert.equal(normal.status, 'active'); assert.equal(normal.archivedAt, undefined)
 })
+
+test('新续办步骤使用新请求键但保留原执行，会拒绝旧键改目标且不增加执行', async t => {
+ const f=await fixture(t),owner=await f.task(),first=await f.execution(owner.binding)
+ await f.command('execution.result',{binding:first,output:{done:true}});await f.command('execution.drained',{binding:first})
+ const args={binding:owner.binding,executionId:first.executionId,key:'verify-build',prompt:'Verify build',input:{objective:'Verify build'}}
+ await f.command('execution.continue',args)
+ const second=(await f.command('execution.claim',{executionId:first.executionId})).result.binding
+ await f.command('execution.result',{binding:second,output:{done:true}});await f.command('execution.drained',{binding:second})
+ assert.equal((await f.command('execution.continue',args)).result.execution.inputVersion,2)
+ const next={...args,prompt:'Inspect newly supplied connection',input:{objective:'Inspect newly supplied connection'}}
+ await assert.rejects(f.command('execution.continue',next),{code:'DYNAMIC_DISPATCH_KEY_CONFLICT'})
+ const continued=(await f.command('execution.continue',{...next,key:'inspect-new-connection'})).result.execution
+ assert.equal(continued.executionId,first.executionId);assert.equal(continued.sessionId,first.sessionId);assert.equal(continued.inputVersion,3)
+ assert.equal((await f.query({kind:'execution.list'})).length,1)
+})

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { runInNewContext } from 'node:vm'
-const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+const source = (await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
 
 test('single expansion initializes only after asynchronous data, uses displayed sort, and never overwrites manual choice', () => {
   const start = source.indexOf('      useEffect(() => {\n        if (!data) return')

@@ -596,7 +596,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const longTitle = topics.find((topic) => topic.title.length > TOPIC_TITLE_MAX_CHARS && topic.summary?.trim())
       if (longTitle) createTitleMigrationRequest(groupId, longTitle)
       else {
-        const missingSummary = topics.find((topic) => topic.migrationBaseline && topic.processedRevision >= topic.revision && !topic.summary.trim() && topic.revision > 0)
+        const missingSummary = topics.find((topic) => topic.processedRevision >= topic.revision && !topic.summary.trim() && topic.revision > 0)
         if (missingSummary) createSummaryMigrationRequest(groupId, missingSummary)
       }
     }

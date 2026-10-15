@@ -925,3 +925,7 @@ Owner上下文索引压缩仅改变新模型回合的投影，无schema迁移；
 Owner 每轮去重无 schema 迁移。部署后普通工具结果应携带 evidenceRef，且不再新增“Host原生工具执行回执”独立通知；SDK value 替换仍可通过材料索引查凭据。核对可见基础信息只有一份，需求变化更新且压缩恢复不丢约束。旧完整快照仅保留简短 superseded 审计标记，原始日志保留。记录新注入长度、仍可见基线和系统说明分别计量，不把字段移位当整体 token 节省；历史通知不追溯删除。
 
 调查投入原则更新仅修改 Owner 与停止依据核验的模型指令，无工具禁令、成本审批、schema或权限变化。部署后核对新Owner请求的系统指令包含自主权衡证据增益与成本；指令存在及协议测试通过不保证模型每次判断正确，需结合实际后续行为观察。
+
+## 通知列表回读修复
+
+部署前运行 task-notification-readback 与 workflow-notification-obligations 定向测试，使用同一 DWS profile 的原 openTaskId 查 SUCCESS/messageId，再读取原消息验证身份与正文。记录待对账通知的 sendAttemptCount。部署后等待原 unknown 回读队列结清，逐条验证 delivered 原消息身份及发送次数不变；不得改账或重发来清除告警。若仍有活动任务，等其排空后切换。Goal 原失败回执优先通过现有 human reply/check 核验绑定调查，再经正式 reply 结清并恢复原任务，保留 previousObservation。

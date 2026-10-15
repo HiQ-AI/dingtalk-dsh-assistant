@@ -1087,6 +1087,26 @@ test('Topic 按需搜索分页及固定版本读回，跨群与越界拒绝', as
   await assert.rejects(h.call('group_topic_list', { offset: -1 }), /topic_page_invalid/)
 })
 
+test('普通已处理话题补齐空摘要，不重做任务动作，之后不重复补齐', async t => {
+  const h = await setup(t)
+  await ingest(h, 'summary-backfill')
+  const request = (await route(h, { 'summary-backfill': { newTopicKey: 'summary-backfill', title: '排查保存失败' } })).pendingDecisions[0]
+  await complete(h, request)
+  await h.coordinator.schedule('g')
+  const pending = h.envelope('[GROUP_TOPIC_SUMMARY_MIGRATION]')
+  assert.equal(pending.topicId, request.topicId)
+  const before = h.applications.length
+  const summary = '排查保存失败，当前仅完成讨论，尚无修复结论。'
+  assert.equal((await h.call('group_topic_summary_submit', { requestId: pending.requestId, topicId: pending.topicId, summary })).status, 'accepted')
+  const topic = h.store.getTopic('g', pending.topicId)
+  assert.equal(topic.summary, summary)
+  assert.equal(topic.summaryRevision, topic.revision)
+  assert.equal(h.applications.length, before)
+  const count = h.sent.length
+  await h.coordinator.schedule('g')
+  assert.equal(h.sent.length, count)
+})
+
 test('历史 Topic 先根据引用消息补 summary，再据此重生成 title', async (t) => {
   const h = await setup(t)
   await ingest(h, 'legacy')

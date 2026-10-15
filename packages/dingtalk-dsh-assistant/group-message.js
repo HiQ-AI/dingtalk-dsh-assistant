@@ -17,13 +17,23 @@ export function sameDeliveredText(observed, expected, quoted = false) {
   if (actual === null || wanted === null) return false
   // 钉钉回读把单行 inline-code 表示成粗体；只变换期望的成对单反引号，保留正文。
   const inlineRendered = expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**')
-  // 已实证 DWS 将连续有序列表的项间单换行移除；只变换期望正文，保留编号和每个字符。
+  // DWS 会移除列表项间换行；仅变换期望的顶层列表边界，保留正文和段落间隔。
   const listRendered = text => {
     const lines = text.split(/\r?\n/u), rendered = []
     let fence = null
     for (let index = 0; index < lines.length; index++) {
       const marker = lines[index].match(/^\s*(`{3,}|~{3,})/u)?.[1]
       if (marker) { if (!fence) fence = marker; else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null }
+      if (!fence && /^- .+/u.test(lines[index])) {
+        let end = index, joined = lines[index]
+        while (end + 1 < lines.length) {
+          let next = end + 1
+          while (next < lines.length && lines[next].trim() === '') next++
+          if (!/^- .+/u.test(lines[next] ?? '')) break
+          joined += lines[next]; end = next
+        }
+        rendered.push(joined); index = end; continue
+      }
       if (!fence && /^1\. .+/u.test(lines[index])) {
         let end = index + 1
         while (end < lines.length && lines[end].startsWith(`${end - index + 1}. `) && lines[end].length > `${end - index + 1}. `.length) end++
