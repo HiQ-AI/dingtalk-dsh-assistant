@@ -1,0 +1,9 @@
+case,round,status,evidence
+native-background-service,1,FAIL,round-1.md
+native-background-service,2,PASS,round-2.md
+native-background-service,3,PASS,round-3.md
+foreground-promotion,3,PASS,round-3.md
+cancel-drain,3,PASS,round-3.md
+parallel-scope,3,PASS,round-3.md
+local-deployment,1,PENDING,round-1.md
+original-task-verification,1,PENDING,round-1.md

@@ -329,6 +329,37 @@ test('process tracking handles async terminal allocation and isolates parallel n
   assert.deepEqual(trace.sort(), ['late:terminal','one:terminate','one:wait','two:terminate','two:wait'])
 })
 
+test('a later foreground drain failure still stops the same executors retained background processes', async t => {
+  const h = await host({ script: [{ name: 'pwsh', args: { run_in_background: true } }, { name: 'pwsh', args: {} }] })
+  const { SubprocessRuntime } = await import('@deepseek-ai/dsh-subprocess')
+  const trace = []
+  class FixtureProcess extends SubprocessRuntime {
+    spawn({ background }) { return { terminate: async () => trace.push(background ? 'background' : 'foreground'),
+      waitForExit: async () => { if (!background) throw new Error('foreground range unknown') } } }
+  }
+  new FixtureProcess(h.ctx)
+  const preset = await nativePreset(h, { execute: args => { h.ctx.subprocess.spawn({ background: args.run_in_background === true }); return { done: true } } })
+  t.after(async () => { await h.manager.close().catch(() => {}); await h.ctx.fiber.dispose(); await preset.standing.dispose() })
+  await assert.rejects(dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async () => ({}) }), error => error.executionDrained === false)
+  assert.deepEqual(trace, ['foreground', 'background'])
+})
+
+
+test('retained process scopes keep services alive between tools and isolate parallel execution cleanup', async t => {
+  const { trackDynamicProcesses } = await import('../packages/dingtalk-dsh-assistant/dynamic-process-scope.js')
+  const trace = []
+  const service = { spawn: ({ id }) => ({ terminate: async () => trace.push(id), waitForExit: async () => trace.push(`${id}:wait`) }) }
+  const tracker = trackDynamicProcesses(service), first = tracker.scope(), second = tracker.scope()
+  t.after(() => tracker.close())
+  await Promise.all([first.run(async () => service.spawn({ id: 'first' })), second.run(async () => service.spawn({ id: 'second' }))])
+  assert.deepEqual(trace, [])
+  await first.close()
+  assert.deepEqual(trace, ['first', 'first:wait'])
+  await second.run(async () => assert.deepEqual(trace, ['first', 'first:wait']))
+  await second.close()
+  assert.deepEqual(trace, ['first', 'first:wait', 'second', 'second:wait'])
+  assert.throws(() => first.run(() => {}), error => error.executionDrained === false)
+})
 
 test('native recovery validates durable identity and refuses missing bound sessions before releasing a lease', async t => {
   const root = await temp(), first = await host({ root, script: [dynamicSubmit('first')] })

@@ -1,6 +1,6 @@
 // A promoted shell call still belongs to the original execution and process scope.
 // Never launch a replacement command, or accept a job belonging to another session.
-export async function collectNativeJob({ result, jobs, sessionId, toolName, command, startedAt, signal, record }) {
+export async function collectNativeJob({ result, jobs, sessionId, toolName, command, startedAt, signal, record, background = false, cancelled = false }) {
   const jobId = result?.value?.jobId
   if (!jobId) return null
   const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -17,6 +17,12 @@ export async function collectNativeJob({ result, jobs, sessionId, toolName, comm
       chunks.push(chunk); bytes += Buffer.byteLength(chunk.text)
       while (bytes > 256 * 1024 && chunks.length > 1) { bytes -= Buffer.byteLength(chunks.shift().text); lossy = true }
     }
+  }
+  if (background && ['running', 'stopping'].includes(job.status)) {
+    read()
+    const receipt = { jobId, owner: sessionId, status: job.status, startedAt: job.startedAt, chunks, lossy, cancelled: false }
+    await record(receipt)
+    return receipt
   }
   try {
     while (['running', 'stopping'].includes(job.status)) {
@@ -39,7 +45,7 @@ export async function collectNativeJob({ result, jobs, sessionId, toolName, comm
   }
   read()
   const receipt = { jobId, owner: sessionId, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
-    detail: job.detail ?? null, chunks, lossy, cancelled: false }
+    detail: job.detail ?? null, chunks, lossy, cancelled }
   await record(receipt)
   return receipt
 }

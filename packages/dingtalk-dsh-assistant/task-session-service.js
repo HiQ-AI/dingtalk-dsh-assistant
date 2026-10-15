@@ -547,6 +547,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!receipt.dispatchEligible) fail(receipt.result.operation.state === 'unknown' ? 'DYNAMIC_OPERATION_UNRESOLVED' : 'DYNAMIC_OPERATION_ALREADY_DISPATCHED')
       return { operationId }
     }
+    // A background launch acknowledgement does not prove a terminal process result.
+    if (event.jobReceipt && ['running', 'stopping'].includes(event.jobReceipt.status)) return { operationId, running: true }
     const error = event.result?.error?.info ?? event.result?.error
     const noEffect = !event.cancelled && event.result?.isError === true && isNativeFilePrecondition(toolName, error)
     const state = noEffect ? 'failed' : event.cancelled || event.result?.isError ? 'unknown' : event.jobReceipt && event.jobReceipt.status !== 'completed' ? 'failed' : 'succeeded'

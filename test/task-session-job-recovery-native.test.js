@@ -1,9 +1,9 @@
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { available, reason, nativeShell, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeShell, nativeTaskHost, latestInput, waitUntil, modelToolValues } from './fixtures/task-session-native-host.js'
 const test = (name, fn) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
 const decide = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
@@ -14,32 +14,73 @@ async function fixture(t, model) {
  return h
 }
 for (const background of [false, true]) test(`native shell retains its original process, reads output to terminal and persists the owned job receipt: background=${background}`, async t => {
- let step = 0
+ let step = 0, backgroundCollected = false
  const h = await fixture(t, async request => {
   const input = latestInput(request), owner = request.tools.some(tool => tool.name === 'task_delegate')
   if (owner) return !input.executions.length && !input.task.lastDecision ? [call('task_delegate', { key: 'long', objective: 'long' }), decide('wait','waiting')]
    : [decide(input.executions.every(e => e.status === 'succeeded') ? 'complete' : 'wait','verified')]
   if (step++ === 0) return [call(nativeShell, { command: nativeShell === 'pwsh' ? "Write-Output 'before'; Start-Sleep -Milliseconds 400; Set-Content result.txt 'after'; Write-Output 'after'" : "printf 'before\\n'; sleep 0.4; printf 'after\\n' | tee result.txt", ...(background ? { run_in_background: true } : {}), timeoutMs: 80, description: 'Promote and retain original command' })]
   assert.match(JSON.stringify(request), /nativeJobReceipt/)
+  if (background && !backgroundCollected) {
+   backgroundCollected = true
+   const receipt = modelToolValues(request).findLast(value => value.nativeJobReceipt)?.nativeJobReceipt
+   return [call('job_output', { job_id: receipt.jobId, wait: true, timeout_ms: 10000 })]
+  }
   assert.match(JSON.stringify(request), /after/)
   return [call('execution_submit',{output:{status:'completed',summary:'done',evidence:['actual terminal output'],limitations:[],artifacts:['result.txt']}})]
  })
  const created = await h.service.createTask({groupId:'native-group',requestId:'job-complete',objective:'long task'})
  await h.service.whenIdle()
- const operations = await h.query('operation.list',{taskId:created.taskId})
+ const operations = (await h.query('operation.list',{taskId:created.taskId})).filter(op => op.definition.toolName === nativeShell)
  assert.equal(operations.length,1)
  assert.equal(operations[0].state,'succeeded')
  assert.ok(operations[0].job, JSON.stringify(h.toolResults)); assert.equal(operations[0].job.status,'completed')
  assert.equal(operations[0].job.owner,(await h.query('execution.list'))[0].sessionId)
  assert.match(operations[0].job.chunks.map(c=>c.text).join(''),/before[\s\S]*after/)
  assert.equal((await readFile(join(h.root,'tasks',created.taskId,'result.txt'),'utf8')).trim(),'after')
- assert.equal(step,2)
+ assert.equal(step,background ? 3 : 2)
 })
-test('cancelling a promoted native job records terminal cancellation and drains the actual owned process', async t => {
+
+for (const explicitStop of [false, true]) test(`native background HTTP service remains usable by the next tool and drains its original job: explicitStop=${explicitStop}`, async t => {
+ let step = 0, originalJob, serverPid
+ const h = await fixture(t, async (request, host) => {
+  const input = latestInput(request)
+  if (request.tools.some(tool => tool.name === 'task_delegate')) return !input.executions.length && !input.task.lastDecision
+   ? [call('task_delegate', { key: 'service', objective: 'use service' }), decide('wait', 'waiting')]
+   : [decide(input.executions.every(e => e.status === 'succeeded') ? 'complete' : 'wait', 'verified')]
+  if (step++ === 0) {
+   const script = join(h.root, 'service.cjs'), ready = join(h.root, 'ready.json')
+   await writeFile(script, `const fs=require('fs'),http=require('http');const s=http.createServer((q,r)=>r.end('original-service'));s.listen(0,'127.0.0.1',()=>fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,port:s.address().port})));`)
+   return [call(nativeShell, { command: `${nativeShell === 'pwsh' ? '& ' : ''}'${process.execPath}' '${script}'`, run_in_background: true, description: 'Original owned HTTP service' })]
+  }
+  if (step === 2) {
+   const receipt = modelToolValues(request).findLast(value => value.nativeJobReceipt)?.nativeJobReceipt
+   assert.equal(receipt.status, 'running')
+   originalJob = receipt.jobId
+   const ready = await waitUntil(async () => { try { return JSON.parse(await readFile(join(h.root, 'ready.json'), 'utf8')) } catch {} }, 'background service ready')
+   serverPid = ready.pid
+   const operation = (await host.query('operation.list')).find(op => op.job?.jobId === originalJob)
+   assert.equal(operation.state, 'starting')
+   return [call(nativeShell, { command: nativeShell === 'pwsh' ? `(Invoke-WebRequest 'http://127.0.0.1:${ready.port}' -NoProxy).Content` : `curl --noproxy '*' 'http://127.0.0.1:${ready.port}'`, description: 'Use existing service from the next tool' })]
+  }
+  assert.match(JSON.stringify(request), /original-service/)
+  if (explicitStop && step === 3) return [call('job_kill', { job_id: originalJob })]
+  return [call('execution_submit', { output: { status: 'completed', summary: 'Actual HTTP request passed', evidence: ['original-service response'], limitations: [], artifacts: [] } })]
+ })
+ await h.service.createTask({ groupId: 'native-group', requestId: 'service', objective: 'Use and clean original service' })
+ await h.service.whenIdle()
+ assert.equal((await h.query('execution.list'))[0].drained, true)
+ const operation = (await h.query('operation.list')).find(op => op.job?.jobId === originalJob)
+ assert.equal(operation.job.jobId, originalJob)
+ assert.ok(['killed', 'failed', 'completed'].includes(operation.job.status))
+ assert.notEqual(operation.state, 'starting')
+ assert.throws(() => process.kill(serverPid, 0), { code: 'ESRCH' })
+})
+for (const background of [false, true]) test(`cancelling a native job records terminal cancellation and drains the actual owned process: background=${background}`, async t => {
  const h=await fixture(t,async request=>{
   const input=latestInput(request)
   if(request.tools.some(tool=>tool.name==='task_delegate')) return input.executions.length?[decide('wait','waiting')]:[call('task_delegate',{key:'cancel',objective:'cancel'}),decide('wait','waiting')]
-  return [call(nativeShell,{command:nativeShell==='pwsh'?"Write-Output 'started'; Start-Sleep -Seconds 30; Set-Content forbidden.txt done":"printf 'started\\n'; sleep 30; printf done > forbidden.txt",timeoutMs:80,description:'Long cancellable process'})]
+  return [call(nativeShell,{command:nativeShell==='pwsh'?"Write-Output 'started'; Start-Sleep -Seconds 30; Set-Content forbidden.txt done":"printf 'started\\n'; sleep 30; printf done > forbidden.txt",timeoutMs:80,...(background?{run_in_background:true}:{}),description:'Long cancellable process'})]
  })
  const created=await h.service.createTask({groupId:'native-group',requestId:'job-cancel',objective:'cancel task'})
  const operation=await waitUntil(async()=> (await h.query('operation.list')).find(op=>op.job?.status==='running'),'persisted promoted job')

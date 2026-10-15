@@ -6,7 +6,7 @@ const owners = new AsyncLocalStorage()
 const installed = new Map()
 const failure = cause => Object.assign(new Error('execution_process_drain_failed'), { code: 'execution_process_drain_failed', executionDrained: false, cause })
 export function trackDynamicProcesses(service) {
-  if (!service) return { run: action => action(), async close() {} }
+  if (!service) return { run: action => action(), scope: () => ({ run: action => action(), async close() {} }), async close() {} }
   const key = service.identity ?? service
   let state = installed.get(key)
   if (!state) {
@@ -33,13 +33,16 @@ export function trackDynamicProcesses(service) {
   }
   state.refs++
   let closed = false
-  return {
-    async run(action) {
-      if (closed) throw failure(new Error('Process scope closed'))
-      const owner = { handles: [], pending: [] }
-      return owners.run(owner, async () => {
-        try { return await action() }
-        finally {
+  const scope = () => {
+    const owner = { handles: [], pending: [] }
+    let closing
+    return {
+      run(action) {
+        if (closed || closing) throw failure(new Error('Process scope closed'))
+        return owners.run(owner, action)
+      },
+      close() {
+        return closing ??= (async () => {
           await Promise.allSettled(owner.pending)
           const outcomes = await Promise.allSettled(owner.handles.map(async ({ handle, terminal }) => {
             if (typeof handle?.terminate !== 'function' || !terminal && typeof handle?.waitForExit !== 'function') throw new Error('Subprocess quiescence capability is missing')
@@ -48,8 +51,16 @@ export function trackDynamicProcesses(service) {
           }))
           const failed = outcomes.find(outcome => outcome.status === 'rejected')
           if (failed) throw failure(failed.reason)
-        }
-      })
+        })()
+      },
+    }
+  }
+  return {
+    scope,
+    async run(action) {
+      const owned = scope()
+      try { return await owned.run(action) }
+      finally { await owned.close() }
     },
     async close() {
       if (closed) return
