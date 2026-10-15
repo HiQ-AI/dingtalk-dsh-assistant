@@ -9,3 +9,13 @@
 去掉动态任务的附加文件拦截、原生调用全局 unknown 门禁及合成全局资源锁，继续沿原生 preset/sandbox/approval 执行；保留原操作身份去重、真实未知记录、任务版本、取消排空与业务完成证据。旧未知结果不会通过本次修改伪装为成功。
 
 验证：重复来源引文与合法引用反例；业务问题、Web-only 技术申请、私聊发送/回读/精确引用恢复、错误作者/群/引用/过期版本拒绝；真实原生 gh 调用及任务日志读取在已有 unknown 时可用，原未知账保持。定向回归、精确包部署及目标任务恢复分别取证。PR #175 已合并，新分支基于最新 main，不向已合并分支推送。
+
+## Web 处理后的私聊通知撤回
+
+Web 的 `task.human.respond`（含原生失败结清复合命令）成功提交、申请为 `answered` 且 `replyChannel=web` 后，通知调度独立回收该申请的 operator 私聊通知。关闭页面弹窗、检查答复、私聊答复及 requester 群通知不触发撤回。关联必须同时满足通知的 taskId、humanRequestId、kind=question、audience=operator 与独立送达回读保存的 messageId/conversationId/senderActorId，不能通过正文近似匹配选择撤回对象。
+
+复用现有 `dynamic_notifications` SQLite 命令账、调度/恢复和错误记录机制，撤回另记 `notification.recall` 状态、尝试次数、领取 token、下次尝试时间及脱敏错误。领取有效期 5 分钟，进程重启后到期重新回读；同申请并发领取只允许一个执行者，迟到 token 不能覆盖当前结果。先读精确私聊完整历史；消息仍在且作者相符才调用现有 DWS `chat +messages-recall --msg-id <messageId> --format json --yes`，要求 `recallStatus=SUCCESS` 并再次完整回读确认消失。恢复时若完整历史已无该消息，记录目标已不存在的证据，不再次外发撤回。历史不完整、作者不符、拒绝、未确认或仍可见均记失败并退避重试；申请答复与任务恢复不回滚。发送与 Web 答复竞争时，发送回执仍入账，后续轮询待确认送达后再回收。
+
+`listAuthorizationRequests()` 的 `notification.recall` 提供独立读取状态，`failed` 不等于人工申请未处理。没有通知、尚未确认送达或通知属于其他申请/群聊时不会冒用未知 ID。
+
+接口证据边界：本次沿用仓库已存在的 DWS adapter 与 workflow-approval 撤回命令/成功确认契约；隔离环境未安装 DWS，未执行任何真实发送或撤回。官方网页检索未取得 DWS 撤回的权威时限与消息类型限制，因此没有假定两分钟、一天等时限；平台实际权限、账号及时间窗口拒绝作为真实失败保留。真实平台验收需在另行授权的测试账号和专用消息完成。

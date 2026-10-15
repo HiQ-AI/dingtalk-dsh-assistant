@@ -892,6 +892,30 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       notification.updatedAt = stamp
       put('dynamic_notifications', notification); return changed({ notification })
     }
+    if (kind === 'notification.recall.start' || kind === 'notification.recall.result') {
+      const notification = get('dynamic_notifications', text(a.notificationId, 'notificationId'))
+      const task = get('dynamic_tasks', notification.taskId)
+      const request = task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
+      if (notification.kind !== 'question' || notification.payload.audience !== 'operator'
+        || request?.status !== 'answered' || request.replyChannel !== 'web' || notification.state !== 'delivered'
+        || !notification.receipt?.messageId || !notification.receipt?.conversationId || !notification.receipt?.senderActorId)
+        fail('DYNAMIC_NOTIFICATION_RECALL_NOT_REQUIRED')
+      const previous = notification.recall
+      if (kind === 'notification.recall.start') {
+        if (previous?.state === 'recalled' || Date.parse(previous?.nextAttemptAt ?? '') > Date.parse(stamp)) return changed({ notification })
+        notification.recall = { ...previous, state: 'starting', token: randomUUID(), attempts: (previous?.attempts ?? 0) + 1,
+          nextAttemptAt: new Date(Date.parse(stamp) + 300000).toISOString(), updatedAt: stamp }
+        put('dynamic_notifications', notification)
+        return { result: { notification }, dispatchEligible: true }
+      }
+      if (!previous || previous.token !== a.token || previous.state !== 'starting') fail('DYNAMIC_NOTIFICATION_RECALL_STALE')
+      if (!['recalled', 'failed'].includes(a.state)) fail('DYNAMIC_ARGUMENT_INVALID', 'state')
+      notification.recall = { ...previous, state: a.state, updatedAt: stamp,
+        nextAttemptAt: a.state === 'failed' ? text(a.nextAttemptAt, 'nextAttemptAt') : null,
+        error: a.state === 'failed' ? clone(record(a.error)) : null,
+        ...(a.state === 'recalled' ? { evidenceRef: text(a.evidenceRef, 'evidenceRef'), ...(a.proof ? { proof: clone(record(a.proof)) } : {}) } : {}) }
+      put('dynamic_notifications', notification); return changed({ notification })
+    }
     if (kind === 'notification.start' || kind === 'notification.receipt' || kind === 'notification.delivered' || kind === 'notification.reconcile') {
       const notification = get('dynamic_notifications', a.notificationId)
       if (kind === 'notification.start') {

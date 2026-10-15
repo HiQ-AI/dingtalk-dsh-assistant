@@ -10,7 +10,7 @@ import { inspectEnvironment } from './environment.js'
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 import { tmpdir } from 'node:os'
 import { closeExecutionResources } from './resource-close.js'
-import { readTaskNotificationDelivery, readOperatorNotificationDelivery } from './task-notification-readback.js'
+import { readTaskNotificationDelivery, readOperatorNotificationDelivery, recallOperatorNotification } from './task-notification-readback.js'
 import { openTaskSessionService } from './task-session-service.js'
 import { sendWorkflowNotification } from './group-message.js'
 import { join, resolve } from 'node:path'
@@ -106,6 +106,7 @@ export async function apply(ctx, config = {}) {
       send: notification => notification.payload.audience === 'operator'
         ? dwsAdapter.sendSelfIntent({ userId: notification.payload.recipientUserId, text: notification.payload.text, idempotencyKey: notification.id })
         : sendWorkflowNotification(dwsAdapter, notification),
+      recall: notification => recallOperatorNotification(dwsAdapter, notification),
       readback: notification => notification.payload.audience === 'operator'
         ? readOperatorNotificationDelivery(dwsAdapter, notification)
         : readTaskNotificationDelivery(dwsAdapter, notification, { senderActorId: taskConfig.assistantActorId }),

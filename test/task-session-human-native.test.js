@@ -260,3 +260,33 @@ test('an authenticated reply in the original group answers the waiting request w
   assert.equal((await h.query('task.list')).length, 1)
   assert.equal((await h.query('execution.list')).length, 1)
 })
+
+test('Web answer recalls its delivered operator notification once without recalling group replies', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  let turns = 0
+  const recalls = []
+  const h = await fixture(t, async request => {
+    const routed = topicTaskCalls(request)
+    if (routed) return routed
+    return ++turns === 1 ? [requestHuman()] : [finish('已按人工答复继续')]
+  }, { config: { operatorUserId: 'login', webActorId: 'web-user' }, notifications: {
+    async send(notification) { return { messageId: notification.id } },
+    async readback(notification) { return { messageId: notification.id, conversationId: notification.payload.audience === 'operator' ? 'self-private' : 'native-group', senderActorId: 'login', visible: true } },
+    async recall(notification) { recalls.push(notification); return { ...notification.receipt, recallStatus: 'SUCCESS' } },
+  } })
+  await h.service.ingest({ groupId: 'native-group', messageId: 'request', senderOpenDingTalkId: 'native-user', text: '测试助手，检查原业务需求', occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  const request = await pending(h), task = (await h.query('task.list'))[0]
+  const reply = { taskId: task.taskId, humanRequestId: request.requestId, requestId: 'web-reply', reply: '已修复原能力',
+    expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision }
+  await Promise.all([h.service.respondHumanRequest(reply), h.service.respondHumanRequest(reply)])
+  await h.service.whenIdle()
+  await h.service.respondHumanRequest(reply)
+  await h.service.whenIdle()
+  assert.equal(recalls.length, 1)
+  assert.equal(recalls[0].payload.humanRequestId, request.requestId)
+  assert.equal(recalls[0].payload.audience, 'operator')
+  assert.equal(recalls[0].receipt.conversationId, 'self-private')
+  const answered = (await h.service.listAuthorizationRequests()).find(item => item.requestId === request.requestId)
+  assert.equal(answered.status, 'answered')
+  assert.equal(answered.notification.recall.state, 'recalled')
+})
