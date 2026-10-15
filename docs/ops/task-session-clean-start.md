@@ -74,3 +74,9 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 当前Agent工作区和taskSessions.workspaceDir均为`D:\baibu-agent`，数据库位于`D:\baibu-agent\.dsh\task-sessions.sqlite`，resident storage位于`.dsh\resident`，任务及会话在`tasks\<taskId>\.dsh\sessions`，共享会话工作目录在`session-workspaces`。上文clean根是当时清洁启动步骤的历史记录；当前`task-session-runtime-clean`已完整迁出并移除，不再作为运行入口。
 
 迁根必须先零写入Check、确认唯一写者和原生回合停稳，再迁当前路由/材料/Workspace/数据库保护路径绑定。原生记录通过官方persistence.create新cwd+append原事件，并核验原事件前缀摘要；历史input、收据和业务正文不全文替换。既有目标子项不能覆盖；所有新位置独立读回后才清除迁移暂存。一次性脚本与原生续办证明在`docs/acceptance/workspace-root-restore/`，固定旧源不存在时不可重复apply。普通部署不需要重做数据迁移。
+
+## 原生文件前置拒绝恢复
+
+本修复仅修改 Assistant，无 schema 迁移。按本页静止实例原生退出切换流程打包、零写Check、排空退出、双包安装与独立回读。即使Observer未改也需显式提供当前已核验的包及摘要。安装后先检查精确包摘要、新进程与健康；旧 edit/write unknown 由 task_operation_reconcile 读取原生工具日志中的结构化错误码及同轮结束记录，不凭文件内容判成功。对账只记原调用 failed/noEffect 并保留审计，由原执行会话读取当前文件后按原授权补缺，不在部署脚本重放编辑或重复业务UAT部署。
+
+Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR，插件针对已识别暂时故障另有3次持久恢复。原始结果、实际恢复次数、成功效果及未知效果分别核对。HTTP200不是业务成功，也不能单独证明可重试。

@@ -1,5 +1,6 @@
 import { deliverTaskNotification } from './notification-delivery.js'
-import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
+import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
@@ -546,9 +547,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!receipt.dispatchEligible) fail(receipt.result.operation.state === 'unknown' ? 'DYNAMIC_OPERATION_UNRESOLVED' : 'DYNAMIC_OPERATION_ALREADY_DISPATCHED')
       return { operationId }
     }
-    const state = event.cancelled || event.result?.isError ? 'unknown' : event.jobReceipt && event.jobReceipt.status !== 'completed' ? 'failed' : 'succeeded'
+    const error = event.result?.error?.info ?? event.result?.error
+    const noEffect = !event.cancelled && event.result?.isError === true && isNativeFilePrecondition(toolName, error)
+    const state = noEffect ? 'failed' : event.cancelled || event.result?.isError ? 'unknown' : event.jobReceipt && event.jobReceipt.status !== 'completed' ? 'failed' : 'succeeded'
     await command('operation.settle', { binding, operationId, state,
-      result: { callId, toolName, isError: event.result?.isError === true, resultDigest: hash(event.result?.content ?? event.result ?? null), ...(event.cancelled ? { cancelled: true } : {}), ...(event.jobReceipt ? { jobReceipt: event.jobReceipt } : {}) } }, `settle:${key}`)
+      result: { callId, toolName, isError: event.result?.isError === true, resultDigest: hash(event.result?.content ?? event.result ?? null),
+        ...(error?.code ? { errorCode: error.code } : {}), ...(noEffect ? { noEffect: true } : {}),
+        ...(event.cancelled ? { cancelled: true } : {}), ...(event.jobReceipt ? { jobReceipt: event.jobReceipt } : {}) } }, `settle:${key}`)
     return { operationId }
   }
   function kickExecution(executionId) {
@@ -674,6 +679,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             catch (error) {
               if (error.code !== 'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT') throw error
               const executions = await query('execution.list', { taskId })
+              const fileProof = await inspectFailedNativeFileMutation({ ctx, operation,
+                execution: executions.find(item => item.executionId === operation.executionId) })
+              if (fileProof) return (await command('operation.reconcile-file-precondition', { binding, operationId, proof: fileProof }, `reconcile-file-precondition:${operationId}:${hash(fileProof)}`)).result
               const readProof = await inspectFailedNativeWebRead({ ctx, operation,
                 execution: executions.find(item => item.executionId === operation.executionId) })
               if (readProof) return (await command('operation.reconcile-web-read', { binding, operationId, proof: readProof }, `reconcile-web-read:${operationId}:${hash(readProof)}`)).result

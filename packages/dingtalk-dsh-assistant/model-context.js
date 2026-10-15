@@ -161,7 +161,9 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
     agentCtx.systemPrompt.section({ name: 'dingtalk:model-content', order: 20, text: modelContextInstructions })
     agentCtx.tools.register({ name: 'model_content_read', effectClass: 'read', description: '读取本会话已准入contentRef的精确内容。支持JSON Pointer和分页；未知引用不能读取。',
       parameters: { type: 'object', properties: { contentRef: { type: 'string' }, path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 16000 } }, required: ['contentRef'], additionalProperties: false },
-      output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(project(value)) }] },
+      // An explicit read is the leaf of the index. Re-projecting its `text`
+      // changes the page contract into another reference instead of evidence.
+      output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
       async execute(args, exec) {
         exec.signal.throwIfAborted(); if (!await isCurrent()) fail('MODEL_CONTENT_SESSION_STALE')
         const value = selected(args.contentRef, args.path ?? '')
@@ -173,12 +175,9 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
             entries: entries.slice(offset, end).map(([key, child]) => ({ key, ...(child && typeof child === 'object' || typeof child === 'string' && (child.length >= 120 || contentFields.has(key))
               ? { valueRef: store(child) } : { value: child }) })), nextOffset: end < entries.length ? end : null }
         }
-        const page = read(args)
-        if (visibleDefinitions().has(page.resolvedRef.contentRef)) {
-          const { text: _text, ...metadata } = page
-          return { ...metadata, alreadyVisible: true, nextOffset: null }
-        }
-        return page
+        // Explicit repeated reads must return the same requested page, even if
+        // a prior Host/tool message already contains the original definition.
+        return read(args)
       } })
   }
   const render = value => [{ type: 'text', text: JSON.stringify(project(value)) }]

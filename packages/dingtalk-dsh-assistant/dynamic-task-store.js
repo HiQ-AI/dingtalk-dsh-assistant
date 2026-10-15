@@ -1,4 +1,5 @@
 import { quotedSendRejectionProof } from './group-message.js'
+import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
 import { DatabaseSync } from 'node:sqlite'
@@ -678,24 +679,30 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       operation.job = clone(job); operation.updatedAt = stamp; put('dynamic_operations', operation)
       return changed({ operation })
     }
-    if (kind === 'operation.reconcile-web-read') {
+    if (kind === 'operation.reconcile-web-read' || kind === 'operation.reconcile-file-precondition') {
       const task = currentTask(a.binding), operation = get('dynamic_operations', a.operationId), proof = record(a.proof)
       const execution = get('dynamic_executions', operation.executionId)
+      const filePrecondition = kind === 'operation.reconcile-file-precondition'
       if (operation.taskId !== task.taskId || operation.state !== 'unknown' || digest(operation) !== proof.operationDigest
-        || proof.kind !== 'native-web-read-failed' || proof.operationId !== operation.operationId
+        || proof.kind !== (filePrecondition ? 'native-file-precondition-failed' : 'native-web-read-failed') || proof.operationId !== operation.operationId
         || proof.taskId !== task.taskId || proof.executionId !== execution.executionId || proof.sessionId !== execution.sessionId
         || !execution.drained || execution.recovering || operation.result?.isError !== true || operation.result.cancelled === true
-        || !['web_fetch', 'web_search'].includes(operation.definition.toolName) || proof.toolName !== operation.definition.toolName
-        || operation.definition.effectClass !== undefined && !['read', 'pure'].includes(operation.definition.effectClass)
+        || proof.toolName !== operation.definition.toolName
+        || (filePrecondition ? !isNativeFilePrecondition(operation.definition.toolName, { code: proof.errorCode }) || proof.noEffect !== true
+          || operation.result.errorCode && operation.result.errorCode !== proof.errorCode
+          : !['web_fetch', 'web_search'].includes(operation.definition.toolName)
+            || operation.definition.effectClass !== undefined && !['read', 'pure'].includes(operation.definition.effectClass))
         || proof.callId !== operation.result.callId || proof.resultDigest !== operation.result.resultDigest
         || proof.argumentsDigest !== operation.definition.argumentsDigest
         || !Number.isSafeInteger(proof.resultSequence) || proof.resultSequence < 0
         || !Number.isSafeInteger(proof.turnEndSequence) || proof.turnEndSequence <= proof.resultSequence) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
       const previousObservation = clone(operation)
       operation.state = 'failed'; operation.updatedAt = stamp
-      operation.evidenceRef = `native-web-read:${operation.operationId}:${digest(proof)}`
+      operation.evidenceRef = `${filePrecondition ? 'native-file-precondition' : 'native-web-read'}:${operation.operationId}:${digest(proof)}`
       operation.result = { reconciled: true, previousObservation, proof,
-        instruction: 'The original web read returned an error and its native turn ended. This is not success and does not replay the request.' }
+        ...(filePrecondition ? { noEffect: true, errorCode: proof.errorCode } : {}),
+        instruction: filePrecondition ? 'The original file mutation was rejected before publication. Read the current file and correct the request within the original authorization. This is not success or automatic replay.'
+          : 'The original web read returned an error and its native turn ended. This is not success and does not replay the request.' }
       put('dynamic_operations', operation); release(operation.operationId)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed' }, `wake:${commandId}`)
       return changed({ operation })

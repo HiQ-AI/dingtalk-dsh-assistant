@@ -32,6 +32,48 @@ const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-proj
 const decision = { kind: 'no_action', reason: '人际闲聊' }
 const decisionSchema = { type: 'object', properties: { kind: { type: 'string' }, reason: { type: 'string' } }, required: ['kind', 'reason'], additionalProperties: false }
 
+for (const variant of ['same-path-repeat', 'root-and-five-distinct-paths']) test(`explicit source reads return literal final SDK text and survive reopen: ${variant}`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'model-read-literal-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  const sourceId = 'web-human:42eb13721d14847ad394143e0fca8b268e1ba85de64f5bfbf519c83213dabbfd'
+  const body = '仅核对原任务证据，不修改生产。'.repeat(20).slice(0, 180) + ' source authority '.padEnd(73, 'x')
+  assert.equal(body.length, 253); assert.equal(Buffer.byteLength(JSON.stringify(body)), 615)
+  let reference, reads = 0
+  const path = '/' + sourceId + '/text'
+  const paths = variant === 'same-path-repeat' ? Array(6).fill(path) : ['', path, '/' + sourceId + '/quoted/text', '/' + sourceId + '/original/text', '/' + sourceId + '/reply', '/' + sourceId + '/context/objective']
+  const check = (request, expectedPath = path) => {
+    const message = request.messages.filter(message => message.role === 'tool').at(-1)
+    const page = JSON.parse(message.content[0].text)
+    assert.equal(page.contentRef, reference); assert.equal(page.path, expectedPath)
+    if (expectedPath === '') { assert.equal(page.format, 'json-index'); assert.equal(page.entries[0].key, sourceId); return page }
+    assert.equal(page.format, 'text'); assert.equal(typeof page.text, 'string', 'final tool text must never be another content reference')
+    assert.equal(page.text, body); assert.equal(page.totalLength, body.length)
+    assert.equal(page.offset, 0); assert.equal(page.nextOffset, null)
+    assert.equal(page.resolvedRef.bytes, 615)
+    assert.equal(page.contentIndex, undefined, 'explicit read must not require a dictionary hop')
+    return page
+  }
+  let previous
+  const first = await host(root, { call: (number, request) => {
+    if (number === 1) return { name: 'group_coordinator_read_material', args: {} }
+    if (number === 2) reference = JSON.parse(request.messages.filter(message => message.role === 'tool').at(-1).content[0].text).catalogRef.contentRef
+    else { const page = check(request, paths[reads]); if (previous && variant === 'same-path-repeat') assert.deepEqual(page, previous); previous = page; reads++ }
+    return reads < paths.length ? { name: 'model_content_read', args: { contentRef: reference, path: paths[reads] } } : { name: 'group_coordinator_submit', args: { decision } }
+  } }); hosts.push(first)
+  const readTools = [{ name: 'group_coordinator_read_material', effectClass: 'read', description: 'source catalogue', parameters: { type: 'object' }, output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute: async () => ({ catalogRef: createModelContentIndex(first.ctx.sessions.get('literal-session'), { root: join(root, 'model-content') }).store({ [sourceId]: { actorId: 'original-user', version: 2, text: body, quoted: { text: body }, original: { text: body }, reply: body, context: { objective: body } } }) }) }]
+  const binding = { conversationId: 'group', sessionId: 'literal-session', turnId: 'first', leaseEpoch: 1, sessionBound: false }
+  const run = (h, binding) => h.sessions.run({ binding, input: { sources: [] }, provider: 'group-fixture', model: 'scripted', decisionSchema, readTools, onSessionBound: async () => {}, onCandidate: async () => {} })
+  assert.equal((await run(first, binding)).status, 'submitted'); assert.equal(reads, 6)
+  await first.close()
+  const second = await host(root, { call: (number, request) => {
+    if (number === 1) return { name: 'model_content_read', args: { contentRef: reference, path: previous.path } }
+    assert.deepEqual(check(request, previous.path), previous)
+    return { name: 'group_coordinator_submit', args: { decision } }
+  } }); hosts.push(second); second.setLease(2)
+  assert.equal((await run(second, { ...binding, leaseEpoch: 2, sessionBound: true, turnId: 'second' })).status, 'submitted')
+})
+
 test('group single-input nested quotes, policy and read-tool copies share resolvable content', async t => {
   const root = await mkdtemp(join(tmpdir(), 'group-index-')); t.after(() => rm(root, { recursive: true, force: true }))
   const h = await host(root); t.after(() => h.close())
@@ -46,7 +88,7 @@ test('group single-input nested quotes, policy and read-tool copies share resolv
   assert.equal(text.split(policy).length - 1, 1, 'policy has one authoritative content entry')
 })
 
-test('all group read bypasses preserve first evidence once, repeat as references and resolve after native reopen', async t => {
+test('ordinary group reads deduplicate while explicit content reads return literal evidence, including after reopen', async t => {
   const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
   const root = await mkdtemp(join(tmpdir(), 'group-read-index-')), hosts = []
   t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
@@ -65,7 +107,8 @@ test('all group read bypasses preserve first evidence once, repeat as references
       assert.ok(reference, 'repeat read returns an exact resolvable record reference')
       return { name: 'model_content_read', args: { contentRef: reference, path: '/text' } }
     }
-    assert.match(JSON.stringify(request.messages.at(-1)), /alreadyVisible/)
+    const page = JSON.parse(request.messages.filter(message => message.role === 'tool').at(-1).content[0].text)
+    assert.equal(page.text, bodies[3]); assert.equal(page.nextOffset, null)
     return { name: 'group_coordinator_submit', args: { decision } }
   } }); hosts.push(first)
   const binding = { conversationId: 'group', sessionId: 'group-content-reopen', turnId: 'first', leaseEpoch: 1, sessionBound: false }
@@ -73,14 +116,14 @@ test('all group read bypasses preserve first evidence once, repeat as references
     provider: 'group-fixture', model: 'scripted', decisionSchema, readTools, onSessionBound: async () => {}, onCandidate: async () => {} })
   assert.equal((await run(first, binding)).status, 'submitted')
   assert.deepEqual(values, original)
-  for (const text of bodies) assert.equal(JSON.stringify(first.requests.at(-1).messages).split(text).length - 1, 1)
+  for (const [i, text] of bodies.entries()) assert.equal(JSON.stringify(first.requests.at(-1).messages).split(text).length - 1, i === 3 ? 2 : 1)
   await first.close()
   const second = await host(root, { call: number => number === 1 ? { name: 'model_content_read', args: { contentRef: reference, path: '/text' } } : { name: 'group_coordinator_submit', args: { decision } } }); hosts.push(second)
   second.setLease(2)
   assert.equal((await run(second, { ...binding, leaseEpoch: 2, sessionBound: true, turnId: 'second' })).status, 'submitted')
   const saved = await inspectSession(second.ctx.sessionPersistence, binding.sessionId), folded = foldSurface(saved.events)
   const messages = folded.nodes.map(seq => deriveEventMessage(saved.events[seq], folded.projectedMessages)).filter(Boolean)
-  for (const text of bodies.slice(1)) assert.equal(JSON.stringify(messages).split(text).length - 1, 1)
+  for (const [i, text] of bodies.entries()) if (i > 0) assert.equal(JSON.stringify(messages).split(text).length - 1, i === 3 ? 3 : 1)
   for (const request of [first.requests[0], first.requests[4], first.requests.at(-1), second.requests.at(-1)]) metrics.push({
     currentHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinator && !message.source.groupCoordinatorHistory))),
     oldHostBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(message => message.source?.groupCoordinatorHistory))),
@@ -119,7 +162,11 @@ test('native json-index pages reach exact previously unseen text, quoted author/
       assert.equal(entries.get('corrects').value, 'source-v2'); phase = 'body'
     } else if (phase === 'body') {
       assert.equal(last.offset, offset)
-      buffer += decode(request, last.text)
+      assert.equal(typeof last.text, 'string', 'each final model-visible page carries literal text')
+      assert.equal(last.totalLength, body.length)
+      assert.equal(last.text, body.slice(offset, offset + 1000))
+      assert.equal(last.nextOffset, offset + last.text.length < body.length ? offset + last.text.length : null)
+      buffer += last.text
       if (last.nextOffset === null) { assert.equal(buffer, body); phase = 'quoted' } else offset = last.nextOffset
     } else if (phase === 'quoted') {
       assert.equal(last.format, 'json-index')
@@ -147,7 +194,8 @@ test('native json-index pages reach exact previously unseen text, quoted author/
   const next = await host(root, { call: (number, request) => {
     if (number === 1) return { name: 'model_content_read', args: { contentRef: reference, path: '/quoted/text' } }
     const result = JSON.parse(request.messages.filter(message => message.role === 'tool').at(-1).content[0].text)
-    recoveredText = result.alreadyVisible ? decode(request, result.resolvedRef) : decode(request, result.text)
+    assert.equal(typeof result.text, 'string')
+    recoveredText = result.text
     return { name: 'group_coordinator_submit', args: { decision } }
   } }); hosts.push(next); next.setLease(2)
   assert.equal((await run(next, { ...binding, turnId: 'two', leaseEpoch: 2, sessionBound: true })).status, 'submitted')

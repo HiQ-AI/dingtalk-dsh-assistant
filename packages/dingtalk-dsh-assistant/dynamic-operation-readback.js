@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { inspectSession } from './session-persistence.js'
 import { safeNotificationDetail } from './notification-delivery.js'
+import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
 const results = event => event.type !== 'tool/result' ? [] : event.data.message?.role === 'tool' ? [event.data.message] : event.data.message?.content ?? []
@@ -32,15 +33,15 @@ export async function readNativeOperationContext({ ctx, operation }) {
     && result.isError === operation.result.isError && hash(result.content) === operation.result.resultDigest))
   if (!resultEvent) return null
   return { operationId: operation.operationId, sessionId: binding.sessionId, toolName: call.data.name, arguments: args,
-    result: results(resultEvent).find(result => result.toolCallId === callId), callSequence: call.seq, resultSequence: resultEvent.seq,
+    result: results(resultEvent).find(result => result.toolCallId === callId), resultError: resultEvent.data.error,
+    callSequence: call.seq, resultSequence: resultEvent.seq,
     limitation: '原生调用及结果仅用于定位调查对象，不证明命令成功或没有部分效果；不能重放原命令。' }
 }
 
-/** 仅对账已结束的原生网页读取错误；写工具的错误结果仍不能证明效果。 */
-export async function inspectFailedNativeWebRead({ ctx, operation, execution }) {
+/** 精确绑定原始错误与正常结束回合；错误文字、当前文件内容均不作为无效果证据。 */
+async function inspectFailedNativeOperation({ ctx, operation, execution }, { kind, accepts }) {
   const binding = operation.dispatchBinding
-  if (operation.state !== 'unknown' || !binding || !['web_fetch', 'web_search'].includes(operation.definition?.toolName)
-    || operation.definition.effectClass !== undefined && !['read', 'pure'].includes(operation.definition.effectClass)
+  if (operation.state !== 'unknown' || !binding
     || operation.executionId !== execution?.executionId || operation.taskId !== execution.taskId
     || binding.sessionId !== execution.sessionId || !execution.drained || execution.recovering
     || ctx.agents.get(execution.sessionId) || ctx.sessions.get(execution.sessionId)
@@ -49,7 +50,7 @@ export async function inspectFailedNativeWebRead({ ctx, operation, execution }) 
   const jobs = ctx.get?.('jobs')
   if (!jobs?.list || jobs.list(execution.sessionId).some(job => ['running', 'stopping'].includes(job.status))) return null
   const original = await readNativeOperationContext({ ctx, operation })
-  if (!original || original.result.isError !== true) return null
+  if (!original || original.result.isError !== true || !accepts(original)) return null
   const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
   const input = inputFor(events, binding)
   const start = events.findLast(event => event.seq < original.callSequence && event.type === 'turn/start')
@@ -58,12 +59,21 @@ export async function inspectFailedNativeWebRead({ ctx, operation, execution }) 
   if (!input || !start || input.seq < start.seq || !Number.isSafeInteger(start.data.turn) || result?.data.turn !== start.data.turn
     || end?.data.turn !== start.data.turn || end.data.reason?.kind !== 'completed'
     || events.some(event => event.seq > start.seq && event.seq < end.seq && (event.type === 'turn/end' || event.type === 'turn/start'))) return null
-  return { kind: 'native-web-read-failed', operationId: operation.operationId, operationDigest: hash(operation),
+  return { kind, operationId: operation.operationId, operationDigest: hash(operation),
     taskId: operation.taskId, executionId: execution.executionId, sessionId: binding.sessionId,
     callId: operation.result.callId, toolName: operation.definition.toolName,
     argumentsDigest: operation.definition.argumentsDigest, resultDigest: operation.result.resultDigest,
-    resultSequence: original.resultSequence, turnEndSequence: end.seq }
+    resultSequence: original.resultSequence, turnEndSequence: end.seq,
+    ...(kind === 'native-file-precondition-failed' ? { errorCode: original.resultError.code, noEffect: true } : {}) }
 }
+
+export const inspectFailedNativeWebRead = args => inspectFailedNativeOperation(args, {
+  kind: 'native-web-read-failed', accepts: () => ['web_fetch', 'web_search'].includes(args.operation.definition?.toolName)
+    && (args.operation.definition.effectClass === undefined || ['read', 'pure'].includes(args.operation.definition.effectClass)) })
+
+export const inspectFailedNativeFileMutation = args => inspectFailedNativeOperation(args, {
+  kind: 'native-file-precondition-failed', accepts: original => isNativeFilePrecondition(args.operation.definition?.toolName, original.resultError)
+    && (!args.operation.result.errorCode || args.operation.result.errorCode === original.resultError.code) })
 
 // Compatibility with the retired a5 promotion rejection only. That exact Host
 // path awaited terminate + waitForExit before throwing. A model summary, stderr,
