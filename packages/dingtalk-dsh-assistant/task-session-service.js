@@ -287,6 +287,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     topicRefs: task.topicRefs ?? [], executionCount: executions.length,
     executionSessions: [...new Map(executions.map(execution => [execution.sessionId || execution.executionId, {
       executionId: execution.executionId, sessionId: execution.sessionId, title: executionSessionTitle(execution), status: execution.status, createdAt: execution.createdAt,
+      runTiming: execution.runTiming ?? null,
+      drained: execution.drained, recovering: execution.recovering === true,
     }])).values()].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.executionId.localeCompare(b.executionId)), waitingReason: state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
     controlState: task.control, inputVersion: task.requirementRevision, result: task.completion?.result ?? task.lastDecision ?? null,
     session: { sessionId: task.sessionId, sessionBound: task.sessionBound, status: task.drained ? 'idle' : 'running', workspaceDir: await taskWorkspace(root, task.taskId), logPath: taskSessionLogRoot(root, task.taskId) },

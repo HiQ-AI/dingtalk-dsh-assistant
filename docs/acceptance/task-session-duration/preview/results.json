@@ -1,0 +1,263 @@
+{
+  "checks": [
+    "running-ticks-each-second",
+    "terminal-queued-and-unknown-remain-fixed",
+    "existing-duration-formatter",
+    "native-export-registration-and-14px-loader",
+    "actual-native-css-animation-and-reduced-motion",
+    "no-visible-status-or-duration-prefix",
+    "status-icon-accessible-label-and-tooltip",
+    "unknown-em-dash-with-explanation",
+    "390-and-320-no-horizontal-overflow",
+    "long-chinese-ellipsis-and-full-tooltip",
+    "icon-name-duration-single-line-no-overlap",
+    "running-to-terminal-clears-timer",
+    "native-loader-unmounts-and-state-switch-keeps-geometry",
+    "read-failure-visible",
+    "empty-list-unmounts-timers",
+    "keyboard-session-navigation"
+  ],
+  "errors": [],
+  "geometry": [
+    {
+      "width": 1440,
+      "values": [
+        {
+          "width": 249,
+          "scrollWidth": 249,
+          "clientWidth": 249,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "1分4秒"
+        },
+        {
+          "width": 249,
+          "scrollWidth": 249,
+          "clientWidth": 249,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "1分23秒"
+        },
+        {
+          "width": 249,
+          "scrollWidth": 249,
+          "clientWidth": 249,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "0秒"
+        },
+        {
+          "width": 249,
+          "scrollWidth": 249,
+          "clientWidth": 249,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "—"
+        },
+        {
+          "width": 249,
+          "scrollWidth": 249,
+          "clientWidth": 249,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "—"
+        },
+        {
+          "width": 249,
+          "scrollWidth": 249,
+          "clientWidth": 249,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "123小时0分"
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "values": [
+        {
+          "width": 294,
+          "scrollWidth": 294,
+          "clientWidth": 294,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "1分4秒"
+        },
+        {
+          "width": 294,
+          "scrollWidth": 294,
+          "clientWidth": 294,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "1分23秒"
+        },
+        {
+          "width": 294,
+          "scrollWidth": 294,
+          "clientWidth": 294,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "0秒"
+        },
+        {
+          "width": 294,
+          "scrollWidth": 294,
+          "clientWidth": 294,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "—"
+        },
+        {
+          "width": 294,
+          "scrollWidth": 294,
+          "clientWidth": 294,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "—"
+        },
+        {
+          "width": 294,
+          "scrollWidth": 294,
+          "clientWidth": 294,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "123小时0分"
+        }
+      ]
+    },
+    {
+      "width": 320,
+      "values": [
+        {
+          "width": 224,
+          "scrollWidth": 224,
+          "clientWidth": 224,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "1分4秒"
+        },
+        {
+          "width": 224,
+          "scrollWidth": 224,
+          "clientWidth": 224,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "1分23秒"
+        },
+        {
+          "width": 224,
+          "scrollWidth": 224,
+          "clientWidth": 224,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "0秒"
+        },
+        {
+          "width": 224,
+          "scrollWidth": 224,
+          "clientWidth": 224,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "—"
+        },
+        {
+          "width": 224,
+          "scrollWidth": 224,
+          "clientWidth": 224,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "—"
+        },
+        {
+          "width": 224,
+          "scrollWidth": 224,
+          "clientWidth": 224,
+          "rightAligned": true,
+          "sameLine": true,
+          "singleLine": true,
+          "ellipsis": true,
+          "fullTooltip": true,
+          "noOverlap": true,
+          "text": "123小时0分"
+        }
+      ]
+    }
+  ],
+  "nativeEvidence": {
+    "package": "@deepseek-ai/dsh-client-ui-primitives",
+    "version": "0.2.1-alpha.2",
+    "implementationSha256": "b0c41cb392ad807102c28708dd7727f1c09ee1d2fecabadd2975885a245a90b3",
+    "cssSha256": "ad4603fd7a499dcc3b672dc87663f6c73302a8cedaf4a9859db0abdb9144bee8",
+    "method": "unchanged StateDot + syncSpinner/pinSpinner implementation extracted from installed export; native stylesheet; JSX runtime and clsx adapters only"
+  },
+  "baseCommit": "8c2cc772",
+  "fixture": "real React + complete observer module; native installed StateDot implementation/CSS; semantic other host primitives; synthetic read-only API, all external requests intercepted; no business data or resident service used"
+}
