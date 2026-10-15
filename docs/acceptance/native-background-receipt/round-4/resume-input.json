@@ -1,0 +1,6 @@
+{
+  "requestId": "native-background-receipt-resume-20261015",
+  "expectedControlRevision": 1,
+  "context": "本机维护已完成，可以解除刚才的等待并继续原任务。插件修复已安装：Assistant包SHA256 971e078f8b774de11fb6cfb8d02952b60fef895e9311f79b6c735abef4f6e5fc，Observer c8b70537e04798a7c8783bdf2dd68305d97728a4f3c8ac4092580096d58bedc9；双包安装内容与源代码一致，新宿主PID42240，原PID28820已退出，原profile摘要未变，inbound/DWS正常。显式后台run_in_background现在及时返回原job身份并保留进程供后续工具使用，结束时按原job真实终态排空；前台提升仍等待终态。原数据库启动operation-dd0590820dd7589b071f8caeb85284f5c19dba8f及pwsh-10已真实completed/exit0，不重放旧调用。旧edit operation-7c546ed0d83e2aee0cc01073c65b4e64a8c2ad80已由原统筹结算failed/noEffect，不能重放。请沿原executionId bdb7b510-4a09-4cd3-9a06-8ac8dda42608和原session继续完成既有撤回修复的隔离验证，核对已修正夹具，不把65项中1项夹具断言失败当通过；必要时明确启动同一pgdata的后续受管服务生命周期，实际验证后按原生job身份停止并读回清理。不要更换任务/会话或重建数据库来绕过未知效果，不新增已授权事项的技术申请。原业务授权边界不变，不授权业务仓库push/PR/合并/共享或生产部署；仅在原任务内继续验证和如实交付测试结果及限制。",
+  "expectedRequirementRevision": 1
+}

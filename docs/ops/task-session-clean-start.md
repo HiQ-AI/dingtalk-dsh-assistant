@@ -79,6 +79,10 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 显式 run_in_background 返回原生 job 身份及 running 收据，不等待常驻服务退出；前台超时提升仍等待终态。服务归单个 execution，使用原生 job_output/job_kill 检查与停止；提交前应清理服务，执行排空也会停止残留原 job 并记录真实终态。后台 operation 在排空结算前保持 starting，running 不是业务验收。
 
+部署脚本在实际执行阶段自动创建工作树缺省的 docs/tmp 锁目录；Check 阶段仍为零写入。失败轮次证据保留，修复后使用新的证据目录。
+
+显式指定Observer包时，安装后以该包及源码核验安装内容，不要求旧Observer manifest字节摘要保持：pnpm pack可能仅格式化JSON。profile仍要求原字节摘要。若安装已成功却因旧manifest字节门禁误报，先独立核验两包、profile、旧PID和离线账本，再沿原计划任务启动阶段完成；不重新安装或手改账。
+
 已陷入旧 collector 的调用不能仅换包热恢复。先核对专用服务 PID、启动时间、数据目录、端口和原 operation/job/session，零副作用检查后正常停止该专用服务，让旧 collector 产生真实工具终态。保留原 pgdata 和原始收据，不重放旧启动、不手改账。静止实例双包 Check/部署后，由原任务回读停机事实及对账结果；需要再次使用服务时，原执行必须以明确的后续服务生命周期启动同一隔离数据目录，不能把旧 unknown 换身份重放。部署健康不证明业务测试通过。
 
 ## 原生文件前置拒绝恢复
