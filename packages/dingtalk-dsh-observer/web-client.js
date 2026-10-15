@@ -977,7 +977,6 @@ window.__ModuleLoader__.load({
       const selectedGroup = groupsById.get(selectedGroupId) || (data?.groups || [])[0]
       const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || message.sourceKind === 'workflow-v2' || message.sourceKind === 'task-session' || !message.sourceKind).sort((left, right) => (new Date(right.occurredAt).getTime() || 0) - (new Date(left.occurredAt).getTime() || 0) || Number(right.sequence || 0) - Number(left.sequence || 0))
       const messageWorkflowState = (message) => {
-        if (['routing', 'waiting_clarification', 'waiting_authorization', 'waiting_context', 'waiting_system', 'execution_blocked', 'routing_blocked', 'waiting_routing_barrier', 'intent_judging', 'intent_rejudging', 'processed'].includes(message.workflowStatus)) return message.workflowStatus
         if (message.routingStatus === 'failed') return 'failed'
         if (message.routingStatus !== 'routed') return 'routing'
         if (message.sourceKind === 'workflow-v2') return 'processed'
@@ -995,15 +994,6 @@ window.__ModuleLoader__.load({
       const visibleMessages = filteredMessages.slice((currentMessagePage - 1) * pageSize, currentMessagePage * pageSize)
       const delivery = {
         routing: { label: '待归类', state: 'ongoing' },
-        waiting_authorization: { label: '等待授权', state: 'ongoing' },
-        waiting_clarification: { label: '等待用户补充', state: 'ongoing' },
-        waiting_context: { label: '正在读取材料', state: 'ongoing' },
-        waiting_system: { label: '材料读取受阻', state: 'error' },
-        execution_blocked: { label: '执行受阻', state: 'error' },
-        routing_blocked: { label: '关联受阻', state: 'error' },
-        waiting_routing_barrier: { label: '核对相关输入', state: 'ongoing' },
-        intent_judging: { label: '话题意图判断中', state: 'ongoing' },
-        intent_rejudging: { label: '新消息加入 · 重新判断', state: 'ongoing' },
         processing: { label: '话题处理中', state: 'ongoing' },
         processed: { label: '已处理', state: 'done' },
         failed: { label: '归类失败', state: 'error' },
@@ -1027,7 +1017,7 @@ window.__ModuleLoader__.load({
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, fmt(message.occurredAt)))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.taskSessionRefs || []).map(taskId => React.createElement(Button, { key: `task:${taskId}`, type: 'button', variant: 'outline', size: 'sm', onClick: () => openTask(tasksById.get(taskId) || { taskId }), style: { maxWidth: 140, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }, 'aria-label': `查看任务 ${tasksById.get(taskId)?.title || taskId}` }, taskDisplayTitle(tasksById.get(taskId) || { title: taskId }))), ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : message.taskSessionRefs?.length ? [] : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, messageWorkflowState(message) === 'processed' ? '—' : '待归类')]))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）')),
-          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : React.createElement('span', { style: { color: colors.muted, fontSize: 11, display: 'block' } }, '历史未记录处理过程'), messageFacts))
+          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, messageFacts))
       })
       const selectedOutbox = [...(selectedGroup?.outbox || [])].reverse()
       const outboxState = (message) => outboxDelivery(message).id
@@ -1159,7 +1149,7 @@ window.__ModuleLoader__.load({
           selectedGroup?.coordinator?.sessionId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: navigatingSessionId === selectedGroup.coordinator.sessionId,
             onClick: () => navigate(selectedGroup.coordinator.sessionId) }, navigatingSessionId === selectedGroup.coordinator.sessionId ? '正在打开…' : '打开群常驻会话') : null,
           groupTableView === 'messages'
-            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'waiting_routing_barrier', label: '核对相关输入' }, { id: 'intent_judging', label: '意图判断中' }, { id: 'intent_rejudging', label: '意图重新判断' }, { id: 'waiting_clarification', label: '等待用户补充' }, { id: 'waiting_authorization', label: '等待授权' }, { id: 'waiting_context', label: '正在读取材料' }, { id: 'waiting_system', label: '材料读取受阻' }, { id: 'execution_blocked', label: '执行受阻' }, { id: 'routing_blocked', label: '关联受阻' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
+            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发件状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发件状态' }, { id: 'queued', label: '待发送' }, { id: 'sending', label: '发送中' }, { id: 'failed', label: '投递异常' }, { id: 'waiting', label: '待回读 / 核对' }, { id: 'stopped', label: '已停止发送' }, { id: 'reassessment', label: '已停止，需核验' }, { id: 'confirmed', label: '已发送' }, { id: 'superseded', label: '已替代' }, { id: 'recall-failed', label: '撤回待处理' }, { id: 'recalled', label: '已撤回' }], onChange: (value) => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 910, borderCollapse: 'collapse', tableLayout: 'fixed' } },

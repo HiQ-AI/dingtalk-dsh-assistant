@@ -34,22 +34,22 @@ test('精简判断轨迹不包含技术详情，并展示容量受阻原因', as
   assert.match(reason('ENGINEERING_ACCEPTANCE_FAILED'), /业务验收未通过.*后续提交已停止/)
 })
 
-test('收信箱仍区分话题关联等待与意图重判', async () => {
+test('收信箱按当前归类和话题版本计算状态，不受旧工作流字段影响', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  assert.match(source, /message\.workflowStatus/)
-  assert.match(source, /waiting_routing_barrier: \{ label: '核对相关输入'/)
-  assert.match(source, /intent_judging: \{ label: '话题意图判断中'/)
-  assert.match(source, /intent_rejudging: \{ label: '新消息加入 · 重新判断'/)
-  assert.match(source, /routing_blocked: \{ label: '关联受阻'/)
+  const start = source.indexOf('      const messageWorkflowState =')
+  const end = source.indexOf('      const filteredMessages =', start)
+  const state = runInNewContext(`(() => { ${source.slice(start, end)}; return messageWorkflowState })()`, {
+    selectedGroup: { topics: [{ processedRevision: 2, entries: [{ messageId: 'm', messageVersion: 1, action: 'add', revision: 3 }] }] },
+  })
+  assert.equal(state({ routingStatus: 'pending', workflowStatus: 'waiting_authorization' }), 'routing')
+  assert.equal(state({ routingStatus: 'failed' }), 'failed')
+  assert.equal(state({ messageId: 'm', messageVersion: 1, routingStatus: 'routed' }), 'processing')
+  assert.equal(state({ messageId: 'other', routingStatus: 'routed', workflowStatus: 'intent_judging' }), 'processed')
+  assert.doesNotMatch(source, /历史未记录处理过程|id: 'waiting_authorization', label: '等待授权'/)
 })
 
 test('收信箱分开表达材料读取责任及通知回读，详情可用键盘展开', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  assert.match(source, /waiting_context: \{ label: '正在读取材料'/)
-  assert.match(source, /waiting_authorization: \{ label: '等待授权'/)
-  assert.match(source, /id: 'waiting_authorization', label: '等待授权'/)
-  assert.match(source, /waiting_clarification: \{ label: '等待用户补充'/)
-  assert.match(source, /waiting_system: \{ label: '材料读取受阻'/)
   assert.match(source, /React\.createElement\('details'[\s\S]*React\.createElement\('summary'[\s\S]*'等待与通知'/)
   assert.match(source, /message\.blockingSources/)
   assert.match(source, /恢复条件/)
@@ -362,17 +362,17 @@ test('简短任务标题保留可读首句，完整目标仍可展开且不写�
   assert.match(source, /task\.objective/)
 })
 
-test('已读取材料但执行受阻走实际状态分支与显示标签，不回落已处理',async()=>{
+test('历史工作流消息按收信处理进度展示，不混入任务执行状态',async()=>{
  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
  const stateCode=source.slice(source.indexOf('const messageWorkflowState = ')+'const messageWorkflowState = '.length,source.indexOf('      const filteredMessages ='))
  const state=runInNewContext(`(${stateCode})`,{selectedGroup:{topics:[]}})
  const deliveryCode=source.slice(source.indexOf('const delivery = ')+'const delivery = '.length,source.indexOf('      const messageRows ='))
  const delivery=runInNewContext(`(${deliveryCode})`)
  const message={workflowStatus:'execution_blocked',routingStatus:'routed',sourceKind:'workflow-v2'}
- assert.equal(state(message),'execution_blocked')
- assert.equal(delivery[state(message)].label,'执行受阻')
- assert.equal(delivery[state({...message,workflowStatus:'waiting_system'})].label,'材料读取受阻')
- assert.equal([message].filter(item=>state(item)==='execution_blocked').length,1)
+ assert.equal(state(message),'processed')
+ assert.equal(delivery[state(message)].label,'已处理')
+ assert.equal(delivery[state({...message,workflowStatus:'waiting_system'})].label,'已处理')
+ assert.equal([message].filter(item=>state(item)==='processed').length,1)
 })
 
 test('任务短名称合同拒绝超过30字，读模型回退截断不修改完整目标',async()=>{
