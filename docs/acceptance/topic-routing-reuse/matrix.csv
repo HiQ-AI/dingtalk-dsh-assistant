@@ -27,3 +27,12 @@ Host与话题整组,15,PASS,round-15-all-related.log
 操作人结算准入,8,PASS,round-8-tests.log
 归并来源时间线,20,PASS,round-20/final-readback.json
 浏览器两话题及原任务关联,20,PASS,round-20.md
+授权来源与上下文预算,21,FAIL,round-21.md
+授权来源与上下文预算,23,PASS,round-23/core-tests.log
+原生续办身份及稳定名称,22,FAIL,round-22.md
+原生续办身份及稳定名称,23,PASS,round-23/core-tests.log
+等待说明与无障碍契约,21,PASS,round-21/observer-tests.log
+等待说明与无障碍契约,23,PASS,round-21/premium-audit.json
+授权继承双包部署,24,PASS,round-24/runtime-readback.json
+等待说明真实浏览器及窄屏,24,PASS,round-24.md
+重复审批纠正及原会话实际推进,24,PASS,round-24/business-progress-readback.json

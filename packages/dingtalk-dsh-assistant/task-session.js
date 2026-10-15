@@ -4,6 +4,7 @@ import { renameTaskSession } from './session-workspaces.js'
 import { inspectSession } from './session-persistence.js'
 import { createModelContentIndex, taskModelInput, operationModelReadback, modelHostMessage, modelHostInput } from './model-context.js'
 import { classifyExecutionProviderFailure } from './execution-provider-failure.js'
+import { sourceInterpretationInstructions } from './task-source-instructions.js'
 
 const identityEvent = 'plugin:dingtalk/task-session'
 const fail = code => Object.assign(new Error(code), { code })
@@ -91,6 +92,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           if (!selected) agent.session.append('agent-preset/selected', { agentPreset: mounted.id })
         }
         agentCtx.systemPrompt.section({ name: 'task:responsibility', order: 0, text: instructions })
+        agentCtx.systemPrompt.section({ name: 'task:sources', order: 1, text: sourceInterpretationInstructions })
         if (groupResponsibility) agentCtx.systemPrompt.section({ name: 'task:group-responsibility', order: 1,
           text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${groupResponsibility}` })
         agentCtx.tools.presentAs('native')
@@ -144,8 +146,10 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           entry.decision = decision
           return { received: true, ...result }
         })
-        register('task_request_human', '无法自行解决或触及授权边界时申请人工介入，结束本轮，等待原任务收到人工答复。不能用它代替等待受控小目标。', { ...object({
-          reason: text, question: text, audience: { type: 'string', enum: ['operator', 'requester'], description: 'operator=插件/任务/底座等技术介入，Web或登录人私聊；requester=需求提出人需要回答的业务信息。缺省operator。' }, evidence: { type: 'array', items: text }, attemptedActions: { type: 'array', items: text },
+        register('task_request_human', '先核对已有有权来源及答复，仅对确实无法自行解决的具体缺口申请人工介入。已授权的必要准备先做；不能重复申请同一授权，也不能代替等待受控执行结果。结束本轮，等待原任务收到人工答复。', { ...object({
+          reason: { ...text, description: '用简短业务语言先说已完成什么、尚未完成什么及卡在哪个具体缺口，不写“申请第一段精确授权”等流程术语。' },
+          question: { ...text, description: '直接说明需要用户决定的事项及影响；缺授权时说明已核对的原授权为何不足。分开独立必要问题，使用真实换行；哈希、完整文件清单和过程放evidence，不堆砌无关排除项。' },
+          audience: { type: 'string', enum: ['operator', 'requester'], description: 'operator=插件/任务/底座等技术介入，Web或登录人私聊；requester=需求提出人需要回答的业务信息。缺省operator。' }, evidence: { type: 'array', items: text }, attemptedActions: { type: 'array', items: text },
         }), required: ['reason', 'question', 'evidence', 'attemptedActions'] }, async args => {
           if (!args.reason.trim() || !args.question.trim()) throw fail('TASK_HUMAN_QUESTION_REQUIRED')
           assertProgressReviewed()

@@ -208,16 +208,23 @@ export function operationDirectory(operations) {
     toolName: operation.definition?.toolName ?? operation.definition?.tool, effectClass: operation.definition?.effectClass,
     terminal: terminal.has(operation.state), evidence: deferModelContent(operation) }))
 }
+// 保留各已接纳作者的近期补充；最初需求人未必是后来调整授权范围的操作人。
+function currentTaskSources(sources, authorizationSourceId) {
+  const selected = new Set(sources.slice(-19))
+  const original = sources.find(source => source.sourceId === authorizationSourceId)
+  if (original) selected.add(original)
+  return sources.filter(source => selected.has(source))
+}
 export function taskModelInput(input) {
   const task = input.task ?? {}, operations = input.operations ?? [], executions = input.executions ?? []
   const executionIndex = executionDirectory(executions), operationIndex = operationDirectory(operations.filter(operation => !terminal.has(operation.state)))
   const blockerExecutions = executionDirectory(input.blockers?.executions ?? []), blockerOperations = operationDirectory(input.blockers?.operations ?? [])
-  return { ...input, task: { ...fields(task, ['taskId', 'sessionId', 'groupId', 'title', 'request', 'status', 'control', 'ownerActorId', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'drained', 'runSequence', 'updatedAt']),
+  return { ...input, sourceReviewRequired: true, task: { ...fields(task, ['taskId', 'sessionId', 'groupId', 'title', 'request', 'objective', 'requirements', 'status', 'control', 'ownerActorId', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'drained', 'runSequence', 'updatedAt']),
     ...(task.lastDecision ? { lastDecision: fields(task.lastDecision, ['action', 'summary', 'question', 'audience', 'at', 'recordedAt', 'requirementRevision', 'controlRevision', 'binding']), lastDecisionRef: deferModelContent(task.lastDecision) } : {}),
     authorizationSourceId: task.metadata?.authorizationSourceId, fullRecord: deferModelContent(task),
     humanRequests: (task.humanRequests ?? []).filter((request, index, requests) => request.status === 'waiting-reply' || index === requests.length - 1) },
     sourceCatalog: { total: (input.sources ?? []).length, catalogRef: deferModelContent(Object.fromEntries((input.sources ?? []).map(source => [source.sourceId, source]))) },
-    sources: (input.sources ?? []).slice(0, 20).map(source => ({ ...source, requestIdentity: undefined,
+    sources: currentTaskSources(input.sources ?? [], task.metadata?.authorizationSourceId).map(source => ({ ...source, requestIdentity: undefined,
       ...(source.requestIdentity ? { requestIdentityRef: deferModelContent(source.requestIdentity) } : {}) })),
     materialCatalogRef: deferModelContent(input.materials ?? []),
     materials: (input.materials ?? []).slice(0, 20).map(material => ({ ...material, text: undefined, quote: undefined,
@@ -230,13 +237,12 @@ export function taskModelInput(input) {
       operations: blockerOperations.items, operationIndex: { total: blockerOperations.total, catalogRef: blockerOperations.catalogRef } } }
 }
 export function executionModelInput(input, binding) {
-  const all = input.sources ?? [], selected = new Set([input.task?.authorizationSourceId].filter(Boolean))
-  const correction = all.findLast(source => source.actorId && source.actorId === input.task?.ownerActorId)
-  if (correction?.sourceId) selected.add(correction.sourceId)
+  const all = input.sources ?? [], current = currentTaskSources(all, input.task?.authorizationSourceId)
+  const selected = new Set(current.map(source => source.sourceId))
   const history = executionDirectory((input.previousExecutions ?? []).filter(execution => execution.executionId !== binding.executionId))
-  return { ...input, sourceReviewRequired: true, sources: all.filter(source => selected.has(source.sourceId)).map(source => ({ ...source, requestIdentity: undefined,
+  return { ...input, sourceReviewRequired: true, sources: current.map(source => ({ ...source, requestIdentity: undefined,
     ...(source.requestIdentity ? { requestIdentityRef: deferModelContent(source.requestIdentity) } : {}) })), sourceCatalog: {
-    total: all.length, items: all.slice(0, 20).map(source => fields(source, ['sourceId', 'actorId', 'version', 'messageId', 'corrects', 'supersedes'])),
+    total: all.length, items: current.map(source => fields(source, ['sourceId', 'actorId', 'version', 'messageId', 'corrects', 'supersedes'])),
     catalogRef: deferModelContent(Object.fromEntries(all.map(source => [source.sourceId, source]))) },
     materialPaths: (input.materialPaths ?? []).filter((_path, index) => selected.has(all[index]?.sourceId)),
     materialCatalogRef: deferModelContent(Object.fromEntries(all.map((source, index) => [source.sourceId, { sourceId: source.sourceId, path: input.materialPaths?.[index] }]))),

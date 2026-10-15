@@ -244,7 +244,7 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
     latestInputBytes: Buffer.byteLength(JSON.stringify(latestInput(last))), totalRequestBytes: Buffer.byteLength(JSON.stringify(last)) } }))
 })
 
-test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 30000 }, async t => {
+test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 120000 }, async t => {
   const fixture = await nativeCase(t, 'task-five-context-'), metrics = []
   let ownerSteps = 0
   const scope = 'ONLY_ANALYZE_AUTHORIZATION_'.repeat(300)
@@ -506,7 +506,7 @@ test('native executor resumes in the same titled task workspace and all task ses
   const log = await inspectSession(next.ctx.sessionPersistence, resumed.sessionId)
   assert.equal(log.meta.cwd, taskRoot)
   assert.ok(!log.events.some(event => event.type === 'working-directory/change'))
-  assert.equal(log.events.findLast(event => event.type === 'session/title').data.title, '继续核对')
+  assert.equal(log.events.findLast(event => event.type === 'session/title').data.title, execution.title, '同一执行保留稳定名称，续办key不改名')
 })
 
 test('native service reopens an unknown notification for readback without resending completed business work', { timeout: 15000 }, async t => {

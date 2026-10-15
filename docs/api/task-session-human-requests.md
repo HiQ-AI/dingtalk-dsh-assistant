@@ -47,3 +47,5 @@ Web新建/补充/重开/取消在提供有效topicRefs时复用首个话题，�
 原消息/决策/operation/task身份与旧话题版本保留；新版本为来源remove、目标add并直接processed，不重新路由或执行旧意图。来源记录mergedInto及mergeReceipt；任务旧refs仍是有效历史快照。默认GET /state/topics及群进度排除已归并话题，`includeMerged=true`可读归并档案，按ID读取旧版本仍可审计。
 
 归并后的话题上下文按来源消息sequence稳定排序；归属变更的较晚revision不能把早期消息挪到后续指令之后，同一消息的多个单元保持原有稳定顺序，旧revision仍只读取当时归属。
+
+人工请求内容约定：reason简短说明已完成、尚未完成及具体缺口；question提出必要决定，并解释相关既有授权为何不足；完整文件/摘要/过程放evidence和attemptedActions。使用真实换行。来源投影保留原始授权来源及最近19条已接纳来源，不把作者与最初owner不同视为无关；实际权限仍逐条按真实作者和原文判断，完整目录保持可读。技术答复的范围限定不自动撤销先前授权。

@@ -93,7 +93,8 @@ test('result size, execution/failed counts and continuation self-result stay in 
     assert.deepEqual(resolve(index, projected.executionIndex.catalogRef, '/e' + (count - 1)), executions.at(-1))
     assert.deepEqual(resolve(index, projected.operationHistory.catalogRef, '/failed' + (count - 1)), failed.at(-1))
     const continued = index.project(executionModelInput({ task: { ownerActorId: 'owner', authorizationSourceId: 'auth' }, sources: [{ sourceId: 'auth', text: 'authority' }, { sourceId: 'unrelated', text: 'details'.repeat(5000) }], previousExecutions: executions }, { executionId: 'e0' }), { reuseVisible: false })
-    assert.equal(continued.sources.length, 1); assert.equal(continued.sources[0].sourceId, 'auth')
+    assert.equal(continued.sources.length, 2); assert.equal(continued.sources[0].sourceId, 'auth')
+    assert.equal(JSON.stringify(continued).split('details'.repeat(5000)).length - 1, 1, '近期原文仅定义一次，不能按非最初需求人身份丢弃')
     assert.equal(continued.executionHistory.total, count - 1)
     assert.equal(resolve(index, continued.sourceCatalog.catalogRef, '/unrelated').text.length, 35000)
     assert.equal(continued.previousExecutions.some(execution => execution.executionId === 'e0'), false)
@@ -104,10 +105,37 @@ test('result size, execution/failed counts and continuation self-result stay in 
   assert.ok(metrics.at(-1).ownerBytes < 17000)
   // Scoped references plus definitions for the 20 short goals have fixed
   // overhead; increasing result bodies and record counts must not expand them.
-  assert.ok(metrics.at(-1).executionBytes < 17000)
+  assert.ok(metrics.at(-1).executionBytes - Buffer.byteLength('details'.repeat(5000)) < 17000, '执行目录预算与本轮必要来源正文分别计量')
   assert.ok(Math.abs(metrics.at(-1).ownerBytes - metrics[1].ownerBytes) < 1000)
   assert.ok(Math.abs(metrics.at(-1).executionBytes - metrics[1].executionBytes) < 1000)
   t.diagnostic(JSON.stringify({ scope: 'projected current Host JSON UTF-8 bytes, catalogues are not eagerly expanded', metrics }))
+})
+
+test('current source windows retain operator authorization and later restrictions beyond the first twenty sources', async t => {
+  const { index } = await fixture(t)
+  const sources = Array.from({ length: 28 }, (_, i) => ({ sourceId: `s${i}`, actorId: 'requester', version: 1, text: `历史资料${i}` }))
+  sources[1] = { sourceId: 's1', actorId: 'operator', version: 1, text: '暂停发布，等待我明确恢复', channel: 'private' }
+  sources.push({ sourceId: 'uat', actorId: 'operator', version: 1, text: '部署到UAT2', channel: 'im' },
+    { sourceId: 'technical', actorId: 'operator', version: 1, text: '仅恢复工具，本答复不新增部署授权', channel: 'web' },
+    { sourceId: 'restriction', actorId: 'operator', version: 1, text: '先不要部署，继续本地准备', channel: 'private' })
+  const task = { taskId: 'task', ownerActorId: 'requester', request: '原始修复需求', objective: '当前UAT交付目标', requirements: ['保留真实申请'],
+    metadata: { authorizationSourceId: 's0' }, authorizationSourceId: 's0' }
+  const input = { task, sources, materialPaths: sources.map(source => `materials/${source.sourceId}.md`) }
+  const unchanged = structuredClone(input)
+  for (const projected of [index.project(taskModelInput(input), { reuseVisible: false }), index.project(executionModelInput(input, {}), { reuseVisible: false })]) {
+    assert.equal(projected.sources.length, 20)
+    assert.equal(projected.sources[0].sourceId, 's0')
+    assert.deepEqual(projected.sources.slice(-3).map(source => source.sourceId), ['uat', 'technical', 'restriction'])
+    assert.deepEqual(projected.sources.slice(-3).map(source => source.actorId), ['operator', 'operator', 'operator'])
+    for (const source of sources.slice(-3)) assert.equal(resolve(index, projected.sources.find(item => item.sourceId === source.sourceId).text), source.text)
+    assert.equal(projected.sourceCatalog.total, sources.length)
+    assert.deepEqual(resolve(index, projected.sourceCatalog.catalogRef, '/s1'), sources[1], '窗口外撤销仍能逐字读取，不可用窗口内旧授权复活发布')
+    assert.equal(resolve(index, projected.task.objective), task.objective)
+    assert.deepEqual(projected.task.requirements, task.requirements)
+  }
+  const execution = executionModelInput(input, {})
+  assert.deepEqual(execution.materialPaths, execution.sources.map(source => `materials/${source.sourceId}.md`))
+  assert.deepEqual(input, unchanged)
 })
 
 test('first read is available, repeated readback uses references, reopen resolves and other sessions/tampering fail closed', async t => {

@@ -11,6 +11,7 @@
 | Scrollbar | observerCss | DESIGN.md | 宿主内容区；局部有界结果区 | 静态审计；浏览器窄屏检查 |
 | Toast | 页内 role=status / role=alert | 既有群消息设置与看板反馈 | 错误留在发生位置；提交成功状态 | test/client.test.js；组件行为测试 |
 | CRUD | TaskSessionDetail / CreateTaskForm / TaskControls | http.js 与 task-session-service.js | 新建后进入唯一任务详情；需求更新留在详情；取消保留历史 | test/http.test.js；组件及浏览器 fixture |
+| 人工请求正文 | HumanRequestContent / linkedTaskText / readout | docs/api/task-session-human-requests.md | 任务详情与人工介入页共用；原因与完整问题直接显示，证据/已尝试/原文折叠；不推断批准或缺失原因 | test/observer-node-control-display.test.js；真实浏览器 |
 
 ## 业务与安全来源
 
@@ -32,5 +33,7 @@
 查询：自动/手动刷新共用请求；任务切换隔离过期响应；动态执行分页可重试并自动夹紧越界页码。看板通过 taskDTO.executionSessions 获得全部轻量会话投影，不依赖详情执行分页；按会话去重并以创建时间和执行 ID 稳定排序。执行名称由 dynamic-task-store 持久化并复用 session-workspaces 的原生清理逻辑，续办不重命名。读取状态合入独立执行标题槽，加载、失败和重试保留已读取列表及分页位置。空列表、正在读取、读取失败和旧数据可见状态不同。
 
 导航：看板嵌入宿主 conversation 插槽，使用 sessionStorage 记住当前页，不占用宿主会话 URL。列表筛选/分页目前属于本次看板会话内状态；不把任务正文写入 URL 或持久客户端存储。
+
+人工等待：任务详情读取当前 waiting-reply 申请的 reason/question/evidence/attemptedActions，与人工介入页使用相同正文组件。已有历史摘要不覆盖当前申请；缺少独立原因时明确显示未说明。全文范围保持可读，链接只接受 http/https，长文本可换行。显示层整理转义换行时不修改持久记录，申请原文可用键盘展开核对；完整申请不作为实时状态区反复朗读。答复表单及其幂等、失败保留、修订冲突合同不变。
 
 验证边界：纯 fixture 浏览器可验证 UI 与真实 HTTP 的连接、失败、状态和键盘行为，但不代表宿主实际原生会话注册、模型、凭据、钉钉发送或线上部署已验证。

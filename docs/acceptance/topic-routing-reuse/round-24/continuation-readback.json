@@ -1,0 +1,80 @@
+{
+  "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+  "taskSessionId": "task-session-c1283783-eac0-41cd-b16b-bf6ca60833f0",
+  "status": "active",
+  "drained": false,
+  "requirementRevision": 4,
+  "controlRevision": 2,
+  "originalRequest": {
+    "requestId": "human-82f82c9a2a9785f4155ec84c4a0e71708c0ee840050cc924d6b8fc9f38eb0a29",
+    "status": "answered",
+    "reply": "操作人已明确要求修正重复审批并继续原任务。12:17孙鹏原文“部署到uat”（来源im:db8aff36986c204958b55aa8e5a7c5611f84f2fb71c8cca59126b36ad588e166）仍是本任务有效交办；后续技术恢复答复只限定该次恢复，不撤销已有UAT范围。当前A段的原三文件提交、原开发分支快进推送、更新PR353正文、本地UAT集成和隔离验证属于完成已交办目标的必要步骤，请核对原文、原分支及当前状态后沿原executionId/session继续，不再为这些步骤申请同一批准。按项目规则推进原UAT任务；确有要求最终批准的发布动作，先完成可自行执行的准备和验证，再只说明具体待决动作、已有授权不足之处及新增风险。不得把新SHA或镜像摘要尚未产生当作前置审批理由。原共享环境测试限制继续有效，不运行全仓共享测试、不改生产、不操作真实申请、不强推、不合main、不重发旧通知。摘要先说已完成什么、下一步是什么；只有真实新增缺口才等待。"
+  },
+  "waiting": [],
+  "execution": {
+    "executionId": "bdb7b510-4a09-4cd3-9a06-8ac8dda42608",
+    "sessionId": "task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6",
+    "inputVersion": 9,
+    "status": "running",
+    "drained": false,
+    "objective": "完成已授权的原三文件提交、原开发分支快进推送、PR353正文更新、本地UAT集成与严格隔离验证，为最终UAT发布提供精确候选及新增风险。",
+    "sourceIds": [
+      "im:4ebf8f0d29d1dfdb4080367f018f8ee758f194dd13c6cd13098042227f93d9b6",
+      "web-human:d08b77123b42900b2e16ac3a62d4dd331fa372ce1d105fcca96a6d6c7150d30f",
+      "web-human:9da4d9813b5fd6678c29d730f83d2e8dc3e6915613b448c381ede0794cd2b3b4",
+      "web-human:72d60cb800d20acd6ac532c611fe90a57aeb916063082f1ed8f855af44103f01",
+      "web:1a08c83d5935a5985447372ee1f6d4e0fd992fdc88a2c3282d768b9ee5fe2b4f",
+      "web:b409755bb6250114466f38af9fdfce5da630e2225e158514ac422e6463f95145",
+      "web-human:7139f798c19c4d0c40d898406b2e4a6f042326451f7aa88bd4fe565eaa76084e",
+      "im:db8aff36986c204958b55aa8e5a7c5611f84f2fb71c8cca59126b36ad588e166",
+      "private-human:a2c9e91c65f00fa085db9c40dec9f4a4271bc41f27f0c0cc39ea756700cc2e72",
+      "web-human:3d8247bb66ef4f74d66969ed760107c25209e0ce110b0d79affeeb585bc14824",
+      "web-human:82187ba2c5295adedae0564c63b4a6b7ac8e519c94637b9207a6ce13f56db7a0"
+    ]
+  },
+  "unknownOperations": [],
+  "recentOperations": [
+    {
+      "operationId": "operation-d47032d0867fcb2d741330a94aeb5c9e25c9a93c",
+      "state": "succeeded",
+      "toolName": "edit",
+      "createdAt": "2026-10-15T04:51:05.588Z",
+      "updatedAt": "2026-10-15T04:51:05.649Z"
+    },
+    {
+      "operationId": "operation-3b30c0ca73f528f71c7b5b41752b09023a00c763",
+      "state": "succeeded",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T05:39:50.924Z",
+      "updatedAt": "2026-10-15T05:39:59.176Z"
+    },
+    {
+      "operationId": "operation-42aa477209ac7b1901ea274d3b7a74b1cd7a05f5",
+      "state": "succeeded",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T05:40:08.297Z",
+      "updatedAt": "2026-10-15T05:40:09.646Z"
+    },
+    {
+      "operationId": "operation-6eee5b85d7c5c71dc1bf9f2a709fe9a3283fde8d",
+      "state": "succeeded",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T05:40:16.084Z",
+      "updatedAt": "2026-10-15T05:40:35.622Z"
+    },
+    {
+      "operationId": "operation-368811d783f82c32f109a26eb1ce703ddbd75c30",
+      "state": "succeeded",
+      "toolName": "write",
+      "createdAt": "2026-10-15T05:41:00.094Z",
+      "updatedAt": "2026-10-15T05:41:00.217Z"
+    },
+    {
+      "operationId": "operation-62f31e42968773d2890d521eb6b9b617d07612bd",
+      "state": "starting",
+      "toolName": "pwsh",
+      "createdAt": "2026-10-15T05:41:10.279Z",
+      "updatedAt": "2026-10-15T05:41:11.372Z"
+    }
+  ]
+}

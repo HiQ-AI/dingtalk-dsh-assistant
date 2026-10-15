@@ -1,0 +1,15 @@
+✖ 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects (30593.7262ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 31467.1518
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:43:38
+✖ 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects (30593.7262ms)
+  'test timed out after 30000ms'

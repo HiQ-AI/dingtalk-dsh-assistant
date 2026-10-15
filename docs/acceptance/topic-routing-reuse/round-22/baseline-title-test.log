@@ -1,0 +1,28 @@
+✖ native executor resumes in the same titled task workspace and all task sessions share the process cwd (19314.8015ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25218.5543
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:43:38
+✖ native executor resumes in the same titled task workspace and all task sessions share the process cwd (19314.8015ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  '初次核对' !== '继续核对'
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/native-background-receipt/dingtalk-dsh-assistant/test/task-session-service-native.test.js:509:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '初次核对',
+    expected: '继续核对',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

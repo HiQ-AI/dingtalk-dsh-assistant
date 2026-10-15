@@ -102,3 +102,7 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 先部署精确包并核验入口和原任务/子执行均已排空。调用本机 `/runtime/task-topics/reconcile/check` 只读取得每项来源、目标、原任务、原decision/operation及摘要；只接受旧Web续办已applied且唯一原事项关系，不能按同标题猜测。确认这次四个重复话题只属于现场两任务后，使用同摘要和固定requestId调用正式reconcile。正式命令单次group事务写来源remove新版本、目标add新版本、closed/mergedInto及收据，不触发业务动作。
 
 独立回读默认话题数、includeMerged档案、群消息唯一归属、原task refs与operation状态不变；旧话题revision1仍须可读。状态漂移或任务/执行活跃时停止apply，待原执行自然停稳再重新Check，不停止业务执行来强行合并。旧二进制不了解mergedInto，不应直接回退并重写该domain；保留兼容该字段的受控包。
+
+## 授权连续性与等待说明核验
+
+沿静止实例双包Check及正式切换部署，无schema迁移。恢复前读回当前申请、原始有权来源和任务版本；用户已经纠正重复审批时，走既有Web原申请reply记录纠正，不写SQLite、不自动批量关闭申请。恢复后核验原task/session及原execution新input包含相关授权和技术答复，既有unknown未被普通回复结算；以实际后续操作证明推进。敏感动作真实最终批准、后续撤销/暂停和共享环境限制仍保留。旧申请长文本仅改善展示，不改历史正文或授权事实。

@@ -288,3 +288,45 @@ test('历史、已答复及失效问题只读，任务问题能导航人工介�
   assert.deepEqual(opened, ['t'])
   assert.doesNotMatch(source, /需求与控制|TaskControls/)
 })
+
+test('任务详情使用当前申请的原因、问题和证据，忽略历史已答申请', () => {
+  const current = { requestId: 'current', status: 'waiting-reply', reason: '准备已完成，目标环境尚未明确。', question: '使用哪个环境？', evidence: ['已核验配置'], attemptedActions: ['读取环境清单'] }
+  const task = { taskId: 't', waitingReason: '较旧的统筹摘要', lastDecision: { question: current.question }, humanRequests: [current, { status: 'answered', question: '旧问题' }] }
+  const tree = harness('TaskSessionDetail', { task }).render()
+  const content = elements(tree).find(item => typeof item.type === 'function' && item.type.name === 'HumanRequestContent')
+  assert.equal(content.props.request, current)
+  assert.equal(elements(tree).filter(item => item.props.role === 'status').length, 0, '长申请不作为整块实时通知重复朗读')
+  assert.doesNotMatch(text(tree), /较旧的统筹摘要|旧问题/)
+  assert.match(source, /React\.createElement\(HumanRequestContent, \{ request: selectedAuthorization \}\)/)
+})
+
+test('人工请求分层保留完整范围，格式化链接和换行，原文可独立审计', () => {
+  const scope = '不得修改生产环境；保留原有开关。'.repeat(80)
+  const request = { reason: '代码已验证。\\n等待明确目标环境。', question: `是否使用候选环境？\\n范围：${scope}\\n参考 [变更记录](https://example.test/pull/353)。`,
+    evidence: ['[测试结果](https://example.test/result)', 'D:\\my notes\\new.sql', '`print("\\n")`'], attemptedActions: ['读取配置\\n核对现有功能'] }
+  const tree = harness('HumanRequestContent', { request }).render(), nodes = elements(tree)
+  assert.deepEqual(nodes.filter(item => item.type === 'h3').map(text), ['当前进度与等待原因', '需要你决定'])
+  assert.match(text(tree.children[0]), /代码已验证。\n等待明确目标环境/)
+  assert.ok(text(tree.children[1]).includes(scope))
+  assert.deepEqual(nodes.filter(item => item.type === 'a').map(item => [text(item), item.props.href, item.props.rel]), [
+    ['变更记录', 'https://example.test/pull/353', 'noopener noreferrer'], ['测试结果', 'https://example.test/result', 'noopener noreferrer'],
+  ])
+  const disclosures = nodes.filter(item => item.type === 'details')
+  assert.deepEqual(disclosures.map(item => text(item.children[0])), ['证据与范围明细 · 3', '已尝试 · 1', '申请原文'])
+  assert.ok(disclosures.every(item => !item.props.open), '辅助资料初始折叠，问题和完整范围直接显示')
+  const evidence = nodes.filter(item => item.type === 'li').map(text)
+  assert.ok(evidence.includes('D:\\my notes\\new.sql'))
+  assert.ok(evidence.includes('`print("\\n")`'))
+  assert.equal(JSON.parse(text(nodes.find(item => item.type === 'pre'))).question, request.question)
+  assert.equal(JSON.parse(text(nodes.find(item => item.type === 'pre'))).reason, request.reason)
+  assert.equal(request.reason, '代码已验证。\\n等待明确目标环境。')
+})
+
+test('人工请求不把问题重复作为原因，不产生非HTTP链接或执行HTML', () => {
+  const question = '选择环境。 [不可点击](javascript:alert(1)) <img src=x onerror=alert(1)>'
+  const tree = harness('HumanRequestContent', { request: { question, waitingReason: question } }).render()
+  assert.match(text(tree.children[0]), /该申请未说明等待原因/)
+  assert.equal(text(tree.children[1]), `需要你决定\n${question}`)
+  assert.equal(elements(tree).some(item => item.type === 'a' || item.type === 'img' || item.props.dangerouslySetInnerHTML), false)
+  assert.equal(elements(tree).filter(item => item.type === 'details').length, 1)
+})

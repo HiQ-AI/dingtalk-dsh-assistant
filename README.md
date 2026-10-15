@@ -268,3 +268,5 @@ node --test test/dynamic-task-store.test.js test/dynamic-execution-session-nativ
 原生工具错误若仍为未知效果，模型不能凭错误文字自行清账。操作人可在当前技术申请的本机Web回复中显式提供 `nativeFailureResolutions`（原operationId及摘要）；`POST /tasks/:taskId/human-requests/:requestId/reply/check` 零写核验原日志、正常回合结束、排空和绑定只读调查。正式reply在单个事务内记录受信来源、结算全部指定失败并答复申请，保留完整原账和 `partialEffectsPossible`，不标成功或无效果、不重放。未确认的写效果仍受unknown保护。
 
 Web对原任务的补充、重开和取消沿已有话题继续，保留原文和独立意图收据。旧版本产生的Web重复话题可按原任务/applied关系在本机Check后归并；默认列表只展示当前话题，历史归并记录可通过includeMerged及原ID读取，不删除来源或重放动作。
+
+任务授权连续性：统筹和执行共同核对原始有权来源及近期补充，不以最初需求人身份过滤后续操作人指令。模型输入保留原始来源和最近19条来源（总计最多20条），完整来源可按目录读取；旧摘要不能覆盖新原文。技术恢复答复不新增授权，不自动撤销既有交办；后续明确暂停、撤销、改环境仍优先。已授权的必要准备继续完成，真实最终审批先准备后提出具体缺口；未知效果及原生权限拒绝继续有效。等待说明先说进度和具体缺口，再说需要用户决定什么，技术清单放证据。

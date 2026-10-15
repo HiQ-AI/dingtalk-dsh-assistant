@@ -511,6 +511,24 @@ window.__ModuleLoader__.load({
         parts.push(content.slice(offset))
         return parts
       }
+    // 仅整理说明文字的转义换行；路径和代码原样显示，完整持久原文另可展开核对。
+    const humanRequestText = value => String(value ?? '').replace(/(`[^`]*`|(?:[A-Za-z]:\\|\\\\)[^\r\n]+)|\\r\\n|\\n/g, (match, literal) => literal || '\n')
+    function HumanRequestContent({ request }) {
+      const question = request.question || request.requestedAction || ''
+      const reason = request.reason || (request.waitingReason !== question ? request.waitingReason : '')
+      const field = (label, value) => React.createElement('section', { style: { display: 'grid', gap: ui.space2, minWidth: 0 } },
+        React.createElement('h3', { style: { margin: 0, fontSize: ui.textSm, color: colors.muted } }, label),
+        React.createElement('div', { style: { fontSize: ui.textMd, lineHeight: 1.7, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, ...linkedTaskText(humanRequestText(value))))
+      const supporting = (label, items) => Array.isArray(items) && items.length ? React.createElement('details', { style: { borderTop: `1px solid ${colors.border}`, paddingTop: ui.space3 } },
+        React.createElement('summary', { style: { cursor: 'pointer', fontSize: ui.textSm, fontWeight: 600 } }, `${label} · ${items.length}`),
+        React.createElement('ol', { style: { paddingLeft: ui.space6, margin: `${ui.space3}px 0 0`, display: 'grid', gap: ui.space2, fontSize: ui.textSm, lineHeight: 1.7 } }, ...items.map((item, index) => React.createElement('li', { key: index, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, ...linkedTaskText(humanRequestText(readableValue(item))))))) : null
+      return React.createElement('div', { className: 'observer-human-request', style: { display: 'grid', gap: ui.space4, minWidth: 0 } },
+        field('当前进度与等待原因', reason || '该申请未说明等待原因。'),
+        question ? field('需要你决定', question) : null,
+        request.risk && request.risk !== '未单独说明' ? field('风险', request.risk) : null,
+        supporting('证据与范围明细', request.evidence), supporting('已尝试', request.attemptedActions),
+        readout('申请原文', { reason: request.reason, question: request.question, requestedAction: request.requestedAction, waitingReason: request.waitingReason, risk: request.risk, evidence: request.evidence, attemptedActions: request.attemptedActions }))
+    }
     const activePageStorageKey = 'dingtalk-dsh-observer.active-page'
     const readActivePage = () => {
       try {
@@ -774,7 +792,6 @@ window.__ModuleLoader__.load({
       .observer-session-detail .detail-attention { display: grid; gap: 8px; padding: 16px; border: 1px solid color-mix(in srgb, ${colors.warning} 32%, ${colors.border}); border-left: 3px solid ${colors.warning}; border-radius: 8px; background: color-mix(in srgb, ${colors.warning} 6%, ${colors.surface}); }
       .observer-session-detail .detail-attention h2 { color: ${colors.warning}; }
       .observer-session-detail .detail-attention button { justify-self: start; }
-      .observer-session-detail .detail-question { font-weight: 500; white-space: pre-wrap; }
       .observer-session-detail :is(summary, button, a) { cursor: pointer; }
       .observer-session-detail button:disabled { cursor: default; }
       .observer-session-detail summary { font-size: 12px; font-weight: 500; }
@@ -818,17 +835,18 @@ window.__ModuleLoader__.load({
     `
     function TaskSessionDetail({ task, onOpenSession, onBack, updatedAt, onOpenHumanRequest }) {
       const requirements = task.requirements || task.acceptanceCriteria || []
-      const question = !task.legacyReadonly && task.lastDecision?.question
+      const humanRequest = !task.legacyReadonly && task.humanRequests?.findLast(request => request.status === 'waiting-reply')
+      const question = !task.legacyReadonly && (humanRequest?.question || task.lastDecision?.question)
       return React.createElement('section', { className: 'observer-session-detail', 'aria-label': '任务会话详情' },
         React.createElement('style', null, taskDetailCss),
         React.createElement('header', { className: 'detail-header' },
           React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: onBack }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')),
           React.createElement('div', { className: 'detail-title-row' }, React.createElement('h1', null, task.title?.trim() || taskDisplayTitle(task)), statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state))),
           React.createElement('div', { className: 'detail-meta' }, React.createElement('span', null, `创建 ${fmt(task.createdAt)}`), React.createElement('span', null, `更新 ${fmt(task.updatedAt)}`), !task.legacyReadonly ? React.createElement('span', null, `${task.executionCount ?? '未记录'} 次独立执行`) : null)),
-        task.waitingReason || question ? React.createElement('section', { className: 'detail-attention', 'aria-label': '阻塞与待处理', role: 'status' },
+        task.waitingReason || question ? React.createElement('section', { className: 'detail-attention', 'aria-label': '阻塞与待处理' },
           React.createElement('h2', null, question ? '等待答复' : '当前等待 / 阻塞'),
-          task.waitingReason ? React.createElement('p', null, traceReason(task.waitingReason)) : null,
-          question ? React.createElement('p', { className: 'detail-question' }, question) : null,
+          question ? React.createElement(HumanRequestContent, { request: humanRequest || { reason: traceReason(task.waitingReason), question, evidence: task.lastDecision?.evidence } })
+            : React.createElement('p', null, ...linkedTaskText(traceReason(task.waitingReason))),
           question ? React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => onOpenHumanRequest(task.taskId) }, '查看人工介入问题') : null) : null,
         React.createElement('div', { className: 'detail-columns' },
           React.createElement('div', { className: 'detail-primary' },
@@ -1186,7 +1204,7 @@ window.__ModuleLoader__.load({
       const selectedAuthorization = authorizationItems.find((item) => item.requestId === selectedAuthorizationId)
       const authorizationDetailField = (label, value) => React.createElement('div', { style: { display: 'grid', gap: 5 } },
         React.createElement('strong', { style: { fontSize: 11, color: colors.muted } }, label),
-        React.createElement('div', { style: { fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, value || '—'))
+        React.createElement('div', { style: { fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, ...linkedTaskText(value || '—')))
       const authorizationRows = visibleAuthorizationItems.map((item, rowIndex) => {
         const status = authorizationPresentation(item)
         const group = groupsById.get(item.groupId)
@@ -1203,11 +1221,7 @@ window.__ModuleLoader__.load({
             React.createElement('div', { style: { minWidth: 0 } }, React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } }, statusTag(authorizationPresentation(selectedAuthorization).label, authorizationPresentation(selectedAuthorization).state), React.createElement('span', { style: { color: colors.muted, fontSize: 11.5 } }, fmt(selectedAuthorization.createdAt))), React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: 1.5 } }, selectedAuthorization.objective || '人工介入事项'), React.createElement('code', { style: { display: 'block', marginTop: 10, color: colors.muted, fontSize: 10.5 } }, selectedAuthorization.requestId)),
             React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', 'aria-label': '关闭人工介入事项', onClick: () => setSelectedAuthorizationId(''), style: { flex: '0 0 auto', minWidth: 52, whiteSpace: 'nowrap' } }, '关闭')),
           React.createElement('div', { style: { flex: '1 1 auto', overflowY: 'auto', padding: '0 24px 24px' } },
-            React.createElement('section', { style: { padding: '24px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('需要人工处理', selectedAuthorization.requestedAction || selectedAuthorization.question || selectedAuthorization.reason)),
-            React.createElement('section', { style: { padding: '24px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('风险', selectedAuthorization.risk || '未单独说明')),
-            React.createElement('section', { style: { padding: '24px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('阻塞原因', selectedAuthorization.waitingReason)),
-            React.createElement('details', { open: true, style: { padding: '18px 0', borderBottom: `1px solid ${colors.border}` } }, React.createElement('summary', { style: { cursor: 'pointer', fontSize: 12, fontWeight: 600 } }, `现场证据 · ${(selectedAuthorization.evidence || []).length}`), React.createElement('div', { style: { marginTop: 14 } }, authorizationDetailField('', (selectedAuthorization.evidence || []).map((value, index) => `${index + 1}. ${value}`).join('\n')))),
-            React.createElement('details', { style: { padding: '18px 0', borderBottom: `1px solid ${colors.border}` } }, React.createElement('summary', { style: { cursor: 'pointer', fontSize: 12, fontWeight: 600 } }, `已尝试 · ${(selectedAuthorization.attemptedActions || []).length}`), React.createElement('div', { style: { marginTop: 14 } }, authorizationDetailField('', (selectedAuthorization.attemptedActions || []).map((value, index) => `${index + 1}. ${value}`).join('\n')))),
+            React.createElement('section', { style: { padding: '24px 0', borderBottom: `1px solid ${colors.border}` } }, React.createElement(HumanRequestContent, { request: selectedAuthorization })),
             React.createElement('section', { style: { padding: '20px 0', borderBottom: `1px solid ${colors.border}` } }, authorizationDetailField('关联信息', `Task ID：${selectedAuthorization.taskId || '—'}\n群聊：${groupsById.get(selectedAuthorization.groupId)?.name || selectedAuthorization.groupId || '—'}`)),
             selectedAuthorization.status === 'answered' ? React.createElement('section', { style: { padding: '20px 0' } }, authorizationDetailField('处理结果', `${selectedAuthorization.taskSessionRequest ? '已答复' : selectedAuthorization.decision === 'approved' ? '继续任务' : selectedAuthorization.decision === 'rejected' ? '不执行' : selectedAuthorization.decision || '已处理'}\n处理渠道：${selectedAuthorization.decisionSource === 'web' ? '运行看板' : selectedAuthorization.decisionSource === 'dingtalk' ? '钉钉私聊' : selectedAuthorization.decisionSource || '历史迁移'}\n处理时间：${fmt(selectedAuthorization.decidedAt)}\n处理意见：${selectedAuthorization.reply || '—'}`)) : null),
           React.createElement(HumanRequestReply, { key: selectedAuthorization.requestId, request: selectedAuthorization, onChanged: () => { setDetailRetry(value => value + 1); void refresh() } }))) : null
