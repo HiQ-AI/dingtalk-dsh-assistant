@@ -1,0 +1,15 @@
+39a1b1595c71c3669a731c9df950223496c56181
+100644 3a5ebf3dd97688aabe8df1cf05402f8e19ed3a23 1	packages/dingtalk-dsh-assistant/task-session-service.js
+100644 6e6c5a6145ee530e27b1aa36ce930a196fa23cdc 2	packages/dingtalk-dsh-assistant/task-session-service.js
+100644 974dd032148c74794248e912a0d97072e3db0dac 3	packages/dingtalk-dsh-assistant/task-session-service.js
+100644 2f69e4e81d105d71fe4f62d202c453b371238b66 1	test/task-session-service-native.test.js
+100644 65921c95aa2c3e094355a2b7dd76976e5c148d5c 2	test/task-session-service-native.test.js
+100644 9d3d1cbe537f99257707f167e5f4906f9b5e4f36 3	test/task-session-service-native.test.js
+
+Auto-merging UX-CONTRACT.md
+Auto-merging packages/dingtalk-dsh-assistant/task-session-service.js
+CONFLICT (content): Merge conflict in packages/dingtalk-dsh-assistant/task-session-service.js
+Auto-merging packages/dingtalk-dsh-assistant/task-session.js
+Auto-merging test/dynamic-task-store.test.js
+Auto-merging test/task-session-service-native.test.js
+CONFLICT (content): Merge conflict in test/task-session-service-native.test.js

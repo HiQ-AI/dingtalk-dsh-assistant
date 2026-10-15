@@ -1,0 +1,82 @@
+{
+  "observedAt": "2026-10-15T06:21:59.4081701Z",
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T06:21:08.596Z",
+            "readyAt": "2026-10-15T06:21:09.033Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T06:21:48.723Z",
+            "succeededAt": "2026-10-15T06:21:49.466Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T06:21:08.643Z",
+            "readyAt": "2026-10-15T06:21:09.081Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T06:21:48.755Z",
+            "succeededAt": "2026-10-15T06:21:49.233Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T06:21:08.683Z",
+        "readyAt": "2026-10-15T06:21:09.13Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "packageSha256": "391bc5ddc706577ef4f67dd07ad1ac9dbbd36f9843b6c660feccbfa0a7f6267f",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "installedVersion": "1.0.0",
+  "oldProcessExists": false,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 52452
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 52452
+    }
+  ]
+}

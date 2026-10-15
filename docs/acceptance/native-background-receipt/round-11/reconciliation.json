@@ -1,0 +1,23 @@
+{
+  "operationId": "operation-9585dd4be15889115b7dd8b22c6d522371315cbf",
+  "state": "failed",
+  "noEffect": true,
+  "previousState": "unknown",
+  "proof": {
+    "argumentsDigest": "31fde337a51bf9db219c8210c21664f01be028442a3a6d9d1fd10306e66a3933",
+    "callId": "call_3d98e98dd03b46aa85373ecc99b39886|fc_003bd8d3a5ef1786016ad04e912870819a9b38b264329ca159",
+    "executionId": "bdb7b510-4a09-4cd3-9a06-8ac8dda42608",
+    "jobId": "pwsh-7",
+    "kind": "native-job-read-missing",
+    "noEffect": true,
+    "operationDigest": "3f49a56791fa01641ad2d1250e133250c96e288f0bdea839c5eb847df15d7c45",
+    "operationId": "operation-9585dd4be15889115b7dd8b22c6d522371315cbf",
+    "resultDigest": "2f2a7ed5c8d7e5bdb4175491937d57d138a10358ffd3cf50dc7adfce98fb697c",
+    "resultSequence": 599,
+    "sessionId": "task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6",
+    "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+    "toolName": "job_output",
+    "turnEndSequence": 709
+  },
+  "evidenceRef": "native-job-read:operation-9585dd4be15889115b7dd8b22c6d522371315cbf:886e6dec25a76ab79222192c609295542bfd74cc4bf415b1217edec5ca738b81"
+}

@@ -1,0 +1,45 @@
+✔ topic context HTTP uses real topic decisions and current native task reader without workflow methods (174.5084ms)
+✔ topic panel requests generic context with group identity while retaining its existing layout (4.9884ms)
+✔ topic reconciliation HTTP enforces local origin, strict body and separate zero-write check; merged topics remain audit-readable (85.8694ms)
+✔ 无替换的大量发件只按线性次数读取邻接关系 (8.8861ms)
+✔ 明确发送阻塞重启保留，普通错误不清阻塞，真实晚回执清阻塞但保留替换终态 (7.5058ms)
+✔ 替换图在决策接纳前拒绝未知目标，重复协调不产生持久写入 (5.7642ms)
+✔ 替换pending原子停止旧发送，发送领取与替换串行且晚回执保留终态 (1.9193ms)
+✔ 历史替换图先完整校验，拒绝环与分叉且保留已有有效链 (2.0499ms)
+✔ 阶段修订在原子接纳前拒绝未知ID，修正同请求可接受；Web遵循相同校验 (9.0672ms)
+✔ 新建与重开都拒绝重复阶段，不能先接受后破坏主叶上下文 (2.8281ms)
+✔ 同group串行队列使用最新Task阶段与版本校验，不接纳排队前的旧计划 (1.7032ms)
+✔ 接纳与执行共用参数规范化，空数组默认值可用而trim后重复阶段在接纳前拒绝 (1.4847ms)
+✔ 拒绝旧决策的持久写入失败时不释放预约，不把内存结果当已恢复 (2.8866ms)
+✔ 重开旧坏决策仅释放自己的预约，保留输入、Task和Outbox且rejected不可复活 (2.9059ms)
+✔ 旧坏决策出现已执行账本、部分应用、取消副作用或版本变化时不能退回 (6.4999ms)
+✔ A/B交错归类跨turn延续、固定快照及Task不复制消息 (1.6848ms)
+✔ 归类整批预检拒绝跨群/重复/过时事实且幂等重试不重复Topic (0.8574ms)
+✔ 未知输入阻止提交，已归类无关B允许A提交，同A补充使旧版本失效 (1.0751ms)
+✔ 附件与身份补齐产生新事实版本，重开仍可读取旧Topic快照 (1.4191ms)
+✔ 错误归属追加remove/add保留原版本 (0.6517ms)
+✔ 决策固定动作身份、失败后重开恢复、Task变更恰好一次 (3.003ms)
+✔ 共享Task版本和保留项阻止其他Topic覆盖 (1.5287ms)
+✔ 一条共享消息只存一份并更新两个Topic，归类与决策排队按最新状态检查 (1.0913ms)
+✔ 回复快照preflight在Group原子更新内拒绝，决策和Outbox均零副作用 (0.7514ms)
+✔ 重复引用补齐保留已知正文，改变引用ID不串用旧正文和身份 (1.4284ms)
+✔ 固定版本不暴露后来摘要，旧决策完成不关闭已收到新输入的话题 (1.9562ms)
+✔ 不同Topic不能同时接受撤回同一Outbox的意图 (0.8142ms)
+✔ Web输入与Topic决策一次写入，持久失败零副作用且重试固定身份 (2.2722ms)
+✔ Web输入原子复核未知消息、Topic版本、Task版本状态与保留项 (2.5626ms)
+✔ Task通知并发替换同一旧回复时只有首个Outbox接受，pending意图也阻止Topic决策 (0.7101ms)
+✔ 已接受Topic意图阻止其他通知抢占回复，但自身Outbox允许落盘 (0.6539ms)
+✔ Topic已完成但Outbox未送达时退订拒绝，确认送达后才允许删除 (0.7284ms)
+✔ 新Outbox结果指纹通过真实domain schema保存且重开可查询 (0.4219ms)
+✔ 重判原子门禁拒绝任何相关 Outbox、业务动作和未知进度 (4.6062ms)
+✔ 历史Web续办只归并明确原任务关系，保留原来源/决策/操作和历史版本，不重做意图 (5.3828ms)
+✔ 历史归并拒绝活跃任务与未完成决策，不以相同标题合并独立群事项 (1.9408ms)
+✔ Web取消复用原话题，保留仅阻塞保留项可取消的语义且不越过活跃决策 (2.4491ms)
+ℹ tests 37
+ℹ suites 0
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 735.143

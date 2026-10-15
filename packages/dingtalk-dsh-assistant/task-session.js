@@ -4,23 +4,22 @@ import { renameTaskSession } from './session-workspaces.js'
 import { inspectSession } from './session-persistence.js'
 import { createModelContentIndex, taskModelInput, operationModelReadback, modelHostMessage, modelHostInput } from './model-context.js'
 import { classifyExecutionProviderFailure } from './execution-provider-failure.js'
+import { sourceInterpretationInstructions } from './task-source-instructions.js'
+import { retireHostContext } from './host-context.js'
 
 const identityEvent = 'plugin:dingtalk/task-session'
 const fail = code => Object.assign(new Error(code), { code })
 export const isTaskProviderTransient = cause => classifyExecutionProviderFailure(cause).retryable
 const object = properties => ({ type: 'object', properties, additionalProperties: false })
 const text = { type: 'string' }
-// 只替换模型可见surface；完整来源和旧快照仍留在原生审计日志。
-export function retireTaskContext(session, binding) {
+// 在原生request开放turn边界退休旧快照及前代占位；原审计保留，新输入尚未进入surface。
+export function retireTaskContext(session, binding, position) {
   const visible = new Set(session.surface.nodes)
   for (const event of session.snapshotEvents()) {
-    if (!visible.has(event.seq) || event.type !== 'user/message' || event.data.source?.taskContextHistory
+    if (!visible.has(event.seq) || event.type !== 'user/message'
       || event.data.source?.taskSession?.taskId !== binding.taskId
       || event.data.source.taskSession.sessionId !== binding.sessionId) continue
-    session.append('user/message', createUserMessage({ source: { ...event.data.source, taskContextHistory: true },
-      content: [{ type: 'text', text: JSON.stringify({ historicalTaskContext: { leaseEpoch: event.data.source.taskSession.leaseEpoch },
-        instruction: '此轮Host快照已由最新完整快照替代；旧内容保留在审计日志，不作为当前状态。' }) }] }),
-    { surfaceOp: { op: 'replace', startSeq: event.seq, endSeq: event.seq }, sourceEventSeqs: [event.seq] })
+    retireHostContext(session, event, position)
   }
 }
 export const taskSessionDecisionSchema = { ...object({
@@ -91,11 +90,19 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           if (!selected) agent.session.append('agent-preset/selected', { agentPreset: mounted.id })
         }
         agentCtx.systemPrompt.section({ name: 'task:responsibility', order: 0, text: instructions })
+        agentCtx.systemPrompt.section({ name: 'task:sources', order: 1, text: sourceInterpretationInstructions })
         if (groupResponsibility) agentCtx.systemPrompt.section({ name: 'task:group-responsibility', order: 1,
           text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${groupResponsibility}` })
         agentCtx.tools.presentAs('native')
         entry.content.install(agentCtx, () => current(entry))
         agentCtx.tools.guard(() => entry.submitted || entry.cancelled || closed ? 'task_session_inactive' : undefined)
+        agentCtx.on('agent/request', (position, next) => {
+          if (!entry.contextRetired) {
+            retireTaskContext(entry.handle.agent.session, binding, position)
+            entry.contextRetired = true
+          }
+          return next()
+        })
         agentCtx.on('agent/pre-step', async (_event, next) => {
           if (entry.submitted || !await current(entry)) return { kind: 'reject' }
           const decision = await next()
@@ -144,8 +151,10 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           entry.decision = decision
           return { received: true, ...result }
         })
-        register('task_request_human', '无法自行解决或触及授权边界时申请人工介入，结束本轮，等待原任务收到人工答复。不能用它代替等待受控小目标。', { ...object({
-          reason: text, question: text, audience: { type: 'string', enum: ['operator', 'requester'], description: 'operator=插件/任务/底座等技术介入，Web或登录人私聊；requester=需求提出人需要回答的业务信息。缺省operator。' }, evidence: { type: 'array', items: text }, attemptedActions: { type: 'array', items: text },
+        register('task_request_human', '先核对已有有权来源及答复，仅对确实无法自行解决的具体缺口申请人工介入。已授权的目标持续完成，不能把同一部署拆为准备与再次批准；规则要求批准时先判断已有授权是否满足。不能代替等待受控执行结果。结束本轮，等待原任务收到人工答复。', { ...object({
+          reason: { ...text, description: '用简短业务语言先说已完成什么、尚未完成什么及卡在哪个具体缺口，不写“申请第一段精确授权”等流程术语。' },
+          question: { ...text, description: '直接说明需要用户决定的事项及影响；缺授权时说明已核对的原授权为何不足。分开独立必要问题，使用真实换行；哈希、完整文件清单和过程放evidence，不堆砌无关排除项。' },
+          audience: { type: 'string', enum: ['operator', 'requester'], description: 'operator=插件/任务/底座等技术介入，Web或登录人私聊；requester=需求提出人需要回答的业务信息。缺省operator。' }, evidence: { type: 'array', items: text }, attemptedActions: { type: 'array', items: text },
         }), required: ['reason', 'question', 'evidence', 'attemptedActions'] }, async args => {
           if (!args.reason.trim() || !args.question.trim()) throw fail('TASK_HUMAN_QUESTION_REQUIRED')
           assertProgressReviewed()
@@ -164,7 +173,6 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
       await ctx.sessions.flush(entry.handle.agent.session)
       await onSessionBound(binding)
       if (!await current(entry)) return { status: 'stale' }
-      retireTaskContext(entry.handle.agent.session, binding)
       entry.handle.agent.steer(createUserMessage({ source: { kind: 'coordinator', taskSession: binding },
         content: [{ type: 'text', text: JSON.stringify(input) }] }))
       await entry.handle.agent.whenIdle()

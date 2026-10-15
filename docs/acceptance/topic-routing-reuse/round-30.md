@@ -1,0 +1,15 @@
+# 轮次30：主分支合流与最终本地交付
+
+origin/main新合PR184（d5b45c9）加入可选中文执行短名。本轮解决task-session-service与原生续办测试两处冲突，保留本分支当前任务objective/requirements与来源授权，同时保留main的title/existingTitle及旧英文名称回退；没有以一边覆盖另一边。
+
+定向实跑service-native、names-native、session-workspaces合计36项，再分别运行store中文续办名称及旧英文名各1项，共38项PASS、0失败、0跳过。日志为merge-service-name-tests.log、merge-store-name-tests.log、merge-store-legacy-name-tests.log。原申请前判断与申请工具说明不变，仍明确已有部署目标持续完成，不按每个工程步骤再次批准。
+
+按现有runbook执行Check后部署最终合流包。Assistant SHA256为9b1ce88f4e93c12611fbb8e5d615a4d8a3cbd5060d5893025c3b5b1509b60f0b；Observer仍为5ecaa17a21549cbcc8c1178b9f47ca0ede80582e5c8cfb4c78bd67df931775a0。新PID43072持有3080/18998，旧PID52452退出，版本1.0.0，profile SHA256仍fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96，未创建历史备份。正式脚本readback及独立runtime-readback.json一致，接入和DWS就绪。
+
+使用实际安装模块重算原lease178输入：59587→26798字节（55%）；来源11项和执行目录8项精确一致，审计未改。实际最新原生surface只有1份Host、0旧标记，见installed-context-metrics.json。此比例仅针对相同Host输入的UTF-8字节，不能解释为总上下文或token降幅。
+
+重启后独立读回task-final.json：原任务completed/drained，原执行succeeded/drained，lease190、inputVersion11保持，waiting0、unknown操作0，没有重复执行已完成UAT部署。实际业务发布证据在round-29：新digest、521/521、1/1 Ready、入口200；唯一流水线整体killed如实保留。
+
+health仍degraded来自3条完成通知unknown，包括本次完成通知；notification-state.json记录原状态，没有重发或伪记送达。真实申请撤回E2E及历史共享测试影响未核实。
+
+合流提交ce1b929已推送原PR182。pr-readback.json独立确认URL/number/state/head、中文正文精确匹配，OPEN/MERGEABLE/CLEAN，检查列表为空。主检出仍f6d366a和原有未提交文件。矩阵36个用例最新均PASS，goal全部子目标完成；后续仅归档该回读的文档提交，不改变已验证、已安装的源码。

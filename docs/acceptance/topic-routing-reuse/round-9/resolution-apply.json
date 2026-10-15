@@ -1,0 +1,10 @@
+{
+  "applied": true,
+  "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+  "status": "active",
+  "operations": [
+    "operation-d00a661cc36bc0273e26a716090954b4ef8df1fb",
+    "operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835"
+  ],
+  "replayedApi": false
+}

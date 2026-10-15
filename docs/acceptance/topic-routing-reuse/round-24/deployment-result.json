@@ -1,0 +1,8 @@
+{
+  "health": "degraded",
+  "transportReady": true,
+  "recoveryIssueCount": 3,
+  "installed": true,
+  "newPid": 64388,
+  "evidenceDirectory": "D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/docs/acceptance/topic-routing-reuse/round-24/deployment"
+}

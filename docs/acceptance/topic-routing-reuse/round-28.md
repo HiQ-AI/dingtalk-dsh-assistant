@@ -1,0 +1,13 @@
+# 轮次28：授权判定修复、安装与原任务发布推进
+
+用户明确纠正“这个申请不应该提，说了让部署到UAT，那就部署到UAT”。共享sourceInterpretationInstructions与task_request_human描述均已修改；实际会话协议6项PASS，工具描述最终再跑1项PASS。原生夹具证明代码进入两类会话，不代表模型语义自动验收。
+
+Assistant包391bc5ddc706577ef4f67dd07ad1ac9dbbd36f9843b6c660feccbfa0a7f6267f，Observer沿用5ecaa17a21549cbcc8c1178b9f47ca0ede80582e5c8cfb4c78bd67df931775a0。Check零写、15会话排空，旧PID64388正常SIGINT退出，官方双包安装和53文件核验通过。新PID52452冷启动超过原脚本120秒期限，脚本记录DEPLOY_NEW_PROCESS_NOT_READY；不能将该轮脚本标为成功，也未重装或另起进程。
+
+随后独立回读同一PID52452已监听3080/18998，profile原摘要不变，安装版本1.0.0，接入/DWS就绪。安装包对精确原lease178重新投影为26798字节（原59587），原日志前缀、11条来源、8执行目录完整。真实当前原生日志surface仅1份Host、0历史标记，lease186正文26978字节。
+
+正式reply仅传达当前用户纠正，原human-2ad2ef申请answered、等待0、unknown0；保留原task/session/execution，inputVersion9→10，目标为完整UAT2实际部署。连续3个普通工具完成没有operation.result唤醒，owner仅因human.responded增加1轮，见stage-wake-readback.json。
+
+真实阶段随后发生：独立gh读回dataset PR391 MERGED、base feature/uat2-base、候选head a5bae0bc；原执行阶段报告合入提交4e2a1b56和候选tree一致，自动流水线289运行。仅该阶段成果触发execution.stage.progress，统筹进入lease187，没有再次索取发布批准。构建与镜像发布尚在进行，不在本轮冒充已完成。
+
+冷启动脚本根因是固定两分钟等待过短；下一轮将只把新进程ready预算调为五分钟，退出排空仍两分钟。保留本轮failure.json，实际恢复和脚本验证单独记录。

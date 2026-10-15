@@ -1,0 +1,5 @@
+# 第9轮：job读取分类与拒绝恢复
+
+121项通过、0失败、0跳过，见 round-9-native.log。真实原生missing job读取保留isError但不生成unknown操作，job_list可继续，原执行可提交。固定定义的显式write与同名替换反例通过。
+
+历史来源另行核验：原会话seq2选择standard preset；profile SHAfc9b7dc5始终未变，standard中tool-jobs指向@deepseek-ai/dsh-tool-jobs 0.2.1-alpha.2；该模块SHA660066155801b20c67e6e288820961a365fe65738ffee1a16e50a2394ac9c7c6，jobs-local SHA3bed0cd38c649f39b148752e742ff1ef57696a6b9b11b15ff8cc6cd1d4f08f26。插件未注册同名job工具。已核对当前这笔历史调用的原生来源，不把任意同名工具的错误文字当原生身份证明。

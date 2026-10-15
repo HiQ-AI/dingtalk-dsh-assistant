@@ -1,0 +1,6 @@
+{
+  "error": "Exception calling \"Open\" with \"4\" argument(s): \"Could not find a part of the path 'D:\\codex\\worktrees\\native-background-receipt\\dingtalk-dsh-assistant\\docs\\tmp\\task-session-deployment.lock'.\"",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "phase": "check",
+  "autostartEnabled": true
+}

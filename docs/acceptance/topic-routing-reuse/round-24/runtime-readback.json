@@ -1,0 +1,93 @@
+{
+  "installedVersions": [
+    "1.0.0",
+    "1.0.0"
+  ],
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 64388
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 64388
+    }
+  ],
+  "observedAt": "2026-10-15T05:39:00.4551738Z",
+  "packageHashes": [
+    {
+      "Path": "D:\\dsh_home\\packages\\authorization-continuity\\zzusp-dingtalk-dsh-assistant-1.0.0.tgz",
+      "Hash": "244DBBC540F9D8009623832108B6C1ED18635B5982F193EE48FD6D93BF9D3DC7"
+    },
+    {
+      "Path": "D:\\dsh_home\\packages\\authorization-continuity\\zzusp-dingtalk-dsh-observer-1.0.0.tgz",
+      "Hash": "5ECAA17A21549CBCC8C1178B9F47CA0EDE80582E5C8CFB4C78BD67DF931775A0"
+    }
+  ],
+  "oldProcessExists": false,
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T05:36:52.866Z",
+            "readyAt": "2026-10-15T05:36:53.28Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T05:38:53.076Z",
+            "succeededAt": "2026-10-15T05:38:53.771Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T05:36:52.9Z",
+            "readyAt": "2026-10-15T05:36:53.336Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T05:38:53.121Z",
+            "succeededAt": "2026-10-15T05:38:53.633Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T05:36:52.922Z",
+        "readyAt": "2026-10-15T05:36:53.373Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  }
+}

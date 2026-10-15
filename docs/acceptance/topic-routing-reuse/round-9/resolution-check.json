@@ -1,0 +1,25 @@
+{
+  "checkOnly": true,
+  "writes": 0,
+  "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+  "resolutions": [
+    {
+      "operationId": "operation-d00a661cc36bc0273e26a716090954b4ef8df1fb",
+      "operationDigest": "69add8e4f7da4383512768d2146a38a08888e0aba3d85542d501a4a916e7ea12",
+      "resultSequence": 1007,
+      "turnEndSequence": 1096,
+      "investigationCount": 1,
+      "outcome": "failed",
+      "partialEffectsPossible": true
+    },
+    {
+      "operationId": "operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835",
+      "operationDigest": "ec50a67baf5e4e63e51210f374be3eb02a1723082739a40fd72a36aed237a70c",
+      "resultSequence": 1036,
+      "turnEndSequence": 1096,
+      "investigationCount": 1,
+      "outcome": "failed",
+      "partialEffectsPossible": true
+    }
+  ]
+}

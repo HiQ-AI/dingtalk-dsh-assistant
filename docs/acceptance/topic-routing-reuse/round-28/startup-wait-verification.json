@@ -1,0 +1,9 @@
+{
+  "shutdownTimeoutSeconds": 120,
+  "pid": 52452,
+  "parseErrors": 0,
+  "immediateSuccess": true,
+  "boundedTimeout": true,
+  "actualNewProcessReady": true,
+  "startupTimeoutSeconds": 300
+}

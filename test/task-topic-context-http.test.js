@@ -60,3 +60,21 @@ test('topic panel requests generic context with group identity while retaining i
   assert.ok(!source.includes('get(`/state/workflows/topics/${encodeURIComponent(selection.topicId)}/context?${params}`)'))
   assert.ok(source.includes("'当前上下文与判断记录'"))
 })
+
+
+test('topic reconciliation HTTP enforces local origin, strict body and separate zero-write check; merged topics remain audit-readable',async t=>{
+ const calls=[], topics=[{topicId:'current',groupId:'g',title:'原话题',revision:2,processedRevision:2,status:'active',summary:'',summaryRevision:0,entries:[],decisions:[]},
+  {topicId:'retired',groupId:'g',title:'旧Web重复话题',revision:2,processedRevision:2,status:'closed',mergedInto:'current',summary:'',summaryRevision:0,entries:[],decisions:[]}]
+ const runtime={listTopics:()=>topics,reconcileWebTaskTopics:async args=>{calls.push(args);return args.checkOnly?{writes:0,expectedDigest:'a'.repeat(64)}:{mergedTopicIds:['retired']}},
+  getTopic:(_g,id)=>topics.find(topic=>topic.topicId===id),getTopicContext:async()=>({topic:topics[1],messages:[],total:0})}
+ const server=createServer((req,res)=>handleRequest(req,res,runtime));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
+ const base=`http://127.0.0.1:${server.address().port}`
+ const post=(suffix,body,origin)=>fetch(base+'/runtime/task-topics/reconcile'+suffix,{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)})
+ assert.equal((await post('/check',{groupId:'g'},'https://outside.invalid')).status,403);assert.equal(calls.length,0)
+ assert.equal((await post('/check',{groupId:'g',actorId:'forged'})).status,400);assert.equal(calls.length,0)
+ const check=await post('/check',{groupId:'g'});assert.equal(check.status,200);assert.equal((await check.json()).writes,0);assert.equal(calls[0].checkOnly,true)
+ assert.equal((await post('',{groupId:'g',requestId:'merge',expectedDigest:'a'.repeat(64)})).status,200);assert.equal(calls[1].checkOnly,false)
+ assert.equal((await (await fetch(base+'/state/topics')).json()).total,1)
+ assert.equal((await (await fetch(base+'/state/topics?includeMerged=true')).json()).total,2)
+ const history=await fetch(base+'/state/topics/retired?groupId=g');assert.equal(history.status,200);assert.equal((await history.json()).topic.mergedInto,'current')
+})

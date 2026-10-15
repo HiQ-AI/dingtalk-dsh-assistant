@@ -1,0 +1,9 @@
+waiting for server to shut down.... done
+server stopped
+{
+  "dataPreserved": true,
+  "pid": 62532,
+  "stopped": true,
+  "startupReplayed": false,
+  "dataDirectory": "D:\\baibu-agent\\tasks\\task-4c4780a541c5ea7c51024975de5f121d\\docs\\acceptance\\expert-withdraw-fix\\round-3\\pgdata"
+}

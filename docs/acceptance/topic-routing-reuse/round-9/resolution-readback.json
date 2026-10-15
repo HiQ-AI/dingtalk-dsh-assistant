@@ -1,0 +1,56 @@
+{
+  "operations": [
+    {
+      "operationId": "operation-d00a661cc36bc0273e26a716090954b4ef8df1fb",
+      "state": "failed",
+      "evidenceRef": "native-investigated-failure:operation-d00a661cc36bc0273e26a716090954b4ef8df1fb:df84c5c8e79b00b0b632cdeab4561786c188faf61ae34ec42cfd092acfbd9e19",
+      "partialEffectsPossible": true,
+      "noEffect": null,
+      "previousState": "unknown",
+      "previousError": true,
+      "operatorSourceId": "web-human:3d8247bb66ef4f74d66969ed760107c25209e0ce110b0d79affeeb585bc14824",
+      "resultSequence": 1007,
+      "turnEndSequence": 1096
+    },
+    {
+      "operationId": "operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835",
+      "state": "failed",
+      "evidenceRef": "native-investigated-failure:operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835:2948c0c7d742dcdddf231ca7073356ecabd02e31e7f71a27912ba8b03f8e9278",
+      "partialEffectsPossible": true,
+      "noEffect": null,
+      "previousState": "unknown",
+      "previousError": true,
+      "operatorSourceId": "web-human:3d8247bb66ef4f74d66969ed760107c25209e0ce110b0d79affeeb585bc14824",
+      "resultSequence": 1036,
+      "turnEndSequence": 1096
+    }
+  ],
+  "request": {
+    "actorId": "DOii4iiLKtZz5A91yyWlCtDQU7Ba43QHb0t",
+    "answeredAt": "2026-10-15T04:49:49.943Z",
+    "attemptedActions": [
+      "接受人工纠正，准备沿原执行仅核清本地读取与规则API的区别，并停止Bytebase使用。",
+      "原executionId续办被Host未结算操作门禁拒绝，未另开替代会话绕过。",
+      "未提交、推送、改PR、构建或部署。"
+    ],
+    "audience": "operator",
+    "controlRevision": 2,
+    "createdAt": "2026-10-15T04:34:38.770Z",
+    "evidence": [
+      "两次原响应分别为database=uat2及hiq_lcd、include=summary，均isError=true、DATABASE_NOT_FOUND，没有schema返回。",
+      "只读调查675c9b93-c0b3-43d7-b897-727c35e9d1f2及c19c2a4d-7dd7-4786-8e8f-231af061490b均已排空；调查后对账仍证据不足。",
+      "既有UAT直连核验current_database=hiq_editor、transaction_read_only=on，所需列及outbox约束已核实。"
+    ],
+    "objective": "将原专家审核后申请撤回限制修复按项目流程部署到UAT，核验部署版本及运行状态；不涉及生产或真实申请撤回。",
+    "question": "UAT已通过现有直连只读工具完成结构兼容核验，将不再使用Bytebase。本地dataset仓库读取正常；403仅发生于GitHub的rulesets/protection API，不是本地Git读取。现尝试沿原会话纠正说明，派发被DYNAMIC_OPERATION_UNRESOLVED拒绝。请仅核验并结算两次原生DATABASE_NOT_FOUND响应：operation-d00a661cc36bc0273e26a716090954b4ef8df1fb、operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835；保留原身份与实际失败证据，不重放API、不登记成功或猜测效果。两项绑定只读调查均已结束。技术解除后将继续核对规则接口问题与部署准备；不把刚才纠正解读成提交推送或部署的精确批准。",
+    "reason": "已接受UAT直连纠正，但原查询错误未知态阻止原会话续办，需Host技术结算，不是业务权限缺失。",
+    "reply": "按操作人本次明确请求，仅核验并结算两次原生DATABASE_NOT_FOUND：operation-d00a661cc36bc0273e26a716090954b4ef8df1fb、operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835。保留原调用身份、精确错误及绑定只读调查，将已结束请求记为failed并保留partialEffectsPossible；不登记成功、noEffect或猜测同步效果，不重放Bytebase API。UAT结构兼容已由既有直连只读工具核验，停止使用Bytebase；本地dataset读取正常，403仅是GitHub rulesets/protection API。解除后沿原execution/session继续规则接口核对与部署准备，本答复不构成提交、推送、改PR、构建或部署的精确批准。",
+    "replyChannel": "web",
+    "requestId": "human-5e84e76b64942acdbe3b15d6d33f1730d77f89ca962df70ebe041c4d4567a7b5",
+    "requirementRevision": 4,
+    "sourceId": "web-human:3d8247bb66ef4f74d66969ed760107c25209e0ce110b0d79affeeb585bc14824",
+    "status": "answered",
+    "waitingReason": "已接受UAT直连纠正，但原查询错误未知态阻止原会话续办，需Host技术结算，不是业务权限缺失。"
+  },
+  "drained": false
+}

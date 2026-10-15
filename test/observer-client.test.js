@@ -398,7 +398,7 @@ test('自动与手动刷新共用一个请求，失败后可重新读取',async(
 });
 
 test('详情慢查询跨刷新复用，切换任务不接受旧响应', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const source = (await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
   const start = source.indexOf('      const pendingDetail = '), end = source.indexOf('      useEffect(() => {\n        refresh()', start)
   const effects = [], requests = [], details = [], pending = { current: null }
   const environment = { useRef: () => pending, useEffect: fn => effects.push(fn), selectedTaskId: 'one', detailRetry: 0, updatedAt: 0,

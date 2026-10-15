@@ -1,0 +1,30 @@
+{
+  "pid": 29832,
+  "signals": 0,
+  "checkOnly": true,
+  "console": {
+    "consolePids": [
+      24972,
+      29832,
+      48636
+    ],
+    "targetPid": 29832,
+    "checkOnly": true,
+    "signals": 0
+  },
+  "writes": 0,
+  "ledger": {
+    "quiescent": true,
+    "candidateOnly": true,
+    "ownerReleased": false,
+    "ownerProcessExited": false,
+    "staleOwner": false,
+    "drained": true,
+    "unstartedTaskClaims": [],
+    "verifiedSessions": 15,
+    "unknownOperations": 0,
+    "unknownNotifications": 2
+  },
+  "packageSha256": "7ed96f75702cd75fce18d2df4e0e51d016f4429c3bd5b2bfb93b18df09939c89",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96"
+}

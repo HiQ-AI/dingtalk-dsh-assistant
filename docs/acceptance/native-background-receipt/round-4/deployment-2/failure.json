@@ -1,0 +1,6 @@
+{
+  "error": "DEPLOY_INSTALL_CHANGED_UNRELATED_INPUT",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "autostartEnabled": false,
+  "phase": "install"
+}

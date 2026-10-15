@@ -1,0 +1,58 @@
+{
+  "activeTopics": 2,
+  "allTopics": 6,
+  "mergedTopics": 4,
+  "timelines": [
+    {
+      "topicId": "topic-67793cdea8c52283a5f9e091be48e082",
+      "title": "数据集合并描述框位置",
+      "revision": 8,
+      "sequences": [
+        1,
+        2,
+        3,
+        4,
+        7,
+        8,
+        10,
+        11
+      ],
+      "messageCount": 8
+    },
+    {
+      "topicId": "topic-bb20243613e5cf31f6b5c786b6d2b6fa",
+      "title": "专家审核后申请撤回限制修复",
+      "revision": 4,
+      "sequences": [
+        9,
+        12,
+        13,
+        14
+      ],
+      "messageCount": 4
+    }
+  ],
+  "originalTaskExecutionAndOperationStateUnchanged": true,
+  "unknownOperations": 0,
+  "allDrained": true,
+  "originalFailures": [
+    {
+      "operationId": "operation-d00a661cc36bc0273e26a716090954b4ef8df1fb",
+      "state": "failed",
+      "partialEffectsPossible": true,
+      "previousState": "unknown"
+    },
+    {
+      "operationId": "operation-e132cbbdc8560bd3e65c41f0095013cf8e8f0835",
+      "state": "failed",
+      "partialEffectsPossible": true,
+      "previousState": "unknown"
+    }
+  ],
+  "health": {
+    "status": "degraded",
+    "inboundProcessing": true,
+    "dwsBridgeHealthy": true,
+    "recoveryIssueCount": 3
+  }
+}

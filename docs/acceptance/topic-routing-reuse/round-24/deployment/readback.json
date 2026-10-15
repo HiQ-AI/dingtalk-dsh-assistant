@@ -1,0 +1,74 @@
+{
+  "packageSha256": "244dbbc540f9d8009623832108b6c1ed18635b5982f193ee48fd6d93bf9d3dc7",
+  "creationDate": "2026-10-15T13:36:34.648195+08:00",
+  "newPid": 64388,
+  "backupCreated": false,
+  "installedVersion": "1.0.0",
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T05:36:52.866Z",
+            "readyAt": "2026-10-15T05:36:53.28Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T05:36:53.281Z",
+            "succeededAt": "2026-10-15T05:36:54.302Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T05:36:52.9Z",
+            "readyAt": "2026-10-15T05:36:53.336Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T05:36:53.337Z",
+            "succeededAt": "2026-10-15T05:36:54.146Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T05:36:52.922Z",
+        "readyAt": "2026-10-15T05:36:53.373Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "taskEnabled": true
+}

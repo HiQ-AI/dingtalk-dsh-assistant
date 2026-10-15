@@ -1,0 +1,123 @@
+✔ 32 continued inputs retire recursive Host snapshots on actual SDK requests and replay (2924.5194ms)
+ℹ {"scope":"scripted adapter request, UTF-8 JSON bytes; no provider tokens","rawAuditInputTextBytes":153256,"metrics":[{"version":1,"rawInputBytes":48342,"currentInputBytes":1849,"hostBytes":2328,"messagesBytes":5486,"adapterRequestBytes":7352},{"version":2,"rawInputBytes":48342,"currentInputBytes":1849,"hostBytes":2328,"messagesBytes":5961,"adapterRequestBytes":7827},{"version":3,"rawInputBytes":48342,"currentInputBytes":1849,"hostBytes":2328,"messagesBytes":6436,"adapterRequestBytes":8302},{"version":4,"rawInputBytes":283,"currentInputBytes":1833,"hostBytes":2310,"messagesBytes":6893,"adapterRequestBytes":8759},{"version":5,"rawInputBytes":283,"currentInputBytes":1833,"hostBytes":2310,"messagesBytes":7368,"adapterRequestBytes":9234},{"version":32,"rawInputBytes":284,"currentInputBytes":1834,"hostBytes":2314,"messagesBytes":20219,"adapterRequestBytes":22085}]}
+✔ upgrade shadows every already stored recursive v1/v2/v3 input without rewriting originals (121.0181ms)
+ℹ {"scope":"execution Host messages, UTF-8 JSON bytes","beforeBytes":193198,"afterBytes":2176}
+✔ dynamic execution uses independent identities, task-parallel sessions and a generic submit tool (109.1364ms)
+✔ durable native submit is recollected without another model turn after result callback crash (82.0516ms)
+✔ continuation preserves native history while new input and requirement revisions remain authenticated (133.221ms)
+✔ 原生网页及job只读身份不覆盖显式写效果，同名替换不继承只读身份 (320.1874ms)
+✔ native preset-only tools and workspace instructions are retained; managed subprocesses drain before result settlement (89.6693ms)
+✔ dynamic native sessions use configured shell and delegation without a session tool whitelist (58.0556ms)
+▶ dynamic background requests retain native capability and native errors can be corrected in the same conversation
+  ✔ true (37.5096ms)
+  ✔ false (42.2175ms)
+✔ dynamic background requests retain native capability and native errors can be corrected in the same conversation (80.5803ms)
+✔ native process drain failure retains the execution slot and cannot report a settled result (40.6985ms)
+✔ process tracking handles async terminal allocation and isolates parallel native call ownership (13.792ms)
+✔ a later foreground drain failure still stops the same executors retained background processes (37.2887ms)
+✔ retained process scopes keep services alive between tools and isolate parallel execution cleanup (0.7342ms)
+✔ native recovery validates durable identity and refuses missing bound sessions before releasing a lease (77.3101ms)
+✔ unverifiable background job without its native registry cannot report false success (52.1513ms)
+✔ one failed process termination still attempts cleanup of every other managed handle (0.8346ms)
+✔ configured native preset is chosen once and resume retains the persisted preset without changing permissions (96.8647ms)
+✔ anonymous field v12 native failure retains raw diagnostics and derives failure independently of HTTP200 (55.1761ms)
+✔ integrated projection keeps stage evidence and provider decisions bound to the original versions (79.4649ms)
+✔ source content is unique while identities, Web request, human correction and material references remain exact (57.5344ms)
+✔ short authority bodies also have one definition rather than silently bypassing source indexing (35.4158ms)
+✔ result size, execution/failed counts and continuation self-result stay in lazy bounded catalogues (616.4496ms)
+ℹ {"scope":"projected current Host JSON UTF-8 bytes, catalogues are not eagerly expanded","metrics":[{"count":1,"beforeOwnerBytes":2341,"ownerBytes":3527,"executionBytes":36587},{"count":20,"beforeOwnerBytes":645711,"ownerBytes":15564,"executionBytes":48620},{"count":120,"beforeOwnerBytes":23072071,"ownerBytes":15570,"executionBytes":49257}]}
+✔ current source windows retain operator authorization and later restrictions beyond the first twenty sources (131.4455ms)
+✔ first read is available, repeated readback uses references, reopen resolves and other sessions/tampering fail closed (52.0962ms)
+✔ nested quote graphs and identical bodies across distinct authors grow by identities and edges, not copied text (757.1282ms)
+ℹ {"scope":"nested source current Host UTF-8 JSON bytes","metrics":[{"depth":2,"beforeBytes":173630,"afterBytes":13490},{"depth":5,"beforeBytes":1470478,"afterBytes":14852},{"depth":9,"beforeBytes":23702160,"afterBytes":16675}]}
+✔ operator technical reply retains business sources and shared scope protocol in the same resumed execution (4930.5874ms)
+✔ 技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问 (1389.9643ms)
+✔ native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text (1809.3927ms)
+✔ an execution result cannot bypass human waiting; reply reads the original execution and continues the original task (2211.8968ms)
+✔ a native blocked decision without a human question is corrected into an explicit durable request (678.6694ms)
+✔ an authenticated reply in the original group answers the waiting request without revising the task or cancelling its live execution (2355.1382ms)
+✔ native shell retains its original process, reads output to terminal and persists the owned job receipt: background=false (4287.1324ms)
+✔ native shell retains its original process, reads output to terminal and persists the owned job receipt: background=true (3221.8806ms)
+✔ native missing-job read stays a real error without creating unknown effects or blocking later work (1770.3671ms)
+✔ native background HTTP service remains usable by the next tool and drains its original job: explicitStop=false (3746.5943ms)
+✔ native background HTTP service remains usable by the next tool and drains its original job: explicitStop=true (3326.1441ms)
+✔ cancelling a native job records terminal cancellation and drains the actual owned process: background=false (1185.1283ms)
+✔ cancelling a native job records terminal cancellation and drains the actual owned process: background=true (1489.0026ms)
+✔ unknown operation keeps native reads available; owner can investigate readonly but cannot clear missing evidence or replay (2235.8369ms)
+✔ restart reconciles an original persisted native terminal receipt and resumes the same executor without replay (4256.8864ms)
+✔ operator exact error resolution has zero-write HTTP check, retains partial effects and resumes original execution without replay (5095.0045ms)
+✔ task provider transient classifier only accepts the exact verified provider errors (2.1799ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=false (1017.541ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=true (214.9177ms)
+✔ service retries a transient native owner with its claimed wake and same session after cooldown (6310.4677ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: true (1815.0349ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: false (1225.8992ms)
+✔ owner provider failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance (5743.8296ms)
+✔ owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=true (298.4737ms)
+✔ owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=false (238.5483ms)
+✔ 原生网页工具错误不建立未知效果，仍可完成后续读取 (3055.5133ms)
+✔ owner injects one authoritative source body across task, Web identity and materials (684.0778ms)
+ℹ {"scope":"actual native owner scripted adapter UTF-8 JSON bytes","bodyCopies":[1],"metrics":[{"currentHostBytes":9387,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":9754,"schemaBytes":9386,"adapterRequestBytes":38717}]}
+✔ 话题历史自身通知不阻断同账号人工补充 (1705.5424ms)
+✔ 话题历史未准入真实消息仍拒绝更新且不发送成功回复 (2254.1825ms)
+{"contextProof":{"ownerRequests":7,"latestInputBytes":22658,"totalRequestBytes":52189}}
+✔ owner keeps one current Host snapshot and delegates non-recursive execution context across three generations (4846.1825ms)
+✖ 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects (30312.3996ms)
+✔ configured group responsibility reaches group and task models and its reply signature survives notification formatting (773.892ms)
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (6611.3112ms)
+✖ native executor resumes in the same titled task workspace and all task sessions share the process cwd (5669.0234ms)
+✔ native service reopens an unknown notification for readback without resending completed business work (5820.3456ms)
+✔ native service cancellation stops the real execution process, drains the session, and rejects late completion (2185.6355ms)
+✔ native requirement update resumes the same owner with new sources and fences the interrupted old execution result (4134.3423ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (4837.6097ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (2932.1372ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (3622.0812ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (2921.0576ms)
+✔ recovering an idle owner with no pending wake does not consume a task slot (1237.0476ms)
+✔ native session creation failure has bounded recovery retries: persistent=false (2786.9094ms)
+✔ native session creation failure has bounded recovery retries: persistent=true (2423.5121ms)
+✔ native model failures settle without repeated owner requests: persistent=false (1088.5885ms)
+✔ native model failures settle without repeated owner requests: persistent=true (1061.6518ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=false (465.7477ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=true (470.9155ms)
+✔ native topic routing rejects incomplete source coverage and accepts correction in the same real session (718.5871ms)
+✔ resident.apply boots and disposes with only its declared native service dependencies (554.2706ms)
+✔ resident listener startup failure disposes native resources and permits reopening the same task database (659.9611ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (1500.761ms)
+✔ native recovery no-op preserves an undrained task writer conflict alert (580.7745ms)
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (3851.0568ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (2477.2501ms)
+✔ task session permits late native tools and configured read and shell alongside skills (2097.4126ms)
+✔ unconfigured native profiles expose no bundled personal skills (816.5012ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (2109.0766ms)
+ℹ tests 85
+ℹ suites 0
+ℹ pass 83
+ℹ fail 1
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 97094.0104
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:43:38
+✖ 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects (30312.3996ms)
+  'test timed out after 30000ms'
+
+test at test\task-session-service-native.test.js:43:38
+✖ native executor resumes in the same titled task workspace and all task sessions share the process cwd (5669.0234ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  '初次核对' !== '继续核对'
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/topic-routing-reuse/dingtalk-dsh-assistant/test/task-session-service-native.test.js:509:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '初次核对',
+    expected: '继续核对',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

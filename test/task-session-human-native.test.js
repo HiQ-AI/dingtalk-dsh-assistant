@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
+import { requestSystemText } from './fixtures/session-persistence.js'
 const call = (name, args) => ({ name, args })
 const requestHuman = (audience = 'operator') => call('task_request_human', { audience, reason: '目标环境尚未明确，不能自行扩大授权', question: '请明确本次允许的环境和操作范围', evidence: ['已读取原始交办'], attemptedActions: ['核对现有需求，未执行外部修改'] })
 const finish = summary => call('task_session_submit', { decision: { action: 'complete', summary, evidence: ['已核对人工原文和原执行结果'], limitations: [] } })
@@ -16,6 +17,55 @@ async function fixture(t, decide, options) {
   return h
 }
 async function pending(h) { return (await h.service.listAuthorizationRequests()).find(item => item.status === 'waiting-reply') }
+
+test('operator technical reply retains business sources and shared scope protocol in the same resumed execution', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const objective = '测试助手，修复后部署到UAT2，隔离验证，不操作真实申请'
+  const reply = '技术已恢复；本答复不新增部署批准，不撤销此前明确交办范围。用户纠正：说了部署到UAT就部署到UAT，这个申请不应该提。'
+  const seen = [], scopes = []
+  const h = await fixture(t, async request => {
+    const routed = topicTaskCalls(request)
+    if (routed) return routed
+    const input = latestInput(request)
+    scopes.push(requestSystemText(request))
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      assert.match(request.tools.find(tool => tool.name === 'task_request_human').description, /已授权的目标持续完成/)
+      const execution = input.executions[0]
+      if (!execution) return [call('task_delegate', { key: 'prepare', objective: '准备原交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '准备中', evidence: [], limitations: [] } })]
+      if (!input.task.humanRequests.length) return [call('task_request_human', { reason: '准备已完成，工具配置需操作人恢复', question: '请恢复原工具配置', evidence: ['原生配置诊断'], attemptedActions: ['原配置检查'] })]
+      if (execution.inputVersion === 1) return [call('task_delegate', { executionId: execution.executionId, key: 'continue', objective: '按原来源继续完整UAT交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '沿原执行继续', evidence: [], limitations: [] } })]
+      return [finish('原执行已收到完整来源')]
+    }
+    seen.push(input)
+    return [call('execution_submit', { output: { status: 'completed', summary: '测试夹具仅记录输入，没有执行外部部署', evidence: [], limitations: [], artifacts: [] } })]
+  }, { config: { webActorId: 'operator-user' } })
+  await h.service.ingest({ groupId: 'native-group', messageId: 'business-authorization', senderOpenDingTalkId: 'native-user', text: objective, occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  const before = (await h.query('task.list'))[0], original = (await h.query('execution.list'))[0], request = await pending(h)
+  await h.service.respondHumanRequest({ taskId: before.taskId, humanRequestId: request.requestId, requestId: 'scope-continuation', reply,
+    expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision })
+  await h.service.whenIdle()
+  const after = await h.query('task.get', { taskId: before.taskId }), executions = await h.query('execution.list')
+  assert.equal(executions.length, 1)
+  assert.equal(executions[0].executionId, original.executionId)
+  assert.equal(executions[0].sessionId, original.sessionId)
+  assert.equal(executions[0].inputVersion, 2)
+  assert.equal(after.sessionId, before.sessionId)
+  assert.equal(after.humanRequests.length, 1)
+  assert.equal(after.humanRequests[0].status, 'answered')
+  assert.equal(seen.at(-1).sources.find(source => source.messageId === 'business-authorization').text, objective)
+  assert.equal(seen.at(-1).sources.find(source => source.text === reply).actorId, 'operator-user')
+  assert.equal(seen.at(-1).task.objective, after.objective)
+  for (const scope of scopes) {
+    assert.match(scope, /不自动撤销此前已明确授予的范围/)
+    assert.match(scope, /明确暂停、撤销、仅准备或改变目标环境则优先/)
+    assert.match(scope, /真实原生权限拒绝和尚未满足的审批条件不得绕过/)
+    assert.match(scope, /作出任何授权判断前（包括认定可以继续）/)
+    assert.match(scope, /用户说“部署到UAT”就是该任务的UAT部署授权/)
+    assert.match(scope, /规则写“需批准”不等于当前“尚未批准”/)
+    assert.match(scope, /具体规则、触发条件与已有授权尚缺什么/)
+  }
+  assert.deepEqual(await h.query('operation.list'), [], '输入与恢复证明不冒充真实发布或工具效果')
+})
 
 test('技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   let ownerTurns = 0, resumed, h

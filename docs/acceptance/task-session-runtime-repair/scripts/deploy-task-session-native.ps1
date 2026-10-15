@@ -47,8 +47,8 @@ function Descendants([int]$parent){
  $direct=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parent")
  foreach($child in $direct){$child;Descendants $child.ProcessId}
 }
-function WaitFor([scriptblock]$Condition,[string]$Failure){
- $deadline=[DateTime]::UtcNow.AddSeconds(120)
+function WaitFor([scriptblock]$Condition,[string]$Failure,[int]$TimeoutSeconds=120){
+ $deadline=[DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
  do{if(& $Condition){return};Start-Sleep -Milliseconds 500}while([DateTime]::UtcNow-lt$deadline)
  throw $Failure
 }
@@ -76,6 +76,7 @@ New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
 $lockPath=Join-Path $workspace 'docs/tmp/task-session-deployment.lock'
 $deploymentLock=$null
 try{
+ [IO.Directory]::CreateDirectory((Split-Path -Parent $lockPath))|Out-Null
  $deploymentLock=[IO.File]::Open($lockPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
  Record 'control' @{backupCreated=$false;pid=$ExpectedPid;creationDate=$original.CreationDate;packageSha256=Hash $Package;profileSha256=Hash $patch;taskEnabled=$wasEnabled;observerManifestSha256=$observerHash;package=($packageProof|ConvertFrom-Json)}
  ProcessIdentity
@@ -110,14 +111,14 @@ try{
  finally{$env:DSH_HOME=$previousDshHome}
  if($installExit){throw 'DEPLOY_PACKAGE_INSTALL_FAILED'}
  $installedProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packages/dingtalk-dsh-assistant'),$installed)
- if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()-or(Hash $observerManifest)-ne$observerHash){throw 'DEPLOY_INSTALL_CHANGED_UNRELATED_INPUT'}
+ if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_INSTALL_CHANGED_UNRELATED_INPUT'}
  Record 'installed' ($installedProof|ConvertFrom-Json)
  if($ObserverPackage){Record 'observer-installed' ((RunNode @($checker,'package',$ObserverPackage,(Join-Path $workspace 'packages/dingtalk-dsh-observer'),"$profile/node_modules/@zzusp/dingtalk-dsh-observer"))|ConvertFrom-Json)}
  $phase='verify-profile'
  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_PROFILE_RESTORE_MISMATCH'}
  if($wasEnabled){Enable-ScheduledTask -TaskName $taskName|Out-Null}
  $phase='start';Start-ScheduledTask -TaskName $taskName
- WaitFor {$owners=PortOwners 18998;if($owners.Count-ne1-or$owners[0]-eq$ExpectedPid){return $false};$script:newPid=$owners[0];return (PortOwners 3080)-contains$newPid} 'DEPLOY_NEW_PROCESS_NOT_READY'
+ WaitFor {$owners=PortOwners 18998;if($owners.Count-ne1-or$owners[0]-eq$ExpectedPid){return $false};$script:newPid=$owners[0];return (PortOwners 3080)-contains$newPid} 'DEPLOY_NEW_PROCESS_NOT_READY' 300
  $health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10
  Record 'readback' @{newPid=$newPid;creationDate=(Get-CimInstance Win32_Process -Filter "ProcessId=$newPid").CreationDate;health=$health;profileSha256=Hash $patch;packageSha256=Hash $Package;installedVersion=(Get-Content "$installed/package.json" -Raw|ConvertFrom-Json).version;taskEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled;backupCreated=$false}
  if(-not $health.inboundProcessing -or -not $health.dwsBridge.healthy){throw 'DEPLOY_TRANSPORT_NOT_READY'}

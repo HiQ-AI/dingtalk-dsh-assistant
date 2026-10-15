@@ -1,0 +1,9 @@
+{
+  "ExpectedObserverPackageSha256": "67e1438d448db76936a233ce0d2ac7930d2c13d6fccedd2c3a02f0b8ef79136d",
+  "Package": "D:/dsh_home/packages/topic-routing-reuse-chronology/zzusp-dingtalk-dsh-assistant-1.0.0.tgz",
+  "ExpectedPackageSha256": "7ed96f75702cd75fce18d2df4e0e51d016f4429c3bd5b2bfb93b18df09939c89",
+  "ExpectedProfileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "ExpectedPid": 29832,
+  "ObserverPackage": "D:/dsh_home/packages/topic-routing-reuse-final/zzusp-dingtalk-dsh-observer-1.0.0.tgz",
+  "EvidenceDirectory": "D:\\codex\\worktrees\\topic-routing-reuse\\dingtalk-dsh-assistant/docs/acceptance/topic-routing-reuse/round-20/deployment"
+}

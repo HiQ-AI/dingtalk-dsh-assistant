@@ -1,0 +1,11 @@
+{
+  "observedAt": "2026-10-15T05:41:13.0141810Z",
+  "commit": "9a545aa609bada3c02514f4892494ed6805e0b76|fee3ffb016c7074610efcf5097fbeddd419da082|fix(approval): 禁止已有跨轮专家评审的申请整单撤回",
+  "pullRequest": {
+    "baseRefName": "main",
+    "headRefOid": "9a545aa609bada3c02514f4892494ed6805e0b76",
+    "number": 353,
+    "state": "OPEN",
+    "url": "https://github.com/HiQ-AI/dataset/pull/353"
+  }
+}

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 import { isNativeFilePrecondition } from '../packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
@@ -37,6 +37,28 @@ function webFailure() {
  f.end={seq:5,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}};f.original.push(f.end)
  return f
 }
+
+test('历史原生job读取仅凭精确missing-job拒绝和完整终态结算，写工具与替换身份仍拒绝', async()=>{
+ const make=()=>{
+  const f=webFailure()
+  f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='job_output'
+  f.operation.definition.effectClass='unknown'
+  f.call.data.arguments=JSON.stringify({job_id:'pwsh-7'})
+  f.operation.definition.argumentsDigest=hash(JSON.parse(f.call.data.arguments))
+  f.result.data.message.content=[{type:'text',text:'Error: unknown job pwsh-7'}]
+  f.operation.result.resultDigest=hash(f.result.data.message.content)
+  return f
+ }
+ const proof=await inspectFailedNativeJobRead(make())
+ assert.equal(proof.kind,'native-job-read-missing');assert.equal(proof.jobId,'pwsh-7');assert.equal(proof.noEffect,true)
+ for(const mutate of [
+  f=>{f.operation.definition.toolName='job_kill'},f=>{f.operation.definition.effectClass='write'},
+  f=>{f.operation.definition.nativeJobRead=false},f=>{f.operation.result.cancelled=true},
+  f=>{f.result.data.message.isError=false},f=>{f.result.data.message.content[0].text='Error: arbitrary failure'},
+  f=>{f.call.data.arguments=JSON.stringify({job_id:'pwsh-8'})},f=>{f.execution.drained=false},
+  f=>{f.end.data.reason.kind='aborted'},f=>{f.jobs.push({status:'running'})},
+ ]){const f=make();mutate(f);assert.equal(await inspectFailedNativeJobRead(f),null)}
+})
 
 function fileFailure(code = 'FS_NOT_OBSERVED') {
  const f=webFailure()
@@ -173,4 +195,23 @@ test('execution progress limits excerpts to latest eight real events without cop
  const view=await readExecutionProgress(f)
  assert.equal(view.excerpts.length,8);assert.ok(view.excerpts.reduce((sum,item)=>sum+item.preview.length,0)<=8*640);assert.equal(view.excerpts[0].sequence,12);assert.equal(view.excerpts.at(-1).sequence,19)
  assert.equal(view.excerpts.at(-1).digest,hash(f.original.at(-1).data));assert.equal('events' in view,false)
+})
+
+
+test('investigated native error closes failed with partial effects, never infers noEffect from DATABASE_NOT_FOUND', async () => {
+ const make=()=>{const f=webFailure(); f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='mcp__bytebase__get_schema';
+  f.call.data.arguments=JSON.stringify({database:'uat2',include:'summary'});f.operation.definition.argumentsDigest=hash(JSON.parse(f.call.data.arguments));
+  f.result.data.message.content=[{type:'text',text:'Error: {"code":"DATABASE_NOT_FOUND"}'}];f.operation.result.resultDigest=hash(f.result.data.message.content);return f}
+ const f=make(),proof=await inspectInvestigatedNativeFailure(f)
+ assert.equal(proof.kind,'native-investigated-failure');assert.equal(proof.partialEffectsPossible,true);assert.equal(proof.noEffect,undefined)
+ assert.equal(proof.observations[0].executionId,'readback')
+ for(const mutate of [x=>{x.operation.result.isError=false},x=>{x.operation.result.cancelled=true},x=>{x.end.data.reason.kind='aborted'},
+  x=>{x.operation.result.resultDigest='wrong'},x=>{x.execution.drained=false},x=>{x.live.add('readback-session')},
+  x=>{x.readback.definition.recoveryReadOnly=false},x=>{x.readback.input.readbackOperationId='other'},x=>{x.readback.status='running'},
+  x=>{x.readEvents.pop()},x=>{x.readEvents[3].data.message.isError=true},x=>{x.readback.updatedAt='2026-10-14T00:00:00Z'}]){
+  const bad=make();mutate(bad);assert.equal(await inspectInvestigatedNativeFailure(bad),null)
+ }
+ // Arbitrary tool names and write failures do not become noEffect: failed is only a terminal observation.
+ const write=make();write.operation.definition.toolName=write.operation.result.toolName=write.call.data.name='edit';write.operation.definition.effectClass='write'
+ assert.equal((await inspectInvestigatedNativeFailure(write)).partialEffectsPossible,true)
 })

@@ -1,0 +1,12 @@
+{
+  "ownerWakeReason": "human.responded",
+  "ordinaryCompletedOperations": 3,
+  "inputVersion": 10,
+  "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+  "operationWakeDelta": 0,
+  "unknown": 0,
+  "ownerLeaseDelta": 1,
+  "executionId": "bdb7b510-4a09-4cd3-9a06-8ac8dda42608",
+  "sessionId": "task-session-c1283783-eac0-41cd-b16b-bf6ca60833f0",
+  "waiting": 0
+}

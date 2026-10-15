@@ -20,7 +20,10 @@ export const modelHostMessage = (message, value) => createUserMessage({
 export const modelHostInput = message => JSON.parse(message.content[0].text)
 const fields = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]))
 const terminal = new Set(['succeeded', 'failed', 'cancelled'])
+const terminalExecutions = new Set([...terminal, 'stale'])
 const contentFields = new Set(['text', 'body', 'reply', 'request', 'objective', 'context', 'goalText', 'policy', 'groupResponsibility', 'question', 'summary', 'answer', 'title'])
+// scope、摘要和字典键本身有成本，短文本直接展示比建立引用更小。
+const indexText = value => Buffer.byteLength(value) >= 512
 const syncDirectory = path => {
   if (process.platform === 'win32') return
   const fd = openSync(path, 'r')
@@ -107,7 +110,7 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
     const localObjects = reuseVisible ? objects : new Set()
     function visit(item, key) {
       if (item && Object.hasOwn(item, deferred)) return store(item[deferred])
-      if (typeof item === 'string' && (item.length >= 120 || contentFields.has(key))) {
+      if (typeof item === 'string' && indexText(item)) {
         const reference = store(item)
         if (!known.has(reference.contentRef)) contentIndex[reference.contentRef] = item
         known.add(reference.contentRef)
@@ -197,8 +200,13 @@ function directory(records, identity, summary) {
     catalogRef: deferModelContent(Object.fromEntries(records.map((record, index) => [record[identity] ?? 'unidentified-' + index, record]))) }
 }
 export function executionDirectory(executions) {
-  return directory(executions, 'executionId', execution => ({ ...fields(execution,
-    ['executionId', 'sessionId', 'taskId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'inputDigest', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'progressReview', 'stageProgress', 'providerRecovery']),
+  return directory(executions, 'executionId', execution => terminalExecutions.has(execution.status) ? {
+    ...fields(execution, ['executionId', 'key', 'status', 'drained', 'inputVersion', 'requirementRevision', 'controlRevision']),
+    input: fields(execution.input ?? {}, ['title', 'objective', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']),
+    ...(execution.result ? { result: fields(execution.result, ['current', 'receivedAt', 'recovery']), resultRef: deferModelContent(execution.result) } : {}),
+  } : ({ ...fields(execution,
+    ['executionId', 'sessionId', 'taskId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'inputDigest', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'progressReview', 'providerRecovery']),
+    ...(execution.stageProgress ? { stageProgress: execution.stageProgress } : {}),
     input: fields(execution.input ?? {}, ['title', 'objective', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']),
     // Keep the Host recovery decision visible without reinjecting the full result.
     ...(execution.result ? { result: fields(execution.result, ['current', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'inputVersion', 'receivedAt', 'recovery']), resultRef: deferModelContent(execution.result) } : {}) }))
@@ -208,21 +216,32 @@ export function operationDirectory(operations) {
     toolName: operation.definition?.toolName ?? operation.definition?.tool, effectClass: operation.definition?.effectClass,
     terminal: terminal.has(operation.state), evidence: deferModelContent(operation) }))
 }
+// 保留各已接纳作者的近期补充；最初需求人未必是后来调整授权范围的操作人。
+function currentTaskSources(sources, authorizationSourceId) {
+  const selected = new Set(sources.slice(-19))
+  const original = sources.find(source => source.sourceId === authorizationSourceId)
+  if (original) selected.add(original)
+  return sources.filter(source => selected.has(source))
+}
+function sourceContext(source) {
+  return { ...fields(source, ['sourceId', 'actorId', 'senderName', 'channel', 'messageId', 'version', 'timestamp', 'corrects', 'supersedes', 'text', 'body', 'quote', 'resources']),
+    ...(source.requestIdentity ? { requestIdentityRef: deferModelContent(source.requestIdentity) } : {}) }
+}
 export function taskModelInput(input) {
   const task = input.task ?? {}, operations = input.operations ?? [], executions = input.executions ?? []
   const executionIndex = executionDirectory(executions), operationIndex = operationDirectory(operations.filter(operation => !terminal.has(operation.state)))
   const blockerExecutions = executionDirectory(input.blockers?.executions ?? []), blockerOperations = operationDirectory(input.blockers?.operations ?? [])
-  return { ...input, task: { ...fields(task, ['taskId', 'sessionId', 'groupId', 'title', 'request', 'status', 'control', 'ownerActorId', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'drained', 'runSequence', 'updatedAt']),
+  return { ...input, sourceReviewRequired: true, task: { ...fields(task, ['taskId', 'sessionId', 'groupId', 'title', 'objective', 'requirements', 'status', 'control', 'ownerActorId', 'requirementRevision', 'controlRevision', 'leaseEpoch', 'drained', 'runSequence', 'updatedAt']),
+    ...(task.request !== undefined ? { request: deferModelContent(task.request) } : {}),
     ...(task.lastDecision ? { lastDecision: fields(task.lastDecision, ['action', 'summary', 'question', 'audience', 'at', 'recordedAt', 'requirementRevision', 'controlRevision', 'binding']), lastDecisionRef: deferModelContent(task.lastDecision) } : {}),
     authorizationSourceId: task.metadata?.authorizationSourceId, fullRecord: deferModelContent(task),
-    humanRequests: (task.humanRequests ?? []).filter((request, index, requests) => request.status === 'waiting-reply' || index === requests.length - 1) },
+    humanRequests: (task.humanRequests ?? []).filter((request, index, requests) => request.status === 'waiting-reply' || index === requests.length - 1)
+      .map(request => ({ ...fields(request, ['requestId', 'status', 'audience', 'requirementRevision', 'controlRevision', 'sourceId', 'responseSourceId']),
+        ...(request.status === 'waiting-reply' ? fields(request, ['reason', 'question']) : {}), requestRef: deferModelContent(request) })) },
     sourceCatalog: { total: (input.sources ?? []).length, catalogRef: deferModelContent(Object.fromEntries((input.sources ?? []).map(source => [source.sourceId, source]))) },
-    sources: (input.sources ?? []).slice(0, 20).map(source => ({ ...source, requestIdentity: undefined,
-      ...(source.requestIdentity ? { requestIdentityRef: deferModelContent(source.requestIdentity) } : {}) })),
+    sources: currentTaskSources(input.sources ?? [], task.metadata?.authorizationSourceId).map(sourceContext),
     materialCatalogRef: deferModelContent(input.materials ?? []),
-    materials: (input.materials ?? []).slice(0, 20).map(material => ({ ...material, text: undefined, quote: undefined,
-      ...(material.text !== undefined ? { textRef: deferModelContent(material.text) } : {}),
-      ...(material.quote !== undefined ? { quoteRef: deferModelContent(material.quote) } : {}) })),
+    materials: (input.materials ?? []).filter(material => material.resources?.length).slice(0, 20).map(material => fields(material, ['sourceId', 'path', 'resources'])),
     executions: executionIndex.items, executionIndex: { total: executionIndex.total, catalogRef: executionIndex.catalogRef },
     operations: operationIndex.items, operationIndex: { total: operationIndex.total, catalogRef: operationIndex.catalogRef },
     operationHistory: { total: operations.length, catalogRef: deferModelContent(Object.fromEntries(operations.map(operation => [operation.operationId, operation]))) },
@@ -230,13 +249,11 @@ export function taskModelInput(input) {
       operations: blockerOperations.items, operationIndex: { total: blockerOperations.total, catalogRef: blockerOperations.catalogRef } } }
 }
 export function executionModelInput(input, binding) {
-  const all = input.sources ?? [], selected = new Set([input.task?.authorizationSourceId].filter(Boolean))
-  const correction = all.findLast(source => source.actorId && source.actorId === input.task?.ownerActorId)
-  if (correction?.sourceId) selected.add(correction.sourceId)
+  const all = input.sources ?? [], current = currentTaskSources(all, input.task?.authorizationSourceId)
+  const selected = new Set(current.map(source => source.sourceId))
   const history = executionDirectory((input.previousExecutions ?? []).filter(execution => execution.executionId !== binding.executionId))
-  return { ...input, sourceReviewRequired: true, sources: all.filter(source => selected.has(source.sourceId)).map(source => ({ ...source, requestIdentity: undefined,
-    ...(source.requestIdentity ? { requestIdentityRef: deferModelContent(source.requestIdentity) } : {}) })), sourceCatalog: {
-    total: all.length, items: all.slice(0, 20).map(source => fields(source, ['sourceId', 'actorId', 'version', 'messageId', 'corrects', 'supersedes'])),
+  return { ...input, sourceReviewRequired: true, sources: current.map(sourceContext), sourceCatalog: {
+    total: all.length, items: current.map(source => fields(source, ['sourceId', 'actorId', 'version', 'messageId', 'corrects', 'supersedes'])),
     catalogRef: deferModelContent(Object.fromEntries(all.map(source => [source.sourceId, source]))) },
     materialPaths: (input.materialPaths ?? []).filter((_path, index) => selected.has(all[index]?.sourceId)),
     materialCatalogRef: deferModelContent(Object.fromEntries(all.map((source, index) => [source.sourceId, { sourceId: source.sourceId, path: input.materialPaths?.[index] }]))),

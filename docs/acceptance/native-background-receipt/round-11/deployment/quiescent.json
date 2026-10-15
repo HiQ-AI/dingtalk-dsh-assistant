@@ -1,0 +1,20 @@
+{
+  "ledger": {
+    "quiescent": true,
+    "candidateOnly": false,
+    "ownerReleased": false,
+    "ownerProcessExited": true,
+    "staleOwner": true,
+    "drained": true,
+    "unstartedTaskClaims": [],
+    "verifiedSessions": 13,
+    "unknownOperations": 1,
+    "unknownNotifications": 1
+  },
+  "creationDate": "2026-10-15T11:37:16.533487+08:00",
+  "pid": 42240,
+  "observedAt": "2026-10-15T04:06:28.2254563Z",
+  "runtimePortClosed": true,
+  "shutdown": "SIGINT",
+  "remainingDescendants": 0
+}

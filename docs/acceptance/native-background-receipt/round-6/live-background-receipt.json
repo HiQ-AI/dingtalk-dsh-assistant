@@ -1,0 +1,44 @@
+[
+  {
+    "seq": 452,
+    "type": "tool/call",
+    "time": 1792035771851,
+    "name": "pwsh",
+    "receipt": null
+  },
+  {
+    "seq": 453,
+    "type": "tool/result",
+    "time": 1792035771908,
+    "name": null,
+    "receipt": "{\"nativeJobReceipt\":{\"jobId\":\"pwsh-2\",\"owner\":\"task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6\",\"status\":\"running\",\"startedAt\":1792035771903,\"chunks\":[],\"lossy\":false,\"cancelled\":false},\"instruction\":\"Original background job is still active. Use its native job identity to inspect or stop it; do not replay the command. This receipt is not service readiness or business acceptance. Stop owned services before execution_submit; executor disposal drains any remaining jobs.\"}"
+  },
+  {
+    "seq": 454,
+    "type": "step/end",
+    "time": 1792035771909,
+    "name": null,
+    "receipt": null
+  },
+  {
+    "seq": 455,
+    "type": "step/start",
+    "time": 1792035771943,
+    "name": null,
+    "receipt": null
+  },
+  {
+    "seq": 456,
+    "type": "assistant/message",
+    "time": 1792035777398,
+    "name": null,
+    "receipt": null
+  },
+  {
+    "seq": 457,
+    "type": "tool/call",
+    "time": 1792035777399,
+    "name": "pwsh",
+    "receipt": null
+  }
+]

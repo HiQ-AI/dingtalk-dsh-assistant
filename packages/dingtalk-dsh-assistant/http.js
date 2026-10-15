@@ -58,6 +58,7 @@ function topicSummary(topic) {
   return {
     topicId: topic.topicId, groupId: topic.groupId, title: topic.title,
     revision: topic.revision, processedRevision: topic.processedRevision, status: topic.status,
+    ...(topic.mergedInto ? { mergedInto: topic.mergedInto, mergeReceipt: topic.mergeReceipt } : {}),
     summary: String(topic.summary ?? '').slice(0, 1000),
     summaryRevision: topic.summaryRevision,
     openQuestionCount: topic.openQuestions?.length ?? 0,
@@ -80,7 +81,7 @@ function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
   const coordinator = workflowMailboxes?.coordinators?.[group.groupId]
   if (coordinator) summary.coordinator = coordinator
-  const topics = runtime.listTopics(group.groupId)
+  const topics = runtime.listTopics(group.groupId).filter(topic => !topic.mergedInto)
   summary.messages = (summary.messages ?? []).map((message) => ({
     ...message,
     topicRefs: topics.flatMap((topic) => {
@@ -195,7 +196,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     try {
       const offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
       const groupId=url.searchParams.get('groupId')??undefined
-      const topics = [...store.listTopics(groupId).map(topicSummary), ...((await store.listWorkflowTopics?.(groupId))??[]).map(workflowTopicSummary)]
+      const topics = [...store.listTopics(groupId).filter(topic => !topic.mergedInto || url.searchParams.get('includeMerged') === 'true').map(topicSummary), ...((await store.listWorkflowTopics?.(groupId))??[]).map(workflowTopicSummary)]
       topics.sort((a,b)=>String(b.updatedAt??b.createdAt).localeCompare(String(a.updatedAt??a.createdAt)))
       return send(response, 200, { topics: topics.slice(offset, offset + limit), total: topics.length, offset, limit })
     } catch (error) { return send(response, 400, { error: error.message }) }
@@ -303,16 +304,28 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/performance') return send(response, 200, store.listPerformance(Object.fromEntries(['day', 'sessionId', 'groupId', 'taskId', 'requestId', 'submissionId'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]))))
   if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, await store.listAuthorizationRequests())
-  const humanReply = request.method === 'POST' && /^\/tasks\/([^/]+)\/human-requests\/([^/]+)\/reply$/u.exec(url.pathname)
+  const reconcileTopics = request.method === 'POST' && /^\/runtime\/task-topics\/reconcile(\/check)?$/u.exec(url.pathname)
+  if (reconcileTopics) {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    if (!store.reconcileWebTaskTopics) return send(response, 404, { error: 'task_session_disabled' })
+    try {
+      const parsed = z.strictObject({ groupId: requiredText, requestId: requiredText.optional(), expectedDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'task_topic_reconcile_invalid' })
+      return send(response, 200, await store.reconcileWebTaskTopics({ ...parsed.data, checkOnly: !!reconcileTopics[1] }))
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
+  const humanReply = request.method === 'POST' && /^\/tasks\/([^/]+)\/human-requests\/([^/]+)\/reply(\/check)?$/u.exec(url.pathname)
   if (humanReply) {
     if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
     if (!store.respondTaskHumanRequest) return send(response, 404, { error: 'task_session_disabled' })
     try {
       const parsed = z.strictObject({ requestId: requiredText.max(200), reply: requiredText.max(20000),
-        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() }).safeParse(await readJson(request))
+        expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
+        nativeFailureResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u) })).min(1).max(8)
+          .refine(items => new Set(items.map(item => item.operationId)).size === items.length).optional() }).safeParse(await readJson(request))
       if (!parsed.success) return send(response, 400, { error: 'human_reply_invalid' })
       return send(response, 200, await store.respondTaskHumanRequest({ ...parsed.data,
-        taskId: decodeURIComponent(humanReply[1]), humanRequestId: decodeURIComponent(humanReply[2]) }))
+        taskId: decodeURIComponent(humanReply[1]), humanRequestId: decodeURIComponent(humanReply[2]), ...(humanReply[3] ? { checkOnly: true } : {}) }))
     } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/activities') return send(response, 200, store.listActivities(url.searchParams.get('taskId') ?? undefined))

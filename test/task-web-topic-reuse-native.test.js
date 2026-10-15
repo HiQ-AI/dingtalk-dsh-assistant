@@ -55,4 +55,17 @@ test('web acceptance reuses existing topic and captures exact enriched source ve
   assert.equal(h.residentStore.listTopics('native-group').length, 1)
   assert.equal((await h.query('task.list')).length, 1)
   await assert.rejects(h.service.createTask({ ...args, requestId: 'stale-accept' }), error => error.code === 'TASK_TOPIC_WEB_topic-stale')
+  const beforeContext=await h.query('task.get',{taskId:task.taskId})
+  const contextArgs={taskId:task.taskId,requestId:'continue-existing-topic',context:'只补充原事项验收要求，保持同一任务',expectedRequirementRevision:beforeContext.requirementRevision,expectedControlRevision:beforeContext.controlRevision}
+  await h.service.appendTaskContext(contextArgs);await h.service.whenIdle()
+  assert.equal(h.residentStore.listTopics('native-group').length,1,'Web补充不另开话题')
+  const afterContext=await h.query('task.get',{taskId:task.taskId})
+  assert.equal(afterContext.requirementRevision,beforeContext.requirementRevision+1)
+  assert.equal(h.residentStore.getTopic('native-group',originalTopic).revision,oldRevision+2)
+  const webMessages=(await h.residentStore.getTopicContext({groupId:'native-group',topicId:originalTopic,revision:oldRevision+2,offset:0,limit:100})).messages.filter(item=>item.sourceKind==='web')
+  assert.equal(webMessages.length,2,'原授权与后续补充都可追溯')
+  await h.service.appendTaskContext(contextArgs);await h.service.whenIdle()
+  assert.equal((await h.query('task.get',{taskId:task.taskId})).requirementRevision,afterContext.requirementRevision)
+  assert.equal(h.residentStore.listTopics('native-group').length,1)
+
 })

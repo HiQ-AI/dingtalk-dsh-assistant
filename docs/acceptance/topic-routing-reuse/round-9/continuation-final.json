@@ -1,0 +1,19 @@
+{
+  "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+  "status": "active",
+  "taskDrained": true,
+  "executionId": "bdb7b510-4a09-4cd3-9a06-8ac8dda42608",
+  "sessionId": "task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6",
+  "inputVersion": 8,
+  "executionStatus": "succeeded",
+  "executionDrained": true,
+  "replayedBytebaseCalls": 0,
+  "summary": "规则接口核对与UAT准备说明已更正：本地dataset及普通GitHub仓库/PR读取正常，UAT直连必要schema兼容已核验；403仅限rulesets/protection接口，不作为升级套餐或阻断A准备的人为门槛。原三文件/父SHA/远端未漂移，精确A申请范围已明确，受控写入仍未批准。",
+  "limitations": [
+    "A仍须统筹发起human-intervention/redline并取得精确批准：仅三文件提交、原分支快进push、更新PR353正文、本地UAT集成准备；不含远端UAT写、构建、部署、测试、SQL或消息。",
+    "规则全貌不可由当前失败接口证明；现有PR CLEAN仅适用于当前旧head/main，不替代新提交/UAT PR核验，不要求人为升级套餐。",
+    "部署仍需处理固定digest与仅restart流水线不匹配，后续以验证后的新digest单独批准工作负载更新。",
+    "真实UI/完整审核重提E2E及此前越界全仓测试共享副作用保持未验/未知；不宣布整体完成。"
+  ],
+  "waiting": "部署前检查已完成，现仅请求第一段精确代码交付与本地UAT集成准备授权。"
+}

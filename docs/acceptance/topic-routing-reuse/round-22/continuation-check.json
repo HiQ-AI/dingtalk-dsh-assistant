@@ -1,0 +1,88 @@
+{
+  "writes": 0,
+  "snapshot": {
+    "taskId": "task-4c4780a541c5ea7c51024975de5f121d",
+    "taskSessionId": "task-session-c1283783-eac0-41cd-b16b-bf6ca60833f0",
+    "status": "active",
+    "drained": true,
+    "requirementRevision": 4,
+    "controlRevision": 2,
+    "originalRequest": {
+      "requestId": "human-82f82c9a2a9785f4155ec84c4a0e71708c0ee840050cc924d6b8fc9f38eb0a29",
+      "status": "waiting-reply"
+    },
+    "waiting": [
+      {
+        "requestId": "human-82f82c9a2a9785f4155ec84c4a0e71708c0ee840050cc924d6b8fc9f38eb0a29",
+        "reason": "部署前检查已完成，现仅请求第一段精确代码交付与本地UAT集成准备授权。",
+        "question": "是否批准以下A段操作：仅HiQ-AI/dataset原分支worktree-audit-draft-outbox-main，以fee3ffb016c7074610efcf5097fbeddd419da082为父，提交已验证的3文件（审批服务、申请DTO、隔离数据库测试，精确摘要见部署准备记录）；独立回读提交后快进推送同名origin分支，仅更新[PR #353](https://github.com/HiQ-AI/dataset/pull/353)中文正文，不改base、不合main；从重新核对的UAT2基线准备本地集成树，保留UAT现有功能、开关及SQL修复。\n风险为撤回资格变化和集成冲突。父SHA、文件摘要或远端漂移即停止；不强推、不改写历史、不自动revert。\n本次不含UAT远端更新、UAT PR创建或合并、构建、部署、测试/服务启动、SQL、生产、partners、真实申请或群消息。集成树产生后另申请验证和UAT推进，新镜像摘要确认后另申请精确镜像更新。"
+      }
+    ],
+    "execution": {
+      "executionId": "bdb7b510-4a09-4cd3-9a06-8ac8dda42608",
+      "sessionId": "task-execution-9b11f09e-1ede-4e07-8e66-a9d104bdbbf6",
+      "inputVersion": 8,
+      "status": "succeeded",
+      "drained": true,
+      "summary": "规则接口核对与UAT准备说明已更正：本地dataset及普通GitHub仓库/PR读取正常，UAT直连必要schema兼容已核验；403仅限rulesets/protection接口，不作为升级套餐或阻断A准备的人为门槛。原三文件/父SHA/远端未漂移，精确A申请范围已明确，受控写入仍未批准。"
+    },
+    "unknownOperations": [],
+    "recentOperations": [
+      {
+        "operationId": "operation-fbf613c75d75468c0ce5a0f8c123aae6437c60f6",
+        "state": "succeeded",
+        "toolName": "pwsh"
+      },
+      {
+        "operationId": "operation-b5d501960458abba6e34523ce5ffc3640d3510ea",
+        "state": "succeeded",
+        "toolName": "edit"
+      },
+      {
+        "operationId": "operation-619b70c548e3d9f700cd02d3a28cadee7adf1a74",
+        "state": "succeeded",
+        "toolName": "pwsh"
+      },
+      {
+        "operationId": "operation-e7feba6ebcdfa6a8a7d9de4a8c94160da7b4344c",
+        "state": "succeeded",
+        "toolName": "pwsh"
+      },
+      {
+        "operationId": "operation-bad705841961111cc0e19f37affcd6beca60a60d",
+        "state": "succeeded",
+        "toolName": "edit"
+      },
+      {
+        "operationId": "operation-d47032d0867fcb2d741330a94aeb5c9e25c9a93c",
+        "state": "succeeded",
+        "toolName": "edit"
+      }
+    ]
+  },
+  "ownerSourceIds": [
+    "im:4ebf8f0d29d1dfdb4080367f018f8ee758f194dd13c6cd13098042227f93d9b6",
+    "web-human:d08b77123b42900b2e16ac3a62d4dd331fa372ce1d105fcca96a6d6c7150d30f",
+    "web-human:9da4d9813b5fd6678c29d730f83d2e8dc3e6915613b448c381ede0794cd2b3b4",
+    "web-human:72d60cb800d20acd6ac532c611fe90a57aeb916063082f1ed8f855af44103f01",
+    "web:1a08c83d5935a5985447372ee1f6d4e0fd992fdc88a2c3282d768b9ee5fe2b4f",
+    "web:b409755bb6250114466f38af9fdfce5da630e2225e158514ac422e6463f95145",
+    "web-human:7139f798c19c4d0c40d898406b2e4a6f042326451f7aa88bd4fe565eaa76084e",
+    "im:db8aff36986c204958b55aa8e5a7c5611f84f2fb71c8cca59126b36ad588e166",
+    "private-human:a2c9e91c65f00fa085db9c40dec9f4a4271bc41f27f0c0cc39ea756700cc2e72",
+    "web-human:3d8247bb66ef4f74d66969ed760107c25209e0ce110b0d79affeeb585bc14824"
+  ],
+  "executionSourceIds": [
+    "im:4ebf8f0d29d1dfdb4080367f018f8ee758f194dd13c6cd13098042227f93d9b6",
+    "web-human:d08b77123b42900b2e16ac3a62d4dd331fa372ce1d105fcca96a6d6c7150d30f",
+    "web-human:9da4d9813b5fd6678c29d730f83d2e8dc3e6915613b448c381ede0794cd2b3b4",
+    "web-human:72d60cb800d20acd6ac532c611fe90a57aeb916063082f1ed8f855af44103f01",
+    "web:1a08c83d5935a5985447372ee1f6d4e0fd992fdc88a2c3282d768b9ee5fe2b4f",
+    "web:b409755bb6250114466f38af9fdfce5da630e2225e158514ac422e6463f95145",
+    "web-human:7139f798c19c4d0c40d898406b2e4a6f042326451f7aa88bd4fe565eaa76084e",
+    "im:db8aff36986c204958b55aa8e5a7c5611f84f2fb71c8cca59126b36ad588e166",
+    "private-human:a2c9e91c65f00fa085db9c40dec9f4a4271bc41f27f0c0cc39ea756700cc2e72",
+    "web-human:3d8247bb66ef4f74d66969ed760107c25209e0ce110b0d79affeeb585bc14824"
+  ],
+  "reply": "操作人已明确要求修正重复审批并继续原任务。12:17孙鹏原文“部署到uat”（来源im:db8aff36986c204958b55aa8e5a7c5611f84f2fb71c8cca59126b36ad588e166）仍是本任务有效交办；后续技术恢复答复只限定该次恢复，不撤销已有UAT范围。当前A段的原三文件提交、原开发分支快进推送、更新PR353正文、本地UAT集成和隔离验证属于完成已交办目标的必要步骤，请核对原文、原分支及当前状态后沿原executionId/session继续，不再为这些步骤申请同一批准。按项目规则推进原UAT任务；确有要求最终批准的发布动作，先完成可自行执行的准备和验证，再只说明具体待决动作、已有授权不足之处及新增风险。不得把新SHA或镜像摘要尚未产生当作前置审批理由。原共享环境测试限制继续有效，不运行全仓共享测试、不改生产、不操作真实申请、不强推、不合main、不重发旧通知。摘要先说已完成什么、下一步是什么；只有真实新增缺口才等待。"
+}

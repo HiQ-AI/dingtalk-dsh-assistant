@@ -1,0 +1,13 @@
+{
+  "package": {
+    "verifiedFiles": 53,
+    "sha256": "7ed96f75702cd75fce18d2df4e0e51d016f4429c3bd5b2bfb93b18df09939c89"
+  },
+  "taskEnabled": true,
+  "creationDate": "2026-10-15T12:58:52.148284+08:00",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "packageSha256": "7ed96f75702cd75fce18d2df4e0e51d016f4429c3bd5b2bfb93b18df09939c89",
+  "observerManifestSha256": "9ec51b6e9d591d4c435be7bb4cbb650aa96693edab119739ac7e2f1cfba85e60",
+  "backupCreated": false,
+  "pid": 29832
+}

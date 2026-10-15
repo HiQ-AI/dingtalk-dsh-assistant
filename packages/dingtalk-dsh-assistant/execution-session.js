@@ -284,6 +284,18 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       try {
         if (entry.handle) {
           await entry.handle.agent.whenIdle()
+          // Background processes remain usable across tools, but never outlive their executor.
+          const outcomes = await Promise.allSettled((entry.backgroundJobs ?? []).map(async ({ call, result, jobs, startedAt }) => {
+            const job = jobs.get(call.jobReceipt.jobId, entry.binding.sessionId)
+            if (['running', 'stopping'].includes(job.status)) jobs.kill(call.jobReceipt.jobId, entry.binding.sessionId, 'task execution ended')
+            call.jobReceipt = await collectNativeJob({ result, jobs, sessionId: entry.binding.sessionId, toolName: call.toolName,
+              command: call.arguments.command, startedAt, signal: new AbortController().signal, cancelled: entry.cancelled || closed,
+              record: job => entry.onNativeExecution({ ...call, phase: 'job', job }) })
+            await entry.onNativeExecution({ ...call, phase: 'settled', cancelled: entry.cancelled || closed, postExecutionDecision: 'accept', result })
+          }))
+          await entry.backgroundProcesses?.close()
+          const failed = outcomes.find(outcome => outcome.status === 'rejected')
+          if (failed) throw failed.reason
           if (entry.processDrainError) throw entry.processDrainError
           try { await ctx.sessions.flush(entry.handle.agent.session) }
           finally { await entry.handle.dispose() }
@@ -333,7 +345,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       const skillTool = nativeEnabled ? agentCtx.tools.get('skill', agent) : undefined
       // alpha2's filesystem and web read tools lack effect metadata. Pin the mounted
       // definitions, so a later same-name shadow cannot acquire read privileges.
-      const readonlyTools = new Map(['read', 'read_image', 'glob', 'grep', 'ls', 'skill', 'web_fetch', 'web_search'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool && (tool.effectClass === undefined || ['read', 'pure'].includes(tool.effectClass))))
+      const readonlyTools = new Map(['read', 'read_image', 'glob', 'grep', 'ls', 'skill', 'web_fetch', 'web_search', 'job_list', 'job_output'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool && (tool.effectClass === undefined || ['read', 'pure'].includes(tool.effectClass))))
       const isReadonly = exec => {
         const tool = agentCtx.tools.get(exec.name, exec.agent)
         return !!tool && (readonlyTools.get(exec.name) === tool || ['read', 'pure'].includes(tool.effectClass))
@@ -364,12 +376,18 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (!await current(entry)) throw failure('execution_binding_stale')
         exec.signal.throwIfAborted()
         try {
-          const dispatch = () => processes(presetService).run(async () => {
+          const background = exec.arguments.run_in_background === true && ['bash', 'pwsh'].includes(exec.name)
+          const processScope = background ? entry.backgroundProcesses ??= processes(presetService).scope() : processes(presetService)
+          const dispatch = () => processScope.run(async () => {
             const startedAt = Date.now()
             const result = await next()
-            call.jobReceipt = await collectNativeJob({ result, jobs: agentCtx.get?.('jobs') ?? ctx.get?.('jobs'),
+            const jobs = agentCtx.get?.('jobs') ?? ctx.get?.('jobs')
+            call.jobReceipt = await collectNativeJob({ result, jobs,
               sessionId: entry.binding.sessionId, toolName: exec.name, command: exec.arguments.command, startedAt, signal: exec.signal,
-              record: job => entry.onNativeExecution({ ...call, phase: 'job', job }) })
+              record: job => entry.onNativeExecution({ ...call, phase: 'job', job }), background })
+            if (background && call.jobReceipt && ['running', 'stopping'].includes(call.jobReceipt.status)) {
+              (entry.backgroundJobs ??= []).push({ call, result, jobs, startedAt })
+            }
             if (hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
             return result
           })
@@ -390,7 +408,9 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           postExecutionDecision: decision.kind, result: copy({ isError: result.isError, content: result.content, ...(result.error ? { error: result.error } : {}) }) })
         nativeCalls.delete(exec.callId)
         if (call.jobReceipt && decision.kind === 'accept') return { kind: 'accept', content: [{ type: 'text', text: JSON.stringify({ nativeJobReceipt: call.jobReceipt,
-          instruction: 'Original job reached the recorded terminal state. Do not replay the command. Process completion is not business acceptance.' }) }] }
+          instruction: ['running', 'stopping'].includes(call.jobReceipt.status)
+            ? 'Original background job is still active. Use its native job identity to inspect or stop it; do not replay the command. This receipt is not service readiness or business acceptance. Stop owned services before execution_submit; executor disposal drains any remaining jobs.'
+            : 'Original job reached the recorded terminal state. Do not replay the command. Process completion is not business acceptance.' }) }] }
         if (!receipt?.evidenceRef || Object.hasOwn(decision, 'value')) return decision
         const reference = { type: 'text', text: JSON.stringify({ evidenceRef: receipt.evidenceRef }) }
         if (decision.kind === 'block') return { ...decision, feedback: [...decision.feedback, reference] }

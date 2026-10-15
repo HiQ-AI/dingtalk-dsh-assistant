@@ -1,0 +1,9 @@
+# 原生job读取分类与旧拒绝收据恢复
+
+现场operation-9585dd4be15889115b7dd8b22c6d522371315cbf为原生job_output查询已释放的pwsh-7，真实回执Error: unknown job pwsh-7。插件尚未固定原生job读取定义的read身份，因此误入unknown账。
+
+固定挂载job_output/job_list的实际定义为只读，显式write元数据和同名替换不继承。新版本未获固定read身份的同名工具在账中标记nativeJobRead=false，禁止历史恢复入口给同名替换授予只读身份。
+
+旧账仅恢复job_output的精确missing-job拒绝：校验原operation/call/参数与结果摘要、归属、正常结束回合、执行排空且无活动job；保留previousObservation，正式事务转failed/noEffect，不重放工具或生产者命令。任意错误、job_kill、显式write、取消/活动回合、摘要不符或新版本不受信同名工具均拒绝。此入口不处理全仓测试或共享影响。
+
+历史未存工具定义身份，不能仅凭名称与错误文字推断原生来源；本轮还核对原session持久选择的standard preset、部署前后未变的profile摘要、原生工具模块版本/摘要及插件无同名注册。新版本未受信同名工具显式false是持续门禁，不把旧版本缺标志当成通用工具授权。

@@ -9,6 +9,7 @@ import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
 import { available, reason, nativeShell, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
+import { retireTaskContext } from '../packages/dingtalk-dsh-assistant/task-session.js'
 
 testRunner('原生网页工具错误不建立未知效果，仍可完成后续读取', { skip: !available ? reason : false, timeout: 20000 }, async t => {
  const root=await mkdtemp(join(tmpdir(),'native-web-read-'))
@@ -195,6 +196,51 @@ for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知
   }
 })
 
+test('180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay', { timeout: 30000 }, async t => {
+  const { createUserMessage, createSystemMessage } = await import('@deepseek-ai/dsh-llm')
+  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
+  const fixture = await nativeCase(t, 'task-host-retirement-')
+  const h = await fixture.host(async () => [])
+  const binding = { taskId: 'retirement-task', sessionId: 'retirement-session', leaseEpoch: 181 }
+  const session = h.ctx.sessions.prepare(binding.sessionId)
+  session.append('turn/start', { turn: 1 }); session.append('step/start', { turn: 1, step: 1 })
+  session.append('system/message', { turn: 1, step: 1, message: createSystemMessage('native protected head') }, { surfaceOp: 'append' })
+  const append = (source, value, options = { surfaceOp: 'append' }) => session.append('user/message', createUserMessage({ source,
+    content: [{ type: 'text', text: JSON.stringify(value) }] }), options)
+  for (let i = 1; i <= 180; i++) append({ kind: 'coordinator', taskSession: { ...binding, leaseEpoch: i }, taskContextHistory: true },
+    { historicalTaskContext: { leaseEpoch: i }, instruction: '此轮Host快照已替换，原文留审计' })
+  append({ kind: 'coordinator', taskSession: { ...binding, taskId: 'foreign-task' }, taskContextHistory: true }, { instruction: 'FOREIGN_TASK_AUDIT' })
+  const original = structuredClone(session.snapshotEvents())
+  const messages = () => { const events = session.snapshotEvents(), folded = foldSurface(events)
+    return folded.nodes.map(seq => deriveEventMessage(events[seq], folded.projectedMessages)).filter(Boolean) }
+  const beforeBytes = Buffer.byteLength(JSON.stringify(messages()))
+  retireTaskContext(session, binding, { turn: 1, step: 1 })
+  const current = { task: { taskId: binding.taskId }, sources: [
+    { sourceId: 'initial', actorId: 'requester', text: '原授权：仅UAT隔离验证' },
+    { sourceId: 'restriction', actorId: 'operator', text: '后续收窄：暂停部署，只继续准备' }], unknownOperation: 'UNKNOWN_EFFECT_RETAINED' }
+  append({ kind: 'coordinator', taskSession: binding }, current)
+  const live = messages(), afterBytes = Buffer.byteLength(JSON.stringify(live))
+  assert.deepEqual(session.snapshotEvents().slice(0, original.length), original)
+  assert.equal(live.filter(item => item.source?.taskSession?.taskId === binding.taskId).length, 1)
+  assert.equal(live.filter(item => item.source?.taskContextHistory).length, 1, '其他任务的占位不动')
+  assert.match(JSON.stringify(live), /FOREIGN_TASK_AUDIT/)
+  assert.deepEqual(JSON.parse(live.find(item => item.source?.taskSession?.taskId === binding.taskId).content[0].text), current)
+  assert.ok(beforeBytes - afterBytes > 30000, '删除旧占位确实降低总可见内容，而不是换位置')
+  // 用SDK公开surface替换模拟压缩已移除旧Host；新输入仍必须全文独立，不能依赖已消失基线。
+  const hostNode = session.surface.nodes.find(seq => session.snapshotEvents()[seq].data?.source?.taskSession?.taskId === binding.taskId)
+  append({ kind: 'runtime-context', form: 'snapshot' }, { summary: 'COMPACTED_CONTEXT' },
+    { surfaceOp: { op: 'replace', startSeq: hostNode, endSeq: hostNode }, sourceEventSeqs: [hostNode] })
+  retireTaskContext(session, { ...binding, leaseEpoch: 182 }, { turn: 1, step: 1 })
+  append({ kind: 'coordinator', taskSession: { ...binding, leaseEpoch: 182 } }, current)
+  const restored = messages()
+  assert.match(JSON.stringify(restored), /COMPACTED_CONTEXT/)
+  assert.deepEqual(JSON.parse(restored.find(item => item.source?.taskSession?.taskId === binding.taskId).content[0].text), current)
+  assert.deepEqual(session.snapshotEvents().slice(0, original.length), original)
+  t.diagnostic(JSON.stringify({ scope: 'actual native foldSurface UTF-8 JSON message bytes; source/task identity retained',
+    legacyHostCount: 180, beforeBytes, afterBytes, newInputBytes: Buffer.byteLength(JSON.stringify(current)), retainedBaselineBytes: 0,
+    afterCompactionBytes: Buffer.byteLength(JSON.stringify(restored)), rawAuditEvents: session.snapshotEvents().length }))
+})
+
 test('owner keeps one current Host snapshot and delegates non-recursive execution context across three generations', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-context-native-'), ownerRequests = []
   const scope = 'CURRENT_AUTHORIZATION_SCOPE_'.repeat(100)
@@ -238,13 +284,17 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
   const log = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
   assert.ok(log.events.filter(event => event.type === 'user/message' && event.data.source?.taskSession && !event.data.source.taskContextHistory).length >= 4,
     '原始Host输入仍在审计日志')
-  assert.ok(log.events.some(event => event.data?.source?.taskContextHistory))
+  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
+  const folded = foldSurface(log.events)
+  const visible = folded.nodes.map(seq => deriveEventMessage(log.events[seq], folded.projectedMessages)).filter(Boolean)
+  assert.equal(visible.filter(message => message.source?.taskSession).length, 1)
+  assert.equal(visible.filter(message => message.source?.taskContextHistory).length, 0)
   const last = ownerRequests.at(-1)
   console.log(JSON.stringify({ contextProof: { ownerRequests: ownerRequests.length,
     latestInputBytes: Buffer.byteLength(JSON.stringify(latestInput(last))), totalRequestBytes: Buffer.byteLength(JSON.stringify(last)) } }))
 })
 
-test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 30000 }, async t => {
+test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 120000 }, async t => {
   const fixture = await nativeCase(t, 'task-five-context-'), metrics = []
   let ownerSteps = 0
   const scope = 'ONLY_ANALYZE_AUTHORIZATION_'.repeat(300)
@@ -265,7 +315,9 @@ test('32 continuations bound owner Host input and execution-read tool results wh
     if (++ownerSteps > 200) throw new Error(JSON.stringify({ inputVersion: execution?.inputVersion, values: values.slice(-3).map(value => ({ keys: Object.keys(value), inputVersion: value.inputVersion, contentRef: value.contentRef, record: value.record })) }))
     for (const e of reads) { assert.ok(e.record.contentRef); assert.equal(e.input, undefined); assert.equal(e.results, undefined) }
     const currentHost = host[0].content.find(block => block.type === 'text').text
-    metrics.push({ lease: input.task.leaseEpoch, inputVersion: execution?.inputVersion ?? 0, currentInputBytes: Buffer.byteLength(currentHost), hostMessagesBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(m => m.source?.taskSession))), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
+    const retainedHost = request.messages.filter(m => m.source?.taskSession && m !== host[0])
+    assert.equal(retainedHost.length, 0, '退休快照不留下历史占位或隐含基线')
+    metrics.push({ lease: input.task.leaseEpoch, inputVersion: execution?.inputVersion ?? 0, currentInputBytes: Buffer.byteLength(currentHost), retainedHostCount: retainedHost.length, retainedBaselineBytes: retainedHost.reduce((bytes, item) => bytes + Buffer.byteLength(JSON.stringify(item)), 0), hostMessagesBytes: Buffer.byteLength(JSON.stringify(request.messages.filter(m => m.source?.taskSession))), messagesBytes: Buffer.byteLength(JSON.stringify(request.messages)), adapterRequestBytes: Buffer.byteLength(JSON.stringify(request)) })
     if (execution && !execution.drained) return [decision('wait', 'wait for physical drain')]
     if (execution && !reads.some(e => e.inputVersion === execution.inputVersion)) return [call('task_execution_read', { executionId: execution.executionId })]
     if (execution) {
@@ -288,7 +340,8 @@ test('32 continuations bound owner Host input and execution-read tool results wh
   t.diagnostic(JSON.stringify({ scope: 'native owner scripted adapter, UTF-8 JSON bytes; no provider tokens', metrics: metrics.filter(m => [0, 1, 5, 32].includes(m.inputVersion)) }))
   assert.ok(metrics.every(m => m.currentInputBytes < 60000), 'current owner input must stay within fixture budget')
   assert.ok(metrics.at(-1).currentInputBytes < metrics[0].currentInputBytes + 6000, 'input growth excludes recursive execution history')
-  assert.ok(metrics.at(-1).hostMessagesBytes - metrics.at(-1).currentInputBytes < 33 * 750, 'only small retired snapshot markers grow')
+  assert.ok(metrics.every(m => m.retainedBaselineBytes === 0), '没有被转移为基线的旧Host正文')
+  assert.ok(metrics.at(-1).hostMessagesBytes - metrics.at(-1).currentInputBytes < 1500, 'Host包装开销不随续办轮数增长')
 })
 
 test('configured group responsibility reaches group and task models and its reply signature survives notification formatting', { timeout: 15000 }, async t => {
@@ -506,7 +559,7 @@ test('native executor resumes in the same titled task workspace and all task ses
   const log = await inspectSession(next.ctx.sessionPersistence, resumed.sessionId)
   assert.equal(log.meta.cwd, taskRoot)
   assert.ok(!log.events.some(event => event.type === 'working-directory/change'))
-  assert.equal(log.events.findLast(event => event.type === 'session/title').data.title, execution.title, '续办保留创建时的中文名称')
+  assert.equal(log.events.findLast(event => event.type === 'session/title').data.title, execution.title, '同一执行保留稳定名称，续办key不改名')
   assert.equal(resumed.input.title, execution.title)
 })
 
@@ -639,7 +692,7 @@ test('native requirement update resumes the same owner with new sources and fenc
   assert.equal(task.lastDecision.action, 'blocked')
   assert.ok(revisedInputs.length >= 1)
   for (const input of revisedInputs) {
-    assert.ok(input.task.request.includes('最新要求：暂停生成文件'))
+    assert.ok(input.sources.some(source => source.text.includes('最新要求：暂停生成文件')))
     assert.equal(input.sources.length, 2)
     assert.ok(input.sources.every(source => source.actorId === 'native-user'))
   }

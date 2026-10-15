@@ -1,0 +1,20 @@
+{
+  "pid": 52452,
+  "shutdown": "SIGINT",
+  "runtimePortClosed": true,
+  "remainingDescendants": 0,
+  "ledger": {
+    "quiescent": true,
+    "candidateOnly": false,
+    "ownerReleased": false,
+    "ownerProcessExited": true,
+    "staleOwner": true,
+    "drained": true,
+    "unstartedTaskClaims": [],
+    "verifiedSessions": 15,
+    "unknownOperations": 0,
+    "unknownNotifications": 3
+  },
+  "creationDate": "2026-10-15T14:18:46.567414+08:00",
+  "observedAt": "2026-10-15T06:46:15.4725363Z"
+}

@@ -531,7 +531,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     messages = structuredClone(messages.map(({ facts, ...message }) => message))
     const request = { requestId: requestIdentity('route', { groupId, routingRevision: group.routingRevision, messages: messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })), reason }), groupId, routingRevision: group.routingRevision, messages, readOffsets: new Map(), ...(reason ? { reason } : {}) }
     routes.set(request.requestId, request)
-    const allTopics = store.listTopics(groupId)
+    const allTopics = store.listTopics(groupId).filter(topic => !topic.mergedInto)
     const referencedIds = new Set(messages.flatMap(message => [message.messageId, message.quotedMessage?.messageId]).filter(Boolean))
     const relatedIds = new Set(allTopics.filter(topic => {
       const active = new Map(topic.entries.map(entry => [entry.unitId ?? entry.messageId, entry]))

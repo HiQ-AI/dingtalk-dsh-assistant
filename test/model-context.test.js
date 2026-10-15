@@ -39,6 +39,7 @@ test('integrated projection keeps stage evidence and provider decisions bound to
   assert.ok(Buffer.byteLength(JSON.stringify(projected)) < 10000, 'full provider diagnostics stay referenced')
 })
 function resolve(index, ref, path = '') {
+  if (!ref?.contentRef) return ref
   let text = '', offset = 0, page
   do { page = index.read({ contentRef: ref.contentRef, path, offset, limit: 173 }); text += page.text; offset = page.nextOffset } while (offset !== null)
   return page.format === 'json' ? JSON.parse(text) : text
@@ -62,19 +63,47 @@ test('source content is unique while identities, Web request, human correction a
   assert.equal(projected.sources[0].actorId, 'owner'); assert.equal(projected.sources[1].actorId, 'other')
   assert.equal(projected.sources[1].version, 2)
   assert.equal(resolve(index, projected.sources[0].requestIdentityRef, '/request/args/context'), body)
-  assert.equal(resolve(index, projected.materials[0].textRef), body)
-  assert.equal(resolve(index, projected.task.humanRequests[0].reply), reply)
+  assert.equal(projected.materials.length, 0, '纯来源快照不重复列入附件材料')
+  assert.equal(resolve(index, projected.materialCatalogRef, '/0/text'), body)
+  assert.equal(resolve(index, projected.task.humanRequests[0].requestRef, '/reply'), reply)
   assert.deepEqual(resolve(index, projected.task.fullRecord), task)
   assert.deepEqual(resolve(index, projected.task.lastDecisionRef), task.lastDecision, 'existing decision identity and versions remain exact')
 })
 
-test('short authority bodies also have one definition rather than silently bypassing source indexing', async t => {
+test('short authority bodies stay literal with exact authors instead of larger hash dictionaries', async t => {
   const { index } = await fixture(t), text = '仅分析，不执行'
   const projected = index.project(taskModelInput({ task: { taskId: 'task', request: text, humanRequests: [{ status: 'answered', reply: text }] },
-    objective: text, context: text, sources: [{ sourceId: 'one', actorId: 'owner', version: 1, text }, { sourceId: 'two', actorId: 'other', version: 2, text }], materials: [{ sourceId: 'one', text }] }), { reuseVisible: false })
-  assert.equal(JSON.stringify(projected).split(text).length - 1, 1)
+    objective: text, context: text, sources: [{ sourceId: 'one', actorId: 'owner', version: 1, text }, { sourceId: 'two', actorId: 'other', version: 2, body: text }], materials: [{ sourceId: 'one', text }] }), { reuseVisible: false })
+  assert.equal(projected.contentIndex, undefined, '短原文无需180字节引用和字典键')
+  assert.equal(projected.sources[0].text, text)
+  assert.equal(projected.sources[1].body, text)
   assert.equal(resolve(index, projected.sources[0].text), text)
   assert.equal(projected.sources[1].actorId, 'other')
+  assert.equal(resolve(index, projected.task.request), text, '完整旧request仍可按需读取')
+})
+
+test('completed stage reports and routing internals stay readable without inflating the current task snapshot', async t => {
+  const { index } = await fixture(t), old = 'OLD_STAGE '.repeat(4000), evidence = '完整结果'.repeat(3000)
+  const source = { sourceId: 's', actorId: 'operator', version: 2, corrects: 'previous', text: '暂停部署，先检查',
+    id: 's', groupId: 'group', routeReceipt: [{ taskId: 'task', debug: old }], routed: true, timestamp: '2026-10-15T05:00:00Z' }
+  const execution = { executionId: 'done', status: 'succeeded', drained: true, input: { objective: '核验当前要求' }, stageProgress: { summary: old, evidence: [evidence] }, result: { payload: { output: { summary: evidence } } } }
+  const stale = { ...execution, executionId: 'stale', status: 'stale', result: { ...execution.result, current: false } }
+  const input = { task: { taskId: 'task', request: old, objective: '继续核查' }, sources: [source], executions: [execution, stale],
+    materials: [{ sourceId: 's', text: source.text, path: 'source.json', resources: [] }, { sourceId: 'file', path: 'attachment.json', resources: [{ status: 'unavailable', reason: '读取失败' }] }] }
+  const projected = index.project(taskModelInput(input), { reuseVisible: false })
+  assert.equal(projected.sources[0].corrects, 'previous')
+  assert.equal(projected.sources[0].routeReceipt, undefined)
+  assert.equal(projected.executions[0].stageProgress, undefined)
+  assert.equal(projected.executions[0].input.objective, execution.input.objective)
+  assert.deepEqual(resolve(index, projected.executions[0].resultRef), execution.result, '终态目录保留业务结果的精确读取入口')
+  assert.equal(projected.executions[1].stageProgress, undefined)
+  assert.equal(projected.executions[1].result.current, false, '过期结果不能误认为当前验收')
+  assert.equal(projected.materials.length, 1)
+  assert.equal(projected.materials[0].resources[0].status, 'unavailable', '附件不可用仍明确可见')
+  assert.deepEqual(resolve(index, projected.sourceCatalog.catalogRef, '/s'), source)
+  assert.deepEqual(resolve(index, projected.executionIndex.catalogRef, '/done'), execution)
+  assert.equal(resolve(index, projected.task.request), old)
+  assert.ok(Buffer.byteLength(JSON.stringify(projected)) < 5000)
 })
 
 test('result size, execution/failed counts and continuation self-result stay in lazy bounded catalogues', async t => {
@@ -93,7 +122,8 @@ test('result size, execution/failed counts and continuation self-result stay in 
     assert.deepEqual(resolve(index, projected.executionIndex.catalogRef, '/e' + (count - 1)), executions.at(-1))
     assert.deepEqual(resolve(index, projected.operationHistory.catalogRef, '/failed' + (count - 1)), failed.at(-1))
     const continued = index.project(executionModelInput({ task: { ownerActorId: 'owner', authorizationSourceId: 'auth' }, sources: [{ sourceId: 'auth', text: 'authority' }, { sourceId: 'unrelated', text: 'details'.repeat(5000) }], previousExecutions: executions }, { executionId: 'e0' }), { reuseVisible: false })
-    assert.equal(continued.sources.length, 1); assert.equal(continued.sources[0].sourceId, 'auth')
+    assert.equal(continued.sources.length, 2); assert.equal(continued.sources[0].sourceId, 'auth')
+    assert.equal(JSON.stringify(continued).split('details'.repeat(5000)).length - 1, 1, '近期原文仅定义一次，不能按非最初需求人身份丢弃')
     assert.equal(continued.executionHistory.total, count - 1)
     assert.equal(resolve(index, continued.sourceCatalog.catalogRef, '/unrelated').text.length, 35000)
     assert.equal(continued.previousExecutions.some(execution => execution.executionId === 'e0'), false)
@@ -104,10 +134,37 @@ test('result size, execution/failed counts and continuation self-result stay in 
   assert.ok(metrics.at(-1).ownerBytes < 17000)
   // Scoped references plus definitions for the 20 short goals have fixed
   // overhead; increasing result bodies and record counts must not expand them.
-  assert.ok(metrics.at(-1).executionBytes < 17000)
+  assert.ok(metrics.at(-1).executionBytes - Buffer.byteLength('details'.repeat(5000)) < 17000, '执行目录预算与本轮必要来源正文分别计量')
   assert.ok(Math.abs(metrics.at(-1).ownerBytes - metrics[1].ownerBytes) < 1000)
   assert.ok(Math.abs(metrics.at(-1).executionBytes - metrics[1].executionBytes) < 1000)
   t.diagnostic(JSON.stringify({ scope: 'projected current Host JSON UTF-8 bytes, catalogues are not eagerly expanded', metrics }))
+})
+
+test('current source windows retain operator authorization and later restrictions beyond the first twenty sources', async t => {
+  const { index } = await fixture(t)
+  const sources = Array.from({ length: 28 }, (_, i) => ({ sourceId: `s${i}`, actorId: 'requester', version: 1, text: `历史资料${i}` }))
+  sources[1] = { sourceId: 's1', actorId: 'operator', version: 1, text: '暂停发布，等待我明确恢复', channel: 'private' }
+  sources.push({ sourceId: 'uat', actorId: 'operator', version: 1, text: '部署到UAT2', channel: 'im' },
+    { sourceId: 'technical', actorId: 'operator', version: 1, text: '仅恢复工具，本答复不新增部署授权', channel: 'web' },
+    { sourceId: 'restriction', actorId: 'operator', version: 1, text: '先不要部署，继续本地准备', channel: 'private' })
+  const task = { taskId: 'task', ownerActorId: 'requester', request: '原始修复需求', objective: '当前UAT交付目标', requirements: ['保留真实申请'],
+    metadata: { authorizationSourceId: 's0' }, authorizationSourceId: 's0' }
+  const input = { task, sources, materialPaths: sources.map(source => `materials/${source.sourceId}.md`) }
+  const unchanged = structuredClone(input)
+  for (const projected of [index.project(taskModelInput(input), { reuseVisible: false }), index.project(executionModelInput(input, {}), { reuseVisible: false })]) {
+    assert.equal(projected.sources.length, 20)
+    assert.equal(projected.sources[0].sourceId, 's0')
+    assert.deepEqual(projected.sources.slice(-3).map(source => source.sourceId), ['uat', 'technical', 'restriction'])
+    assert.deepEqual(projected.sources.slice(-3).map(source => source.actorId), ['operator', 'operator', 'operator'])
+    for (const source of sources.slice(-3)) assert.equal(resolve(index, projected.sources.find(item => item.sourceId === source.sourceId).text), source.text)
+    assert.equal(projected.sourceCatalog.total, sources.length)
+    assert.deepEqual(resolve(index, projected.sourceCatalog.catalogRef, '/s1'), sources[1], '窗口外撤销仍能逐字读取，不可用窗口内旧授权复活发布')
+    assert.equal(resolve(index, projected.task.objective), task.objective)
+    assert.deepEqual(projected.task.requirements, task.requirements)
+  }
+  const execution = executionModelInput(input, {})
+  assert.deepEqual(execution.materialPaths, execution.sources.map(source => `materials/${source.sourceId}.md`))
+  assert.deepEqual(input, unchanged)
 })
 
 test('first read is available, repeated readback uses references, reopen resolves and other sessions/tampering fail closed', async t => {

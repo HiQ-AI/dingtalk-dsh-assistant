@@ -1,0 +1,55 @@
+{
+  "status": "running",
+  "inputVersion": 11,
+  "stage": {
+    "controlRevision": 2,
+    "evidence": [
+      "https://github.com/HiQ-AI/dataset/pull/391：MERGED，merge SHA 4e2a1b56c33fbb0e86b8f5842aeeea9224e47576",
+      "合入tree=5bfe8b92d06d3e358b8e3e4c063dc94ab9b690e2，与17项通过候选一致",
+      "流水线289：feature/uat2-base，commit4e2a1b56，running"
+    ],
+    "inputVersion": 10,
+    "leaseEpoch": 10,
+    "recordedAt": "2026-10-15T06:26:45.893Z",
+    "requirementRevision": 4,
+    "sequence": 1,
+    "summary": "UAT2集成已实际合入PR391，合入提交4e2a1b56与已验证候选tree完全一致。Poller已自动产生唯一流水线289，正在源码准备；没有重复触发。构建后继续核验镜像并更新固定digest工作负载。"
+  },
+  "previous": [
+    {
+      "inputVersion": 9,
+      "current": true,
+      "output": {
+        "artifacts": [
+          "D:\\baibu-agent\\tasks\\task-4c4780a541c5ea7c51024975de5f121d\\docs\\acceptance\\expert-withdraw-fix\\round-5.md",
+          "D:\\baibu-agent\\tasks\\task-4c4780a541c5ea7c51024975de5f121d\\docs\\acceptance\\expert-withdraw-fix\\uat-integration-tests.log",
+          "D:\\baibu-agent\\tasks\\task-4c4780a541c5ea7c51024975de5f121d\\docs\\acceptance\\expert-withdraw-fix\\pr353-body.md"
+        ],
+        "evidence": [
+          "开发新SHA 9a545aa609bada3c02514f4892494ed6805e0b76，parent fee3ffb016c7074610efcf5097fbeddd419da082，tree3ea1db6502c57286611a4fae360e0801e20c684a；恰好三文件。push后ls-remote与gh headRefOid一致。",
+          "PR353 https://github.com/HiQ-AI/dataset/pull/353 独立读回OPEN、base main、原head分支/new SHA、中文body与pr353-body.md一致；未合main。",
+          "本地UAT分支worktree-expert-withdraw-uat2：基线152a609f，经必要972b及新修复cherry-pick，head a5bae0bc26d1fed97b69a7733ea0e1d51663690e、tree5bfe8b92d06d3e358b8e3e4c063dc94ab9b690e2；无冲突、status干净，outbox关键三文件对基线无差异。",
+          "原生pwsh-9 completed/exit0；uat-integration-tests.log:995为17项0失败/错误/跳过（分配4、附件2、终态2、PG9）。独立psql夹具表0/其他连接0；精确原pgdata停止，pwsh-8完整收齐completed/exit0及database system is shut down。"
+        ],
+        "limitations": [
+          "未推进远端UAT、创建UAT PR、触发构建、改镜像或部署；远端UAT仍152a609f。最终批准应绑定a5bae0bc/tree5bfe8b92与验证后产物，动作前核验最新base与运行现场。",
+          "关键新增发布风险：当前Deployment固定旧digest d83f9fb27c2cd66d436645ed94a39ec5bec130acf4c79d22d082cccd96ea8859；流水线只推浮动tag并restart，须批准经构建/registry核实的新digest精确更新唯一dataset容器，不能以CI success宣称新版本运行。",
+          "保护规则API403是局限，不证明无规则；新UAT PR需实际checks/状态核验，不绕过规则。",
+          "PG验证非完整Spring MVC/鉴权/UI或审核→打回→重提E2E；迁入的ApprovalMultiReviewerSettlementTest本轮未执行，17项不涵盖它。旧越界全仓测试共享副作用仍未知。",
+          "历史uat-approval-plan中的A待审批/禁止前置测试已由最新Web更正取代，当前状态和最终待决以round-5.md为准。"
+        ],
+        "status": "completed",
+        "summary": "已完成本次授权前置工作：原三文件提交并快进push原开发分支，PR353正文更新且独立回读；独立本地UAT集成候选已形成，显式隔离17项全通过并清理。最终UAT远端推进、构建及工作负载更新未执行，交统筹申请最终决定；本状态仅代表受托小目标，不代表整体部署完成。"
+      },
+      "error": null
+    },
+    {
+      "inputVersion": 10,
+      "current": true,
+      "output": null,
+      "error": {
+        "code": "execution_no_submission"
+      }
+    }
+  ]
+}
