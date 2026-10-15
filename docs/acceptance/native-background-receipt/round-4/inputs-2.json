@@ -1,0 +1,9 @@
+{
+  "ObserverPackage": "D:/dsh_home/packages/native-background-receipt/zzusp-dingtalk-dsh-observer-1.0.0.tgz",
+  "ExpectedPackageSha256": "971e078f8b774de11fb6cfb8d02952b60fef895e9311f79b6c735abef4f6e5fc",
+  "ExpectedPid": 28820,
+  "EvidenceDirectory": "D:/codex/worktrees/native-background-receipt/dingtalk-dsh-assistant/docs/acceptance/native-background-receipt/round-4/deployment-2",
+  "ExpectedObserverPackageSha256": "c8b70537e04798a7c8783bdf2dd68305d97728a4f3c8ac4092580096d58bedc9",
+  "Package": "D:/dsh_home/packages/native-background-receipt/zzusp-dingtalk-dsh-assistant-1.0.0.tgz",
+  "ExpectedProfileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96"
+}

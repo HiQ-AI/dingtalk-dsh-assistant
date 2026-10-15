@@ -75,6 +75,18 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 迁根必须先零写入Check、确认唯一写者和原生回合停稳，再迁当前路由/材料/Workspace/数据库保护路径绑定。原生记录通过官方persistence.create新cwd+append原事件，并核验原事件前缀摘要；历史input、收据和业务正文不全文替换。既有目标子项不能覆盖；所有新位置独立读回后才清除迁移暂存。一次性脚本与原生续办证明在`docs/acceptance/workspace-root-restore/`，固定旧源不存在时不可重复apply。普通部署不需要重做数据迁移。
 
+## 显式后台服务回执恢复
+
+显式 run_in_background 返回原生 job 身份及 running 收据，不等待常驻服务退出；前台超时提升仍等待终态。服务归单个 execution，使用原生 job_output/job_kill 检查与停止；提交前应清理服务，执行排空也会停止残留原 job 并记录真实终态。后台 operation 在排空结算前保持 starting，running 不是业务验收。
+
+job_list/job_output 只读取原生注册表。会话释放后job已移除是实际查询失败，原持久终态仍在operation/job收据中，不能据此重启生产者。旧版将该查询误记unknown时，原统筹调用task_operation_reconcile；Host仅接受精确missing-job拒绝、原调用摘要、正常回合结束及排空证明，记failed/noEffect并保留原始账。同名不受信工具、job_kill、写效果和任意其他错误不在恢复范围。
+
+部署脚本在实际执行阶段自动创建工作树缺省的 docs/tmp 锁目录；Check 阶段仍为零写入。失败轮次证据保留，修复后使用新的证据目录。
+
+显式指定Observer包时，安装后以该包及源码核验安装内容，不要求旧Observer manifest字节摘要保持：pnpm pack可能仅格式化JSON。profile仍要求原字节摘要。若安装已成功却因旧manifest字节门禁误报，先独立核验两包、profile、旧PID和离线账本，再沿原计划任务启动阶段完成；不重新安装或手改账。
+
+已陷入旧 collector 的调用不能仅换包热恢复。先核对专用服务 PID、启动时间、数据目录、端口和原 operation/job/session，零副作用检查后正常停止该专用服务，让旧 collector 产生真实工具终态。保留原 pgdata 和原始收据，不重放旧启动、不手改账。静止实例双包 Check/部署后，由原任务回读停机事实及对账结果；需要再次使用服务时，原执行必须以明确的后续服务生命周期启动同一隔离数据目录，不能把旧 unknown 换身份重放。部署健康不证明业务测试通过。
+
 ## 原生文件前置拒绝恢复
 
 本修复仅修改 Assistant，无 schema 迁移。按本页静止实例原生退出切换流程打包、零写Check、排空退出、双包安装与独立回读。即使Observer未改也需显式提供当前已核验的包及摘要。安装后先检查精确包摘要、新进程与健康；旧 edit/write unknown 由 task_operation_reconcile 读取原生工具日志中的结构化错误码及同轮结束记录，不凭文件内容判成功。对账只记原调用 failed/noEffect 并保留审计，由原执行会话读取当前文件后按原授权补缺，不在部署脚本重放编辑或重复业务UAT部署。

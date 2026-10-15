@@ -1,0 +1,74 @@
+{
+  "taskEnabled": true,
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "packageSha256": "2168cc5604bc9c1ee0311bbd6b62bbbe01d1bc085f5991705ac0959454c69266",
+  "creationDate": "2026-10-15T12:06:43.730593+08:00",
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 3,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T04:06:49.888Z",
+            "readyAt": "2026-10-15T04:06:50.526Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T04:06:50.526Z",
+            "succeededAt": "2026-10-15T04:06:51.345Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T04:06:49.923Z",
+            "readyAt": "2026-10-15T04:06:50.493Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T04:06:50.494Z",
+            "succeededAt": "2026-10-15T04:06:51.371Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T04:06:49.942Z",
+        "readyAt": "2026-10-15T04:06:50.554Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "newPid": 63408,
+  "installedVersion": "1.0.0",
+  "backupCreated": false
+}

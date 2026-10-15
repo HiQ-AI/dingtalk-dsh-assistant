@@ -1,0 +1,74 @@
+{
+  "taskEnabled": true,
+  "newPid": 42240,
+  "observerPackageSha256": "c8b70537e04798a7c8783bdf2dd68305d97728a4f3c8ac4092580096d58bedc9",
+  "profileSha256": "fc9b7dc5b8780093510ef53d1aaae69764aac7791d93ee89328b6a0138dd0c96",
+  "health": {
+    "status": "degraded",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 2,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T03:39:04.999Z",
+            "readyAt": "2026-10-15T03:39:05.438Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T03:39:05.438Z",
+            "succeededAt": "2026-10-15T03:39:06.515Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-10-15T03:39:05.013Z",
+            "readyAt": "2026-10-15T03:39:05.413Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-10-15T03:39:05.414Z",
+            "succeededAt": "2026-10-15T03:39:06.359Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-10-15T03:39:05.03Z",
+        "readyAt": "2026-10-15T03:39:05.457Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "packageSha256": "971e078f8b774de11fb6cfb8d02952b60fef895e9311f79b6c735abef4f6e5fc",
+  "reinstalled": false,
+  "installedPackagesVerified": true
+}

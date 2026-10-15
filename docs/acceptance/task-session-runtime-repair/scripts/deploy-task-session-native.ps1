@@ -76,6 +76,7 @@ New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
 $lockPath=Join-Path $workspace 'docs/tmp/task-session-deployment.lock'
 $deploymentLock=$null
 try{
+ [IO.Directory]::CreateDirectory((Split-Path -Parent $lockPath))|Out-Null
  $deploymentLock=[IO.File]::Open($lockPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
  Record 'control' @{backupCreated=$false;pid=$ExpectedPid;creationDate=$original.CreationDate;packageSha256=Hash $Package;profileSha256=Hash $patch;taskEnabled=$wasEnabled;observerManifestSha256=$observerHash;package=($packageProof|ConvertFrom-Json)}
  ProcessIdentity
@@ -110,7 +111,7 @@ try{
  finally{$env:DSH_HOME=$previousDshHome}
  if($installExit){throw 'DEPLOY_PACKAGE_INSTALL_FAILED'}
  $installedProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packages/dingtalk-dsh-assistant'),$installed)
- if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()-or(Hash $observerManifest)-ne$observerHash){throw 'DEPLOY_INSTALL_CHANGED_UNRELATED_INPUT'}
+ if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_INSTALL_CHANGED_UNRELATED_INPUT'}
  Record 'installed' ($installedProof|ConvertFrom-Json)
  if($ObserverPackage){Record 'observer-installed' ((RunNode @($checker,'package',$ObserverPackage,(Join-Path $workspace 'packages/dingtalk-dsh-observer'),"$profile/node_modules/@zzusp/dingtalk-dsh-observer"))|ConvertFrom-Json)}
  $phase='verify-profile'

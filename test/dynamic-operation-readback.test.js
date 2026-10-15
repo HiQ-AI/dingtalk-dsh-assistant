@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { inspectStoppedNativeOperation, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, legacyDrainedError, readExecutionProgress } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 import { isNativeFilePrecondition } from '../packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
@@ -37,6 +37,28 @@ function webFailure() {
  f.end={seq:5,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}};f.original.push(f.end)
  return f
 }
+
+test('历史原生job读取仅凭精确missing-job拒绝和完整终态结算，写工具与替换身份仍拒绝', async()=>{
+ const make=()=>{
+  const f=webFailure()
+  f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='job_output'
+  f.operation.definition.effectClass='unknown'
+  f.call.data.arguments=JSON.stringify({job_id:'pwsh-7'})
+  f.operation.definition.argumentsDigest=hash(JSON.parse(f.call.data.arguments))
+  f.result.data.message.content=[{type:'text',text:'Error: unknown job pwsh-7'}]
+  f.operation.result.resultDigest=hash(f.result.data.message.content)
+  return f
+ }
+ const proof=await inspectFailedNativeJobRead(make())
+ assert.equal(proof.kind,'native-job-read-missing');assert.equal(proof.jobId,'pwsh-7');assert.equal(proof.noEffect,true)
+ for(const mutate of [
+  f=>{f.operation.definition.toolName='job_kill'},f=>{f.operation.definition.effectClass='write'},
+  f=>{f.operation.definition.nativeJobRead=false},f=>{f.operation.result.cancelled=true},
+  f=>{f.result.data.message.isError=false},f=>{f.result.data.message.content[0].text='Error: arbitrary failure'},
+  f=>{f.call.data.arguments=JSON.stringify({job_id:'pwsh-8'})},f=>{f.execution.drained=false},
+  f=>{f.end.data.reason.kind='aborted'},f=>{f.jobs.push({status:'running'})},
+ ]){const f=make();mutate(f);assert.equal(await inspectFailedNativeJobRead(f),null)}
+})
 
 function fileFailure(code = 'FS_NOT_OBSERVED') {
  const f=webFailure()

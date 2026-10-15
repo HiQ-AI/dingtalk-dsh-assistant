@@ -681,16 +681,20 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       operation.job = clone(job); operation.updatedAt = stamp; put('dynamic_operations', operation)
       return changed({ operation })
     }
-    if (kind === 'operation.reconcile-web-read' || kind === 'operation.reconcile-file-precondition') {
+    if (kind === 'operation.reconcile-web-read' || kind === 'operation.reconcile-file-precondition' || kind === 'operation.reconcile-job-read') {
       const task = currentTask(a.binding), operation = get('dynamic_operations', a.operationId), proof = record(a.proof)
       const execution = get('dynamic_executions', operation.executionId)
       const filePrecondition = kind === 'operation.reconcile-file-precondition'
+      const jobRead = kind === 'operation.reconcile-job-read'
       if (operation.taskId !== task.taskId || operation.state !== 'unknown' || digest(operation) !== proof.operationDigest
-        || proof.kind !== (filePrecondition ? 'native-file-precondition-failed' : 'native-web-read-failed') || proof.operationId !== operation.operationId
+        || proof.kind !== (jobRead ? 'native-job-read-missing' : filePrecondition ? 'native-file-precondition-failed' : 'native-web-read-failed') || proof.operationId !== operation.operationId
         || proof.taskId !== task.taskId || proof.executionId !== execution.executionId || proof.sessionId !== execution.sessionId
         || !execution.drained || execution.recovering || operation.result?.isError !== true || operation.result.cancelled === true
         || proof.toolName !== operation.definition.toolName
-        || (filePrecondition ? !isNativeFilePrecondition(operation.definition.toolName, { code: proof.errorCode }) || proof.noEffect !== true
+        || (jobRead ? operation.definition.toolName !== 'job_output' || operation.definition.nativeJobRead !== undefined
+          || operation.definition.effectClass !== 'unknown'
+          || typeof proof.jobId !== 'string' || !proof.jobId || proof.noEffect !== true
+          : filePrecondition ? !isNativeFilePrecondition(operation.definition.toolName, { code: proof.errorCode }) || proof.noEffect !== true
           || operation.result.errorCode && operation.result.errorCode !== proof.errorCode
           : !['web_fetch', 'web_search'].includes(operation.definition.toolName)
             || operation.definition.effectClass !== undefined && !['read', 'pure'].includes(operation.definition.effectClass))
@@ -700,10 +704,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         || !Number.isSafeInteger(proof.turnEndSequence) || proof.turnEndSequence <= proof.resultSequence) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
       const previousObservation = clone(operation)
       operation.state = 'failed'; operation.updatedAt = stamp
-      operation.evidenceRef = `${filePrecondition ? 'native-file-precondition' : 'native-web-read'}:${operation.operationId}:${digest(proof)}`
+      operation.evidenceRef = `${jobRead ? 'native-job-read' : filePrecondition ? 'native-file-precondition' : 'native-web-read'}:${operation.operationId}:${digest(proof)}`
       operation.result = { reconciled: true, previousObservation, proof,
         ...(filePrecondition ? { noEffect: true, errorCode: proof.errorCode } : {}),
-        instruction: filePrecondition ? 'The original file mutation was rejected before publication. Read the current file and correct the request within the original authorization. This is not success or automatic replay.'
+        ...(jobRead ? { noEffect: true } : {}),
+        instruction: jobRead ? 'The original native job read rejected a missing job before reading output. Retain the failed receipt; do not replay the job or its producer command.'
+          : filePrecondition ? 'The original file mutation was rejected before publication. Read the current file and correct the request within the original authorization. This is not success or automatic replay.'
           : 'The original web read returned an error and its native turn ended. This is not success and does not replay the request.' }
       put('dynamic_operations', operation); release(operation.operationId)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed' }, `wake:${commandId}`)
