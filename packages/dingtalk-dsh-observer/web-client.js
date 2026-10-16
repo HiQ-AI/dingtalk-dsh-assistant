@@ -899,6 +899,25 @@ window.__ModuleLoader__.load({
       .observer-session-detail .timeline-date { font-variant-numeric: tabular-nums; font-size: 11px; color: ${colors.muted}; }
       .observer-session-detail .timeline-heading > span, .observer-session-detail .timeline-note { font-size: 12px; }
       .observer-session-detail .timeline-note { font-size: 11px; line-height: 16px; }
+      .observer-session-detail .timeline-navigator { min-width: 0; padding-bottom: 2px; }
+      .observer-session-detail .timeline-range-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; color: ${colors.muted}; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .observer-session-detail .timeline-range-caption button { flex: none; color: inherit; background: transparent; border: 0; font: inherit; padding: 4px; border-radius: 4px; }
+      .observer-session-detail .timeline-range-caption button:disabled { opacity: .4; }
+      .observer-session-detail .timeline-range-caption button:not(:disabled):hover { color: ${colors.accent}; background: ${colors.surface2}; }
+      .observer-session-detail .timeline-overview { position: relative; height: 32px; margin: 4px 9px 0; background: ${colors.surface2}; border-radius: 4px; }
+      .observer-session-detail .timeline-overview-activity { position: absolute; height: 3px; min-width: 1px; opacity: .35; border-radius: 1px; pointer-events: none; }
+      .observer-session-detail .timeline-range-window { position: absolute; top: 0; bottom: 0; box-sizing: border-box; background: color-mix(in srgb, #5968cf 12%, transparent); border: 1px solid #7d89df; border-radius: 4px; }
+      .observer-session-detail .timeline-range-window button { position: absolute; top: -1px; bottom: -1px; touch-action: none; color: #5968cf; font: inherit; border: 0; border-radius: 3px; padding: 0; }
+      .observer-session-detail .timeline-range-pan { left: 0; width: 100%; background: transparent; cursor: grab; font-size: 11px !important; }
+      .observer-session-detail .timeline-range-pan:active { cursor: grabbing; }
+      .observer-session-detail :is(.timeline-range-left, .timeline-range-right) { width: 18px; background: transparent; cursor: ew-resize; }
+      .observer-session-detail :is(.timeline-range-left, .timeline-range-right) > span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); box-sizing: border-box; width: 5px; height: 18px; border: 1px solid #7d89df; border-radius: 1px; background: ${colors.surface}; }
+      .observer-session-detail :is(.timeline-range-left, .timeline-range-right):hover > span { border-color: #5968cf; background: color-mix(in srgb, #5968cf 12%, ${colors.surface}); }
+      .observer-session-detail .timeline-range-left { left: -9px; }
+      .observer-session-detail .timeline-range-right { right: -9px; }
+      .observer-session-detail .timeline-range-window .timeline-range-pan:hover { background: color-mix(in srgb, #5968cf 25%, transparent); }
+      .observer-session-detail :is(.timeline-range-window button, .timeline-range-caption button):focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
+      .observer-session-detail .timeline-overview-labels { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0 0; color: ${colors.muted}; font-size: 10px; font-variant-numeric: tabular-nums; }
       .observer-session-detail .timeline-scroll { overflow-x: auto; padding-bottom: 4px; }
       .observer-session-detail .timeline-scroll:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
       .observer-session-detail .timeline-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 820px; table-layout: fixed; font-size: 12px; }
@@ -909,9 +928,7 @@ window.__ModuleLoader__.load({
       .observer-session-detail .timeline-name { display: block; position: relative; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; line-height: 20px; padding-left: 14px; }
       .observer-session-detail .timeline-name::before { content: ''; position: absolute; left: 1px; top: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--timeline-lane-color); }
       .observer-session-detail .timeline-table tbody tr:last-child .timeline-name::before { border-radius: 2px; }
-      .observer-session-detail .timeline-row-info { display: none; position: absolute; z-index: 5; top: 100%; left: 0; width: max-content; max-width: 280px; padding: 6px 8px; border: 1px solid ${colors.border}; border-radius: 4px; background: ${colors.surface}; color: inherit; font-weight: 400; white-space: normal; box-shadow: 0 2px 8px rgba(0,0,0,.08); pointer-events: none; }
       .observer-session-detail .timeline-table th:is(:hover, :focus) { z-index: 12; }
-      .observer-session-detail .timeline-table th:is(:hover, :focus) .timeline-row-info { display: block; }
       .observer-session-detail .timeline-table th:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: -2px; }
       .observer-session-detail .timeline-table td { padding: 0; }
       .observer-session-detail .timeline-table tbody tr:first-child .timeline-track { margin-bottom: 3px; }
@@ -929,9 +946,6 @@ window.__ModuleLoader__.load({
       .observer-session-detail .timeline-activity { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
       .observer-session-detail .timeline-duration { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; }
       @container (max-width: 130px) { .observer-session-detail .timeline-activity { display: none; } .observer-session-detail .timeline-bar > span { gap: 0; padding-inline: 4px; } }
-      .observer-session-detail .timeline-tooltip { display: none; position: absolute; left: 0; top: 100%; z-index: 8; box-sizing: border-box; width: max-content; max-width: min(320px, 100%); padding: 6px 8px; background: ${colors.surface}; color: inherit; border: 1px solid ${colors.border}; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.08); white-space: pre-line; overflow-wrap: anywhere; font-size: 12px; line-height: 18px; pointer-events: none; }
-      .observer-session-detail .timeline-track:has(:is(:hover, :focus)) { z-index: 6; }
-      .observer-session-detail :is(.timeline-bar, .timeline-milestone):is(:hover, :focus) + .timeline-tooltip { display: block; }
       .observer-session-detail .timeline-bar:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
       .observer-session-detail .timeline-milestone { position: absolute; top: 6px; transform: translateX(-50%); width: 18px; height: 22px; padding: 0; border: 0; background: transparent; color: var(--timeline-lane-color); cursor: help; z-index: 3; }
       .observer-session-detail .timeline-milestone-tick { position: absolute; left: 50%; top: -3px; transform: translateX(-50%); width: 1px; height: 28px; background: currentColor; opacity: .8; }
@@ -952,6 +966,34 @@ window.__ModuleLoader__.load({
     `
     function TaskExecutionTimeline({ timeline }) {
       const [now, setNow] = useState(Date.now)
+      const tooltipRef = useRef(null), tooltipTarget = useRef(null)
+      const [windowRange, setWindowRange] = useState(null)
+      const dragRange = useRef(null), overviewRef = useRef(null)
+      const hideTooltip = () => {
+        const node = tooltipRef.current
+        if (!node) return
+        if (node.matches(':popover-open')) node.hidePopover()
+        node.hidden = true
+      }
+      useEffect(() => {
+        const onScroll = event => {
+          if (event.target?.nodeType && tooltipRef.current?.contains(event.target)) return
+          if (tooltipTarget.current && document.activeElement === tooltipTarget.current) placeTooltip({ currentTarget: tooltipTarget.current })
+          else hideTooltip()
+        }
+        const onKey = event => { if (event.key === 'Escape') hideTooltip() }
+        window.addEventListener('scroll', onScroll, true)
+        window.addEventListener('resize', hideTooltip)
+        window.addEventListener('keydown', onKey)
+        return () => {
+          window.removeEventListener('scroll', onScroll, true)
+          window.removeEventListener('resize', hideTooltip)
+          window.removeEventListener('keydown', onKey)
+          tooltipRef.current?.remove()
+          tooltipRef.current = null
+          tooltipTarget.current = null
+        }
+      }, [])
       const live = timeline?.task?.active || [...(timeline?.executions || []), timeline?.human].some(row => row?.segments?.some(segment => segment.active))
       useEffect(() => {
         if (!live) return
@@ -965,26 +1007,105 @@ window.__ModuleLoader__.load({
       const totalEvents = timeline.task.events || []
       const dates = [timeline.task.startedAt, timeline.task.endedAt, ...totalSegments.flatMap(segment => [segment.startedAt, segment.endedAt]), ...totalEvents.map(event => event.at), ...rows.flatMap(row => [...row.segments.flatMap(segment => [segment.startedAt, segment.endedAt]), ...row.milestones.map(event => event.at)])].map(value => value ? Date.parse(value) : NaN).filter(Number.isFinite)
       if (live) dates.push(now)
-      const start = dates.length ? Math.min(...dates) : now, end = Math.max(start + 1000, ...dates)
+      const fullStart = dates.length ? Math.min(...dates) : now
+      const fullEnd = Math.max(fullStart + 1000, ...dates)
+      const minSpan = Math.min(1000, fullEnd - fullStart)
+      const clampRange = (from, to) => {
+        const span = Math.max(minSpan, Math.min(fullEnd - fullStart, to - from))
+        const left = Math.max(fullStart, Math.min(from, fullEnd - span))
+        return [left, left + span]
+      }
+      const [start, end] = windowRange ? clampRange(...windowRange) : [Math.max(fullStart, fullEnd - 3600000), fullEnd]
       const position = date => Math.max(0, Math.min(100, (Date.parse(date) - start) / (end - start) * 100))
+      const overviewPosition = value => (value - fullStart) / (fullEnd - fullStart) * 100
+      const axisDate = fraction => start + (end - start) * fraction
+      const selectRange = (kind, delta, snapshot = [start, end]) => {
+        const [from, to] = snapshot
+        hideTooltip()
+        setWindowRange(kind === 'left' ? [Math.max(fullStart, Math.min(to - minSpan, from + delta)), to]
+          : kind === 'right' ? [from, Math.min(fullEnd, Math.max(from + minSpan, to + delta))]
+            : clampRange(from + delta, to + delta))
+      }
+      const beginRangeDrag = (event, kind) => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        const width = overviewRef.current.getBoundingClientRect().width
+        dragRange.current = { kind, x: event.clientX, range: [start, end], scale: (fullEnd - fullStart) / width }
+        event.currentTarget.setPointerCapture(event.pointerId)
+      }
+      const moveRangeDrag = event => {
+        const drag = dragRange.current
+        if (drag) selectRange(drag.kind, (event.clientX - drag.x) * drag.scale, drag.range)
+      }
+      const endRangeDrag = () => { dragRange.current = null }
+      const rangeKeyboard = (event, kind) => {
+        const step = Math.max(1000, (fullEnd - fullStart) / (event.shiftKey ? 10 : 100))
+        let delta
+        if (event.key === 'ArrowLeft') delta = -step
+        else if (event.key === 'ArrowRight') delta = step
+        else if (event.key === 'Home') delta = fullStart - (kind === 'right' ? end : start)
+        else if (event.key === 'End') delta = fullEnd - (kind === 'left' ? start : end)
+        else return
+        event.preventDefault()
+        selectRange(kind, delta)
+      }
+      const rangeControl = (kind, label, extra = {}) => ({
+        type: 'button', className: `timeline-range-${kind}`, role: 'slider', 'aria-label': label,
+        'aria-valuemin': kind === 'right' ? start + minSpan : fullStart,
+        'aria-valuemax': kind === 'left' ? end - minSpan : kind === 'pan' ? fullEnd - (end - start) : fullEnd,
+        'aria-valuenow': kind === 'right' ? end : start,
+        'aria-valuetext': `${fmt(new Date(start).toISOString())} 至 ${fmt(new Date(end).toISOString())}`,
+        onPointerDown: event => beginRangeDrag(event, kind), onPointerMove: moveRangeDrag,
+        onPointerUp: endRangeDrag, onPointerCancel: endRangeDrag, onLostPointerCapture: endRangeDrag,
+        onKeyDown: event => rangeKeyboard(event, kind), ...extra,
+      })
       const time = value => value ? fmt(value) : '未记录'
       const sameDay = new Date(start).toDateString() === new Date(end).toDateString()
+      const navTime = value => new Date(value).toLocaleTimeString('zh-CN', { hour12: false })
+      const overviewTime = value => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
       const dateLabel = new Date(start).toLocaleDateString('zh-CN') + (sameDay ? '' : ` — ${new Date(end).toLocaleDateString('zh-CN')}`)
       const status = value => ({ completed: '已完成', recorded: '已记录', running: '执行中', queued: '排队中', succeeded: '已成功', failed: '失败', stale: '已失效', cancelled: '已取消', 'waiting-reply': '等待处理', answered: '已答复', superseded: '已失效', closed: '已关闭' })[value] || value
       const range = segment => `${time(segment.startedAt)} — ${segment.active ? '当前' : time(segment.endedAt)}`
-      const placeTooltip = event => {
-        const target = event.currentTarget, tooltip = target.nextElementSibling, bounds = target.getBoundingClientRect()
-        const width = Math.min(320, window.innerWidth - 16)
-        tooltip.style.position = 'fixed'
-        tooltip.style.width = `${width}px`
-        tooltip.style.left = `${Math.max(8, Math.min(bounds.left, window.innerWidth - width - 8))}px`
-        tooltip.style.top = `${Math.max(8, Math.min(bounds.bottom + 4, window.innerHeight - tooltip.offsetHeight - 8))}px`
+      function placeTooltip(event) {
+        const target = event.currentTarget, bounds = target.getBoundingClientRect()
+        tooltipTarget.current = target
+        let node = tooltipRef.current
+        if (!node) {
+          node = document.createElement('div')
+          node.className = 'timeline-tooltip'
+          node.setAttribute('role', 'tooltip')
+          node.setAttribute('popover', 'manual')
+          node.addEventListener('mouseleave', hideTooltip)
+          document.body.appendChild(node)
+          tooltipRef.current = node
+        }
+        const theme = window.getComputedStyle(target.closest('.detail-timeline'))
+        node.textContent = target.getAttribute('aria-label')
+        node.hidden = false
+        Object.assign(node.style, {
+          position: 'fixed', inset: 'auto', margin: '0', boxSizing: 'border-box',
+          width: `${Math.min(320, window.innerWidth - 16)}px`,
+          maxHeight: `${window.innerHeight - 16}px`, overflowY: 'auto',
+          padding: '6px 8px', border: '1px solid rgba(127,127,127,.35)',
+          borderRadius: '4px', background: theme.backgroundColor, color: theme.color,
+          fontFamily: theme.fontFamily, fontSize: '12px', lineHeight: '18px',
+          whiteSpace: 'pre-line', overflowWrap: 'anywhere', boxShadow: '0 2px 8px rgba(0,0,0,.08)',
+          zIndex: '1000', left: '8px', top: '8px',
+        })
+        if (typeof node.showPopover === 'function' && !node.matches(':popover-open')) node.showPopover()
+        const width = node.getBoundingClientRect().width, height = node.getBoundingClientRect().height
+        const below = bounds.bottom + 4
+        node.style.left = `${Math.max(8, Math.min(bounds.left, window.innerWidth - width - 8))}px`
+        node.style.top = `${Math.max(8, Math.min(below + height <= window.innerHeight - 8 ? below : bounds.top - height - 4, window.innerHeight - height - 8))}px`
+      }
+      const leaveTooltip = event => {
+        if (!event.relatedTarget?.nodeType || !tooltipRef.current?.contains(event.relatedTarget)) hideTooltip()
       }
       const elapsed = segment => fmtDuration(Math.max(0, (segment.active ? now : Date.parse(segment.endedAt)) - Date.parse(segment.startedAt)))
       const describe = (segment, total, human) => `${segment.label || '任务执行'} · ${range(segment)} · ${total ? '本次处理历时' : human ? '人工处理等待' : '执行区段历时'} ${elapsed(segment)}${segment.active ? '（进行中）' : ''}`
       const markerLayout = row => {
         const groups = []
-        for (const event of [...row.milestones].filter(event => Number.isFinite(Date.parse(event.at))).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
+        for (const event of [...row.milestones].filter(event => Number.isFinite(Date.parse(event.at)) && Date.parse(event.at) >= start && Date.parse(event.at) <= end).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
           const group = groups.at(-1), at = position(event.at)
           if (group && Date.parse(event.at) === Date.parse(group.events[0].at)) group.events.push(event)
           else groups.push({ at, events: [event] })
@@ -992,31 +1113,45 @@ window.__ModuleLoader__.load({
         return groups
       }
       const markers = row => markerLayout(row).map(group => {
-          const nearby = row.milestones.filter(event => Number.isFinite(Date.parse(event.at)) && Math.abs(position(event.at) - group.at) <= 3).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+          const nearby = row.milestones.filter(event => Number.isFinite(Date.parse(event.at)) && Date.parse(event.at) >= start && Date.parse(event.at) <= end && Math.abs(position(event.at) - group.at) <= 3).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
           const content = nearby.map(event => `${time(event.at)} · 阶段成果：${event.summary}`).join('\n')
           return React.createElement(React.Fragment, { key: group.events[0].id },
-            React.createElement('button', { type: 'button', className: 'timeline-milestone', style: { left: `${group.at}%` }, 'data-recorded-at': group.events[0].at, 'aria-label': content, title: content, onFocus: placeTooltip, onMouseEnter: placeTooltip },
-              React.createElement('span', { className: 'timeline-milestone-tick', 'aria-hidden': true })),
-            React.createElement('span', { className: 'timeline-tooltip', 'aria-hidden': true }, content))
+            React.createElement('button', { type: 'button', className: 'timeline-milestone', style: { left: `${group.at}%` }, 'data-recorded-at': group.events[0].at, 'aria-label': content, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip },
+              React.createElement('span', { className: 'timeline-milestone-tick', 'aria-hidden': true })))
         })
       const bar = (segment, total = false, human = false) => {
         if (!segment.startedAt || !segment.active && !segment.endedAt) return null
+        const segmentEnd = segment.active ? Math.max(now, Date.parse(segment.startedAt)) : Date.parse(segment.endedAt)
+        if (segmentEnd < start || Date.parse(segment.startedAt) > end) return null
         const left = position(segment.startedAt), right = position(segment.active ? new Date(Math.max(now, Date.parse(segment.startedAt))).toISOString() : segment.endedAt)
         const description = describe(segment, total, human)
         return React.createElement(React.Fragment, { key: segment.id || 'total' },
           React.createElement('span', { className: `timeline-bar${total ? ' timeline-total' : ''}${['failed','cancelled','superseded','stale'].includes(segment.status) ? ' timeline-muted' : ''}`,
-            style: { left: `${left}%`, width: `${Math.max(0, right - left)}%` }, title: description, tabIndex: 0, role: 'img', 'aria-label': description, onFocus: placeTooltip, onMouseEnter: placeTooltip },
-            React.createElement('span', null, React.createElement('span', { className: 'timeline-activity' }, segment.label || '任务执行'), React.createElement('span', { className: 'timeline-duration' }, elapsed(segment)))),
-          React.createElement('span', { className: 'timeline-tooltip', 'aria-hidden': true }, description))
+            style: { left: `${left}%`, width: `${Math.max(0, right - left)}%` }, tabIndex: 0, role: 'img', 'aria-label': description, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip },
+            React.createElement('span', null, React.createElement('span', { className: 'timeline-activity' }, segment.label || '任务执行'), React.createElement('span', { className: 'timeline-duration' }, elapsed(segment)))))
       }
       return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' },
         React.createElement('div', { className: 'timeline-heading' }, React.createElement('div', { className: 'timeline-title' }, React.createElement('h2', null, '执行时间'), React.createElement('span', { className: 'timeline-count' }, `${timeline.executions.length} 个会话`)), React.createElement('span', { className: 'timeline-date', title: '时间按浏览器本地时区显示' }, dateLabel)),
+        React.createElement('div', { className: 'timeline-navigator', 'aria-label': '时间范围导航器', 'data-full-start': fullStart, 'data-full-end': fullEnd, 'data-start': start, 'data-end': end },
+          React.createElement('div', { className: 'timeline-range-caption' },
+            React.createElement('span', null, `${navTime(start)} — ${navTime(end)} · ${fmtDuration(end - start)}`),
+            React.createElement('button', { type: 'button', disabled: !windowRange, onClick: () => { hideTooltip(); setWindowRange(null) } }, '回到最新')),
+          React.createElement('div', { className: 'timeline-overview', ref: overviewRef },
+            ...rows.flatMap((row, rowIndex) => row.segments.map(part => React.createElement('span', { key: `${row.id}:${part.id}`, className: 'timeline-overview-activity', style: {
+              left: `${overviewPosition(Date.parse(part.startedAt))}%`, width: `${Math.max(0, overviewPosition(part.active ? now : Date.parse(part.endedAt)) - overviewPosition(Date.parse(part.startedAt)))}%`,
+              top: `${7 + rowIndex % 4 * 5}px`, background: row.id === 'human' ? '#b48125' : '#5968cf',
+            }, 'aria-hidden': true }))),
+            React.createElement('div', { className: 'timeline-range-window', style: { left: `${overviewPosition(start)}%`, width: `${overviewPosition(end) - overviewPosition(start)}%` } },
+              React.createElement('button', rangeControl('pan', '平移时间范围'), React.createElement('span', { 'aria-hidden': true }, '⋮⋮')),
+              React.createElement('button', rangeControl('left', '调整开始时间'), React.createElement('span', { 'aria-hidden': true })),
+              React.createElement('button', rangeControl('right', '调整结束时间'), React.createElement('span', { 'aria-hidden': true })))),
+          React.createElement('div', { className: 'timeline-overview-labels', 'aria-hidden': true }, React.createElement('span', null, overviewTime(fullStart)), React.createElement('span', null, overviewTime(fullEnd)))),
         React.createElement('div', { className: 'timeline-scroll', role: 'region', tabIndex: 0, 'aria-label': '时间泳道图，可横向滚动；完整活动与时间见下方明细' },
           React.createElement('table', { className: 'timeline-table' }, React.createElement('caption', { className: 'timeline-sr' }, '任务、执行会话与人工介入时间，区段之间保留空档'),
-            React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', { scope: 'col' }, '会话 / 时间'), React.createElement('th', { scope: 'col' }, React.createElement('div', { className: 'timeline-axis' }, ...[0, 1, 2, 3, 4].map(index => React.createElement('span', { key: index, style: { left: `${index * 25}%` } }, new Date(start + (end - start) * index / 4).toLocaleString('zh-CN', { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }), hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }))))))),
+            React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', { scope: 'col' }, '会话 / 时间'), React.createElement('th', { scope: 'col' }, React.createElement('div', { className: 'timeline-axis' }, ...[0, 1, 2, 3, 4].map(index => React.createElement('span', { key: index, style: { left: `${index * 25}%` } }, new Date(axisDate(index / 4)).toLocaleString('zh-CN', { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }), hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }))))))),
             React.createElement('tbody', null,
               React.createElement('tr', null, React.createElement('th', { scope: 'row' }, '任务执行', timeline.task.complete === false ? React.createElement('small', { className: 'timeline-total-missing' }, '部分历史未记录') : null), React.createElement('td', null, React.createElement('div', { className: 'timeline-track timeline-total-track' }, ...totalSegments.map(segment => bar(segment, true)), !totalSegments.length ? React.createElement('span', { className: 'timeline-empty' }, '完成 / 重开时间未完整记录') : null), React.createElement('span', { className: 'timeline-sr' }, ...totalSegments.map(segment => `${segment.label} · ${range(segment)}；`)))),
-              ...rows.map(row => React.createElement('tr', { key: row.id }, React.createElement('th', { scope: 'row', tabIndex: 0, 'aria-label': `${row.title}${row.status ? ` · ${status(row.status)}` : ''}${row.complete ? '' : ' · 部分区间未记录'}` }, React.createElement('span', { className: 'timeline-name' }, row.title), React.createElement('span', { className: 'timeline-row-info', 'aria-hidden': true }, `${row.title}${row.status ? ` · ${status(row.status)}` : ''}${row.complete ? '' : ' · 部分区间未记录'}`), row.status ? React.createElement('small', null, status(row.status)) : null, !row.complete ? React.createElement('small', null, '部分区间未记录') : null),
+              ...rows.map(row => React.createElement('tr', { key: row.id }, React.createElement('th', { scope: 'row', tabIndex: 0, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip, 'aria-label': `${row.title}${row.status ? ` · ${status(row.status)}` : ''}${row.complete ? '' : ' · 部分区间未记录'}` }, React.createElement('span', { className: 'timeline-name' }, row.title), row.status ? React.createElement('small', null, status(row.status)) : null, !row.complete ? React.createElement('small', null, '部分区间未记录') : null),
                 React.createElement('td', null, React.createElement('div', { className: 'timeline-track' }, ...row.segments.map(segment => bar(segment, false, row.id === 'human')), ...markers(row),
                   !row.segments.length ? React.createElement('span', { className: 'timeline-empty' }, row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史区间未记录') : null),
                   React.createElement('span', { className: 'timeline-sr' }, `${row.segments.length} 个区段${row.complete ? '' : '，部分历史区间未记录'}`))))))),

@@ -47,6 +47,10 @@ test('时间泳道图保留多区段、并行、人工介入底行以及触屏�
   assert.equal(nodes.filter(node => node.props.className?.includes('timeline-bar')).length, 3)
   assert.ok(nodes.some(node => node.type === 'details'))
   assert.ok(nodes.some(node => node.type === 'button' && node.props.className === 'timeline-milestone' && node.props['aria-label'].includes('成果说明')))
+  for (const trigger of nodes.filter(node => node.props.className === 'timeline-milestone' || node.props.className?.startsWith('timeline-bar'))) {
+    assert.equal(trigger.props.title, undefined)
+    assert.ok(trigger.props['aria-label'])
+  }
   assert.ok(nodes.some(node => node.props.className === 'timeline-duration' && text(node) === '1分0秒'))
   assert.match(text(tree), /成果说明/)
   assert.ok(nodes.some(node => node.props.role === 'region' && node.props.tabIndex === 0))
