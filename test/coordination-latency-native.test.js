@@ -53,7 +53,11 @@ test('真实协调器中九次非法旧决策不挡住新图文任务，公平�
       calls.set(request.requestId, count)
       const isOld = request.topicId === oldTopicId
       let name, args
-      if (role === 'route') {
+      if (request.requestId.startsWith('coord-summary-')) {
+        assert.equal(count, 1, '摘要迁移按当前工具协议一次提交，不消耗请求重试')
+        name = 'group_topic_summary_submit'
+        args = { requestId: request.requestId, topicId: request.topicId, summary: '原话题停止承接盘点；新话题继续排查审核后撤回异常。' }
+      } else if (role === 'route') {
         assert.equal(count, 1, '小消息的真实路由仅需一次模型调用')
         name = 'group_topic_route_submit'
         args = { requestId: request.requestId, routes: request.messages.map(message => ({
@@ -93,7 +97,7 @@ test('真实协调器中九次非法旧决策不挡住新图文任务，公平�
 
   manager = createCoordinationSessions({ isCurrent: request => coordinator.isCurrentRequest(request), onError: error => errors.push(error), create: async entry => {
     requests.set(entry.request.requestId, entry.request)
-    if (entry.request.topicId === oldTopicId) oldRequest = entry.request
+    if (entry.role === 'decision' && entry.request.topicId === oldTopicId) oldRequest = entry.request
     else if (entry.role === 'decision') newRequest = entry.request
     ctx.llm.registerAdapter([entry.sessionId], new Model(entry))
     const handle = await loop.createAgent(ctx, { sessionId: entry.sessionId, agentOptions: { provider: entry.sessionId, model: 'fixture' }, setup(agentCtx) {

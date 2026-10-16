@@ -1,3 +1,4 @@
+import { trackTestService } from './fixtures/owned-test-service.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile} from 'node:fs/promises'
@@ -45,6 +46,7 @@ test('controller store runner effect recovery accepts upgraded runner and preser
  await writeFile(profile,JSON.stringify({environment:'uat',env:{TRACE:trace,FIXED:fixed,REPORTS:reports}}))
  const command=role=>({executable:process.execPath,args:['fixture.mjs',role]})
  const config={version:'sg20-seven-ui-hosted-v2',sharedDataProfilePath:profile,prepareSteps:[command('prepare')],service:{...command('service'),args:['fixture.mjs','service','127.0.0.1','{port}'],readyPath:'/ready'},scenarios:[{...command('scenario'),id:'dataset-merge-ui',description:'isolated admission fixture'}],cleanup:command('cleanup'),verifyCleanup:command('verify')}
+ trackTestService(t,config.service,root)
  const options={root:join(root,'acceptance'),tempRoot:join(root,'tmp'),config};let runner=createTaskLocalAcceptanceRunner(options)
  const plan={cases:[{criterionId:'criterion-1',scenarioId:'dataset-merge-ui',expected,steps:['isolated integration path'],parameters:{}}]}
  const dbPath=join(root,'control.db'),store=await openExecutionStore({dbPath,instanceId:'upgrade-test',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(root,'artifacts'),initialize:true});let controller

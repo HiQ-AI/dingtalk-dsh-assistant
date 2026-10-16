@@ -122,15 +122,15 @@ Skill 不提供动作授权，不恢复固定 DAG、参数绑定、审批门槛�
 
 ## 安装到 DSH
 
-本分支的任务会话架构是源码切换，不能从包版本号推断某个已发布包已包含它。既有实例必须先按[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)停止旧调度、排空实际执行并审阅历史未决效果。历史版本安装方法仍见[大版本升级边界](docs/ops/npm-release.md#100-升级边界)与[更新日志](CHANGELOG.md)。
+2.0.0 起发行包包含任务会话架构切换。既有实例必须先按[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)停止旧调度、排空实际执行并审阅历史未决效果。历史版本安装方法仍见[大版本升级边界](docs/ops/npm-release.md#100-升级边界)与[更新日志](CHANGELOG.md)。
 
 
 推荐让 Web、resident Runtime 和看板运行在同一个 DSH Web 进程中，避免两个进程同时写同一份 Session JSONL 和 storage domain。
 
-全新安装使用根发行包；它会把 Assistant Runtime、Observer 看板和对应 bundle patch 一并装入 `web` profile。以 1.0.0 为例，生产或验收环境固定版本：
+全新安装使用根发行包；它会把 Assistant Runtime、Observer 看板和对应 bundle patch 一并装入 `web` profile。以 2.0.0 为例，生产或验收环境固定版本：
 
 ```powershell
-dsh plugin --profile web add dingtalk-dsh-assistant@1.0.0 --save-exact
+dsh plugin --profile web add dingtalk-dsh-assistant@2.0.0 --save-exact
 ```
 
 安装完成后必须重启 `dsh web`；仅看到依赖安装成功不代表插件 Runtime 已加载。已有 profile 升级前须先确认安装形态，不能在仍直接依赖两个内部包时只添加根包。

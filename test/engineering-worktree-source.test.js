@@ -1,3 +1,4 @@
+import { trackTestService } from './fixtures/owned-test-service.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile,readdir,rm} from 'node:fs/promises'
@@ -41,6 +42,7 @@ test('worktree acceptance does not copy source and accepts long actual business 
  const readInput="let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',async()=>{const input=JSON.parse(s);"
  const config={version:'1',instructions:'notes'.repeat(2000),sharedDataProfilePath:profile,prepareSteps:[],service:command("require('http').createServer((q,r)=>r.end(require('fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"),scenarios:[{id:'value',description:'description'.repeat(300),...command(readInput+"console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual:await(await fetch(input.baseUrl)).text()}));});")}],cleanup:command(readInput+"console.log(JSON.stringify({namespace:input.namespace}));});"),verifyCleanup:command(readInput+"console.log(JSON.stringify({namespace:input.namespace,empty:true}));});")}
  config.service.args.push('{port}','127.0.0.1');config.service.readyPath='/'
+ trackTestService(t,config.service,root)
  const runner=createWorktreeAcceptanceRunner({root:join(root,'acceptance'),tempRoot:join(root,'tmp'),config})
  const plan=normalizeWorktreeAcceptancePlan({cases:[{expected,steps:['step'.repeat(800)]}]},{request:'actual target',criteria:[{id:'criterion-1',description:'goal'}],scenarios:runner.scenarios})
  const prepared=await runner.prepare({candidate,plan,taskId:'task',runId:'run',generation:1,uatEnvironment:'uat1'})

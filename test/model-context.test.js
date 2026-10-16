@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative, isAbsolute, sep } from 'node:path'
 import { Session } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { taskExecutionContext } from '../packages/dingtalk-dsh-assistant/execution-context.js'
@@ -323,7 +323,9 @@ test('all long content surfaces expose existing readable files without contentIn
   assert.equal(JSON.stringify(projected).includes(long), false)
   for (const [ref, value] of [[projected.context, long], [projected.result.summary, long], [projected.evidence, [long]], [projected.diagnostics, raw.diagnostics], [projected.entries, log]]) {
     assert.ok(ref, JSON.stringify(projected))
-    assert.ok(ref.path.startsWith(root + '/'))
+    const within = relative(root, ref.path)
+    assert.ok(isAbsolute(ref.path))
+    assert.ok(within && !isAbsolute(within) && within !== '..' && !within.startsWith('..' + sep))
     assert.equal(ref.path, index.store(value).path, 'existing content-addressed file is reused')
     assert.deepEqual(JSON.parse(await readFile(ref.path, 'utf8')), value)
   }

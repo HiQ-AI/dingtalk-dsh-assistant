@@ -3,10 +3,12 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+const durationComponent = source.slice(source.indexOf('    function ExecutionSessionDuration('), source.indexOf('    function TaskResult('))
+assert.match(durationComponent, /^    function ExecutionSessionDuration\(/)
 const flatten = tree => typeof tree !== 'object' || !tree ? [] : [tree, ...tree.children.flatMap(flatten)]
 function card(task) {
  const actions = []
- const render = runInNewContext(`(()=>{${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {
+ const render = runInNewContext(`(()=>{${durationComponent}\n${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {
   expandedTaskId:'card-copy',setExpandedTaskId(){},Button:'button',archivingIds:[],archiveTask:task=>actions.push(['archive',task.taskId]),copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
   navigatingSessionId:'',navigate:(id,parent)=>actions.push(['session',id,parent]), statusTag:(label)=>({type:'span',props:{},children:[label]}),openTask:task=>actions.push(['task',task.taskId]),setTopicTarget:value=>actions.push(['topic',value.topicId]),setActivePage:value=>actions.push(['page',value])
  }); return {tree:render(task),actions}
@@ -66,7 +68,8 @@ test('内嵌执行列表只按真实成功会话计数，支持单展开和归�
  const nodes=flatten(tree),list=nodes.find(x=>x.props['aria-label']==='全部执行会话')
  assert.equal(list.type,'details');assert.equal(list.props.open,true)
  const meter=nodes.find(x=>x.type==='meter');assert.equal(meter.props.max,3);assert.equal(meter.props.value,1);assert.equal(meter.props['aria-label'],'已完成执行会话数量')
- assert.match(JSON.stringify(list),/1\/3/);assert.equal(flatten(list).filter(x=>x.type==='svg').length,5)
+ assert.match(JSON.stringify(list),/1\/3/)
+ assert.deepEqual(flatten(list).filter(x=>x.props.role==='img').map(x=>x.props['aria-label']),['succeeded','running','failed'])
  let stopped=false;nodes.find(x=>x.props['aria-label']==='归档任务：检查').props.onClick({stopPropagation(){stopped=true}});assert.equal(stopped,true);assert.deepEqual(actions,[['archive','card-copy']])
 })
 

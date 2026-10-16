@@ -3,11 +3,12 @@ import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persi
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import { sessionWorkspace, taskDirectories, taskFilePath } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import assert from 'node:assert/strict'
-import testRunner from 'node:test'
+import testRunner, { after } from 'node:test'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
@@ -30,14 +31,27 @@ const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-proj
 // Process fixtures run only the requested phase, without registering the parent suites.
 const test = process.argv[2] === '--execution-session-child' ? () => {} : testRunner
 const self = fileURLToPath(import.meta.url)
-const artifacts = resolve('/tmp/dynamic-execution-native-tests')
+const artifacts = resolve(tmpdir())
+const temporaryRoots = new Set()
+if (process.argv[2] !== '--execution-session-child') after(async () => {
+  for (const root of temporaryRoots) {
+    assert.equal(dirname(root), artifacts)
+    assert.ok(root.startsWith(join(artifacts, 'dx-')))
+    await rm(root, { recursive: true, force: true })
+  }
+})
 const binding = (extra = {}) => ({ taskId: 'task', runId: 'run', nodeRunId: 'node', generation: 1, leaseEpoch: 1, inputDigest: 'input-R1', sessionId: 'session-node-r1', sessionBound: false, ...extra })
 const definition = (extra = {}) => ({ provider: 'execution-fixture', model: 'scripted', prompt: 'R1_OLD_MARKER_30ba', allowedTools: ['read_fixture'], outputSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false }, ...extra })
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const submit = answer => ({ name: 'execution_node_submit', args: { output: { answer } } })
 const leases = events => [...new Set(events.flatMap(event => event.type === 'plugin:dingtalk/execution-session' ? [event.data.creationLease]
   : event.type === 'user/message' && event.data.source.executionSession ? [event.data.source.executionSession.leaseEpoch] : []))]
-async function temp() { await mkdir(artifacts, { recursive: true }); return mkdtemp(join(artifacts, 'run-')) }
+async function temp() {
+  await mkdir(artifacts, { recursive: true })
+  const root = await mkdtemp(join(artifacts, 'dx-'))
+  temporaryRoots.add(root)
+  return root
+}
 
 // 只有 LlmAdapter 为脚本；每次 Host 都用真实原生 Loop、Tools、文件 JSONL 后端。
 async function host({ root, script = [submit('done')], isCurrent = async () => true, repositoryInspect, tools, getWorkspaceDir } = {}) {
@@ -129,9 +143,9 @@ test('32 continued inputs retire recursive Host snapshots on actual SDK requests
       history.push({ inputVersion: version, inputDigest: b.inputDigest, requirementRevision: 1, controlRevision: 1 })
     } finally { await h.close() }
   }
-  assert.ok(metrics.slice(3).every(item => item.hostBytes < 2500))
-  assert.ok(metrics.at(-1).messagesBytes - metrics[4].messagesBytes < 27 * 550, 'only preserved result history grows, within a per-turn budget')
   t.diagnostic(JSON.stringify({ scope: 'scripted adapter request, UTF-8 JSON bytes; no provider tokens', rawAuditInputTextBytes: allInputs, metrics: metrics.filter(item => item.version <= 5 || item.version === 32) }))
+  assert.ok(metrics.slice(3).every(item => item.hostBytes < 2500), 'Host budget includes absolute context paths; use a short physical TEMP/TMP root')
+  assert.ok(metrics.at(-1).messagesBytes - metrics[4].messagesBytes < 27 * 550, 'only preserved result history grows, within a per-turn budget')
 })
 
 test('upgrade shadows every already stored recursive v1/v2/v3 input without rewriting originals', async t => {

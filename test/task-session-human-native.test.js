@@ -157,9 +157,10 @@ test('an execution result cannot bypass human waiting; reply reads the original 
     if (turns === 1) return [call('task_delegate', { key: 'original-inspection', objective: '只读核对原目标' })]
     if (turns === 2) return [requestHuman()]
     afterReply = input
-    const ref = input.executions[0].resultRef.contentRef
-    const page = modelToolValues(request).find(value => value.contentRef === ref && value.path === '/payload/output/summary')
-    if (!page) return [call('model_content_read', { contentRef: ref, path: '/payload/output/summary' })]
+    const execution = input.executions[0], ref = execution.resultRef ?? input.catalogRef
+    const path = (execution.resultRef ? '' : '/executions/' + execution.executionId + '/result') + '/payload/output/summary'
+    const page = modelToolValues(request).find(value => value.contentRef === ref.contentRef && value.path === path)
+    if (!page) return [call('model_content_read', { contentRef: ref.contentRef, path })]
     originalSummary = page.text
     return [finish('已读取原执行结果并按人工范围收束')]
   })

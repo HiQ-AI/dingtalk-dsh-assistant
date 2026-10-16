@@ -47,7 +47,8 @@ const decision = (action, summary) => call('task_session_submit', { decision: { 
 // The scripted coordinator obeys the same required-read contract as a real model.
 function requiredDecisionRead(request, input) {
   for (const source of input.sources ?? []) if (source.textFile && source.readRequired) {
-    const alreadyLocated = request.messages.filter(message => message.role === 'tool').some(message => JSON.stringify(message.content).includes(source.textFile))
+    const alreadyLocated = request.messages.filter(message => message.role === 'tool').some(message =>
+      (message.content ?? []).some(part => part.type === 'text' && part.text.includes(source.textFile)))
     if (!alreadyLocated) return call('read', { file_path: source.textFile, offset: 1, limit: 1 })
   }
   const refs = new Set()
@@ -118,7 +119,8 @@ for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知
   const fixture = await nativeCase(t, 'task-topic-source-')
   let topicId, originalTask, ownerCalls = 0
   const readReviews = new Set()
-  const h = await fixture.host(async request => {
+  let h
+  const model = async request => {
     assert.ok(h.requests.length < 12, JSON.stringify(h.toolResults.slice(-2)))
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     if (names.includes('group_topic_route_submit')) {
@@ -150,7 +152,8 @@ for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知
     assert.ok(input.sources.some(source => source.text === '先核对分支，不是批准例外'))
     assert.ok(input.sources.every(source => source.messageId !== 'native-notification-1'))
     return [decision('complete', '已按补充要求核对分支')]
-  }, { config: { assistantActorId: 'native-user' } })
+  }
+  h = await fixture.host(model, { config: { assistantActorId: 'native-user' } })
   await h.service.ingest(message); await h.service.whenIdle()
   ;[originalTask] = await h.query('task.list')
   topicId = originalTask.topicRefs[0].topicId
@@ -198,6 +201,12 @@ for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知
       sourceId: 'fixture-historical-source', groupId: message.groupId, messageId: echo.messageId, version: 1,
       actorId: message.senderOpenDingTalkId, text: echo.text, timestamp: echo.occurredAt,
     } })
+    // A legacy partial commit is observed only after a real service restart.
+    // Retain the test's transport audit across both instances; expected counts stay unchanged.
+    const sentHistory = h.sent.slice()
+    await h.close(); readReviews.clear()
+    h = await fixture.host(model, { initialize: false, config: { assistantActorId: 'native-user' } })
+    h.sent.unshift(...sentHistory) // Preserve the diagnostic recorder across the two real instances.
     const append = h.residentStore.appendOutbox
     h.residentStore.appendOutbox = args => {
       if (args.outboundId === notificationId) throw new Error('outbox_identity_duplicate')
