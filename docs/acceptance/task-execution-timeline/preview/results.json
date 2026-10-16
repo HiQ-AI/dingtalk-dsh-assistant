@@ -1,0 +1,302 @@
+{
+  "checks": [
+    "completed-reopened-total-segments-with-real-gap",
+    "no-stage-ticks-or-running-waiting-endpoint-ticks",
+    "reference-structure-total-session-rows-human-bottom",
+    "same-session-gap",
+    "parallel-start-different-end",
+    "historical-and-recovery-missing-evidence",
+    "full-name-status-and-missing-evidence-hover-and-keyboard-focus-tooltip",
+    "keyboard-details-full-long-name-and-human-statuses",
+    "pending-human-and-running-execution-extend-now",
+    "narrow-no-page-overflow-keyboard-local-horizontal-scroll",
+    "terminal-fixed-total-and-missing-history-no-invented-interval",
+    "empty-human-legacy-no-timeline-failure-retry-retains-detail",
+    "pinned-narrow-labels-and-host-dark-theme-aliases"
+  ],
+  "errors": [],
+  "geometry": [
+    [
+      {
+        "x": 347,
+        "width": 721.015625
+      },
+      {
+        "x": 1158.140625,
+        "width": 90.84375
+      }
+    ],
+    [
+      {
+        "x": 392.0625,
+        "width": 270.375
+      },
+      {
+        "x": 1158.140625,
+        "width": 45.0625
+      }
+    ],
+    [
+      {
+        "x": 662.4375,
+        "width": 225.3125
+      }
+    ],
+    [
+      {
+        "x": 662.4375,
+        "width": 405.5625
+      }
+    ],
+    [
+      {
+        "x": 1158.140625,
+        "width": 90.84375
+      }
+    ],
+    [],
+    [
+      {
+        "x": 437.125,
+        "width": 90.125
+      }
+    ],
+    [
+      {
+        "x": 527.25,
+        "width": 90.125
+      },
+      {
+        "x": 932.828125,
+        "width": 90.125
+      },
+      {
+        "x": 1158.140625,
+        "width": 90.84375
+      }
+    ]
+  ],
+  "density": {
+    "desktop": {
+      "chartHeight": 419,
+      "paddingTop": "14px",
+      "paddingBottom": "8px",
+      "panelGap": "8px",
+      "rowHeights": [
+        43,
+        34,
+        34,
+        34,
+        34,
+        34,
+        34,
+        37
+      ],
+      "trackHeight": 40,
+      "barHeight": 22,
+      "totalBarHeight": 22,
+      "axisHeight": 24,
+      "barGap": [
+        1007.953125,
+        1041.953125,
+        1075.953125
+      ],
+      "summaryHeight": 28
+    },
+    "narrow": {
+      "chartHeight": 419,
+      "paddingTop": "14px",
+      "paddingBottom": "8px",
+      "panelGap": "8px",
+      "rowHeights": [
+        43,
+        34,
+        34,
+        34,
+        34,
+        34,
+        34,
+        37
+      ],
+      "trackHeight": 40,
+      "barHeight": 22,
+      "totalBarHeight": 22,
+      "axisHeight": 24,
+      "barGap": [
+        669.921875,
+        703.921875,
+        737.921875
+      ],
+      "summaryHeight": 28
+    }
+  },
+  "contrast": {
+    "light": [
+      {
+        "background": "color(srgb 0.869804 0.881569 0.962353)",
+        "foreground": "color(srgb 0.248431 0.282549 0.51)",
+        "ratio": 6.561739892041416,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.869804 0.881569 0.962353)",
+        "foreground": "color(srgb 0.248431 0.282549 0.51)",
+        "ratio": 6.561739892041416,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.869804 0.881569 0.962353)",
+        "foreground": "color(srgb 0.248431 0.282549 0.51)",
+        "ratio": 6.561739892041416,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.869804 0.881569 0.962353)",
+        "foreground": "color(srgb 0.248431 0.282549 0.51)",
+        "ratio": 6.561739892041416,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.869804 0.881569 0.962353)",
+        "foreground": "color(srgb 0.248431 0.282549 0.51)",
+        "ratio": 6.561739892041416,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.869804 0.881569 0.962353)",
+        "foreground": "color(srgb 0.248431 0.282549 0.51)",
+        "ratio": 6.561739892041416,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.941176 0.901176 0.82902)",
+        "foreground": "color(srgb 0.444706 0.336471 0.143333)",
+        "ratio": 5.540942873886868,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.941176 0.901176 0.82902)",
+        "foreground": "color(srgb 0.444706 0.336471 0.143333)",
+        "ratio": 5.540942873886868,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.941176 0.901176 0.82902)",
+        "foreground": "color(srgb 0.444706 0.336471 0.143333)",
+        "ratio": 5.540942873886868,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      }
+    ],
+    "dark": [
+      {
+        "background": "color(srgb 0.145098 0.16 0.247059)",
+        "foreground": "color(srgb 0.608431 0.640784 0.871765)",
+        "ratio": 5.954183582022887,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.145098 0.16 0.247059)",
+        "foreground": "color(srgb 0.608431 0.640784 0.871765)",
+        "ratio": 5.954183582022887,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.145098 0.16 0.247059)",
+        "foreground": "color(srgb 0.608431 0.640784 0.871765)",
+        "ratio": 5.954183582022887,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.145098 0.16 0.247059)",
+        "foreground": "color(srgb 0.608431 0.640784 0.871765)",
+        "ratio": 5.954183582022887,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.145098 0.16 0.247059)",
+        "foreground": "color(srgb 0.608431 0.640784 0.871765)",
+        "ratio": 5.954183582022887,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.145098 0.16 0.247059)",
+        "foreground": "color(srgb 0.608431 0.640784 0.871765)",
+        "ratio": 5.954183582022887,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.216471 0.179608 0.113725)",
+        "foreground": "color(srgb 0.804706 0.694706 0.505098)",
+        "ratio": 6.512537105960103,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.216471 0.179608 0.113725)",
+        "foreground": "color(srgb 0.804706 0.694706 0.505098)",
+        "ratio": 6.512537105960103,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      },
+      {
+        "background": "color(srgb 0.216471 0.179608 0.113725)",
+        "foreground": "color(srgb 0.804706 0.694706 0.505098)",
+        "ratio": 6.512537105960103,
+        "fontFamily": "Inter, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "500"
+      }
+    ]
+  },
+  "renderedFonts": [
+    {
+      "familyName": "Noto Sans CJK SC",
+      "postScriptName": "NotoSansCJKsc-Regular",
+      "isCustomFont": false,
+      "glyphCount": 6
+    }
+  ],
+  "requests": [
+    "/health",
+    "/state/groups",
+    "/state/tasks",
+    "/state/supervisor/alerts",
+    "/state/authorizations",
+    "/state/topics",
+    "/state/tasks/fixture/detail",
+    "/state/tasks/fixture/executions"
+  ],
+  "fixture": "complete observer module + real React; semantic host shell substitutes; all API calls intercepted, projectTaskTimeline used for synthetic records; no resident or business access"
+}

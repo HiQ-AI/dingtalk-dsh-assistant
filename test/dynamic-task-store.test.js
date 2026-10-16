@@ -6,6 +6,105 @@ import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { projectTaskTimeline } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
+
+test('timeline records activity switches, independent parallel leases and continuation gaps without duplicating stage events', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-16T00:00:00Z') })
+  const f = await fixture(t), owner = await f.task(), first = await f.execution(owner.binding, '查询信息')
+  t.mock.timers.tick(1000)
+  const second = await f.execution(owner.binding, '修改配置')
+  const args = { binding: first, summary: '查询完成，开始核对差异', evidence: ['query-proof'], sequence: 1, activity: '排查差异' }
+  await f.command('execution.progressReported', args, 'activity-one')
+  await f.command('execution.progressReported', args, 'activity-one')
+  t.mock.timers.tick(2000)
+  await f.command('execution.result', { binding: first, output: { summary: '不可倒推的最终摘要' } })
+  await f.command('execution.drained', { binding: first })
+  await f.command('execution.result', { binding: second, output: {} })
+  await f.command('execution.drained', { binding: second })
+  t.mock.timers.tick(5000)
+  await f.command('execution.continue', { binding: owner.binding, executionId: first.executionId, key: 'verify', prompt: '验证修复', input: { objective: '验证修复' } })
+  const resumed = (await f.command('execution.claim', { executionId: first.executionId })).result.binding
+  t.mock.timers.tick(1000)
+  await f.command('execution.progressReported', { binding: resumed, summary: '开始验证', evidence: [], sequence: 1, activity: '验证修复' })
+  t.mock.timers.tick(1000)
+  await f.command('execution.drained', { binding: resumed })
+  const executions = await f.query({ kind: 'execution.list', taskId: 'task' }), wakes = await f.query({ kind: 'wake.list', taskId: 'task' })
+  const timeline = projectTaskTimeline((await f.query({ kind: 'task.get', taskId: 'task' })), executions, wakes)
+  assert.equal(timeline.executions.length, 2)
+  const segments = timeline.executions[0].segments
+  assert.equal(segments.length, 4)
+  assert.equal(segments[0].endedAt, segments[1].startedAt)
+  assert.equal(Date.parse(segments[2].startedAt) - Date.parse(segments[1].endedAt), 5000)
+  assert.equal(segments[3].label, '验证修复')
+  assert.equal(timeline.executions[0].milestones.length, 2)
+  assert.ok(Date.parse(timeline.executions[1].segments[0].startedAt) < Date.parse(segments[1].endedAt))
+  assert.equal(timeline.executions[0].complete, true)
+  assert.equal(JSON.stringify(timeline).includes('不可倒推的最终摘要'), false)
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'execution.get', executionId: first.executionId })).timeline.segments, executions[0].timeline.segments)
+})
+
+test('timeline restart leaves an unknown interval rather than inventing an end; later claims collect only observed history', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.reopen()
+  const interrupted = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(interrupted.timeline.segments[0].state, 'unknown')
+  assert.equal(interrupted.timeline.segments[0].endedAt, null)
+  const projected = projectTaskTimeline({ taskId: 'task' }, [interrupted], [])
+  assert.equal(projected.executions[0].segments.length, 0)
+  assert.equal(projected.executions[0].complete, false)
+  await f.command('execution.drained', { binding })
+  await f.command('execution.claim', { executionId: binding.executionId })
+  const resumed = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(resumed.timeline.complete, false)
+  assert.equal(resumed.timeline.segments.length, 2)
+  assert.equal(resumed.timeline.segments[1].state, 'running')
+})
+
+test('timeline pause/resume leaves a real gap and task completion remains an owner decision', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-16T00:00:00Z') })
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  t.mock.timers.tick(1000)
+  await f.command('task.control', { taskId: 'task', control: 'paused' })
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).timeline.segments[0].state, 'running')
+  t.mock.timers.tick(2000)
+  await f.command('execution.drained', { binding })
+  await f.command('task.drained', { binding: owner.binding })
+  t.mock.timers.tick(5000)
+  await f.command('task.control', { taskId: 'task', control: 'active' })
+  const nextOwner = (await f.command('task.claim', { taskId: 'task', force: true })).result.binding
+  await f.command('execution.continue', { binding: nextOwner, executionId: binding.executionId, key: 'resume', prompt: '继续核对', input: {} })
+  const next = (await f.command('execution.claim', { executionId: binding.executionId })).result.binding
+  t.mock.timers.tick(1000)
+  await f.command('execution.result', { binding: next, output: {} })
+  await f.command('execution.drained', { binding: next })
+  const execution = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(Date.parse(execution.timeline.segments[1].startedAt) - Date.parse(execution.timeline.segments[0].endedAt), 5000)
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).status, 'active')
+  await f.command('task.complete', { binding: nextOwner, summary: '统筹确认' })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).status, 'completed')
+})
+
+test('human timeline uses task-owned request lifecycle times and preserves distinct terminal meanings', () => {
+  const startedAt = '2026-10-16T00:00:00Z', endedAt = '2026-10-16T00:01:00Z'
+  const humanRequests = [
+    { requestId: 'a', status: 'answered', createdAt: startedAt, answeredAt: endedAt },
+    { requestId: 'b', status: 'superseded', createdAt: startedAt, supersededAt: endedAt },
+    { requestId: 'c', status: 'cancelled', createdAt: startedAt, cancelledAt: endedAt },
+    { requestId: 'd', status: 'closed', createdAt: startedAt, closedAt: endedAt },
+    { requestId: 'e', status: 'waiting-reply', createdAt: startedAt },
+    { requestId: 'missing', status: 'answered', createdAt: startedAt },
+  ]
+  const result = projectTaskTimeline({ taskId: 't', humanRequests }, [{ taskId: 'other', sessionId: 'unrelated' }], [{ taskId: 'other', kind: 'execution.stage.progress', payload: { recordedAt: startedAt } }])
+  assert.equal(result.executions.length, 0)
+  assert.deepEqual(result.human.segments.map(segment => segment.label), ['已答复', '已失效', '已取消', '已关闭', '等待处理'])
+  assert.equal(result.human.segments[4].active, true)
+  assert.equal(result.human.complete, false)
+  assert.equal(projectTaskTimeline({ taskId: 'empty' }, [], []).human.segments.length, 0)
+  const terminal = projectTaskTimeline({ taskId: 't', status: 'completed', humanRequests: [humanRequests[4]] }, [], [])
+  assert.equal(terminal.human.segments.length, 0)
+  assert.equal(terminal.human.complete, false)
+})
 
 async function fixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dynamic-task-ledger-'))
@@ -719,6 +818,8 @@ test('provider recovery persists bounded backoff, history and session identity a
     let e = await f.query({ kind: 'execution.get', executionId: binding.executionId })
     assert.equal(e.result.payload.error.providerError.code, 'TRANSPORT')
     assert.equal(e.status, attempt < 3 ? 'queued' : 'failed')
+    assert.equal(e.timeline.segments.length, attempt + 1)
+    assert.ok(e.timeline.segments.every(segment => segment.state === 'closed' && segment.endedAt))
     if (attempt === 3) {
       assert.equal(e.providerRecovery.attempts, 3); assert.equal(e.providerRecovery.exhausted, true)
       assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).filter(w => w.kind === 'execution.result').length, 1)
@@ -735,6 +836,8 @@ test('provider recovery persists bounded backoff, history and session identity a
     await f.command('execution.retry-provider', { binding }, `retry-${attempt}`)
     assert.equal((await f.command('execution.retry-provider', { binding }, `retry-${attempt}`)).replayed, true)
     e = (await f.command('execution.claim', { executionId: binding.executionId })).result.execution
+    assert.equal(e.timeline.segments.at(-1).state, 'running')
+    assert.equal(Date.parse(e.timeline.segments.at(-1).startedAt) - Date.parse(e.timeline.segments.at(-2).endedAt), 5000 * 2 ** attempt)
     binding = await f.query({ kind: 'execution.binding', executionId: e.executionId })
     assert.equal(binding.sessionId, first.sessionId); assert.equal(binding.executionId, first.executionId)
     assert.equal(binding.inputDigest, first.inputDigest); assert.equal(binding.inputVersion, attempt + 2)
@@ -1054,13 +1157,16 @@ test('execution timing never guesses legacy or interrupted intervals; terminal b
   const fixed = (await f.query({ kind: 'execution.get', executionId: finished.executionId })).runTiming
   const legacy = await f.execution(owner.binding, 'legacy')
   const db = new DatabaseSync(f.config.dbPath)
-  db.prepare("UPDATE dynamic_executions SET body=json_remove(body,'$.runTiming') WHERE id=?").run(legacy.executionId)
+  db.prepare("UPDATE dynamic_executions SET body=json_remove(body,'$.runTiming','$.timeline') WHERE id=?").run(legacy.executionId)
   db.close()
   await f.command('execution.result', { binding: legacy, output: {} })
   await f.command('execution.drained', { binding: legacy })
   await f.command('execution.continue', { binding: owner.binding, executionId: legacy.executionId, key: 'legacy-next', prompt: 'Continue', input: {} })
   await f.command('execution.claim', { executionId: legacy.executionId })
   assert.equal((await f.query({ kind: 'execution.get', executionId: legacy.executionId })).runTiming, undefined)
+  const legacyTimeline = (await f.query({ kind: 'execution.get', executionId: legacy.executionId })).timeline
+  assert.equal(legacyTimeline.complete, false)
+  assert.equal(legacyTimeline.segments.length, 1, 'collect only the newly observed claim, never the missing original run')
   await f.reopen()
   const interrupted = await f.query({ kind: 'execution.get', executionId: active.executionId })
   assert.equal(interrupted.runTiming.recorded, false)

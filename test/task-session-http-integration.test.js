@@ -28,8 +28,8 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
   const service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } }, legacy, residentStore,
     config: { dbPath: join(root, 'control.sqlite'), workspaceDir: root, instanceId: 'http-fixture', initialize: true, webActorId: 'owner' },
     persistence: { register: noop, close: noop }, groupSessions: { run: noop, close: noop },
-    taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 43; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
-    executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult }) => { await onSessionBound(); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
+    taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 53; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
+    executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult, onProgress }) => { await onSessionBound(); await onProgress({ summary: '已读取状态，开始验证', evidence: ['actual-evidence.txt'], activity: '验证状态', reportId: 'http-stage' }); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
   })
   const runtime = { ...legacy, listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args),
     createTask: args => service.createTask(args), appendTaskContext: args => service.appendTaskContext(args), cancelTask: args => service.cancelTask(args) }
@@ -52,12 +52,18 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.equal(detail.session.sessionId, sessionId)
     assert.ok(detail.session.workspaceDir.startsWith(root))
     assert.ok(detail.session.logPath.startsWith(root))
+    assert.equal(detail.timeline.version, 1)
+    assert.equal(detail.timeline.executions.length, 53)
+    assert.ok(detail.timeline.executions.every(row => row.complete && row.segments.length === 2 && row.segments.every(segment => segment.endedAt)))
+    assert.ok(detail.timeline.executions.every(row => row.segments[1].label === '验证状态' && row.milestones.length === 1))
+    assert.equal(detail.timeline.human.title, '人工介入')
+    assert.deepEqual(detail.timeline.human.segments, [])
     const page = await (await fetch(base + `/state/tasks/${taskId}/executions?offset=0&limit=20`)).json()
-    assert.equal(page.total, 43)
+    assert.equal(page.total, 53)
     assert.equal(page.executions.length, 20)
     const board = await (await fetch(base + '/state/tasks')).json()
-    assert.equal(board[0].executionSessions.length, 43)
-    assert.equal(new Set(board[0].executionSessions.map(item => item.sessionId)).size, 43)
+    assert.equal(board[0].executionSessions.length, 53)
+    assert.equal(new Set(board[0].executionSessions.map(item => item.sessionId)).size, 53)
     assert.deepEqual(board[0].executionSessions, detail.executionSessions)
     assert.ok(board[0].executionSessions.every(item => /^核对服务\d{2}$/.test(item.title)))
     assert.ok(board[0].executionSessions.every(item => item.runTiming.recorded === true && item.runTiming.elapsedMs >= 0 && item.runTiming.startedAt === null))

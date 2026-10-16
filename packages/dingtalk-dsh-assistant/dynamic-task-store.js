@@ -32,6 +32,11 @@ const clone = value => JSON.parse(JSON.stringify(value))
 const changed = result => ({ result, dispatchEligible: false })
 // Host-owned active intervals only. Never reconstruct legacy/restarted intervals.
 function stopExecutionTiming(execution, stamp) {
+  const segment = execution.timeline?.segments.at(-1)
+  if (segment?.state === 'running') {
+    if (Date.parse(stamp) >= Date.parse(segment.startedAt)) { segment.endedAt = stamp; segment.state = 'closed' }
+    else { segment.state = 'unknown'; execution.timeline.complete = false }
+  }
   const timing = execution.runTiming
   if (!timing?.startedAt) return
   const delta = Date.parse(stamp) - Date.parse(timing.startedAt)
@@ -254,6 +259,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       for (const notification of all('dynamic_notifications')) if (notification.state === 'starting') { notification.state = 'unknown'; put('dynamic_notifications', notification) }
       for (const execution of all('dynamic_executions')) if (!execution.drained) {
         execution.recovering = true
+        const segment = execution.timeline?.segments.at(-1)
+        if (segment?.state === 'running') { segment.state = 'unknown'; execution.timeline.complete = false }
         if (execution.runTiming?.startedAt) { execution.runTiming.recorded = false; execution.runTiming.startedAt = null }
         put('dynamic_executions', execution)
       }
@@ -318,7 +325,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (!['active','paused','cancelled'].includes(a.control)) fail('DYNAMIC_ARGUMENT_INVALID', 'control')
         if (task.status === 'completed' || task.control === 'cancelled' && a.control !== 'cancelled') fail('DYNAMIC_TASK_TERMINAL')
         task.controlRevision++; task.control = a.control
-        if (a.control === 'cancelled') task.status = 'cancelled'
+        if (a.control === 'cancelled') { task.status = 'cancelled'; task.cancelledAt ??= stamp }
       }
       if (a.topicRefs !== undefined) task.topicRefs = clone(array(a.topicRefs))
       if (a.operationId) task.appliedOperations = [...new Set([...(task.appliedOperations ?? []), text(a.operationId, 'operationId')])]
@@ -487,7 +494,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), title: executionSessionTitle({ input: payload.input, key }), dispatchDigest, inputDigest: digest(payload.input),
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, sessionId: `task-execution-${randomUUID()}`,
         status: 'queued', inputVersion: 1, inputHistory: [], results: [], leaseEpoch: 0, sessionBound: false, drained: true, cancelRequested: false, createdAt: stamp, updatedAt: stamp,
-        runTiming: { recorded: true, elapsedMs: 0, startedAt: null } }
+        runTiming: { recorded: true, elapsedMs: 0, startedAt: null }, timeline: { version: 1, complete: true, segments: [] } }
       put('dynamic_executions', execution)
       return changed({ execution })
     }
@@ -598,6 +605,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (!execution.definition?.recoveryReadOnly && ops(execution.taskId).some(item => item.executionId === execution.executionId && ['starting','unknown'].includes(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       execution.leaseEpoch++; execution.status = 'running'; execution.drained = false; execution.recovering = false
+      // Legacy history stays explicitly incomplete; collect only this new, observed lease.
+      execution.timeline ??= { version: 1, complete: false, segments: [] }
+      execution.timeline.segments.push({ startedAt: stamp, endedAt: null, state: 'running', activity: executionSessionTitle(execution),
+        inputVersion: execution.inputVersion, leaseEpoch: execution.leaseEpoch })
       if (execution.runTiming?.recorded) execution.runTiming.startedAt = stamp
       execution.updatedAt = stamp; put('dynamic_executions', execution)
       return { result: { execution, binding: executionBinding(execution) }, dispatchEligible: true }
@@ -607,11 +618,23 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (execution.drained || execution.status !== 'running' || !executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       const summary = text(a.summary, 'summary').trim(), evidence = array(a.evidence)
       if (summary.length > 2000 || evidence.length > 4 || evidence.some(item => typeof item !== 'string' || !item.trim() || item.length > 512)) fail('DYNAMIC_EXECUTION_PROGRESS_INVALID')
+      if (a.activity !== undefined && (typeof a.activity !== 'string' || !a.activity.trim() || a.activity.length > 120)) fail('DYNAMIC_EXECUTION_PROGRESS_INVALID')
       const sequence = integer(a.sequence, 'sequence')
       if (execution.stageProgress?.inputVersion === execution.inputVersion && execution.stageProgress?.leaseEpoch === execution.leaseEpoch && sequence <= execution.stageProgress.sequence) fail('DYNAMIC_EXECUTION_PROGRESS_STALE')
       const report = { summary, evidence: clone(evidence), sequence, recordedAt: stamp, inputVersion: execution.inputVersion,
         leaseEpoch: execution.leaseEpoch, requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision }
       execution.stageProgress = report
+      // A result summary describes the past, so never use it to infer a timed activity.
+      // Only an explicit current activity starts a new segment at the Host timestamp.
+      if (a.activity !== undefined) {
+        const segment = execution.timeline?.segments.at(-1)
+        if (segment?.state === 'running' && segment.activity !== a.activity.trim()) {
+          if (Date.parse(stamp) >= Date.parse(segment.startedAt)) { segment.endedAt = stamp; segment.state = 'closed' }
+          else { segment.state = 'unknown'; execution.timeline.complete = false }
+          execution.timeline.segments.push({ startedAt: stamp, endedAt: null, state: 'running', activity: a.activity.trim(),
+            inputVersion: execution.inputVersion, leaseEpoch: execution.leaseEpoch })
+        }
+      }
       put('dynamic_executions', execution)
       const wakeId = wake(execution.taskId, 'execution.stage.progress', { executionId: execution.executionId, ...report }, `execution-stage:${commandId}`)
       return changed({ execution, wakeId })

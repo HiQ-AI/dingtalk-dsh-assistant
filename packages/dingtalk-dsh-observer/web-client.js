@@ -891,9 +891,101 @@ window.__ModuleLoader__.load({
       .observer-session-detail .detail-progress-note { border-top: 1px solid ${colors.border}; padding-top: 8px; }
       .observer-task-detail-route .detail-fetch-error { padding: 16px; border: 1px solid ${colors.danger}; border-radius: 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; color: ${colors.danger}; font-size: 14px; line-height: 1.65; }
       .observer-task-detail-route .detail-fetch-state { min-height: 200px; align-content: start; }
+      .observer-session-detail .detail-timeline { min-width: 0; padding: 14px 16px 8px; gap: 8px; font-family: Inter, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', 'Noto Sans CJK SC', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+      .observer-session-detail .timeline-heading { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding-bottom: 4px; }
+      .observer-session-detail .timeline-title { display: flex; align-items: center; gap: 8px; }
+      .observer-session-detail .timeline-heading h2 { font-size: 17px; font-weight: 600; line-height: 26px; letter-spacing: -.2px; }
+      .observer-session-detail .timeline-count { font-size: 11px; line-height: 20px; padding: 0 7px; border-radius: 4px; background: ${colors.surface2}; color: ${colors.muted}; font-weight: 400; }
+      .observer-session-detail .timeline-date { font-variant-numeric: tabular-nums; font-size: 11px; color: ${colors.muted}; }
+      .observer-session-detail .timeline-heading > span, .observer-session-detail .timeline-note { font-size: 12px; }
+      .observer-session-detail .timeline-note { font-size: 11px; line-height: 16px; }
+      .observer-session-detail .timeline-scroll { overflow-x: auto; padding-bottom: 4px; }
+      .observer-session-detail .timeline-scroll:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: 2px; }
+      .observer-session-detail .timeline-table { border-collapse: collapse; width: 100%; min-width: 820px; table-layout: fixed; font-size: 12px; }
+      .observer-session-detail .timeline-table th { text-align: left; font-weight: 500; }
+      .observer-session-detail .timeline-table th:first-child { width: 140px; padding: 1px 16px 1px 0; overflow-wrap: anywhere; line-height: 18px; position: sticky; left: 0; z-index: 2; background: ${colors.surface}; }
+      .observer-session-detail .timeline-table thead th, .observer-session-detail .timeline-table tbody tr:first-child th { color: ${colors.muted}; font-size: 11px; font-weight: 400; }
+      .observer-session-detail .timeline-table th small { display: none; }
+      .observer-session-detail .timeline-name { display: block; position: relative; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; line-height: 20px; padding-left: 14px; }
+      .observer-session-detail .timeline-name::before { content: ''; position: absolute; left: 1px; top: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--timeline-lane-color); }
+      .observer-session-detail .timeline-table tbody tr:last-child .timeline-name::before { border-radius: 2px; }
+      .observer-session-detail .timeline-row-info { display: none; position: absolute; z-index: 5; top: 100%; left: 0; width: max-content; max-width: 280px; padding: 6px 8px; border: 1px solid ${colors.border}; border-radius: 4px; background: ${colors.surface}; color: inherit; font-weight: 400; white-space: normal; box-shadow: 0 2px 8px rgba(0,0,0,.08); pointer-events: none; }
+      .observer-session-detail .timeline-table th:is(:hover, :focus) { z-index: 5; }
+      .observer-session-detail .timeline-table th:is(:hover, :focus) .timeline-row-info { display: block; }
+      .observer-session-detail .timeline-table th:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: -2px; }
+      .observer-session-detail .timeline-table td { padding: 0; }
+      .observer-session-detail .timeline-table tbody tr:first-child .timeline-track { margin-bottom: 3px; }
+      .observer-session-detail .timeline-table tbody tr:last-child .timeline-track { margin-top: 3px; }
+      .observer-session-detail .timeline-axis { position: relative; height: 24px; margin: 0 4px; color: ${colors.muted}; font-weight: 500; font-size: 12px; font-variant-numeric: tabular-nums; }
+      .observer-session-detail .timeline-axis span { position: absolute; top: 1px; transform: translateX(-50%); width: 110px; text-align: center; font-variant-numeric: tabular-nums; }
+      .observer-session-detail .timeline-axis span:first-child { transform: none; text-align: left; }
+      .observer-session-detail .timeline-axis span:last-child { transform: translateX(-100%); text-align: right; }
+      .observer-session-detail .timeline-table tbody tr { --timeline-lane-color: #5968cf; }
+      .observer-session-detail .timeline-table tbody tr:last-child { --timeline-lane-color: #b48125; }
+      .observer-session-detail .timeline-track { height: 34px; position: relative; margin: 0 4px; background: repeating-linear-gradient(to right, color-mix(in srgb, ${colors.border} 30%, transparent) 0, color-mix(in srgb, ${colors.border} 30%, transparent) 1px, transparent 1px, transparent 25%); }
+      .observer-session-detail .timeline-bar { position: absolute; top: 6px; height: 22px; min-width: 2px; box-sizing: border-box; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--timeline-lane-color) 20%, ${colors.surface}); color: color-mix(in srgb, var(--timeline-lane-color) 55%, currentColor); overflow: hidden; }
+      .observer-session-detail .timeline-bar > span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 8px; font-size: 12px; font-weight: 500; line-height: 20px; }
+      .observer-session-detail .timeline-total-track { height: 40px; }
+      .observer-session-detail .timeline-total { top: 9px; height: 22px; border: 0; border-radius: 5px; background: color-mix(in srgb, ${colors.muted} 12%, ${colors.surface}); color: inherit; }
+      .observer-session-detail .timeline-table th small.timeline-total-missing { display: block; font-size: 10px; line-height: 14px; font-weight: 400; color: ${colors.muted}; }
+      .observer-session-detail .timeline-muted { border-color: ${colors.muted}; }
+      .observer-session-detail .timeline-empty { position: absolute; top: 8px; left: 4px; color: ${colors.muted}; background: ${colors.surface2}; border-radius: 4px; padding: 1px 6px; font-size: 11px; line-height: 16px; }
+      .observer-session-detail .timeline-details { font-size: 12px; overflow-wrap: anywhere; padding-top: 6px; }
+      .observer-session-detail .timeline-details > summary { min-height: 28px; line-height: 28px; color: ${colors.muted}; }
+      .observer-session-detail .timeline-details > summary:hover { color: inherit; }
+      .observer-session-detail .timeline-details section { margin-top: 16px; }
+      .observer-session-detail .timeline-details li { margin-top: 8px; }
+      .observer-session-detail .timeline-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
       @media (max-width: 800px) { .observer-session-detail .detail-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
       @media (max-width: 520px) { [data-dingtalk-observer] .observer-session-detail { gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: minmax(0, 1fr); } .observer-session-detail .detail-header { padding-bottom: 16px; } .observer-session-detail .detail-title-row { align-items: start; } .observer-session-detail .detail-execution-summary { padding: 12px; gap: 4px 8px; } }
     `
+    function TaskExecutionTimeline({ timeline }) {
+      const [now, setNow] = useState(Date.now)
+      const live = timeline?.task?.active || [...(timeline?.executions || []), timeline?.human].some(row => row?.segments?.some(segment => segment.active))
+      useEffect(() => {
+        if (!live) return
+        setNow(Date.now())
+        const timer = window.setInterval(() => setNow(Date.now()), 1000)
+        return () => window.clearInterval(timer)
+      }, [live, timeline])
+      if (!timeline) return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' }, React.createElement('h2', null, '执行时间'), React.createElement('p', { className: 'detail-muted' }, '历史执行过程未记录。'))
+      const rows = [...timeline.executions, timeline.human]
+      const totalSegments = timeline.task.segments || [{ ...timeline.task, id: 'total', label: timeline.task.active ? '处理中' : timeline.task.status === 'completed' ? '已完成' : '已结束' }]
+      const totalEvents = timeline.task.events || []
+      const dates = [timeline.task.startedAt, timeline.task.endedAt, ...totalSegments.flatMap(segment => [segment.startedAt, segment.endedAt]), ...totalEvents.map(event => event.at), ...rows.flatMap(row => [...row.segments.flatMap(segment => [segment.startedAt, segment.endedAt]), ...row.milestones.map(event => event.at)])].map(value => value ? Date.parse(value) : NaN).filter(Number.isFinite)
+      if (live) dates.push(now)
+      const start = dates.length ? Math.min(...dates) : now, end = Math.max(start + 1000, ...dates)
+      const position = date => Math.max(0, Math.min(100, (Date.parse(date) - start) / (end - start) * 100))
+      const time = value => value ? fmt(value) : '未记录'
+      const sameDay = new Date(start).toDateString() === new Date(end).toDateString()
+      const dateLabel = new Date(start).toLocaleDateString('zh-CN') + (sameDay ? '' : ` — ${new Date(end).toLocaleDateString('zh-CN')}`)
+      const status = value => ({ completed: '已完成', recorded: '已记录', running: '执行中', queued: '排队中', succeeded: '已成功', failed: '失败', stale: '已失效', cancelled: '已取消', 'waiting-reply': '等待处理', answered: '已答复', superseded: '已失效', closed: '已关闭' })[value] || value
+      const range = segment => `${time(segment.startedAt)} — ${segment.active ? '当前' : time(segment.endedAt)}`
+      const bar = (segment, total = false) => {
+        if (!segment.startedAt || !segment.active && !segment.endedAt) return null
+        const left = position(segment.startedAt), right = position(segment.active ? new Date(Math.max(now, Date.parse(segment.startedAt))).toISOString() : segment.endedAt)
+        return React.createElement('span', { key: segment.id || 'total', className: `timeline-bar${total ? ' timeline-total' : ''}${['failed','cancelled','superseded','stale'].includes(segment.status) ? ' timeline-muted' : ''}`,
+          style: { left: `${left}%`, width: `${Math.max(0, right - left)}%` }, title: `${segment.label || '任务执行'} · ${range(segment)}${segment.status ? ` · ${status(segment.status)}` : ''}`,
+          'aria-hidden': true }, React.createElement('span', null, segment.label || '任务执行'))
+      }
+      return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' },
+        React.createElement('div', { className: 'timeline-heading' }, React.createElement('div', { className: 'timeline-title' }, React.createElement('h2', null, '执行时间'), React.createElement('span', { className: 'timeline-count' }, `${timeline.executions.length} 个会话`)), React.createElement('span', { className: 'timeline-date', title: '时间按浏览器本地时区显示' }, dateLabel)),
+        React.createElement('div', { className: 'timeline-scroll', role: 'region', tabIndex: 0, 'aria-label': '时间泳道图，可横向滚动；完整活动与时间见下方明细' },
+          React.createElement('table', { className: 'timeline-table' }, React.createElement('caption', { className: 'timeline-sr' }, '任务、执行会话与人工介入时间，区段之间保留空档'),
+            React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', { scope: 'col' }, '会话 / 时间'), React.createElement('th', { scope: 'col' }, React.createElement('div', { className: 'timeline-axis' }, ...[0, 1, 2, 3, 4].map(index => React.createElement('span', { key: index, style: { left: `${index * 25}%` } }, new Date(start + (end - start) * index / 4).toLocaleString('zh-CN', { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }), hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }))))))),
+            React.createElement('tbody', null,
+              React.createElement('tr', null, React.createElement('th', { scope: 'row' }, '任务执行', timeline.task.complete === false ? React.createElement('small', { className: 'timeline-total-missing' }, '部分历史未记录') : null), React.createElement('td', null, React.createElement('div', { className: 'timeline-track timeline-total-track' }, ...totalSegments.map(segment => bar(segment, true)), !totalSegments.length ? React.createElement('span', { className: 'timeline-empty' }, '完成 / 重开时间未完整记录') : null), React.createElement('span', { className: 'timeline-sr' }, ...totalSegments.map(segment => `${segment.label} · ${range(segment)}；`)))),
+              ...rows.map(row => React.createElement('tr', { key: row.id }, React.createElement('th', { scope: 'row', tabIndex: 0, 'aria-label': `${row.title}${row.status ? ` · ${status(row.status)}` : ''}${row.complete ? '' : ' · 部分区间未记录'}` }, React.createElement('span', { className: 'timeline-name' }, row.title), React.createElement('span', { className: 'timeline-row-info', 'aria-hidden': true }, `${row.title}${row.status ? ` · ${status(row.status)}` : ''}${row.complete ? '' : ' · 部分区间未记录'}`), row.status ? React.createElement('small', null, status(row.status)) : null, !row.complete ? React.createElement('small', null, '部分区间未记录') : null),
+                React.createElement('td', null, React.createElement('div', { className: 'timeline-track' }, ...row.segments.map(segment => bar(segment)),
+                  !row.segments.length ? React.createElement('span', { className: 'timeline-empty' }, row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史区间未记录') : null),
+                  React.createElement('span', { className: 'timeline-sr' }, `${row.segments.length} 个区段${row.complete ? '' : '，部分历史区间未记录'}`))))))),
+        React.createElement('details', { className: 'detail-disclosure timeline-details' }, React.createElement('summary', null, '活动与时间明细'),
+          React.createElement('p', { className: 'detail-muted timeline-note' }, '靛蓝为执行会话，金色为人工介入。阶段成果保留在明细中；未记录区间不推算，人工处理不表示批准。'),
+          React.createElement('section', null, React.createElement('h3', null, '任务完成与重开'), timeline.task.complete === false ? React.createElement('p', null, '部分任务历史时间未记录，不推算完成或重开的时间。') : null,
+            totalEvents.length ? React.createElement('ul', null, ...totalEvents.map((event, index) => React.createElement('li', { key: `${event.kind}:${index}` }, `${time(event.at)} · 第 ${event.sequence} 次处理 · ${({ created: '创建任务', completed: '任务完成', reopened: '重新打开', cancelled: '取消任务' })[event.kind] || event.kind}`))) : React.createElement('p', null, '任务历史时间未完整记录。')),
+          ...rows.map(row => React.createElement('section', { key: row.id }, React.createElement('h3', null, `${row.title}${row.status ? ` · ${status(row.status)}` : ''}`), !row.complete ? React.createElement('p', null, '部分历史区间未记录；恢复时未知的结束时间不作推算。') : null,
+            row.segments.length || row.milestones.length ? React.createElement('ul', null, ...row.segments.map(segment => React.createElement('li', { key: segment.id }, `${segment.label} · ${range(segment)} · ${status(segment.status)}`, segment.description ? React.createElement('p', null, segment.description) : null)), ...row.milestones.map(event => React.createElement('li', { key: event.id }, `${time(event.at)} · 阶段成果：${event.summary}`))) : React.createElement('p', null, row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史执行过程未记录。')))))
+    }
     function TaskSessionDetail({ task, onOpenSession, onBack, updatedAt, onOpenHumanRequest }) {
       const requirements = task.requirements || task.acceptanceCriteria || []
       const humanRequest = !task.legacyReadonly && task.humanRequests?.findLast(request => request.status === 'waiting-reply')
@@ -920,6 +1012,7 @@ window.__ModuleLoader__.load({
             React.createElement('details', { className: 'detail-records' }, React.createElement('summary', null, '任务记录与修订'), React.createElement('div', { className: 'detail-location' },
               React.createElement('div', null, `任务 ID：${task.taskId}`), React.createElement('div', null, `需求修订 ${task.requirementRevision ?? task.inputVersion ?? '未记录'}`), React.createElement('div', null, `控制修订 ${task.controlRevision ?? '未记录'}`), React.createElement('div', null, `控制状态 ${taskStateLabel(task.controlState || task.control?.state || task.state)}`),
               task.blockers ? readout('待排空记录（原始信息）', task.blockers) : null)))),
+        React.createElement(TaskExecutionTimeline, { key: `timeline:${task.taskId}`, timeline: task.timeline }),
         task.legacyReadonly ? React.createElement('div', { className: 'detail-panel' }, React.createElement('h2', null, '历史执行'), React.createElement(LegacyTaskHistory, { key: task.taskId, task }))
           : React.createElement(TaskExecutions, { key: task.taskId, taskId: task.taskId, updatedAt, onOpenSession }))
     }

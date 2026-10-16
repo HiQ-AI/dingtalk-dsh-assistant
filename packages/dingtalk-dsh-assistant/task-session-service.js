@@ -18,6 +18,7 @@ import { installTaskSessionPersistence, taskSessionLogRoot } from './task-sessio
 import { formatTaskGroupReply } from './group-reply-format.js'
 import { sameDeliveredText } from './group-message.js'
 import { taskExecutionContext } from './execution-context.js'
+import { projectTaskTimeline, readTaskLifecycle } from './task-execution-timeline.js'
 export { taskExecutionContext } from './execution-context.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
@@ -297,7 +298,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   async function taskDetail(taskId) {
     const task = await query('task.get', { taskId })
     if (!task) return null
+    const wakes = await query('wake.list', { taskId })
+    const lifecycle = await readTaskLifecycle(task, wakes, id => query('receipt.get', { id }))
     return { ...await taskDTO(task), executions: (await taskExecutions(taskId)).executions,
+      timeline: projectTaskTimeline(task, await query('execution.list', { taskId }), wakes, lifecycle),
       blockers: await query('task.blockers', { taskId }), notifications: await query('notification.list', { taskId }) }
   }
   async function taskExecutions(taskId, { offset = 0, limit = 50 } = {}) {
@@ -601,11 +605,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           prompt: execution.prompt, allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title); return command('execution.sessionBound', { binding }, `execution-bound:${executionId}:${binding.leaseEpoch}`) },
           onNativeExecution: nativeOperation,
-          onProgress: async ({ summary, evidence, reportId }) => {
+          onProgress: async ({ summary, evidence, reportId, activity }) => {
             if (typeof reportId !== 'string' || !reportId.trim() || reportId.length > 2000) fail('EXECUTION_PROGRESS_REPORT_ID_INVALID')
             if (!await query('execution.current', { binding })) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
             if (!stageReports.has(reportId)) stageReports.set(reportId, ++stageSequence)
-            const receipt = await command('execution.progressReported', { binding, summary, evidence, sequence: stageReports.get(reportId) },
+            const receipt = await command('execution.progressReported', { binding, summary, evidence, ...(activity === undefined ? {} : { activity }), sequence: stageReports.get(reportId) },
               `execution-stage:${executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${hash(reportId)}`)
             if (!receipt.replayed) void kickTask(binding.taskId)
             return { recorded: true, sequence: receipt.result.execution.stageProgress.sequence }
