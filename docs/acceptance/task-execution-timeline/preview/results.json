@@ -1,6 +1,7 @@
 {
   "checks": [
     "completed-reopened-total-segments-with-real-gap",
+    "one-tooltip-after-long-hover-focus-blur-and-switch-between-dense-points",
     "stage-lines-span-band-plus-three-pixels-no-clipping",
     "segment-duration-and-exact-distinct-stage-time-coordinates",
     "no-running-waiting-endpoint-ticks",
@@ -12,69 +13,102 @@
     "keyboard-details-full-long-name-and-human-statuses",
     "pending-human-and-running-execution-extend-now",
     "narrow-no-page-overflow-keyboard-local-horizontal-scroll",
+    "linear-navigator-default-last-hour-pan-resize-clamp-keyboard-preserved-history-refresh-and-narrow-drag",
     "terminal-fixed-total-and-missing-history-no-invented-interval",
+    "empty-human-label-body-top-layer-no-layout-overflow-escape-scroll-resize-edge-bounds",
     "empty-human-legacy-no-timeline-failure-retry-retains-detail",
-    "pinned-narrow-labels-and-host-dark-theme-aliases"
+    "pinned-narrow-labels-and-host-dark-theme-aliases",
+    "leaving-task-removes-top-layer-tooltip"
   ],
   "errors": [],
+  "overlayMeasurements": {
+    "emptyHumanBefore": {
+      "scrollHeight": 314,
+      "clientHeight": 314,
+      "pageHeight": 1268,
+      "pageWidth": 390,
+      "belowY": 836.484375
+    },
+    "emptyHumanAfter": {
+      "scrollHeight": 314,
+      "clientHeight": 314,
+      "pageHeight": 1268,
+      "pageWidth": 390,
+      "belowY": 836.484375
+    },
+    "desktopBefore": {
+      "scrollHeight": 314,
+      "clientHeight": 314,
+      "pageHeight": 1118,
+      "pageWidth": 1440,
+      "belowY": 635.515625
+    },
+    "desktopAfter": {
+      "scrollHeight": 314,
+      "clientHeight": 314,
+      "pageHeight": 1118,
+      "pageWidth": 1440,
+      "belowY": 635.515625
+    }
+  },
   "geometry": [
     [
       {
         "x": 347,
-        "width": 721.328125
+        "width": 718.90625
       },
       {
-        "x": 1158.484375,
-        "width": 90.5
+        "x": 1155.78125,
+        "width": 93.203125
       }
     ],
     [
       {
-        "x": 392.078125,
-        "width": 270.484375
+        "x": 391.921875,
+        "width": 269.59375
       },
       {
-        "x": 1158.484375,
-        "width": 45.078125
+        "x": 1155.78125,
+        "width": 44.921875
       }
     ],
     [
       {
-        "x": 662.578125,
-        "width": 225.40625
+        "x": 661.515625,
+        "width": 224.65625
       }
     ],
     [
       {
-        "x": 662.578125,
-        "width": 405.734375
+        "x": 661.515625,
+        "width": 404.390625
       }
     ],
     [
       {
-        "x": 1158.484375,
-        "width": 90.5
+        "x": 1155.78125,
+        "width": 93.203125
       }
     ],
     [],
     [
       {
-        "x": 437.15625,
-        "width": 90.15625
+        "x": 436.859375,
+        "width": 89.859375
       }
     ],
     [
       {
-        "x": 527.328125,
-        "width": 90.15625
+        "x": 526.71875,
+        "width": 89.859375
       },
       {
-        "x": 933.078125,
-        "width": 90.15625
+        "x": 931.109375,
+        "width": 89.859375
       },
       {
-        "x": 1158.484375,
-        "width": 90.5
+        "x": 1155.78125,
+        "width": 93.203125
       }
     ]
   ],
@@ -82,71 +116,71 @@
     "desktop": [
       {
         "at": "2026-10-16T10:04:00.000Z",
-        "ratio": 0.19992031596452328,
-        "y": 1004.953125
+        "ratio": 0.19924473392461198,
+        "y": 805.59375
       },
       {
         "at": "2026-10-16T10:04:03.000Z",
-        "ratio": 0.20241477272727273,
-        "y": 1004.953125
+        "ratio": 0.20173919068736143,
+        "y": 805.59375
       },
       {
         "at": "2026-10-16T10:04:06.000Z",
-        "ratio": 0.20490922949002216,
-        "y": 1004.953125
+        "ratio": 0.20423364745011086,
+        "y": 805.59375
       },
       {
         "at": "2026-10-16T10:04:09.000Z",
-        "ratio": 0.2074210088691796,
-        "y": 1004.953125
+        "ratio": 0.2067281042128603,
+        "y": 805.59375
       },
       {
         "at": "2026-10-16T10:04:12.000Z",
-        "ratio": 0.20991546563192906,
-        "y": 1004.953125
+        "ratio": 0.20920523835920177,
+        "y": 805.59375
       },
       {
         "at": "2026-10-16T10:19:00.000Z",
-        "ratio": 0.9496431541019955,
-        "y": 1004.953125
+        "ratio": 0.9464557926829268,
+        "y": 805.59375
       }
     ],
     "narrow": [
       {
         "at": "2026-10-16T10:04:00.000Z",
-        "ratio": 0.19031059451219512,
-        "y": 666.921875
+        "ratio": 0.1898342225609756,
+        "y": 1030.5625
       },
       {
         "at": "2026-10-16T10:04:03.000Z",
-        "ratio": 0.19269245426829268,
-        "y": 666.921875
+        "ratio": 0.1921922637195122,
+        "y": 1030.5625
       },
       {
         "at": "2026-10-16T10:04:06.000Z",
-        "ratio": 0.19507431402439024,
-        "y": 666.921875
+        "ratio": 0.19457412347560976,
+        "y": 1030.5625
       },
       {
         "at": "2026-10-16T10:04:09.000Z",
-        "ratio": 0.1974561737804878,
-        "y": 666.921875
+        "ratio": 0.19695598323170732,
+        "y": 1030.5625
       },
       {
         "at": "2026-10-16T10:04:12.000Z",
-        "ratio": 0.1998142149390244,
-        "y": 666.921875
+        "ratio": 0.1993140243902439,
+        "y": 1030.5625
       },
       {
         "at": "2026-10-16T10:19:00.000Z",
-        "ratio": 0.9040110518292683,
-        "y": 666.921875
+        "ratio": 0.9017244664634146,
+        "y": 1030.5625
       }
     ]
   },
   "density": {
     "desktop": {
-      "chartHeight": 419,
+      "chartHeight": 510.640625,
       "paddingTop": "14px",
       "paddingBottom": "8px",
       "panelGap": "8px",
@@ -165,14 +199,14 @@
       "totalBarHeight": 22,
       "axisHeight": 24,
       "barGap": [
-        1007.953125,
-        1041.953125,
-        1075.953125
+        1099.59375,
+        1133.59375,
+        1167.59375
       ],
       "summaryHeight": 28
     },
     "narrow": {
-      "chartHeight": 419,
+      "chartHeight": 510.640625,
       "paddingTop": "14px",
       "paddingBottom": "8px",
       "panelGap": "8px",
@@ -191,9 +225,9 @@
       "totalBarHeight": 22,
       "axisHeight": 24,
       "barGap": [
-        669.921875,
-        703.921875,
-        737.921875
+        1033.5625,
+        1067.5625,
+        1101.5625
       ],
       "summaryHeight": 28
     }
