@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
-import { available, reason, nativeTaskHost } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, topicSummaryResponse } from './fixtures/task-session-native-host.js'
 import { createTaskSessions, isTaskProviderTransient } from '../packages/dingtalk-dsh-assistant/task-session.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -67,7 +67,8 @@ async function providerServiceHost(root, { legacyNoSubmission = false, transient
   const h = await nativeTaskHost(root, async () => [], { initialize, config: { retryIntervalMs: 100 }, agentConfig: { provider: 'service-provider-fixture' },
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
-        async *stream() {
+        async *stream(request) {
+          if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
           requests++
           if (failFirst && requests <= failCount) {
             yield { type: 'finish', reason: { kind: 'error', failure: transient ? overloaded : { code: 'PI_AI_ERROR', message: 'Invalid account configuration' } } }; return

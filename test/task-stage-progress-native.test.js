@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { available, reason, nativeTaskHost, latestInput, modelToolValues, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, modelToolValues, waitUntil, topicSummaryResponse } from './fixtures/task-session-native-host.js'
 const call = (name, args) => ({ name, args })
 const submit = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
 
@@ -18,6 +18,7 @@ test('integrated stage evidence survives same-session provider recovery with new
   const h = await nativeTaskHost(root, async () => [], { agentConfig: { provider: 'integrated-stage-provider' }, serviceFactory: async options => {
     class Provider extends LlmAdapter {
       async *stream(request) {
+        if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
         let calls
         if (request.tools.some(tool => tool.name === 'task_delegate')) {
           const input = latestInput(request); ownerInputs.push(input)

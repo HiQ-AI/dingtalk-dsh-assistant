@@ -24,8 +24,8 @@ const row = (name, config) => ({ name: modulePath(name), ...(config ? { config }
 
 export async function nativeTaskHost(root, decide, options = {}) {
   if (!available) throw new Error(reason)
-  const ctx = new Context(), requests = [], sent = [], readbacks = [], toolResults = []
-  const h = { ctx, requests, sent, readbacks, toolResults, root }
+  const ctx = new Context(), requests = [], auxiliaryRequests = [], sent = [], readbacks = [], toolResults = []
+  const h = { ctx, requests, auxiliaryRequests, sent, readbacks, toolResults, root }
   let closing
   h.close = () => closing ??= (async () => { try { await h.service?.close() } finally { try { await h.residentStore?.close() } finally { await ctx.fiber.dispose() } } })()
   try {
@@ -62,8 +62,13 @@ export async function nativeTaskHost(root, decide, options = {}) {
   let sequence = 0
   class ScriptedModel extends LlmAdapter {
     async *stream(request) {
-      requests.push(structuredClone(request))
-      const calls = await decide(request, h)
+      // Topic summary maintenance is an independent model invocation, not an
+      // owner/executor step. Keep its real requests separately so scripted
+      // fault counters cannot consume a business step on this auxiliary call.
+      let auxiliary = false
+      try { auxiliary = latestInput(request).requestId?.startsWith('coord-summary-') === true } catch {}
+      ;(auxiliary ? auxiliaryRequests : requests).push(structuredClone(request))
+      const calls = auxiliary ? topicTaskCalls(request) : await decide(request, h)
       for (const [index, call] of calls.entries()) {
         const id = `native-call-${++sequence}`, args = JSON.stringify(call.args)
         yield { type: 'block-start', index, blockType: 'tool-call' }
@@ -135,6 +140,21 @@ export async function waitUntil(read, description, timeoutMs = 10000) {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   throw new Error('Timed out: ' + description)
+}
+
+// Custom fault-injection adapters must answer maintenance in its own session
+// before advancing any owner/executor fault counter.
+export function* topicSummaryResponse(request, audit) {
+  let input
+  try { input = latestInput(request) } catch { return false }
+  if (!input.requestId?.startsWith('coord-summary-')) return false
+  audit.push(structuredClone(request))
+  const call = topicTaskCalls(request)[0], id = 'summary-' + input.requestId, args = JSON.stringify(call.args)
+  yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+  yield { type: 'tool-call-delta', index: 0, id, name: call.name, argumentsDelta: args }
+  yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: call.name, arguments: args } }
+  yield { type: 'finish', reason: { kind: 'tool-calls' } }
+  return true
 }
 
 // Script model decisions only; routing, validation and durable topic state remain real.

@@ -276,7 +276,7 @@ test('真实Resident以task-session启动，旧workflow配置HTTP返回410且保
     await new Promise(resolve => reserve.close(resolve))
     await applyResident(host.ctx, { host: '127.0.0.1', port, proxyUrl: '', agentWorkspaceDir: directory, agentPreset: 'native-test',
       dws: { enabled: false, writesAuthorized: false }, groups: [{ groupId: 'configuration-test', responsibility: 'isolated test' }],
-      taskSessions: { dbPath: join(directory, 'task-sessions.db'), instanceId: 'configuration-resident', initialize: first } })
+      taskSessions: { dbPath: join(directory, 'task-sessions.db'), instanceId: 'configuration-resident', initialize: first, ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-01T00:00:00.000Z' } })
     first = false
     return { host, base: 'http://127.0.0.1:' + port }
   }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { available, reason, nativeTaskHost, latestInput, nativeShell, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, nativeShell, waitUntil, topicSummaryResponse } from './fixtures/task-session-native-host.js'
 const test = (name, fn) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
 const decide = action => call('task_session_submit', { decision: { action, summary: 'Original goal', evidence: [], limitations: [] } })
@@ -18,15 +18,20 @@ async function host(root, { initialize = true, fault = true, allowUnrelated = fa
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
         async *stream(request) {
+          if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
           requests.push(structuredClone(request))
           let calls
           if (request.tools.some(tool => tool.name === 'task_delegate')) {
             const input = latestInput(request)
             const answered = input.task.humanRequests?.find(request => request.status === 'answered')
-            if (humanFlow && answered) assert.match(answered.reply, /UAT3/)
+            if (humanFlow && answered) {
+              const response = input.sources.find(source => source.sourceId === answered.sourceId)
+              assert.ok(response, 'Read the authenticated answer source bound to this human request')
+              assert.match(response.text, /UAT3/)
+            }
             calls = persistent && input.wakes?.some(wake => wake.kind === 'execution.provider.review' || wake.kind === 'provider.evidence.available')
               ? reviewWait ? [decide('wait')] : [call('task_delegate', { key: 'cold-' + input.executions[0].inputVersion, executionId: input.executions[0].executionId, objective: 'Write exactly once and verify' }), decide('wait')]
-              : humanFlow && answered && input.executions[0]?.input.objective !== 'Authenticated UAT3 target'
+              : humanFlow && answered && input.executions[0]?.inputVersion === 1
               ? [call('task_delegate', { key: 'answered-target', executionId: input.executions[0].executionId, objective: 'Authenticated UAT3 target' }), decide('wait')]
               : humanFlow && input.executions.some(e => e.result?.recovery?.decision === 'scheduled') && !input.task.humanRequests?.length
                 ? [call('task_request_human', { reason: 'Target must be supplied', question: 'Which target?', audience: 'requester', evidence: [], attemptedActions: ['Read business request'] })]

@@ -81,9 +81,15 @@ OIDC 发布失败时依次核对：workflow 使用 GitHub 托管 runner；权限
 
 仍有效的看板测试补齐真实 `ExecutionSessionDuration` 定义，检查三种状态的可访问语义而非过时的 SVG 总数；模型上下文测试使用 `node:path.relative` 核对目录内路径，继续读回全部原内容。未修改产品源码或降低字节预算。
 
-完整原生材料测试要求 `test/fixtures/task-session-native-host.js` 声明的完整组合，通过 `DSH_NATIVE_TEST_PROFILE` 指向隔离安装的 package.json，默认路径是仓库 resident profile。该要求在 `3601f29` 已存在；仅在仓库根执行冻结安装不会安装不属于 workspace 的 resident profile。不能删除这些材料权限测试或把缺环境改成通过；也不能读取用户的实际 provider 登录配置来补齐 CI。
+完整原生材料测试要求 `test/fixtures/task-session-native-host.js` 声明的完整组合。CI/Release 通过 `DSH_NATIVE_TEST_PROFILE` 显式指向 private 合成 workspace `test/fixtures/native-profile/package.json`，冻结安装后预检 37 个真实原生模块；夹具不包含用户 bundle、provider 配置或凭据。锁文件新增完整组合并改变若干 Assistant 依赖的 peer 上下文，原有包版本未升级，不能据此声称依赖解析完全不变。未设置变量的本地测试仍默认使用 resident profile；不得删除有效材料权限测试或把缺环境改成通过。
 
-固定摘要属于 `runtime-contracts-archive.md` 明确保留的历史字节完整性保证。`3601f29` 的两个 v4 函数与上次绿 CI `88181c2` 语义相同，但换行从 LF 变为 CRLF；原 LF 摘要仍匹配原测试常量。本轮不删除断言、不改期望摘要、不擅自重写冻结源文件。群协调公平续行的重试计数断言也保留。基线最小用例的 1 次重试实际来自旧模型夹具未处理的摘要迁移请求，原、新话题决策均为 0 次。夹具现按真实 `group_topic_summary_submit` 协议处理摘要，并仅用 decision 角色更新决策指针；9 次非法纠正、10 次原请求调用、新任务先行以及全部请求 0 重试断言不变，定向回归通过。
+固定摘要属于 `runtime-contracts-archive.md` 明确保留的历史字节完整性保证。`3601f29` 的两个 v4 函数与上次绿 CI `88181c2` 语义相同，但换行从 LF 变为 CRLF；原 LF 摘要仍匹配原测试常量。本轮已恢复 `88181c2` 的原始混合换行字节，Git blob `9af03f7ec38b8ff2fe0105038aa1ce1aee0bc613` 完全相同；规范化内容不变，原断言及期望摘要未改，两项定向回归通过。归档文件不进入当前正式包。群协调公平续行的重试计数断言也保留。基线最小用例的 1 次重试实际来自旧模型夹具未处理的摘要迁移请求，原、新话题决策均为 0 次。夹具现按真实 `group_topic_summary_submit` 协议处理摘要，并仅用 decision 角色更新决策指针；9 次非法纠正、10 次原请求调用、新任务先行以及全部请求 0 重试断言不变，定向回归通过。
 隔离原生材料回归中发现合成模型误将 `coord-summary-*` 请求提交为路由，已补齐真实摘要协议分支，未改生产代码。材料文件本机 15 项中 13 项通过；两项创建符号链接被 Windows 返回 EPERM，保留原断言交由托管 CI 实测，未变更系统权限。
 
 Windows 原生 Task 来源夹具直接检查工具文本中的绝对路径，避免 JSON 序列化反斜杠转义导致重复读取。真实读取、正文去重、原始审计与完成断言保持不变，权威来源定向回归通过。
+
+`df6eb20` 的完整 CI `38922011709` 结果为 3204 项：3156 通过、38 失败、6 取消、4 跳过，未进入打包上传。隔离组合补齐 `api-session-controller` 与 `file-reference-local`，冻结安装及 37 模块预检通过。原生夹具将 `coord-summary-*` 维护调用与 owner/executor 故障计数分开，维护请求保留在 `auxiliaryRequests` 供审计；自定义 Provider 同样先处理维护协议。人答模型按当前 `sourceId` 读取真实答复，按原执行版本决定续办；执行结果沿 `catalogRef` 精确读取，不要求缩减快照重复内联正文。合成 Resident 仍须提供 ownerActorId、webActorId 与有效 ingressEpoch，不能绕过运行时校验。
+
+通知身份缓存断言仍单独失败：恢复已有持久化通知的分支读取了最新记录，但未刷新服务内通知身份缓存。原断言保留，产品修复范围须独立审查；不能把有效失败视作测试清理或发布成功。
+
+针对 `df6eb20` CI 的原 44 个失败/取消用例，补齐上述测试环境与模型协议后，13 个文件的串行定向复核为 42 通过、1 失败、1 超时取消、0 跳过。失败仍是已送达通知身份缓存；超时为完整冷恢复用例超过原 30 秒，单独运行曾在 24.68 秒通过。尚未增加超时、修改产品源码或重新触发完整 CI；不能把这份定向结果称作整套通过。证据应按本轮日志回读，不以此历史记录替代当前运行状态。
