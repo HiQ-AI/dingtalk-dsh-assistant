@@ -202,9 +202,9 @@ window.__ModuleLoader__.load({
       error: 'var(--dsw-alias-state-error-primary, #c33)'
     }
     const CheckpointDoneIcon = ({ size = 12 }) => React.createElement('svg', { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, React.createElement('circle', { cx: 8, cy: 8, r: 6.25 }), React.createElement('path', { d: 'M5 8.1 7.05 10 11.2 5.9' }))
-    const statusTag = (label, state, { borderless = false, fontSize = 11, fontWeight = 500 } = {}) => {
-      const tone = statusTone[state] || colors.muted
-      return React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 24, boxSizing: 'border-box', border: borderless ? 0 : `1px solid color-mix(in srgb, ${tone} 28%, transparent)`, borderRadius: 999, background: `color-mix(in srgb, ${tone} 10%, transparent)`, color: tone, padding: '2px 8px', fontSize, fontWeight, lineHeight: 1.4, whiteSpace: 'nowrap' } }, React.createElement(StateDot, { state, size: 7 }), label)
+    const statusTag = (label, state, { borderless = false, fontSize = 11, fontWeight = 500, className, tone: customTone } = {}) => {
+      const tone = customTone || statusTone[state] || colors.muted
+      return React.createElement('span', { className, style: { display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 24, boxSizing: 'border-box', border: borderless ? 0 : `1px solid color-mix(in srgb, ${tone} 28%, transparent)`, borderRadius: 999, background: `color-mix(in srgb, ${tone} 10%, transparent)`, color: tone, padding: '2px 8px', fontSize, fontWeight, lineHeight: 1.4, whiteSpace: 'nowrap' } }, React.createElement(StateDot, { state, size: 7 }), label)
     }
     const tableStatusTag = (label, state, { fontWeight = 500 } = {}) => statusTag(label, state, { borderless: true, fontSize: 12, fontWeight })
     function SelectMenu({ label, value, options, onChange, minWidth = 150, fitContent = false }) {
@@ -706,23 +706,23 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const controller = new AbortController(); let active = true
         setLoading(true); setError('')
-        get(`/state/tasks/${encodeURIComponent(taskId)}/executions?offset=${offset}&limit=20`, { signal: controller.signal }).then(value => { if (active) { const items = value.executions || value.items || (Array.isArray(value) ? value : []); const total = value.total ?? items.length; if (offset > 0 && offset >= total) { setOffset(Math.max(0, Math.floor((total - 1) / 20) * 20)); return } setPage({ items, total, offset }); } }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
+        get(`/state/tasks/${encodeURIComponent(taskId)}/executions?offset=${offset}&limit=20`, { signal: controller.signal }).then(value => { if (active) { const items = value.executions || value.items || (Array.isArray(value) ? value : []); const total = value.total ?? items.length; if (offset > 0 && offset >= total) { setOffset(Math.max(0, Math.floor((total - 1) / 20) * 20)); return } setPage({ items, total, offset, refreshedAt: updatedAt }); } }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
         return () => { active = false; controller.abort() }
       }, [taskId, offset, updatedAt, retry])
       const ready = !!page
       const visibleOffset = page?.offset ?? 0
+      const refreshedAt = page?.refreshedAt && Number.isFinite(new Date(page.refreshedAt).getTime()) ? page.refreshedAt : null
       return React.createElement('section', { className: 'detail-executions', 'aria-label': '动态执行列表', style: { display: 'grid', gap: 16, minHeight: 160 } },
-        React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h2', null, '独立执行'),
+        React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h2', null, '执行会话'),
           React.createElement('div', { className: 'detail-execution-feedback' },
             React.createElement('span', { role: error ? 'alert' : 'status', className: error ? 'detail-execution-error' : 'detail-muted', tabIndex: error ? 0 : undefined },
-              error ? `执行记录读取失败${ready ? '，暂显示已读取记录' : ''}：${error}` : loading ? `${ready && page.offset !== offset ? '正在读取另一页，暂显示已读取记录' : '正在读取执行记录'}…` : '执行记录已更新'),
+              error ? `执行记录读取失败${ready ? '，暂显示已读取记录' : ''}：${error}` : loading ? `${ready && page.offset !== offset ? '正在读取另一页，暂显示已读取记录' : '正在读取执行记录'}…` : ''),
             React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'aria-label': '重试读取执行', disabled: !error || loading, style: { visibility: error ? 'visible' : 'hidden' }, onClick: () => setRetry(value => value + 1) }, '重试'))),
-        React.createElement('p', { className: 'detail-muted' }, '由任务会话按需安排；展开可查看本次结果与独立会话。'),
-        React.createElement('div', { className: 'detail-pagination' }, React.createElement('span', { className: 'detail-muted', style: { marginRight: 'auto' } }, ready ? `${page.total} 条执行记录 · ${page.total ? visibleOffset + 1 : 0}–${visibleOffset + page.items.length}` : '尚未读取执行记录'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset === 0, onClick: () => setOffset(Math.max(0, visibleOffset - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset + page.items.length >= page.total, onClick: () => setOffset(visibleOffset + 20) }, '下一页')),
+        React.createElement('div', { className: 'detail-pagination' }, React.createElement('span', { className: 'detail-muted detail-execution-meta', style: { marginRight: 'auto' } }, refreshedAt ? React.createElement('span', null, `更新 ${fmt(refreshedAt)}`) : null, React.createElement('span', null, ready ? `${page.total} 条执行记录 · ${page.total ? visibleOffset + 1 : 0}–${visibleOffset + page.items.length}` : '尚未读取执行记录')), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset === 0, onClick: () => setOffset(Math.max(0, visibleOffset - 20)) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: loading || !ready || visibleOffset + page.items.length >= page.total, onClick: () => setOffset(visibleOffset + 20) }, '下一页')),
         ready ? React.createElement('ol', { className: 'detail-execution-list' }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, className: 'detail-execution' },
           React.createElement('details', null, React.createElement('summary', { className: 'detail-execution-summary' },
             React.createElement('span', { className: 'detail-execution-title' }, execution.title || execution.objective || execution.executionId),
-            statusTag(taskStateLabel(execution.status), taskStateTone(execution.status)),
+            statusTag(taskStateLabel(execution.status), taskStateTone(execution.status), execution.status === 'running' ? { className: 'detail-execution-running-tag', tone: `color-mix(in srgb, ${colors.accent} 75%, currentColor)` } : {}),
             React.createElement('span', { className: 'detail-execution-time' }, `创建 ${fmt(execution.createdAt)}`)),
             React.createElement('div', { className: 'detail-execution-body' },
             React.createElement('p', { className: 'detail-objective' }, execution.input?.objective || execution.objective || '尚未记录执行目标。'),
@@ -871,9 +871,12 @@ window.__ModuleLoader__.load({
       .observer-session-detail details[open] > .detail-execution-summary::before { content: '⌄'; }
       .observer-session-detail .detail-execution-summary:hover { background: ${colors.surface2}; border-radius: 8px; }
       .observer-session-detail .detail-execution-title { font-size: 14px; font-weight: 500; color: inherit; }
+      .observer-session-detail .detail-execution-running-tag [data-state='ongoing'] { color: inherit; }
       .observer-session-detail .detail-execution-time { grid-column: 2 / 4; font-size: 12px; color: ${colors.muted}; }
       .observer-session-detail .detail-execution-body { padding: 16px; display: grid; gap: 16px; border-top: 1px solid ${colors.border}; }
       .observer-session-detail .detail-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 36px; }
+      .observer-session-detail .detail-execution-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 44px; }
+      .observer-session-detail .detail-execution-meta > span { white-space: nowrap; }
       .observer-session-detail .detail-pagination > span { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
       .observer-session-detail .detail-execution-feedback { height: 36px; flex: 1; min-width: 0; max-width: 520px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
       .observer-session-detail .detail-execution-feedback > span { grid-column: 1; grid-row: 1; min-width: 0; max-height: 36px; overflow: auto; font-size: 12px; line-height: 18px; }
@@ -1080,13 +1083,44 @@ window.__ModuleLoader__.load({
           tooltipRef.current = node
         }
         const theme = window.getComputedStyle(target.closest('.detail-timeline'))
-        node.textContent = target.getAttribute('aria-label')
+        node.replaceChildren()
+        let content
+        try { content = JSON.parse(target.dataset.tooltip || 'null') } catch {}
+        const addText = (parent, value, className, style) => {
+          if (!value) return
+          const child = document.createElement('div')
+          child.className = className
+          child.textContent = value
+          Object.assign(child.style, style)
+          parent.appendChild(child)
+        }
+        if (content) {
+          const heading = document.createElement('div')
+          heading.style.display = 'flex'
+          heading.style.alignItems = 'baseline'
+          heading.style.gap = '8px'
+          heading.style.flexWrap = 'wrap'
+          node.appendChild(heading)
+          addText(heading, content.title, 'timeline-tooltip-heading', { fontWeight: '600', fontSize: '13px', lineHeight: '20px', flex: '1', minWidth: '0' })
+          if (content.status && content.status !== content.title) addText(heading, content.status, 'timeline-tooltip-status', { fontSize: '11px', opacity: '.8', flex: 'none' })
+          addText(node, content.meta, 'timeline-tooltip-meta', { marginTop: '4px', fontSize: '11px', lineHeight: '17px', fontVariantNumeric: 'tabular-nums', opacity: '.8' })
+          addText(node, content.duration, 'timeline-tooltip-duration', { marginTop: '2px', fontSize: '11px', lineHeight: '17px', fontVariantNumeric: 'tabular-nums', opacity: '.8', whiteSpace: 'nowrap' })
+          addText(node, content.body, 'timeline-tooltip-body', { marginTop: '8px' })
+          for (const item of content.items || []) {
+            const entry = document.createElement('div')
+            entry.className = 'timeline-tooltip-entry'
+            entry.style.marginTop = '8px'
+            addText(entry, item.at, 'timeline-tooltip-meta', { fontSize: '11px', lineHeight: '17px', fontVariantNumeric: 'tabular-nums', opacity: '.8' })
+            addText(entry, item.summary, 'timeline-tooltip-body', { marginTop: '2px' })
+            node.appendChild(entry)
+          }
+        } else node.textContent = target.getAttribute('aria-label')
         node.hidden = false
         Object.assign(node.style, {
           position: 'fixed', inset: 'auto', margin: '0', boxSizing: 'border-box',
           width: `${Math.min(320, window.innerWidth - 16)}px`,
           maxHeight: `${window.innerHeight - 16}px`, overflowY: 'auto',
-          padding: '6px 8px', border: '1px solid rgba(127,127,127,.35)',
+          padding: '10px 12px', border: '1px solid rgba(127,127,127,.35)',
           borderRadius: '4px', background: theme.backgroundColor, color: theme.color,
           fontFamily: theme.fontFamily, fontSize: '12px', lineHeight: '18px',
           whiteSpace: 'pre-line', overflowWrap: 'anywhere', boxShadow: '0 2px 8px rgba(0,0,0,.08)',
@@ -1116,7 +1150,7 @@ window.__ModuleLoader__.load({
           const nearby = row.milestones.filter(event => Number.isFinite(Date.parse(event.at)) && Date.parse(event.at) >= start && Date.parse(event.at) <= end && Math.abs(position(event.at) - group.at) <= 3).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
           const content = nearby.map(event => `${time(event.at)} · 阶段成果：${event.summary}`).join('\n')
           return React.createElement(React.Fragment, { key: group.events[0].id },
-            React.createElement('button', { type: 'button', className: 'timeline-milestone', style: { left: `${group.at}%` }, 'data-recorded-at': group.events[0].at, 'aria-label': content, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip },
+            React.createElement('button', { type: 'button', className: 'timeline-milestone', style: { left: `${group.at}%` }, 'data-recorded-at': group.events[0].at, 'data-tooltip': JSON.stringify({ title: '阶段成果', items: nearby.map(event => ({ at: time(event.at), summary: event.summary })) }), 'aria-label': content, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip },
               React.createElement('span', { className: 'timeline-milestone-tick', 'aria-hidden': true })))
         })
       const bar = (segment, total = false, human = false) => {
@@ -1127,7 +1161,7 @@ window.__ModuleLoader__.load({
         const description = describe(segment, total, human)
         return React.createElement(React.Fragment, { key: segment.id || 'total' },
           React.createElement('span', { className: `timeline-bar${total ? ' timeline-total' : ''}${['failed','cancelled','superseded','stale'].includes(segment.status) ? ' timeline-muted' : ''}`,
-            style: { left: `${left}%`, width: `${Math.max(0, right - left)}%` }, tabIndex: 0, role: 'img', 'aria-label': description, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip },
+            style: { left: `${left}%`, width: `${Math.max(0, right - left)}%` }, tabIndex: 0, role: 'img', 'data-tooltip': JSON.stringify({ title: segment.label || '任务执行', status: segment.status ? status(segment.status) : null, meta: range(segment), duration: `${total ? '本次处理历时' : human ? '等待历时' : '执行历时'} ${elapsed(segment)}`, body: segment.description }), 'aria-label': description, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip },
             React.createElement('span', null, React.createElement('span', { className: 'timeline-activity' }, segment.label || '任务执行'), React.createElement('span', { className: 'timeline-duration' }, elapsed(segment)))))
       }
       return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' },
@@ -1151,7 +1185,7 @@ window.__ModuleLoader__.load({
             React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', { scope: 'col' }, '会话 / 时间'), React.createElement('th', { scope: 'col' }, React.createElement('div', { className: 'timeline-axis' }, ...[0, 1, 2, 3, 4].map(index => React.createElement('span', { key: index, style: { left: `${index * 25}%` } }, new Date(axisDate(index / 4)).toLocaleString('zh-CN', { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }), hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }))))))),
             React.createElement('tbody', null,
               React.createElement('tr', null, React.createElement('th', { scope: 'row' }, '任务执行', timeline.task.complete === false ? React.createElement('small', { className: 'timeline-total-missing' }, '部分历史未记录') : null), React.createElement('td', null, React.createElement('div', { className: 'timeline-track timeline-total-track' }, ...totalSegments.map(segment => bar(segment, true)), !totalSegments.length ? React.createElement('span', { className: 'timeline-empty' }, '完成 / 重开时间未完整记录') : null), React.createElement('span', { className: 'timeline-sr' }, ...totalSegments.map(segment => `${segment.label} · ${range(segment)}；`)))),
-              ...rows.map(row => React.createElement('tr', { key: row.id }, React.createElement('th', { scope: 'row', tabIndex: 0, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip, 'aria-label': `${row.title}${row.status ? ` · ${status(row.status)}` : ''}${row.complete ? '' : ' · 部分区间未记录'}` }, React.createElement('span', { className: 'timeline-name' }, row.title), row.status ? React.createElement('small', null, status(row.status)) : null, !row.complete ? React.createElement('small', null, '部分区间未记录') : null),
+              ...rows.map(row => React.createElement('tr', { key: row.id }, React.createElement('th', { scope: 'row', tabIndex: 0, onFocus: placeTooltip, onMouseEnter: placeTooltip, onMouseLeave: leaveTooltip, onBlur: hideTooltip, 'data-tooltip': JSON.stringify({ title: row.title, status: row.status ? status(row.status) : null, body: row.complete ? null : '部分区间未记录' }), 'aria-label': `${row.title}${row.status ? ` · ${status(row.status)}` : ''}${row.complete ? '' : ' · 部分区间未记录'}` }, React.createElement('span', { className: 'timeline-name' }, row.title), row.status ? React.createElement('small', null, status(row.status)) : null, !row.complete ? React.createElement('small', null, '部分区间未记录') : null),
                 React.createElement('td', null, React.createElement('div', { className: 'timeline-track' }, ...row.segments.map(segment => bar(segment, false, row.id === 'human')), ...markers(row),
                   !row.segments.length ? React.createElement('span', { className: 'timeline-empty' }, row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史区间未记录') : null),
                   React.createElement('span', { className: 'timeline-sr' }, `${row.segments.length} 个区段${row.complete ? '' : '，部分历史区间未记录'}`))))))),

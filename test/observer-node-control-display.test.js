@@ -182,6 +182,36 @@ test('执行加载状态区域与分页始终存在，空记录刷新及失败�
   assert.ok(elements(tree).some(item => item.props.role === 'alert'))
 })
 
+test('执行会话计数前复用成功刷新的时间，刷新失败保留旧时间，缺失或非法时间不显示', async () => {
+  const stamp = '2026-10-16T08:19:10.000Z', next = '2026-10-16T08:20:10.000Z'
+  const h = harness('TaskExecutions', { taskId: 't', updatedAt: stamp })
+  h.render(); h.requests[0].resolve({ executions: [], total: 0 }); await settle()
+  let tree = h.render()
+  assert.ok(elements(tree).some(n => n.type === 'h2' && text(n) === '执行会话'))
+  assert.doesNotMatch(text(tree), /执行记录已更新|由任务会话按需安排/)
+  const meta = value => elements(value).find(n => n.props.className?.includes('detail-execution-meta'))
+  assert.equal(text(meta(tree).children[0]), `更新 ${new Date(stamp).toLocaleString('zh-CN', { hour12: false })}`)
+  assert.match(text(meta(tree).children[1]), /0 条执行记录/)
+  h.render({ taskId: 't', updatedAt: next }); h.requests[1].reject(Error('offline')); await settle()
+  assert.ok(text(h.render()).includes(new Date(stamp).toLocaleString('zh-CN', { hour12: false })))
+  for (const invalid of [undefined, 'invalid-time']) {
+    const empty = harness('TaskExecutions', { taskId: 'empty', updatedAt: invalid })
+    empty.render(); empty.requests[0].resolve({ executions: [], total: 0 }); await settle()
+    assert.doesNotMatch(text(empty.render()), /Invalid Date|更新 /)
+  }
+})
+
+test('执行会话列表仅运行标签覆盖蓝色，复用StateDot，其他状态保留原语义色', async () => {
+  const h = harness('TaskExecutions', { taskId: 't' })
+  h.render(); h.requests[0].resolve({ executions: ['running','succeeded','waiting'].map((status,i) => ({ executionId: String(i), status })), total:3 }); await settle()
+  const nodes = elements(h.render()), blue = nodes.filter(n => n.props.className === 'detail-execution-running-tag')
+  assert.equal(blue.length, 1)
+  assert.match(blue[0].props.style.color, /dsw-alias-brand-primary/)
+  assert.ok(elements(blue[0]).some(n => n.type === 'dot' && n.props.state === 'ongoing'))
+  assert.ok(nodes.some(n => n.props.style?.color === 'var(--dsw-alias-state-success-primary, #248a3d)'))
+  assert.ok(nodes.some(n => n.props.style?.color === 'var(--dsw-alias-state-warn-primary, #a56500)'))
+})
+
 test('当前进展合并活跃阻塞记录，包含详情分页外的并行执行且不把已完成结果当进展', () => {
   const task = { state: 'running', requirementRevision: 3, controlRevision: 1, result: { summary: '已完成的历史结论' },
     executions: [{ executionId: 'old', status: 'succeeded', drained: true, objective: '已完成事项' }, { executionId: 'stale', status: 'stale', drained: true, objective: '旧修订事项' }, { executionId: 'one', status: 'running', sessionBound: true, input: { title: '检查甲', objective: '核对甲配置' }, progressReview: { newEventCount: 2 } }],
