@@ -9,6 +9,18 @@
     "height": 24,
     "contrast": 5.3163596082567555
   },
+  "cardStyle": {
+    "color": "color(srgb 0.257843 0.347059 0.782353)",
+    "stroke": "color(srgb 0.257843 0.347059 0.782353)",
+    "width": 14,
+    "height": 14,
+    "animation": "dsh-state-dot-spin"
+  },
+  "topStyle": {
+    "color": "color(srgb 0.257843 0.347059 0.782353)",
+    "stroke": "color(srgb 0.257843 0.347059 0.782353)",
+    "animation": "dsh-state-dot-spin"
+  },
   "desktopMeta": [
     {
       "x": 170,

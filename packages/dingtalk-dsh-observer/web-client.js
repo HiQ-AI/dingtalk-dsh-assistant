@@ -97,6 +97,7 @@ window.__ModuleLoader__.load({
     }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
     const observerCss = `
+      [data-dingtalk-observer] .observer-task-running [data-state='ongoing'] { color: inherit; }
       .observer-human-modal { box-sizing: border-box; width: min(1040px, calc(100vw - 48px)); height: min(900px, calc(100dvh - 48px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 1px solid ${colors.border}; border-radius: 12px; background: ${colors.surface}; color: inherit; box-shadow: 0 24px 80px rgba(0,0,0,.22); overflow: hidden; }
       .observer-human-modal[open] { display: flex; flex-direction: column; }
       .observer-human-modal::backdrop { background: rgba(0,0,0,.28); backdrop-filter: blur(2px); }
@@ -201,6 +202,7 @@ window.__ModuleLoader__.load({
       ongoing: 'var(--dsw-alias-brand-primary, #4d6bfe)',
       error: 'var(--dsw-alias-state-error-primary, #c33)'
     }
+    const taskRunningTag = { className: 'observer-task-running', tone: `color-mix(in srgb, ${colors.accent} 75%, currentColor)` }
     const CheckpointDoneIcon = ({ size = 12 }) => React.createElement('svg', { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, React.createElement('circle', { cx: 8, cy: 8, r: 6.25 }), React.createElement('path', { d: 'M5 8.1 7.05 10 11.2 5.9' }))
     const statusTag = (label, state, { borderless = false, fontSize = 11, fontWeight = 500, className, tone: customTone } = {}) => {
       const tone = customTone || statusTone[state] || colors.muted
@@ -722,7 +724,7 @@ window.__ModuleLoader__.load({
         ready ? React.createElement('ol', { className: 'detail-execution-list' }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, className: 'detail-execution' },
           React.createElement('details', null, React.createElement('summary', { className: 'detail-execution-summary' },
             React.createElement('span', { className: 'detail-execution-title' }, execution.title || execution.objective || execution.executionId),
-            statusTag(taskStateLabel(execution.status), taskStateTone(execution.status), execution.status === 'running' ? { className: 'detail-execution-running-tag', tone: `color-mix(in srgb, ${colors.accent} 75%, currentColor)` } : {}),
+            statusTag(taskStateLabel(execution.status), taskStateTone(execution.status), execution.status === 'running' ? taskRunningTag : {}),
             React.createElement('span', { className: 'detail-execution-time' }, `创建 ${fmt(execution.createdAt)}`)),
             React.createElement('div', { className: 'detail-execution-body' },
             React.createElement('p', { className: 'detail-objective' }, execution.input?.objective || execution.objective || '尚未记录执行目标。'),
@@ -871,7 +873,6 @@ window.__ModuleLoader__.load({
       .observer-session-detail details[open] > .detail-execution-summary::before { content: '⌄'; }
       .observer-session-detail .detail-execution-summary:hover { background: ${colors.surface2}; border-radius: 8px; }
       .observer-session-detail .detail-execution-title { font-size: 14px; font-weight: 500; color: inherit; }
-      .observer-session-detail .detail-execution-running-tag [data-state='ongoing'] { color: inherit; }
       .observer-session-detail .detail-execution-time { grid-column: 2 / 4; font-size: 12px; color: ${colors.muted}; }
       .observer-session-detail .detail-execution-body { padding: 16px; display: grid; gap: 16px; border-top: 1px solid ${colors.border}; }
       .observer-session-detail .detail-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 36px; }
@@ -1204,7 +1205,7 @@ window.__ModuleLoader__.load({
         React.createElement('style', null, taskDetailCss),
         React.createElement('header', { className: 'detail-header' },
           React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: onBack }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')),
-          React.createElement('div', { className: 'detail-title-row' }, React.createElement('h1', null, task.title?.trim() || taskDisplayTitle(task)), statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state))),
+          React.createElement('div', { className: 'detail-title-row' }, React.createElement('h1', null, task.title?.trim() || taskDisplayTitle(task)), statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state), !task.legacyReadonly && task.state === 'running' ? taskRunningTag : {})),
           React.createElement('div', { className: 'detail-meta' }, React.createElement('span', null, `创建 ${fmt(task.createdAt)}`), React.createElement('span', null, `更新 ${fmt(task.updatedAt)}`), !task.legacyReadonly ? React.createElement('span', null, `${task.executionCount ?? '未记录'} 次独立执行`) : null)),
         task.waitingReason || question ? React.createElement('section', { className: 'detail-attention', 'aria-label': '阻塞与待处理' },
           React.createElement('h2', null, question ? '等待答复' : '当前等待 / 阻塞'),
@@ -1471,7 +1472,7 @@ window.__ModuleLoader__.load({
               const failed = execution.status === 'failed'
               const tone = done ? 'var(--dsw-alias-state-success-primary, #248a3d)' : running ? colors.accent : failed ? colors.danger : colors.muted
               return React.createElement('button', { key: execution.sessionId || execution.executionId, className: 'observer-execution-session', type: 'button', disabled: !execution.sessionId || navigatingSessionId === execution.sessionId, 'aria-busy': navigatingSessionId === execution.sessionId, onClick: () => navigate(execution.sessionId, session.sessionId), style: { display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) auto', alignItems: 'start', gap: 7, minWidth: 0, padding: '6px 0', border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5, textAlign: 'left', cursor: execution.sessionId ? 'pointer' : 'default' } },
-                active ? React.createElement('span', { role: 'img', 'aria-label': taskStateLabel(execution.status), title: taskStateLabel(execution.status), style: { display: 'inline-flex', width: 14, height: 14, marginTop: 1 } }, React.createElement(StateDot, { state: 'ongoing', size: 14 })) : React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, role: 'img', 'aria-label': taskStateLabel(execution.status), style: { marginTop: 1 } },
+                active ? React.createElement('span', { className: taskRunningTag.className, role: 'img', 'aria-label': taskStateLabel(execution.status), title: taskStateLabel(execution.status), style: { display: 'inline-flex', width: 14, height: 14, marginTop: 1, color: taskRunningTag.tone } }, React.createElement(StateDot, { state: 'ongoing', size: 14 })) : React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, role: 'img', 'aria-label': taskStateLabel(execution.status), style: { marginTop: 1 } },
                   React.createElement('title', null, taskStateLabel(execution.status)),
                   React.createElement('circle', { cx: 8, cy: 8, r: 5.6, fill: done ? tone : 'none' }),
                   done ? React.createElement('path', { d: 'm5 8 2 2 4-4', stroke: 'white' }) : running ? React.createElement('circle', { cx: 8, cy: 8, r: 2, fill: tone, stroke: 'none' }) : failed ? React.createElement('path', { d: 'M8 4.5v4M8 10v1' }) : null),
