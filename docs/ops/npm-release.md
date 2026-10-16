@@ -57,6 +57,8 @@ OIDC 发布失败时依次核对：workflow 使用 GitHub 托管 runner；权限
 
 ## 发布测试环境
 
+测试临时根必须是当前执行身份可写、祖先目录可回读的物理目录；可通过 `TEMP` / `TMP` 指定隔离工作区，不使用写死的 `/tmp`。Windows 进程与端口所有权验收仍需要系统允许其既有只读查询；访问被拒时按环境阻塞报告，不删除检查、不把失败改成跳过。合成 Node 服务的测试 owner 通过专属 IPC 请求自然关闭，并等待其实际 `ChildProcess` 的 `close` 事件；这只负责测试自身资源收尾，不替代产品的进程树或排空验收。
+
 测试需要真实 JDK11（`JAVA_HOME` 指向其安装根），前端启动用例还需 `NODE22_EXECUTABLE` 指向真实 Node22；仓库与发布本身仍使用 Node24.19.0。测试所用 YAML、Cordis 和 Loader 来自仓库声明依赖，不要求预先安装本机 DSH profile。
 
 全量测试前先执行 `mvn -B -f test/fixtures/local-acceptance-spring/pom.xml package`，从已声明的真实 Spring Boot 依赖生成合成验收夹具，不使用或发布业务 JAR。CI 与 Release 都显式准备工具和短物理临时目录；受管路径的链接/越界检查保持原样，不因 runner 的系统临时路径而放宽。较深临时根会触发部分 Git for Windows 命令的路径限制，须使用短物理根。

@@ -1,9 +1,10 @@
 import test from 'node:test'
+import { trackTestService } from './fixtures/owned-test-service.js'
 import assert from 'node:assert/strict'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 import {mkdir,mkdtemp,writeFile,readFile} from 'node:fs/promises'
-import {join,resolve} from 'node:path'
+import {join,resolve,dirname} from 'node:path'
 import {executionDigest,openExecutionArtifacts} from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import {inspectDevelopmentBranch,selectDevelopmentBaseline,resolveDevelopmentSource,readDevelopmentSnapshot} from '../packages/dingtalk-dsh-assistant/execution-development-branch.js'
 import {createEngineeringRegistry,readEngineeringDeliveryProof} from '../packages/dingtalk-dsh-assistant/workflow-engineering.js'
@@ -61,6 +62,7 @@ test('historical UAT workflow still uses its original merge semantics, source-on
 async function endToEnd(t,{polluted,remoteBranch,explicitSource,localAhead,analysisPollution,reissue,staged,requestSource,interrupt,crossReuse}={}){
  let f=await fixture();if(explicitSource)await f.g('push',f.remote,'dev');const original=f,destination=reissue==='cross'?await fixture():null;const config=await configuration(f,explicitSource?'refs/heads/dev':requestSource?'refs/heads/trunk':undefined);if(destination){const other=await configuration(destination);other.repositories[0].id='other';other.repositories[0].githubRepository='example/other';config.repositories.push(other.repositories[0])};const rawStore=await openExecutionStore({dbPath:join(f.directory,'isolated.sqlite'),instanceId:'isolated-purity',initialize:true}),artifacts=await openExecutionArtifacts({directory:join(f.directory,'artifacts'),initialize:true})
  let interrupted=false;const store=interrupt?{...rawStore,command:async command=>{if(!interrupted&&command.kind==='run.workflow.reissue-repository'){interrupted=true;throw Object.assign(new Error('synthetic interruption before migration commit'),{code:'ETIMEDOUT'})};return rawStore.command(command)}}:rawStore
+ for(const repository of config.repositories)trackTestService(t,repository.localAcceptance.service,dirname(repository.managedRoot))
  t.after(async()=>{await controller?.close();await store.close()});const registry=createEngineeringRegistry(config);await registry.restore(store,artifacts)
  let controller,currentRunId,seen=[],outputs={},preparedPr
  const delivery=createExecutionDelivery({store,artifacts,...registry.deliveryOptions})

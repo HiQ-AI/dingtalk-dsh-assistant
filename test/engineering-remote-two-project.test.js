@@ -1,3 +1,4 @@
+import { trackTestService } from './fixtures/owned-test-service.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises'
@@ -20,6 +21,7 @@ test('remote-only 16-node two-repository flow retains actual workspaces, receipt
  const profile=join(dir,'profile.json');await writeFile(profile,JSON.stringify({environment:'uat',env:{ISOLATED_TEST:'yes'}}))
  const inputCode="let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',async()=>{const input=JSON.parse(s);"
  const localAcceptance={version:'1',sharedDataProfilePath:profile,prepareSteps:[command("require('fs').appendFileSync("+JSON.stringify(cwdLog)+",JSON.stringify({phase:'acceptance',cwd:process.cwd()})+'\\n')")],service:{...command("require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])"),args:['-e',"require('node:http').createServer((req,res)=>res.end(require('node:fs').readFileSync('value.txt','utf8'))).listen(Number(process.argv[1]),process.argv[2])",'{port}','127.0.0.1'],readyPath:'/'},scenarios:[{id:'value',description:'Read actual local candidate service',...command(inputCode+"const actual=await(await fetch(input.baseUrl)).text();console.log(JSON.stringify({namespace:input.namespace,baseUrl:input.baseUrl,actual}));});")}],cleanup:command(inputCode+"console.log(JSON.stringify({namespace:input.namespace}));});"),verifyCleanup:command(inputCode+"console.log(JSON.stringify({namespace:input.namespace,empty:true}));});")}
+ trackTestService(t,localAcceptance.service,dir)
  const configs=[],fixture={}
  for(const id of ['frontend','backend']){
   const source=join(dir,id),managedRoot=join(dir,id+'-managed'),remote=join(dir,id+'.git');await mkdir(source);await mkdir(managedRoot)
