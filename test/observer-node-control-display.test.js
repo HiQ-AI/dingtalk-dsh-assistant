@@ -201,22 +201,16 @@ test('执行会话计数前复用成功刷新的时间，刷新失败保留旧�
   }
 })
 
-test('执行会话列表仅运行标签覆盖蓝色，复用StateDot，其他状态保留原语义色', async () => {
-  const h = harness('TaskExecutions', { taskId: 't' })
-  h.render(); h.requests[0].resolve({ executions: ['running','succeeded','waiting'].map((status,i) => ({ executionId: String(i), status })), total:3 }); await settle()
-  const nodes = elements(h.render()), blue = nodes.filter(n => n.props.className === 'observer-task-running')
-  assert.equal(blue.length, 1)
-  assert.match(blue[0].props.style.color, /dsw-alias-brand-primary/)
-  assert.ok(elements(blue[0]).some(n => n.type === 'dot' && n.props.state === 'ongoing'))
-  assert.ok(nodes.some(n => n.props.style?.color === 'var(--dsw-alias-state-success-primary, #248a3d)'))
-  assert.ok(nodes.some(n => n.props.style?.color === 'var(--dsw-alias-state-warn-primary, #a56500)'))
-})
-
-test('任务详情顶部仅running复用公共蓝色标签，其他状态与历史任务不覆盖', () => {
-  const render = task => elements(harness('TaskSessionDetail', { task: { taskId:'t', ...task } }).render())
-  assert.equal(render({ state:'running' }).filter(n => n.props.className === 'observer-task-running').length,1)
-  for (const state of ['completed','waiting','failed','queued']) assert.equal(render({ state }).filter(n => n.props.className === 'observer-task-running').length,0)
-  assert.equal(render({ state:'running', legacyReadonly:true }).filter(n => n.props.className === 'observer-task-running').length,0)
+test('取消新增蓝色覆盖后恢复PR196品牌状态色与原生StateDot，保留本轮列表内容', async () => {
+  assert.doesNotMatch(source, /observer-task-running|detail-execution-running-tag|taskRunningTag|customTone/)
+  const h = harness('TaskExecutions', { taskId:'t' })
+  h.render(); h.requests[0].resolve({ executions:['running','succeeded','waiting'].map((status,i)=>({ executionId:String(i),status })), total:3 }); await settle()
+  const nodes=elements(h.render())
+  for (const color of ['var(--dsw-alias-brand-primary, #4d6bfe)','var(--dsw-alias-state-success-primary, #248a3d)','var(--dsw-alias-state-warn-primary, #a56500)']) assert.ok(nodes.some(n=>n.props.style?.color===color))
+  assert.ok(nodes.some(n=>n.type==='dot' && n.props.state==='ongoing'))
+  const top=elements(harness('TaskSessionDetail',{task:{ taskId:'t',state:'running' }}).render())
+  assert.ok(top.some(n=>n.props.style?.color==='var(--dsw-alias-brand-primary, #4d6bfe)'))
+  assert.ok(nodes.some(n=>n.type==='h2' && text(n)==='执行会话'))
 })
 
 test('当前进展合并活跃阻塞记录，包含详情分页外的并行执行且不把已完成结果当进展', () => {
