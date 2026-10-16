@@ -33,6 +33,25 @@ function harness(componentName, initialProps = {}) {
 const button = (tree, label) => elements(tree).find(item => item.type === 'button' && text(item) === label)
 const input = (tree, label) => elements(tree).find(item => item.type === 'label' && item.children[0] === label)?.children.find(item => typeof item === 'object')
 
+test('时间泳道图保留多区段、并行、人工介入底行以及触屏可读的完整明细', () => {
+  const segment = { id: 'one', label: '查询业务信息并完整核对证据'.repeat(5), startedAt: '2026-10-16T00:00:00Z', endedAt: '2026-10-16T00:01:00Z', status: 'recorded' }
+  const timeline = { task: { startedAt: segment.startedAt, endedAt: segment.endedAt, active: false }, executions: [
+    { id: 'session', title: '执行会话完整中文长名'.repeat(8), complete: false, segments: [segment, { ...segment, id: 'two' }], milestones: [{ id: 'milestone', summary: '成果说明', at: segment.endedAt }] },
+  ], human: { id: 'human', title: '人工介入', complete: true, segments: [], milestones: [] } }
+  const tree = harness('TaskExecutionTimeline', { timeline }).render(), nodes = elements(tree)
+  const rows = nodes.filter(node => node.type === 'tr')
+  assert.match(text(rows.at(-1)), /人工介入/)
+  assert.match(text(tree), /暂无人工介入/)
+  assert.match(text(tree), /部分区间未记录/)
+  assert.ok(text(tree).includes(segment.label))
+  assert.equal(nodes.filter(node => node.props.className?.includes('timeline-bar')).length, 3)
+  assert.ok(nodes.some(node => node.type === 'details'))
+  assert.equal(nodes.some(node => node.props.className === 'timeline-milestone'), false)
+  assert.match(text(tree), /成果说明/)
+  assert.ok(nodes.some(node => node.props.role === 'region' && node.props.tabIndex === 0))
+  assert.match(text(harness('TaskExecutionTimeline', {}).render()), /历史执行过程未记录/)
+})
+
 test('任务详情只有一个任务会话入口，动态执行与结果拥有独立数据', () => {
   const task = { taskId: 't', title: '核对服务', objective: '按实际情况核对', state: 'running', requirementRevision: 2, controlRevision: 3, controlState: 'active', session: { sessionId: 'task-session', workspaceDir: '/task', logPath: '/task/log' }, result: { summary: '进行中', evidence: ['proof'], limitations: ['尚未完成'] } }
   const h = harness('TaskSessionDetail', { task, onOpenSession() {}, onChanged() {}, onBack() {} })

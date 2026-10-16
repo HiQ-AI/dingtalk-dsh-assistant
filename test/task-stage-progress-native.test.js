@@ -80,7 +80,7 @@ for (const humanWait of [false, true]) test(`native nonterminal stage report con
       if (step === 2) {
         assert.match(JSON.stringify(request.messages), /ACTUAL_STAGE_PROOF/)
         assert.ok(request.tools.some(tool => tool.name === 'execution_report_progress'))
-        return [call('execution_report_progress', { summary: '已核对样例差异，继续验证修复边界。', evidence: [join(root, 'stage-proof.txt')] })]
+        return [call('execution_report_progress', { summary: '已核对样例差异，继续验证修复边界。', evidence: [join(root, 'stage-proof.txt')], activity: '验证修复边界' })]
       }
       await gate.promise
       return [call('execution_submit', { output: { status: 'completed', summary: '原执行验证完成', evidence: ['ACTUAL_STAGE_PROOF'], limitations: [], artifacts: [] } })]
@@ -118,6 +118,10 @@ for (const humanWait of [false, true]) test(`native nonterminal stage report con
   const [execution] = await h.query('execution.list')
   assert.equal(execution.status, 'running'); assert.equal(execution.drained, false); assert.equal(execution.result, undefined)
   assert.match(execution.stageProgress.summary, /样例差异/)
+  assert.equal(execution.timeline.segments.at(-1).activity, '验证修复边界')
+  const timeline = (await h.service.taskDetail(task.taskId)).timeline
+  assert.equal(timeline.executions[0].segments.at(-1).label, '验证修复边界')
+  assert.equal(timeline.executions[0].milestones.length, 1)
   assert.equal((await h.query('operation.list', { taskId: task.taskId })).some(item => item.definition?.toolName === 'execution_report_progress'), false, 'internal reporting must not be an external business operation')
   if (humanWait) {
     assert.equal(stageOwnerInput, undefined, 'stage wake cannot bypass the real human request')

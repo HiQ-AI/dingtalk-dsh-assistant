@@ -48,6 +48,7 @@
     "session-workspaces.js",
     "store.js",
     "task-input-contract.js",
+    "task-execution-timeline.js",
     "task-input-revision.js",
     "task-message-projections.js",
     "task-notification-readback.js",

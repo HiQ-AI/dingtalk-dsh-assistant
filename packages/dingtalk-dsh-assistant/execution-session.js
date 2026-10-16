@@ -485,14 +485,14 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       if (dynamicExecution(entry.binding) && typeof entry.onProgress === 'function') {
         agentCtx.tools.register({
           name: PROGRESS_REPORT,
-          description: '向任务统筹报告有证据的阶段成果，原执行继续；不代表整体完成、不发送消息。仅可公开业务摘要和必要证据引用，不含凭据、内部调用参数或原始日志。',
+          description: '向任务统筹报告有证据的阶段成果，原执行继续；不代表整体完成、不发送消息。可选 activity 为从现在开始的当前业务活动短名（如查询信息、修改配置、验证修复）；切换活动时报告，不回填过去的起止时间。仅可公开业务摘要和必要证据引用，不含凭据、内部调用参数或原始日志。',
           effectClass: 'pure',
-          parameters: { type: 'object', properties: { summary: { type: 'string', minLength: 1, maxLength: 2000 }, evidence: { type: 'array', maxItems: 4, items: { type: 'string', minLength: 1, maxLength: 512 } } }, required: ['summary', 'evidence'], additionalProperties: false },
+          parameters: { type: 'object', properties: { summary: { type: 'string', minLength: 1, maxLength: 2000 }, evidence: { type: 'array', maxItems: 4, items: { type: 'string', minLength: 1, maxLength: 512 } }, activity: { type: 'string', minLength: 1, maxLength: 120 } }, required: ['summary', 'evidence'], additionalProperties: false },
           output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
           async execute(args, exec) {
             if (!await current(entry)) throw failure('execution_binding_stale')
             exec.signal.throwIfAborted()
-            return entry.onProgress({ summary: args.summary, evidence: copy(args.evidence), reportId: exec.callId })
+            return entry.onProgress({ summary: args.summary, evidence: copy(args.evidence), reportId: exec.callId, ...(args.activity === undefined ? {} : { activity: args.activity }) })
           },
         })
         progressTool = agentCtx.tools.get(PROGRESS_REPORT, agent)
