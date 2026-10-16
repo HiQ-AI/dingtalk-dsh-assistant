@@ -254,9 +254,21 @@ test('处理步骤直接展示事项、关联对象和动作结论，未知结�
   assert.doesNotMatch(source,/技术详情|消息技术记录|const traceUsage/);assert.match(source,/回复送达情况见发信箱/)
 })
 
+test('消息处理历时固定截止已记录状态时间，不使用发送时间回退或当前时钟',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const code=source.slice(source.indexOf('const messageProcessingElapsed = ')+'const messageProcessingElapsed = '.length,source.indexOf('    const traceReason ='))
+ const elapsed=runInNewContext(`(${code})`)
+ const row={processingSentAt:'2026-10-15T00:00:00Z',processingCompletedAt:'2026-10-15T00:01:23Z'}
+ assert.equal(elapsed(row),'历时 1 分 23 秒')
+ for(const value of [undefined,null,'', 'invalid'])assert.equal(elapsed({...row,processingCompletedAt:value}),'历时未记录')
+ assert.equal(elapsed({...row,processingSentAt:undefined,occurredAt:row.processingSentAt}),'历时未记录')
+ assert.equal(elapsed({...row,processingCompletedAt:'2026-10-14T00:00:00Z'}),'历时未记录')
+ assert.equal(elapsed({processingSentAt:0,processingCompletedAt:2500}),'历时 2.5 秒')
+})
+
 test('步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时',async()=>{
  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
- const code=source.slice(source.indexOf('const traceElapsed = ')+ 'const traceElapsed = '.length,source.indexOf('    const traceReason ='))
+ const code=source.slice(source.indexOf('const traceElapsed = ')+ 'const traceElapsed = '.length,source.indexOf('    const messageProcessingElapsed ='))
  const elapsed=runInNewContext(`(${code})`)
  const step={startedAt:'2026-09-26T00:00:00Z',completedAt:'2026-09-26T00:00:02.500Z',status:'succeeded'}
  assert.equal(elapsed(step,0),'耗时 2.5 秒')

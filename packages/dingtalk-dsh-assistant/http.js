@@ -76,6 +76,29 @@ function workflowTopicSummary(topic) {
     createdAt: topic.createdAt, updatedAt: topic.updatedAt, engine: 'workflow-v2' }
 }
 
+// 复用 Topic 已完成判断的原文与完成时间，不读取任务或通知回执。
+function messageProcessingProjection(message, topics) {
+  const related = topics.flatMap(topic => {
+    const entry = [...(topic.entries ?? [])].reverse().find(item => item.messageId === message.messageId)
+    return entry?.action === 'add' && entry.messageVersion === message.messageVersion ? [{ topic, entry }] : []
+  })
+  const empty = { processingConclusion: null, processingCompletedAt: null, processingSentAt: message.occurredAt ?? null }
+  if (message.routingStatus !== 'routed' || related.some(({ topic, entry }) => topic.processedRevision < entry.revision)) return empty
+  if (!related.length) {
+    const reasons = [...new Set((message.ignoredRanges ?? []).map(range => range.reason).filter(reason => typeof reason === 'string' && reason.trim()))]
+    return { ...empty, processingConclusion: reasons.join('；') || null,
+      processingCompletedAt: reasons.length && message.agentDeliveryStatus === 'delivered' ? message.agentDeliveryAt ?? null : null }
+  }
+  const records = related.map(({ topic, entry }) => [...(topic.decisions ?? [])]
+    .filter(record => record.status === 'completed' && record.revision >= entry.revision)
+    .sort((a, b) => a.revision - b.revision)[0])
+  const conclusions = records.map(record => record?.decision?.reason ?? record?.decision?.reply)
+    .filter(text => typeof text === 'string' && text.trim())
+  const times = records.map(record => typeof record?.updatedAt === 'string' ? Date.parse(record.updatedAt) : NaN)
+  return { ...empty, processingConclusion: [...new Set(conclusions)].join('；') || null,
+    processingCompletedAt: times.every(Number.isFinite) ? new Date(Math.max(...times)).toISOString() : null }
+}
+
 function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
@@ -84,6 +107,7 @@ function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   const topics = runtime.listTopics(group.groupId).filter(topic => !topic.mergedInto)
   summary.messages = (summary.messages ?? []).map((message) => ({
     ...message,
+    ...messageProcessingProjection(message, topics),
     topicRefs: topics.flatMap((topic) => {
       const state = new Map()
       for (const entry of topic.entries?.filter((item) => item.messageId === message.messageId) ?? []) state.set(entry.unitId ?? `legacy:${entry.messageId}`, entry)
@@ -95,7 +119,8 @@ function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   for (const message of workflowMessages) {
     // 补读的旧资料不能挡住原生控制账的会话入口和状态；缺省显示资料仍保留。
     const defined = Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined))
-    byMessageId.set(message.messageId, { ...byMessageId.get(message.messageId), ...defined, sourceKind: 'workflow-v2' })
+    byMessageId.set(message.messageId, { ...byMessageId.get(message.messageId), ...defined, sourceKind: 'workflow-v2',
+      processingConclusion: null, processingCompletedAt: null, processingSentAt: message.occurredAt ?? null })
   }
   summary.messages = [...byMessageId.values()]
   const existingOutboundIds = new Set((summary.outbox ?? []).map((message) => message.outboundId))

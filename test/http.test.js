@@ -60,6 +60,40 @@ test('旧话题关联修复入口全部410，预检、执行与身份变体均�
   }, { overrides: { reconcileWorkflowTopic: async (value, check) => { calls.push({ value, check }); return { checked: true } } } })
 })
 
+test('消息列表投影当前版本首个完成判断原文与时间，后续话题更新和通知不延长历时', async () => {
+  const sent='2026-10-15T00:00:00Z',done='2026-10-15T00:01:23Z',later='2026-10-16T00:00:00Z'
+  const group={groupId:'g',messages:[{messageId:'m',messageVersion:2,text:'资料',occurredAt:sent,routingStatus:'routed'},
+    {messageId:'ignored',messageVersion:1,text:'谢谢',occurredAt:sent,routingStatus:'routed',ignoredRanges:[{reason:'日常闲聊，无具体事项'}],agentDeliveryStatus:'delivered',agentDeliveryAt:done},
+    {messageId:'pending',messageVersion:1,text:'待处理',occurredAt:sent,routingStatus:'pending'},
+    {messageId:'history',messageVersion:1,text:'历史',occurredAt:sent,routingStatus:'routed'}],outbox:[]}
+  const topic={topicId:'t',revision:5,processedRevision:5,updatedAt:later,entries:[{messageId:'m',messageVersion:1,revision:1,action:'add'}, {messageId:'m',messageVersion:2,revision:3,action:'add'}],
+    decisions:[{revision:1,status:'completed',updatedAt:sent,decision:{reason:'旧版本判断'}},
+      {revision:3,status:'completed',updatedAt:done,decision:{reason:'本条资料无需进一步处理'}},
+      {revision:5,status:'completed',updatedAt:later,decision:{reply:'后续判断不覆盖'}}]}
+  const topics=[topic]
+  await withServer(false,async base=>{
+    const read=async()=>(await(await fetch(base+'/state/groups')).json())[0].messages
+    const rows=await read(),row=rows.find(m=>m.messageId==='m')
+    assert.equal(row.processingConclusion,'本条资料无需进一步处理');assert.equal(row.processingCompletedAt,new Date(done).toISOString());assert.equal(row.processingSentAt,sent)
+    assert.equal(rows.find(m=>m.messageId==='ignored').processingConclusion,'日常闲聊，无具体事项')
+    assert.equal(rows.find(m=>m.messageId==='ignored').processingCompletedAt,done)
+    for(const id of ['pending','history'])assert.equal(rows.find(m=>m.messageId===id).processingCompletedAt,null)
+    group.outbox.push({outboundId:'notification',deliveredAt:later});topic.updatedAt=later
+    assert.deepEqual((await read()).find(m=>m.messageId==='m'),row)
+    topic.decisions[1].decision={reply:'判断时的确认原文'}
+    assert.equal((await read()).find(m=>m.messageId==='m').processingConclusion,'判断时的确认原文')
+    topic.decisions[1].updatedAt=undefined
+    assert.equal((await read()).find(m=>m.messageId==='m').processingCompletedAt,null)
+    topic.processedRevision=2
+    assert.equal((await read()).find(m=>m.messageId==='m').processingConclusion,null)
+    topic.processedRevision=5;topic.decisions[1].updatedAt=done
+    topics.push({...topic,topicId:'second',entries:[{messageId:'m',messageVersion:2,revision:1,action:'add'}],decisions:[{revision:1,status:'completed',updatedAt:'2026-10-15T00:02:00Z',decision:{reason:'另一事项的判断原文'}}]})
+    const combined=(await read()).find(m=>m.messageId==='m')
+    assert.equal(combined.processingConclusion,'判断时的确认原文；另一事项的判断原文')
+    assert.equal(combined.processingCompletedAt,'2026-10-15T00:02:00.000Z')
+  },{overrides:{listGroups:()=>[group],getGroup:()=>group,listTopics:()=>topics}})
+})
+
 test('任务列表保留任务会话投影，不再合成固定阶段进度', async () => {
   const task = { taskId: 't', engine: 'task-session', session: { sessionId: 's' }, executions: [{ executionId: 'e', status: 'running' }] }
   await withServer(false, async base => {
@@ -272,7 +306,7 @@ test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预�
     assert.equal(projected.topics, undefined)
     assert.equal(projected.routeHistory, undefined)
     assert.equal(projected.taskReservations, undefined)
-    assert.deepEqual(projected.messages, [{ ...group.messages[0], topicRefs: [{ topicId: 'topic-0', revision: 3, title: '话题 0' }] }])
+    assert.deepEqual(projected.messages, [{ ...group.messages[0], processingConclusion: null, processingCompletedAt: null, processingSentAt: null, topicRefs: [{ topicId: 'topic-0', revision: 3, title: '话题 0' }] }])
     assert.deepEqual(projected.topicProgress, { total: 102, pending: 102, pendingRevisions: 204, pendingUnits: 0, unroutedMessages: 1 })
     const detail = await (await fetch(`${baseUrl}/state/topics/topic-0?groupId=g&revision=2&offset=1&limit=3`)).json()
     assert.deepEqual(request, { groupId: 'g', topicId: 'topic-0', revision: 2, offset: 1, limit: 3 })
