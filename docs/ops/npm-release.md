@@ -83,4 +83,4 @@ OIDC 发布失败时依次核对：workflow 使用 GitHub 托管 runner；权限
 
 完整原生材料测试要求 `test/fixtures/task-session-native-host.js` 声明的完整组合，通过 `DSH_NATIVE_TEST_PROFILE` 指向隔离安装的 package.json，默认路径是仓库 resident profile。该要求在 `3601f29` 已存在；仅在仓库根执行冻结安装不会安装不属于 workspace 的 resident profile。不能删除这些材料权限测试或把缺环境改成通过；也不能读取用户的实际 provider 登录配置来补齐 CI。
 
-固定摘要属于 `runtime-contracts-archive.md` 明确保留的历史字节完整性保证。`3601f29` 的两个 v4 函数与上次绿 CI `88181c2` 语义相同，但换行从 LF 变为 CRLF；原 LF 摘要仍匹配原测试常量。本轮不删除断言、不改期望摘要、不擅自重写冻结源文件。群协调公平续行的重试计数断言也保留；其基线最小用例仍是实际 1、期望 0，需要继续定位。
+固定摘要属于 `runtime-contracts-archive.md` 明确保留的历史字节完整性保证。`3601f29` 的两个 v4 函数与上次绿 CI `88181c2` 语义相同，但换行从 LF 变为 CRLF；原 LF 摘要仍匹配原测试常量。本轮不删除断言、不改期望摘要、不擅自重写冻结源文件。群协调公平续行的重试计数断言也保留。基线最小用例的 1 次重试实际来自旧模型夹具未处理的摘要迁移请求，原、新话题决策均为 0 次。夹具现按真实 `group_topic_summary_submit` 协议处理摘要，并仅用 decision 角色更新决策指针；9 次非法纠正、10 次原请求调用、新任务先行以及全部请求 0 重试断言不变，定向回归通过。
