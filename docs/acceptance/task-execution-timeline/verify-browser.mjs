@@ -38,7 +38,11 @@ const task = { taskId: 'fixture', title: '核对订单信息并验证修复', ob
     { requestId: 'superseded', question: '旧版本范围', createdAt: iso(13), supersededAt: iso(15), status: 'superseded' },
     { requestId: 'pending', question: '验证后是否保留原结果？', createdAt: iso(18), status: 'waiting-reply' },
   ] }
-const wakes = [{ id: 'stage', taskId: 'fixture', kind: 'execution.stage.progress', payload: { executionId: 'e0', recordedAt: iso(7), summary: '已查询到差异证据' } }]
+const wakes = [{ id: 'stage', taskId: 'fixture', kind: 'execution.stage.progress', payload: { executionId: 'e0', recordedAt: iso(4), summary: '区段中间已查询到差异证据' } }]
+wakes.push({ ...structuredClone(wakes[0]), id: 'stage-same', payload: { ...wakes[0].payload, summary: '同一时刻记录的补充证据' } },
+  { ...structuredClone(wakes[0]), id: 'stage-near', payload: { ...wakes[0].payload, recordedAt: iso(4.05), summary: '已复核差异证据' } },
+  { ...structuredClone(wakes[0]), id: 'stage-later', payload: { ...wakes[0].payload, recordedAt: iso(19), summary: '重开后确认修复结果' } })
+for (const [index, minute] of [4.1, 4.15, 4.2].entries()) wakes.push({ ...structuredClone(wakes[0]), id: `stage-dense-${index}`, payload: { ...wakes[0].payload, recordedAt: iso(minute), summary: `密集成果证据 ${index + 1}` } })
 let mode = 'normal', detailFailure = false, delayDetail = false
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, locale: 'zh-CN', reducedMotion: 'reduce' })
@@ -121,11 +125,48 @@ try {
   checks.push('completed-reopened-total-segments-with-real-gap')
   assert.match(await rows.last().innerText(), /人工介入/)
   assert.equal(await rows.nth(1).locator('.timeline-bar').count(), 2)
-  assert.equal(await chart.locator('.timeline-milestone').count(), 0)
+  assert.equal(await chart.locator('.timeline-milestone').count(), 6)
+  const points = chart.locator('.timeline-milestone')
+  assert.equal(await chart.locator('.timeline-milestone-count, .timeline-milestone-dot').count(), 0)
+  const verifyPointCoordinates = async () => {
+    const coords = await points.evaluateAll(nodes => nodes.map(n => {
+      const track = n.closest('.timeline-track').getBoundingClientRect(), dot = n.querySelector('.timeline-milestone-tick').getBoundingClientRect()
+      return { at: n.dataset.recordedAt, ratio: (dot.x + dot.width / 2 - track.x) / track.width, y: dot.y }
+    }))
+    // The initial fixture spans precisely 10:00–10:20; current time advances later.
+    for (const [i, minute] of [4, 4.05, 4.1, 4.15, 4.2, 19].entries()) {
+      const currentMinutes = (await page.evaluate(() => Date.now()) - Date.parse(iso(0))) / 60000
+      assert.ok(Math.abs(coords[i].ratio - minute / currentMinutes) < .001, 'tick center matches actual recordedAt on unified axis')
+    }
+    assert.ok(coords.every(point => point.y === coords[0].y), 'all stage ticks stay on the same horizontal line without avoidance')
+    return coords
+  }
+  const pointCoordinates = { desktop: await verifyPointCoordinates() }
+  const tickExtent = await points.first().evaluate(n => {
+    const line = n.firstElementChild.getBoundingClientRect(), band = n.closest('.timeline-track').querySelector('.timeline-bar').getBoundingClientRect()
+    return { above: band.top - line.top, below: line.bottom - band.bottom, height: line.height, overflow: getComputedStyle(n).overflow }
+  })
+  assert.equal(tickExtent.above, 3)
+  assert.equal(tickExtent.below, 3)
+  assert.equal(tickExtent.height, 28)
+  assert.equal(tickExtent.overflow, 'visible')
+  checks.push('stage-lines-span-band-plus-three-pixels-no-clipping')
+  await points.first().focus()
+  assert.match(await points.first().evaluate(n => n.nextElementSibling.innerText), /区段中间已查询到差异证据[\s\S]*同一时刻记录的补充证据[\s\S]*已复核差异证据/)
+  assert.ok(await points.first().evaluate(n => getComputedStyle(n.nextElementSibling).display !== 'none'))
+  await points.first().evaluate(n => n.blur())
+  assert.equal(await rows.first().locator('.timeline-duration').first().innerText(), '16分0秒')
+  assert.equal(await rows.nth(1).locator('.timeline-duration').first().innerText(), '6分0秒')
+  const shortPart = rows.nth(1).locator('.timeline-bar').last()
+  assert.equal(await shortPart.locator('.timeline-activity').evaluate(n => getComputedStyle(n).display), 'none')
+  await shortPart.focus()
+  assert.match(await shortPart.getAttribute('aria-label'), /排查差异结果.*1分0秒/)
+  await shortPart.evaluate(n => n.blur())
+  checks.push('segment-duration-and-exact-distinct-stage-time-coordinates')
   for (const target of [rows.nth(4).locator('.timeline-bar'), rows.last().locator('.timeline-bar').last()]) {
     assert.equal(await target.evaluate(node => getComputedStyle(node, '::after').content), 'none', 'running/waiting interval has no decorative endpoint')
   }
-  checks.push('no-stage-ticks-or-running-waiting-endpoint-ticks')
+  checks.push('no-running-waiting-endpoint-ticks')
   const geometry = await rows.evaluateAll(nodes => nodes.map(row => [...row.querySelectorAll('.timeline-bar')].map(bar => ({ x: bar.getBoundingClientRect().x, width: bar.getBoundingClientRect().width }))))
   assert.ok(geometry[1][0].x + geometry[1][0].width < geometry[1][1].x)
   assert.equal(Math.round(geometry[2][0].x), Math.round(geometry[3][0].x))
@@ -154,12 +195,15 @@ try {
   assert.match(await chart.locator('details').innerText(), /已答复|已失效/)
   checks.push('keyboard-details-full-long-name-and-human-statuses')
   await page.keyboard.press('Enter')
-  const pending = rows.last().locator('.timeline-bar').last(), widthBefore = (await pending.boundingBox()).width
+  const pending = rows.last().locator('.timeline-bar').last(), durationBefore = await rows.last().locator('.timeline-duration').last().innerText(), widthBefore = (await pending.boundingBox()).width
   await page.clock.runFor(60_000)
   assert.ok((await pending.boundingBox()).width > widthBefore)
+  assert.notEqual(await rows.last().locator('.timeline-duration').last().innerText(), durationBefore)
+  assert.equal(await rows.first().locator('.timeline-duration').first().innerText(), '16分0秒')
   checks.push('pending-human-and-running-execution-extend-now')
   await page.setViewportSize({ width: 390, height: 844 })
   density.narrow = await measure()
+  pointCoordinates.narrow = await verifyPointCoordinates()
   await chart.scrollIntoViewIfNeeded()
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
   const scroller = chart.locator('.timeline-scroll')
@@ -177,14 +221,26 @@ try {
   await chart.evaluate(node => node.scrollIntoView({ block: 'center', behavior: 'instant' }))
   await page.mouse.move(380, 10)
   assert.equal(await scroller.evaluate(node => node.scrollLeft), 0)
+  await scroller.evaluate(node => node.scrollTo({ left: 100, behavior: 'instant' }))
+  await rows.nth(1).locator('.timeline-milestone').first().focus()
+  const stageTooltip = await rows.nth(1).locator('.timeline-milestone').first().evaluate(n => { const b = n.nextElementSibling.getBoundingClientRect(); return { x: b.x, right: b.right } })
+  assert.ok(stageTooltip.x >= 0 && stageTooltip.right <= 390, 'focused stage tooltip stays inside narrow viewport after horizontal scroll')
+  await rows.nth(1).locator('.timeline-milestone').first().evaluate(n => n.blur())
+  await page.mouse.move(380, 10)
+  await scroller.evaluate(node => node.scrollTo({ left: 100, behavior: 'instant' }))
+  await page.clock.runFor(100)
+  await page.waitForTimeout(100)
   await page.screenshot({ path: path.join(output, 'narrow.png'), fullPage: false })
   await chart.screenshot({ path: path.join(output, 'narrow-chart.png') })
   checks.push('narrow-no-page-overflow-keyboard-local-horizontal-scroll')
   mode = 'completed'; await refresh()
   assert.match(await rows.first().innerText(), /已完成.*重开后完成/)
+  const fixedDuration = await rows.first().locator('.timeline-duration').last().innerText()
+  assert.equal(fixedDuration, '2分0秒')
   const fixedWidth = await rows.first().locator('.timeline-total').last().evaluate(n => n.style.width)
   await page.clock.runFor(60_000)
   assert.equal(await rows.first().locator('.timeline-total').last().evaluate(n => n.style.width), fixedWidth)
+  assert.equal(await rows.first().locator('.timeline-duration').last().innerText(), fixedDuration)
   mode = 'missing-lifecycle'; await refresh()
   assert.equal(await rows.first().locator('.timeline-total').count(), 1)
   assert.match(await rows.first().innerText(), /不完整|未记录/)
@@ -198,6 +254,7 @@ try {
   detailFailure = false; delayDetail = true; await refresh()
   assert.equal(await chart.locator('tbody tr').count(), 8)
   checks.push('empty-human-legacy-no-timeline-failure-retry-retains-detail')
+  await scroller.evaluate(node => node.scrollTo({ left: 0, behavior: 'instant' }))
   await page.setViewportSize({ width: 1440, height: 1100 })
   await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
   await page.addStyleTag({ content: ':root{--dsw-alias-bg-base:#18191b;--dsw-alias-bg-layer-1:#24262c;--dsw-alias-border-l2:rgba(255,255,255,.22);--dsw-alias-label-secondary:#aaaeb8;--dsw-alias-brand-primary:#a4afff}body{background:#18191b;color:#ececf1}' })
@@ -211,6 +268,6 @@ try {
   await page.emulateMedia({ forcedColors: 'active' })
   await chart.screenshot({ path: path.join(output, 'forced-colors.png') })
   assert.deepEqual(errors, [])
-  await writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors, geometry, density, contrast, renderedFonts, requests: [...new Set(requests)], fixture: 'complete observer module + real React; semantic host shell substitutes; all API calls intercepted, projectTaskTimeline used for synthetic records; no resident or business access' }, null, 2))
+  await writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors, geometry, pointCoordinates, density, contrast, renderedFonts, requests: [...new Set(requests)], fixture: 'complete observer module + real React; semantic host shell substitutes; all API calls intercepted, projectTaskTimeline used for synthetic records; no resident or business access' }, null, 2))
   console.log(JSON.stringify({ checks, output }, null, 2))
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)) }
