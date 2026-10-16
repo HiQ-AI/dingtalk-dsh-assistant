@@ -62,3 +62,25 @@ OIDC 发布失败时依次核对：workflow 使用 GitHub 托管 runner；权限
 测试需要真实 JDK11（`JAVA_HOME` 指向其安装根），前端启动用例还需 `NODE22_EXECUTABLE` 指向真实 Node22；仓库与发布本身仍使用 Node24.19.0。测试所用 YAML、Cordis 和 Loader 来自仓库声明依赖，不要求预先安装本机 DSH profile。
 
 全量测试前先执行 `mvn -B -f test/fixtures/local-acceptance-spring/pom.xml package`，从已声明的真实 Spring Boot 依赖生成合成验收夹具，不使用或发布业务 JAR。CI 与 Release 都显式准备工具和短物理临时目录；受管路径的链接/越界检查保持原样，不因 runner 的系统临时路径而放宽。较深临时根会触发部分 Git for Windows 命令的路径限制，须使用短物理根。
+
+## 2.0.0 候选的测试范围对齐依据
+
+依据当前 README 的运行时边界、三个发行入口的实际依赖图及 Assistant 显式发布清单，旧 workflow/Owner/消息账编排不再由 resident 装配，其源码只供历史取证。本次按用户要求移除下列整组旧架构测试，不只摘除失败断言；历史源码、Git 记录及原 CI 失败证据保留。测试总数下降不能计作新增通过。
+
+| 移除的测试文件 | 已废弃的受测合同 | 保留的当前覆盖 |
+| --- | --- | --- |
+| `development-branch-purity.test.js` | 旧 `workflow-engineering`、Run/节点阶段与自动 PR 编排 | 当前 `task-session-service-native`、`dynamic-execution-session-native` |
+| `group-reply-audience.test.js` | 旧 `workflow-notifications` 格式化及 Owner 固定提示词 | `group-reply-format`、`task-session-reply-identity` |
+| `message-answer-cancel.test.js` | 旧 `workflow-service` 取消消息事项与 Owner 流程 | `group-coordinator-session-native`、当前 Task 会话控制回归 |
+| `message-coordinator.test.js` | 旧 `message-coordinator`、`message-workflow` 和 execution-store | 当前原生群协调及 Task 来源/接续测试 |
+| `message-ledger.test.js` | 已退役消息事项控制账的活动编排 | 当前 topic/store、`dynamic-task-store`、群协调测试 |
+| `task-owner-session-native.test.js` | 旧 Task Owner 独立编排层与 task-owner-controller | 当前 `task-session-service-native`、`task-session-persistence-native`、回复身份回归 |
+| `workflow-service.test.js` | 已退役 workflow-service、Run/节点及旧领域流程活动执行 | 当前 Task 服务、会话恢复、材料权限、通知与原生执行回归 |
+
+这些文件对应候选提交 `fe07ee8` 完整 CI 中的 52 个失败，但删除依据是受测合同已经退出当前产品，而不是失败本身。`coordination-latency-native`、`task-release-workflows` 和 `task-session-material-history` 仍有有效保证，不在删除范围。
+
+仍有效的看板测试补齐真实 `ExecutionSessionDuration` 定义，检查三种状态的可访问语义而非过时的 SVG 总数；模型上下文测试使用 `node:path.relative` 核对目录内路径，继续读回全部原内容。未修改产品源码或降低字节预算。
+
+完整原生材料测试要求 `test/fixtures/task-session-native-host.js` 声明的完整组合，通过 `DSH_NATIVE_TEST_PROFILE` 指向隔离安装的 package.json，默认路径是仓库 resident profile。该要求在 `3601f29` 已存在；仅在仓库根执行冻结安装不会安装不属于 workspace 的 resident profile。不能删除这些材料权限测试或把缺环境改成通过；也不能读取用户的实际 provider 登录配置来补齐 CI。
+
+固定摘要属于 `runtime-contracts-archive.md` 明确保留的历史字节完整性保证。`3601f29` 的两个 v4 函数与上次绿 CI `88181c2` 语义相同，但换行从 LF 变为 CRLF；原 LF 摘要仍匹配原测试常量。本轮不删除断言、不改期望摘要、不擅自重写冻结源文件。群协调公平续行的重试计数断言也保留；其基线最小用例仍是实际 1、期望 0，需要继续定位。
