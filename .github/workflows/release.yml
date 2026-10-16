@@ -24,6 +24,7 @@ jobs:
     environment: NPM_PUBLISH
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      DSH_NATIVE_TEST_PROFILE: ${{ github.workspace }}/test/fixtures/native-profile/package.json
     steps:
       - uses: actions/checkout@v7
         with:
@@ -92,6 +93,8 @@ jobs:
           "TMP=$testDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           node --input-type=module -e "import {lstat,realpath} from 'node:fs/promises'; const p=process.argv[1]; const s=await lstat(p); console.log(JSON.stringify({testDirectory:p,realpath:await realpath(p),symlink:s.isSymbolicLink(),dev:s.dev,ino:s.ino}));" $testDirectory
       - run: pnpm install --frozen-lockfile
+      - name: 核验隔离原生测试组合
+        run: node scripts/verify-native-test-profile.mjs
       - name: 构建真实 Spring 验收夹具
         shell: pwsh
         run: |

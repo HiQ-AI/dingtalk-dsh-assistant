@@ -47,7 +47,8 @@ const decision = (action, summary) => call('task_session_submit', { decision: { 
 // The scripted coordinator obeys the same required-read contract as a real model.
 function requiredDecisionRead(request, input) {
   for (const source of input.sources ?? []) if (source.textFile && source.readRequired) {
-    const alreadyLocated = request.messages.filter(message => message.role === 'tool').some(message => JSON.stringify(message.content).includes(source.textFile))
+    const alreadyLocated = request.messages.filter(message => message.role === 'tool').some(message =>
+      (message.content ?? []).some(part => part.type === 'text' && part.text.includes(source.textFile)))
     if (!alreadyLocated) return call('read', { file_path: source.textFile, offset: 1, limit: 1 })
   }
   const refs = new Set()

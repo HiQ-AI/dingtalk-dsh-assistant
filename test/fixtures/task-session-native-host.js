@@ -140,6 +140,9 @@ export async function waitUntil(read, description, timeoutMs = 10000) {
 // Script model decisions only; routing, validation and durable topic state remain real.
 export function topicTaskCalls(request, { title = '原消息交办', objective } = {}) {
   const input = latestInput(request), names = request.tools.map(tool => tool.name)
+  if (input.requestId?.startsWith('coord-summary-')) return [{ name: 'group_topic_summary_submit', args: {
+    requestId: input.requestId, topicId: input.topicId, summary: title,
+  } }]
   if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(message => ({
     messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
     units: [{ unitKey: 'request', summary: title, sourceRefs: [{ quote: message.text }], topics: [{ newTopicKey: message.messageId, title }] }],
