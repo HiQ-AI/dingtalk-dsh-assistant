@@ -1,0 +1,26 @@
+{
+  "palette": {
+    "foreground": "color(srgb 0.257843 0.347059 0.782353)",
+    "background": "color(srgb 0.290931 0.401471 0.942647 / 0.1)",
+    "ringColor": "color(srgb 0.257843 0.347059 0.782353)",
+    "stroke": "color(srgb 0.257843 0.347059 0.782353)",
+    "animation": "dsh-state-dot-spin",
+    "width": 64,
+    "height": 24,
+    "contrast": 5.3163596082567555
+  },
+  "desktopMeta": [
+    {
+      "x": 170,
+      "y": 903.484375
+    },
+    {
+      "x": 323.703125,
+      "y": 903.484375
+    }
+  ],
+  "loadingHeadingHeight": 36,
+  "readyHeadingHeight": 36,
+  "errors": [],
+  "fixture": "isolated synthetic task and intercepted read-only APIs; real React and complete Observer module"
+}

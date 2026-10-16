@@ -15,9 +15,16 @@ const files = new Map([
   ['/react-dom.js', await readFile('/tmp/task-timeline-browser/node_modules/react-dom/umd/react-dom.development.js')],
   ['/observer.js', await readFile(path.join(root, 'packages/dingtalk-dsh-observer/web-client.js'))],
 ])
-const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>执行时间泳道图 · 隔离预览</title><style>body{margin:0;color:#202124;font:14px system-ui,sans-serif}button{font:inherit}#sidebar{padding:8px}#app{height:calc(100dvh - 48px)}</style><div id="sidebar"></div><div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>
+const nativeRoot = path.join(root, 'packages/dingtalk-dsh-observer/node_modules/@deepseek-ai/dsh-client-ui-primitives/lib')
+const nativeModule = await readFile(path.join(nativeRoot, 'index.js'), 'utf8')
+const nativeStateCode = nativeModule.slice(nativeModule.indexOf('function syncSpinner('), nativeModule.indexOf('//#endregion', nativeModule.indexOf('function StateDot(')))
+const nativeStateCss = await readFile(path.join(nativeRoot, 'StateDot.module.css'), 'utf8')
+const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>执行时间泳道图 · 隔离预览</title><style>${nativeStateCss}
+body{margin:0;color:#202124;font:14px system-ui,sans-serif}button{font:inherit}#sidebar{padding:8px}#app{height:calc(100dvh - 48px)}</style><div id="sidebar"></div><div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>
 const h=React.createElement;const roots={sidebar:ReactDOM.createRoot(document.getElementById('sidebar')),app:ReactDOM.createRoot(document.getElementById('app'))};
-const primitives={Button:({variant,size,children,...props})=>h('button',props,children),Pill:({children,...props})=>h('span',props,children),StateDot:()=>h('span',null,'◉'),Menu:({anchor})=>anchor};
+const jsx=(type,props)=>{const {children,...rest}=props;return React.createElement(type,rest,...(Array.isArray(children)?children:[children]))},jsxs=jsx,clsx=(...args)=>args.filter(Boolean).join(' '),css=new Proxy({},{get:(_,name)=>name});
+${nativeStateCode}
+const primitives={Button:({variant,size,children,...props})=>h('button',props,children),Pill:({children,...props})=>h('span',props,children),StateDot,Menu:({anchor})=>anchor};
 window.__ModuleLoader__={load(def){const mod=def.factory(name=>name==='react'?React:primitives);mod.apply({slots:{inject(name,callback){return callback()},register(spec,Component){const target=spec.name==='main.conversation'?'app':'sidebar';roots[target].render(h(Component,{...(spec.inject?.()||{}),wide:true}));return()=>roots[target].render(null)}},layout:{selectPanel(){}},uiWorkspace:{openSession(){}},sessions:{subagentAddress(){},async refreshProjections(){},async refreshSubagents(){},async refresh(){},open(){}}})}};
 </script><script src="/observer.js"></script></html>`
 const server = createServer((req, res) => { res.setHeader('content-type', req.url === '/' ? 'text/html;charset=utf-8' : 'text/javascript;charset=utf-8'); res.end(req.url === '/' ? html : files.get(req.url) || '') })
@@ -145,6 +152,9 @@ try {
   await page.waitForTimeout(1800)
   assert.equal(await page.locator('.timeline-tooltip:visible').count(), 1)
   assert.match(await page.locator('.timeline-tooltip:visible').innerText(), /密集成果证据/)
+  assert.equal(await page.locator('.timeline-tooltip-heading').innerText(), '阶段成果')
+  assert.equal(await page.locator('.timeline-tooltip-entry').count(), 6)
+  await page.screenshot({ path: path.join(output, 'structured-stage-tooltip.png'), fullPage: false })
   await chart.screenshot({ path: path.join(output, 'single-tooltip-hover.png') })
   await points.first().focus()
   await points.last().hover()
@@ -191,6 +201,14 @@ try {
   await points.first().evaluate(n => n.blur())
   assert.equal(await rows.first().locator('.timeline-duration').first().innerText(), '16分0秒')
   assert.equal(await rows.nth(1).locator('.timeline-duration').first().innerText(), '6分0秒')
+  const block = rows.nth(1).locator('.timeline-bar').first()
+  await block.focus()
+  assert.match(await page.locator('.timeline-tooltip-heading').innerText(), /查询订单信息/)
+  assert.match(await page.locator('.timeline-tooltip-meta').innerText(), /10:01:00.*10:07:00/s)
+  assert.match(await page.locator('.timeline-tooltip-duration').innerText(), /6分0秒/)
+  await page.screenshot({ path: path.join(output, 'structured-block-tooltip.png'), fullPage: false })
+  await block.evaluate(n => n.blur())
+  checks.push('structured-block-meta-and-stage-body-preserve-real-data')
   const shortPart = rows.nth(1).locator('.timeline-bar').last()
   assert.equal(await shortPart.locator('.timeline-activity').evaluate(n => getComputedStyle(n).display), 'none')
   await shortPart.focus()
@@ -212,7 +230,7 @@ try {
   await longHeader.focus()
   assert.ok(await page.locator('.timeline-tooltip').isVisible())
   assert.ok((await page.locator('.timeline-tooltip').innerText()).includes(executions[4].title))
-  assert.match(await page.locator('.timeline-tooltip').innerText(), /已成功.*部分区间未记录/)
+  assert.match(await page.locator('.timeline-tooltip').innerText(), /已成功[\s\S]*部分区间未记录/)
   await longHeader.evaluate(node => node.blur())
   await rows.nth(6).locator('th').hover()
   assert.ok(await page.locator('.timeline-tooltip').isVisible())
