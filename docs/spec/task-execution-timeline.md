@@ -4,7 +4,7 @@
 
 ## 现有证据与最小补全
 
-当前生效入口为 task-session-service → dynamic-task-store；Observer 的 TaskSessionDetail 使用 `/state/tasks/:id/detail`。不使用旧 workflow。现有 `runTiming` 只有累计时长和当前领取起点，不能还原完整区间；`stageProgress` 是最新快照，但 `dynamic_wakes` 的 `execution.stage.progress` 已持久保留各次成果的 summary、recordedAt、执行/输入/租约身份。复用这些 wake 在折叠明细展示阶段成果，图中不绘制小标记，不新增重复成果日志，不从成果摘要或最终摘要推算过去的活动时长。
+当前生效入口为 task-session-service → dynamic-task-store；Observer 的 TaskSessionDetail 使用 `/state/tasks/:id/detail`。不使用旧 workflow。现有 `runTiming` 只有累计时长和当前领取起点，不能还原完整区间；`stageProgress` 是最新快照，但 `dynamic_wakes` 的 `execution.stage.progress` 已持久保留各次成果的 summary、recordedAt、执行/输入/租约身份。复用这些 wake 在折叠明细展示阶段成果，图中以贯穿色带、上下各超出 3px 的轻细刻线展示，各不同时间严格映射统一时间轴，固定同一水平线，不做位置避让；同一时刻可共享位置并保留全部内容；无圆点或数量角标，命中区可较大，悬停/聚焦列出附近成果准确时间与内容，不新增重复成果日志，不从成果摘要或最终摘要推算过去的活动时长。
 
 执行 JSON 增加 Host 管理的 `timeline: {version:1,complete,segments}`，无数据库 schema 迁移。dispatch 初始化空记录；claim 开始区段；首次 result 或无结果 drained 关闭。排空等待与排队不算执行。取消请求尚未排空仍保留活动区间。continue、供应商退避重试及恢复沿用原执行身份，下次 claim 才开新区段。
 
@@ -21,6 +21,6 @@
 
 ## 任务完成与重开
 
-任务总览使用连续时间轴，按创建/重开至完成分段，完成至重开留白；当前区段延伸至现在，终态固定。总览文字区分“已完成”“重开后完成”“重开后处理中”，详情展示真实创建、完成与重开时间，不增加小竖线。
+任务总览使用连续时间轴，按创建/重开至完成分段，完成至重开留白；当前区段延伸至现在，终态固定。总览文字区分“已完成”“重开后完成”“重开后处理中”，详情展示真实创建、完成与重开时间，不增加小竖线。每个区段时长仅以其自身结束减开始计算；进行中区段使用 now，完成区段固定，不跨越完成至重开的空档。人工区段明确为等待历时，任务区段为本次处理历时。宽区段名称/时长同排，窄区段优先时长；悬停和聚焦提示及折叠明细提供完整信息。
 
 只读使用当前 completion.at、task.reopen wake，以及不可变重开回执和 complete:taskId:requirementRevision 完成回执；核验任务、修订及既有 runSequence。缺失或异常事实标记历史不完整，不用摘要、updatedAt 或通知时间推断。不增加表、实体或写入，也不改变统筹判断及重开门禁。
