@@ -12,12 +12,26 @@ test('user source files: exact original, native targeted reads, stable paths aft
   let originalPath, originalSourceId, requestIdentityFile, steps = 0, modelError, decisionBytes = 0
   t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
   const model = request => { try {
-    assert.ok(++steps <= 8, JSON.stringify(request.messages.filter(m => m.role === 'tool').at(-1)?.content ?? []).slice(0, 1500))
+    assert.ok(++steps <= 16, JSON.stringify(request.messages.filter(m => m.role === 'tool').at(-1)?.content ?? []).slice(0, 1500))
     const input = latestInput(request), host = request.messages.find(m => m.source?.taskSession)
     assert.ok(host, 'this fixture creates a Web task directly')
     assert.equal(host.content[0].text.includes(body), false)
     assert.equal(input.contentIndex, undefined)
-    const source = input.sources.find(source => source.textFile)
+    const toolText = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content ?? []).map(b => b.text ?? '').join('\n')
+    decisionBytes += Buffer.byteLength(host.content[0].text) + Buffer.byteLength(toolText)
+    const pages = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content ?? []).flatMap(b => {
+      try { return [JSON.parse(b.text)] } catch { return [] }
+    })
+    let source
+    if (Array.isArray(input.sources)) source = input.sources.find(source => source.textFile)
+    else {
+      assert.ok(Buffer.byteLength(host.content[0].text) <= 3000)
+      const metadata = pages.find(page => page.contentRef === input.contextRef && page.path === '/sources/0')
+      if (!metadata) return [{ name: 'model_content_read', args: { contentRef: input.contextRef, path: '/sources/0' } }]
+      const file = pages.find(page => page.contentRef === input.contextRef && page.path === '/sources/0/textFile')
+      if (!file) return [{ name: 'model_content_read', args: { contentRef: input.contextRef, path: '/sources/0/textFile' } }]
+      source = { ...Object.fromEntries(metadata.entries.filter(entry => Object.hasOwn(entry, 'value')).map(entry => [entry.key, entry.value])), textFile: file.text }
+    }
     assert.ok(source.readRequired); assert.equal(source.text, undefined)
     assert.equal(dirname(source.textFile), join(root, 'tasks', input.task.taskId, 'materials'))
     assert.equal(source.textFile.endsWith('.txt'), true)
@@ -25,8 +39,6 @@ test('user source files: exact original, native targeted reads, stable paths aft
     assert.equal(source.requestIdentityInCatalog, true, 'the Web authorization identity remains available in the source catalog')
     originalPath ??= source.textFile; originalSourceId ??= source.sourceId; requestIdentityFile ??= input.catalogRef.path
     assert.equal(source.textFile, originalPath); assert.equal(source.sourceId, originalSourceId)
-    const toolText = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content ?? []).map(b => b.text ?? '').join('\n')
-    decisionBytes += Buffer.byteLength(host.content[0].text) + Buffer.byteLength(toolText)
     if (!toolText.includes('核验事项31：')) return [{ name: 'read', args: { file_path: source.textFile, offset: 30, limit: 3 } }]
     if (!toolText.includes('BOUNDARY_END:')) return [{ name: 'read', args: { file_path: source.textFile, offset: 37, limit: 1 } }]
     metrics.push({ hostTextBytes: Buffer.byteLength(host.content[0].text), sourceVersion: source.version,

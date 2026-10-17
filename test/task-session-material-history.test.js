@@ -7,6 +7,7 @@ import { join, resolve, sep } from 'node:path'
 import { openTaskSessionHistory } from '../packages/dingtalk-dsh-assistant/task-session-history.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { nativeTaskHost, latestInput, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { createModelContentIndex } from '../packages/dingtalk-dsh-assistant/model-context.js'
 import { canonicalExecutionJson } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
@@ -61,10 +62,19 @@ async function historicalFixture() {
 
 async function service(root, options = {}) {
   const inputs = []
-  const host = await nativeTaskHost(root, request => {
+  let host
+  host = await nativeTaskHost(root, request => {
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) return topicCalls
-    inputs.push(latestInput(request))
+    const input = latestInput(request)
+    if (input.materials?.contextPath) {
+      const message = request.messages.find(message => message.source?.taskSession)
+      const session = host.ctx.sessions.get(message.source.taskSession.sessionId)
+      const index = createModelContentIndex(session)
+      const page = index.read({ contentRef: input.contextRef, path: input.materials.contextPath, limit: 16000 })
+      assert.equal(page.nextOffset, null)
+      inputs.push({ ...input, materials: JSON.parse(page.text) })
+    } else inputs.push(input)
     return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '材料已登记，等待后续执行', evidence: [], limitations: [] } } }]
   }, {
     initialize: options.initialize !== false,

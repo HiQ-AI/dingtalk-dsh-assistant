@@ -15,7 +15,7 @@ const isRuntimeContext = source => source?.kind === 'runtime-context' && source.
   || source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot'
 
 // 原始事件保持不变；下一轮只携带已结束轮次的来源，不累积失效的Host快照。
-function retainCoordinatorSources(session, currentSources = [], position) {
+function retainCoordinatorSources(session, currentSources = [], position, content) {
   const events = session.snapshotEvents()
   const conversationId = events.findLast(event => event.type === IDENTITY)?.data.conversationId
   // Keep all source evidence, including authorization and unknown fields. The
@@ -36,8 +36,9 @@ function retainCoordinatorSources(session, currentSources = [], position) {
     if (event.type !== 'user/message' || source?.kind !== 'coordinator'
       || source.groupCoordinator?.conversationId !== conversationId) continue
     const input = JSON.parse(event.data.content.find(block => block.type === 'text').text)
-    if (!Array.isArray(input.sources)) continue
-    const sources = input.sources.map(project).filter(item => {
+    const originalSources = content?.hostSources(input) ?? input.sources
+    if (!Array.isArray(originalSources)) continue
+    const sources = originalSources.map(project).filter(item => {
       // Missing source identity cannot safely be deduplicated. Same key/version
       // with different body, actor, attachments or boundaries also stays visible.
       if (typeof item.sourceKey !== 'string' || !item.sourceKey || !Number.isSafeInteger(item.sourceVersion) || item.sourceVersion < 1) return true
@@ -52,7 +53,7 @@ function retainCoordinatorSources(session, currentSources = [], position) {
       if (position) retireHostContext(session, event, position)
       continue
     }
-    if (source.groupCoordinatorHistory && sources.length === input.sources.length) continue
+    if (source.groupCoordinatorHistory && sources.length === originalSources.length) continue
     const history = { sources }
     session.append('user/message', createUserMessage({ source: { ...source, groupCoordinatorHistory: true },
       content: [{ type: 'text', text: JSON.stringify(history) }] }),
@@ -205,7 +206,8 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
               parentContentScope: modelContentScope(stored.meta), parentContentRoot: contentRoot ?? modelContentRoot(stored.meta), creationLease: binding.leaseEpoch + 1 } }] })
     try {
       permissions(handle); title(handle.agent.session, binding.conversationId)
-      retainCoordinatorSources(handle.agent.session)
+      retainCoordinatorSources(handle.agent.session, [], undefined,
+        createModelContentIndex(handle.agent.session, contentRoot ? { root: contentRoot } : {}))
       await handle.agent.whenIdle()
       await ctx.sessions.flush(handle.agent.session)
       await attachWorkspace(handle.agent.session)
@@ -244,12 +246,12 @@ export function createGroupCoordinatorSessions({ ctx, isCurrent, getWorkspaceDir
         return { ...decision, messages: decision.messages.map(message => {
           if (message.source?.kind !== 'coordinator' || message.source.groupCoordinator?.sessionId !== binding.sessionId) return message
           entry.projectedInput = entry.content.project(modelHostInput(message), { reuseVisible: false })
-          return modelHostMessage(message, entry.projectedInput)
+          return modelHostMessage(message, entry.content.host(entry.projectedInput, { projected: true }))
         }) }
       })
       agentCtx.on('agent/request', (position, next) => {
         if (!entry.contextRetired) {
-          retainCoordinatorSources(entry.handle.agent.session, entry.projectedInput.sources, position)
+          retainCoordinatorSources(entry.handle.agent.session, entry.projectedInput.sources, position, entry.content)
           entry.contextRetired = true
         }
         return next()

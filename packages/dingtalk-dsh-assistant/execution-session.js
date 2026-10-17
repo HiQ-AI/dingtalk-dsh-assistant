@@ -451,7 +451,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         const decision = await next()
         if (!entry.content || decision.kind !== 'enter') return decision
         return { ...decision, messages: decision.messages.map(message => message.source?.kind === 'coordinator' && message.source.executionSession?.sessionId === entry.binding.sessionId
-          ? modelHostMessage(message, entry.content.project(executionModelInput(modelHostInput(message), entry.binding), { reuseVisible: false })) : message) }
+          ? modelHostMessage(message, entry.content.host(executionModelInput(modelHostInput(message), entry.binding))) : message) }
       })
       agentCtx.on('agent/request', (position, next) => {
         if (dynamicExecution(entry.binding) && !entry.contextRetired) {

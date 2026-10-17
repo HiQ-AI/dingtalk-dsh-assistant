@@ -350,3 +350,50 @@ test('long configured task/execution instructions reuse the content file instead
   assert.ok(text.includes(file.path)); assert.equal(JSON.parse(await readFile(file.path, 'utf8')), body)
   assert.equal(index.instruction('短指引'), '短指引')
 })
+
+
+test('whole Host UTF-8 budget retains every overflow field through admitted pointers', async t => {
+  const { index } = await fixture(t)
+  for (const count of [5, 100]) {
+    const sources = Array.from({ length: count }, (_, i) => ({ sourceId: `来源/~${i}` + '长'.repeat(80), actorId: `作者${i}`, version: i + 1,
+      corrects: i ? `来源/~${i - 1}` : undefined, text: '授权更正🙂'.repeat(15), quote: { text: '原始边界'.repeat(30) } }))
+    const raw = { task: { objective: '当前合法长目标🙂'.repeat(1000), requirements: sources.map(s => s.text) }, sources,
+      operations: [{ operationId: 'unknown/~', state: 'unknown', authorizationRef: sources[0].sourceId }],
+      blockers: { operations: [{ operationId: 'unknown/~' }], executions: [{ executionId: 'recover' }] },
+      executions: [{ executionId: 'recover', status: 'running', providerRecovery: { attempts: 3 }, input: { objective: '恢复目标' }, result: { current: true, payload: '结果'.repeat(1000) } }],
+      previousExecutions: [{ executionId: 'old', status: 'failed', result: { current: false, payload: '旧结果'.repeat(1000) } }],
+      instructions: '长指令'.repeat(2000), 'escaped/~': '不能丢失'.repeat(1000), optional: undefined }
+    for (const [kind, input] of [['task', taskModelInput(raw)], ['execution', executionModelInput(raw, {})], ['group', raw]]) {
+      const before = index.project(input, { reuseVisible: false }), host = index.host(input)
+      assert.ok(Buffer.byteLength(JSON.stringify(host)) <= 3000)
+      assert.equal(host.contextReadRequired, true)
+      const read = (ref, path = '') => {
+        let text = '', offset = 0, page
+        do { page = index.read({ contentRef: ref, path, offset, limit: 16000 }); text += page.text; offset = page.nextOffset } while (offset !== null)
+        return JSON.parse(text)
+      }
+      assert.deepEqual(read(host.contextRef), JSON.parse(JSON.stringify(before)))
+      for (const [key, value] of Object.entries(host)) if (value?.contextPath) assert.deepEqual(read(host.contextRef, value.contextPath), JSON.parse(JSON.stringify(before[key])))
+      console.log(JSON.stringify({ kind, sources: count, before: Buffer.byteLength(JSON.stringify(before)), after: Buffer.byteLength(JSON.stringify(host)) }))
+    }
+  }
+})
+
+
+test('budget also covers tool render bypasses, long keys and reserved context names', async t => {
+  const { index, root, session } = await fixture(t)
+  const payload = Object.fromEntries(Array.from({ length: 200 }, (_, i) => ['字段/~' + i + '长'.repeat(100), { state: 'unknown', actor: '授权作者🙂', version: i }]))
+  const longIndex = createModelContentIndex(session, { root: join(root, ...Array(8).fill('long-path-'.repeat(8))) })
+  for (const subject of [payload, { ...payload, contextRef: 'original-context-value', contextReadRequired: false }]) {
+    for (const content of [index, longIndex]) {
+      const host = content.host(subject)
+      assert.ok(Buffer.byteLength(JSON.stringify(host)) <= 3000)
+      const rendered = content.render(subject)[0].text
+      assert.ok(Buffer.byteLength(rendered) <= 3000)
+      const wrapped = content.wrapOutput({ render: () => [{ type: 'text', text: JSON.stringify(subject) }] }).render({}, {})[0].text
+      assert.ok(Buffer.byteLength(wrapped) <= 3000)
+      assert.equal(content.read({ contentRef: host.contextRef, path: '/字段~1~00' + '长'.repeat(100) + '/actor' }).text, '授权作者🙂')
+      if (subject.contextRef) assert.equal(content.read({ contentRef: host.contextRef, path: '/contextRef' }).text, 'original-context-value')
+    }
+  }
+})

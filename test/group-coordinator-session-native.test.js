@@ -664,3 +664,33 @@ test('Task权限拒绝反馈保持原话题并区分公共fact与合法revise',a
  const feedback=JSON.stringify(h.requests[2].messages)
  assert.match(feedback,/不得改绑新话题规避权限/u);assert.match(feedback,/scope=conversation/u);assert.match(feedback,/原Task用revise更新/u)
 })
+
+
+test('oversized source directories retire old full Hosts without losing source identities', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'group-budget-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = await host(root); t.after(() => h.close())
+  const sources = Array.from({ length: 5 }, (_, i) => ({ runId: 'wake', sourceKey: 'key-' + i, sourceVersion: i + 1,
+    actorId: 'actor-' + i + '长'.repeat(100), body: '授权边界🙂'.repeat(20), context: { quotes: [{ text: '原始引用'.repeat(40) }] } }))
+  const metrics = []
+  for (let leaseEpoch = 1; leaseEpoch <= 4; leaseEpoch++) {
+    h.setLease(leaseEpoch)
+    const result = await h.sessions.run({ binding: { conversationId: 'group', sessionId: 'budget', turnId: 't' + leaseEpoch, leaseEpoch, sessionBound: leaseEpoch > 1 },
+      input: { sources: leaseEpoch < 4 ? sources : [], candidates: [], instructions: '配置职责'.repeat(1000) }, provider: 'group-fixture', model: 'scripted', decisionSchema,
+      readTools: [], onSessionBound: async () => {}, onCandidate: async () => {} })
+    assert.equal(result.status, 'submitted')
+    const hosts = h.requests.at(-1).messages.filter(m => m.source?.groupCoordinator && !m.source.groupCoordinatorHistory)
+    assert.equal(hosts.length, 1)
+    const text = hosts[0].content.filter(b => b.type === 'text').map(b => b.text).join('')
+    assert.ok(Buffer.byteLength(text) <= 3000)
+    const content = createModelContentIndex(h.ctx.sessions.get('budget'), { root: join(root, 'model-content') })
+    const current = content.hostSources(JSON.parse(text))
+    assert.equal(current.length, leaseEpoch < 4 ? 5 : 0)
+    if (leaseEpoch < 4) assert.equal(current[4].sourceVersion, 5)
+    const history = h.requests.at(-1).messages.filter(m => m.source?.groupCoordinatorHistory)
+    assert.ok(history.length <= 1)
+    if (leaseEpoch === 4) assert.equal(JSON.parse(history[0].content[0].text).sources.length, 5)
+    metrics.push(Buffer.byteLength(text))
+  }
+  t.diagnostic(JSON.stringify({ oversizedGroupHostBytes: metrics }))
+})

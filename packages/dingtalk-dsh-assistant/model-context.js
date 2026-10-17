@@ -30,7 +30,7 @@ const syncDirectory = path => {
   try { fsyncSync(fd) } finally { closeSync(fd) }
 }
 
-export const modelContextInstructions = `Host输入和只读工具使用contentRef标识精确内容。相同正文不等于同一作者、来源版本或授权，历史资料不改变当前授权。执行resultInCatalog表示完整结果在catalogRef的/executions/<原ID>/result，按当前问题定位证据或诊断，不必整包读取。当前目标或要求为sourceId时，从对应sources.textFile定位原文；若来源在当前窗口外，沿catalogRef的/materials按sourceId定位textPath或/sources/<原ID>读取原始来源；requestIdentityInCatalog表示完整请求身份在相应source目录的/requestIdentity，不得省略授权核对。统筹快照catalogRef是完整原始目录：/task、/sources/<sourceId>、/executions/<executionId>、/operations/<operationId>、/materials、/wakes；例如/executions/<executionId>/input/objective。路径段的~与/须分别转义为~0与~1。sources保守保留近期及原授权来源，sourceCount可大于展示数量；核对目录中仍有效的要求/授权/撤销，不能把未展开当作不存在。当前task/sources/executions中的readRequired=true表示长正文无损延迟，表示本轮要求/证据尚待核对：优先用既有原生文件工具读取path、textFile或sourceFile，定位与当前判断相关的字段/段落，不必整文件回灌；重要新要求、撤销及授权条件必须核对，未读部分不能当作已知。统筹executions只展示运行/未排空、本轮唤醒关联或当前结果，历史执行仍完整可读；operations只展示unknown及本轮事件关联的操作，其他状态用operationCounts计数，blockers保留未决成员准确ID，未展开不是无阻塞。阶段wake仅有executionId/sequence时，对应executions.stageProgress就是经过全部字段核对的同一报告；有reportRef时须读取该次原报告，可能早于当前阶段，不可混用。执行会话仍用executionHistory.catalogRef及sourceCatalog等原目录。过长且无法精简的正文、结果、证据、诊断与日志只提供已有不可变JSON文件path（文本内容为JSON字符串，按字段解析后定位），不以contentIndex自动展开；用户长消息优先使用原source JSON及原文txt文件。使用已有原生文件/shell能力，注意原生read的行长/总量截断提示，按需定位或分段读取；不要把截断当全文。contentRef与model_content_read仅保留兼容读取，不要求按其分页把长正文整包读回。显式读取返回正文，不能把引用或未读内容当证据。引用不是丢弃或截断。`
+export const modelContextInstructions = `Host输入和只读工具使用contentRef标识精确内容。Host的contextRef是超预算视图的完整不可变快照；contextPath是相对该contextRef的JSON Pointer，用model_content_read的contentRef及path参数读取对应字段，必要时继续解析其中的引用。contextReadRequired/readRequired表示相关目标、来源身份/作者/版本/授权更正、未处理要求、未知效果和恢复信息尚待读取核对，不得把引用当作已知或没有要求；先读取与当前判断相关的字段。相同正文不等于同一作者、来源版本或授权，历史资料不改变当前授权。执行resultInCatalog表示完整结果在catalogRef的/executions/<原ID>/result，按当前问题定位证据或诊断，不必整包读取。当前目标或要求为sourceId时，从对应sources.textFile定位原文；若来源在当前窗口外，沿catalogRef的/materials按sourceId定位textPath或/sources/<原ID>读取原始来源；requestIdentityInCatalog表示完整请求身份在相应source目录的/requestIdentity，不得省略授权核对。统筹快照catalogRef是完整原始目录：/task、/sources/<sourceId>、/executions/<executionId>、/operations/<operationId>、/materials、/wakes；例如/executions/<executionId>/input/objective。路径段的~与/须分别转义为~0与~1。sources保守保留近期及原授权来源，sourceCount可大于展示数量；核对目录中仍有效的要求/授权/撤销，不能把未展开当作不存在。当前task/sources/executions中的readRequired=true表示长正文无损延迟，表示本轮要求/证据尚待核对：优先用既有原生文件工具读取path、textFile或sourceFile，定位与当前判断相关的字段/段落，不必整文件回灌；重要新要求、撤销及授权条件必须核对，未读部分不能当作已知。统筹executions只展示运行/未排空、本轮唤醒关联或当前结果，历史执行仍完整可读；operations只展示unknown及本轮事件关联的操作，其他状态用operationCounts计数，blockers保留未决成员准确ID，未展开不是无阻塞。阶段wake仅有executionId/sequence时，对应executions.stageProgress就是经过全部字段核对的同一报告；有reportRef时须读取该次原报告，可能早于当前阶段，不可混用。执行会话仍用executionHistory.catalogRef及sourceCatalog等原目录。过长且无法精简的正文、结果、证据、诊断与日志只提供已有不可变JSON文件path（文本内容为JSON字符串，按字段解析后定位），不以contentIndex自动展开；用户长消息优先使用原source JSON及原文txt文件。使用已有原生文件/shell能力，注意原生read的行长/总量截断提示，按需定位或分段读取；不要把截断当全文。contentRef与model_content_read仅保留兼容读取，不要求按其分页把长正文整包读回。显式读取返回正文，不能把引用或未读内容当证据。引用不是丢弃或截断。`
 
 // contentRef remains a native-session capability. Paths point only to existing
 // admitted immutable files; native filesystem permission policy remains unchanged.
@@ -172,13 +172,13 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
         return read(args)
       } })
   }
-  const render = value => [{ type: 'text', text: JSON.stringify(project(value)) }]
+  const render = value => [{ type: 'text', text: JSON.stringify(host(value, { reuseVisible: true })) }]
   function wrapOutput(output) {
     return { ...output, render: (args, value) => output.render(args, value).map(block => {
       if (block.type !== 'text') return block
       let payload
       try { payload = JSON.parse(block.text) } catch { payload = { text: block.text } }
-      return { ...block, text: JSON.stringify(project(payload)) }
+      return { ...block, text: JSON.stringify(host(payload, { reuseVisible: true })) }
     }) }
   }
   function instruction(text, label = '详细上下文') {
@@ -186,7 +186,33 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
     const file = store(text)
     return `${label}已保存在${file.path}（JSON字符串；contentRef=${file.contentRef}）。按当前问题用已有文件能力定位相关段落，先核对授权边界，不必整包回灌；未读取部分不能当作已知。`
   }
-  return { project, store, read, install, render, wrapOutput, instruction }
+  // Budget the actual serialized Host text, after all field-level projection.
+  // One immutable definition carries overflow; pointers never imply it was read.
+  function host(value, { reuseVisible = false, projected: alreadyProjected = false } = {}) {
+    const projected = alreadyProjected ? value : project(value, { reuseVisible })
+    const bytes = value => Buffer.byteLength(JSON.stringify(value) ?? '')
+    if (bytes(projected) <= 3000) return projected
+    const snapshot = store(projected)
+    if (Object.hasOwn(projected, 'contextRef') || Object.hasOwn(projected, 'contextReadRequired'))
+      return { contextRef: snapshot.contentRef, contextReadRequired: true }
+    const result = { ...projected, contextRef: snapshot.contentRef, contextReadRequired: true }
+    const pointer = key => '/' + key.replaceAll('~', '~0').replaceAll('/', '~1')
+    const candidates = Object.keys(projected).sort((a, b) => bytes(projected[b]) - bytes(projected[a]))
+    for (const key of candidates) {
+      if (bytes(result) <= 2800) break
+      const reference = { contextPath: pointer(key), readRequired: true }
+      if (bytes(reference) < bytes(result[key])) result[key] = reference
+    }
+    // Arbitrarily many or long keys must also fit without dropping their data.
+    return bytes(result) <= 3000 ? result : { contextRef: snapshot.contentRef, contextReadRequired: true }
+  }
+  function hostSources(input) {
+    if (Array.isArray(input.sources)) return input.sources
+    if (!input.contextRef) return undefined
+    const snapshot = selected(input.contextRef, '')
+    return Array.isArray(snapshot.sources) ? snapshot.sources : undefined
+  }
+  return { project, host, hostSources, store, read, install, render, wrapOutput, instruction }
 }
 
 function directory(records, identity, summary) {

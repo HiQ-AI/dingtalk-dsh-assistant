@@ -432,3 +432,29 @@ test('anonymous field v12 native failure retains raw diagnostics and derives fai
   assert.equal(result.failure.terminal.reason, 'error'); assert.equal(outputs, 0)
   assert.equal(h.manager.assertDrained(dynamic()), true)
 })
+
+
+test('oversized execution Host survives reopen with exact source and recovery directories', async t => {
+  const { createModelContentIndex } = await import('../packages/dingtalk-dsh-assistant/model-context.js')
+  const root = await temp(), inputHistory = [], metrics = []
+  for (let version = 1; version <= 3; version++) {
+    const h = await host({ root, script: [dynamicSubmit('budget-result-' + version)] })
+    try {
+      const input = { objective: '合法长执行目标🙂'.repeat(1000), task: { authorizationSourceId: 's0' },
+        sources: Array.from({ length: 5 }, (_, i) => ({ sourceId: 's' + i, actorId: 'actor' + i, version: i + 1, text: '人工更正边界'.repeat(50) })),
+        previousExecutions: [{ executionId: 'prior', status: 'failed', result: { current: false, payload: '旧结果'.repeat(1000) } }],
+        originalOperation: { operationId: 'unknown', state: 'unknown', evidenceRef: 'exact-evidence', instruction: '先核对未知效果' } }
+      const b = dynamic({ leaseEpoch: version, inputVersion: version, inputDigest: 'input-' + version, inputHistory: structuredClone(inputHistory), sessionBound: version > 1 })
+      assert.equal((await dynamicDrive(h, { binding: b, input })).status, 'submitted')
+      const hosts = h.requests[0].messages.filter(m => m.source?.executionSession)
+      assert.equal(hosts.length, 1)
+      const text = hosts[0].content.filter(b => b.type === 'text').map(b => b.text).join(''), view = JSON.parse(text)
+      assert.ok(Buffer.byteLength(text) <= 3000)
+      const index = createModelContentIndex(h.handles.find(agent => agent.session.id === b.sessionId).session, { root: join(root, 'model-content') })
+      assert.equal(index.read({ contentRef: view.contextRef, path: '/sources/4/version' }).text, '5')
+      metrics.push(Buffer.byteLength(text))
+      inputHistory.push({ inputVersion: version, inputDigest: b.inputDigest, requirementRevision: 1, controlRevision: 1 })
+    } finally { await h.close() }
+  }
+  t.diagnostic(JSON.stringify({ oversizedExecutionHostBytes: metrics }))
+})
