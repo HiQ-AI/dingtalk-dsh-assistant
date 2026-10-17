@@ -55,3 +55,35 @@ test('issue172 actual SDK requests: seven operations, lazy historical goals, dir
   assert.equal(stored.events.filter(e => e.type === 'user/message' && e.data.source?.taskSession).length, 3)
   t.diagnostic(JSON.stringify({ scope: 'real SDK with scripted adapter; Host text UTF-8 bytes, tool history separately measured', metrics }))
 })
+
+
+test('oversized SDK Host stays within budget across retries while exact source evidence is readable', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'issue172-budget-')), cwd = join(root, 'task')
+  await mkdir(cwd)
+  const raw = context172Fixture(), metrics = []
+  raw.sources = Array.from({ length: 5 }, (_, i) => ({ sourceId: 'source-' + i, actorId: 'actor-' + i, version: i + 1,
+    text: '人工授权边界🙂'.repeat(30), quote: { text: '历史引用'.repeat(60) }, corrects: i ? 'source-' + (i - 1) : undefined }))
+  let manager
+  const h = await sdkHost(root, request => {
+    const hosts = request.messages.filter(m => m.source?.taskSession)
+    assert.equal(hosts.length, 1)
+    const text = hosts[0].content.filter(b => b.type === 'text').map(b => b.text).join('')
+    assert.ok(Buffer.byteLength(text) <= 3000)
+    const input = JSON.parse(text)
+    assert.equal(input.sources.readRequired, true)
+    const pages = request.messages.filter(m => m.role === 'tool').flatMap(m => m.content ?? []).filter(b => b.type === 'text').map(b => JSON.parse(b.text))
+    if (!pages.some(page => page.text === 'actor-4')) return [{ name: 'model_content_read', args: { contentRef: input.contextRef, path: '/sources/4/actorId' } }]
+    metrics.push(Buffer.byteLength(text))
+    return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '尚待授权核验', evidence: [], limitations: [] } } }]
+  })
+  manager = createTaskSessions({ ctx: h.ctx, isCurrent: async () => true, getWorkspaceDir: async () => cwd })
+  t.after(async () => { try { await manager.close(); await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  for (let round = 1; round <= 3; round++) {
+    const result = await manager.run({ binding: { kind: 'task-session', taskId: 'synthetic-task', sessionId: 'budget-session', leaseEpoch: round, sessionBound: round > 1 },
+      input: raw, provider: 'native-task-test', model: 'controlled', agentPreset: 'native-test', onSessionBound: async () => {}, submit: async () => ({ accepted: true }) })
+    assert.equal(result.status, 'submitted')
+  }
+  const stored = await inspectSession(h.ctx.sessionPersistence, 'budget-session')
+  assert.equal(stored.events.filter(e => e.type === 'user/message' && e.data.source?.taskSession).length, 3)
+  t.diagnostic(JSON.stringify({ oversizedSDKHostBytes: metrics }))
+})

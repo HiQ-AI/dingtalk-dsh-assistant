@@ -108,7 +108,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           const decision = await next()
           if (decision.kind !== 'enter') return decision
           return { ...decision, messages: decision.messages.map(message => message.source?.kind === 'coordinator' && message.source.taskSession?.sessionId === binding.sessionId
-            ? modelHostMessage(message, entry.content.project(taskModelInput(modelHostInput(message)), { reuseVisible: false })) : message) }
+            ? modelHostMessage(message, entry.content.host(taskModelInput(modelHostInput(message)))) : message) }
         })
         agentCtx.on('tools/pre-execute', async (_exec, next) => !await current(entry) ? { kind: 'deny', reason: 'task_session_stale' } : next())
         const register = (name, description, parameters, execute) => agentCtx.tools.register({ name, description, parameters,
