@@ -128,7 +128,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     async retryMessage(groupId, messageId) {
       // 该错误发生在任务写入之前；显式重试仍复用原动作的版本与已应用证据门禁。
       for (const topic of store.getGroup(groupId)?.topics ?? []) for (const record of topic.decisions) {
-        const sourceMissing = record.error === 'TASK_TOPIC_SOURCE_VERSION_MISSING'
+        const sourceMissing = ['TASK_TOPIC_SOURCE_VERSION_MISSING', 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED'].includes(record.error)
         const projectedReply = record.error === 'outbox_identity_duplicate' && record.failureOperationId === record.outboundId
           && record.operations.every(operation => operation.status === 'applied')
         if (record.status !== 'blocked' || !sourceMissing && !projectedReply || !record.decision.basisMessageIds.includes(messageId)) continue

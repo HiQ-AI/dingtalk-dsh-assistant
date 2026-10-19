@@ -1,0 +1,11 @@
+case,round,status,evidence
+cross-author-reopen,1,PASS,round-1.md
+blocked-decision-retry-idempotency,1,PASS,round-1.md
+cross-author-context,1,PASS,round-1.md
+missing-admission-rejected,1,PASS,round-1.md
+web-human-topic-regression,1,FAIL,round-1.md
+cross-author-reopen,2,PASS,round-2.md
+blocked-decision-retry-idempotency,2,PASS,round-2.md
+cross-author-context-requester-protection,2,PASS,round-2.md
+missing-admission-rejected,2,PASS,round-2.md
+web-human-topic-regression,2,PASS,round-2.md
