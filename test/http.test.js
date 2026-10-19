@@ -589,11 +589,18 @@ test('current task archive checks local identity, strict body, legacy protection
   let writes = 0
   await withServer(false, async base => {
     const post = (body, headers = {}) => fetch(`${base}/tasks/current/archive`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
+    const origin = 'http://127.0.0.1:3080'
+    const preflight = await fetch(`${base}/tasks/current/archive`, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' } })
+    assert.equal(preflight.status, 204)
+    assert.equal(preflight.headers.get('access-control-allow-origin'), origin)
+    assert.match(preflight.headers.get('access-control-allow-methods'), /POST/)
+    assert.match(preflight.headers.get('access-control-allow-headers'), /content-type/)
+    assert.equal(writes, 0)
     assert.equal((await post({}, { origin: 'https://untrusted.example' })).status, 403)
     assert.equal((await post({ actorId: 'spoof' })).status, 400)
     assert.equal(writes, 0)
     assert.equal((await fetch(`${base}/tasks/legacy/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 410)
-    const success = await post({}); assert.equal(success.status, 200); assert.ok((await success.json()).archivedAt)
+    const success = await post({}, { origin }); assert.equal(success.status, 200); assert.ok((await success.json()).archivedAt)
     assert.equal(writes, 1)
   }, { overrides: { isTaskSessionMode: () => true, getTaskSessionDetail: async id => ({ legacyReadonly: id === 'legacy' }), archiveTask: async ({ taskId }) => { writes++; return { taskId, archivedAt: '2026-10-15T00:00:00Z' } } } })
   await withServer(false, async base => {

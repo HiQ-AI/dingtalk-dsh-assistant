@@ -75,6 +75,8 @@ Web 写入限制本机合法请求来源；操作者由 Host 配置，不接受�
 
 旧 `/workflows/*`、`/config/workflow-variables*`、`/config/workflow-bindings*`、工作流目录及旧阶段/重跑/暂停恢复/归档等写入口返回 HTTP 410。旧任务写入返回 `LEGACY_TASK_READONLY`；历史读取不赋予恢复权限。完整退役范围以 `http.js` 为准。
 
+当前任务仅在“已结束”桶显示归档按钮（completed、cancelled、succeeded、failed），历史只读及已归档任务不显示。归档仍由服务端检查任务已完成或已取消且执行已结束；浏览器 OPTIONS 预检先于旧入口清退规则返回 204，实际写请求继续执行身份和状态校验。
+
 ## 包结构
 
 - `packages/dingtalk-dsh-assistant`：DWS 传输、群配置、任务会话服务、动态 SQLite 账与设置页面
