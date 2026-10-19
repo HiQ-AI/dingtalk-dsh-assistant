@@ -17,4 +17,4 @@
 |---|---|---|
 | 原消息和发送状态核验 | PASS | 原发送 SUCCESS，精确消息可读，发送者/群/引用匹配；旧校验因列表编号拒绝 |
 | 格式修复及拒绝反例 | PASS | 新增两用例在基线失败，修复后通过；数字/正文/顺序/代码围栏/身份差异拒绝 |
-| 本地部署及原通知正式对账 | PENDING | 等活动业务执行自然排空后按 runbook 部署；unknown 仅回读不重发 |
+| 本地部署及原通知正式对账 | PASS | round-7.md：PID62032，原通知 delivered、原 messageId、sendAttemptCount=1，health=ok、告警 0 |

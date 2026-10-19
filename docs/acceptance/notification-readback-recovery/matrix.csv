@@ -13,6 +13,10 @@ ordered-list-baseline,4,FAIL,two new cases fail on HEAD; expected text mismatch 
 ordered-list-boundaries,4,PASS,10 readback cases; text/numbers/order/fences/identity changes rejected
 ordered-notification-regression,4,PASS,130 targeted tests; no skips; send forbidden for unknown fixture
 original-ordered-message-verifier,4,PASS,exact original message accepted by fixed full verifier; no writes
-ordered-local-deployment,5,PENDING,await natural execution drain; no resend
-original-ordered-notification-reconcile,5,PENDING,verify original notification delivered and sendAttemptCount remains1
+ordered-local-deployment,5,FAIL,zero-write Check refused CONSOLE_UNRELATED_PROCESS_PRESENT; active business retained
+original-ordered-notification-reconcile,5,NOT_RUN,deployment did not execute; no resend
+ordered-local-deployment,6,FAIL,ledger check refused while owner was finishing; later independent ledger confirms drained
+original-ordered-notification-reconcile,6,NOT_RUN,no stop signal or install
+ordered-local-deployment,7,PASS,zero-write Check then SIGINT; PID62032; exact packages installed; health ok
+original-ordered-notification-reconcile,7,PASS,API and readonly SQLite delivered; original messageId; sendAttemptCount1; no alerts
 
