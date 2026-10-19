@@ -5,6 +5,7 @@ import { inspectSession } from './session-persistence.js'
 import { createModelContentIndex, taskModelInput, operationModelReadback, modelHostMessage, modelHostInput } from './model-context.js'
 import { classifyExecutionProviderFailure } from './execution-provider-failure.js'
 import { sourceInterpretationInstructions } from './task-source-instructions.js'
+import { groupReplyScopeInstructions } from './group-message.js'
 import { retireHostContext } from './host-context.js'
 
 const identityEvent = 'plugin:dingtalk/task-session'
@@ -91,6 +92,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         }
         agentCtx.systemPrompt.section({ name: 'task:responsibility', order: 0, text: instructions })
         agentCtx.systemPrompt.section({ name: 'task:sources', order: 1, text: sourceInterpretationInstructions })
+        agentCtx.systemPrompt.section({ name: 'task:reply-scope', order: 1, text: groupReplyScopeInstructions })
         if (groupResponsibility) agentCtx.systemPrompt.section({ name: 'task:group-responsibility', order: 1,
           text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${entry.content.instruction(groupResponsibility, '所属群职责、授权边界与回复要求')}` })
         agentCtx.tools.presentAs('native')
