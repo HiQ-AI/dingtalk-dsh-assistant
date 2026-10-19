@@ -13,7 +13,7 @@ import { openResidentStore, resolveTopicMessages, taskSessionId } from '../packa
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 import { taskReports } from '../packages/dingtalk-dsh-assistant/task-reports.js'
 import { taskPlanFixture, stageOutputFixture } from './fixtures/task-plan.js'
-import { fingerprint } from '../packages/dingtalk-dsh-assistant/topic-model.js'
+import { fingerprint, stableId } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 import { startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 
 const agentWorkspace = mkdtempSync(join(tmpdir(), 'dsh-agent-workspace-'))
@@ -1055,7 +1055,7 @@ test('任务目标变化保留流程引用供重审，并拒绝未加载流程',
   await assert.rejects(leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: [saved.taskPrompts[0].id], reason: '排查' }), /task_prompt_not_loaded/)
   await leafCall(h, task, 'load_task_prompt', { id: saved.taskPrompts[0].id })
   await leafCall(h, task, 'select_task_prompts', { inputVersion: 1, ids: [saved.taskPrompts[0].id], reason: '排查' })
-  const revised = await h.runtime.followupTask({ taskId: task.taskId, requestId: 'switch-to-fix', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), text: '用户明确要求修复', title: '修复已定位问题', objective: '修复已定位的问题', acceptanceCriteria: ['修复可验证'], stageTasks: ['完成修复'] })
+  const revised = await h.runtime.followupTask({ taskId: task.taskId, requestId: 'switch-to-fix', progressImpact: 'replan', topicRefs: task.topicRefs, ...inputVersion(h.store.getTask(task.taskId)), text: '用户明确要求修复', title: '修复已定位问题', objective: '修复已定位的问题', acceptanceCriteria: ['修复可验证'], stageTasks: ['完成修复'] })
   assert.equal(revised.inputVersion, 2)
   assert.deepEqual(revised.taskPromptRefs, h.store.getTask(task.taskId).taskPromptRefs)
   assert.equal(revised.taskPromptRefs[0].id, saved.taskPrompts[0].id)
@@ -1741,7 +1741,7 @@ test('Web 创建按 requestId 幂等，原始输入只落 Topic，参数变更�
 test('Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充', async (t) => {
   const h = await setup(t), task = await createTask(h)
   await checkpoint(h, task, { kind: 'plan-confirmed', remainingItems: ['一', '二'] })
-  const request = { taskId: task.taskId, requestId: 'web-append-1', topicRefs: task.topicRefs, context: '新增异常分支范围', stageTasks: ['新增异常核验', '一', '二'], ...inputVersion(task) }
+  const request = { taskId: task.taskId, requestId: 'web-append-1', progressImpact: 'replan', topicRefs: task.topicRefs, context: '新增异常分支范围', stageTasks: ['新增异常核验', '一', '二'], ...inputVersion(task) }
   const updated = await h.runtime.appendTaskContext(request)
   assert.equal(updated.inputVersion, task.inputVersion + 1)
   assert.equal(updated.runSequence, task.runSequence)
@@ -1764,8 +1764,8 @@ test('Web 补充提升输入版本并重置当前检查点，同请求重试不�
 
 test('目标修订原子更新任务名称并保留旧名称，普通补充不得单独改名', async (t) => {
   const h = await setup(t), task = await createTask(h, '数据库切换排查')
-  await assert.rejects(h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'title-only', topicRefs: task.topicRefs, context: '只补充信息', title: '不应改名', ...inputVersion(task) }), /task_title_requires_objective_revision/)
-  const updated = await h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'revise-objective', topicRefs: task.topicRefs, context: '明确要求修复并部署', title: '修复并部署数据库切换', objective: '修复数据库切换问题并部署 UAT', ...inputVersion(task) })
+  await assert.rejects(h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'title-only', progressImpact: 'replan', topicRefs: task.topicRefs, context: '只补充信息', title: '不应改名', ...inputVersion(task) }), /task_title_requires_objective_revision/)
+  const updated = await h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'revise-objective', progressImpact: 'replan', topicRefs: task.topicRefs, context: '明确要求修复并部署', title: '修复并部署数据库切换', objective: '修复数据库切换问题并部署 UAT', ...inputVersion(task) })
   assert.equal(updated.title, '修复并部署数据库切换')
   assert.equal(updated.objective, '修复数据库切换问题并部署 UAT')
   assert.deepEqual(updated.titleHistory.map((item) => item.title), ['数据库切换排查'])
@@ -1776,7 +1776,7 @@ test('目标修订原子更新任务名称并保留旧名称，普通补充不�
 
 test('目标变化缺少新任务名称时拒绝续接', async (t) => {
   const h = await setup(t), task = await createTask(h)
-  await assert.rejects(h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'objective-without-title', topicRefs: task.topicRefs, context: '扩大范围', objective: '修复并部署', ...inputVersion(task) }), /task_objective_title_required/)
+  await assert.rejects(h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'objective-without-title', progressImpact: 'replan', topicRefs: task.topicRefs, context: '扩大范围', objective: '修复并部署', ...inputVersion(task) }), /task_objective_title_required/)
   assert.equal(h.store.getTask(task.taskId).objective, task.objective)
   assert.equal(h.store.getTask(task.taskId).title, task.title)
 })
@@ -1806,7 +1806,9 @@ test('授权变化即使阶段名称不变也撤销旧阶段批准', async t => 
   const before = h.store.getTask(task.taskId)
   assert.equal(before.checkpoints.length, 1)
   const updated = await h.runtime.appendTaskContext({ taskId: task.taskId, requestId: 'authorization-changed', topicRefs: task.topicRefs,
-    context: '原有授权已被撤回', authorizationChange: 'changed', ...inputVersion(before) })
+    context: '原有授权已被撤回', progressImpact: 'replan', authorizationChange: 'changed',
+    impactEvidence: { basisMessageIds: [stableId('web', 'g:authorization-changed')], reason: '原授权已撤回，旧阶段批准必须失效',
+      affectedStageIds: stagePlanFor(before, before.stageTasks).map(stage => stage.stageId) }, ...inputVersion(before) })
   assert.deepEqual(updated.checkpoints, [])
   const revision = updated.executionEvents.findLast(event => event.kind === 'input-revised')
   assert.equal(revision.authorizationChange, 'changed')

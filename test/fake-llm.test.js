@@ -103,11 +103,13 @@ test('fake adapter 一批多个话题处理完一个提交一个', async () => {
   assert.equal(done.at(-1).reason.kind, 'stop')
 })
 
-test('fake adapter 补充任务携带当前 Task 版本与新 Topic 版本', async () => {
+for (const impact of [undefined, 'preserve', 'replan']) test(`fake adapter 补充必须显式分类且携带当前 Task 版本: ${impact}`, async () => {
   const tasks = [{ taskId: 'task-1', inputVersion: 3, runSequence: 2, topicRefs: [{ topicId: 'topic-a', revision: 1 }] }]
-  const request = topicRequest('DECISION', { requestId: 'd1', topicId: 'topic-a', revision: 2, messages: [{ messageId: 'm2', messageVersion: 1, unitId: 'unit-m2', unitRevision: 1, text: '补充：仅核验本月' }] })
+  const request = topicRequest('DECISION', { requestId: 'd1', topicId: 'topic-a', revision: 2, messages: [{ messageId: 'm2', messageVersion: 1, unitId: 'unit-m2', unitRevision: 1, text: `补充：${impact ? impact + '：' : ''}仅核验本月` }] })
   const chunks = await run(adapter(), [request], `## 本群全部任务关联索引\n\n${JSON.stringify(tasks)}`)
   const { decision } = groupDecisionSubmissionSchema.parse(JSON.parse(chunks[1].argumentsDelta))
+  if (!impact) { assert.deepEqual(decision.actions, []); return }
+  assert.equal(decision.actions[0].progressImpact, impact)
   assert.equal(decision.actions[0].inputVersion, 3)
   assert.equal(decision.actions[0].runSequence, 2)
   assert.deepEqual(decision.actions[0].topicRefs, [{ topicId: 'topic-a', revision: 2 }])
