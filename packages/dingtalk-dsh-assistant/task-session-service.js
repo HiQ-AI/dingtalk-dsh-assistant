@@ -221,7 +221,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             || Date.parse(review || execution.providerRecovery.nextAttemptAt) > Date.now()) continue
           const task = await requireTask(execution.taskId)
           if (task.archivedAt || task.status !== 'active' || task.control !== 'active' || task.humanRequests?.some(item => item.status === 'waiting-reply')
-            || execution.requirementRevision !== task.requirementRevision || execution.controlRevision !== task.controlRevision) continue
+            || !review && execution.requirementRevision !== task.requirementRevision || execution.controlRevision !== task.controlRevision
+            || execution.cancelRequested) continue
           if ((await query('wake.list', { taskId: task.taskId })).some(item => item.kind === 'human.responded' && item.state !== 'acked')) continue
           let binding
           try {

@@ -11,7 +11,7 @@ const call = (name, args) => ({ name, args })
 const decide = action => call('task_session_submit', { decision: { action, summary: 'Original goal', evidence: [], limitations: [] } })
 const submit = call('execution_submit', { output: { status: 'completed', summary: 'Original goal done', evidence: ['Original operation retained'], limitations: [], artifacts: ['effect.txt'] } })
 const overloaded = { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.\n[Codex diagnostics: {"httpStatus":200}]' }
-async function host(root, { initialize = true, fault = true, allowUnrelated = false, persistent = false, humanFlow = false, recoverAfterCold = false, providerError = overloaded, reviewWait = false } = {}) {
+async function host(root, { initialize = true, fault = true, allowUnrelated = false, persistent = false, humanFlow = false, recoverAfterCold = false, providerError = overloaded, reviewWait = false, revisedReview = false } = {}) {
   let executionSteps = 0, sequence = 0, humanAttempts = 0
   const requests = []
   const h = await nativeTaskHost(root, async () => [], { initialize, agentConfig: { provider: 'execution-recovery-fixture' },
@@ -24,6 +24,12 @@ async function host(root, { initialize = true, fault = true, allowUnrelated = fa
           let calls
           if (request.tools.some(tool => tool.name === 'task_delegate')) {
             const input = latestInput(request)
+            if (revisedReview && input.wakes?.some(wake => wake.kind === 'execution.provider.review')) {
+              const review = input.wakes.find(wake => wake.kind === 'execution.provider.review')
+              assert.equal(review.payload.requirementRevision, 2)
+              assert.equal(review.payload.executionRequirementRevision, 1)
+              assert.ok(Date.parse(review.payload.reviewedAt) >= Date.parse(review.payload.retryNotBefore))
+            }
             const answered = input.task.humanRequests?.find(request => request.status === 'answered')
             if (humanFlow && answered) {
               const response = input.sources.find(source => source.sourceId === answered.sourceId)
@@ -214,6 +220,37 @@ test('anonymous field v12 error restores original execution with complete diagno
   assert.equal(after.sessionId, before.sessionId); assert.equal(after.executionId, before.executionId)
   assert.equal(after.status, 'succeeded'); assert.deepEqual(after.results[0].payload.error.providerError, fieldV12Error)
   assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
+  assert.equal((await h.query('operation.list')).length, 1)
+  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
+})
+
+test('requirement supplement during provider cooldown wakes current owner after restart and resumes original executor once', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const root = await mkdtemp(join(tmpdir(), 'native-review-revised-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  let h = await host(root, { persistent: true, recoverAfterCold: true, revisedReview: true }); hosts.push(h)
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'review-revised', objective: 'Original task' })
+  await h.service.whenIdle()
+  for (let fast = 0; fast < 3; fast++) {
+    const e = (await h.query('execution.list'))[0]
+    t.mock.timers.setTime(Date.parse(e.providerRecovery.nextAttemptAt) + 1)
+    await h.service.recover(); await h.service.whenIdle()
+  }
+  const first = (await h.query('execution.list'))[0]
+  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'network-restored', context: 'Network restored; retain original scope', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).requirementRevision, 2)
+  assert.equal((await h.query('execution.list'))[0].inputVersion, first.inputVersion)
+  await h.close(); h = await host(root, { initialize: false, persistent: true, fault: false, revisedReview: true }); hosts.push(h)
+  t.mock.timers.setTime(Date.parse(first.providerRecovery.nextReviewAt) + 1)
+  await h.service.recover(); await h.service.whenIdle()
+  const after = (await h.query('execution.list'))[0]
+  assert.equal(after.sessionId, first.sessionId); assert.equal(after.executionId, first.executionId)
+  assert.equal(after.requirementRevision, 2); assert.equal(after.inputVersion, first.inputVersion + 1)
+  assert.equal(first.providerRecovery.attempts, 3)
+  assert.equal(after.providerRecovery, null, 'Successful completion closes recovery without altering retained failures')
+  assert.equal(after.status, 'succeeded')
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
   assert.equal((await h.query('operation.list')).length, 1)
   assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
 })

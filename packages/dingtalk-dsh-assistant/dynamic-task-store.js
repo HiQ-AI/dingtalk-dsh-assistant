@@ -552,7 +552,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (kind === 'execution.review-provider') {
       const execution = boundExecution(a.binding)
       const task = get('dynamic_tasks', execution.taskId)
-      if (!execution.drained || execution.recovering || !executionCurrent(execution) || execution.status !== 'failed'
+      // 复核只唤醒当前统筹，不接纳旧需求的执行结果或自动重跑旧输入。
+      if (!execution.drained || execution.recovering || task.archivedAt || task.status !== 'active' || task.control !== 'active'
+        || execution.controlRevision !== task.controlRevision || execution.cancelRequested || execution.status !== 'failed'
         || !execution.providerRecovery?.nextReviewAt || task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (Date.parse(stamp) < Date.parse(execution.providerRecovery.nextReviewAt)) fail('DYNAMIC_EXECUTION_RETRY_NOT_DUE')
       if (ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
@@ -564,7 +566,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       execution.result.recovery = { ...execution.result.recovery, decision: 'review-ready', reviewAttempts: reviews, nextReviewAt: execution.providerRecovery.nextReviewAt }
       put('dynamic_executions', execution)
       const wakeId = wake(execution.taskId, 'execution.provider.review', { executionId: execution.executionId,
-        instruction: '通用模型/传输故障的冷却已结束，先核对原失败、目标、操作账和当前恢复条件。可用原executionId受管续办，不重放成功或未知效果；不得仅因短重试耗尽要求人工恢复服务。' }, `wake:${commandId}`)
+        reviewedAt: stamp, retryNotBefore: execution.providerRecovery.retryNotBefore,
+        executionRequirementRevision: execution.requirementRevision, requirementRevision: task.requirementRevision,
+        instruction: '通用模型/传输故障的冷却已结束，以本事件reviewedAt及retryNotBefore为准。先核对原失败、当前需求、操作账和恢复条件；需求版本变化时必须重新判断原小目标是否适用，再用原executionId受管续办当前要求，不自动重跑旧输入。不重放成功或未知效果；不得仅因短重试耗尽要求人工恢复服务。' }, `wake:${commandId}`)
       return changed({ execution, wakeId })
     }
     if (kind === 'execution.provider-recovery-blocked') {
