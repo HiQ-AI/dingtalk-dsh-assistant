@@ -31,6 +31,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 ## 已初始化实例更新核验
 
+模型冷却期间 Web 补充会推进需求版本；已失败的旧执行仍须在冷却到期后产生 `execution.provider.review`，只唤醒当前统筹，不自动执行旧输入。安装恢复修复后，回读原执行 `providerRecovery.reviewedAt`、复核事件的新旧需求版本，以及同一 executionId/sessionId 后续输入；不能只看任务短暂进入 running。`nextReviewAt` 已过期的记录会由既有恢复调度复核，不手改账、不重置预算，也不再追加一次上下文制造版本变化。若有活动业务执行，先等待自然排空，再按本页静止实例规程切换。
+
 发信箱状态梳理只更新 Observer，Assistant 复用当前受信包；按原生双包脚本部署。重载后核对五种短状态、一个筛选、四个默认列；原因/替代/撤回为消息辅助信息，内部 ID 默认折叠。已送达/未知不被历史字段覆盖，缺证记录保持待确认，历史撤回无重试承诺。独立对比通知事实，不改账、不重发；UI 通过不代表未知通知已经送达。
 
 看板提示关闭修复仅修改 Observer，无数据迁移。原生部署脚本仍显式传入两包并校验摘要，Assistant 复用当前受信包。浏览器刷新后成功反馈应支持手动关闭且 5 秒消失；错误反馈支持手动关闭，恢复后清除，同一持续错误不因轮询重新出现。无需通过归档其他业务任务制造测试提示。
@@ -42,6 +44,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 本机静止实例使用 [原生退出切换脚本](../acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1)：显式传入持久 Assistant 与 Observer 两个包及各自摘要、精确旧 PID、当前 profile 摘要及本轮证据目录，先 `-Check`，通过后同参数执行。脚本先核验共享控制台仅包含精确计划任务进程树，再经 Windows CTRL+C 触发 DSH 原生 SIGINT disposal；等待旧进程退出、SQLite owner 释放、原生日志回合结束和实际子进程退出后，才沿官方 `dsh plugin --profile web add` 安装。不修改 profile，核验其原字节摘要并还原自启状态，经计划任务启动并回读。失败保留现场与阶段记录，不自动强制重启；不得将其用于活动业务执行或其他实例。此脚本只支持既有已配置的本机身份与路径，不承担迁移。
 
 恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的 `openTaskId` 查询 SUCCESS 后仍须读取精确原消息核对群、发送者、原生引用及完整正文。DWS 缺少原生 mention 元数据时仅在这些精确发送证据齐全的情况下确认送达，并记录 `mentionVerification=unavailable`；不能把文本 `@姓名` 当作原生 mention 证据。unknown 不重发。
+
+若原通知只因顶层有序列表的 `1./2./3.` 在分段回读时变为 `1./1./1.` 而停留 unknown，安装列表回读修复后交由既有 notification.reconcile 正式结清；不手改 SQLite、正文或发送回执，不调用发送/重试发送接口。独立回读原 notificationId、原 messageId、delivered、sendAttemptCount 仍为 1，再核对恢复告警消失及健康状态。代码围栏、非连续编号、列表顺序或正文数字变化继续拒绝。
 
 启动时 active、已排空、lastDecision=wait、无 question 且有 unknown 操作的任务，按相关运行模块摘要和当前需求/控制版本补一次 `runtime.updated` 唤醒。重复定时恢复或同代码重启不再补发；暂停、取消、人工问题等待和仍有执行的任务不适用。Owner 沿原任务调查并使用 `task_operation_reconcile` 核验，未知操作未被证明前不能放行原动作。
 

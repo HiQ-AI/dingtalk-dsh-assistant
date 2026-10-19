@@ -1,0 +1,7 @@
+case,round-1,round-2,round-3,evidence
+revised-provider-review,FAIL,PASS,PASS,round-1.md;round-2.md;round-3.md
+review-control-unknown-guards,NOT_RUN,PASS,NOT_APPLICABLE,round-2.md
+native-original-session-no-replay,NOT_RUN,PASS,NOT_APPLICABLE,round-2.md
+provider-targeted-regression,NOT_RUN,PASS,NOT_APPLICABLE,round-2.md
+deployment-package-process-health,NOT_RUN,NOT_RUN,PASS,round-3.md
+live-original-task-resumed,NOT_RUN,NOT_RUN,PASS,round-3.md

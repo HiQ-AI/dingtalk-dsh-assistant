@@ -9,4 +9,14 @@ local-deployment,3,PASS,native SIGINT; installed package verified; PID21016; hea
 operator-alert-cache,2,PASS,native HTTP original resolution regression; old source fails alert assertion and fixed source passes
 continuation-key,3,PASS,84 store/readback tests; same execution/session inputVersion3 and total executions3
 real-nine-delivery,3,PASS,9 delivered; original message IDs unchanged; sendAttemptCount1 for all9
+ordered-list-baseline,4,FAIL,two new cases fail on HEAD; expected text mismatch and diagnostic instead of reconcile
+ordered-list-boundaries,4,PASS,10 readback cases; text/numbers/order/fences/identity changes rejected
+ordered-notification-regression,4,PASS,130 targeted tests; no skips; send forbidden for unknown fixture
+original-ordered-message-verifier,4,PASS,exact original message accepted by fixed full verifier; no writes
+ordered-local-deployment,5,FAIL,zero-write Check refused CONSOLE_UNRELATED_PROCESS_PRESENT; active business retained
+original-ordered-notification-reconcile,5,NOT_RUN,deployment did not execute; no resend
+ordered-local-deployment,6,FAIL,ledger check refused while owner was finishing; later independent ledger confirms drained
+original-ordered-notification-reconcile,6,NOT_RUN,no stop signal or install
+ordered-local-deployment,7,PASS,zero-write Check then SIGINT; PID62032; exact packages installed; health ok
+original-ordered-notification-reconcile,7,PASS,API and readonly SQLite delivered; original messageId; sendAttemptCount1; no alerts
 

@@ -845,6 +845,50 @@ test('provider recovery persists bounded backoff, history and session identity a
   }
 })
 
+for (const variant of ['revised', 'paused', 'cancelled', 'unknown-effect']) test(`provider cold review after requirement update preserves recovery boundaries: ${variant}`, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const f = await fixture(t), owner = await f.task()
+  let binding = await f.execution(owner.binding)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await f.command('execution.sessionBound', { binding })
+    await f.command('execution.result', { binding, error: providerFailure(binding) })
+    await f.command('execution.drained', { binding })
+    const e = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+    if (attempt === 3) break
+    t.mock.timers.setTime(Date.parse(e.providerRecovery.nextAttemptAt))
+    await f.command('execution.retry-provider', { binding })
+    binding = (await f.command('execution.claim', { executionId: binding.executionId })).result.binding
+  }
+  await f.command('task.revise', { taskId: 'task', request: 'Network restored; review current requirements' })
+  const before = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  await assert.rejects(f.command('execution.review-provider', { binding }), { code: 'DYNAMIC_EXECUTION_RETRY_NOT_DUE' })
+  if (variant === 'paused' || variant === 'cancelled') await f.command('task.control', { taskId: 'task', control: variant })
+  if (variant === 'unknown-effect') {
+    const db = new DatabaseSync(f.config.dbPath)
+    const operation = { operationId: 'uncertain', taskId: 'task', executionId: binding.executionId, state: 'unknown', resourceKeys: [] }
+    db.prepare('INSERT INTO dynamic_operations (id, body) VALUES (?, ?)').run(operation.operationId, JSON.stringify(operation)); db.close()
+  }
+  t.mock.timers.setTime(Date.parse(before.providerRecovery.nextReviewAt))
+  await f.reopen()
+  if (variant !== 'revised') {
+    await assert.rejects(f.command('execution.review-provider', { binding }), { code: variant === 'unknown-effect' ? 'DYNAMIC_OPERATION_UNRESOLVED' : 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+    return
+  }
+  const reviewed = await f.command('execution.review-provider', { binding }, 'revised-review')
+  assert.equal((await f.command('execution.review-provider', { binding }, 'revised-review')).replayed, true)
+  assert.equal(reviewed.result.execution.status, 'failed')
+  assert.equal(reviewed.result.execution.inputVersion, before.inputVersion)
+  assert.equal(reviewed.result.execution.sessionId, before.sessionId)
+  assert.equal(reviewed.result.execution.providerRecovery.attempts, 3)
+  assert.equal(reviewed.result.execution.providerRecovery.reviewAttempts, 1)
+  const wake = (await f.query({ kind: 'wake.list', taskId: 'task' })).find(item => item.id === reviewed.result.wakeId)
+  assert.equal(wake.payload.executionRequirementRevision, 1)
+  assert.equal(wake.payload.requirementRevision, 2)
+  assert.equal(wake.payload.retryNotBefore, before.providerRecovery.retryNotBefore)
+  assert.equal(Date.parse(wake.payload.reviewedAt), Date.now())
+  await assert.rejects(f.command('execution.retry-provider', { binding }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+})
+
 for (const variant of ['missing-proof', 'foreign-proof', 'permanent', 'unknown-effect', 'cancelled']) test(`provider automatic recovery rejects ${variant}`, async t => {
   const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
   await f.command('execution.sessionBound', { binding })
