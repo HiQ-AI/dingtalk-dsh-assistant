@@ -5,10 +5,10 @@
 | 子目标 | 状态 | 证据 |
 | --- | --- | --- |
 | 版本准备与三包检查 | PASS | docs/tmp/release-2.0.1-pack |
-| 完整测试失败归类 | 进行中 | docs/tmp/release-2.0.1-tests.log |
-| 最小修复及定向回归 | 待完成 | |
-| 完整发布检查 | 待完成 | |
-| 版本合入与Tag发布 | 待完成 | |
+| 完整测试失败归类 | PASS | docs/tmp/release-2.0.1-tests.log |
+| 最小修复及定向回归 | PASS | round-2.md |
+| 完整发布检查 | 运行中 | Release run39214657717 |
+| 版本合入与Tag发布 | PASS | PR205、v2.0.1→b63d652 |
 | npm及Release回读 | 待完成 | |
 
 ## 决策
@@ -22,3 +22,9 @@
 - 初次全量日志保留，不将失败改写为通过；修复回归覆盖全部导入受影响公共fixture的26个测试文件，最终Tag发布workflow仍运行完整pnpm test。
 
 技能剩余失败是专用TEMP的ACL：当前用户仅Modify，native grantWrite需要ACL控制。仅专用测试根增加当前用户继承FullControl，未改产品策略；原技能断言不动，5/5通过。
+
+## 发布进展
+PR205已合并，main b63d652c54ba653c893741cbf5a7c8025d5d5ea9。v2.0.1注释Tag远端独立回读解引用相同提交。Release run39214657717已按Tag开始，未手工触发普通CI；npm与附件尚未回读。
+
+
+正式Tag第三轮全量3214PASS/1FAIL/4SKIP，npm步骤未执行。唯一Provider重启测试10秒等待完整业务结果超时，正在分离定时准入与原生排空检查，所有业务断言保留。改写未发布远端Tag需用户明确批准，尚未执行。
