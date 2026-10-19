@@ -1,0 +1,8 @@
+case,round-1,round-2
+status-and-filter,FAIL,PASS
+verified-send-time,PASS,PASS
+persistent-projection,PASS,PASS
+unknown-no-resend,PASS,PASS
+native-deployment,NOT_RUN,PASS
+live-outbox-and-filter,NOT_RUN,PASS
+refresh-and-narrow-layout,NOT_RUN,PASS
