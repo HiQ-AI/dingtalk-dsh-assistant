@@ -586,7 +586,36 @@ Topic 版本使用 domain v7。升级已有 v6 profile 前，按[Topic 存储离
 
 若 Resident 连续出现上下文压缩，检查普通输入是否重复包含完整群历史或 Task 消息副本。Topic 列表应只含摘要，详情由 `GET /state/topics/{topicId}?groupId=...&revision=...&offset=0&limit=50` 或 `group_topic_context_get` 按固定版本分页读取；API 每页最多 100 条。Topic 决策信封的内联消息限制为 40,000 字符；出现 `omittedDeltaMessageIds` 时必须分页读完该固定 revision 的缺失增量，未读完时 Host 会拒绝决策。Topic 详情返回 `{topicId, groupId, revision, topic, messages, total, offset, limit, taskRefs}`，不会公开内部决策动作日志。Task 只保存 Topic 引用，不应再出现 messageHistory、triggerHistory 和 sourceMessageId。
 
-人工 Web 新建 Task 使用 `POST /tasks`，调用方必须提供稳定 requestId、原始 context、groupId、title、objective、acceptanceCriteria；不指定 topicRefs 时建立 Web 来源 Topic。已有 Task 的 context、reopen、cancel 操作还必须提供 topicRefs、inputVersion、runSequence；前两者使用 context，取消使用 reason。版本和请求身份冲突返回 409，已持久接受但未完成返回 202。Web 来源不能伪造钉钉引用、@ 或 childSessionId。Resident 不再提供 group_task_create / group_task_context_append / group_task_reopen 直写工具，业务动作统一走 group_decision_submit；误归类修订使用 group_topic_route_review。所有非空回复必须提供 replyReview.kind。Task context 补充输入支持 progressImpact 与 impactEvidence（basisMessageIds、reason、affectedStageIds），字段契约与常驻决策同源；create/reopen 不接受这两个字段。相同目标、验收和阶段数组不触发 replan，保留有效 checkpoints 的原 inputVersion；明确变化只失效受影响阶段及后续，历史证据不改写版本。跨 Topic 补充会合并旧引用。waiting Task 收到信息或批准后统一进入 FIFO 队列，Session 创建与恢复期间也计入并发容量。
+当前任务会话的后端补充入口为 `POST /tasks/:taskId/context`，仅接纳本机合法来源及已配置的受信 Web 身份；作者由 Host 确定。先从任务详情读取当前 `requirementRevision`、`controlRevision`，分别填入下列比较版本字段。所有示例值均须替换为实际任务的当前值。
+
+普通提醒或事实澄清必须显式声明 `progressImpact: "preserve"`，确认目标、授权、验收及既有证据有效性不变；保留原执行，不提高需求版本：
+
+```json
+{
+  "requestId": "branch-reminder-20261019-001",
+  "context": "开发分支别搞错了；目标、授权和验收要求保持不变。",
+  "progressImpact": "preserve",
+  "expectedRequirementRevision": 1,
+  "expectedControlRevision": 1
+}
+```
+
+真实目标、授权、验收或证据有效性变化使用 `replan`，在 `context` 中保留明确变更原文，使旧判断失效并停止旧执行。例如明确收回发布授权：
+
+```json
+{
+  "requestId": "authorization-change-20261019-002",
+  "context": "撤回此前发布授权，本次目标改为仅只读核对并报告差异。",
+  "progressImpact": "replan",
+  "authorizationChange": "changed",
+  "expectedRequirementRevision": 1,
+  "expectedControlRevision": 1
+}
+```
+
+请求体严格只接受上述字段：`requestId`、`context`、`progressImpact`、两个比较版本均必填；`authorizationChange` 可省略，提供时为 `none` 或 `changed`，`changed` 不能与 `preserve` 混用。`requestId` 最长200字符，`context` 最长32000字符且 trim 后非空，比较版本为正整数。HTTP 入口不接受旧 `topicRefs/inputVersion/runSequence`，也不接受 `impactEvidence/objective/acceptanceCriteria/stageTasks`；不能把协调工具的完整动作对象直接作为此接口请求体。
+
+同一次提交重试复用相同 `requestId` 和完整正文，不换 ID 重放。成功返回当前 Task DTO；缺少分类、分类冲突、额外字段或其他输入不合法返回400 `web_task_request_invalid`，`issues` 提供字段路径及原因，原执行不会因此取消。直接服务调用的分类错误为 `TASK_CONTEXT_CLASSIFICATION_REQUIRED` 或 `TASK_CONTEXT_CLASSIFICATION_CONFLICT`。不受信请求返回403；需求/控制版本或请求身份冲突返回409，先读取当前任务再判断，不覆盖新输入。明确取消使用独立取消入口，不能用缺省分类代替；新建与取消入口见[当前 HTTP 接口](../../README.md#web-看板与-http-接口)。运行中澄清工具、持久接收与模型步骤准入的核对方式见[运行中补充协议](../spec/running-task-feedback.md)。
 
 查询 Topic 的 processing 可读取最新未完成决策标识、状态、已完成/总动作数及有界错误；Observer 依据 routingStatus、Topic revision 与 processedRevision 显示待归类、话题处理中、已处理或归类失败。此摘要不暴露内部动作正文，processedRevision 与 Outbox 投递状态仍需分别核对。
 
