@@ -213,6 +213,8 @@ for (const changed of [false, true]) test(`original-group human input preserves 
       return calls
     }
     if (names.includes('group_decision_submit')) {
+      // Reproduce a coordinator slower than the former 100ms executor release.
+      if (changed) await new Promise(resolve => setTimeout(resolve, 500))
       const calls = topicTaskCalls(request), submitted = calls[0].args
       submitted.decision.actions = [{ kind: 'task-context', taskId: originalTask.taskId, inputVersion: originalTask.requirementRevision,
         runSequence: originalTask.runSequence, context: replyText, progressImpact: 'preserve', topicRefs: [{ topicId: submitted.topicId, revision: submitted.revision }],
@@ -242,8 +244,10 @@ for (const changed of [false, true]) test(`original-group human input preserves 
   const ingestion = h.service.ingest({ groupId: 'native-group', messageId: 'real-group-human-answer', senderOpenDingTalkId: 'native-user', text: replyText,
     occurredAt: new Date().toISOString(), timestamp: new Date().toISOString() })
   if (changed) {
-    // A cancelled provider stream must still physically return before Host can drain it.
-    setTimeout(() => release.resolve(), 100)
+    // Keep the provider live until cancellation is actually requested, then let Host drain it.
+    await waitUntil(async () => (await h.query('execution.list')).find(execution => execution.executionId === before.executionId)?.cancelRequested,
+      'original execution receives authorization cancellation')
+    release.resolve()
     await ingestion; await h.service.whenIdle()
     const task = await h.query('task.get', { taskId: created.taskId }), [execution] = await h.query('execution.list')
     assert.equal(task.requirementRevision, originalTask.requirementRevision + 1)
