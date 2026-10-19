@@ -46,4 +46,6 @@ execution.result 事务比较步骤反馈版本及未消费记录；task.complet
 
 提交 PR 前以已合并 #207 的 main 847ee32 为基线无冲突重放。复跑以上 15 文件（包含新 main 的新增用例），并增加 task-session-execution-provider-recovery-native.test.js 与 task-notification-readback.test.js，共 17 文件、476 PASS、0 FAIL、0 SKIP（37.758 秒）。保留 #207 的独立冷却复核与通知回读机制；仅将其需求修订夹具迁移到本次必填分类契约。仍未触发 CI 或部署。
 
+PR #210 冲突处理：main 更新至 c634a34（合并 #209 的同群真实来源续办）。沿原分支普通 merge，仅 task-session-service.js 的 applyTopicAction 有文本冲突：保留同群来源/Web身份/internal排除及取消权限限制；pendingHuman 同时要求无真实需求变更、原 requester 作者及时间有效；保留 #208 分类拒绝、普通补充及原执行反馈/恢复。自动合并的同群成员补充不能代答人工请求。独立只读审查未发现代码阻塞，文档统一为按显式分类处理补充。复跑同一 17 文件，478 PASS、0 FAIL、0 SKIP（39.094 秒）；未触发 CI 或部署。
+
 验证使用仓库 test/fixtures/native-profile 的真实 AgentLoop、会话、JSONL、工具、shell 与 SQLite，模型适配器为确定性脚本。存储定向测试不代表模型或现场；测试中的人工故障注入不代表真实进程崩溃。未部署、未操作业务任务，真实钉钉、生产模型及现场进程崩溃恢复仍待验收。不会因本文记录声称 #208 已现场闭环。

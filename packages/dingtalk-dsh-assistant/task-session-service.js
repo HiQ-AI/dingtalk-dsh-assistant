@@ -280,9 +280,6 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return sources.find(source => source?.actorId === task.ownerActorId)
   }
   const requireTask = async taskId => (await query('task.get', { taskId })) ?? fail('TASK_SESSION_NOT_FOUND')
-  const authorize = (task, source) => {
-    if (!source?.actorId || task.groupId !== source.groupId || ![task.ownerActorId, config.ownerActorId].filter(Boolean).includes(source.actorId)) fail('TASK_SESSION_SOURCE_FORBIDDEN')
-  }
   const taskDTO = async task => {
     const executions = await query('execution.list', { taskId: task.taskId })
     const pendingWake = !task.lastDecision && (await query('wake.list', { taskId: task.taskId })).some(wake => wake.state !== 'acked')
@@ -440,9 +437,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const basis = sources.filter(source => actionUnits.some(message => message.messageId === source.messageId))
     const existingTask = action.kind === 'new-task' ? null : await requireTask(operation.taskId)
     if (existingTask?.archivedAt) fail('DYNAMIC_TASK_ARCHIVED_CONFLICT')
-    const source = existingTask ? basis.findLast(item => item.actorId === existingTask.ownerActorId || item.actorId === config.ownerActorId)
-      : basis.findLast(item => item.channel !== 'web' && item.channel !== 'internal') ?? basis.at(-1)
+    // 群续办按本次真实来源接纳；最初发起人身份不代表后续交办的唯一作者。
+    const source = basis.findLast(item => item.groupId === groupId && item.actorId
+      && (item.channel === 'web' ? item.actorId === config.webActorId : item.channel !== 'internal')
+      && (action.kind !== 'task-cancel' || [existingTask?.ownerActorId, config.ownerActorId].includes(item.actorId)))
     if (!source) fail('TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
+    if (existingTask && existingTask.groupId !== source.groupId) fail('TASK_SESSION_SOURCE_FORBIDDEN')
     const refs = action.topicRefs
     const id = `topic-operation:${operation.operationId}`
     if (await query('receipt.get', { id })) return
@@ -454,7 +454,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         requirements: action.acceptanceCriteria ?? [], metadata: { channel: source.channel ?? 'im', authorizationSourceId: source.sourceId } }, id)
       task = receipt.result.task
     } else {
-      task = await requireTask(operation.taskId); authorize(task, source)
+      task = await requireTask(operation.taskId)
       if (action.kind === 'task-context' && action.progressImpact === 'preserve' && action.title !== undefined && action.title !== task.title) fail('TASK_CONTEXT_CLASSIFICATION_CONFLICT')
       const topicRefs = [...new Map([...(task.topicRefs ?? []), ...refs].map(ref => [ref.topicId, ref])).values()]
       const args = { taskId: task.taskId, expectedRequirementRevision: action.inputVersion, expectedControlRevision: task.controlRevision,
@@ -462,7 +462,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const changesRequirements = action.authorizationChange === 'changed' || action.progressImpact === 'replan' || action.impactEvidence !== undefined
         || action.objective !== undefined || action.acceptanceCriteria !== undefined || action.stageTasks !== undefined
       const pendingHuman = action.kind === 'task-context' && !changesRequirements ? task.humanRequests?.findLast(request => request.status === 'waiting-reply'
-        && request.audience === 'requester' && Date.parse(source.timestamp) >= Date.parse(request.createdAt)) : null
+        && request.audience === 'requester' && source.actorId === task.ownerActorId
+        && Date.parse(source.timestamp) >= Date.parse(request.createdAt)) : null
       const supplement = action.kind === 'task-context' && action.progressImpact === 'preserve' && action.authorizationChange !== 'changed'
         && !changesRequirements && (action.title === undefined || action.title === task.title)
       const receipt = action.kind === 'task-cancel'
