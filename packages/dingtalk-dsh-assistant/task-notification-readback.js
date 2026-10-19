@@ -1,6 +1,7 @@
 import { matchesOutbound } from './dws-adapter.js'
 import { notificationOpenTaskId } from './group-message.js'
 import { sameDeliveredText } from './group-message.js'
+import { messageTimestamp } from './dws-bridge.js'
 
 export async function readOperatorNotificationDelivery(adapter, notification) {
   const payload = notification.payload, openTaskId = notificationOpenTaskId(notification.ack ?? notification.receipt)
@@ -31,7 +32,9 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
     : !Array.isArray(actual) || expected.some(id => !actual.includes(id)))) return undefined
   if (!exactReceipt && !exactUuid && !ownSender) return undefined
   if (!sameDeliveredText(observed.text, payload.text, quote)) return undefined
+  const sentTime = messageTimestamp(observed.createTime)
   return { messageId, conversationId: payload.conversationId, quoteMessageId: quote.messageId,
+    ...(Number.isFinite(sentTime) ? { sentAt: new Date(sentTime).toISOString() } : {}),
     atOpenDingTalkIds: unavailableMention ? [] : [...expected], mentionVerification: unavailableMention ? 'unavailable' : 'verified',
     identity: exactReceipt ? 'send-receipt' : exactUuid ? 'idempotency-key' : 'configured-sender', observedAt: new Date().toISOString() }
 }

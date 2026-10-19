@@ -102,6 +102,7 @@ export function taskNotificationOutbound(notification) {
     matterSourceMessageIds: payload.sourceMessageId ? [payload.sourceMessageId] : [],
     ...(notification.dispatchToken ? { sendStartedAt: notification.createdAt } : {}),
     ...(delivered ? { deliveredAt: receipt?.observedAt ?? notification.updatedAt,
+      ...(receipt?.sentAt ? { sentAt: receipt.sentAt } : {}),
       ...(receipt?.messageId ? { deliveredMessageId: receipt.messageId } : {}) }
       : { deliveryPendingReason: notification.retirement ? `task-notification-${notification.retirement.reason}` : knownNotSent ? 'task-notification-pre-send-rejected' : `task-notification-${notification.state}` }),
   }

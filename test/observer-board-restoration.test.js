@@ -13,6 +13,17 @@ function card(task) {
   navigatingSessionId:'',navigate:(id,parent)=>actions.push(['session',id,parent]), statusTag:(label)=>({type:'span',props:{},children:[label]}),openTask:task=>actions.push(['task',task.taskId]),setTopicTarget:value=>actions.push(['topic',value.topicId]),setActivePage:value=>actions.push(['page',value])
  }); return {tree:render(task),actions}
 }
+
+test('只有已结束桶的未归档当前任务显示归档按钮',()=>{
+ for (const state of ['queued','running','waiting','paused','blocked','interrupted','completed','cancelled','succeeded','failed']) {
+  const nodes=flatten(card({taskId:'t',title:'任务',state}).tree)
+  assert.equal(nodes.some(x=>x.props['aria-label']==='归档任务：任务'), ['completed','cancelled','succeeded','failed'].includes(state), state)
+  assert.equal(nodes.some(x=>x.children.includes('已归档')),false,state)
+ }
+ for (const extra of [{archivedAt:'now'},{legacyReadonly:true}]) {
+  assert.equal(flatten(card({taskId:'t',title:'任务',state:'completed',...extra}).tree).some(x=>x.props['aria-label']==='归档任务：任务'),false)
+ }
+})
 test('原看板紧凑卡片恢复，完整目标及话题仍能通过原有入口查看',()=>{
  const {tree,actions}=card({taskId:'t',title:'核对服务',objective:'长目标'.repeat(50),sourceGroupId:'g',state:'queued',updatedAt:'now',session:{sessionId:'session'},executionCount:7,topicRefs:[{topicId:'topic'}]})
  assert.equal(tree.props.style.padding,'11px 13px');assert.equal(tree.props.style.gap,6);assert.equal(tree.props.style.opacity,.72)
@@ -64,7 +75,7 @@ test('真实任务卡片展示全部会话名称及状态；点击原生入口�
 })
 
 test('内嵌执行列表只按真实成功会话计数，支持单展开和归档',()=>{
- const {tree,actions}=card({taskId:'card-copy',title:'检查',state:'running',executionSessions:[{executionId:'a',sessionId:'sa',title:'会话甲',status:'succeeded'},{executionId:'b',sessionId:'sb',title:'会话乙',status:'running'},{executionId:'c',sessionId:'sc',title:'会话丙',status:'failed'}]})
+ const {tree,actions}=card({taskId:'card-copy',title:'检查',state:'completed',executionSessions:[{executionId:'a',sessionId:'sa',title:'会话甲',status:'succeeded'},{executionId:'b',sessionId:'sb',title:'会话乙',status:'running'},{executionId:'c',sessionId:'sc',title:'会话丙',status:'failed'}]})
  const nodes=flatten(tree),list=nodes.find(x=>x.props['aria-label']==='全部执行会话')
  assert.equal(list.type,'details');assert.equal(list.props.open,true)
  const meter=nodes.find(x=>x.type==='meter');assert.equal(meter.props.max,3);assert.equal(meter.props.value,1);assert.equal(meter.props['aria-label'],'已完成执行会话数量')

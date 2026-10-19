@@ -91,7 +91,7 @@ const outboundSchema = z.object({
   sendAttemptCount: z.number().int().nonnegative().optional(), readbackAttemptCount: z.number().int().nonnegative().optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
   deliveryBlockedAt: z.string().min(1).optional(),
-  deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(),
+  deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(), sentAt: z.string().datetime().optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
   atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
   replyKind: z.enum(['confirmation', 'substantive', 'correction']).optional(),

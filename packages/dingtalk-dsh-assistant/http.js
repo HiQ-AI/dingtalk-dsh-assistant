@@ -172,6 +172,8 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
 export async function handleRequest(request, response, store, { testApiEnabled = false, transport = 'fake-dws', outboundAuthorized = false, modelMode = 'fake', checkForUpdatesImpl = checkForUpdates } = {}) {
   applyResidentCorsHeaders(request, response)
   const url = new URL(request.url ?? '/', 'http://localhost')
+  // 浏览器预检不执行业务操作，须先于旧写入口清退规则响应。
+  if (request.method === 'OPTIONS') return send(response, 204, null)
   // Only current task sessions may use this endpoint. Legacy archive stays retired.
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/archive$/u.test(url.pathname) && store.isTaskSessionMode?.()) {
     try {
@@ -203,7 +205,6 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     if (!store.getWorkflowMaintenance) return send(response, 404, { error: 'workflow_maintenance_unavailable' })
     return send(response, 200, { ...await store.getWorkflowMaintenance(), legacyReadonly: true })
   }
-  if (request.method === 'OPTIONS') return send(response, 204, null)
   if (request.method === 'GET' && url.pathname === '/health') {
     const recoveryIssues = store.listRecoveryIssues()
     const inboundConfigured = transport === 'dws'

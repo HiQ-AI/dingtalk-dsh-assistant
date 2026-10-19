@@ -106,12 +106,16 @@ test('existing resident timeline persists new images, quotes and notification re
   store = await openResidentStore(memoryFacility(seed))
   assert.equal(store.getGroup('g').messages[0].imageRefs[0].id, 'image')
   assert.equal(store.getGroup('g').messages[0].quotedMessage.content, '原文')
-  await projectTaskNotification({ residentStore: store, notification: { ...notification, state: 'delivered', receipt: { messageId: 'selfecho', observedAt: '2026-10-14T00:00:03Z' } } })
+  await projectTaskNotification({ residentStore: store, notification: { ...notification, state: 'delivered', receipt: { messageId: 'selfecho', sentAt: '2026-10-14T00:00:02.000Z', observedAt: '2026-10-14T00:00:03Z' } } })
   const outbound = store.getGroup('g').outbox[0]
   assert.equal(outbound.status, 'sent')
   assert.equal(outbound.notificationState, 'delivered')
   assert.equal(outbound.deliveredMessageId, 'selfecho')
   assert.equal(outbound.deliveryPendingReason, undefined)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed))
+  assert.equal(store.getGroup('g').outbox[0].sentAt, '2026-10-14T00:00:02.000Z')
+  assert.equal(store.getGroup('g').outbox[0].deliveredAt, '2026-10-14T00:00:03Z')
   await store.close()
 })
 
