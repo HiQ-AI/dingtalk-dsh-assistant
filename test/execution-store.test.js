@@ -1086,7 +1086,7 @@ for (const mode of ['drop-once', 'late-once', 'drop-all']) test(`read timeout ${
   await f.store.close()
   const probe = child(t, `
     const {Worker}=await import('node:worker_threads');const on=Worker.prototype.on;
-    const nativeTimeout=globalThis.setTimeout;globalThis.setTimeout=(fn,ms,...args)=>nativeTimeout(fn,ms===10000?150:ms,...args);
+    const nativeTimeout=globalThis.setTimeout;
     let reads=0;
     Worker.prototype.on=function(name,fn){return on.call(this,name,name==='message'?m=>{
       if(m.type==='response'&&m.value?.run?.runId==='run'){
@@ -1100,7 +1100,8 @@ for (const mode of ['drop-once', 'late-once', 'drop-all']) test(`read timeout ${
     }:fn)};
     const {openExecutionStore}=await import(${JSON.stringify(moduleUrl)});
     const s=await openExecutionStore({dbPath:process.argv[1],instanceId:process.argv[2]});let code,result;
-    try{result=await s.query({kind:'run',runId:'run'})}catch(e){code=e.code}
+    globalThis.setTimeout=(fn,ms,...args)=>nativeTimeout(fn,ms===10000?150:ms,...args);
+    try{result=await s.query({kind:'run',runId:'run'})}catch(e){code=e.code}finally{globalThis.setTimeout=nativeTimeout}
     await new Promise(resolve=>nativeTimeout(resolve,500));
     const healthy=s.healthy,failure=s.failure;
     const receipt=await s.command({id:'after-read-timeout',kind:'run.stop',args:{runId:'run',reason:'read recovered'}});
