@@ -18,7 +18,7 @@ export function sameDeliveredText(observed, expected, quoted = false) {
   // 钉钉回读把单行 inline-code 表示成粗体；只变换期望的成对单反引号，保留正文。
   const inlineRendered = expected.replace(/(^|[^`])`([^`\r\n]+)`(?!`)/gu, '$1**$2**')
   // DWS 会移除列表项间换行；仅变换期望的顶层列表边界，保留正文和段落间隔。
-  const listRendered = text => {
+  const listRendered = (text, restartOrdered = false) => {
     const lines = text.split(/\r?\n/u), rendered = []
     let fence = null
     for (let index = 0; index < lines.length; index++) {
@@ -35,6 +35,20 @@ export function sameDeliveredText(observed, expected, quoted = false) {
         rendered.push(joined); index = end; continue
       }
       if (!fence && /^1\. .+/u.test(lines[index])) {
+        // 分段有序列表在钉钉回读中可各自从 1 开始；只变换连续原序号，正文逐字保留。
+        if (restartOrdered) {
+          let end = index, count = 1
+          const items = [lines[index]]
+          while (end + 1 < lines.length) {
+            let next = end + 1
+            while (next < lines.length && lines[next].trim() === '') next++
+            const prefix = `${count + 1}. `
+            if (!lines[next]?.startsWith(prefix) || lines[next].length <= prefix.length) break
+            items.push(...lines.slice(end + 1, next), `1. ${lines[next].slice(prefix.length)}`)
+            end = next; count++
+          }
+          if (count > 1) { rendered.push(...items); index = end; continue }
+        }
         let end = index + 1
         while (end < lines.length && lines[end].startsWith(`${end - index + 1}. `) && lines[end].length > `${end - index + 1}. `.length) end++
         if (end > index + 1) { rendered.push(lines.slice(index, end).join('')); index = end - 1; continue }
@@ -45,7 +59,8 @@ export function sameDeliveredText(observed, expected, quoted = false) {
   }
   const prefix = typeof quoted === 'object' && quoted?.sender ? normalize(`@${quoted.sender} `) + ' ' : null
   const body = prefix && actual.startsWith(prefix) ? actual.slice(prefix.length) : actual
-  return [wanted, normalize(inlineRendered), listRendered(expected), listRendered(inlineRendered)].some(candidate => body === candidate)
+  return [wanted, normalize(inlineRendered), listRendered(expected), listRendered(inlineRendered),
+    listRendered(expected, true), listRendered(inlineRendered, true)].some(candidate => body === candidate)
 }
 
 export function notificationOpenTaskId(ack) {

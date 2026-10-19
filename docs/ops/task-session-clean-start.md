@@ -45,6 +45,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的 `openTaskId` 查询 SUCCESS 后仍须读取精确原消息核对群、发送者、原生引用及完整正文。DWS 缺少原生 mention 元数据时仅在这些精确发送证据齐全的情况下确认送达，并记录 `mentionVerification=unavailable`；不能把文本 `@姓名` 当作原生 mention 证据。unknown 不重发。
 
+若原通知只因顶层有序列表的 `1./2./3.` 在分段回读时变为 `1./1./1.` 而停留 unknown，安装列表回读修复后交由既有 notification.reconcile 正式结清；不手改 SQLite、正文或发送回执，不调用发送/重试发送接口。独立回读原 notificationId、原 messageId、delivered、sendAttemptCount 仍为 1，再核对恢复告警消失及健康状态。代码围栏、非连续编号、列表顺序或正文数字变化继续拒绝。
+
 启动时 active、已排空、lastDecision=wait、无 question 且有 unknown 操作的任务，按相关运行模块摘要和当前需求/控制版本补一次 `runtime.updated` 唤醒。重复定时恢复或同代码重启不再补发；暂停、取消、人工问题等待和仍有执行的任务不适用。Owner 沿原任务调查并使用 `task_operation_reconcile` 核验，未知操作未被证明前不能放行原动作。
 
 ## 回退

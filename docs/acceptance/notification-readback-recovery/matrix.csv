@@ -9,4 +9,10 @@ local-deployment,3,PASS,native SIGINT; installed package verified; PID21016; hea
 operator-alert-cache,2,PASS,native HTTP original resolution regression; old source fails alert assertion and fixed source passes
 continuation-key,3,PASS,84 store/readback tests; same execution/session inputVersion3 and total executions3
 real-nine-delivery,3,PASS,9 delivered; original message IDs unchanged; sendAttemptCount1 for all9
+ordered-list-baseline,4,FAIL,two new cases fail on HEAD; expected text mismatch and diagnostic instead of reconcile
+ordered-list-boundaries,4,PASS,10 readback cases; text/numbers/order/fences/identity changes rejected
+ordered-notification-regression,4,PASS,130 targeted tests; no skips; send forbidden for unknown fixture
+original-ordered-message-verifier,4,PASS,exact original message accepted by fixed full verifier; no writes
+ordered-local-deployment,5,PENDING,await natural execution drain; no resend
+original-ordered-notification-reconcile,5,PENDING,verify original notification delivered and sendAttemptCount remains1
 

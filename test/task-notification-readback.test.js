@@ -96,3 +96,37 @@ test('未知列表通知仅按原发送回执回读结清，内容或身份不�
     assert.equal(commands[0].kind,'notification.diagnostic');Object.assign(message,before)
   }
 })
+
+test('DWS分段有序列表重置编号时保留正文、数字、列表顺序和代码围栏', async () => {
+  const { sameDeliveredText } = await import('../packages/dingtalk-dsh-assistant/group-message.js')
+  const expected = '结论。\n\n1. 环境 UAT2 已核实，数量 12。\n\n2. 仅调查来源，保留 `v2`。\n\n范围。\n\n- 证据 A\n\n- 证据 B'
+  const rendered = '结论。\n1. 环境 UAT2 已核实，数量 12。\n1. 仅调查来源，保留 **v2**。\n范围。\n- 证据 A- 证据 B'
+  assert.equal(sameDeliveredText('@用户 '+rendered, expected, { sender: '用户' }), true)
+  assert.equal(sameDeliveredText('1. A\n1. B\n1. C', '1. A\r\n\r\n2. B\r\n\r\n3. C'), true)
+  for (const text of [rendered.replace('12', '13'), rendered.replace('UAT2', 'UAT3'), rendered.replace('v2', 'v3'),
+    rendered.replace('仅调查', '已修改'), rendered.replace('1. 仅调查', '仅调查'), rendered.replace('1. 仅调查', '3. 仅调查'),
+    rendered.replace('1. 环境 UAT2 已核实，数量 12。\n1. 仅调查来源，保留 **v2**。', '1. 仅调查来源，保留 **v2**。\n1. 环境 UAT2 已核实，数量 12。'), rendered+'附加'])
+    assert.equal(sameDeliveredText(text, expected), false)
+  for (const fence of ['```', '~~~']) assert.equal(sameDeliveredText(`${fence}\n1. A\n1. B\n${fence}`, `${fence}\n1. A\n2. B\n${fence}`), false)
+  for (const text of ['1. A\n\n3. B', '2. A\n\n3. B', '1. A\n\n正文\n\n2. B', '  1. A\n  2. B'])
+    assert.equal(sameDeliveredText(text.replace(/2\.|3\./gu, '1.'), text), false)
+})
+
+test('原有序列表通知只回读结清，正文或身份不符继续unknown且不重发', async () => {
+  const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
+  const pending = { ...notification, state: 'unknown', sendAttemptCount: 1, ack: { openTaskId: 'original-send' },
+    payload: { ...notification.payload, text: '1. 环境已核实。\n\n2. 只调查来源。' } }
+  const message = { ...observed, senderId: 'bot', text: '1. 环境已核实。\n1. 只调查来源。' }
+  const adapter = { querySendStatus: async id => { assert.equal(id, 'original-send'); return { result: { sendStatus: 'SUCCESS' }, messageRef: { openConversationId: 'g', openMessageId: 'm' } } }, readMessage: async () => message }
+  const notifications = { send: async () => assert.fail('unknown must never resend'), readback: n => readTaskNotificationDelivery(adapter, n, { senderActorId: 'bot' }) }
+  const commands = []
+  await deliverTaskNotification({ notification: pending, notifications, command: async (kind, args) => commands.push({ kind, args }) })
+  assert.equal(commands[0].kind, 'notification.reconcile')
+  assert.equal(commands[0].args.receipt.messageId, 'm')
+  assert.equal(pending.sendAttemptCount, 1)
+  for (const patch of [{ text: '1. 环境已核实。\n1. 已修改来源。' }, { senderId: 'other' }, { quotedMessage: { messageId: 'wrong', conversationId: 'g' } }, { atOpenDingTalkIds: ['other'] }]) {
+    const before = { ...message }; Object.assign(message, patch); commands.length = 0
+    await deliverTaskNotification({ notification: pending, notifications, command: async (kind, args) => commands.push({ kind, args }) })
+    assert.equal(commands[0].kind, 'notification.diagnostic'); Object.assign(message, before)
+  }
+})
