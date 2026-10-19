@@ -4,6 +4,15 @@ import { readTaskNotificationDelivery, verifyTaskNotificationReadback, readOpera
 const notification = { id: 'n', payload: { conversationId: 'g', sourceMessageId: 's', text: '核验完成。', atOpenDingTalkIds: ['u'] } }
 const observed = { messageId: 'm', conversationId: 'g', text: '核验完成。', quotedMessage: { messageId: 's', conversationId: 'g' }, atOpenDingTalkIds: ['u'] }
 
+test('发送时间只来自通过身份正文校验的原消息，缺失及无效时间不伪造', () => {
+  const verify = createTime => verifyTaskNotificationReadback(notification, { ...observed, createTime }, { acknowledgedMessageId: 'm' })
+  for (const value of ['2026-10-19 10:27:14', '2026-10-19T02:27:14Z', 1792376834000, '1792376834000']) {
+    assert.equal(verify(value).sentAt, '2026-10-19T02:27:14.000Z')
+  }
+  for (const value of [undefined, null, '', 'invalid']) assert.equal(verify(value).sentAt, undefined)
+  assert.equal(verifyTaskNotificationReadback(notification, { ...observed, text: 'other', createTime: '2026-10-19 10:27:14' }, { acknowledgedMessageId: 'm' }), undefined)
+})
+
 test('私聊申请按原发送收据回读，发送结果未知仅精确查找，不退回群聊或重发', async () => {
   const calls = [], privateNotice = { payload: { humanRequestId: 'human-request', recipientUserId: 'login-user', text: '技术申请' } }
   const proof = { messageId: 'notice', conversationId: 'self', senderActorId: 'actual-login-actor' }

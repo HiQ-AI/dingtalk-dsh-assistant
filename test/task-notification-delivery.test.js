@@ -10,6 +10,17 @@ import { readTaskNotificationDelivery } from '../packages/dingtalk-dsh-assistant
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 import { formatTaskGroupReply } from '../packages/dingtalk-dsh-assistant/group-reply-format.js'
 
+test('发送时间随送达回执持久保存，历史记录不以创建时间或回读时间冒充', async t => {
+  const f = await fixture(t)
+  const proof = { messageId: 'actual', conversationId: 'g', sentAt: '2026-10-19T02:27:14.000Z', observedAt: '2026-10-19T02:27:24.000Z' }
+  await deliverTaskNotification({ notification: f.notification, command: f.command, notifications: { send: async () => ({ openTaskId: 'accepted' }), readback: async () => proof } })
+  await f.reopen()
+  const saved = await f.read(), outbound = taskNotificationOutbound(saved)
+  assert.equal(outbound.sentAt, proof.sentAt)
+  assert.equal(outbound.deliveredAt, proof.observedAt)
+  assert.equal(taskNotificationOutbound({ ...saved, receipt: { messageId: 'old', observedAt: proof.observedAt } }).sentAt, undefined)
+})
+
 async function fixture(t, text = 'done') {
   const root = await mkdtemp(join(tmpdir(), 'notice-receipt-'))
   const config = { dbPath: join(root, 'tasks.sqlite'), instanceId: 'receipt-test', initialize: true }

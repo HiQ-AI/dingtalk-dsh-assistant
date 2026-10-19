@@ -108,8 +108,8 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
     [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已送达'],
     [{ status: 'sent' }, 'confirmed', '已发送'],
     [{ status: 'sent', recallStatus: 'recalled' }, 'recalled', '已撤回'],
-    [{ status: 'superseded', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
-    [{ status: 'sent', supersededByOutboundId: 'new' }, 'superseded', '已替代'],
+    [{ status: 'superseded', supersededByOutboundId: 'new' }, 'stopped', '已停止'],
+    [{ status: 'sent', deliveredMessageId: 'actual', supersededByOutboundId: 'new' }, 'confirmed', '已送达'],
     [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'recall-failed', '撤回受阻'],
     [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'recall-failed', '撤回受阻'],
   ]
@@ -179,7 +179,7 @@ test('任务通知明确区分待发送、发送中、结果未知和确定的�
   assert.doesNotMatch(classify({ notificationState: 'failed', notificationKnownNotSent: false }).detail, /未发送/)
   assert.match(classify({ notificationState: 'failed', notificationKnownNotSent: true }).detail, /已确认本次未发送/)
   assert.equal(classify({ notificationState: 'unknown', recallStatus: 'recalled' }).id, 'recalled')
-  assert.equal(classify({ notificationState: 'unknown', supersededByOutboundId: 'replacement' }).id, 'superseded')
+  assert.equal(classify({ notificationState: 'unknown', supersededByOutboundId: 'replacement' }).id, 'checking')
   const filter = source.slice(source.indexOf("label: '筛选发件状态'"), source.indexOf('      const messagesTable ='))
   assert.match(filter, /id: 'sending', label: '发送中'/)
   assert.match(filter, /id: 'waiting', label: '待回读'/)
@@ -210,7 +210,7 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
   const withFacts = facts => Object.assign(Object.create(message), facts)
   const text = tree => flattenElements(tree).flatMap(item => item.children.filter(value => typeof value === 'string')).join('\n')
   const row = render(message)[0]
-  assert.equal(row.children.filter(child => child?.type === 'td').length, 5)
+  assert.equal(row.children.filter(child => child?.type === 'td').length, 6)
   const rendered = text(row)
   assert.match(rendered, /待回读/)
   assert.match(row.children[0].props.title, /发送后回读/)
@@ -233,8 +233,27 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
   }
   const delivered = text(render(withFacts({ status: 'sent', notificationState: 'delivered', deliveredMessageId: 'observed' }))[0])
   assert.doesNotMatch(delivered, /计划重试|计划核验|CLI_READBACK_FAILED/)
+  const replacedDelivered = text(render(withFacts({ status: 'sent', notificationState: 'delivered', deliveredMessageId: 'observed', supersededByOutboundId: 'replacement', deliveredAt: '2026-10-19T02:27:24Z' }))[0])
+  assert.match(replacedDelivered, /已送达/)
+  assert.match(replacedDelivered, /内容已被后续通知替代/)
+  assert.match(replacedDelivered, /未记录.*\n回读确认 本地时间 2026-10-19T02:27:24Z/)
+  assert.doesNotMatch(replacedDelivered, /等待替换通知|送达后撤回/)
+  const timed = text(render(withFacts({ sentAt: '2026-10-19T02:27:14Z', deliveredAt: '2026-10-19T02:27:24Z' }))[0])
+  assert.match(timed, /本地时间 2026-10-19T02:27:14Z/)
+  assert.doesNotMatch(timed, /未记录|回读确认/)
   const superseded = text(render(withFacts({ supersededByOutboundId: 'replacement' }))[0])
-  assert.doesNotMatch(superseded, /计划重试|计划核验|CLI_READBACK_FAILED/)
+  assert.match(superseded, /内容已被后续通知替代/); assert.match(superseded, /待回读/); assert.doesNotMatch(superseded, /等待替换通知|送达后撤回/)
+})
+
+test('已送达筛选包含被替代通知，替代关系筛选独立于送达状态', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const classify = runInNewContext(`(${source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))})`)
+  const fragment = source.slice(source.indexOf('      const outboxState ='), source.indexOf('      const outboxPageSize ='))
+  const selectedOutbox = [{ status: 'sent', notificationState: 'delivered', supersededByOutboundId: 'new' }, { status: 'sent' }, { status: 'pending' }]
+  const filter = outboxStatusFilter => runInNewContext(`${fragment}; filteredOutbox.length`, { selectedOutbox, outboxStatusFilter, outboxDelivery: classify })
+  assert.equal(filter('confirmed'), 2)
+  assert.equal(filter('superseded'), 1)
+  assert.equal(filter('all'), 3)
 })
 
 test('处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果', async () => {
