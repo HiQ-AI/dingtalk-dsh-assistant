@@ -291,4 +291,6 @@ Web对原任务的补充、重开和取消沿已有话题继续，保留原文�
 
 执行续办以 `executionId` 保留会话身份；`task_delegate.key` 是单次委派请求的幂等键。同一请求重试复用原 key 与目标，已完成后的新输入、新步骤使用新的稳定请求 key，并保留原 executionId。相同 key 改目标仍拒绝；不得通过换 key 绕过未知操作保护或重放已完成动作。
 
+运行中普通提醒/事实澄清通过 `task-context.progressImpact=preserve` 保留原执行；目标、验收、证据或授权变化须明确声明 `replan`，使旧执行失效，明确取消使用独立路径。协调工具及后端补充 API 均要求显式 `progressImpact`，遗漏或语义冲突会明确拒绝并保持原执行，不默认修订或补充；任务 DTO 的 `contextInputContract` 提供调用契约。统筹向原执行补充澄清时使用 `task_delegate` 的 `executionId`、`feedback=true` 和稳定 `key`；普通续办仍须排空。回执 `received` 仅表示持久接收，`task_execution_read.feedback` 的 `modelStepEnteredAt`（兼容字段 `consumedAt`）及 `sequence` 只表示消息进入原生模型步骤并持久化，`consumptionMeaning=native-model-step-admission`，不证明理解、模型成功响应或业务完成。完成竞争、去重和恢复边界见[运行中补充协议](docs/spec/running-task-feedback.md)。
+
 本机桌面重启入口与零写入预检见[任务会话启动说明](docs/ops/task-session-clean-start.md#本机桌面重启入口)。

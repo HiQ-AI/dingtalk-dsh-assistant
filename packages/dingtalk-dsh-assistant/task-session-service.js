@@ -18,6 +18,7 @@ import { installTaskSessionPersistence, taskSessionLogRoot } from './task-sessio
 import { formatTaskGroupReply } from './group-reply-format.js'
 import { sameDeliveredText } from './group-message.js'
 import { taskExecutionContext } from './execution-context.js'
+import { assertTaskContextSemantics, taskContextInputContract } from './task-input-contract.js'
 import { projectTaskTimeline, readTaskLifecycle } from './task-execution-timeline.js'
 export { taskExecutionContext } from './execution-context.js'
 
@@ -132,6 +133,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const task = await query('task.get', { taskId: binding.taskId })
     return !!task && !task.archivedAt && !task.recovering && !task.drained && task.status === 'active' && task.control === 'active' && task.sessionId === binding.sessionId
       && task.leaseEpoch === binding.leaseEpoch && task.requirementRevision === binding.requirementRevision && task.controlRevision === binding.controlRevision
+      && (task.contextRevision ?? 0) === (binding.contextRevision ?? 0)
   }
   const taskSessions = suppliedTaskSessions ?? createTaskSessions({ ctx, isCurrent: currentTask, withPersistenceWriter: (binding, action) => persistence.runOwned(binding, action),
     getWorkspaceDir: ({ binding }) => taskWorkspace(root, binding.taskId), registerPersistence: value => persistence.register(value) })
@@ -285,7 +287,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const executions = await query('execution.list', { taskId: task.taskId })
     const pendingWake = !task.lastDecision && (await query('wake.list', { taskId: task.taskId })).some(wake => wake.state !== 'acked')
     const state = taskBoardState(task, executions, pendingWake)
-    return { ...task, state,
+    return { ...task, state, contextInputContract: taskContextInputContract,
     topicRefs: task.topicRefs ?? [], executionCount: executions.length,
     executionSessions: [...new Map(executions.map(execution => [execution.sessionId || execution.executionId, {
       executionId: execution.executionId, sessionId: execution.sessionId, title: executionSessionTitle(execution), status: execution.status, createdAt: execution.createdAt,
@@ -411,6 +413,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   async function applyTopicAction(groupId, action, operation, record) {
     if (action.kind === 'task-proposal') return
+    // Also guard durable actions accepted by older schemas before any cancellation.
+    if (action.kind === 'task-context') assertTaskContextSemantics(action)
     // 固定话题历史可能保留早期通知回声；它们仅是上下文，不是准入的用户来源。
     const topicSources = [...new Map(action.topicRefs.flatMap(ref => resolveTopicMessages(residentStore.getGroup(groupId), ref.topicId, ref.revision))
       .filter(message => !isOwnNotification({ ...message, groupId })).map(message => [message.messageId, message])).values()]
@@ -451,23 +455,33 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       task = receipt.result.task
     } else {
       task = await requireTask(operation.taskId); authorize(task, source)
+      if (action.kind === 'task-context' && action.progressImpact === 'preserve' && action.title !== undefined && action.title !== task.title) fail('TASK_CONTEXT_CLASSIFICATION_CONFLICT')
       const topicRefs = [...new Map([...(task.topicRefs ?? []), ...refs].map(ref => [ref.topicId, ref])).values()]
       const args = { taskId: task.taskId, expectedRequirementRevision: action.inputVersion, expectedControlRevision: task.controlRevision,
         topicRefs, operationId: operation.operationId }
-      const pendingHuman = action.kind === 'task-context' ? task.humanRequests?.findLast(request => request.status === 'waiting-reply'
+      const changesRequirements = action.authorizationChange === 'changed' || action.progressImpact === 'replan' || action.impactEvidence !== undefined
+        || action.objective !== undefined || action.acceptanceCriteria !== undefined || action.stageTasks !== undefined
+      const pendingHuman = action.kind === 'task-context' && !changesRequirements ? task.humanRequests?.findLast(request => request.status === 'waiting-reply'
         && request.audience === 'requester' && Date.parse(source.timestamp) >= Date.parse(request.createdAt)) : null
+      const supplement = action.kind === 'task-context' && action.progressImpact === 'preserve' && action.authorizationChange !== 'changed'
+        && !changesRequirements && (action.title === undefined || action.title === task.title)
       const receipt = action.kind === 'task-cancel'
         ? await command('task.control', { ...args, control: 'cancelled', reason: action.reason }, id)
         : pendingHuman
         ? await command('task.human.respond', { ...args, requestId: pendingHuman.requestId,
           sourceId: source.sourceId }, id)
+        : supplement
+        ? await command('task.supplement', { ...args, messageId: id, text: action.context ?? source.text,
+          request: `${task.request}\n\n[话题补充]\n${action.context ?? source.text}`,
+          sourceRefs: [...new Set([...task.sourceRefs, ...sources.map(item => item.sourceId)])] }, id)
         : await command(action.kind === 'task-reopen' ? 'task.reopen' : 'task.revise', { ...args,
           request: `${task.request}\n\n[话题补充]\n${action.context ?? source.text}`,
           sourceRefs: [...new Set([...task.sourceRefs, ...sources.map(item => item.sourceId)])],
           ...(action.title ? { title: action.title } : {}), ...(action.objective ? { objective: action.objective } : {}),
           ...(action.acceptanceCriteria ? { requirements: action.acceptanceCriteria } : {}) }, id)
       task = receipt.result.task
-      if (!pendingHuman) await cancelLiveTask(task.taskId)
+      if (!pendingHuman && !supplement) await cancelLiveTask(task.taskId)
+      if (supplement) for (const execution of await query('execution.list', { taskId: task.taskId })) await executionSessions.feedback(execution.executionId)
     }
     for (const item of sources) await materializeSource(task.taskId, item)
     if (action.kind !== 'task-cancel') void kickTask(task.taskId)
@@ -606,6 +620,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           prompt: execution.prompt, allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title); return command('execution.sessionBound', { binding }, `execution-bound:${executionId}:${binding.leaseEpoch}`) },
           onNativeExecution: nativeOperation,
+          readFeedback: async () => ((await query('execution.get', { executionId })).feedback ?? []).filter(item => item.requirementRevision === binding.requirementRevision && item.controlRevision === binding.controlRevision),
+          onFeedbackConsumed: proof => command('execution.feedbackConsumed', { binding, ...proof }, `feedback-consumed:${executionId}:${proof.messageId}`),
           onProgress: async ({ summary, evidence, reportId, activity }) => {
             if (typeof reportId !== 'string' || !reportId.trim() || reportId.length > 2000) fail('EXECUTION_PROGRESS_REPORT_ID_INVALID')
             if (!await query('execution.current', { binding })) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
@@ -618,10 +634,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           ...(execution.providerRecovery?.activeInputVersion === execution.inputVersion ? { recoveryContext: { kind: 'provider-recovery', attempt: execution.providerRecovery.attempts,
             failure: execution.results.at(-1)?.payload.error,
             instruction: '模型服务暂态失败后的同会话恢复。沿原小目标继续，保留原工具结果；不得重放成功操作或未知效果。原生终态与排空已核验，这不是新的业务授权。' } } : {}),
-          onResult: output => command('execution.result', { binding, output }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`) })
+          onResult: (output, proof) => command('execution.result', { binding, output, feedbackVersion: proof?.feedbackVersion ?? 0 }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`) })
         if (result.status !== 'submitted') await command('execution.result', { binding, error: { ...result.failure, code: result.reason ?? result.status } }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`)
       } catch (error) {
         drained = error.executionDrained !== false
+        // The native submission raced newer feedback. Keep the same execution queued
+        // after drain; its persisted tool results remain authoritative on resume.
+        if (drained && error.code === 'DYNAMIC_EXECUTION_FEEDBACK_PENDING') return
         if (drained) {
           try { await command('execution.result', { binding, error: { code: error.code ?? error.message, message: String(error.message), phase: error.phase ?? 'runtime' } }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`) }
           catch (recordError) { throw Object.assign(new AggregateError([error, recordError], 'DYNAMIC_EXECUTION_FAILURE_RECORD_FAILED'), { code: 'DYNAMIC_EXECUTION_FAILURE_RECORD_FAILED' }) }
@@ -664,8 +683,18 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               || args.skillNames.some(name => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
               || new Set(args.skillNames).size !== args.skillNames.length)) fail('TASK_SKILL_NAMES_INVALID')
             const dispatchId = `${args.executionId ? 'continue' : 'delegate'}:${taskId}:${binding.requirementRevision}:${args.key}`
+            if (args.feedback === true && (!args.executionId || args.readOnly || args.readbackOperationId || args.skillNames?.length || args.resourceKeys?.length)) fail('TASK_EXECUTION_FEEDBACK_ARGUMENT_INVALID')
             const prior = await query('receipt.get', { id: dispatchId })
             if (prior) {
+              if (prior.result.feedback) {
+                if (args.feedback !== true || prior.result.feedback.text !== JSON.stringify({ objective: args.objective, context: args.context ?? '' })
+                  || prior.result.execution.executionId !== args.executionId) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
+                await executionSessions.feedback(args.executionId)
+                const execution = await query('execution.get', { executionId: args.executionId })
+                const feedback = execution.feedback.find(item => item.id === dispatchId)
+                return { executionId: execution.executionId, sessionId: execution.sessionId, received: true, consumed: !!feedback.consumedAt, feedback }
+              }
+              if (args.feedback === true) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
               if (prior.result.execution.input.objective !== args.objective || (args.executionId && prior.result.execution.executionId !== args.executionId)
                 || (prior.result.execution.input.recoveryReadOnly === true) !== (args.readOnly === true)
                 || (prior.result.execution.input.readbackOperationId ?? null) !== (args.readbackOperationId ?? null)
@@ -676,6 +705,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             if (args.executionId) {
               const original = await query('execution.get', { executionId: args.executionId })
               if (original?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
+              if (args.feedback === true) {
+                const receipt = await command('execution.feedback', { binding, executionId: args.executionId,
+                  messageId: dispatchId, text: JSON.stringify({ objective: args.objective, context: args.context ?? '' }) }, dispatchId)
+                await executionSessions.feedback(args.executionId)
+                return { executionId: args.executionId, sessionId: original.sessionId, feedback: receipt.result.feedback,
+                  received: true, consumed: !!receipt.result.feedback.consumedAt }
+              }
               existingTitle = executionSessionTitle(original)
               if (original.result?.payload.error?.code === 'EXECUTION_PROVIDER_TRANSIENT') await verifyProviderTerminal(original)
             }
@@ -953,6 +989,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     })().finally(() => { recovering = undefined })
   }
   async function webTopicAction(args, task, kind) {
+    if (kind === 'task-context') assertTaskContextSemantics(args)
     if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
     if (!args.requestId) fail('TASK_SESSION_REQUEST_ID_REQUIRED')
     const groupId = task?.groupId ?? args.groupId
@@ -976,6 +1013,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       return [current.topicId, { topicId: current.topicId, revision: current.revision }]
     })).values()] : []
     const action = previous?.requestIdentity?.action ?? { kind, topicRefs: args.topicRefs ?? inheritedRefs,
+      ...(kind === 'task-context' ? { progressImpact: args.progressImpact, authorizationChange: args.authorizationChange,
+        impactEvidence: args.impactEvidence, objective: args.objective, title: args.title, acceptanceCriteria: args.acceptanceCriteria, stageTasks: args.stageTasks } : {}),
       ...(task ? { taskId: task.taskId, inputVersion: args.expectedRequirementRevision ?? args.inputVersion ?? task.requirementRevision, runSequence: task.runSequence ?? 1,
         ...(kind === 'task-cancel' ? { reason: text } : { context: text }) } : { title: args.title || (args.objective ?? text).slice(0, 80), objective: args.objective ?? text, acceptanceCriteria: args.acceptanceCriteria ?? [text] }) }
     await command('source.record', { sourceId, groupId, messageId, actorId: config.webActorId, text, timestamp: '', channel: 'web',

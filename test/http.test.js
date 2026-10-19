@@ -245,7 +245,7 @@ test('旧话题操作恢复统一410，任何参数均不能绕过清退', async
 
 test('Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Session', async () => {
   const calls = []
-  const update = { requestId: 'web-1', context: '只处理本月', expectedRequirementRevision: 1, expectedControlRevision: 1 }
+  const update = { requestId: 'web-1', context: '只处理本月', progressImpact: 'replan', expectedRequirementRevision: 1, expectedControlRevision: 1 }
   await withServer(false, async (baseUrl) => {
     const post = (path, body) => fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     assert.equal((await post('/tasks', { requestId: 'create-1', groupId: 'g', title: '数据导出', objective: '导出本月', context: '请导出本月数据', acceptanceCriteria: ['文件可读'] })).status, 200)
@@ -255,7 +255,7 @@ test('Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Se
     assert.equal(calls[1].expectedRequirementRevision, 1)
     assert.equal((await post('/tasks/task-1/reopen', update)).status, 410)
     for (const extra of [{ childSessionId: 'other-session' }, { taskId: 'other-task' }, { sourceKind: 'dingtalk' }, { sourceMessageId: 'fake-message' }]) assert.equal((await post('/tasks/task-1/context', { ...update, ...extra })).status, 400)
-    for (const field of ['requestId', 'context', 'expectedRequirementRevision', 'expectedControlRevision']) {
+    for (const field of ['requestId', 'context', 'progressImpact', 'expectedRequirementRevision', 'expectedControlRevision']) {
       const invalid = { ...update }; delete invalid[field]
       assert.equal((await post('/tasks/task-1/context', invalid)).status, 400)
     }
@@ -280,7 +280,7 @@ test('移除群遇到Topic引用或未完成决策返回409而非普通参数错
 test('Web输入版本与幂等身份冲突返回409，可靠接收尚未完成返回202', async () => {
   let result = new Error('task_input_version_stale')
   await withServer(false, async (baseUrl) => {
-    const post = () => fetch(`${baseUrl}/tasks/task-1/context`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'r1', context: '补充', expectedRequirementRevision: 1, expectedControlRevision: 1 }) })
+    const post = () => fetch(`${baseUrl}/tasks/task-1/context`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'r1', context: '补充', progressImpact: 'preserve', expectedRequirementRevision: 1, expectedControlRevision: 1 }) })
     assert.equal((await post()).status, 409)
     result = new Error('task_request_identity_conflict')
     assert.equal((await post()).status, 409)
@@ -519,7 +519,7 @@ test('任务修订和取消携带CAS版本，路径身份不可覆盖，历史�
   const calls = []
   await withServer(false, async base => {
     const post = (id, action, value) => fetch(base + `/tasks/${id}/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) })
-    const revision = { requestId: 'revise', context: '补充实际限制', expectedRequirementRevision: 2, expectedControlRevision: 3 }
+    const revision = { requestId: 'revise', context: '补充实际限制', progressImpact: 'replan', expectedRequirementRevision: 2, expectedControlRevision: 3 }
     const cancel = { requestId: 'cancel', reason: '不再需要', expectedControlRevision: 3 }
     assert.equal((await post('live', 'context', revision)).status, 200)
     assert.equal((await post('live', 'cancel', cancel)).status, 200)

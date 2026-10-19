@@ -478,7 +478,7 @@ test('Web输入原子复核未知消息、Topic版本、Task版本状态与保�
   const { store } = await setup(); await ingest(store, 'a')
   const a = (await route(store, 'r1', [['a', { newTopicKey: 'a', title: 'A' }]])).topicIdsByKey.a
   const { task } = await store.createTask({ groupId: 'g', topicRefs: [{ topicId: a, revision: 1 }], title: 'A', objective: '执行A', acceptanceCriteria: ['完成可核验'] })
-  const request = { groupId: 'g', requestId: 'web-context', text: '页面补充', topicRefs: [{ topicId: a, revision: 1 }], action: { kind: 'task-context', taskId: task.taskId, inputVersion: 1, runSequence: 1, context: '补充背景' } }
+  const request = { groupId: 'g', requestId: 'web-context', text: '页面补充', topicRefs: [{ topicId: a, revision: 1 }], action: { kind: 'task-context', taskId: task.taskId, inputVersion: 1, runSequence: 1, context: '补充背景', progressImpact: 'preserve' } }
   await ingest(store, 'unknown')
   assert.equal((await store.submitWebTaskInput(request)).status, 'routing-required')
   await route(store, 'r2', [['unknown', { newTopicKey: 'b', title: 'B' }]])
