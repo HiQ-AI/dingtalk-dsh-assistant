@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
+import { groupReplyScopeInstructions } from '../packages/dingtalk-dsh-assistant/group-message.js'
 import { available, reason, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
 
 const call = (name, args) => ({ name, args: name === 'group_decision_submit' ? { ...args, decision: { ...args.decision, topicUpdate: { summary: '围绕原始事项持续核对，当前结论以任务真实进展为准。' } } } : args })
@@ -35,6 +36,8 @@ testRunner('native task service preserves Topic routing, task association, ignor
   const reviewed = new Set(), ownerInputs = []
   h = await nativeTaskHost(root, async (request, host) => {
     const names = request.tools.map(tool => tool.name)
+    assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'system')).includes(groupReplyScopeInstructions),
+      '话题承接及任务结果的原生模型请求都必须携带多事项与部分处理的回复范围规则')
     if (names.includes('group_topic_route_submit')) {
       const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
       const existing = residentStore.listTopics('native-group').find(topic => topic.title === '原生文件检查')
