@@ -59,7 +59,7 @@ test('user source files: exact original, native targeted reads, stable paths aft
   await h.close()
   h = await nativeTaskHost(root, model, { initialize: false }); hosts.push(h)
   const current = await h.query('task.get', { taskId: created.taskId })
-  await h.service.appendTaskContext({ taskId: created.taskId, requestId: 'file-source-correction', context: '新更正：仍然禁止发布，先确认核验事项31。',
+  await h.service.appendTaskContext({ taskId: created.taskId, requestId: 'file-source-correction', progressImpact: 'replan', context: '新更正：仍然禁止发布，先确认核验事项31。',
     expectedRequirementRevision: current.requirementRevision, expectedControlRevision: current.controlRevision })
   await h.service.whenIdle()
   assert.equal(h.service.listAlerts().length, 0, JSON.stringify({ alerts: h.service.listAlerts(), steps, modelError, results: h.toolResults, lastTools: h.requests.at(-1)?.messages.filter(m => m.role === 'tool').slice(-2) }))

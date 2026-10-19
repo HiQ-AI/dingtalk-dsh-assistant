@@ -445,8 +445,13 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           }
         }
       })
-      agentCtx.on('agent/pre-step', async (_event, next) => {
+      agentCtx.on('agent/pre-step', async (event, next) => {
         if (!await current(entry) || entry.attempted || entry.haltCode) return { kind: 'reject' }
+        if (entry.readFeedback) {
+          await deliverFeedback(entry)
+          const seen = new Set([...agent.session.snapshotEvents().filter(item => item.type === 'user/message').map(item => item.data.id), ...event.messages.map(item => item.id)])
+          entry.feedbackVersion = (await entry.readFeedback()).filter(item => seen.has(feedbackMessageId(entry, item))).length
+        }
         entry.steps++
         const decision = await next()
         if (!entry.content || decision.kind !== 'enter') return decision
@@ -467,9 +472,19 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       })
       agentCtx.on('tools/pre-execute', async (_exec, next) => {
         if (!await current(entry)) return { kind: 'deny', reason: 'execution_binding_stale' }
+        if (entry.readFeedback) {
+          await consumeFeedback(entry)
+          const feedback = await entry.readFeedback()
+          if (entry.feedbackVersion !== feedback.length || feedback.some(item => !item.consumedAt)) {
+            entry.feedbackDenied ??= new Set()
+            entry.feedbackDenied.add(_exec.token)
+            return { kind: 'deny', reason: 'execution_feedback_pending: 新补充已接收，请在下一模型步骤读取后重新判断；保留已完成操作，不重放。' }
+          }
+        }
         return next()
       })
       agentCtx.on('tools/result', (exec, result) => {
+        if (entry.feedbackDenied?.delete(exec.token)) return
         const feedback = entry.correctableCalls.get(exec.token)
         entry.correctableCalls.delete(exec.token)
         if (result.isError && exec.signal.aborted) { entry.interruptedTool = true; return }
@@ -604,7 +619,36 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
+  const feedbackMessageId = (entry, item) => `execution-feedback:${entry.binding.executionId}:${item.id}`
+  async function deliverFeedback(entry) {
+    if (!entry.handle || !entry.readFeedback || entry.attempted || !await current(entry)) return
+    const agent = entry.handle.agent, events = agent.session.snapshotEvents()
+    const present = new Set([...events.filter(event => event.type === 'user/message').map(event => event.data.id), ...agent.inbox.nextStep.map(item => item.id), ...agent.inbox.nextTurn.map(item => item.id)])
+    // No await between checking the inbox and inserting a message: parallel wakeups cannot duplicate it.
+    const feedback = await entry.readFeedback()
+    for (const item of feedback) {
+      const id = feedbackMessageId(entry, item)
+      if (item.consumedAt || entry.feedbackQueued?.has(id) || present.has(id) || agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data.id === id)
+        || agent.inbox.nextStep.some(message => message.id === id) || agent.inbox.nextTurn.some(message => message.id === id)) continue
+      ;(entry.feedbackQueued ??= new Set()).add(id)
+      agent.steer(Object.freeze({ ...createUserMessage({ source: { kind: 'coordinator', executionFeedback: { executionId: entry.binding.executionId, messageId: item.id } },
+        content: [{ type: 'text', text: `[EXECUTION_FEEDBACK]\n${JSON.stringify(item)}\n这是原任务的补充/澄清，保留原作业及已完成证据，不重放外部操作；按当前补充重新判断剩余工作。` }] }), id }))
+      present.add(id)
+    }
+  }
+  async function consumeFeedback(entry) {
+    const session = entry.handle.agent.session, events = session.snapshotEvents()
+    for (const item of await entry.readFeedback()) {
+      if (item.consumedAt) continue
+      const event = events.find(event => event.type === 'user/message' && event.data.id === feedbackMessageId(entry, item))
+      // Native user/message is appended after step/start and before building the model request.
+      if (!event || !events.some(step => step.type === 'step/start' && step.seq < event.seq)) continue
+      await ctx.sessions.flush(session)
+      await entry.onFeedbackConsumed({ messageId: item.id, sequence: event.seq })
+    }
+  }
+
+  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, readFeedback, onFeedbackConsumed, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
@@ -620,7 +664,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       if (entries.has(executionKey(binding)) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
+    const entry = { binding, input: copy(input), readFeedback, onFeedbackConsumed, feedbackVersion: 0, validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
       correctableCalls: new Map(), submissionCorrections: 0, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, ...(definition.agentPreset === undefined ? {} : { agentPreset: definition.agentPreset }), nativeTools: definition.nativeTools === true, recoveryReadOnly: definition.recoveryReadOnly === true, protectedPaths: definition.protectedPaths ?? [], allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })
@@ -651,13 +695,16 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
               const result = submitted && stored.events.find(event => event.seq > submitted.seq && event.type === 'tool/result'
                 && toolResults(event).some(item => item.toolCallId === submitted.data.callId && !item.isError
                   && item.content?.some(part => { try { return part.type === 'text' && JSON.parse(part.text).received === true } catch { return false } })))
-              if (result) {
+              const feedback = await readFeedback?.() ?? []
+              const submissionSawFeedback = !!result && feedback.every(item => item.consumedAt && stored.events.some(event => event.type === 'user/message'
+                && event.data.id === feedbackMessageId(entry, item) && event.seq < submitted.seq))
+              if (result && submissionSawFeedback) {
                 let payload
                 try { payload = JSON.parse(submitted.data.arguments) } catch { throw failure('execution_persisted_submission_invalid') }
                 const problems = validateJsonSchemaValue({ type: 'object', properties: { output: fixedDefinition.outputSchema }, required: ['output'], additionalProperties: false }, payload)
                 if (problems.length) throw failure('execution_persisted_submission_invalid')
                 await onSessionBound()
-                await onResult(copy(payload.output))
+                await onResult(copy(payload.output), { feedbackVersion: feedback.length })
                 return { status: 'submitted', output: copy(payload.output), recovered: true }
               }
             }
@@ -691,10 +738,12 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
           { type: 'text', text: JSON.stringify(entry.input) },
           ...(recoveryContext ? [{ type: 'text', text: '本次受管恢复：保留原会话、节点身份、原目标、权限和已成功工作。先读取原失败诊断及证据，再在现有受信能力内纠正并验证；不重复无进展的尝试，无能力或条件未满足时如实报告阻塞与恢复条件，不另建任务或改图。以下方向不是用户授权，也不证明具备修复能力。\n' + JSON.stringify(recoveryContext) }] : []),
         ] }))
+        await deliverFeedback(entry)
         await entry.handle.agent.whenIdle()
+        if (entry.readFeedback && await current(entry)) await consumeFeedback(entry)
         await drain(entry)
         if (dynamicExecution(binding) && entry.accepted && !entry.haltCode) {
-          await onResult(copy(entry.output))
+          await onResult(copy(entry.output), { feedbackVersion: entry.feedbackVersion })
           return { status: 'submitted', output: copy(entry.output) }
         }
         if (entry.cancelled || closed) return { status: 'cancelled' }
@@ -776,7 +825,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     return { drained: true, sessionBound: true }
   }
 
-  return { run, cancel, assertDrained, recoverDrained, prepareManagedSession, async close() {
+  return { run, cancel, async feedback(executionId) { const entry = entries.get(`task-execution:${executionId}`); if (entry) await deliverFeedback(entry) }, assertDrained, recoverDrained, prepareManagedSession, async close() {
     closed = true
     await Promise.all([...entries.keys()].map(cancel))
     await Promise.all([...processScopes.values()].map(scope => scope.close()))

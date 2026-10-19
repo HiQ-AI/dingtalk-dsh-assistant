@@ -115,6 +115,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     return id
   }
   const bindingOf = task => ({ kind: 'task-session', taskId: task.taskId, sessionId: task.sessionId,
+    contextRevision: task.claimContextRevision ?? task.contextRevision ?? 0,
     requirementRevision: task.claimRequirementRevision ?? task.requirementRevision, controlRevision: task.claimControlRevision ?? task.controlRevision,
     leaseEpoch: task.leaseEpoch, sessionBound: task.sessionBound })
   const executionBinding = execution => ({ kind: 'task-execution', taskId: execution.taskId, executionId: execution.executionId,
@@ -128,7 +129,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     const task = get('dynamic_tasks', binding.taskId)
     if (binding.kind !== 'task-session' || binding.sessionId !== task.sessionId || binding.leaseEpoch !== task.leaseEpoch || task.drained) fail('DYNAMIC_TASK_LEASE_STALE')
     if (current && task.recovering) fail('DYNAMIC_TASK_LEASE_STALE')
-    if (current && (binding.requirementRevision !== task.requirementRevision || binding.controlRevision !== task.controlRevision)) fail('DYNAMIC_TASK_REVISION_STALE')
+    if (current && (binding.requirementRevision !== task.requirementRevision || binding.controlRevision !== task.controlRevision
+      || (binding.contextRevision ?? 0) !== (task.contextRevision ?? 0))) fail('DYNAMIC_TASK_REVISION_STALE')
     if (active && (task.archivedAt || task.control !== 'active' || task.status !== 'active')) fail('DYNAMIC_TASK_NOT_ACTIVE')
     return task
   }
@@ -307,6 +309,54 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       saveTask(task)
       return changed({ task })
     }
+    if (kind === 'task.supplement') {
+      const task = get('dynamic_tasks', a.taskId)
+      const messageId = text(a.messageId, 'messageId'), message = text(a.text, 'text')
+      const prior = task.supplements?.find(item => item.id === messageId)
+      if (prior) {
+        if (prior.text !== message) fail('DYNAMIC_FEEDBACK_ID_CONFLICT')
+        return changed({ task })
+      }
+      if (task.archivedAt || task.status !== 'active' || task.control !== 'active') fail('DYNAMIC_TASK_NOT_ACTIVE')
+      if (a.expectedRequirementRevision !== task.requirementRevision || a.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
+      task.contextRevision = (task.contextRevision ?? 0) + 1
+      for (const field of ['request', 'sourceRefs', 'topicRefs']) if (a[field] !== undefined) task[field] = clone(a[field])
+      if (a.operationId) task.appliedOperations = [...new Set([...(task.appliedOperations ?? []), a.operationId])]
+      ;(task.supplements ??= []).push({ id: messageId, text: message, receivedAt: stamp, contextRevision: task.contextRevision })
+      for (const execution of execs(task.taskId)) if (!terminalExecutions.has(execution.status) && executionCurrent(execution)) {
+        execution.feedback ??= []
+        execution.feedback.push({ id: messageId, text: message, requirementRevision: task.requirementRevision,
+          controlRevision: task.controlRevision, inputVersion: execution.inputVersion, receivedAt: stamp, consumedAt: null })
+        put('dynamic_executions', execution)
+      }
+      saveTask(task); wake(task.taskId, kind, { messageId, contextRevision: task.contextRevision }, `wake:${commandId}`)
+      return changed({ task })
+    }
+    if (kind === 'execution.feedback') {
+      const task = currentTask(a.binding), execution = get('dynamic_executions', a.executionId)
+      if (execution.taskId !== task.taskId) fail('DYNAMIC_EXECUTION_SCOPE_INVALID')
+      if (!executionCurrent(execution) || terminalExecutions.has(execution.status)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      const id = text(a.messageId, 'messageId'), message = text(a.text, 'text')
+      execution.feedback ??= []
+      const prior = execution.feedback.find(item => item.id === id)
+      if (prior && prior.text !== message) fail('DYNAMIC_FEEDBACK_ID_CONFLICT')
+      if (!prior) execution.feedback.push({ id, text: message, requirementRevision: task.requirementRevision,
+        controlRevision: task.controlRevision, inputVersion: execution.inputVersion, receivedAt: stamp, consumedAt: null })
+      put('dynamic_executions', execution)
+      return changed({ execution, feedback: execution.feedback.find(item => item.id === id) })
+    }
+    if (kind === 'execution.feedbackConsumed') {
+      const execution = boundExecution(a.binding)
+      if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      const feedback = execution.feedback?.find(item => item.id === a.messageId)
+      if (!feedback || feedback.requirementRevision !== execution.requirementRevision || feedback.controlRevision !== execution.controlRevision
+        || !Number.isSafeInteger(a.sequence) || a.sequence < 0) fail('DYNAMIC_FEEDBACK_PROOF_INVALID')
+      feedback.consumedAt ??= stamp; feedback.sequence ??= a.sequence
+      feedback.modelStepEnteredAt ??= feedback.consumedAt
+      feedback.consumptionMeaning = 'native-model-step-admission'
+      put('dynamic_executions', execution)
+      return changed({ feedback })
+    }
     if (kind === 'task.revise' || kind === 'task.reopen' || kind === 'task.control') {
       const task = get('dynamic_tasks', a.taskId)
       if (task.archivedAt) fail('DYNAMIC_TASK_ARCHIVED_CONFLICT')
@@ -347,6 +397,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         && (!task.providerRecovery.nextAttemptAt || Date.parse(stamp) < Date.parse(task.providerRecovery.nextAttemptAt))) fail('DYNAMIC_TASK_PROVIDER_RETRY_NOT_DUE')
       task.leaseEpoch++; task.drained = false; task.recovering = false
       task.claimRequirementRevision = task.requirementRevision; task.claimControlRevision = task.controlRevision
+      task.claimContextRevision = task.contextRevision ?? 0
       if (task.providerRecovery) {
         // Consume every admission before entering native runtime. A different
         // runtime fault must not reuse an already due provider timer in a hot loop.
@@ -463,6 +514,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.complete') {
       const task = currentTask(a.binding)
+      if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt
+        && item.requirementRevision === task.requirementRevision && item.controlRevision === task.controlRevision))) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
       assertClear(task.taskId)
       task.status = 'completed'; task.completion = { summary: text(a.summary, 'summary'), result: a.result ?? null, at: stamp,
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, leaseEpoch: task.leaseEpoch }
@@ -657,6 +710,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         else if (execution.status === 'running' && !execution.result) execution.status = 'queued'
       }
       if (kind === 'execution.result') {
+        if (!a.error && (a.feedbackVersion ?? 0) !== (execution.feedback ?? []).filter(item => item.requirementRevision === execution.requirementRevision
+          && item.controlRevision === execution.controlRevision).length) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
+        if (!a.error && (execution.feedback ?? []).some(item => item.requirementRevision === execution.requirementRevision
+          && item.controlRevision === execution.controlRevision && !item.consumedAt)) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
         const payload = { output: a.output ?? null, error: a.error ?? null }
         if (execution.result && digest(execution.result.payload) !== digest(payload)) fail('DYNAMIC_EXECUTION_RESULT_CONFLICT')
         if (!execution.result) {

@@ -8,6 +8,58 @@ import { createHash } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { projectTaskTimeline } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 
+test('running supplement preserves the runner, persists once and fences old completion', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const before = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  const args = { taskId: 'task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+    messageId: 'branch-reminder', text: '开发分支别搞错了', request: '原目标\n开发分支别搞错了' }
+  await f.command('task.supplement', args, 'supplement-one')
+  assert.equal((await f.command('task.supplement', args, 'supplement-one')).replayed, true)
+  await f.command('task.supplement', args, 'same-identity-new-command')
+  await assert.rejects(f.command('task.supplement', { ...args, text: '不同消息' }), { code: 'DYNAMIC_FEEDBACK_ID_CONFLICT' })
+  const task = await f.query({ kind: 'task.get', taskId: 'task' })
+  const after = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(task.requirementRevision, 1)
+  for (const key of ['executionId', 'sessionId', 'leaseEpoch', 'inputVersion', 'status', 'cancelRequested']) assert.equal(after[key], before[key])
+  assert.equal(after.feedback.length, 1); assert.equal(after.feedback[0].consumedAt, null)
+  await assert.rejects(f.command('execution.claim', { executionId: binding.executionId }), { code: 'DYNAMIC_EXECUTION_BUSY' })
+  await assert.rejects(f.command('execution.result', { binding, output: {} }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await assert.rejects(f.command('task.complete', { binding: owner.binding, summary: '旧结论' }), { code: 'DYNAMIC_TASK_REVISION_STALE' })
+  await f.command('execution.feedbackConsumed', { binding, messageId: 'branch-reminder', sequence: 20 })
+  await assert.rejects(f.command('execution.result', { binding, output: {}, feedbackVersion: 0 }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await f.command('execution.result', { binding, output: {}, feedbackVersion: 1 })
+  await f.command('execution.drained', { binding })
+  await f.reopen()
+  const restored = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(restored.feedback.length, 1); assert.equal(restored.feedback[0].sequence, 20)
+  assert.ok(restored.feedback[0].consumedAt); assert.equal(restored.result.payload.output !== null, true)
+})
+
+test('coordinator feedback deduplicates identity, survives restart and retains cancel and requirement fences', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const args = { binding: owner.binding, executionId: binding.executionId, messageId: 'clarification', text: '内置通知仍在授权范围内' }
+  await f.command('execution.feedback', args, 'feedback-one')
+  await f.command('execution.feedback', args, 'feedback-retry')
+  await assert.rejects(f.command('execution.feedback', { ...args, text: '不同说明' }), { code: 'DYNAMIC_FEEDBACK_ID_CONFLICT' })
+  await f.reopen()
+  const restored = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(restored.feedback.length, 1); assert.equal(restored.feedback[0].consumedAt, null)
+  await f.command('task.control', { taskId: 'task', control: 'cancelled' })
+  await assert.rejects(f.command('execution.feedbackConsumed', { binding, messageId: 'clarification', sequence: 9 }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  await f.command('execution.result', { binding, output: {}, feedbackVersion: 1 }).catch(error => assert.equal(error.code, 'DYNAMIC_EXECUTION_FEEDBACK_PENDING'))
+  assert.equal((await f.query({ kind: 'execution.current', binding })), false)
+})
+
+test('pending feedback blocks task completion even after executor reports failure and drains', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.command('execution.feedback', { binding: owner.binding, executionId: binding.executionId, messageId: 'late', text: '核对新事实' })
+  await f.command('execution.result', { binding, error: { code: 'transport_failed' } })
+  await f.command('execution.drained', { binding })
+  await assert.rejects(f.command('task.complete', { binding: owner.binding, summary: '不能漏掉输入' }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await f.command('task.revise', { taskId: 'task', request: '真正目标变化' })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).requirementRevision, 2)
+})
+
 test('timeline records activity switches, independent parallel leases and continuation gaps without duplicating stage events', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-16T00:00:00Z') })
   const f = await fixture(t), owner = await f.task(), first = await f.execution(owner.binding, '查询信息')

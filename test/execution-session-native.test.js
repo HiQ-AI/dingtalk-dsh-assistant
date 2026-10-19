@@ -56,7 +56,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
     async resolveModel(provider, model) { return { ...await super.resolveModel(provider, model), reasoning: { efforts: [{ id: 'low', name: 'Low' }] } } }
     async *stream(options) {
       requests.push(JSON.parse(JSON.stringify(options)))
-      const next = typeof script === 'function' ? script(requests.length) : script[requests.length - 1]
+      const next = await (typeof script === 'function' ? script(requests.length) : script[requests.length - 1])
       if (!next) throw new Error('unexpected model continuation')
       if (next.providerFailure) { yield { type: 'finish', reason: { kind: 'error', failure: next.providerFailure } }; return }
       if (Array.isArray(next)) {
@@ -93,6 +93,80 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
 function drive(h, extra = {}) {
   return h.manager.run({ binding: binding(), input: { requirement: 'read and submit' }, definition: definition(), onSessionBound: async () => {}, onResult: async () => {}, ...extra })
 }
+
+test('native steer queues a running reminder without aborting the original operation and consumes it once', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), feedback = []
+  let writes = 0, aborted = false
+  const h = await host({ script: [{ name: 'hold_fixture' }, { name: 'execution_submit', args: { output: { answer: 'done' } } }],
+    tools: [{ name: 'hold_fixture', description: '原作业', parameters: { type: 'object' },
+      async execute({ signal }) { writes++; signal.addEventListener('abort', () => { aborted = true }); entered.resolve(); await release.promise; signal.throwIfAborted(); return { originalJob: 'one' } } }] })
+  t.after(() => h.close())
+  const b = { kind: 'task-execution', taskId: 'task', executionId: 'feedback-native', sessionId: 'feedback-native-session',
+    inputDigest: 'input', inputVersion: 1, inputHistory: [], requirementRevision: 1, controlRevision: 1, leaseEpoch: 1, sessionBound: false }
+  const run = drive(h, { binding: b, definition: definition({ allowedTools: ['hold_fixture'] }),
+    readFeedback: async () => structuredClone(feedback), onFeedbackConsumed: async ({ messageId, sequence }) => {
+      const item = feedback.find(item => item.id === messageId); item.consumedAt ??= 'native-projected'; item.sequence ??= sequence
+    }, onResult: async (_output, proof) => assert.equal(proof.feedbackVersion, 1) })
+  await entered.promise
+  feedback.push({ id: 'reminder', text: '开发分支别搞错了', receivedAt: 'received', consumedAt: null })
+  await Promise.all([h.manager.feedback(b.executionId), h.manager.feedback(b.executionId)])
+  assert.equal(feedback[0].consumedAt, null); assert.equal(aborted, false); assert.equal(writes, 1)
+  release.resolve()
+  assert.equal((await run).status, 'submitted')
+  assert.equal(writes, 1); assert.equal(aborted, false); assert.equal(feedback[0].consumedAt, 'native-projected')
+  const stored = await inspectSession(h.ctx.sessionPersistence, b.sessionId)
+  const messages = stored.events.filter(event => event.type === 'user/message' && event.data.source?.executionFeedback)
+  assert.equal(messages.length, 1); assert.equal(messages[0].seq, feedback[0].sequence)
+  assert.match(JSON.stringify(h.requests.at(-1)), /开发分支别搞错了/)
+})
+
+test('feedback arriving during native model generation fences the old submit without terminating the runner', async t => {
+  const feedback = [], b = { kind: 'task-execution', taskId: 'task', executionId: 'feedback-step', sessionId: 'feedback-step-session',
+    inputDigest: 'input', inputVersion: 1, inputHistory: [], requirementRevision: 1, controlRevision: 1, leaseEpoch: 1, sessionBound: false }
+  let h, accepted = 0
+  h = await host({ script: async n => {
+    if (n === 1) {
+      feedback.push({ id: 'during-model', text: '事实已澄清', consumedAt: null })
+      await h.manager.feedback(b.executionId)
+    }
+    return { name: 'execution_submit', args: { output: { answer: n === 1 ? 'obsolete' : 'current' } } }
+  } })
+  t.after(() => h.close())
+  const result = await drive(h, { binding: b, readFeedback: async () => structuredClone(feedback),
+    onFeedbackConsumed: async proof => { feedback[0].consumedAt = 'projected'; feedback[0].sequence = proof.sequence },
+    onResult: async output => { accepted++; assert.equal(output.answer, 'current') } })
+  assert.equal(result.status, 'submitted'); assert.equal(accepted, 1); assert.equal(h.requests.length, 2)
+  const events = (await inspectSession(h.ctx.sessionPersistence, b.sessionId)).events
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source?.executionFeedback).length, 1)
+})
+
+test('native restart never recovers an older successful submit after newer feedback was consumed without a new submit', async t => {
+  const root = await temp(), feedback = [], hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close() })
+  const b = { kind: 'task-execution', taskId: 'task', executionId: 'feedback-restart', sessionId: 'feedback-restart-session',
+    inputDigest: 'input', inputVersion: 1, inputHistory: [], requirementRevision: 1, controlRevision: 1, leaseEpoch: 1, sessionBound: false }
+  const callbacks = { readFeedback: async () => structuredClone(feedback), onFeedbackConsumed: async proof => {
+    const item = feedback.find(item => item.id === proof.messageId); item.consumedAt ??= 'projected'; item.sequence ??= proof.sequence
+  } }
+  let h = await host({ root, script: [{ name: 'execution_submit', args: { output: { answer: 'obsolete' } } }] }); hosts.push(h)
+  await assert.rejects(drive(h, { binding: b, ...callbacks, onResult: async () => {
+    feedback.push({ id: 'completion-race', text: '原判断需要核对新事实', consumedAt: null })
+    throw Object.assign(new Error('new feedback'), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  } }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await h.close()
+  h = await host({ root, script: [{ name: 'read_fixture' }, { text: '原会话已读取补充，尚未形成新结论' }] }); hosts.push(h)
+  const interrupted = await drive(h, { binding: { ...b, leaseEpoch: 2, sessionBound: true }, ...callbacks,
+    onResult: async () => assert.fail('不能接纳旧提交') })
+  assert.equal(interrupted.status, 'no_submission'); assert.ok(feedback[0].consumedAt)
+  await h.close()
+  h = await host({ root, script: [{ name: 'execution_submit', args: { output: { answer: 'current' } } }] }); hosts.push(h)
+  let resultCount = 0
+  const result = await drive(h, { binding: { ...b, leaseEpoch: 3, sessionBound: true }, ...callbacks,
+    onResult: async output => { resultCount++; assert.equal(output.answer, 'current') } })
+  assert.equal(result.status, 'submitted'); assert.equal(resultCount, 1); assert.equal(h.requests.length, 1)
+  const events = (await inspectSession(h.ctx.sessionPersistence, b.sessionId)).events
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source?.executionFeedback).length, 1)
+})
 
 async function processPhase(root, phase) {
   const h = await host({ root, script: phase === 'initial' ? [{ name: 'read_fixture' }, submit('first')] : [submit('resumed')] })

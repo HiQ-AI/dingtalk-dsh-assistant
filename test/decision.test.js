@@ -29,7 +29,7 @@ test('定向重规划证据必须给出消息依据、原因及受影响阶段',
 
 test('Topic 决策独立提交并以固定 Topic 版本关联任务', () => {
   const decision = { basisMessageIds: ['m-1'], actions: [
-    { kind: 'task-context', taskId: 'task-1', context: 'more', topicRefs, ...executionVersion },
+    { kind: 'task-context', taskId: 'task-1', context: 'more', progressImpact: 'preserve', topicRefs, ...executionVersion },
     { kind: 'task-reopen', taskId: 'task-2', context: 'rollback', topicRefs, ...executionVersion },
     { kind: 'new-task', title: '修复问题', objective: 'fix', acceptanceCriteria: ['有可核验证据'], topicRefs },
     { kind: 'task-cancel', taskId: 'task-3', reason: '群里明确说不用处理', topicRefs, ...executionVersion },
@@ -52,7 +52,7 @@ test('Topic 决策拒绝缺失来源依据、消息副本和缺失执行版本',
 
 test('任务续接协议允许目标修订同时携带新的任务名称', () => {
   for (const kind of ['task-context', 'task-reopen']) {
-    const action = { kind, taskId: 'task-1', context: '目标升级', title: '修复并部署数据库切换', objective: '修复数据库切换并部署 UAT', topicRefs, ...executionVersion }
+    const action = { kind, taskId: 'task-1', context: '目标升级', title: '修复并部署数据库切换', objective: '修复数据库切换并部署 UAT', ...(kind === 'task-context' ? { progressImpact: 'replan' } : {}), topicRefs, ...executionVersion }
     assert.deepEqual(groupDecisionSchema.parse({ basisMessageIds: ['m-1'], actions: [action], reply: '按新目标继续处理' }).actions[0], action)
     assert.throws(() => groupDecisionSchema.parse({ basisMessageIds: ['m-1'], actions: [{ ...action, title: '长'.repeat(121) }], reply: '继续处理' }))
   }

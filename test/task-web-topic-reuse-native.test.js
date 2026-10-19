@@ -56,7 +56,7 @@ test('web acceptance reuses existing topic and captures exact enriched source ve
   assert.equal((await h.query('task.list')).length, 1)
   await assert.rejects(h.service.createTask({ ...args, requestId: 'stale-accept' }), error => error.code === 'TASK_TOPIC_WEB_topic-stale')
   const beforeContext=await h.query('task.get',{taskId:task.taskId})
-  const contextArgs={taskId:task.taskId,requestId:'continue-existing-topic',context:'只补充原事项验收要求，保持同一任务',expectedRequirementRevision:beforeContext.requirementRevision,expectedControlRevision:beforeContext.controlRevision}
+  const contextArgs={taskId:task.taskId,requestId:'continue-existing-topic',progressImpact:'replan',context:'只补充原事项验收要求，保持同一任务',expectedRequirementRevision:beforeContext.requirementRevision,expectedControlRevision:beforeContext.controlRevision}
   await h.service.appendTaskContext(contextArgs);await h.service.whenIdle()
   assert.equal(h.residentStore.listTopics('native-group').length,1,'Web补充不另开话题')
   const afterContext=await h.query('task.get',{taskId:task.taskId})

@@ -215,7 +215,7 @@ test('restart reconciles an original persisted native terminal receipt and resum
   if(readStep++===0)return [call('read',{file_path:'once.txt'})]
   return [call('execution_submit',{output:{status:'completed',summary:'one original effect',evidence:['read once.txt'],limitations:[],artifacts:['once.txt']}})]
  },{initialize:false,promoteOnTimeout:true});hosts.push(second)
- await second.service.appendTaskContext({taskId:created.taskId,requestId:'inspect-receipt',context:'Inspect the original receipt and verify without replay'})
+ await second.service.appendTaskContext({taskId:created.taskId,requestId:'inspect-receipt',progressImpact:'replan',context:'Inspect the original receipt and verify without replay'})
  await second.service.whenIdle()
  const after=await second.query('operation.get',{operationId:before.operationId}),execution=(await second.query('execution.list'))[0]
  assert.equal(after.state,'succeeded');assert.equal(after.result.reconciled,true)

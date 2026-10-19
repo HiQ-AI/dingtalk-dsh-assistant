@@ -1,6 +1,7 @@
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
 import { isPendingDecision } from './topic-model.js'
+import { taskContextProgressImpactSchema, taskContextSemanticsProblem } from './task-input-contract.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
 
@@ -143,7 +144,9 @@ const createTaskInputSchema = z.strictObject({
   context: z.string().max(32000).optional(), acceptanceCriteria: z.array(requiredText.max(2000)).max(100).optional(), topicRefs: topicRefsSchema.optional(),
 })
 const contextTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), context: requiredText.max(32000),
+  progressImpact: taskContextProgressImpactSchema, authorizationChange: z.enum(['none', 'changed']).optional(),
   expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() })
+  .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
 const cancelTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), reason: requiredText.max(2000), expectedControlRevision: z.number().int().positive() })
 
 export function residentErrorStatus(error) {

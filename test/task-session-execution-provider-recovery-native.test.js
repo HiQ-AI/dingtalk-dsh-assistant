@@ -237,7 +237,7 @@ test('requirement supplement during provider cooldown wakes current owner after 
     await h.service.recover(); await h.service.whenIdle()
   }
   const first = (await h.query('execution.list'))[0]
-  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'network-restored', context: 'Network restored; retain original scope', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'network-restored', progressImpact: 'replan', context: 'Network restored; add current output verification before completing the original goal', expectedRequirementRevision: 1, expectedControlRevision: 1 })
   await h.service.whenIdle()
   assert.equal((await h.query('task.get', { taskId: task.taskId })).requirementRevision, 2)
   assert.equal((await h.query('execution.list'))[0].inputVersion, first.inputVersion)

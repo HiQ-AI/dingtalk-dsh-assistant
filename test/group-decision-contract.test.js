@@ -9,10 +9,23 @@ const submit = (decision) => ({ requestId: 'decision-recall', topicId: 'topic-re
 const actions = [
   { kind: 'task-proposal', title: '确认排查', objective: '排查撤回规则', topicRefs },
   { kind: 'new-task', title: '排查撤回规则', objective: '核查专家已评审后仍可撤回的原因', acceptanceCriteria: ['给出代码和复现证据'], topicRefs },
-  { kind: 'task-context', taskId: 'task-recall', inputVersion: 1, runSequence: 1, context: '补充专家已审核事实', topicRefs },
+  { kind: 'task-context', taskId: 'task-recall', inputVersion: 1, runSequence: 1, context: '补充专家已审核事实', progressImpact: 'preserve', topicRefs },
   { kind: 'task-reopen', taskId: 'task-recall', inputVersion: 1, runSequence: 1, context: '继续核查新证据', topicRefs },
   { kind: 'task-cancel', taskId: 'task-recall', inputVersion: 1, runSequence: 1, reason: '用户取消', topicRefs },
 ]
+
+test('task-context requires explicit semantics in both Zod and actual native tool JSON schema', () => {
+  const action = actions.find(item => item.kind === 'task-context')
+  const missing = { ...action }; delete missing.progressImpact
+  const envelope = value => submit({ ...basis, actions: [value], reply: '已核对输入' })
+  assert.equal(groupDecisionSubmissionSchema.safeParse(envelope(missing)).success, false)
+  assert.ok(validateJsonSchemaValue(groupDecisionSubmissionJsonSchema, envelope(missing)).length > 0)
+  assert.equal(validateJsonSchemaValue(groupDecisionSubmissionJsonSchema, envelope(action)).length, 0)
+  for (const fields of [{ authorizationChange: 'changed' }, { objective: '新的目标' }, { acceptanceCriteria: ['新增验收'] }]) {
+    assert.equal(groupDecisionSubmissionSchema.safeParse(envelope({ ...action, ...fields })).success, false)
+    assert.equal(groupDecisionSubmissionSchema.safeParse(envelope({ ...action, ...fields, progressImpact: 'replan' })).success, true)
+  }
+})
 
 test('决策公开契约保留 reply / reason 互斥，原生 DSH 与 Zod 均接受三条合法路径', () => {
   assert.doesNotThrow(() => assertSupportedJsonSchema(groupDecisionSubmissionJsonSchema))

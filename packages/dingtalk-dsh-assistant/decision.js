@@ -1,4 +1,4 @@
-import { acceptanceCriteriaSchema } from './task-input-contract.js'
+import { acceptanceCriteriaSchema, taskContextProgressImpactSchema, taskContextSemanticsProblem } from './task-input-contract.js'
 import { z } from 'zod'
 import { toToolJsonSchema } from './tool-schema.js'
 import { resolveTopicMessages, topicRefSchema } from './topic-model.js'
@@ -10,7 +10,7 @@ export { topicRefSchema }
 const unitRefSchema = z.strictObject({ unitId: z.string().min(1), unitRevision: z.number().int().positive() })
 const taskSources = { topicRefs: z.array(topicRefSchema).min(1), basisUnitRefs: z.array(unitRefSchema).min(1).optional() }
 const impactEvidenceSchema = z.strictObject({ basisMessageIds: z.array(z.string().min(1)).min(1), reason: z.string().trim().min(1), affectedStageIds: z.array(z.string().min(1)).min(1) })
-export const taskContextImpactFields = { progressImpact: z.enum(['preserve', 'replan']).optional(), impactEvidence: impactEvidenceSchema.optional(), authorizationChange: z.enum(['none', 'changed']).optional() }
+export const taskContextImpactFields = { progressImpact: taskContextProgressImpactSchema, impactEvidence: impactEvidenceSchema.optional(), authorizationChange: z.enum(['none', 'changed']).optional() }
 const taskVersion = { inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() }
 const topicUpdateSchema = z.strictObject({ summary: z.string().optional(), openQuestions: z.array(z.string().min(1)).optional(), status: z.enum(['active', 'waiting', 'closed']).optional() })
 const decisionBasis = { topicUpdate: topicUpdateSchema.optional(), basisMessageIds: z.array(z.string().min(1)).min(1), basisUnitRefs: z.array(unitRefSchema).min(1).optional() }
@@ -24,6 +24,7 @@ const dispatchAssessmentSchema = z.strictObject({
 })
 const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
 const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
+  .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel])

@@ -1419,7 +1419,7 @@ test('明确给他人的补充或取消同样不能改变已有 Task，引用转
   const current = (await route(h, { other: original.topicId })).pendingDecisions[0]
   for (const kind of ['task-context', 'task-cancel', 'task-reopen']) {
     await h.store.updateTask(task.taskId, (value) => ({ ...value, state: kind === 'task-reopen' ? 'completed' : 'running' }))
-    const action = { kind, taskId: task.taskId, inputVersion: 1, runSequence: 1, topicRefs: [{ topicId: original.topicId, revision: current.revision }], ...(kind === 'task-cancel' ? { reason: '取消' } : { context: '修改任务' }) }
+    const action = { kind, taskId: task.taskId, inputVersion: 1, runSequence: 1, topicRefs: [{ topicId: original.topicId, revision: current.revision }], ...(kind === 'task-context' ? { progressImpact: 'replan' } : {}), ...(kind === 'task-cancel' ? { reason: '取消' } : { context: '修改任务' }) }
     await assertDecisionIssue(h.call('group_decision_submit', submission(current, { actions: [action], reply: '收到' })), /task_action_directed_to_other_participants/)
   }
   assert.equal(h.store.getTopic('g', original.topicId).decisions.length, 1)

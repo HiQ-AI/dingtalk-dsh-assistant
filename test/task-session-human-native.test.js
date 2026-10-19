@@ -201,7 +201,7 @@ test('a native blocked decision without a human question is corrected into an ex
   assert.ok(h.toolResults.some(item => item.name === 'task_session_submit' && item.result.isError))
 })
 
-test('an authenticated reply in the original group answers the waiting request without revising the task or cancelling its live execution', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+for (const changed of [false, true]) test(`original-group human input preserves clarification but fences explicit authorization change: changed=${changed}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const release = Promise.withResolvers(); t.after(() => release.resolve())
   let ownerTurns = 0, originalTask, originalTopic, answeredInput
   const replyText = '测试助手，本次只允许 UAT3 只读核对，保持现有执行，不得发布生产。'
@@ -216,6 +216,7 @@ test('an authenticated reply in the original group answers the waiting request w
       const calls = topicTaskCalls(request), submitted = calls[0].args
       submitted.decision.actions = [{ kind: 'task-context', taskId: originalTask.taskId, inputVersion: originalTask.requirementRevision,
         runSequence: originalTask.runSequence, context: replyText, progressImpact: 'preserve', topicRefs: [{ topicId: submitted.topicId, revision: submitted.revision }],
+        ...(changed ? { authorizationChange: 'changed', progressImpact: 'replan' } : {}),
         basisUnitRefs: submitted.decision.basisUnitRefs }]
       submitted.decision.reply = '已收到本次范围答复，将沿原任务继续。'
       return calls
@@ -238,8 +239,20 @@ test('an authenticated reply in the original group answers the waiting request w
   originalTask = await h.query('task.get', { taskId: created.taskId }); originalTopic = originalTask.topicRefs[0].topicId
   const [before] = await h.query('execution.list')
   assert.equal(before.drained, false)
-  await h.service.ingest({ groupId: 'native-group', messageId: 'real-group-human-answer', senderOpenDingTalkId: 'native-user', text: replyText,
+  const ingestion = h.service.ingest({ groupId: 'native-group', messageId: 'real-group-human-answer', senderOpenDingTalkId: 'native-user', text: replyText,
     occurredAt: new Date().toISOString(), timestamp: new Date().toISOString() })
+  if (changed) {
+    // A cancelled provider stream must still physically return before Host can drain it.
+    setTimeout(() => release.resolve(), 100)
+    await ingestion; await h.service.whenIdle()
+    const task = await h.query('task.get', { taskId: created.taskId }), [execution] = await h.query('execution.list')
+    assert.equal(task.requirementRevision, originalTask.requirementRevision + 1)
+    assert.equal(task.humanRequests[0].status, 'superseded')
+    assert.equal(execution.cancelRequested, true)
+    assert.equal(execution.result.current, false)
+    return
+  }
+  await ingestion
   await waitUntil(() => answeredInput, 'owner receives authenticated group answer').catch(async error => {
     error.message += JSON.stringify({ toolErrors: h.toolResults.filter(item => item.name === 'group_decision_submit').slice(-1),
       alerts: await h.service.listAlerts(), task: (await h.query('task.get', { taskId: created.taskId })).humanRequests,

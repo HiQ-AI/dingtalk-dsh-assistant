@@ -1,6 +1,6 @@
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createServer } from 'node:net'
@@ -45,7 +45,164 @@ const call = (name, args) => ({ name, args })
 const test = (name, options, run) => testRunner(name, { ...options, ...(!available ? { skip: reason } : {}) }, run)
 const decision = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: ['实际文件和进程输出已核验'], limitations: [] } })
 
+test('running reminder and coordinator clarification preserve one native shell job with received and consumed receipts', { timeout: 20000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-running-feedback-'))
+  let h, delegated = false, clarified = false, executions = 0
+  t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
+  h = await nativeTaskHost(root, async request => {
+    const topics = topicTaskCalls(request); if (topics) return topics
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      const required = requiredDecisionRead(request, input); if (required) return [required]
+      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'original', objective: '创建原作业并核对补充' }), decision('wait', '等待原作业')] }
+      const execution = input.executions[0]
+      if (!execution) return [decision('wait', '等待执行')]
+      if (input.wakes.some(wake => wake.kind === 'task.supplement') && !clarified) {
+        clarified = true
+        return [call('task_delegate', { executionId: execution.executionId, feedback: true, key: 'clarify', objective: '原目标不变，内置通知仍允许' }), decision('wait', '等待原执行消费说明')]
+      }
+      return [decision(execution.drained && execution.status === 'succeeded' ? 'complete' : 'wait', '核对原执行及补充')]
+    }
+    if (++executions === 1) {
+      const start = join(root, 'started'), release = join(root, 'release')
+      const command = nativeShell === 'pwsh'
+        ? `Add-Content effect.txt once; New-Item -ItemType File '${start}' | Out-Null; while (!(Test-Path '${release}')) { Start-Sleep -Milliseconds 20 }`
+        : `echo once >> effect.txt; touch '${start}'; while [ ! -f '${release}' ]; do sleep 0.02; done`
+      return [call(nativeShell, { command, description: '运行原生作业并等待测试释放' })]
+    }
+    return [call('execution_submit', { output: { status: 'completed', summary: '已读取补充，原作业完成', evidence: [], limitations: [], artifacts: ['effect.txt'] } })]
+  })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'original', objective: '创建并保留原作业' })
+  try { await waitUntil(async () => { try { await readFile(join(root, 'started')); return true } catch { return false } }) }
+  catch (error) { throw new Error(JSON.stringify({ alerts: h.service.listAlerts(), executions: await h.query('execution.list'), results: h.toolResults }), { cause: error }) }
+  const before = (await h.query('execution.list'))[0]
+  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'reminder', context: '开发分支别搞错了', progressImpact: 'preserve', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).requirementRevision, 1, '普通提醒不能变成需求修订并取消原作业')
+  assert.equal((await h.query('execution.list'))[0].cancelRequested, false, '原作业不能被普通提醒取消')
+  await waitUntil(async () => (await h.query('execution.list'))[0].feedback?.length === 2)
+  const received = (await h.query('execution.list'))[0]
+  assert.ok(received.feedback.every(item => item.receivedAt && !item.consumedAt))
+  assert.equal(received.cancelRequested, before.cancelRequested)
+  await writeFile(join(root, 'release'), 'release')
+  await h.service.whenIdle()
+  const after = (await h.query('execution.list'))[0]
+  for (const key of ['executionId', 'sessionId', 'inputVersion', 'leaseEpoch']) assert.equal(after[key], before[key])
+  assert.equal((await h.query('execution.list')).length, 1)
+  assert.ok(after.feedback.every(item => item.consumedAt && Number.isInteger(item.sequence)))
+  assert.ok(after.feedback.every(item => item.modelStepEnteredAt === item.consumedAt && item.consumptionMeaning === 'native-model-step-admission'))
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
+  const events = (await inspectSession(h.ctx.sessionPersistence, after.sessionId)).events
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source?.executionFeedback).length, 2)
+})
+
+test('native completion race drains then resumes the original execution without replaying its shell effect', { timeout: 15000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-feedback-completion-'))
+  let h, delegated = false, steps = 0, injected = false
+  t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
+  h = await nativeTaskHost(root, async request => {
+    const topics = topicTaskCalls(request); if (topics) return topics
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      const required = requiredDecisionRead(request, input); if (required) return [required]
+      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'once', objective: '原作业只写入一次' }), decision('wait', '等待原执行')] }
+      return [decision(input.executions.some(item => !item.drained || item.status !== 'succeeded') ? 'wait' : 'complete', '核对当前结果')]
+    }
+    if (++steps === 1) return [call(nativeShell, { command: nativeShell === 'pwsh' ? 'Add-Content effect.txt once' : 'echo once >> effect.txt', description: '真实原生单次写入' })]
+    return [call('execution_submit', { output: { status: 'completed', summary: steps === 2 ? '过时结果' : '已核对新补充', evidence: [], limitations: [], artifacts: ['effect.txt'] } })]
+  })
+  h.ctx.on('tools/post-execute', async (exec, result, next) => {
+    const decision = await next()
+    if (exec.name === 'execution_submit' && !result.isError && !injected) {
+      injected = true
+      const task = (await h.query('task.list'))[0]
+      await h.service.store.command({ id: 'completion-race-input', kind: 'task.supplement', args: { taskId: task.taskId,
+        expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision,
+        messageId: 'completion-race-input', text: '完成前核对新事实', request: task.request + '\n完成前核对新事实' } })
+    }
+    return decision
+  })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'completion-race', objective: '写入一次并核对输入' })
+  await h.service.whenIdle()
+  const [execution] = await h.query('execution.list')
+  assert.equal(injected, true); assert.equal(execution.leaseEpoch, 2); assert.equal(execution.inputVersion, 1)
+  assert.equal(execution.result.payload.error, null, JSON.stringify({ error: execution.result.payload.error, alerts: h.service.listAlerts() }))
+  assert.equal(execution.result.payload.output.summary, '已核对新补充')
+  assert.ok(execution.feedback[0].consumedAt)
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
+  assert.equal((await h.query('operation.list')).filter(item => item.state === 'succeeded').length, 1)
+})
+
 // The scripted coordinator obeys the same required-read contract as a real model.
+for (const mode of ['missing', 'preserve', 'replan', 'cancel']) test(`real coordinator input enforces explicit context semantics without default cancellation: ${mode}`, { timeout: 15000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-input-semantics-'))
+  let h, task, delegated = false, executionSteps = 0
+  const reviews = new Set()
+  t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
+  h = await nativeTaskHost(root, async request => {
+    const names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit')) {
+      const calls = topicTaskCalls(request)
+      for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: task.topicRefs[0].topicId }]
+      return calls
+    }
+    if (names.includes('group_decision_submit')) {
+      const input = latestInput(request)
+      const schema = request.tools.find(tool => tool.name === 'group_decision_submit').parameters
+      assert.match(JSON.stringify(schema), /progressImpact/)
+      if (!reviews.has(input.requestId)) { reviews.add(input.requestId); return [call('group_reply_review_get', { requestIds: [input.requestId] })] }
+      const review = h.toolResults.findLast(item => item.name === 'group_reply_review_get')
+      const ids = JSON.parse(review.result.content[0].text).candidates.map(item => item.outboundId)
+      const action = { kind: mode === 'cancel' ? 'task-cancel' : 'task-context', taskId: task.taskId,
+        inputVersion: task.requirementRevision, runSequence: task.runSequence, topicRefs: [{ topicId: input.topicId, revision: input.revision }],
+        ...(mode === 'cancel' ? { reason: '用户明确取消' } : { context: input.messages.at(-1).text }) }
+      if (mode !== 'cancel' && mode !== 'missing') action.progressImpact = mode === 'replan' ? 'replan' : 'preserve'
+      if (mode === 'replan') action.objective = '新的明确目标'
+      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+        decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [action], reply: '已核对本次输入语义',
+          replyReview: { kind: 'substantive', reviewedOutboundIds: ids, sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
+    }
+    const topics = topicTaskCalls(request); if (topics) return topics
+    if (names.includes('task_delegate')) {
+      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'original', objective: '保留原作业等待明确输入' }), decision('wait', '等待原执行')] }
+      return [decision('wait', '保留当前执行证据')]
+    }
+    if (++executionSteps === 1) {
+      const started = join(root, 'started'), released = join(root, 'release')
+      return [call(nativeShell, { command: nativeShell === 'pwsh'
+        ? `New-Item -ItemType File '${started}' | Out-Null; while (!(Test-Path '${released}')) { Start-Sleep -Milliseconds 20 }`
+        : `touch '${started}'; while [ ! -f '${released}' ]; do sleep 0.02; done`, description: '真实原生作业等待输入' })]
+    }
+    return [call('execution_submit', { output: { status: 'completed', summary: '已核对补充', evidence: [], limitations: [], artifacts: [] } })]
+  })
+  task = await h.service.createTask({ groupId: 'native-group', requestId: 'initial', objective: '原始明确任务' })
+  await waitUntil(async () => { try { await readFile(join(root, 'started')); return true } catch { return false } }, 'original shell running')
+  await h.service.ingest({ groupId: 'native-group', messageId: 'semantic-input', senderOpenDingTalkId: 'native-user',
+    text: mode === 'cancel' ? '测试助手，明确取消原任务' : mode === 'replan' ? '测试助手，改为新的明确目标，停止旧目标' : '测试助手，开发分支别搞错了', timestamp: new Date().toISOString() })
+  if (mode === 'missing') {
+    const rejected = () => h.toolResults.some(item => item.name === 'group_decision_submit' && item.result.isError)
+      || h.requests.some(request => request.messages.some(message => message.role === 'tool' && JSON.stringify(message).includes('progressImpact')))
+    await waitUntil(async () => rejected() || (await h.query('task.get', { taskId: task.taskId })).requirementRevision !== 1, 'real tool schema rejects omitted classification')
+    const current = await h.query('task.get', { taskId: task.taskId }), [execution] = await h.query('execution.list')
+    assert.equal(current.requirementRevision, 1); assert.equal(execution.cancelRequested, false); assert.equal(execution.drained, false)
+    assert.equal(execution.feedback?.length ?? 0, 0)
+    assert.equal(rejected(), true, '缺失字段须明确拒绝，不能默认为preserve')
+    await writeFile(join(root, 'release'), 'release')
+    return
+  }
+  await waitUntil(async () => {
+    const current = await h.query('task.get', { taskId: task.taskId }), [execution] = await h.query('execution.list')
+    return mode === 'cancel' ? current.control === 'cancelled' : mode === 'replan' ? current.requirementRevision === 2 : execution.feedback?.length === 1
+  }, 'coordinator semantic action applied')
+  const current = await h.query('task.get', { taskId: task.taskId }), [execution] = await h.query('execution.list')
+  if (mode === 'preserve' || mode === 'missing') {
+    assert.equal(current.requirementRevision, 1); assert.equal(execution.cancelRequested, false); assert.equal(execution.drained, false)
+    await writeFile(join(root, 'release'), 'release')
+  } else assert.equal(execution.cancelRequested, true)
+  await h.service.whenIdle()
+})
+
 function requiredDecisionRead(request, input) {
   for (const source of input.sources ?? []) if (source.textFile && source.readRequired) {
     const alreadyLocated = request.messages.filter(message => message.role === 'tool').some(message =>
@@ -236,9 +393,10 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
   assert.equal((await h.query('task.list')).length, 1)
   assert.ok(!(await h.query('source.list')).some(source => source.messageId === echo.messageId))
   if (ownEcho) {
-    assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
-    assert.equal(task.humanRequests[0].status, 'superseded', '群补充是需求修订，不能作为operator技术申请答复')
-    assert.equal(ownerCalls, 2)
+    assert.equal(task.status, 'active', JSON.stringify(h.service.listAlerts()))
+    assert.equal(task.humanRequests[0].status, 'waiting-reply', '普通定位补充既不改变授权，也不能代答或清除operator技术申请')
+    assert.equal(task.requirementRevision, 1)
+    assert.equal(ownerCalls, 1)
     assert.equal(h.residentStore.getTopic(message.groupId, topicId).processedRevision, 3)
   } else {
     assert.equal(task.humanRequests[0].status, 'waiting-reply')
@@ -285,8 +443,9 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
     assert.equal(replyBlocked.error, 'outbox_identity_duplicate')
     assert.ok(replyBlocked.operations.every(operation => operation.status === 'applied'))
     await h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' }); await h.service.whenIdle()
-    assert.equal((await h.query('task.list'))[0].status, 'completed', JSON.stringify(h.service.listAlerts()))
-    assert.equal(ownerCalls, 2)
+    assert.equal((await h.query('task.list'))[0].status, 'active', JSON.stringify(h.service.listAlerts()))
+    assert.equal((await h.query('task.list'))[0].humanRequests[0].status, 'waiting-reply')
+    assert.equal(ownerCalls, 1)
     assert.equal((await h.query('notification.get', { notificationId })).state, 'delivered')
     assert.equal(h.residentStore.getGroup(message.groupId).outbox.find(item => item.outboundId === notificationId).deliveredMessageId, 'historical-reply-id')
     assert.equal(h.sent.filter(notification => notification.kind === 'topic-reply').length, sentBefore)
@@ -295,7 +454,7 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
     const sentAfter = h.sent.length
     await h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' }); await h.service.whenIdle()
     assert.equal(h.sent.length, sentAfter, '已应用动作和已送达回复不能因重复重试再次执行')
-    assert.equal(ownerCalls, 2)
+    assert.equal(ownerCalls, 1)
   }
 })
 
@@ -654,7 +813,7 @@ test('native executor resumes in the same titled task workspace and all task ses
   await first.close()
   const next = await fixture.host(model(true), { initialize: false })
   await next.service.recover(); await next.service.whenIdle()
-  await next.service.appendTaskContext({ taskId: created.taskId, requestId: 'resume-executor', context: '继续使用原执行会话完成第二次核对' })
+  await next.service.appendTaskContext({ taskId: created.taskId, requestId: 'resume-executor', progressImpact: 'replan', context: '继续使用原执行会话完成第二次核对' })
   await next.service.whenIdle()
   assert.deepEqual((await next.service.recover()).failures, [])
   const [resumed] = await next.query('execution.list')
@@ -794,7 +953,7 @@ test('native requirement update resumes the same owner with new sources and fenc
     return await readFile(marker).then(() => execution, error => error.code === 'ENOENT' ? null : Promise.reject(error))
   }, 'old real execution started')
   const oldTask = await h.query('task.get', { taskId: oldExecution.taskId })
-  await h.service.appendTaskContext({ taskId: oldTask.taskId, requestId: 'revise-once', expectedRequirementRevision: 1, expectedControlRevision: 1,
+  await h.service.appendTaskContext({ taskId: oldTask.taskId, requestId: 'revise-once', progressImpact: 'replan', expectedRequirementRevision: 1, expectedControlRevision: 1,
     context: '最新要求：暂停生成文件，先核对旧操作结果，不要将旧结果当作新要求完成。' })
   await h.service.whenIdle()
   const task = await h.query('task.get', { taskId: oldTask.taskId }), execution = await h.query('execution.get', { executionId: oldExecution.executionId })
@@ -911,7 +1070,7 @@ for (const persistent of [false, true]) test(`native model failures settle witho
   for (let i = 0; i < 3; i++) { await h.service.recover(); await h.service.whenIdle() }
   assert.equal(requests, 1)
   assert.equal((await h.query('task.get', { taskId: task.taskId })).lastDecision.action, 'blocked')
-  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'model-retry-source', context: 'Try this same task again with the new information.' })
+  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'model-retry-source', progressImpact: 'replan', context: 'Try this same task again with the new information.' })
   await h.service.whenIdle()
   assert.equal(requests, 2)
   const stored = await h.query('task.get', { taskId: task.taskId })
