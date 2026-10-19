@@ -5,6 +5,31 @@ import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/wor
 import { runInNewContext } from 'node:vm'
 import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 
+test('顶部提示成功五秒关闭、手动关闭、持续错误不被刷新重开且清理定时器', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('    function FeedbackNotice('), source.indexOf('    function ObserverContent('))
+  let visible = true, deps, cleanup, pendingEffect, nextId = 0
+  const timers = new Map()
+  const Notice = runInNewContext(`${fragment}; FeedbackNotice`, {
+    useState: () => [visible, value => { visible = value }],
+    useEffect: (effect, next) => { if (!deps || next.some((value, i) => value !== deps[i])) { cleanup?.(); deps = next; pendingEffect = effect } },
+    window: { setTimeout: (fn, delay) => { assert.equal(delay, 5000); timers.set(++nextId, fn); return nextId }, clearTimeout: id => timers.delete(id) },
+    React: { createElement: (type, props, ...children) => ({ type, props, children }) }, Button: 'button', card: {}, colors: {},
+  })
+  const render = props => { let result = Notice(props); if (pendingEffect) { const effect = pendingEffect; pendingEffect = undefined; cleanup = effect(); result = Notice(props) } return result }
+  let tree = render({ text: '已归档' })
+  assert.equal(tree.props.role, 'status'); assert.equal(timers.size, 1)
+  render({ text: '已归档' }); assert.equal(nextId, 1, '轮询不能延长成功提示寿命')
+  timers.get(1)(); assert.equal(render({ text: '已归档' }), null)
+  tree = render({ text: '连接失败', error: true }); assert.equal(timers.size, 0); assert.equal(tree.props.role, 'alert')
+  assert.equal(tree.children[1].props['aria-label'], '关闭提示'); tree.children[1].props.onClick()
+  assert.equal(render({ text: '连接失败', error: true }), null)
+  tree = render({ text: '新错误', error: true }); assert.equal(tree.props.role, 'alert')
+  tree = render({ text: '操作完成' }); tree.children[1].props.onClick(); assert.equal(render({ text: '操作完成' }), null)
+  cleanup(); assert.equal(timers.size, 0)
+  assert.equal((source.match(/React\.createElement\(FeedbackNotice,/g) || []).length, 3)
+})
+
 test('消息与话题详情只展示有绑定的会话并支持分页', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /message\.runId \? React\.createElement\(Button[\s\S]*'处理过程'/)

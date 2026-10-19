@@ -2,6 +2,8 @@
 
 # DingTalk DSH Assistant
 
+看板顶部提示均支持手动关闭；操作成功提示在 5 秒后自动关闭。连接和操作错误保留至手动关闭或问题恢复，同一次持续错误不会因自动刷新反复弹回。
+
 `dingtalk-dsh-assistant` 把钉钉群聊接入 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness)。当前 resident 使用“消息 → 话题 → 任务会话 → 独立执行会话”：消息只归属话题，既有话题协调器结合固定版本原文与新消息决定是否创建、续办、取消任务或仅讨论；任务会话持续负责完整目标，独立执行会话使用宿主实际工具完成受托工作。
 
 当前源码不再装配固定 workflow、DAG、阶段或节点调度器。按清洁启动使用全新任务库与 Resident domain，旧任务数据可恢复地移出运行路径；当前服务不读取、导入或兼容旧任务，也不重新发送旧通知。既有实例不能直接热切换，先读[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)。本文描述源码行为，不表示已发布、已部署或通过真实钉钉验收。

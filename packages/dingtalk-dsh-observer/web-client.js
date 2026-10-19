@@ -1226,6 +1226,19 @@ window.__ModuleLoader__.load({
         task.legacyReadonly ? React.createElement('div', { className: 'detail-panel' }, React.createElement('h2', null, '历史执行'), React.createElement(LegacyTaskHistory, { key: task.taskId, task }))
           : React.createElement(TaskExecutions, { key: task.taskId, taskId: task.taskId, updatedAt, onOpenSession }))
     }
+    function FeedbackNotice({ text, error = false }) {
+      const [visible, setVisible] = useState(true)
+      useEffect(() => {
+        setVisible(true)
+        if (error) return
+        const timer = window.setTimeout(() => setVisible(false), 5000)
+        return () => window.clearTimeout(timer)
+      }, [text, error])
+      if (!visible) return null
+      return React.createElement('div', { role: error ? 'alert' : 'status', style: { ...card, display: 'flex', alignItems: 'center', gap: 12, color: error ? colors.danger : colors.muted, ...(error ? { borderColor: colors.danger } : {}) } },
+        React.createElement('span', { style: { flex: 1, minWidth: 0, overflowWrap: 'anywhere' } }, text),
+        React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', 'aria-label': '关闭提示', onClick: () => setVisible(false) }, '关闭'))
+    }
     function ObserverContent({ openSession }) {
       const draftDirty = useRef(false)
       const [pendingNavigation, setPendingNavigation] = useState(null)
@@ -1646,9 +1659,9 @@ window.__ModuleLoader__.load({
       const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
-        error ? React.createElement('div', { style: { ...card, borderColor: colors.danger, color: colors.danger } }, `无法连接 resident 插件：${error}`) : null,
-        archiveFeedback ? React.createElement('div', { role: archiveFeedback.error ? 'alert' : 'status', style: { ...card, color: archiveFeedback.error ? colors.danger : colors.muted } }, archiveFeedback.text) : null,
-        navigationError ? React.createElement('div', { role: 'alert', style: { ...card, borderColor: colors.danger, color: colors.danger } }, `操作失败：${navigationError}`) : null,
+        error ? React.createElement(FeedbackNotice, { text: `无法连接 resident 插件：${error}`, error: true }) : null,
+        archiveFeedback ? React.createElement(FeedbackNotice, { text: archiveFeedback.text, error: Boolean(archiveFeedback.error) }) : null,
+        navigationError ? React.createElement(FeedbackNotice, { text: `操作失败：${navigationError}`, error: true }) : null,
         pageViewport
       )
       return React.createElement('div', { 'data-dingtalk-observer': '', style: { width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: colors.surface, color: 'inherit', overflow: 'auto' } }, React.createElement('style', null, observerCss), header, main)
