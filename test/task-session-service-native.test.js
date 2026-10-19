@@ -10,6 +10,7 @@ import { available, reason, nativeShell, nativeTaskHost, latestInput, modelToolV
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
 import { retireTaskContext } from '../packages/dingtalk-dsh-assistant/task-session.js'
+import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
 testRunner('原生网页工具错误不建立未知效果，仍可完成后续读取', { skip: !available ? reason : false, timeout: 20000 }, async t => {
  const root=await mkdtemp(join(tmpdir(),'native-web-read-'))
@@ -115,7 +116,71 @@ test('owner injects one authoritative source body across task, Web identity and 
   assert.equal(JSON.parse(raw.content[0].text).sources[0].requestIdentity.request.args.context, body)
 })
 
-for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知不阻断同账号人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}`, { timeout: 15000 }, async t => {
+test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话', { timeout: 20000 }, async t => {
+  let h, backing, original, topicId, block = true
+  t.after(async () => { await h?.close(); await backing?.close() })
+  const fixture = await nativeCase(t, 'task-topic-auth-')
+  backing = await openDynamicTaskStore({ dbPath: join(fixture.root, 'dynamic.db'), instanceId: 'native-test', initialize: true })
+  const store = { ...backing, command(input) {
+    if (block && input.kind === 'task.reopen') throw new Error('TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
+    return backing.command(input)
+  } }
+  const reviews = new Set()
+  h = await fixture.host(async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit')) {
+      const calls = topicTaskCalls(request)
+      if (topicId) for (const route of calls[0].args.routes) for (const unit of route.units)
+        unit.topics = [{ topicId, relationship: 'continuation', reason: '部署原修复' }]
+      return calls
+    }
+    if (names.includes('group_decision_submit') && topicId) {
+      if (!reviews.has(input.requestId)) {
+        reviews.add(input.requestId)
+        return [call('group_reply_review_get', { requestIds: [input.requestId] })]
+      }
+      const review = h.toolResults.findLast(item => item.name === 'group_reply_review_get')
+      const reviewedOutboundIds = JSON.parse(review.result.content[0].text).candidates.map(item => item.outboundId)
+      const basisUnitRefs = input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
+      return [call('group_decision_submit', { requestId: input.requestId, topicId, revision: input.revision, decision: {
+        basisMessageIds: input.messages.map(item => item.messageId), basisUnitRefs,
+        actions: [{ kind: 'task-reopen', taskId: original.taskId, inputVersion: original.requirementRevision,
+          runSequence: original.runSequence, context: '部署原修复到UAT2', objective: '部署原修复到UAT2',
+          acceptanceCriteria: ['核验实际运行版本'], topicRefs: [{ topicId, revision: input.revision }], basisUnitRefs }],
+        reply: '沿原任务部署UAT2。', replyReview: { kind: 'substantive', reviewedOutboundIds, sameMatterOutboundIds: [], replaceOutboundIds: [] },
+      } })]
+    }
+    const calls = topicTaskCalls(request)
+    if (calls) return calls
+    if (original) {
+      assert.equal(input.task.sessionId, original.sessionId)
+      assert.ok(input.sources.some(source => source.actorId === 'colleague' && source.text === '测试助手，部署原修复到UAT2'))
+    }
+    return [decision('complete', original ? '已处理原任务续办' : '修复已完成，未部署')]
+  }, { store })
+  await h.service.ingest(message); await h.service.whenIdle()
+  ;[original] = await h.query('task.list'); topicId = original.topicRefs[0].topicId
+  const followup = { ...message, messageId: 'deploy-followup', senderOpenDingTalkId: 'colleague', text: '测试助手，部署原修复到UAT2', occurredAt: '2026-10-13T10:02:00Z' }
+  await h.service.ingest(followup); await h.service.whenIdle()
+  const blocked = h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1)
+  assert.equal(blocked.error, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
+  assert.equal((await h.query('task.list'))[0].requirementRevision, 1)
+  const sent = h.sent.length
+  block = false
+  await h.service.retryMessage({ groupId: message.groupId, messageId: followup.messageId }); await h.service.whenIdle()
+  const [task] = await h.query('task.list')
+  assert.equal((await h.query('task.list')).length, 1)
+  assert.equal(task.taskId, original.taskId); assert.equal(task.sessionId, original.sessionId)
+  assert.equal(task.ownerActorId, 'native-user'); assert.equal(task.runSequence, 2)
+  assert.equal(task.requirementRevision, 2); assert.equal(task.status, 'completed')
+  assert.ok(h.sent.length > sent)
+  assert.equal(h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1).decisionId, blocked.decisionId)
+  assert.equal(h.residentStore.getTopic(message.groupId, topicId).processedRevision, 2)
+  await h.service.retryMessage({ groupId: message.groupId, messageId: followup.messageId }); await h.service.whenIdle()
+  assert.equal((await h.query('task.list'))[0].runSequence, 2)
+})
+
+for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague'], [false, 'native-user']]) test(`话题历史${ownEcho ? '自身通知不阻断人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}-${followupActor}`, { timeout: 15000 }, async t => {
   const fixture = await nativeCase(t, 'task-topic-source-')
   let topicId, originalTask, ownerCalls = 0
   const readReviews = new Set()
@@ -147,7 +212,9 @@ for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知
     }
     const calls = topicTaskCalls(request)
     if (calls) return calls
-    if (++ownerCalls === 1) return [call('task_session_submit', { decision: { action: 'blocked', summary: '需要核对开发来源', question: '是否批准分支例外？', evidence: [], limitations: [] } })]
+    if (++ownerCalls === 1) return followupActor === 'colleague'
+      ? [call('task_request_human', { audience: 'requester', reason: '需要核对开发来源', question: '是否批准分支例外？', evidence: [], attemptedActions: ['核对原始交办'] })]
+      : [call('task_session_submit', { decision: { action: 'blocked', summary: '需要核对开发来源', question: '是否批准分支例外？', evidence: [], limitations: [] } })]
     assert.equal(input.task.sessionId, originalTask.sessionId)
     assert.ok(input.sources.some(source => source.text === '先核对分支，不是批准例外'))
     assert.ok(input.sources.every(source => source.messageId !== 'native-notification-1'))
@@ -163,7 +230,7 @@ for (const ownEcho of [true, false]) test(`话题历史${ownEcho ? '自身通知
   await h.residentStore.routeMessages({ groupId: message.groupId, routeId: 'historical-echo-route', routingRevision: h.residentStore.getGroup(message.groupId).routingRevision, routes: [{ messageId: echo.messageId, messageVersion: 1,
     topics: [{ topicId, relationship: 'continuation', reason: '历史话题上下文' }] }] })
   const sentBefore = h.sent.filter(notification => notification.kind === 'topic-reply').length
-  await h.service.ingest({ ...message, messageId: 'manual-followup', text: '先核对分支，不是批准例外', occurredAt: '2026-10-13T10:02:00Z' })
+  await h.service.ingest({ ...message, senderOpenDingTalkId: followupActor, messageId: 'manual-followup', text: '先核对分支，不是批准例外', occurredAt: '2026-10-13T10:02:00Z' })
   await h.service.whenIdle()
   const [task] = await h.query('task.list')
   assert.equal((await h.query('task.list')).length, 1)
