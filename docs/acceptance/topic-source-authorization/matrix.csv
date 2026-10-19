@@ -9,3 +9,6 @@ blocked-decision-retry-idempotency,2,PASS,round-2.md
 cross-author-context-requester-protection,2,PASS,round-2.md
 missing-admission-rejected,2,PASS,round-2.md
 web-human-topic-regression,2,PASS,round-2.md
+package-process-health,3,PASS,round-3.md
+original-topic-drained,3,PASS,round-3.md
+original-task-session-execution-resumed,3,PASS,round-3.md
