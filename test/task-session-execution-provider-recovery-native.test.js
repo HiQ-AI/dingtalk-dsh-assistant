@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { available, reason, nativeTaskHost, latestInput, nativeShell, waitUntil, topicSummaryResponse } from './fixtures/task-session-native-host.js'
-const test = (name, fn) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, fn)
+import { available, reason, nativeTaskHost, latestInput, nativeShell, waitUntil, contextReadResponse, topicSummaryResponse } from './fixtures/task-session-native-host.js'
+const test = (name, fn, options = {}) => testRunner(name, { timeout: 30000, ...options, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
 const decide = action => call('task_session_submit', { decision: { action, summary: 'Original goal', evidence: [], limitations: [] } })
 const submit = call('execution_submit', { output: { status: 'completed', summary: 'Original goal done', evidence: ['Original operation retained'], limitations: [], artifacts: ['effect.txt'] } })
@@ -19,6 +19,7 @@ async function host(root, { initialize = true, fault = true, allowUnrelated = fa
       class Provider extends LlmAdapter {
         async *stream(request) {
           if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
+          if (yield* contextReadResponse(request)) return
           requests.push(structuredClone(request))
           let calls
           if (request.tools.some(tool => tool.name === 'task_delegate')) {
@@ -168,7 +169,8 @@ for (const recoverAfterCold of [false, true]) test(`provider short budget exhaus
   }
   assert.equal((await h.query('operation.list')).length, 1)
   assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
-})
+  // 未恢复分支完整运行三次冷审阅及后续真实事件，新增原生引用读取也计入墙钟预算。
+}, { timeout: recoverAfterCold ? 30000 : 60000 })
 
 test('business human answer replaces pending provider recovery input before any original session resumes', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })

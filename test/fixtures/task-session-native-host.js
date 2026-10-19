@@ -68,7 +68,7 @@ export async function nativeTaskHost(root, decide, options = {}) {
       let auxiliary = false
       try { auxiliary = latestInput(request).requestId?.startsWith('coord-summary-') === true } catch {}
       ;(auxiliary ? auxiliaryRequests : requests).push(structuredClone(request))
-      const calls = auxiliary ? topicTaskCalls(request) : await decide(request, h)
+      const calls = contextReadCalls(request) ?? (auxiliary ? topicTaskCalls(request) : await decide(request, h))
       for (const [index, call] of calls.entries()) {
         const id = `native-call-${++sequence}`, args = JSON.stringify(call.args)
         yield { type: 'block-start', index, blockType: 'tool-call' }
@@ -124,12 +124,69 @@ export function latestInput(request) {
     if (message.role !== 'user') continue
     for (const part of message.content ?? []) {
       if (part.type !== 'text') continue
-      try { const parsed = JSON.parse(part.text); if (parsed.task || parsed.sources) return inline(parsed) } catch {}
+      try { const parsed = JSON.parse(part.text); if (parsed.task || parsed.sources || parsed.contextReadRequired) return resolveContextInput(request, inline(parsed)) } catch (error) { if (error.contextReads) throw error }
       const topicLine = part.text.split('\n').find(line => line.startsWith('Topic 请求：'))
       if (topicLine) return JSON.parse(topicLine.slice('Topic 请求：'.length))
     }
   }
   throw new Error('No native coordinator input found')
+}
+
+// Scripted decisions must observe overflow through the same admitted tool as a
+// real model. Only contextPath fields are expanded; ordinary contentRef bodies
+// remain explicit references for the individual test's judgment.
+function resolveContextInput(request, input) {
+  const pages = modelToolValues(request), pending = new Map()
+  const read = (contentRef, path = '') => {
+    let offset = 0, text = '', entries = [], kind
+    while (true) {
+      // JSON indexes omit offset; the page range follows from entry count and
+      // its nextOffset (or totalEntries for the final page).
+      const page = pages.findLast(page => page.contentRef === contentRef && page.path === path && (page.format === 'json-index' ? (page.nextOffset ?? page.totalEntries) - page.entries.length : page.offset) === offset)
+      if (!page) {
+        const args = { contentRef, path, offset, limit: 16000 }
+        pending.set(JSON.stringify(args), args)
+        return undefined
+      }
+      if (page.format === 'json-index') { entries.push(...page.entries); kind = page.valueKind }
+      else text += page.text
+      if (page.nextOffset === null) break
+      offset = page.nextOffset
+    }
+    if (kind) {
+      const value = kind === 'array' ? [] : {}
+      for (const entry of entries) value[entry.key] = entry.valueRef ? read(entry.valueRef.contentRef) : entry.value
+      return value
+    }
+    const page = pages.findLast(page => page.contentRef === contentRef && page.path === path)
+    return page.format === 'text' ? text : JSON.parse(text)
+  }
+  const visit = value => value && typeof value === 'object'
+    ? value.contextPath ? read(input.contextRef, value.contextPath)
+      : Array.isArray(value) ? value.map(visit) : Object.fromEntries(Object.entries(value).map(([key, child]) => [key, visit(child)]))
+    : value
+  const resolved = input.contextReadRequired && !input.task && !input.sources ? read(input.contextRef) : visit(input)
+  if (pending.size) throw Object.assign(new Error('Native context requires explicit tool reads'), { contextReads: [...pending.values()].slice(0, 4) })
+  return resolved
+}
+
+export function contextReadCalls(request) {
+  try { latestInput(request); return undefined }
+  catch (error) { if (error.contextReads) return error.contextReads.map(args => ({ name: 'model_content_read', args })); throw error }
+}
+
+let contextSequence = 0
+export function* contextReadResponse(request) {
+  const calls = contextReadCalls(request)
+  if (!calls) return false
+  for (const [index, call] of calls.entries()) {
+    const id = 'context-read-' + ++contextSequence, args = JSON.stringify(call.args)
+    yield { type: 'block-start', index, blockType: 'tool-call' }
+    yield { type: 'tool-call-delta', index, id, name: call.name, argumentsDelta: args }
+    yield { type: 'block-end', index, block: { type: 'tool-call', id, name: call.name, arguments: args } }
+  }
+  yield { type: 'finish', reason: { kind: 'tool-calls' } }
+  return true
 }
 
 export async function waitUntil(read, description, timeoutMs = 10000) {

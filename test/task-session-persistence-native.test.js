@@ -214,7 +214,11 @@ for (const replaced of ['root', 'project', 'session', 'log']) test(`cached nativ
   const selected = replaced === 'root' ? taskSessionLogRoot(root, 'task-a') : replaced === 'project' ? dirname(dirname(log)) : replaced === 'session' ? dirname(log) : log
   const outside = join(root, 'outside-' + replaced)
   await rename(selected, outside)
-  await symlink(outside, selected, replaced === 'log' ? 'file' : process.platform === 'win32' ? 'junction' : 'dir')
+  // Windows 最终日志路径使用无特权 junction；文件 symlink 仍由 POSIX 覆盖。
+  const windowsLogLink = replaced === 'log' && process.platform === 'win32'
+  const linkTarget = windowsLogLink ? join(root, 'outside-log-directory') : outside
+  if (windowsLogLink) await mkdir(linkTarget)
+  await symlink(linkTarget, selected, process.platform === 'win32' ? 'junction' : replaced === 'log' ? 'file' : 'dir')
   const nextHeader = h.ctx.sessions.prepare('after', { meta: { cwd } }).header
   for (const operation of [
     () => h.router.register({ taskId: 'task-a', sessionId: 'new-binding', cwd }),
@@ -226,7 +230,8 @@ for (const replaced of ['root', 'project', 'session', 'log']) test(`cached nativ
   ]) await assert.rejects(operation(), /TASK_DIRECTORY_OUTSIDE_ROOT/)
   await assert.rejects(h.ctx.sessionPersistence.flush(), error => error instanceof AggregateError
     && error.errors.some(item => /TASK_DIRECTORY_OUTSIDE_ROOT/.test(item.message)))
-  assert.deepEqual(await readFile(log), before)
+  assert.deepEqual(await readFile(replaced === 'log' ? outside : log), before)
+  if (windowsLogLink) assert.deepEqual(await readdir(linkTarget), [])
   if (replaced !== 'log') assert.ok(!(await readdir(outside, { recursive: true })).some(path => path.includes('after') || path.includes('new-binding')))
 })
 

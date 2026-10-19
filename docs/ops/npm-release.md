@@ -28,6 +28,7 @@ GitHub Environment `NPM_PUBLISH` 保留审批/保护规则，但应删除不再�
 
 1. 同步根包、assistant、observer 的版本号，并更新 `CHANGELOG.md` 的版本章节和 Release 链接。
 2. 在本地使用 Node.js 24.19.0 执行 `pnpm install --frozen-lockfile`、构建和 `pnpm test`，再检查三个实际 `pnpm pack` 产物。
+   工程交付后补充用例完整实跑两代 Git、候选服务及 PR 流程，按每代 240 秒合计 480 秒预算；Windows 本地单代实测约 187 秒，需等待最终断言，不能以持续有进展代替通过。
 3. 将版本改动合入 `main`，创建指向该提交的带注释 `v<version>` Tag 并推送。
 4. `release.yml` 在 GitHub 托管的 Windows runner 上安装固定 npm 12.0.2，通过 `id-token: write` 获取 OIDC 身份，按 observer → assistant → 根包发布。Trusted Publishing 会自动生成 provenance，无需 `--provenance`。
 5. workflow 最多等待约十分钟回读三个精确 npm 版本；全部一致后才创建带三个 tgz 的 GitHub Release。已存在的 Release 也必须逐个核对附件名称、大小与 SHA-256，全部一致才视为重跑成功。1.0.0 发布时 npm 元数据可见时间比发布回执晚约五分钟，原两分钟窗口因此误报失败。
@@ -60,6 +61,8 @@ OIDC 发布失败时依次核对：workflow 使用 GitHub 托管 runner；权限
 测试临时根必须是当前执行身份可写、祖先目录可回读的物理目录；可通过 `TEMP` / `TMP` 指定隔离工作区，不使用写死的 `/tmp`。Windows 进程与端口所有权验收仍需要系统允许其既有只读查询；访问被拒时按环境阻塞报告，不删除检查、不把失败改成跳过。合成 Node 服务的测试 owner 通过专属 IPC 请求自然关闭，并等待其实际 `ChildProcess` 的 `close` 事件；这只负责测试自身资源收尾，不替代产品的进程树或排空验收。
 
 测试需要真实 JDK11（`JAVA_HOME` 指向其安装根），前端启动用例还需 `NODE22_EXECUTABLE` 指向真实 Node22；仓库与发布本身仍使用 Node24.19.0。测试所用 YAML、Cordis 和 Loader 来自仓库声明依赖，不要求预先安装本机 DSH profile。
+
+Windows 专用临时测试目录须向当前执行用户继承授予 FullControl，供原生沙箱设置子目录 ACL；仅能写文件的 Modify 权限不足，会在 SetNamedSecurityInfoW grantWrite 阶段报 Win32 5。这是测试环境权限准备，不修改产品沙箱策略。
 
 全量测试前先执行 `mvn -B -f test/fixtures/local-acceptance-spring/pom.xml package`，从已声明的真实 Spring Boot 依赖生成合成验收夹具，不使用或发布业务 JAR。CI 与 Release 都显式准备工具和短物理临时目录；受管路径的链接/越界检查保持原样，不因 runner 的系统临时路径而放宽。较深临时根会触发部分 Git for Windows 命令的路径限制，须使用短物理根。
 
