@@ -77,7 +77,7 @@ window.__ModuleLoader__.load({
         confirmed: ['已送达', 'done', '回读已确认送达'],
         failed: ['投递异常', 'error', '需核验投递原因'],
         stopped: ['已停止', 'neutral', '旧通知意图已停止发送'],
-        unverified: ['已发送未核验', 'warning', '历史发送记录，缺少回读消息 ID'],
+        unverified: ['已发送', 'warning', '历史发送记录，缺少回读消息 ID'],
       }
       const [label, state, hint] = states[id]
       const reasons = {
@@ -97,7 +97,7 @@ window.__ModuleLoader__.load({
       else if (['checking', 'waiting'].includes(id)) { reasonId = id === 'waiting' ? 'readback' : 'verification'; detail = hint }
       if (id === 'confirmed') { reasonId = 'none'; detail = '' }
       const recallId = ({ requested: 'requested', recalled: 'recalled', failed: 'failed' })[message.recallStatus] || 'none'
-      const recall = { id: recallId, label: ({ requested: '已记录撤回请求', recalled: '已撤回', failed: '撤回受阻', none: '无撤回记录' })[recallId],
+      const recall = { id: recallId, label: ({ requested: '已申请', recalled: '已撤回', failed: '撤回受阻', none: '无记录' })[recallId],
         detail: recallId === 'failed' ? message.recallError === 'replacement_delivery_unknown' ? '历史送达证据不足，撤回结果需核验' : typeof message.recallError === 'string' ? message.recallError : '原因未记录' : '' }
       return { id, label, state, hint, detail, reasonId, historical, recall, replacementId: message.supersededByOutboundId,
         retryDisabled: historical || ['stopped', 'unverified'].includes(id) }
@@ -1460,7 +1460,7 @@ window.__ModuleLoader__.load({
             typeof message.deliveryError === 'string' && message.deliveryError ? React.createElement('div', { style: { marginTop: 3, color: colors.muted } }, `${status.id === 'confirmed' ? '历史诊断' : '诊断'}：${message.deliveryError}`) : null,
             !status.retryDisabled && (['waiting', 'checking'].includes(status.id) || status.id === 'failed' && message.notificationKnownNotSent === true) && message.notificationRetryAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `计划${['waiting', 'checking'].includes(status.id) ? '核验' : '重试'} ${fmt(message.notificationRetryAt)}`) : null,
             message.deliveryAttemptedAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `最近尝试 ${fmt(message.deliveryAttemptedAt)} · 共 ${message.deliveryAttemptCount || 1} 次`) : null),
-          React.createElement('td', { style: { ...tableBodyCell, width: 180, overflowWrap: 'anywhere' } }, status.replacementId ? React.createElement('span', null, '已被后续通知替代 · ', React.createElement('code', { title: status.replacementId }, short(status.replacementId))) : '无替代关系'),
+          React.createElement('td', { style: { ...tableBodyCell, width: 180, overflowWrap: 'anywhere' } }, status.replacementId ? React.createElement('span', null, '已替代 · ', React.createElement('code', { title: status.replacementId }, short(status.replacementId))) : '无替代'),
           React.createElement('td', { style: { ...tableBodyCell, width: 160, overflowWrap: 'anywhere' } }, status.recall.label,
             status.recall.detail ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, status.recall.detail) : null),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } },
@@ -1582,14 +1582,14 @@ window.__ModuleLoader__.load({
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(React.Fragment, null,
-              React.createElement(SelectMenu, { label: '筛选发送状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部发送状态' }, ...[
+              React.createElement(SelectMenu, { label: '筛选发送状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部状态' }, ...[
                 { notificationState: 'prepared' }, { notificationState: 'starting' }, { notificationState: 'unknown', notificationFailurePhase: 'readback' },
                 { notificationState: 'unknown' }, { notificationState: 'failed' }, { notificationState: 'failed', deliveryPendingReason: 'task-notification-task-terminal' },
                 { notificationState: 'delivered' }, { status: 'sent' },
               ].map(message => { const { id, label } = outboxDelivery(message); return { id, label } })], onChange: value => { setOutboxStatusFilter(value); setOutboxPage(1) } }),
-              React.createElement(SelectMenu, { label: '筛选发送原因', value: outboxReasonFilter, options: [{ id: 'all', label: '全部原因' }, { id: 'none', label: '无异常原因' }, { id: 'pre-send', label: '发送前拒绝' }, { id: 'readback', label: '回读未确认' }, { id: 'verification', label: '需要核验' }, { id: 'failure', label: '投递错误' }, { id: 'stopped', label: '旧意图停发' }, { id: 'history', label: '历史证据不足' }], onChange: value => { setOutboxReasonFilter(value); setOutboxPage(1) } }),
-              React.createElement(SelectMenu, { label: '筛选替代关系', value: outboxReplacementFilter, options: [{ id: 'all', label: '全部替代关系' }, { id: 'replaced', label: '存在替代关系' }, { id: 'none', label: '无替代关系' }], onChange: value => { setOutboxReplacementFilter(value); setOutboxPage(1) } }),
-              React.createElement(SelectMenu, { label: '筛选撤回结果', value: outboxRecallFilter, options: [{ id: 'all', label: '全部撤回结果' }, { id: 'none', label: '无撤回记录' }, { id: 'requested', label: '已记录撤回请求' }, { id: 'failed', label: '撤回受阻' }, { id: 'recalled', label: '已撤回' }], onChange: value => { setOutboxRecallFilter(value); setOutboxPage(1) } }))))
+              React.createElement(SelectMenu, { label: '筛选发送原因', value: outboxReasonFilter, options: [{ id: 'all', label: '全部原因' }, { id: 'none', label: '无异常' }, { id: 'pre-send', label: '发送前拒绝' }, { id: 'readback', label: '回读未确认' }, { id: 'verification', label: '需要核验' }, { id: 'failure', label: '投递错误' }, { id: 'stopped', label: '旧意图停发' }, { id: 'history', label: '历史缺证' }], onChange: value => { setOutboxReasonFilter(value); setOutboxPage(1) } }),
+              React.createElement(SelectMenu, { label: '筛选替代关系', value: outboxReplacementFilter, options: [{ id: 'all', label: '全部关系' }, { id: 'replaced', label: '已替代' }, { id: 'none', label: '无替代' }], onChange: value => { setOutboxReplacementFilter(value); setOutboxPage(1) } }),
+              React.createElement(SelectMenu, { label: '筛选撤回结果', value: outboxRecallFilter, options: [{ id: 'all', label: '全部结果' }, { id: 'none', label: '无记录' }, { id: 'requested', label: '已申请' }, { id: 'failed', label: '撤回受阻' }, { id: 'recalled', label: '已撤回' }], onChange: value => { setOutboxRecallFilter(value); setOutboxPage(1) } }))))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 1040, borderCollapse: 'collapse', tableLayout: 'fixed' } },
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 144 } }, '处理状态'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '关联任务 / 历史话题'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),

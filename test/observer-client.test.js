@@ -131,12 +131,12 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
     [{ status: 'pending', deliveryPendingReason: 'delivery_unknown' }, 'checking', '待核对'],
     [{ status: 'pending', deliveryPendingReason: 'message_not_observed' }, 'waiting', '待回读'],
     [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已送达'],
-    [{ status: 'sent' }, 'unverified', '已发送未核验'],
-    [{ status: 'sent', recallStatus: 'recalled' }, 'unverified', '已发送未核验'],
+    [{ status: 'sent' }, 'unverified', '已发送'],
+    [{ status: 'sent', recallStatus: 'recalled' }, 'unverified', '已发送'],
     [{ status: 'superseded', supersededByOutboundId: 'new' }, 'stopped', '已停止'],
     [{ status: 'sent', deliveredMessageId: 'actual', supersededByOutboundId: 'new' }, 'confirmed', '已送达'],
     [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'stopped', '已停止'],
-    [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'unverified', '已发送未核验'],
+    [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'unverified', '已发送'],
   ]
   for (const [message, id, label] of scenarios) {
     const result = classify(message)
@@ -260,14 +260,14 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
   assert.doesNotMatch(delivered, /计划重试|计划核验/); assert.match(delivered, /历史诊断：CLI_READBACK_FAILED/)
   const replacedDelivered = text(render(withFacts({ status: 'sent', notificationState: 'delivered', deliveredMessageId: 'observed', supersededByOutboundId: 'replacement', deliveredAt: '2026-10-19T02:27:24Z' }))[0])
   assert.match(replacedDelivered, /已送达/)
-  assert.match(replacedDelivered, /已被后续通知替代/)
+  assert.match(replacedDelivered, /已替代/)
   assert.match(replacedDelivered, /未记录.*\n回读确认 本地时间 2026-10-19T02:27:24Z/)
   assert.doesNotMatch(replacedDelivered, /等待替换通知|送达后撤回/)
   const timed = text(render(withFacts({ sentAt: '2026-10-19T02:27:14Z', deliveredAt: '2026-10-19T02:27:24Z' }))[0])
   assert.match(timed, /本地时间 2026-10-19T02:27:14Z/)
   assert.doesNotMatch(timed, /未记录|回读确认/)
   const superseded = text(render(withFacts({ supersededByOutboundId: 'replacement' }))[0])
-  assert.match(superseded, /已被后续通知替代/); assert.match(superseded, /待回读/); assert.doesNotMatch(superseded, /等待替换通知|送达后撤回/)
+  assert.match(superseded, /已替代/); assert.match(superseded, /待回读/); assert.doesNotMatch(superseded, /等待替换通知|送达后撤回/)
 })
 
 test('发送状态、原因、替代关系和撤回结果按交集独立筛选', async () => {
@@ -301,6 +301,9 @@ test('现行通知账优先，历史字段与撤回结果不能覆盖未知或�
   assert.equal(classify({ notificationState: 'future-state', status: 'sent' }).id, 'checking')
   assert.equal(classify({ status: 'sent' }).id, 'unverified')
   assert.equal(classify({ status: 'pending' }).id, 'checking')
+  for (const message of [{ notificationState: 'prepared' }, { notificationState: 'starting' }, { notificationState: 'unknown' }, { notificationState: 'unknown', notificationFailurePhase: 'readback' }, { notificationState: 'failed' }, { notificationState: 'delivered' }, { status: 'sent' }, { status: 'superseded' }]) {
+    assert.ok(classify(message).label.length <= 4, '发送状态使用最多四字短名称')
+  }
   assert.equal(classify({ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required' }).reasonId, 'verification')
 })
 
