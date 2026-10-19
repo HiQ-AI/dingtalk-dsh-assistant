@@ -1,0 +1,9 @@
+case,round-1,round-2,round-3,evidence
+stopped-check,PASS,,,round-1.md
+launcher-regression,PASS,PASS,PASS,round-3.md
+stopped-start,FAIL,,PASS,round-3.md
+running-check,,PASS,,round-2.md
+native-exit,,PASS,,round-2.md
+native-restart-one-command,,FAIL,NOT_RUN,round-3.md
+startup-recovery,,,PASS,round-3.md
+installed-launcher-sha256,,,PASS,round-3.md

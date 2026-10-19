@@ -98,7 +98,29 @@ export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerP
       drained: unstartedTaskClaims.length === 0, unstartedTaskClaims, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
   } finally { db.close() }
 }
+// 冷启动走正式 Host 的恢复事务，不把部署要求的 turn/end 当作崩溃恢复前提。
+export function inspectStartup(dbPath) {
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  try {
+    if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok') throw Error('START_DATABASE_CORRUPT')
+    const meta = Object.fromEntries(db.prepare('SELECT key,value FROM dynamic_meta').all().map(row => [row.key, row.value]))
+    const marker = JSON.parse(readFileSync(dbPath + '.initialized', 'utf8'))
+    if (marker.version !== 1 || !meta.instanceId || !meta.initToken || marker.phase !== 'initialized' || marker.instanceId !== meta.instanceId || marker.initToken !== meta.initToken
+      || (marker.ingressEpoch ?? null) !== (meta.ingressEpoch ?? null)) throw Error('START_INITIALIZATION_IDENTITY')
+    if (meta.owner) {
+      const pid = Number(meta.owner.split(':')[0])
+      if (!Number.isSafeInteger(pid) || pid < 1) throw Error('START_OWNER_INVALID')
+      try { process.kill(pid, 0); throw Error('START_OWNER_STILL_ALIVE') }
+      catch (error) { if (error.code !== 'ESRCH') throw error }
+    }
+    const rows = table => db.prepare(`SELECT body FROM dynamic_${table}`).all().map(row => JSON.parse(row.body))
+    return { ownerProcessExited: true, recoveryHandledByHost: true,
+      pendingSessions: ['tasks', 'executions', 'groups'].flatMap(rows).filter(row => row.drained === false).length,
+      startingOperations: rows('operations').filter(row => row.state === 'starting').length,
+      unknownNotifications: rows('notifications').filter(row => row.state === 'unknown').length }
+  } finally { db.close() }
+}
 if (process.argv[1]?.endsWith('inspect-quiescent-ledger.mjs')) {
-  try { console.log(JSON.stringify(process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5])))) }
+  try { console.log(JSON.stringify(process.argv[2] === 'startup' ? inspectStartup(process.argv[3]) : process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5])))) }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }
