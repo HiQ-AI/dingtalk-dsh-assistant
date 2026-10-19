@@ -79,9 +79,10 @@ for (const restart of [false, true]) test(`native provider failure resumes origi
     await h.close(); h = await host(root, { initialize: false, fault: false }); hosts.push(h)
     await h.service.recover()
   }
-  // The service timer must resume without polling recover every 10 minutes.
-  await waitUntil(async () => (await h.query('task.get', { taskId: task.taskId })).status === 'completed', 'bounded native provider recovery', 10000)
+  // 十秒只约束定时恢复准入；实际模型读取和执行由原生排空等待，仍受用例总时限约束。
+  await waitUntil(async () => (await h.query('execution.list'))[0]?.inputVersion === 2, 'bounded native provider recovery admission', 10000)
   await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
   const final = (await h.query('execution.list'))[0]
   assert.equal(final.executionId, first.executionId); assert.equal(final.sessionId, first.sessionId)
   assert.equal(final.inputVersion, 2); assert.equal(final.status, 'succeeded')
