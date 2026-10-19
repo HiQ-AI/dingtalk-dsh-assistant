@@ -34,7 +34,11 @@ function makeDecision(request, tasks) {
   else if (message.startsWith('任务：')) decision = { actions: [{ kind: 'new-task', title: message.slice(3), objective: message.slice(3), acceptanceCriteria: ['任务目标已完成并有可核验证据'], topicRefs, basisUnitRefs }], reply: '已识别为正式任务。' }
   else if (message.startsWith('补充：')) {
     const task = tasks.find((item) => item.topicRefs?.some((ref) => ref.topicId === request.topicId))
-    decision = task === undefined ? { actions: [], reply: '没有可补充的任务。' } : { actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, context: message.slice(3), topicRefs, basisUnitRefs }], reply: '已补充到现有任务。' }
+    // Fake mode accepts an explicit enum command, never infers authorization or defaults a missing classification.
+    const classified = /^补充：(preserve|replan)：([\s\S]+)$/u.exec(message)
+    decision = task === undefined ? { actions: [], reply: '没有可补充的任务。' }
+      : !classified ? { actions: [], reply: 'fake 模式补充须显式使用“补充：preserve：正文”或“补充：replan：正文”，尚未修改任务。' }
+      : { actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence, progressImpact: classified[1], context: classified[2], topicRefs, basisUnitRefs }], reply: '已补充到现有任务。' }
   }
   else decision = { actions: [], reply: `fake-answer:${text}` }
   const unitBasis = basisUnitRefs.length ? basisUnitRefs : request.removedUnitRefs?.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })).filter(({ unitId, unitRevision }) => unitId && unitRevision)
