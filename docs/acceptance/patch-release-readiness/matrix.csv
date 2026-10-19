@@ -1,0 +1,8 @@
+case,round-1,round-2
+version-and-three-packages,PASS,PASS
+full-local-suite,FAIL,NOT_RUN
+context-reference-protocol,FAIL,PASS
+windows-reparse-point-guards,FAIL,PASS
+two-generation-engineering,FAIL,PASS
+affected-fixture-regression,NOT_RUN,PASS
+registry-and-release,NOT_RUN,NOT_RUN

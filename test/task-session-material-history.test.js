@@ -207,12 +207,14 @@ for (const mode of ['snapshot-link', 'snapshot-truncated', 'foreign-resource', '
     await h.instance.whenIdle()
     const task = (await h.instance.store.query({ kind: 'task.list' }))[0]
     const directory = join(root, 'tasks', task.taskId, 'materials'), name = (await readdir(directory)).find(name => name.startsWith('source-'))
-    const path = join(directory, name), material = JSON.parse(await readFile(path, 'utf8'))
+    const path = join(directory, name), originalSnapshot = await readFile(path), material = JSON.parse(originalSnapshot.toString('utf8'))
     const foreign = join(root, 'tasks', 'foreign-task', 'materials'); await mkdir(foreign, { recursive: true })
     const foreignFile = join(foreign, 'private.txt'); await writeFile(foreignFile, 'FOREIGN_SECRET_MUST_NOT_REACH_MODEL')
     const modelCalls = h.inputs.length
     if (mode === 'snapshot-link') {
-      const prior = join(root, 'external-snapshot.json'); await rename(path, prior); await symlink(prior, path, 'file')
+      const prior = join(root, 'external-snapshot.json'); await rename(path, prior)
+      // Windows 无特权进程用原生 junction 覆盖最终路径重解析点拒绝；POSIX 保留文件 symlink。
+      await symlink(process.platform === 'win32' ? foreign : prior, path, process.platform === 'win32' ? 'junction' : 'file')
     } else if (mode === 'snapshot-truncated') await writeFile(path, '{"sourceId":')
     else if (mode === 'foreign-resource') {
       material.resources[0].path = foreignFile
@@ -220,7 +222,7 @@ for (const mode of ['snapshot-link', 'snapshot-truncated', 'foreign-resource', '
       await writeFile(path, JSON.stringify(material))
     } else if (mode === 'resource-link') {
       await rename(material.resources[0].path, join(root, 'saved-resource.txt'))
-      await symlink(foreignFile, material.resources[0].path, 'file')
+      await symlink(process.platform === 'win32' ? foreign : foreignFile, material.resources[0].path, process.platform === 'win32' ? 'junction' : 'file')
     } else {
       material.resources[0].resource.resourceId = 'another-users-resource'
       await writeFile(path, JSON.stringify(material))
@@ -233,6 +235,9 @@ for (const mode of ['snapshot-link', 'snapshot-truncated', 'foreign-resource', '
     assert.equal(reads, 1)
     assert.equal(JSON.stringify(h.inputs).includes('FOREIGN_SECRET'), false)
     assert.equal(await readFile(foreignFile, 'utf8'), 'FOREIGN_SECRET_MUST_NOT_REACH_MODEL')
+    assert.deepEqual(await readdir(foreign), ['private.txt'])
+    if (mode === 'snapshot-link') assert.deepEqual(await readFile(join(root, 'external-snapshot.json')), originalSnapshot)
+    if (mode === 'resource-link') assert.equal(await readFile(join(root, 'saved-resource.txt'), 'utf8'), 'original bytes')
   } finally { await h.instance.close() }
 })
 

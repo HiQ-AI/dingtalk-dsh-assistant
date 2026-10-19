@@ -459,7 +459,8 @@ test('工程registry按Task冻结配置，重启重建同digest，模型变化�
   await assert.rejects(changed.restore(reopened), { code: 'ENGINEERING_DEFINITION_CONFIG_DRIFT' })
 })
 
-test('工程交付后补充：固定分支祖先条件续写、PR原位修订且新代读取旧代结果', { timeout: 240000 }, async t => {
+// 两代均完整实跑 Git、候选服务验收及 PR 投递，每代沿用 240 秒预算。
+test('工程交付后补充：固定分支祖先条件续写、PR原位修订且新代读取旧代结果', { timeout: 2 * 240000 }, async t => {
   const { readFile } = await import('node:fs/promises')
   const { openExecutionArtifacts } = await import('../packages/dingtalk-dsh-assistant/execution-artifacts.js')
   const { createExecutionController } = await import('../packages/dingtalk-dsh-assistant/execution-controller.js')
