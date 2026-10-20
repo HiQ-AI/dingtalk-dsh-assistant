@@ -354,6 +354,18 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, await store.reconcileWebTaskTopics({ ...parsed.data, checkOnly: !!reconcileTopics[1] }))
     } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
+  const dialogue = /^(?:\/state)?\/tasks\/([^/]+)\/dialogue$/u.exec(url.pathname)
+  if (dialogue && ((request.method === 'GET' && url.pathname.startsWith('/state/')) || (request.method === 'POST' && !url.pathname.startsWith('/state/')))) {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    if (!store.getTaskDialogue || !store.sendTaskDialogue) return send(response, 404, { error: 'task_session_disabled' })
+    const taskId = decodeURIComponent(dialogue[1])
+    try {
+      if (request.method === 'GET') return send(response, 200, await store.getTaskDialogue(taskId))
+      const parsed = z.strictObject({ requestId: requiredText.max(200), text: requiredText.max(10000) }).safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'task_dialogue_invalid' })
+      return send(response, 202, await store.sendTaskDialogue({ ...parsed.data, taskId }))
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   const humanReply = request.method === 'POST' && /^\/tasks\/([^/]+)\/human-requests\/([^/]+)\/reply(\/check)?$/u.exec(url.pathname)
   if (humanReply) {
     if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })

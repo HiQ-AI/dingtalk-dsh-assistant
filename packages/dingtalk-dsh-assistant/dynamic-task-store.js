@@ -309,6 +309,38 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       saveTask(task)
       return changed({ task })
     }
+    if (kind === 'task.dialogue.add') {
+      const task = get('dynamic_tasks', a.taskId)
+      const id = text(a.requestId, 'requestId'), message = text(a.text, 'text').trim()
+      if (!webActorId || a.actorId !== webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
+      const prior = task.dialogue?.find(item => item.id === id)
+      if (prior) {
+        if (prior.text !== message || prior.actorId !== a.actorId) fail('DYNAMIC_COMMAND_ID_CONFLICT')
+        return changed({ message: prior })
+      }
+      if (task.archivedAt || task.status !== 'active' || task.control !== 'active') fail('DYNAMIC_TASK_NOT_ACTIVE')
+      if (!message || message.length > 10000 || id.length > 200) fail('DYNAMIC_ARGUMENT_INVALID')
+      const entry = { id, text: message, actorId: a.actorId, receivedAt: stamp, reply: null }
+      ;(task.dialogue ??= []).push(entry)
+      saveTask(task)
+      wake(task.taskId, 'task.dialogue', { messageId: id }, `dialogue:${task.taskId}:${id}`)
+      return changed({ task, message: entry })
+    }
+    if (kind === 'task.dialogue.reply') {
+      const task = currentTask(a.binding)
+      const message = task.dialogue?.find(item => item.id === a.messageId)
+      const claimed = wakes(task.taskId).some(item => item.kind === 'task.dialogue' && item.payload.messageId === a.messageId
+        && item.state === 'claimed' && item.leaseEpoch === a.binding.leaseEpoch)
+      if (!message || !claimed) fail('DYNAMIC_WAKE_CLAIM_STALE')
+      const reply = text(a.reply, 'reply').trim()
+      if (!reply || reply.length > 20000) fail('DYNAMIC_ARGUMENT_INVALID')
+      if (message.reply && message.reply !== reply) fail('DYNAMIC_COMMAND_ID_CONFLICT')
+      message.reply = reply; message.repliedAt ??= stamp
+      for (const item of wakes(task.taskId)) if (item.kind === 'task.dialogue' && item.payload.messageId === a.messageId
+        && item.leaseEpoch === a.binding.leaseEpoch) { item.state = 'acked'; item.ackedAt = stamp; put('dynamic_wakes', item) }
+      saveTask(task)
+      return changed({ task, message })
+    }
     if (kind === 'task.supplement') {
       const task = get('dynamic_tasks', a.taskId)
       const messageId = text(a.messageId, 'messageId'), message = text(a.text, 'text')
@@ -404,7 +436,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         task.providerRecovery = { ...task.providerRecovery, requirementRevision: task.requirementRevision,
           nextAttemptAt: null, suspended: true, admission: { kind: task.providerRecovery.requirementRevision !== task.requirementRevision ? 'new-input' : 'scheduled', leaseEpoch: task.leaseEpoch, at: stamp } }
       }
-      const pending = wakes(task.taskId).filter(item => item.state !== 'acked')
+      let pending = wakes(task.taskId).filter(item => item.state !== 'acked')
+      // Dialogue uses the same owner/lease queue, one message per turn. Ordinary
+      // execution wakes remain pending so a conversation cannot consume their work.
+      if (a.dialogue === true) pending = pending.filter(item => item.kind === 'task.dialogue').slice(0, 1)
+      else pending = pending.filter(item => item.kind !== 'task.dialogue')
       if (!pending.length && !a.force) fail('DYNAMIC_TASK_NO_WAKE')
       for (const item of pending) { item.state = 'claimed'; item.leaseEpoch = task.leaseEpoch; put('dynamic_wakes', item) }
       saveTask(task)
@@ -514,6 +550,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.complete') {
       const task = currentTask(a.binding)
+      if (task.dialogue?.some(item => !item.reply)) fail('DYNAMIC_TASK_DIALOGUE_PENDING')
       if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt
         && item.requirementRevision === task.requirementRevision && item.controlRevision === task.controlRevision))) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
       assertClear(task.taskId)

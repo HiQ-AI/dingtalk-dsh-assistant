@@ -20,7 +20,7 @@ function harness(componentName, initialProps = {}) {
   }
   runInNewContext(source.replace('return module.exports', `return { ...module.exports, testComponent: ${componentName} }`), {
     document: initialProps.testDocument,
-    AbortController, URL, console, crypto: { randomUUID: () => `request-${++uuid}` },
+    AbortController, URL, console, setTimeout: () => 1, clearTimeout() {}, crypto: { randomUUID: () => `request-${++uuid}` },
     fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, resolve: value => resolve({ ok: true, json: async () => value }), reject })) },
     window: { addEventListener: (...args) => events.push(['add', ...args]), removeEventListener: (...args) => events.push(['remove', ...args]),
       __ModuleLoader__: { load: ({ factory }) => { component = factory(name => name === 'react' ? React : { Button: 'button', StateDot: 'dot' }).testComponent } } },
@@ -113,6 +113,51 @@ test('Web看板无新建入口或表单接线，空列表和已有任务仍显�
     assert.equal(elements(tree).some(item => ['button', 'form', 'input', 'textarea'].includes(item.type)), false)
     assert.equal(text(tree).includes('已有任务'), bucketColumns.length > 0)
   }
+})
+
+test('任务对话运行中可发送，IME不误发，失败保留草稿和幂等键，关闭重开与旧回读不丢消息', async () => {
+  const h = harness('TaskDialogue', { taskId: 't' })
+  let tree = h.render(); button(tree, '对话').props.onClick(); tree = h.render()
+  h.requests[0].resolve({ messages: [], writable: true }); await settle(); tree = h.render()
+  input(tree, '消息').props.onChange({ target: { value: '目标不变，请先检查原错误' } }); tree = h.render()
+  const form = () => elements(tree).find(item => item.type === 'form')
+  await form().props.onSubmit({ preventDefault() {}, nativeEvent: { isComposing: true } })
+  assert.equal(h.requests.length, 1)
+  const first = form().props.onSubmit({ preventDefault() {} }); form().props.onSubmit({ preventDefault() {} })
+  assert.equal(h.requests.length, 2)
+  const identity = JSON.parse(h.requests[1].options.body)
+  h.requests[1].reject(Error('connection lost')); await first; tree = h.render()
+  assert.equal(input(tree, '消息').props.value, identity.text)
+  assert.match(text(tree), /发送失败/)
+  button(tree, '收起对话').props.onClick(); tree = h.render()
+  button(tree, '对话').props.onClick(); tree = h.render()
+  assert.equal(input(tree, '消息').props.value, identity.text)
+  const retry = form().props.onSubmit({ preventDefault() {} })
+  assert.deepEqual(JSON.parse(h.requests[3].options.body), identity)
+  const saved = { id: identity.requestId, text: identity.text, receivedAt: '2026-10-20T02:00:00Z', reply: null }
+  h.requests[3].resolve(saved); await retry
+  h.requests[2].resolve({ writable: true, messages: [] }); await settle(); tree = h.render()
+  assert.equal(input(tree, '消息').props.value, '')
+  assert.ok(text(tree).includes(identity.text)); assert.match(text(tree), /已保存，待统筹处理/)
+  button(tree, '收起对话').props.onClick(); tree = h.render(); button(tree, '对话').props.onClick(); h.render()
+  h.requests[4].resolve({ writable: true, messages: [{ ...saved, reply: '原统筹已保存提醒，尚未确认消费。', repliedAt: saved.receivedAt }] }); await settle()
+  tree = h.render(); assert.match(text(tree), /原统筹已保存提醒/)
+  assert.doesNotMatch(text(tree), /已保存，待统筹处理/)
+  h.unmount()
+})
+
+test('对话按任务key隔离，历史任务不挂载，已结束任务只读回看', async () => {
+  for (const taskId of ['one', 'two']) {
+    const tree = harness('TaskSessionDetail', { task: { taskId, state: 'running' } }).render()
+    const dialogue = elements(tree).find(item => item.props.taskId === taskId && item.props.key === taskId && !item.props.updatedAt)
+    assert.ok(dialogue)
+  }
+  assert.equal(elements(harness('TaskSessionDetail', { task: { taskId: 'old', legacyReadonly: true } }).render()).some(item => item.type?.name === 'TaskDialogue'), false)
+  const h = harness('TaskDialogue', { taskId: 'done' })
+  button(h.render(), '对话').props.onClick(); h.render()
+  h.requests[0].resolve({ writable: false, messages: [] }); await settle()
+  assert.equal(button(h.render(), '发送').props.disabled, true)
+  h.unmount()
 })
 
 test('任务详情移除需求与控制区，同时保留会话、结果、执行及返回看板', () => {

@@ -176,6 +176,41 @@ async function fixture(t, options = {}) {
   return { root, config, command, query, task, execution, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }); return store } }
 }
 
+test('task dialogue persists idempotently without broadcasting text and serializes on the original owner lease', async t => {
+  const f = await fixture(t, { webActorId: 'web-user' }), owner = await f.task(), execution = await f.execution(owner.binding)
+  const args = { taskId: 'task', requestId: 'one', actorId: 'web-user', text: '现在进度怎样？' }
+  const sent = await f.command('task.dialogue.add', args)
+  assert.equal(sent.result.message.reply, null)
+  await f.command('task.dialogue.add', args)
+  await assert.rejects(f.command('task.dialogue.add', { ...args, text: 'different' }), { code: 'DYNAMIC_COMMAND_ID_CONFLICT' })
+  await assert.rejects(f.command('task.dialogue.add', { ...args, actorId: 'spoof' }), { code: 'TASK_SESSION_WEB_ACTOR_REQUIRED' })
+  await assert.rejects(f.command('task.complete', { binding: owner.binding, summary: '旧结论' }), { code: 'DYNAMIC_TASK_DIALOGUE_PENDING' })
+  assert.equal((await f.query({ kind: 'execution.get', executionId: execution.executionId })).feedback, undefined)
+  await f.command('task.wait', { binding: owner.binding, summary: '等待', action: 'wait' })
+  await f.command('wake.ack', { binding: owner.binding, wakeIds: owner.wakeIds })
+  await f.command('task.drained', { binding: owner.binding })
+  await f.command('task.wake', { taskId: 'task', kind: 'normal-work' })
+  const claimed = (await f.command('task.claim', { taskId: 'task', dialogue: true })).result
+  assert.equal(claimed.binding.sessionId, owner.binding.sessionId)
+  assert.equal(claimed.binding.requirementRevision, owner.binding.requirementRevision)
+  assert.deepEqual(claimed.wakes.map(wake => wake.kind), ['task.dialogue'])
+  await assert.rejects(f.command('task.claim', { taskId: 'task', dialogue: true }), { code: 'DYNAMIC_TASK_BUSY' })
+  await f.command('task.dialogue.add', { ...args, requestId: 'two', text: '目标变化是否需要先澄清？' })
+  await f.command('task.dialogue.reply', { binding: claimed.binding, messageId: 'one', reply: '原执行尚在处理，未完成。' })
+  assert.ok((await f.query({ kind: 'wake.list', taskId: 'task' })).some(item => item.kind === 'normal-work' && item.state === 'pending'))
+  await f.command('task.drained', { binding: claimed.binding })
+  await f.reopen()
+  const restored = await f.query({ kind: 'task.get', taskId: 'task' })
+  assert.equal(restored.dialogue.length, 2)
+  assert.match(restored.dialogue[0].reply, /未完成/)
+  assert.equal(restored.dialogue[1].reply, null)
+  assert.equal(restored.sessionId, owner.binding.sessionId)
+  const next = (await f.command('task.claim', { taskId: 'task', dialogue: true })).result
+  assert.equal(next.wakes[0].payload.messageId, 'two')
+  await assert.rejects(f.command('task.dialogue.reply', { binding: owner.binding, messageId: 'two', reply: '旧租约冒充回复' }), { code: 'DYNAMIC_TASK_LEASE_STALE' })
+  await assert.rejects(f.command('task.dialogue.reply', { binding: next.binding, messageId: 'one', reply: '重复处理已回复消息' }), { code: 'DYNAMIC_WAKE_CLAIM_STALE' })
+})
+
 test('legacy persisted English names remain stable across continuation and reopen; no implicit migration',async t=>{
  const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding,'legacy-check')
  await f.command('execution.result',{binding,output:{done:true}})
