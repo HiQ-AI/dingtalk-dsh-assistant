@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { link, lstat, open, readFile, readdir, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistenceModule from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { checkedTaskDirectory, taskDirectories, taskFilePath } from './session-workspaces.js'
 
+const JsonlSessionPersistence = JsonlSessionPersistenceModule.default ?? JsonlSessionPersistenceModule
 const writerScope = new AsyncLocalStorage()
 const installations = new Map()
 const installing = new Map()
