@@ -1166,6 +1166,62 @@ window.__ModuleLoader__.load({
           ...rows.map(row => React.createElement('section', { key: row.id }, React.createElement('h3', null, `${row.title}${row.status ? ` · ${status(row.status)}` : ''}`), !row.complete ? React.createElement('p', null, '部分历史区间未记录；恢复时未知的结束时间不作推算。') : null,
             row.segments.length || row.milestones.length ? React.createElement('ul', null, ...row.segments.map(segment => React.createElement('li', { key: segment.id }, `${segment.label} · ${range(segment)} · ${elapsed(segment)} · ${status(segment.status)}`, segment.description ? React.createElement('p', null, segment.description) : null)), ...row.milestones.map(event => React.createElement('li', { key: event.id }, `${time(event.at)} · 阶段成果：${event.summary}`))) : React.createElement('p', null, row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史执行过程未记录。')))))
     }
+    function TaskDialogue({ taskId }) {
+      const [open, setOpen] = useState(false), [draft, setDraft] = useState(''), [messages, setMessages] = useState([])
+      const [busy, setBusy] = useState(false), [error, setError] = useState(''), [readError, setReadError] = useState(''), [writable, setWritable] = useState(false)
+      const pending = useRef(false), attempt = useRef(null), editor = useRef(null)
+      const merge = incoming => setMessages(current => {
+        const records = new Map(current.map(item => [item.id, item]))
+        for (const item of incoming) { const old = records.get(item.id); records.set(item.id, old?.reply && !item.reply ? old : item) }
+        return [...records.values()].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt))
+      })
+      useEffect(() => {
+        if (!open) return
+        let active = true, timer, controller
+        const load = async () => {
+          controller = new AbortController()
+          try {
+            const value = await get(`/state/tasks/${encodeURIComponent(taskId)}/dialogue`, { signal: controller.signal })
+            if (active) { merge(value.messages || []); setWritable(value.writable); setReadError(value.error ? `统筹暂未回复：${value.error}` : '') }
+          } catch (cause) { if (active) setReadError(`对话读取失败：${cause.message}`) }
+          finally { if (active) timer = setTimeout(load, 2000) }
+        }
+        void load(); editor.current?.focus()
+        return () => { active = false; controller?.abort(); clearTimeout(timer) }
+      }, [open, taskId])
+      const submit = async event => {
+        event.preventDefault()
+        if (event.nativeEvent?.isComposing || pending.current || !writable || !draft.trim()) return
+        attempt.current ||= { requestId: crypto.randomUUID(), text: draft.trim() }
+        const body = attempt.current
+        pending.current = true; setBusy(true); setError('')
+        try {
+          const message = await post(`/tasks/${encodeURIComponent(taskId)}/dialogue`, body)
+          merge([message]); setDraft(''); attempt.current = null
+        } catch (cause) { setError(`发送失败：${cause.message}。可重试，已保存的消息不会重复提交。`) }
+        finally { pending.current = false; setBusy(false) }
+      }
+      const panelId = `task-dialogue-${taskId}`
+      return React.createElement('div', null,
+        React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'aria-expanded': open, 'aria-controls': panelId, onClick: () => setOpen(value => !value) }, open ? '收起对话' : '对话'),
+        open ? React.createElement('section', { id: panelId, className: 'detail-panel', 'aria-label': '与当前任务统筹对话', style: { marginTop: 12 } },
+          React.createElement('h2', null, '与任务统筹对话'),
+          React.createElement('p', { className: 'detail-muted' }, '可以询问进度、补充信息或提醒执行方向。消息由原统筹处理；本对话不自动改变目标、另派或取消执行。'),
+          React.createElement('ol', { 'aria-label': '对话记录', style: { margin: 0, padding: 0, listStyle: 'none', maxHeight: 320, overflowY: 'auto', display: 'grid', gap: 16 } },
+            ...messages.map(message => React.createElement('li', { key: message.id, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } },
+              React.createElement('strong', null, `我 · ${fmt(message.receivedAt)}`), React.createElement('p', null, ...linkedTaskText(message.text)),
+              message.reply ? React.createElement(React.Fragment, null, React.createElement('strong', null, `统筹 · ${fmt(message.repliedAt)}`), React.createElement('p', null, ...linkedTaskText(message.reply)))
+                : React.createElement('span', { role: 'status', className: 'detail-muted' }, '已保存，待统筹处理')))),
+          !messages.length ? React.createElement('p', { className: 'detail-muted' }, '暂无对话记录。') : null,
+          readError ? React.createElement('p', { role: 'alert' }, readError) : null,
+          React.createElement('form', { noValidate: true, onSubmit: submit, style: { display: 'grid', gap: 12 } },
+            React.createElement('label', { className: 'observer-config-field' }, '消息', React.createElement('textarea', { ref: editor, className: 'observer-config-input', rows: 3, maxLength: 10000, value: draft, disabled: busy,
+              'aria-describedby': error ? `${panelId}-error` : undefined, onChange: event => { setDraft(event.target.value); attempt.current = null } })),
+            error ? React.createElement('p', { id: `${panelId}-error`, role: 'alert' }, error) : null,
+            !writable ? React.createElement('p', { className: 'detail-muted' }, '正在确认任务状态；已结束、暂停或归档的任务仅可回读对话。') : null,
+            React.createElement(Button, { type: 'submit', disabled: busy || !writable || !draft.trim(), style: { justifySelf: 'start', minWidth: 90 } }, busy ? '保存中…' : '发送')))
+          : null)
+    }
     function TaskSessionDetail({ task, onOpenSession, onBack, updatedAt, onOpenHumanRequest }) {
       const requirements = task.requirements || task.acceptanceCriteria || []
       const humanRequest = !task.legacyReadonly && task.humanRequests?.findLast(request => request.status === 'waiting-reply')
@@ -1176,6 +1232,7 @@ window.__ModuleLoader__.load({
           React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: onBack }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')),
           React.createElement('div', { className: 'detail-title-row' }, React.createElement('h1', null, task.title?.trim() || taskDisplayTitle(task)), statusTag(task.legacyReadonly ? '历史只读' : taskStateLabel(task.state), taskStateTone(task.state))),
           React.createElement('div', { className: 'detail-meta' }, React.createElement('span', null, `创建 ${fmt(task.createdAt)}`), React.createElement('span', null, `更新 ${fmt(task.updatedAt)}`), !task.legacyReadonly ? React.createElement('span', null, `${task.executionCount ?? '未记录'} 次独立执行`) : null)),
+        !task.legacyReadonly ? React.createElement(TaskDialogue, { key: task.taskId, taskId: task.taskId }) : null,
         task.waitingReason || question ? React.createElement('section', { className: 'detail-attention', 'aria-label': '阻塞与待处理' },
           React.createElement('h2', null, question ? '等待答复' : '当前等待 / 阻塞'),
           question ? React.createElement(HumanRequestContent, { request: humanRequest || { reason: traceReason(task.waitingReason), question, evidence: task.lastDecision?.evidence } })

@@ -32,7 +32,8 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult, onProgress }) => { await onSessionBound(); await onProgress({ summary: '已读取状态，开始验证', evidence: ['actual-evidence.txt'], activity: '验证状态', reportId: 'http-stage' }); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
   })
   const runtime = { ...legacy, listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args),
-    createTask: args => service.createTask(args), appendTaskContext: args => service.appendTaskContext(args), cancelTask: args => service.cancelTask(args) }
+    createTask: args => service.createTask(args), appendTaskContext: args => service.appendTaskContext(args), cancelTask: args => service.cancelTask(args),
+    getTaskDialogue: id => service.taskDialogue(id), sendTaskDialogue: args => service.sendTaskDialogue(args) }
   const server = createServer((req, res) => handleRequest(req, res, runtime).catch(error => { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: error.message })) }))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${server.address().port}`
@@ -74,6 +75,23 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.equal(page.executions[0].status, 'succeeded')
     assert.notEqual(page.executions[0].sessionId, sessionId)
     assert.equal(page.executions[0].result.summary, '核对成功')
+    const dialoguePath = `/tasks/${taskId}/dialogue`
+    assert.equal((await post(dialoguePath, { requestId: 'chat', text: '现在进度怎样？', actorId: 'spoof' })).status, 400)
+    const saved = await post(dialoguePath, { requestId: 'chat', text: '现在进度怎样？' })
+    assert.equal(saved.status, 202); assert.equal(saved.body.reply, null)
+    await service.whenIdle()
+    const conversation = await (await fetch(base + `/state${dialoguePath}`)).json()
+    assert.equal(conversation.sessionId, sessionId)
+    assert.equal(conversation.messages.length, 1)
+    assert.ok(conversation.messages[0].reply)
+    assert.equal((await post(dialoguePath, { requestId: 'chat', text: '现在进度怎样？' })).status, 202)
+    assert.equal((await post(dialoguePath, { requestId: 'chat', text: '同一ID不同正文' })).status, 409)
+    assert.equal((await service.taskDetail(taskId)).executionCount, 53)
+    assert.equal((await service.taskDetail(taskId)).requirementRevision, 1)
+    const foreignOrigin = await fetch(base + dialoguePath, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://example.invalid' },
+      body: JSON.stringify({ requestId: 'foreign', text: '不能受理' }) })
+    assert.equal(foreignOrigin.status, 403)
+    assert.equal((await post(dialoguePath, { requestId: 'empty', text: '   ' })).status, 400)
     assert.deepEqual(page.executions[0].result.limitations, ['未部署'])
     const missing = await post(`/tasks/${taskId}/context`, { requestId: 'missing-classification', context: '开发分支别搞错了', expectedRequirementRevision: detail.requirementRevision, expectedControlRevision: detail.controlRevision })
     assert.equal(missing.status, 400)
@@ -94,6 +112,10 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body))
     assert.equal(cancelled.body.controlState, 'cancelled')
     assert.equal(cancelled.body.session.sessionId, sessionId)
+    assert.equal((await service.taskDialogue(taskId)).writable, false)
+    assert.notEqual((await post(dialoguePath, { requestId: 'after-cancel', text: '不能自动恢复任务' })).status, 202)
+    assert.equal((await post(dialoguePath, { requestId: 'chat', text: '现在进度怎样？' })).status, 202, 'saved request remains idempotent after terminal state')
+    assert.equal((await service.taskDialogue(taskId)).messages.length, 1)
     assert.equal((await (await fetch(base + '/state/tasks')).json()).length, 1)
     assert.equal((await post('/tasks/old/context', { requestId: 'old', progressImpact: 'replan', context: '禁止恢复', expectedRequirementRevision: 1, expectedControlRevision: 1 })).status, 404)
     for (const path of ['/tasks/old/reopen', '/tasks/old/reports/r/retry', '/authorizations/old/decision', '/workflows/message/requests/r/answer']) assert.equal((await post(path, {})).status, 410)

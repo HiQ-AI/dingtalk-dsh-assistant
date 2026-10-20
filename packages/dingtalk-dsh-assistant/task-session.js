@@ -84,6 +84,8 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
       }
       const setup = async (agentCtx, agent) => {
         entry.content = createModelContentIndex(agent.session)
+        if (input.dialogue) agentCtx.systemPrompt.section({ name: 'task-dialogue', order: 121, text:
+          '本轮仅处理当前任务的 dialogue 原文，复用已有协调语义，不以关键词分类。进度询问先核对现有记录后直接回答，不投递执行反馈。普通补充或方向纠偏仅在 preserve（目标、授权、验收和既有证据有效性不变）时，读取原执行后使用 task_delegate 的原 executionId、feedback=true、稳定 key。不得另派、续办、取消执行或重放操作。如果需要 replan 或改变目标/授权，先说明本对话不自动改变目标及停止原执行，并向用户澄清；不要默默执行。人工介入待答事项仍沿原入口答复，不用聊天代答。用 task_session_submit 的 wait 和 summary 直接回复用户，说明实际接收/消费证据；不称纠偏完成，不提交 complete/blocked。已有结果和任务身份保持。' })
         // Reuse the configured native provider/catalog, including preset-scoped personal skills.
         const presets = ctx.get?.('agentPresets') ?? ctx.agentPresets
         if (presets?.mount) {
@@ -98,7 +100,10 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${entry.content.instruction(groupResponsibility, '所属群职责、授权边界与回复要求')}` })
         agentCtx.tools.presentAs('native')
         entry.content.install(agentCtx, () => current(entry))
-        agentCtx.tools.guard(() => entry.submitted || entry.cancelled || closed ? 'task_session_inactive' : undefined)
+        agentCtx.tools.guard(exec => entry.submitted || entry.cancelled || closed ? 'task_session_inactive'
+          : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image', 'glob', 'grep', 'ls'].includes(exec.name)
+            && !['read', 'pure'].includes(agentCtx.tools.get(exec.name, exec.agent)?.effectClass)
+            ? 'task_dialogue_read_and_feedback_only' : undefined)
         agentCtx.on('agent/request', (position, next) => {
           if (!entry.contextRetired) {
             retireTaskContext(entry.handle.agent.session, binding, position)

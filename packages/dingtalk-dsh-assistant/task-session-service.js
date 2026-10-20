@@ -57,6 +57,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const inflightTasks = new Map(), inflightExecutions = new Map(), inflightGroups = new Map(), inflightNotifications = new Map()
   const failures = new Map(), taskSlots = new Set()
+  const pendingDialogue = task => task.dialogue?.some(item => !item.reply)
   const taskLimit = () => legacy.getAgentConfig().maxConcurrentTasks ?? config.maxConcurrentTasks ?? 5
   const executionLimit = () => config.maxConcurrentExecutions ?? taskLimit()
   const reserveTask = taskId => taskSlots.has(taskId) || taskSlots.size < taskLimit() && (taskSlots.add(taskId), true)
@@ -162,7 +163,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const task = await query('task.get', { taskId: id }).catch(() => null)
         again = !task?.archivedAt && task?.status === 'active' && task.control === 'active' && task.drained
           && retryReady(id)
-          && !task.humanRequests?.some(request => request.status === 'waiting-reply')
+          && (pendingDialogue(task) || !task.humanRequests?.some(request => request.status === 'waiting-reply'))
           && pending.some(item => item.state !== 'acked')
       }
       map.delete(id)
@@ -247,7 +248,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         for (const task of await query('task.list')) {
           if (closed) return
           if (task.archivedAt || !retryReady(task.taskId) || inflightTasks.has(task.taskId) || !task.drained || task.recovering || task.status !== 'active' || task.control !== 'active') continue
-          if (task.humanRequests?.some(request => request.status === 'waiting-reply')) continue
+          if (!pendingDialogue(task) && task.humanRequests?.some(request => request.status === 'waiting-reply')) continue
           if (!taskSlots.has(task.taskId) && taskSlots.size >= taskLimit()) continue
           if ((await query('wake.list', { taskId: task.taskId })).some(item => item.state !== 'acked')) void kickTask(task.taskId)
         }
@@ -281,10 +282,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const requireTask = async taskId => (await query('task.get', { taskId })) ?? fail('TASK_SESSION_NOT_FOUND')
   const taskDTO = async task => {
+    const { dialogue: _dialogue, ...publicTask } = task
     const executions = await query('execution.list', { taskId: task.taskId })
     const pendingWake = !task.lastDecision && (await query('wake.list', { taskId: task.taskId })).some(wake => wake.state !== 'acked')
     const state = taskBoardState(task, executions, pendingWake)
-    return { ...task, state, contextInputContract: taskContextInputContract,
+    return { ...publicTask, state, contextInputContract: taskContextInputContract,
     topicRefs: task.topicRefs ?? [], executionCount: executions.length,
     executionSessions: [...new Map(executions.map(execution => [execution.sessionId || execution.executionId, {
       executionId: execution.executionId, sessionId: execution.sessionId, title: executionSessionTitle(execution), status: execution.status, createdAt: execution.createdAt,
@@ -659,24 +661,28 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return track(inflightTasks, taskId, async () => {
       let task = await requireTask(taskId)
       if (task.archivedAt || task.status !== 'active' || task.control !== 'active') { taskSlots.delete(taskId); return }
-      if (task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
+      if (!pendingDialogue(task) && task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
       if (!task.drained) return
       if (!(await query('wake.list', { taskId })).some(item => item.state !== 'acked')) return
-      const claimed = await command('task.claim', { taskId })
+      const claimed = await command('task.claim', { taskId, ...(pendingDialogue(task) ? { dialogue: true } : {}) })
       const { binding, wakeIds, wakes } = claimed.result
       task = claimed.result.task
+      const dialogueMessage = wakes.find(item => item.kind === 'task.dialogue')?.payload.messageId
+      const dialogue = dialogueMessage ? { ...task.dialogue.find(item => item.id === dialogueMessage),
+        history: task.dialogue.filter(item => item.reply && item.id !== dialogueMessage).slice(-20) } : null
       let drained = true, submitted = false
       try {
         const sources = (await Promise.all(task.sourceRefs.map(sourceId => query('source.get', { sourceId })))).filter(Boolean)
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
         const operations = await query('operation.list', { taskId })
-        const runResult = await taskSessions.run({ binding, input: { task, sources, materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: await query('execution.list', { taskId }),
+        const runResult = await taskSessions.run({ binding, input: { task, sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: await query('execution.list', { taskId }),
           operations,
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...models(), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
+            if (dialogue && (args.feedback !== true || !args.executionId)) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
             if (args.readbackOperationId) {
               const operation = await query('operation.get', { operationId: args.readbackOperationId })
               if (args.readOnly !== true || operation?.taskId !== taskId) fail('TASK_OPERATION_SCOPE_MISMATCH')
@@ -771,12 +777,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             }
           },
           cancelExecution: async ({ executionId, reason }) => {
+            if (dialogue) fail('TASK_DIALOGUE_CANNOT_CANCEL')
             const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
             await command('execution.cancel', { binding, executionId, reason })
             await executionSessions.cancel(executionId)
             return { executionId, cancellationRequested: true }
           },
           submit: async decision => {
+            if (dialogue) {
+              if (decision.action !== 'wait' || decision.question?.trim()) fail('TASK_DIALOGUE_REPLY_ONLY')
+              await command('task.dialogue.reply', { binding, messageId: dialogue.id, reply: decision.summary }, `dialogue-reply:${taskId}:${dialogue.id}`)
+              submitted = true
+              return { accepted: true, replied: true }
+            }
             if (decision.action === 'complete') {
               const source = await sourceFor(task)
               let notification
@@ -800,6 +813,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             return { accepted: true }
           } })
         if (!submitted && runResult.status === 'no_submission') {
+          if (dialogue) fail('TASK_DIALOGUE_NO_REPLY')
           failures.set(taskId, { id: taskId, code: runResult.reason ?? 'TASK_SESSION_NO_SUBMISSION' })
           await command('task.wait', { binding, action: 'blocked', summary: '任务会话本轮未能提交有效决定，原任务和执行结果已保留。',
             limitations: [runResult.reason ?? 'TASK_SESSION_NO_SUBMISSION'] }, `task-technical-block:${taskId}:${binding.leaseEpoch}`)
@@ -1165,6 +1179,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     },
     async createTask(args) { return taskDTO(await webTopicAction(args, null, 'new-task')) },
     async appendTaskContext(args) { return taskDTO(await webTopicAction(args, await requireTask(args.taskId), 'task-context')) },
+    async taskDialogue(taskId) {
+      const task = await requireTask(taskId)
+      return { taskId, sessionId: task.sessionId, messages: task.dialogue ?? [],
+        writable: !!config.webActorId && !task.archivedAt && task.status === 'active' && task.control === 'active',
+        error: failures.get(taskId)?.code ?? null }
+    },
+    async sendTaskDialogue({ taskId, requestId, text }) {
+      if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
+      const receipt = await command('task.dialogue.add', { taskId, requestId, text, actorId: config.webActorId }, `dialogue:${taskId}:${requestId}`)
+      // The durable wake survives a closed tab, a lost response and Host restart.
+      void kickTask(taskId).catch(() => {})
+      return receipt.result.message
+    },
     async cancelTask(args) { return taskDTO(await webTopicAction(args, await requireTask(args.taskId), 'task-cancel')) },
     async whenIdle() {
       const notificationAttempts = new Set()

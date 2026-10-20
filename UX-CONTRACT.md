@@ -7,7 +7,7 @@
 | Capability | Canonical owner | Source of truth | Allowed variants | Verification |
 |---|---|---|---|---|
 | Select/Listbox | DSH Menu / SelectMenu；设置页原生 select | DESIGN.md；observer web-client.js | 已有筛选使用宿主菜单；简单单选由系统拥有展开样式 | test/observer-slot-compatibility.test.js；浏览器 fixture |
-| Form | HumanRequestReply / 既有设置表单 | http.js strict schemas | 人工答复必填、防重及失败保留输入；Web 无新建任务表单 | test/observer-node-control-display.test.js |
+| Form | TaskDialogue / HumanRequestReply / 既有设置表单 | http.js strict schemas | 对话与人工答复防重、失败保留输入；Web 无新建任务表单 | test/observer-node-control-display.test.js |
 | Scrollbar | observerCss | DESIGN.md | 宿主内容区；局部有界结果区 | 静态审计；浏览器窄屏检查 |
 | Toast | 页内 role=status / role=alert | 既有群消息设置与看板反馈 | 错误留在发生位置；提交成功状态 | test/client.test.js；组件行为测试 |
 | CRUD | TaskSessionDetail / archiveTask | http.js 与 task-session-service.js | 查看现有任务、会话、结果与执行；符合条件的任务可归档；Web 不提供任务新建入口 | test/observer-node-control-display.test.js；test/observer-archive-interaction.test.js |
@@ -26,7 +26,9 @@
 
 创建：Web 不提供新建任务按钮、菜单、空状态入口、快捷操作或新建表单/页面分支。钉钉消息等非 Web 创建能力以及共享后端创建 API 保持不变；这是 UI 能力调整，不是 API 权限变更。
 
-现有任务：看板进入任务详情，保留原生会话入口、结果、执行列表与返回看板；详情不提供需求补充或取消控件。人工答复、归档及历史只读查询沿用现有流程。
+现有任务：看板进入任务详情，保留原生会话入口、结果、执行列表与返回看板；“对话”展开当前任务的原统筹对话，不提供直接修订或取消控件。自然语言先持久保存、再沿原任务 wake/claim/lease 队列逐条处理，运行中不另起统筹；普通工作唤醒保留待后续处理。原统筹复用既有语义判断：询问进度直接答复，不广播执行反馈；仅 preserve 范围内的补充/方向纠偏可使用原 executionId 的 feedback，真实目标/授权变化须澄清，不调用 replan、续办、取消或新派。人工答复、归档及历史只读查询沿用现有流程。
+
+对话发送采用 requestId 幂等，失败和未知结果保留原草稿及请求身份，重试不重复；消息、原文作者、回复与时间持久落账并可回读，回复和对应 wake 确认同一事务提交。收起重开保留当前任务草稿，切任务按 taskId remount，过期 GET 不覆盖已保存消息或已回读回复。IME composition 不提交，发送中同步防重；已结束、暂停、归档及旧历史不能发送，不自动恢复任务。保存只表示已接收；进入执行步骤仍须原反馈消费证据，不等于业务完成。原生会话输入和 Host 写入保护不变。
 
 导航：移除仅供新建草稿使用的离开确认与 beforeunload 接线；任务详情保持自然滚动，其他表单沿用各自既有行为。
 
