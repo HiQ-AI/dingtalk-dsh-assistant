@@ -101,38 +101,21 @@ test('结果区分结论、证据与限制，不把限制当作已完成结果',
   assert.equal(elements(tree).find(item => item.type === 'a').props.href, 'https://example.test/evidence')
 })
 
-test('新建任务校验字段，重复提交仅一次，失败保留草稿和幂等键', async () => {
-  const created = [], dirty = [], h = harness('CreateTaskForm', { groups: [{ groupId: 'g', name: '测试群' }], onCreated: value => created.push(value), onCancel() {}, onDirtyChange: value => dirty.push(value) })
-  let tree = h.render(), form = tree
-  await form.props.onSubmit({ preventDefault() {} })
-  tree = h.render(); assert.equal(h.requests.length, 0); assert.ok(elements(tree).some(item => item.props.role === 'alert'))
-  assert.equal(input(tree, '任务名称').props['aria-invalid'], true)
-  for (const [label, value] of [['来源群', 'g'], ['任务名称', '检查服务'], ['任务目标', '核对状态'], ['验收要求（每行一项，可选）', '可读取\n状态准确']]) { input(tree, label).props.onChange({ target: { value } }); tree = h.render() }
-  const submit = tree.props.onSubmit({ preventDefault() {} }); tree.props.onSubmit({ preventDefault() {} })
-  assert.equal(h.requests.length, 1)
-  const firstBody = JSON.parse(h.requests[0].options.body)
-  assert.deepEqual(firstBody.acceptanceCriteria, ['可读取', '状态准确'])
-  assert.equal('workflowId' in firstBody, false)
-  h.requests[0].reject(Error('temporary network failure')); await submit
-  tree = h.render(); assert.equal(input(tree, '任务目标').props.value, '核对状态')
-  const retry = tree.props.onSubmit({ preventDefault() {} })
-  assert.equal(JSON.parse(h.requests[1].options.body).requestId, firstBody.requestId)
-  h.requests[1].resolve({ taskId: 'created' }); await retry
-  assert.deepEqual(created, [{ taskId: 'created' }]); assert.equal(dirty.at(-1), false)
+test('Web看板无新建入口或表单接线，空列表和已有任务仍显示看板', () => {
+  assert.doesNotMatch(source, /CreateTaskForm|creatingTask|setCreatingTask|useUnsavedTaskChanges|新建任务|task-create-error/)
+  assert.doesNotMatch(source, /post\(['"]\/tasks['"]/)
+  const fragment = source.slice(source.indexOf('      const tasksPage ='), source.indexOf('      const authorizationStatus ='))
+  for (const bucketColumns of [[], [{ type: 'section', props: { 'aria-label': '执行中' }, children: ['已有任务'] }]]) {
+    const tree = runInNewContext(`(()=>{${fragment};return tasksPage})()`, {
+      selectedTaskId: '', bucketColumns, ui: {}, React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }) },
+    })
+    assert.ok(elements(tree).some(item => item.props.className === 'observer-task-board'))
+    assert.equal(elements(tree).some(item => ['button', 'form', 'input', 'textarea'].includes(item.type)), false)
+    assert.equal(text(tree).includes('已有任务'), bucketColumns.length > 0)
+  }
 })
 
-test('新建任务取消保护草稿，继续填写保留内容，IME不提前提交', async () => {
-  let cancelled = 0
-  const h = harness('CreateTaskForm', { groups: [], onCreated() {}, onCancel: () => cancelled++ })
-  let tree = h.render(); input(tree, '任务名称').props.onChange({ target: { value: '未提交任务' } }); tree = h.render()
-  await tree.props.onSubmit({ preventDefault() {}, nativeEvent: { isComposing: true } }); assert.equal(h.requests.length, 0)
-  button(tree, '返回看板').props.onClick(); tree = h.render(); assert.equal(cancelled, 0)
-  button(tree, '继续填写').props.onClick(); tree = h.render(); assert.equal(input(tree, '任务名称').props.value, '未提交任务')
-  button(tree, '返回看板').props.onClick(); tree = h.render(); button(tree, '放弃草稿并返回').props.onClick(); assert.equal(cancelled, 1)
-  assert.ok(h.events.some(([kind, event]) => kind === 'add' && event === 'beforeunload'))
-})
-
-test('任务详情移除需求与控制区，同时保留会话、结果、执行及独立新建入口', () => {
+test('任务详情移除需求与控制区，同时保留会话、结果、执行及返回看板', () => {
   const task = { taskId: 't', title: '核对', state: 'running', objective: '核对当前服务' }
   const h = harness('TaskSessionDetail', { task, onBack() {}, onOpenSession() {} })
   const tree = h.render(), children = elements(tree)
@@ -142,9 +125,7 @@ test('任务详情移除需求与控制区，同时保留会话、结果、执�
   assert.equal(children.some(item => ['textarea', 'input', 'form'].includes(item.type)), false)
   assert.equal(h.requests.length, 0)
   assert.doesNotMatch(source, /TaskControls|需求与控制|提交需求补充|确认取消任务|补充需求/)
-  const create = harness('CreateTaskForm', { groups: [], onCreated() {}, onCancel() {} }).render()
-  assert.ok(input(create, '任务目标'))
-  assert.ok(button(create, '创建任务'))
+
 })
 
 test('动态执行分页的失败可重试，离开后慢响应不能覆盖新查询', async () => {

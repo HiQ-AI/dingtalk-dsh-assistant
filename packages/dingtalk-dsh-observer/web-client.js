@@ -625,47 +625,6 @@ window.__ModuleLoader__.load({
         values(value?.evidence).length ? React.createElement('div', null, React.createElement('h3', { style: { fontSize: 14 } }, '证据'), React.createElement('ul', null, ...values(value.evidence).map((item, index) => React.createElement('li', { key: index, style: { overflowWrap: 'anywhere' } }, ...linkedTaskText(typeof item === 'string' ? item : item.description || item.path || item.ref || '证据已记录'))))) : null,
         values(value?.limitations).length ? React.createElement('div', null, React.createElement('h3', { style: { fontSize: 14 } }, '限制与未验证项'), React.createElement('ul', null, ...values(value.limitations).map((item, index) => React.createElement('li', { key: index }, typeof item === 'string' ? item : readableValue(item))))) : null)
     }
-    function useUnsavedTaskChanges(dirty, onDirtyChange) {
-      useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false) }, [dirty, onDirtyChange])
-      useEffect(() => {
-        if (!dirty) return
-        const warn = event => { event.preventDefault(); event.returnValue = '' }
-        window.addEventListener('beforeunload', warn)
-        return () => window.removeEventListener('beforeunload', warn)
-      }, [dirty])
-    }
-    function CreateTaskForm({ groups, onCreated, onCancel, onDirtyChange }) {
-      const [draft, setDraft] = useState({ groupId: '', title: '', objective: '', context: '', acceptance: '' })
-      const [busy, setBusy] = useState(false), [error, setError] = useState('')
-      const attempt = useRef(null), pending = useRef(false), fields = useRef({})
-      const [errors, setErrors] = useState({}), [leaving, setLeaving] = useState(false)
-      const dirty = Object.values(draft).some(Boolean)
-      useUnsavedTaskChanges(dirty, onDirtyChange)
-      const change = (field, value) => { setDraft(current => ({ ...current, [field]: value })); setErrors(current => ({ ...current, [field]: false })); attempt.current = null }
-      const submit = async event => {
-        event.preventDefault()
-        if (event.nativeEvent?.isComposing || pending.current) return
-        const invalid = { groupId: !draft.groupId, title: !draft.title.trim(), objective: !draft.objective.trim() }
-        setErrors(invalid)
-        if (Object.values(invalid).some(Boolean)) { setError('请选择来源群，并填写任务名称和目标。'); fields.current[Object.keys(invalid).find(name => invalid[name])]?.focus(); return }
-        const body = { groupId: draft.groupId, title: draft.title.trim(), objective: draft.objective.trim(), ...(draft.context.trim() ? { context: draft.context.trim() } : {}), acceptanceCriteria: draft.acceptance.split('\n').map(text => text.trim()).filter(Boolean) }
-        attempt.current ||= { ...body, requestId: crypto.randomUUID() }
-        pending.current = true; setBusy(true); setError('')
-        try { const result = await post('/tasks', attempt.current); onDirtyChange?.(false); onCreated(result) }
-        catch (cause) { setError(cause.message) }
-        finally { pending.current = false; setBusy(false) }
-      }
-      const field = (label, name, multiline = false, required = false) => React.createElement('label', { className: 'observer-config-field' }, label,
-        React.createElement(multiline ? 'textarea' : 'input', { className: 'observer-config-input', ref: element => { fields.current[name] = element }, 'aria-invalid': !!errors[name], 'aria-describedby': errors[name] ? 'task-create-error' : undefined, value: draft[name], required, maxLength: name === 'title' ? 120 : 16000, rows: multiline ? 5 : undefined, disabled: busy, onChange: event => change(name, event.target.value) }))
-      return React.createElement('form', { noValidate: true, 'aria-label': '新建任务', onSubmit: submit, style: { ...card, display: 'grid', gap: 16, maxWidth: 800 } },
-        React.createElement('h2', { style: { margin: 0, fontSize: 20 } }, '新建任务'),
-        React.createElement('p', { style: { margin: 0, color: colors.muted } }, '描述目标与约束。任务会话会按实际需要创建独立执行。'),
-        React.createElement('label', { className: 'observer-config-field' }, '来源群', React.createElement('select', { className: 'observer-config-input', ref: element => { fields.current.groupId = element }, 'aria-invalid': !!errors.groupId, 'aria-describedby': errors.groupId ? 'task-create-error' : undefined, required: true, value: draft.groupId, disabled: busy, onChange: event => change('groupId', event.target.value) }, React.createElement('option', { value: '' }, '请选择群聊'), ...groups.map(group => React.createElement('option', { key: group.groupId, value: group.groupId }, group.name || group.groupId)))),
-        field('任务名称', 'title', false, true), field('任务目标', 'objective', true, true), field('参考资料（不代表执行授权）', 'context', true), field('验收要求（每行一项，可选）', 'acceptance', true),
-        error ? React.createElement('p', { id: 'task-create-error', role: 'alert', style: { margin: 0, color: colors.danger } }, error) : null,
-        React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'submit', disabled: busy, style: { minWidth: 100 } }, busy ? '提交中…' : '创建任务'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: busy, onClick: () => dirty ? setLeaving(true) : onCancel() }, '返回看板')),
-        leaving ? React.createElement('section', { 'aria-label': '确认放弃草稿', style: { display: 'grid', gap: 8 } }, React.createElement('p', null, '返回看板会丢弃尚未提交的任务草稿。'), React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setLeaving(false) }, '继续填写'), React.createElement(Button, { type: 'button', onClick: () => { onDirtyChange?.(false); onCancel() } }, '放弃草稿并返回')) : null)
-    }
     function HumanRequestModal({ children, onClose }) {
       const dialog = useRef(null)
       useEffect(() => {
@@ -1251,12 +1210,8 @@ window.__ModuleLoader__.load({
         React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', 'aria-label': '关闭提示', onClick: () => setVisible(false) }, '关闭'))
     }
     function ObserverContent({ openSession }) {
-      const draftDirty = useRef(false)
-      const [pendingNavigation, setPendingNavigation] = useState(null)
-      const reportDirty = useCallback(value => { draftDirty.current = value }, [])
       const [activePage, updateActivePage] = useState(readActivePage)
       const setActivePage = useCallback(page => {
-        if (draftDirty.current) { setPendingNavigation({ page }); return }
         updateActivePage(page)
         // 导航属于看板，不能随宿主 conversation 插槽重挂载而丢失。
         try { window.sessionStorage.setItem(activePageStorageKey, page) }
@@ -1304,7 +1259,6 @@ window.__ModuleLoader__.load({
       const [messageDeliveryFilter, setMessageDeliveryFilter] = useState('all')
       const [outboxStatusFilter, setOutboxStatusFilter] = useState('all')
       const [hoveredTaskId, setHoveredTaskId] = useState('')
-      const [creatingTask, setCreatingTask] = useState(false)
       const [taskPages, setTaskPages] = useState({})
       const [selectedTaskId, setSelectedTaskId] = useState('')
       const [taskDetail, setTaskDetail] = useState()
@@ -1368,8 +1322,8 @@ window.__ModuleLoader__.load({
         catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
         finally { setNavigatingSessionId('') }
       }
-      const openTask = task => { setCreatingTask(false); setSelectedTaskId(task.taskId); setActivePage('tasks') }
-      const returnFromTask = () => { if (draftDirty.current) { setPendingNavigation({ back: true }); return } setSelectedTaskId(''); setCreatingTask(false) }
+      const openTask = task => { setSelectedTaskId(task.taskId); setActivePage('tasks') }
+      const returnFromTask = () => setSelectedTaskId('')
       const copyId = async (value) => {
         let copied = false
         try {
@@ -1568,8 +1522,7 @@ window.__ModuleLoader__.load({
             updatedAt ? React.createElement('span', { 'aria-hidden': true, style: { width: 1, height: 12, background: colors.border } }) : null,
             updatedAt ? React.createElement('span', { title: fmt(updatedAt) }, `更新于 ${fmtTime(updatedAt)}`) : null),
           React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: refreshState === 'refreshing', onClick: manualRefresh, 'aria-live': 'polite', style: { gap: 6, minWidth: 78, fontSize: 13, lineHeight: '20px' } }, refreshState === 'refreshing' ? '刷新中' : refreshState === 'done' ? '已刷新' : '刷新', refreshIcon)),
-        menu,
-        pendingNavigation ? React.createElement('section', { 'aria-label': '未提交的修改', style: { padding: 12, display: 'flex', gap: 12, flexWrap: 'wrap' } }, React.createElement('span', null, '离开会丢弃尚未提交的修改。'), React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setPendingNavigation(null) }, '继续编辑'), React.createElement(Button, { type: 'button', onClick: () => { const target = pendingNavigation; draftDirty.current = false; setPendingNavigation(null); if (target.back) returnFromTask(); else setActivePage(target.page) } }, '放弃修改并离开')) : null)
+        menu)
       const dataViewTabs = React.createElement('div', { role: 'tablist', 'aria-label': '群聊数据视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } },
         ...[{ id: 'messages', label: `收信箱 · ${selectedMessages.length}` }, { id: 'outbox', label: `发信箱 · ${selectedOutbox.length}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': groupTableView === item.id, type: 'button', onClick: () => setGroupTableView(item.id), style: navigationTabStyle(groupTableView === item.id, { paddingBottom: 4 }) }, item.label)))
       const groupTableToolbar = React.createElement('div', { style: toolbar },
@@ -1595,13 +1548,12 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
       const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
       const selectedTask = taskDetail?.taskId === selectedTaskId ? taskDetail : undefined
-      const tasksPage = creatingTask ? React.createElement(CreateTaskForm, { groups: data?.groups || [], onDirtyChange: reportDirty, onCancel: returnFromTask, onCreated: result => { setCreatingTask(false); const task = result.task || result; if (task.taskId) openTask(task); void refresh() } })
-        : selectedTaskId ? React.createElement('div', { className: 'observer-task-detail-route', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 16 } },
+      const tasksPage = selectedTaskId ? React.createElement('div', { className: 'observer-task-detail-route', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 16 } },
           React.createElement('style', null, taskDetailCss),
           detailError ? React.createElement('div', { className: 'detail-fetch-error', role: 'alert' }, `${selectedTask ? '详情刷新失败，已读取内容可能过期' : '详情读取失败'}：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
           selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, updatedAt, onOpenHumanRequest: taskId => { setSelectedAuthorizationId((data?.authorizations || []).find(item => item.taskId === taskId && item.taskSessionRequest && item.status === 'waiting-reply')?.requestId || ''); setActivePage('authorizations') } })
             : React.createElement('section', { className: 'observer-session-detail detail-fetch-state', 'aria-label': '任务详情读取状态' }, React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: returnFromTask }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')), React.createElement('h1', null, '任务详情'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : React.createElement('p', { className: 'detail-muted' }, '未读取到任务内容，请重试或返回看板。')))
-        : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement(Button, { type: 'button', onClick: () => setCreatingTask(true), style: { justifySelf: 'start' } }, '新建任务'), React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
+        : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
       const authorizationStatus = {
         'pending-send': { label: '待发送', state: 'warning' },
         'sending-unknown': { label: '投递待确认', state: 'warning' },

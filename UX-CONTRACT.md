@@ -6,11 +6,11 @@
 
 | Capability | Canonical owner | Source of truth | Allowed variants | Verification |
 |---|---|---|---|---|
-| Select/Listbox | DSH Menu / SelectMenu；设置与创建表单原生 select | DESIGN.md；observer web-client.js | 已有筛选使用宿主菜单；简单单选由系统拥有展开样式 | test/observer-slot-compatibility.test.js；浏览器 fixture |
-| Form | CreateTaskForm / TaskControls 与共享 useUnsavedTaskChanges | http.js strict schemas | 新建；需求补充；应用内取消确认 | test/observer-node-control-display.test.js |
+| Select/Listbox | DSH Menu / SelectMenu；设置页原生 select | DESIGN.md；observer web-client.js | 已有筛选使用宿主菜单；简单单选由系统拥有展开样式 | test/observer-slot-compatibility.test.js；浏览器 fixture |
+| Form | HumanRequestReply / 既有设置表单 | http.js strict schemas | 人工答复必填、防重及失败保留输入；Web 无新建任务表单 | test/observer-node-control-display.test.js |
 | Scrollbar | observerCss | DESIGN.md | 宿主内容区；局部有界结果区 | 静态审计；浏览器窄屏检查 |
 | Toast | 页内 role=status / role=alert | 既有群消息设置与看板反馈 | 错误留在发生位置；提交成功状态 | test/client.test.js；组件行为测试 |
-| CRUD | TaskSessionDetail / CreateTaskForm / TaskControls | http.js 与 task-session-service.js | 新建后进入唯一任务详情；需求更新留在详情；取消保留历史 | test/http.test.js；组件及浏览器 fixture |
+| CRUD | TaskSessionDetail / archiveTask | http.js 与 task-session-service.js | 查看现有任务、会话、结果与执行；符合条件的任务可归档；Web 不提供任务新建入口 | test/observer-node-control-display.test.js；test/observer-archive-interaction.test.js |
 | 人工请求正文 | HumanRequestContent / linkedTaskText / readout | docs/api/task-session-human-requests.md | 任务详情与人工介入页共用；原因与完整问题直接显示，证据/已尝试/原文折叠；不推断批准或缺失原因 | test/observer-node-control-display.test.js；真实浏览器 |
 
 ## 业务与安全来源
@@ -24,11 +24,11 @@
 
 ## 流程与状态
 
-创建：看板 → 表单 → strict HTTP 校验 → 任务详情。成功后清理草稿，失败保留字段和幂等键。重复点击不会重复发送。IME composition 不触发提交。
+创建：Web 不提供新建任务按钮、菜单、空状态入口、快捷操作或新建表单/页面分支。钉钉消息等非 Web 创建能力以及共享后端创建 API 保持不变；这是 UI 能力调整，不是 API 权限变更。
 
-补充：详情 → 输入 → requirement/control CAS → 刷新同一任务会话。取消：详情 → 写明原因的应用内确认 → 使用确认打开时控制修订提交 → 历史仍保留。取消不会承诺撤销已发生的外部操作。
+现有任务：看板进入任务详情，保留原生会话入口、结果、执行列表与返回看板；详情不提供需求补充或取消控件。人工答复、归档及历史只读查询沿用现有流程。
 
-离开：新建和补充的脏状态触发页内确认；取消离开保留输入；真实页面卸载使用 beforeunload。新建页和详情保持自然滚动。
+导航：移除仅供新建草稿使用的离开确认与 beforeunload 接线；任务详情保持自然滚动，其他表单沿用各自既有行为。
 
 查询：自动/手动刷新共用请求；任务切换隔离过期响应；动态执行分页可重试并自动夹紧越界页码。看板通过 taskDTO.executionSessions 获得全部轻量会话投影，不依赖详情执行分页；按会话去重并以创建时间和执行 ID 稳定排序。执行名称由 dynamic-task-store 持久化并复用 session-workspaces 的原生清理逻辑，续办不重命名。新委派可在同次 task_delegate 调用中提供明确中文短title（技术专名可保留英文）；缺名或纯英文title沿用原key名称，不从objective截断或按动作词合成中文名，不另调用模型。key仍用于幂等，objective保留完整目标。续办不是改名操作，即使提供新title也保持已有名称。既有持久英文名称保持兼容，不在读取或续办时静默迁移；正式改名需另行协调台账与原生标题。读取状态合入独立执行标题槽，加载、失败和重试保留已读取列表及分页位置。空列表、正在读取、读取失败和旧数据可见状态不同。
 
