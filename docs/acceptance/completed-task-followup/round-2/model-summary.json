@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "provider": "openai-codex",
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "low",
+  "elapsedMs": 118540,
+  "sourceSha256": "bbd810dbb6460427e5cb3a884f854abeb148633bfd0f4d1630a2b5a67f4e4906",
+  "capturedTasksSha256": "13ee39bfeea428792d8911525dfe6916ad7e9b2cd0a783dd8296ef283571ac03",
+  "capturedTaskCount": 14,
+  "taskCataloguePages": 3,
+  "taskDetailReads": 3,
+  "actionKinds": [
+    "task-reopen",
+    "task-reopen",
+    "task-reopen",
+    "task-reopen",
+    "task-reopen",
+    "task-reopen"
+  ],
+  "uniqueOriginalTargets": 6,
+  "businessDispatch": false,
+  "dingtalkSend": false,
+  "errors": [],
+  "boundary": "真实模型及当前原生协调器；原消息及14项历史任务快照，话题历史作只读裁剪，任务执行为隔离内存投影，无真实PR/UAT操作。"
+}

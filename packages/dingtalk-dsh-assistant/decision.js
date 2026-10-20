@@ -22,10 +22,10 @@ const dispatchAssessmentSchema = z.strictObject({
   workflowRefs: z.array(z.strictObject({ id: z.string().min(1), revision: z.number().int().positive() })),
   workflowReason: z.string().trim().min(1),
 })
-const newTask = z.strictObject({ kind: z.literal('new-task'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
+const newTask = z.strictObject({ kind: z.literal('new-task').describe('独立新交付；已有任务的后续核查或修订应按状态使用 task-context/task-reopen，批量跟进分别操作原任务。'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
 const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
   .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
-const taskReopen = z.strictObject({ kind: z.literal('task-reopen'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
+const taskReopen = z.strictObject({ kind: z.literal('task-reopen').describe('向已完成的原任务追加核查、修订或重新提测要求；复用原 Task 和会话，不重做已完成步骤。批量跟进在 actions 中为每个原任务分别提交。'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel])
 const replyReviewSchema = z.strictObject({
