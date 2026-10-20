@@ -6,6 +6,33 @@ const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-cli
 const durationComponent = source.slice(source.indexOf('    function ExecutionSessionDuration('), source.indexOf('    function TaskResult('))
 assert.match(durationComponent, /^    function ExecutionSessionDuration\(/)
 const flatten = tree => typeof tree !== 'object' || !tree ? [] : [tree, ...tree.children.flatMap(flatten)]
+
+test('执行行仅使用最新轮次投影，运行时更新、结束固定，缺失不回退累计值', () => {
+ let now = 10_000, clock, effect, cleanup, deps, tick, clears = 0
+ const renderDuration = runInNewContext(`(()=>{${durationComponent};return ExecutionSessionDuration})()`, {
+  Date: { now: () => now, parse: Date.parse }, Number, colors: { muted: 'gray' }, fmtDuration: ms => `${ms / 1000}秒`,
+  useState: () => [clock ??= now, value => { clock = value }],
+  useEffect: (fn, next) => { if (!deps || next.some((value, index) => value !== deps[index])) { cleanup?.(); deps = next; effect = fn } },
+  setInterval: fn => { tick = fn; return 1 }, clearInterval: () => { tick = null; clears++ },
+  React: { createElement: (type, props, ...children) => ({ type, props, children }) },
+ })
+ const render = timing => { const tree = renderDuration({ timing }); if (effect) { cleanup = effect(); effect = null }; return tree }
+ const start = new Date(8000).toISOString(), end = new Date(11000).toISOString()
+ let tree = render({ startedAt: start, endedAt: null, active: true })
+ assert.equal(tree.children[0], '2秒'); assert.match(tree.props.title, /最新一轮执行耗时/)
+ now = 11000; tick(); assert.equal(render({ startedAt: start, endedAt: null, active: true }).children[0], '3秒')
+ assert.equal(render({ startedAt: start, endedAt: end, active: false }).children[0], '3秒')
+ assert.equal(clears, 1); assert.equal(tick, null)
+ now = 100000; assert.equal(render({ startedAt: start, endedAt: end, active: false }).children[0], '3秒')
+ for (const timing of [null, { recorded: true, elapsedMs: 99999 }, { startedAt: 'bad', endedAt: end, active: false },
+  { startedAt: end, endedAt: start, active: false }, { startedAt: start, endedAt: null, active: false }]) {
+  tree = render(timing); assert.equal(tree.children[0], '—'); assert.match(tree.props['aria-label'], /最新一轮耗时未记录/); assert.equal(tick, null)
+ }
+ render({ startedAt: start, endedAt: null, active: true }); cleanup(); assert.equal(tick, null)
+ const timing = { startedAt: start, endedAt: end, active: false }
+ const nodes = flatten(card({ taskId: 't', title: '任务', executionSessions: [{ executionId: 'e', sessionId: 's', latestRoundTiming: timing, runTiming: { elapsedMs: 99999 } }] }).tree)
+ assert.ok(nodes.some(node => node.props.timing === timing), 'card wires latest round, not accumulated runTiming')
+})
 function card(task) {
  const actions = []
  const render = runInNewContext(`(()=>{${durationComponent}\n${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {

@@ -3,6 +3,26 @@ import { executionSessionTitle } from './session-workspaces.js'
 const timestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null
 const positive = value => Number.isSafeInteger(value) && value >= 1
 
+// One claim is one run. Activity feedback can split it into contiguous segments.
+// Project only the current lease; incomplete older runs do not invalidate a new one.
+export function latestExecutionRoundTiming(execution) {
+  if (!positive(execution.leaseEpoch)) return null
+  const segments = (execution.timeline?.segments ?? []).filter(segment => segment.leaseEpoch === execution.leaseEpoch)
+  if (!segments.length) return null
+  let previousEnd = null
+  for (const [index, segment] of segments.entries()) {
+    const start = timestamp(segment.startedAt), end = timestamp(segment.endedAt)
+    if (!start || index > 0 && start !== previousEnd) return null
+    if (segment.state === 'closed') {
+      if (!end || Date.parse(end) < Date.parse(start)) return null
+    } else if (segment.state !== 'running' || index !== segments.length - 1 || segment.endedAt != null
+      || execution.status !== 'running' || execution.drained || execution.recovering) return null
+    previousEnd = end
+  }
+  const last = segments.at(-1)
+  return { startedAt: segments[0].startedAt, endedAt: last.endedAt ?? null, active: last.state === 'running' }
+}
+
 // The current service uses this stable completion receipt ID. Reopen wakes and
 // immutable receipts supply lifecycle facts; never infer them from summaries.
 export async function readTaskLifecycle(task, wakes, getReceipt) {

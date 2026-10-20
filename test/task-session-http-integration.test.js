@@ -67,6 +67,8 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.deepEqual(board[0].executionSessions, detail.executionSessions)
     assert.ok(board[0].executionSessions.every(item => /^核对服务\d{2}$/.test(item.title)))
     assert.ok(board[0].executionSessions.every(item => item.runTiming.recorded === true && item.runTiming.elapsedMs >= 0 && item.runTiming.startedAt === null))
+    assert.ok(board[0].executionSessions.every(item => item.latestRoundTiming.active === false
+      && Date.parse(item.latestRoundTiming.endedAt) >= Date.parse(item.latestRoundTiming.startedAt)))
     assert.ok(board[0].executionSessions.every(item => item.drained === true && item.recovering === false))
     assert.deepEqual((await service.boardTasks())[0].executionSessions, board[0].executionSessions)
     assert.equal(page.executions[0].status, 'succeeded')
