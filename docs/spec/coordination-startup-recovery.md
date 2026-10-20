@@ -1,0 +1,12 @@
+# 协调会话启动失败补偿
+
+现状证据：原消息140 routingStatus=pending、agentDeliveryStatus=decision-failed、agentDeliveryError=agent-preset/invalid；原route请求attempt=0、无messageId、status=exhausted，lastError为两个subagent插件拒绝toolFilter。当前health仍ok，不能代表归类可用。
+
+1. 在coordination-sessions获得句柄失败且尚无handle时标记coordinationStartupFailure；steer后异常不标记。
+2. topic-runtime持久化failurePhase=startup、failureCode、startupAttempt及nextRetryAt，保持exhausted与现有终态合同，恢复扫描先校验当前preset，再沿同一requestId重试。指数退避最高5分钟，不耗普通协议重试预算；成功获得Agent并准备输入时清除启动失败字段。历史仅attempt0且无持久messageId可接回。
+3. 当前preset通过原生agentPresets.resolve判断broken；调用失败作为当前故障保持，不以channel健康代替。
+4. 持久exhausted/startup故障进入listAlerts，不能被扫描成功清除；已完成或superseded不再报故障。
+5. 本机profile移除6个已废弃toolFilter块。原生schedule插件对delegated child在执行侧拒绝，先验证后应用；不新增preset、不扩大子Agent调度权限。
+6. 按当前任务会话原生静止部署runbook Check后切换，原消息由恢复扫描接回；追踪原来源、route/decision、task与原native会话，消息任务实际接纳后才宣布恢复。
+
+反例：创建失败与派发后失败；未到期/重启/预设仍broken/同请求并发；普通exhausted/错误请求身份/已有完成提交不重放；持久告警在恢复前后分别验证。源码与本地真实渠道分层留证。

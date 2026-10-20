@@ -201,7 +201,7 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
@@ -373,7 +373,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const exhausted = async () => {
       request.monitoring = false
       request.exhausted = true
-      const error = new Error(`topic_request_retry_exhausted:${request.requestId}`)
+      const state = store.getCoordinationRequest?.(request.groupId, request.requestId)
+      const startup = state?.failurePhase === 'startup' || !state?.failurePhase && state?.attempt === 0 && !state?.messageId
+      const error = new Error(startup && state.lastError ? state.lastError : `topic_request_retry_exhausted:${request.requestId}`)
+      if (state?.failureCode) error.code = state.failureCode
       await persist({ status: 'exhausted', lastError: error.message })
       retire(request)
       request.reject?.(error)
@@ -386,7 +389,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       request.attempt = state?.attempt ?? request.attempt ?? 0
       request.resumeEpoch = state?.resumeEpoch ?? 0
       if (state?.status === 'exhausted' || request.exhausted) { await exhausted(); return }
-      await persist({ status: 'pending', attempt: request.attempt, messageId: request.messageId })
+      await persist({ status: 'pending', attempt: request.attempt, messageId: request.messageId, failurePhase: undefined, failureCode: undefined, startupAttempt: undefined, nextRetryAt: undefined })
       await (waitRequestIdle ? waitRequestIdle(request) : agent.whenIdle())
       if (!current()) { request.monitoring = false; return }
       if (collection === decisions && (pendingInput(request.groupId).length || request.retryAfterRouting || request.retryingAfterRouting)) { request.monitoring = false; request.routingPaused = true; return }
@@ -427,7 +430,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       if (!current()) return
       request.exhausted = true
       retire(request)
-      persist({ status: 'exhausted', lastError: String(error.message).slice(0, 1000) }).catch((failure) => onError(request.groupId, failure))
+      const state = store.getCoordinationRequest?.(request.groupId, request.requestId)
+      const startupAttempt = (state?.startupAttempt ?? 0) + 1
+      persist({ status: 'exhausted', lastError: String(error.message).slice(0, 1000), failurePhase: 'dispatch', failureCode: error.code ?? 'COORDINATION_DISPATCH_FAILED',
+        ...(error.coordinationStartupFailure && !state?.messageId ? { failurePhase: 'startup', failureCode: error.code ?? 'COORDINATION_STARTUP_FAILED', startupAttempt,
+          nextRetryAt: new Date(Date.now() + Math.min(retryDelayMs * 2 ** Math.min(startupAttempt - 1, 10), 300_000)).toISOString() } : {})
+      }).catch((failure) => onError(request.groupId, failure))
       request.reject?.(error); onError(request.groupId, error)
     }
     wait().catch(fail)
@@ -1267,6 +1275,20 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     } catch (error) { replies.delete(request.requestId); reject(error) }
     return promise
   }
+  async function retryRequest(groupId, requestId) {
+      const collection = [routes, decisions, reviews, replies, titleMigrations, summaryMigrations].find((items) => items.get(requestId)?.groupId === groupId)
+      const request = collection?.get(requestId)
+      if (!request) throw new Error('topic_request_unknown_or_wrong_group')
+      if (!request.exhausted) return { status: 'pending', requestId }
+      await store.updateCoordinationRequest(groupId, requestId, { status: 'pending', attempt: 0, resumeEpoch: (store.getCoordinationRequest(groupId, requestId)?.resumeEpoch ?? 0) + 1, nextRetryAt: new Date().toISOString(), lastError: undefined })
+      request.exhausted = false; request.attempt = 0
+      if (request.reject) {
+        collection.delete(requestId)
+        const promise = collection === reviews ? requestReview(request.kind, store.getTask(request.task.taskId), request.value) : requestReply(store.getTask(request.task.taskId), JSON.parse(request.resultFingerprint), request.resultKey)
+        promise.catch((error) => onError(groupId, error))
+      } else monitor(send(groupId, request.text, request.images, request), request, collection)
+      return { status: 'pending', requestId }
+    }
   return {
     register, schedule, prepareReview, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume, isCurrentRequest,
     async resetReviewRequest(groupId, requestId) {
@@ -1314,20 +1336,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       try { return jsonOutput(await submit(args, { validateSnapshot })) }
       finally { request.statusQueryRead = false }
     },
-    async retryRequest(groupId, requestId) {
-      const collection = [routes, decisions, reviews, replies, titleMigrations, summaryMigrations].find((items) => items.get(requestId)?.groupId === groupId)
-      const request = collection?.get(requestId)
-      if (!request) throw new Error('topic_request_unknown_or_wrong_group')
-      if (!request.exhausted) return { status: 'pending', requestId }
-      await store.updateCoordinationRequest(groupId, requestId, { status: 'pending', attempt: 0, resumeEpoch: (store.getCoordinationRequest(groupId, requestId)?.resumeEpoch ?? 0) + 1, nextRetryAt: new Date().toISOString(), lastError: undefined })
-      request.exhausted = false; request.attempt = 0
-      if (request.reject) {
-        collection.delete(requestId)
-        const promise = collection === reviews ? requestReview(request.kind, store.getTask(request.task.taskId), request.value) : requestReply(store.getTask(request.task.taskId), JSON.parse(request.resultFingerprint), request.resultKey)
-        promise.catch((error) => onError(groupId, error))
-      } else monitor(send(groupId, request.text, request.images, request), request, collection)
-      return { status: 'pending', requestId }
-    },
+    retryRequest,
     invalidateTaskReviews(taskId, reason = 'task_review_context_changed') {
       for (const [requestId, request] of reviews) {
         if (request.task.taskId !== taskId) continue
@@ -1382,7 +1391,22 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       return schedule(groupId)
     },
-    async recover() { return Promise.all(store.listGroups().map((group) => schedule(group.groupId))) },
+    async recover() {
+      const result = await Promise.all(store.listGroups().map(group => schedule(group.groupId)))
+      for (const collection of collections) for (const request of collection.values()) {
+        const state = store.getCoordinationRequest?.(request.groupId, request.requestId)
+        if (state?.status !== 'exhausted' || state.messageId || !request.exhausted || request.monitoring) continue
+        // 旧记录无messageId且attempt=0，证明尚未得到Agent并持久登记派发输入。
+        if (state.failurePhase !== 'startup' && !(state.failurePhase === undefined && state.attempt === 0 && !state.messageId)) continue
+        if (Date.parse(state.nextRetryAt ?? '') > Date.now() || request.startupRecovering) continue
+        request.startupRecovering = true
+        try {
+          if (checkStartupRecovery && !await checkStartupRecovery(request.groupId, request.requestId)) continue
+          await retryRequest(request.groupId, request.requestId)
+        } finally { request.startupRecovering = false }
+      }
+      return result
+    },
     async drain(groupId) {
       await Promise.allSettled([...scheduled.entries()].filter(([id]) => !groupId || id === groupId).map(([, value]) => value))
       await Promise.allSettled([...applying.values()].filter((item) => !groupId || item.groupId === groupId).map((item) => item.promise))

@@ -43,9 +43,9 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 普通代码更新保留同一数据库、初始化标记、instanceId、epoch 和原会话目录，不重复清洁启动。当前任务会话运行时没有旧 workflow maintenance 接口，不能直接使用依赖该接口的历史部署脚本。停机前须通过当前宿主的原生生命周期停止接纳并排空，确认原任务/执行/群会话及实际业务子进程已结束；不能仅凭一次 SQLite 快照声称原子排空。普通本地部署不备份历史副本。
 
-本机静止实例使用 [原生退出切换脚本](../acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1)：显式传入持久 Assistant 与 Observer 两个包及各自摘要、精确旧 PID、当前 profile 摘要及本轮证据目录，先 `-Check`，通过后同参数执行。脚本先核验共享控制台仅包含精确计划任务进程树，再经 Windows CTRL+C 触发 DSH 原生 SIGINT disposal；等待旧进程退出、SQLite owner 释放、原生日志回合结束和实际子进程退出后，才沿官方 `dsh plugin --profile web add` 安装。不修改 profile，核验其原字节摘要并还原自启状态，经计划任务启动并回读。失败保留现场与阶段记录，不自动强制重启；不得将其用于活动业务执行或其他实例。此脚本只支持既有已配置的本机身份与路径，不承担迁移。
+本机静止实例使用 [原生退出切换脚本](../acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1)：显式传入持久 Assistant 与 Observer 两个包及各自摘要、精确旧 PID、当前 profile 摘要及本轮证据目录，先 `-Check`，通过后同参数执行。脚本先核验共享控制台仅包含精确计划任务进程树，再经 Windows CTRL+C 触发 DSH 原生 SIGINT disposal；等待旧进程退出、SQLite owner 释放、原生日志回合结束和实际子进程退出后，才沿官方 `dsh plugin --profile web add` 安装。不修改 profile，核验其原字节摘要并还原自启状态，经计划任务启动并回读。失败保留现场与阶段记录，不自动强制重启；不得将其用于活动业务执行或其他实例。此脚本只支持既有已配置的本机身份与路径，不承担迁移。 profile 声明本地 `file:` 目录宿主时，先核对声明与已安装宿主版本一致；漂移以 `DEPLOY_HOST_CONFIGURATION_DRIFT` 在停机前拒绝，普通代码部署不得隐式切换宿主。停机前以 profile 原生 CLI 的只读 `plugin --help` 验证依赖装配。安装失败保留停机现场，先核对原包/profile摘要、旧PID已退出、端口关闭与原生离线账本排空，再用同一配置声明的原生CLI接续原安装阶段；不要重新发信或重做原业务。
 
-恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的 `openTaskId` 查询 SUCCESS 后仍须读取精确原消息核对群、发送者、原生引用及完整正文。DWS 缺少原生 mention 元数据时仅在这些精确发送证据齐全的情况下确认送达，并记录 `mentionVerification=unavailable`；不能把文本 `@姓名` 当作原生 mention 证据。unknown 不重发。
+恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的原 `openTaskId` 查询 SUCCESS 后须读取精确原消息，确认消息 ID 与目标会话一致即可结清送达，不再以钉钉渲染后的正文或引用/@元数据作为该路径的硬门槛。该路径记录 `mentionVerification=unavailable`，仅证明送达，不声称正文、引用或 @ 已验证。无成功发送任务回执的历史匹配继续严格核对原正文、发送者、引用和 @。unknown 只沿原通知正常回读核验，不重发、不直接改 SQLite；独立确认原 receipt.messageId 与 sendAttemptCount 未增加。
 
 若原通知只因顶层有序列表的 `1./2./3.` 在分段回读时变为 `1./1./1.` 而停留 unknown，安装列表回读修复后交由既有 notification.reconcile 正式结清；不手改 SQLite、正文或发送回执，不调用发送/重试发送接口。独立回读原 notificationId、原 messageId、delivered、sendAttemptCount 仍为 1，再核对恢复告警消失及健康状态。代码围栏、非连续编号、列表顺序或正文数字变化继续拒绝。
 
@@ -136,3 +136,14 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 全健康要求一个新 DSH 进程拥有 3080/18998、health=ok、recoveryIssueCount=0、匿名 Web=401。冷启动等待最多五分钟；失败时保留现场，不强杀、不启动第二实例。原生退出阶段失败会保持自启禁用，须查明原因并沿原现场处理。此检查不代表真实钉钉业务验收通过。
 
 启动完成以唯一进程双端口、可读健康响应、匿名 Web=401 及已配置入站就绪为准。health=degraded 时明确警告并返回实际 recoveryIssueCount，不冒充全健康；既有未知通知不会阻止报告服务已启动。此时查看 /state/recovery-issues 沿原记录核对，不重复重启或发送。
+
+
+## 协调启动失败补偿与新版预设
+
+DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个schedule工具的6处旧字段，用 `docs/acceptance/coordination-startup-recovery/scripts/repair-subagent-preset.mjs --check <profile绝对路径> <原SHA256>` 零写校验，再以同参数 `--apply` 原子应用；工具逐项验证YAML语义仅删除已知字段，不接受其他工具限制或范围变化。先实跑当前原生schedule插件：4个工具均对delegated child返回subagent_session，调度服务调用为0，才能移除旧配置；不能靠删限制让预设启动。
+
+修复包沿本页已初始化实例原生部署规程切换，原通知不重发、原消息不重新发送。协调启动失败保持原请求ID和来源版本，持久化failurePhase/startupAttempt/nextRetryAt，恢复扫描先检查当前preset健康再接回；最高5分钟退避，重启不清除。历史仅attempt0且无已派发messageId的失败可恢复，普通协议耗尽或已有输入不自动接回。持久消息故障进入健康告警直到真正解决。
+
+部署后分别回读原消息routingStatus、原coordinationRequest状态与resumeEpoch、关联Topic/Task及真实会话输入。原消息开始处理不代表其业务PR已修改或UAT提测完成；按原任务继续交付并保留未知效果保护。
+
+原生部署启动回读在双端口就绪后，最多等待60秒实际DWS就绪（inboundProcessing与dwsBridge.healthy）；不能把首次健康快照的初始化中状态误判为安装失败。超时保留原阶段证据，先独立查实际进程和渠道；不要重复安装或强制重启。

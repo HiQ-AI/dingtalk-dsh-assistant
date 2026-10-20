@@ -17,6 +17,16 @@ $db="$agentWorkspace/.dsh/task-sessions.sqlite"
 $node='D:/soft/node-v24.19.0/node.exe'
 $starter='D:/dsh_home/launchers/start-web.ps1'
 $entry="$profile/node_modules/@deepseek-ai/dsh/lib/bin.js"
+# 代码包更新不能隐式切换宿主；本地运行时声明与安装版本漂移必须在停机前拒绝。
+$hostDependency=(Get-Content "$profile/package.json" -Raw|ConvertFrom-Json).dependencies.'@deepseek-ai/dsh'
+if($hostDependency -and $hostDependency.StartsWith('file:')){
+ $declaredHost=[IO.Path]::GetFullPath($hostDependency.Substring(5),$profile)
+ if(Test-Path -LiteralPath $declaredHost -PathType Container){
+  $declaredVersion=(Get-Content (Join-Path $declaredHost 'package.json') -Raw|ConvertFrom-Json).version
+  $installedVersion=(Get-Content "$profile/node_modules/@deepseek-ai/dsh/package.json" -Raw|ConvertFrom-Json).version
+  if($declaredVersion-ne$installedVersion){throw 'DEPLOY_HOST_CONFIGURATION_DRIFT'}
+ }
+}
 $installed="$profile/node_modules/@zzusp/dingtalk-dsh-assistant"
 $checker=Join-Path $PSScriptRoot 'inspect-quiescent-ledger.mjs'
 $ledger=Join-Path $PSScriptRoot 'inspect-quiescent-ledger.mjs'
@@ -68,6 +78,9 @@ $consoleProof=ReadConsoleProof
 $packageProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packages/dingtalk-dsh-assistant'))
 if($ObserverPackage){$observerProof=RunNode @($checker,'package',$ObserverPackage,(Join-Path $workspace 'packages/dingtalk-dsh-observer'))}
 $ledgerProof=RunNode @($ledger,$db,$agentWorkspace)
+# 停机前先证明安装CLI可装配；只读help不运行安装，也不输出可能包含凭据的CLI正文。
+$previousCliHome=$env:DSH_HOME
+try{$env:DSH_HOME='D:/dsh_home';& $node $entry plugin --help *> $null;if($LASTEXITCODE){throw 'DEPLOY_CLI_PREFLIGHT_FAILED'}}finally{$env:DSH_HOME=$previousCliHome}
 $observerManifest="$profile/node_modules/@zzusp/dingtalk-dsh-observer/package.json"
 $observerHash=Hash $observerManifest
 if($Check){@{checkOnly=$true;writes=0;signals=0;console=$consoleProof;packageSha256=Hash $Package;profileSha256=Hash $patch;pid=$ExpectedPid;ledger=($ledgerProof|ConvertFrom-Json)}|ConvertTo-Json -Depth 5;exit 0}
@@ -119,9 +132,10 @@ try{
  if($wasEnabled){Enable-ScheduledTask -TaskName $taskName|Out-Null}
  $phase='start';Start-ScheduledTask -TaskName $taskName
  WaitFor {$owners=PortOwners 18998;if($owners.Count-ne1-or$owners[0]-eq$ExpectedPid){return $false};$script:newPid=$owners[0];return (PortOwners 3080)-contains$newPid} 'DEPLOY_NEW_PROCESS_NOT_READY' 300
- $health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10
+ WaitFor {
+  try{$script:health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10;return $health.inboundProcessing -and $health.dwsBridge.healthy}catch{return $false}
+ } 'DEPLOY_TRANSPORT_NOT_READY' 60
  Record 'readback' @{newPid=$newPid;creationDate=(Get-CimInstance Win32_Process -Filter "ProcessId=$newPid").CreationDate;health=$health;profileSha256=Hash $patch;packageSha256=Hash $Package;installedVersion=(Get-Content "$installed/package.json" -Raw|ConvertFrom-Json).version;taskEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled;backupCreated=$false}
- if(-not $health.inboundProcessing -or -not $health.dwsBridge.healthy){throw 'DEPLOY_TRANSPORT_NOT_READY'}
  @{installed=$true;transportReady=$true;newPid=$newPid;health=$health.status;recoveryIssueCount=$health.recoveryIssueCount;evidenceDirectory=$EvidenceDirectory}|ConvertTo-Json
 }catch{
  Record 'failure' @{phase=$phase;error=$_.Exception.Message;profileSha256=Hash $patch;autostartEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled}

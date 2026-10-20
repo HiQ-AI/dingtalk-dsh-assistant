@@ -1,0 +1,12 @@
+case,round,status,evidence
+startup-root-cause,1,PASS,original message pending decision-failed agent-preset invalid; original request exhausted attempt0 without input ID
+startup-recovery-regression,1,PASS,129 coordination and topic tests; persistent backoff restart concurrent recovery and dispatch no replay
+persistent-alert-http,1,PASS,HTTP real SQLite test verifies durable coordination error remains visible and clears only after message resolution
+native-schedule-boundary,1,PASS,4 actual native tools reject delegated child; schedule effects0
+preset-compatibility-repair,1,PASS,check writes0 then exact six filters removed; YAML remaining semantics unchanged
+local-deployment,1,FAIL,installation and new PID succeeded; initial transport health snapshot raced channel startup
+original-message-recovery,1,NOT_RUN,initial snapshot retained original exhausted request while bootstrap settled
+local-deployment,2,PASS,independent same PID35992 dual ports; package and profile SHA verified; health ok; no reinstall
+original-message-recovery,2,PASS,original source routed and delivered; same route completed resumeEpoch1; exactly one associated task active
+original-business-handoff,2,PASS,original task owner delegated execution; execution running and owner wait reports PR review inventory
+startup-readiness-wait,2,PASS,actual WaitFor source waits across not-ready first probe; live transport readiness accepted

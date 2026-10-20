@@ -120,5 +120,11 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.equal((await post('/tasks/old/context', { requestId: 'old', progressImpact: 'replan', context: '禁止恢复', expectedRequirementRevision: 1, expectedControlRevision: 1 })).status, 404)
     for (const path of ['/tasks/old/reopen', '/tasks/old/reports/r/retry', '/authorizations/old/decision', '/workflows/message/requests/r/answer']) assert.equal((await post(path, {})).status, 410)
     assert.ok(taskTurns >= 1)
+    await residentStore.ingest({groupId:'g',messageId:'startup-alert',text:'待处理',senderOpenDingTalkId:'owner',occurredAt:'2026-10-20T10:39:40Z'})
+    await residentStore.markMessageAgentDelivery({groupId:'g',messageId:'startup-alert',status:'decision-failed',error:'agent-preset/invalid'})
+    assert.equal(service.listAlerts().find(item=>item.alertId==='coordination:g').detail,'agent-preset/invalid', '持久消息故障不能依赖会被扫描清空的内存失败表')
+    await residentStore.markMessageAgentDelivery({groupId:'g',messageId:'startup-alert',status:'delivered'})
+    assert.equal(service.listAlerts().some(item=>item.alertId==='coordination:g'),false)
+
   } finally { await new Promise(resolve => server.close(resolve)); await service.close(); await residentStore.close(); await rm(root, { recursive: true, force: true }) }
 })
