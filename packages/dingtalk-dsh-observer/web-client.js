@@ -601,16 +601,19 @@ window.__ModuleLoader__.load({
     }
     function ExecutionSessionDuration({ timing }) {
       const [clock, setClock] = useState(Date.now)
+      const start = timing?.startedAt ? Date.parse(timing.startedAt) : NaN
+      const active = timing?.active === true && timing.endedAt === null && Number.isFinite(start)
       useEffect(() => {
-        if (!timing?.recorded || !timing.startedAt) return
+        if (!active) return
         setClock(Date.now())
         const timer = setInterval(() => setClock(Date.now()), 1000)
         return () => clearInterval(timer)
-      }, [timing?.recorded, timing?.startedAt])
-      const delta = timing?.startedAt ? clock - Date.parse(timing.startedAt) : 0
-      const recorded = timing?.recorded === true && Number.isFinite(timing.elapsedMs) && timing.elapsedMs >= 0 && Number.isFinite(delta) && delta >= 0
-      const value = recorded ? fmtDuration(timing.elapsedMs + delta) : '—'
-      const description = recorded ? `累计实际运行时长：${value}` : '时长未记录：缺少完整的实际运行计时证据。'
+      }, [active, start])
+      const end = active ? clock : timing?.active === false && timing.endedAt ? Date.parse(timing.endedAt) : NaN
+      const elapsed = end - start
+      const recorded = Number.isFinite(elapsed) && elapsed >= 0
+      const value = recorded ? fmtDuration(elapsed) : '—'
+      const description = recorded ? `最新一轮执行耗时：${value}` : '最新一轮耗时未记录：该轮尚未开始或缺少可靠的起止时间。'
       return React.createElement('span', { className: 'observer-execution-duration', title: description, 'aria-label': description, style: { color: colors.muted, fontVariantNumeric: 'tabular-nums', display: 'inline-block', minWidth: '8em', textAlign: 'right' } }, value)
     }
     function TaskResult({ result }) {
@@ -1505,7 +1508,7 @@ window.__ModuleLoader__.load({
                   React.createElement('circle', { cx: 8, cy: 8, r: 5.6, fill: done ? tone : 'none' }),
                   done ? React.createElement('path', { d: 'm5 8 2 2 4-4', stroke: 'white' }) : running ? React.createElement('circle', { cx: 8, cy: 8, r: 2, fill: tone, stroke: 'none' }) : failed ? React.createElement('path', { d: 'M8 4.5v4M8 10v1' }) : null),
                 React.createElement('span', { title: execution.title, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, execution.title),
-                React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, React.createElement(ExecutionSessionDuration, { timing: execution.runTiming })))
+                React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, React.createElement(ExecutionSessionDuration, { timing: execution.latestRoundTiming })))
             }))) : null,
           task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,
           React.createElement('div', { style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted } },

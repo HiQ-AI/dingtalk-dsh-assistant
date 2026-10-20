@@ -19,7 +19,7 @@ import { formatTaskGroupReply } from './group-reply-format.js'
 import { sameDeliveredText } from './group-message.js'
 import { taskExecutionContext } from './execution-context.js'
 import { assertTaskContextSemantics, taskContextInputContract } from './task-input-contract.js'
-import { projectTaskTimeline, readTaskLifecycle } from './task-execution-timeline.js'
+import { projectTaskTimeline, readTaskLifecycle, latestExecutionRoundTiming } from './task-execution-timeline.js'
 export { taskExecutionContext } from './execution-context.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
@@ -289,6 +289,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     executionSessions: [...new Map(executions.map(execution => [execution.sessionId || execution.executionId, {
       executionId: execution.executionId, sessionId: execution.sessionId, title: executionSessionTitle(execution), status: execution.status, createdAt: execution.createdAt,
       runTiming: execution.runTiming ?? null,
+      latestRoundTiming: latestExecutionRoundTiming(execution),
       drained: execution.drained, recovering: execution.recovering === true,
     }])).values()].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.executionId.localeCompare(b.executionId)), waitingReason: state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
     controlState: task.control, inputVersion: task.requirementRevision, result: task.completion?.result ?? task.lastDecision ?? null,

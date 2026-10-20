@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { projectTaskTimeline } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
+import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 
 test('running supplement preserves the runner, persists once and fences old completion', async t => {
   const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
@@ -1215,24 +1215,41 @@ test('execution timing counts claims only, freezes on result/drain and accumulat
   const f = await fixture(t), owner = await f.task()
   const execution = (await f.command('execution.dispatch', { binding: owner.binding, key: 'timing', prompt: 'Inspect', input: {} })).result.execution
   const read = () => f.query({ kind: 'execution.get', executionId: execution.executionId })
+  const round = async () => latestExecutionRoundTiming(await read())
   assert.deepEqual(execution.runTiming, { recorded: true, elapsedMs: 0, startedAt: null })
+  assert.equal(await round(), null)
   t.mock.timers.tick(60_000)
   let binding = (await f.command('execution.claim', { executionId: execution.executionId })).result.binding
   assert.equal(Date.parse((await read()).runTiming.startedAt), Date.now())
-  t.mock.timers.tick(2500)
-  await f.command('execution.result', { binding, output: { done: true } })
+  const firstStart = (await round()).startedAt
+  assert.deepEqual(await round(), { startedAt: firstStart, endedAt: null, active: true })
+  t.mock.timers.tick(500)
+  await f.command('execution.progressReported', { binding, sequence: 1, summary: '已核对', evidence: [], activity: '继续检查' })
+  await f.command('execution.feedback', { binding: owner.binding, executionId: execution.executionId, messageId: 'timing-feedback', text: '继续原目标' })
+  await f.command('execution.feedbackConsumed', { binding, messageId: 'timing-feedback', sequence: 2 })
+  assert.equal((await round()).startedAt, firstStart, 'stage feedback and messages never start a new round')
+  t.mock.timers.tick(2000)
+  await f.command('execution.result', { binding, output: { done: true }, feedbackVersion: 1 })
   const fixed = (await read()).runTiming
+  const firstRound = await round()
+  assert.equal(Date.parse(firstRound.endedAt) - Date.parse(firstRound.startedAt), 2500)
+  assert.equal(firstRound.active, false)
   assert.deepEqual(fixed, { recorded: true, elapsedMs: 2500, startedAt: null })
   t.mock.timers.tick(30_000)
   await f.command('execution.drained', { binding })
   assert.deepEqual((await read()).runTiming, fixed)
+  assert.deepEqual(await round(), firstRound)
   await f.command('execution.continue', { binding: owner.binding, executionId: execution.executionId, key: 'next', prompt: 'Continue', input: {} })
   t.mock.timers.tick(90_000)
   assert.deepEqual((await read()).runTiming, fixed)
+  assert.deepEqual(await round(), firstRound, 'queued continuation does not invent a new start')
   binding = (await f.command('execution.claim', { executionId: execution.executionId })).result.binding
+  assert.notEqual((await round()).startedAt, firstStart)
+  assert.equal((await round()).active, true)
   t.mock.timers.tick(1500)
   await f.command('execution.drained', { binding })
   assert.deepEqual((await read()).runTiming, { recorded: true, elapsedMs: 4000, startedAt: null })
+  assert.equal(Date.parse((await round()).endedAt) - Date.parse((await round()).startedAt), 1500, 'drain without result closes just this round')
   t.mock.timers.tick(30_000)
   binding = (await f.command('execution.claim', { executionId: execution.executionId })).result.binding
   t.mock.timers.tick(1000)
@@ -1241,8 +1258,11 @@ test('execution timing counts claims only, freezes on result/drain and accumulat
   await f.command('execution.drained', { binding })
   assert.deepEqual((await read()).runTiming, { recorded: true, elapsedMs: 5500, startedAt: null })
   assert.equal((await read()).status, 'cancelled')
+  const cancelledRound = await round()
+  assert.equal(Date.parse(cancelledRound.endedAt) - Date.parse(cancelledRound.startedAt), 1500)
   await f.reopen()
   assert.equal((await read()).runTiming.elapsedMs, 5500)
+  assert.deepEqual(await round(), cancelledRound)
 })
 
 test('execution timing never guesses legacy or interrupted intervals; terminal before restart stays fixed', async t => {
@@ -1263,12 +1283,33 @@ test('execution timing never guesses legacy or interrupted intervals; terminal b
   const legacyTimeline = (await f.query({ kind: 'execution.get', executionId: legacy.executionId })).timeline
   assert.equal(legacyTimeline.complete, false)
   assert.equal(legacyTimeline.segments.length, 1, 'collect only the newly observed claim, never the missing original run')
+  assert.equal(latestExecutionRoundTiming(await f.query({ kind: 'execution.get', executionId: legacy.executionId })).active, true)
   await f.reopen()
   const interrupted = await f.query({ kind: 'execution.get', executionId: active.executionId })
   assert.equal(interrupted.runTiming.recorded, false)
   assert.equal(interrupted.runTiming.startedAt, null)
+  assert.equal(latestExecutionRoundTiming(interrupted), null)
   await f.command('execution.drained', { binding: active })
   await f.command('execution.claim', { executionId: active.executionId })
   assert.equal((await f.query({ kind: 'execution.get', executionId: active.executionId })).runTiming.recorded, false)
+  assert.equal(latestExecutionRoundTiming(await f.query({ kind: 'execution.get', executionId: active.executionId })).active, true)
   assert.deepEqual((await f.query({ kind: 'execution.get', executionId: finished.executionId })).runTiming, fixed)
+})
+
+test('failed round freezes at its first result, not at repeated receipt, drain or restart', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_800_000_000_000 })
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding, 'failed-timing')
+  const round = async () => latestExecutionRoundTiming(await f.query({ kind: 'execution.get', executionId: binding.executionId }))
+  const startedAt = (await round()).startedAt
+  t.mock.timers.tick(3500)
+  const args = { binding, error: { code: 'PERMANENT_FAILURE' } }
+  await f.command('execution.result', args)
+  const failed = await round()
+  assert.deepEqual(failed, { startedAt, endedAt: new Date(Date.now()).toISOString(), active: false })
+  assert.equal(Date.parse(failed.endedAt) - Date.parse(startedAt), 3500)
+  t.mock.timers.tick(10000)
+  await f.command('execution.result', args)
+  await f.command('execution.drained', { binding })
+  await f.reopen()
+  assert.deepEqual(await round(), failed)
 })
