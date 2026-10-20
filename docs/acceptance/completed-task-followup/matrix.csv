@@ -5,3 +5,6 @@ native-batch-reopen-and-idempotency,1,PASS,round-1.md
 adjacent-routing-and-version-contracts,1,PASS,round-1.md
 real-model-original-message,1,FAIL,round-1.md
 real-model-original-message,2,PASS,round-2.md
+web-reopen-http-native,3,PASS,round-3.md
+local-package-deployment,3,PASS,round-3.md
+aggregate-effects-and-original-handoff,3,PASS,round-3.md
