@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { groupReplyScopeInstructions } from '../packages/dingtalk-dsh-assistant/group-message.js'
-import { available, reason, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
+import { taskIndexPage } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
+import { available, reason, nativeTaskHost, latestInput, waitUntil, modelToolValues } from './fixtures/task-session-native-host.js'
 
 const call = (name, args) => ({ name, args: name === 'group_decision_submit' ? { ...args, decision: { ...args.decision, topicUpdate: { summary: '围绕原始事项持续核对，当前结论以任务真实进展为准。' } } } : args })
 function envelope(request, prefix) {
@@ -28,6 +29,106 @@ function jsonValues(value) {
 }
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '真实用户', sourceKind: 'dingtalk', text,
   occurredAt: '2026-10-13T10:00:00Z', timestamp: '2026-10-13T10:00:00Z' })
+
+testRunner('completed task catalogue stays within the tool budget and advances by returned entries without losing tasks', () => {
+  const tasks = Array.from({ length: 14 }, (_, index) => ({ taskId: `task-${index}`, title: `原任务${index}`, state: 'completed',
+    inputVersion: index + 1, runSequence: 2, topicRefs: [{ topicId: `topic-${index}`, revision: 3 }],
+    objective: '核对原任务交付。'.repeat(1000), completion: { result: { summary: '已交付原 PR 及 UAT 证据。'.repeat(1000) } },
+    sourceRefs: ['internal-source'], request: '长原文'.repeat(10000), appliedOperations: ['historical-operation'] }))
+  const seen = []
+  for (let offset = 0; offset < tasks.length;) {
+    const page = taskIndexPage(tasks, offset, 100)
+    assert.ok(Buffer.byteLength(JSON.stringify(page), 'utf8') <= 12 * 1024)
+    assert.ok(page.tasks.length > 0 && page.tasks.length < 14)
+    assert.equal(page.total, tasks.length)
+    assert.equal(page.nextOffset, offset + page.tasks.length)
+    assert.equal(page.hasMore, page.nextOffset < tasks.length)
+    for (const item of page.tasks) {
+      assert.equal(item.state, 'completed')
+      assert.equal(item.inputVersion, tasks.find(task => task.taskId === item.taskId).inputVersion)
+      assert.ok(item.objectivePreview && item.resultPreview)
+      assert.equal(item.request, undefined)
+      assert.equal(item.appliedOperations, undefined)
+      seen.push(item.taskId)
+    }
+    offset = page.nextOffset
+  }
+  assert.deepEqual(seen, tasks.map(task => task.taskId))
+  assert.equal(taskIndexPage(tasks, tasks.length, 100).hasMore, false)
+  assert.equal(taskIndexPage([], 0, 100).nextOffset, 0)
+  assert.ok(tasks[0].request.length > 20000, '目录缩减不得改写原任务正文')
+})
+
+testRunner('native batch followup reopens each original completed task and session once from one coordination topic', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+  let followup = false
+  const reopenedInputs = []
+  const h = await extraHost(t, 'task-batch-followup-', async (request, host) => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit')) {
+      assert.ok(JSON.stringify(request).includes('批量事项即使由新协调 Topic 承接'))
+      if (!values.some(value => Array.isArray(value.tasks))) return [call('group_task_list', { limit: 100 })]
+      return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
+        messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'batch-review', title: '原交付审查续办' }],
+      })) })]
+    }
+    if (names.includes('group_decision_submit')) {
+      const details = values.find(value => Array.isArray(value.tasks))
+      if (!details) {
+        const ids = (await host.query('task.list')).filter(task => task.title.startsWith('dataset ')).map(task => task.taskId)
+        return [call('group_task_context_get', { taskIds: ids })]
+      }
+      const review = values.find(value => Array.isArray(value.candidates))
+      if (!review) return [call('group_reply_review_get', { requestIds: [input.requestId] })]
+      const refs = [{ topicId: input.topicId, revision: input.revision }]
+      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+        decision: { basisMessageIds: input.messages.map(item => item.messageId),
+          actions: details.tasks.map(task => {
+            assert.equal(task.state, 'completed')
+            assert.ok(task.request && task.completion.result.summary, '详情仍保留完整原始交付及完成证据')
+            return { kind: 'task-reopen', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
+              context: `仅跟进 ${task.title} 的原 PR；核查新评论，适用时修订、验证并提测原 UAT，无新评论则不重复修改或部署。`, topicRefs: refs }
+          }),
+          reply: '已分别交回两个原任务核查新增审查评论。',
+          replyReview: { kind: 'confirmation', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
+        } })]
+    }
+    assert.ok(names.includes('task_session_submit'))
+    if (followup) reopenedInputs.push({ taskId: input.task.taskId, sessionId: input.task.sessionId, request: input.task.request })
+    return [call('task_session_submit', { decision: { action: 'complete', summary: followup ? '已核查，无新增适用评论，不修改或提测。' : '原 PR 与 UAT 交付证据。',
+      evidence: ['隔离测试完成收据'], limitations: [] } })]
+  })
+  for (const title of ['dataset 名称校验', 'dataset 关联校验', '无关通知文案']) {
+    await h.service.createTask({ groupId: 'native-group', requestId: `seed-${title}`, title, objective: `${title}：完成原 PR 并交付原 UAT` })
+    await h.service.whenIdle()
+  }
+  const originals = await h.query('task.list')
+  assert.ok(originals.every(task => task.status === 'completed'))
+  followup = true
+  const source = message('batch-followup', '测试助手，云端对dataset项目当前活跃的PR做了代码审查，并给出了修复方案，你看看你当前已完成的项目中未合并的PR是否有新的评论，如果有，则逐个按照PR中的评论修改，然后重新提测对应UAT环境')
+  await h.service.ingest(source)
+  await h.service.whenIdle()
+  const after = await h.query('task.list')
+  assert.equal(after.length, originals.length)
+  for (const original of originals) {
+    const current = after.find(task => task.taskId === original.taskId), selected = original.title.startsWith('dataset ')
+    assert.equal(current.sessionId, original.sessionId)
+    assert.equal(current.runSequence, original.runSequence + Number(selected))
+    assert.equal(current.requirementRevision, original.requirementRevision + Number(selected))
+    assert.ok(current.request.startsWith(original.request))
+    assert.ok(original.sourceRefs.every(ref => current.sourceRefs.includes(ref)))
+    assert.ok(original.topicRefs.every(ref => current.topicRefs.some(item => item.topicId === ref.topicId)))
+    assert.equal(current.status, 'completed')
+  }
+  assert.equal(reopenedInputs.length, 2)
+  const decision = h.residentStore.listTopics('native-group').find(topic => topic.title === '原交付审查续办').decisions[0]
+  assert.deepEqual(decision.decision.actions.map(action => action.kind), ['task-reopen', 'task-reopen'])
+  assert.ok(decision.operations.every(operation => operation.status === 'applied'))
+  await h.service.ingest(source)
+  await h.service.recover()
+  await h.service.whenIdle()
+  assert.equal(reopenedInputs.length, 2)
+  assert.deepEqual((await h.query('task.list')).map(task => [task.taskId, task.requirementRevision, task.runSequence]), after.map(task => [task.taskId, task.requirementRevision, task.runSequence]))
+})
 
 testRunner('native task service preserves Topic routing, task association, ignored input and recovery idempotency', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-topic-native-'))
