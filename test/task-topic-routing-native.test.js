@@ -340,3 +340,32 @@ testRunner('native proposal prompt preserves original authorization and asks wit
   assert.equal((await h.query('task.list')).length, 0)
   assert.equal(h.sent.length, 1)
 })
+
+testRunner('native Web reopen preserves task identity and rejects stale input; HTTP retry is idempotent', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+  const { createServer } = await import('node:http')
+  const { handleRequest } = await import('../packages/dingtalk-dsh-assistant/http.js')
+  const h = await extraHost(t, 'web-reopen-', async () => [call('task_session_submit', { decision: { action: 'complete', summary: '原事项已核对', evidence: ['fixture'], limitations: [] } })])
+  const created = await h.service.createTask({ requestId: 'original', groupId: 'native-group', title: '原PR', objective: '核对原PR', acceptanceCriteria: ['核对完成'] })
+  await h.service.whenIdle()
+  const original = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(original.status, 'completed')
+  const runtime = { isTaskSessionMode: () => true, getTaskSessionDetail: id => h.service.taskDetail(id), reopenTask: args => h.service.reopenTask(args) }
+  const server = createServer((req, res) => handleRequest(req, res, runtime))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => server.close(resolve)))
+  const url = `http://127.0.0.1:${server.address().port}/tasks/${original.taskId}/reopen`
+  const args = { requestId: 'review-followup', context: '只处理新增审查，保留原提测证据', expectedRequirementRevision: original.requirementRevision, expectedControlRevision: original.controlRevision }
+  const post = body => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  assert.equal((await post({ ...args, actorId: 'other' })).status, 400)
+  assert.equal((await post({ ...args, expectedControlRevision: original.controlRevision + 1 })).status, 409)
+  assert.equal((await post(args)).status, 200)
+  await h.service.whenIdle()
+  assert.equal((await post(args)).status, 200)
+  await h.service.whenIdle()
+  const reopened = await h.query('task.get', { taskId: original.taskId })
+  assert.equal(reopened.runSequence, original.runSequence + 1)
+  assert.equal(reopened.sessionId, original.sessionId)
+  assert.equal((await h.query('task.list')).length, 1)
+  assert.equal(reopened.sourceRefs.length, original.sourceRefs.length + 1)
+  assert.equal(h.residentStore.listTopics('native-group').length, 1)
+})

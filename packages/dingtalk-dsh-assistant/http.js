@@ -148,6 +148,8 @@ const contextTaskInputSchema = z.strictObject({ requestId: requiredText.max(200)
   expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() })
   .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
 const cancelTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), reason: requiredText.max(2000), expectedControlRevision: z.number().int().positive() })
+const reopenTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), context: requiredText.max(32000),
+  expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() })
 
 export function residentErrorStatus(error) {
   const message = error instanceof Error ? error.message : String(error)
@@ -165,7 +167,7 @@ async function submitWebTask(request, response, runtime, kind, taskId) {
     if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
     if (taskId && ((await runtime.getTaskSessionDetail?.(taskId))?.legacyReadonly || !runtime.getTaskSessionDetail && await runtime.isWorkflowTask?.(taskId))) return send(response, 410, { error: 'LEGACY_TASK_READONLY' })
     const body = await readJson(request)
-    const parsed = (kind === 'createTask' ? createTaskInputSchema : kind === 'cancelTask' ? cancelTaskInputSchema : contextTaskInputSchema).safeParse(body)
+    const parsed = (kind === 'createTask' ? createTaskInputSchema : kind === 'cancelTask' ? cancelTaskInputSchema : kind === 'reopenTask' ? reopenTaskInputSchema : contextTaskInputSchema).safeParse(body)
     if (!parsed.success) return send(response, 400, { error: 'web_task_request_invalid', issues: parsed.error.issues.map(({ path, message }) => ({ path, message })) })
     const value = await runtime[kind]({ ...parsed.data, ...(taskId ? { taskId } : {}) })
     return send(response, value?.status === 'task-stale' ? 409 : value?.status === 'accepted' ? 202 : 200, value)
@@ -187,6 +189,9 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       if (!z.strictObject({}).safeParse(await readJson(request)).success) return send(response, 400, { error: 'web_task_request_invalid' })
       return send(response, 200, await store.archiveTask({ taskId }))
     } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
+  if (request.method === 'POST' && /^\/tasks\/[^/]+\/reopen$/u.test(url.pathname) && store.isTaskSessionMode?.()) {
+    return submitWebTask(request, response, store, 'reopenTask', decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/reopen'.length)))
   }
   // Retired configuration and fixed-run controls must never reach a runtime fallback.
   if (/^\/config\/workflow-(?:variables|bindings)(?:\/|$)/u.test(url.pathname)
