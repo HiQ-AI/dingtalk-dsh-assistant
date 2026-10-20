@@ -49,3 +49,5 @@ Web新建/补充/重开/取消在提供有效topicRefs时复用首个话题，�
 归并后的话题上下文按来源消息sequence稳定排序；归属变更的较晚revision不能把早期消息挪到后续指令之后，同一消息的多个单元保持原有稳定顺序，旧revision仍只读取当时归属。
 
 人工请求内容约定：reason简短说明已完成、尚未完成及具体缺口；question提出必要决定，并解释相关既有授权为何不足；完整文件/摘要/过程放evidence和attemptedActions。使用真实换行。来源投影保留原始授权来源及最近19条已接纳来源，不把作者与最初owner不同视为无关；实际权限仍逐条按真实作者和原文判断，完整目录保持可读。技术答复的范围限定不自动撤销先前授权。
+
+本机任务会话模式支持 `POST /tasks/:taskId/reopen`，正文为 `{requestId, context, expectedRequirementRevision, expectedControlRevision}`。仅当前配置的受信本机 Web 身份可调用；只重开已完成且排空、无未结算操作的原任务。保留 task/session/topic 和历史效果，新来源及 runSequence 递增；相同请求幂等，版本漂移返回409，旧工作流入口仍410。交接前须盘点总任务已发生效果并停用其后续执行，再逐项补入剩余增量，避免重复提测。

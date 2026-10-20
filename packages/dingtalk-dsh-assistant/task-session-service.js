@@ -1185,6 +1185,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     },
     async createTask(args) { return taskDTO(await webTopicAction(args, null, 'new-task')) },
     async appendTaskContext(args) { return taskDTO(await webTopicAction(args, await requireTask(args.taskId), 'task-context')) },
+    async reopenTask(args) { return taskDTO(await webTopicAction(args, await requireTask(args.taskId), 'task-reopen')) },
     async taskDialogue(taskId) {
       const task = await requireTask(taskId)
       return { taskId, sessionId: task.sessionId, messages: task.dialogue ?? [],

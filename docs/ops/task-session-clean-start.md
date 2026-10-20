@@ -149,3 +149,5 @@ DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个s
 部署后分别回读原消息routingStatus、原coordinationRequest状态与resumeEpoch、关联Topic/Task及真实会话输入。原消息开始处理不代表其业务PR已修改或UAT提测完成；按原任务继续交付并保留未知效果保护。
 
 原生部署启动回读在双端口就绪后，最多等待60秒实际DWS就绪（inboundProcessing与dwsBridge.healthy）；不能把首次健康快照的初始化中状态误判为安装失败。超时保留原阶段证据，先独立查实际进程和渠道；不要重复安装或强制重启。
+
+本机原任务重开入口随 Assistant 更新，无 schema 迁移。部署后通过受信 `/tasks/:taskId/reopen` 接纳带需求/控制版本的增量；核验原任务与会话身份、runSequence、来源记录和幂等收据，不直接改库。总任务先核对既有效果并取消其后续执行，再交回原事项。
