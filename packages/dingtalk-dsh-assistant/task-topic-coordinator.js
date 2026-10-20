@@ -123,6 +123,12 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     assertSession: (exec, groupId, request) => sessions.assert(exec.agent, groupId, request?.requestId),
     serializeTasks, applyAction, appendOutbox,
     reviewCandidates: (groupId, currentMessages, focusTaskIds = []) => buildReplyReviewCandidates({ group: store.getGroup(groupId), tasks: store.listTasks().filter(task => task.groupId === groupId), currentMessages, focusTaskIds }),
+    checkStartupRecovery: async () => {
+      const presets = ctx.get('agentPresets')
+      if (!presets?.resolve) return false
+      const preset = await presets.resolve(legacy.getAgentConfig().agentPreset)
+      return !preset.broken
+    },
     validateReplyReview, cancelTask: () => {}, onError: report, isClosing: () => closed,
   })
   return {

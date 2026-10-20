@@ -132,9 +132,10 @@ try{
  if($wasEnabled){Enable-ScheduledTask -TaskName $taskName|Out-Null}
  $phase='start';Start-ScheduledTask -TaskName $taskName
  WaitFor {$owners=PortOwners 18998;if($owners.Count-ne1-or$owners[0]-eq$ExpectedPid){return $false};$script:newPid=$owners[0];return (PortOwners 3080)-contains$newPid} 'DEPLOY_NEW_PROCESS_NOT_READY' 300
- $health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10
+ WaitFor {
+  try{$script:health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10;return $health.inboundProcessing -and $health.dwsBridge.healthy}catch{return $false}
+ } 'DEPLOY_TRANSPORT_NOT_READY' 60
  Record 'readback' @{newPid=$newPid;creationDate=(Get-CimInstance Win32_Process -Filter "ProcessId=$newPid").CreationDate;health=$health;profileSha256=Hash $patch;packageSha256=Hash $Package;installedVersion=(Get-Content "$installed/package.json" -Raw|ConvertFrom-Json).version;taskEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled;backupCreated=$false}
- if(-not $health.inboundProcessing -or -not $health.dwsBridge.healthy){throw 'DEPLOY_TRANSPORT_NOT_READY'}
  @{installed=$true;transportReady=$true;newPid=$newPid;health=$health.status;recoveryIssueCount=$health.recoveryIssueCount;evidenceDirectory=$EvidenceDirectory}|ConvertTo-Json
 }catch{
  Record 'failure' @{phase=$phase;error=$_.Exception.Message;profileSha256=Hash $patch;autostartEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled}

@@ -136,3 +136,14 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 全健康要求一个新 DSH 进程拥有 3080/18998、health=ok、recoveryIssueCount=0、匿名 Web=401。冷启动等待最多五分钟；失败时保留现场，不强杀、不启动第二实例。原生退出阶段失败会保持自启禁用，须查明原因并沿原现场处理。此检查不代表真实钉钉业务验收通过。
 
 启动完成以唯一进程双端口、可读健康响应、匿名 Web=401 及已配置入站就绪为准。health=degraded 时明确警告并返回实际 recoveryIssueCount，不冒充全健康；既有未知通知不会阻止报告服务已启动。此时查看 /state/recovery-issues 沿原记录核对，不重复重启或发送。
+
+
+## 协调启动失败补偿与新版预设
+
+DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个schedule工具的6处旧字段，用 `docs/acceptance/coordination-startup-recovery/scripts/repair-subagent-preset.mjs --check <profile绝对路径> <原SHA256>` 零写校验，再以同参数 `--apply` 原子应用；工具逐项验证YAML语义仅删除已知字段，不接受其他工具限制或范围变化。先实跑当前原生schedule插件：4个工具均对delegated child返回subagent_session，调度服务调用为0，才能移除旧配置；不能靠删限制让预设启动。
+
+修复包沿本页已初始化实例原生部署规程切换，原通知不重发、原消息不重新发送。协调启动失败保持原请求ID和来源版本，持久化failurePhase/startupAttempt/nextRetryAt，恢复扫描先检查当前preset健康再接回；最高5分钟退避，重启不清除。历史仅attempt0且无已派发messageId的失败可恢复，普通协议耗尽或已有输入不自动接回。持久消息故障进入健康告警直到真正解决。
+
+部署后分别回读原消息routingStatus、原coordinationRequest状态与resumeEpoch、关联Topic/Task及真实会话输入。原消息开始处理不代表其业务PR已修改或UAT提测完成；按原任务继续交付并保留未知效果保护。
+
+原生部署启动回读在双端口就绪后，最多等待60秒实际DWS就绪（inboundProcessing与dwsBridge.healthy）；不能把首次健康快照的初始化中状态误判为安装失败。超时保留原阶段证据，先独立查实际进程和渠道；不要重复安装或强制重启。

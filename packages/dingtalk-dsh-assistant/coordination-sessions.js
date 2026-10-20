@@ -49,7 +49,12 @@ export function createCoordinationSessions({ create, isCurrent, onError, eventPr
         if (closed || !entry.active || !isCurrent(request)) { await entry.handle.dispose(); throw new Error('coordination_request_inactive') }
         bySession.set(entry.sessionId, entry)
         return entry
-      } catch (error) { if (entries.get(key) === entry) entries.delete(key); throw error }
+      } catch (error) {
+        // 尚未获得句柄，也未steer用户输入；仅这一阶段允许自动重新创建。
+        if (!entry.handle && error.message !== 'coordination_request_inactive') error.coordinationStartupFailure = true
+        if (entries.get(key) === entry) entries.delete(key)
+        throw error
+      }
     })()
     return entry.ready
   }

@@ -4,6 +4,20 @@ import { createCoordinationSessions, createCoordinationStepGate, coordinationToo
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+
+test('仅未获得句柄的创建错误标记为启动失败，steer 失败不可自动重放', async t => {
+  const startup = Object.assign(new Error('invalid preset'), { code: 'agent-preset/invalid' })
+  const request = { groupId: 'g', requestId: 'coord-route-startup' }
+  const creating = createCoordinationSessions({ create: async () => { throw startup }, isCurrent: () => true, onError() {} })
+  t.after(() => creating.close())
+  await assert.rejects(creating.dispatch(request, { id: 'original' }), error => error === startup && error.coordinationStartupFailure === true && error.code === 'agent-preset/invalid')
+  const steering = new Error('steer failed')
+  const created = createCoordinationSessions({ isCurrent: () => true, onError() {}, create: async () => ({
+    agent: { session: { snapshotEvents: () => [], append() {} }, inbox: {}, steer() { throw steering }, whenIdle: async () => {} }, dispose: async () => {},
+  }) })
+  t.after(() => created.close())
+  await assert.rejects(created.dispatch(request, { id: 'original' }), error => error === steering && error.coordinationStartupFailure !== true)
+})
 function fixture(t) {
   const requests = new Set(), handles = [], errors = []
   const manager = createCoordinationSessions({ isCurrent: request => requests.has(request), onError: error => errors.push(error),

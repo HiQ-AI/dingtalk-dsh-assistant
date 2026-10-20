@@ -1133,6 +1133,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,
     listAlerts: () => [
+      ...residentStore.listGroups().flatMap(group => {
+        const failed = group.messages.filter(message => ['failed', 'decision-failed', 'decision-commit-failed'].includes(message.agentDeliveryStatus))
+        return failed.length ? [{ alertId: `coordination:${group.groupId}`, fingerprint: `coordination:${group.groupId}`,
+          detail: failed[0].agentDeliveryError ?? '群消息归类或协调失败，原消息尚未处理。', status: 'active',
+          lastSeenAt: failed[0].agentDeliveryAt ?? new Date().toISOString() }] : []
+      }),
       ...[...failures.values()].map(item => ({ alertId: `failure:${item.id}`, taskId: taskCache.has(item.id) ? item.id : undefined, fingerprint: `task-session:${item.id}`, detail: item.code, status: 'active', lastSeenAt: item.at ?? new Date().toISOString() })),
       ...[...operationCache.values()].filter(item => item.state === 'unknown').map(item => ({ alertId: `operation:${item.id ?? item.operationId}`, taskId: item.taskId, fingerprint: `unknown-operation:${item.id ?? item.operationId}`, detail: '执行效果未知，已阻止后续操作；须核实原始效果。', status: 'active', lastSeenAt: item.updatedAt ?? item.createdAt })),
       ...[...notificationCache.values()].filter(item => item.state === 'unknown').map(item => ({ alertId: `notification:${item.id}`, taskId: item.taskId, fingerprint: `unknown-notification:${item.id}`, detail: '群通知发送结果尚未回读确认。', status: 'active', lastSeenAt: item.updatedAt })),
