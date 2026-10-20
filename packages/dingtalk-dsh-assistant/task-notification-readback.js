@@ -11,11 +11,19 @@ export async function readOperatorNotificationDelivery(adapter, notification) {
   return proof?.senderActorId ? proof : undefined
 }
 
-/** Never infer a native quote or mention merely from matching prose. */
+/** A successful original send receipt proves delivery; history matching still verifies content. */
 export function verifyTaskNotificationReadback(notification, observed, { acknowledgedMessageId, senderActorId, sendStatusConfirmed = false } = {}) {
   const payload = notification.payload
   const messageId = observed?.messageId
   if (!messageId || observed.conversationId !== payload.conversationId) return undefined
+  if (acknowledgedMessageId && acknowledgedMessageId !== messageId) return undefined
+  const sentTime = messageTimestamp(observed.createTime)
+  // 精确 SUCCESS 回执绑定原发送任务与消息，只确认送达，不推断正文、引用或 @ 核验结果。
+  if (sendStatusConfirmed && acknowledgedMessageId === messageId) return {
+    messageId, conversationId: payload.conversationId, identity: 'send-receipt',
+    ...(Number.isFinite(sentTime) ? { sentAt: new Date(sentTime).toISOString() } : {}),
+    atOpenDingTalkIds: [], mentionVerification: 'unavailable', observedAt: new Date().toISOString(),
+  }
   const quote = observed.quotedMessage
   if (quote?.messageId !== payload.sourceMessageId || quote?.conversationId !== payload.conversationId) return undefined
   const expected = payload.atOpenDingTalkIds ?? []
@@ -32,7 +40,6 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
     : !Array.isArray(actual) || expected.some(id => !actual.includes(id)))) return undefined
   if (!exactReceipt && !exactUuid && !ownSender) return undefined
   if (!sameDeliveredText(observed.text, payload.text, quote)) return undefined
-  const sentTime = messageTimestamp(observed.createTime)
   return { messageId, conversationId: payload.conversationId, quoteMessageId: quote.messageId,
     ...(Number.isFinite(sentTime) ? { sentAt: new Date(sentTime).toISOString() } : {}),
     atOpenDingTalkIds: unavailableMention ? [] : [...expected], mentionVerification: unavailableMention ? 'unavailable' : 'verified',
@@ -49,7 +56,7 @@ export async function readTaskNotificationDelivery(adapter, notification, { send
     const conversationId = status.messageRef?.openConversationId ?? status.result?.openConversationId
     if (status.result?.sendStatus !== 'SUCCESS' || conversationId !== notification.payload.conversationId) return undefined
     const sentMessageId = status.messageRef?.openMessageId ?? status.result?.openMessageId
-    if (messageId && sentMessageId !== messageId) return undefined
+    if (!sentMessageId || messageId && sentMessageId !== messageId) return undefined
     messageId = sentMessageId
     sendStatusConfirmed = true
   }

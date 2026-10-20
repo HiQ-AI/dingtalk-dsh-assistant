@@ -43,9 +43,9 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 普通代码更新保留同一数据库、初始化标记、instanceId、epoch 和原会话目录，不重复清洁启动。当前任务会话运行时没有旧 workflow maintenance 接口，不能直接使用依赖该接口的历史部署脚本。停机前须通过当前宿主的原生生命周期停止接纳并排空，确认原任务/执行/群会话及实际业务子进程已结束；不能仅凭一次 SQLite 快照声称原子排空。普通本地部署不备份历史副本。
 
-本机静止实例使用 [原生退出切换脚本](../acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1)：显式传入持久 Assistant 与 Observer 两个包及各自摘要、精确旧 PID、当前 profile 摘要及本轮证据目录，先 `-Check`，通过后同参数执行。脚本先核验共享控制台仅包含精确计划任务进程树，再经 Windows CTRL+C 触发 DSH 原生 SIGINT disposal；等待旧进程退出、SQLite owner 释放、原生日志回合结束和实际子进程退出后，才沿官方 `dsh plugin --profile web add` 安装。不修改 profile，核验其原字节摘要并还原自启状态，经计划任务启动并回读。失败保留现场与阶段记录，不自动强制重启；不得将其用于活动业务执行或其他实例。此脚本只支持既有已配置的本机身份与路径，不承担迁移。
+本机静止实例使用 [原生退出切换脚本](../acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1)：显式传入持久 Assistant 与 Observer 两个包及各自摘要、精确旧 PID、当前 profile 摘要及本轮证据目录，先 `-Check`，通过后同参数执行。脚本先核验共享控制台仅包含精确计划任务进程树，再经 Windows CTRL+C 触发 DSH 原生 SIGINT disposal；等待旧进程退出、SQLite owner 释放、原生日志回合结束和实际子进程退出后，才沿官方 `dsh plugin --profile web add` 安装。不修改 profile，核验其原字节摘要并还原自启状态，经计划任务启动并回读。失败保留现场与阶段记录，不自动强制重启；不得将其用于活动业务执行或其他实例。此脚本只支持既有已配置的本机身份与路径，不承担迁移。 profile 声明本地 `file:` 目录宿主时，先核对声明与已安装宿主版本一致；漂移以 `DEPLOY_HOST_CONFIGURATION_DRIFT` 在停机前拒绝，普通代码部署不得隐式切换宿主。停机前以 profile 原生 CLI 的只读 `plugin --help` 验证依赖装配。安装失败保留停机现场，先核对原包/profile摘要、旧PID已退出、端口关闭与原生离线账本排空，再用同一配置声明的原生CLI接续原安装阶段；不要重新发信或重做原业务。
 
-恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的 `openTaskId` 查询 SUCCESS 后仍须读取精确原消息核对群、发送者、原生引用及完整正文。DWS 缺少原生 mention 元数据时仅在这些精确发送证据齐全的情况下确认送达，并记录 `mentionVerification=unavailable`；不能把文本 `@姓名` 当作原生 mention 证据。unknown 不重发。
+恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的原 `openTaskId` 查询 SUCCESS 后须读取精确原消息，确认消息 ID 与目标会话一致即可结清送达，不再以钉钉渲染后的正文或引用/@元数据作为该路径的硬门槛。该路径记录 `mentionVerification=unavailable`，仅证明送达，不声称正文、引用或 @ 已验证。无成功发送任务回执的历史匹配继续严格核对原正文、发送者、引用和 @。unknown 只沿原通知正常回读核验，不重发、不直接改 SQLite；独立确认原 receipt.messageId 与 sendAttemptCount 未增加。
 
 若原通知只因顶层有序列表的 `1./2./3.` 在分段回读时变为 `1./1./1.` 而停留 unknown，安装列表回读修复后交由既有 notification.reconcile 正式结清；不手改 SQLite、正文或发送回执，不调用发送/重试发送接口。独立回读原 notificationId、原 messageId、delivered、sendAttemptCount 仍为 1，再核对恢复告警消失及健康状态。代码围栏、非连续编号、列表顺序或正文数字变化继续拒绝。
 

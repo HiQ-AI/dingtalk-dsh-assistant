@@ -37,7 +37,7 @@ test('unknown send cannot be reconciled from somebody else quoting identical tex
   assert.equal(verifyTaskNotificationReadback(notification,{...observed,senderId:'other'},{senderActorId:'bot'}),undefined)
 })
 
-test('exact successful delivery can distinguish unavailable mention metadata from verification', async () => {
+test('原任务SUCCESS与精确消息ID证明送达，不再以正文或引用元数据判定送达', async () => {
   const message = { ...observed, senderId: 'bot', atOpenDingTalkIds: undefined }
   const pending = { ...notification, ack: { openTaskId: 'send-task' } }
   const status = { result: { sendStatus: 'SUCCESS', openConversationId: 'g', openMessageId: 'm' } }
@@ -50,12 +50,14 @@ test('exact successful delivery can distinguish unavailable mention metadata fro
   assert.deepEqual(proof.atOpenDingTalkIds, [])
   const options = { acknowledgedMessageId: 'm', senderActorId: 'bot', sendStatusConfirmed: true }
   for (const change of [{ quotedMessage: undefined }, { quotedMessage: { messageId: 'wrong', conversationId: 'g' } },
-    { text: 'wrong' }, { senderId: 'other' }, { atOpenDingTalkIds: ['other'] }, { conversationId: 'other' }]) {
-    assert.equal(verifyTaskNotificationReadback(notification, { ...message, ...change }, options), undefined)
+    { text: '钉钉重新渲染的正文' }, { senderId: undefined }, { atOpenDingTalkIds: undefined }]) {
+    assert.equal(verifyTaskNotificationReadback(notification, { ...message, ...change }, options).messageId, 'm')
   }
+  for (const change of [{messageId:'other'}, {messageId:undefined}, {conversationId:'other'}])
+    assert.equal(verifyTaskNotificationReadback(notification, {...message,...change}, options), undefined)
   assert.equal(verifyTaskNotificationReadback(notification, message, { ...options, sendStatusConfirmed: false }), undefined)
   assert.equal(verifyTaskNotificationReadback(notification, { ...message, uuid: 'n' }, { senderActorId: 'bot' }), undefined)
-  assert.equal(await readTaskNotificationDelivery(adapter, pending), undefined)
+  assert.equal((await readTaskNotificationDelivery(adapter, pending)).messageId, 'm')
   status.result.sendStatus = 'SENDING'
   assert.equal(await readTaskNotificationDelivery(adapter, pending, { senderActorId: 'bot' }), undefined)
 })
@@ -80,9 +82,9 @@ test('DWS无序列表只消除项间换行，正文、围栏和段落边界不�
   assert.equal(sameDeliveredText('- A正文- B','- A\n正文\n- B'),false)
 })
 
-test('未知列表通知仅按原发送回执回读结清，内容或身份不符不结清且不重发', async () => {
+test('无成功任务回执的列表通知仍严格匹配内容与身份且不重发', async () => {
   const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
-  const pending = {...notification, state:'unknown', sendAttemptCount:1, ack:{openTaskId:'original-send'}, payload:{...notification.payload,text:'- A B\n\n- C'}}
+  const pending = {...notification, state:'unknown', sendAttemptCount:1, ack:{messageId:'m'}, payload:{...notification.payload,text:'- A B\n\n- C'}}
   const message = {...observed, senderId:'bot', text:'- A B- C'}
   const adapter = {querySendStatus:async id=>{assert.equal(id,'original-send');return {result:{sendStatus:'SUCCESS'},messageRef:{openConversationId:'g',openMessageId:'m'}}}, readMessage:async()=>message}
   const notifications={send:async()=>assert.fail('unknown must never resend'),readback:n=>readTaskNotificationDelivery(adapter,n,{senderActorId:'bot'})}
@@ -112,9 +114,9 @@ test('DWS分段有序列表重置编号时保留正文、数字、列表顺序�
     assert.equal(sameDeliveredText(text.replace(/2\.|3\./gu, '1.'), text), false)
 })
 
-test('原有序列表通知只回读结清，正文或身份不符继续unknown且不重发', async () => {
+test('无成功任务回执的有序列表通知严格比较正文与身份且不重发', async () => {
   const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
-  const pending = { ...notification, state: 'unknown', sendAttemptCount: 1, ack: { openTaskId: 'original-send' },
+  const pending = { ...notification, state: 'unknown', sendAttemptCount: 1, ack: { messageId: 'm' },
     payload: { ...notification.payload, text: '1. 环境已核实。\n\n2. 只调查来源。' } }
   const message = { ...observed, senderId: 'bot', text: '1. 环境已核实。\n1. 只调查来源。' }
   const adapter = { querySendStatus: async id => { assert.equal(id, 'original-send'); return { result: { sendStatus: 'SUCCESS' }, messageRef: { openConversationId: 'g', openMessageId: 'm' } } }, readMessage: async () => message }
@@ -128,5 +130,33 @@ test('原有序列表通知只回读结清，正文或身份不符继续unknown�
     const before = { ...message }; Object.assign(message, patch); commands.length = 0
     await deliverTaskNotification({ notification: pending, notifications, command: async (kind, args) => commands.push({ kind, args }) })
     assert.equal(commands[0].kind, 'notification.diagnostic'); Object.assign(message, before)
+  }
+})
+
+
+test('原SUCCESS发送回执只核验原消息，unknown结清不调用发送且错误ID/会话/状态不结清', async () => {
+  const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
+  const pending = {...notification, state:'unknown', sendAttemptCount:1, ack:{openTaskId:'original-send'}}
+  let status = {result:{sendStatus:'SUCCESS',openConversationId:'g',openMessageId:'m'}}
+  let message = {messageId:'m',conversationId:'g',text:'钉钉已重新渲染正文',createTime:'2026-10-20 18:01:50'}
+  const adapter = {querySendStatus:async id=>{assert.equal(id,'original-send');return status},
+    readMessage:async (group,id)=>{assert.equal(group,'g');assert.equal(id,'m');return message},
+    readGroup:async()=>assert.fail('原发送回执不能降级历史搜索')}
+  const commands = [], notifications = {send:async()=>assert.fail('禁止重发'),readback:n=>readTaskNotificationDelivery(adapter,n)}
+  const run = async () => {commands.length=0;await deliverTaskNotification({notification:pending,notifications,command:async(kind,args)=>commands.push({kind,args})})}
+  await run()
+  assert.equal(commands[0].kind,'notification.reconcile')
+  assert.equal(commands[0].args.receipt.identity,'send-receipt')
+  assert.equal(commands[0].args.receipt.sentAt,'2026-10-20T10:01:50.000Z')
+  assert.equal(pending.sendAttemptCount,1)
+  for (const value of [undefined,{messageId:'other',conversationId:'g'},{messageId:'m',conversationId:'other'}]) {
+    message=value;await run();assert.equal(commands[0].kind,'notification.diagnostic')
+  }
+  message={messageId:'m',conversationId:'g'}
+  for (const result of [{sendStatus:'SENDING',openConversationId:'g',openMessageId:'m'},
+    {sendStatus:'FAILED',openConversationId:'g',openMessageId:'m'},
+    {sendStatus:'SUCCESS',openConversationId:'other',openMessageId:'m'},
+    {sendStatus:'SUCCESS',openConversationId:'g'}]) {
+    status={result};await run();assert.equal(commands[0].kind,'notification.diagnostic')
   }
 })

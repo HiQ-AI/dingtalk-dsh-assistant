@@ -19,4 +19,14 @@ ordered-local-deployment,6,FAIL,ledger check refused while owner was finishing; 
 original-ordered-notification-reconcile,6,NOT_RUN,no stop signal or install
 ordered-local-deployment,7,PASS,zero-write Check then SIGINT; PID62032; exact packages installed; health ok
 original-ordered-notification-reconcile,7,PASS,API and readonly SQLite delivered; original messageId; sendAttemptCount1; no alerts
-
+receipt-delivery-boundaries,8,PASS,38 targeted tests; wrong identity and incomplete SUCCESS refused; unknown send unreachable
+receipt-original-readonly,8,PASS,original SUCCESS and exact message proof; reads only; writes0; sendAttemptCount1
+receipt-local-deployment,8,FAIL,native install refused stale profile CLI with missing dependency; stopped evidence retained
+receipt-original-reconcile,8,NOT_RUN,installation stopped; no original notification mutation
+receipt-cli-recovery-check,9,PASS,configured file runtime plugin help exit0; offline46 drained; old PID exited; writes0
+receipt-local-deployment,9,FAIL,packages verified but startup refused missing required profile peers
+receipt-original-reconcile,9,NOT_RUN,startup failed; original sendAttemptCount1 unchanged
+receipt-required-peers-check,10,PASS,23 required peer versions read from configured runtime manifests; no signals or writes
+receipt-local-deployment,10,PASS,54 Assistant and 4 Observer files verified; PID70064 dual ports; health ok; profile patch unchanged
+receipt-original-reconcile,10,PASS,original notification delivered; same original messageId; sendAttemptCount1; no resend
+receipt-host-preflight,10,PASS,actual guard rejects configured versus installed version drift before stop; matching version accepted; actual profile CLI help exit0
