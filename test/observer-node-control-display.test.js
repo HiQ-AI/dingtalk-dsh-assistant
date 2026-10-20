@@ -117,7 +117,7 @@ test('Web看板无新建入口或表单接线，空列表和已有任务仍显�
 
 test('任务对话运行中可发送，IME不误发，失败保留草稿和幂等键，关闭重开与旧回读不丢消息', async () => {
   const h = harness('TaskDialogue', { taskId: 't' })
-  let tree = h.render(); button(tree, '对话').props.onClick(); tree = h.render()
+  let tree = h.render(); button(tree, '介入任务会话').props.onClick(); tree = h.render()
   h.requests[0].resolve({ messages: [], writable: true }); await settle(); tree = h.render()
   input(tree, '消息').props.onChange({ target: { value: '目标不变，请先检查原错误' } }); tree = h.render()
   const form = () => elements(tree).find(item => item.type === 'form')
@@ -129,8 +129,8 @@ test('任务对话运行中可发送，IME不误发，失败保留草稿和幂�
   h.requests[1].reject(Error('connection lost')); await first; tree = h.render()
   assert.equal(input(tree, '消息').props.value, identity.text)
   assert.match(text(tree), /发送失败/)
-  button(tree, '收起对话').props.onClick(); tree = h.render()
-  button(tree, '对话').props.onClick(); tree = h.render()
+  button(tree, '收起任务会话').props.onClick(); tree = h.render()
+  button(tree, '介入任务会话').props.onClick(); tree = h.render()
   assert.equal(input(tree, '消息').props.value, identity.text)
   const retry = form().props.onSubmit({ preventDefault() {} })
   assert.deepEqual(JSON.parse(h.requests[3].options.body), identity)
@@ -139,7 +139,7 @@ test('任务对话运行中可发送，IME不误发，失败保留草稿和幂�
   h.requests[2].resolve({ writable: true, messages: [] }); await settle(); tree = h.render()
   assert.equal(input(tree, '消息').props.value, '')
   assert.ok(text(tree).includes(identity.text)); assert.match(text(tree), /已保存，待统筹处理/)
-  button(tree, '收起对话').props.onClick(); tree = h.render(); button(tree, '对话').props.onClick(); h.render()
+  button(tree, '收起任务会话').props.onClick(); tree = h.render(); button(tree, '介入任务会话').props.onClick(); h.render()
   h.requests[4].resolve({ writable: true, messages: [{ ...saved, reply: '原统筹已保存提醒，尚未确认消费。', repliedAt: saved.receivedAt }] }); await settle()
   tree = h.render(); assert.match(text(tree), /原统筹已保存提醒/)
   assert.doesNotMatch(text(tree), /已保存，待统筹处理/)
@@ -149,15 +149,33 @@ test('任务对话运行中可发送，IME不误发，失败保留草稿和幂�
 test('对话按任务key隔离，历史任务不挂载，已结束任务只读回看', async () => {
   for (const taskId of ['one', 'two']) {
     const tree = harness('TaskSessionDetail', { task: { taskId, state: 'running' } }).render()
-    const dialogue = elements(tree).find(item => item.props.taskId === taskId && item.props.key === taskId && !item.props.updatedAt)
+    const dialogue = elements(tree).find(item => item.props.taskId === taskId && item.props.key === `dialogue:${taskId}` && item.type?.name === 'TaskDialogue')
     assert.ok(dialogue)
   }
   assert.equal(elements(harness('TaskSessionDetail', { task: { taskId: 'old', legacyReadonly: true } }).render()).some(item => item.type?.name === 'TaskDialogue'), false)
   const h = harness('TaskDialogue', { taskId: 'done' })
-  button(h.render(), '对话').props.onClick(); h.render()
+  button(h.render(), '介入任务会话').props.onClick(); h.render()
   h.requests[0].resolve({ writable: false, messages: [] }); await settle()
   assert.equal(button(h.render(), '发送').props.disabled, true)
   h.unmount()
+})
+
+test('介入任务会话位于原任务会话卡片，两入口样式相同，完整面板不挤入侧栏', () => {
+  const h = harness('TaskSessionDetail', { task: { taskId: 'layout', state: 'running' } })
+  const tree = h.render(), location = elements(tree).find(item => item.props.label === '任务会话')
+  assert.equal(text(location.props.primaryAction), '介入任务会话')
+  assert.equal(location.props.primaryAction.props.variant, 'outline')
+  const columnsIndex = tree.children.findIndex(item => item?.props?.className === 'detail-columns')
+  const dialogueIndex = tree.children.findIndex(item => item?.type?.name === 'TaskDialogue')
+  assert.ok(dialogueIndex > columnsIndex)
+  assert.equal(tree.children[dialogueIndex].props.hideTrigger, true)
+  const card = harness('SessionLocation', { session: { sessionId: 'same-session' }, label: '任务会话', compact: true, primaryAction: location.props.primaryAction, onOpenSession() {} }).render()
+  assert.equal(button(card, '打开任务会话').props.variant, 'outline')
+  assert.equal(button(card, '打开任务会话').props.size, location.props.primaryAction.props.size)
+  assert.equal(JSON.stringify(button(card, '打开任务会话').props.style), JSON.stringify(location.props.primaryAction.props.style))
+  location.props.primaryAction.props.onClick()
+  assert.equal(elements(h.render()).find(item => item.props.hideTrigger).props.open, true)
+  assert.equal(h.render({ task: { taskId: 'other-task', state: 'running' } }).children.find(item => item?.props?.hideTrigger).props.open, false)
 })
 
 test('任务详情移除需求与控制区，同时保留会话、结果、执行及返回看板', () => {
