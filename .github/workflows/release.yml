@@ -188,17 +188,19 @@ jobs:
           }
           $releaseJson = gh release view $env:RELEASE_TAG --json tagName,isDraft,isPrerelease,assets 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $env:RELEASE_TAG docs/tmp/packages/*.tgz --verify-tag --title $env:RELEASE_TAG --generate-notes
+            gh release create $env:RELEASE_TAG docs/tmp/packages/*.tgz docs/tmp/packages/release-manifest.json --verify-tag --title $env:RELEASE_TAG --generate-notes
             if ($LASTEXITCODE -ne 0) { throw 'github_release_create_failed' }
           }
           $releaseJson = gh release view $env:RELEASE_TAG --json tagName,isDraft,isPrerelease,assets
           if ($LASTEXITCODE -ne 0) { throw 'github_release_readback_failed' }
           $release = $releaseJson | ConvertFrom-Json
           $packages = @(Get-ChildItem -LiteralPath docs/tmp/packages -Filter '*.tgz')
-          if ($packages.Count -ne 3 -or $release.tagName -ne $env:RELEASE_TAG -or $release.isDraft -or $release.isPrerelease -or $release.assets.Count -ne $packages.Count) {
+          $manifest = Get-Item -LiteralPath docs/tmp/packages/release-manifest.json
+          $files = @($packages) + @($manifest)
+          if ($packages.Count -ne 3 -or $release.tagName -ne $env:RELEASE_TAG -or $release.isDraft -or $release.isPrerelease -or $release.assets.Count -ne 4) {
             throw 'github_release_metadata_mismatch'
           }
-          foreach ($file in $packages) {
+          foreach ($file in $files) {
             $assetRows = @($release.assets | Where-Object { $_.name -eq $file.Name })
             $sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($assetRows.Count -ne 1 -or $assetRows[0].size -ne $file.Length -or $assetRows[0].digest -ne "sha256:$sha256") {

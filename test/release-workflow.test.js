@@ -62,6 +62,14 @@ test('every test file is mapped exactly once and no historical failure is exclud
   assert.ok(map.entries.every(x => x.release && x.reason))
   for (const file of ['task-session-execution-provider-recovery-native.test.js', 'task-session-skills-native.test.js', 'message-impact.test.js', 'workflow-engineering.test.js']) assert.ok(map.entries.some(x => x.file === 'test/' + file && x.release))
 })
+test('release publishes three tgz plus identity manifest and verifies every attachment', async () => {
+  const r = await load('.github/workflows/release.yml')
+  const publish = r.jobs.publish.steps.map(x => x.run ?? '').join('\n')
+  assert.match(publish, /gh release create .*\*\.tgz docs\/tmp\/packages\/release-manifest\.json/)
+  assert.match(publish, /\$release\.assets\.Count -ne 4/)
+  assert.match(publish, /foreach \(\$file in \$files\)/)
+  assert.match(publish, /\$assetRows\[0\]\.digest -ne "sha256:\$sha256"/)
+})
 test('当前正式版本在 CHANGELOG 中有对应章节和 Release 链接', async () => {
   const [manifestSource, changelog] = await Promise.all([
     readFile(new URL('../package.json', import.meta.url), 'utf8'),
