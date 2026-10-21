@@ -20,6 +20,12 @@
 
 ## 持久账、通知与恢复
 
+任务统筹会话使用 resident 插件中的 `taskSessions.provider` 和 `taskSessions.model` 独立配置，分别传入 DSH 原生 provider 和模型精确 ID。例如在既有 `taskSessions` 配置中加入 `provider: openai-codex` 与 `model: gpt-6-astra`。两项未配置、空字符串或纯空白（包括旧配置）分别默认 `openai-codex`、`gpt-6-astra`；其他非字符串值会拒绝启动。不继承执行 provider，不解析自造的斜杠完整标识，也不把显示名或 `astra` 别名转换成模型 ID。
+
+统筹 provider/model 独立于执行选择，reasoningEffort 仍继承当前默认选择；执行会话、消息/话题协调仍使用原默认模型选择，互不覆盖。当前安装的 Codex Connect 提供 `openai-codex / gpt-6-astra`；其他 provider 必须配置其实际支持的模型。统筹每轮在创建或恢复原 Session 前通过 DSH 原生 `resolveCallConfig` 校验精确 provider/model 及 reasoningEffort；不存在或无法解析时报告 `TASK_SESSION_MODEL_UNAVAILABLE`，保留原任务、唤醒和历史，不回退默认执行模型。继承的 reasoningEffort 不受统筹模型支持时报告 `TASK_SESSION_REASONING_EFFORT_UNSUPPORTED`，不静默丢弃、钳制或替换该值。认证、配额、请求阶段错误仍由原生 provider 处理；本地模型目录可解析不等于远端调用一定成功。
+
+新统筹会话和已存在的统筹会话下一轮 resume 都使用当前 `taskSessions.provider` / `taskSessions.model`，包括升级前使用旧默认模型的会话；沿原 Session ID、历史及租约继续，不重建或迁移历史，不中断已在途的轮次。修改 profile 后何时生效由宿主配置加载生命周期决定；本配置不改写 DSH 全局默认模型。resident 当前直接读取配置字段，未提供自动生成配置表单的 `Config` schema；此项沿用既有 profile 配置方式，不新增 Web 页面。
+
 归类/协调会话在获得句柄、派发输入前失败时，持久记录启动故障与指数退避（最高5分钟）；恢复扫描先确认当前Agent预设可用，再沿原requestId续办。已记录派发输入、普通协议耗尽及未知业务效果不自动重放。未解决的消息协调故障持续进入健康告警，不因一次扫描成功而消失。
 
 群通知按原发送任务回执确认送达：`openTaskId` 查询为 `SUCCESS`、目标会话一致且精确消息 ID 回读存在即可结清，不再以钉钉渲染后的正文、引用或 @ 元数据作为该路径的送达门槛。这只证明送达，不声称内容或 @ 已核验。没有成功发送任务回执时，仍严格核对正文、发送者和原生引用；正文比较保留已有有限列表渲染规则。未知通知只回读对账，不重新发送。

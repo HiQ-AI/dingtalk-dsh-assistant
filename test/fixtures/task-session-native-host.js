@@ -78,7 +78,7 @@ export async function nativeTaskHost(root, decide, options = {}) {
       yield { type: 'finish', reason: { kind: calls.length ? 'tool-calls' : 'stop' } }
     }
   }
-  ctx.llm.registerAdapter(['native-task-test'], new ScriptedModel())
+  ctx.llm.registerAdapter(options.modelProviders ?? ['native-task-test'], new ScriptedModel())
   ctx.on('tools/result', (exec, result) => toolResults.push({ name: exec.name, sessionId: exec.agent?.id, result: structuredClone(result) }))
   if (options.resident) return h
   h.residentStore = await openResidentStore(ctx.storageDomain)
@@ -89,7 +89,7 @@ export async function nativeTaskHost(root, decide, options = {}) {
     getGroup: groupId => h.residentStore.getGroup(groupId),
   }
   h.service = await (options.serviceFactory ?? openTaskSessionService)({ ctx, legacy, residentStore: h.residentStore, ...(options.store ? { store: options.store } : {}),
-    config: { workspaceDir: root, dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: options.initialize !== false, ownerActorId: 'native-user', webActorId: 'native-user', ...options.config },
+    config: { workspaceDir: root, dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: options.initialize !== false, ownerActorId: 'native-user', webActorId: 'native-user', provider: 'native-task-test', ...options.config },
     notifications: options.notifications ?? {
       async send(notification) { sent.push(structuredClone(notification)); return { messageId: 'native-notification-' + sent.length } },
       async readback(notification) { readbacks.push(structuredClone(notification)); return { messageId: notification.ack.messageId, visible: true } },
