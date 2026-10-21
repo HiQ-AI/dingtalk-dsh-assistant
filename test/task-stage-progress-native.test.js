@@ -15,7 +15,8 @@ test('integrated stage evidence survives same-session provider recovery with new
   const proof = join(root, 'proof.txt'); await writeFile(proof, 'INTEGRATED_STAGE_PROOF')
   let steps = 0, sequence = 0
   const ownerInputs = []
-  const h = await nativeTaskHost(root, async () => [], { agentConfig: { provider: 'integrated-stage-provider' }, serviceFactory: async options => {
+  // 统筹配置优先于默认 Agent 配置；两者必须进入同一恢复测试 provider。
+  const h = await nativeTaskHost(root, async () => [], { config: { provider: 'integrated-stage-provider' }, agentConfig: { provider: 'integrated-stage-provider' }, serviceFactory: async options => {
     class Provider extends LlmAdapter {
       async *stream(request) {
         if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return

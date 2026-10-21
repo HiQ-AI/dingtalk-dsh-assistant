@@ -20,6 +20,7 @@ const toolResults = event => event.data.message?.role === 'tool' ? [event.data.m
 const SUBMIT = 'execution_node_submit'
 const DYNAMIC_SUBMIT = 'execution_submit'
 const PROGRESS_REPORT = 'execution_report_progress'
+const RESOURCES_READ = 'execution_resources_read'
 const dynamicExecution = binding => binding.kind === 'task-execution'
 const dynamicIdentityKeys = ['kind', 'taskId', 'executionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'inputDigest', 'sessionId']
 const forbiddenNativeTool = name => /(?:^|[./:_-])(?:subagents?|spawn_agent|delegate|task|group)(?:[./:_-]|$)/i.test(name)
@@ -338,7 +339,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         }
         if (!dynamicExecution(entry.binding)) agentCtx.tools.restrict({ deny: agentCtx.tools.schemas(agent).filter(tool => forbiddenNativeTool(tool.name)).map(tool => tool.name) })
       }
-      const allowed = new Set([...definition.allowedTools, SUBMIT, ...(dynamicExecution(entry.binding) ? ['model_content_read'] : []), ...(dynamicExecution(entry.binding) && entry.onProgress ? [PROGRESS_REPORT] : [])])
+      const allowed = new Set([...definition.allowedTools, SUBMIT, ...(dynamicExecution(entry.binding) ? ['model_content_read'] : []), ...(dynamicExecution(entry.binding) && entry.onProgress ? [PROGRESS_REPORT] : []), ...(dynamicExecution(entry.binding) && entry.readResources ? [RESOURCES_READ] : [])])
       // The configured preset owns the native skill loader. Keep its exact definition:
       // a later same-name shadow must not inherit this read-only accounting exception.
       // alpha2's native loader is registry list/get only but lacks effectClass metadata.
@@ -351,12 +352,12 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         return !!tool && (readonlyTools.get(exec.name) === tool || ['read', 'pure'].includes(tool.effectClass))
       }
       const nativeCalls = new Map()
-      let progressTool
+      let progressTool, resourcesTool
       // Scope-local preset tools may be installed after setup. Resolve the actual schema list at call time.
       const nativeAllowed = exec => nativeEnabled && !forbiddenNativeTool(exec.name)
         && agentCtx.tools.schemas(exec.agent).some(schema => schema.name === exec.name)
       agentCtx.on('tools/execute', async (exec, next) => {
-        if (!nativeEnabled || exec.name === SUBMIT || exec.name === 'model_content_read' || exec.name === PROGRESS_REPORT) return next()
+        if (!nativeEnabled || exec.name === SUBMIT || exec.name === 'model_content_read' || exec.name === PROGRESS_REPORT || exec.name === RESOURCES_READ) return next()
         if (!await current(entry)) throw failure('execution_binding_stale')
         exec.signal.throwIfAborted()
         const toolDefinition = agentCtx.tools.get(exec.name, exec.agent)
@@ -424,6 +425,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。
       agentCtx.tools.guard(exec => {
         if (exec.name === PROGRESS_REPORT && agentCtx.tools.get(exec.name, exec.agent) !== progressTool) return 'execution_progress_tool_shadowed'
+        if (exec.name === RESOURCES_READ && agentCtx.tools.get(exec.name, exec.agent) !== resourcesTool) return 'execution_resources_tool_shadowed'
         if (!(dynamicExecution(entry.binding) && nativeEnabled)
           && (nativeEnabled && forbiddenNativeTool(exec.name) || !allowed.has(exec.name) && !nativeAllowed(exec))) { halt(entry, 'execution_tool_not_allowed'); return 'execution_tool_not_allowed' }
         if (closed || entry.cancelled || entry.stale || entry.haltCode || entry.attempted) return 'execution_attempt_stopped'
@@ -497,6 +499,25 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         }
         if (exec.name === SUBMIT && exec.callId === entry.submissionCallId && !result.isError) entry.accepted = true
       })
+      if (dynamicExecution(entry.binding) && typeof entry.readResources === 'function') {
+        agentCtx.tools.register({
+          name: RESOURCES_READ,
+          description: '只读查询本执行当前的身份与 resources（state/keys/holder/blocking）。无参数，身份由 Host 绑定；续办后重新读取，不沿用旧租约，不需要统筹转发证明。仅 held 且 holder 匹配本执行证明当前占用；none 不代表持有任意资源。结果不替代授权或后续写入门禁。',
+          effectClass: 'read',
+          parameters: { type: 'object', properties: {}, additionalProperties: false },
+          output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+          async execute(_args, exec) {
+            if (!await current(entry)) throw failure('execution_binding_stale')
+            exec.signal.throwIfAborted()
+            // 回调固定当前执行绑定；查询返回后仍检查失效，不能让旧回合消费新状态。
+            const value = await entry.readResources()
+            if (!await current(entry)) throw failure('execution_binding_stale')
+            exec.signal.throwIfAborted()
+            return value
+          },
+        })
+        resourcesTool = agentCtx.tools.get(RESOURCES_READ, agent)
+      }
       if (dynamicExecution(entry.binding) && typeof entry.onProgress === 'function') {
         agentCtx.tools.register({
           name: PROGRESS_REPORT,
@@ -648,23 +669,23 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, readFeedback, onFeedbackConsumed, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
+  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, readResources, readFeedback, onFeedbackConsumed, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
       if (!definition || typeof definition.prompt !== 'string' || !definition.provider || !definition.model
-        || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT].includes(name))) throw failure('execution_definition_invalid')
+        || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT,RESOURCES_READ].includes(name))) throw failure('execution_definition_invalid')
       assertSupportedJsonSchema(definition.outputSchema)
       if (definition.nativeTools && (!dynamicExecution(binding) || typeof nativeExecutionHook !== 'function')) throw failure('execution_native_ledger_required')
       if (dynamicExecution(binding) && !definition.nativeTools && definition.allowedTools.some(forbiddenNativeTool)) throw failure('execution_tool_not_allowed')
       if (definition.allowedTools.includes('engineering_apply_edits') && (typeof applyEdits !== 'function' || registry.has('engineering_apply_edits'))) throw failure('execution_edit_executor_required')
       if (definition.allowedTools.includes('execution_request_authorization') && (typeof requestAuthorization !== 'function' || registry.has('execution_request_authorization'))) throw failure('execution_authorization_request_not_admitted')
       if (typeof onSessionBound !== 'function' || typeof onResult !== 'function') throw failure('execution_callbacks_required')
-      if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function') || (onProgress !== undefined && typeof onProgress !== 'function')) throw failure('execution_callbacks_invalid')
+      if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function') || (onProgress !== undefined && typeof onProgress !== 'function') || (readResources !== undefined && typeof readResources !== 'function')) throw failure('execution_callbacks_invalid')
       if (entries.has(executionKey(binding)) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), readFeedback, onFeedbackConsumed, feedbackVersion: 0, validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
+    const entry = { binding, input: copy(input), readResources, readFeedback, onFeedbackConsumed, feedbackVersion: 0, validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
       correctableCalls: new Map(), submissionCorrections: 0, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, ...(definition.agentPreset === undefined ? {} : { agentPreset: definition.agentPreset }), nativeTools: definition.nativeTools === true, recoveryReadOnly: definition.recoveryReadOnly === true, protectedPaths: definition.protectedPaths ?? [], allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })

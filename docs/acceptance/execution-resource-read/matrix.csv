@@ -1,0 +1,10 @@
+case,round-1,round-2,evidence
+own-resource-identity-and-lifecycle,FAIL,PASS,round-2/targeted-tests.log
+native-tool-and-continuation,FAIL,PASS,round-2/targeted-tests.log
+stale-during-read,PASS,PASS,round-2/targeted-tests.log
+native-same-name-registration,FAIL,PASS,round-2/targeted-tests.log
+existing-store-and-session-regression,FAIL,PASS,round-2/targeted-tests.log
+stage-progress-provider-recovery,FAIL,PASS,round-2/targeted-tests.log
+four-skill-structure-and-references,PASS,PASS,round-2.md
+independent-skill-scenarios,PASS,PASS,skill-validation.md
+deployment-failure-attribution,PASS,PASS,report.md

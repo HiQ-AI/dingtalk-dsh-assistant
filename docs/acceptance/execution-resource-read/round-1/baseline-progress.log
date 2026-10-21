@@ -1,0 +1,18 @@
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (6069.6056ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9859.6876
+
+✖ failing tests:
+
+test at docs\tmp\execution-resources-baseline\test\task-stage-progress-native.test.js:12:1
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (6069.6056ms)
+  TypeError: Cannot read properties of undefined (reading 'stageProgress')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/docs/tmp/execution-resources-baseline/test/task-stage-progress-native.test.js:52:23)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
