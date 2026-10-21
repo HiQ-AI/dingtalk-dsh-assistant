@@ -9,10 +9,12 @@
 | 3 独立资源行为测试与审查 | 完成 | 17 项通过；查询放大与所有独立发现修复后复验，保留失败轮次 |
 | 4 公共健康脚本及 runbook | 完成 | health-contract.md；31 项真实 loopback HTTP 验证 |
 | 5 现有 skill 与合并预检入口 | 完成 | 23 项 helper、3 个 skill 校验、14 引用和独立六场景评审 |
-| 6 定向回归、PR、安装后回读 | 进行中 | 最终定向 112+9+2 通过；已受控安装，运行回读及已安装模块 17 项通过；PR 收口中 |
+| 6 定向回归、PR、安装后回读 | 完成 | 最终定向 112+9+2 通过；已受控安装，运行回读及已安装模块 17 项通过；PR #227 OPEN，正文/分支独立回读一致 |
 
 本轮约定：整段 execution 原子取得全部声明资源，不按超时强制释放；会话终态不等于原生效果排空。读写真实任务状态仅用现有正式 API/部署流程，不直接改库。Dataset 业务任务不重放。
 
 失败与重跑记录进 round-N.md，验收总状态以 matrix.csv 为准；完成后再生成 report.md。
 
 重要决策：不新增宽泛 skill；共用 UAT PR 资源合同。资源状态读取改为每个查询一份锁快照，禁止逐执行/资源 N+1 与跨请求缓存。运行包版本仍为 2.0.2，以精确 tarball SHA256 识别此次本地修复，不等同 npm 发布。
+
+交付：[PR #227](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/227)，main ← worktree-task-resource-lease。核心及测试提交 `f87371eec5094e90dee9ceae277998dfc990ec3d`，后续仅补交付状态文档；PR 未合并，当前无远程 checks 记录，不把此状态称为 CI 已通过。
