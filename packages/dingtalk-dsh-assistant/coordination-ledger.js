@@ -19,19 +19,21 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     const task = get('dynamic_tasks', member.taskId)
     const expected = member.effectiveVersion ?? member.preconditionVersion
     return ['requirementRevision','controlRevision','runSequence'].every(key => version(task)[key] === expected[key])
-      && (member.effectiveVersion ? (task.contextRevision ?? 0) >= expected.contextRevision : (task.contextRevision ?? 0) === expected.contextRevision)
+      && (member.effectiveVersion && !member.observation ? (task.contextRevision ?? 0) >= expected.contextRevision : (task.contextRevision ?? 0) === expected.contextRevision)
   }
   const fulfilled = member => {
+    if (['paused','cancelled'].includes(member.control) || ['cancelled','superseded'].includes(member.state)
+      || get('dynamic_coordination', member.coordinationId).state !== 'active') return false
     if (!member.completionReceipt || !member.completionProof || !current(member)) return false
     const task = get('dynamic_tasks', member.taskId)
     const proof = member.completionProof
     return task.status === 'completed' && task.completion?.commandId === proof.commandId
-      && task.completion.instructionIds?.includes(member.id)
+      && (member.observation || task.completion.instructionIds?.includes(member.id))
       && ['requirementRevision','controlRevision','runSequence'].every(key => proof[key] === version(task)[key])
       && proof.contextRevision >= member.effectiveVersion.contextRevision
   }
   const waiting = member => member.dependencies.filter(id => !fulfilled(get('dynamic_coordination_members', id)))
-  const taskMembers = taskId => all('dynamic_coordination_members').filter(m => m.taskId === taskId
+  const taskMembers = taskId => all('dynamic_coordination_members').filter(m => !m.observation && m.taskId === taskId
     && !['cancelled','superseded','fulfilled','template'].includes(m.state)
     && get('dynamic_coordination', m.coordinationId).state !== 'cancelled')
   const scope = (taskId, inputVersion) => {
@@ -64,7 +66,9 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       const reason = coordination.allTogether && coordination.pendingClarifications?.length ? 'waiting_batch_clarification'
       : coordination.state === 'cancelled' || member.control === 'cancelled' || ['cancelled','superseded'].includes(member.state) ? 'cancelled'
       : member.reorderAssessment && ['pending','needs_clarification'].includes(member.reorderAssessment.state) ? `reorder_${member.reorderAssessment.state}`
-      : member.control === 'paused' ? 'paused' : !trigger.eligible ? trigger.reason : !current(member) ? 'target_version_changed' : dependencies.length ? 'waiting_dependency' : null
+      : member.control === 'paused' ? 'paused' : !current(member) ? 'target_version_changed'
+      : member.observation && member.state !== 'fulfilled' ? 'waiting_completion_proof'
+      : dependencies.length ? 'waiting_dependency' : !trigger.eligible ? trigger.reason : null
     return { ...member, eligible: coordination.state === 'active' && member.state === 'ready' && reason === null,
       waitingReason: reason === null ? null : { code: reason, dependencyInstructionIds: dependencies } }
   }
@@ -80,6 +84,33 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         .filter(m => m.state === 'applied' && current(m))
         .map(m => ({ instructionId: m.id, effectiveVersion: clone(m.effectiveVersion), commandId: m.command.id })) }
   }
+  function reconcileObservation(member) {
+    if (!member.observation || ['cancelled','superseded'].includes(member.state) || member.control === 'cancelled') return
+    const task = get('dynamic_tasks', member.taskId), completion = task.completion
+    const receipt = completion?.commandId ? get('dynamic_receipts', completion.commandId, true) : null
+    const decision = receipt?.taskDecision
+    const valid = current(member) && task.status === 'completed' && decision?.decision?.action === 'complete'
+      && decision.taskId === task.taskId && decision.id === completion.commandId
+      && ['requirementRevision','controlRevision','contextRevision','runSequence'].every(key => decision[key] === version(task)[key]
+        && completion[key] === version(task)[key])
+    member.state = valid ? 'fulfilled' : 'observing'
+    if (valid) {
+      member.completionReceipt = completion.commandId
+      member.completionProof = { eventId: receipt.completionEvent?.id ?? `task-decision:${decision.id}`,
+        eventSource: receipt.completionEvent ? 'task-ledger' : 'task-decision-receipt', sequence: receipt.completionEvent?.sequence ?? 0,
+        commandId: decision.id, taskDecisionReceiptId: decision.id, ...version(task) }
+    } else { delete member.completionReceipt; delete member.completionProof }
+    put('dynamic_coordination_members', member)
+  }
+  function activateMember(member, source, coordination, revision = coordination.revision) {
+    if (member.observation) return reconcileObservation(member)
+    if (!member.dependencies.length || !member.existingInputs.length) return
+    member.reorderAssessment = { id: `initial-order:${source.id}:${member.id}`, sourceId: source.id, revision,
+      state: 'pending', afterInstructionIds: member.dependencies, original: source.original, requestedAt: now() }
+    put('dynamic_coordination_members', member)
+    notifyTask(member.taskId, {coordinationId:coordination.id,instructionId:member.id,sourceId:source.id,original:source.original,
+      assessment:clone(member.reorderAssessment),instruction:'首次顺序安排涉及正在运行的任务。只读评估既有输入与后续依赖，不停止或重启工作，不追溯承诺顺序；不清楚则需澄清。'})
+  }
   function prepareMember(input, id, source) {
     record(input)
     const taskId = text(input.taskId, 'taskId'), instructionId = text(input.instructionId, 'instructionId')
@@ -92,6 +123,17 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       apply(creation); task = get('dynamic_tasks', taskId)
     }
     if (!task || task.groupId !== source.groupId) fail('DYNAMIC_COORDINATION_SCOPE')
+    if (input.observation === true) {
+      const envelope = clone(record(input.command)), args = envelope.args
+      if (input.createCommand || envelope.kind !== 'coordination.observe' || envelope.id !== `coordination-command:${id}:${instructionId}`
+        || args?.taskId !== taskId || (input.dependencies ?? []).length || get('dynamic_coordination_members', instructionId, true)
+        || args.expectedRequirementRevision !== task.requirementRevision || args.expectedControlRevision !== task.controlRevision
+        || args.expectedContextRevision !== (task.contextRevision ?? 0) || args.expectedRunSequence !== task.runSequence)
+        fail('DYNAMIC_COORDINATION_OBSERVATION_INVALID')
+      return { id: instructionId, coordinationId: id, taskId, observation: true, original: source.original,
+        preconditionVersion: version(task), effectiveVersion: version(task), command: envelope, commandDigest: digest(envelope),
+        dependencies: [], state: 'observing', existingInputs: [] }
+    }
     if (!['preserve','replan'].includes(input.progressImpact)) fail('DYNAMIC_COORDINATION_IMPACT_REQUIRED')
     const envelope = clone(record(input.command))
     if (envelope.id !== `coordination-command:${id}:${instructionId}` || envelope.args?.taskId !== taskId) fail('DYNAMIC_COORDINATION_COMMAND_INVALID')
@@ -154,6 +196,11 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     return members
   }
   function command(kind, a) {
+    if (kind === 'coordination.observe.reconcile') {
+      const coordination = get('dynamic_coordination', a.coordinationId)
+      for (const id of coordination.memberIds) reconcileObservation(get('dynamic_coordination_members', id))
+      return { coordination }
+    }
     if (kind === 'coordination.reserve') {
       const unitId = text(a.unitId, 'unitId'), revision = integer(a.revision, 'revision')
       const id = digest({ unitId, revision }), previous = get('dynamic_coordination_sources', id, true)
@@ -261,6 +308,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       if (sourceOrder) coordination.sourceOrder = sourceOrder
       members.forEach(m => put('dynamic_coordination_members', m))
       put('dynamic_coordination', coordination)
+      members.forEach(member => activateMember(member, source, coordination))
       if (replacing) {
         const old = get('dynamic_coordination_sources', replacing.sourceId)
         old.state = 'accepted'; old.resolvedBy = source.id; old.coordinationId = id; old.settled = true; put('dynamic_coordination_sources', old)
@@ -277,6 +325,8 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       const source = get('dynamic_coordination_sources', coordination.sourceId)
       if (source.frozen || source.dispatchOwner !== 'coordination' || source.fence !== coordination.sourceFence) fail('DYNAMIC_COORDINATION_SOURCE_STALE')
       if (coordination.revision !== a.expectedRevision || coordination.state !== 'active') fail('DYNAMIC_COORDINATION_REVISION_STALE')
+      if (member.observation) fail('DYNAMIC_COORDINATION_OBSERVATION_READ_ONLY')
+      if (member.reorderAssessment && ['pending','needs_clarification'].includes(member.reorderAssessment.state)) return { member, waiting: ['owner_assessment'] }
       if (member.state === 'applied') return { member }
       if (member.state !== 'ready' || !current(member)) fail('DYNAMIC_COORDINATION_VERSION_STALE')
       const dependencies = waiting(member)
@@ -341,7 +391,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
             slot.resolvedBy = source.id
           }
         }
-        checkGraph(added); added.forEach(m => put('dynamic_coordination_members', m)); coordination.memberIds.push(...added.map(m => m.id))
+        checkGraph(added); added.forEach(m => { put('dynamic_coordination_members', m); activateMember(m, source, coordination, coordination.revision + 1) }); coordination.memberIds.push(...added.map(m => m.id))
         coordination.pendingClarifications = pending.filter(item => !ids.includes(item.clarificationId))
         const original = get('dynamic_coordination_sources', coordination.pendingSourceId)
         original.pendingClarifications = clone(coordination.pendingClarifications); original.settled = !original.pendingClarifications.length
@@ -392,7 +442,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
           const old = get('dynamic_coordination_members', oldId)
           if (old.taskId === member.taskId && old.control === 'cancelled') { old.state = 'superseded'; put('dynamic_coordination_members', old) }
         }
-        checkGraph(added); added.forEach(m => put('dynamic_coordination_members', m)); coordination.memberIds.push(...added.map(m => m.id))
+        checkGraph(added); added.forEach(m => { put('dynamic_coordination_members', m); activateMember(m, source, coordination, coordination.revision + 1) }); coordination.memberIds.push(...added.map(m => m.id))
       } else if (change.action === 'reorder') {
         const changed = array(change.dependencies).map(item => {
           if (!coordination.memberIds.includes(item.instructionId)) fail('DYNAMIC_COORDINATION_SCOPE')

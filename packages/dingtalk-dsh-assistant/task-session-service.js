@@ -51,7 +51,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   for (const value of [config.maxConcurrentExecutions, config.maxConcurrentTasks, legacy.getAgentConfig().maxConcurrentTasks]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 50)) fail('TASK_SESSION_CONCURRENCY_INVALID')
   }
-  const root = resolve(config.workspaceDir ?? legacy.getAgentConfig().workspaceDir)
+  const root = resolve(config.workspaceDir ?? residentStore.getTaskWorkspaceDir?.() ?? legacy.getAgentConfig().workspaceDir)
   await mkdir(dirname(config.dbPath), { recursive: true })
   const store = suppliedStore ?? await openDynamicTaskStore({ dbPath: config.dbPath, instanceId: config.instanceId,
     initialize: config.initialize === true, migrate: config.migrate === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId })
@@ -535,6 +535,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         await residentStore.markMessageAgentDelivery({ groupId, messageId: message.messageId, status: 'decision-failed', error: error.code ?? error.message })
     } })
   const independentCoordination = openIndependentCoordination({ ctx, root, agentPreset: legacy.getAgentConfig().agentPreset,
+    getWorkspaceDir: () => legacy.getAgentConfig().workspaceDir,
     config: config.coordination ?? {}, residentStore, query, command, ownerActorId: config.ownerActorId,
     onError: (id, error) => failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() }),
     onHandoff: groupId => { rerouteGroups.add(groupId); if (!inflightGroups.has(groupId)) { rerouteGroups.delete(groupId); void kickGroup(groupId) } },

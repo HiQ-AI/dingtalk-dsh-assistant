@@ -377,6 +377,70 @@
           "equals": "preserve"
         }
       ]
+    },
+    {
+      "id": "observe-original-A",
+      "message": "A任务处理完之后继续B任务。A保持原来的目标，不要给A补充要求，也不要重新打开A。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "arrangement"
+        },
+        {
+          "path": "members.0.taskId",
+          "equals": "A"
+        },
+        {
+          "path": "members.0.action",
+          "equals": "task-observe"
+        },
+        {
+          "path": "members.1.taskId",
+          "equals": "B"
+        },
+        {
+          "path": "members.1.action",
+          "equals": "task-continue"
+        },
+        {
+          "path": "members.1.afterTaskIds",
+          "includes": [
+            "A"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "active-work-A",
+      "message": "先给A补上接口异常处理并完成验收，然后继续B；这次明确要对A追加实现要求，不是只等原A完成。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "arrangement"
+        },
+        {
+          "path": "members.0.taskId",
+          "equals": "A"
+        },
+        {
+          "path": "members.0.action",
+          "equals": "task-context"
+        },
+        {
+          "path": "members.0.progressImpact",
+          "equals": "replan"
+        },
+        {
+          "path": "members.1.taskId",
+          "equals": "B"
+        },
+        {
+          "path": "members.1.afterTaskIds",
+          "includes": [
+            "A"
+          ]
+        }
+      ]
     }
   ]
 }

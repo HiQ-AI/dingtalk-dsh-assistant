@@ -5,7 +5,8 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
     const task = tasks.find(t => t.taskId === m.taskId)
     const blocked = task?.status === 'active' && !['fulfilled','cancelled','superseded','template'].includes(m.state)
       && m.control !== 'cancelled' && task?.lastDecision?.action === 'blocked'
-    return { instructionId: m.id, taskId: m.taskId, requirement: m.command.args.text ?? m.command.args.request ?? task?.objective ?? '',
+    return { instructionId: m.id, taskId: m.taskId, observation: m.observation === true,
+      requirement: m.observation ? '只观察原任务当前版本的正式完成，不追加要求或唤醒任务' : m.command.args.text ?? m.command.args.request ?? task?.objective ?? '',
       ...(m.recurringTemplateScheduleId ? { authorizationTemplateScheduleId: m.recurringTemplateScheduleId } : {}),
       state: m.state === 'template' ? 'template' : m.recurringOccurrenceId && ['fulfilled','superseded'].includes(m.state) ? m.state : m.waitingReason?.code === 'target_version_changed' ? 'version_changed' : m.state === 'fulfilled' ? 'fulfilled' : m.control === 'cancelled' ? 'cancelled' : m.control === 'paused' ? 'paused' : m.state,
       control: m.control ?? 'active',
