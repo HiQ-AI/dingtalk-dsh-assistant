@@ -1,5 +1,9 @@
 # 常驻通知修复本地部署
 
+## 统筹空返回自动恢复
+
+本次仅更新 Assistant，无 schema、权限或配置迁移。先运行 `test/task-session-provider-native.test.js` 与 `test/task-session-service-native.test.js`，核对空返回后原 wake 未 ack、技术失败 phase=decision、同 session 自动续办及重启预算保留；另核对有效决定不重复提交、已有执行不重派。按普通受控部署切换，独立验证包 SHA256、安装版本、新进程及健康。新发生的正常结束但未提交决定由现有退避计时器恢复；旧版已落 blocked 的普通空返回不自动改账。持续失败超过六次恢复机会后，检查 providerRecovery 的 suspended 和原生日志，不通过重启清预算或重放业务动作。
+
 ## 任务归档预检与按钮范围
 
 本次更新 Assistant 与 Observer，无数据迁移。按本文普通双包部署后刷新浏览器，核对只有“已结束”桶显示归档按钮；从宿主来源发起 OPTIONS `/tasks/<id>/archive` 应返回 204，POST 仍校验本机身份、历史只读及任务排空状态。预检通过不代表任务已归档，应独立回读任务 archivedAt；未归档的执行中任务不应显示“已归档”。

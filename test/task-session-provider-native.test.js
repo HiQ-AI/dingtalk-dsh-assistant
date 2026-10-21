@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
-import { available, reason, nativeTaskHost, topicSummaryResponse } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, topicSummaryResponse, waitUntil, latestInput } from './fixtures/task-session-native-host.js'
 import { createTaskSessions, isTaskProviderTransient } from '../packages/dingtalk-dsh-assistant/task-session.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -62,15 +62,26 @@ for (const trailing of [false, true]) test(`native owner provider error keeps th
   assert.equal(submitted, 1)
 })
 
-async function providerServiceHost(root, { legacyNoSubmission = false, transient = true, failFirst = true, initialize = true, failCount = 1 } = {}) {
+async function providerServiceHost(root, { legacyNoSubmission = false, transient = true, failFirst = true, initialize = true, failCount = 1, noSubmission = false } = {}) {
   let requests = 0
   const h = await nativeTaskHost(root, async () => [], { initialize, config: { retryIntervalMs: 100, provider: 'service-provider-fixture' }, agentConfig: { provider: 'service-provider-fixture' },
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
         async *stream(request) {
           if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
+          if (noSubmission && !request.tools.some(tool => tool.name === 'task_session_submit')) {
+            const input = latestInput(request), args = JSON.stringify({ requestId: input.requestId, topicId: input.topicId, title: '核对任务技术恢复' })
+            yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+            yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'title-' + input.requestId, name: 'group_topic_title_submit', arguments: args } }
+            yield { type: 'finish', reason: { kind: 'tool-calls' } }; return
+          }
           requests++
           if (failFirst && requests <= failCount) {
+            if (noSubmission) {
+              yield { type: 'block-start', index: 0, blockType: 'text' }
+              yield { type: 'block-end', index: 0, block: { type: 'text', text: '' } }
+              yield { type: 'finish', reason: { kind: 'stop' } }; return
+            }
             yield { type: 'finish', reason: { kind: 'error', failure: transient ? overloaded : { code: 'PI_AI_ERROR', message: 'Invalid account configuration' } } }; return
           }
           const args = JSON.stringify({ decision: { ...decision, action: 'complete' } })
@@ -123,6 +134,43 @@ test('service retries a transient native owner with its claimed wake and same se
   assert.equal((await h.query('notification.list')).length, 0)
 })
 
+for (const restart of [false, true]) test(`normal empty owner completion resumes automatically with the same session and wake: restart=${restart}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-empty-owner-')), hosts = []
+  t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
+  let h = await providerServiceHost(root, { noSubmission: true }); hosts.push(h)
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'empty-owner', objective: 'review retained results and submit a decision' })
+  await h.service.whenIdle()
+  const first = await h.query('task.get', { taskId: created.taskId })
+  assert.ok(first.providerRecovery)
+  assert.equal(first.providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
+  assert.equal(first.providerRecovery.failure.phase, 'decision')
+  assert.equal(first.lastDecision?.action === 'blocked', false)
+  assert.equal(first.drained, true)
+  assert.equal(first.humanRequests.length, 0)
+  const wakes = await h.query('wake.list', { taskId: first.taskId })
+  assert.ok(wakes.some(wake => wake.state === 'claimed'))
+  if (restart) {
+    await h.close()
+    h = await providerServiceHost(root, { initialize: false, failFirst: false }); hosts.push(h)
+    assert.deepEqual((await h.query('task.get', { taskId: first.taskId })).providerRecovery, first.providerRecovery)
+    await h.service.recover()
+  }
+  // 不调用恢复接口或补充输入：由真实定时器到期自动续原会话。
+  await waitUntil(async () => (await h.query('task.get', { taskId: first.taskId })).status === 'completed', 'automatic empty decision recovery', 15000)
+  await h.service.whenIdle()
+  const completed = await h.query('task.get', { taskId: first.taskId })
+  assert.equal(completed.sessionId, first.sessionId)
+  assert.equal(completed.leaseEpoch, 2)
+  assert.equal(completed.providerRecovery, null)
+  assert.equal(h.providerRequests(), restart ? 1 : 2)
+  assert.deepEqual((await h.query('wake.list', { taskId: first.taskId })).map(wake => wake.id), wakes.map(wake => wake.id))
+  assert.ok((await h.query('wake.list', { taskId: first.taskId })).every(wake => wake.state === 'acked'))
+  const log = await inspectSession(h.ctx.sessionPersistence, first.sessionId)
+  assert.equal(log.events.filter(event => event.type === 'plugin:dingtalk/task-session').length, 1)
+  assert.equal((await h.query('execution.list')).length, 0)
+  assert.equal((await h.query('notification.list')).length, 0)
+})
+
 for (const transient of [true, false]) test(`restart recovers only a legacy acknowledged no-submission with exact transient native proof: ${transient}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-provider-legacy-')), hosts = []
   t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
@@ -145,11 +193,11 @@ for (const transient of [true, false]) test(`restart recovers only a legacy ackn
   assert.equal((await next.query('notification.list')).length, 0)
 })
 
-test('owner provider failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+for (const noSubmission of [false, true]) test(`owner technical failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance: noSubmission=${noSubmission}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const root = await mkdtemp(join(tmpdir(), 'owner-provider-budget-')), hosts = []
   t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
-  let h = await providerServiceHost(root, { failCount: 20 }); hosts.push(h)
+  let h = await providerServiceHost(root, { failCount: 20, noSubmission }); hosts.push(h)
   const created = await h.service.createTask({ groupId: 'native-group', requestId: 'owner-budget', objective: 'Original task' })
   await h.service.whenIdle()
   const sessionId = (await h.query('task.get', { taskId: created.taskId })).sessionId
@@ -159,7 +207,7 @@ test('owner provider failures have a durable bounded budget across leases and re
     assert.equal(task.humanRequests.length, 0)
     if (failure === 7) break
     if (failure === 3) {
-      await h.close(); h = await providerServiceHost(root, { initialize: false, failCount: 20 }); hosts.push(h)
+      await h.close(); h = await providerServiceHost(root, { initialize: false, failCount: 20, noSubmission }); hosts.push(h)
       const restored = await h.query('task.get', { taskId: created.taskId })
       assert.deepEqual(restored.providerRecovery, task.providerRecovery)
     }

@@ -109,6 +109,9 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         }
         agentCtx.systemPrompt.section({ name: 'task:responsibility', order: 0, text: instructions })
         agentCtx.systemPrompt.section({ name: 'task:sources', order: 1, text: sourceInterpretationInstructions })
+        if (input.task.providerRecovery?.failure?.code === 'TASK_SESSION_NO_SUBMISSION')
+          agentCtx.systemPrompt.section({ name: 'task:decision-recovery', order: 1,
+            text: '上轮正常结束但未提交有效决定，Host 正沿原会话恢复。核对已落账执行结果和操作账，再调用 task_session_submit 或确有必要的 task_request_human。已成功动作不得重做，未知效果先对账；不要将本次技术恢复当成新的业务授权。' })
         agentCtx.systemPrompt.section({ name: 'task:reply-scope', order: 1, text: groupReplyScopeInstructions })
         if (groupResponsibility) agentCtx.systemPrompt.section({ name: 'task:group-responsibility', order: 1,
           text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${entry.content.instruction(groupResponsibility, '所属群职责、授权边界与回复要求')}` })
@@ -211,6 +214,10 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         const end = events.findLast(event => event.type === 'turn/end' && inputEvent && event.seq > inputEvent.seq)
         if (end?.data?.reason?.kind === 'error' && isTaskProviderTransient(end.data.reason.error)) {
           throw Object.assign(fail('TASK_SESSION_PROVIDER_TRANSIENT'), { phase: 'provider', providerError: structuredClone(end.data.reason.error) })
+        }
+        // 正常结束不等于已提交决定。保留原唤醒，沿原会话受管恢复，不能标成业务阻塞并消费唤醒。
+        if (end?.data?.reason?.kind === 'completed' && await current(entry)) {
+          throw Object.assign(fail('TASK_SESSION_NO_SUBMISSION'), { phase: 'decision' })
         }
       }
       return entry.submitted ? { status: 'submitted', decision: entry.decision } : { status: entry.cancelled ? 'cancelled' : 'no_submission', ...(entry.halted ? { reason: entry.halted } : {}) }
