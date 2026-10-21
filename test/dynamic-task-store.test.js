@@ -176,6 +176,73 @@ async function fixture(t, options = {}) {
   return { root, config, command, query, task, execution, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }); return store } }
 }
 
+test('every coordinator decision retains its explanation across replacement, retry, completion and restart', async t => {
+  const f = await fixture(t), owner = await f.task()
+  const first = { binding: owner.binding, action: 'wait', summary: '首次发现对象偏离，已要求原执行回到目标文件', evidence: ['log:12'], limitations: ['尚未确认反馈落实'] }
+  await f.command('task.wait', first, 'review-first')
+  const firstPage = await f.query({ kind: 'task.decisions', taskId: 'task', limit: 1 })
+  assert.equal(firstPage.decisions[0].decision.summary, first.summary)
+  assert.equal(firstPage.decisions[0].sessionId, owner.binding.sessionId)
+  assert.equal(firstPage.decisions[0].triggers[0].wakeId, owner.wakeIds[0])
+  assert.equal((await f.command('task.wait', first, 'review-first')).replayed, true)
+  await assert.rejects(f.command('task.wait', { ...first, summary: '覆盖历史' }, 'review-first'), { code: 'DYNAMIC_COMMAND_ID_CONFLICT' })
+  await f.command('task.wait', { ...first, summary: '已核对目标文件，继续等待最终结果', evidence: ['log:22'] }, 'review-second')
+  const page = await f.query({ kind: 'task.decisions', taskId: 'task', limit: 1 })
+  assert.equal(page.decisions[0].id, 'review-second')
+  assert.ok(page.nextBefore)
+  const other = await f.task('other')
+  await f.command('task.wait', { binding: other.binding, action: 'wait', summary: '其他任务' })
+  await f.command('task.complete', { binding: owner.binding, summary: '完整目标已核验', result: { action: 'complete', summary: '完整目标已核验', evidence: ['final:30'], limitations: ['未部署'] } }, 'review-complete')
+  const older = await f.query({ kind: 'task.decisions', taskId: 'task', before: page.nextBefore, limit: 1 })
+  assert.deepEqual(older.decisions, firstPage.decisions, 'newer inserts cannot shift cursor pagination or replace a decision')
+  assert.equal(older.nextBefore, null)
+  const beforeRestart = await f.query({ kind: 'task.decisions', taskId: 'task' })
+  assert.deepEqual(beforeRestart.decisions.map(x => x.id), ['review-complete', 'review-second', 'review-first'])
+  assert.deepEqual(beforeRestart.decisions[0].decision.limitations, ['未部署'])
+  assert.deepEqual(beforeRestart.decisions[2].decision.evidence, ['log:12'])
+  await f.reopen()
+  assert.deepEqual(await f.query({ kind: 'task.decisions', taskId: 'task' }), beforeRestart)
+  for (const args of [{ limit: 0 }, { limit: 101 }, { before: -1 }, { before: 1.5 }])
+    await assert.rejects(f.query({ kind: 'task.decisions', taskId: 'task', ...args }), { code: 'DYNAMIC_ARGUMENT_INVALID' })
+  await assert.rejects(f.query({ kind: 'task.decisions', taskId: 'missing' }), { code: 'DYNAMIC_NOT_FOUND' })
+})
+
+test('human-wait decisions preserve evidence and progress wake identity without changing human wait', async t => {
+  const f = await fixture(t), owner = await f.task()
+  await f.command('task.wake', { taskId: 'task', kind: 'execution.progress.review', payload: { executionId: 'original-execution', inputVersion: 2, leaseEpoch: 3, lastSequence: 42 } })
+  await f.command('wake.ack', { binding: owner.binding, wakeIds: owner.wakeIds })
+  await f.command('task.drained', { binding: owner.binding })
+  const next = (await f.command('task.claim', { taskId: 'task' })).result
+  await f.command('task.wait', { binding: next.binding, action: 'blocked', summary: '缺少必要业务信息', question: '需要哪一个版本？', evidence: ['source:4'], limitations: ['不能自行选版本'],
+    humanRequest: { requestId: 'question', audience: 'requester', reason: '两个有效版本', attemptedActions: ['已核对来源'] } })
+  const page = await f.query({ kind: 'task.decisions', taskId: 'task' })
+  assert.equal(page.decisions.length, 1)
+  assert.deepEqual(page.decisions[0].triggers, [{ wakeId: next.wakeIds[0], kind: 'execution.progress.review', executionId: 'original-execution', inputVersion: 2, leaseEpoch: 3, lastSequence: 42 }])
+  assert.deepEqual(page.decisions[0].decision.evidence, ['source:4'])
+  assert.equal(page.decisions[0].decision.question, '需要哪一个版本？')
+  assert.equal(page.decisions[0].decision.audience, 'requester')
+  assert.deepEqual(page.decisions[0].decision.attemptedActions, ['已核对来源'])
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).humanRequests[0].status, 'waiting-reply')
+})
+
+test('a failed decision receipt rolls back both latest state and history, then retries exactly once', async t => {
+  const f = await fixture(t), owner = await f.task()
+  await f.command('task.wait', { binding: owner.binding, action: 'wait', summary: '原判断保留' }, 'original-decision')
+  const before = await f.query({ kind: 'task.decisions', taskId: 'task' })
+  const db = new DatabaseSync(f.config.dbPath)
+  try {
+    db.exec("CREATE TRIGGER fail_decision_receipt BEFORE INSERT ON dynamic_receipts WHEN NEW.id='failed-decision' BEGIN SELECT RAISE(ABORT,'injected decision receipt failure'); END")
+    const args = { binding: owner.binding, action: 'wait', summary: '下一轮判断' }
+    await assert.rejects(f.command('task.wait', args, 'failed-decision'), /injected decision receipt failure/)
+    assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).lastDecision.summary, '原判断保留')
+    assert.deepEqual(await f.query({ kind: 'task.decisions', taskId: 'task' }), before)
+    db.exec('DROP TRIGGER fail_decision_receipt')
+    await f.command('task.wait', args, 'failed-decision')
+    await f.command('task.wait', args, 'failed-decision')
+    assert.equal((await f.query({ kind: 'task.decisions', taskId: 'task' })).decisions.length, 2)
+  } finally { db.close() }
+})
+
 test('task dialogue persists idempotently without broadcasting text and serializes on the original owner lease', async t => {
   const f = await fixture(t, { webActorId: 'web-user' }), owner = await f.task(), execution = await f.execution(owner.binding)
   const args = { taskId: 'task', requestId: 'one', actorId: 'web-user', text: '现在进度怎样？' }

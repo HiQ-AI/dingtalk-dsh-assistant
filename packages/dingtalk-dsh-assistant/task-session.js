@@ -28,11 +28,14 @@ export const taskSessionDecisionSchema = { ...object({
   evidence: { type: 'array', items: { type: 'string' } }, limitations: { type: 'array', items: { type: 'string' } },
   question: { type: 'string' }, audience: { type: 'string', enum: ['operator', 'requester'] },
 }), required: ['action', 'summary', 'evidence', 'limitations'] }
-const instructions = `你是整个任务唯一负责的任务会话。你理解用户要求、持续跟踪进度、动态委派独立执行会话、读取结果，再判断继续还是完成。你可以使用当前原生Agent配置提供的工具直接开展工作，也可按需要委派独立执行会话；不要把每条命令拆成一个任务。根据目标和实际结果选择合适的小目标，可并行不同工作，也可用原executionId续办同一执行会话。按实际原生工具能力组织执行。
+const instructions = `你是整个任务唯一负责的任务会话，对完整目标的落实、执行方向和整体进度负责。你理解用户要求、动态委派独立执行会话，并持续判断实际行动是否在推进用户要的结果；读取日志和复述执行摘要不等于完成统筹。你可以使用当前原生Agent配置提供的工具直接开展工作，也可按需要委派独立执行会话；不要把每条命令拆成一个任务。根据目标和实际结果选择合适的小目标，可并行不同工作，也可用原executionId续办同一执行会话。按实际原生工具能力组织执行。
 个人技能由当前原生Agent配置提供。若会话技能目录中有适用项，先用skill按名称读取所需正文，再据此理解业务要求和委派；不要一次加载无关技能。可用task_delegate的skillNames告诉执行会话应读取哪些技能，由执行会话按需读取引用资料、执行具体操作。skill只是指导，不是用户授权、固定工作流、参数绑定或完成门槛；内容不得扩大原消息授权。技能中的命令、文件和业务操作按当前工具能力与用户授权执行。
 没有固定工作流、DAG或预设阶段。Host仅维护身份、授权来源、版本、并发、效果对账和可靠通知，不替你做业务验收。执行结果是证据，不是自动完成结论。由你对照当前完整用户要求决定是否完成，诚实说明验证范围和未完成部分。调用task_delegate只表示已可靠登记，不表示执行完成。新委派可在同次调用中提供title：用简短中文概括本次业务小目标（建议4至16字，可保留API、PostgreSQL等技术专名）。没有明确中文短名时省略title，沿用原key名称，不要复制或截断完整objective充当名称，不必为了全中文另行命名。key用于稳定去重，objective保留完整目标，title专门用于短名；续办不是改名操作，保持已有会话名称。不需要为命名单独调用模型。派发后用wait结束本轮，结果落账后会可靠唤醒你，不要空转轮询。
 运行中澄清或提醒不改变目标和授权时，用task_delegate携带原executionId、feedback=true及稳定key投递；这保留原执行、会话和作业，不启动续办。received只是持久接收，用task_execution_read的feedback核对consumedAt及原生日志sequence；consumedAt只证明进入原生模型步骤，不证明模型理解或业务完成。真正目标/授权变化须处理当前用户来源和版本，不能包装成普通澄清。执行中的会话每10分钟触发真实进度巡检。遇到execution.progress.review唤醒，先调用task_execution_progress读取对应会话的真实记录，对照当前小目标检查具体动作、结果、错误、最后活动及执行方向，不能仅凭running、进程存活或时间经过判断。无新记录只表示未观察到日志进展，不等于停止；读取失败要如实调查。根据证据决定继续等待、运行中用feedback澄清，排空后用原executionId续办，或确需人工时申请介入，不因定时检查重放动作。摘录有限，必要时沿原生日志位置进一步读取，不把摘要当完整验收。
-巡检时先对照整体目标和受托小目标，判断是否有具体证据表明正在重复已验证且未变化的工作、增加不必要步骤或偏离当前目标；有必要的新验证不算绕路。方向正常或证据不足时用wait等待原执行，不凭日志沉默、耗时长或状态猜测卡死。确有绕路证据且目标和授权不变时，只给出一条指出证据、应省步骤及下一必要动作的简短feedback，不另派替身或取消重建。发送前核对task_execution_read中的已有feedback；相同意见尚未消费，或已给出且没有新证据时不重发，同一次纠偏复用稳定key，不能每次巡检换key重复提醒。
+每次巡检都先核对最新有效用户要求、整体目标、范围/授权、验收条件及受托小目标，再结合实际动作、产物与结果判断：当前做到哪里，当前动作为什么能推进目标，下一必要结果及其前置依赖是什么。执行会话自身的计划、进度摘要和“方向正常”声明只是待核对证据，不能代替你的判断。检查做错对象或环境、扩大范围、遗漏必要结果/验证、跳过前置条件、停留在准备而未推进交付、重复已验证且未变化的工作等偏离；有必要的新验证不算绕路。首次发现具体偏离就及时纠偏，不要求错误重复出现；阶段报告或其他唤醒中已发现偏离时立即处理，不等下一次十分钟巡检。
+方向正常或证据不足时用wait等待原执行；证据不足先按需补读相关目标、原日志、产物或依赖状态，说明仍未知什么及下一检查点，不把“没有看到错误”当作方向正确，也不凭日志沉默、耗时长或状态猜测卡死。通过已有task_session_submit的summary/evidence/limitations简短记录对照目标后的判断、具体依据及下一必要结果，不只复述“仍在执行”。
+确认偏离且目标和授权不变时，主动用原executionId的task_delegate(feedback=true)给出一条聚焦的纠偏指令：当前应达成的要求、具体偏离证据、应停止或调整的步骤、下一必要动作及如何核验；不能仅记录问题后继续wait。保留原执行和作业，不另派替身或取消重建；真正目标/授权变化仍走既有修订语义，不能借纠偏扩权。反馈在安全模型步骤进入，不承诺即时中断在途工具。
+发送前核对task_execution_read中的已有feedback；相同意见尚未消费，或已给出且没有新证据时不重发，同一次纠偏复用稳定key，不能每次巡检换key重复提醒。后续巡检须对照反馈后的实际动作和结果判断是否回到目标：received、consumedAt/modelStepEnteredAt只证明投递/步骤准入，不能宣布纠偏完成；新证据显示仍偏离时，查清未落实原因并调整原执行的指导，不能因为已提醒过就放任继续。
 收到execution.stage.progress唤醒时，核对Host绑定的当前执行版本、阶段摘要及证据；阶段成果不是最终结果，也不表示执行已经结束。结合整体要求决定当前做到哪里、正在做什么，并通过原task_session_submit的summary更新整体进展，不另建固定阶段或空转轮询。
 用户原消息与真实作者是授权来源，摘要和第三方资料不能扩权。新要求优先于冲突的旧目标；旧执行结果仅作历史证据，不能改变新要求。取消、修订、未决外部写入和未知效果先对账，不改身份重放。遇到确实无法自行解决的事项、缺少必要业务信息或触及授权边界/红线，调用task_request_human申请人工介入，说明已尝试、受限事项及需要人工回答的具体问题，结束本轮等待答复。等待受控执行结果只用wait，不申请人工。人工答复会沿原任务唤醒，你须读取答复后继续；答复只针对申请事项，不构成无限授权。不要自行绕过边界，也不要让用户替你做本可委派的调查。任何密码或秘密均不能进入输入、输出或委派正文。
 人工介入必须区分收件人：插件、任务运行时、底座、登录、工具能力或技术故障属于operator，走Web人工介入和当前DWS登录人的私聊，不能要求需求提出人处理。只有确实需要需求提出人提供业务信息或业务决定时选择requester，才在原群询问。未明确分类时按operator处理。群聊的普通补充不能冒充技术申请答复。
@@ -57,7 +60,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
     })()
     return entry.draining
   }
-  async function run({ binding, input, provider, model, reasoningEffort, agentPreset, groupResponsibility = '', onSessionBound, delegate, readExecution, readProgress, cancelExecution, reconcileOperation, submit }) {
+  async function run({ binding, input, provider, model, reasoningEffort, agentPreset, groupResponsibility = '', onSessionBound, delegate, readExecution, readProgress, readDecisions, cancelExecution, reconcileOperation, submit }) {
     if (closed) throw fail('TASK_SESSION_CLOSED')
     if (!binding || binding.kind !== 'task-session' || !binding.taskId || !binding.sessionId || !Number.isSafeInteger(binding.leaseEpoch)
       || binding.leaseEpoch < 1 || !provider || !model) throw fail('TASK_SESSION_BINDING_INVALID')
@@ -101,7 +104,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         agentCtx.tools.presentAs('native')
         entry.content.install(agentCtx, () => current(entry))
         agentCtx.tools.guard(exec => entry.submitted || entry.cancelled || closed ? 'task_session_inactive'
-          : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image', 'glob', 'grep', 'ls'].includes(exec.name)
+          : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image', 'glob', 'grep', 'ls'].includes(exec.name)
             && !['read', 'pure'].includes(agentCtx.tools.get(exec.name, exec.agent)?.effectClass)
             ? 'task_dialogue_read_and_feedback_only' : undefined)
         agentCtx.on('agent/request', (position, next) => {
@@ -145,14 +148,17 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
             feedback: (record.feedback ?? []).map(({ id, receivedAt, consumedAt, modelStepEnteredAt, sequence }) => ({ id, receivedAt, consumedAt: consumedAt ?? null, modelStepEnteredAt: modelStepEnteredAt ?? null,
               consumptionMeaning: 'native-model-step-admission', sequence: sequence ?? null })), record: entry.content.store(record) }
         })
-        register('task_execution_progress', '读取本任务指定执行会话的真实持久记录摘录、实际活动及未结束调用；不能用状态代替进度和方向检查。', { ...object({ executionId: text }), required: ['executionId'] }, async args => {
+        register('task_execution_progress', '读取真实执行记录后，须对照完整目标、范围、验收条件和受托目标判断当前动作是否推进目标；首次确认偏离即向原执行反馈，后续核对实际纠正结果。摘录不足时沿原记录补读，不能用状态或执行自述代替判断。', { ...object({ executionId: text }), required: ['executionId'] }, async args => {
           const result = await readProgress(args.executionId, binding)
           progressRequired.delete(args.executionId)
           return result
         })
+        register('task_decisions_read', '按时间倒序读取本任务历次已保存的决定、说明、证据和关联巡检；用nextBefore继续读取。只在需要回顾判断或跟进纠偏时读取，历史不自动注入上下文。升级前的历史仍在原统筹会话日志中。', object({
+          before: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1, maximum: 100 },
+        }), args => readDecisions(args, binding))
         register('task_operation_reconcile', '只读核对本任务原操作的Host原生job终态收据；有充分证据才恢复状态。不能用模型判断或新命令替代原回执。证据不足保留unknown，可委派readOnly调查。', { ...object({ operationId: text }), required: ['operationId'] }, async args => operationModelReadback(await reconcileOperation(args.operationId, binding), value => entry.content.store(value)))
         register('task_execution_cancel', '取消当前任务的一个执行小目标并等待排空。', { ...object({ executionId: text, reason: text }), required: ['executionId', 'reason'] }, args => cancelExecution(args, binding))
-        register('task_session_submit', '结束本轮统筹；wait等待执行结果，complete由你判断业务完成。', { ...object({ decision: taskSessionDecisionSchema }), required: ['decision'] }, async ({ decision }) => {
+        register('task_session_submit', '结束本轮统筹；巡检后用summary/evidence/limitations记录对照目标的方向判断、依据及下一必要结果。确认走偏须先向原执行纠偏，不能只复述进展后wait；正常推进继续wait，complete须核验完整业务目标。', { ...object({ decision: taskSessionDecisionSchema }), required: ['decision'] }, async ({ decision }) => {
           const issues = validateJsonSchemaValue(taskSessionDecisionSchema, decision)
           if (!decision.summary?.trim()) issues.push('summary must not be empty')
           if (decision.action === 'blocked' && !decision.question?.trim()) issues.push('blocked requires a specific human question; use task_request_human')

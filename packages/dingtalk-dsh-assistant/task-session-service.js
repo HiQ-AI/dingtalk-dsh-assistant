@@ -689,6 +689,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...models(), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
+          readDecisions: (args, current) => query('task.decisions', { ...args, taskId: current.taskId }),
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
             if (dialogue && (args.feedback !== true || !args.executionId)) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
@@ -800,7 +801,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           submit: async decision => {
             if (dialogue) {
               if (decision.action !== 'wait' || decision.question?.trim()) fail('TASK_DIALOGUE_REPLY_ONLY')
-              await command('task.dialogue.reply', { binding, messageId: dialogue.id, reply: decision.summary }, `dialogue-reply:${taskId}:${dialogue.id}`)
+              await command('task.dialogue.reply', { binding, messageId: dialogue.id, reply: decision.summary, decision }, `dialogue-reply:${taskId}:${dialogue.id}`)
               submitted = true
               return { accepted: true, replied: true }
             }
@@ -1191,6 +1192,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       return taskDTO(result.result.task)
     },
     async boardTasks() { return Promise.all((await query('task.list')).map(taskDTO)) },
+    async taskDecisions(taskId, options = {}) { await requireTask(taskId); return query('task.decisions', { ...options, taskId }) },
     async reconcileWebTaskTopics(args) {
       if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
       await refreshTasks()
