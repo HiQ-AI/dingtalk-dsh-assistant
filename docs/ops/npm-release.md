@@ -26,14 +26,16 @@ GitHub Environment `NPM_PUBLISH` 保留审批/保护规则，但应删除不再�
 
 ## 发布
 
-1. 同步根包、assistant、observer 的版本号，并更新 `CHANGELOG.md` 的版本章节和 Release 链接。
-2. 在本地使用 Node.js 24.19.0 执行 `pnpm install --frozen-lockfile`、构建和 `pnpm test`，再检查三个实际 `pnpm pack` 产物。
-   工程交付后补充用例完整实跑两代 Git、候选服务及 PR 流程，按每代 240 秒合计 480 秒预算；Windows 本地单代实测约 187 秒，需等待最终断言，不能以持续有进展代替通过。
-3. 将版本改动合入 `main`，创建指向该提交的带注释 `v<version>` Tag 并推送。
-4. `release.yml` 在 GitHub 托管的 Windows runner 上安装固定 npm 12.0.2，通过 `id-token: write` 获取 OIDC 身份，按 observer → assistant → 根包发布。Trusted Publishing 会自动生成 provenance，无需 `--provenance`。
-5. workflow 最多等待约十分钟回读三个精确 npm 版本；全部一致后才创建带三个 tgz 的 GitHub Release。已存在的 Release 也必须逐个核对附件名称、大小与 SHA-256，全部一致才视为重跑成功。1.0.0 发布时 npm 元数据可见时间比发布回执晚约五分钟，原两分钟窗口因此误报失败。
+1. 明确最新 main SHA，检查新增提交范围，同步三个版本、锁文件和 CHANGELOG。原工作区未提交内容及未合并实验分支不得带入。
+2. 本地 Node24.19.0 / pnpm10.13.1 冻结安装，运行本次相关回归及 `pnpm test:release-smoke`。不再在本地重复前置全量；大改必须补风险相关测试，测试成功不等于真实模型或渠道验收。
+3. 必要 PR 经审查合入 main，创建指向最终提交的带注释版本 tag。Release 的 resolve 固定 tag SHA、main 历史、三版本和 changelog；后续 jobs 只 checkout 此 SHA。
+4. validate 六个独立 Windows runner 按 test/suite-map.json 完整执行全部映射：unit 并发4，native两组及兼容三组各并发1；不提高同机并发挤压原30秒阈值。首次版本保留所有历史覆盖，退出任何测试必须另审其导入图与当前发行/兼容合同，不能按文件名或失败结果删除。每文件的依据和分组见完整映射；修改测试集合/导入须更新并审阅映射。
+5. 所有验证分组成功后 build 仅从同 SHA 构建三个 tgz，清单绑定 runId、SHA、tag、lock/profile摘要、Node/平台及固定pnpm配置，记录每包name/version/size/SHA256/SHA1。真实原生包 smoke 读取这批已打出的包；smoke 后再次校验摘要，才上传同 run 的不可变 artifact。
+6. publish 需要 build 成功且保留 NPM_PUBLISH 保护。它没有安装依赖、构建或测试步骤，只下载本 run 同 SHA artifact，核对 checkout/tag/SHA、清单、lock/profile、环境和每个 tgz，再使用原 OIDC 按 observer→assistant→根包发布。精确 npm 版本回读成功后才创建三个 tgz 附件的正式 Release，并核验附件大小/SHA256。
 
-Tag 推送未触发或某个包发布失败时，可以手工运行 Release workflow，并输入已存在、指向 `main` 历史的 Tag。不要为重试创建新版本或新 Tag；先修正 npm Trusted Publisher 配置，再对原 Tag 使用 `workflow_dispatch`。重跑时，workflow 会对已存在的包比较 registry `dist.shasum` 与本次 tgz SHA-1：一致才跳过，不一致立即停止；缺失的包继续按依赖顺序发布。任何 `npm publish` 非零退出都会立即停止，不能被后续命令掩盖。
+仅 publish 失败时，对原 run 重跑失败 job（gh run rerun RUN_ID --failed），不要重新 dispatch、重新打包或换 tag。已发布 npm 包仍比较 SHA1，冲突即停。下载只针对同一 run 的 SHA 命名 artifact，不接受外部 run/token；artifact过期、缺失或摘要不符必须停止，重新完整验证同 SHA，不能盲缓存通过结论。重跑成功后仍独立读取 npm 和 Release。
+
+依赖缓存只用官方 setup-node/pnpm 与 setup-java/Maven，键受锁文件/工具设置约束；不缓存测试结论。手动 ci.yml 保留完整扩展兼容验证入口，无 PR/push/每日定时触发。流水线不部署、重启、改运行配置或加载用户凭据。
 
 ## 验证与故障定位
 

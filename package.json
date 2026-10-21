@@ -41,7 +41,10 @@
     "profile:install": "pwsh -NoProfile -File scripts/install-profile.ps1",
     "profile:dump": "pwsh -NoProfile -File scripts/dump-profile.ps1",
     "start": "pwsh -NoProfile -File scripts/start-resident.ps1",
-    "test": "node --test --test-concurrency=4 \"test/*.test.js\""
+    "test": "node --test --test-concurrency=4 \"test/*.test.js\"",
+    "test:all": "node --test --test-concurrency=4 \"test/*.test.js\"",
+    "test:suites": "node scripts/test-suites.mjs check",
+    "test:release-smoke": "node --test test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js"
   },
   "engines": {
     "node": ">=24"

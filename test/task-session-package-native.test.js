@@ -20,6 +20,14 @@ const finish = action => call('task_session_submit', { decision: { action, summa
 async function pack(t) {
   const root = await mkdtemp(join(tmpdir(), 'task-package-native-'))
   t.after(() => rm(root, { recursive: true, force: true }))
+  let manifest
+  if (process.env.RELEASE_PACKAGE_DIRECTORY) {
+    const version = JSON.parse(await readFile(join(source, 'package.json'), 'utf8')).version
+    const tarball = resolve(process.env.RELEASE_PACKAGE_DIRECTORY, 'zzusp-dingtalk-dsh-assistant-' + version + '.tgz')
+    const { stdout } = await exec('tar', ['-tf', tarball])
+    manifest = { files: stdout.trim().split(/\r?\n/).map(path => ({ path: path.replace(/^package\//, '') })) }
+    await exec('tar', ['-xzf', tarball, '-C', root])
+  } else {
   let npm
   for (const candidate of [process.env.npm_execpath, join(dirname(process.execPath), 'npm'),
     join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'), join(dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js')].filter(Boolean)) {
@@ -28,8 +36,9 @@ async function pack(t) {
   }
   assert.ok(npm, 'An installed npm CLI is required for a real package test')
   const { stdout } = await exec(process.execPath, [npm, 'pack', '--json', '--ignore-scripts', '--pack-destination', root, '--cache', join(root, 'npm-cache')], { cwd: source })
-  const [manifest] = JSON.parse(stdout)
+  ;[manifest] = JSON.parse(stdout)
   await exec('tar', ['-xzf', join(root, manifest.filename), '-C', root])
+  }
   const dir = join(root, 'package'), pkg = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'))
   assert.ok(pkg.files.every(path => !path.includes('*')), 'Publication must use an explicit runtime allowlist')
   assert.ok(manifest.files.some(entry => entry.path === 'notification-delivery.js'), 'The durable notification helper must ship in the runtime tarball')
