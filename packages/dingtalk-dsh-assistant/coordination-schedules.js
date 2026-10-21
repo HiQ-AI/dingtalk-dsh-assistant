@@ -1,4 +1,5 @@
 import { localSlot, nextTimeSlot, summarizeTimeSlots, validateTimeRule } from './coordination-time.js'
+import { coordinationTrigger, coordinationOccurrenceId } from './coordination-triggers.js'
 
 export const scheduleSchema = `
 ${['schedules','occurrences','slots','jobs'].map(name => `CREATE TABLE dynamic_coordination_${name}(id TEXT PRIMARY KEY,body TEXT NOT NULL CHECK(json_valid(body)));`).join('\n')}
@@ -6,7 +7,7 @@ CREATE INDEX coordination_due ON dynamic_coordination_schedules(json_extract(bod
 CREATE UNIQUE INDEX coordination_slot ON dynamic_coordination_slots(json_extract(body,'$.scheduleId'),json_extract(body,'$.plannedAt'));
 `
 
-export function coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now }) {
+export function coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now, dispatchInstruction, readCommandReceipt }) {
   const table = name => `dynamic_coordination_${name}`
   const save = (name, value) => put(table(name), value)
   const read = (name, id, optional = false) => get(table(name), id, optional)
@@ -16,18 +17,33 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) fail('DYNAMIC_COORDINATION_TIME_INVALID')
     return value
   }
-  const validAction = (action, groupId) => {
+  const validAction = (action, groupId, coordinationId) => {
     record(action)
-    if (action.kind !== 'read-query' || !array(action.taskIds).length || action.taskIds.length > 100) fail('DYNAMIC_COORDINATION_ACTION_INVALID')
-    for (const id of action.taskIds) if (get('dynamic_tasks', id).groupId !== groupId) fail('DYNAMIC_COORDINATION_SCOPE')
-    return clone(action)
+    if (action.kind === 'read-query') {
+      if (!array(action.taskIds).length || action.taskIds.length > 100 || new Set(action.taskIds).size !== action.taskIds.length) fail('DYNAMIC_COORDINATION_ACTION_INVALID')
+      for (const id of action.taskIds) if (get('dynamic_tasks', id).groupId !== groupId) fail('DYNAMIC_COORDINATION_SCOPE')
+      return { kind: action.kind, taskIds: clone(action.taskIds) }
+    }
+    if (action.kind !== 'task-command' || !array(action.instructionIds).length || action.instructionIds.length > 100
+      || new Set(action.instructionIds).size !== action.instructionIds.length) fail('DYNAMIC_COORDINATION_ACTION_INVALID')
+    const coordination = get('dynamic_coordination', coordinationId)
+    const frozenInstructions = action.instructionIds.map(id => {
+      const member = get('dynamic_coordination_members', id)
+      if (member.coordinationId !== coordinationId || get('dynamic_tasks', member.taskId).groupId !== groupId) fail('DYNAMIC_COORDINATION_SCOPE')
+      return { instructionId: id, taskId: member.taskId, expectedRevision: coordination.revision,
+        command: clone(member.command), commandDigest: member.commandDigest,
+        preconditionVersion: clone(member.preconditionVersion) }
+    })
+    return { kind: action.kind, instructionIds: clone(action.instructionIds), frozenInstructions }
   }
   const validTarget = (target, groupId) => {
     record(target)
-    if (target.conversationId !== groupId || !Array.isArray(target.recipientIds) || target.recipientIds.some(id => typeof id !== 'string' || !id.trim())) fail('DYNAMIC_COORDINATION_SCOPE')
+    if (target.conversationId !== groupId || !Array.isArray(target.recipientIds) || target.recipientIds.some(id => typeof id !== 'string' || !id.trim())
+      || target.summaryOnly !== undefined && typeof target.summaryOnly !== 'boolean') fail('DYNAMIC_COORDINATION_SCOPE')
     return clone(target)
   }
   function snapshot(occurrence) {
+    if (occurrence.action.kind !== 'read-query') fail('DYNAMIC_COORDINATION_ACTION_INVALID')
     const coordination = get('dynamic_coordination', occurrence.coordinationId)
     const results = occurrence.action.taskIds.map(id => {
       const task = get('dynamic_tasks', id, true)
@@ -36,6 +52,41 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
         contextRevision: task.contextRevision ?? 0, runSequence: task.runSequence, completion: task.completion ?? null }
     })
     return { observedAt: now(), results, limitations: ['Task ledger only; deployment and external acceptance are not inferred.'] }
+  }
+  const assertJob = (job, occurrence, fence, stamp) => {
+    if (job.fence !== fence || job.state !== 'running' || job.leaseUntil <= stamp
+      || !coordinationActive(occurrence.coordinationId) || occurrence.cancelledAt || occurrence.paused
+      || job.instanceControlRevision !== occurrence.instanceControlRevision) fail('DYNAMIC_COORDINATION_JOB_STALE')
+  }
+  function memberTriggerState(instructionId) {
+    const member = get('dynamic_coordination_members', instructionId)
+    if (['applied','fulfilled'].includes(member.state) && member.receipt) return { eligible: true, reason: null }
+    const schedules = list('schedules').filter(s => [s.action, ...s.history.map(revision => revision.action).filter(Boolean)]
+      .some(action => action.kind === 'task-command' && action.instructionIds.includes(instructionId)))
+    const occurrences = list('occurrences').filter(o => o.action.kind === 'task-command' && o.action.instructionIds.includes(instructionId))
+    if (!schedules.length && !occurrences.length) return { eligible: !member.requiresTrigger, reason: member.requiresTrigger ? 'waiting_trigger' : null }
+    const released = occurrences.find(o => o.releasedInstructionIds?.includes(instructionId) && !o.cancelledAt && !o.paused
+      && (!o.scheduleId || read('schedules', o.scheduleId).state !== 'paused')
+      && coordinationActive(o.coordinationId) && !['superseded','cancelled','failed','blocked'].includes(o.actionState))
+    if (released) return { eligible: true, reason: null, occurrenceId: released.id }
+    return { eligible: false, reason: schedules.some(s => s.state === 'paused') || occurrences.some(o => o.paused) ? 'trigger_paused'
+      : schedules.length && schedules.every(s => s.state === 'cancelled') || occurrences.length && occurrences.every(o => o.cancelledAt) ? 'trigger_cancelled'
+        : schedules.length && schedules.every(s => s.action.kind !== 'task-command' || !s.action.instructionIds.includes(instructionId)) && !occurrences.length ? 'trigger_superseded' : 'waiting_trigger' }
+  }
+  function validateTriggerFact(coordination, trigger) {
+    if (trigger.triggerKind === 'message') {
+      const source = get('dynamic_coordination_sources', digest({ unitId: trigger.sourceUnitId, revision: trigger.sourceUnitRevision }), true)
+      if (!source || source.coordinationId !== coordination.id || source.groupId !== coordination.groupId || source.dispatchOwner !== 'coordination'
+        || !['accepted','needs_clarification'].includes(source.state)) fail('DYNAMIC_COORDINATION_SOURCE_STALE')
+    } else if (trigger.triggerKind === 'business-event') {
+      if (trigger.eventSource !== 'task-ledger') fail('DYNAMIC_COORDINATION_EVENT_INVALID')
+      const event = get('dynamic_task_events', trigger.eventId)
+      const task = get('dynamic_tasks', event.taskId)
+      if (task.groupId !== coordination.groupId || event.kind !== 'task.completed') fail('DYNAMIC_COORDINATION_SCOPE')
+      if (task.status !== 'completed' || task.completion?.commandId !== event.commandId
+        || ['requirementRevision','controlRevision','runSequence'].some(key => task[key] !== event[key])
+        || (task.contextRevision ?? 0) !== event.contextRevision) fail('DYNAMIC_COORDINATION_EVENT_STALE')
+    }
   }
   function cancelOccurrence(occurrence, stamp, reason) {
     if (occurrence.cancelledAt) return
@@ -69,7 +120,10 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     const slotId = digest({ scheduleId: schedule.id, plannedAt })
     if (slotId !== occurrence.slotId && read('slots', slotId, true)) fail('DYNAMIC_COORDINATION_SLOT_CONSUMED')
     const id = `${occurrence.id}:replacement:${schedule.revision}`
+    const trigger = coordinationTrigger({ triggerKind: 'time', scheduleId: schedule.id, acceptedScheduleRevision: schedule.revision,
+      plannedAt, slotId }, { fail, text, integer, digest })
     const replacement = { ...clone(occurrence), id, plannedAt, slotId, acceptedAt: stamp,
+      trigger,
       acceptedScheduleRevision: schedule.revision, instanceControlRevision: 1, deliveryControlRevision: 1,
       replacementOf: occurrence.id, action: clone(schedule.action), target: clone(schedule.target), jobId: `job:${id}` }
     occurrence.actionState = 'superseded'; occurrence.replacedBy = id; occurrence.instanceControlRevision++
@@ -95,7 +149,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       const effectiveFrom = stamp
       if (a.rule.kind === 'once' && Date.parse(a.rule.at) <= milliseconds) fail('DYNAMIC_COORDINATION_TIME_PAST')
       const schedule = { id, coordinationId: coordination.id, revision: 1, state: 'active', effectiveFrom,
-        timezone: text(a.timezone, 'timezone'), rule: clone(a.rule), action: validAction(a.action, coordination.groupId),
+        timezone: text(a.timezone, 'timezone'), rule: clone(a.rule), action: validAction(a.action, coordination.groupId, coordination.id),
         target: validTarget(a.target, coordination.groupId), graceMs: a.graceMs ?? 900000,
         freshnessWindowMs: a.freshnessWindowMs ?? 300000,
         misfirePolicy: a.misfirePolicy ?? 'coalesce-latest', overlapPolicy: 'serial', maxBacklog: 1, cursor: null, history: [],
@@ -103,6 +157,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       if (!Number.isSafeInteger(schedule.graceMs) || schedule.graceMs < 0 || schedule.graceMs > 604800000) fail('DYNAMIC_ARGUMENT_INVALID')
       if (!Number.isSafeInteger(schedule.freshnessWindowMs) || schedule.freshnessWindowMs < 1000 || schedule.freshnessWindowMs > 86400000) fail('DYNAMIC_ARGUMENT_INVALID')
       if (!['coalesce-latest','catch-up-once','expire'].includes(schedule.misfirePolicy)) fail('DYNAMIC_ARGUMENT_INVALID')
+      if (schedule.action.kind === 'task-command' && schedule.rule.kind !== 'once') fail('DYNAMIC_COORDINATION_RECURRING_COMMAND_TEMPLATE_REQUIRED')
       save('schedules', schedule); return { schedule }
     }
     if (kind === 'coordination.schedule.change') {
@@ -113,6 +168,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       if (!coordinationActive(coordination.id)) fail('DYNAMIC_COORDINATION_CANCELLED')
       const rule = a.rule ?? schedule.rule, timezone = a.timezone ?? schedule.timezone
       try { validateTimeRule(rule, timezone) } catch { fail('DYNAMIC_COORDINATION_TIME_INVALID') }
+      if (rule.kind !== 'once' && (a.action ?? schedule.action).kind === 'task-command') fail('DYNAMIC_COORDINATION_RECURRING_COMMAND_TEMPLATE_REQUIRED')
       if (a.state !== undefined && !['active','paused','cancelled'].includes(a.state)) fail('DYNAMIC_ARGUMENT_INVALID')
       const scope = a.scope ?? 'future'
       if (!['future','unstarted'].includes(scope)) fail('DYNAMIC_ARGUMENT_INVALID')
@@ -122,7 +178,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
         action: schedule.action, target: schedule.target, state: schedule.state, effectiveFrom: schedule.effectiveFrom,
         nextDueAt: schedule.nextDueAt, cursor: clone(schedule.cursor), scope, changedAt: stamp })
       schedule.revision++; schedule.effectiveFrom = stamp; schedule.rule = clone(rule); schedule.timezone = timezone
-      schedule.action = validAction(a.action ?? schedule.action, coordination.groupId)
+      schedule.action = a.action === undefined ? clone(schedule.action) : validAction(a.action, coordination.groupId, coordination.id)
       schedule.target = validTarget(a.target ?? schedule.target, coordination.groupId)
       schedule.state = a.state ?? schedule.state
       // Pausing preserves the due cursor. Resuming without redefining the rule
@@ -158,7 +214,9 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
         if (!read('slots', slotId, true)) {
           const occurrenceId = `time:${slotId}`
           const expired = schedule.misfirePolicy !== 'catch-up-once' && milliseconds - Date.parse(plannedAt) > schedule.graceMs
-          const occurrence = { id: occurrenceId, coordinationId: schedule.coordinationId, triggerKind: 'time', scheduleId: schedule.id,
+          const trigger = coordinationTrigger({ triggerKind: 'time', scheduleId: schedule.id, acceptedScheduleRevision: schedule.revision,
+            plannedAt, slotId }, { fail, text, integer, digest })
+          const occurrence = { id: occurrenceId, coordinationId: schedule.coordinationId, trigger, triggerKind: 'time', scheduleId: schedule.id,
             acceptedScheduleRevision: schedule.revision, plannedAt, slotId, instanceControlRevision: 1, deliveryControlRevision: 1,
             actionState: expired ? 'expired' : 'waiting', deliveryState: 'none', acceptedAt: stamp, merged,
             freshnessWindowMs: schedule.freshnessWindowMs,
@@ -187,11 +245,13 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     }
     if (kind === 'coordination.job.claim') {
       const job = read('jobs', a.jobId), occurrence = read('occurrences', job.occurrenceId)
-      const schedule = read('schedules', occurrence.scheduleId)
+      const schedule = occurrence.triggerKind === 'time' ? read('schedules', occurrence.scheduleId) : null
       if (!coordinationActive(occurrence.coordinationId)) fail('DYNAMIC_COORDINATION_CANCELLED')
       if (occurrence.cancelledAt || ['cancelled','superseded','expired'].includes(occurrence.actionState)) fail('DYNAMIC_COORDINATION_CANCELLED')
+      if (occurrence.paused) fail('DYNAMIC_COORDINATION_PAUSED')
       if (job.state === 'completed' || job.state === 'running' && job.leaseUntil > stamp) fail('DYNAMIC_COORDINATION_JOB_BUSY')
       if (job.state === 'waiting') {
+        if (schedule) {
         if (schedule.state !== 'active') fail('DYNAMIC_COORDINATION_REVISION_STALE')
         if (occurrence.plannedAt > stamp) fail('DYNAMIC_COORDINATION_NOT_DUE')
         const acceptedDefinition = occurrence.acceptedScheduleRevision === schedule.revision ? schedule
@@ -205,6 +265,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
         const slot = read('slots', occurrence.slotId)
         if (slot.currentOccurrenceId !== occurrence.id || slot.startedOccurrenceId && slot.startedOccurrenceId !== occurrence.id) fail('DYNAMIC_COORDINATION_SLOT_CONSUMED')
         slot.startedOccurrenceId = occurrence.id; save('slots', slot)
+        } else validateTriggerFact(get('dynamic_coordination', occurrence.coordinationId), occurrence.trigger)
       }
       job.state = 'running'; job.fence++; job.attempt++; job.leaseUntil = new Date(milliseconds + 60000).toISOString()
       job.instanceControlRevision = occurrence.instanceControlRevision
@@ -213,13 +274,79 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     }
     if (kind === 'coordination.job.read') {
       const job = read('jobs', a.jobId), occurrence = read('occurrences', job.occurrenceId)
-      if (job.fence !== a.fence || job.state !== 'running' || job.leaseUntil <= stamp
-        || !coordinationActive(occurrence.coordinationId) || occurrence.cancelledAt || job.instanceControlRevision !== occurrence.instanceControlRevision) fail('DYNAMIC_COORDINATION_JOB_STALE')
+      assertJob(job, occurrence, a.fence, stamp)
       // Whitelisted in-process projection only: no arbitrary tools, Owner calls,
       // attachment writes, Task mutations or model-supplied "read-only" assertions.
       job.state = 'completed'; job.result = snapshot(occurrence)
       occurrence.actionState = 'succeeded'; occurrence.result = clone(job.result); occurrence.deliveryState = 'pending'
       save('jobs', job); save('occurrences', occurrence); return { job, occurrence }
+    }
+    if (kind === 'coordination.job.command') {
+      const job = read('jobs', a.jobId), occurrence = read('occurrences', job.occurrenceId)
+      assertJob(job, occurrence, a.fence, stamp)
+      if (occurrence.triggerKind === 'business-event') validateTriggerFact(get('dynamic_coordination', occurrence.coordinationId), occurrence.trigger)
+      if (occurrence.action.kind !== 'task-command' || typeof dispatchInstruction !== 'function') fail('DYNAMIC_COORDINATION_DISPATCH_ADAPTER_REQUIRED')
+      occurrence.releasedInstructionIds = [...occurrence.action.instructionIds]
+      save('occurrences', occurrence)
+      const results = [], waiting = []
+      for (const frozen of occurrence.action.frozenInstructions) {
+        const member = get('dynamic_coordination_members', frozen.instructionId)
+        if (member.coordinationId !== occurrence.coordinationId || member.taskId !== frozen.taskId
+          || digest(member.command) !== frozen.commandDigest || digest(frozen.command) !== frozen.commandDigest
+          || digest(member.preconditionVersion) !== digest(frozen.preconditionVersion)) fail('DYNAMIC_COORDINATION_COMMAND_INVALID')
+        const previous = readCommandReceipt?.(frozen.command)
+        if (['applied','fulfilled'].includes(member.state)) {
+          results.push({ instructionId: member.id, commandId: frozen.command.id, state: member.state,
+            reconciled: true, receipt: clone(previous ?? member.receipt) })
+          continue
+        }
+        const result = dispatchInstruction({ ...clone(frozen), occurrenceId: occurrence.id })
+        if (result.waiting?.length || result.member.state !== 'applied' && result.member.state !== 'fulfilled') waiting.push({ instructionId: member.id, dependencies: result.waiting ?? [] })
+        else results.push({ instructionId: member.id, commandId: frozen.command.id, state: result.member.state, receipt: clone(result.member.receipt) })
+      }
+      job.result = { observedAt: stamp, results, waiting, semantics: 'Task command acceptance receipts; not business completion.' }
+      job.state = waiting.length ? 'waiting' : 'completed'; job.waitingReason = waiting.length ? 'waiting_dependency' : null
+      occurrence.actionState = waiting.length ? 'waiting' : 'succeeded'; occurrence.result = clone(job.result)
+      occurrence.deliveryState = waiting.length || occurrence.target.summaryOnly ? 'none' : 'pending'
+      save('jobs', job); save('occurrences', occurrence); return { job, occurrence }
+    }
+    if (kind === 'coordination.occurrence.accept') {
+      const coordination = get('dynamic_coordination', a.coordinationId)
+      if (!coordinationActive(coordination.id)) fail('DYNAMIC_COORDINATION_CANCELLED')
+      const trigger = coordinationTrigger(a.trigger, { fail, text, integer, digest })
+      const id = coordinationOccurrenceId(coordination.id, trigger, digest)
+      const acceptanceDigest = digest({ coordinationId: coordination.id, trigger, action: a.action, target: a.target })
+      const previous = read('occurrences', id, true)
+      if (previous) {
+        if (trigger.triggerKind === 'time') {
+          const action = previous.action.kind === 'task-command'
+            ? { kind: previous.action.kind, instructionIds: previous.action.instructionIds }
+            : { kind: previous.action.kind, taskIds: previous.action.taskIds }
+          if (previous.coordinationId !== coordination.id || digest(previous.trigger) !== digest(trigger)
+            || digest(action) !== digest(a.action) || digest(previous.target) !== digest(a.target)) fail('DYNAMIC_COORDINATION_TRIGGER_CONFLICT')
+          return { occurrence: previous, replayed: true }
+        }
+        if (previous.acceptanceDigest !== acceptanceDigest) fail('DYNAMIC_COORDINATION_TRIGGER_CONFLICT')
+        return { occurrence: previous, replayed: true }
+      }
+      if (trigger.triggerKind === 'time') fail('DYNAMIC_COORDINATION_TIME_SCAN_REQUIRED')
+      validateTriggerFact(coordination, trigger)
+      const occurrence = { id, coordinationId: coordination.id, ...trigger, trigger, instanceControlRevision: 1, deliveryControlRevision: 1,
+        acceptedAt: stamp, actionState: 'waiting', deliveryState: 'none', acceptanceDigest,
+        action: validAction(a.action, coordination.groupId, coordination.id), target: validTarget(a.target, coordination.groupId), jobId: `job:${id}` }
+      save('occurrences', occurrence); save('jobs', { id: occurrence.jobId, occurrenceId: id, state: 'waiting', fence: 0, attempt: 0 })
+      return { occurrence, replayed: false }
+    }
+    if (kind === 'coordination.occurrence.control') {
+      const occurrence = read('occurrences', a.occurrenceId)
+      if (occurrence.instanceControlRevision !== a.expectedControlRevision) fail('DYNAMIC_COORDINATION_REVISION_STALE')
+      if (!['pause','resume','cancel'].includes(a.control)) fail('DYNAMIC_ARGUMENT_INVALID')
+      if (a.control === 'cancel') { cancelOccurrence(occurrence, stamp, 'occurrence-cancelled'); return { occurrence } }
+      if (!['waiting','running'].includes(occurrence.actionState) || occurrence.cancelledAt) fail('DYNAMIC_COORDINATION_CONTROL_EFFECT_BOUNDARY')
+      occurrence.instanceControlRevision++; occurrence.paused = a.control === 'pause'
+      occurrence.actionState = 'waiting'
+      const job = read('jobs', occurrence.jobId); job.fence++; job.state = 'waiting'; job.leaseUntil = null
+      save('jobs', job); save('occurrences', occurrence); return { occurrence }
     }
     if (kind === 'coordination.occurrence.cancel') {
       const occurrence = read('occurrences', a.occurrenceId)
@@ -228,5 +355,5 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     }
     fail('DYNAMIC_COMMAND_UNKNOWN', kind)
   }
-  return { command, list, read, cancelCoordination, snapshot }
+  return { command, list, read, cancelCoordination, snapshot, memberTriggerState }
 }

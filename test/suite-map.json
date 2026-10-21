@@ -21,13 +21,17 @@
   "publishedBoundary": {
     "roots": [
       "index.js",
+      "packages/dingtalk-dsh-assistant/coordination-changes.js",
       "packages/dingtalk-dsh-assistant/coordination-context.js",
       "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+      "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
       "packages/dingtalk-dsh-assistant/coordination-resources.js",
       "packages/dingtalk-dsh-assistant/coordination-schedules.js",
       "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+      "packages/dingtalk-dsh-assistant/coordination-summary.js",
       "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
       "packages/dingtalk-dsh-assistant/coordination-time.js",
+      "packages/dingtalk-dsh-assistant/coordination-triggers.js",
       "packages/dingtalk-dsh-assistant/decision.js",
       "packages/dingtalk-dsh-assistant/dws-adapter.js",
       "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -84,13 +88,17 @@
     ],
     "staticLocalClosure": [
       "index.js",
+      "packages/dingtalk-dsh-assistant/coordination-changes.js",
       "packages/dingtalk-dsh-assistant/coordination-context.js",
       "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+      "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
       "packages/dingtalk-dsh-assistant/coordination-resources.js",
       "packages/dingtalk-dsh-assistant/coordination-schedules.js",
       "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+      "packages/dingtalk-dsh-assistant/coordination-summary.js",
       "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
       "packages/dingtalk-dsh-assistant/coordination-time.js",
+      "packages/dingtalk-dsh-assistant/coordination-triggers.js",
       "packages/dingtalk-dsh-assistant/decision.js",
       "packages/dingtalk-dsh-assistant/dws-adapter.js",
       "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -451,8 +459,11 @@
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -508,8 +519,11 @@
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -517,6 +531,35 @@
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/coordination-migration.test.js",
+      "lane": "compat-2",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
+        "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
+        "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
+        "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
+        "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
+        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+        "packages/dingtalk-dsh-assistant/execution-context.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/independent-coordination-planner.js",
+        "packages/dingtalk-dsh-assistant/independent-coordination-service.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js",
+        "packages/dingtalk-dsh-assistant/task-message-projections.js",
+        "packages/dingtalk-dsh-assistant/tool-schema.js",
+        "packages/dingtalk-dsh-assistant/topic-model.js"
       ],
       "retainedCompatibilityImports": [],
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
@@ -545,13 +588,16 @@
     },
     {
       "file": "test/coordination-notification-freshness.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -566,7 +612,7 @@
     },
     {
       "file": "test/coordination-resources.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -586,8 +632,11 @@
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -612,6 +661,29 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
+      "file": "test/coordination-summary.test.js",
+      "lane": "unit",
+      "category": "unit",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
+        "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
+        "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
+        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+        "packages/dingtalk-dsh-assistant/execution-context.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js",
+        "packages/dingtalk-dsh-assistant/task-message-projections.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
       "file": "test/coordination-time.test.js",
       "lane": "unit",
       "category": "unit",
@@ -623,8 +695,31 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
+      "file": "test/coordination-trigger-commands.test.js",
+      "lane": "unit",
+      "category": "unit",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
+        "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
+        "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
+        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+        "packages/dingtalk-dsh-assistant/execution-context.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js",
+        "packages/dingtalk-dsh-assistant/task-message-projections.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
       "file": "test/current-acceptance-planning.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -658,7 +753,7 @@
     },
     {
       "file": "test/data-change-execution-responsibility-prompt.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -709,7 +804,7 @@
     },
     {
       "file": "test/deploy-local.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -718,7 +813,7 @@
     },
     {
       "file": "test/deployment-integrity.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -772,13 +867,17 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -843,7 +942,7 @@
     },
     {
       "file": "test/dsh-alpha2-evidence.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -888,7 +987,7 @@
     },
     {
       "file": "test/dsh-alpha2-session-compatibility.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -924,7 +1023,7 @@
     },
     {
       "file": "test/dws-adapter.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -937,7 +1036,7 @@
     },
     {
       "file": "test/dws-bridge.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -951,7 +1050,7 @@
     },
     {
       "file": "test/dws-file-adapter.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -969,8 +1068,11 @@
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -984,7 +1086,7 @@
     },
     {
       "file": "test/dynamic-execution-session-native.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1026,13 +1128,16 @@
     },
     {
       "file": "test/dynamic-task-store.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -1047,7 +1152,7 @@
     },
     {
       "file": "test/edit-argument-recovery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1082,7 +1187,7 @@
     },
     {
       "file": "test/engineering-approach-contract.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1096,7 +1201,7 @@
     },
     {
       "file": "test/engineering-current-context-uat.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1199,7 +1304,7 @@
     },
     {
       "file": "test/engineering-inline-pr-metadata.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1218,7 +1323,7 @@
     },
     {
       "file": "test/engineering-lean-inputs.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1252,7 +1357,7 @@
     },
     {
       "file": "test/engineering-long-stage-criteria.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1287,7 +1392,7 @@
     },
     {
       "file": "test/engineering-remote-inputs.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1390,7 +1495,7 @@
     },
     {
       "file": "test/engineering-remote-two-project.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1435,7 +1540,7 @@
     },
     {
       "file": "test/engineering-review-core.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1453,7 +1558,7 @@
     },
     {
       "file": "test/engineering-stage-routing-minimal.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1497,7 +1602,7 @@
     },
     {
       "file": "test/engineering-two-repository-chain.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1542,7 +1647,7 @@
     },
     {
       "file": "test/engineering-v25-checkpoint.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1587,7 +1692,7 @@
     },
     {
       "file": "test/engineering-v25-reset.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1632,7 +1737,7 @@
     },
     {
       "file": "test/engineering-worktree-inputs.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1666,7 +1771,7 @@
     },
     {
       "file": "test/engineering-worktree-source.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1686,7 +1791,7 @@
     },
     {
       "file": "test/engineering-worktree-two-project.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1731,7 +1836,7 @@
     },
     {
       "file": "test/execution-acceptance-upgrade-integration.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1767,7 +1872,7 @@
     },
     {
       "file": "test/execution-authorization-session.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1802,7 +1907,7 @@
     },
     {
       "file": "test/execution-candidate.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1816,7 +1921,7 @@
     },
     {
       "file": "test/execution-configuration.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1864,7 +1969,7 @@
     },
     {
       "file": "test/execution-controller.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1910,7 +2015,7 @@
     },
     {
       "file": "test/execution-delivery-runtime.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1947,7 +2052,7 @@
     },
     {
       "file": "test/execution-delivery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1983,7 +2088,7 @@
     },
     {
       "file": "test/execution-edit.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -1997,7 +2102,7 @@
     },
     {
       "file": "test/execution-effects.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -2009,7 +2114,7 @@
     },
     {
       "file": "test/execution-engineering-repair.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2112,7 +2217,7 @@
     },
     {
       "file": "test/execution-external-delivery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2147,7 +2252,7 @@
     },
     {
       "file": "test/execution-git.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2178,7 +2283,7 @@
     },
     {
       "file": "test/execution-local-acceptance.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2194,7 +2299,7 @@
     },
     {
       "file": "test/execution-message-delivery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2229,7 +2334,7 @@
     },
     {
       "file": "test/execution-pr.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2257,7 +2362,7 @@
     },
     {
       "file": "test/execution-reset-owner-history.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -2280,7 +2385,7 @@
     },
     {
       "file": "test/execution-runtime-native.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2326,51 +2431,6 @@
     },
     {
       "file": "test/execution-session-installed-cold-fix.test.js",
-      "lane": "compat-0",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
-        "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
-        "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
-        "packages/dingtalk-dsh-assistant/execution-provider-failure.js",
-        "packages/dingtalk-dsh-assistant/execution-session.js",
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/host-context.js",
-        "packages/dingtalk-dsh-assistant/model-context.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js",
-        "packages/dingtalk-dsh-assistant/task-source-instructions.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-query-resources.js",
-        "packages/dingtalk-dsh-assistant/agent-query-tools.js",
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-store.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/execution-session-native.test.js",
       "lane": "compat-1",
       "category": "compat",
       "release": true,
@@ -2415,8 +2475,53 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/execution-store.test.js",
+      "file": "test/execution-session-native.test.js",
       "lane": "compat-2",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
+        "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
+        "packages/dingtalk-dsh-assistant/execution-provider-failure.js",
+        "packages/dingtalk-dsh-assistant/execution-session.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/host-context.js",
+        "packages/dingtalk-dsh-assistant/model-context.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-source-instructions.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-query-resources.js",
+        "packages/dingtalk-dsh-assistant/agent-query-tools.js",
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-store.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/execution-store.test.js",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2439,7 +2544,7 @@
     },
     {
       "file": "test/execution-task-plan.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2486,7 +2591,7 @@
     },
     {
       "file": "test/execution-task-purge.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2503,41 +2608,6 @@
     },
     {
       "file": "test/execution-task-reset.test.js",
-      "lane": "compat-2",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-store.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/execution-workspace-runtime.test.js",
       "lane": "compat-0",
       "category": "compat",
       "release": true,
@@ -2572,8 +2642,43 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/execution-workspace.test.js",
+      "file": "test/execution-workspace-runtime.test.js",
       "lane": "compat-1",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-store.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/execution-workspace.test.js",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2589,7 +2694,7 @@
     },
     {
       "file": "test/external-registry-startup.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2709,7 +2814,7 @@
     },
     {
       "file": "test/github-unprotected-policy-observation.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2756,7 +2861,7 @@
     },
     {
       "file": "test/group-reply-format.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2783,18 +2888,117 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/independent-coordination-native.test.js",
+      "file": "test/independent-coordination-changes-native.test.js",
       "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
+        "packages/dingtalk-dsh-assistant/decision.js",
+        "packages/dingtalk-dsh-assistant/dws-adapter.js",
+        "packages/dingtalk-dsh-assistant/dws-bridge.js",
+        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
+        "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js",
+        "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+        "packages/dingtalk-dsh-assistant/execution-context.js",
+        "packages/dingtalk-dsh-assistant/execution-provider-failure.js",
+        "packages/dingtalk-dsh-assistant/execution-session.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
+        "packages/dingtalk-dsh-assistant/host-context.js",
+        "packages/dingtalk-dsh-assistant/independent-coordination-planner.js",
+        "packages/dingtalk-dsh-assistant/independent-coordination-service.js",
+        "packages/dingtalk-dsh-assistant/model-context.js",
+        "packages/dingtalk-dsh-assistant/notification-delivery.js",
+        "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/store.js",
+        "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js",
+        "packages/dingtalk-dsh-assistant/task-input-revision.js",
+        "packages/dingtalk-dsh-assistant/task-message-projections.js",
+        "packages/dingtalk-dsh-assistant/task-plan.js",
+        "packages/dingtalk-dsh-assistant/task-progress.js",
+        "packages/dingtalk-dsh-assistant/task-report-step-gate.js",
+        "packages/dingtalk-dsh-assistant/task-result.js",
+        "packages/dingtalk-dsh-assistant/task-session-observability.js",
+        "packages/dingtalk-dsh-assistant/task-session-persistence.js",
+        "packages/dingtalk-dsh-assistant/task-session-service.js",
+        "packages/dingtalk-dsh-assistant/task-session.js",
+        "packages/dingtalk-dsh-assistant/task-source-instructions.js",
+        "packages/dingtalk-dsh-assistant/task-topic-coordinator.js",
+        "packages/dingtalk-dsh-assistant/tool-schema.js",
+        "packages/dingtalk-dsh-assistant/topic-model.js",
+        "packages/dingtalk-dsh-assistant/topic-runtime.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/independent-coordination-changes.test.js",
+      "lane": "unit",
+      "category": "unit",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
+        "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
+        "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
+        "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
+        "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
+        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+        "packages/dingtalk-dsh-assistant/execution-context.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/independent-coordination-planner.js",
+        "packages/dingtalk-dsh-assistant/independent-coordination-service.js",
+        "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/store.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js",
+        "packages/dingtalk-dsh-assistant/task-input-revision.js",
+        "packages/dingtalk-dsh-assistant/task-message-projections.js",
+        "packages/dingtalk-dsh-assistant/task-plan.js",
+        "packages/dingtalk-dsh-assistant/task-progress.js",
+        "packages/dingtalk-dsh-assistant/task-result.js",
+        "packages/dingtalk-dsh-assistant/tool-schema.js",
+        "packages/dingtalk-dsh-assistant/topic-model.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/independent-coordination-native.test.js",
+      "lane": "native-0",
+      "category": "native",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
+        "packages/dingtalk-dsh-assistant/coordination-context.js",
+        "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
+        "packages/dingtalk-dsh-assistant/coordination-resources.js",
+        "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
+        "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
+        "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -2844,10 +3048,14 @@
       "category": "unit",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -2865,7 +3073,7 @@
     },
     {
       "file": "test/investigation-continuation.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -2968,7 +3176,7 @@
     },
     {
       "file": "test/investigation-domain-contract.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3005,7 +3213,7 @@
     },
     {
       "file": "test/jsonl-module-compat.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3014,7 +3222,7 @@
     },
     {
       "file": "test/legacy-development-migration.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3059,7 +3267,7 @@
     },
     {
       "file": "test/local-acceptance-activity-merge.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3068,7 +3276,7 @@
     },
     {
       "file": "test/local-acceptance-background.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3077,7 +3285,7 @@
     },
     {
       "file": "test/local-acceptance-dataset-merge-ui.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3086,7 +3294,7 @@
     },
     {
       "file": "test/local-acceptance-merge.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3095,15 +3303,6 @@
     },
     {
       "file": "test/local-acceptance-project.test.js",
-      "lane": "compat-1",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [],
-      "retainedCompatibilityImports": [],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/local-acceptance-readonly.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -3112,7 +3311,7 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/local-acceptance-review.test.js",
+      "file": "test/local-acceptance-readonly.test.js",
       "lane": "compat-0",
       "category": "compat",
       "release": true,
@@ -3121,8 +3320,17 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/maintenance-held-stop.test.js",
+      "file": "test/local-acceptance-review.test.js",
       "lane": "compat-1",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/maintenance-held-stop.test.js",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3143,7 +3351,7 @@
     },
     {
       "file": "test/message-agent-controller.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3191,7 +3399,7 @@
     },
     {
       "file": "test/message-agent-ledger.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3207,7 +3415,7 @@
     },
     {
       "file": "test/message-context-repair.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3310,7 +3518,7 @@
     },
     {
       "file": "test/message-impact.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3339,7 +3547,7 @@
     },
     {
       "file": "test/message-repair-coordination.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3365,7 +3573,7 @@
     },
     {
       "file": "test/message-workflow.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3380,7 +3588,7 @@
     },
     {
       "file": "test/migrate-execution-dependency-index.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3396,7 +3604,7 @@
     },
     {
       "file": "test/migrate-execution-events-index.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3482,17 +3690,21 @@
     },
     {
       "file": "test/model-context-files-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -3550,7 +3762,7 @@
     },
     {
       "file": "test/native-store-reload.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3566,7 +3778,7 @@
     },
     {
       "file": "test/notification-recovery-tool.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3623,7 +3835,7 @@
     },
     {
       "file": "test/notification-retirement.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3656,7 +3868,7 @@
     },
     {
       "file": "test/observer-client.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3778,7 +3990,7 @@
     },
     {
       "file": "test/outbox-audit-classification.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3789,7 +4001,7 @@
     },
     {
       "file": "test/outbox-stale-blockers.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3815,7 +4027,7 @@
     },
     {
       "file": "test/owned-test-service.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -3824,7 +4036,7 @@
     },
     {
       "file": "test/owner-delivery-release-proof.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3838,7 +4050,7 @@
     },
     {
       "file": "test/paused-task-contract-replay.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3852,7 +4064,7 @@
     },
     {
       "file": "test/performance-runtime.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3916,7 +4128,7 @@
     },
     {
       "file": "test/platform-host.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3948,7 +4160,7 @@
     },
     {
       "file": "test/read-uat-delivery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -3971,7 +4183,7 @@
     },
     {
       "file": "test/reconcile-data-change-approval.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4036,7 +4248,7 @@
     },
     {
       "file": "test/reconcile-prepare-failure.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4051,7 +4263,7 @@
     },
     {
       "file": "test/reconcile-workspace-collision.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4070,7 +4282,7 @@
     },
     {
       "file": "test/recover-quarantined-echo.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4118,7 +4330,7 @@
     },
     {
       "file": "test/recover-verification-drain.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4168,15 +4380,6 @@
     },
     {
       "file": "test/release-artifacts.test.js",
-      "lane": "compat-0",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [],
-      "retainedCompatibilityImports": [],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/release-preflight.test.js",
       "lane": "compat-1",
       "category": "compat",
       "release": true,
@@ -4185,7 +4388,7 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/release-workflow.test.js",
+      "file": "test/release-preflight.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -4194,8 +4397,17 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/repair-release-target-policy.test.js",
+      "file": "test/release-workflow.test.js",
       "lane": "compat-0",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/repair-release-target-policy.test.js",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4211,7 +4423,7 @@
     },
     {
       "file": "test/report-native-lifecycle.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4229,7 +4441,7 @@
     },
     {
       "file": "test/restart-web.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -4280,7 +4492,7 @@
     },
     {
       "file": "test/runtime-startup-observation.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4294,7 +4506,7 @@
     },
     {
       "file": "test/runtime.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4358,7 +4570,7 @@
     },
     {
       "file": "test/sg20-planner-correction.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4372,7 +4584,7 @@
     },
     {
       "file": "test/sg20-real-http-evidence.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -4381,7 +4593,7 @@
     },
     {
       "file": "test/single-task-run-scope.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4427,7 +4639,7 @@
     },
     {
       "file": "test/status-query.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4462,7 +4674,7 @@
     },
     {
       "file": "test/task-actions.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4475,17 +4687,21 @@
     },
     {
       "file": "test/task-archive-scheduling.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -4531,7 +4747,7 @@
     },
     {
       "file": "test/task-artifact-files.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4545,7 +4761,7 @@
     },
     {
       "file": "test/task-artifact-write.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4561,17 +4777,21 @@
     },
     {
       "file": "test/task-background-retry-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -4618,7 +4838,7 @@
     },
     {
       "file": "test/task-checks.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4633,17 +4853,21 @@
     },
     {
       "file": "test/task-clean-ingress-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -4689,7 +4913,7 @@
     },
     {
       "file": "test/task-completion-context.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4715,7 +4939,7 @@
     },
     {
       "file": "test/task-completion-notification.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4731,7 +4955,7 @@
     },
     {
       "file": "test/task-delivery-manifest.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4755,7 +4979,7 @@
     },
     {
       "file": "test/task-delivery-project-evidence.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4769,7 +4993,7 @@
     },
     {
       "file": "test/task-delivery-review.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4787,17 +5011,21 @@
     },
     {
       "file": "test/task-dialogue-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -4843,7 +5071,7 @@
     },
     {
       "file": "test/task-discovery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4888,17 +5116,21 @@
     },
     {
       "file": "test/task-execution-resources-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -4944,17 +5176,21 @@
     },
     {
       "file": "test/task-execution-timeline.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5002,7 +5238,7 @@
     },
     {
       "file": "test/task-file-storage.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5050,17 +5286,21 @@
     },
     {
       "file": "test/task-filesystem-boundary-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5106,7 +5346,7 @@
     },
     {
       "file": "test/task-general-workflow.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5146,7 +5386,7 @@
     },
     {
       "file": "test/task-group-file-delivery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5249,7 +5489,7 @@
     },
     {
       "file": "test/task-group-file-runtime.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5258,13 +5498,16 @@
     },
     {
       "file": "test/task-ingress-epoch.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -5293,7 +5536,7 @@
     },
     {
       "file": "test/task-installed-profile-entry.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5302,7 +5545,7 @@
     },
     {
       "file": "test/task-maintenance-constraint.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5339,17 +5582,21 @@
     },
     {
       "file": "test/task-native-unknown-fence.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5395,13 +5642,16 @@
     },
     {
       "file": "test/task-notification-delivery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
@@ -5420,7 +5670,7 @@
     },
     {
       "file": "test/task-notification-readback.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5435,17 +5685,21 @@
     },
     {
       "file": "test/task-notification-retry-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5491,7 +5745,7 @@
     },
     {
       "file": "test/task-operator-notification-recall.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5506,17 +5760,21 @@
     },
     {
       "file": "test/task-operator-notification-scan.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5562,7 +5820,7 @@
     },
     {
       "file": "test/task-owner-context.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5581,7 +5839,7 @@
     },
     {
       "file": "test/task-owner-delivery-manifest.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5616,7 +5874,7 @@
     },
     {
       "file": "test/task-owner-paused-delivery-review.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5652,7 +5910,7 @@
     },
     {
       "file": "test/task-owner-recovery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5687,7 +5945,7 @@
     },
     {
       "file": "test/task-owner-store.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5716,7 +5974,7 @@
     },
     {
       "file": "test/task-permits.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5756,7 +6014,7 @@
     },
     {
       "file": "test/task-purge-start.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5795,7 +6053,7 @@
     },
     {
       "file": "test/task-readonly-workflows.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5898,7 +6156,7 @@
     },
     {
       "file": "test/task-release-workflows.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5935,7 +6193,7 @@
     },
     {
       "file": "test/task-reports.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5950,7 +6208,7 @@
     },
     {
       "file": "test/task-requirement-notifications.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5990,17 +6248,21 @@
     },
     {
       "file": "test/task-session-clean-start.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6055,41 +6317,6 @@
     },
     {
       "file": "test/task-session-control-host-admission.test.js",
-      "lane": "compat-1",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-store.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/task-session-control-six-scenarios.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -6124,7 +6351,7 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/task-session-control.test.js",
+      "file": "test/task-session-control-six-scenarios.test.js",
       "lane": "compat-0",
       "category": "compat",
       "release": true,
@@ -6159,18 +6386,57 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
+      "file": "test/task-session-control.test.js",
+      "lane": "compat-1",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-store.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
       "file": "test/task-session-execution-provider-recovery-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6216,17 +6482,21 @@
     },
     {
       "file": "test/task-session-follow-conflict-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6272,17 +6542,21 @@
     },
     {
       "file": "test/task-session-http-integration.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6330,17 +6604,21 @@
     },
     {
       "file": "test/task-session-human-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6388,17 +6666,21 @@
     },
     {
       "file": "test/task-session-job-recovery-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6446,17 +6728,21 @@
     },
     {
       "file": "test/task-session-listener-resume-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6502,17 +6788,21 @@
     },
     {
       "file": "test/task-session-material-history.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6561,17 +6851,21 @@
     },
     {
       "file": "test/task-session-model-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6617,17 +6911,21 @@
     },
     {
       "file": "test/task-session-names-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6693,17 +6991,21 @@
     },
     {
       "file": "test/task-session-package-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6749,7 +7051,7 @@
     },
     {
       "file": "test/task-session-persistence-native.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6762,17 +7064,21 @@
     },
     {
       "file": "test/task-session-progress-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6818,17 +7124,21 @@
     },
     {
       "file": "test/task-session-provider-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6874,7 +7184,7 @@
     },
     {
       "file": "test/task-session-real-model-isolated.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6909,17 +7219,21 @@
     },
     {
       "file": "test/task-session-reply-identity.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6968,17 +7282,21 @@
     },
     {
       "file": "test/task-session-service-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -7033,17 +7351,21 @@
     },
     {
       "file": "test/task-session-skills-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -7089,17 +7411,21 @@
     },
     {
       "file": "test/task-source-replay-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -7145,7 +7471,7 @@
     },
     {
       "file": "test/task-stage-contracts.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7248,17 +7574,21 @@
     },
     {
       "file": "test/task-stage-progress-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -7304,7 +7634,7 @@
     },
     {
       "file": "test/task-stage-target.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7342,17 +7672,21 @@
     },
     {
       "file": "test/task-topic-routing-native.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -7400,17 +7734,21 @@
     },
     {
       "file": "test/task-web-topic-reuse-native.test.js",
-      "lane": "native-0",
+      "lane": "native-1",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -7456,7 +7794,7 @@
     },
     {
       "file": "test/task-workflow-contracts.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7559,7 +7897,7 @@
     },
     {
       "file": "test/task-workflow.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7662,7 +8000,7 @@
     },
     {
       "file": "test/task-worktree-archive.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -7673,7 +8011,7 @@
     },
     {
       "file": "test/test-suite-contracts.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7686,7 +8024,7 @@
     },
     {
       "file": "test/tool-schema.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7714,7 +8052,7 @@
     },
     {
       "file": "test/topic-migration.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7783,7 +8121,7 @@
     },
     {
       "file": "test/uat-acceptance-policy.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7800,7 +8138,7 @@
     },
     {
       "file": "test/verify-dataset-unit-tests.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7855,7 +8193,7 @@
     },
     {
       "file": "test/web-client-build.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -7864,7 +8202,7 @@
     },
     {
       "file": "test/workflow-agent-service.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7967,7 +8305,7 @@
     },
     {
       "file": "test/workflow-approval.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7983,7 +8321,7 @@
     },
     {
       "file": "test/workflow-bytebase-platform.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7998,17 +8336,21 @@
     },
     {
       "file": "test/workflow-configuration.test.js",
-      "lane": "native-1",
+      "lane": "native-0",
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -8065,7 +8407,7 @@
     },
     {
       "file": "test/workflow-cutover.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8106,7 +8448,7 @@
     },
     {
       "file": "test/workflow-data-change-external.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8167,7 +8509,7 @@
     },
     {
       "file": "test/workflow-data-change.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8247,7 +8589,7 @@
     },
     {
       "file": "test/workflow-engineering.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8292,17 +8634,21 @@
     },
     {
       "file": "test/workflow-entry.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-changes.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-ledger.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-schedules.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/coordination-summary.js",
         "packages/dingtalk-dsh-assistant/coordination-task-commands.js",
         "packages/dingtalk-dsh-assistant/coordination-time.js",
+        "packages/dingtalk-dsh-assistant/coordination-triggers.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -8364,7 +8710,7 @@
     },
     {
       "file": "test/workflow-file-delivery-integration.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8467,7 +8813,7 @@
     },
     {
       "file": "test/workflow-managed-query-native.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8571,7 +8917,7 @@
     },
     {
       "file": "test/workflow-migration.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8592,7 +8938,7 @@
     },
     {
       "file": "test/workflow-notification-obligations.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8608,7 +8954,7 @@
     },
     {
       "file": "test/workflow-platform-clients.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8626,7 +8972,7 @@
     },
     {
       "file": "test/workflow-postgres-production-host.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8643,7 +8989,7 @@
     },
     {
       "file": "test/workflow-postgres-uat-host.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8658,7 +9004,7 @@
     },
     {
       "file": "test/workflow-postgres-uat-platform.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8672,7 +9018,7 @@
     },
     {
       "file": "test/workflow-recovery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8775,7 +9121,7 @@
     },
     {
       "file": "test/workflow-release-platform.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8789,7 +9135,7 @@
     },
     {
       "file": "test/workflow-source-evidence.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8800,7 +9146,7 @@
     },
     {
       "file": "test/workflow-source-upload.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8811,7 +9157,7 @@
     },
     {
       "file": "test/workflow-trusted-platforms.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8862,7 +9208,7 @@
     },
     {
       "file": "test/workflow-uat-build-authorization.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8913,7 +9259,7 @@
     },
     {
       "file": "test/workflow-uat-failure-continuation.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9022,7 +9368,7 @@
     },
     {
       "file": "test/workflow-uat-merge-platform.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9075,57 +9421,6 @@
     },
     {
       "file": "test/workflow-uat-proof.test.js",
-      "lane": "compat-0",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js",
-        "packages/dingtalk-dsh-assistant/task-input-contract.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-development-branch.js",
-        "packages/dingtalk-dsh-assistant/execution-edit.js",
-        "packages/dingtalk-dsh-assistant/execution-git.js",
-        "packages/dingtalk-dsh-assistant/execution-inline-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-pr.js",
-        "packages/dingtalk-dsh-assistant/execution-project-config.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js",
-        "packages/dingtalk-dsh-assistant/task-delivery-review.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/uat-acceptance-policy.js",
-        "packages/dingtalk-dsh-assistant/workflow-bytebase-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-engineering.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js",
-        "packages/dingtalk-dsh-assistant/workflow-release-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js",
-        "packages/dingtalk-dsh-assistant/workflow-uat-merge-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-uat-schema-migration.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/workflow-uat-rebuild-proof.test.js",
       "lane": "compat-1",
       "category": "compat",
       "release": true,
@@ -9176,8 +9471,59 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/workflow-uat-schema-migration.test.js",
+      "file": "test/workflow-uat-rebuild-proof.test.js",
       "lane": "compat-2",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-development-branch.js",
+        "packages/dingtalk-dsh-assistant/execution-edit.js",
+        "packages/dingtalk-dsh-assistant/execution-git.js",
+        "packages/dingtalk-dsh-assistant/execution-inline-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-pr.js",
+        "packages/dingtalk-dsh-assistant/execution-project-config.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js",
+        "packages/dingtalk-dsh-assistant/task-delivery-review.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/uat-acceptance-policy.js",
+        "packages/dingtalk-dsh-assistant/workflow-bytebase-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-engineering.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js",
+        "packages/dingtalk-dsh-assistant/workflow-release-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js",
+        "packages/dingtalk-dsh-assistant/workflow-uat-merge-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-uat-schema-migration.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/workflow-uat-schema-migration.test.js",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9240,7 +9586,7 @@
     },
     {
       "file": "test/workspace-terminal-reconciliation.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [

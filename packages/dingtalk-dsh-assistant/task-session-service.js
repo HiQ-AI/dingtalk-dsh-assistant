@@ -45,6 +45,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   if (!config?.dbPath || !config?.instanceId) fail('TASK_SESSION_CONFIGURATION_REQUIRED')
   taskSessionModelSelection({}, config.model, config.provider)
   coordinationModelSelection(config.coordination)
+  if (config.coordination?.mode !== undefined && !['active','frozen'].includes(config.coordination.mode)) fail('COORDINATION_RUNTIME_MODE_INVALID')
   for (const value of [config.maxConcurrentExecutions, config.maxConcurrentTasks, legacy.getAgentConfig().maxConcurrentTasks]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 50)) fail('TASK_SESSION_CONCURRENCY_INVALID')
   }
@@ -54,6 +55,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     initialize: config.initialize === true, migrate: config.migrate === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId })
   let persistence
   try {
+    if (config.coordination?.mode !== undefined) await store.command({ id: `coordination-runtime-config:${randomUUID()}`, kind: 'coordination.runtime.set',
+      args: { mode: config.coordination.mode, reason: 'Explicit Host coordination runtime configuration before recovery.' } })
     persistence = suppliedPersistence ?? await installTaskSessionPersistence(ctx, { root })
   } catch (error) {
     if (!suppliedStore) await store.close()
@@ -532,6 +535,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const independentCoordination = openIndependentCoordination({ ctx, root, agentPreset: legacy.getAgentConfig().agentPreset,
     config: config.coordination ?? {}, residentStore, query, command, ownerActorId: config.ownerActorId,
     onError: (id, error) => failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() }),
+    onHandoff: groupId => { rerouteGroups.add(groupId); if (!inflightGroups.has(groupId)) { rerouteGroups.delete(groupId); void kickGroup(groupId) } },
     onApplied: async member => {
       const task = await requireTask(member.taskId), input = member.command.args
       await refreshTasks()
@@ -544,10 +548,16 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (task.control === 'active' && task.status === 'active') void kickTask(task.taskId)
     } })
   let coordinationRecovery
+  const rerouteGroups = new Set()
   function recoverCoordination() {
     return coordinationRecovery ??= performCoordinationRecovery().finally(() => { coordinationRecovery = undefined })
   }
   async function performCoordinationRecovery() {
+    const runtime = await query('coordination.runtime')
+    if (runtime.mode === 'frozen') {
+      for (const group of residentStore.listGroups()) await independentCoordination.recoverGroup(group.groupId)
+      return
+    }
     const consumerId = 'host-coordination', consumer = await query('coordination.consumer.get', { consumerId })
     const cursor = consumer?.cursor ?? 0, page = await query('task.events', { after: cursor, limit: 100 })
     if (page.events.length) await command('coordination.events.consume', { consumerId, expectedCursor: cursor, limit: 100 }, `coordination-events:${cursor}:${page.nextCursor}`)
@@ -557,13 +567,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     for (const candidate of jobs) {
       try {
         const job = (await command('coordination.job.claim', { jobId: candidate.id })).result.job
-        await command('coordination.job.read', { jobId: job.id, fence: job.fence })
+        const occurrence = await query('coordination.occurrence.get', { occurrenceId: job.occurrenceId })
+        await command(occurrence.action.kind === 'task-command' ? 'coordination.job.command' : 'coordination.job.read', { jobId: job.id, fence: job.fence })
       } catch (error) {
-        if (!['DYNAMIC_COORDINATION_JOB_BUSY','DYNAMIC_COORDINATION_NOT_DUE','DYNAMIC_COORDINATION_OVERLAP','DYNAMIC_COORDINATION_CANCELLED'].includes(error.code))
+        if (!['DYNAMIC_COORDINATION_JOB_BUSY','DYNAMIC_COORDINATION_NOT_DUE','DYNAMIC_COORDINATION_OVERLAP','DYNAMIC_COORDINATION_CANCELLED','DYNAMIC_COORDINATION_PAUSED','DYNAMIC_COORDINATION_FROZEN'].includes(error.code))
           failures.set(candidate.id, { id: candidate.id, code: error.code ?? error.message })
       }
     }
-    for (const occurrence of await query('coordination.occurrence.list')) if (occurrence.actionState === 'succeeded' && !occurrence.cancelledAt && !occurrence.notificationId)
+    for (const group of residentStore.listGroups()) await independentCoordination.recoverGroup(group.groupId)
+    for (const occurrence of await query('coordination.occurrence.list')) if (occurrence.actionState === 'succeeded' && occurrence.deliveryState === 'pending' && !occurrence.cancelledAt && !occurrence.notificationId)
       await command('coordination.notification.freeze', { occurrenceId: occurrence.id }, `coordination-freeze:${occurrence.id}`)
   }
   function kickGroup(groupId) {
@@ -577,7 +589,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!(residentStore.getGroup(groupId)?.messages ?? []).some(message => ['failed','decision-failed','decision-commit-failed'].includes(message.agentDeliveryStatus))) {
         failures.delete(groupId)
       }
-    })
+    }).finally(() => { if (rerouteGroups.delete(groupId) && !closed) void kickGroup(groupId) })
   }
   async function ingest(message) {
     if (closed) fail('TASK_SESSION_CLOSED')
@@ -668,7 +680,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       try { claimed = await command('execution.claim', { executionId }) }
       catch (error) {
         // 预读后另一执行可能先获得资源；这是排队，不是执行失败。
-        if (['DYNAMIC_RESOURCE_BUSY', 'DYNAMIC_COORDINATION_WAITING', 'DYNAMIC_COORDINATION_COVERAGE_STALE'].includes(error.code)) return
+        if (['DYNAMIC_RESOURCE_BUSY', 'DYNAMIC_COORDINATION_WAITING', 'DYNAMIC_COORDINATION_COVERAGE_STALE', 'DYNAMIC_COORDINATION_FROZEN'].includes(error.code)) return
         throw error
       }
       const { binding, execution } = claimed.result
@@ -938,7 +950,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     for (let notification of await query('notification.list')) {
       if (notification.kind === 'coordination' && notification.state === 'prepared' && !notification.sendPermit && notification.payload.fact.occurrenceId) {
         const occurrence = await query('coordination.occurrence.get', { occurrenceId: notification.payload.fact.occurrenceId })
-        if (!occurrence.cancelledAt && Date.now() - Date.parse(occurrence.result.observedAt) >= (occurrence.freshnessWindowMs ?? 300000)) {
+        if (occurrence.action.kind === 'read-query' && !occurrence.cancelledAt && Date.now() - Date.parse(occurrence.result.observedAt) >= (occurrence.freshnessWindowMs ?? 300000)) {
           const oldId = notification.id
           try {
             notification = (await command('coordination.notification.refresh', { occurrenceId: occurrence.id,

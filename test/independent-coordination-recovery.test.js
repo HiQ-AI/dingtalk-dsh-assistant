@@ -33,7 +33,7 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
   const command = async (kind, args, id = randomUUID()) => {
     commands.push(kind)
     const receipt = await store.command({ kind, args, id })
-    if (kind === 'coordination.apply' && failApplyAck) {
+    if (kind === 'coordination.job.command' && failApplyAck) {
       failApplyAck = false
       throw Object.assign(new Error('injected lost acknowledgement after apply commit'), { code: 'DYNAMIC_COMMIT_ACK_UNKNOWN' })
     }
@@ -54,6 +54,12 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
     taskIds: ['A'], recipientIds: ['author'], interpretation: 'one hour later' })
   return { entry, errors, handoffs, commands, query, command, request, arrangement, schedule,
     get service() { return service },
+    async runJobs() {
+      for (const job of await query('coordination.job.list')) if (job.state === 'waiting') {
+        const claimed = (await command('coordination.job.claim', { jobId: job.id })).result.job
+        await command('coordination.job.command', { jobId: claimed.id, fence: claimed.fence })
+      }
+    },
     async observe() { await service.context(request(), { taskIds: ['A'] }) },
     async restart() { await service.close(); await store.close(); store = await openDynamicTaskStore(options); open() } }
 }
@@ -108,6 +114,7 @@ test('apply commit with lost acknowledgement recovers only the missing Host hand
   await f.observe()
   await f.service.submit(f.request(), f.arrangement())
   await f.service.recoverGroup('group')
+  await assert.rejects(f.runJobs(), { code: 'DYNAMIC_COMMIT_ACK_UNKNOWN' })
   const coordination = (await f.query('coordination.list'))[0]
   let member = (await f.query('coordination.get', { coordinationId: coordination.id })).members[0]
   assert.equal(member.state, 'applied'); assert.equal(member.hostHandoffAt, undefined)
@@ -121,7 +128,7 @@ test('apply commit with lost acknowledgement recovers only the missing Host hand
   await f.service.recoverGroup('group')
   assert.deepEqual(f.handoffs, [member.id])
   assert.equal((await f.query('task.get', { taskId: 'A' })).contextRevision, 1)
-  assert.equal(f.commands.filter(kind => kind === 'coordination.apply').length, 1)
+  assert.equal(f.commands.filter(kind => kind === 'coordination.job.command').length, 1)
 })
 
 test('planner failures honor durable retry times and three-attempt budget across restart', async t => {

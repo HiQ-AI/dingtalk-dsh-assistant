@@ -551,7 +551,7 @@ export async function openResidentStore(storageDomain) {
         reservation = sourceDispatchSchema.parse({ ...previous, generation: previous.generation + 1, dispatchOwner: 'legacy-topic', settled: false,
           handoff: { ...previous.handoff, state: 'completed', proof }, history: [...previous.history, { generation: previous.generation, dispatchOwner: previous.dispatchOwner, semanticState: previous.semanticState, reason: previous.handoff.reason }], updatedAt: new Date().toISOString() })
         return { ...latest, sourceDispatchOwnership: latest.sourceDispatchOwnership.map(item => item.reservationId === reservation.reservationId ? reservation : item),
-          messages: latest.messages.map(message => message.messageId === previous.sourceSnapshot.messageId ? { ...message, agentDeliveryStatus: 'pending' } : message) }
+          messages: latest.messages.map(message => message.messageId === previous.sourceSnapshot.messageId ? { ...message, routingStatus: 'pending', agentDeliveryStatus: 'pending' } : message) }
       })
       return JSON.parse(JSON.stringify(reservation))
     }),
