@@ -135,7 +135,7 @@ test('同一原生操作已派发时拒绝再次执行，原账对账后可完�
   assert.equal(writes, 0)
 })
 
-for (const mutation of ['edit', 'write']) test('原生文件前置拒绝后同会话读取纠正，无人工处理: ' + mutation, { skip: !available ? reason : false, timeout: 20000 }, async t => {
+for (const mutation of ['edit', 'write', 'edit-noop']) test('原生文件前置拒绝后同会话读取纠正，无人工处理: ' + mutation, { skip: !available ? reason : false, timeout: 20000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'native-file-correction-'))
   const { writeFile, readFile } = await import('node:fs/promises')
   let host, delegated=false, step=0, sessionId
@@ -149,16 +149,17 @@ for (const mutation of ['edit', 'write']) test('原生文件前置拒绝后同�
       if(!delegated){delegated=true;return [{name:'task_delegate',args:{key:'correct-file',objective:'Read and correct the file after a precondition failure'}}]}
       return [{name:'task_session_submit',args:{decision:{action:latestInput(request).executions.every(x=>x.status==='succeeded')?'complete':'wait',summary:'文件已读取并修改',evidence:[],limitations:[]}}}]
     }
-    const args=mutation==='edit'?{file_path:file,old_string:'before',new_string:'after'}:{file_path:file,content:'after'}
-    if(step++===0)return [{name:mutation,args}]
+    const tool=mutation==='edit-noop'?'edit':mutation
+    const args=tool==='edit'?{file_path:file,old_string:'before',new_string:'after'}:{file_path:file,content:'after'}
+    if(step++===0)return [{name:tool,args:mutation==='edit-noop'?{...args,new_string:args.old_string}:args}]
     if(step===2){
       assert.equal(await readFile(file,'utf8'),'before')
       const operations=await h.query('operation.list');assert.equal(operations.length,1)
-      assert.equal(operations[0].state,'failed');assert.equal(operations[0].result.errorCode,'FS_NOT_OBSERVED');assert.equal(operations[0].result.noEffect,true)
+      assert.equal(operations[0].state,'failed');assert.equal(operations[0].result.errorCode,mutation==='edit-noop'?'NATIVE_EDIT_ARGUMENT_REJECTED':'FS_NOT_OBSERVED');assert.equal(operations[0].result.noEffect,true)
       sessionId=(await h.query('execution.list'))[0].sessionId
       return [{name:'read',args:{file_path:file}}]
     }
-    if(step===3)return [{name:mutation,args}]
+    if(step===3)return [{name:tool,args}]
     return [{name:'execution_submit',args:{output:{status:'completed',summary:'读取后已完成',evidence:[],limitations:[],artifacts:[]}}}]
   },{fsObservationPolicy:true})
   await host.service.ingest({groupId:'native-group',messageId:'correct-'+mutation,senderOpenDingTalkId:'native-user',text:'测试助手，修改指定文件',timestamp:'2026-10-15T01:00:00Z'})

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { inspectSession } from './session-persistence.js'
 import { safeNotificationDetail } from './notification-delivery.js'
-import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
+import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
 const results = event => event.type !== 'tool/result' ? [] : event.data.message?.role === 'tool' ? [event.data.message] : event.data.message?.content ?? []
@@ -33,7 +33,7 @@ export async function readNativeOperationContext({ ctx, operation }) {
     && result.isError === operation.result.isError && hash(result.content) === operation.result.resultDigest))
   if (!resultEvent) return null
   return { operationId: operation.operationId, sessionId: binding.sessionId, toolName: call.data.name, arguments: args,
-    result: results(resultEvent).find(result => result.toolCallId === callId), resultError: resultEvent.data.error,
+    result: results(resultEvent).find(result => result.toolCallId === callId), resultError: nativeFileError(call.data.name, args, results(resultEvent).find(result => result.toolCallId === callId), resultEvent.data.error),
     callSequence: call.seq, resultSequence: resultEvent.seq,
     limitation: '原生调用及结果仅用于定位调查对象，不证明命令成功或没有部分效果；不能重放原命令。' }
 }

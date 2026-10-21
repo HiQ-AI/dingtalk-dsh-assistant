@@ -1,6 +1,6 @@
 import { deliverTaskNotification, recallTaskOperatorNotification } from './notification-delivery.js'
 import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
-import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
+import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
@@ -603,7 +603,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }
     // A background launch acknowledgement does not prove a terminal process result.
     if (event.jobReceipt && ['running', 'stopping'].includes(event.jobReceipt.status)) return { operationId, running: true }
-    const error = event.result?.error?.info ?? event.result?.error
+    const error = nativeFileError(toolName, args, event.result, event.result?.error?.info ?? event.result?.error)
     const noEffect = !event.cancelled && event.result?.isError === true && isNativeFilePrecondition(toolName, error)
     const state = noEffect ? 'failed' : event.cancelled || event.result?.isError ? 'unknown' : event.jobReceipt && event.jobReceipt.status !== 'completed' ? 'failed' : 'succeeded'
     await command('operation.settle', { binding, operationId, state,
