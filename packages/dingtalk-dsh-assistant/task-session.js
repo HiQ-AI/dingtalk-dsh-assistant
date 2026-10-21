@@ -11,6 +11,12 @@ import { retireHostContext } from './host-context.js'
 const identityEvent = 'plugin:dingtalk/task-session'
 const fail = code => Object.assign(new Error(code), { code })
 export const isTaskProviderTransient = cause => classifyExecutionProviderFailure(cause).retryable
+// This is an exact native model id, not a display label or a provider alias.
+export function taskSessionModelSelection(selection, configuredModel, configuredProvider) {
+  if (configuredModel !== undefined && typeof configuredModel !== 'string') throw fail('TASK_SESSION_MODEL_INVALID')
+  if (configuredProvider !== undefined && typeof configuredProvider !== 'string') throw fail('TASK_SESSION_PROVIDER_INVALID')
+  return { ...selection, provider: configuredProvider?.trim() || 'openai-codex', model: configuredModel?.trim() || 'gpt-6-astra' }
+}
 const object = properties => ({ type: 'object', properties, additionalProperties: false })
 const text = { type: 'string' }
 // 在原生request开放turn边界退休旧快照及前代占位；原审计保留，新输入尚未进入surface。
@@ -70,6 +76,11 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
     const assertProgressReviewed = () => { if (progressRequired.size) throw fail('TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED') }
     active.set(binding.taskId, entry)
     try {
+      // The native exact resolver owns validation; catalog membership is advisory.
+      // Fail before create/resume, without falling back to the execution model.
+      try { await ctx.llm.resolveCallConfig({ provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }, entry.abort.signal) }
+      catch (cause) { throw Object.assign(fail(cause.code === 'UNSUPPORTED_REASONING_EFFORT'
+        ? 'TASK_SESSION_REASONING_EFFORT_UNSUPPORTED' : 'TASK_SESSION_MODEL_UNAVAILABLE'), { cause }) }
       const cwd = await getWorkspaceDir({ binding })
       await registerPersistence?.({ taskId: binding.taskId, sessionId: binding.sessionId, cwd })
       if (!await current(entry)) return { status: 'stale' }

@@ -64,7 +64,7 @@ for (const trailing of [false, true]) test(`native owner provider error keeps th
 
 async function providerServiceHost(root, { legacyNoSubmission = false, transient = true, failFirst = true, initialize = true, failCount = 1 } = {}) {
   let requests = 0
-  const h = await nativeTaskHost(root, async () => [], { initialize, config: { retryIntervalMs: 100 }, agentConfig: { provider: 'service-provider-fixture' },
+  const h = await nativeTaskHost(root, async () => [], { initialize, config: { retryIntervalMs: 100, provider: 'service-provider-fixture' }, agentConfig: { provider: 'service-provider-fixture' },
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
         async *stream(request) {
