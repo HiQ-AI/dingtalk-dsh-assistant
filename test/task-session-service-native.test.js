@@ -1187,6 +1187,7 @@ test('empty owner recovery reviews the retained execution without replaying its 
   const created = await h.service.createTask({ groupId: 'native-group', requestId: 'empty-after-write', objective: '写一次后核对结果' })
   await h.service.whenIdle()
   assert.equal((await h.query('task.get', { taskId: created.taskId })).providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
+  assert.deepEqual((await h.query('task.events')).events, [], 'An empty Owner turn cannot publish a business completion event')
   await waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).status === 'completed', 'retained execution review', 15000)
   await h.service.whenIdle()
   assert.equal(reviewed, true)
@@ -1197,6 +1198,23 @@ test('empty owner recovery reviews the retained execution without replaying its 
   assert.equal(executions[0].inputVersion, 1)
   assert.equal((await h.query('operation.list', { taskId: created.taskId })).filter(item => item.state === 'succeeded').length, 1)
   assert.equal(h.toolResults.filter(result => result.name === nativeShell).length, 1)
+  const events = (await h.query('task.events')).events
+  assert.equal(events.length, 1)
+  assert.equal(events[0].kind, 'task.completed')
+  assert.equal(events[0].taskId, created.taskId)
+  const receipt = await h.query('receipt.get', { id: events[0].taskDecisionReceiptId })
+  assert.equal(receipt.taskDecision.id, events[0].commandId)
+  assert.equal(receipt.taskDecision.decision.action, 'complete')
+  assert.deepEqual(receipt.completionEvent, events[0], 'The completion event is anchored to the exact formal Owner receipt')
+  const operations = await h.query('operation.list', { taskId: created.taskId })
+  await h.service.recover()
+  await h.service.whenIdle()
+  assert.deepEqual((await h.query('task.events')).events, events)
+  assert.deepEqual((await h.query('execution.list', { taskId: created.taskId })).map(item => ({ executionId: item.executionId, inputVersion: item.inputVersion })),
+    executions.map(item => ({ executionId: item.executionId, inputVersion: item.inputVersion })))
+  assert.deepEqual((await h.query('operation.list', { taskId: created.taskId })).map(item => item.operationId), operations.map(item => item.operationId))
+  assert.equal(h.toolResults.filter(result => result.name === nativeShell).length, 1)
+  assert.equal((await readFile(effect, 'utf8')).trim(), 'once')
 })
 
 for (const correctOnce of [false, true]) test(`native owner empty-summary corrections are bounded and may recover: correctOnce=${correctOnce}`, { timeout: 10000 }, async t => {
@@ -1212,6 +1230,14 @@ for (const correctOnce of [false, true]) test(`native owner empty-summary correc
   assert.equal(requests, correctOnce ? 2 : 3)
   assert.equal(stored.drained, true)
   assert.equal(stored.status, correctOnce ? 'completed' : 'active')
+  const completionEvents = (await h.query('task.events')).events
+  assert.equal(completionEvents.length, correctOnce ? 1 : 0, 'Only a valid complete submission may publish the authoritative event')
+  if (correctOnce) {
+    assert.equal(completionEvents[0].taskId, task.taskId)
+    const receipt = await h.query('receipt.get', { id: completionEvents[0].taskDecisionReceiptId })
+    assert.deepEqual(receipt.completionEvent, completionEvents[0])
+    assert.equal(receipt.taskDecision.decision.action, 'complete')
+  }
   const results = h.toolResults.filter(result => result.name === 'task_session_submit')
   assert.equal(results.filter(result => result.result.isError).length, correctOnce ? 1 : 3)
   assert.match(JSON.stringify(results[0].result), /TASK_SESSION_DECISION_INVALID/)
@@ -1224,6 +1250,7 @@ for (const correctOnce of [false, true]) test(`native owner empty-summary correc
   assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_session_submit').length, requests)
   await h.service.whenIdle()
   assert.equal(requests, correctOnce ? 2 : 3)
+  assert.deepEqual((await h.query('task.events')).events, completionEvents)
 })
 
 test('native topic routing rejects incomplete source coverage and accepts correction in the same real session', { timeout: 10000 }, async t => {

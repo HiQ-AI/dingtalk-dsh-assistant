@@ -67,6 +67,8 @@ async function providerServiceHost(root, { legacyNoSubmission = false, transient
   const h = await nativeTaskHost(root, async () => [], { initialize, config: { retryIntervalMs: 100, provider: 'service-provider-fixture' }, agentConfig: { provider: 'service-provider-fixture' },
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
+        resolveModel(provider, model) { return { provider, id: model, name: model,
+          reasoning: { efforts: [{ id: 'low', name: 'low' }], defaultEffort: 'low' } } }
         async *stream(request) {
           if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
           if (noSubmission && !request.tools.some(tool => tool.name === 'task_session_submit')) {

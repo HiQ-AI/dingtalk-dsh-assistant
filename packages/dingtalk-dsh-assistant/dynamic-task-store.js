@@ -4,13 +4,18 @@ import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
 import { DatabaseSync } from 'node:sqlite'
+import { coordinationSchema, coordinationLedger } from './coordination-ledger.js'
+import { scheduleSchema, coordinationSchedules } from './coordination-schedules.js'
+import { assertTaskContextSemantics } from './task-input-contract.js'
+import { migrationStateDigest } from './coordination-migration-state.js'
+import { coordinationSnapshot } from './coordination-summary.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs'
 import { isAbsolute, dirname } from 'node:path'
 
 // This ledger belongs to the trusted Host. None of its write commands are model tools.
 // SQLite transactions commit command receipts and causal wakes together, before dispatch.
-const VERSION = 1
+const VERSION = 2
 const APPLICATION = 0x44535453
 const livePaths = new Set()
 const terminalOperations = new Set(['succeeded', 'failed', 'cancelled'])
@@ -75,7 +80,8 @@ function durableMarker(path, value, initial = false) {
 
 /** New-instance initialization is explicit. An ingress epoch can only be bound to a new ledger.
  * legacyDbPath is an offline, read-only inspection API, not a production compatibility path. */
-export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, legacyDbPath, ingressEpoch, webActorId } = {}) {
+export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, migrate = false, migrationExpectedDigest, legacyDbPath, ingressEpoch, webActorId } = {}) {
+  if (migrationExpectedDigest !== undefined && !/^[a-f0-9]{64}$/.test(migrationExpectedDigest)) fail('DYNAMIC_ARGUMENT_INVALID', 'migrationExpectedDigest')
   if (!isAbsolute(dbPath ?? '') || !text(instanceId, 'instanceId') || typeof initialize !== 'boolean'
     || legacyDbPath !== undefined && !isAbsolute(legacyDbPath)) fail('DYNAMIC_STORE_OPTIONS_INVALID')
   const configuredIngressEpoch = ingressEpoch === undefined ? null : ingressTimestamp(ingressEpoch, false)
@@ -120,7 +126,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     leaseEpoch: task.leaseEpoch, sessionBound: task.sessionBound })
   const executionBinding = execution => ({ kind: 'task-execution', taskId: execution.taskId, executionId: execution.executionId,
     requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, inputDigest: execution.inputDigest,
-    sessionId: execution.sessionId, sessionBound: execution.sessionBound, leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion, inputHistory: execution.inputHistory })
+    sessionId: execution.sessionId, sessionBound: execution.sessionBound, leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion,
+    // Attribution is Host-owned ledger evidence, not a native session identity extension.
+    inputHistory: execution.inputHistory.map(({ inputVersion, inputDigest, requirementRevision, controlRevision }) =>
+      ({ inputVersion, inputDigest, requirementRevision, controlRevision })) })
   const matchesExecutionBinding = (execution, binding) => binding?.kind === 'task-execution' && !!execution
     && ['taskId', 'executionId', 'sessionId', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'inputDigest', 'inputVersion']
       .every(key => binding[key] === execution[key])
@@ -255,6 +264,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         ${['tasks','executions','operations','wakes','notifications','legacy_blockers','sources','groups'].map(name => `CREATE TABLE dynamic_${name}(id TEXT PRIMARY KEY,body TEXT NOT NULL CHECK(json_valid(body)));`).join('\n')}
         CREATE TABLE dynamic_receipts(id TEXT PRIMARY KEY,digest TEXT NOT NULL,body TEXT NOT NULL CHECK(json_valid(body)));
         CREATE TABLE dynamic_resource_locks(resource_key TEXT PRIMARY KEY,holder TEXT NOT NULL);
+        ${coordinationSchema}
+        ${scheduleSchema}
         CREATE UNIQUE INDEX dynamic_execution_key ON dynamic_executions(json_extract(body,'$.taskId'),json_extract(body,'$.key'));
         CREATE UNIQUE INDEX dynamic_operation_key ON dynamic_operations(json_extract(body,'$.taskId'),json_extract(body,'$.key'));
         CREATE UNIQUE INDEX dynamic_notification_revision ON dynamic_notifications(json_extract(body,'$.taskId'),json_extract(body,'$.requirementRevision')) WHERE json_extract(body,'$.kind')='completion';
@@ -263,7 +274,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       db.prepare('INSERT INTO dynamic_meta(key,value) VALUES (?,?)').run('initToken', marker.initToken)
       if (configuredIngressEpoch) db.prepare('INSERT INTO dynamic_meta(key,value) VALUES (?,?)').run('ingressEpoch', configuredIngressEpoch)
       db.exec('COMMIT')
-    } else if (version !== VERSION || db.prepare('PRAGMA application_id').get().application_id !== APPLICATION) fail('DYNAMIC_SCHEMA_INVALID')
+    } else if (![1, VERSION].includes(version) || db.prepare('PRAGMA application_id').get().application_id !== APPLICATION) fail('DYNAMIC_SCHEMA_INVALID')
+    if (version === 1 && !migrate) fail('DYNAMIC_MIGRATION_REQUIRED', 'Offline v1 to v2 migration requires explicit migrate=true after draining writers.')
     const initToken = db.prepare("SELECT value FROM dynamic_meta WHERE key='initToken'").get()?.value
     if (marker && initToken !== marker.initToken) fail('DYNAMIC_INITIALIZATION_MARKER_MISMATCH')
     const requiredTables = ['meta','tasks','executions','operations','wakes','notifications','legacy_blockers','sources','groups','receipts','resource_locks'].map(name => `dynamic_${name}`)
@@ -287,6 +299,20 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         try { process.kill(pid, 0) } catch (error) { if (error.code === 'ESRCH') alive = false; else throw error }
         if (alive) fail('DYNAMIC_STORE_ALREADY_OPEN')
       }
+      if (version === 1) {
+        // Identity and ingress bindings have already been validated; an active old
+        // writer is rejected above. DDL and capability bump roll back together.
+        if (all('dynamic_tasks').some(task => !task.drained) || all('dynamic_groups').some(group => !group.drained) || all('dynamic_executions').some(execution => !execution.drained)
+          || ops().some(operation => !terminalOperations.has(operation.state))
+          || all('dynamic_notifications').some(notification => ['starting','unknown'].includes(notification.state))) fail('DYNAMIC_MIGRATION_NOT_QUIESCENT')
+        if (migrationExpectedDigest !== undefined && migrationStateDigest(db) !== migrationExpectedDigest) fail('DYNAMIC_MIGRATION_STATE_CHANGED')
+        db.exec(coordinationSchema)
+        db.exec(scheduleSchema)
+        db.exec(`PRAGMA user_version=${VERSION}`)
+      }
+      for (const table of ['coordination','coordination_sources','coordination_members','coordination_schedules','coordination_occurrences','coordination_slots','coordination_jobs','task_events','coordination_consumers']) {
+        if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(`dynamic_${table}`)) fail('DYNAMIC_SCHEMA_INVALID')
+      }
       db.prepare('INSERT INTO dynamic_meta(key,value) VALUES (\'owner\',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(incarnation)
       // 决策沿原命令收据追加保存；索引只服务按任务分页，不把历史数组塞进每轮任务快照。
       db.exec(`CREATE INDEX IF NOT EXISTS dynamic_receipt_decision_task
@@ -299,6 +325,14 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const segment = execution.timeline?.segments.at(-1)
         if (segment?.state === 'running') { segment.state = 'unknown'; execution.timeline.complete = false }
         if (execution.runTiming?.startedAt) { execution.runTiming.recorded = false; execution.runTiming.startedAt = null }
+        put('dynamic_executions', execution)
+      }
+      // Records written before instruction attribution existed remain an explicit
+      // existing input; neither restart nor a later arrangement grants coverage.
+      for (const execution of all('dynamic_executions')) if (!execution.instructionScope) {
+        execution.instructionScope = { kind: 'existing', taskId: execution.taskId, inputVersion: execution.inputVersion,
+          requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
+          runSequence: get('dynamic_tasks', execution.taskId).runSequence, contextRevision: null, instructionIds: [], boundAt: now() }
         put('dynamic_executions', execution)
       }
       for (const task of all('dynamic_tasks')) if (!task.drained) { task.recovering = true; saveTask(task) }
@@ -328,8 +362,186 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     db?.close(); livePaths.delete(pathKey); throw error
   }
 
+  const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now,
+    validateOwner: binding => currentTask(binding),
+    triggerState: id => schedules.memberTriggerState(id),
+    notifyTask: (taskId, payload) => wake(taskId, 'coordination.changed', payload, `coordination-change:${payload.sourceId}:${payload.instructionId}`),
+    apply(command) {
+      const requestDigest = digest({ kind: command.kind, args: command.args })
+      const previous = db.prepare('SELECT digest,body FROM dynamic_receipts WHERE id=?').get(command.id)
+      if (previous) {
+        if (previous.digest !== requestDigest) fail('DYNAMIC_COMMAND_ID_CONFLICT')
+        return JSON.parse(previous.body)
+      }
+      const value = { ...reduce(command.kind, command.args, command.id), replayed: false }
+      db.prepare('INSERT INTO dynamic_receipts(id,digest,body) VALUES (?,?,?)').run(command.id, requestDigest, canonical(value))
+      return value
+    } })
+  const schedules = coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now,
+    instantiateInstructions: input => coordination.instantiateRecurring(input),
+    dispatchInstruction: ({ instructionId }) => {
+      const member = get('dynamic_coordination_members', instructionId)
+      return coordination.command('coordination.apply', { instructionId, expectedRevision: get('dynamic_coordination', member.coordinationId).revision })
+    },
+    readCommandReceipt: command => {
+      const row = db.prepare('SELECT digest,body FROM dynamic_receipts WHERE id=?').get(command.id)
+      if (!row) return null
+      if (row.digest !== digest({ kind: command.kind, args: command.args })) fail('DYNAMIC_COMMAND_ID_CONFLICT')
+      return JSON.parse(row.body)
+    } })
+  const taskEvents = (after = 0, limit = 100) => {
+    if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('DYNAMIC_ARGUMENT_INVALID')
+    const rows = db.prepare('SELECT sequence,body FROM dynamic_task_events WHERE sequence>? ORDER BY sequence LIMIT ?').all(after, limit + 1)
+    const events = rows.slice(0, limit).map(row => ({ ...JSON.parse(row.body), sequence: row.sequence }))
+    return { events, nextCursor: events.at(-1)?.sequence ?? after, hasMore: rows.length > limit }
+  }
+  const controlNotice = payload => {
+    const fact = payload.fact
+    if (fact?.noticeKind !== 'control' || !fact.sourceAcceptanceId) return false
+    const source = get('dynamic_coordination_sources', fact.sourceAcceptanceId, true)
+    return source?.state === 'accepted' && source.coordinationId === fact.coordinationId
+      && ['change','resolve'].includes(source.acceptedKind)
+      && ['change','schedule-change','occurrence-control'].includes(source.acceptedProposal?.kind)
+  }
   function reduce(kind, a, commandId) {
     const stamp = now()
+    if (kind === 'coordination.aggregate') {
+      const item = get('dynamic_coordination', a.coordinationId)
+      const members = item.memberIds.map(id => coordination.view(get('dynamic_coordination_members', id)))
+      const occurrences = schedules.list('occurrences').filter(o => o.coordinationId === item.id)
+      const occurrenceIds = new Set(occurrences.map(o => o.id))
+      const snapshot = coordinationSnapshot({ coordination: item, members, tasks: all('dynamic_tasks'),
+        schedules: schedules.list('schedules').filter(s => s.coordinationId === item.id), occurrences,
+        jobs: schedules.list('jobs').filter(j => occurrenceIds.has(j.occurrenceId)) })
+      const snapshotDigest = digest(snapshot), changedSnapshot = item.aggregateDigest !== snapshotDigest
+      item.lifecycleState = snapshot.state; item.aggregateSnapshot = snapshot; item.aggregateDigest = snapshotDigest
+      let notification
+      let prior = item.summaryNotificationId ? get('dynamic_notifications', item.summaryNotificationId, true) : null
+      if (prior?.state === 'prepared' && !prior.sendPermit && prior.payload.fact.snapshotDigest !== snapshotDigest) {
+        prior.state = 'superseded'; prior.retirement = { reason: 'coordination-facts-changed', at: stamp }; put('dynamic_notifications', prior)
+        item.summaryNotificationId = null; item.lastNotifiedDigest = null; prior = null
+      }
+      const shouldNotify = item.memberIds.length > 0 && !['needs_clarification','cancelled'].includes(item.state)
+        && ['completed','partially_completed','needs_attention'].includes(snapshot.state)
+        && item.lastNotifiedDigest !== snapshotDigest
+      if (shouldNotify && !prior?.state?.match(/^(starting|unknown|prepared)$/)) {
+        item.summaryRevision = (item.summaryRevision ?? 0) + 1
+        const notificationId = `coordination:${item.id}:summary:${item.summaryRevision}`
+        notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
+          payload: { kind: 'coordination', replyKind: 'substantive', conversationId: item.groupId, atOpenDingTalkIds: [],
+            text: `协调安排：${snapshot.state}；${snapshot.fulfilled}/${members.length} 项具有正式结果证明；尚欠 ${snapshot.remainingInstructionIds.length} 项。各任务业务结果以原 Owner 回执为准。`
+              + snapshot.members.filter(member=>member.reorderAssessment?.state === 'needs_clarification' && member.blocker)
+                .map(member=>`\n${member.taskId} 顺序待澄清：${member.blocker}`).join(''),
+            fact: { coordinationId: item.id, eventId: `summary:${item.summaryRevision}`, snapshotDigest, summaryRevision: item.summaryRevision } } }, commandId).result.notification
+        item.summaryNotificationId = notification.id; item.lastNotifiedDigest = snapshotDigest
+      }
+      put('dynamic_coordination', item); return changed({ coordination: item, snapshot, changed: changedSnapshot, ...(notification ? { notification } : {}) })
+    }
+    if (kind === 'coordination.runtime.set') {
+      if (!['active','frozen'].includes(a.mode)) fail('DYNAMIC_ARGUMENT_INVALID')
+      const runtime = { mode: a.mode, changedAt: stamp, reason: text(a.reason, 'reason') }
+      db.prepare("INSERT INTO dynamic_meta(key,value) VALUES ('coordinationRuntime',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(canonical(runtime))
+      return changed({ runtime })
+    }
+    const runtimeMode = db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value
+    if (runtimeMode && JSON.parse(runtimeMode).mode === 'frozen' && ['coordination.accept','coordination.apply','coordination.schedule.scan','coordination.job.claim','coordination.job.command'].includes(kind)) fail('DYNAMIC_COORDINATION_FROZEN')
+    if (kind === 'coordination.events.consume') {
+      const consumerId = text(a.consumerId, 'consumerId'), previous = get('dynamic_coordination_consumers', consumerId, true)
+      if ((previous?.cursor ?? 0) !== a.expectedCursor) fail('DYNAMIC_COORDINATION_CURSOR_STALE')
+      const page = taskEvents(a.expectedCursor, a.limit ?? 100), changedTaskIds = new Set(page.events.map(event => event.taskId))
+      const reconciledMembers = []
+      for (const member of all('dynamic_coordination_members')) {
+        if (!changedTaskIds.has(member.taskId) && !member.dependencies.some(id => changedTaskIds.has(get('dynamic_coordination_members', id).taskId))) continue
+        const projected = coordination.view(member)
+        member.waitingReason = projected.waitingReason; member.lastReconciledSequence = page.nextCursor
+        put('dynamic_coordination_members', member); reconciledMembers.push(projected)
+      }
+      put('dynamic_coordination_consumers', { id: consumerId, cursor: page.nextCursor, updatedAt: stamp })
+      return changed({ ...page, cursor: page.nextCursor, reconciledMembers })
+    }
+    if (kind === 'coordination.notification.freeze') {
+      const occurrence = schedules.read('occurrences', a.occurrenceId)
+      if (occurrence.cancelledAt || occurrence.actionState !== 'succeeded') fail('DYNAMIC_COORDINATION_JOB_STALE')
+      if (occurrence.notificationId) return changed({ notification: get('dynamic_notifications', occurrence.notificationId) })
+      occurrence.resultVersion ??= 1
+      const notificationId = `coordination:${occurrence.coordinationId}:${occurrence.id}:result:${occurrence.resultVersion}`
+      const notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
+        payload: { kind: 'coordination', replyKind: 'substantive', conversationId: occurrence.target.conversationId, atOpenDingTalkIds: occurrence.target.recipientIds,
+          text: JSON.stringify(occurrence.result), fact: { coordinationId: occurrence.coordinationId, eventId: `${occurrence.id}:result:${occurrence.resultVersion}`,
+            occurrenceId: occurrence.id, instanceControlRevision: occurrence.instanceControlRevision,
+            deliveryControlRevision: occurrence.deliveryControlRevision, resultVersion: occurrence.resultVersion, resultDigest: digest(occurrence.result) } } }, commandId)
+      occurrence.notificationId = notificationId; put('dynamic_coordination_occurrences', occurrence)
+      return notification
+    }
+    if (kind === 'coordination.notification.refresh') {
+      const occurrence = schedules.read('occurrences', a.occurrenceId)
+      if (occurrence.action.kind !== 'read-query') fail('DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED')
+      const old = get('dynamic_notifications', a.expectedNotificationId)
+      if (occurrence.notificationId !== old.id || occurrence.resultVersion !== a.expectedResultVersion
+        || occurrence.instanceControlRevision !== a.expectedInstanceControlRevision || occurrence.deliveryControlRevision !== a.expectedDeliveryControlRevision
+        || occurrence.cancelledAt || occurrence.actionState !== 'succeeded' || get('dynamic_coordination', occurrence.coordinationId).state === 'cancelled'
+        || old.state !== 'prepared' || old.sendPermit || old.ack || old.receipt || old.supersededBy) fail('DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED')
+      if (Date.parse(stamp) - Date.parse(occurrence.result.observedAt) < (occurrence.freshnessWindowMs ?? 300000)) fail('DYNAMIC_COORDINATION_RESULT_FRESH')
+      ;(occurrence.resultHistory ??= []).push({ resultVersion: occurrence.resultVersion, notificationId: old.id, result: clone(occurrence.result) })
+      occurrence.result = schedules.snapshot(occurrence); occurrence.resultVersion++
+      const notificationId = `coordination:${occurrence.coordinationId}:${occurrence.id}:result:${occurrence.resultVersion}`
+      old.state = 'superseded'; old.supersededBy = notificationId; old.updatedAt = stamp
+      put('dynamic_notifications', old)
+      occurrence.notificationId = notificationId; put('dynamic_coordination_occurrences', occurrence)
+      const prepared = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
+        payload: { ...clone(old.payload), text: JSON.stringify(occurrence.result), fact: { ...clone(old.payload.fact),
+          eventId: `${occurrence.id}:result:${occurrence.resultVersion}`, resultVersion: occurrence.resultVersion,
+          resultDigest: digest(occurrence.result) } } }, commandId)
+      return prepared
+    }
+    if (/^coordination\.(schedule\.|job\.|occurrence\.)/.test(kind)) return changed(schedules.command(kind, a))
+    if (kind.startsWith('coordination.')) {
+      const result = coordination.command(kind, a)
+      if (kind === 'coordination.accept' && a.schedule) {
+        result.schedule = schedules.command('coordination.schedule.create', { ...record(a.schedule), coordinationId: result.coordination.id }).schedule
+      }
+      if (kind === 'coordination.change') {
+        if (result.coordination.state === 'cancelled') schedules.cancelCoordination(result.coordination.id)
+        if (a.change.action === 'schedule') {
+          const existing = schedules.read('schedules', a.change.scheduleChange.scheduleId)
+          if (existing.coordinationId !== result.coordination.id) fail('DYNAMIC_COORDINATION_SCOPE')
+          result.schedule = schedules.command('coordination.schedule.change', a.change.scheduleChange).schedule
+        }
+        if (a.change.action === 'occurrence') {
+          const existing = schedules.read('occurrences', a.change.occurrenceControl.occurrenceId)
+          if (existing.coordinationId !== result.coordination.id) fail('DYNAMIC_COORDINATION_SCOPE')
+          result.occurrence = schedules.command('coordination.occurrence.control', a.change.occurrenceControl).occurrence
+        }
+        if (a.change.action === 'resolve' && a.change.schedule) result.schedule = schedules.command('coordination.schedule.create', { ...a.change.schedule, coordinationId: result.coordination.id }).schedule
+      }
+      if (kind === 'coordination.cancel') schedules.cancelCoordination(a.coordinationId)
+      return changed(result)
+    }
+    if (kind === 'task.coordination.input') {
+      const task = get('dynamic_tasks', a.taskId)
+      if (task.requirementRevision !== a.expectedRequirementRevision || task.controlRevision !== a.expectedControlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
+      assertTaskContextSemantics({ progressImpact: a.progressImpact, ...(a.objective !== undefined ? { objective: a.objective } : {}),
+        ...(a.requirements !== undefined ? { acceptanceCriteria: a.requirements } : {}) })
+      const origin = record(a.originalSource), admitted = get('dynamic_sources', origin.sourceId)
+      if (admitted.groupId !== task.groupId || admitted.actorId !== origin.actorId) fail('DYNAMIC_COORDINATION_SCOPE')
+      if (!['supplement','continue','reopen','cancel'].includes(a.action)) fail('DYNAMIC_ARGUMENT_INVALID')
+      if (a.action === 'cancel') {
+        if (![task.ownerActorId, a.authorizedOwnerActorId].includes(origin.actorId)) fail('DYNAMIC_COORDINATION_CONTROL_FORBIDDEN')
+        return reduce('task.control', { ...a, control: 'cancelled', reason: a.text }, commandId)
+      }
+      if (a.action === 'reopen') {
+        if (a.progressImpact !== 'replan') fail('DYNAMIC_COORDINATION_IMPACT_REQUIRED')
+        return reduce('task.reopen', a, commandId)
+      }
+      let expectedControlRevision = a.expectedControlRevision
+      if (task.control === 'paused') {
+        if (a.action !== 'continue') fail('DYNAMIC_TASK_NOT_ACTIVE')
+        reduce('task.control', { taskId: a.taskId, expectedControlRevision, control: 'active' }, `${commandId}:resume`)
+        expectedControlRevision++
+      }
+      return reduce(a.progressImpact === 'preserve' ? 'task.supplement' : 'task.revise',
+        { ...a, expectedControlRevision, messageId: commandId }, commandId)
+    }
     if (kind === 'task.create') {
       const taskId = text(a.taskId, 'taskId')
       if (get('dynamic_tasks', taskId, true)) fail('DYNAMIC_TASK_EXISTS')
@@ -337,10 +549,20 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         sourceRefs: a.sourceRefs ?? [], topicRefs: a.topicRefs ?? [], appliedOperations: a.operationId ? [a.operationId] : [], runSequence: 1, ownerActorId: a.ownerActorId ?? null, title: a.title ?? a.objective ?? a.request ?? taskId,
         objective: a.objective ?? a.request ?? '', request: a.request ?? a.objective ?? '', requirements: a.requirements ?? [], metadata: a.metadata ?? {},
         requirementRevision: 1, controlRevision: 1, status: 'active', control: 'active', leaseEpoch: 0, sessionBound: false, drained: true,
-        humanRequests: [], createdAt: stamp, updatedAt: stamp }
+        humanRequests: [], ...(a.coordinationHold ? { coordinationHold: clone(record(a.coordinationHold)) } : {}), createdAt: stamp, updatedAt: stamp }
       text(task.request, 'request'); array(task.sourceRefs); array(task.requirements)
-      saveTask(task); wake(taskId, 'task.created', { sourceRefs: task.sourceRefs }, `wake:${commandId}`)
+      saveTask(task); if (!task.coordinationHold) wake(taskId, 'task.created', { sourceRefs: task.sourceRefs }, `wake:${commandId}`)
       return changed({ task })
+    }
+    if (kind === 'task.coordination.start') {
+      const task = get('dynamic_tasks', a.taskId)
+      if (task.requirementRevision !== a.expectedRequirementRevision || task.controlRevision !== a.expectedControlRevision
+        || task.coordinationHold?.coordinationId !== a.coordinationId || task.coordinationHold?.instructionId !== a.instructionId) fail('DYNAMIC_TASK_REVISION_STALE')
+      const admitted = get('dynamic_sources', a.originalSource.sourceId)
+      if (admitted.groupId !== task.groupId || admitted.actorId !== task.ownerActorId) fail('DYNAMIC_COORDINATION_SCOPE')
+      task.coordinationHold = null; saveTask(task)
+      const wakeId = wake(task.taskId, 'task.created', { sourceRefs: task.sourceRefs, instructionId: a.instructionId }, `wake:${commandId}`)
+      return changed({ task, wakeId })
     }
     if (kind === 'task.archive') {
       const task = get('dynamic_tasks', a.taskId)
@@ -516,6 +738,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.wait') {
       const task = currentTask(a.binding, { active: false })
+      if (all('dynamic_coordination_members').some(member=>member.taskId === task.taskId && member.reorderAssessment?.state === 'pending'
+        && member.control !== 'cancelled' && get('dynamic_coordination',member.coordinationId).state === 'active'
+        && coordination.current(member))) fail('DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED')
       const question = a.question ?? a.decision?.question ?? null
       if (typeof question === 'string' && question.trim()) {
         const executions = execs(task.taskId).filter(executionCurrent)
@@ -596,11 +821,18 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.complete') {
       const task = currentTask(a.binding)
+      if (all('dynamic_coordination_members').some(member=>member.taskId === task.taskId
+        && ['pending','needs_clarification'].includes(member.reorderAssessment?.state) && member.control !== 'cancelled'
+        && get('dynamic_coordination',member.coordinationId).state === 'active' && coordination.current(member))) fail('DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED')
+      if (task.coordinationHold) fail('DYNAMIC_COORDINATION_WAITING')
       if (task.dialogue?.some(item => !item.reply)) fail('DYNAMIC_TASK_DIALOGUE_PENDING')
       if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt
         && item.requirementRevision === task.requirementRevision && item.controlRevision === task.controlRevision))) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
       assertClear(task.taskId)
+      const instructionIds = coordination.coverage(task.taskId)
+      for (const id of instructionIds) if (coordination.waiting(get('dynamic_coordination_members', id)).length) fail('DYNAMIC_COORDINATION_WAITING', id)
       task.status = 'completed'; task.completion = { summary: text(a.summary, 'summary'), result: a.result ?? null, at: stamp,
+        commandId, instructionIds, runSequence: task.runSequence, contextRevision: task.contextRevision ?? 0,
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, leaseEpoch: task.leaseEpoch }
       for (const request of task.humanRequests ?? []) if (request.status === 'waiting-reply') { request.status = 'superseded'; request.supersededAt = stamp }
       task.providerRecovery = null
@@ -627,7 +859,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       const executionId = a.executionId ?? randomUUID()
       if (get('dynamic_executions', executionId, true)) fail('DYNAMIC_EXECUTION_EXISTS')
-      const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), title: executionSessionTitle({ input: payload.input, key }), dispatchDigest, inputDigest: digest(payload.input),
+      const instructionScope = coordination.scope(task.taskId, 1)
+      const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), instructionScope, instructionIds: instructionScope.instructionIds, title: executionSessionTitle({ input: payload.input, key }), dispatchDigest, inputDigest: digest(payload.input),
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, sessionId: `task-execution-${randomUUID()}`,
         status: 'queued', inputVersion: 1, inputHistory: [], results: [], leaseEpoch: 0, sessionBound: false, drained: true, cancelRequested: false, createdAt: stamp, updatedAt: stamp,
         runTiming: { recorded: true, elapsedMs: 0, startedAt: null }, timeline: { version: 1, complete: true, segments: [] } }
@@ -657,9 +890,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         execution.providerRecovery.coldAttempts = (execution.providerRecovery.coldAttempts ?? 0) + 1
       }
       execution.inputHistory.push({ inputVersion: execution.inputVersion, inputDigest: execution.inputDigest,
-        requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision })
+        requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, instructionScope: clone(execution.instructionScope) })
       if (execution.result) execution.results.push(execution.result)
       execution.result = null; execution.progressReview = null; execution.inputVersion++; execution.inputDigest = digest(payload.input)
+      execution.instructionScope = coordination.scope(task.taskId, execution.inputVersion)
+      execution.instructionIds = execution.instructionScope.instructionIds
       execution.title ||= executionSessionTitle(execution)
       execution.prompt = payload.prompt; execution.input = clone(payload.input)
       execution.resourceKeys = payload.resourceKeys
@@ -680,9 +915,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       if (Date.parse(stamp) < Date.parse(execution.providerRecovery.nextAttemptAt)) fail('DYNAMIC_EXECUTION_RETRY_NOT_DUE')
       execution.inputHistory.push({ inputVersion: execution.inputVersion, inputDigest: execution.inputDigest,
-        requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision })
+        requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, instructionScope: clone(execution.instructionScope) })
       execution.results.push(execution.result)
       execution.result = null; execution.progressReview = null; execution.inputVersion++
+      execution.instructionScope = coordination.scope(task.taskId, execution.inputVersion)
+      execution.instructionIds = execution.instructionScope.instructionIds
       execution.status = 'queued'; execution.providerRecovery.nextAttemptAt = null
       execution.providerRecovery.activeInputVersion = execution.inputVersion
       execution.updatedAt = stamp; put('dynamic_executions', execution)
@@ -742,6 +979,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'execution.claim') {
       const execution = get('dynamic_executions', a.executionId)
+      if (get('dynamic_tasks', execution.taskId).coordinationHold) fail('DYNAMIC_COORDINATION_WAITING')
+      if (runtimeMode && JSON.parse(runtimeMode).mode === 'frozen' && execution.instructionScope?.instructionIds?.length) fail('DYNAMIC_COORDINATION_FROZEN')
+      coordination.gate(execution)
       assertNoLegacy(execution.taskId)
       if (execution.result || execution.providerRecovery?.nextAttemptAt) fail('DYNAMIC_EXECUTION_RECOVERY_PENDING')
       if (!execution.drained || terminalExecutions.has(execution.status)) fail('DYNAMIC_EXECUTION_BUSY')
@@ -750,6 +990,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       // 同一事务全取或全不取，禁止持有部分资源后等待另一部分。
       const keys = resourceKeys(execution.resourceKeys)
       lock(keys, executionHolder(execution))
+      execution.instructionScope = coordination.claimScope(execution)
       if (keys.length) execution.resourceLease ??= { acquiredAt: stamp }
       execution.leaseEpoch++; execution.status = 'running'; execution.drained = false; execution.recovering = false
       // Legacy history stays explicitly incomplete; collect only this new, observed lease.
@@ -810,7 +1051,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           stopExecutionTiming(execution, stamp)
           const current = executionCurrent(execution)
           execution.result = { payload, current, requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
-            leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion, receivedAt: stamp }
+            leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion,
+            instructionScope: clone(execution.instructionScope), receivedAt: stamp }
           execution.status = current ? a.error ? 'failed' : 'succeeded' : 'stale'
           // Only native terminal evidence can admit provider recovery. Preserve the
           // original failure and successful effects; unresolved operations go to reconciliation.
@@ -1036,8 +1278,23 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       put('dynamic_legacy_blockers', item); release(item.id); return changed({ blocker: item })
     }
     if (kind === 'notification.prepare') {
-      const task = a.kind === 'topic-reply' ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
-      if (!['question','status','topic-reply'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
+      const task = ['topic-reply','coordination'].includes(a.kind) ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
+      if (!['question','status','topic-reply','coordination'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
+      if (a.kind === 'coordination') {
+        const fact = record(a.payload?.fact), coordination = get('dynamic_coordination', fact.coordinationId)
+        text(fact.eventId, 'eventId')
+        const sameEvent = all('dynamic_notifications').find(n => n.id !== id && n.kind === 'coordination'
+          && n.payload.fact.coordinationId === fact.coordinationId && n.payload.fact.eventId === fact.eventId)
+        if (sameEvent) fail('DYNAMIC_NOTIFICATION_EVENT_CONFLICT')
+        if (a.payload.conversationId !== coordination.groupId || coordination.state === 'cancelled' && !controlNotice(a.payload)) fail('DYNAMIC_COORDINATION_SCOPE')
+        if (fact.occurrenceId) {
+          const occurrence = schedules.read('occurrences', fact.occurrenceId)
+          if (occurrence.coordinationId !== coordination.id || occurrence.actionState !== 'succeeded' || occurrence.cancelledAt
+            || fact.resultDigest !== digest(occurrence.result) || fact.instanceControlRevision !== occurrence.instanceControlRevision
+            || fact.deliveryControlRevision !== occurrence.deliveryControlRevision
+            || digest(a.payload.atOpenDingTalkIds ?? []) !== digest(occurrence.target.recipientIds)) fail('DYNAMIC_COORDINATION_JOB_STALE')
+        }
+      }
       integer(a.requirementRevision, 'requirementRevision')
       if (a.kind === 'topic-reply' && (!Array.isArray(a.payload?.fact?.topicRefs) || !a.payload.fact.topicRefs.length)) fail('DYNAMIC_ARGUMENT_INVALID', 'topicRefs')
       const body = { taskId: task?.taskId ?? null, requirementRevision: a.requirementRevision, kind: a.kind, payload: clone(record(a.payload)) }
@@ -1118,7 +1375,18 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const notification = get('dynamic_notifications', a.notificationId)
       if (kind === 'notification.start') {
         if (notification.state !== 'prepared') return changed({ notification })
-        const task = notification.kind === 'topic-reply' ? null : get('dynamic_tasks', notification.taskId)
+        if (notification.kind === 'coordination' && runtimeMode && JSON.parse(runtimeMode).mode === 'frozen') return changed({ notification })
+        if (notification.kind === 'coordination') {
+          const fact = notification.payload.fact, coordination = get('dynamic_coordination', fact.coordinationId)
+          const occurrence = fact.occurrenceId ? schedules.read('occurrences', fact.occurrenceId) : null
+          if (notification.supersededBy || coordination.state === 'cancelled' && !controlNotice(notification.payload) || occurrence && (occurrence.cancelledAt
+            || occurrence.notificationId !== notification.id || occurrence.resultVersion !== fact.resultVersion || digest(occurrence.result) !== fact.resultDigest
+            || occurrence.instanceControlRevision !== fact.instanceControlRevision || occurrence.deliveryControlRevision !== fact.deliveryControlRevision)) {
+            notification.state = 'failed'; notification.reason = 'coordination_cancelled'; put('dynamic_notifications', notification)
+            return changed({ notification })
+          }
+        }
+        const task = ['topic-reply','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
         const request = notification.kind === 'question' && task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
         if (notification.kind === 'question' && (notification.requirementRevision !== task.requirementRevision || task.status !== 'active' || task.control !== 'active'
           || !request || request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision
@@ -1129,6 +1397,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         assertNoLegacy(task?.taskId)
         notification.sendAttemptCount = (notification.sendAttemptCount ?? 0) + 1
         notification.state = 'starting'; notification.dispatchToken = randomUUID(); notification.updatedAt = stamp
+        notification.sendPermit = { notificationId: notification.id, payloadDigest: notification.payloadDigest ?? digest(notification.payload),
+          attempt: notification.sendAttemptCount, fence: notification.dispatchToken,
+          ...(notification.kind === 'coordination' ? notification.payload.fact : {}) }
         put('dynamic_notifications', notification); return { result: { notification }, dispatchEligible: true }
       }
       const state = kind === 'notification.delivered' ? 'delivered' : a.state
@@ -1141,6 +1412,15 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (state === 'delivered') notification.nextAttemptAt = null
       if (a.error) notification.deliveryError = clone(record(a.error))
       notification.state = state; notification.receipt = a.receipt ?? null; notification.evidenceRef = a.evidenceRef ?? null; notification.updatedAt = stamp
+      if (notification.kind === 'coordination' && notification.payload.fact.occurrenceId) {
+        const occurrence = schedules.read('occurrences', notification.payload.fact.occurrenceId)
+        occurrence.deliveryState = state
+        put('dynamic_coordination_occurrences', occurrence)
+        if (state === 'delivered' && occurrence.scheduleId) {
+          const schedule = schedules.read('schedules', occurrence.scheduleId)
+          if (schedule.rule.kind === 'once' && schedule.state === 'active') { schedule.state = 'completed'; put('dynamic_coordination_schedules', schedule) }
+        }
+      }
       put('dynamic_notifications', notification); return changed({ notification })
     }
     if (kind === 'source.record' || kind === 'source.acceptHistory' || kind === 'source.captureRevision') {
@@ -1231,7 +1511,29 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           value.taskDecision = { id, taskId: args.binding.taskId, sessionId: args.binding.sessionId,
             leaseEpoch: args.binding.leaseEpoch, requirementRevision: args.binding.requirementRevision,
             controlRevision: args.binding.controlRevision, contextRevision: args.binding.contextRevision ?? 0,
+            runSequence: value.result.task.runSequence,
             recordedAt: now(), triggers, decision: clone(decision) }
+          if (kind === 'task.complete') {
+            const task = get('dynamic_tasks', args.binding.taskId)
+            const instructionCoverage = task.completion.instructionIds.map(instructionId => {
+              const member = get('dynamic_coordination_members', instructionId)
+              return { instructionId, commandId: member.command.id, effectiveVersion: clone(member.effectiveVersion),
+                assessmentReceiptId: id, assessmentKind: 'current-owner-completion' }
+            })
+            value.taskDecision.instructionCoverage = instructionCoverage
+            const event = { id: `task-completed:${id}`, eventVersion: 1, kind: 'task.completed', taskId: task.taskId,
+              commandId: id, taskDecisionReceiptId: id, ...coordination.version(task),
+              instructionCoverage, result: clone(task.completion.result), recordedAt: now() }
+            const inserted = db.prepare('INSERT INTO dynamic_task_events(id,body) VALUES (?,?)').run(event.id, canonical(event))
+            value.completionEvent = { ...event, sequence: Number(inserted.lastInsertRowid) }
+            for (const coverage of instructionCoverage) {
+              const member = get('dynamic_coordination_members', coverage.instructionId)
+              member.completionReceipt = id
+              member.completionProof = { eventId: event.id, sequence: Number(inserted.lastInsertRowid), commandId: id,
+                taskDecisionReceiptId: id, ...coordination.version(task) }
+              member.state = 'fulfilled'; put('dynamic_coordination_members', member)
+            }
+          }
         }
         db.prepare('INSERT INTO dynamic_receipts(id,digest,body) VALUES (?,?,?)').run(id, requestDigest, canonical(value))
         return value
@@ -1242,6 +1544,22 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       record(q)
       let value
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
+      else if (q.kind === 'coordination.runtime') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value ?? '{"mode":"active"}')
+      else if (q.kind === 'coordination.assessments') value = all('dynamic_coordination_members').filter(m => m.taskId === q.taskId
+        && m.control !== 'cancelled' && get('dynamic_coordination',m.coordinationId).state === 'active'
+        && coordination.current(m)
+        && ['pending','needs_clarification'].includes(m.reorderAssessment?.state)).map(m => ({instructionId:m.id,coordinationId:m.coordinationId,...m.reorderAssessment}))
+      else if (q.kind === 'coordination.list') value = all('dynamic_coordination').filter(c => !q.groupId || c.groupId === q.groupId)
+      else if (q.kind === 'coordination.get') value = { coordination: get('dynamic_coordination', q.coordinationId),
+        members: all('dynamic_coordination_members').filter(m => m.coordinationId === q.coordinationId).map(coordination.view) }
+      else if (q.kind === 'coordination.consumer.get') value = get('dynamic_coordination_consumers', q.consumerId, true)
+      else if (q.kind === 'task.events') value = taskEvents(q.after ?? 0, q.limit ?? 100)
+      else if (q.kind === 'coordination.source') value = get('dynamic_coordination_sources', digest({ unitId: q.unitId, revision: q.revision }), true)
+      else if (q.kind === 'coordination.source.list') value = all('dynamic_coordination_sources').filter(s => !q.groupId || s.groupId === q.groupId)
+      else if (q.kind === 'coordination.schedule.list') value = schedules.list('schedules').filter(s => !q.coordinationId || s.coordinationId === q.coordinationId)
+      else if (q.kind === 'coordination.occurrence.list') value = schedules.list('occurrences').filter(o => !q.coordinationId || o.coordinationId === q.coordinationId)
+      else if (q.kind === 'coordination.occurrence.get') value = schedules.read('occurrences', q.occurrenceId)
+      else if (q.kind === 'coordination.job.list') value = schedules.list('jobs')
       else if (q.kind === 'task.get') value = get('dynamic_tasks', q.taskId, true)
       else if (q.kind === 'task.decisions') {
         get('dynamic_tasks', q.taskId)

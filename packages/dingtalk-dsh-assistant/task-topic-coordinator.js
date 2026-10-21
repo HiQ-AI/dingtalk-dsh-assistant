@@ -26,10 +26,17 @@ export function taskIndexPage(tasks, offset, limit) {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, coordinationEnabled = false, onError = () => {} }) {
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
-  store = new Proxy(store, { get(target, key) { return key === 'getTaskPrompts' ? () => [] : key === 'listTasks' ? () => target.listTasks().filter(task => !task.archivedAt) : Reflect.get(target, key) } })
+  store = new Proxy(store, { get(target, key) {
+    if (key === 'routeMessages') return args => {
+      if (!coordinationEnabled && args.routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))
+        && !target.getGroup(args.groupId)?.routeHistory.some(record => record.routeId === args.routeId)) throw new Error('coordination_ingress_disabled')
+      return target.routeMessages(args)
+    }
+    return key === 'getTaskPrompts' ? () => [] : key === 'listTasks' ? () => target.listTasks().filter(task => !task.archivedAt) : Reflect.get(target, key)
+  } })
   let closed = false, topics, serial = Promise.resolve()
   const handles = new Set(), dispatches = new Set()
   const report = (groupId, error) => onError(groupId, error)
@@ -85,6 +92,10 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
           agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions })
           agentCtx.systemPrompt.section({ name: 'dingtalk-task-continuation', order: 121, text: taskContinuationInstructions })
+          if (role === 'route') agentCtx.systemPrompt.section({ name: 'dingtalk-independent-task-coordination', order: 122,
+            text: coordinationEnabled
+              ? '独立任务协调接纳已启用。用户明确授权的跨任务安排、依赖、批量修改、定时查询/继续及关联改口，应拆成稳定 source unit，并在 group_topic_route_submit 的对应 units 设置 dispatchOwner="coordination"。该 unit 的 topics 可为空，或仅提供真实 Topic 上下文引用，不设置 effectOwner，不新建总 Topic 或总 Task 替代原任务。普通讨论及原单项单独保留旧链，混合消息按 unit 划分，不能整条吞并。这里只提交候选归属和原文引用；任务目标、要求版本、时间与通知对象由独立协调服务核查和接纳。'
+              : '独立任务协调的新接纳已关闭。不要生成 dispatchOwner="coordination" 的新 unit。已经持久保留给 coordination 的 unit 仍由其独占，不得交旧 Topic 链执行或承诺。' })
           agentCtx.systemPrompt.section({ name: 'dingtalk-running-input', order: 119,
             text: 'task-context 必须显式填写progressImpact：preserve声明目标、授权、验收和既有证据有效性不变，适用于普通提醒、定位信息和事实澄清；不要重复附带objective/acceptanceCriteria/stageTasks。replan声明真实目标、验收或证据变化，须根据原文补判，不能因字段遗漏或无法判断就默认replan。收回或改变授权必须authorizationChange=changed并使用replan；明确取消用task-cancel独立路径。缺失分类或preserve与变更字段冲突会被拒绝，原执行保持；先读取来源补判，仍无法判定则不提交任务动作并说明缺口。Host会保留普通补充的原作业并在安全步骤送入；补充受理不代表已进入模型步骤。' })
           agentCtx.systemPrompt.section({ name: 'dingtalk-topic-coordination', order: 120, text: () => {
