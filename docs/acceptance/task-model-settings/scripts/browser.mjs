@@ -39,7 +39,17 @@ try{
  await page.goto(`http://127.0.0.1:${server.address().port}`)
  const form=page.getByRole('form',{name:'任务统筹模型配置'})
  await form.waitFor()
- await page.waitForTimeout(400)
+ assert.match(await form.locator('xpath=ancestor::section[1]').textContent(),/Agent 配置/)
+ const desktopBoxes=await Promise.all(['#agent-model-id','#agent-reasoning','#task-model-id','#task-reasoning'].map(selector=>page.locator(selector).boundingBox()))
+ if(page.viewportSize().width>720){
+  assert.equal(desktopBoxes[0].y,desktopBoxes[1].y)
+  assert.equal(desktopBoxes[2].y,desktopBoxes[3].y)
+  assert.equal(desktopBoxes[0].x,desktopBoxes[2].x)
+  assert.equal(desktopBoxes[1].x,desktopBoxes[3].x)
+ }
+ await page.waitForFunction(()=>document.querySelectorAll('#agent-model-id-list option').length>0)
+ assert.deepEqual(await page.locator('#agent-model-id-list option').evaluateAll(nodes=>nodes.map(n=>n.value)),await page.locator('#task-model-id-list option').evaluateAll(nodes=>nodes.map(n=>n.value)))
+ assert.equal(await page.locator('#agent-reasoning option[value="high"]').textContent(),await page.locator('#task-reasoning option[value="high"]').textContent())
  holdGroups=true;await page.getByRole('button',{name:'刷新',exact:true}).click()
  while(!heldGroup)await page.waitForTimeout(20)
  await page.locator('#task-reasoning').selectOption('high')

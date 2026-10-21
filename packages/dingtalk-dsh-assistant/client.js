@@ -14,7 +14,11 @@ const settingsCss = `
     outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;
     outline-offset: 2px !important;
   }
+  [data-model-row] { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: end; }
+  [data-model-field] { display: grid; gap: 8px; min-width: 0; }
+  [data-model-row] :is(input, select) { height: 38px; box-sizing: border-box; }
   @media (max-width: 720px) {
+    [data-model-row] { grid-template-columns: minmax(0, 1fr); }
     [data-dingtalk-assistant-settings] { gap: 12px !important; }
     [data-dingtalk-assistant-settings] section { padding: 12px !important; }
     [data-dingtalk-assistant-settings] .assistant-inline-form { align-items: stretch !important; flex-direction: column !important; }
@@ -40,6 +44,13 @@ export async function readResidentOverview() {
   return { health, groups, tasks, alerts, environment, agentConfig }
 }
 
+const effortLabel = value => ({ low: '轻度', medium: '中度', high: '高度', xhigh: '极高', max: '最高' })[value.id] ?? value.name ?? value.id
+function ModelIdInput({ id, label, value, onChange, models, ...props }) {
+  return React.createElement(React.Fragment, null,
+    React.createElement('input', { id, 'aria-label': label, list: `${id}-list`, style: input, value, onChange, ...props }),
+    React.createElement('datalist', { id: `${id}-list` }, ...(models ?? []).map(model => React.createElement('option', { key: model.id, value: model.id }, model.name))))
+}
+
 function Environment({ value }) {
   return React.createElement('section', { style: panel },
     React.createElement('strong', null, '环境检查'),
@@ -57,6 +68,7 @@ export function DingTalkDshAssistantCard() {
   const [replySignature, setReplySignature] = useState('')
   const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
   const [taskModel, setTaskModel] = useState({ provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'inherit', reasoningEffort: null })
+  const [defaultOptions, setDefaultOptions] = useState(null)
   const [taskOptions, setTaskOptions] = useState(null)
   const [taskOptionsError, setTaskOptionsError] = useState('')
   const [taskFeedback, setTaskFeedback] = useState(null)
@@ -99,6 +111,15 @@ export function DingTalkDshAssistantCard() {
     }, 300)
     return () => { current = false; clearTimeout(timer) }
   }, [taskModel.provider, taskModel.model])
+  useEffect(() => {
+    let current = true
+    setDefaultOptions(null)
+    const timer = setTimeout(() => {
+      request(`/state/task-model-options?provider=${encodeURIComponent(overview?.agentConfig?.provider ?? '')}&model=${encodeURIComponent(agentModel.model)}`)
+        .then(value => { if (current) setDefaultOptions(value) }).catch(() => { if (current) setDefaultOptions(null) })
+    }, 300)
+    return () => { current = false; clearTimeout(timer) }
+  }, [overview?.agentConfig?.provider, agentModel.model])
   const taskEfforts = taskOptions?.reasoning?.efforts ?? []
   const requestedTaskEffort = taskModel.reasoningMode === 'inherit' ? overview?.agentConfig?.reasoningEffort
     : taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : undefined
@@ -191,36 +212,35 @@ export function DingTalkDshAssistantCard() {
       React.createElement('strong', { style: { fontSize: 13 } }, '工作目录'),
       React.createElement('input', { 'aria-label': 'Agent 工作区目录', placeholder: '现有绝对目录', style: input, value: agentWorkspace, onChange: (event) => setAgentWorkspace(event.target.value) }),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '群常驻会话使用此工作区；每个任务及其动态执行使用独立工作目录。'),
-      React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '默认处理模型'),
-      React.createElement('input', { 'aria-label': 'Agent 默认模型', placeholder: '例如 gpt-5.6-sol', style: input, value: agentModel.model, onChange: (event) => setAgentModel((current) => ({ ...current, model: event.target.value })) }),
-      React.createElement('select', { 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
-        React.createElement('option', { value: '' }, '模型默认'), React.createElement('option', { value: 'low' }, '轻度'), React.createElement('option', { value: 'medium' }, '中度'), React.createElement('option', { value: 'high' }, '高度'), React.createElement('option', { value: 'xhigh' }, '极高')),
+      React.createElement('div', { 'data-model-row': true, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
+        React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'agent-model-id' }, '默认处理模型'),
+          React.createElement(ModelIdInput, { id: 'agent-model-id', label: 'Agent 默认模型', models: defaultOptions?.models, value: agentModel.model, onChange: event => setAgentModel(current => ({ ...current, model: event.target.value })) })),
+        React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'agent-reasoning' }, '推理深度'),
+          React.createElement('select', { id: 'agent-reasoning', 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
+        React.createElement('option', { value: '' }, '模型默认'), ...(defaultOptions?.reasoning?.efforts ?? []).map(value => React.createElement('option', { key: value.id, value: value.id }, effortLabel(value))),
+        agentModel.reasoningEffort && !(defaultOptions?.reasoning?.efforts ?? []).some(value => value.id === agentModel.reasoningEffort) ? React.createElement('option', { value: agentModel.reasoningEffort }, agentModel.reasoningEffort) : null))),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
-      React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
-      React.createElement('input', { 'aria-label': 'Agent 网络代理', placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
-      React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
-React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
-    React.createElement('form', { noValidate: true, onSubmit: saveTaskModel, style: panel, 'aria-label': '任务统筹模型配置' },
-      React.createElement('strong', null, '任务统筹模型'),
-      React.createElement('div', { id: 'task-model-help', style: { color: colors.muted, fontSize: ui.textSm } }, '仅影响任务统筹的下一轮请求；执行和话题仍使用默认处理模型。'),
-      React.createElement('label', { htmlFor: 'task-provider' }, '模型提供方'),
-      React.createElement('select', { id: 'task-provider', style: input, value: taskModel.provider, disabled: taskBusy, onChange: event => changeTask(current => ({ ...current, provider: event.target.value })) },
-        ...[...new Map([{ id: taskModel.provider, name: taskModel.provider }, ...(taskOptions?.providers ?? [])].map(value => [value.id, value])).values()].map(value => React.createElement('option', { key: value.id, value: value.id }, value.name || value.id))),
-      React.createElement('label', { htmlFor: 'task-model-id' }, '统筹模型 ID'),
-      React.createElement('input', { id: 'task-model-id', list: 'task-model-list', style: input, value: taskModel.model, disabled: taskBusy, 'aria-invalid': !!taskOptionsError, 'aria-describedby': 'task-options-status task-model-help', onChange: event => changeTask(current => ({ ...current, model: event.target.value })) }),
-      React.createElement('datalist', { id: 'task-model-list' }, ...(taskOptions?.models ?? []).map(value => React.createElement('option', { key: value.id, value: value.id }, value.name))),
-      React.createElement('label', { htmlFor: 'task-reasoning' }, '统筹推理深度'),
+    React.createElement('form', { noValidate: true, onSubmit: saveTaskModel, style: { display: 'grid', gap: ui.space3, minWidth: 0 }, 'aria-label': '任务统筹模型配置' },
+      React.createElement('div', { 'data-model-row': true },
+        React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'task-model-id' }, '统筹模型'),
+          React.createElement(ModelIdInput, { id: 'task-model-id', label: '统筹模型', models: taskOptions?.models, value: taskModel.model, disabled: taskBusy, 'aria-invalid': !!taskOptionsError, 'aria-describedby': 'task-options-status task-model-help', onChange: event => changeTask(current => ({ ...current, model: event.target.value })) })),
+        React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'task-reasoning' }, '统筹推理深度'),
       React.createElement('select', { id: 'task-reasoning', style: input, disabled: taskBusy || !taskOptions, 'aria-invalid': taskEffortInvalid, 'aria-describedby': 'task-options-status', value: taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : taskModel.reasoningMode,
         onChange: event => { const value = event.target.value; changeTask(current => ({ ...current, reasoningMode: ['inherit', 'model-default'].includes(value) ? value : 'explicit', reasoningEffort: ['inherit', 'model-default'].includes(value) ? null : value })) } },
         React.createElement('option', { value: 'inherit' }, `跟随默认处理（${overview?.agentConfig?.reasoningEffort || '模型默认'}）`),
-        React.createElement('option', { value: 'model-default' }, '使用统筹模型默认深度'),
-        ...taskEfforts.map(value => React.createElement('option', { key: value.id, value: value.id }, ({ low: '轻度', medium: '中度', high: '高度', xhigh: '极高', max: '最高' })[value.id] ?? value.name)),
+        React.createElement('option', { value: 'model-default' }, '模型默认'),
+        ...taskEfforts.map(value => React.createElement('option', { key: value.id, value: value.id }, effortLabel(value))),
         taskModel.reasoningMode === 'explicit' && !taskEfforts.some(value => value.id === taskModel.reasoningEffort)
-          ? React.createElement('option', { value: taskModel.reasoningEffort }, `${taskModel.reasoningEffort}（当前模型不支持）`) : null),
+          ? React.createElement('option', { value: taskModel.reasoningEffort }, `${taskModel.reasoningEffort}（当前模型不支持）`) : null))),
+      React.createElement('div', { id: 'task-model-help', style: { color: colors.muted, fontSize: ui.textSm } }, '仅影响任务统筹的下一轮请求；执行和话题仍使用默认处理模型。'),
       React.createElement('div', { id: 'task-options-status', role: taskOptionsError || taskEffortInvalid ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskOptionsError || taskEffortInvalid ? colors.danger : colors.muted } },
         taskOptionsError || (taskEffortInvalid ? '当前模型不支持所选或继承的深度，请改选模型默认或支持的深度。' : taskOptions ? '推理选项来自当前模型能力；不支持的深度不会静默替换。' : '正在读取模型能力…')),
       React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !taskChanged, 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存统筹配置'),
       React.createElement('div', { role: taskFeedback?.kind === 'error' ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskFeedback?.kind === 'error' ? colors.danger : colors.muted } }, taskFeedback?.message ?? '')),
+      React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
+      React.createElement('input', { 'aria-label': 'Agent 网络代理', placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
+      React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
+React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
     React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 任务看板”查看任务会话、动态执行、结果与日志路径。'),
     React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),
       ...(overview?.groups ?? []).map((group) => React.createElement('div', { key: group.groupId, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
