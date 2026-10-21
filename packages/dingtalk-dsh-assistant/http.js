@@ -424,7 +424,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'PUT' && url.pathname === '/config/agent') {
     const body = await readJson(request)
     if (['taskPrompts', 'taskPromptsVersion', 'taskGuidance', 'leafSessionPrompt', 'workflowVariables', 'workflowBindings'].some(field => Object.hasOwn(body, field))) return send(response, 410, { error: 'WORKFLOW_RETIRED' })
-    return send(response, 200, await store.updateAgentConfig(body))
+    try { return send(response, 200, await store.updateAgentConfig(body)) }
+    catch (error) { return send(response, error.message === 'AGENT_CONFIG_SAVE_FAILED' ? 500 : residentErrorStatus(error), { error: error.message, ...(error.readback ? { readback: error.readback } : {}) }) }
   }
   if (request.method === 'GET' && url.pathname === '/config/groups/search') return send(response, 200, await store.searchGroups(url.searchParams.get('q') ?? ''))
   if (request.method === 'POST' && url.pathname === '/config/groups') return send(response, 200, await store.subscribe(await readJson(request)))

@@ -1,30 +1,24 @@
 # 任务统筹模型配置验收
 
-基线 `94f99720836e134f0615dc7e02f0f4d4bd72b7e9`，独立分支 `fix/task-session-model-settings`。未引入协调开发分支、依赖或锁文件变更；未安装、重启或修改生产配置。
+独立分支 `fix/task-session-model-settings`，基线 `94f99720836e134f0615dc7e02f0f4d4bd72b7e9`。无协调开发代码、依赖或锁文件变更，未部署或修改生产配置。
 
-## 验证
+## 最终行为
 
-- 前序相关单元/UI合同组合 100/100 通过；后续只跑受影响测试。
-- `node --test test/task-model-config.test.js test/client.test.js`：9/9，通过读写/重开持久化、旧配置三模式、无全局默认写入、组合与默认深度修改的严格拒绝。
-- 使用 DSH 0.2.1-rc.2，`node --test test/task-model-reasoning-native.test.js test/task-session-model-native.test.js`：6/6（与上项 config 两例组合执行共8/8）。脚本化原生适配器记录真实调用参数，覆盖执行隔离、原 Session resume、运行中深度不变、模型默认重设、unsupported失败不写历史；未调用真实模型。
-- `scripts/browser.mjs`：真实 Chromium、React 与生成发布 bundle、完整页面CSS；API均由内存fixture接管。验证保存/刷新、执行配置不变、模型能力联动、失败草稿保留、旧刷新晚返回不能覆盖保存成功、390px无溢出，无页面异常。
-- Premium strict audit：0 errors / warnings / violations。独立只读复审发现并复核修复最终组合校验及过期刷新竞态，最终无阻断。
+Agent 配置内两行模型/推理深度对齐，标签均为“推理深度”，唯一保存配置入口。统筹默认 openai-codex/gpt-6-astra/low；显式inherit及模型默认保持可用。默认模型保留 DSH 原生全局profile含义。统筹保存不改变执行选择；同时编辑默认选择时按用户提交更新。
 
-## 截图
+全量预检后按native profile→resident单record顺序保存，均成功且回读一致才整体成功。没有跨存储事务；失败回读当前有效配置，分项显示默认模型与插件设置是否符合提交值，保留草稿；回读不可用则说明未知，不盲目补偿或重试。活动轮次不变，下一轮正常原Session resume生效。
 
-真实页面截图已保存Library：
+## 实跑证据
 
-- 桌面成功态：`libfile_3b3456a7c2548191a3391cbfef2012f4`
-- 窄屏错误态：`libfile_35320214aa4c8191819b2ca94855defe`
+- `node --test test/task-model-config.test.js test/client.test.js test/http.test.js`：43/43。含新默认low、显式继承、读写/重开、两模型预检、native与resident写前失败及已写入但确认丢失的分项回读；保持原生全局保存语义。
+- DSH rc2脚本化原生适配器：owner/executor隔离、活动轮次、原Session resume、模型默认与unsupported拒绝。初次12例11过，1例因测试适配器新增high声明破坏原high拒绝断言失败；修正为仅声明low，保留拒绝断言后受影响模型4/4通过。
+- 真实Chromium加载React、生成bundle和完整CSS，所有API由内存fixture接管：两标签/low/唯一按钮、列坐标、候选与深度标签一致、保存刷新、模型联动、错误草稿、旧刷新竞态、在途禁用与重复提交、部分写成功回读提示、390px无溢出通过。
+- Premium strict 0发现；独立审查要求补齐在途署名禁用，已修正。
+
+## 当前截图
+
+桌面成功态 `libfile_d80466d447508191a4b1e3c3d8b5894c`；窄屏部分写失败 `libfile_9d9c2d67cacc81918a868d49b1d55775`。旧截图不代表最终统一保存布局。
 
 ## 边界
 
-这是隔离本地候选，未PR/推送/合并/部署。未验证生产宿主完整页面集成及真实模型凭据、余额和远端调用成功。旧配置继续继承默认深度；保存后下一轮创建或正常恢复生效，活动轮次不被中断。
-
-## 布局调整复验
-
-默认处理模型与统筹模型均位于 Agent 配置，模型和深度各占一列，两行对齐，窄屏按组折行。模型复用相同输入/原生候选列表组件，深度来自各自原生模型能力并共用值及中文标签；统筹保留三语义与独立配置，隐藏独立provider控件但原provider仍保留，不改变astra默认。
-
-本次只跑受影响UI测试7/7、真实Chromium完整CSS交互与列坐标断言，并检查两行候选及深度标签一致。保存/刷新/联动/失败草稿/旧刷新竞态及390px无溢出通过；独立只读复审无阻断。未重跑原生及前序100组合，因为接口、存储和执行参数没有改动。
-
-更新截图（替代上方旧布局截图）：桌面 `libfile_149f8e4612d08191b662c58f1e3b1bca`；窄屏 `libfile_df89be5492d88191b634efc1ae021c7c`。
+未调用真实模型、未验收生产宿主页面/凭据/余额/远端调用；未合并、部署、发版或手动触发CI。不承诺跨存储任意崩溃全有全无。回滚代码不恢复数据库或会话历史。

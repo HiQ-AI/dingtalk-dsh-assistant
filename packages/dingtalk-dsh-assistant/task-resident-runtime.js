@@ -19,6 +19,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   // Keep transport messages (including their cursor timestamps) and configuration, but
   // never expose historical task state to the HTTP board or DWS replay/approval loops.
   const groupView = group => group && ({ ...group, messages: group.messages.filter(message => !api.isOwnNotification?.({ ...message, groupId: group.groupId })), taskReservations: [] })
+  let configSaving = false
   let closed = false, profile = '', groupReader, resourceReader
   const selection = () => ctx.agentDefaultModel.currentSelection()
   const taskSelection = () => taskModelConfig(store.getTaskSessionModelConfig?.() ?? taskSessionModel)
@@ -43,39 +44,51 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
     },
     async updateAgentConfig(input) {
       if (closed) throw new Error('resident_runtime_closed')
-      if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
-      // Validate before any writes. A task-only save never changes the native default.
-      const nextTask = input.taskSessionModel === undefined ? undefined : taskModelConfig(input.taskSessionModel)
-      const oldSelection = selection()
-      const proposedSelection = { provider: oldSelection.provider, model: input.model === undefined ? oldSelection.model : input.model.trim() }
-      const proposedEffort = input.reasoningEffort === undefined ? oldSelection.reasoningEffort : input.reasoningEffort
-      if (proposedEffort) proposedSelection.reasoningEffort = proposedEffort
-      if (nextTask || input.reasoningEffort !== undefined) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, nextTask ?? taskSelection()))
-      if (input.workspaceDir !== undefined && resolve(input.workspaceDir) !== root) throw new Error('task_workspace_change_requires_offline_migration')
-      const replySignature = input.replySignature === undefined ? undefined : normalizeReplySignature(input.replySignature)
-      if (input.agentNames !== undefined) {
-        if (!Array.isArray(input.agentNames) || input.agentNames.some(name => typeof name !== 'string')) throw new Error('agent_names_must_be_array')
-        await store.setAgentNames([...new Set(input.agentNames.map(name => name.trim()).filter(Boolean))])
-      }
-      if (replySignature !== undefined) await store.setReplySignature(replySignature)
-      if (input.maxConcurrentTasks !== undefined) {
-        if (!Number.isSafeInteger(input.maxConcurrentTasks) || input.maxConcurrentTasks < 1 || input.maxConcurrentTasks > 50) throw new Error('agent_max_concurrent_tasks_invalid')
-        await store.setMaxConcurrentTasks(input.maxConcurrentTasks)
-      }
-      if (input.proxyUrl !== undefined) {
-        if (typeof input.proxyUrl !== 'string' || input.proxyUrl && !/^https?:\/\//i.test(input.proxyUrl)) throw new Error('agent_proxy_url_invalid')
-        await store.setProxyUrl(input.proxyUrl.trim())
-      }
-      if (input.model !== undefined || input.reasoningEffort !== undefined) {
-        const old = selection(), model = input.model === undefined ? old.model : input.model.trim()
-        if (!model) throw new Error('agent_model_required')
-        const next = { provider: old.provider, model }
+      if (configSaving) throw new Error('AGENT_CONFIG_SAVE_BUSY')
+      configSaving = true
+      try {
+        if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
+        if (input.workspaceDir !== undefined && resolve(input.workspaceDir) !== root) throw new Error('task_workspace_change_requires_offline_migration')
+        const patch = {}
+        if (input.agentNames !== undefined) {
+          if (!Array.isArray(input.agentNames) || input.agentNames.some(name => typeof name !== 'string')) throw new Error('agent_names_must_be_array')
+          patch.agentNames = [...new Set(input.agentNames.map(name => name.trim()).filter(Boolean))]
+        }
+        if (input.replySignature !== undefined) patch.replySignature = normalizeReplySignature(input.replySignature)
+        if (input.maxConcurrentTasks !== undefined) {
+          if (!Number.isSafeInteger(input.maxConcurrentTasks) || input.maxConcurrentTasks < 1 || input.maxConcurrentTasks > 50) throw new Error('agent_max_concurrent_tasks_invalid')
+          patch.maxConcurrentTasks = input.maxConcurrentTasks
+        }
+        if (input.proxyUrl !== undefined) {
+          if (typeof input.proxyUrl !== 'string' || input.proxyUrl && !/^https?:\/\//i.test(input.proxyUrl)) throw new Error('agent_proxy_url_invalid')
+          patch.proxyUrl = input.proxyUrl.trim()
+        }
+        if (input.taskSessionModel !== undefined) patch.taskSessionModel = taskModelConfig(input.taskSessionModel)
+        const old = selection(), changesDefault = input.model !== undefined || input.reasoningEffort !== undefined
+        if (input.model !== undefined && typeof input.model !== 'string') throw new Error('agent_model_required')
+        if (input.reasoningEffort !== undefined && typeof input.reasoningEffort !== 'string') throw new Error('agent_reasoning_effort_invalid')
+        const proposedSelection = { provider: old.provider, model: input.model === undefined ? old.model : input.model.trim() }
+        if (!proposedSelection.model) throw new Error('agent_model_required')
         const effort = input.reasoningEffort === undefined ? old.reasoningEffort : input.reasoningEffort
-        if (effort) next.reasoningEffort = effort
-        await ctx.agentDefaultModel.saveSelection(next)
-      }
-      if (nextTask) await store.setTaskSessionModelConfig(nextTask)
-      return getAgentConfig()
+        if (effort) proposedSelection.reasoningEffort = effort
+        // Preflight the complete requested state before either independent store is written.
+        if (changesDefault) await ctx.llm.resolveCallConfig(proposedSelection)
+        if (patch.taskSessionModel || input.reasoningEffort !== undefined) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, patch.taskSessionModel ?? taskSelection()))
+        try {
+          if (changesDefault) await ctx.agentDefaultModel.saveSelection(proposedSelection)
+          if (Object.keys(patch).length) await store.setAgentSettings(patch)
+          const saved = getAgentConfig()
+          const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b)
+          if (changesDefault && (saved.provider !== proposedSelection.provider || saved.model !== proposedSelection.model || (saved.reasoningEffort || '') !== (proposedSelection.reasoningEffort || ''))
+            || Object.entries(patch).some(([key,value]) => !equal(saved[key],value))) throw new Error('AGENT_CONFIG_READBACK_MISMATCH')
+          return saved
+        } catch (cause) {
+          // No blind compensation: native profile and resident storage have no shared transaction.
+          let readback
+          try { readback = getAgentConfig() } catch {}
+          throw Object.assign(new Error('AGENT_CONFIG_SAVE_FAILED'), { cause, readback })
+        }
+      } finally { configSaving = false }
     },
     hasGroupConfiguration: store.hasGroupConfiguration,
     initializeGroupConfiguration: store.initializeGroupConfiguration,

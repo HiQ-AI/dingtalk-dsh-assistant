@@ -9,9 +9,9 @@ import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task
 import { openResidentStore, residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 
-test('old profile inherits reasoning; explicit and model default are distinct', () => {
+test('unset task depth defaults low; explicit inheritance and model default remain distinct', () => {
   const execution = { provider: 'executor', model: 'sol', reasoningEffort: 'low' }
-  assert.deepEqual(taskModelSelection(execution, {}), { ...execution, provider: 'openai-codex', model: 'gpt-6-astra' })
+  assert.deepEqual(taskModelSelection({...execution,reasoningEffort:'high'}, {}), { ...execution, provider: 'openai-codex', model: 'gpt-6-astra' })
   assert.equal(taskModelSelection(execution, { reasoningEffort: 'high' }).reasoningEffort, 'high')
   for (const reasoningEffort of [null, '']) assert.equal(taskModelSelection(execution, { reasoningEffort }).reasoningEffort, undefined)
   assert.equal(taskModelSelection(execution, { reasoningMode: 'inherit' }).reasoningEffort, 'low')
@@ -51,7 +51,7 @@ test('HTTP task settings validate, persist, refresh and reopen without touching 
   const base = `http://127.0.0.1:${server.address().port}`
   const read = async () => (await fetch(base+'/state/agent-config')).json()
   const save = value => fetch(base+'/config/agent',{ method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({ taskSessionModel:value }) })
-  assert.equal((await read()).taskSessionModel.reasoningMode,'inherit')
+  assert.equal((await read()).taskSessionModel.reasoningMode,'explicit')
   const value = { provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'explicit',reasoningEffort:'high' }
   assert.equal((await save(value)).status,200)
   assert.deepEqual((await read()).taskSessionModel,value)
@@ -75,4 +75,40 @@ test('HTTP task settings validate, persist, refresh and reopen without touching 
   const inherited = await fetch(base+'/config/agent',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({reasoningEffort:'ultra'})})
   assert.equal(inherited.status,400)
   assert.equal(defaultWrites,0); assert.deepEqual(execution,{provider:'executor',model:'sol',reasoningEffort:'low'})
+})
+
+
+test('unified save preflights both models and reports readback on independent-store failures without compensation', async t => {
+  const root=await mkdtemp(join(tmpdir(),'agent-unified-save-'))
+  t.after(()=>rm(root,{recursive:true,force:true}))
+  const {facility}=memoryFacility(), store=await openResidentStore(facility)
+  let current={provider:'executor',model:'sol',reasoningEffort:'low'},defaultWrites=0,residentWrites=0,defaultFailure='',residentFailure=''
+  const llm={async resolveCallConfig(value){
+    if(!['sol','sol-next','gpt-6-astra'].includes(value.model))throw Error('MODEL_NOT_FOUND')
+    if(value.reasoningEffort&&!['low','high'].includes(value.reasoningEffort))throw Error('UNSUPPORTED_REASONING_EFFORT')
+    return value
+  }}
+  const savePatch=store.setAgentSettings
+  store.setAgentSettings=async patch=>{residentWrites++;if(residentFailure==='before')throw Error('DISK_FULL');await savePatch(patch);if(residentFailure==='after')throw Error('ACK_LOST')}
+  const ctx={llm,agentDefaultModel:{currentSelection:()=>({...current}),saveSelection:async value=>{
+    defaultWrites++;if(defaultFailure==='before')throw Error('PROFILE_WRITE_FAILED');current={...value};if(defaultFailure==='after')throw Error('PROFILE_ACK_LOST')
+  }}}
+  const runtime=await openTaskResidentRuntime(ctx,store,root);t.after(()=>runtime.close())
+  const desired={model:'sol-next',reasoningEffort:'high',agentNames:['Ada'],proxyUrl:'',replySignature:'',taskSessionModel:{provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'explicit',reasoningEffort:'low'}}
+  for(const input of [{...desired,model:'missing'},{...desired,taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'ultra'}},{...desired,proxyUrl:'invalid'}])await assert.rejects(runtime.updateAgentConfig(input))
+  assert.equal(defaultWrites,0);assert.equal(residentWrites,0)
+  const saved=await runtime.updateAgentConfig(desired)
+  assert.equal(saved.model,'sol-next');assert.equal(saved.reasoningEffort,'high');assert.equal(saved.taskSessionModel.reasoningEffort,'low')
+  const next={...desired,model:'sol',reasoningEffort:'low',agentNames:['Grace'],taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'high'}}
+  defaultFailure='before'
+  await assert.rejects(runtime.updateAgentConfig(next),error=>error.message==='AGENT_CONFIG_SAVE_FAILED'&&error.readback.model==='sol-next'&&error.readback.agentNames[0]==='Ada')
+  assert.equal(residentWrites,1)
+  defaultFailure='after'
+  await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.model==='sol'&&error.readback.agentNames[0]==='Ada')
+  assert.equal(residentWrites,1,'unknown native acknowledgement never blindly repeats or compensates')
+  defaultFailure='';residentFailure='before'
+  await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.model==='sol'&&error.readback.taskSessionModel.reasoningEffort==='low')
+  residentFailure='after'
+  await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.agentNames[0]==='Grace'&&error.readback.taskSessionModel.reasoningEffort==='high')
+  assert.equal(defaultWrites,5,'one native write per explicit save attempt')
 })

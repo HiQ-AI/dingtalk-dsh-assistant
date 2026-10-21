@@ -24,22 +24,25 @@ const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1100, height: 850 } })
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
-let config={workspaceDir:'D:/fixture',agentNames:['百部'],model:'sol',reasoningEffort:'low',proxyUrl:'',taskSessionModel:{provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'inherit',reasoningEffort:null}}
-let failSave=false,writes=0,holdGroups=false,heldGroup
+let config={workspaceDir:'D:/fixture',agentNames:['百部'],model:'sol',reasoningEffort:'low',proxyUrl:'',taskSessionModel:{provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'explicit',reasoningEffort:'low'}}
+let failSave=false,partialSave=false,writes=0,holdGroups=false,heldGroup
 await page.route('http://127.0.0.1:18998/**',async route=>{
  const path=new URL(route.request().url()).pathname
  if(path==='/state/groups'&&holdGroups){heldGroup=route;return}
  let value={'/health':{status:'ok'},'/state/groups':[],'/state/tasks':[],'/state/supervisor/alerts':[],'/state/environment':{},'/state/version':{},'/state/agent-config':config}[path]??{}
  if(path==='/state/task-model-options')value={providers:[{id:'openai-codex',name:'Codex'}],models:[{id:'gpt-6-astra',name:'Astra'},{id:'limited',name:'Limited'}],available:true,reasoning:{efforts:(new URL(route.request().url()).searchParams.get('model')==='limited'?['low']:['low','high']).map(id=>({id,name:id}))}}
- if(path==='/config/agent'){writes++;if(failSave)return route.fulfill({status:400,json:{error:'UNSUPPORTED_REASONING_EFFORT'}});config={...config,...route.request().postDataJSON()};value=config}
+ if(path==='/config/agent'){writes++;await new Promise(done=>setTimeout(done,200));if(partialSave){const body=route.request().postDataJSON();config={...config,model:body.model,reasoningEffort:body.reasoningEffort};return route.fulfill({status:500,json:{error:'AGENT_CONFIG_SAVE_FAILED',readback:config}})};if(failSave)return route.fulfill({status:400,json:{error:'UNSUPPORTED_REASONING_EFFORT'}});config={...config,...route.request().postDataJSON()};value=config}
  await route.fulfill({json:value})
 })
 try{
  await mkdir(outputDir,{recursive:true})
  await page.goto(`http://127.0.0.1:${server.address().port}`)
- const form=page.getByRole('form',{name:'任务统筹模型配置'})
+ const form=page.getByRole('form',{name:'Agent 配置'})
  await form.waitFor()
- assert.match(await form.locator('xpath=ancestor::section[1]').textContent(),/Agent 配置/)
+ assert.equal(await page.locator('#task-reasoning').inputValue(),'low')
+ assert.equal(await form.getByRole('button',{name:'保存配置',exact:true}).count(),1)
+ assert.equal(await form.getByText('推理深度',{exact:true}).count(),2)
+ assert.match(await form.textContent(),/Agent 配置/)
  const desktopBoxes=await Promise.all(['#agent-model-id','#agent-reasoning','#task-model-id','#task-reasoning'].map(selector=>page.locator(selector).boundingBox()))
  if(page.viewportSize().width>720){
   assert.equal(desktopBoxes[0].y,desktopBoxes[1].y)
@@ -53,8 +56,11 @@ try{
  holdGroups=true;await page.getByRole('button',{name:'刷新',exact:true}).click()
  while(!heldGroup)await page.waitForTimeout(20)
  await page.locator('#task-reasoning').selectOption('high')
- await page.getByRole('button',{name:'保存统筹配置',exact:true}).click()
- await page.getByText('统筹配置已保存',{exact:false}).waitFor()
+ await page.getByRole('button',{name:'保存配置',exact:true}).click()
+ assert.equal(await page.locator('#agent-model-id').isDisabled(),true)
+ assert.equal(await page.locator('#dingtalk-agent-reply-signature').isDisabled(),true)
+ await form.evaluate(node=>node.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
+ await page.getByText('Agent 配置已保存',{exact:false}).waitFor()
  holdGroups=false;await heldGroup.fulfill({json:[]});await page.waitForTimeout(150)
  assert.equal(await page.locator('#task-reasoning').inputValue(),'high','old refresh cannot overwrite saved config')
  assert.equal(config.taskSessionModel.reasoningEffort,'high');assert.equal(config.reasoningEffort,'low');assert.equal(writes,1)
@@ -64,8 +70,13 @@ try{
  await page.waitForTimeout(500)
  assert.equal(await page.locator('#task-reasoning option[value="high"]').textContent(),'high（当前模型不支持）')
  await page.locator('#task-reasoning').selectOption('model-default');failSave=true
- await page.getByRole('button',{name:'保存统筹配置',exact:true}).click()
- await page.getByRole('alert').filter({hasText:'保存失败'}).waitFor()
+ await page.getByRole('button',{name:'保存配置',exact:true}).click()
+ await page.getByRole('alert').filter({hasText:'保存未全部完成'}).waitFor()
+ assert.equal(await page.locator('#task-model-id').inputValue(),'limited')
+ failSave=false;partialSave=true
+ await page.locator('#agent-reasoning').selectOption('high')
+ await page.getByRole('button',{name:'保存配置',exact:true}).click()
+ await page.getByRole('alert').filter({hasText:'默认模型：已生效；插件设置（含统筹）：未全部生效'}).waitFor()
  assert.equal(await page.locator('#task-model-id').inputValue(),'limited')
  await page.setViewportSize({width:390,height:844});await form.scrollIntoViewIfNeeded()
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true)

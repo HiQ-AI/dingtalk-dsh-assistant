@@ -454,6 +454,9 @@ export async function openResidentStore(storageDomain) {
     listGroups: () => [...groups.entries()].map(([, value]) => value),
     hasGroupConfiguration: () => scheduler.get('runtime')?.groupConfigurationInitialized === true,
     getAgentWorkspaceDir: () => scheduler.get('runtime')?.agentWorkspaceDir,
+    setAgentSettings: async patch => {
+      await scheduler.update('runtime', current => ({ ...current, ...patch }))
+    },
     getAgentNames: () => scheduler.get('runtime')?.agentNames ?? [],
     getReplySignature: () => scheduler.get('runtime')?.replySignature,
     setReplySignature: async (replySignature) => {
