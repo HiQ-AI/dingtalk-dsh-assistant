@@ -14,16 +14,18 @@ export function createStandardModelReplayAdapter({ llm, provider, model, reasoni
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new Error('REPLAY_STANDARD_ADAPTER_CONFIG_INVALID')
   const selection = { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }
   const records = []
-  let invocations = 0
+  let invocations = 0, streams = 0
   return {
     identity: `standard-dsh:${provider}/${model}`,
     evidenceKind: 'actual-model',
-    accounting: () => ({ standardStreamInvocations: invocations, providerNetworkCalls: null, records: structuredClone(records),
+    accounting: () => ({ planAttempts: invocations, standardStreamInvocations: streams, providerNetworkCalls: null, records: structuredClone(records),
       limitation: 'Provider-internal retries/network requests and cost are not inferred from standard stream count.' }),
     async plan(input) {
       if (invocations >= maxInvocations) throw new Error('REPLAY_STANDARD_ADAPTER_BUDGET_EXHAUSTED')
       invocations++
-      const record = { invocation: invocations, provider, model, completed: false }
+      const startedAt = Date.now()
+      const record = { invocation: invocations, provider, model, completed: false, streamStarted:false,
+        input:structuredClone(input),rawText:'',usage:null,cost:null }
       records.push(record)
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(new Error('REPLAY_STANDARD_ADAPTER_TIMEOUT')), timeoutMs)
@@ -33,21 +35,23 @@ export function createStandardModelReplayAdapter({ llm, provider, model, reasoni
         const system = `${coordinationPlannerInstructions}\n此次为无工具隔离语言回放。context已提供合成只读事实，不调用任何工具。仅输出符合以下schema的JSON，不输出Markdown：\n${JSON.stringify(toToolJsonSchema(coordinationProposalSchema))}`
         const messages = [createUserMessage({ source: { kind: 'coordinator' }, content: [{ type:'text', text:JSON.stringify(input) }] })]
         let text = '', finish
+        streams++; record.streamStarted = true
         for await (const chunk of llm.stream({ ...config, system, messages, tools: [], signal: controller.signal })) {
           if (controller.signal.aborted) throw controller.signal.reason
           if (chunk.type === 'tool-call-delta' || chunk.type === 'block-start' && chunk.blockType === 'tool-call'
             || chunk.type === 'block-end' && chunk.block?.type === 'tool-call') throw new Error('REPLAY_STANDARD_ADAPTER_TOOL_FORBIDDEN')
-          if (chunk.type === 'text-delta') text += chunk.text
+          if (chunk.type === 'text-delta') { text += chunk.text; record.rawText = text }
           if (text.length > 100000) throw new Error('REPLAY_STANDARD_ADAPTER_OUTPUT_BUDGET')
           if (chunk.type === 'usage') record.usage = structuredClone(chunk.usage)
-          if (chunk.type === 'finish') { finish = chunk.reason?.kind; record.finish = finish }
+          if (chunk.type === 'finish') { finish = chunk.reason?.kind; record.finish = finish
+            if (chunk.reason?.failure) record.failure = structuredClone(chunk.reason.failure) }
         }
         if (finish !== 'stop') throw new Error('REPLAY_STANDARD_ADAPTER_INCOMPLETE')
         const proposal = coordinationProposalSchema.parse(JSON.parse(text))
         record.completed = true
         return proposal
       } catch (error) { record.error = error.code ?? error.message; throw error }
-      finally { clearTimeout(timeout); controller.abort() }
+      finally { record.elapsedMs = Date.now() - startedAt; clearTimeout(timeout); controller.abort() }
     },
   }
 }

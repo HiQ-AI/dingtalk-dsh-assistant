@@ -76,7 +76,7 @@ T03/T23 补充同文件 `T03 T23 due scan COMMIT ... acknowledgement failure rec
 
 ## 唯一外部前置条件
 
-云端代码与程序验证无待办阻断。实际语言/模型选型与成本证据仍缺**选定且获授权的现有真实模型接入**。测试profile只注册脚本模型；没有检查凭据内容或调用模型。已备 `coordination-standard-model-adapter.mjs`，向其显式注入批准的LLM-only `ctx.llm`，无业务工具、TaskStore、群历史或发送器。
+云端代码与程序验证无待办阻断。后续用户已选定并授权临时`openai-codex/gpt-5.6-sol`；恢复依赖后真实LLM-only路由首项返回账号不可用，doctor报告OAuth存储缺失，后续未执行。当前阻断为**该云端没有可用的既有真实路由账号**，且不允许本轮新增登录。详见[真实回放状态](./real-language-replay-status.md)。已备 `coordination-standard-model-adapter.mjs`，向其显式注入批准的LLM-only `ctx.llm`，无业务工具、TaskStore、群历史或发送器。
 
 最小选项：一个现有provider/model，先4项固定合成样例（六任务、A后B、部分指代、明早9点），或最多16项全样例，每项一次标准stream、无自动重试，单次30秒默认超时。再比较第二模型需另计调用。仅发送合成消息/任务/成员/时间事实、协调协议提示与schema，不含真实用户/群数据、附件、私有源码或凭据。提供方内部重试与账单未知，不从样例数推算成本。步骤见 [语言回放runbook](../../ops/coordination-language-replay.md)。
 
