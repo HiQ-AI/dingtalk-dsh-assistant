@@ -77,6 +77,7 @@ export async function apply(ctx, config = {}) {
     agentPreset: config.agentPreset ?? 'standard',
     agentWorkspaceDir: config.agentWorkspaceDir,
     agentReplySignature: config.agentReplySignature,
+    taskSessionModel: taskConfig,
     resumeTimeoutMs: config.resumeTimeoutMs ?? 10_000,
     maxConcurrentTasks: config.maxConcurrentTasks ?? 5,
     maxGoalRounds: config.maxGoalRounds ?? 24,

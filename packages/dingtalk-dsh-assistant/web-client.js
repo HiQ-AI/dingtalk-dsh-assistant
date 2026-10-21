@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
-    const { useCallback, useEffect, useState } = React
+    const { useCallback, useEffect, useState, useRef } = React
 
     const name = 'dingtalk-dsh-assistant-client'
     const inject = ['slots']
@@ -19,7 +19,11 @@ window.__ModuleLoader__.load({
         outline: 2px solid var(--dsw-alias-brand-primary, #4d6bfe) !important;
         outline-offset: 2px !important;
       }
+      [data-model-row] { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: end; }
+      [data-model-field] { display: grid; gap: 8px; min-width: 0; }
+      [data-model-row] :is(input, select) { height: 38px; box-sizing: border-box; }
       @media (max-width: 720px) {
+        [data-model-row] { grid-template-columns: minmax(0, 1fr); }
         [data-dingtalk-assistant-settings] { gap: 12px !important; }
         [data-dingtalk-assistant-settings] section { padding: 12px !important; }
         [data-dingtalk-assistant-settings] .assistant-inline-form { align-items: stretch !important; flex-direction: column !important; }
@@ -37,12 +41,28 @@ window.__ModuleLoader__.load({
     async function request(path, options) {
       const response = await fetch(`${ENDPOINT}${path}`, { headers: { accept: 'application/json', 'content-type': 'application/json' }, ...options })
       const value = await response.json()
-      if (!response.ok) throw new Error(value.error ?? `HTTP ${response.status}`)
+      if (!response.ok) throw Object.assign(new Error(value.error ?? `HTTP ${response.status}`), { readback: value.readback })
       return value
     }
     async function readResidentOverview() {
       const [health, groups, tasks, alerts, environment, agentConfig] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config'].map((path) => request(path)))
       return { health, groups, tasks, alerts, environment, agentConfig }
+    }
+
+    const effortLabel = value => ({ low: '轻度', medium: '中度', high: '高度', xhigh: '极高', max: '最高' })[value.id] ?? value.name ?? value.id
+    function ModelIdInput({ id, label, value, onChange, models, ...props }) {
+      return React.createElement(React.Fragment, null,
+        React.createElement('input', { id, 'aria-label': label, list: `${id}-list`, style: input, value, onChange, ...props }),
+        React.createElement('datalist', { id: `${id}-list` }, ...(models ?? []).map(model => React.createElement('option', { key: model.id, value: model.id }, model.name))))
+    }
+
+    function agentSaveSummary(desired, actual) {
+      if (!actual) return '保存结果未知，无法回读；请恢复连接后刷新核对，未自动重试。草稿已保留。'
+      const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b)
+      const modelSaved = desired.model.trim() === actual.model && (desired.reasoningEffort || '') === (actual.reasoningEffort || '')
+      const pluginSaved = equal([...new Set(desired.agentNames)], actual.agentNames) && desired.replySignature.trim() === (actual.replySignature || '')
+        && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel)
+      return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
     }
 
     function Environment({ value }) {
@@ -61,6 +81,15 @@ window.__ModuleLoader__.load({
       const [agentNames, setAgentNames] = useState('')
       const [replySignature, setReplySignature] = useState('')
       const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
+      const [taskModel, setTaskModel] = useState({ provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'explicit', reasoningEffort: 'low' })
+      const [defaultOptions, setDefaultOptions] = useState(null)
+      const [taskOptions, setTaskOptions] = useState(null)
+      const [taskOptionsError, setTaskOptionsError] = useState('')
+      const [taskFeedback, setTaskFeedback] = useState(null)
+      const [taskBusy, setTaskBusy] = useState(false)
+      const taskSaving = useRef(false)
+      const taskDirty = useRef(false)
+      const changeTask = transform => { taskDirty.current = true; setTaskModel(transform); setTaskFeedback(null) }
           const [proxyUrl, setProxyUrl] = useState('')
       const [deletingGroupId, setDeletingGroupId] = useState('')
       const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
@@ -71,11 +100,68 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState()
       const [updateFeedback, setUpdateFeedback] = useState()
       const [checkingVersion, setCheckingVersion] = useState(false)
+      const refreshGeneration = useRef(0)
       const refresh = useCallback(async () => {
-        try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+        const generation = ++refreshGeneration.current
+        try { const next = await readResidentOverview(); if (generation !== refreshGeneration.current) return; setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); if (!taskDirty.current) { setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); } setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
         catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       }, [])
       useEffect(() => { refresh() }, [refresh])
+      useEffect(() => {
+        if (!taskDirty.current && overview?.agentConfig?.taskSessionModel) setTaskModel(overview.agentConfig.taskSessionModel)
+      }, [overview?.agentConfig?.taskSessionModel])
+      useEffect(() => {
+        if (taskFeedback?.kind !== 'success') return
+        const timer = setTimeout(() => setTaskFeedback(null), 5000)
+        return () => clearTimeout(timer)
+      }, [taskFeedback])
+      useEffect(() => {
+        let current = true
+        setTaskOptions(null); setTaskOptionsError('')
+        const timer = setTimeout(() => {
+          request(`/state/task-model-options?provider=${encodeURIComponent(taskModel.provider)}&model=${encodeURIComponent(taskModel.model)}`)
+            .then(value => { if (current) { setTaskOptions(value); setTaskOptionsError(value.modelError ?? '') } })
+            .catch(() => { if (current) setTaskOptionsError('模型选项读取失败，请检查连接后重新选择模型。') })
+        }, 300)
+        return () => { current = false; clearTimeout(timer) }
+      }, [taskModel.provider, taskModel.model])
+      useEffect(() => {
+        let current = true
+        setDefaultOptions(null)
+        const timer = setTimeout(() => {
+          request(`/state/task-model-options?provider=${encodeURIComponent(overview?.agentConfig?.provider ?? '')}&model=${encodeURIComponent(agentModel.model)}`)
+            .then(value => { if (current) setDefaultOptions(value) }).catch(() => { if (current) setDefaultOptions(null) })
+        }, 300)
+        return () => { current = false; clearTimeout(timer) }
+      }, [overview?.agentConfig?.provider, agentModel.model])
+      const taskEfforts = taskOptions?.reasoning?.efforts ?? []
+      const requestedTaskEffort = taskModel.reasoningMode === 'inherit' ? agentModel.reasoningEffort
+        : taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : undefined
+      const taskEffortInvalid = !!requestedTaskEffort && !taskEfforts.some(value => value.id === requestedTaskEffort)
+      const taskChanged = JSON.stringify(taskModel) !== JSON.stringify(overview?.agentConfig?.taskSessionModel)
+      const taskValid = taskOptions?.available && !taskOptionsError && !taskEffortInvalid && !!taskModel.provider.trim() && !!taskModel.model.trim()
+      const saveAgentConfig = async event => {
+        event?.preventDefault()
+        if (taskSaving.current || !taskValid || !(taskChanged || agentConfigChanged)) return
+        taskDirty.current = true
+        taskSaving.current = true; setTaskBusy(true); setTaskFeedback(null)
+        const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel }
+        try {
+          const saved = await request('/config/agent', { method: 'PUT', body: JSON.stringify(desired) })
+          refreshGeneration.current++
+          taskDirty.current = false
+          setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel)
+          setAgentNames((saved.agentNames ?? []).join(',')); setReplySignature(saved.replySignature ?? ''); setAgentWorkspace(saved.workspaceDir); setAgentModel({ model: saved.model, reasoningEffort: saved.reasoningEffort ?? '' }); setProxyUrl(saved.proxyUrl ?? '')
+          setTaskFeedback({ kind: 'success', message: 'Agent 配置已保存；下一轮新建或恢复时生效，不中断当前会话。' })
+        } catch (cause) {
+          refreshGeneration.current++
+          let actual = cause.readback
+          if (!actual) { try { actual = await request('/state/agent-config') } catch {} }
+          if (actual) setOverview(current => ({ ...current, agentConfig: actual }))
+          setTaskFeedback({ kind: 'error', message: agentSaveSummary(desired, actual) })
+        }
+        finally { taskSaving.current = false; setTaskBusy(false) }
+      }
       const checkVersion = async () => {
         setCheckingVersion(true)
         try {
@@ -109,7 +195,7 @@ window.__ModuleLoader__.load({
       }
       const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
       const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '')
-      const saveAgentConfig = () => mutate(() => request('/config/agent', { method: 'PUT', body: JSON.stringify({ agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl }) }))
+
       return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
         React.createElement('section', { style: panel },
           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
@@ -139,25 +225,45 @@ window.__ModuleLoader__.load({
           updateFeedback ? React.createElement('div', { role: 'status', style: { color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, updateFeedback) : null,
           overview?.version?.changelogUrl ? React.createElement('a', { href: overview.version.changelogUrl, target: '_blank', rel: 'noreferrer', style: { color: colors.accent } }, '查看 CHANGELOG') : null),
         React.createElement(Environment, { value: overview?.environment }),
-        React.createElement('section', { style: panel }, React.createElement('strong', null, 'Agent 配置'),
+        React.createElement('form', { style: panel, noValidate: true, onSubmit: saveAgentConfig, 'aria-label': 'Agent 配置', onChange: () => { taskDirty.current = true } }, React.createElement('strong', null, 'Agent 配置'),
           React.createElement('strong', { style: { fontSize: 13 } }, 'Agent 名称 / 别名'),
-          React.createElement('input', { 'aria-label': 'Agent 名称和别名', placeholder: '例如 数字助理,小助手', style: input, value: agentNames, onChange: (event) => setAgentNames(event.target.value) }),
+          React.createElement('input', { 'aria-label': 'Agent 名称和别名', disabled: taskBusy, placeholder: '例如 数字助理,小助手', style: input, value: agentNames, onChange: (event) => setAgentNames(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '多个名称使用英文逗号分隔；任一名称被明确提及时可参与新任务判断。'),
           React.createElement('label', { htmlFor: 'dingtalk-agent-reply-signature', style: { fontSize: 13, fontWeight: 600 } }, '群回复署名（可选）'),
-          React.createElement('input', { id: 'dingtalk-agent-reply-signature', 'aria-label': 'Agent 群回复署名', 'aria-describedby': 'dingtalk-agent-reply-signature-help', maxLength: 80, placeholder: '留空不追加署名', style: input, value: replySignature, onChange: (event) => setReplySignature(event.target.value) }),
+          React.createElement('input', { id: 'dingtalk-agent-reply-signature', disabled: taskBusy, 'aria-label': 'Agent 群回复署名', 'aria-describedby': 'dingtalk-agent-reply-signature-help', maxLength: 80, placeholder: '留空不追加署名', style: input, value: replySignature, onChange: (event) => setReplySignature(event.target.value) }),
           React.createElement('div', { id: 'dingtalk-agent-reply-signature-help', style: { fontSize: 12, color: colors.muted } }, '完整最终回复末尾统一附加一次，不用加开头的“-”；中间消息不追加，留空不额外署名。'),
           React.createElement('strong', { style: { fontSize: 13 } }, '工作目录'),
-          React.createElement('input', { 'aria-label': 'Agent 工作区目录', placeholder: '现有绝对目录', style: input, value: agentWorkspace, onChange: (event) => setAgentWorkspace(event.target.value) }),
+          React.createElement('input', { 'aria-label': 'Agent 工作区目录', disabled: taskBusy, placeholder: '现有绝对目录', style: input, value: agentWorkspace, onChange: (event) => setAgentWorkspace(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '群常驻会话使用此工作区；每个任务及其动态执行使用独立工作目录。'),
-          React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '默认处理模型'),
-          React.createElement('input', { 'aria-label': 'Agent 默认模型', placeholder: '例如 gpt-5.6-sol', style: input, value: agentModel.model, onChange: (event) => setAgentModel((current) => ({ ...current, model: event.target.value })) }),
-          React.createElement('select', { 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
-            React.createElement('option', { value: '' }, '模型默认'), React.createElement('option', { value: 'low' }, '轻度'), React.createElement('option', { value: 'medium' }, '中度'), React.createElement('option', { value: 'high' }, '高度'), React.createElement('option', { value: 'xhigh' }, '极高')),
+          React.createElement('div', { 'data-model-row': true, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
+            React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'agent-model-id' }, '默认处理模型'),
+              React.createElement(ModelIdInput, { id: 'agent-model-id', label: 'Agent 默认模型', disabled: taskBusy, models: defaultOptions?.models, value: agentModel.model, onChange: event => setAgentModel(current => ({ ...current, model: event.target.value })) })),
+            React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'agent-reasoning' }, '推理深度'),
+              React.createElement('select', { id: 'agent-reasoning', disabled: taskBusy, 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
+            React.createElement('option', { value: '' }, '模型默认'), ...(defaultOptions?.reasoning?.efforts ?? []).map(value => React.createElement('option', { key: value.id, value: value.id }, effortLabel(value))),
+            agentModel.reasoningEffort && !(defaultOptions?.reasoning?.efforts ?? []).some(value => value.id === agentModel.reasoningEffort) ? React.createElement('option', { value: agentModel.reasoningEffort }, agentModel.reasoningEffort) : null))),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
+        React.createElement('div', { role: 'group', style: { display: 'grid', gap: ui.space3, minWidth: 0 }, 'aria-label': '任务统筹模型配置' },
+          React.createElement('div', { 'data-model-row': true },
+            React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'task-model-id' }, '统筹模型'),
+              React.createElement(ModelIdInput, { id: 'task-model-id', label: '统筹模型', models: taskOptions?.models, value: taskModel.model, disabled: taskBusy, 'aria-invalid': !!taskOptionsError, 'aria-describedby': 'task-options-status task-model-help', onChange: event => changeTask(current => ({ ...current, model: event.target.value })) })),
+            React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'task-reasoning' }, '推理深度'),
+          React.createElement('select', { id: 'task-reasoning', style: input, disabled: taskBusy || !taskOptions, 'aria-invalid': taskEffortInvalid, 'aria-describedby': 'task-options-status', value: taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : taskModel.reasoningMode,
+            onChange: event => { const value = event.target.value; changeTask(current => ({ ...current, reasoningMode: ['inherit', 'model-default'].includes(value) ? value : 'explicit', reasoningEffort: ['inherit', 'model-default'].includes(value) ? null : value })) } },
+            React.createElement('option', { value: 'inherit' }, `跟随默认处理（${agentModel.reasoningEffort || '模型默认'}）`),
+            React.createElement('option', { value: 'model-default' }, '模型默认'),
+            ...taskEfforts.map(value => React.createElement('option', { key: value.id, value: value.id }, effortLabel(value))),
+            taskModel.reasoningMode === 'explicit' && !taskEfforts.some(value => value.id === taskModel.reasoningEffort)
+              ? React.createElement('option', { value: taskModel.reasoningEffort }, `${taskModel.reasoningEffort}（当前模型不支持）`) : null))),
+          React.createElement('div', { id: 'task-model-help', style: { color: colors.muted, fontSize: ui.textSm } }, '仅影响任务统筹的下一轮请求；执行和话题仍使用默认处理模型。'),
+          React.createElement('div', { id: 'task-options-status', role: taskOptionsError || taskEffortInvalid ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskOptionsError || taskEffortInvalid ? colors.danger : colors.muted } },
+            taskOptionsError || (taskEffortInvalid ? '当前模型不支持所选或继承的深度，请改选模型默认或支持的深度。' : taskOptions ? '推理选项来自当前模型能力；不支持的深度不会静默替换。' : '正在读取模型能力…')),
+        ),
           React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
-          React.createElement('input', { 'aria-label': 'Agent 网络代理', placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
+          React.createElement('input', { 'aria-label': 'Agent 网络代理', disabled: taskBusy, placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
-    React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
+    React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !agentModel.model.trim() || !(agentConfigChanged || taskChanged), 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存配置'),
+          React.createElement('div', { role: taskFeedback?.kind === 'error' ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskFeedback?.kind === 'error' ? colors.danger : colors.muted } }, taskFeedback?.message ?? '')),
         React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 任务看板”查看任务会话、动态执行、结果与日志路径。'),
         React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),
           ...(overview?.groups ?? []).map((group) => React.createElement('div', { key: group.groupId, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },
