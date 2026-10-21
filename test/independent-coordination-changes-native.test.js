@@ -22,6 +22,92 @@ async function seed(host) {
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '测试用户', text,
   timestamp: '2026-10-21T01:00:00Z' })
 
+test('native scheduled query releases an explicitly authorized continuation only after fresh incomplete facts',
+  {skip:!available?reason:false,timeout:20000},async t=>{
+    t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+    const root=await mkdtemp(join(tmpdir(),'conditional-native-'));let host
+    t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+    host=await nativeTaskHost(root,request=>{
+      const names=request.tools.map(t=>t.name),input=latestInput(request)
+      if(names.includes('group_topic_route_submit'))return unitRoute(input)
+      if(names.includes('coordination_submit')){
+        const full=modelToolValues(request).find(v=>v.taskContexts?.some(task=>task.taskId==='A'))
+        if(!full)return [{name:'coordination_context_get',args:{taskIds:['A']}}]
+        const task=full.taskContexts.find(task=>task.taskId==='A')
+        return [{name:'coordination_submit',args:{kind:'schedule',actionKind:'read-query',timezone:'Asia/Shanghai',
+          rule:{kind:'once',at:'2026-10-21T00:01:00.000Z'},taskIds:['A'],recipientIds:[],interpretation:'一分钟后查A，未完成则按原目标继续',
+          conditionalMembers:[{taskId:'A',action:'task-continue',inputVersion:task.requirementRevision,runSequence:task.runSequence,
+            progressImpact:'preserve',impactReason:'仅继续已授权原目标，不改验收或授权',context:'继续原目标',afterTaskIds:[]}]}}]
+      }
+      const topic=topicTaskCalls(request);if(topic)return topic
+      if(names.includes('task_session_submit'))return [ownerWait]
+      return []
+    },{config})
+    await host.service.store.command({id:'seed-A',kind:'task.create',args:{taskId:'A',groupId:'native-group',ownerActorId:'native-user',request:'原目标A'}})
+    await host.service.ingest({...message('conditional','测试助手，一分钟后查询A，未完成则按原目标继续。'),timestamp:'2026-10-21T00:00:00Z'})
+    await host.service.whenIdle()
+    assert.equal((await host.query('task.get',{taskId:'A'})).contextRevision??0,0,JSON.stringify(host.service.listAlerts()))
+    t.mock.timers.tick(60000);await host.service.recover();await host.service.whenIdle()
+    const task=await host.query('task.get',{taskId:'A'})
+    assert.equal(task.contextRevision,1,JSON.stringify(host.service.listAlerts()));assert.equal(task.runSequence,1)
+    const occurrences=await host.query('coordination.occurrence.list')
+    assert.equal(occurrences.length,1);assert.equal(occurrences[0].triggerKind,'time')
+    assert.equal(occurrences[0].result.results[0].contextRevision,0)
+    assert.equal(occurrences[0].result.conditionalCommands.results.length,1)
+    assert.equal(occurrences[0].deliveryState,'delivered')
+  })
+
+test('native partial clarification continues A, resolves B under the original arrangement, and answers a factual chat query',
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    const root=await mkdtemp(join(tmpdir(),'coordination-partial-query-native-'));let host, originalId
+    t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+    host=await nativeTaskHost(root,request=>{
+      const names=request.tools.map(tool=>tool.name),input=latestInput(request)
+      if(names.includes('group_topic_route_submit'))return unitRoute(input)
+      if(names.includes('coordination_submit')){
+        const source=input.source??modelToolValues(request).find(value=>value.source)?.source
+        const full=modelToolValues(request).find(value=>value.arrangementContexts?.length)
+        if(source.unitText.includes('还欠')){
+          if(!full)return [{name:'coordination_context_get',args:{coordinationIds:[originalId]}}]
+          return [{name:'coordination_submit',args:{kind:'query',coordinationIds:[originalId]}}]
+        }
+        if(source.unitText.includes('明确是B')){
+          const observed=modelToolValues(request).find(value=>value.arrangementContexts?.length&&value.taskContexts?.length)
+          if(!observed)return [{name:'coordination_context_get',args:{coordinationIds:[originalId],taskIds:['B']}}]
+          const resolution=arrangement(observed.taskContexts);resolution.members[0].afterTaskIds=[]
+          return [{name:'coordination_submit',args:{kind:'resolve',coordinationId:originalId,expectedRevision:1,
+            clarificationIds:['other-task'],resolution}}]
+        }
+        const observed=modelToolValues(request).find(value=>value.taskContexts?.length)
+        if(!observed)return [{name:'coordination_context_get',args:{taskIds:['A']}}]
+        return [{name:'coordination_submit',args:{...arrangement(observed.taskContexts),pendingClarifications:[{
+          clarificationId:'other-task',question:'另一个任务是B吗？',candidates:['B']}]}}]
+      }
+      if(names.includes('task_session_submit'))return [ownerWait]
+      return topicTaskCalls(request)??[]
+    },{config})
+    await seed(host)
+    await host.service.ingest(message('partial','测试助手，A补充定位材料，另一个同名任务也补充。'));await host.service.whenIdle()
+    const original=(await host.query('coordination.list'))[0];originalId=original.id
+    let state=await host.query('coordination.get',{coordinationId:originalId})
+    assert.equal(state.members[0].state,'applied',JSON.stringify(host.service.listAlerts()))
+    assert.equal(state.coordination.pendingClarifications.length,1)
+    let source=host.residentStore.listSourceDispatchOwnership('native-group')[0]
+    assert.equal(source.semanticState,'needs_clarification');assert.equal(source.settled,false);assert.equal(source.dispatchOwner,'coordination')
+    await host.service.ingest(message('answer','测试助手，另一个明确是B，只补材料。'));await host.service.whenIdle()
+    state=await host.query('coordination.get',{coordinationId:originalId})
+    assert.equal(state.coordination.revision,2,JSON.stringify(host.service.listAlerts()))
+    assert.deepEqual(state.members.map(member=>member.state),['applied','applied'])
+    const before=await host.query('task.list')
+    await host.service.ingest(message('facts','测试助手，整体还欠什么，为什么等待？'));await host.service.whenIdle()
+    const answer=host.sent.find(notification=>notification.payload.sourceMessageId==='facts')
+    assert.ok(answer,JSON.stringify(host.service.listAlerts()));assert.match(answer.payload.text,/正式完成 0 项/)
+    assert.match(answer.payload.text,/尚欠 2 项/);assert.deepEqual(await host.query('task.list'),before)
+    assert.equal(host.residentStore.listTopics('native-group').length,0)
+    await host.service.recover();await host.service.whenIdle()
+    assert.equal(host.sent.filter(notification=>notification.id===answer.id).length,1)
+  })
+
 test('actual ingress applies a follow-up ordinal to the original coordination member and keeps original Tasks active',
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'coordination-change-native-'))

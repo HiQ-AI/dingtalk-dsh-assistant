@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -41,6 +41,31 @@ test('source reservation and fixed member apply survive restart without replayin
   assert.equal((await f.query({ kind: 'task.get', taskId: 'A' })).contextRevision, 1)
   assert.deepEqual((await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })).result.waiting, ['A'])
   await assert.rejects(f.command('task.supplement', { ...f.member('A').command.args, text: 'changed' }, 'coordination-command:batch:A'), { code: 'DYNAMIC_COMMAND_ID_CONFLICT' })
+})
+
+test('real process SIGKILL after third member commit resumes original six receipts without replay', {timeout:15000}, async t => {
+  const f = await fixture(t)
+  const ids = ['A','B','C','D','E','F']
+  for (const id of ids) await f.task(id)
+  const source = await f.reserve()
+  await f.command('coordination.accept',{sourceId:source.id,fence:1,coordinationId:'batch',members:ids.map(id=>f.member(id))})
+  await f.close()
+  const moduleUrl = new URL('../packages/dingtalk-dsh-assistant/dynamic-task-store.js',import.meta.url).href
+  const script = `import {openDynamicTaskStore} from ${JSON.stringify(moduleUrl)};
+    const store=await openDynamicTaskStore(JSON.parse(process.argv[1]));
+    for(const id of ['A','B','C']) await store.command({id:'apply:'+id,kind:'coordination.apply',args:{instructionId:id,expectedRevision:1}});
+    process.kill(process.pid,'SIGKILL');`
+  const child=spawn(process.execPath,['--input-type=module','-e',script,JSON.stringify(f.options)],{stdio:['ignore','ignore','pipe']})
+  let errors='';child.stderr.on('data',chunk=>{errors+=chunk})
+  t.after(()=>child.kill('SIGKILL'))
+  const [code,signal]=await once(child,'exit')
+  assert.equal(signal,'SIGKILL',errors);assert.equal(code,null)
+  await f.reopen()
+  assert.deepEqual((await f.query({kind:'coordination.get',coordinationId:'batch'})).members.map(m=>m.state),
+    ['applied','applied','applied','ready','ready','ready'])
+  for(const id of ids) await f.command('coordination.apply',{instructionId:id,expectedRevision:1})
+  for(const id of ids) assert.equal((await f.query({kind:'task.get',taskId:id})).contextRevision,1,id)
+  assert.ok((await f.query({kind:'coordination.get',coordinationId:'batch'})).members.every(m=>m.receipt && m.state==='applied'))
 })
 
 test('dependency gate rejects claim before resource acquisition and cancellation does not cancel task', async t => {
@@ -173,6 +198,33 @@ test('cancel wins send-permit CAS and stale query worker cannot publish after le
   const notification = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
   await f.command('coordination.occurrence.cancel', { occurrenceId: occurrence.id, expectedControlRevision: 1 })
   assert.equal((await f.command('notification.start', { notificationId: notification.id })).dispatchEligible, false)
+})
+
+for (const fakeNetworkCalled of [false,true]) test(`real SIGKILL after permit: fake network called=${fakeNetworkCalled}; recovery never issues a new send`, async t => {
+  const f=await querySchedule(t)
+  const occurrence=(await f.command('coordination.schedule.scan',{})).result.occurrences[0]
+  const job=(await f.command('coordination.job.claim',{jobId:occurrence.jobId})).result.job
+  await f.command('coordination.job.read',{jobId:job.id,fence:job.fence})
+  const notification=(await f.command('coordination.notification.freeze',{occurrenceId:occurrence.id})).result.notification
+  const marker=`${f.options.dbPath}.fake-network`
+  await f.close()
+  const moduleUrl=new URL('../packages/dingtalk-dsh-assistant/dynamic-task-store.js',import.meta.url).href
+  const script=`import {openDynamicTaskStore} from ${JSON.stringify(moduleUrl)};import {writeFileSync} from 'node:fs';
+    const store=await openDynamicTaskStore(JSON.parse(process.argv[1]));
+    const permit=await store.command({id:'crash-permit',kind:'notification.start',args:{notificationId:process.argv[2]}});
+    if(!permit.dispatchEligible)throw new Error('permit missing');
+    if(process.argv[3]==='true')writeFileSync(process.argv[4],'one isolated fake send');
+    process.kill(process.pid,'SIGKILL');`
+  const child=spawn(process.execPath,['--input-type=module','-e',script,JSON.stringify(f.options),notification.id,String(fakeNetworkCalled),marker],{stdio:['ignore','ignore','pipe']})
+  let errors='';child.stderr.on('data',chunk=>{errors+=chunk})
+  t.after(()=>child.kill('SIGKILL'))
+  const [code,signal]=await once(child,'exit');assert.equal(signal,'SIGKILL',errors);assert.equal(code,null)
+  await f.reopen()
+  assert.equal((await f.query({kind:'notification.get',notificationId:notification.id})).state,'unknown')
+  for(const commandId of ['crash-permit','new-recovery-attempt'])
+    assert.equal((await f.command('notification.start',{notificationId:notification.id},commandId)).dispatchEligible,false)
+  if(fakeNetworkCalled) assert.equal(await readFile(marker,'utf8'),'one isolated fake send')
+  else await assert.rejects(readFile(marker),{code:'ENOENT'})
 })
 
 test('SIGKILL after job claim recovers the same occurrence and preserves the lease instead of inventing success', async t => {

@@ -84,7 +84,7 @@ const outboundSchema = z.object({
   taskInputVersion: z.number().int().positive().optional(), taskRunSequence: z.number().int().positive().optional(),
   supersededByOutboundId: z.string().min(1).optional(), supersededAt: z.string().min(1).optional(), supersededReason: z.string().min(1).optional(), sendStartedAt: z.string().min(1).optional(),
   readbackRequired: z.boolean().optional(),
-  notificationState: z.enum(['prepared','starting','unknown','delivered','failed']).optional(),
+  notificationState: z.enum(['prepared','starting','unknown','delivered','failed','superseded']).optional(),
   notificationRetryAt: z.string().optional(), notificationFailurePhase: z.enum(['send', 'readback']).optional(), notificationKnownNotSent: z.boolean().optional(),
   notificationTaskId: z.string().min(1).optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
@@ -1146,6 +1146,7 @@ export async function openResidentStore(storageDomain) {
         const previous = latest.outbox.find(item => item.outboundId === value.outboundId)
         if (previous && previous.text !== value.text) throw new Error('task_notification_projection_conflict')
         if (previous?.notificationState === 'delivered' && value.notificationState !== 'delivered') return latest
+        if (previous?.notificationState === 'superseded' && value.notificationState !== 'superseded') return latest
         const outbox = previous ? latest.outbox.map(item => item.outboundId === value.outboundId ? { ...item, ...value, ...(value.status === 'sent' ? { deliveryPendingReason: undefined, deliveryError: undefined } : {}) } : item) : [...latest.outbox, value]
         return { ...latest, outbox }
       })

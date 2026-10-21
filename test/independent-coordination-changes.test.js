@@ -148,3 +148,111 @@ test('persisted frozen mode blocks new semantic submit and accepted member dispa
   const next = await f.message('frozen-new', '继续A')
   await assert.rejects(f.service.submit(next, { kind: 'reject', reason: 'not admitted while frozen' }), { code: 'COORDINATION_RUNTIME_FROZEN' })
 })
+
+for (const allTogether of [false,true]) test(`member-level ambiguity preserves source ownership and ${allTogether ? 'holds the explicit batch' : 'continues clear members'}`, async t => {
+  const f = await fixture(t), original = await f.message(`partial-${allTogether}`, 'A补充材料，另一个同名任务也补充')
+  await f.service.context(original, { taskIds:['A'] })
+  const proposal = f.arrangement(); proposal.members = proposal.members.slice(0,1); proposal.allTogether = allTogether
+  proposal.pendingClarifications = [{clarificationId:'second-target',question:'另一个任务是B吗？',candidates:['B']}]
+  const accepted = await f.service.submit(original,proposal)
+  assert.equal(accepted.status,'partially_accepted')
+  await f.restart(); await f.service.recoverGroup('group'); await f.runJobs(); await f.service.recoverGroup('group')
+  let state = await f.query('coordination.get',{coordinationId:accepted.coordinationId})
+  assert.equal(state.members[0].state,allTogether ? 'ready' : 'applied')
+  let ownership = f.resident.getSourceDispatchOwnership('group',original.unitId,original.unitRevision)
+  assert.equal(ownership.dispatchOwner,'coordination'); assert.equal(ownership.semanticState,'needs_clarification'); assert.equal(ownership.settled,false)
+  const reply = await f.message(`partial-answer-${allTogether}`,'是B，独立加材料')
+  await f.service.context(reply,{taskIds:['B'],coordinationIds:[accepted.coordinationId]})
+  const resolution = f.arrangement(); resolution.members = resolution.members.slice(1).map(member=>({...member,afterTaskIds:[]}))
+  await f.service.submit(reply,{kind:'resolve',coordinationId:accepted.coordinationId,expectedRevision:1,
+    clarificationIds:['second-target'],resolution})
+  await f.restart(); await f.service.recoverGroup('group'); await f.runJobs(); await f.service.recoverGroup('group')
+  state = await f.query('coordination.get',{coordinationId:accepted.coordinationId})
+  assert.equal(state.coordination.revision,2); assert.deepEqual(state.coordination.pendingClarifications,[])
+  assert.deepEqual(state.members.map(member=>member.state),['applied','applied'])
+  assert.equal((await f.query('task.get',{taskId:'A'})).contextRevision,1,'clear member is never reapplied while resolving another member')
+  ownership = f.resident.getSourceDispatchOwnership('group',original.unitId,original.unitRevision)
+  assert.equal(ownership.settled,true); assert.equal(ownership.semanticState,'accepted')
+  assert.equal(f.errors.length,0)
+})
+
+test('chat aggregate query freezes authoritative obligations and recovers the same answer without changing Tasks', async t => {
+  const f=await fixture(t), original=await f.message('query-arrangement','先A后B')
+  await f.service.context(original,{taskIds:['A','B']})
+  const accepted=await f.service.submit(original,f.arrangement())
+  const request=await f.message('query-message','整体还欠什么，B为什么等待？')
+  await f.service.context(request,{coordinationIds:[accepted.coordinationId]})
+  const before=await f.query('task.list')
+  const answer=await f.service.submit(request,{kind:'query',coordinationIds:[accepted.coordinationId]})
+  assert.equal(answer.snapshots[0].remainingInstructionIds.length,2)
+  const notice=(await f.query('notification.list')).find(n=>n.payload.sourceMessageId==='query-message')
+  assert.match(notice.payload.text,/B/);assert.match(notice.payload.text,/waiting_dependency|waiting_trigger/)
+  const digest=notice.payloadDigest, text=notice.payload.text
+  assert.deepEqual(await f.query('task.list'),before)
+  await f.restart(); await f.service.recoverGroup('group')
+  const recovered=(await f.query('notification.list')).filter(n=>n.payload.sourceMessageId==='query-message')
+  assert.equal(recovered.length,1);assert.equal(recovered[0].id,notice.id);assert.equal(recovered[0].payloadDigest,digest);assert.equal(recovered[0].payload.text,text)
+})
+
+test('resolving one of several pending members settles neither the other ambiguity nor its original source', async t => {
+  const f=await fixture(t),original=await f.message('two-missing','分别给两个同名任务补充材料')
+  const pending=['first','second'].map(clarificationId=>({clarificationId,question:`${clarificationId}是哪项？`,candidates:['A','B']}))
+  const accepted=await f.service.submit(original,{kind:'arrangement',members:[],pendingClarifications:pending})
+  for(const [index,taskId] of ['A','B'].entries()){
+    const reply=await f.message(`resolve-${taskId}`,`明确${taskId}`)
+    await f.service.context(reply,{taskIds:[taskId],coordinationIds:[accepted.coordinationId]})
+    const resolution=f.arrangement();resolution.members=resolution.members.filter(member=>member.taskId===taskId).map(member=>({...member,afterTaskIds:[]}))
+    await f.service.submit(reply,{kind:'resolve',coordinationId:accepted.coordinationId,expectedRevision:index+1,
+      clarificationIds:[pending[index].clarificationId],resolution})
+    await f.restart();await f.service.recoverGroup('group');await f.runJobs()
+    const source=f.resident.getSourceDispatchOwnership('group',original.unitId,original.unitRevision)
+    assert.equal(source.settled,index===1);assert.equal(source.dispatchOwner,'coordination')
+    assert.equal((await f.query('coordination.get',{coordinationId:accepted.coordinationId})).coordination.pendingClarifications.length,1-index)
+  }
+  assert.equal((await f.query('coordination.list')).length,1)
+  assert.deepEqual(f.errors,[],'recovery must reuse frozen initial acceptance content after a partial clarification changes member count')
+})
+
+test('interleaved unknown source order cannot ordinal-control the clear subset, even after clarification resolves', async t => {
+  const f=await fixture(t), original=await f.message('interleaved','第一个同名任务和第二个A都补材料')
+  await f.service.context(original,{taskIds:['A']})
+  const proposal=f.arrangement();proposal.members=proposal.members.slice(0,1)
+  proposal.pendingClarifications=[{clarificationId:'first-target',question:'第一个任务是哪项？',candidates:['B']}]
+  const accepted=await f.service.submit(original,proposal)
+  for(const revision of [1,2]){
+    const request=await f.message(`ordinal-${revision}`,'第一个先别动')
+    const context=await f.service.context(request,{coordinationIds:[accepted.coordinationId]})
+    assert.equal(context.arrangementContexts[0].coordination.ordinalSelectionRequiresClarification,true)
+    await assert.rejects(f.service.submit(request,{kind:'change',coordinationId:accepted.coordinationId,expectedRevision:revision,
+      change:{action:'pause',selectors:[{ordinal:1}],reason:'第一个先别动'}}),{code:'COORDINATION_CHANGE_ORDINAL_NEEDS_CLARIFICATION'})
+    assert.equal((await f.query('coordination.get',{coordinationId:accepted.coordinationId})).members[0].control??'active','active')
+    if(revision===1){
+      const reply=await f.message('interleaved-answer','第一个明确是B')
+      await f.service.context(reply,{taskIds:['B'],coordinationIds:[accepted.coordinationId]})
+      const resolution=f.arrangement();resolution.members=resolution.members.slice(1).map(member=>({...member,afterTaskIds:[]}))
+      await f.service.submit(reply,{kind:'resolve',coordinationId:accepted.coordinationId,expectedRevision:1,clarificationIds:['first-target'],resolution})
+    }
+  }
+})
+
+test('arrangement member context pages remain bounded and preserve persisted ordinals', async t => {
+  const f=await fixture(t),original=await f.message('paged-context','x'.repeat(2500))
+  await f.service.context(original,{taskIds:['A']})
+  const proposal=f.arrangement();proposal.members=proposal.members.slice(0,1)
+  const accepted=await f.service.submit(original,proposal)
+  const initial=(await f.query('coordination.get',{coordinationId:accepted.coordinationId})).members[0]
+  // Isolate the read adapter with a large authoritative recurring-child projection;
+  // no write or task command is performed by this context-only fixture.
+  const members=Array.from({length:205},(_,index)=>({...initial,id:`instruction:${index+1}`}))
+  const pagingService=openIndependentCoordination({config:{},residentStore:f.resident,
+    query:async(kind,args)=>kind==='coordination.get'?{coordination:{...(await f.query(kind,args)).coordination,memberIds:members.map(member=>member.id)},members}:f.query(kind,args),
+    command:f.command,onError:()=>{},onApplied:()=>{},planner:{close(){}}})
+  t.after(()=>pagingService.close())
+  const first=(await pagingService.context(original,{coordinationIds:[accepted.coordinationId]})).arrangementContexts[0]
+  assert.equal(first.members.length,100);assert.equal(first.coordination.memberIds.length,100);assert.equal(first.membersTotal,205)
+  assert.equal(first.nextMemberOffset,100);assert.equal(first.membersTruncated,true)
+  assert.equal(first.members[0].original.length,2000);assert.equal(first.members[0].originalTruncated,true)
+  const last=(await pagingService.context(original,{coordinationIds:[accepted.coordinationId],memberOffset:200})).arrangementContexts[0]
+  assert.deepEqual(last.members.map(member=>member.ordinal),[201,202,203,204,205]);assert.equal(last.nextMemberOffset,null)
+  await assert.rejects(pagingService.context(original,{memberOffset:-1}),{code:'COORDINATION_CONTEXT_RANGE'})
+})

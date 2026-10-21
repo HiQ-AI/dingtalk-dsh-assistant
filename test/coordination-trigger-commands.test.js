@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
-async function fixture(t, { members = ['B'], dependencies = {}, scheduled = true } = {}) {
+async function fixture(t, { members = ['B'], dependencies = {}, scheduled = true, replan = false } = {}) {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
   const directory = await mkdtemp(join(tmpdir(), 'coordination-trigger-'))
   const config = { dbPath: join(directory, 'task.sqlite'), instanceId: 'test', initialize: true }
@@ -18,8 +18,8 @@ async function fixture(t, { members = ['B'], dependencies = {}, scheduled = true
   for (const id of ['A','B']) await command('task.create', { taskId: id, groupId: 'group', request: id })
   const source = (await command('coordination.reserve', { unitId: 'source-unit', revision: 1, groupId: 'group', original: '到9点继续原任务' })).result.source
   const target = { conversationId: 'group', recipientIds: ['member-id'] }
-  const member = id => ({ instructionId: id, taskId: id, progressImpact: 'preserve', dependencies: dependencies[id] ?? [],
-    command: { id: `coordination-command:batch:${id}`, kind: 'task.supplement', args: { taskId: id,
+  const member = id => ({ instructionId: id, taskId: id, progressImpact: replan ? 'replan' : 'preserve', dependencies: dependencies[id] ?? [],
+    command: { id: `coordination-command:batch:${id}`, kind: replan ? 'task.revise' : 'task.supplement', args: { taskId: id,
       expectedRequirementRevision: 1, expectedControlRevision: 1, messageId: `input:${id}`, text: '按原目标继续', request: `${id}\n按原目标继续` } } })
   await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'batch',
     members: members.map(member), readOnly: members.length === 0,
@@ -57,16 +57,108 @@ test('timer defers a frozen original Task command until due and receives it once
   assert.ok(await f.query('receipt.get', { id: 'coordination-command:batch:B' }))
 })
 
-test('recurring writes fail closed until each-slot instruction templates exist; one-shot command and query contracts stay intact', async t => {
-  const f = await fixture(t)
-  await assert.rejects(f.command('coordination.schedule.create', { coordinationId: 'batch', scheduleId: 'recurring', timezone: 'Asia/Shanghai',
-    rule: { kind: 'daily', time: '09:00' }, action: { kind: 'task-command', instructionIds: ['B'] }, target: f.target }),
-  { code: 'DYNAMIC_COORDINATION_RECURRING_COMMAND_TEMPLATE_REQUIRED' })
-  await assert.rejects(f.command('coordination.schedule.change', { scheduleId: 'schedule', expectedRevision: 1,
-    rule: { kind: 'weekly', time: '09:00', weekday: 4 } }), { code: 'DYNAMIC_COORDINATION_RECURRING_COMMAND_TEMPLATE_REQUIRED' })
-  assert.equal((await f.query('coordination.schedule.list')).length, 1)
-  assert.equal((await f.query('coordination.schedule.list'))[0].revision, 1)
-  assert.equal((await f.task('B')).contextRevision ?? 0, 0)
+test('daily accepted authorization freezes a new exact command per slot and recovers without another user confirmation', async t => {
+  const f = await fixture(t, { scheduled: false })
+  await f.command('coordination.schedule.create', { coordinationId: 'batch', scheduleId: 'recurring', timezone: 'Asia/Shanghai',
+    rule: { kind: 'daily', time: '09:00' }, action: { kind: 'task-command', instructionIds: ['B'] }, target: { ...f.target, summaryOnly:true } })
+  assert.equal((await f.query('coordination.get',{coordinationId:'batch'})).members[0].state,'template')
+  const first = await f.due(), firstJob = await f.claim(first)
+  const applied = await f.command('coordination.job.command',{jobId:firstJob.id,fence:firstJob.fence},'first-slot')
+  const firstInstruction = applied.result.occurrence.action.instructionIds[0]
+  assert.notEqual(firstInstruction,'B')
+  assert.equal((await f.command('coordination.occurrence.accept',{coordinationId:'batch',trigger:first.trigger,
+    action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})).result.replayed,true)
+  assert.equal((await f.task('B')).contextRevision,1)
+  await f.restart()
+  assert.equal((await f.command('coordination.job.command',{jobId:firstJob.id,fence:firstJob.fence},'first-slot')).replayed,true)
+  await f.command('task.supplement',{taskId:'B',expectedRequirementRevision:1,expectedControlRevision:1,messageId:'compatible',text:'新增材料',request:'B\n新增材料'})
+  f.tick(86400000)
+  const second = (await f.command('coordination.schedule.scan')).result.occurrences[0], secondJob = await f.claim(second)
+  const next = await f.command('coordination.job.command',{jobId:secondJob.id,fence:secondJob.fence})
+  const secondInstruction = next.result.occurrence.action.instructionIds[0]
+  assert.notEqual(firstInstruction,secondInstruction)
+  assert.equal((await f.task('B')).contextRevision,3)
+  assert.match((await f.task('B')).request,/新增材料/)
+  assert.notEqual(next.result.job.result.results[0].commandId,applied.result.job.result.results[0].commandId)
+  assert.equal((await f.query('task.list')).length,2)
+  assert.equal((await f.task('B')).runSequence,1)
+})
+
+test('weekly command blocks a changed goal instead of extending its old recurring authorization', async t => {
+  const f = await fixture(t, { scheduled:false })
+  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'weekly',timezone:'Asia/Shanghai',
+    rule:{kind:'weekly',time:'09:00',weekday:3},action:{kind:'task-command',instructionIds:['B']},target:f.target})
+  await f.command('task.revise',{taskId:'B',request:'用户另行修改目标'})
+  const occurrence = await f.due(), job = await f.claim(occurrence)
+  const result = await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})
+  assert.equal(result.result.job.state,'blocked')
+  assert.equal(result.result.job.waitingReason,'DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE')
+  assert.equal((await f.query('coordination.get',{coordinationId:'batch'})).members.length,1)
+  assert.equal((await f.task('B')).requirementRevision,2)
+  assert.equal((await f.task('B')).contextRevision ?? 0,0)
+})
+
+test('future schedule edits preserve each slot authorized original text rather than replacing it with the control message', async t => {
+  const f=await fixture(t,{scheduled:false})
+  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-edit',timezone:'Asia/Shanghai',
+    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
+  const source=(await f.command('coordination.reserve',{unitId:'edit',revision:1,groupId:'group',original:'改到10点'})).result.source
+  await f.command('coordination.change',{sourceId:source.id,fence:source.fence,coordinationId:'batch',expectedRevision:1,
+    change:{action:'schedule',scheduleChange:{scheduleId:'daily-edit',expectedRevision:1,rule:{kind:'daily',time:'10:00'}}}})
+  f.tick(7200000)
+  const occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0],job=await f.claim(occurrence)
+  await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})
+  const child=(await f.query('coordination.get',{coordinationId:'batch'})).members.find(member=>member.recurringOccurrenceId)
+  assert.equal(child.original,'到9点继续原任务')
+  assert.equal(child.materializationSourceId,source.id)
+  assert.equal(child.templateInstructionId,'B')
+})
+
+test('recurring replan advances only through its own prior effective target version', async t => {
+  const f = await fixture(t,{scheduled:false,replan:true})
+  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-replan',timezone:'Asia/Shanghai',
+    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
+  for(const elapsed of [3600000,86400000]) {
+    f.tick(elapsed)
+    const occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0], job=await f.claim(occurrence)
+    assert.equal((await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result.job.state,'completed')
+  }
+  assert.equal((await f.task('B')).requirementRevision,3)
+  const state=await f.query('coordination.get',{coordinationId:'batch'})
+  assert.deepEqual(state.members.filter(member=>member.recurringOccurrenceId).map(member=>member.command.args.expectedRequirementRevision),[1,2])
+  const children=state.members.filter(member=>member.recurringOccurrenceId)
+  assert.equal(children[0].state,'superseded')
+  assert.equal(children[0].supersededBy,children[1].id)
+  const aggregate=(await f.command('coordination.aggregate',{coordinationId:'batch'})).result.snapshot
+  assert.equal(aggregate.state,'active')
+  assert.ok(!aggregate.remainingInstructionIds.includes(children[0].id))
+  await f.command('task.revise',{taskId:'B',request:'计划外新目标'})
+  f.tick(86400000)
+  const occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0], job=await f.claim(occurrence)
+  assert.equal((await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result.job.state,'blocked')
+  assert.equal((await f.task('B')).requirementRevision,4)
+})
+
+test('per-slot instruction creation and Task effects survive lost acknowledgement under the original frozen identity', async t => {
+  const f=await fixture(t,{scheduled:false})
+  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-ack',timezone:'Asia/Shanghai',
+    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
+  const occurrence=await f.due(), job=await f.claim(occurrence)
+  const original=DatabaseSync.prototype.exec
+  let armed=true
+  const mocked=t.mock.method(DatabaseSync.prototype,'exec',function(sql){
+    const result=original.call(this,sql)
+    if(sql==='COMMIT'&&armed){armed=false;throw new Error('injected per-slot ACK loss')}
+    return result
+  })
+  await assert.rejects(f.command('coordination.job.command',{jobId:job.id,fence:job.fence},'slot-ack'),{code:'DYNAMIC_COMMIT_ACK_UNKNOWN'})
+  mocked.mock.restore();await f.restart()
+  const replay=await f.command('coordination.job.command',{jobId:job.id,fence:job.fence},'slot-ack')
+  assert.equal(replay.replayed,true)
+  assert.equal((await f.task('B')).contextRevision,1)
+  const members=(await f.query('coordination.get',{coordinationId:'batch'})).members.filter(member=>member.recurringOccurrenceId)
+  assert.equal(members.length,1)
+  assert.equal(members[0].command.id,replay.result.job.result.results[0].commandId)
 })
 
 test('lost commit acknowledgement is reconciled by the original Task command receipt after restart', async t => {

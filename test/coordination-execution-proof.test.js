@@ -42,6 +42,79 @@ test('Host binds pending instructions despite caller empty ids; claim waits befo
   assert.equal((await f.query('task.get', { taskId: 'B' })).status, 'active')
 })
 
+async function startedReorder(t) {
+  const f = await fixture(t)
+  await f.task('A'); await f.task('B')
+  await f.arrange('batch',[f.member('batch','a','A'),f.member('batch','b','B')])
+  await f.command('coordination.apply',{instructionId:'b',expectedRevision:1})
+  const binding = await f.owner('B'), execution = await f.dispatch(binding,'running-before-reorder')
+  await f.command('execution.claim',{executionId:execution.id})
+  const source = (await f.command('coordination.reserve',{unitId:'change',revision:1,groupId:'group',original:'A finishes before further B work'})).result.source
+  await f.command('coordination.change',{sourceId:source.id,fence:source.fence,coordinationId:'batch',expectedRevision:1,
+    change:{action:'reorder',dependencies:[{instructionId:'b',afterInstructionIds:['a']}]}})
+  const pending=(await f.query('coordination.get',{coordinationId:'batch'})).members.find(m=>m.id==='b')
+  return {...f,binding,execution,pending,assess:decision=>f.command('coordination.reorder.assess',{binding,instructionId:'b',
+    assessmentId:pending.reorderAssessment.id,decision,summary:'Original effects preserved; future input waits.',evidence:['execution log and operation ledger inspected']})}
+}
+
+test('running reorder requests read-only Owner assessment without revising or cancelling; safe point needs Host evidence',async t=>{
+  const f=await startedReorder(t)
+  const before=await f.query('task.get',{taskId:'B'})
+  assert.equal(f.pending.waitingReason.code,'reorder_pending')
+  assert.deepEqual(f.pending.dependencies,[])
+  assert.equal((await f.query('execution.get',{executionId:f.execution.id})).cancelRequested,false)
+  assert.equal((await f.query('coordination.assessments',{taskId:'B'})).length,1)
+  await assert.rejects(f.command('task.wait',{binding:f.binding,action:'wait',summary:'skip structured assessment'}),
+    {code:'DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED'})
+  await assert.rejects(f.command('task.complete',{binding:f.binding,summary:'old Owner cannot close pending reorder'}),
+    {code:'DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED'})
+  assert.ok((await f.query('wake.list',{taskId:'B'})).some(wake=>wake.kind === 'coordination.changed' && wake.state !== 'acked'))
+  await assert.rejects(f.assess('safe_point'),{code:'DYNAMIC_COORDINATION_SAFE_POINT_UNPROVEN'})
+  await f.assess('continue_existing')
+  const after=await f.query('task.get',{taskId:'B'})
+  for(const key of ['requirementRevision','contextRevision','controlRevision','runSequence']) assert.equal(after[key],before[key])
+  const binding=await f.query('execution.binding',{executionId:f.execution.id})
+  await f.command('execution.drained',{binding})
+  // A restart of the exact old input is explicit existing work, not new business scope.
+  await f.command('execution.claim',{executionId:f.execution.id})
+  await f.command('execution.drained',{binding:await f.query('execution.binding',{executionId:f.execution.id})})
+  await f.command('execution.continue',{binding:f.binding,executionId:f.execution.id,key:'later-input',prompt:'next',input:{}})
+  await assert.rejects(f.command('execution.claim',{executionId:f.execution.id}),{code:'DYNAMIC_COORDINATION_WAITING'})
+  assert.deepEqual(await f.query('resource.list'),[])
+})
+
+test('running reorder uncertainty persists clarification instead of pretending strict ordering or cancelling work',async t=>{
+  const f=await startedReorder(t)
+  await f.assess('needs_clarification')
+  await f.reopen()
+  const member=(await f.query('coordination.get',{coordinationId:'batch'})).members.find(m=>m.id==='b')
+  assert.equal(member.waitingReason.code,'reorder_needs_clarification')
+  assert.deepEqual(member.dependencies,[])
+  assert.equal((await f.query('execution.get',{executionId:f.execution.id})).cancelRequested,false)
+  await assert.rejects(f.assess('continue_existing'),{code:'DYNAMIC_TASK_LEASE_STALE'})
+})
+
+test('a second reorder cannot inherit an earlier existing-input exemption',async t=>{
+  const f=await startedReorder(t)
+  await f.assess('continue_existing')
+  const source=(await f.command('coordination.reserve',{unitId:'second-change',revision:1,groupId:'group',original:'重新评估这次顺序'})).result.source
+  await f.command('coordination.change',{sourceId:source.id,fence:source.fence,coordinationId:'batch',expectedRevision:2,
+    change:{action:'reorder',dependencies:[{instructionId:'b',afterInstructionIds:['a']}]}})
+  await f.command('execution.drained',{binding:await f.query('execution.binding',{executionId:f.execution.id})})
+  await assert.rejects(f.command('execution.claim',{executionId:f.execution.id}),{code:'DYNAMIC_COORDINATION_WAITING'})
+  const member=(await f.query('coordination.get',{coordinationId:'batch'})).members.find(m=>m.id==='b')
+  assert.deepEqual(member.reorderExistingInputs,[])
+  assert.equal(member.reorderAssessment.state,'pending')
+})
+
+test('opposite pending reorder proposals are rejected before either Owner decision',async t=>{
+  const f=await startedReorder(t)
+  const source=(await f.command('coordination.reserve',{unitId:'opposite',revision:1,groupId:'group',original:'反向顺序'})).result.source
+  await assert.rejects(f.command('coordination.change',{sourceId:source.id,fence:source.fence,coordinationId:'batch',expectedRevision:2,
+    change:{action:'reorder',dependencies:[{instructionId:'a',afterInstructionIds:['b']}]}}),{code:'DYNAMIC_COORDINATION_CYCLE'})
+  assert.equal((await f.query('coordination.get',{coordinationId:'batch'})).coordination.revision,2)
+})
+
 test('existing running input remains explicit prior scope, but a new continue input cannot inherit the exemption', async t => {
   const f = await fixture(t)
   await f.task('A'); await f.task('B')

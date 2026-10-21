@@ -7,11 +7,12 @@ CREATE INDEX coordination_due ON dynamic_coordination_schedules(json_extract(bod
 CREATE UNIQUE INDEX coordination_slot ON dynamic_coordination_slots(json_extract(body,'$.scheduleId'),json_extract(body,'$.plannedAt'));
 `
 
-export function coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now, dispatchInstruction, readCommandReceipt }) {
+export function coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now, dispatchInstruction, readCommandReceipt, instantiateInstructions }) {
   const table = name => `dynamic_coordination_${name}`
   const save = (name, value) => put(table(name), value)
   const read = (name, id, optional = false) => get(table(name), id, optional)
   const list = name => all(table(name))
+  const commandAction = action => action.kind === 'task-command' ? action : action.onIncomplete
   const coordinationActive = coordinationId => get('dynamic_coordination', coordinationId).state !== 'cancelled'
   const timestamp = value => {
     if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) fail('DYNAMIC_COORDINATION_TIME_INVALID')
@@ -22,7 +23,17 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     if (action.kind === 'read-query') {
       if (!array(action.taskIds).length || action.taskIds.length > 100 || new Set(action.taskIds).size !== action.taskIds.length) fail('DYNAMIC_COORDINATION_ACTION_INVALID')
       for (const id of action.taskIds) if (get('dynamic_tasks', id).groupId !== groupId) fail('DYNAMIC_COORDINATION_SCOPE')
-      return { kind: action.kind, taskIds: clone(action.taskIds) }
+      const conditional = action.onIncomplete === undefined ? null : validAction(action.onIncomplete, groupId, coordinationId)
+      if (conditional) {
+        for (const frozen of conditional.frozenInstructions) {
+          const member = get('dynamic_coordination_members', frozen.instructionId)
+          if (!action.taskIds.includes(member.taskId) || member.progressImpact !== 'preserve'
+            || member.createCommand || member.dependencies.length || member.command.kind !== 'task.coordination.input'
+            || member.command.args.action !== 'continue' || member.command.args.objective !== undefined
+            || member.command.args.requirements !== undefined) fail('DYNAMIC_COORDINATION_CONDITIONAL_SCOPE_INVALID')
+        }
+      }
+      return { kind: action.kind, taskIds: clone(action.taskIds), ...(conditional ? {onIncomplete:conditional} : {}) }
     }
     if (action.kind !== 'task-command' || !array(action.instructionIds).length || action.instructionIds.length > 100
       || new Set(action.instructionIds).size !== action.instructionIds.length) fail('DYNAMIC_COORDINATION_ACTION_INVALID')
@@ -41,6 +52,70 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     if (target.conversationId !== groupId || !Array.isArray(target.recipientIds) || target.recipientIds.some(id => typeof id !== 'string' || !id.trim())
       || target.summaryOnly !== undefined && typeof target.summaryOnly !== 'boolean') fail('DYNAMIC_COORDINATION_SCOPE')
     return clone(target)
+  }
+  function recurringTemplates(action, scheduleId) {
+    action = commandAction(action)
+    if (!action) return
+    if (action.kind !== 'task-command') return
+    for (const frozen of action.frozenInstructions) {
+      const member = get('dynamic_coordination_members', frozen.instructionId)
+      // A recurring authorization repeats an existing Task operation. Starting a
+      // newly-created held Task is a one-off contract, never a repeated create.
+      if (member.createCommand || member.command.kind === 'task.coordination.start'
+        || !['ready','template'].includes(member.state)
+        || member.recurringTemplateScheduleId && member.recurringTemplateScheduleId !== scheduleId
+        || list('schedules').some(schedule => schedule.id !== scheduleId && commandAction(schedule.action)?.instructionIds.includes(member.id)))
+        fail('DYNAMIC_COORDINATION_RECURRING_TEMPLATE_INVALID')
+      member.state = 'template'; member.recurringTemplateScheduleId = scheduleId
+      put('dynamic_coordination_members', member)
+    }
+  }
+  function instantiateOccurrence(occurrence, schedule) {
+    const action = commandAction(occurrence.action)
+    if (occurrence.templateAction || !action
+      || !action.frozenInstructions.some(frozen => get('dynamic_coordination_members', frozen.instructionId).recurringTemplateScheduleId === schedule.id)) return
+    if (typeof instantiateInstructions !== 'function') fail('DYNAMIC_COORDINATION_DISPATCH_ADAPTER_REQUIRED')
+    const templateAction = clone(occurrence.action), coordination = get('dynamic_coordination', occurrence.coordinationId)
+    const selected = action.frozenInstructions.filter(frozen => occurrence.action.kind !== 'read-query' || get('dynamic_tasks',frozen.taskId).status !== 'completed')
+    const ids = new Map(selected.map(frozen => [frozen.instructionId,
+      `${frozen.instructionId}:slot:${occurrence.slotId}`]))
+    const inputs = selected.map(frozen => {
+      const template = get('dynamic_coordination_members', frozen.instructionId), task = get('dynamic_tasks', frozen.taskId)
+      if (template.coordinationId !== coordination.id || template.recurringTemplateScheduleId !== schedule.id
+        || digest(template.command) !== frozen.commandDigest || task.groupId !== coordination.groupId || task.archivedAt
+        || template.control === 'cancelled' || template.control === 'paused') fail('DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE')
+      const prior = all('dynamic_coordination_members').filter(member => member.templateInstructionId === template.id
+        && member.effectiveVersion).sort((a,b) => read('occurrences', a.recurringOccurrenceId).plannedAt
+          .localeCompare(read('occurrences', b.recurringOccurrenceId).plannedAt)).at(-1)
+      const anchor = prior?.effectiveVersion ?? frozen.preconditionVersion
+      // Only this accepted schedule's own operations can advance its target
+      // boundary. An unrelated goal/control/run change needs a new arrangement.
+      if (['requirementRevision','controlRevision','runSequence'].some(key => task[key] !== anchor[key]))
+        fail('DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE')
+      const operation = frozen.command.kind === 'task.coordination.input' ? frozen.command.args.action
+        : frozen.command.kind === 'task.reopen' ? 'reopen' : frozen.command.kind === 'task.control' ? 'cancel' : 'supplement'
+      if (operation === 'reopen' ? task.status !== 'completed' || !task.drained
+        : task.status !== 'active' || task.control === 'cancelled' || task.control === 'paused' && operation !== 'continue')
+        fail('DYNAMIC_COORDINATION_RECURRING_TASK_STATE_CHANGED')
+      const instructionId = ids.get(template.id), commandId = `coordination-command:${coordination.id}:${instructionId}`
+      const envelope = clone(frozen.command), args = envelope.args
+      envelope.id = commandId; args.expectedRequirementRevision = task.requirementRevision; args.expectedControlRevision = task.controlRevision
+      if (args.messageId !== undefined) args.messageId = commandId
+      // Preserve supplementary context added since acceptance; the recurring
+      // input itself remains exactly the authorized immutable material.
+      if (template.progressImpact === 'preserve') args.request = `${task.request}\n\n[周期协调 ${instructionId}]\n${args.text}`
+      return { instructionId, templateInstructionId: template.id, taskId: task.taskId, requiresTrigger: true,
+        progressImpact: template.progressImpact, impactReason: template.impactReason,
+        dependencies: template.dependencies.map(id => ids.get(id) ?? id), command: envelope }
+    })
+    const members = inputs.length ? instantiateInstructions({ coordinationId: coordination.id, occurrenceId: occurrence.id, inputs }) : []
+    occurrence.templateAction = templateAction
+    const materialized = { kind: 'task-command', instructionIds: members.map(member => member.id),
+      frozenInstructions: members.map(member => ({ instructionId: member.id, taskId: member.taskId,
+        expectedRevision: coordination.revision, command: clone(member.command), commandDigest: member.commandDigest,
+        preconditionVersion: clone(member.preconditionVersion) })) }
+    occurrence.action = occurrence.action.kind === 'read-query' ? {...occurrence.action,onIncomplete:materialized} : materialized
+    save('occurrences', occurrence)
   }
   function snapshot(occurrence) {
     if (occurrence.action.kind !== 'read-query') fail('DYNAMIC_COORDINATION_ACTION_INVALID')
@@ -62,8 +137,8 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     const member = get('dynamic_coordination_members', instructionId)
     if (['applied','fulfilled'].includes(member.state) && member.receipt) return { eligible: true, reason: null }
     const schedules = list('schedules').filter(s => [s.action, ...s.history.map(revision => revision.action).filter(Boolean)]
-      .some(action => action.kind === 'task-command' && action.instructionIds.includes(instructionId)))
-    const occurrences = list('occurrences').filter(o => o.action.kind === 'task-command' && o.action.instructionIds.includes(instructionId))
+      .some(action => commandAction(action)?.instructionIds.includes(instructionId)))
+    const occurrences = list('occurrences').filter(o => commandAction(o.action)?.instructionIds.includes(instructionId))
     if (!schedules.length && !occurrences.length) return { eligible: !member.requiresTrigger, reason: member.requiresTrigger ? 'waiting_trigger' : null }
     const released = occurrences.find(o => o.releasedInstructionIds?.includes(instructionId) && !o.cancelledAt && !o.paused
       && (!o.scheduleId || read('schedules', o.scheduleId).state !== 'paused')
@@ -71,7 +146,38 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     if (released) return { eligible: true, reason: null, occurrenceId: released.id }
     return { eligible: false, reason: schedules.some(s => s.state === 'paused') || occurrences.some(o => o.paused) ? 'trigger_paused'
       : schedules.length && schedules.every(s => s.state === 'cancelled') || occurrences.length && occurrences.every(o => o.cancelledAt) ? 'trigger_cancelled'
-        : schedules.length && schedules.every(s => s.action.kind !== 'task-command' || !s.action.instructionIds.includes(instructionId)) && !occurrences.length ? 'trigger_superseded' : 'waiting_trigger' }
+        : schedules.length && schedules.every(s => !commandAction(s.action)?.instructionIds.includes(instructionId)) && !occurrences.length ? 'trigger_superseded' : 'waiting_trigger' }
+  }
+  function dispatchFrozen(occurrence, action) {
+    if (typeof dispatchInstruction !== 'function') fail('DYNAMIC_COORDINATION_DISPATCH_ADAPTER_REQUIRED')
+    occurrence.releasedInstructionIds = [...action.instructionIds]
+    save('occurrences', occurrence)
+    const results = [], waiting = []
+    for (const frozen of action.frozenInstructions) {
+      const member = get('dynamic_coordination_members', frozen.instructionId)
+      if (member.coordinationId !== occurrence.coordinationId || member.taskId !== frozen.taskId
+        || digest(member.command) !== frozen.commandDigest || digest(frozen.command) !== frozen.commandDigest
+        || digest(member.preconditionVersion) !== digest(frozen.preconditionVersion)) fail('DYNAMIC_COORDINATION_COMMAND_INVALID')
+      const previous = readCommandReceipt?.(frozen.command)
+      if (['applied','fulfilled'].includes(member.state)) {
+        results.push({ instructionId: member.id, commandId: frozen.command.id, state: member.state,
+          reconciled: true, receipt: clone(previous ?? member.receipt) })
+        continue
+      }
+      const result = dispatchInstruction({ ...clone(frozen), occurrenceId: occurrence.id })
+        if (result.member.state === 'applied' && member.templateInstructionId) {
+          for (const prior of all('dynamic_coordination_members').filter(candidate => candidate.id !== member.id
+            && candidate.templateInstructionId === member.templateInstructionId && candidate.state === 'applied'
+            && ['requirementRevision','controlRevision','runSequence'].some(key => candidate.effectiveVersion[key] !== result.member.effectiveVersion[key]))) {
+            prior.state = 'superseded'; prior.supersededBy = member.id; prior.supersededAt = now()
+            prior.supersessionReason = 'recurring_target_advanced'
+            put('dynamic_coordination_members', prior)
+          }
+        }
+      if (result.waiting?.length || result.member.state !== 'applied' && result.member.state !== 'fulfilled') waiting.push({ instructionId: member.id, dependencies: result.waiting ?? [] })
+      else results.push({ instructionId: member.id, commandId: frozen.command.id, state: result.member.state, receipt: clone(result.member.receipt) })
+    }
+    return {results,waiting}
   }
   function validateTriggerFact(coordination, trigger) {
     if (trigger.triggerKind === 'message') {
@@ -157,7 +263,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       if (!Number.isSafeInteger(schedule.graceMs) || schedule.graceMs < 0 || schedule.graceMs > 604800000) fail('DYNAMIC_ARGUMENT_INVALID')
       if (!Number.isSafeInteger(schedule.freshnessWindowMs) || schedule.freshnessWindowMs < 1000 || schedule.freshnessWindowMs > 86400000) fail('DYNAMIC_ARGUMENT_INVALID')
       if (!['coalesce-latest','catch-up-once','expire'].includes(schedule.misfirePolicy)) fail('DYNAMIC_ARGUMENT_INVALID')
-      if (schedule.action.kind === 'task-command' && schedule.rule.kind !== 'once') fail('DYNAMIC_COORDINATION_RECURRING_COMMAND_TEMPLATE_REQUIRED')
+      if (schedule.rule.kind !== 'once') recurringTemplates(schedule.action, schedule.id)
       save('schedules', schedule); return { schedule }
     }
     if (kind === 'coordination.schedule.change') {
@@ -168,7 +274,6 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       if (!coordinationActive(coordination.id)) fail('DYNAMIC_COORDINATION_CANCELLED')
       const rule = a.rule ?? schedule.rule, timezone = a.timezone ?? schedule.timezone
       try { validateTimeRule(rule, timezone) } catch { fail('DYNAMIC_COORDINATION_TIME_INVALID') }
-      if (rule.kind !== 'once' && (a.action ?? schedule.action).kind === 'task-command') fail('DYNAMIC_COORDINATION_RECURRING_COMMAND_TEMPLATE_REQUIRED')
       if (a.state !== undefined && !['active','paused','cancelled'].includes(a.state)) fail('DYNAMIC_ARGUMENT_INVALID')
       const scope = a.scope ?? 'future'
       if (!['future','unstarted'].includes(scope)) fail('DYNAMIC_ARGUMENT_INVALID')
@@ -179,6 +284,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
         nextDueAt: schedule.nextDueAt, cursor: clone(schedule.cursor), scope, changedAt: stamp })
       schedule.revision++; schedule.effectiveFrom = stamp; schedule.rule = clone(rule); schedule.timezone = timezone
       schedule.action = a.action === undefined ? clone(schedule.action) : validAction(a.action, coordination.groupId, coordination.id)
+      if (rule.kind !== 'once') recurringTemplates(schedule.action, schedule.id)
       schedule.target = validTarget(a.target ?? schedule.target, coordination.groupId)
       schedule.state = a.state ?? schedule.state
       // Pausing preserves the due cursor. Resuming without redefining the rule
@@ -258,7 +364,7 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
           : schedule.history.find(revision => revision.revision === occurrence.acceptedScheduleRevision)
         // A future-only revision leaves an earlier accepted occurrence valid,
         // but does not grant permission to invent an unrecorded old definition.
-        if (!acceptedDefinition || digest(acceptedDefinition.action) !== digest(occurrence.action)
+        if (!acceptedDefinition || digest(acceptedDefinition.action) !== digest(occurrence.templateAction ?? occurrence.action)
           || digest(acceptedDefinition.target) !== digest(occurrence.target)) fail('DYNAMIC_COORDINATION_REVISION_STALE')
         if (list('occurrences').some(o => o.scheduleId === schedule.id && o.id !== occurrence.id
           && !o.cancelledAt && (o.actionState === 'running' || ['pending','unknown'].includes(o.deliveryState)))) fail('DYNAMIC_COORDINATION_OVERLAP')
@@ -275,9 +381,47 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
     if (kind === 'coordination.job.read') {
       const job = read('jobs', a.jobId), occurrence = read('occurrences', job.occurrenceId)
       assertJob(job, occurrence, a.fence, stamp)
-      // Whitelisted in-process projection only: no arbitrary tools, Owner calls,
-      // attachment writes, Task mutations or model-supplied "read-only" assertions.
-      job.state = 'completed'; job.result = snapshot(occurrence)
+      // The query is always a whitelisted projection. A separately accepted,
+      // fixed conditional command can be released only after rereading this fact.
+      job.result = snapshot(occurrence)
+      if (occurrence.action.onIncomplete) {
+        const blocked = code => {
+          job.state='blocked';job.waitingReason=code
+          job.result.conditionalCommands={results:[],skipped:[],blocked:code,semantics:'No conditional command was applied.'}
+          occurrence.actionState='blocked';occurrence.failureReason=code
+          occurrence.result=clone(job.result);occurrence.deliveryState='pending'
+          save('jobs',job);save('occurrences',occurrence);return {job,occurrence}
+        }
+        if (occurrence.scheduleId) {
+          try { instantiateOccurrence(occurrence,read('schedules',occurrence.scheduleId)) }
+          catch(error) {
+            if (!['DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE','DYNAMIC_COORDINATION_RECURRING_TASK_STATE_CHANGED'].includes(error.code)) throw error
+            return blocked(error.code)
+          }
+        }
+        const conditional=occurrence.action.onIncomplete, selected=[], skipped=[]
+        for (const frozen of conditional.frozenInstructions) {
+          const task=get('dynamic_tasks',frozen.taskId)
+          if (task.status === 'completed') {
+            skipped.push({instructionId:frozen.instructionId,taskId:task.taskId,reason:'already_completed'})
+            const member=get('dynamic_coordination_members',frozen.instructionId)
+            if (!['applied','fulfilled','template'].includes(member.state)) {
+              member.state='superseded';member.conditionOutcome='already_completed';put('dynamic_coordination_members',member)
+            }
+          } else selected.push(frozen)
+        }
+        // Preflight the complete fixed conditional set before applying its first
+        // command. Changed scope is a visible blocked result, never a retry loop.
+        for(const frozen of selected) {
+          const task=get('dynamic_tasks',frozen.taskId), expected=frozen.preconditionVersion
+          if(['requirementRevision','controlRevision','runSequence'].some(key=>task[key]!==expected[key])
+            || (task.contextRevision??0)!==(expected.contextRevision??0)) return blocked('DYNAMIC_COORDINATION_VERSION_STALE')
+        }
+        const outcome=dispatchFrozen(occurrence,{kind:'task-command',instructionIds:selected.map(f=>f.instructionId),frozenInstructions:selected})
+        job.result.conditionalCommands={...outcome,skipped,semantics:'Authorized continue acceptance receipts; not business completion.'}
+        if (outcome.waiting.length) fail('DYNAMIC_COORDINATION_CONDITIONAL_WAITING')
+      }
+      job.state = 'completed'
       occurrence.actionState = 'succeeded'; occurrence.result = clone(job.result); occurrence.deliveryState = 'pending'
       save('jobs', job); save('occurrences', occurrence); return { job, occurrence }
     }
@@ -286,24 +430,20 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       assertJob(job, occurrence, a.fence, stamp)
       if (occurrence.triggerKind === 'business-event') validateTriggerFact(get('dynamic_coordination', occurrence.coordinationId), occurrence.trigger)
       if (occurrence.action.kind !== 'task-command' || typeof dispatchInstruction !== 'function') fail('DYNAMIC_COORDINATION_DISPATCH_ADAPTER_REQUIRED')
-      occurrence.releasedInstructionIds = [...occurrence.action.instructionIds]
-      save('occurrences', occurrence)
-      const results = [], waiting = []
-      for (const frozen of occurrence.action.frozenInstructions) {
-        const member = get('dynamic_coordination_members', frozen.instructionId)
-        if (member.coordinationId !== occurrence.coordinationId || member.taskId !== frozen.taskId
-          || digest(member.command) !== frozen.commandDigest || digest(frozen.command) !== frozen.commandDigest
-          || digest(member.preconditionVersion) !== digest(frozen.preconditionVersion)) fail('DYNAMIC_COORDINATION_COMMAND_INVALID')
-        const previous = readCommandReceipt?.(frozen.command)
-        if (['applied','fulfilled'].includes(member.state)) {
-          results.push({ instructionId: member.id, commandId: frozen.command.id, state: member.state,
-            reconciled: true, receipt: clone(previous ?? member.receipt) })
-          continue
+      if (occurrence.scheduleId) {
+        const schedule = read('schedules', occurrence.scheduleId)
+        const definition = occurrence.acceptedScheduleRevision === schedule.revision ? schedule
+          : schedule.history.find(revision => revision.revision === occurrence.acceptedScheduleRevision)
+        try { instantiateOccurrence(occurrence, definition) }
+        catch (error) {
+          if (!['DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE','DYNAMIC_COORDINATION_RECURRING_TASK_STATE_CHANGED'].includes(error.code)) throw error
+          job.state = 'blocked'; job.waitingReason = error.code
+          occurrence.actionState = 'blocked'; occurrence.failureReason = error.code
+          save('jobs', job); save('occurrences', occurrence)
+          return { job, occurrence }
         }
-        const result = dispatchInstruction({ ...clone(frozen), occurrenceId: occurrence.id })
-        if (result.waiting?.length || result.member.state !== 'applied' && result.member.state !== 'fulfilled') waiting.push({ instructionId: member.id, dependencies: result.waiting ?? [] })
-        else results.push({ instructionId: member.id, commandId: frozen.command.id, state: result.member.state, receipt: clone(result.member.receipt) })
       }
+      const {results,waiting}=dispatchFrozen(occurrence,occurrence.action)
       job.result = { observedAt: stamp, results, waiting, semantics: 'Task command acceptance receipts; not business completion.' }
       job.state = waiting.length ? 'waiting' : 'completed'; job.waitingReason = waiting.length ? 'waiting_dependency' : null
       occurrence.actionState = waiting.length ? 'waiting' : 'succeeded'; occurrence.result = clone(job.result)
@@ -319,9 +459,10 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       const previous = read('occurrences', id, true)
       if (previous) {
         if (trigger.triggerKind === 'time') {
-          const action = previous.action.kind === 'task-command'
-            ? { kind: previous.action.kind, instructionIds: previous.action.instructionIds }
-            : { kind: previous.action.kind, taskIds: previous.action.taskIds }
+          const acceptedAction = previous.templateAction ?? previous.action
+          const action = acceptedAction.kind === 'task-command'
+            ? { kind: acceptedAction.kind, instructionIds: acceptedAction.instructionIds }
+            : { kind: acceptedAction.kind, taskIds: acceptedAction.taskIds }
           if (previous.coordinationId !== coordination.id || digest(previous.trigger) !== digest(trigger)
             || digest(action) !== digest(a.action) || digest(previous.target) !== digest(a.target)) fail('DYNAMIC_COORDINATION_TRIGGER_CONFLICT')
           return { occurrence: previous, replayed: true }

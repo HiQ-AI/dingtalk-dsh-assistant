@@ -87,7 +87,7 @@ export function taskNotificationOutbound(notification) {
     // One source can produce both a question and completion. Deduplicate by notification.
     sourceMessageId: `task-notification:${notification.id}`,
     text: payload.text,
-    status: notification.supersededBy ? 'superseded' : delivered ? 'sent' : 'pending',
+    status: notification.state === 'superseded' || notification.supersededBy ? 'superseded' : delivered ? 'sent' : 'pending',
     notificationState: notification.state,
     notificationRetryAt: !delivered ? notification.nextAttemptAt ?? undefined : undefined,
     notificationKnownNotSent: knownNotSent,

@@ -65,6 +65,19 @@ test('notification projections retain unknown and only verified delivery becomes
   assert.deepEqual(calls, [{ groupId: 'g', outbound: unknown }])
 })
 
+test('retired coordination notification projects terminal superseded even before a replacement exists', async t => {
+  const store=await openResidentStore(memoryFacility());t.after(()=>store.close())
+  await store.subscribe({groupId:'g'})
+  const candidate={id:'retired-summary',state:'prepared',payload:{conversationId:'g',text:'earlier facts'}}
+  await projectTaskNotification({residentStore:store,notification:candidate})
+  await projectTaskNotification({residentStore:store,notification:{...candidate,state:'superseded',retirement:{reason:'coordination-facts-changed'}}})
+  let outbound=store.getGroup('g').outbox[0]
+  assert.equal(outbound.notificationState,'superseded');assert.equal(outbound.status,'superseded')
+  await projectTaskNotification({residentStore:store,notification:candidate})
+  outbound=store.getGroup('g').outbox[0]
+  assert.equal(outbound.notificationState,'superseded');assert.equal(outbound.status,'superseded')
+})
+
 test('question and completion for the same source have separate stable timeline identities', () => {
   const payload = { conversationId: 'g', sourceMessageId: 'm', text: '?' }
   assert.notEqual(taskNotificationOutbound({ id: 'question', state: 'prepared', payload }).sourceMessageId,

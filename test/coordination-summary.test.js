@@ -30,11 +30,50 @@ test('all individually cancelled members report cancelled rather than zero-resul
   assert.deepEqual(result.remainingInstructionIds,[])
 })
 
+test('Owner reorder clarification remains visible as an outstanding reason but never overrides terminal facts',()=>{
+  const assessment={id:'assessment',state:'needs_clarification',summary:'是否允许保留已发生的页面改动？',evidence:['existing execution log']}
+  const result=snapshot([{...member('A','applied'),reorderAssessment:assessment}])
+  assert.equal(result.state,'needs_attention')
+  assert.equal(result.members[0].blocker,assessment.summary)
+  assert.deepEqual(result.members[0].reorderAssessment.evidence,assessment.evidence)
+  for(const state of ['fulfilled','cancelled'])assert.equal(snapshot([{...member('A',state),reorderAssessment:assessment}]).members[0].blocker,null)
+})
+
+test('pending members stay outstanding while recurring templates are not unexecuted business work', () => {
+  const template = {...member('A','template'),recurringTemplateScheduleId:'daily',waitingReason:{code:'target_version_changed'}}
+  const build = coordination => coordinationSnapshot({coordination:{id:'coordination',revision:1,state:'active',...coordination},
+    members:[template],tasks:[{taskId:'A',status:'active',lastDecision:{action:'blocked',summary:'unrelated historical blocker'}}],schedules:[{id:'daily',revision:1,state:'active'}],occurrences:[],jobs:[]})
+  assert.deepEqual(build({}).remainingInstructionIds,[])
+  assert.equal(build({}).state,'active')
+  const pending = build({pendingClarifications:[{clarificationId:'ambiguous',question:'哪一个？'}]})
+  assert.equal(pending.state,'needs_attention')
+  assert.deepEqual(pending.outstanding.clarificationIds,['ambiguous'])
+  const cancelled=build({state:'cancelled',pendingClarifications:[{clarificationId:'ambiguous',question:'哪一个？'}]})
+  assert.equal(cancelled.state,'cancelled');assert.deepEqual(cancelled.outstanding.clarificationIds,[])
+})
+
 test('fulfilled and individually cancelled members report partial completion and retain distinct member facts', () => {
   const result = snapshot([member('A','fulfilled'),member('B','cancelled')])
   assert.equal(result.state,'partially_completed')
   assert.equal(result.fulfilled,1)
   assert.deepEqual(result.members.map(m=>m.state),['fulfilled','cancelled'])
+})
+
+test('a recurring authorization blocked at trigger remains visible as outstanding with its actual reason', () => {
+  const result=coordinationSnapshot({coordination:{id:'coordination',revision:1,state:'active'},members:[],tasks:[],
+    schedules:[{id:'daily',state:'active',revision:1}],occurrences:[{id:'slot',actionState:'blocked',deliveryState:'none',failureReason:'authorization_changed'}],
+    jobs:[{id:'job',state:'blocked',waitingReason:'authorization_changed'}]})
+  assert.equal(result.state,'needs_attention');assert.deepEqual(result.outstanding.occurrenceIds,['slot'])
+  assert.equal(result.occurrences[0].failureReason,'authorization_changed');assert.equal(result.jobs[0].failureReason,'authorization_changed')
+})
+
+test('a past recurring slot retains its own fulfillment without releasing current-version dependencies', () => {
+  const old={...member('A','fulfilled'),recurringOccurrenceId:'yesterday',waitingReason:{code:'target_version_changed'},completionProof:{commandId:'old-proof'}}
+  const result=coordinationSnapshot({coordination:{id:'coordination',revision:1,state:'active'},members:[old],tasks:[],
+    schedules:[{id:'daily',state:'active',revision:1}],occurrences:[],jobs:[]})
+  assert.equal(result.state,'active');assert.equal(result.members[0].state,'fulfilled')
+  assert.deepEqual(result.remainingInstructionIds,[])
+  assert.deepEqual(result.members[0].completionProof,{commandId:'old-proof'})
 })
 
 test('unsent summary A superseded by active facts B can freeze A again, while an unknown permitted summary keeps its identity', async t => {

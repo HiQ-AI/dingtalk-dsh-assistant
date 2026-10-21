@@ -536,6 +536,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     config: config.coordination ?? {}, residentStore, query, command, ownerActorId: config.ownerActorId,
     onError: (id, error) => failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() }),
     onHandoff: groupId => { rerouteGroups.add(groupId); if (!inflightGroups.has(groupId)) { rerouteGroups.delete(groupId); void kickGroup(groupId) } },
+    onChanged: async result => {
+      await refreshTasks()
+      const state = await query('coordination.get', {coordinationId:result.coordination.id})
+      for (const taskId of new Set(state.members.map(member=>member.taskId))) void kickTask(taskId)
+    },
     onApplied: async member => {
       const task = await requireTask(member.taskId), input = member.command.args
       await refreshTasks()
@@ -745,13 +750,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
         const operations = await query('operation.list', { taskId })
         const runResult = await taskSessions.run({ binding, input: { task, sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: await query('execution.list', { taskId }),
-          operations,
+          operations, coordinationAssessments: await query('coordination.assessments', {taskId}),
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...taskSessionModelSelection(models(), config.model, config.provider), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
           readDecisions: (args, current) => query('task.decisions', { ...args, taskId: current.taskId }),
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
+            if ((await query('coordination.assessments', {taskId})).length) fail('DYNAMIC_COORDINATION_ASSESSMENT_READ_ONLY')
             if (dialogue && (args.feedback !== true || !args.executionId)) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
             if (args.readbackOperationId) {
               const operation = await query('operation.get', { operationId: args.readbackOperationId })
@@ -852,11 +858,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             }
           },
           cancelExecution: async ({ executionId, reason }) => {
+            if ((await query('coordination.assessments', {taskId})).length) fail('DYNAMIC_COORDINATION_ASSESSMENT_READ_ONLY')
             if (dialogue) fail('TASK_DIALOGUE_CANNOT_CANCEL')
             const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
             await command('execution.cancel', { binding, executionId, reason })
             await executionSessions.cancel(executionId)
             return { executionId, cancellationRequested: true }
+          },
+          assessCoordinationReorder: async args => {
+            if (dialogue) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
+            const result = (await command('coordination.reorder.assess', {binding,...args},
+              `coordination-assessment:${args.assessmentId}:${binding.leaseEpoch}`)).result
+            await command('coordination.aggregate',{coordinationId:result.coordination.id})
+            return result
           },
           submit: async decision => {
             if (dialogue) {

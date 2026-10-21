@@ -3,13 +3,14 @@ import { freezeCoordinationMembers } from './coordination-task-commands.js'
 import { stableId } from './topic-model.js'
 import { validateTimeRule } from './coordination-time.js'
 import { selectCoordinationInstructions, assertCoordinationHandoffProof } from './coordination-changes.js'
+import { coordinationSnapshot } from './coordination-summary.js'
 
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clone = value => JSON.parse(JSON.stringify(value))
 
 /** One Host-owned queue for independent source units; Topic is never its parent. */
 export function openIndependentCoordination({ ctx, root, agentPreset, config = {}, residentStore, query, command,
-  ownerActorId, onApplied, onError, onHandoff = () => {}, planner: suppliedPlanner }) {
+  ownerActorId, onApplied, onError, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
   coordinationModelSelection(config)
   const observations = new Map(), arrangementObservations = new Map(), running = new Map(), admissions = new Set()
   let closed = false
@@ -23,8 +24,8 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
   async function context(request, args = {}) {
     assertOwned(request)
     const offset = args.offset ?? 0, limit = args.limit ?? 20, sourceOffset = args.sourceOffset ?? 0, arrangementSourceOffset = args.arrangementSourceOffset ?? 0,
-      arrangementOffset = args.arrangementOffset ?? 0
-    if (![offset, sourceOffset, arrangementSourceOffset, arrangementOffset].every(n => Number.isSafeInteger(n) && n >= 0)
+      arrangementOffset = args.arrangementOffset ?? 0, memberOffset = args.memberOffset ?? 0
+    if (![offset, sourceOffset, arrangementSourceOffset, arrangementOffset, memberOffset].every(n => Number.isSafeInteger(n) && n >= 0)
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || (args.taskIds?.length ?? 0) > 8
       || !Array.isArray(args.coordinationIds ?? []) || (args.coordinationIds?.length ?? 0) > 4) fail('COORDINATION_CONTEXT_RANGE')
     const tasks = (await query('task.list', { groupId: request.groupId })).filter(t => !t.archivedAt)
@@ -49,7 +50,9 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
       observed.set(coordinationId, clone({ ...state, schedules, occurrences }))
       const originalText = original?.sourceSnapshot.unitText ?? ''
       return { coordination: { id: state.coordination.id, revision: state.coordination.revision, state: state.coordination.state,
-        memberIds: state.coordination.memberIds, question: state.coordination.question,
+        memberIds: state.coordination.memberIds.slice(memberOffset, memberOffset + 100), question: state.coordination.question,
+        pendingClarifications: state.coordination.pendingClarifications ?? [],
+        ordinalSelectionRequiresClarification: state.coordination.hadPartialClarifications === true || !!state.coordination.pendingClarifications?.length,
         history: (state.coordination.history ?? []).slice(-20).map(entry => ({ sourceId: entry.sourceId, revision: entry.revision,
           oldRevision: entry.oldRevision, reason: entry.reason, original: entry.original?.slice(0, 2000), at: entry.at })),
         historyTruncated: (state.coordination.history?.length ?? 0) > 20 },
@@ -57,12 +60,16 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
           sourceRefs: original.sourceSnapshot.sourceRefs, sourceOffset: arrangementSourceOffset,
           nextSourceOffset: arrangementSourceOffset + 16000 < originalText.length ? arrangementSourceOffset + 16000 : null,
           truncated: arrangementSourceOffset > 0 || originalText.length > arrangementSourceOffset + 16000 } : null,
-        members: state.coordination.memberIds.map((id, index) => {
+        members: state.coordination.memberIds.slice(memberOffset, memberOffset + 100).map((id, index) => {
           const member = state.members.find(member => member.id === id)
-          return { instructionId: id, ordinal: index + 1, taskId: member.taskId, state: member.state, control: member.control ?? 'active',
-            original: member.original, dependencies: member.dependencies, effectiveVersion: member.effectiveVersion ?? null,
+          return { instructionId: id, ordinal: memberOffset + index + 1, taskId: member.taskId, state: member.state, control: member.control ?? 'active',
+            original: (member.original ?? '').slice(0, 2000), originalTruncated: (member.original?.length ?? 0) > 2000,
+            dependencies: member.dependencies, effectiveVersion: member.effectiveVersion ?? null,
             waitingReason: member.waitingReason, originalCommandId: member.command.id }
-        }), schedules: schedules.slice(-20), schedulesTruncated: schedules.length > 20,
+        }), memberOffset, membersTotal: state.coordination.memberIds.length,
+        nextMemberOffset: memberOffset + 100 < state.coordination.memberIds.length ? memberOffset + 100 : null,
+        membersTruncated: memberOffset > 0 || state.coordination.memberIds.length > memberOffset + 100,
+        schedules: schedules.slice(-20), schedulesTruncated: schedules.length > 20,
         occurrences: occurrences.slice(-20), occurrencesTruncated: occurrences.length > 20 }
     }))
     const recipientMap = new Map()
@@ -92,7 +99,7 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
       unresolved: unresolved.slice(-20).map(entry => ({ reservationId: entry.reservationId, unitId: entry.unitId, unitRevision: entry.unitRevision,
         coordinationId: entry.coordinationId, question: entry.clarification, sourcePreview: entry.sourceSnapshot.unitText?.slice(0, 400) })),
       unresolvedTruncated: unresolved.length > 20,
-      allowedActions: ['arrangement','schedule','clarify','reject','change','resolve','schedule-change','occurrence-control'], limitations: ['同群；收件人目录仅含有来源证据的已观察成员，缺失或重名必须澄清。'] })
+      allowedActions: ['arrangement','schedule','clarify','reject','change','resolve','query','schedule-change','occurrence-control'], limitations: ['同群；收件人目录仅含有来源证据的已观察成员，缺失或重名必须澄清。'] })
   }
   async function ensureSource(request) {
     const snapshot = request.sourceSnapshot
@@ -167,8 +174,14 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
   async function freezeProposal(request, proposal, coordinationId, source, extra = {}) {
     const observed = await checkObservedTasks(request, proposal)
     const taskCommand = proposal.kind === 'arrangement' || proposal.kind === 'schedule' && proposal.actionKind === 'task-command'
-    if (taskCommand && !proposal.members?.length) fail('COORDINATION_TASK_COMMAND_MEMBERS_REQUIRED')
-    const members = taskCommand ? freezeCoordinationMembers({ coordinationId, proposal, tasks: observed, source, ownerActorId, ...extra }) : []
+    const conditionalProposal = proposal.kind === 'schedule' ? proposal.conditionalMembers : undefined
+    if (conditionalProposal && (proposal.actionKind !== 'read-query' || conditionalProposal.some(member => member.action !== 'task-continue'
+      || member.progressImpact !== 'preserve' || !proposal.taskIds?.includes(member.taskId)))) fail('COORDINATION_CONDITIONAL_SCOPE_INVALID')
+    // A completed query target is never reopened by a conditional continue.
+    const conditional = conditionalProposal?.filter(member => observed.get(member.taskId)?.status !== 'completed')
+    if (taskCommand && !proposal.members?.length && !proposal.pendingClarifications?.length) fail('COORDINATION_TASK_COMMAND_MEMBERS_REQUIRED')
+    const members = taskCommand || conditional ? freezeCoordinationMembers({ coordinationId,
+      proposal: conditional ? { ...proposal, members: conditional } : proposal, tasks: observed, source, ownerActorId, ...extra }) : []
     let schedule
     if (proposal.kind === 'schedule') {
       validateTimeRule(proposal.rule, proposal.timezone)
@@ -177,11 +190,14 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
       if (proposal.recipientIds.some(id => !known.has(id))) fail('COORDINATION_RECIPIENT_UNRESOLVED')
       schedule = { scheduleId: `schedule:${coordinationId}`, timezone: proposal.timezone, rule: proposal.rule,
         action: taskCommand ? { kind: 'task-command', instructionIds: members.map(member => member.instructionId) }
-          : { kind: 'read-query', taskIds: proposal.taskIds }, target: { conversationId: request.groupId, recipientIds: proposal.recipientIds } }
+          : { kind: 'read-query', taskIds: proposal.taskIds, ...(conditional?.length ? { onIncomplete: { kind: 'task-command', instructionIds: members.map(member => member.instructionId) } } : {}) },
+        target: { conversationId: request.groupId, recipientIds: proposal.recipientIds } }
     }
     return { members, schedule }
   }
-  const acceptanceText = (proposal, memberCount) => proposal?.kind === 'schedule'
+  const acceptanceText = (proposal, memberCount) => proposal?.kind === 'query' ? proposal.answerText
+    : proposal?.pendingClarifications?.length ? `已记录 ${memberCount} 项明确安排；另有 ${proposal.pendingClarifications.length} 项待澄清：${proposal.pendingClarifications.map(item => `[${item.clarificationId}] ${item.question}`).join('；')}。${proposal.allTogether ? '整批一起的要求尚未通过澄清屏障，暂不派发。' : '明确且独立的成员继续处理。'}`
+    : proposal?.kind === 'schedule'
     ? `已记录时间安排：${proposal.interpretation}（${proposal.timezone}）。到期读取事实，动作结果与通知送达分别记录。`
     : ['change','resolve','schedule-change','occurrence-control'].includes(proposal?.kind)
       ? `已记录对原安排的${proposal.kind === 'resolve' ? '澄清补全' : '变更'}；已生效或发送未知的效果不会因此撤回，原任务未被自动取消。`
@@ -209,10 +225,13 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
         }
       }
     } else if (proposal.kind === 'resolve') {
-      if (state.coordination.state !== 'needs_clarification') fail('COORDINATION_CLARIFICATION_ALREADY_RESOLVED')
+      const partial = proposal.clarificationIds !== undefined
+      if (!partial && state.coordination.state !== 'needs_clarification'
+        || partial && !state.coordination.pendingClarifications?.length) fail('COORDINATION_CLARIFICATION_ALREADY_RESOLVED')
+      if (partial && (proposal.resolution.kind !== 'arrangement' || proposal.resolution.pendingClarifications.length)) fail('COORDINATION_PARTIAL_RESOLUTION_INVALID')
       const frozen = await freezeProposal(request, proposal.resolution, proposal.coordinationId, source,
         { instructionRevision: proposal.expectedRevision + 1, existingMembers: state.members })
-      change = { action: 'resolve', members: frozen.members, readOnly: proposal.resolution.kind === 'schedule',
+      change = { action: partial ? 'resolve-members' : 'resolve', ...(partial ? { clarificationIds: proposal.clarificationIds } : {}), members: frozen.members, readOnly: proposal.resolution.kind === 'schedule',
         ...(frozen.schedule ? { schedule: frozen.schedule } : {}), proposal: proposal.resolution }
     } else if (proposal.kind === 'schedule-change') {
       const schedule = observed.schedules.find(schedule => schedule.id === proposal.scheduleId)
@@ -234,6 +253,7 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
     const receipt = await command('coordination.change', { sourceId: ledger.id, fence: ledger.fence,
       coordinationId: proposal.coordinationId, expectedRevision: proposal.expectedRevision, change, proposal: clone(proposal) },
     `coordination-change:${request.reservationId}:${request.generation}`)
+    await onChanged(receipt.result)
     await updateResident(request, 'accepted', { coordinationId: proposal.coordinationId, settled: true })
     await prepareSummary(request, proposal.coordinationId, `accepted:${request.reservationId}`, acceptanceText(proposal),
       proposal.kind === 'resolve' ? {} : { noticeKind: 'control', sourceAcceptanceId: ledger.id })
@@ -246,6 +266,26 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
     const { source, ledger } = await ensureSource(request)
     const coordinationId = stableId('coordination', `${request.groupId}:${request.unitId}:${request.unitRevision}:${request.generation}`)
     if (proposal.kind === 'reject') return reject(request, ledger, proposal.reason)
+    if (proposal.kind === 'query') {
+      const snapshots = []
+      for (const id of proposal.coordinationIds) {
+        if (!arrangementObservations.get(request.reservationId)?.has(id)) fail('COORDINATION_ARRANGEMENT_CONTEXT_REQUIRED')
+        const state = await query('coordination.get', { coordinationId: id })
+        if (!state || state.coordination.groupId !== request.groupId) fail('COORDINATION_ARRANGEMENT_SCOPE')
+        const schedules = await query('coordination.schedule.list', { coordinationId: id })
+        const occurrences = await query('coordination.occurrence.list', { coordinationId: id })
+        const occurrenceIds = new Set(occurrences.map(item => item.id))
+        snapshots.push(coordinationSnapshot({ ...state, tasks: await query('task.list', { groupId: request.groupId }), schedules, occurrences,
+          jobs: (await query('coordination.job.list')).filter(job => occurrenceIds.has(job.occurrenceId)) }))
+      }
+      const answerText = `截至 ${new Date().toISOString()} 的协调事实：\n${snapshots.map(snapshot => `${snapshot.coordinationId}（revision ${snapshot.revision}）：${snapshot.state}；正式完成 ${snapshot.fulfilled} 项；尚欠 ${snapshot.remainingInstructionIds.length} 项。\n${snapshot.members.map(member => `${member.instructionId} / ${member.taskId}：${member.state}；要求：${member.requirement}；等待：${member.waitingReason?.code ?? member.blocker ?? '无'}；回执：${member.receiptRef ?? '尚未接收'}；完成证明：${member.completionProof?.commandId ?? '无'}`).join('\n')}\n待澄清：${(snapshot.pendingClarifications ?? []).map(item => item.question).join('；') || '无'}；活动计划：${snapshot.outstanding.activeScheduleIds.length}；待结实例：${snapshot.outstanding.occurrenceIds.length}。`).join('\n')}`
+      const frozenProposal = { ...proposal, answerText, snapshots }
+      await command('coordination.accept', { sourceId: ledger.id, fence: ledger.fence, coordinationId, members: [], readOnly: true,
+        proposal: frozenProposal }, `coordination-accept:${request.reservationId}:${request.generation}`)
+      await updateResident(request, 'accepted', { coordinationId, settled: true })
+      await prepareSummary(request, coordinationId, `accepted:${request.reservationId}`, answerText)
+      return { status: 'accepted', coordinationId, snapshots }
+    }
     if (['change','resolve','schedule-change','occurrence-control'].includes(proposal.kind)) return submitChange(request, proposal, source, ledger)
     if (proposal.kind === 'clarify') {
       await command('coordination.source.clarify', { sourceId: ledger.id, fence: ledger.fence, coordinationId,
@@ -259,11 +299,14 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
     // asks a model to reinterpret already accepted business contents.
     await command('coordination.accept', { sourceId: ledger.id, fence: ledger.fence, coordinationId,
       members, readOnly: proposal.kind === 'schedule', proposal: clone(proposal), allTogether: proposal.allTogether ?? false,
+      pendingClarifications: proposal.pendingClarifications ?? [],
       ...(schedule ? { schedule } : {}) },
     `coordination-accept:${request.reservationId}:${request.generation}`)
-    await updateResident(request, 'accepted', { coordinationId, settled: true })
+    const pending = proposal.pendingClarifications ?? []
+    await updateResident(request, pending.length ? 'needs_clarification' : 'accepted', { coordinationId, settled: !pending.length,
+      ...(pending.length ? { clarification: pending.map(item => item.question).join('；') } : {}) })
     await prepareSummary(request, coordinationId, `accepted:${request.reservationId}`, acceptanceText(proposal, members.length))
-    return { status: 'accepted', coordinationId, memberIds: members.map(m => m.instructionId) }
+    return { status: pending.length ? 'partially_accepted' : 'accepted', coordinationId, memberIds: members.map(m => m.instructionId), pendingClarifications: pending }
   }
   async function prepareSummary(request, coordinationId, eventId, text, fact = {}) {
     const notificationId = `coordination:${coordinationId}:${eventId}`
@@ -276,10 +319,11 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
   const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, agentPreset, config, context, submit,
     isCurrent: request => { try { assertOwned(request); return true } catch { return false } } })
   async function acceptMemberTrigger(groupId, coordination, state, member) {
+    if (coordination.allTogether && coordination.pendingClarifications?.length) return
     if (member.control === 'paused' || member.control === 'cancelled') return
     const schedules = await query('coordination.schedule.list', { coordinationId: coordination.id })
     if (schedules.some(schedule => [schedule.action, ...(schedule.history ?? []).map(revision => revision.action).filter(Boolean)]
-      .some(action => action.kind === 'task-command' && action.instructionIds.includes(member.id)))) return
+      .some(action => (action.kind === 'task-command' ? action : action.onIncomplete)?.instructionIds.includes(member.id)))) return
     const occurrences = await query('coordination.occurrence.list', { coordinationId: coordination.id })
     if (occurrences.some(occurrence => occurrence.action.kind === 'task-command' && occurrence.action.instructionIds.includes(member.id))) return
     let trigger
@@ -361,11 +405,14 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
             } else if (ledger.resolvedBy) {
               await updateResident(request, 'accepted', { coordinationId: ledger.coordinationId, settled: true })
             } else if (ledger.state === 'accepted') {
-              await updateResident(request, 'accepted', { coordinationId: ledger.coordinationId, settled: true })
+              const pending = ledger.pendingClarifications ?? []
+              await updateResident(request, pending.length ? 'needs_clarification' : 'accepted', { coordinationId: ledger.coordinationId, settled: !pending.length,
+                ...(pending.length ? { clarification: pending.map(item => item.question).join('；') } : {}) })
               const state = await query('coordination.get', { coordinationId: ledger.coordinationId })
               const proposal = ledger.acceptedProposal ?? state.coordination.proposal
+              if (['change','resolve','schedule-change','occurrence-control'].includes(proposal?.kind)) await onChanged({ coordination: state.coordination, members: state.members })
               await prepareSummary(request, ledger.coordinationId, `accepted:${request.reservationId}`,
-                acceptanceText(proposal, state.members.length), ['change','schedule-change','occurrence-control'].includes(proposal?.kind)
+                acceptanceText(proposal, proposal?.members?.length ?? state.members.length), ['change','schedule-change','occurrence-control'].includes(proposal?.kind)
                   ? { noticeKind: 'control', sourceAcceptanceId: ledger.id } : {})
             } else if (ledger.state === 'needs_clarification') {
               await updateResident(request, 'needs_clarification', { coordinationId: ledger.coordinationId, clarification: ledger.question })

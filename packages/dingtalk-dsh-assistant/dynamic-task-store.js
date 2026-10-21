@@ -363,6 +363,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   }
 
   const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now,
+    validateOwner: binding => currentTask(binding),
     triggerState: id => schedules.memberTriggerState(id),
     notifyTask: (taskId, payload) => wake(taskId, 'coordination.changed', payload, `coordination-change:${payload.sourceId}:${payload.instructionId}`),
     apply(command) {
@@ -377,6 +378,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       return value
     } })
   const schedules = coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now,
+    instantiateInstructions: input => coordination.instantiateRecurring(input),
     dispatchInstruction: ({ instructionId }) => {
       const member = get('dynamic_coordination_members', instructionId)
       return coordination.command('coordination.apply', { instructionId, expectedRevision: get('dynamic_coordination', member.coordinationId).revision })
@@ -427,7 +429,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const notificationId = `coordination:${item.id}:summary:${item.summaryRevision}`
         notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
           payload: { kind: 'coordination', replyKind: 'substantive', conversationId: item.groupId, atOpenDingTalkIds: [],
-            text: `协调安排：${snapshot.state}；${snapshot.fulfilled}/${members.length} 项具有正式结果证明；尚欠 ${snapshot.remainingInstructionIds.length} 项。各任务业务结果以原 Owner 回执为准。`,
+            text: `协调安排：${snapshot.state}；${snapshot.fulfilled}/${members.length} 项具有正式结果证明；尚欠 ${snapshot.remainingInstructionIds.length} 项。各任务业务结果以原 Owner 回执为准。`
+              + snapshot.members.filter(member=>member.reorderAssessment?.state === 'needs_clarification' && member.blocker)
+                .map(member=>`\n${member.taskId} 顺序待澄清：${member.blocker}`).join(''),
             fact: { coordinationId: item.id, eventId: `summary:${item.summaryRevision}`, snapshotDigest, summaryRevision: item.summaryRevision } } }, commandId).result.notification
         item.summaryNotificationId = notification.id; item.lastNotifiedDigest = snapshotDigest
       }
@@ -734,6 +738,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.wait') {
       const task = currentTask(a.binding, { active: false })
+      if (all('dynamic_coordination_members').some(member=>member.taskId === task.taskId && member.reorderAssessment?.state === 'pending'
+        && member.control !== 'cancelled' && get('dynamic_coordination',member.coordinationId).state === 'active'
+        && coordination.current(member))) fail('DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED')
       const question = a.question ?? a.decision?.question ?? null
       if (typeof question === 'string' && question.trim()) {
         const executions = execs(task.taskId).filter(executionCurrent)
@@ -814,6 +821,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.complete') {
       const task = currentTask(a.binding)
+      if (all('dynamic_coordination_members').some(member=>member.taskId === task.taskId
+        && ['pending','needs_clarification'].includes(member.reorderAssessment?.state) && member.control !== 'cancelled'
+        && get('dynamic_coordination',member.coordinationId).state === 'active' && coordination.current(member))) fail('DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED')
       if (task.coordinationHold) fail('DYNAMIC_COORDINATION_WAITING')
       if (task.dialogue?.some(item => !item.reply)) fail('DYNAMIC_TASK_DIALOGUE_PENDING')
       if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt
@@ -1535,6 +1545,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       let value
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
       else if (q.kind === 'coordination.runtime') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value ?? '{"mode":"active"}')
+      else if (q.kind === 'coordination.assessments') value = all('dynamic_coordination_members').filter(m => m.taskId === q.taskId
+        && m.control !== 'cancelled' && get('dynamic_coordination',m.coordinationId).state === 'active'
+        && coordination.current(m)
+        && ['pending','needs_clarification'].includes(m.reorderAssessment?.state)).map(m => ({instructionId:m.id,coordinationId:m.coordinationId,...m.reorderAssessment}))
       else if (q.kind === 'coordination.list') value = all('dynamic_coordination').filter(c => !q.groupId || c.groupId === q.groupId)
       else if (q.kind === 'coordination.get') value = { coordination: get('dynamic_coordination', q.coordinationId),
         members: all('dynamic_coordination_members').filter(m => m.coordinationId === q.coordinationId).map(coordination.view) }

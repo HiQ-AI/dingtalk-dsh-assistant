@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS dynamic_task_events(sequence INTEGER PRIMARY KEY AUTO
 CREATE TABLE IF NOT EXISTS dynamic_coordination_consumers(id TEXT PRIMARY KEY,body TEXT NOT NULL CHECK(json_valid(body)));
 `
 
-export function coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, apply, now, triggerState = () => ({ eligible: true }), notifyTask = () => {} }) {
+export function coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, apply, now, validateOwner, triggerState = () => ({ eligible: true }), notifyTask = () => {} }) {
   const version = task => ({ requirementRevision: task.requirementRevision, contextRevision: task.contextRevision ?? 0,
     controlRevision: task.controlRevision, runSequence: task.runSequence })
   const current = member => {
@@ -31,7 +31,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
   }
   const waiting = member => member.dependencies.filter(id => !fulfilled(get('dynamic_coordination_members', id)))
   const taskMembers = taskId => all('dynamic_coordination_members').filter(m => m.taskId === taskId
-    && !['cancelled','superseded','fulfilled'].includes(m.state)
+    && !['cancelled','superseded','fulfilled','template'].includes(m.state)
     && get('dynamic_coordination', m.coordinationId).state !== 'cancelled')
   const scope = (taskId, inputVersion) => {
     const task = get('dynamic_tasks', taskId)
@@ -44,18 +44,25 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     for (const member of taskMembers(execution.taskId)) {
       const existing = member.existingInputs?.some(input => input.executionId === execution.executionId && input.inputVersion === execution.inputVersion)
       if (existing && !bound?.instructionIds.includes(member.id)) continue
+      const batch = get('dynamic_coordination', member.coordinationId)
+      if (batch.allTogether && batch.pendingClarifications?.length) fail('DYNAMIC_COORDINATION_WAITING', member.id)
       if (!current(member)) {
         if (bound?.instructionIds.includes(member.id)) fail('DYNAMIC_COORDINATION_COVERAGE_STALE', member.id)
         continue
       }
-      if (member.control === 'paused' || member.control === 'cancelled' || !triggerState(member.id).eligible || waiting(member).length || member.state !== 'applied') fail('DYNAMIC_COORDINATION_WAITING', member.id)
+      if (!['paused','cancelled'].includes(member.control) && member.reorderAssessment?.state === 'assessed'
+        && member.reorderAssessment.decision === 'continue_existing'
+        && member.reorderExistingInputs?.some(input => input.executionId === execution.executionId && input.inputVersion === execution.inputVersion)) continue
+      if (member.reorderAssessment?.state === 'pending' || member.reorderAssessment?.state === 'needs_clarification' || member.control === 'paused' || member.control === 'cancelled' || !triggerState(member.id).eligible || waiting(member).length || member.state !== 'applied') fail('DYNAMIC_COORDINATION_WAITING', member.id)
       if (!bound?.instructionIds.includes(member.id)) fail('DYNAMIC_COORDINATION_COVERAGE_STALE', member.id)
     }
   }
   const view = member => {
     const coordination = get('dynamic_coordination', member.coordinationId), dependencies = waiting(member)
     const trigger = triggerState(member.id)
-    const reason = coordination.state === 'cancelled' || member.control === 'cancelled' || ['cancelled','superseded'].includes(member.state) ? 'cancelled'
+      const reason = coordination.allTogether && coordination.pendingClarifications?.length ? 'waiting_batch_clarification'
+      : coordination.state === 'cancelled' || member.control === 'cancelled' || ['cancelled','superseded'].includes(member.state) ? 'cancelled'
+      : member.reorderAssessment && ['pending','needs_clarification'].includes(member.reorderAssessment.state) ? `reorder_${member.reorderAssessment.state}`
       : member.control === 'paused' ? 'paused' : !trigger.eligible ? trigger.reason : !current(member) ? 'target_version_changed' : dependencies.length ? 'waiting_dependency' : null
     return { ...member, eligible: coordination.state === 'active' && member.state === 'ready' && reason === null,
       waitingReason: reason === null ? null : { code: reason, dependencyInstructionIds: dependencies } }
@@ -104,7 +111,9 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     const edges = new Map()
     for (const m of graph.values()) if (!['cancelled','superseded'].includes(m.state) && m.control !== 'cancelled') {
       const parents = edges.get(m.taskId) ?? new Set()
-      for (const id of m.dependencies) {
+      const dependencies = ['pending','needs_clarification'].includes(m.reorderAssessment?.state)
+        ? m.reorderAssessment.afterInstructionIds : m.dependencies
+      for (const id of dependencies) {
         const parent = graph.get(id)
         if (!parent) fail('DYNAMIC_COORDINATION_DEPENDENCY_MISSING')
         if (get('dynamic_tasks', parent.taskId).groupId !== get('dynamic_tasks', m.taskId).groupId) fail('DYNAMIC_COORDINATION_SCOPE')
@@ -116,6 +125,26 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     const visit = id => { if (stack.has(id)) fail('DYNAMIC_COORDINATION_CYCLE'); if (seen.has(id)) return
       stack.add(id); for (const parent of edges.get(id) ?? []) visit(parent); stack.delete(id); seen.add(id) }
     for (const id of edges.keys()) visit(id)
+  }
+  function instantiateRecurring({ coordinationId, occurrenceId, inputs }) {
+    const coordination = get('dynamic_coordination', coordinationId)
+    const source = get('dynamic_coordination_sources', coordination.sourceId)
+    if (coordination.state !== 'active' || source.frozen || source.dispatchOwner !== 'coordination'
+      || source.fence !== coordination.sourceFence) fail('DYNAMIC_COORDINATION_SOURCE_STALE')
+    const members = inputs.map(input => prepareMember(input, coordinationId, source))
+    checkGraph(members)
+    for (const member of members) {
+      member.recurringOccurrenceId = occurrenceId
+      member.templateInstructionId = inputs.find(input => input.instructionId === member.id).templateInstructionId
+      const template = get('dynamic_coordination_members', member.templateInstructionId)
+      member.original = template.original
+      member.materializationSourceId = source.id
+      member.authorizationSourceRefs = clone(template.command.args.sourceRefs ?? [])
+      put('dynamic_coordination_members', member)
+      coordination.memberIds.push(member.id)
+    }
+    put('dynamic_coordination', coordination)
+    return members
   }
   function command(kind, a) {
     if (kind === 'coordination.reserve') {
@@ -174,7 +203,11 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       if (replacing && (replacing.state !== 'needs_clarification' || replacing.revision !== a.replaceClarificationRevision)) fail('DYNAMIC_COORDINATION_EXISTS')
       if (array(a.members).length > 100) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
       const members = a.members.map(input => prepareMember(input, id, source))
-      if (!members.length && a.readOnly !== true || new Set(members.map(m => m.id)).size !== members.length
+      checkGraph(members)
+      const pending = clone(array(a.pendingClarifications ?? []))
+      if (pending.length > 100 || new Set(pending.map(item => text(item.clarificationId, 'clarificationId'))).size !== pending.length) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
+      pending.forEach(item => { text(item.question, 'question'); array(item.candidates ?? []) })
+      if (!members.length && !pending.length && a.readOnly !== true || new Set(members.map(m => m.id)).size !== members.length
         || new Set(members.map(m => m.taskId)).size !== members.length
         || new Set(members.map(m => m.command.id)).size !== members.length) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
       const graph = new Map([...all('dynamic_coordination_members').filter(m => !['cancelled','superseded'].includes(m.state)), ...members].map(m => [m.id, m]))
@@ -214,14 +247,16 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       const coordination = { id, revision: replacing ? replacing.revision + 1 : 1, sourceId: source.id, groupId: source.groupId, topicRefs: a.topicRefs ?? [],
         sourceFence: source.fence, memberIds: members.map(m => m.id), state: 'active', createdAt: now(),
         history: replacing ? [...(replacing.history ?? []), { revision: replacing.revision, sourceId: replacing.sourceId, reason: 'clarification-resolved', at: now() }] : [],
-        ...(a.proposal ? { proposal: clone(record(a.proposal)) } : {}), allTogether: a.allTogether === true }
+        ...(a.proposal ? { proposal: clone(record(a.proposal)) } : {}), allTogether: a.allTogether === true,
+        pendingClarifications: pending, hadPartialClarifications: pending.length > 0, pendingSourceId: pending.length ? source.id : null }
       members.forEach(m => put('dynamic_coordination_members', m))
       put('dynamic_coordination', coordination)
       if (replacing) {
         const old = get('dynamic_coordination_sources', replacing.sourceId)
         old.state = 'accepted'; old.resolvedBy = source.id; old.coordinationId = id; put('dynamic_coordination_sources', old)
       }
-      source.state = 'accepted'; source.coordinationId = id; put('dynamic_coordination_sources', source)
+      source.state = 'accepted'; source.coordinationId = id; source.settled = !pending.length
+      source.pendingClarifications = clone(pending); put('dynamic_coordination_sources', source)
       source.acceptedProposal = clone(a.proposal ?? {}); source.acceptedRevision = coordination.revision; source.acceptedKind = replacing ? 'resolve' : 'arrangement'
       put('dynamic_coordination_sources', source)
       return { coordination, members }
@@ -235,6 +270,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       if (member.state === 'applied') return { member }
       if (member.state !== 'ready' || !current(member)) fail('DYNAMIC_COORDINATION_VERSION_STALE')
       const dependencies = waiting(member)
+      if (coordination.allTogether && coordination.pendingClarifications?.length) return { member, waiting: ['waiting_batch_clarification'] }
       if (dependencies.length) return { member, waiting: dependencies }
       if (member.control === 'paused' || member.control === 'cancelled' || !triggerState(member.id).eligible) return { member, waiting: [member.control ?? triggerState(member.id).reason] }
       // The outer TaskStore receipt commits the frozen command and task mutation together.
@@ -247,12 +283,50 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       if (!['applied','fulfilled'].includes(member.state)) fail('DYNAMIC_COORDINATION_VERSION_STALE')
       member.hostHandoffAt ??= now(); put('dynamic_coordination_members', member); return { member }
     }
+    if (kind === 'coordination.reorder.assess') {
+      const task = validateOwner(a.binding), member = get('dynamic_coordination_members', a.instructionId)
+      const coordination = get('dynamic_coordination', member.coordinationId), pending = member.reorderAssessment
+      if (member.taskId !== task.taskId || !pending || pending.id !== a.assessmentId || pending.state !== 'pending'
+        || coordination.state !== 'active' || member.control === 'cancelled' || member.control === 'paused'
+        || coordination.revision < pending.revision || !current(member)) fail('DYNAMIC_COORDINATION_ASSESSMENT_STALE')
+      if (!['continue_existing','safe_point','needs_clarification'].includes(a.decision)) fail('DYNAMIC_COORDINATION_ASSESSMENT_INVALID')
+      const evidence = array(a.evidence)
+      if (!evidence.length || evidence.some(item => typeof item !== 'string' || !item.trim())) fail('DYNAMIC_COORDINATION_ASSESSMENT_EVIDENCE_REQUIRED')
+      const executions = all('dynamic_executions').filter(item => item.taskId === task.taskId)
+      const active = executions.filter(item => !item.drained || !['succeeded','failed','cancelled','stale'].includes(item.status))
+      if (a.decision === 'safe_point' && (active.length || all('dynamic_operations').some(item => item.taskId === task.taskId
+        && !['succeeded','failed','cancelled'].includes(item.state)))) fail('DYNAMIC_COORDINATION_SAFE_POINT_UNPROVEN')
+      pending.state = a.decision === 'needs_clarification' ? 'needs_clarification' : 'assessed'
+      pending.decision = a.decision; pending.summary = text(a.summary, 'summary'); pending.evidence = clone(evidence)
+      pending.ownerBinding = clone(a.binding); pending.decidedAt = now()
+      if (a.decision !== 'needs_clarification') {
+        member.dependencies = pending.afterInstructionIds
+        member.reorderExistingInputs = a.decision === 'continue_existing' ? active.map(item => ({executionId:item.executionId,inputVersion:item.inputVersion})) : []
+        checkGraph([member])
+      }
+      put('dynamic_coordination_members', member)
+      ;(coordination.history ??= []).push({eventId:`${pending.id}:${member.id}`,kind:'owner-reorder-assessment',instructionId:member.id,
+        sourceId:pending.sourceId,revision:coordination.revision,decision:a.decision,summary:pending.summary,evidence:clone(evidence),at:now()})
+      put('dynamic_coordination',coordination)
+      return {member,coordination,alreadyStarted:a.decision === 'continue_existing',futureInputsGated:a.decision !== 'needs_clarification'}
+    }
     if (kind === 'coordination.change') {
       const source = get('dynamic_coordination_sources', a.sourceId), coordination = get('dynamic_coordination', a.coordinationId)
       if (source.fence !== a.fence || source.state !== 'reserved' || source.frozen || source.dispatchOwner !== 'coordination'
         || coordination.groupId !== source.groupId || coordination.revision !== a.expectedRevision) fail('DYNAMIC_COORDINATION_REVISION_STALE')
       const change = record(a.change), reason = text(a.reason ?? source.original, 'reason')
-      if (change.action === 'resolve') {
+      if (change.action === 'resolve-members') {
+        const pending = coordination.pendingClarifications ?? [], ids = array(change.clarificationIds)
+        if (!ids.length || new Set(ids).size !== ids.length || ids.some(id => !pending.some(item => item.clarificationId === id))) fail('DYNAMIC_COORDINATION_CLARIFICATION_STALE')
+        const added = array(change.members).map(input => prepareMember(input, coordination.id, source))
+        if (!added.length) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
+        checkGraph(added); added.forEach(m => put('dynamic_coordination_members', m)); coordination.memberIds.push(...added.map(m => m.id))
+        coordination.pendingClarifications = pending.filter(item => !ids.includes(item.clarificationId))
+        const original = get('dynamic_coordination_sources', coordination.pendingSourceId)
+        original.pendingClarifications = clone(coordination.pendingClarifications); original.settled = !original.pendingClarifications.length
+        if (original.settled) original.resolvedBy = source.id
+        put('dynamic_coordination_sources', original)
+      } else if (change.action === 'resolve') {
         if (coordination.state !== 'needs_clarification') fail('DYNAMIC_COORDINATION_REVISION_STALE')
         const result = command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: coordination.id,
           replaceClarificationRevision: coordination.revision, members: change.members ?? [], readOnly: change.readOnly === true, proposal: change.proposal })
@@ -264,7 +338,10 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       const selected = array(change.instructionIds ?? coordination.memberIds)
       if (selected.some(id => !coordination.memberIds.includes(id))) fail('DYNAMIC_COORDINATION_SCOPE')
       const members = selected.map(id => get('dynamic_coordination_members', id)), affected = []
-      if (['pause','resume','cancel'].includes(change.action)) {
+      if (change.action === 'resolve-members') {
+        // Added members and clarification resolution were committed above, in
+        // the same transaction as this source acceptance and revision update.
+      } else if (['pause','resume','cancel'].includes(change.action)) {
         for (const member of members) {
           member.control = change.action === 'pause' ? 'paused' : change.action === 'cancel' ? 'cancelled' : 'active'
           if (change.action === 'cancel' && member.state === 'ready') member.state = 'cancelled'
@@ -287,10 +364,19 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         const changed = array(change.dependencies).map(item => {
           if (!coordination.memberIds.includes(item.instructionId)) fail('DYNAMIC_COORDINATION_SCOPE')
           const member = get('dynamic_coordination_members', item.instructionId)
-          if (member.state !== 'ready') fail('DYNAMIC_COORDINATION_ALREADY_STARTED')
+          if (member.state !== 'ready') {
+            if (member.state !== 'applied' || !current(member)) fail('DYNAMIC_COORDINATION_ALREADY_STARTED')
+            member.reorderAssessment = {id:`reorder:${source.id}:${member.id}`,sourceId:source.id,revision:coordination.revision+1,
+              state:'pending',afterInstructionIds:array(item.afterInstructionIds),original:source.original,requestedAt:now()}
+            member.reorderExistingInputs = []
+            notifyTask(member.taskId,{coordinationId:coordination.id,instructionId:member.id,sourceId:source.id,original:source.original,
+              assessment:clone(member.reorderAssessment),instruction:'先只读评估已运行工作与新顺序。用task_coordination_reorder_assess提交证据：既有输入继续但后续输入受依赖约束、已证实安全点，或需澄清。评估前不修订目标、不取消或重启执行；不能追溯声称已有严格顺序。'})
+            return member
+          }
           member.dependencies = array(item.afterInstructionIds); return member
         })
-        checkGraph(changed); changed.forEach(m => put('dynamic_coordination_members', m))
+        checkGraph(changed.map(m => m.reorderAssessment?.state === 'pending' ? {...m,dependencies:m.reorderAssessment.afterInstructionIds} : m))
+        changed.forEach(m => put('dynamic_coordination_members', m))
       } else if (!['schedule','occurrence'].includes(change.action)) fail('DYNAMIC_ARGUMENT_INVALID', 'change.action')
       ;(coordination.history ??= []).push({ eventId: source.id, sourceId: source.id, original: source.original,
         oldRevision: coordination.revision, revision: coordination.revision + 1, change: clone(change), reason, at: now() })
@@ -314,5 +400,5 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     fail('DYNAMIC_COMMAND_UNKNOWN', kind)
   }
   const coverage = taskId => taskMembers(taskId).filter(m => m.state === 'applied' && current(m)).map(m => m.id).sort()
-  return { command, gate, coverage, scope, claimScope, view, waiting, current, version }
+  return { command, gate, coverage, scope, claimScope, view, waiting, current, version, instantiateRecurring }
 }

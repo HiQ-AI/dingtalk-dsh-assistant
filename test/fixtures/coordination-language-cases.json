@@ -1,0 +1,382 @@
+{
+  "context": {
+    "groupId": "isolated-group",
+    "actorId": "synthetic-user",
+    "observedAt": "2026-10-21T00:00:00Z",
+    "timezone": "Asia/Shanghai",
+    "taskContexts": [
+      {
+        "taskId": "A",
+        "requirementRevision": 1,
+        "contextRevision": 0,
+        "controlRevision": 1,
+        "runSequence": 1,
+        "status": "active",
+        "title": "任务A",
+        "groupId": "isolated-group"
+      },
+      {
+        "taskId": "B",
+        "requirementRevision": 1,
+        "contextRevision": 0,
+        "controlRevision": 1,
+        "runSequence": 1,
+        "status": "active",
+        "title": "任务B",
+        "groupId": "isolated-group"
+      },
+      {
+        "taskId": "C",
+        "requirementRevision": 1,
+        "contextRevision": 0,
+        "controlRevision": 1,
+        "runSequence": 1,
+        "status": "active",
+        "title": "任务C",
+        "groupId": "isolated-group"
+      },
+      {
+        "taskId": "D",
+        "requirementRevision": 1,
+        "contextRevision": 0,
+        "controlRevision": 1,
+        "runSequence": 1,
+        "status": "active",
+        "title": "任务D",
+        "groupId": "isolated-group"
+      },
+      {
+        "taskId": "E",
+        "requirementRevision": 1,
+        "contextRevision": 0,
+        "controlRevision": 1,
+        "runSequence": 1,
+        "status": "active",
+        "title": "任务E",
+        "groupId": "isolated-group"
+      },
+      {
+        "taskId": "F",
+        "requirementRevision": 1,
+        "contextRevision": 0,
+        "controlRevision": 1,
+        "runSequence": 1,
+        "status": "active",
+        "title": "任务F",
+        "groupId": "isolated-group"
+      }
+    ],
+    "arrangements": [
+      {
+        "coordinationId": "original",
+        "revision": 1,
+        "memberIds": [
+          "instruction-A",
+          "instruction-B",
+          "instruction-C"
+        ],
+        "schedules": [
+          {
+            "scheduleId": "daily",
+            "revision": 1
+          }
+        ],
+        "occurrences": [
+          {
+            "occurrenceId": "today",
+            "instanceControlRevision": 1
+          }
+        ]
+      }
+    ],
+    "recipients": [
+      {
+        "id": "member-one",
+        "name": "小王"
+      },
+      {
+        "id": "member-two",
+        "name": "小王"
+      }
+    ],
+    "visibility": {
+      "truncated": false
+    }
+  },
+  "cases": [
+    {
+      "id": "six",
+      "message": "这六个原任务A、B、C、D、E、F都补充定位材料后继续。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "arrangement"
+        },
+        {
+          "path": "members.0.taskId",
+          "equals": "A"
+        },
+        {
+          "path": "members.1.taskId",
+          "equals": "B"
+        },
+        {
+          "path": "members.2.taskId",
+          "equals": "C"
+        },
+        {
+          "path": "members.3.taskId",
+          "equals": "D"
+        },
+        {
+          "path": "members.4.taskId",
+          "equals": "E"
+        },
+        {
+          "path": "members.5.taskId",
+          "equals": "F"
+        }
+      ]
+    },
+    {
+      "id": "cross-topic",
+      "message": "这里是话题C，先完成原任务A，再让原任务B接入。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "arrangement"
+        },
+        {
+          "path": "members.1.taskId",
+          "equals": "B"
+        },
+        {
+          "path": "members.1.afterTaskIds",
+          "includes": [
+            "A"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "third",
+      "message": "原安排的第三个先别动。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "change"
+        },
+        {
+          "path": "coordinationId",
+          "equals": "original"
+        },
+        {
+          "path": "change.action",
+          "equals": "pause"
+        },
+        {
+          "path": "change.selectors.0.ordinal",
+          "equals": 3
+        }
+      ]
+    },
+    {
+      "id": "reverse",
+      "message": "原安排改成先B后A。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "change"
+        },
+        {
+          "path": "change.action",
+          "equals": "reorder"
+        }
+      ]
+    },
+    {
+      "id": "subset",
+      "message": "定位材料只补充给A和C，其他任务不变。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "arrangement"
+        },
+        {
+          "path": "members.0.taskId",
+          "equals": "A"
+        },
+        {
+          "path": "members.1.taskId",
+          "equals": "C"
+        },
+        {
+          "path": "members.2",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "cancel",
+      "message": "撤销原协调安排，不停止原任务。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "change"
+        },
+        {
+          "path": "change.action",
+          "equals": "cancel"
+        }
+      ]
+    },
+    {
+      "id": "missing",
+      "message": "继续没有匹配的水星项目任务。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "clarify"
+        }
+      ]
+    },
+    {
+      "id": "duplicate",
+      "message": "继续同名的接口任务，不知道是哪一个。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "clarify"
+        }
+      ]
+    },
+    {
+      "id": "tomorrow",
+      "message": "明早9点在当前群查A进度，不指定收件人。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "schedule"
+        },
+        {
+          "path": "actionKind",
+          "equals": "read-query"
+        },
+        {
+          "path": "rule.kind",
+          "equals": "once"
+        },
+        {
+          "path": "rule.at",
+          "equals": "2026-10-22T01:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "id": "daily",
+      "message": "每天9点在当前群查A进度。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "schedule"
+        },
+        {
+          "path": "rule.kind",
+          "equals": "daily"
+        },
+        {
+          "path": "rule.time",
+          "equals": "09:00"
+        }
+      ]
+    },
+    {
+      "id": "cancel-once",
+      "message": "只取消今天这一次，以后每天继续。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "occurrence-control"
+        },
+        {
+          "path": "occurrenceId",
+          "equals": "today"
+        },
+        {
+          "path": "control",
+          "equals": "cancel"
+        }
+      ]
+    },
+    {
+      "id": "reschedule",
+      "message": "把原计划以后的时间改到每天10点。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "schedule-change"
+        },
+        {
+          "path": "scheduleId",
+          "equals": "daily"
+        },
+        {
+          "path": "rule.time",
+          "equals": "10:00"
+        }
+      ]
+    },
+    {
+      "id": "recipient",
+      "message": "明早9点查A进度并通知群里的小王。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "clarify"
+        }
+      ]
+    },
+    {
+      "id": "ambiguous-time",
+      "message": "9点查A进度。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "clarify"
+        }
+      ]
+    },
+    {
+      "id": "past",
+      "message": "今天早上7点查A进度。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "clarify"
+        }
+      ]
+    },
+    {
+      "id": "conditional",
+      "message": "明早9点查A，没完成就继续原任务，不许改目标。",
+      "expect": [
+        {
+          "path": "kind",
+          "equals": "schedule"
+        },
+        {
+          "path": "actionKind",
+          "equals": "read-query"
+        },
+        {
+          "path": "conditionalMembers.0.action",
+          "equals": "task-continue"
+        },
+        {
+          "path": "conditionalMembers.0.progressImpact",
+          "equals": "preserve"
+        }
+      ]
+    }
+  ]
+}

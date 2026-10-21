@@ -10,6 +10,8 @@ export function selectCoordinationInstructions(state, selectors = []) {
       return selector.instructionId
     }
     if (Number.isSafeInteger(selector?.ordinal) && selector.ordinal >= 1 && Object.keys(selector).length === 1) {
+      if (state.coordination.hadPartialClarifications || state.coordination.pendingClarifications?.length)
+        fail('COORDINATION_CHANGE_ORDINAL_NEEDS_CLARIFICATION')
       const id = ids[selector.ordinal - 1]
       if (!id) fail('COORDINATION_CHANGE_MEMBER_MISSING')
       return id
