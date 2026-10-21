@@ -34,7 +34,7 @@
 | T18 | [coordination-final-fault-matrix.test.js](../../../test/coordination-final-fault-matrix.test.js) — T18 second supported writer refuses live owner and expired incarnation rejects coordination writes | writer/fence | 已通过 |
 | T19 | [coordination-execution-proof.test.js](../../../test/coordination-execution-proof.test.js) — consuming an old completion after reopen reads current truth and cannot make B eligible | version | 已通过 |
 | T20 | [independent-coordination-native.test.js](../../../test/independent-coordination-native.test.js) — real ingress reserves a no-Topic unit, independently plans A then B and dispatches original Owners from completion facts | native/notification | 已通过 |
-| T21 | [independent-coordination-recovery.test.js](../../../test/independent-coordination-recovery.test.js) — invalid schedule | service/time | 已通过；真实语言未执行 |
+| T21 | [independent-coordination-recovery.test.js](../../../test/independent-coordination-recovery.test.js) — invalid schedule | service/time | 已通过；固定合成语言回放通过（任务消息摘要，原 JSON 未导入） |
 | T22 | [coordination-schedule-revisions.test.js](../../../test/coordination-schedule-revisions.test.js) — explicit same-slot replacement transfers current pointer and permanently fences the old occurrence | slot | 已通过 |
 | T23 | [coordination-final-fault-matrix.test.js](../../../test/coordination-final-fault-matrix.test.js) — T23 due scan rollback | transaction/fault | 已通过 |
 | T24 | [coordination-trigger-commands.test.js](../../../test/coordination-trigger-commands.test.js) — lost commit acknowledgement is reconciled by the original Task command receipt after restart | receipt/fault | 已通过 |
@@ -43,14 +43,14 @@
 | T27 | [coordination-concurrency-contracts.test.js](../../../test/coordination-concurrency-contracts.test.js) — concurrent cancellation and permit: | concurrency | 已通过 |
 | T28 | [coordination-ledger.test.js](../../../test/coordination-ledger.test.js) — real SIGKILL after permit | process/notification | 已通过；真实送达不在本次范围 |
 | T29 | [independent-coordination-native.test.js](../../../test/independent-coordination-native.test.js) — no-Topic scheduled query runs through Host recovery and the existing outbox without reopening the queried Task | native | 已通过 |
-| T30 | [independent-coordination-recovery.test.js](../../../test/independent-coordination-recovery.test.js) — invalid schedule | service/scope | 已通过；真实语言未执行 |
+| T30 | [independent-coordination-recovery.test.js](../../../test/independent-coordination-recovery.test.js) — invalid schedule | service/scope | 已通过；固定合成语言回放通过（任务消息摘要，原 JSON 未导入） |
 | T31 | [coordination-schedule-revisions.test.js](../../../test/coordination-schedule-revisions.test.js) — expired one-time schedule terminates visibly; multi-year offline coalescing has an exact count | time/recovery | 已通过 |
 | T32 | [coordination-final-fault-matrix.test.js](../../../test/coordination-final-fault-matrix.test.js) — T32 forward jump coalesces latest slot and backward clock plus restart cannot repeat accepted UTC slot | time/recovery | 已通过 |
 | T33 | [coordination-final-native.test.js](../../../test/coordination-final-native.test.js) — automatic expired result refresh restores one outbox after restart | native/outbox | 已通过 |
 | T34 | [coordination-migration.test.js](../../../test/coordination-migration.test.js) — compatible frozen mode survives restart and blocks coordinated claims and send permits without freezing unrelated work | migration/recovery | 已通过 |
 | T35 | [coordination-final-native.test.js](../../../test/coordination-final-native.test.js) — automatic expired result refresh restores one outbox after restart | native/topology | 已通过 |
 | T36 | [independent-coordination-native.test.js](../../../test/independent-coordination-native.test.js) — no-Topic scheduled query runs through Host recovery and the existing outbox without reopening the queried Task | native/outbox | 已通过 |
-| T37 | [independent-coordination-changes.test.js](../../../test/independent-coordination-changes.test.js) — arrangement member context pages remain bounded and preserve persisted ordinals | service/context | 已通过；真实语言未执行 |
+| T37 | [independent-coordination-changes.test.js](../../../test/independent-coordination-changes.test.js) — arrangement member context pages remain bounded and preserve persisted ordinals | service/context | 已通过；固定合成语言回放通过（任务消息摘要，原 JSON 未导入） |
 | T38 | [coordination-execution-proof.test.js](../../../test/coordination-execution-proof.test.js) — event write failure rolls back business completion, instruction fulfillment and receipt | transaction/fault | 已通过 |
 | T39 | [coordination-final-fault-matrix.test.js](../../../test/coordination-final-fault-matrix.test.js) — T39 execution failure and notification failure remain separate while an independent member still receives its input | execution/notification | 已通过 |
 | T40 | [coordination-final-fault-matrix.test.js](../../../test/coordination-final-fault-matrix.test.js) — T40 concurrent manual and recovery continuation share a new input identity and both claims respect dependency lock gate | concurrency/execution | 已通过 |
@@ -74,13 +74,14 @@ T03/T23 补充同文件 `T03 T23 due scan COMMIT ... acknowledgement failure rec
 
 运行中重排不会先 revise/cancel；周期授权不每轮向用户重确认；Owner默认astra与执行模型配置保持。协调模型仍使用显式独立 provider/model 配置，无静默继承或降级。
 
-## 唯一外部前置条件
+## 最终修复与真实语言证据
 
-云端代码与程序验证无待办阻断。后续用户已选定并授权临时`openai-codex/gpt-5.6-sol`；恢复依赖后真实LLM-only路由首项返回账号不可用，doctor报告OAuth存储缺失，后续未执行。当前阻断为**该云端没有可用的既有真实路由账号**，且不允许本轮新增登录。详见[真实回放状态](./real-language-replay-status.md)。已备 `coordination-standard-model-adapter.mjs`，向其显式注入批准的LLM-only `ctx.llm`，无业务工具、TaskStore、群历史或发送器。
+时间提案入口接纳显式时区 ISO 后规范为 UTC，持久化仍严格要求规范 UTC；精确时间断言未放宽。百部实测修复 `707766a74d5f313b2499c6636459760a3511f840` 已按用户批准的任务消息补丁整合为本地 `cbd249ed76cc6c632904a9a9a91585867f6476a8`。补丁字节、SHA256、五文件摘要与 tree `f24af35ec48a2b2dde55adbe4615313205400554` 全部一致。后续提交仅更新本文、证据与测试依赖映射，运行代码保持该实测树。
 
-最小选项：一个现有provider/model，先4项固定合成样例（六任务、A后B、部分指代、明早9点），或最多16项全样例，每项一次标准stream、无自动重试，单次30秒默认超时。再比较第二模型需另计调用。仅发送合成消息/任务/成员/时间事实、协调协议提示与schema，不含真实用户/群数据、附件、私有源码或凭据。提供方内部重试与账单未知，不从样例数推算成本。步骤见 [语言回放runbook](../../ops/coordination-language-replay.md)。
+云端补跑相关 native/time/replay/slot 回归 **34 PASS、0 FAIL、0 SKIP**，触发、条件查询、并发、故障矩阵和恢复回归 **67 PASS、0 FAIL、0 SKIP**。独立审查未发现实质问题，另定向9项通过；这些有重叠，不与历史542项累加。上述542/83/55是此前候选证据，未在最后树机械重跑。日志与精确命令见 [修复证据](./repair-707766a.md)。测试映射只更新新增 import，不改 release 分类。
 
-默认报告16项均 `not_executed`、真实模型调用0；不能算真实语言通过。真实钉钉送达、生产迁移和部署检查属于明确未授权的外部范围，不是本云端候选的程序测试失败。候选不等于上线验收通过。
+用户改用百部隔离环境后，真实 `openai-codex/gpt-5.6-sol` 修后冒烟4/4、完整16/16通过；20次修后成功响应耗时分别42,142ms与149,293ms，报告 totalTokens 合计194,842。含此前保留失败为25次 stream 尝试、24次完成（原候选4项中3通过1失败，另1次传输失败）。费用、提供方内部重试与底层网络请求数未知。以上来自父任务转交的验证摘要；原始报告 JSON 未导入云端，其摘要值未在云端重新计算，不能宣称云端再次跑过真实模型。详见 [真实回放状态](./real-language-replay-status.md)。
 
-本分支未推送、未建PR、未部署、未合并、未发版，未访问百部。完整patch与测试日志在workspace交付。
+当前无已知功能缺口或程序验证缺口；51项均按有限协议边界逐项列证，不是穷尽交错或上线验收。剩余边界为真实报告原件未在云端归档、真实钉钉送达和生产迁移/部署未执行；后两者不在本请求授权内。既有云端鉴权/下载阻断未重试，不影响已完成的百部隔离回放结论。
 
+本分支未推送、未建PR、未合并、未部署、未发版。云端未访问百部机器或复制凭据，仅接收获授权代码补丁及验证摘要；长期 Owner/执行模型配置不变。

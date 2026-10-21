@@ -188,7 +188,8 @@
       "titleMatch": "literal-or-expanded-prefix",
       "layer": "service/time",
       "programStatus": "passed",
-      "externalEvidence": "actual-language"
+      "externalEvidence": "fixed-synthetic-language-passed-parent-summary; raw-json-not-imported",
+      "externalEvidenceReference": "real-language-replay-status.md"
     },
     {
       "id": "T22",
@@ -269,7 +270,8 @@
       "titleMatch": "literal-or-expanded-prefix",
       "layer": "service/scope",
       "programStatus": "passed",
-      "externalEvidence": "actual-language"
+      "externalEvidence": "fixed-synthetic-language-passed-parent-summary; raw-json-not-imported",
+      "externalEvidenceReference": "real-language-replay-status.md"
     },
     {
       "id": "T31",
@@ -332,7 +334,8 @@
       "titleMatch": "literal-or-expanded-prefix",
       "layer": "service/context",
       "programStatus": "passed",
-      "externalEvidence": "actual-language"
+      "externalEvidence": "fixed-synthetic-language-passed-parent-summary; raw-json-not-imported",
+      "externalEvidenceReference": "real-language-replay-status.md"
     },
     {
       "id": "T38",

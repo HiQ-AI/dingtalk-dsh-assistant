@@ -655,6 +655,7 @@
       "category": "unit",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-time.js",
         "packages/dingtalk-dsh-assistant/independent-coordination-planner.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
         "packages/dingtalk-dsh-assistant/tool-schema.js"
@@ -939,9 +940,11 @@
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/independent-coordination-planner.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
-        "packages/dingtalk-dsh-assistant/task-message-projections.js"
+        "packages/dingtalk-dsh-assistant/task-message-projections.js",
+        "packages/dingtalk-dsh-assistant/tool-schema.js"
       ],
       "retainedCompatibilityImports": [],
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
@@ -964,6 +967,7 @@
       "category": "unit",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/coordination-time.js",
         "packages/dingtalk-dsh-assistant/independent-coordination-planner.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
         "packages/dingtalk-dsh-assistant/tool-schema.js"
