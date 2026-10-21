@@ -12,7 +12,8 @@
 
 - 优先修改现有实现，控制改动范围；行为、配置或接口发生变化时，同步更新相应文档。
 - 安装依赖使用 `pnpm install --frozen-lockfile`。执行命令使用 PowerShell 7 语法。
-- 测试用例较多，默认只运行与本次修改功能直接相关的测试，不主动运行全量测试。例如：`node --test test/<相关文件>.test.js`。大改必须运行风险相关测试；本地发布准备默认相关回归与 `pnpm test:release-smoke`，不再重复前置全量。`pnpm test:all` 与手动扩展 CI 用于明确要求或风险所需的全覆盖。正式发行精确 SHA 由一次 Release CI 权威验证全部映射分组，失败不能跳过。
+- 测试用例较多，默认只运行与本次修改功能直接相关的测试，不主动运行全量测试。例如：`node --test test/<相关文件>.test.js`。大改必须运行风险相关测试；本地发布准备默认相关回归与 `pnpm test:release-smoke`，不再重复前置全量。`pnpm test:all` 与手动扩展 CI 用于明确要求或风险所需的全覆盖。正式发行精确 SHA 由一次 Release CI 权威验证全部 release=true 映射分组，失败不能跳过。
+- 已逐注册审定的纯历史流程保留 `pnpm test:history` 与手动 CI history 入口；修改相关旧源码或共享夹具须显式验证相关历史路径。当前/保留兼容合同及未知覆盖仍进入 Release；分类、守恒及范围见 `docs/ops/release-test-mapping.md`。不能只更新映射或摘要跳过未复审变化。
 - 代码变更至少实跑相关测试或功能路径，报告实际结果；不要把测试通过等同于本地部署或真实钉钉消息验证通过。
 - 普通开发/修复分支的提交、推送及创建/更新 PR 不得触发 CI，包括不得主动使用 `workflow_dispatch`、`gh workflow run` 或其他入口补跑。
 - 仅在用户明确要求运行 CI 时，才可主动触发、重跑或补跑 CI；提交、合并或部署请求不包含手动运行 CI 的授权。

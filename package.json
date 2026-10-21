@@ -41,8 +41,9 @@
     "profile:install": "pwsh -NoProfile -File scripts/install-profile.ps1",
     "profile:dump": "pwsh -NoProfile -File scripts/dump-profile.ps1",
     "start": "pwsh -NoProfile -File scripts/start-resident.ps1",
-    "test": "node --test --test-concurrency=4 \"test/*.test.js\"",
-    "test:all": "node --test --test-concurrency=4 \"test/*.test.js\"",
+    "test": "node scripts/test-suites.mjs all",
+    "test:all": "node scripts/test-suites.mjs all",
+    "test:history": "node scripts/test-suites.mjs run history",
     "test:suites": "node scripts/test-suites.mjs check",
     "test:release-smoke": "node --test test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js"
   },
@@ -93,6 +94,7 @@
     "js-yaml": "4.1.1",
     "react": "^18.2.0",
     "undici": "^7.16.0",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "acorn": "8.15.0"
   }
 }

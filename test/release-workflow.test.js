@@ -2,13 +2,18 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import yaml from 'js-yaml'
-import { checkedInventory, lanes } from '../scripts/test-suites.mjs'
+import { checkedInventory, lanes, extendedLanes } from '../scripts/test-suites.mjs'
+import { checkedContracts } from '../scripts/test-contracts.mjs'
+import { fileURLToPath } from 'node:url'
 const load = async p => yaml.load(await readFile(new URL('../' + p, import.meta.url), 'utf8'))
 test('manual compatibility CI has no push, PR, schedule or publication side effects', async () => {
   const ci = await load('.github/workflows/ci.yml')
   assert.deepEqual(Object.keys(ci.on), ['workflow_dispatch'])
   assert.deepEqual(ci.permissions, { contents: 'read' })
-  assert.deepEqual(ci.jobs.check.strategy.matrix.lane, lanes)
+  assert.deepEqual(ci.on.workflow_dispatch.inputs.scope.options, ['all', 'history'])
+  assert.equal(ci.on.workflow_dispatch.inputs.scope.default, 'all')
+  const matrixOptions = [...ci.jobs.check.strategy.matrix.lane.matchAll(/'(\[[^']*\])'/g)].map(match => JSON.parse(match[1]))
+  assert.deepEqual(matrixOptions, [['history'], extendedLanes])
   assert.equal(ci.jobs.check.strategy['fail-fast'], false)
   assert.ok(ci.jobs.check.steps.some(x => /matrix[.]lane/.test(x.run ?? '')))
 })
@@ -56,11 +61,17 @@ test('release exact SHA validates all lanes before immutable build and same-run 
   assert.match(env, /cache: pnpm/)
   assert.match(env, /cache: maven/)
 })
-test('every test file is mapped exactly once and no historical failure is excluded', async () => {
+test('every test file is mapped once; only reviewed historical registrations leave Release', async () => {
   const map = await checkedInventory()
   assert.ok(map.entries.length >= 265)
-  assert.ok(map.entries.every(x => x.release && x.reason))
+  const reviewed = await checkedContracts(fileURLToPath(new URL('../', import.meta.url)))
+  assert.ok(map.entries.every(x => x.reason && (x.release || reviewed.get(x.file)?.every(item => item.contract === 'historical'))))
+  assert.deepEqual(map.entries.filter(x => !x.release).map(x => x.file), [
+    'test/execution-local-acceptance-history.test.js', 'test/runtime-history.test.js', 'test/workflow-engineering-history.test.js',
+  ])
   for (const file of ['task-session-execution-provider-recovery-native.test.js', 'task-session-skills-native.test.js', 'message-impact.test.js', 'workflow-engineering.test.js']) assert.ok(map.entries.some(x => x.file === 'test/' + file && x.release))
+  assert.ok(map.entries.find(x => x.file === 'test/runtime.test.js').release)
+  assert.ok(map.entries.find(x => x.file === 'test/execution-local-acceptance.test.js').release)
 })
 test('release publishes three tgz plus identity manifest and verifies every attachment', async () => {
   const r = await load('.github/workflows/release.yml')

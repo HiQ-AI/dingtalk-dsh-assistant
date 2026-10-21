@@ -123,6 +123,9 @@ importers:
       '@deepseek-ai/dsh-working-directory':
         specifier: 0.2.1-alpha.2
         version: 0.2.1-alpha.2(d3dadd6ccc60c19d6dd164159ffe5f9b)
+      acorn:
+        specifier: 8.15.0
+        version: 8.15.0
       js-yaml:
         specifier: 4.1.1
         version: 4.1.1
@@ -2262,6 +2265,11 @@ packages:
 
   '@vscode/ripgrep@1.18.0':
     resolution: {integrity: sha512-ns5lWe44tSfbTMbVUsyB+I1819PVSw4AdpgK0RNkzfWfwy6+3IUNSxwSrfTno1/oWaS/hERNz+XLWVyga2aJBQ==}
+
+  acorn@8.15.0:
+    resolution: {integrity: sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
 
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
@@ -5468,6 +5476,8 @@ snapshots:
       '@vscode/ripgrep-win32-arm64': 1.18.0
       '@vscode/ripgrep-win32-ia32': 1.18.0
       '@vscode/ripgrep-win32-x64': 1.18.0
+
+  acorn@8.15.0: {}
 
   agent-base@7.1.4: {}
 
