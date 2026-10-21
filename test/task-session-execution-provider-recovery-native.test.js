@@ -14,7 +14,7 @@ const overloaded = { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are
 async function host(root, { initialize = true, fault = true, allowUnrelated = false, persistent = false, humanFlow = false, recoverAfterCold = false, providerError = overloaded, reviewWait = false, revisedReview = false } = {}) {
   let executionSteps = 0, sequence = 0, humanAttempts = 0
   const requests = []
-  const h = await nativeTaskHost(root, async () => [], { initialize, agentConfig: { provider: 'execution-recovery-fixture' },
+  const h = await nativeTaskHost(root, async () => [], { initialize, config: { provider: 'execution-recovery-fixture' }, agentConfig: { provider: 'execution-recovery-fixture' },
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
         async *stream(request) {

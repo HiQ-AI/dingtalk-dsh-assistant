@@ -125,7 +125,7 @@ test('real resident starts a clean explicit ledger without reading old workflow 
   const dbPath = join(root, 'new-task-sessions.sqlite')
   const plugin = await host.ctx.plugin(resident, { host: '127.0.0.1', port, agentWorkspaceDir: root, agentPreset: 'native-test', proxyUrl: '',
     dws: { enabled: false }, workflow: { dbPath: oldPath, instanceId: 'retired', ownerActorId: 'wrong-owner', webActorId: 'wrong-web' },
-    taskSessions: { ...explicit, dbPath, initialize: true, ingressEpoch: '2026-10-13T08:00:00+08:00', recoveryIntervalMs: 60000 } })
+    taskSessions: { ...explicit, provider: 'native-task-test', dbPath, initialize: true, ingressEpoch: '2026-10-13T08:00:00+08:00', recoveryIntervalMs: 60000 } })
   const read = path => new Promise((resolve, reject) => httpGet(`http://127.0.0.1:${port}${path}`, { agent: false }, response => {
     let body = ''; response.on('data', chunk => { body += chunk }); response.on('end', () => { try { resolve({ status: response.statusCode, body: JSON.parse(body) }) } catch (error) { reject(error) } })
   }).on('error', reject))
