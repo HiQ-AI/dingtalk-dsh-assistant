@@ -536,6 +536,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     } })
   const independentCoordination = openIndependentCoordination({ ctx, root, agentPreset: legacy.getAgentConfig().agentPreset,
     getWorkspaceDir: () => legacy.getAgentConfig().workspaceDir,
+    getModelSelection: () => coordinationModelSelection({
+      ...(residentStore.getCoordinationModelConfig?.() ?? config.coordination ?? legacy.getAgentConfig().coordinationModel ?? {}),
+      enabled: config.coordination?.enabled === true }, models()),
     config: config.coordination ?? {}, residentStore, query, command, ownerActorId: config.ownerActorId,
     onError: (id, error) => failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() }),
     onHandoff: groupId => { rerouteGroups.add(groupId); if (!inflightGroups.has(groupId)) { rerouteGroups.delete(groupId); void kickGroup(groupId) } },

@@ -51,13 +51,64 @@ function ModelIdInput({ id, label, value, onChange, models, ...props }) {
     React.createElement('datalist', { id: `${id}-list` }, ...(models ?? []).map(model => React.createElement('option', { key: model.id, value: model.id }, model.name))))
 }
 
+const independentModelDefault = { provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'explicit', reasoningEffort: 'low' }
+function useIndependentModelOptions(selection) {
+  const [options, setOptions] = useState(null), [error, setError] = useState('')
+  useEffect(() => {
+    let current = true
+    setOptions(null); setError('')
+    const timer = setTimeout(() => {
+      request(`/state/task-model-options?provider=${encodeURIComponent(selection.provider)}&model=${encodeURIComponent(selection.model)}`)
+        .then(value => { if (current) { setOptions(value); setError(value.modelError ?? '') } })
+        .catch(() => { if (current) setError('模型选项读取失败，请检查连接后重新选择模型。') })
+    }, 300)
+    return () => { current = false; clearTimeout(timer) }
+  }, [selection.provider, selection.model])
+  return { options, error }
+}
+function IndependentModelFields({ id, label, value, change, options, error, busy, defaultEffort, help }) {
+  const efforts = options?.reasoning?.efforts ?? []
+  const requested = value.reasoningMode === 'inherit' ? defaultEffort : value.reasoningMode === 'explicit' ? value.reasoningEffort : undefined
+  const invalid = !!requested && !efforts.some(effort => effort.id === requested)
+  const qualify = model => model.startsWith(`${value.provider}/`) ? model : `${value.provider}/${model}`
+  const [modelDraft, setModelDraft] = useState(() => qualify(value.model))
+  const emittedModel = useRef(null)
+  useEffect(() => {
+    const key = JSON.stringify([value.provider, value.model])
+    if (emittedModel.current !== key) setModelDraft(qualify(value.model))
+  }, [value.provider, value.model])
+  return React.createElement('div', { role: 'group', style: { display: 'grid', gap: ui.space3, minWidth: 0 }, 'aria-label': `${label}配置` },
+    React.createElement('div', { 'data-model-row': true },
+      React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: `${id}-model-id` }, label),
+        React.createElement(ModelIdInput, { id: `${id}-model-id`, label, value: modelDraft,
+          models: options?.models?.map(model => ({ ...model, id: qualify(model.id) })), disabled: busy,
+          'aria-invalid': !!error, 'aria-describedby': `${id}-options-status ${id}-model-help`, onChange: event => {
+            const entered = event.target.value, slash = entered.indexOf('/')
+            const provider = slash < 0 ? value.provider : entered.slice(0, slash), model = slash < 0 ? entered : entered.slice(slash + 1)
+            emittedModel.current = JSON.stringify([provider, model]); setModelDraft(entered)
+            change(current => ({ ...current, provider, model }))
+          }, onBlur: () => { if (value.provider && value.model) setModelDraft(qualify(value.model)) } })),
+      React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: `${id}-reasoning` }, '推理深度'),
+        React.createElement('select', { id: `${id}-reasoning`, style: input, disabled: busy || !options,
+          'aria-invalid': invalid, 'aria-describedby': `${id}-options-status`, value: value.reasoningMode === 'explicit' ? value.reasoningEffort : value.reasoningMode,
+          onChange: event => { const next = event.target.value; change(current => ({ ...current, reasoningMode: ['inherit','model-default'].includes(next) ? next : 'explicit', reasoningEffort: ['inherit','model-default'].includes(next) ? null : next })) } },
+          React.createElement('option', { value: 'inherit' }, `跟随默认处理（${defaultEffort || '模型默认'}）`),
+          React.createElement('option', { value: 'model-default' }, '模型默认'),
+          ...efforts.map(effort => React.createElement('option', { key: effort.id, value: effort.id }, effortLabel(effort))),
+          value.reasoningMode === 'explicit' && !efforts.some(effort => effort.id === value.reasoningEffort)
+            ? React.createElement('option', { value: value.reasoningEffort }, `${value.reasoningEffort}（当前模型不支持）`) : null))),
+    React.createElement('div', { id: `${id}-model-help`, style: { color: colors.muted, fontSize: ui.textSm } }, help),
+    React.createElement('div', { id: `${id}-options-status`, role: error || invalid ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: error || invalid ? colors.danger : colors.muted } },
+      error || (invalid ? '当前模型不支持所选或继承的深度，请改选模型默认或支持的深度。' : options ? '推理选项来自当前模型能力；不支持的深度不会静默替换。' : '正在读取模型能力…')))
+}
+
 export function agentSaveSummary(desired, actual) {
   if (!actual) return '保存结果未知，无法回读；请恢复连接后刷新核对，未自动重试。草稿已保留。'
   const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b)
   const modelSaved = desired.model.trim() === actual.model && (desired.reasoningEffort || '') === (actual.reasoningEffort || '')
   const pluginSaved = equal([...new Set(desired.agentNames)], actual.agentNames) && desired.replySignature.trim() === (actual.replySignature || '')
-    && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel)
-  return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
+    && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel) && equal(desired.coordinationModel, actual.coordinationModel)
+  return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹和协调）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
 }
 
 function Environment({ value }) {
@@ -76,15 +127,17 @@ export function DingTalkDshAssistantCard() {
   const [agentNames, setAgentNames] = useState('')
   const [replySignature, setReplySignature] = useState('')
   const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
-  const [taskModel, setTaskModel] = useState({ provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'explicit', reasoningEffort: 'low' })
+  const [taskModel, setTaskModel] = useState(independentModelDefault)
+  const [coordinationModel, setCoordinationModel] = useState(independentModelDefault)
   const [defaultOptions, setDefaultOptions] = useState(null)
-  const [taskOptions, setTaskOptions] = useState(null)
-  const [taskOptionsError, setTaskOptionsError] = useState('')
+  const { options: taskOptions, error: taskOptionsError } = useIndependentModelOptions(taskModel)
+  const { options: coordinationOptions, error: coordinationOptionsError } = useIndependentModelOptions(coordinationModel)
   const [taskFeedback, setTaskFeedback] = useState(null)
   const [taskBusy, setTaskBusy] = useState(false)
   const taskSaving = useRef(false)
   const taskDirty = useRef(false)
   const changeTask = transform => { taskDirty.current = true; setTaskModel(transform); setTaskFeedback(null) }
+  const changeCoordination = transform => { taskDirty.current = true; setCoordinationModel(transform); setTaskFeedback(null) }
       const [proxyUrl, setProxyUrl] = useState('')
   const [deletingGroupId, setDeletingGroupId] = useState('')
   const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
@@ -104,22 +157,13 @@ export function DingTalkDshAssistantCard() {
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => {
     if (!taskDirty.current && overview?.agentConfig?.taskSessionModel) setTaskModel(overview.agentConfig.taskSessionModel)
-  }, [overview?.agentConfig?.taskSessionModel])
+    if (!taskDirty.current) setCoordinationModel(overview?.agentConfig?.coordinationModel ?? independentModelDefault)
+  }, [overview?.agentConfig?.taskSessionModel, overview?.agentConfig?.coordinationModel])
   useEffect(() => {
     if (taskFeedback?.kind !== 'success') return
     const timer = setTimeout(() => setTaskFeedback(null), 5000)
     return () => clearTimeout(timer)
   }, [taskFeedback])
-  useEffect(() => {
-    let current = true
-    setTaskOptions(null); setTaskOptionsError('')
-    const timer = setTimeout(() => {
-      request(`/state/task-model-options?provider=${encodeURIComponent(taskModel.provider)}&model=${encodeURIComponent(taskModel.model)}`)
-        .then(value => { if (current) { setTaskOptions(value); setTaskOptionsError(value.modelError ?? '') } })
-        .catch(() => { if (current) setTaskOptionsError('模型选项读取失败，请检查连接后重新选择模型。') })
-    }, 300)
-    return () => { current = false; clearTimeout(timer) }
-  }, [taskModel.provider, taskModel.model])
   useEffect(() => {
     let current = true
     setDefaultOptions(null)
@@ -135,17 +179,22 @@ export function DingTalkDshAssistantCard() {
   const taskEffortInvalid = !!requestedTaskEffort && !taskEfforts.some(value => value.id === requestedTaskEffort)
   const taskChanged = JSON.stringify(taskModel) !== JSON.stringify(overview?.agentConfig?.taskSessionModel)
   const taskValid = taskOptions?.available && !taskOptionsError && !taskEffortInvalid && !!taskModel.provider.trim() && !!taskModel.model.trim()
+  const requestedCoordinationEffort = coordinationModel.reasoningMode === 'inherit' ? agentModel.reasoningEffort
+    : coordinationModel.reasoningMode === 'explicit' ? coordinationModel.reasoningEffort : undefined
+  const coordinationValid = coordinationOptions?.available && !coordinationOptionsError && !!coordinationModel.provider.trim() && !!coordinationModel.model.trim()
+    && (!requestedCoordinationEffort || coordinationOptions.reasoning?.efforts?.some(value => value.id === requestedCoordinationEffort))
+  const coordinationChanged = JSON.stringify(coordinationModel) !== JSON.stringify(overview?.agentConfig?.coordinationModel ?? independentModelDefault)
   const saveAgentConfig = async event => {
     event?.preventDefault()
-    if (taskSaving.current || !taskValid || !(taskChanged || agentConfigChanged)) return
+    if (taskSaving.current || !taskValid || !coordinationValid || !(taskChanged || coordinationChanged || agentConfigChanged)) return
     taskDirty.current = true
     taskSaving.current = true; setTaskBusy(true); setTaskFeedback(null)
-    const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel }
+    const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel, coordinationModel }
     try {
       const saved = await request('/config/agent', { method: 'PUT', body: JSON.stringify(desired) })
       refreshGeneration.current++
       taskDirty.current = false
-      setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel)
+      setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel); setCoordinationModel(saved.coordinationModel)
       setAgentNames((saved.agentNames ?? []).join(',')); setReplySignature(saved.replySignature ?? ''); setAgentWorkspace(saved.workspaceDir); setAgentModel({ model: saved.model, reasoningEffort: saved.reasoningEffort ?? '' }); setProxyUrl(saved.proxyUrl ?? '')
       setTaskFeedback({ kind: 'success', message: 'Agent 配置已保存；下一轮新建或恢复时生效，不中断当前会话。' })
     } catch (cause) {
@@ -238,26 +287,16 @@ export function DingTalkDshAssistantCard() {
         React.createElement('option', { value: '' }, '模型默认'), ...(defaultOptions?.reasoning?.efforts ?? []).map(value => React.createElement('option', { key: value.id, value: value.id }, effortLabel(value))),
         agentModel.reasoningEffort && !(defaultOptions?.reasoning?.efforts ?? []).some(value => value.id === agentModel.reasoningEffort) ? React.createElement('option', { value: agentModel.reasoningEffort }, agentModel.reasoningEffort) : null))),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
-    React.createElement('div', { role: 'group', style: { display: 'grid', gap: ui.space3, minWidth: 0 }, 'aria-label': '任务统筹模型配置' },
-      React.createElement('div', { 'data-model-row': true },
-        React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'task-model-id' }, '统筹模型'),
-          React.createElement(ModelIdInput, { id: 'task-model-id', label: '统筹模型', models: taskOptions?.models, value: taskModel.model, disabled: taskBusy, 'aria-invalid': !!taskOptionsError, 'aria-describedby': 'task-options-status task-model-help', onChange: event => changeTask(current => ({ ...current, model: event.target.value })) })),
-        React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'task-reasoning' }, '推理深度'),
-      React.createElement('select', { id: 'task-reasoning', style: input, disabled: taskBusy || !taskOptions, 'aria-invalid': taskEffortInvalid, 'aria-describedby': 'task-options-status', value: taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : taskModel.reasoningMode,
-        onChange: event => { const value = event.target.value; changeTask(current => ({ ...current, reasoningMode: ['inherit', 'model-default'].includes(value) ? value : 'explicit', reasoningEffort: ['inherit', 'model-default'].includes(value) ? null : value })) } },
-        React.createElement('option', { value: 'inherit' }, `跟随默认处理（${agentModel.reasoningEffort || '模型默认'}）`),
-        React.createElement('option', { value: 'model-default' }, '模型默认'),
-        ...taskEfforts.map(value => React.createElement('option', { key: value.id, value: value.id }, effortLabel(value))),
-        taskModel.reasoningMode === 'explicit' && !taskEfforts.some(value => value.id === taskModel.reasoningEffort)
-          ? React.createElement('option', { value: taskModel.reasoningEffort }, `${taskModel.reasoningEffort}（当前模型不支持）`) : null))),
-      React.createElement('div', { id: 'task-model-help', style: { color: colors.muted, fontSize: ui.textSm } }, '仅影响任务统筹的下一轮请求；执行和话题仍使用默认处理模型。'),
-      React.createElement('div', { id: 'task-options-status', role: taskOptionsError || taskEffortInvalid ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskOptionsError || taskEffortInvalid ? colors.danger : colors.muted } },
-        taskOptionsError || (taskEffortInvalid ? '当前模型不支持所选或继承的深度，请改选模型默认或支持的深度。' : taskOptions ? '推理选项来自当前模型能力；不支持的深度不会静默替换。' : '正在读取模型能力…')),
-    ),
+    React.createElement(IndependentModelFields, { id: 'task', label: '统筹模型', value: taskModel, change: changeTask,
+      options: taskOptions, error: taskOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
+      help: '仅影响任务统筹的下一轮请求；执行和话题仍使用默认处理模型。' }),
+    React.createElement(IndependentModelFields, { id: 'coordination', label: '协调模型', value: coordinationModel, change: changeCoordination,
+      options: coordinationOptions, error: coordinationOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
+      help: '仅影响下一次协调规划；保存模型不会启用协调功能，也不改变运行中的规划会话。' }),
       React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
       React.createElement('input', { 'aria-label': 'Agent 网络代理', disabled: taskBusy, placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
-React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !agentModel.model.trim() || !(agentConfigChanged || taskChanged), 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存配置'),
+React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !coordinationValid || !agentModel.model.trim() || !(agentConfigChanged || taskChanged || coordinationChanged), 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存配置'),
       React.createElement('div', { role: taskFeedback?.kind === 'error' ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskFeedback?.kind === 'error' ? colors.danger : colors.muted } }, taskFeedback?.message ?? '')),
     React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 任务看板”查看任务会话、动态执行、结果与日志路径。'),
     React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),

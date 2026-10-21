@@ -9,7 +9,7 @@ const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clone = value => JSON.parse(JSON.stringify(value))
 
 /** One Host-owned queue for independent source units; Topic is never its parent. */
-export function openIndependentCoordination({ ctx, root, getWorkspaceDir, agentPreset, config = {}, residentStore, query, command,
+export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config = {}, residentStore, query, command,
   ownerActorId, onApplied, onError, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
   coordinationModelSelection(config)
   const observations = new Map(), arrangementObservations = new Map(), running = new Map(), admissions = new Set()
@@ -336,7 +336,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, agentP
         sourceMessageId: snapshot.messageId, actorId: snapshot.actorId,
         fact: { coordinationId, eventId, sourceUnitId: request.unitId, sourceUnitRevision: request.unitRevision, ...fact } } }, `prepare:${notificationId}`)
   }
-  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir, agentPreset, config, context, submit,
+  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config, context, submit,
     isCurrent: request => { try { assertOwned(request); return true } catch { return false } } })
   async function acceptMemberTrigger(groupId, coordination, state, member) {
     if (coordination.allTogether && coordination.pendingClarifications?.length) return
