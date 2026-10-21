@@ -1,6 +1,12 @@
 name: Extended compatibility checks
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: All mapped tests or historical workflows only
+        type: choice
+        default: all
+        options: [all, history]
 permissions:
   contents: read
 jobs:
@@ -9,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [unit, native-0, native-1, compat-0, compat-1, compat-2]
+        lane: ${{ fromJSON(inputs.scope == 'history' && '["history"]' || '["unit","native-0","native-1","compat-0","compat-1","compat-2","history"]') }}
     env:
       DSH_NATIVE_TEST_PROFILE: ${{ github.workspace }}/test/fixtures/native-profile/package.json
     steps:

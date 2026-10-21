@@ -1,0 +1,3097 @@
+{
+  "schema": 1,
+  "sourceCommit": "7ca36c26ad1c52e8b1896fdc76a7e8aed1c9a697",
+  "policy": "case-preservation; unknown-release; reviewed-historical-only",
+  "groups": [
+    {
+      "original": "test/workflow-engineering.test.js",
+      "originalSha256": "8f3500d4d99f7789ba530e87d00924db046065b311c8814c90e31e76b002e368",
+      "originalRegistrations": 31,
+      "originalVariants": 45,
+      "destinations": [
+        "test/workflow-engineering.test.js",
+        "test/workflow-engineering-history.test.js"
+      ],
+      "fixture": {
+        "file": "test/fixtures/workflow-engineering-mixed.js",
+        "sha256": "1619bd4a3d0a8d7c2e7c40335bdcd76b14b4aa341f3bd72d7c8c6f335fc5c1f2"
+      },
+      "cases": [
+        {
+          "originalId": 1,
+          "originalLine": 29,
+          "title": "test('重执行复用受信开发分支最新提交并冻结远端，保留源检出与历史定义', async t => {",
+          "sha256": "58222cb76da1fab95110c881e3a19fec700b28e2b8d436e38077faae5002fe98",
+          "variants": 1,
+          "file": "test/workflow-engineering.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留整个混合注册：包含当前checkedTaskDirectory的junction越界拒绝及外部零写入断言",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 2,
+          "originalLine": 141,
+          "title": "test('工程交付证明复用同一 Run 工件并要求显式业务 E2E 检查', async () => {",
+          "sha256": "4ea42396f03dea68c02aa4d0a19c8ea60ad63ba55e598b62ee318139c80f3988",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 3,
+          "originalLine": 296,
+          "title": "test('已终结工程 Run 的旧定义不参与启动恢复', async () => {",
+          "sha256": "81df1c3e9d45a6b3b770e87b9bc0f0af5e257c258f74b1e4bc4529712e79d10b",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 4,
+          "originalLine": 309,
+          "title": "test('工程空方案重发保留原任务并冻结新仓库定义', async t => {",
+          "sha256": "1ec3a79995d6a6fc62f466bc1022bbd6f81311d2a80e5e2b1d897501aa729be9",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 5,
+          "originalLine": 394,
+          "title": "test('工程registry按Task冻结配置，重启重建同digest，模型变化不改历史，owner/目录/argv不由消息提升', async t => {",
+          "sha256": "7e82d257218602604fcdf0aa6219c1d3f85e969f8264ca7c3e1ef29b208563d6",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 6,
+          "originalLine": 463,
+          "title": "test('工程交付后补充：固定分支祖先条件续写、PR原位修订且新代读取旧代结果', { timeout: 2 * 240000 }, async t => {",
+          "sha256": "fa5ca9b3952eeb058db3a78b7782eff4b98edec2b02cd94d4fbb14a89081b443",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 7,
+          "originalLine": 534,
+          "title": "test('九个 UAT 环境精确映射固定分支，缺失和其他名称不能猜测', () => {",
+          "sha256": "262a64e96dffb0de272d41939d5d86cb4e95bdb30db4f9fee5299f4f993b6ebc",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 8,
+          "originalLine": 540,
+          "title": "test('v11 缺本地验收配置时真实 controller 阻塞且不准备工作区', async t => {",
+          "sha256": "50608d83a3223e33ede748c4c5c61818a8f61a050ed2d8ba88793fe63e9c6a5a",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 9,
+          "originalLine": 562,
+          "title": "test('v11 输入映射、候选绑定和失败验收不能进入提交；v10 工厂摘要保持稳定', async () => {",
+          "sha256": "e66865ac8c3d9e191fb6daf4fb3c9f126736d9b92adb3e17f2ff302b01039e27",
+          "variants": 1,
+          "file": "test/workflow-engineering.test.js",
+          "contract": "compatibility",
+          "reason": "保留v10工厂定义在localAcceptance选项变化时摘要不变合同；本例并非固定SHA常量快照",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 10,
+          "originalLine": 584,
+          "title": "test('本地验收经 delivery 对共享 UAT 加锁，另一个 Run 在首个排空前零发送', async t => {",
+          "sha256": "ea64f377fb7449956bec904b6270dc97279fb453d49a1e915203a32926a2d227",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 11,
+          "originalLine": 611,
+          "title": "test('远端引用单次读取，无总时长和输出容量截止且保留取消信号',async()=>{",
+          "sha256": "4a498fe9b9df36447be1df85c8ee6fec44ecb0445cb224f537938890d6bdae78",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 12,
+          "originalLine": 621,
+          "title": "for(const failure of [{code:'ETIMEDOUT'},{code:'ECONNRESET'},{code:'EAI_AGAIN'},",
+          "sha256": "d397e1494feef461866177ebbade6ceda7356a0b0fdcdffd6323d3c54696f624",
+          "variants": 5,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 13,
+          "originalLine": 631,
+          "title": "for(const failure of [{code:128,stderr:'Authentication failed secret-token'},{code:128,stderr:'Permission denied (publickey).'},",
+          "sha256": "27f502dc45b8f051f2852a727dc5ca75b892d2979e7e29f7cbdd7143061d5a48",
+          "variants": 9,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 14,
+          "originalLine": 644,
+          "title": "test('远端引用分支不存在不重试，写命令不进入读取器',async()=>{",
+          "sha256": "ace15885e70882f9b6d8b48cdea92637cb59080105672169ac6bf14f0d2fefed",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 15,
+          "originalLine": 655,
+          "title": "test('真实本地Git引用超过1MiB仍完整读回，取消不会误分类暂态',async t=>{",
+          "sha256": "16fafd3d9965ccd53db556e1ffeb72db47a29b3f9db21292b6085ba7414eabcf",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 16,
+          "originalLine": 672,
+          "title": "for(const ownerConfirmed of [true,false])test(`工程阶段保留已核验任务授权及完整原动作：ownerConfirmed=${ownerConfirmed}`,async()=>{",
+          "sha256": "1498fd6f91e166fc1abdc3b7b89ef4fead82c973e3e66543086a3d6d9e9d2831",
+          "variants": 2,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 17,
+          "originalLine": 683,
+          "title": "test('工程源仓库缺失在git与工作区准备前明确拒绝且零执行副作用', async t => {",
+          "sha256": "24a5f32dbe9c1b3cf98b147a5f8ef04de16e3e0665e1c44b9eb85b2e1ce696a8",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 18,
+          "originalLine": 697,
+          "title": "test('v25工程共享材料读取不依赖节点正文，受管检查修订保留原定义',async t=>{",
+          "sha256": "d7a173eab43bd3b3a44d1c794553925b38bc257edbbd749b4b764173bbec5bbc",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 19,
+          "originalLine": 747,
+          "title": "test('导入导出前置核验保留真实API缺口，不把源码或新映射冒充业务PASS', async t => {",
+          "sha256": "5a067ab0ba5d711bbdd29b0d2248bf8ab8ba4a5b5b58b8568b72cbedad9b8f97",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 20,
+          "originalLine": 761,
+          "title": "test('Task专属验收不按仓库默认回退，拒绝错UAT、旧需求及另一Task',()=>{",
+          "sha256": "11aff2f5fffe5049e5e584005c139d2d6634862b5c141e346c77682f0a90e501",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 21,
+          "originalLine": 769,
+          "title": "test('必要后端阶段仅替换阶段仓库与阶段验收，保留Task授权和同UAT', async () => {",
+          "sha256": "ccdb5f61cf5e25e01b78b26cf6591fcb1560fb1093f4bd734aa6b994d45470db",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 22,
+          "originalLine": 780,
+          "title": "test('必要工程仓库绑定拒绝未登记仓库、他人/旧版来源和无阶段验收',()=>{",
+          "sha256": "c441c8c30da514ce66efa5d86b721ee815b4a6e50735df18c4ca1d97cfd25a4e",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 23,
+          "originalLine": 792,
+          "title": "test('必要依赖StageContract到真实registry优先显式来源仓库，普通路由和跨Task/UAT仍拒绝', async () => {",
+          "sha256": "d9f7f79034afd3f04abe86dca9ab0c0555e14fa121cd38de14be20f5e2fa618d",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 24,
+          "originalLine": 825,
+          "title": "test('当前工程拒绝动态改图入口，Host检查与验收职责随原模板冷恢复',async t=>{",
+          "sha256": "a3250a82eddba1c228fced0d9931719863f5e6744f7d2127bdd73961c99679b8",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 25,
+          "originalLine": 853,
+          "title": "test('原生读取凭据只恢复同绑定且当前完整SHA吻合的路径',async()=>{",
+          "sha256": "fcd2b47e434708e5912f9760326e8e26e66740e653b668fd5d40ed18fd8e386f",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 26,
+          "originalLine": 869,
+          "title": "test('真实工程受管noChange保留固定节点并完成候选检查本地业务验收与交付', { timeout: 240000 }, async t => {",
+          "sha256": "a9a7a5281c6df5edfbc41ea24757f6091288923c2720da4399a7930e42d3bae7",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 27,
+          "originalLine": 944,
+          "title": "test('真实工程受管验收配置纠正保留已验证候选完成交付', { timeout: 240000 }, async t => {",
+          "sha256": "ea3bcbe45c9737ded24bd8168952d07588c4f01bf76e3256d153cc99d8c31ee8",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 28,
+          "originalLine": 1004,
+          "title": "for (const upgradedRunner of [false, true]) test('固定工程重启后复用同Run成功检查回执且无动态改图入口 '+(upgradedRunner?'runner升级':'原实现'), { timeout: 240000 }, async t => {",
+          "sha256": "f3641c59f020a9156ad1e5ff0c0d18c65fba3fbd7f151d5e35df8a3d24025d3e",
+          "variants": 2,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 29,
+          "originalLine": 1079,
+          "title": "test('execution reset registry reuses dirty workspace and creates current two-node development chain',async t=>{",
+          "sha256": "11408d80ac26d1b76ce5a9963af4fde71c14a20e2983d126745aaa3c076448cb",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 30,
+          "originalLine": 1112,
+          "title": "test('v25 acceptance checkpoint retains real factory preparation delivery identity', async t => {",
+          "sha256": "a84256b866e014cf5670de24d23dc7ba5ae256da72fc940723569e26cbaf96b0",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        },
+        {
+          "originalId": 31,
+          "originalLine": 1168,
+          "title": "test('工程阶段传播完整当前objective，显式授权阶段仍保留逐字范围', async () => {",
+          "sha256": "63b48249589a1891476e26aca75020963f07aed76abd8133bad7531361921b17",
+          "variants": 1,
+          "file": "test/workflow-engineering-history.test.js",
+          "contract": "historical",
+          "reason": "旧固定工程Run/节点的注册、恢复、Git、UAT或交付协议；当前新任务不装配该适配器，原断言保留手动运行",
+          "evidence": [
+            "README.md#首版限制",
+            "docs/ops/task-session-clean-start.md",
+            "docs/ops/runtime-contracts-archive.md"
+          ]
+        }
+      ],
+      "destinationSha256": {
+        "test/workflow-engineering.test.js": "2cf99ed2bdd49dc1b359a0801599c09453a2cd1fc4fc65c481f706545eea9ac1",
+        "test/workflow-engineering-history.test.js": "dd2844e350ab477e35921de3f4ab9a19494a99eb0c7cca65053b969e4c7989bb"
+      }
+    },
+    {
+      "original": "test/execution-local-acceptance.test.js",
+      "originalSha256": "3b5ceddaaca62768081ba84318668f97c3953285e25c73fd6a29c90032dfec3c",
+      "originalRegistrations": 22,
+      "originalVariants": 26,
+      "destinations": [
+        "test/execution-local-acceptance.test.js",
+        "test/execution-local-acceptance-history.test.js"
+      ],
+      "fixture": {
+        "file": "test/fixtures/execution-local-acceptance-mixed.js",
+        "sha256": "2e22c90b0e58e68be8165c16596ef57f3be962b7d42036f0d47e5bb50a8f9d41"
+      },
+      "cases": [
+        {
+          "originalId": 1,
+          "originalLine": 14,
+          "title": "test('进程归属拒绝历史父PID关联，当前子孙仍属于原启动身份', () => {",
+          "sha256": "3ecf5bf951b5ffe7d9ffc5bdf1b1560fdace97560e40189ee235818e961798c0",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 2,
+          "originalLine": 20,
+          "title": "test('关闭后复用的根PID及新子进程不具有终止授权，原后代存活仍阻断', () => {",
+          "sha256": "1f3ee04cc6870601428b673919f6887d5f8d254c5c6e1f8ddb2570a4586c04c4",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 3,
+          "originalLine": 31,
+          "title": "test('大型进程快照保留归属判定且不混入无关进程', () => {",
+          "sha256": "f7f20153e8506428eeb369e7290cfcc525aaf2d961a66cfcd026f5bafe40c386",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 4,
+          "originalLine": 38,
+          "title": "test('Host生成目录拒绝根目录、穿越、绝对路径和重复值',()=>{",
+          "sha256": "e7bacb01d5334c002bf96cd375e378915e48a4f6b97c8dc7dde41db46c1fb764",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 5,
+          "originalLine": 112,
+          "title": "test('本地验收真实进程全链通过，恢复只读收据且不重复业务写入', windows, async t => {",
+          "sha256": "e814221363c81cf1c6af56711e1577760538b426bc2c4edc843052450c9676f3",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 6,
+          "originalLine": 132,
+          "title": "for (const parameter of ['mutatePrepare','mutateScenario','extraSource']) test(`原始候选文件在${parameter}阶段漂移不能签发通过票据`, windows, async t => {",
+          "sha256": "8d0c4ae17705c6fa5a475d59b9e64d1ca8b163f50284ffc997b9b87efa0298d2",
+          "variants": 3,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 7,
+          "originalLine": 139,
+          "title": "test('新增生成物不混入原始manifest，签票后改原文件也拒绝交付', windows, async t => {",
+          "sha256": "54d98ae1b7a05bb14511def847e7c2e28fce76b2d73683ae3633fe2928ad9006",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 8,
+          "originalLine": 147,
+          "title": "test('实际结果不符阻断提交，仍完成清理和停止', windows, async t => {",
+          "sha256": "af7f6d6933d82899b697edcf9357350c7bb1a09e0b887432117579d398321443",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 9,
+          "originalLine": 157,
+          "title": "test('清理失败持久化失败收据，不因执行用例成功而放行或重跑', windows, async t => {",
+          "sha256": "7646b3defe1a9d547e0852ce2779e340d57a1d20ad4b4c3fe7bd1b5f617cf2ff",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 10,
+          "originalLine": 171,
+          "title": "test('已有执行预约但无收据时只读恢复，候选变化也不能掩盖未知执行', windows, async t => {",
+          "sha256": "a05ae68799f25627099b4a1ed36ddb2862c763f9e79e5bcc5b8d18d2ac99e151",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 11,
+          "originalLine": 183,
+          "title": "test('清理命令成功但独立回读仍有数据时不能通过', windows, async t => {",
+          "sha256": "ccc5da6d29b1dda2fa6de8b2ed83155e24bfde97745ffa5e1455e4bb8cda60ba",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 12,
+          "originalLine": 194,
+          "title": "test('取消用例后服务保留至清理完成，进程和数据都能回收', windows, async t => {",
+          "sha256": "30c375a7d21f5bf39a10e3b75dc7a6be9e56f78a1a39ebb73417f39e939b6c0a",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 13,
+          "originalLine": 211,
+          "title": "test('受信伴随服务按哈希绑定且和主服务共同停止后才核对清理', windows, async t => {",
+          "sha256": "635b7178d5bafb98acab54e88754279e64f4e893ca21ca86dbac71931d89fa45",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 14,
+          "originalLine": 223,
+          "title": "test('伴随服务产物在准备后被替换时拒绝启动，也不执行准备命令', windows, async t => {",
+          "sha256": "f027548accf7cd575e241036f0d283006e3abda420ffbd7e01d210e2fd0fad38",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 15,
+          "originalLine": 230,
+          "title": "test('真实延迟就绪先进行轻量HTTP轮询，就绪后才核对端口归属并执行业务', windows, async t => {",
+          "sha256": "8c762a926c4810227b07ae86231e084e26705a74e670852478b3997d66ef9ff9",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 16,
+          "originalLine": 238,
+          "title": "test('HTTP健康但监听属于子进程时拒绝就绪，不执行业务且回收整个服务树', windows, async t => {",
+          "sha256": "5b607d9f70c08939434d92e99294f5532ac9d0449acbd51ca3a5d4ff5543bbd4",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 17,
+          "originalLine": 249,
+          "title": "test('进程检查启动失败保留安全分类和阶段证据，不包含stderr或命令内容', windows, async t => {",
+          "sha256": "b27196142353cdff219fe7ea23227dcfca980863728a0ac9028591e05144f692",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 18,
+          "originalLine": 266,
+          "title": "test('任务目录验收直接服务PID通过，所有阶段使用任务临时目录和旁路证据根', windows, async t => {",
+          "sha256": "8b734c42e374ca3ddc41a33e8be7ba4a7f88dbd113a127267e9d3ab6f6a8c533",
+          "variants": 1,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 19,
+          "originalLine": 280,
+          "title": "test('任务验收拒绝tmp和evidence祖先junction，外部零写入且无执行预约', windows, async t => {",
+          "sha256": "be8817a02eda519d5d66a2597e5006751b4557047f6d81f0ec7fa69f65db2613",
+          "variants": 1,
+          "file": "test/execution-local-acceptance.test.js",
+          "contract": "compatibility",
+          "reason": "当前发布checkedTaskDirectory经旧runner调用的tmp/evidence祖先junction拒绝与外部零写入保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 20,
+          "originalLine": 293,
+          "title": "test('新任务验收runner及依赖跨LF/CRLF打包身份一致，真实源码变化仍改变身份', async t => {",
+          "sha256": "22256f83d98d209bc9a7484d367771f6863ad1764e85874d11e8cc3767e4334d",
+          "variants": 1,
+          "file": "test/execution-local-acceptance.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留跨LF/CRLF及真实源码变化的身份合同，包含当前session-workspaces源文件，尚不退出门禁",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 21,
+          "originalLine": 312,
+          "title": "for (const taskFiles of [false, true]) test('验收配置和方案不以数量或信封容量限制任务：'+(taskFiles?'任务目录':'候选目录'), windows, async t => {",
+          "sha256": "5ca284ccd09422762de857972ab2846366fa934bb6975fd57e8524e87b349b3c",
+          "variants": 2,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 22,
+          "originalLine": 327,
+          "title": "for (const taskFiles of [false, true]) test('干净失败的新attempt绑定当前runner并保留原快照和回执：'+taskFiles, windows, async t => {",
+          "sha256": "ad0a2fab2bf7b5dded0ea38d2ed3107d6801c9eb88362ec77e707585f9c26409",
+          "variants": 2,
+          "file": "test/execution-local-acceptance-history.test.js",
+          "contract": "historical",
+          "reason": "旧候选/任务本地验收runner的进程、HTTP、配置、清理或重试协议；不属于当前动态执行入口，保留原参数化变体及断言",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/package.json#files",
+            "packages/dingtalk-dsh-assistant/session-workspaces.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        }
+      ],
+      "destinationSha256": {
+        "test/execution-local-acceptance.test.js": "37cfd61f99c4fdfea7529971f7808e66301c91087e2adc0f9248700ee986c9a4",
+        "test/execution-local-acceptance-history.test.js": "602b1994b6a5f261d320f8de8a6c49edb50074945f4110c9afa4d9bada2aad05"
+      }
+    },
+    {
+      "original": "test/runtime.test.js",
+      "originalSha256": "41b83efa612fd4bbe66febfa6a76c35e526831c7bbc343e9517d291aa4645cd3",
+      "originalRegistrations": 149,
+      "originalVariants": 149,
+      "destinations": [
+        "test/runtime.test.js",
+        "test/runtime-history.test.js"
+      ],
+      "fixture": {
+        "file": "test/fixtures/runtime-mixed.js",
+        "sha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2"
+      },
+      "cases": [
+        {
+          "originalId": 1,
+          "originalLine": 150,
+          "title": "test('Resident 完整提示词保留群职责与动态别名，不叠加登录人特殊禁令', async (t) => {",
+          "sha256": "c2df25d51b5769ba5710cea1470db98f647785beea4bf323b1b54a426987279c",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 2,
+          "originalLine": 194,
+          "title": "test('叶子登记的 worktree 在归档失败时保留，修复后迁出文档并删除目录', async t => {",
+          "sha256": "7d11db2b6c1779c3894f9dbdf4373745ecfea90b7e3624fc5d039057ac63cae5",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧叶子worktree登记、自动归档与taskWorkLocations投影；当前任务使用固定任务根及原生会话归属",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 3,
+          "originalLine": 255,
+          "title": "test('运行时协调请求独立日志与工具角色绑定；群主和旧请求均不能越权提交', async t => {",
+          "sha256": "4e53b66ff83dd58644b107a4336ccba961e106d36389f9f7af777f11936e551c",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 4,
+          "originalLine": 283,
+          "title": "test('重启仅为未接纳协调请求建新会话，已接纳业务效果不重放', async t => {",
+          "sha256": "0a458a56eafe6d20d2d4d901070990cbf6a702d00f0ece1b68386c14a6a60a2c",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 5,
+          "originalLine": 304,
+          "title": "test('内部审阅预算故障由 Host 暂停并一次通知，叶子重复提交不能耗尽轮次', async t => {",
+          "sha256": "4fd1f7b03eba4d728c515a253c833e7b796af7a73f00e68fb207b0b9073ac21d",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 6,
+          "originalLine": 345,
+          "title": "test('系统等待恢复先只读构造原报告，预算仍超限时不解除等待或建立模型会话', async t => {",
+          "sha256": "cbb271417434684ac6e1d36648085d4d8572c6c5110d5f5bbb39d9fb37f2de2d",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 7,
+          "originalLine": 362,
+          "title": "test('系统等待恢复拒绝旧输入、待授权和未归类撤销消息，失败不产生报告重试事件', async t => {",
+          "sha256": "10454778fa758f53d52e71afe8be531de166e6f483ac06d2acc84875ae8f6746",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 8,
+          "originalLine": 380,
+          "title": "test('活动投影从 DSH 工具结果关联真实工具名与错误位', async t => {",
+          "sha256": "2a834a826930ac5acb9da81880891cf7ea1b9ea0de9c55ecbb2be9cc2529d80c",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 9,
+          "originalLine": 398,
+          "title": "test('活动落盘失败暂停后续投影，故障消失按原事件顺序补齐并清除当前告警', async t => {",
+          "sha256": "e22a483e39e3e9171881baaa2c395efb179fe1a50ec508ab3af7f75291751e5e",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 10,
+          "originalLine": 429,
+          "title": "test('活动故障跨 Runtime 重启从 Session 原事件补投影', async t => {",
+          "sha256": "add878ae37609d459fad99a4ef619b506e7ea8a1d37deec6115bfa09e17d6b85",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 11,
+          "originalLine": 448,
+          "title": "test('已完成任务重启后从持久 Session 审计并补齐遗漏活动', async t => {",
+          "sha256": "97fe3fed9dc2adba595beb9588d47ad1ab484fb748c37b31c6e19dbbf75006e0",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 12,
+          "originalLine": 468,
+          "title": "test('历史已完成任务的 Session 不存在时审计收束为不可回填，不反复报当前写盘故障', async t => {",
+          "sha256": "cd57fe164c8f34fded9665e4641c03994860a7053fd3eef7ae39d0ab18dc423f",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 13,
+          "originalLine": 484,
+          "title": "test('已完成任务的持久 Session 读取故障仍保留重试和当前告警', async t => {",
+          "sha256": "0b92722df44566761172a7b5a317141badbb1a4b703ad1faa3aa4e6c0793fb52",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 14,
+          "originalLine": 515,
+          "title": "test('关联状态追问走同模型无工具短路径，事实未变才写入统一 Outbox', async t => {",
+          "sha256": "1b907905b0253b3ae46b9ee7f8980eb24acec9e7bcb9cb726c5a31bdbb0975c7",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 15,
+          "originalLine": 533,
+          "title": "test('短路径识别执行请求后交还常驻，不创建动作或发送推测回复', async t => {",
+          "sha256": "8aca21e19baedc87a1cc828fd3e0a74827d12591f6d844de531d78179ed9ce17",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 16,
+          "originalLine": 544,
+          "title": "test('短答生成期间 Task 事实变化，原子提交拒绝旧快照并交还常驻', async t => {",
+          "sha256": "a4e694db4b4df9d1564c9fc83fbf1999b494de6ac39a4322012f2f0e9de4022f",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 17,
+          "originalLine": 556,
+          "title": "test('短答期间关联任务集合或群职责改变，拒绝按旧集合和旧准入发言', async t => {",
+          "sha256": "7c99e2a1024f1f6bfbcf75b3cedb74dbd8bd81ee7fc78f25243efd6cc3bfc514",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 18,
+          "originalLine": 574,
+          "title": "test('纯工具心跳不使只含业务事实的短答失效，短答不携带活动投影', async t => {",
+          "sha256": "ab1af4296ac6f1fe73fc05a8f988581ea4bce7a315c31fc0c45016f68c305744",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 19,
+          "originalLine": 588,
+          "title": "test('别名修复请求创建任务，后续无称呼的图片补充续接同一叶子', async (t) => {",
+          "sha256": "5c4208dea2bf0d938a89402a76c192427b368d57421fad6e75e6d78642ded663",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 20,
+          "originalLine": 612,
+          "title": "test('入站持久接收立即返回，模型尚未提交时也能接收后续消息', async (t) => {",
+          "sha256": "e64829cf4b273748b0b39678ccacbef719c79bfefd819e4d8521269d0f705167",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 21,
+          "originalLine": 622,
+          "title": "test('重复入站幂等，Topic 提交成功后只生成一条可靠回复', async (t) => {",
+          "sha256": "a22a6246ac8e386342628ce713e6c51dc3466c3d97562e82446e2657ebc50260",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 22,
+          "originalLine": 633,
+          "title": "test('普通 assistant 文本或 turn 结束不能替代 Topic 结构化提交', async (t) => {",
+          "sha256": "c9a0b9a048e680e310c0966f2e939c2468b167e0fd640aff8bafa259b7a528ef",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 23,
+          "originalLine": 643,
+          "title": "test('注册工具符合 DSH JSON Schema，Resident 只能通过 Topic 决策建任务', async (t) => {",
+          "sha256": "5e5598b92b754d959ecc180a479f47afd4bd2acfac2b9c7944a8f042056f71de",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 24,
+          "originalLine": 653,
+          "title": "test('来源附件先持久保存，归类输入可恢复相同 imageRefs', async (t) => {",
+          "sha256": "5942ddaa0652b5eeda082082cea6c44b7f42069e4c62556a3b38614fea1de59a",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 25,
+          "originalLine": 663,
+          "title": "test('附件缺失硬拦截任务，仍发送明确缺失反馈', async (t) => {",
+          "sha256": "c3fa19427f02e136e79734b702bb9d96f411c749d4a65883c9ccb9eceb276ff5",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 26,
+          "originalLine": 672,
+          "title": "test('多群请求隔离，A 等待归类不阻止 B 完成', async (t) => {",
+          "sha256": "866f65eac28383eabcb825e0c5b13dc1d20716fc8f05f41518f3d64077e31eec",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 27,
+          "originalLine": 682,
+          "title": "test('Task 只保存固定 Topic 引用，叶子收到版本化原始上下文', async (t) => {",
+          "sha256": "8cc28a20cc47f0adab7e206e857550aef147ebed957ec4d7726f823e4dfac9bb",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 28,
+          "originalLine": 701,
+          "title": "test('任务关联摘要不复制原文，按需读取返回 Topic refs 与执行约定', async (t) => {",
+          "sha256": "820366e212aeaf3e210c71cb8da217a3dd1bbbe83ea1bbb1b53c321ad8db5825",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 29,
+          "originalLine": 720,
+          "title": "test('任务并发容量满时 FIFO 排队，取消释放名额并保留取消事实', async (t) => {",
+          "sha256": "7242d9b0ad6aade06cfa6fe2d721372a47e2c3d4724e879ff5d4206f421541be",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 30,
+          "originalLine": 731,
+          "title": "test('Host 动作默认无适配器，显式注册后仍逐次绑定身份版本与授权', async t => {",
+          "sha256": "a26dbcfbbd90a9d86de7e6203dee6cbf53c8f26791349bbffb26e1be8f057dcc",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 31,
+          "originalLine": 751,
+          "title": "test('取消先持久停止再中断叶子，未知动作跨重启保留占用且读回后才终结', async t => {",
+          "sha256": "3afbe252c0f439e56405c8fb89aa645a95a80c7957d279873f76b5de394c6bb4",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 32,
+          "originalLine": 782,
+          "title": "test('取消等待非中断动作时不持有全局提交锁，独立任务仍能保存新动作', async t => {",
+          "sha256": "62095b91be4620dfa4fdf2c7230d0ab5df1316a8a0cc9ffde9771339f2679cb2",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 33,
+          "originalLine": 801,
+          "title": "test('Outbox 已落盘时监听器失败不会回滚已接受 Topic 决策', async (t) => {",
+          "sha256": "5144051b5fbe25ba129f8d46ee894ed8c8ac21924671465b82e6a33af829f81b",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 34,
+          "originalLine": 812,
+          "title": "test('历史导入只发送 Topic 索引，不重放历史消息正文或指令', async (t) => {",
+          "sha256": "35ae99bdf5efe4b94fdc4e660c1ebb9fd3b6377cb9b01fadda17939eb8c861dc",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 35,
+          "originalLine": 823,
+          "title": "test('恢复失败保留原 Resident Session，其他群仍能工作', async (t) => {",
+          "sha256": "33392ae2905f808b363d935ce15ddda7ea2b9ee791ada1cb6f16c224661b97b4",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 36,
+          "originalLine": 832,
+          "title": "test('新群主会话具有完整工具权限，Topic 工具仍不能访问其他 Session', async (t) => {",
+          "sha256": "9809bc4fa1eaac17f772ab6a627fd2a2f90f342db35b533765c4f56a08faf294",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 37,
+          "originalLine": 844,
+          "title": "test('workflow 启用时在线换工作区零写拒绝，同根及模型修改仍可用', async t => {",
+          "sha256": "a681cb3370b4fab5c5faeddfb5f95834b24a59c3c20dab49d2008766491601f7",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 38,
+          "originalLine": 857,
+          "title": "test('工作区切换保留事件历史并重建 Resident，旧 Session 释放', async (t) => {",
+          "sha256": "a3b0dc3b30ef8164d53bef2ff0c9747e6933aa063e626a0cb4b66f59440d67cf",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 39,
+          "originalLine": 872,
+          "title": "test('存在活动 Task 时仍保存默认模型并在下一请求生效，工作区切换继续拒绝', async (t) => {",
+          "sha256": "ede5b0dc1b06291950d1f858220dc74c437d1a42bf4999c2fec73dd7693a262e",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 40,
+          "originalLine": 892,
+          "title": "test('模型与推理深度使用原生配置服务保存', async (t) => {",
+          "sha256": "cbf7a26a0e30ac91948068bee0dd92ed75c7ad1507095c6d6929f85248aabd9f",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 41,
+          "originalLine": 899,
+          "title": "test('叶子会话提示词通过统一配置字段保存和读取', async (t) => {",
+          "sha256": "1839320eb5fea34cdb2a38394e7a4810a77817cda24d016d195c9e9d5c6366c1",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 42,
+          "originalLine": 908,
+          "title": "test('内置通用规范不依赖用户补充，动态清空及恢复后仍只注入叶子', async (t) => {",
+          "sha256": "34f0301d3b41bfa9780f3ad19cad8ea41971abbc7b969a444ea266e51db88983",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 43,
+          "originalLine": 935,
+          "title": "test('叶子只常驻流程索引，按需加载后直接动态注入当前正文', async (t) => {",
+          "sha256": "19daefcba79bc0ee46ad92c9b63e25dc58c1d3c96dd72a2e6ce9facdb65d4d53",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 44,
+          "originalLine": 955,
+          "title": "test('长任务可组合超过五个流程，重复加载去重，恢复后保留组合并按阶段裁减', async (t) => {",
+          "sha256": "119dbde7774b3ff6c296c90fd79a2612e2e4a201f5fecaea3a5f6f31afe575e9",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 45,
+          "originalLine": 976,
+          "title": "test('流程加载与组合调整排队期间目标变化时拒绝迟到写入', async (t) => {",
+          "sha256": "af1fc2c7eacdbb9c51079c30804957764c73910c24cf5973c6c9203bfb087d6e",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 46,
+          "originalLine": 991,
+          "title": "test('流程修订后旧选择失效，拒绝叶子用旧流程完成任务', async (t) => {",
+          "sha256": "b617c1d58708a68ea7585b81c0c899d83ffc88c78b71fb4abbf99202f8f2ebd9",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 47,
+          "originalLine": 1001,
+          "title": "test('计划绑定已选流程，主会话读完同一流程正文后才可审阅', async (t) => {",
+          "sha256": "d4043d0b87089a4417795e44868cdfd96fe56a045bdb48007d6fb0dfeac9f16f",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 48,
+          "originalLine": 1018,
+          "title": "test('主会话可拒绝自行扩写的冲突计划，叶子重新规划前不能推进', async (t) => {",
+          "sha256": "53f0307113fa04cd89d39c6689715731be77ca528706dea33b1434f9183d34b2",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 49,
+          "originalLine": 1034,
+          "title": "test('流程修订只使引用任务的旧计划失效，未引用任务不接收更新', async (t) => {",
+          "sha256": "9ff03f601eee0a256839c6abb15cb20fd890b617a1ac3a4d44fe70e2a8058372",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 50,
+          "originalLine": 1051,
+          "title": "test('任务目标变化保留流程引用供重审，并拒绝未加载流程', async (t) => {",
+          "sha256": "3fe96f959d422cd8969bb7e31a8bb9fe2e14392df3a3d333ad2fbcfbf078e0d1",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 51,
+          "originalLine": 1074,
+          "title": "test('流程修改、禁用和删除后未重新加载也不能推进旧阶段', async (t) => {",
+          "sha256": "3c024e49322e2496792226ab7649da348bfc9db1b3d5ee7752e2caabba777917",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 52,
+          "originalLine": 1086,
+          "title": "test('待审计划遇流程改版会失效并归档，重新加载后可重新规划', async (t) => {",
+          "sha256": "b4e3e8807b98880684bd21577a6dcad191fdc905e1824d126c76277ad13a36c9",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 53,
+          "originalLine": 1102,
+          "title": "test('首次异常可报告但不能改变进度，随后可制定计划并正常完成', async (t) => {",
+          "sha256": "61c525699b91a7c634b3edda0876693dc7649520c4b10a5d0080cfd2f55169a4",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 54,
+          "originalLine": 1111,
+          "title": "test('异常可抢占待审计划，旧审阅不得回写或阻止新计划', async (t) => {",
+          "sha256": "8cf6c3a201e49228c7ca6486ef0fdc9e20babb121b7c01691acdd1016050728c",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 55,
+          "originalLine": 1123,
+          "title": "test('被拒计划仍能报告证据缺口，诊断确认不解除计划拒绝', async (t) => {",
+          "sha256": "1637ee1bf35ef4a690b2b69ccb851d61eeee40b4a858b5f7d1c4ce8d0c6f8fdd",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 56,
+          "originalLine": 1134,
+          "title": "test('完成审阅发起即记录事件，拒绝与失败也保留耗时起点', async (t) => {",
+          "sha256": "3d3c0629577374ece17587a79a4079075011355cc0dabfae62e26c5d3d3ff4de",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 57,
+          "originalLine": 1150,
+          "title": "test('完成审阅期间流程更新保持 Task 与 Goal 活动并记录失败', async (t) => {",
+          "sha256": "ec5165c779ad2d9c5dcba09b9bdab28439715efaa397686db0454a7fd69f3295",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 58,
+          "originalLine": 1166,
+          "title": "test('审阅通过后最后落盘前流程改变，不能完成任务或发送通知', async (t) => {",
+          "sha256": "09a6700a5e6de7c06fe3437a4eba9081cf5a857ef5c246a97a94155e1923ed74",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 59,
+          "originalLine": 1192,
+          "title": "test('重启恢复过期待审计划时归档失败项，新计划不再被 pending 卡住', async (t) => {",
+          "sha256": "c6e14f41477d5349324f3ca90f9770eaacf2a58e2ceeb766d78f3c3c88b19ce6",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 60,
+          "originalLine": 1206,
+          "title": "test('完成审阅通过后的并发暂停不能被完成 CAS 覆盖', async (t) => {",
+          "sha256": "d702000c08bbbc2a1e642a73f4d879bd0bdcb5229e36442f963dd5d035bcab70",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 61,
+          "originalLine": 1228,
+          "title": "test('退订存储失败时保留 Resident，修复后可再次退订', async (t) => {",
+          "sha256": "b4dff47dabece0d41512c3bd3149e883d9b655b337b11e634e8ca80c57381aac",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 62,
+          "originalLine": 1241,
+          "title": "test('关闭后拒绝新消息，关闭两次只释放每个 Session 一次', async (t) => {",
+          "sha256": "7f29f12c0d6bd028d1007ec6379aee738aec0fac8033a43cacb63f964f5a218f",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 63,
+          "originalLine": 1299,
+          "title": "test('报告先持久接收并停等，Topic 决策事件解除等待而无需再次提交或巡检', async t => {",
+          "sha256": "848152646271a3fb132587907bb965377edeea518a724790fd7e00b4e08e45e4",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 64,
+          "originalLine": 1320,
+          "title": "test('坏阶段决策在持久化前拒绝，同一请求纠正后恢复报告与正常阶段推进', async t => {",
+          "sha256": "10c6b18255bafd3f4fd059fc719b33d3ca73209b4a2a5225010bb240505d4c0d",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 65,
+          "originalLine": 1347,
+          "title": "test('历史坏决策重启后退回重判，原报告不跳过且纠正后恢复同一Task', async t => {",
+          "sha256": "109cf39162b0b8be32b748f0180d8d5fd0302988b78aed225600a0a2483ce0f5",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 66,
+          "originalLine": 1388,
+          "title": "test('报告审阅耗尽保持同身份停等，显式重试重置原请求后恢复推进', async t => {",
+          "sha256": "e37e9ee32f6737e2a20f2b93e205a3da9be37d88e69d74f0624505ffa1676150",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 67,
+          "originalLine": 1411,
+          "title": "test('完成审阅耗尽进入系统等待，拒绝新报告且原完成报告可显式恢复', async t => {",
+          "sha256": "8bbc5b26e0b4fd2bc0691f6c3752827d8d679e37329b6669cdbc0e97d006ad4a",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 68,
+          "originalLine": 1470,
+          "title": "test('旧运行任务恢复时从已批准计划补齐阶段索引，原检查点不改写且只补一次', async t => {",
+          "sha256": "12a78b4855b5fd99a858157c19226f079cf9530109d1f2ed909a3e87bbf976d8",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 69,
+          "originalLine": 1549,
+          "title": "test('直接叶子工具不能绕过结构化必填、准备记录或可信检查器边界', async t => {",
+          "sha256": "e8a6f75959de36c62fe096138a41b3dab6ecced68faaabc0bfa48a43d3e49e99",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 70,
+          "originalLine": 1567,
+          "title": "test('输入修订沿阶段依赖闭包撤销，跨计划采用及无关输入保留同一原证据', async t => {",
+          "sha256": "4fa4f05b18b434af89748418f051d7f933b8a2bc13583b88a108bdddf16ed610",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 71,
+          "originalLine": 1597,
+          "title": "test('真实检查工具记录 UNKNOWN 不满足独立验收，文件产生后重新检查方可通过', async t => {",
+          "sha256": "540c7e6cfdcf4184ce102a2a94e6994a0143821de3a10dc1cdd03aff5687cef9",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 72,
+          "originalLine": 1621,
+          "title": "test('叶子结果与检查点拒绝缺失或过期 inputVersion/runSequence', async (t) => {",
+          "sha256": "96208d93b615632fe0d8cad665a6b6be9cba6b918220cb3f6a0b0d93ce46b603",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 73,
+          "originalLine": 1632,
+          "title": "test('完成验收不接收历史检查点夹带证据，跨检查点同ID不同内容明确拒绝', async t => {",
+          "sha256": "f4716d5e3911c1a646286e920b0727b178ca7f3218528f97ce3b0e5edb5a8f7e",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 74,
+          "originalLine": 1652,
+          "title": "test('检查点逐项推进并由结构化内部审阅确认，不能跳项完成', async (t) => {",
+          "sha256": "f655b9c2811a0880253becdde5412894432a32d0f5fa255ed87f085c45b0a2e8",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 75,
+          "originalLine": 1667,
+          "title": "test('首阶段尚未完成时拒绝跨序推进，不能以主会话审阅绕过顺序', async t => {",
+          "sha256": "01c134f28fb7592bcc63589029bfa5cd0541501e1f940e7400875d26847ace41",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 76,
+          "originalLine": 1678,
+          "title": "test('完成验收拒绝后保持 running 并向叶子发送具体纠偏', async (t) => {",
+          "sha256": "3c3953eeea6dd841dcc6ef6493ef99366411d00a0b5919a2e65de1b7e8ca4405",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 77,
+          "originalLine": 1688,
+          "title": "test('一次完成审阅同时准备通知，完成落盘后直接入 Outbox 且 FIFO 下个任务启动', async (t) => {",
+          "sha256": "52c6d9bc115ade9d1d4a3306d266a875d2456675b5b090f7432ce70e81be8a58",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 78,
+          "originalLine": 1706,
+          "title": "test('通知已入 Outbox 后执行事件写入失败不会重复发起通知协调', async (t) => {",
+          "sha256": "0d58a009f346550e1fd52a6392fb86c300e593bc804686afb1a6550207829bcb",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 79,
+          "originalLine": 1720,
+          "title": "test('尚未归类的新消息阻止叶子提交等待或完成结果', async (t) => {",
+          "sha256": "0071cf8088c342e9dac770c19dc3d937f7408ce2b2877c7a4dd634ce2df93415",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 80,
+          "originalLine": 1727,
+          "title": "test('Web 创建按 requestId 幂等，原始输入只落 Topic，参数变更不能复用身份', async (t) => {",
+          "sha256": "fa942e446ecfc8417189ace6f70b6e6c0245aec1b3538b6e781a7d2c9d382f16",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 81,
+          "originalLine": 1741,
+          "title": "test('Web 补充提升输入版本并重置当前检查点，同请求重试不重复补充', async (t) => {",
+          "sha256": "5daa7647d8d658b966a3efa95cce9a9fedf547635e7127f5a55a1cafcea4b745",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 82,
+          "originalLine": 1765,
+          "title": "test('目标修订原子更新任务名称并保留旧名称，普通补充不得单独改名', async (t) => {",
+          "sha256": "dfee0b35401acd16341a5d3fbe847a3baed0910932d719326196c11a0a587fea",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 83,
+          "originalLine": 1777,
+          "title": "test('目标变化缺少新任务名称时拒绝续接', async (t) => {",
+          "sha256": "a73df3c5f58db2a724f825edc00b3e73819bdfeb3b228079fe01a62229378707",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 84,
+          "originalLine": 1784,
+          "title": "test('preserve 新输入作废待审 checkpoint，并按新版本重新审阅', async (t) => {",
+          "sha256": "c76f2bfc83057564d6297a6589ce88e4650e875ea4aabcec896e9b79e1c54d49",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 85,
+          "originalLine": 1803,
+          "title": "test('授权变化即使阶段名称不变也撤销旧阶段批准', async t => {",
+          "sha256": "dab9ef49225809f6a448eb8e43dc80f8fad0ee539d822a6a2fb77a0f6bd802b0",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 86,
+          "originalLine": 1820,
+          "title": "test('相同待审计划的重复提交与Supervisor恢复共用一次审阅和拒绝注入', async (t) => {",
+          "sha256": "92d2be35ba04d149451f12fba04cbf40c8be66a64b58168268709912d8ec6d20",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 87,
+          "originalLine": 1838,
+          "title": "test('旧执行轮次的 idle 回收不释放已重开的叶子', async (t) => {",
+          "sha256": "588ccabdc94e1a2186f88073c296b8ec33580e1b1902df04454e980d368d48e3",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 88,
+          "originalLine": 1858,
+          "title": "test('人工批准与排队启动竞争时不突破并发上限', async (t) => {",
+          "sha256": "d8be49bf0e4b63eb3682c9b8aca7aa7ff28d8a48ffdfb4d227f3e5dde3619bf4",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 89,
+          "originalLine": 1880,
+          "title": "test('Web 重开完成任务建立新轮次，固定保留旧输入版本与历史', async (t) => {",
+          "sha256": "959b75073516e974ad1fbad9da27b807171f2f9a7b539e29870ce48fc2ebed39",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 90,
+          "originalLine": 1898,
+          "title": "test('完成任务按新目标重开时同步更新名称并在轮次历史保留旧名称', async (t) => {",
+          "sha256": "e5041d3ab70a2428c689f1c43a461823a2b93d80ab1a7fa17a0459fecb9b0e52",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 91,
+          "originalLine": 1909,
+          "title": "test('叶子 Topic 读取仅允许已接纳版本，拒绝未来版本及其他话题', async (t) => {",
+          "sha256": "596b80130db1a2450a4ca2b7b0c1881118c654e8c6f57142daa5438a5a2c1a55",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 92,
+          "originalLine": 1921,
+          "title": "test('同一消息并发补齐身份与附件不会丢失任一事实', async (t) => {",
+          "sha256": "8d44c1fdaa8218b0fcf8fd3681c38f1a7483bd8d6fdfbc39c7134094822fba33",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 93,
+          "originalLine": 1934,
+          "title": "test('人工授权重发、引用校验、批准幂等及已批准范围复用', async (t) => {",
+          "sha256": "7317200a41a2cbcb95cdf66156e7a149d4db4880c67dc2cf8dc3ccdc87552fbf",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 94,
+          "originalLine": 1963,
+          "title": "test('Goal 耗尽转真实 waiting，正常 turn 结束只记录活动不完成 Task', async (t) => {",
+          "sha256": "567081699863fa26cc4dbb400b5a4835f065eb26def262ac078992c447d97208",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 95,
+          "originalLine": 1977,
+          "title": "test('无许可的耗尽 Goal 重新获许可仍转人工等待，不自动扩轮', async (t) => {",
+          "sha256": "aa46fec62fe5521c0f39600943dd12b24038348b8448ed75bda9200b349f324a",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 96,
+          "originalLine": 1991,
+          "title": "test('叶子异常暂停最多重建两次，继续失败升级为人工阻塞', async (t) => {",
+          "sha256": "71a9bdd9a9b895288fb28e3f85dc10ee504855d0acf32e4aba2dee1b4d85756a",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 97,
+          "originalLine": 2008,
+          "title": "test('running 叶子 idle 时由 Runtime 继续，底层 unavailable 时重建同一 Task', async (t) => {",
+          "sha256": "d9c9a8be0a4a5cc52acb1eac8d25ae6d0f7e77c4b53b8eb8938af637833576f7",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 98,
+          "originalLine": 2039,
+          "title": "test('Resident 恢复超时由原生 AbortSignal 隔离，不阻止下一群恢复', { timeout: 2_000 }, async (t) => {",
+          "sha256": "cb1c095f275941a409d220819447ac7b81f13ca0b2048db203ea1a3ff0a08fa1",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 99,
+          "originalLine": 2048,
+          "title": "test('恢复清理旧协议与旧 Topic 请求 Inbox，但保留普通待办', async (t) => {",
+          "sha256": "06eeea30dd84c2b442b26107736ae1251ed03e8c2347c5eb019239759a68570f",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 100,
+          "originalLine": 2056,
+          "title": "test('重启恢复 Running 叶子沿用 Goal 与已接纳输入，并重新注入已选流程正文', async (t) => {",
+          "sha256": "50759029d6fc2f7c581d918ae981e02e8a4d0e0440edaf331e0a9af3c870a2e7",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 101,
+          "originalLine": 2071,
+          "title": "test('关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝', async (t) => {",
+          "sha256": "f2cdf50d9edc31ddda0f46ace20a13996648dfdf80e063bae170d09e5c9e7304",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 102,
+          "originalLine": 2088,
+          "title": "test('替换确认先送达新消息，随后精确撤回旧消息且重复恢复幂等', async (t) => {",
+          "sha256": "d7b0d3658de32c6a069fce98623831c34e858893514832616ef093a2ff918b83",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 103,
+          "originalLine": 2110,
+          "title": "test('未回读的旧确认停止重发，不阻塞替换，未观察到仍保持送达未知', async (t) => {",
+          "sha256": "41baa9ff3c74d20dca01c8eb5b2d3ce5afb0038deaa0b5e5166523529dbd439b",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 104,
+          "originalLine": 2131,
+          "title": "test('链式替换先送达最终通知，部分撤回失败不阻塞其他目标且永久拒绝不重试', async (t) => {",
+          "sha256": "3af8425277263401946fd5c968c3daa1fc9a57fdc79a2d57eb7c436ad3418f4b",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 105,
+          "originalLine": 2162,
+          "title": "test('撤回瞬态异常有限重试，持久次数达到上限后不再调用渠道', async (t) => {",
+          "sha256": "aa6bae18829c2a3b9363aee937c073580605a72a6df36a16cb3764bf5f8dc79e",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 106,
+          "originalLine": 2187,
+          "title": "test('撤回成功后持久写失败不能伪报成功，恢复永久拒绝后保留人工核验状态', async (t) => {",
+          "sha256": "e4d6f8efbdb46d40d680f90e69427dc80d9266d9d94a7f203355f6cd94263a92",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 107,
+          "originalLine": 2209,
+          "title": "test('真实Store与Bridge在监听和启动补偿并发、回执落盘崩溃及两次重启下不重发旧消息', async (t) => {",
+          "sha256": "054f06181a59d4912724e325f30116f8a51c01dd1df45589e1136c8d78900ec6",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 108,
+          "originalLine": 2246,
+          "title": "test('迁移任务重启不自动执行，显式恢复清门禁并要求重订计划', async t => {",
+          "sha256": "69c5fc66ada284ac3cae41705cdb14e1cc0f013b624953dfc54bd24e5359ae67",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧任务迁移恢复；清洁启动合同明确不迁移和兼容旧Task/Run",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 109,
+          "originalLine": 2261,
+          "title": "test('等待通知在同版本 resume 清除 result 后失效，不发送旧问题', async (t) => {",
+          "sha256": "a09dcf71b8ad4e4b39b33b8c17982057a7d821fae125a68cdeba3d7d162ef075",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 110,
+          "originalLine": 2272,
+          "title": "test('信息等待只在原通知确认送达后有限跟进，重复巡检不补发', async (t) => {",
+          "sha256": "6baa7c625e64d79f269b7d985e369c6dc29d86031f15b3ec527a6fb366684276",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 111,
+          "originalLine": 2289,
+          "title": "test('信息等待同时通知反馈人与发起人，并引用反馈消息', async (t) => {",
+          "sha256": "f93de3636e354fd1aa94af3496acdee8bb9df1669c322df500c34a072302934b",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 112,
+          "originalLine": 2304,
+          "title": "test('信息等待通知投递失败产生告警，送达后解除', async (t) => {",
+          "sha256": "7d7be31e59e5c4735741e97e3b7154025ab6d75fbdbdbe3840325d4aa658a2f9",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 113,
+          "originalLine": 2315,
+          "title": "test('历史已送达询问只按指定任务补一次暂停更正，送达前不启动催促', async (t) => {",
+          "sha256": "c53a589e80c897a53057de316c1c158cab7ca48d696948121e46affdd7e0acf3",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 114,
+          "originalLine": 2332,
+          "title": "test('已完成自身工作的叶子不能以外部独立检查提交等待', async (t) => {",
+          "sha256": "eba83b8cd890081bf868936c54c5bcb65cb15d8658c4e11bd747550ba9e4984a",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 115,
+          "originalLine": 2345,
+          "title": "test('把他人后续检查误列为本职阶段时，内部修订范围并保留已完成证据', async (t) => {",
+          "sha256": "2a44204498380679d39091e580f2cce7f4823bf6cb94a445dd86b7464c50860e",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 116,
+          "originalLine": 2368,
+          "title": "test('等待审阅认为仍可自行继续时保持 Task 运行且不发阻塞通知', async (t) => {",
+          "sha256": "5566ccef4ccd601fc76351a7d822fc7f39a2f1c2dad10a4be8a02c105086ab68",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 117,
+          "originalLine": 2381,
+          "title": "test('历史 coordination 等待结果可重启读取，但通知补偿不会重发旧检查', async (t) => {",
+          "sha256": "38a6b226383cb0da0f58d0007347786142bded51a4ee1243d4447d4653f71569",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 118,
+          "originalLine": 2395,
+          "title": "test('同版本重新 waiting 新问题不能被旧问题的通知快照覆盖', async (t) => {",
+          "sha256": "c2069612795b0f08b1aa0155192dcf913252059d15558ac9cc135a5519355ebe",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 119,
+          "originalLine": 2407,
+          "title": "test('等待结果原子落盘遇新输入，报告保留且 Goal 停等', async (t) => {",
+          "sha256": "36acd6ee3917e1066019e67b58fd5501ee1367422702a594fedd91430539812c",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 120,
+          "originalLine": 2416,
+          "title": "test('完成审阅通过后原子落盘遇新输入，不能提前 complete Goal', async (t) => {",
+          "sha256": "880148701a4869f1d5ed39c7a51c011107a9fab92fcb5cc410dd11542bac34bc",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 121,
+          "originalLine": 2432,
+          "title": "test('通知 Outbox 首次失败后相同请求重试使用稳定结果键且只落一次', async (t) => {",
+          "sha256": "19a3be622dd3eb7b5b777d51297343d3c33c65b9a90597e091fe211374d8bfb0",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 122,
+          "originalLine": 2447,
+          "title": "test('接纳后新入站先阻止叶子启动，同话题决策完成再恢复或取消', async t => {",
+          "sha256": "fda3276535721f6d51bff5624349d2fc5ab30cdb7dbe744ccfc458954c0b4c65",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 123,
+          "originalLine": 2475,
+          "title": "test('DSH原生默认模型在运行中变化时配置读回和下一请求同步更新', async (t) => {",
+          "sha256": "78d0748a8da70da5929b0cfe8333c0c6d70bf0d725f1ca13474013bc687aad98",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 124,
+          "originalLine": 2487,
+          "title": "test('慢叶子创建期间同群其他 Topic 仍可完成', async (t) => {",
+          "sha256": "6a74a1c2830fbeb61a0ad894e27cda403f6c314c44453f8e41809086ce6df913",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 125,
+          "originalLine": 2508,
+          "title": "test('排队叶子启动中取消立即落盘，迟到的 Session 创建不能复活任务', async (t) => {",
+          "sha256": "b639a6fa6775e7ea71d403bd011716eb6b92521445ddc28af7563f3a59a79a51",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 126,
+          "originalLine": 2527,
+          "title": "test('缺少稳定发送人 ID 不伪造引用，缓冲回复监听异常不损失已存意图', async (t) => {",
+          "sha256": "7ffd1c2c9f675527092fe582a72b2c97cdb8c3ad575d946ed8ff28e24bf6fb0e",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 127,
+          "originalLine": 2539,
+          "title": "test('DWS 恢复关闭同群 carrier 告警且不误清其他异常', async (t) => {",
+          "sha256": "bc55530808714499c46418bde89fdc60ab4cfabd959e1a5f71a3f9d6846e904f",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 128,
+          "originalLine": 2567,
+          "title": "test('没有持久通知意图的历史完成任务不在启动或对账时补发', async t => {",
+          "sha256": "0cfad429c3c99a137a8078f7dcd13f8ed065fa63b05f200c8d1527c5b6399033",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 129,
+          "originalLine": 2579,
+          "title": "test('非法完成通知草稿只重做通知，业务完成及固定意图跨重启保留', async t => {",
+          "sha256": "5e11235ce5e0aab229f129642cb575e3cb1abc371745528659b4e7e237bdf669",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 130,
+          "originalLine": 2602,
+          "title": "test('通知写入持续故障不产生未处理拒绝，恢复只补同一Outbox身份', async t => {",
+          "sha256": "6f73841f8a48987788cad07927d268204c3b0f1544bc54912597adc5bbbf8397",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 131,
+          "originalLine": 2625,
+          "title": "test('通知补发同批跳过退订群、隔离损坏 Resident，正常群仍独立完成', async (t) => {",
+          "sha256": "0dbb0ab0d10a9f7d295bed2fa75c0a0e67e9cee3047d2a33a605d0c6729722d5",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Task等待/完成通知补偿；旧Task不导入当前独立任务通知账",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 132,
+          "originalLine": 2646,
+          "title": "test('工作区屏障内到达的历史导入与通知等待新 Resident，导入先前事件进入新 seed', async (t) => {",
+          "sha256": "2ee5675a30f10e5b0b3cf238d916fb960885bfb8949220722696b85901046e25",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 133,
+          "originalLine": 2676,
+          "title": "test('切换工作区等待已经开始的结果通知，通知落盘前不释放旧 Resident', async (t) => {",
+          "sha256": "432f0c8d05ca8eb125c74c41cf0567b95a64d3ca2a459339a70b1a26b475e2ad",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 134,
+          "originalLine": 2692,
+          "title": "test('退订屏障之后的历史导入拒绝旧 Resident，等待期间其他群仍可提交', async (t) => {",
+          "sha256": "1164de335600061e0a2e2c6a8c10ea4d45936bf0b77af8432df26502aa28514c",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 135,
+          "originalLine": 2711,
+          "title": "test('关闭与进行中工作区切换串行收口，旧和替换 Resident 均释放一次', async (t) => {",
+          "sha256": "41d63cca8d20ba2faf7834d3313773934f3e80f66c667f41d38552c1e78ce092",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 136,
+          "originalLine": 2729,
+          "title": "test('同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可取消两个不同 Task 各一次', async (t) => {",
+          "sha256": "bb454c4d9527cdd116560db015f4a7b7765c182219ef7e49ae8e322081ddfd21",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 137,
+          "originalLine": 2763,
+          "title": "test('已执行来源改归属不会重新授予效果权限，新授权消息可以创建新任务', async (t) => {",
+          "sha256": "87c8b73639ca6ae899a69fc28f6818ecde21da3132b3af9dae72669c14adad16",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "current",
+          "reason": "混合注册仍断言发布中的Store/Topic/Bridge消息版本、提交、来源权限或发件箱事实；完整保留旧脚手架中的当前覆盖",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 138,
+          "originalLine": 2788,
+          "title": "test('工作区切换等待期间不占任务提交队列，提交前复核新出现的活动任务', async (t) => {",
+          "sha256": "15e7d9457ddc782856f322552c033e89c6a398ed75e82e64a47eeb377d0347a0",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 139,
+          "originalLine": 2807,
+          "title": "test('关闭拒绝尚未提交的结果通知且不悬挂', async (t) => {",
+          "sha256": "9c29aa87915a43130ef0f0ef3fc7a64417820f9a75f5a220c9758dadb3b0ce40",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 140,
+          "originalLine": 2816,
+          "title": "test('关闭等待已开始提交的结果通知 Outbox，不能提前关闭存储', async (t) => {",
+          "sha256": "31d1acabd7ff29639731c82bbbf2e898afbee45aae19143b303d3ef3ebecac80",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧在线工作区切换及Resident屏障；当前配置拒绝在线改根并要求离线迁移",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 141,
+          "originalLine": 2835,
+          "title": "test('相同引用 ID 下的不同事项不自动撤回，只有显式 replacement 才能产生撤回意图', async (t) => {",
+          "sha256": "6647b8d783e06fa1d9ab31922b39d986f11bf14f2a36994a9c802d31ef7ff5a8",
+          "variants": 1,
+          "file": "test/runtime.test.js",
+          "contract": "compatibility",
+          "reason": "保守保留：旧Runtime脚手架中仍有共享配置、Store、Topic或Bridge行为，未证明退出不损失当前/兼容保证",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 142,
+          "originalLine": 2851,
+          "title": "test('任务工作位置仅验证已有工件，保留历史来源并排除不存在及远程定位', async () => {",
+          "sha256": "6cf0f286225a61a7744419b366ec4e6f864b289984da791ee4d4f71eeb9daa34",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧叶子worktree登记、自动归档与taskWorkLocations投影；当前任务使用固定任务根及原生会话归属",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 143,
+          "originalLine": 2872,
+          "title": "test('启动活动审计不阻塞后续叶子和API，固定快照后live按序接续且close排空', async t => {",
+          "sha256": "6651034828760d0fd5981ccf8b84b4d871cd5d7c921a58e9e9b1eabb3e3eba2d",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 144,
+          "originalLine": 2913,
+          "title": "test('活动重试固定快照期间新增事件不丢且失败水位不跳洞', async t => {",
+          "sha256": "957fb33d3b174b82b2b561260abf459a843fafca1bc0023350cc06bdfcdc13da",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 145,
+          "originalLine": 2941,
+          "title": "test('启动resume失败会释放活动恢复预约，后续flush和close不悬挂', async t => {",
+          "sha256": "d6c26b86e2cb9a30cfd63be3bd99faa4576e6f631cd556d0d82c0df1a2ad6eb3",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧Runtime活动投影及Session审计；resident活动入口已换成任务会话observability",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 146,
+          "originalLine": 2950,
+          "title": "test('input-wait重启按原report形状恢复待审稿，复用已持久reject且保留checkpoint身份', async t => {",
+          "sha256": "dc85cdfca4f8306a0d93b12dc91bfb74bff3a75a5207ed7aead0d757be5d766c",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧checkpoint/result、流程选择、阶段计划、内部审阅或Goal停等协议已退役",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 147,
+          "originalLine": 2985,
+          "title": "test('旧Session缺失时仅为已重开的独立轮次建立新Session并保持Task身份', async t => {",
+          "sha256": "188da16c7a08d267b8221751741e60a8cbe0180f743fcc006566a9427e6f0259",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 148,
+          "originalLine": 3012,
+          "title": "test('非缺失故障和非重开任务不得替换旧Session', async t => {",
+          "sha256": "e63e13f44ddabf0bd8f46ea952299b15390eff7574dd45b0af9ecef0ca8f4cbe",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧单叶子Task/Session/Goal、动作适配器、重开及调度生命周期；新任务使用独立execution与租约",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        },
+        {
+          "originalId": 149,
+          "originalLine": 3039,
+          "title": "test('已切换群不恢复旧resident，旧入口拒绝接收且不产生协调会话', async t => {",
+          "sha256": "b137027d3c5750d269264ee06db7783520df8a5b403ab39a2cc512f24e0132d9",
+          "variants": 1,
+          "file": "test/runtime-history.test.js",
+          "contract": "historical",
+          "reason": "旧workflowGroupIds及workflow ingress分流已由新resident装配替代",
+          "evidence": [
+            "packages/dingtalk-dsh-assistant/resident.js",
+            "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+            "docs/ops/task-session-clean-start.md"
+          ]
+        }
+      ],
+      "destinationSha256": {
+        "test/runtime.test.js": "506c9eaa11a835ce4356b68f2246dd2375518a26507cdcf2421277a4fa6ff432",
+        "test/runtime-history.test.js": "2c8ddaa590dad5698bd77f1f90aa66757537db126576dd6f8fa80f1741a6bbdc"
+      }
+    }
+  ]
+}

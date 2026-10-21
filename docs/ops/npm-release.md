@@ -29,7 +29,7 @@ GitHub Environment `NPM_PUBLISH` 保留审批/保护规则，但应删除不再�
 1. 明确最新 main SHA，检查新增提交范围，同步三个版本、锁文件和 CHANGELOG。原工作区未提交内容及未合并实验分支不得带入。
 2. 本地 Node24.19.0 / pnpm10.13.1 冻结安装，运行本次相关回归及 `pnpm test:release-smoke`。不再在本地重复前置全量；大改必须补风险相关测试，测试成功不等于真实模型或渠道验收。
 3. 必要 PR 经审查合入 main，创建指向最终提交的带注释版本 tag。Release 的 resolve 固定 tag SHA、main 历史、三版本和 changelog；后续 jobs 只 checkout 此 SHA。
-4. validate 六个独立 Windows runner 按 test/suite-map.json 完整执行全部映射：unit 并发4，native两组及兼容三组各并发1；不提高同机并发挤压原30秒阈值。首次版本保留所有历史覆盖，退出任何测试必须另审其导入图与当前发行/兼容合同，不能按文件名或失败结果删除。每文件的依据和分组见完整映射；修改测试集合/导入须更新并审阅映射。
+4. validate 六个独立 Windows runner 按 test/suite-map.json 完整执行 release=true 映射：unit 并发4，native两组及兼容三组各并发1；不提高同机并发挤压原30秒阈值。当前运行时、保留兼容合同及未知覆盖继续门禁；逐注册审定的纯历史流程保留 `pnpm test:history` 和手动 CI scope=history。修改旧工程/验收/Runtime源码或共享夹具时显式运行相关历史路径。不能按文件名、旧导入或失败结果退出；依据、守恒清单和操作见[发行测试映射](release-test-mapping.md)。修改集合/导入须更新并审阅映射，混合注册/夹具变化须重新审定合同。
 5. 所有验证分组成功后 build 仅从同 SHA 构建三个 tgz，清单绑定 runId、SHA、tag、lock/profile摘要、Node/平台及固定pnpm配置，记录每包name/version/size/SHA256/SHA1。真实原生包 smoke 读取这批已打出的包；smoke 后再次校验摘要，才上传同 run 的不可变 artifact。
 6. publish 需要 build 成功且保留 NPM_PUBLISH 保护。它没有安装依赖、构建或测试步骤，只下载本 run 同 SHA artifact，核对 checkout/tag/SHA、清单、lock/profile、环境和每个 tgz，再使用原 OIDC 按 observer→assistant→根包发布。精确 npm 版本回读成功后才创建三个 tgz 附件的正式 Release，并核验附件大小/SHA256。
 
