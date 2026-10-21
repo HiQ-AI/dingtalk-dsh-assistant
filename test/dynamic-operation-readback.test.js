@@ -215,3 +215,28 @@ test('investigated native error closes failed with partial effects, never infers
  const write=make();write.operation.definition.toolName=write.operation.result.toolName=write.call.data.name='edit';write.operation.definition.effectClass='write'
  assert.equal((await inspectInvestigatedNativeFailure(write)).partialEffectsPossible,true)
 })
+
+test('原生edit值校验以绑定参数和精确拒绝回执对账，歧义错误仍保持unknown', async()=>{
+ const make=(args={file_path:'a.txt',old_string:'same',new_string:'same'},message='old_string and new_string must differ')=>{
+  const f=fileFailure();delete f.result.data.error
+  f.call.data.arguments=JSON.stringify(args);f.operation.definition.argumentsDigest=hash(args)
+  f.result.data.message.content=[{type:'text',text:`Error: ${message}`}]
+  f.operation.result.resultDigest=hash(f.result.data.message.content)
+  return f
+ }
+ for(const [args,message] of [
+  [{file_path:'a',old_string:'x',new_string:'x'},'old_string and new_string must differ'],
+  [{file_path:' ',old_string:'x',new_string:'y'},'file_path must be a non-empty string'],
+  [{file_path:'a',old_string:'',new_string:'y'},'old_string must be a non-empty string']
+ ]) {
+  const proof=await inspectFailedNativeFileMutation(make(args,message))
+  assert.equal(proof.errorCode,'NATIVE_EDIT_ARGUMENT_REJECTED');assert.equal(proof.noEffect,true)
+ }
+ for(const mutate of [f=>{f.result.data.message.content[0].text='Error: disk failure';f.operation.result.resultDigest=hash(f.result.data.message.content)},
+  f=>{f.call.data.arguments=JSON.stringify({file_path:'a',old_string:'x',new_string:'y'});f.operation.definition.argumentsDigest=hash(JSON.parse(f.call.data.arguments))},
+  f=>{f.result.data.error={code:'FS_IO_ERROR'}},f=>{f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='write'},
+  f=>{f.execution.drained=false},f=>{f.end.data.reason.kind='aborted'},f=>{f.operation.definition.argumentsDigest='wrong'}]){
+  const f=make();mutate(f);assert.equal(await inspectFailedNativeFileMutation(f),null)
+ }
+ assert.equal(isNativeFilePrecondition('write',{code:'NATIVE_EDIT_ARGUMENT_REJECTED'}),false)
+})

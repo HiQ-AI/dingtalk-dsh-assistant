@@ -7,7 +7,18 @@ const scopes = new AsyncLocalStorage(), installations = new Map()
 // 可能发生在提交之后，不能由错误码推断没有效果，也不按错误文案分类。
 const filePreconditions = new Set(['FS_NOT_OBSERVED', 'FS_STALE_VERSION', 'FS_NOT_FOUND',
   'FS_NOT_DIRECTORY', 'FS_NOT_REGULAR_FILE', 'FS_NOT_TEXT', 'FS_TOO_LARGE', 'FS_EDIT_NOT_FOUND', 'FS_AMBIGUOUS_EDIT'])
-export const isNativeFilePrecondition = (toolName, error) => ['edit', 'write'].includes(toolName) && filePreconditions.has(error?.code)
+export const isNativeFilePrecondition = (toolName, error) => ['edit', 'write'].includes(toolName) && (filePreconditions.has(error?.code) || toolName === 'edit' && error?.code === 'NATIVE_EDIT_ARGUMENT_REJECTED')
+// 原生 edit 的值校验发生在任何 FS 调用之前；必须同时核对参数和精确错误回执。
+export function nativeFileError(toolName, args, result, error) {
+  if (error?.code || toolName !== 'edit' || result?.isError !== true || result.content?.length !== 1
+    || result.content[0].type !== 'text' || typeof args?.file_path !== 'string'
+    || typeof args.old_string !== 'string' || typeof args.new_string !== 'string') return error
+  const message = !args.file_path.trim() ? 'file_path must be a non-empty string'
+    : !args.old_string.length ? 'old_string must be a non-empty string'
+    : args.old_string === args.new_string ? 'old_string and new_string must differ' : null
+  return message && result.content[0].text === `Error: ${message}`
+    ? { code: 'NATIVE_EDIT_ARGUMENT_REJECTED' } : error
+}
 const fail = () => { throw Object.assign(new Error('TASK_FILESYSTEM_SCOPE_FORBIDDEN'), { code: 'TASK_FILESYSTEM_SCOPE_FORBIDDEN' }) }
 const inside = (root, path) => { const part = relative(root, path); return part === '' || part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part) }
 async function canonical(path) {
