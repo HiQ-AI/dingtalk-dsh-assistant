@@ -9,7 +9,7 @@ const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clone = value => JSON.parse(JSON.stringify(value))
 
 /** One Host-owned queue for independent source units; Topic is never its parent. */
-export function openIndependentCoordination({ ctx, root, agentPreset, config = {}, residentStore, query, command,
+export function openIndependentCoordination({ ctx, root, getWorkspaceDir, agentPreset, config = {}, residentStore, query, command,
   ownerActorId, onApplied, onError, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
   coordinationModelSelection(config)
   const observations = new Map(), arrangementObservations = new Map(), running = new Map(), admissions = new Set()
@@ -184,6 +184,7 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
     return observed
   }
   async function freezeProposal(request, proposal, coordinationId, source, extra = {}) {
+    if (proposal.kind === 'schedule' && proposal.members?.some(member => member.action === 'task-observe')) fail('COORDINATION_OBSERVATION_SCHEDULE_UNSUPPORTED')
     const observed = await checkObservedTasks(request, proposal)
     const taskCommand = proposal.kind === 'arrangement' || proposal.kind === 'schedule' && proposal.actionKind === 'task-command'
     const conditionalProposal = proposal.kind === 'schedule' ? proposal.conditionalMembers : undefined
@@ -335,7 +336,7 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
         sourceMessageId: snapshot.messageId, actorId: snapshot.actorId,
         fact: { coordinationId, eventId, sourceUnitId: request.unitId, sourceUnitRevision: request.unitRevision, ...fact } } }, `prepare:${notificationId}`)
   }
-  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, agentPreset, config, context, submit,
+  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir, agentPreset, config, context, submit,
     isCurrent: request => { try { assertOwned(request); return true } catch { return false } } })
   async function acceptMemberTrigger(groupId, coordination, state, member) {
     if (coordination.allTogether && coordination.pendingClarifications?.length) return
@@ -354,7 +355,7 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
       const proofs = []
       for (const id of member.dependencies) {
         const parent = state.members.find(candidate => candidate.id === id)
-        if (!parent?.completionProof || parent.state !== 'fulfilled') return
+        if (!parent?.completionProof || parent.state !== 'fulfilled' || ['paused','cancelled'].includes(parent.control)) return
         const task = await query('task.get', { taskId: parent.taskId }), proof = parent.completionProof
         if (task.status !== 'completed' || task.completion?.commandId !== proof.commandId
           || ['requirementRevision','controlRevision','runSequence'].some(key => task[key] !== proof[key])
@@ -362,7 +363,7 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
         proofs.push(proof)
       }
       const latest = proofs.sort((a,b) => b.sequence - a.sequence)[0]
-      trigger = { triggerKind: 'business-event', eventSource: 'task-ledger', eventId: latest.eventId, actionId: member.id }
+      trigger = { triggerKind: 'business-event', eventSource: latest.eventSource ?? 'task-ledger', eventId: latest.eventId, actionId: member.id }
     }
     await command('coordination.occurrence.accept', { coordinationId: coordination.id, trigger,
       action: { kind: 'task-command', instructionIds: [member.id] }, target: { conversationId: groupId, recipientIds: [], summaryOnly: true } })
@@ -370,14 +371,17 @@ export function openIndependentCoordination({ ctx, root, agentPreset, config = {
   async function dispatch(groupId) {
     for (const coordination of await query('coordination.list', { groupId })) {
       if (coordination.state !== 'active') continue
+      await command('coordination.observe.reconcile', { coordinationId: coordination.id })
       const state = await query('coordination.get', { coordinationId: coordination.id })
       for (const member of state.members) {
+        if (member.observation) continue
         if (['applied','fulfilled'].includes(member.state) && !member.hostHandoffAt) {
           await onApplied(member)
           await command('coordination.member.handoff', { instructionId: member.id }, `coordination-handoff:${member.id}`)
           continue
         }
         if (member.state !== 'ready') continue
+        if (member.reorderAssessment && ['pending','needs_clarification'].includes(member.reorderAssessment.state)) continue
         try {
           if (member.requiresTrigger) {
             await acceptMemberTrigger(groupId, coordination, state, member)

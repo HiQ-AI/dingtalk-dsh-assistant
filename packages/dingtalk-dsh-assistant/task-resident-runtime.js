@@ -9,8 +9,15 @@ const retired = () => { throw Object.assign(new Error('WORKFLOW_RETIRED'), { cod
 /** Group transport/configuration facade. It has no legacy task scheduler, stage engine or Owner. */
 export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5, taskSessionModel = {} } = {}) {
   const initialSignature = normalizeReplySignature(store.getReplySignature?.() ?? agentReplySignature)
-  const root = resolve(store.getAgentWorkspaceDir?.() ?? agentWorkspaceDir ?? cwd)
-  if (!isAbsolute(root) || !(await stat(root)).isDirectory()) throw new Error('agent_workspace_not_directory')
+  const resolveAgentWorkspace = async value => {
+    if (typeof value !== 'string') throw new Error('agent_workspace_must_be_absolute')
+    const directory = value.trim() || cwd
+    if (!isAbsolute(directory)) throw new Error('agent_workspace_must_be_absolute')
+    const normalized = resolve(directory)
+    if (!(await stat(normalized).catch(() => undefined))?.isDirectory()) throw new Error('agent_workspace_not_directory')
+    return normalized
+  }
+  const root = await resolveAgentWorkspace(store.getAgentWorkspaceDir?.() ?? agentWorkspaceDir ?? '')
   if (store.getAgentWorkspaceDir?.() !== root) await store.setAgentWorkspaceDir(root)
   if (store.getReplySignature?.() === undefined && agentReplySignature !== undefined) await store.setReplySignature(initialSignature)
   const subscribed = new Set(), unsubscribed = new Set(), issues = new Map()
@@ -23,7 +30,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   let closed = false, profile = '', groupReader, resourceReader
   const selection = () => ctx.agentDefaultModel.currentSelection()
   const taskSelection = () => taskModelConfig(store.getTaskSessionModelConfig?.() ?? taskSessionModel)
-  const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: root, ...selection(),
+  const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: store.getAgentWorkspaceDir?.() ?? root, ...selection(),
     taskSessionModel: taskSelection(),
     replySignature: store.getReplySignature?.() ?? initialSignature,
     proxyUrl: store.getProxyUrl?.() ?? '', maxConcurrentTasks: store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks })
@@ -48,8 +55,13 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
       configSaving = true
       try {
         if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
-        if (input.workspaceDir !== undefined && resolve(input.workspaceDir) !== root) throw new Error('task_workspace_change_requires_offline_migration')
         const patch = {}
+        if (input.workspaceDir !== undefined) {
+          patch.agentWorkspaceDir = await resolveAgentWorkspace(input.workspaceDir)
+          // Agent cwd may change for future coordination plans. Existing task files,
+          // leases and native logs remain rooted at their original durable location.
+          patch.taskWorkspaceDir = store.getTaskWorkspaceDir?.() ?? root
+        }
         if (input.agentNames !== undefined) {
           if (!Array.isArray(input.agentNames) || input.agentNames.some(name => typeof name !== 'string')) throw new Error('agent_names_must_be_array')
           patch.agentNames = [...new Set(input.agentNames.map(name => name.trim()).filter(Boolean))]
@@ -80,7 +92,8 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
           const saved = getAgentConfig()
           const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b)
           if (changesDefault && (saved.provider !== proposedSelection.provider || saved.model !== proposedSelection.model || (saved.reasoningEffort || '') !== (proposedSelection.reasoningEffort || ''))
-            || Object.entries(patch).some(([key,value]) => !equal(saved[key],value))) throw new Error('AGENT_CONFIG_READBACK_MISMATCH')
+            || Object.entries(patch).some(([key,value]) => !equal(key === 'agentWorkspaceDir' ? saved.workspaceDir
+              : key === 'taskWorkspaceDir' ? store.getTaskWorkspaceDir?.() : saved[key],value))) throw new Error('AGENT_CONFIG_READBACK_MISMATCH')
           return saved
         } catch (cause) {
           // No blind compensation: native profile and resident storage have no shared transaction.

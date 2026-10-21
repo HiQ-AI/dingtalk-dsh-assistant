@@ -185,6 +185,18 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       if (!source || source.coordinationId !== coordination.id || source.groupId !== coordination.groupId || source.dispatchOwner !== 'coordination'
         || !['accepted','needs_clarification'].includes(source.state)) fail('DYNAMIC_COORDINATION_SOURCE_STALE')
     } else if (trigger.triggerKind === 'business-event') {
+      if (trigger.eventSource === 'task-decision-receipt') {
+        if (!trigger.eventId.startsWith('task-decision:')) fail('DYNAMIC_COORDINATION_EVENT_INVALID')
+        const id = trigger.eventId.slice('task-decision:'.length), decision = get('dynamic_receipts', id).taskDecision
+        if (!decision || decision.id !== id || decision.decision?.action !== 'complete') fail('DYNAMIC_COORDINATION_EVENT_INVALID')
+        const task = get('dynamic_tasks', decision.taskId)
+        if (task.groupId !== coordination.groupId) fail('DYNAMIC_COORDINATION_SCOPE')
+        if (task.status !== 'completed' || task.completion?.commandId !== id
+          || ['requirementRevision','controlRevision','runSequence'].some(key => task[key] !== decision[key] || task.completion[key] !== decision[key])
+          || (task.contextRevision ?? 0) !== decision.contextRevision || task.completion.contextRevision !== decision.contextRevision)
+          fail('DYNAMIC_COORDINATION_EVENT_STALE')
+        return
+      }
       if (trigger.eventSource !== 'task-ledger') fail('DYNAMIC_COORDINATION_EVENT_INVALID')
       const event = get('dynamic_task_events', trigger.eventId)
       const task = get('dynamic_tasks', event.taskId)

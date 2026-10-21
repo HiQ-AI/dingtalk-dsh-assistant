@@ -10,7 +10,16 @@ export function freezeCoordinationMembers({ coordinationId, proposal, tasks, sou
   proposal.members.forEach((m, index) => ids.set(keyOf(m), `${coordinationId}:member:${index + 1}${instructionRevision ? `:revision:${instructionRevision}` : ''}`))
   return proposal.members.map(input => {
     const instructionId = ids.get(keyOf(input)), commandId = `coordination-command:${coordinationId}:${instructionId}`
-    const dependencies = input.afterTaskIds.map(id => ids.get(id) ?? fail('COORDINATION_DEPENDENCY_TARGET_MISSING'))
+    const dependencies = (input.afterTaskIds ?? []).map(id => ids.get(id) ?? fail('COORDINATION_DEPENDENCY_TARGET_MISSING'))
+    if (input.action === 'task-observe') {
+      const task = tasks.get(input.taskId)
+      if (!task || task.groupId !== source.groupId || task.archivedAt) fail('COORDINATION_TASK_SCOPE')
+      if (input.inputVersion !== task.requirementRevision || input.runSequence !== task.runSequence) fail('DYNAMIC_TASK_REVISION_STALE')
+      return { instructionId, taskId: task.taskId, observation: true, progressImpact: 'preserve', dependencies: [],
+        command: { id: commandId, kind: 'coordination.observe', args: { taskId: task.taskId,
+          expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision,
+          expectedContextRevision: task.contextRevision ?? 0, expectedRunSequence: task.runSequence } } }
+    }
     if (input.action === 'new-task') {
       if (!input.creationKey?.trim() || !input.title?.trim() || !input.objective?.trim() || !input.requirements?.length) fail('COORDINATION_CREATE_CONTRACT_REQUIRED')
       const taskId = stableId('task', `${coordinationId}:${input.creationKey}`)

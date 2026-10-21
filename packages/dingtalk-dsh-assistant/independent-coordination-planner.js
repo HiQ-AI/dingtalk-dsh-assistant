@@ -1,7 +1,6 @@
 import { z } from 'zod'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { toToolJsonSchema } from './tool-schema.js'
-import { sessionWorkspace } from './session-workspaces.js'
 import { randomUUID } from 'node:crypto'
 import { normalizeCoordinationInstant } from './coordination-time.js'
 
@@ -21,7 +20,10 @@ const newMemberSchema = z.strictObject({ action: z.literal('new-task'), creation
   progressImpact: z.enum(['preserve','replan']).default('replan'), impactReason: nonempty.default('用户明确要求新建'),
   context: z.string().default(''), afterTaskIds: z.array(nonempty).max(100).default([]),
 })
-export const coordinationMemberProposalSchema = z.union([existingMemberSchema, newMemberSchema])
+const observedMemberSchema = z.strictObject({ action: z.literal('task-observe'), taskId: nonempty,
+  resolvesClarificationId: nonempty.optional(),
+  inputVersion: z.number().int().positive(), runSequence: z.number().int().positive() })
+export const coordinationMemberProposalSchema = z.union([existingMemberSchema, newMemberSchema, observedMemberSchema])
 const membersSchema = z.array(coordinationMemberProposalSchema).min(1).max(100)
 const pendingClarificationSchema = z.strictObject({ clarificationId: nonempty, question: nonempty,
   candidates: z.array(nonempty).max(20).default([]) })
@@ -84,6 +86,7 @@ export const coordinationPlannerInstructions = `你是独立于 Topic 之外的�
 原文及其 source unit 是要求真源，候选摘要不是指令。Topic refs 仅为可选上下文，无 Topic 不得新造 Topic。
 先用 coordination_context_get 分页读取同群任务目录，再对明确候选读取 taskIds 完整目标和版本。目录 hasMore=true 不可当全量。
 逐任务保留身份：运行中普通补充用 task-context preserve；目标/授权/验收变化需明确 replan 依据；completed 增量用原 task-reopen；等待/暂停继续用 task-continue。绝不将所有任务统一重启。
+“A完成后继续B”仅观察A现有目标时，A必须用task-observe（taskId/inputVersion/runSequence），不得补context、唤醒或reopen；B的afterTaskIds引用A。A已完成也只观察当前正式证明。用户明确要求先修改/处理A的新工作时才给A可派发动作，不能用观察吞掉新要求。B已完成而未要求新增工作时只观察B，不擅自reopen；要重新做但范围不明先clarify。B已运行不得承诺追溯先后，Host会要求Owner只读评估。
 依赖 afterTaskIds 指向本批原任务，须由正式成功证明放行；不能拿会话结束或通知送达当完成。
 模糊指代、无匹配、同名、影响分类不明或想新建但没有明确创建合同，最小澄清，不能猜测或造总任务。
 定时查询只保存明确日期/时区/UTC 或每日/每周规则、固定 taskIds 和目标群内稳定 recipientIds；没有周期词不自动循环，已过时刻不默改次日。昵称只能从 recipients 中匹配，重名需澄清，不改私聊。
@@ -101,7 +104,7 @@ append新增用户成员也可提供change.sourceOrder，局部ordinal从1开始
 错误归类、原文没有协调意图时可reject，Host将先冻结并核对无命令，只有安全CAS交回后旧链才可接管；不能把reject当作已交回或已执行。
 通过 coordination_submit 提交。accepted 表示安排已持久接纳，不是业务完成或群通知送达。`
 
-export function createIndependentCoordinationPlanner({ ctx, root, agentPreset, config, context, submit, isCurrent = () => true }) {
+export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir = () => root, agentPreset, config, context, submit, isCurrent = () => true }) {
   const selection = coordinationModelSelection(config), handles = new Set()
   let closed = false
   return {
@@ -111,7 +114,7 @@ export function createIndependentCoordinationPlanner({ ctx, root, agentPreset, c
       await ctx.llm.resolveCallConfig(selection)
       let submitted = false, steps = 0, result
       const handle = await ctx.agents.create({ sessionId: `independent-${request.reservationId}-${request.generation}-${randomUUID().slice(0,8)}`,
-        agentOptions: selection, meta: { cwd: await sessionWorkspace(root, 'coordination'), origin: 'subagent', delegationDepth: 1, agentPreset },
+        agentOptions: selection, meta: { cwd: await getWorkspaceDir(), origin: 'subagent', delegationDepth: 1, agentPreset },
         seed: [{ type: 'plugin:dingtalk/independent-coordination', seq: 0, time: Date.now(), ignorable: true,
           data: { reservationId: request.reservationId, generation: request.generation, groupId: request.groupId } }],
         setup: async agentCtx => {
