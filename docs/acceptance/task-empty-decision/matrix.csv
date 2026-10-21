@@ -1,0 +1,7 @@
+case,round-1,round-2,evidence
+empty-auto-resume,FAIL,PASS,round-2.md
+restart-same-session,FAIL,PASS,round-2.md
+durable-bounded-budget,PASS,PASS,round-2.md
+existing-decisions-and-errors,PASS,PASS,round-2.md
+native-service-regressions,FAIL,PASS,round-2.md
+completed-write-no-replay,NOT_RUN,PASS,round-2.md

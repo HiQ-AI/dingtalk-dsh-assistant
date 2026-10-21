@@ -1160,6 +1160,45 @@ for (const persistent of [false, true]) test(`native model failures settle witho
   assert.equal(stored.sessionId, task.session.sessionId)
 })
 
+test('empty owner recovery reviews the retained execution without replaying its completed native write', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-empty-after-write-')
+  const effect = join(fixture.root, 'effect.txt')
+  let delegated = false, wrote = false, empty = false, reviewed = false, executionId
+  const h = await fixture.host(async request => {
+    const topics = topicTaskCalls(request); if (topics) return topics
+    const names = request.tools.map(tool => tool.name)
+    if (names.includes('task_session_submit')) {
+      if (!delegated) {
+        delegated = true
+        return [call('task_delegate', { key: 'once', objective: '只写一次并提交真实结果' }), decision('wait', '等待原执行')]
+      }
+      executionId = latestInput(request).executions[0].executionId
+      if (!empty) { empty = true; return [] }
+      assert.match(requestSystemText(request), /上轮正常结束但未提交有效决定/)
+      if (!reviewed) { reviewed = true; return [call('task_execution_read', { executionId })] }
+      return [decision('complete', '已核对原执行，写入未重放')]
+    }
+    if (!wrote) {
+      wrote = true
+      return [call(nativeShell, { command: nativeShell === 'pwsh' ? `Add-Content -LiteralPath '${effect}' -Value once` : `echo once >> '${effect}'`, description: '仅执行一次受控写入' })]
+    }
+    return [call('execution_submit', { output: { status: 'completed', summary: '已完成一次写入', evidence: ['原生写入成功'], limitations: [], artifacts: [] } })]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'empty-after-write', objective: '写一次后核对结果' })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: created.taskId })).providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
+  await waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).status === 'completed', 'retained execution review', 15000)
+  await h.service.whenIdle()
+  assert.equal(reviewed, true)
+  assert.equal((await readFile(effect, 'utf8')).trim(), 'once')
+  const executions = await h.query('execution.list', { taskId: created.taskId })
+  assert.equal(executions.length, 1)
+  assert.equal(executions[0].executionId, executionId)
+  assert.equal(executions[0].inputVersion, 1)
+  assert.equal((await h.query('operation.list', { taskId: created.taskId })).filter(item => item.state === 'succeeded').length, 1)
+  assert.equal(h.toolResults.filter(result => result.name === nativeShell).length, 1)
+})
+
 for (const correctOnce of [false, true]) test(`native owner empty-summary corrections are bounded and may recover: correctOnce=${correctOnce}`, { timeout: 10000 }, async t => {
   const fixture = await nativeCase(t, 'task-service-invalid-summary-')
   let requests = 0

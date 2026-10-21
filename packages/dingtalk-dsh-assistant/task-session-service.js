@@ -839,7 +839,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         if (submitted) await command('wake.ack', { binding, wakeIds }, `wake-ack:${taskId}:${binding.leaseEpoch}`)
       } catch (error) {
         drained = error.taskSessionDrained !== false
-        if (drained && error.code === 'TASK_SESSION_PROVIDER_TRANSIENT') await command('task.provider-failure', { binding,
+        if (drained && ['TASK_SESSION_PROVIDER_TRANSIENT', 'TASK_SESSION_NO_SUBMISSION'].includes(error.code)) await command('task.provider-failure', { binding,
           failure: { code: error.code, phase: error.phase, providerError: error.providerError } }, `task-provider-failure:${taskId}:${binding.leaseEpoch}`)
         throw error
       }
