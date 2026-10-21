@@ -3,6 +3,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { toToolJsonSchema } from './tool-schema.js'
 import { randomUUID } from 'node:crypto'
 import { normalizeCoordinationInstant } from './coordination-time.js'
+import { taskModelSelection } from './task-model-config.js'
 
 const nonempty = z.string().trim().min(1)
 const existingMemberSchema = z.strictObject({ taskId: nonempty,
@@ -72,14 +73,11 @@ export const coordinationProposalSchema = z.discriminatedUnion('kind', [
     occurrenceId: nonempty, expectedControlRevision: z.number().int().positive(), control: z.enum(['pause','resume','cancel']), reason: nonempty }),
 ])
 
-export function coordinationModelSelection(config = {}) {
+export function coordinationModelSelection(config = {}, defaults = {}) {
   if (config.enabled !== true) return null
-  // An independently configured semantic model never inherits Owner/executor settings.
-  for (const key of ['provider','model']) if (typeof config[key] !== 'string' || !config[key].trim())
-    throw Object.assign(new Error(`COORDINATION_MODEL_CONFIGURATION_REQUIRED:${key}`), { code: 'COORDINATION_MODEL_CONFIGURATION_REQUIRED' })
-  if (config.reasoningEffort !== undefined && !['minimal','low','medium','high','xhigh','max'].includes(config.reasoningEffort))
-    throw Object.assign(new Error('COORDINATION_REASONING_INVALID'), { code: 'COORDINATION_REASONING_INVALID' })
-  return { provider: config.provider.trim(), model: config.model.trim(), ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}) }
+  // Provider/model default independently to astra. Only an explicit inherit mode
+  // follows the default reasoning depth; it never follows the executor model.
+  return taskModelSelection(defaults, config)
 }
 
 export const coordinationPlannerInstructions = `你是独立于 Topic 之外的任务协调层，只提出结构化安排，不写 Task 状态、不执行工具效果、不替 Task Owner 业务验收。
@@ -104,17 +102,18 @@ append新增用户成员也可提供change.sourceOrder，局部ordinal从1开始
 错误归类、原文没有协调意图时可reject，Host将先冻结并核对无命令，只有安全CAS交回后旧链才可接管；不能把reject当作已交回或已执行。
 通过 coordination_submit 提交。accepted 表示安排已持久接纳，不是业务完成或群通知送达。`
 
-export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir = () => root, agentPreset, config, context, submit, isCurrent = () => true }) {
-  const selection = coordinationModelSelection(config), handles = new Set()
+export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir = () => root, getModelSelection = () => coordinationModelSelection(config), agentPreset, config, context, submit, isCurrent = () => true }) {
+  const handles = new Set()
   let closed = false
   return {
     async plan(request) {
+      const selection = getModelSelection()
       if (closed || !selection) throw new Error('COORDINATION_ADMISSION_DISABLED')
       if (!isCurrent(request)) throw new Error('COORDINATION_SOURCE_FENCED')
-      await ctx.llm.resolveCallConfig(selection)
+      const resolvedCall = await ctx.llm.resolveCallConfig(selection)
       let submitted = false, steps = 0, result
       const handle = await ctx.agents.create({ sessionId: `independent-${request.reservationId}-${request.generation}-${randomUUID().slice(0,8)}`,
-        agentOptions: selection, meta: { cwd: await getWorkspaceDir(), origin: 'subagent', delegationDepth: 1, agentPreset },
+        agentOptions: { ...selection, reasoningEffort: resolvedCall?.reasoningEffort ?? null }, meta: { cwd: await getWorkspaceDir(), origin: 'subagent', delegationDepth: 1, agentPreset },
         seed: [{ type: 'plugin:dingtalk/independent-coordination', seq: 0, time: Date.now(), ignorable: true,
           data: { reservationId: request.reservationId, generation: request.generation, groupId: request.groupId } }],
         setup: async agentCtx => {
