@@ -1,0 +1,354 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
+import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+
+// 使用真实隔离账本和公开命令验证资源生命周期；不读写运行实例或依赖私有锁实现。
+async function fixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'dynamic-execution-resources-'))
+  const config = { dbPath: join(root, 'ledger.sqlite'), instanceId: 'resource-tests', initialize: true }
+  let store = await openDynamicTaskStore(config), sequence = 0
+  t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }) })
+  const command = (kind, args, id = `command-${++sequence}`) => store.command({ id, kind, args })
+  const query = args => store.query(args)
+  async function task(taskId) {
+    await command('task.create', { taskId, request: '验证共享环境的受管执行互斥' })
+    return (await command('task.claim', { taskId })).result.binding
+  }
+  async function dispatch(binding, resourceKeys, key = 'deploy') {
+    return (await command('execution.dispatch', { binding, key, prompt: '验证指定资源', input: {}, resourceKeys })).result.execution
+  }
+  async function claim(execution) {
+    return (await command('execution.claim', { executionId: execution.executionId })).result.binding
+  }
+  async function finish(binding) {
+    await command('execution.result', { binding, output: { status: 'verified' } })
+    await command('execution.drained', { binding })
+  }
+  async function operation(binding, resourceKeys = []) {
+    return (await command('operation.prepare', { binding, key: `effect-${++sequence}`, definition: { toolName: 'pwsh' }, resourceKeys })).result.operation
+  }
+  return { command, query, task, dispatch, claim, finish, operation,
+    async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }) } }
+}
+
+test('同一资源只允许一个 execution 取得执行权，结果提交不提前释放', async t => {
+  const f = await fixture(t)
+  const first = await f.dispatch(await f.task('first'), ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  assert.equal((await f.query({ kind: 'execution.get', executionId: second.executionId })).status, 'queued')
+  await f.command('execution.result', { binding, output: { status: 'verified' } })
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('execution.drained', { binding })
+  const next = await f.claim(second)
+  assert.equal(next.executionId, second.executionId)
+  await f.finish(next)
+  assert.deepEqual(await f.query({ kind: 'resource.list' }), [])
+})
+
+test('资源归一化及多键原子获取不留下部分锁，异键执行可以并行', async t => {
+  const f = await fixture(t)
+  const first = await f.dispatch(await f.task('first'), ['b'])
+  const second = await f.dispatch(await f.task('second'), ['b', 'a', 'b'])
+  const independent = await f.dispatch(await f.task('independent'), ['a'])
+  assert.deepEqual(second.resourceKeys, ['a', 'b'])
+  const firstBinding = await f.claim(first)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  const independentBinding = await f.claim(independent)
+  assert.deepEqual((await f.query({ kind: 'resource.list' })).map(item => item.resourceKey), ['a', 'b'])
+  await f.finish(firstBinding)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.finish(independentBinding)
+  await f.finish(await f.claim(second))
+})
+
+test('续办省略资源时保留，安全排空后可以显式更新或清空', async t => {
+  const f = await fixture(t), owner = await f.task('owner')
+  const execution = await f.dispatch(owner, ['uat2'])
+  await f.finish(await f.claim(execution))
+  const base = { binding: owner, executionId: execution.executionId, prompt: '继续原执行', input: {} }
+  const retained = (await f.command('execution.continue', { ...base, key: 'retained' })).result.execution
+  assert.deepEqual(retained.resourceKeys, ['uat2'])
+  await f.finish(await f.claim(retained))
+  const updated = (await f.command('execution.continue', { ...base, key: 'updated', resourceKeys: ['uat3', 'uat3'] })).result.execution
+  assert.deepEqual(updated.resourceKeys, ['uat3'])
+  await f.finish(await f.claim(updated))
+  const cleared = (await f.command('execution.continue', { ...base, key: 'cleared', resourceKeys: [] })).result.execution
+  assert.deepEqual(cleared.resourceKeys, [])
+  await f.finish(await f.claim(cleared))
+})
+
+test('同一续办幂等键不能把变更的资源合同当作原请求', async t => {
+  const f = await fixture(t), owner = await f.task('owner')
+  const execution = await f.dispatch(owner, ['uat2'])
+  await f.finish(await f.claim(execution))
+  const args = { binding: owner, executionId: execution.executionId, key: 'resume', prompt: '继续', input: {}, resourceKeys: ['uat3'] }
+  await f.command('execution.continue', args)
+  await assert.rejects(f.command('execution.continue', { ...args, resourceKeys: ['uat4'] }), { code: 'DYNAMIC_DISPATCH_KEY_CONFLICT' })
+})
+
+test('unknown 效果保留资源，原执行只读对账可续办但不能扩大或清空资源', async t => {
+  const f = await fixture(t), owner = await f.task('owner')
+  const first = await f.dispatch(owner, ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first), operation = await f.operation(binding)
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'unknown', result: { lostReceipt: true } })
+  await f.finish(binding)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  const original = await f.query({ kind: 'operation.get', operationId: operation.operationId })
+  const base = { binding: owner, executionId: first.executionId, key: 'readback', prompt: '核对原效果', input: {}, definition: { recoveryReadOnly: true } }
+  for (const resourceKeys of [[], ['uat3'], ['uat2', 'uat3']]) {
+    await assert.rejects(f.command('execution.continue', { ...base, resourceKeys }), { code: 'DYNAMIC_EXECUTION_RESOURCES_HELD' })
+  }
+  const continued = (await f.command('execution.continue', base)).result.execution
+  assert.deepEqual(continued.resourceKeys, ['uat2'])
+  const readback = await f.claim(continued)
+  await f.finish(readback)
+  assert.deepEqual(await f.query({ kind: 'operation.get', operationId: operation.operationId }), original)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.reconcile', { operationId: operation.operationId, state: 'failed', result: { readback: 'confirmed failure' }, evidenceRef: 'fixture-original-effect-readback' })
+  await f.finish(await f.claim(second))
+})
+
+test('后台 job 未终止时执行排空也不释放，原 job 终态回执可解除等待', async t => {
+  const f = await fixture(t), first = await f.dispatch(await f.task('first'), ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first), operation = await f.operation(binding)
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  const job = { jobId: 'original-job', owner: binding.sessionId, startedAt: 1, status: 'running' }
+  await f.command('operation.job', { binding, operationId: operation.operationId, job })
+  await f.finish(binding)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.job', { binding, operationId: operation.operationId, job: { ...job, status: 'completed', finishedAt: 2 } })
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'succeeded', result: { jobReceipt: 'completed' } })
+  await f.finish(await f.claim(second))
+})
+
+test('停止任务只请求取消，不在原执行和未知效果排空前释放资源', async t => {
+  const f = await fixture(t), first = await f.dispatch(await f.task('first'), ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first), operation = await f.operation(binding)
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'unknown' })
+  await f.command('task.control', { taskId: first.taskId, control: 'cancelled' })
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('execution.drained', { binding })
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.reconcile', { operationId: operation.operationId, state: 'failed', result: { stopped: true }, evidenceRef: 'fixture-stopped-process-readback' })
+  await f.finish(await f.claim(second))
+})
+
+test('重启保留 execution 锁及 unknown 效果，恢复排空和对账后才能释放', async t => {
+  const f = await fixture(t), first = await f.dispatch(await f.task('first'), ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first), operation = await f.operation(binding, ['uat2'])
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  const held = await f.query({ kind: 'resource.list' })
+  await f.reopen()
+  assert.deepEqual(await f.query({ kind: 'resource.list' }), held)
+  assert.equal((await f.query({ kind: 'operation.get', operationId: operation.operationId })).state, 'unknown')
+  assert.equal((await f.query({ kind: 'execution.get', executionId: first.executionId })).recovering, true)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('execution.drained', { binding })
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.reconcile', { operationId: operation.operationId, state: 'failed', result: { stopped: true }, evidenceRef: 'fixture-restart-readback' })
+  await f.finish(await f.claim(second))
+})
+
+test('执行声明内操作共享资源且不自锁，操作完成不抢先释放父执行', async t => {
+  const f = await fixture(t), first = await f.dispatch(await f.task('first'), ['uat2', 'repository'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first)
+  for (const keys of [[], ['uat2'], ['uat2', 'repository']]) {
+    const operation = await f.operation(binding, keys)
+    assert.equal((await f.command('operation.start', { binding, operationId: operation.operationId })).dispatchEligible, true)
+    await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'succeeded' })
+    await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  }
+  await assert.rejects(f.operation(binding, ['new-resource']), { code: 'DYNAMIC_RESOURCE_SCOPE_EXPANSION' })
+  await assert.rejects(f.operation(binding, ['uat2', 'new-resource']), { code: 'DYNAMIC_RESOURCE_SCOPE_EXPANSION' })
+  await f.finish(binding)
+  await f.finish(await f.claim(second))
+})
+
+test('准备后未启动的操作也须明确取消，不能用 execution drained 绕过', async t => {
+  const f = await fixture(t), first = await f.dispatch(await f.task('first'), ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first), operation = await f.operation(binding)
+  await f.finish(binding)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.cancelPrepared', { binding, operationId: operation.operationId, key: operation.key, reason: 'fixture-proven-not-dispatched' })
+  await f.finish(await f.claim(second))
+})
+
+test('execution 与既有独立 operation 在相同资源上互斥', async t => {
+  const f = await fixture(t), legacyOwner = await f.task('legacy')
+  const legacy = await f.operation(legacyOwner, ['uat2'])
+  await f.command('operation.start', { binding: legacyOwner, operationId: legacy.operationId })
+  const execution = await f.dispatch(await f.task('execution'), ['uat2'])
+  await assert.rejects(f.claim(execution), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.settle', { binding: legacyOwner, operationId: legacy.operationId, state: 'succeeded' })
+  const binding = await f.claim(execution)
+  const next = await f.operation(legacyOwner, ['uat2'])
+  await assert.rejects(f.command('operation.start', { binding: legacyOwner, operationId: next.operationId }), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.finish(binding)
+  await f.command('operation.start', { binding: legacyOwner, operationId: next.operationId })
+  await f.command('operation.settle', { binding: legacyOwner, operationId: next.operationId, state: 'succeeded' })
+  assert.deepEqual(await f.query({ kind: 'resource.list' }), [])
+})
+
+test('查询暴露真实持有者与等待资源，queued 回执不冒充持锁', async t => {
+  const f = await fixture(t), first = await f.dispatch(await f.task('first'), ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const read = execution => f.query({ kind: 'execution.get', executionId: execution.executionId })
+  assert.deepEqual((await read(first)).resources, { state: 'available', keys: ['uat2'], holder: null, blocking: [] })
+  const binding = await f.claim(first)
+  const holder = `execution:${first.executionId}`
+  assert.deepEqual((await read(first)).resources, { state: 'held', keys: ['uat2'], holder, blocking: [] })
+  const waiting = { state: 'waiting', keys: ['uat2'], holder: null, blocking: [{ resourceKey: 'uat2', holder }] }
+  assert.deepEqual((await read(second)).resources, waiting)
+  assert.deepEqual((await f.query({ kind: 'execution.list', taskId: second.taskId }))[0].resources, waiting)
+  assert.deepEqual((await f.query({ kind: 'task.blockers', taskId: second.taskId })).executions[0].resources, waiting)
+  await f.finish(binding)
+  assert.deepEqual((await read(first)).resources, { state: 'released', keys: ['uat2'], holder: null, blocking: [] })
+  assert.equal((await read(second)).resources.state, 'available')
+  await f.finish(await f.claim(second))
+})
+
+test('失败或取消在确认执行排空后释放，不把无副作用终态永久占用', async t => {
+  for (const terminal of ['failure', 'cancel']) {
+    const f = await fixture(t), first = await f.dispatch(await f.task(`first-${terminal}`), ['uat2'])
+    const second = await f.dispatch(await f.task(`second-${terminal}`), ['uat2'])
+    const binding = await f.claim(first)
+    if (terminal === 'failure') await f.command('execution.result', { binding, error: { code: 'FIXTURE_ERROR' } })
+    else await f.command('execution.cancel', { binding })
+    await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+    await f.command('execution.drained', { binding })
+    await f.finish(await f.claim(second))
+  }
+})
+
+test('多个未知效果须全部对账，最后一个完成也不能释放仍运行的只读续办', async t => {
+  const f = await fixture(t), owner = await f.task('owner')
+  const first = await f.dispatch(owner, ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first), effects = []
+  for (let index = 0; index < 2; index++) {
+    const effect = await f.operation(binding)
+    await f.command('operation.start', { binding, operationId: effect.operationId })
+    await f.command('operation.settle', { binding, operationId: effect.operationId, state: 'unknown' })
+    effects.push(effect)
+  }
+  await f.finish(binding)
+  await f.command('operation.reconcile', { operationId: effects[0].operationId, state: 'failed', evidenceRef: 'fixture-first-readback' })
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  const continued = (await f.command('execution.continue', { binding: owner, executionId: first.executionId, key: 'readback', prompt: '验证原效果', definition: { recoveryReadOnly: true } })).result.execution
+  const readback = await f.claim(continued)
+  await f.command('operation.reconcile', { operationId: effects[1].operationId, state: 'failed', evidenceRef: 'fixture-second-readback' })
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.finish(readback)
+  await f.finish(await f.claim(second))
+})
+
+test('原 job 失败对账路径释放父执行锁并保留部分效果的不确定性', async t => {
+  const f = await fixture(t), owner = await f.task('owner')
+  const first = await f.dispatch(owner, ['uat2'])
+  const second = await f.dispatch(await f.task('second'), ['uat2'])
+  const binding = await f.claim(first), effect = await f.operation(binding)
+  await f.command('operation.start', { binding, operationId: effect.operationId })
+  await f.command('operation.job', { binding, operationId: effect.operationId, job: { jobId: 'original-job', owner: binding.sessionId, startedAt: 1, status: 'killed', finishedAt: 2 } })
+  await f.command('operation.settle', { binding, operationId: effect.operationId, state: 'unknown', result: { reason: 'cancelled-with-partial-effects' } })
+  await f.finish(binding)
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  const reconciled = (await f.command('operation.reconcile-job', { binding: owner, operationId: effect.operationId })).result.operation
+  assert.equal(reconciled.state, 'failed')
+  assert.equal(reconciled.result.partialEffectsPossible, true)
+  assert.equal(reconciled.result.previousObservation.reason, 'cancelled-with-partial-effects')
+  await f.finish(await f.claim(second))
+})
+
+test('任务控制或需求修订取消最后一个 prepared 操作时释放已排空执行', async t => {
+  for (const action of ['cancelled', 'paused', 'revise']) {
+    const f = await fixture(t), first = await f.dispatch(await f.task(`first-${action}`), ['uat2'])
+    const second = await f.dispatch(await f.task(`second-${action}`), ['uat2'])
+    const binding = await f.claim(first), operation = await f.operation(binding)
+    await f.finish(binding)
+    await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+    if (action === 'revise') await f.command('task.revise', { taskId: first.taskId, request: '修订目标，旧操作不再启动' })
+    else await f.command('task.control', { taskId: first.taskId, control: action })
+    assert.equal((await f.query({ kind: 'operation.get', operationId: operation.operationId })).state, 'cancelled')
+    await f.finish(await f.claim(second))
+  }
+})
+
+test('多执行资源视图每次公开查询最多读取一次锁表，并在释放后读取新状态', async t => {
+  const f = await fixture(t), owner = await f.task('owner'), executions = [], bindings = []
+  for (let index = 0; index < 12; index++) {
+    const pair = index % 6
+    executions.push(await f.dispatch(owner, [`cluster:${pair}`, `repository:${pair}`], `deploy-${index}`))
+  }
+  for (const execution of executions.slice(0, 6)) bindings.push(await f.claim(execution))
+
+  // 数真实 statement 读取，而非只数 prepare，避免缓存语句掩盖逐执行/逐键查询。
+  const originalPrepare = DatabaseSync.prototype.prepare
+  let counting = false, resourceReads = 0
+  const observations = []
+  const prepareMock = t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    const statement = Reflect.apply(originalPrepare, this, [sql, ...args])
+    if (!/^\s*SELECT\b/i.test(sql) || !/\bdynamic_resource_locks\b/i.test(sql)) return statement
+    return new Proxy(statement, { get(target, property) {
+      const value = Reflect.get(target, property, target)
+      if (typeof value !== 'function') return value
+      return (...parameters) => {
+        if (counting && ['all', 'get', 'iterate'].includes(property)) resourceReads++
+        return Reflect.apply(value, target, parameters)
+      }
+    } })
+  })
+  t.after(() => prepareMock.mock.restore())
+  async function read(args) {
+    resourceReads = 0; counting = true
+    try { return await f.query(args) }
+    finally {
+      counting = false
+      observations.push({ query: args.kind, resourceReads })
+      assert.ok(resourceReads <= 1, `${args.kind} 执行了 ${resourceReads} 次资源表 SELECT，应与执行数和资源数无关`)
+    }
+  }
+  function assertInitial(view, index) {
+    const pair = index % 6, holder = `execution:${executions[pair].executionId}`
+    const keys = [`cluster:${pair}`, `repository:${pair}`]
+    assert.deepEqual(view.resources, index < 6
+      ? { state: 'held', keys, holder, blocking: [] }
+      : { state: 'waiting', keys, holder: null, blocking: keys.map(resourceKey => ({ resourceKey, holder })) })
+  }
+
+  const initialList = await read({ kind: 'execution.list' })
+  assert.equal(initialList.length, executions.length)
+  executions.forEach((execution, index) => assertInitial(initialList.find(view => view.executionId === execution.executionId), index))
+  assertInitial(await read({ kind: 'execution.get', executionId: executions[7].executionId }), 7)
+  const initialBlockers = await read({ kind: 'task.blockers', taskId: owner.taskId })
+  assert.equal(initialBlockers.executions.length, executions.length)
+  executions.forEach((execution, index) => assertInitial(initialBlockers.executions.find(view => view.executionId === execution.executionId), index))
+
+  // 写入发生在查询窗口之外；下一次读必须看到释放/新 holder，不能复用旧快照。
+  await f.finish(bindings[0])
+  const releasedList = await read({ kind: 'execution.list', taskId: owner.taskId })
+  assert.equal(releasedList.find(view => view.executionId === executions[0].executionId).resources.state, 'released')
+  assert.equal(releasedList.find(view => view.executionId === executions[6].executionId).resources.state, 'available')
+  await f.claim(executions[6])
+  const current = await read({ kind: 'execution.get', executionId: executions[6].executionId })
+  assert.equal(current.resources.state, 'held')
+  assert.equal(current.resources.holder, `execution:${executions[6].executionId}`)
+  const currentBlockers = await read({ kind: 'task.blockers', taskId: owner.taskId })
+  assert.equal(currentBlockers.executions.length, executions.length - 1)
+  assert.deepEqual(currentBlockers.executions.find(item => item.executionId === current.executionId).resources, current.resources)
+  t.diagnostic(JSON.stringify({ executions: executions.length, declaredKeys: executions.length * 2, observations }))
+})

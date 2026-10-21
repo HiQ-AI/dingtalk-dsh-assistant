@@ -78,7 +78,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (receipt.replayed && receipt.result?.notification)
       receipt.result.notification = await query('notification.get', { notificationId: receipt.result.notification.id })
     if (receipt.result?.execution) executionCache.set(receipt.result.execution.executionId,
-      receipt.replayed && kind === 'execution.progressReported' ? await query('execution.get', { executionId: receipt.result.execution.executionId }) : receipt.result.execution)
+      await query('execution.get', { executionId: receipt.result.execution.executionId }))
     if (receipt.result?.operation) operationCache.set(receipt.result.operation.id ?? receipt.result.operation.operationId, receipt.result.operation)
     // 人工结清是复合事务，只返回任务；从账本刷新其中已结清的操作，避免残留 unknown 告警。
     if (kind === 'task.human.resolve-failures') for (const resolution of args.resolutions) {
@@ -88,6 +88,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (receipt.result?.notification) notificationCache.set(receipt.result.notification.id, receipt.result.notification)
     if (receipt.result?.notification) await projectTaskNotification({ residentStore, notification: receipt.result.notification })
     if (receipt.result?.task) taskCache.set(receipt.result.task.taskId, topicTaskView(receipt.result.task))
+    // 原效果终态可能晚于会话退出；释放后直接提升持久队列，不等待恢复定时器。
+    if (['execution.drained', 'execution.cancel', 'task.control', 'task.revise', 'task.reopen'].includes(kind)
+      || kind.startsWith('operation.') && ['succeeded', 'failed', 'cancelled'].includes(receipt.result?.operation?.state)) void schedulePending()
     return receipt
   }
   await refreshTasks()
@@ -172,7 +175,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         if (taskId && !inflightTasks.has(taskId)) {
           const task = await query('task.get', { taskId }).catch(() => null)
           const executions = await query('execution.list', { taskId }).catch(() => [])
-          if (!task || task.drained && !executions.some(item => !item.drained || item.status === 'queued' && !item.providerRecovery?.nextAttemptAt)) taskSlots.delete(taskId)
+          if (!task || task.drained && !executions.some(item => !item.drained || item.status === 'queued' && !item.providerRecovery?.nextAttemptAt && item.resources?.state !== 'waiting')) taskSlots.delete(taskId)
         }
       }
       if (again) void kickTask(id)
@@ -254,7 +257,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         }
         for (const execution of await query('execution.list')) {
           if (closed || inflightExecutions.size >= executionLimit()) break
-          if (execution.providerRecovery?.nextAttemptAt || !retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested) continue
+          if (execution.providerRecovery?.nextAttemptAt || !retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested || execution.resources?.state === 'waiting') continue
           if (!taskSlots.has(execution.taskId) && taskSlots.size >= taskLimit()) continue
           void kickExecution(execution.executionId)
         }
@@ -612,16 +615,22 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (closed || !retryReady(executionId) || !inflightExecutions.has(executionId) && inflightExecutions.size >= executionLimit()) return Promise.resolve()
     return track(inflightExecutions, executionId, async () => {
       const candidate = await query('execution.get', { executionId })
-      if (!candidate || candidate.status !== 'queued' || candidate.providerRecovery?.nextAttemptAt || !candidate.drained || candidate.cancelRequested || !reserveTask(candidate.taskId)) return
+      if (!candidate || candidate.status !== 'queued' || candidate.providerRecovery?.nextAttemptAt || !candidate.drained || candidate.cancelRequested || candidate.resources?.state === 'waiting' || !reserveTask(candidate.taskId)) return
       if ((await requireTask(candidate.taskId)).archivedAt) return
-      const claimed = await command('execution.claim', { executionId })
+      let claimed
+      try { claimed = await command('execution.claim', { executionId }) }
+      catch (error) {
+        // 预读后另一执行可能先获得资源；这是排队，不是执行失败。
+        if (error.code === 'DYNAMIC_RESOURCE_BUSY') return
+        throw error
+      }
       const { binding, execution } = claimed.result
       let drained = true
       let stageSequence = 0
       const stageReports = new Map()
       try {
         const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: execution.input, definition: { ...models(), ...execution.definition,
-          prompt: execution.prompt, allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
+          prompt: execution.prompt + (execution.resourceKeys?.length ? `\nHost 已在本执行开始前取得资源 ${JSON.stringify(execution.resourceKeys)}；会话及在途操作排空前保持。queued/派发接收不等于其他执行已持锁。` : ''), allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title); return command('execution.sessionBound', { binding }, `execution-bound:${executionId}:${binding.leaseEpoch}`) },
           onNativeExecution: nativeOperation,
           readFeedback: async () => ((await query('execution.get', { executionId })).feedback ?? []).filter(item => item.requirementRevision === binding.requirementRevision && item.controlRevision === binding.controlRevision),
@@ -690,6 +699,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             if (args.skillNames !== undefined && (!Array.isArray(args.skillNames)
               || args.skillNames.some(name => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
               || new Set(args.skillNames).size !== args.skillNames.length)) fail('TASK_SKILL_NAMES_INVALID')
+            if (args.resourceKeys !== undefined && (!Array.isArray(args.resourceKeys)
+              || args.resourceKeys.some(key => typeof key !== 'string' || !key.trim()))) fail('DYNAMIC_ARGUMENT_INVALID', 'resourceKeys')
             const dispatchId = `${args.executionId ? 'continue' : 'delegate'}:${taskId}:${binding.requirementRevision}:${args.key}`
             if (args.feedback === true && (!args.executionId || args.readOnly || args.readbackOperationId || args.skillNames?.length || args.resourceKeys?.length)) fail('TASK_EXECUTION_FEEDBACK_ARGUMENT_INVALID')
             const prior = await query('receipt.get', { id: dispatchId })
@@ -706,8 +717,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               if (prior.result.execution.input.objective !== args.objective || (args.executionId && prior.result.execution.executionId !== args.executionId)
                 || (prior.result.execution.input.recoveryReadOnly === true) !== (args.readOnly === true)
                 || (prior.result.execution.input.readbackOperationId ?? null) !== (args.readbackOperationId ?? null)
-                || hash(prior.result.execution.input.skillNames ?? []) !== hash(args.skillNames ?? [])) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
-              return { executionId: prior.result.execution.executionId, status: prior.result.execution.status, sessionId: prior.result.execution.sessionId }
+                || hash(prior.result.execution.input.skillNames ?? []) !== hash(args.skillNames ?? [])
+                || hash(prior.result.execution.resourceKeys ?? []) !== hash([...new Set(args.resourceKeys ?? (args.executionId ? prior.result.execution.resourceKeys ?? [] : []))].sort())) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
+              const current = await query('execution.get', { executionId: prior.result.execution.executionId })
+              return { executionId: current.executionId, status: current.status, sessionId: current.sessionId, resources: current.resources }
             }
             let existingTitle
             if (args.executionId) {
@@ -732,11 +745,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             const payload = { binding, key: args.key, prompt: `当前小目标见结构化input.objective。\n具体执行由你负责，可在同一会话内持续调查、操作、验证和纠错。不得再次委派；不能宣布整体任务完成。只依据当前任务真实来源和权限执行。结果包含实际证据、限制及产物。最后调用execution_submit。`,
               input: { task: { taskId, request: task.request, objective: task.objective, requirements: task.requirements, requirementRevision: binding.requirementRevision, ownerActorId: task.ownerActorId, authorizationSourceId: task.metadata?.authorizationSourceId }, sources,
                 title: existingTitle || executionSessionTitle({ input: { title: args.title, objective: args.objective }, key: args.key }), objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), sourceFiles: Object.fromEntries(materials.map(item => [item.sourceId, { path: item.path, textPath: item.textPath }])), previousExecutions: (await query('execution.list', { taskId })).map(taskExecutionContext) },
-              definition: { nativeTools: true, recoveryReadOnly: args.readOnly === true, agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, resourceKeys: args.resourceKeys ?? [] }
+              definition: { nativeTools: true, recoveryReadOnly: args.readOnly === true, agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, ...(args.resourceKeys === undefined ? {} : { resourceKeys: args.resourceKeys }) }
             const accepted = args.executionId ? await command('execution.continue', { ...payload, executionId: args.executionId }, dispatchId)
               : await command('execution.dispatch', payload, dispatchId)
             void kickExecution(accepted.result.execution.executionId)
-            return { executionId: accepted.result.execution.executionId, status: accepted.result.execution.status, sessionId: accepted.result.execution.sessionId }
+            const current = await query('execution.get', { executionId: accepted.result.execution.executionId })
+            return { executionId: current.executionId, status: current.status, sessionId: current.sessionId, resources: current.resources }
           },
           readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return execution },
           readProgress: async executionId => {

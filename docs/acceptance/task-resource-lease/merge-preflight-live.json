@@ -1,0 +1,30 @@
+{
+  "readOnly": true,
+  "helperExit": 0,
+  "result": {
+    "approved": true,
+    "scope": "Identity and mergeability only; required checks, review, validation and merge authorization remain separate.",
+    "reason": "identity_and_mergeability_confirmed",
+    "repository": "HiQ-AI/dataset",
+    "pullRequest": 353,
+    "expectedHeadSha": "3960185cdd488848cd4a5fe83df193f1fb2a579b",
+    "expectedBaseBranch": "main",
+    "expectedBaseSha": "5d7cf3bf2c2a5117d1601a22358e75df4c482e1b",
+    "attemptsUsed": 1,
+    "observedAt": "2026-10-21T09:24:59.1984723+08:00",
+    "observed": {
+      "repository": "HiQ-AI/dataset",
+      "number": 353,
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "headSha": "3960185cdd488848cd4a5fe83df193f1fb2a579b",
+      "baseBranch": "main",
+      "prBaseSha": "a42bd050a1db27aa639925abf6278fd646539fca",
+      "targetRef": "refs/heads/main",
+      "targetSha": "5d7cf3bf2c2a5117d1601a22358e75df4c482e1b",
+      "mergeable": true,
+      "mergeableState": "clean"
+    }
+  }
+}

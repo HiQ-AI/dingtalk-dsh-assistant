@@ -1,0 +1,190 @@
+{
+  "passed": 23,
+  "failed": 0,
+  "results": [
+    {
+      "case": "clean",
+      "pass": true,
+      "exitCode": 0,
+      "reason": "identity_and_mergeability_confirmed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "unknown_then_true",
+      "pass": true,
+      "exitCode": 0,
+      "reason": "identity_and_mergeability_confirmed",
+      "attemptsUsed": 2,
+      "getCount": 4
+    },
+    {
+      "case": "unknown_forever",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "mergeability_unknown",
+      "attemptsUsed": 3,
+      "getCount": 6
+    },
+    {
+      "case": "unknown_state_true_boolean",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "mergeability_unknown",
+      "attemptsUsed": 3,
+      "getCount": 6
+    },
+    {
+      "case": "unknown_then_head_drift",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "head_changed",
+      "attemptsUsed": 2,
+      "getCount": 4
+    },
+    {
+      "case": "false",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "not_mergeable",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "head_drift",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "head_changed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "live_base_drift",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "base_changed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "cached_pr_base_differs",
+      "pass": true,
+      "exitCode": 0,
+      "reason": "identity_and_mergeability_confirmed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "wrong_branch",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "base_branch_changed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "wrong_repository",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "pr_identity_mismatch",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "wrong_pr",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "pr_identity_mismatch",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "closed",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "pr_not_open",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "merged",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "pr_not_open",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "draft",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "pr_draft_or_unconfirmed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "missing_draft",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "pr_draft_or_unconfirmed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "blocked",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "merge_blocked",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "behind",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "merge_blocked",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "string_true",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "mergeability_unrecognized",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "unrecognized_state",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "mergeability_unrecognized",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "unstable_checks_not_attested",
+      "pass": true,
+      "exitCode": 0,
+      "reason": "identity_and_mergeability_confirmed",
+      "attemptsUsed": 1,
+      "getCount": 2
+    },
+    {
+      "case": "read_failure",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "github_read_failed",
+      "attemptsUsed": 1,
+      "getCount": 1
+    },
+    {
+      "case": "invalid_json",
+      "pass": true,
+      "exitCode": 1,
+      "reason": "github_invalid_json",
+      "attemptsUsed": 1,
+      "getCount": 1
+    }
+  ]
+}
