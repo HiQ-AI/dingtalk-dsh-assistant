@@ -3,10 +3,11 @@ import { isAbsolute, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { listPerformance } from './performance.js'
 import { normalizeReplySignature } from './group-reply-format.js'
+import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 
 const retired = () => { throw Object.assign(new Error('WORKFLOW_RETIRED'), { code: 'WORKFLOW_RETIRED' }) }
 /** Group transport/configuration facade. It has no legacy task scheduler, stage engine or Owner. */
-export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5 } = {}) {
+export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5, taskSessionModel = {} } = {}) {
   const initialSignature = normalizeReplySignature(store.getReplySignature?.() ?? agentReplySignature)
   const root = resolve(store.getAgentWorkspaceDir?.() ?? agentWorkspaceDir ?? cwd)
   if (!isAbsolute(root) || !(await stat(root)).isDirectory()) throw new Error('agent_workspace_not_directory')
@@ -20,15 +21,36 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   const groupView = group => group && ({ ...group, messages: group.messages.filter(message => !api.isOwnNotification?.({ ...message, groupId: group.groupId })), taskReservations: [] })
   let closed = false, profile = '', groupReader, resourceReader
   const selection = () => ctx.agentDefaultModel.currentSelection()
+  const taskSelection = () => taskModelConfig(store.getTaskSessionModelConfig?.() ?? taskSessionModel)
   const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: root, ...selection(),
+    taskSessionModel: taskSelection(),
     replySignature: store.getReplySignature?.() ?? initialSignature,
     proxyUrl: store.getProxyUrl?.() ?? '', maxConcurrentTasks: store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks })
   const api = {
     taskSessionNotifications: true,
     getAgentConfig,
+    async getTaskModelOptions({ provider, model }) {
+      const providers = ctx.llm.listProviders().map(({ id, name }) => ({ id, name }))
+      let models = [], info
+      try {
+        models = await ctx.llm.listModels(provider || taskSelection().provider)
+        if (model) info = await ctx.llm.resolveModelInfo(provider || taskSelection().provider, model)
+      } catch {
+        return { providers, models: models.map(({ id, name }) => ({ id, name })), reasoning: null, available: false,
+          modelError: '模型或提供方不可用，请核对精确模型 ID 或选择其他提供方。' }
+      }
+      return { providers, models: models.map(({ id, name }) => ({ id, name })), reasoning: info?.reasoning ?? null, available: !!info }
+    },
     async updateAgentConfig(input) {
       if (closed) throw new Error('resident_runtime_closed')
       if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
+      // Validate before any writes. A task-only save never changes the native default.
+      const nextTask = input.taskSessionModel === undefined ? undefined : taskModelConfig(input.taskSessionModel)
+      const oldSelection = selection()
+      const proposedSelection = { provider: oldSelection.provider, model: input.model === undefined ? oldSelection.model : input.model.trim() }
+      const proposedEffort = input.reasoningEffort === undefined ? oldSelection.reasoningEffort : input.reasoningEffort
+      if (proposedEffort) proposedSelection.reasoningEffort = proposedEffort
+      if (nextTask || input.reasoningEffort !== undefined) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, nextTask ?? taskSelection()))
       if (input.workspaceDir !== undefined && resolve(input.workspaceDir) !== root) throw new Error('task_workspace_change_requires_offline_migration')
       const replySignature = input.replySignature === undefined ? undefined : normalizeReplySignature(input.replySignature)
       if (input.agentNames !== undefined) {
@@ -52,6 +74,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
         if (effort) next.reasoningEffort = effort
         await ctx.agentDefaultModel.saveSelection(next)
       }
+      if (nextTask) await store.setTaskSessionModelConfig(nextTask)
       return getAgentConfig()
     },
     hasGroupConfiguration: store.hasGroupConfiguration,

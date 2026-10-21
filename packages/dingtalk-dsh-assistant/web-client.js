@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
-    const { useCallback, useEffect, useState } = React
+    const { useCallback, useEffect, useState, useRef } = React
 
     const name = 'dingtalk-dsh-assistant-client'
     const inject = ['slots']
@@ -61,6 +61,14 @@ window.__ModuleLoader__.load({
       const [agentNames, setAgentNames] = useState('')
       const [replySignature, setReplySignature] = useState('')
       const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
+      const [taskModel, setTaskModel] = useState({ provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'inherit', reasoningEffort: null })
+      const [taskOptions, setTaskOptions] = useState(null)
+      const [taskOptionsError, setTaskOptionsError] = useState('')
+      const [taskFeedback, setTaskFeedback] = useState(null)
+      const [taskBusy, setTaskBusy] = useState(false)
+      const taskSaving = useRef(false)
+      const taskDirty = useRef(false)
+      const changeTask = transform => { taskDirty.current = true; setTaskModel(transform); setTaskFeedback(null) }
           const [proxyUrl, setProxyUrl] = useState('')
       const [deletingGroupId, setDeletingGroupId] = useState('')
       const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
@@ -71,11 +79,50 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState()
       const [updateFeedback, setUpdateFeedback] = useState()
       const [checkingVersion, setCheckingVersion] = useState(false)
+      const refreshGeneration = useRef(0)
       const refresh = useCallback(async () => {
-        try { const next = await readResidentOverview(); setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+        const generation = ++refreshGeneration.current
+        try { const next = await readResidentOverview(); if (generation !== refreshGeneration.current) return; setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
         catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       }, [])
       useEffect(() => { refresh() }, [refresh])
+      useEffect(() => {
+        if (!taskDirty.current && overview?.agentConfig?.taskSessionModel) setTaskModel(overview.agentConfig.taskSessionModel)
+      }, [overview?.agentConfig?.taskSessionModel])
+      useEffect(() => {
+        if (taskFeedback?.kind !== 'success') return
+        const timer = setTimeout(() => setTaskFeedback(null), 5000)
+        return () => clearTimeout(timer)
+      }, [taskFeedback])
+      useEffect(() => {
+        let current = true
+        setTaskOptions(null); setTaskOptionsError('')
+        const timer = setTimeout(() => {
+          request(`/state/task-model-options?provider=${encodeURIComponent(taskModel.provider)}&model=${encodeURIComponent(taskModel.model)}`)
+            .then(value => { if (current) { setTaskOptions(value); setTaskOptionsError(value.modelError ?? '') } })
+            .catch(() => { if (current) setTaskOptionsError('模型选项读取失败，请检查连接后重新选择模型。') })
+        }, 300)
+        return () => { current = false; clearTimeout(timer) }
+      }, [taskModel.provider, taskModel.model])
+      const taskEfforts = taskOptions?.reasoning?.efforts ?? []
+      const requestedTaskEffort = taskModel.reasoningMode === 'inherit' ? overview?.agentConfig?.reasoningEffort
+        : taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : undefined
+      const taskEffortInvalid = !!requestedTaskEffort && !taskEfforts.some(value => value.id === requestedTaskEffort)
+      const taskChanged = JSON.stringify(taskModel) !== JSON.stringify(overview?.agentConfig?.taskSessionModel)
+      const taskValid = taskOptions?.available && !taskOptionsError && !taskEffortInvalid && !!taskModel.provider.trim() && !!taskModel.model.trim()
+      const saveTaskModel = async event => {
+        event?.preventDefault()
+        if (taskSaving.current || !taskValid || !taskChanged) return
+        taskSaving.current = true; setTaskBusy(true); setTaskFeedback(null)
+        try {
+          const saved = await request('/config/agent', { method: 'PUT', body: JSON.stringify({ taskSessionModel: taskModel }) })
+          refreshGeneration.current++
+          taskDirty.current = false
+          setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel)
+          setTaskFeedback({ kind: 'success', message: '统筹配置已保存；下一轮新建或恢复时生效，不中断当前会话。' })
+        } catch { setTaskFeedback({ kind: 'error', message: '统筹配置保存失败，请检查模型与推理深度后重试。草稿已保留。' }) }
+        finally { taskSaving.current = false; setTaskBusy(false) }
+      }
       const checkVersion = async () => {
         setCheckingVersion(true)
         try {
@@ -158,6 +205,27 @@ window.__ModuleLoader__.load({
           React.createElement('input', { 'aria-label': 'Agent 网络代理', placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
     React.createElement('button', { type: 'button', style: { ...button, justifySelf: 'end', background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: !agentModel.model.trim() || !agentConfigChanged, onClick: saveAgentConfig }, '保存配置')),
+        React.createElement('form', { noValidate: true, onSubmit: saveTaskModel, style: panel, 'aria-label': '任务统筹模型配置' },
+          React.createElement('strong', null, '任务统筹模型'),
+          React.createElement('div', { id: 'task-model-help', style: { color: colors.muted, fontSize: ui.textSm } }, '仅影响任务统筹的下一轮请求；执行和话题仍使用默认处理模型。'),
+          React.createElement('label', { htmlFor: 'task-provider' }, '模型提供方'),
+          React.createElement('select', { id: 'task-provider', style: input, value: taskModel.provider, disabled: taskBusy, onChange: event => changeTask(current => ({ ...current, provider: event.target.value })) },
+            ...[...new Map([{ id: taskModel.provider, name: taskModel.provider }, ...(taskOptions?.providers ?? [])].map(value => [value.id, value])).values()].map(value => React.createElement('option', { key: value.id, value: value.id }, value.name || value.id))),
+          React.createElement('label', { htmlFor: 'task-model-id' }, '统筹模型 ID'),
+          React.createElement('input', { id: 'task-model-id', list: 'task-model-list', style: input, value: taskModel.model, disabled: taskBusy, 'aria-invalid': !!taskOptionsError, 'aria-describedby': 'task-options-status task-model-help', onChange: event => changeTask(current => ({ ...current, model: event.target.value })) }),
+          React.createElement('datalist', { id: 'task-model-list' }, ...(taskOptions?.models ?? []).map(value => React.createElement('option', { key: value.id, value: value.id }, value.name))),
+          React.createElement('label', { htmlFor: 'task-reasoning' }, '统筹推理深度'),
+          React.createElement('select', { id: 'task-reasoning', style: input, disabled: taskBusy || !taskOptions, 'aria-invalid': taskEffortInvalid, 'aria-describedby': 'task-options-status', value: taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : taskModel.reasoningMode,
+            onChange: event => { const value = event.target.value; changeTask(current => ({ ...current, reasoningMode: ['inherit', 'model-default'].includes(value) ? value : 'explicit', reasoningEffort: ['inherit', 'model-default'].includes(value) ? null : value })) } },
+            React.createElement('option', { value: 'inherit' }, `跟随默认处理（${overview?.agentConfig?.reasoningEffort || '模型默认'}）`),
+            React.createElement('option', { value: 'model-default' }, '使用统筹模型默认深度'),
+            ...taskEfforts.map(value => React.createElement('option', { key: value.id, value: value.id }, ({ low: '轻度', medium: '中度', high: '高度', xhigh: '极高', max: '最高' })[value.id] ?? value.name)),
+            taskModel.reasoningMode === 'explicit' && !taskEfforts.some(value => value.id === taskModel.reasoningEffort)
+              ? React.createElement('option', { value: taskModel.reasoningEffort }, `${taskModel.reasoningEffort}（当前模型不支持）`) : null),
+          React.createElement('div', { id: 'task-options-status', role: taskOptionsError || taskEffortInvalid ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskOptionsError || taskEffortInvalid ? colors.danger : colors.muted } },
+            taskOptionsError || (taskEffortInvalid ? '当前模型不支持所选或继承的深度，请改选模型默认或支持的深度。' : taskOptions ? '推理选项来自当前模型能力；不支持的深度不会静默替换。' : '正在读取模型能力…')),
+          React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !taskChanged, 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存统筹配置'),
+          React.createElement('div', { role: taskFeedback?.kind === 'error' ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskFeedback?.kind === 'error' ? colors.danger : colors.muted } }, taskFeedback?.message ?? '')),
         React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 任务看板”查看任务会话、动态执行、结果与日志路径。'),
         React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),
           ...(overview?.groups ?? []).map((group) => React.createElement('div', { key: group.groupId, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'grid', gap: 8 } },

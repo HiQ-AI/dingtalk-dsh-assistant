@@ -7,6 +7,7 @@ import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { openDynamicTaskStore, ingressTimestamp } from './dynamic-task-store.js'
 import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
+import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 import { inspectSession } from './session-persistence.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createTaskSessionObservability } from './task-session-observability.js'
@@ -42,6 +43,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   store: suppliedStore, persistence: suppliedPersistence } = {}) {
   if (!config?.dbPath || !config?.instanceId) fail('TASK_SESSION_CONFIGURATION_REQUIRED')
   taskSessionModelSelection({}, config.model, config.provider)
+  taskModelConfig(config)
   for (const value of [config.maxConcurrentExecutions, config.maxConcurrentTasks, legacy.getAgentConfig().maxConcurrentTasks]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 50)) fail('TASK_SESSION_CONCURRENCY_INVALID')
   }
@@ -689,7 +691,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const runResult = await taskSessions.run({ binding, input: { task, sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: await query('execution.list', { taskId }),
           operations,
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
-          blockers: await query('task.blockers', { taskId }) }, ...taskSessionModelSelection(models(), config.model, config.provider), agentPreset: legacy.getAgentConfig().agentPreset,
+          blockers: await query('task.blockers', { taskId }) }, ...taskModelSelection(models(), legacy.getAgentConfig().taskSessionModel ?? config), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
           readDecisions: (args, current) => query('task.decisions', { ...args, taskId: current.taskId }),
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },

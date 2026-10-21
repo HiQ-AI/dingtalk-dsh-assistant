@@ -192,6 +192,7 @@ const taskSchema = z.object({
   reopenContext: z.string().min(1).optional(), resumeContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
 const schedulerSchema = z.object({
+  taskSessionModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
   performanceProjection: performanceProjectionSchema.optional(),
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), replySignature: z.string().max(80).optional(), agentWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
   leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
@@ -473,6 +474,10 @@ export async function openResidentStore(storageDomain) {
       return { workspaceDir: agentWorkspaceDir }
     },
     getProxyUrl: () => scheduler.get('runtime')?.proxyUrl,
+    getTaskSessionModelConfig: () => scheduler.get('runtime')?.taskSessionModel,
+    setTaskSessionModelConfig: async (taskSessionModel) => {
+      await scheduler.update('runtime', current => ({ ...current, taskSessionModel }))
+    },
     setProxyUrl: async (proxyUrl) => {
       await scheduler.update('runtime', (current) => ({ ...current, proxyUrl }))
       return { proxyUrl }

@@ -78,7 +78,8 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
     try {
       // The native exact resolver owns validation; catalog membership is advisory.
       // Fail before create/resume, without falling back to the execution model.
-      try { await ctx.llm.resolveCallConfig({ provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }, entry.abort.signal) }
+      let resolvedCall
+      try { resolvedCall = await ctx.llm.resolveCallConfig({ provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }, entry.abort.signal) }
       catch (cause) { throw Object.assign(fail(cause.code === 'UNSUPPORTED_REASONING_EFFORT'
         ? 'TASK_SESSION_REASONING_EFFORT_UNSUPPORTED' : 'TASK_SESSION_MODEL_UNAVAILABLE'), { cause }) }
       const cwd = await getWorkspaceDir({ binding })
@@ -197,7 +198,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           return { received: true, ...result }
         })
       }
-      const options = { agentOptions: { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) }, setup, signal: entry.abort.signal }
+      const options = { agentOptions: { provider, model, reasoningEffort: resolvedCall.reasoningEffort ?? null }, setup, signal: entry.abort.signal }
       entry.handle = await withPersistenceWriter(binding, async () => stored ? await ctx.agents.resume({ ...options, resumeSessionId: binding.sessionId })
         : await ctx.agents.create({ ...options, sessionId: binding.sessionId, meta: { cwd }, seed: [{ type: identityEvent, seq: 0, time: Date.now(), ignorable: true,
           data: { version: 1, taskId: binding.taskId, sessionId: binding.sessionId, creationLease: binding.leaseEpoch } }] }))

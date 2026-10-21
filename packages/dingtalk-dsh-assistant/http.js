@@ -398,6 +398,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())
+  if (request.method === 'GET' && url.pathname === '/state/task-model-options') return send(response, 200, await store.getTaskModelOptions({ provider: url.searchParams.get('provider'), model: url.searchParams.get('model') }))
   if (request.method === 'GET' && url.pathname === '/state/agent-config') {
     const { taskPrompts, taskPromptsVersion, taskGuidance, leafSessionPrompt, ...configuration } = store.getAgentConfig()
     return send(response, 200, configuration)
