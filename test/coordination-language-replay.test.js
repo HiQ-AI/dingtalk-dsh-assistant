@@ -3,6 +3,22 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { compareProposal, replayLanguage } from '../scripts/coordination-language-replay.mjs'
 
+test('schedule acceptance canonicalizes explicit offsets without weakening exact replay expectations', async () => {
+  const expected = '2026-10-22T01:00:00.000Z'
+  for (const [at, passed] of [
+    ['2026-10-22T09:00:00+08:00', true], [expected, true],
+    ['2026-10-22T09:00:00Z', false], ['2026-10-22T09:00:00', false],
+    ['2026-02-30T09:00:00+08:00', false], ['2026-10-23T09:00:00+08:00', false],
+    ['2026-10-22T09:00:00+24:00', false], ['2026-10-22T09:00:00-00:00', false],
+  ]) {
+    const report = await replayLanguage({context:{},cases:[{id:'time',message:'synthetic',expect:[{path:'rule.at',equals:expected}]}],
+      adapter:{evidenceKind:'scripted',identity:'time-contract',plan:()=>({kind:'schedule',timezone:'Asia/Shanghai',
+        rule:{kind:'once',at},taskIds:['A'],recipientIds:[],interpretation:'synthetic'})}})
+    assert.equal(report.passed, Number(passed), at)
+    if (passed) assert.equal(report.results[0].proposal.rule.at, expected)
+  }
+})
+
 test('language replay without an explicit adapter never claims model calls or passes', async () => {
   const fixtures = JSON.parse(await readFile(new URL('./fixtures/coordination-language-cases.json',import.meta.url),'utf8'))
   const report = await replayLanguage(fixtures)

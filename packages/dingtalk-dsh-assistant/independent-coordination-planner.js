@@ -3,6 +3,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { toToolJsonSchema } from './tool-schema.js'
 import { sessionWorkspace } from './session-workspaces.js'
 import { randomUUID } from 'node:crypto'
+import { normalizeCoordinationInstant } from './coordination-time.js'
 
 const nonempty = z.string().trim().min(1)
 const existingMemberSchema = z.strictObject({ taskId: nonempty,
@@ -30,7 +31,10 @@ const arrangementSchema = z.strictObject({ kind: z.literal('arrangement'), commo
   allTogether: z.boolean().default(false), members: z.array(coordinationMemberProposalSchema).max(100),
   sourceOrder: sourceOrderSchema.optional(),
   pendingClarifications: z.array(pendingClarificationSchema).max(100).default([]) })
-const ruleSchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('once'), at: nonempty }),
+const instantSchema = nonempty.refine(value => {
+  try { normalizeCoordinationInstant(value); return true } catch { return false }
+}, 'Explicit valid second-precision ISO timestamp required').transform(normalizeCoordinationInstant)
+const ruleSchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('once'), at: instantSchema }),
   z.strictObject({ kind: z.literal('daily'), time: nonempty }),
   z.strictObject({ kind: z.literal('weekly'), time: nonempty, weekday: z.number().int().min(0).max(6) })])
 const scheduleSchema = z.strictObject({ kind: z.literal('schedule'), actionKind: z.enum(['read-query','task-command']).default('read-query'), timezone: nonempty,
@@ -61,7 +65,7 @@ export const coordinationProposalSchema = z.discriminatedUnion('kind', [
     scheduleId: nonempty, expectedScheduleRevision: z.number().int().positive(),
     scope: z.enum(['future','unstarted']).default('future'), state: z.enum(['active','paused','cancelled']).optional(),
     rule: ruleSchema.optional(), timezone: nonempty.optional(), recipientIds: z.array(nonempty).max(100).optional(),
-    replacementPlannedAt: nonempty.optional(), reason: nonempty }),
+    replacementPlannedAt: instantSchema.optional(), reason: nonempty }),
   z.strictObject({ kind: z.literal('occurrence-control'), coordinationId: nonempty, expectedRevision: z.number().int().positive(),
     occurrenceId: nonempty, expectedControlRevision: z.number().int().positive(), control: z.enum(['pause','resume','cancel']), reason: nonempty }),
 ])

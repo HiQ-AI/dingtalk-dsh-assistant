@@ -1,6 +1,22 @@
 // Calendar evaluation is deterministic and independent of model/session timers.
 // Policy: skip nonexistent wall times; use the first UTC occurrence on a repeated day.
 const formatters = new Map()
+/** Normalize explicit, second-precision ISO input before durable UTC validation.
+ * Reject ambiguous local times, invalid calendar rollovers and unknown offsets.
+ */
+export function normalizeCoordinationInstant(value) {
+  const match = typeof value === 'string' && /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.0{1,3})?(Z|[+-]\d{2}:\d{2})$/.exec(value)
+  if (!match || match[1].startsWith('0000') || match[3] === '-00:00') throw new Error('COORDINATION_TIME_INVALID')
+  const wall = `${match[1]}T${match[2]}.000Z`, wallDate = new Date(wall)
+  if (!Number.isFinite(wallDate.getTime()) || wallDate.toISOString() !== wall) throw new Error('COORDINATION_TIME_INVALID')
+  if (match[3] !== 'Z' && (Number(match[3].slice(1,3)) > 23 || Number(match[3].slice(4,6)) > 59)) throw new Error('COORDINATION_TIME_INVALID')
+  const instant = Date.parse(value)
+  if (!Number.isFinite(instant)) throw new Error('COORDINATION_TIME_INVALID')
+  const canonical = new Date(instant).toISOString()
+  if (!/^\d{4}-/.test(canonical) || canonical.startsWith('0000')) throw new Error('COORDINATION_TIME_INVALID')
+  return canonical
+}
+
 export function localSlot(instant, timezone) {
   let formatter = formatters.get(timezone)
   if (!formatter) {

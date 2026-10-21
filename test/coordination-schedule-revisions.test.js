@@ -6,6 +6,24 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { summarizeTimeSlots } from '../packages/dingtalk-dsh-assistant/coordination-time.js'
+import { coordinationProposalSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
+
+test('offset proposal persists a canonical due time and one slot across restart and repeated scans', async t => {
+  const proposal = coordinationProposalSchema.parse({kind:'schedule',timezone:'Asia/Shanghai',
+    rule:{kind:'once',at:'2026-10-21T09:00:00+08:00'},taskIds:['A'],recipientIds:[],interpretation:'synthetic'})
+  const f = await fixture(t, proposal.rule)
+  const schedule = (await f.query('coordination.schedule.list'))[0]
+  assert.equal(schedule.rule.at, '2026-10-21T01:00:00.000Z')
+  assert.equal(schedule.nextDueAt, schedule.rule.at)
+  await f.restart()
+  f.tick(3600000)
+  const occurrence = (await f.scan()).result.occurrences[0]
+  assert.equal(occurrence.plannedAt, schedule.rule.at)
+  assert.equal((await f.scan()).result.occurrences.length, 0)
+  await f.restart()
+  assert.equal((await f.scan()).result.occurrences.length, 0)
+  assert.equal((await f.occurrences()).length, 1)
+})
 
 async function fixture(t, rule = { kind: 'once', at: '2026-10-21T01:00:00.000Z' }) {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
