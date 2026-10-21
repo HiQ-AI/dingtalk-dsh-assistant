@@ -66,7 +66,7 @@ const messageFactFields = {
   messageVersion: z.number().int().positive(), imageRefs: z.array(z.record(z.string(), z.unknown())).optional(), mediaUnavailable: z.array(z.string()).optional(),
   sourceKind: z.enum(['dingtalk', 'web', 'internal', 'migration']).optional(), migrationSource: z.string().optional(),
   ignoredRanges: z.array(sourceRangeSchema.extend({ reason: z.string().min(1) })).optional(),
-  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
+  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
   activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
@@ -123,7 +123,17 @@ const humanBlockerSchema = z.object({
   recallStatus: z.enum(['pending', 'recalled', 'failed', 'not-required']).optional(), recalledAt: z.string().min(1).optional(), recallError: z.string().min(1).optional(),
   supersededAt: z.string().min(1).optional(), supersededBy: z.string().min(1).optional(), supersedeReason: z.string().min(1).optional(),
 })
+const sourceDispatchSchema = z.object({
+  reservationId: z.string().min(1), unitId: z.string().min(1), unitRevision: z.number().int().positive(),
+  generation: z.number().int().positive(), dispatchOwner: z.enum(['coordination', 'legacy-topic']),
+  semanticState: z.enum(['reserved', 'needs_clarification', 'accepted', 'rejected']), settled: z.boolean(),
+  sourceSnapshot: z.record(z.string(), z.unknown()), coordinationId: z.string().min(1).optional(),
+  clarification: z.string().min(1).optional(), frozen: z.boolean().default(false),
+  handoff: z.record(z.string(), z.unknown()).optional(), history: z.array(z.record(z.string(), z.unknown())).default([]),
+  createdAt: z.string().min(1), updatedAt: z.string().min(1),
+})
 const groupSchema = z.object({
+  sourceDispatchOwnership: z.array(sourceDispatchSchema).default([]),
   coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed', 'superseded']), messageId: z.string().optional(), lastError: z.string().optional(), failurePhase: z.enum(['startup', 'dispatch']).optional(), failureCode: z.string().optional(), startupAttempt: z.number().int().nonnegative().optional(), supersededBy: z.string().optional(), supersedeReason: z.string().optional() })).default({}),
   groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
@@ -230,16 +240,48 @@ export const residentDomainSpec = defineDomain({
   },
 })
 
-function settleCompletedMessageDeliveries(messages, topics) {
+export function sourceDispatchOwnershipFor(group, unit) {
+  return (group.sourceDispatchOwnership ?? []).find(item => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)
+}
+const coordinationOwns = (group, unit) => sourceDispatchOwnershipFor(group, unit)?.dispatchOwner === 'coordination'
+const decisionUnitRefs = (group, decision) => decision.basisUnitRefs?.length ? decision.basisUnitRefs
+  : group.messages.filter(message => decision.basisMessageIds?.includes(message.messageId)).flatMap(message => message.activeUnitRefs ?? message.units ?? [])
+function assertLegacyDecisionOwnership(group, decision) {
+  if (decisionUnitRefs(group, decision).some(ref => coordinationOwns(group, ref))) throw new Error('source_dispatch_owned_by_coordination')
+}
+function reserveSourceDispatchRecord(group, message, unit) {
+  const previous = sourceDispatchOwnershipFor(group, unit)
+  if (previous) {
+    if (previous.dispatchOwner !== 'coordination') throw new Error('source_dispatch_legacy_owned')
+    return previous
+  }
+  if (group.topics.some(topic => topic.decisions.some(record => record.status !== 'rejected'
+    && decisionUnitRefs(group, record.decision).some(ref => ref.unitId === unit.unitId && ref.unitRevision === unit.unitRevision)))) {
+    throw new Error('source_dispatch_legacy_decision_exists')
+  }
+  const stamp = new Date().toISOString()
+  return sourceDispatchSchema.parse({ reservationId: stableId('source-dispatch', `${group.groupId}:${unit.unitId}:${unit.unitRevision}`),
+    unitId: unit.unitId, unitRevision: unit.unitRevision, generation: 1, dispatchOwner: 'coordination', semanticState: 'reserved', settled: false,
+    sourceSnapshot: { messageId: message.messageId, messageVersion: message.messageVersion, text: message.text,
+      unitText: unit.sourceRanges.map(range => message.text.slice(range.start, range.end)).join('\n'),
+      sourceRefs: unit.sourceRanges, unit: JSON.parse(JSON.stringify(unit)),
+      ...(message.senderOpenDingTalkId ? { actorId: message.senderOpenDingTalkId } : {}),
+      ...(message.senderName ? { senderName: message.senderName } : {}), occurredAt: message.occurredAt }, createdAt: stamp, updatedAt: stamp })
+}
+
+function settleCompletedMessageDeliveries(messages, topics, sourceDispatchOwnership = []) {
   const deliveredAt = new Date().toISOString()
   return messages.map((message) => {
+    const owned = sourceDispatchOwnership.filter(item => item.dispatchOwner === 'coordination'
+      && item.sourceSnapshot.messageId === message.messageId && (message.activeUnitRefs ?? []).some(ref => ref.unitId === item.unitId && ref.unitRevision === item.unitRevision))
+    if (owned.some(item => !item.settled)) return { ...message, agentDeliveryStatus: 'pending' }
     if (message.routingStatus !== 'routed' || ['delivered', 'skipped'].includes(message.agentDeliveryStatus)) return message
     const activeEntries = topics.flatMap((topic) => {
       const latestByUnit = new Map()
       for (const entry of topic.entries) if (entry.messageId === message.messageId) latestByUnit.set(entry.unitId, entry)
       return [...latestByUnit.values()].filter((entry) => entry.action === 'add' && entry.messageVersion === message.messageVersion).map((entry) => ({ topic, entry }))
     })
-    if (activeEntries.some(({ topic, entry }) => topic.processedRevision < entry.revision)) return message
+    if (activeEntries.some(({ topic, entry }) => !sourceDispatchOwnership.some(item => item.unitId === entry.unitId && item.unitRevision === entry.unitRevision && item.dispatchOwner === 'coordination') && topic.processedRevision < entry.revision)) return message
     const { agentDeliveryError: _error, agentDecisionRetryAt: _retryAt, ...current } = message
     return { ...current, agentDeliveryStatus: 'delivered', agentDeliveryAt: deliveredAt }
   })
@@ -438,6 +480,81 @@ export async function openResidentStore(storageDomain) {
       return persisted
     },
     getCoordinationRequest: (groupId, requestId) => findGroupEntry(groupId)?.[1].coordinationRequests?.[requestId],
+    getSourceDispatchOwnership: (groupId, unitId, unitRevision) => {
+      const group = findGroupEntry(groupId)?.[1]
+      const value = group ? sourceDispatchOwnershipFor(group, { unitId, unitRevision }) : undefined
+      return value ? JSON.parse(JSON.stringify(value)) : undefined
+    },
+    listSourceDispatchOwnership: groupId => JSON.parse(JSON.stringify(findGroupEntry(groupId)?.[1].sourceDispatchOwnership ?? [])),
+    reserveSourceDispatch: ({ groupId, unitId, unitRevision, expectedGeneration = 0, sourceSnapshot }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_found:${groupId}`)
+      let reservation
+      await groups.update(entry[0], latest => {
+        const message = latest.messages.find(message => message.units?.some(unit => unit.unitId === unitId && unit.unitRevision === unitRevision))
+        const unit = message?.units.find(unit => unit.unitId === unitId && unit.unitRevision === unitRevision)
+        if (!unit) throw new Error('source_dispatch_unit_not_found')
+        const previous = sourceDispatchOwnershipFor(latest, unit)
+        if (expectedGeneration !== 0 && previous?.generation !== expectedGeneration || !previous && expectedGeneration !== 0) throw new Error('source_dispatch_generation_stale')
+        reservation = reserveSourceDispatchRecord(latest, message, unit)
+        if (sourceSnapshot && (sourceSnapshot.text !== undefined && sourceSnapshot.text !== reservation.sourceSnapshot.text
+          || sourceSnapshot.sourceRefs !== undefined && fingerprint(sourceSnapshot.sourceRefs) !== fingerprint(reservation.sourceSnapshot.sourceRefs))) throw new Error('source_dispatch_snapshot_conflict')
+        if (previous) return latest
+        const ownership = [...(latest.sourceDispatchOwnership ?? []), reservation]
+        return { ...latest, sourceDispatchOwnership: ownership, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics, ownership) }
+      })
+      return JSON.parse(JSON.stringify(reservation))
+    }),
+    updateSourceDispatch: ({ groupId, unitId, unitRevision, expectedGeneration, semanticState, coordinationId, clarification, settled = false }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_found:${groupId}`)
+      let reservation
+      await groups.update(entry[0], latest => {
+        const previous = sourceDispatchOwnershipFor(latest, { unitId, unitRevision })
+        if (!previous || previous.generation !== expectedGeneration || previous.dispatchOwner !== 'coordination' || previous.frozen) throw new Error('source_dispatch_generation_stale')
+        if (!['reserved','needs_clarification','accepted','rejected'].includes(semanticState)
+          || settled && semanticState !== 'accepted' || semanticState === 'needs_clarification' && !clarification?.trim()) throw new Error('source_dispatch_state_invalid')
+        if (previous.semanticState === 'accepted' && semanticState !== 'accepted'
+          || previous.semanticState === 'rejected' && semanticState !== 'rejected') throw new Error('source_dispatch_state_terminal')
+        if (previous.coordinationId && coordinationId && previous.coordinationId !== coordinationId) throw new Error('source_dispatch_coordination_conflict')
+        reservation = sourceDispatchSchema.parse({ ...previous, semanticState, settled: previous.settled || settled,
+          ...(coordinationId ? { coordinationId } : {}), ...(clarification ? { clarification } : {}), updatedAt: new Date().toISOString() })
+        const ownership = latest.sourceDispatchOwnership.map(item => item.reservationId === reservation.reservationId ? reservation : item)
+        return { ...latest, sourceDispatchOwnership: ownership, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics, ownership) }
+      })
+      return JSON.parse(JSON.stringify(reservation))
+    }),
+    beginSourceDispatchHandoff: ({ groupId, unitId, unitRevision, expectedGeneration, freezeId, reason }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_found:${groupId}`)
+      if (!freezeId?.trim() || !reason?.trim()) throw new Error('source_dispatch_handoff_invalid')
+      let reservation
+      await groups.update(entry[0], latest => {
+        const previous = sourceDispatchOwnershipFor(latest, { unitId, unitRevision })
+        if (!previous || previous.generation !== expectedGeneration || previous.dispatchOwner !== 'coordination' || previous.semanticState !== 'rejected') throw new Error('source_dispatch_generation_stale')
+        if (previous.frozen && previous.handoff?.freezeId !== freezeId) throw new Error('source_dispatch_handoff_conflict')
+        reservation = sourceDispatchSchema.parse({ ...previous, frozen: true, handoff: { freezeId, reason, state: 'pending' }, updatedAt: new Date().toISOString() })
+        return { ...latest, sourceDispatchOwnership: latest.sourceDispatchOwnership.map(item => item.reservationId === reservation.reservationId ? reservation : item) }
+      })
+      return JSON.parse(JSON.stringify(reservation))
+    }),
+    completeSourceDispatchHandoff: ({ groupId, unitId, unitRevision, expectedGeneration, proof }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_found:${groupId}`)
+      let reservation
+      await groups.update(entry[0], latest => {
+        const previous = sourceDispatchOwnershipFor(latest, { unitId, unitRevision })
+        if (!previous || previous.generation !== expectedGeneration || previous.dispatchOwner !== 'coordination' || !previous.frozen) throw new Error('source_dispatch_generation_stale')
+        if (proof?.kind !== 'coordination.no-commands' || proof.reservationId !== previous.reservationId || proof.generation !== expectedGeneration
+          || proof.unitId !== unitId || proof.unitRevision !== unitRevision || proof.freezeId !== previous.handoff?.freezeId
+          || !proof.dynamicSourceId?.trim() || proof.commandCount !== 0 || proof.unknownCount !== 0 || !proof.checkedAt?.trim()) throw new Error('source_dispatch_handoff_proof_invalid')
+        reservation = sourceDispatchSchema.parse({ ...previous, generation: previous.generation + 1, dispatchOwner: 'legacy-topic', settled: false,
+          handoff: { ...previous.handoff, state: 'completed', proof }, history: [...previous.history, { generation: previous.generation, dispatchOwner: previous.dispatchOwner, semanticState: previous.semanticState, reason: previous.handoff.reason }], updatedAt: new Date().toISOString() })
+        return { ...latest, sourceDispatchOwnership: latest.sourceDispatchOwnership.map(item => item.reservationId === reservation.reservationId ? reservation : item),
+          messages: latest.messages.map(message => message.messageId === previous.sourceSnapshot.messageId ? { ...message, agentDeliveryStatus: 'pending' } : message) }
+      })
+      return JSON.parse(JSON.stringify(reservation))
+    }),
     updateCoordinationRequest: (groupId, requestId, patch) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_found:${groupId}`)
@@ -637,6 +754,17 @@ export async function openResidentStore(storageDomain) {
         if (latest.routingRevision !== routingRevision) throw new Error('topic_routing_stale')
         if (new Set(routes.map((route) => route.messageId)).size !== routes.length) throw new Error('topic_route_message_duplicate')
         const { newTopics, topicIdsByKey, unitsByMessage, ignoredByMessage } = resolveRouteBatch(latest, { groupId, routeId, routes })
+        const sourceDispatchOwnership = [...(latest.sourceDispatchOwnership ?? [])]
+        for (const route of routes) {
+          const message = latest.messages.find(message => message.messageId === route.messageId)
+          for (const unit of unitsByMessage.get(route.messageId)) {
+            const previousOwned = sourceDispatchOwnership.filter(item => item.unitId === unit.unitId && item.dispatchOwner === 'coordination')
+            if (previousOwned.length && unit.dispatchOwner !== 'coordination') throw new Error('source_dispatch_coordination_owned')
+            if (unit.dispatchOwner !== 'coordination') continue
+            const reservation = reserveSourceDispatchRecord({ ...latest, sourceDispatchOwnership }, message, unit)
+            if (!sourceDispatchOwnership.some(item => item.reservationId === reservation.reservationId)) sourceDispatchOwnership.push(reservation)
+          }
+        }
         let topics = [...latest.topics, ...newTopics.values()]
         for (const route of routes) {
           const resolvedUnits = unitsByMessage.get(route.messageId)
@@ -673,8 +801,8 @@ export async function openResidentStore(storageDomain) {
           for (const unit of current) if (!historical.some((item) => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)) historical.push(unit)
           return { ...message, units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined }
         })
-        return { ...latest, topics, routingRevision: latest.routingRevision + 1, routeHistory: [...latest.routeHistory, receipt],
-          messages: settleCompletedMessageDeliveries(routedMessages, topics) }
+        return { ...latest, topics, sourceDispatchOwnership, routingRevision: latest.routingRevision + 1, routeHistory: [...latest.routeHistory, receipt],
+          messages: settleCompletedMessageDeliveries(routedMessages, topics, sourceDispatchOwnership) }
       })
       return { status: 'routed', group, topics: group.topics, ...receipt }
     }),
@@ -691,6 +819,7 @@ export async function openResidentStore(storageDomain) {
           if (previous.fingerprint !== digest) throw new Error('topic_decision_identity_conflict')
           result = { status: 'duplicate', record: previous }; return latest
         }
+        assertLegacyDecisionOwnership(latest, decision)
         if (latest.messages.some((message) => message.routingStatus !== 'routed')) { result = { status: 'routing-required' }; return latest }
         const veto = preflight?.(latest)
         if (veto !== undefined) { result = veto; return latest }
@@ -913,14 +1042,14 @@ export async function openResidentStore(storageDomain) {
           ...item, ...(update.summary !== undefined ? { summary: update.summary, summaryRevision: record.revision } : {}), ...(update.status && item.revision === record.revision ? { status: update.status } : {}), ...(update.openQuestions ? { openQuestions: update.openQuestions } : {}),
           processedRevision: Math.max(item.processedRevision, record.revision), decisions: item.decisions.map((previous) => previous.decisionId === decisionId ? result : previous), updatedAt: result.updatedAt })
         return { ...latest, taskReservations: latest.taskReservations.filter((item) => item.decisionId !== decisionId), topics,
-          messages: settleCompletedMessageDeliveries(latest.messages, topics) }
+          messages: settleCompletedMessageDeliveries(latest.messages, topics, latest.sourceDispatchOwnership) }
       })
       return result
     }),
     reconcileMessageDeliveries: ({ groupId }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
-      return groups.update(entry[0], (latest) => ({ ...latest, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics) }))
+      return groups.update(entry[0], (latest) => ({ ...latest, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics, latest.sourceDispatchOwnership) }))
     }),
     updateTopicTitle: ({ groupId, topicId, expectedTitle, expectedSummary, title }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -1035,6 +1164,9 @@ export async function openResidentStore(storageDomain) {
       if (existing !== undefined) return current
       let veto
       const group = await groups.update(storageKey, (latest) => {
+        if (decisionId && (matterUnitRefs ?? []).some(ref => coordinationOwns(latest, ref))) {
+          veto = { status: 'coordination-owned' }; return latest
+        }
         veto = preflight?.(latest)
         if (veto !== undefined) return latest
         if (latest.topics.some(topic => topic.decisions.some(record => record.status === 'rejected'
@@ -1073,6 +1205,7 @@ export async function openResidentStore(storageDomain) {
         const outbound = latest.outbox.find(item => item.outboundId === outboundId)
         if (!outbound) throw new Error(`outbound_not_found:${outboundId}`)
         if (outbound.status !== 'pending' || outbound.supersededByOutboundId) return latest
+        if (outbound.decisionId && (outbound.matterUnitRefs ?? []).some(ref => coordinationOwns(latest, ref))) return latest
         started = true
         return { ...latest, outbox: latest.outbox.map(item => item.outboundId === outboundId ? { ...item, sendStartedAt: item.sendStartedAt ?? new Date().toISOString(), sendAttemptCount: (item.sendAttemptCount ?? 0) + 1 } : item) }
       })

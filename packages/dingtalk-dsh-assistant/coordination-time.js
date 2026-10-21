@@ -23,21 +23,55 @@ export function validateTimeRule(rule, timezone) {
 
 export function nextTimeSlot(rule, timezone, after, lastLocalDate = null) {
   validateTimeRule(rule, timezone)
+  if (!Number.isFinite(after)) throw new Error('COORDINATION_TIME_INVALID')
   if (rule.kind === 'once') return Date.parse(rule.at) > after ? rule.at : null
-  const start = Math.floor(after / 60000) * 60000 + 60000
-  // Includes the week following a skipped DST day; no unbounded catch-up loop.
-  for (let instant = start; instant <= start + 15 * 86400000; instant += 60000) {
-    const local = localSlot(instant, timezone)
-    if (local.date === lastLocalDate || local.time !== rule.time) continue
-    if (rule.kind === 'weekly' && new Date(`${local.date}T12:00:00Z`).getUTCDay() !== rule.weekday) continue
-    // On a fall-back day reject a second occurrence even if the scanner starts
-    // after the first one, rather than treating it as an unconsumed new slot.
-    let repeated = false
-    for (let earlier = instant - 3 * 3600000; earlier < instant; earlier += 60000) {
-      const candidate = localSlot(earlier, timezone)
-      if (candidate.date === local.date && candidate.time === local.time) { repeated = true; break }
-    }
-    if (!repeated) return new Date(instant).toISOString()
+  const date = localSlot(after, timezone).date
+  // Iterate local calendar days rather than every UTC minute while holding the
+  // writer transaction. The first UTC candidate fixes fall-back disambiguation.
+  for (let day = 0; day < 16; day++) {
+    const candidateDate = addLocalDays(date, day)
+    if (candidateDate === lastLocalDate || rule.kind === 'weekly' && new Date(`${candidateDate}T12:00:00Z`).getUTCDay() !== rule.weekday) continue
+    const candidate = firstLocalInstant(candidateDate, rule.time, timezone)
+    if (candidate !== null && candidate > after) return new Date(candidate).toISOString()
   }
   throw new Error('COORDINATION_TIME_HORIZON')
+}
+
+function addLocalDays(date, days) {
+  return new Date(Date.parse(`${date}T12:00:00Z`) + days * 86400000).toISOString().slice(0, 10)
+}
+
+function firstLocalInstant(date, time, timezone) {
+  const wall = Date.parse(`${date}T${time}:00Z`), offsets = new Set()
+  // Cover both sides of ordinary DST, half-hour changes and date-line changes.
+  for (let hours = -36; hours <= 36; hours += 6) {
+    const probe = wall + hours * 3600000, local = localSlot(probe, timezone)
+    offsets.add(Date.parse(`${local.date}T${local.time}:00Z`) - probe)
+  }
+  const matches = [...offsets].map(offset => wall - offset).filter(instant => {
+    const local = localSlot(instant, timezone)
+    return local.date === date && local.time === time
+  })
+  return matches.length ? Math.min(...matches) : null
+}
+
+/** Exact count and latest UTC identity for coalesced offline slots. */
+export function summarizeTimeSlots(rule, timezone, from, through) {
+  validateTimeRule(rule, timezone)
+  if (!Number.isFinite(from) || !Number.isFinite(through) || from > through) throw new Error('COORDINATION_TIME_INVALID')
+  if (rule.kind === 'once') {
+    const present = Date.parse(rule.at) >= from && Date.parse(rule.at) <= through
+    return { latest: present ? rule.at : null, count: present ? 1 : 0 }
+  }
+  const firstDate = localSlot(from, timezone).date, lastDate = localSlot(through, timezone).date
+  const days = Math.round((Date.parse(`${lastDate}T12:00:00Z`) - Date.parse(`${firstDate}T12:00:00Z`)) / 86400000)
+  if (days > 100000) throw new Error('COORDINATION_TIME_HORIZON')
+  let latest = null, count = 0
+  for (let day = 0; day <= days; day++) {
+    const date = addLocalDays(firstDate, day)
+    if (rule.kind === 'weekly' && new Date(`${date}T12:00:00Z`).getUTCDay() !== rule.weekday) continue
+    const instant = firstLocalInstant(date, rule.time, timezone)
+    if (instant !== null && instant >= from && instant <= through) { count++; latest = new Date(instant).toISOString() }
+  }
+  return { latest, count }
 }

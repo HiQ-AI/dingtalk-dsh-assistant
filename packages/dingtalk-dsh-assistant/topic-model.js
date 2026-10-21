@@ -139,7 +139,9 @@ export function resolveRouteBatch(latest, { groupId, routeId, routes }) {
       try {
       if (!Array.isArray(unit.topics) || (unit.topics.length === 0 && !unit.reason?.trim())) throw new Error('topic_route_reason_required')
       if (unit.topics.length > 1 && unit.topics.some((ref) => !['continuation', 'affected'].includes(ref.relationship) || !ref.reason?.trim())) throw new Error('topic_route_relationship_required')
-      if (unit.topics.length > 1 && !unit.effectOwner) throw new Error('topic_route_effect_owner_required')
+      if (unit.topics.length > 1 && !unit.effectOwner && unit.dispatchOwner !== 'coordination') throw new Error('topic_route_effect_owner_required')
+      if (unit.dispatchOwner !== undefined && !['legacy-topic','coordination'].includes(unit.dispatchOwner)
+        || unit.dispatchOwner === 'coordination' && unit.effectOwner) throw new Error('topic_route_dispatch_owner_invalid')
       const prior = existingUnits.findLast((item) => item.unitKey === unit.unitKey)
       const replacesUnitIds = unit.replacesUnitIds ?? []
       const predecessors = replacesUnitIds.map((unitId) => existingUnits.findLast((item) => item.unitId === unitId)).filter(Boolean)
@@ -157,8 +159,8 @@ export function resolveRouteBatch(latest, { groupId, routeId, routes }) {
         return { imageRefId }
       })
       const contextRanges = (unit.contextRefs ?? []).flatMap((ref, index) => { const range = readRange(ref, `routes.${routeIndex}.units.${unitIndex}.contextRefs.${index}`, 'topic_unit_context_ambiguous:contextRefs.quote must uniquely match current message.text; quotedMessage content is separate'); return range ? [{ ...range, purpose: ref.purpose }] : [] })
-      const comparable = { summary: unit.summary.trim(), sourceRanges, sourceAttachments, contextRanges, predecessorUnitRefs: predecessors.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ...(unit.effectInheritance ? { effectInheritance: unit.effectInheritance } : {}), ...(unit.revisionReason ? { revisionReason: unit.revisionReason } : {}) }
-      const same = prior && JSON.stringify({ summary: prior.summary, sourceRanges: prior.sourceRanges, sourceAttachments: prior.sourceAttachments ?? [], contextRanges: prior.contextRanges ?? [], predecessorUnitRefs: prior.predecessorUnitRefs ?? [], effectInheritance: prior.effectInheritance, revisionReason: prior.revisionReason }) === JSON.stringify(comparable)
+      const comparable = { summary: unit.summary.trim(), sourceRanges, sourceAttachments, contextRanges, predecessorUnitRefs: predecessors.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ...(unit.effectInheritance ? { effectInheritance: unit.effectInheritance } : {}), ...(unit.revisionReason ? { revisionReason: unit.revisionReason } : {}), ...(unit.dispatchOwner ? { dispatchOwner: unit.dispatchOwner } : {}) }
+      const same = prior && JSON.stringify({ summary: prior.summary, sourceRanges: prior.sourceRanges, sourceAttachments: prior.sourceAttachments ?? [], contextRanges: prior.contextRanges ?? [], predecessorUnitRefs: prior.predecessorUnitRefs ?? [], effectInheritance: prior.effectInheritance, revisionReason: prior.revisionReason, ...(prior.dispatchOwner ? { dispatchOwner: prior.dispatchOwner } : {}) }) === JSON.stringify(comparable)
       const stored = { unitId: prior?.unitId ?? stableId('unit', `${groupId}:${route.messageId}:${unit.unitKey}`), unitRevision: same ? prior.unitRevision : (prior?.unitRevision ?? 0) + 1, unitKey: unit.unitKey, ...comparable }
       const selected = new Set()
       for (const ref of unit.topics) {

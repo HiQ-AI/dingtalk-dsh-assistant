@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { coordinationRole, coordinationTools } from './coordination-sessions.js'
 import { z } from 'zod'
 import { toToolJsonSchema } from './tool-schema.js'
-import { resolveTopicMessages } from './store.js'
+import { resolveTopicMessages, sourceDispatchOwnershipFor } from './store.js'
 import { fingerprint, isPendingDecision } from './topic-model.js'
 import { TaskRevisionError } from './task-input-revision.js'
 import { visiblePromptRefs, visibleSectionLength, visibleCoordinatorText, visibleToolOutputs, promptContent, compactSectionValue, buildMaterialManifest } from './coordination-context.js'
@@ -273,6 +273,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
     }
     const topic = group.topics.find((item) => item.topicId === topicId)
+    for (const message of messages) if (sourceDispatchOwnershipFor(group, message)?.dispatchOwner === 'coordination') ownerByFact.set(unitKey(message), 'coordination')
     const delta = new Set(topic.entries.filter((entry) => entry.action === 'add' && entry.revision > topic.processedRevision && entry.revision <= revision).map(unitKey))
     return {
       effectOwnerTopicIds: Object.fromEntries(messages.flatMap((message) => [[message.unitId, ownerByFact.get(unitKey(message))], [message.messageId, ownerByFact.get(unitKey(message))]])),
@@ -675,6 +676,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const promise = (async () => {
       let record = store.getTopic(groupId, topicId).decisions.find((item) => item.decisionId === decisionId)
       if (!record || !isPendingDecision(record) || record.status === 'blocked') return record
+      if ((record.decision.basisUnitRefs ?? []).some(ref => sourceDispatchOwnershipFor(store.getGroup(groupId), ref)?.dispatchOwner === 'coordination')) {
+        return store.updateTopicDecision({ groupId, topicId, decisionId, patch: { status: 'blocked', error: 'source_dispatch_owned_by_coordination' } })
+      }
       if ((record.attempt ?? 0) - (record.retryBaseAttempt ?? 0) >= 3) {
         return store.updateTopicDecision({ groupId, topicId, decisionId, patch: { status: 'blocked', nextRetryAt: undefined, error: 'decision_attempts_exhausted', failureOperationId: record.operations.find(item => item.status !== 'applied')?.operationId ?? record.outboundId } })
       }

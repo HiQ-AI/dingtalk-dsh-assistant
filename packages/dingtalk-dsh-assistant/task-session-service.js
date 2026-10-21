@@ -11,6 +11,8 @@ import { inspectSession } from './session-persistence.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createTaskSessionObservability } from './task-session-observability.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
+import { openIndependentCoordination } from './independent-coordination-service.js'
+import { coordinationModelSelection } from './independent-coordination-planner.js'
 import { resolveTopicMessages, stableId } from './topic-model.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, checkedTaskDirectory } from './session-workspaces.js'
@@ -42,13 +44,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   store: suppliedStore, persistence: suppliedPersistence } = {}) {
   if (!config?.dbPath || !config?.instanceId) fail('TASK_SESSION_CONFIGURATION_REQUIRED')
   taskSessionModelSelection({}, config.model, config.provider)
+  coordinationModelSelection(config.coordination)
   for (const value of [config.maxConcurrentExecutions, config.maxConcurrentTasks, legacy.getAgentConfig().maxConcurrentTasks]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 50)) fail('TASK_SESSION_CONCURRENCY_INVALID')
   }
   const root = resolve(config.workspaceDir ?? legacy.getAgentConfig().workspaceDir)
   await mkdir(dirname(config.dbPath), { recursive: true })
   const store = suppliedStore ?? await openDynamicTaskStore({ dbPath: config.dbPath, instanceId: config.instanceId,
-    initialize: config.initialize === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId })
+    initialize: config.initialize === true, migrate: config.migrate === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId })
   let persistence
   try {
     persistence = suppliedPersistence ?? await installTaskSessionPersistence(ctx, { root })
@@ -407,13 +410,17 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (source.routed || source.channel === 'web' || !residentStore) return
     const message = residentStore.getGroup(source.groupId)?.messages.find(item => item.messageId === source.messageId)
     if (!message || message.routingStatus !== 'routed') return
+    const coordinated = (residentStore.listSourceDispatchOwnership?.(source.groupId) ?? [])
+      .filter(r => r.dispatchOwner === 'coordination' && r.sourceSnapshot.messageId === source.messageId && r.sourceSnapshot.messageVersion === source.version)
+    if (coordinated.some(r => !r.settled)) return
     if (source.version < message.messageVersion) {
       await command('source.routed', { sourceId: source.sourceId, receipt: [{ supersededByVersion: message.messageVersion }] }, `topic-routed:${source.sourceId}`)
       return
     }
     const refs = residentStore.listTopics(source.groupId).filter(topic => resolveTopicMessages(residentStore.getGroup(source.groupId), topic.topicId, topic.revision).some(item => item.messageId === source.messageId && item.messageVersion === source.version))
     if (refs.some(topic => topic.processedRevision < topic.revision)) return
-    await command('source.routed', { sourceId: source.sourceId, receipt: refs.map(topic => ({ topicId: topic.topicId, revision: topic.revision })) }, `topic-routed:${source.sourceId}`)
+    await command('source.routed', { sourceId: source.sourceId, receipt: [...refs.map(topic => ({ topicId: topic.topicId, revision: topic.revision })),
+      ...coordinated.map(r => ({ reservationId: r.reservationId, generation: r.generation, coordinationId: r.coordinationId }))] }, `topic-routed:${source.sourceId}`)
   }
   async function applyTopicAction(groupId, action, operation, record) {
     if (action.kind === 'task-proposal') return
@@ -495,6 +502,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (action.kind !== 'task-cancel') void kickTask(task.taskId)
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
+    coordinationEnabled: config.coordination?.enabled === true,
     appendOutbox: async args => {
       const prepared = (await query('notification.list')).find(item => item.id === args.outboundId)
       if (prepared) {
@@ -521,12 +529,50 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       for (const message of residentStore.getGroup(groupId)?.messages ?? []) if (message.agentDeliveryStatus !== 'delivered' && message.agentDeliveryStatus !== 'skipped')
         await residentStore.markMessageAgentDelivery({ groupId, messageId: message.messageId, status: 'decision-failed', error: error.code ?? error.message })
     } })
+  const independentCoordination = openIndependentCoordination({ ctx, root, agentPreset: legacy.getAgentConfig().agentPreset,
+    config: config.coordination ?? {}, residentStore, query, command, ownerActorId: config.ownerActorId,
+    onError: (id, error) => failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() }),
+    onApplied: async member => {
+      const task = await requireTask(member.taskId), input = member.command.args
+      await refreshTasks()
+      if (input.progressImpact === 'replan' || input.action === 'cancel' || input.action === 'reopen') await cancelLiveTask(task.taskId)
+      for (const sourceId of input.sourceRefs ?? []) {
+        const source = await query('source.get', { sourceId })
+        if (source) await materializeSource(task.taskId, source)
+      }
+      if (input.progressImpact === 'preserve') for (const execution of await query('execution.list', { taskId: task.taskId })) await executionSessions.feedback(execution.executionId)
+      if (task.control === 'active' && task.status === 'active') void kickTask(task.taskId)
+    } })
+  let coordinationRecovery
+  function recoverCoordination() {
+    return coordinationRecovery ??= performCoordinationRecovery().finally(() => { coordinationRecovery = undefined })
+  }
+  async function performCoordinationRecovery() {
+    const consumerId = 'host-coordination', consumer = await query('coordination.consumer.get', { consumerId })
+    const cursor = consumer?.cursor ?? 0, page = await query('task.events', { after: cursor, limit: 100 })
+    if (page.events.length) await command('coordination.events.consume', { consumerId, expectedCursor: cursor, limit: 100 }, `coordination-events:${cursor}:${page.nextCursor}`)
+    for (const group of residentStore.listGroups()) await independentCoordination.recoverGroup(group.groupId)
+    await command('coordination.schedule.scan', {})
+    const jobs = (await query('coordination.job.list')).filter(job => job.state === 'waiting' || job.state === 'running' && Date.parse(job.leaseUntil) <= Date.now()).slice(0, 20)
+    for (const candidate of jobs) {
+      try {
+        const job = (await command('coordination.job.claim', { jobId: candidate.id })).result.job
+        await command('coordination.job.read', { jobId: job.id, fence: job.fence })
+      } catch (error) {
+        if (!['DYNAMIC_COORDINATION_JOB_BUSY','DYNAMIC_COORDINATION_NOT_DUE','DYNAMIC_COORDINATION_OVERLAP','DYNAMIC_COORDINATION_CANCELLED'].includes(error.code))
+          failures.set(candidate.id, { id: candidate.id, code: error.code ?? error.message })
+      }
+    }
+    for (const occurrence of await query('coordination.occurrence.list')) if (occurrence.actionState === 'succeeded' && !occurrence.cancelledAt && !occurrence.notificationId)
+      await command('coordination.notification.freeze', { occurrenceId: occurrence.id }, `coordination-freeze:${occurrence.id}`)
+  }
   function kickGroup(groupId) {
     if (closed) return Promise.resolve()
     return track(inflightGroups, groupId, async () => {
       await refreshTasks()
       await topicCoordinator.schedule(groupId)
       await topicCoordinator.whenIdle()
+      await independentCoordination.recoverGroup(groupId)
       for (const source of await query('source.list', { groupId })) await projectSource(source)
       if (!(residentStore.getGroup(groupId)?.messages ?? []).some(message => ['failed','decision-failed','decision-commit-failed'].includes(message.agentDeliveryStatus))) {
         failures.delete(groupId)
@@ -889,7 +935,23 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   let notificationTransportRetryAt = 0
   async function deliverNotifications(attempted) {
-    for (const notification of await query('notification.list')) {
+    for (let notification of await query('notification.list')) {
+      if (notification.kind === 'coordination' && notification.state === 'prepared' && !notification.sendPermit && notification.payload.fact.occurrenceId) {
+        const occurrence = await query('coordination.occurrence.get', { occurrenceId: notification.payload.fact.occurrenceId })
+        if (!occurrence.cancelledAt && Date.now() - Date.parse(occurrence.result.observedAt) >= (occurrence.freshnessWindowMs ?? 300000)) {
+          const oldId = notification.id
+          try {
+            notification = (await command('coordination.notification.refresh', { occurrenceId: occurrence.id,
+              expectedNotificationId: oldId, expectedResultVersion: occurrence.resultVersion,
+              expectedInstanceControlRevision: occurrence.instanceControlRevision, expectedDeliveryControlRevision: occurrence.deliveryControlRevision })).result.notification
+            await projectTaskNotification({ residentStore, notification: await query('notification.get', { notificationId: oldId }) })
+          } catch (error) {
+            if (!['DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED','DYNAMIC_COORDINATION_RESULT_FRESH'].includes(error.code)) throw error
+            notification = await query('notification.get', { notificationId: oldId })
+          }
+        }
+      }
+      if (notification.state === 'superseded') { await projectTaskNotification({ residentStore, notification }); continue }
       if (notifications?.recall && notification.kind === 'question' && notification.payload.audience === 'operator'
         && notification.state === 'delivered' && notification.recall?.state !== 'recalled'
         && !(Date.parse(notification.recall?.nextAttemptAt ?? '') > Date.now())
@@ -993,6 +1055,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         await attachWorkspace(execution.sessionId, cwd, (await requireTask(execution.taskId)).title)
       }
       await topicCoordinator.recover()
+      await recoverCoordination()
       for (const source of await query('source.list')) {
         await projectSource(source)
         if (!source.routed) void kickGroup(source.groupId)
@@ -1224,6 +1287,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await deliverNotifications(notificationAttempts)
       do {
         await Promise.allSettled([scheduling, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
+        await independentCoordination.whenIdle()
+        await recoverCoordination()
         await schedulePending()
         await deliverNotifications(notificationAttempts)
       } while (scheduling || [inflightTasks,inflightExecutions,inflightGroups,inflightNotifications].some(map => map.size))
@@ -1234,6 +1299,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       stopObservation?.()
       await observationTail
       await topicCoordinator.close()
+      await independentCoordination.close()
       await Promise.all([taskSessions.close(), executionSessions.close()])
       await Promise.allSettled([scheduling, recovering, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
       await persistence.close()

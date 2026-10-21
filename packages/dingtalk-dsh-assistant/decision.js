@@ -77,14 +77,16 @@ export const topicRouteSubmissionSchema = z.strictObject({
       sourceRefs: z.array(unitSourceRefSchema).min(1),
       contextRefs: z.array(z.strictObject({ quote: z.string().min(1), purpose: z.string().min(1) })).default([]),
       topics: z.array(topicRouteTargetSchema), effectOwner: topicRouteOwnerSchema.optional(),
+      dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(),
       reason: z.string().trim().min(1).optional(),
     }).superRefine((unit, ctx) => {
       if (unit.topics.length === 0 && !unit.reason) ctx.addIssue({ code: 'custom', message: '无 Topic 归属的事项必须说明原因', path: ['reason'] })
       if (unit.replacesUnitIds.length && (!unit.effectInheritance || !unit.revisionReason)) ctx.addIssue({ code: 'custom', message: '事项拆分或合并必须声明效果继承方式和修订原因', path: ['replacesUnitIds'] })
       if (unit.topics.length > 1) {
         if (unit.topics.some((topic) => !topic.relationship || !topic.reason)) ctx.addIssue({ code: 'custom', message: '多 Topic 归属必须逐项声明关系和理由', path: ['topics'] })
-        if (!unit.effectOwner) ctx.addIssue({ code: 'custom', message: '多 Topic 归属必须指定唯一动作主归属', path: ['effectOwner'] })
+        if (!unit.effectOwner && unit.dispatchOwner !== 'coordination') ctx.addIssue({ code: 'custom', message: '多 Topic 归属必须指定唯一动作主归属', path: ['effectOwner'] })
       }
+      if (unit.dispatchOwner === 'coordination' && unit.effectOwner) ctx.addIssue({ code: 'custom', message: '独立协调事项不得同时指定 Topic 派发者', path: ['effectOwner'] })
       if (unit.effectOwner && !unit.topics.some((topic) => sameRouteTarget(unit.effectOwner, topic))) ctx.addIssue({ code: 'custom', message: '动作主归属必须属于当前 Topic 集合', path: ['effectOwner'] })
     })).optional(),
     topics: z.array(topicRouteTargetSchema).optional(), effectOwner: topicRouteOwnerSchema.optional(),
@@ -111,6 +113,7 @@ export const topicRouteSubmissionJsonSchema = {
         ignoredRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { quote: stringJsonSchema, reason: stringJsonSchema }, required: ['quote', 'reason'] } },
         units: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
           unitKey: stringJsonSchema, summary: stringJsonSchema,
+          dispatchOwner: { type: 'string', enum: ['legacy-topic', 'coordination'], description: '跨任务安排、依赖、批量修改、时间计划及其澄清/改口归独立 coordination；Topic 仅为可选上下文。' },
           replacesUnitIds: { type: 'array', items: stringJsonSchema }, effectInheritance: { type: 'string', enum: ['inherit', 'new-scope'] }, revisionReason: stringJsonSchema,
           sourceRefs: { type: 'array', items: { oneOf: [
             { type: 'object', additionalProperties: false, properties: { quote: stringJsonSchema }, required: ['quote'] },
