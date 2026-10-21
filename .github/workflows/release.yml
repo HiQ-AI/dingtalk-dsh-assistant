@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 已存在且指向 main 历史的正式版本 Tag
+        description: Existing annotated version tag in main history
         required: true
         type: string
 
@@ -15,49 +15,23 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  DSH_NATIVE_TEST_PROFILE: ${{ github.workspace }}/test/fixtures/native-profile/package.json
 
 jobs:
-  publish:
+  resolve:
     runs-on: windows-latest
-    environment: NPM_PUBLISH
-    env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-      DSH_NATIVE_TEST_PROFILE: ${{ github.workspace }}/test/fixtures/native-profile/package.json
+    outputs:
+      sha: ${{ steps.identity.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.13.1
-      - name: 准备 Node22 前端验收执行器
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22.13.0
-          package-manager-cache: false
-      - name: 保存 Node22 精确路径
-        shell: pwsh
-        run: |
-          "NODE22_EXECUTABLE=$((Get-Command node).Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: 准备真实 JDK11 验收工具
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '11'
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.19.0
-          registry-url: https://registry.npmjs.org/
-          package-manager-cache: false
-      - name: 使用支持 Trusted Publishing 的 npm
-        shell: pwsh
-        run: |
-          npm install --global npm@12.0.2
-          npm --version
-      - name: 校验 Tag、main 与三个包版本
+      - id: identity
         shell: pwsh
         run: |
           git fetch origin main
@@ -79,48 +53,92 @@ jobs:
           if ($changelog -notmatch "(?m)^\[$escapedVersion\]: $([regex]::Escape($releaseUrl))\r?$") {
             throw "changelog_release_link_missing_$tagVersion"
           }
-      - name: 准备独立物理测试目录
+          if ((git cat-file -t "refs/tags/$env:RELEASE_TAG") -ne 'tag') { throw 'annotated_release_tag_required' }
+          "sha=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+  validate:
+    needs: resolve
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [unit, native-0, native-1, compat-0, compat-1, compat-2]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: ./.github/actions/release-test-env
+      - name: Verify exhaustive classification and run isolated lane
         shell: pwsh
-        run: |
-          $testDirectory = Join-Path $env:SystemDrive 'dsh-release-tests'
-          New-Item -ItemType Directory -Force -Path $testDirectory | Out-Null
-          $current = Get-Item -LiteralPath $testDirectory
-          while ($null -ne $current) {
-            if ($current.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'test_directory_must_not_use_reparse_points' }
-            $current = $current.Parent
-          }
-          $testAcl = Get-Acl -LiteralPath $testDirectory
-          $testUser = [Security.Principal.WindowsIdentity]::GetCurrent().User
-          $testAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($testUser, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
-          Set-Acl -LiteralPath $testDirectory -AclObject $testAcl
-          "TEMP=$testDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "TMP=$testDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          node --input-type=module -e "import {lstat,realpath} from 'node:fs/promises'; const p=process.argv[1]; const s=await lstat(p); console.log(JSON.stringify({testDirectory:p,realpath:await realpath(p),symlink:s.isSymbolicLink(),dev:s.dev,ino:s.ino}));" $testDirectory
-      - run: pnpm install --frozen-lockfile
-      - name: 核验隔离原生测试组合
-        run: node scripts/verify-native-test-profile.mjs
-      - name: 构建真实 Spring 验收夹具
-        shell: pwsh
-        run: |
-          mvn -B -f test/fixtures/local-acceptance-spring/pom.xml package
-          if ($LASTEXITCODE -ne 0) { throw 'spring_test_fixture_build_failed' }
-      - name: 构建并测试
+        run: node scripts/test-suites.mjs run ${{ matrix.lane }}
+  build:
+    needs: [resolve, validate]
+    runs-on: windows-latest
+    env:
+      RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: ./.github/actions/release-test-env
+      - name: Build immutable packages from verified SHA
         shell: pwsh
         run: |
           node scripts/build-web-client.mjs
           git diff --exit-code -- packages/dingtalk-dsh-assistant/web-client.js
           if ($LASTEXITCODE -ne 0) { throw 'web_client_bundle_not_committed' }
-          pnpm test
-      - name: 生成固定发行包
+          New-Item -ItemType Directory -Path docs/tmp/packages | Out-Null
+          pnpm pack --pack-destination docs/tmp/packages
+          if ($LASTEXITCODE -ne 0) { throw 'root_pack_failed' }
+          pnpm --dir packages/dingtalk-dsh-assistant pack --pack-destination ../../docs/tmp/packages
+          if ($LASTEXITCODE -ne 0) { throw 'assistant_pack_failed' }
+          pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp/packages
+          if ($LASTEXITCODE -ne 0) { throw 'observer_pack_failed' }
+          node scripts/release-artifacts.mjs create
+          if ($LASTEXITCODE -ne 0) { throw 'release_package_inspection_failed' }
+          $env:RELEASE_PACKAGE_DIRECTORY = Join-Path $PWD 'docs/tmp/packages'
+          node --test test/task-session-package-native.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'built_package_native_smoke_failed' }
+          node scripts/release-artifacts.mjs verify
+          if ($LASTEXITCODE -ne 0) { throw 'release_package_changed_after_smoke' }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verified-packages-${{ needs.resolve.outputs.sha }}
+          path: docs/tmp/packages/*
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: [resolve, build]
+    runs-on: windows-latest
+    environment: NPM_PUBLISH
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+      - shell: pwsh
+        run: npm install --global npm@12.0.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-packages-${{ needs.resolve.outputs.sha }}
+          path: docs/tmp/packages
+      - name: Verify same-run SHA, lock, environment and every package hash
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path docs/tmp/packages | Out-Null
-          pnpm pack --pack-destination docs/tmp/packages
-          pnpm --dir packages/dingtalk-dsh-assistant pack --pack-destination ../../docs/tmp/packages
-          pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination ../../docs/tmp/packages
-          $packages = Get-ChildItem -LiteralPath docs/tmp/packages -Filter '*.tgz'
-          if ($packages.Count -ne 3) { throw "expected_3_packages_actual_$($packages.Count)" }
-          $packages | ForEach-Object { Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256 }
+          if ((git rev-parse HEAD) -ne $env:RELEASE_SHA -or (git rev-parse "$env:RELEASE_TAG^{commit}") -ne $env:RELEASE_SHA) { throw 'release_sha_changed' }
+          node scripts/release-artifacts.mjs verify
+          if ($LASTEXITCODE -ne 0) { throw 'verified_release_artifact_mismatch' }
       - name: 按依赖顺序发布 npm
         shell: pwsh
         run: |
@@ -170,17 +188,19 @@ jobs:
           }
           $releaseJson = gh release view $env:RELEASE_TAG --json tagName,isDraft,isPrerelease,assets 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $env:RELEASE_TAG docs/tmp/packages/*.tgz --verify-tag --title $env:RELEASE_TAG --generate-notes
+            gh release create $env:RELEASE_TAG docs/tmp/packages/*.tgz docs/tmp/packages/release-manifest.json --verify-tag --title $env:RELEASE_TAG --generate-notes
             if ($LASTEXITCODE -ne 0) { throw 'github_release_create_failed' }
           }
           $releaseJson = gh release view $env:RELEASE_TAG --json tagName,isDraft,isPrerelease,assets
           if ($LASTEXITCODE -ne 0) { throw 'github_release_readback_failed' }
           $release = $releaseJson | ConvertFrom-Json
           $packages = @(Get-ChildItem -LiteralPath docs/tmp/packages -Filter '*.tgz')
-          if ($packages.Count -ne 3 -or $release.tagName -ne $env:RELEASE_TAG -or $release.isDraft -or $release.isPrerelease -or $release.assets.Count -ne $packages.Count) {
+          $manifest = Get-Item -LiteralPath docs/tmp/packages/release-manifest.json
+          $files = @($packages) + @($manifest)
+          if ($packages.Count -ne 3 -or $release.tagName -ne $env:RELEASE_TAG -or $release.isDraft -or $release.isPrerelease -or $release.assets.Count -ne 4) {
             throw 'github_release_metadata_mismatch'
           }
-          foreach ($file in $packages) {
+          foreach ($file in $files) {
             $assetRows = @($release.assets | Where-Object { $_.name -eq $file.Name })
             $sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($assetRows.Count -ne 1 -or $assetRows[0].size -ne $file.Length -or $assetRows[0].digest -ne "sha256:$sha256") {
