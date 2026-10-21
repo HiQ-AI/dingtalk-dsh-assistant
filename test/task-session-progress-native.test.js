@@ -122,11 +122,16 @@ for (const detour of [false, true]) test(`scripted progress decision waits for e
     phases.set(review, phase + 1)
     if (phase === 0) return [call('task_execution_progress', { executionId: execution.executionId })]
     if (phase === 1) return [call('task_execution_read', { executionId: execution.executionId })]
-    if (detour && phase === 3) return [call('task_execution_read', { executionId: execution.executionId })]
+    if (phase === 2) return [call('task_decisions_read', { limit: 10 })]
+    if (detour && phase === 4) return [call('task_execution_read', { executionId: execution.executionId })]
     // Scripted decisions inspect actual native tool values, not model inference.
     const progress = h.toolResults.findLast(item => item.name === 'task_execution_progress')?.result.value
     const record = h.toolResults.findLast(item => item.name === 'task_execution_read')?.result.value
+    const history = h.toolResults.findLast(item => item.name === 'task_decisions_read')?.result.value
     assert.ok(progress && record)
+    assert.equal(history.taskId, input.task.taskId)
+    assert.ok(history.decisions.length >= reviews + 1, 'each prior owner decision remains available through the actual tool')
+    assert.ok(history.decisions.every(item => item.decision.summary && Array.isArray(item.decision.evidence)))
     for (const feedback of record.feedback) {
       assert.equal(feedback.consumedAt, null)
       assert.equal(feedback.modelStepEnteredAt, null)

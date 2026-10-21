@@ -31,7 +31,7 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 53; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
     executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult, onProgress }) => { await onSessionBound(); await onProgress({ summary: '已读取状态，开始验证', evidence: ['actual-evidence.txt'], activity: '验证状态', reportId: 'http-stage' }); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
   })
-  const runtime = { ...legacy, listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args),
+  const runtime = { ...legacy, listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args), getTaskSessionDecisions: (...args) => service.taskDecisions(...args),
     createTask: args => service.createTask(args), appendTaskContext: args => service.appendTaskContext(args), cancelTask: args => service.cancelTask(args),
     getTaskDialogue: id => service.taskDialogue(id), sendTaskDialogue: args => service.sendTaskDialogue(args) }
   const server = createServer((req, res) => handleRequest(req, res, runtime).catch(error => { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: error.message })) }))
@@ -61,6 +61,13 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.deepEqual(detail.timeline.human.segments, [])
     const page = await (await fetch(base + `/state/tasks/${taskId}/executions?offset=0&limit=20`)).json()
     assert.equal(page.total, 53)
+    const decisions = await (await fetch(base + `/state/tasks/${taskId}/decisions?limit=1`)).json()
+    assert.equal(decisions.decisions.length, 1)
+    assert.ok(decisions.decisions[0].decision.summary)
+    assert.ok(Array.isArray(decisions.decisions[0].decision.evidence))
+    assert.equal(decisions.decisions[0].sessionId, sessionId)
+    assert.equal((await fetch(base + `/state/tasks/${taskId}/decisions?limit=0`)).status, 400)
+    assert.equal((await fetch(base + '/state/tasks/missing/decisions')).status, 404)
     assert.equal(page.executions.length, 20)
     const board = await (await fetch(base + '/state/tasks')).json()
     assert.equal(board[0].executionSessions.length, 53)
@@ -84,6 +91,9 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.equal(conversation.sessionId, sessionId)
     assert.equal(conversation.messages.length, 1)
     assert.ok(conversation.messages[0].reply)
+    const dialogueDecisions = await (await fetch(base + `/state/tasks/${taskId}/decisions?limit=1`)).json()
+    assert.equal(dialogueDecisions.decisions[0].decision.summary, conversation.messages[0].reply)
+    assert.ok(dialogueDecisions.decisions[0].triggers.some(item => item.kind === 'task.dialogue'))
     assert.equal((await post(dialoguePath, { requestId: 'chat', text: '现在进度怎样？' })).status, 202)
     assert.equal((await post(dialoguePath, { requestId: 'chat', text: '同一ID不同正文' })).status, 409)
     assert.equal((await service.taskDetail(taskId)).executionCount, 53)

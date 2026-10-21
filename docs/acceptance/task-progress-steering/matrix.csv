@@ -1,0 +1,8 @@
+case,round-1,round-2,round-3,evidence
+decision-retention-and-cursor,PASS,PASS,NOT_RUN,round-2-tests.log
+decision-rollback-and-human-detail,NOT_RUN,PASS,NOT_RUN,round-2-tests.log
+http-history-and-dialogue,PASS,PASS,NOT_RUN,round-2-tests.log
+native-progress-and-human-wait,PASS,PASS,PASS,round-3-tests.log
+native-history-tool,NOT_RUN,NOT_RUN,PASS,round-3-tests.log
+real-tarball-startup,NOT_RUN,PASS,NOT_RUN,round-2-tests.log
+real-model-direction-judgment,BLOCKED,BLOCKED,NOT_RUN,round-1.md

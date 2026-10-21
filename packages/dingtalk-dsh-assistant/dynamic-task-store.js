@@ -288,6 +288,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (alive) fail('DYNAMIC_STORE_ALREADY_OPEN')
       }
       db.prepare('INSERT INTO dynamic_meta(key,value) VALUES (\'owner\',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(incarnation)
+      // 决策沿原命令收据追加保存；索引只服务按任务分页，不把历史数组塞进每轮任务快照。
+      db.exec(`CREATE INDEX IF NOT EXISTS dynamic_receipt_decision_task
+        ON dynamic_receipts(json_extract(body,'$.taskDecision.taskId')) WHERE json_type(body,'$.taskDecision')='object'`)
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
       for (const operation of ops()) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
       for (const notification of all('dynamic_notifications')) if (notification.state === 'starting') { notification.state = 'unknown'; put('dynamic_notifications', notification) }
@@ -734,7 +737,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       put('dynamic_executions', execution)
       const wakeId = wake(execution.taskId, 'execution.progress.review', { executionId: execution.executionId, inputVersion: execution.inputVersion,
         leaseEpoch: execution.leaseEpoch, lastSequence: observation.lastSequence,
-        instruction: '读取本执行会话的真实执行记录，对照原目标检查进度和方向；不能仅按运行状态判断进展或完成。' }, `wake:${commandId}`)
+        instruction: '对照最新整体目标、范围、验收条件和受托目标核查实际行动；首次确认偏离即纠偏，跟进先前反馈的实际落实。保存方向判断、依据及下一必要结果，不能只复述运行状态。' }, `wake:${commandId}`)
       return changed({ execution, wakeId })
     }
     if (kind === 'execution.claim') {
@@ -1214,7 +1217,22 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           if (previous.digest !== requestDigest) fail('DYNAMIC_COMMAND_ID_CONFLICT')
           return { ...JSON.parse(previous.body), replayed: true, dispatchEligible: false }
         }
+        // 与任务状态在同一事务保存完整决定；失败命令不留伪决定，同一命令重试不重复追加。
+        const recordsDecision = ['task.wait', 'task.complete', 'task.dialogue.reply'].includes(kind)
+        const triggers = recordsDecision ? wakes(args.binding.taskId).filter(w => w.state === 'claimed' && w.leaseEpoch === args.binding.leaseEpoch)
+          .map(w => ({ wakeId: w.wakeId, kind: w.kind, ...Object.fromEntries(['executionId', 'inputVersion', 'leaseEpoch', 'lastSequence'].filter(key => w.payload?.[key] !== undefined).map(key => [key, w.payload[key]])) })) : []
         const value = { ...reduce(kind, args, id), replayed: false }
+        if (recordsDecision) {
+          const decision = kind === 'task.wait' ? { ...value.result.task.lastDecision,
+            ...(args.audience || args.humanRequest ? { audience: args.audience ?? args.humanRequest.audience ?? 'operator' } : {}),
+            ...(args.attemptedActions || args.humanRequest ? { attemptedActions: args.attemptedActions ?? args.humanRequest.attemptedActions ?? [] } : {}) }
+            : kind === 'task.complete' ? { action: 'complete', summary: args.summary, evidence: [], limitations: [], ...args.result }
+              : args.decision ?? { action: 'wait', summary: args.reply, evidence: [], limitations: [] }
+          value.taskDecision = { id, taskId: args.binding.taskId, sessionId: args.binding.sessionId,
+            leaseEpoch: args.binding.leaseEpoch, requirementRevision: args.binding.requirementRevision,
+            controlRevision: args.binding.controlRevision, contextRevision: args.binding.contextRevision ?? 0,
+            recordedAt: now(), triggers, decision: clone(decision) }
+        }
         db.prepare('INSERT INTO dynamic_receipts(id,digest,body) VALUES (?,?,?)').run(id, requestDigest, canonical(value))
         return value
       }))
@@ -1225,6 +1243,16 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       let value
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
       else if (q.kind === 'task.get') value = get('dynamic_tasks', q.taskId, true)
+      else if (q.kind === 'task.decisions') {
+        get('dynamic_tasks', q.taskId)
+        const before = q.before ?? Number.MAX_SAFE_INTEGER, limit = q.limit ?? 20
+        if (!Number.isSafeInteger(before) || before < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('DYNAMIC_ARGUMENT_INVALID')
+        const rows = db.prepare(`SELECT rowid AS sequence,json_extract(body,'$.taskDecision') AS decision FROM dynamic_receipts
+          WHERE json_type(body,'$.taskDecision')='object' AND json_extract(body,'$.taskDecision.taskId')=? AND rowid<?
+          ORDER BY rowid DESC LIMIT ?`).all(q.taskId, before, limit + 1)
+        const decisions = rows.slice(0, limit).map(row => ({ ...JSON.parse(row.decision), sequence: row.sequence }))
+        value = { taskId: q.taskId, decisions, nextBefore: rows.length > limit ? decisions.at(-1).sequence : null }
+      }
       else if (q.kind === 'task.list') value = all('dynamic_tasks').filter(item => !q.groupId || item.groupId === q.groupId)
       else if (q.kind === 'task.blockers') value = blockers(q.taskId)
       else if (q.kind === 'task.binding') value = bindingOf(get('dynamic_tasks', q.taskId))

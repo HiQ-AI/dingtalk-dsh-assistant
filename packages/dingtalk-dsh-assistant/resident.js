@@ -125,6 +125,7 @@ export async function apply(ctx, config = {}) {
   runtime.listTaskView = tasks.boardTasks
   runtime.getTaskSessionDetail = tasks.taskDetail
   runtime.getTaskSessionExecutions = tasks.taskExecutions
+  runtime.getTaskSessionDecisions = tasks.taskDecisions
   runtime.createTask = tasks.createTask
   runtime.appendTaskContext = tasks.appendTaskContext
   runtime.reopenTask = tasks.reopenTask

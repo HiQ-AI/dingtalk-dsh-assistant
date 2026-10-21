@@ -325,6 +325,15 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, value ? 200 : 404, value ?? { error: 'output_not_found' }) }
     catch (error) { return send(response, error.code === 'TASK_OUTPUT_CHANGED' ? 409 : residentErrorStatus(error), { error: error.message }) }
   }
+  const taskDecisions = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/decisions$/u.exec(url.pathname)
+  if (taskDecisions) {
+    if (!store.getTaskSessionDecisions) return send(response, 404, { error: 'task_session_disabled' })
+    try {
+      return send(response, 200, await store.getTaskSessionDecisions(decodeURIComponent(taskDecisions[1]), {
+        ...(url.searchParams.has('before') ? { before: pageNumber(url, 'before', 0) } : {}), limit: pageNumber(url, 'limit', 20, 100),
+      }))
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   const taskHistory = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/(detail|executions)$/u.exec(url.pathname)
   if (taskHistory) {
     const detail = taskHistory[2] === 'detail'
