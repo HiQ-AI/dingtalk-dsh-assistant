@@ -23,3 +23,36 @@ node scripts/coordination-language-replay.mjs --adapter /approved/path/isolated-
 报告保留逐样例提案、错误字段与失败原因；未执行、未支持能力和模型失败须分开报告。
 样例不是昨晚用户原话的完整留存副本；原始六任务消息未在当前上下文提供，合成六项案例不能冒充原话回放。
 模型身份、token/cost 统计须来自实际提供方回执，不能由样例数推算。
+
+## 已核查的标准接入选项
+
+安装的 native test profile 提供真实 DSH `ctx.llm` 服务 API，但测试 Host 只注册
+`native-task-test` 脚本适配器；不能据此推断已有可调用的真实账号。
+只读核查了公开依赖清单、公共 API 和测试组成，没有读取 credentials 文件、环境变量值或执行模型调用。
+`dsh-base` 包含标准 LLM registry 及 pi-ai/deepseek provider 依赖；provider 安装、账号可用性及模型可用性是三件不同的事实。
+
+可复用 `scripts/coordination-standard-model-adapter.mjs`，向工厂显式注入**已经获授权的隔离 LLM-only runtime** 的 `ctx.llm`，不启动完整 resident、不挂载 TaskStore/消息/通知/业务工具。
+工厂构造不加载配置或凭据、不调用模型；仅显式 `plan` 时调用标准 `resolveCallConfig` 和 `stream`，不自行重试。
+
+```javascript
+import { createStandardModelReplayAdapter } from './scripts/coordination-standard-model-adapter.mjs'
+import { replayLanguage } from './scripts/coordination-language-replay.mjs'
+import { readFile } from 'node:fs/promises'
+
+// ctx.llm must be supplied by an explicitly approved isolated standard runtime.
+// Do not load the production resident profile to obtain it.
+const adapter = createStandardModelReplayAdapter({
+  llm: ctx.llm, provider: selectedProvider, model: selectedModel,
+  reasoningEffort: selectedEffort, maxInvocations: 16, timeoutMs: 30000,
+})
+const fixtures = JSON.parse(await readFile('./test/fixtures/coordination-language-cases.json', 'utf8'))
+const report = await replayLanguage({ ...fixtures, adapter })
+```
+
+最小授权选项：选择一个现有、可用且已连接的 provider/model，授权最多16次标准 stream 调用，仅发送固定16项合成消息、合成任务/成员/时间上下文及当前提案 schema，不发送真实用户/群消息、附件、仓库私有源码、凭据或任务历史；不执行工具、不发群消息、不改任务。
+可先授权4项（六任务、A后B、部分指代、明早9点）小样，再决定是否执行其余12项；工厂 `maxInvocations:4` 限额适用于选出的4项 fixtures。
+模型可选择已连接的协调候选模型与一个对照模型；每多一个模型需另算最多16次调用，不能从 Owner 默认 astra 自动推导授权。
+
+当前唯一模型回放外部前置条件是：明确选定且获授权的真实模型接入。无需提供或新增宽泛凭据配置。
+工厂记录标准 stream 次数和提供方 usage 事件；提供方内部重试/网络请求数与未返回的成本保持未知，不用16个样例推算账单。
+工具调用、无 stop 终态、超限输出均报告失败，不切换模型或扩大数据范围。

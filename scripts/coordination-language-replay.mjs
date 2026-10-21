@@ -43,6 +43,7 @@ export async function replayLanguage({ cases, context, adapter }) {
     // Scripted adapters prove no model calls; real-model call accounting remains
     // unknown until a separately verified provider usage record is available.
     adapterInvocations, actualModelCalls: adapter.evidenceKind === 'actual-model' ? null : 0,
+    ...(typeof adapter.accounting === 'function' ? { accounting: adapter.accounting() } : {}),
     implementationGaps: results.filter(r => r.status === 'implementation_gap').length,
     passed: results.filter(r => r.status === 'passed').length, failed: results.filter(r => r.status === 'failed').length, results }
 }

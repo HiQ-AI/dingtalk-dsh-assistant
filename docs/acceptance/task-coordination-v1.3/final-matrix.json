@@ -1,0 +1,464 @@
+{
+  "definition": "Finite protocol boundary coverage; program results do not imply model or external delivery acceptance.",
+  "cases": [
+    {
+      "id": "T01",
+      "file": "test/coordination-final-native.test.js",
+      "testTitle": "competing actual ingress and recovery reserve one source, plan once and keep original receipt after restart",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "native/restart",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T02",
+      "file": "test/coordination-ledger.test.js",
+      "testTitle": "real process SIGKILL after third member commit resumes original six receipts without replay",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "process",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T03",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T03 acceptance rollback",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "transaction/fault",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T04",
+      "file": "test/independent-coordination-native.test.js",
+      "testTitle": "real ingress reserves a no-Topic unit, independently plans A then B and dispatches original Owners from completion facts",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "native",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T05",
+      "file": "test/coordination-execution-proof.test.js",
+      "testTitle": "completion receipt, coverage proof and independent ordered event commit atomically and replay once",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "transaction",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T06",
+      "file": "test/coordination-execution-proof.test.js",
+      "testTitle": "consuming an old completion after reopen reads current truth and cannot make B eligible",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "recovery",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T07",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T07 cross-coordination opposing dependency producers",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "concurrency",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T08",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T08 cancelled arrangement cannot be resurrected by old apply or recovered wake and does not cancel original Task",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "recovery",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T09",
+      "file": "test/coordination-execution-proof.test.js",
+      "testTitle": "Host binds pending instructions despite caller empty ids; claim waits before locking while Owner controls remain available",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "execution",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T10",
+      "file": "test/independent-coordination-changes.test.js",
+      "testTitle": "member-level ambiguity preserves source ownership and",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "service",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T11",
+      "file": "test/source-dispatch-ownership.test.js",
+      "testTitle": "accepted legacy decision cannot be claimed by coordination and retains original operation identity",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "resident",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T12",
+      "file": "test/coordination-summary.test.js",
+      "testTitle": "unsent summary A superseded by active facts B can freeze A again, while an unknown permitted summary keeps its identity",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "notification",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T13",
+      "file": "test/coordination-execution-proof.test.js",
+      "testTitle": "running reorder requests read-only Owner assessment without revising or cancelling; safe point needs Host evidence",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "execution",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T14",
+      "file": "test/coordination-execution-proof.test.js",
+      "testTitle": "existing running input remains explicit prior scope, but a new continue input cannot inherit the exemption",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "execution",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T15",
+      "file": "test/coordination-ledger.test.js",
+      "testTitle": "source reservation and fixed member apply survive restart without replaying task mutation",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "receipt/restart",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T16",
+      "file": "test/source-dispatch-ownership.test.js",
+      "testTitle": "route atomically reserves coordination unit; no Topic required and discussion remains separate",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "resident",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T17",
+      "file": "test/coordination-migration.test.js",
+      "testTitle": "a real process killed after migration DDL but before version update leaves atomic v1 state and retries safely",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "process/migration",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T18",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T18 second supported writer refuses live owner and expired incarnation rejects coordination writes",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "writer/fence",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T19",
+      "file": "test/coordination-execution-proof.test.js",
+      "testTitle": "consuming an old completion after reopen reads current truth and cannot make B eligible",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "version",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T20",
+      "file": "test/independent-coordination-native.test.js",
+      "testTitle": "real ingress reserves a no-Topic unit, independently plans A then B and dispatches original Owners from completion facts",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "native/notification",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T21",
+      "file": "test/independent-coordination-recovery.test.js",
+      "testTitle": "invalid schedule",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "service/time",
+      "programStatus": "passed",
+      "externalEvidence": "actual-language"
+    },
+    {
+      "id": "T22",
+      "file": "test/coordination-schedule-revisions.test.js",
+      "testTitle": "explicit same-slot replacement transfers current pointer and permanently fences the old occurrence",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "slot",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T23",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T23 due scan rollback",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "transaction/fault",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T24",
+      "file": "test/coordination-trigger-commands.test.js",
+      "testTitle": "lost commit acknowledgement is reconciled by the original Task command receipt after restart",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "receipt/fault",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T25",
+      "file": "test/coordination-ledger.test.js",
+      "testTitle": "cancel wins send-permit CAS and stale query worker cannot publish after lease reclaim",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "lease/fence",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T26",
+      "file": "test/coordination-concurrency-contracts.test.js",
+      "testTitle": "slot replacement, repeat scan and first claim linearize",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "concurrency",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T27",
+      "file": "test/coordination-concurrency-contracts.test.js",
+      "testTitle": "concurrent cancellation and permit:",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "concurrency",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T28",
+      "file": "test/coordination-ledger.test.js",
+      "testTitle": "real SIGKILL after permit",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "process/notification",
+      "programStatus": "passed",
+      "externalEvidence": "real-dingtalk"
+    },
+    {
+      "id": "T29",
+      "file": "test/independent-coordination-native.test.js",
+      "testTitle": "no-Topic scheduled query runs through Host recovery and the existing outbox without reopening the queried Task",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "native",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T30",
+      "file": "test/independent-coordination-recovery.test.js",
+      "testTitle": "invalid schedule",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "service/scope",
+      "programStatus": "passed",
+      "externalEvidence": "actual-language"
+    },
+    {
+      "id": "T31",
+      "file": "test/coordination-schedule-revisions.test.js",
+      "testTitle": "expired one-time schedule terminates visibly; multi-year offline coalescing has an exact count",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "time/recovery",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T32",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T32 forward jump coalesces latest slot and backward clock plus restart cannot repeat accepted UTC slot",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "time/recovery",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T33",
+      "file": "test/coordination-final-native.test.js",
+      "testTitle": "automatic expired result refresh restores one outbox after restart",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "native/outbox",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T34",
+      "file": "test/coordination-migration.test.js",
+      "testTitle": "compatible frozen mode survives restart and blocks coordinated claims and send permits without freezing unrelated work",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "migration/recovery",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T35",
+      "file": "test/coordination-final-native.test.js",
+      "testTitle": "automatic expired result refresh restores one outbox after restart",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "native/topology",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T36",
+      "file": "test/independent-coordination-native.test.js",
+      "testTitle": "no-Topic scheduled query runs through Host recovery and the existing outbox without reopening the queried Task",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "native/outbox",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T37",
+      "file": "test/independent-coordination-changes.test.js",
+      "testTitle": "arrangement member context pages remain bounded and preserve persisted ordinals",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "service/context",
+      "programStatus": "passed",
+      "externalEvidence": "actual-language"
+    },
+    {
+      "id": "T38",
+      "file": "test/coordination-execution-proof.test.js",
+      "testTitle": "event write failure rolls back business completion, instruction fulfillment and receipt",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "transaction/fault",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T39",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T39 execution failure and notification failure remain separate while an independent member still receives its input",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "execution/notification",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T40",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T40 concurrent manual and recovery continuation share a new input identity and both claims respect dependency lock gate",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "concurrency/execution",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T41",
+      "file": "test/coordination-notification-freshness.test.js",
+      "testTitle": "refresh wins: old payload and old outbox identity remain permanently unsendable after restart",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "notification/restart",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T42",
+      "file": "test/coordination-ledger.test.js",
+      "testTitle": "real SIGKILL after permit",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "process/notification",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T43",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T43 known-not-sent retry settles original attempt and races cancellation via same permit",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "concurrency/notification",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T44",
+      "file": "test/coordination-schedule-revisions.test.js",
+      "testTitle": "a started occurrence keeps its accepted revision while a future rule and recipient change is committed",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "slot/version",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T45",
+      "file": "test/coordination-concurrency-contracts.test.js",
+      "testTitle": "slot replacement, repeat scan and first claim linearize",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "concurrency/slot",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T46",
+      "file": "test/coordination-notification-freshness.test.js",
+      "testTitle": "permit wins: starting, recovered unknown and delivered candidates cannot be refreshed or resent",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "notification/CAS",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T47",
+      "file": "test/coordination-notification-freshness.test.js",
+      "testTitle": "SIGKILL after atomic supersede but before outbox creation recovers the new frozen identity only",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "process/outbox",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T48",
+      "file": "test/independent-coordination-changes.test.js",
+      "testTitle": "resolving one of several pending members settles neither the other ambiguity nor its original source",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "service/recovery",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T49",
+      "file": "test/independent-coordination-changes.test.js",
+      "testTitle": "rejected source handoff reconciles frozen identity across",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "service/CAS",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T50",
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "testTitle": "T50 actual dispatcher stops unapplied tail after mid-batch version conflict without compensation",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "service/partial",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    },
+    {
+      "id": "T51",
+      "file": "test/coordination-trigger-commands.test.js",
+      "testTitle": "one authoritative business event may trigger two different actions but never the same action twice",
+      "titleMatch": "literal-or-expanded-prefix",
+      "layer": "trigger/receipt",
+      "programStatus": "passed",
+      "externalEvidence": "not-required-for-program-contract"
+    }
+  ]
+}

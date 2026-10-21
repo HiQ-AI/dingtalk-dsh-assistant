@@ -108,6 +108,55 @@ test('native partial clarification continues A, resolves B under the original ar
     assert.equal(host.sent.filter(notification=>notification.id===answer.id).length,1)
   })
 
+test('native original source slots control interleaved clear and clarified members by their original ordinal',
+  {skip:!available?reason:false,timeout:20000},async t=>{
+    const root=await mkdtemp(join(tmpdir(),'coordination-source-ordinal-native-'));let host,coordinationId,revision=1
+    t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+    host=await nativeTaskHost(root,request=>{
+      const names=request.tools.map(tool=>tool.name),input=latestInput(request)
+      if(names.includes('group_topic_route_submit'))return unitRoute(input)
+      if(names.includes('coordination_submit')){
+        const source=input.source??modelToolValues(request).find(value=>value.source)?.source
+        const observed=modelToolValues(request).find(value=>value.arrangementContexts?.length)
+        if(source.unitText.includes('先别动')){
+          if(!observed)return [{name:'coordination_context_get',args:{coordinationIds:[coordinationId]}}]
+          return [{name:'coordination_submit',args:{kind:'change',coordinationId,expectedRevision:revision,
+            change:{action:'pause',selectors:[{ordinal:source.unitText.includes('第二')?2:1}],reason:'原文序号控制'}}}]
+        }
+        if(source.unitText.includes('明确是B')){
+          const full=modelToolValues(request).find(value=>value.arrangementContexts?.length&&value.taskContexts?.length)
+          if(!full)return [{name:'coordination_context_get',args:{coordinationIds:[coordinationId],taskIds:['B']}}]
+          const resolution=arrangement(full.taskContexts);resolution.members[0].afterTaskIds=[]
+          resolution.members[0].resolvesClarificationId='first'
+          return [{name:'coordination_submit',args:{kind:'resolve',coordinationId,expectedRevision:revision,clarificationIds:['first'],resolution}}]
+        }
+        const full=modelToolValues(request).find(value=>value.taskContexts?.length)
+        if(!full)return [{name:'coordination_context_get',args:{taskIds:['A']}}]
+        const proposal=arrangement(full.taskContexts),text=source.unitText,boundary=text.indexOf('；'),first=text.indexOf('第一项')
+        proposal.pendingClarifications=[{clarificationId:'first',question:'第一项是哪一个？',candidates:['B']}]
+        proposal.sourceOrder=[{ordinal:1,start:first,end:boundary,quote:text.slice(first,boundary),clarificationId:'first'},
+          {ordinal:2,start:boundary+1,end:text.length,quote:text.slice(boundary+1),memberIndex:0}]
+        return [{name:'coordination_submit',args:proposal}]
+      }
+      if(names.includes('task_session_submit'))return [ownerWait]
+      return topicTaskCalls(request)??[]
+    },{config})
+    await seed(host)
+    await host.service.ingest(message('ordered-partial','测试助手，第一项同名任务；第二项A补充。'));await host.service.whenIdle()
+    coordinationId=(await host.query('coordination.list'))[0].id
+    await host.service.ingest(message('ordered-pause-second','测试助手，第二个先别动'));await host.service.whenIdle();revision=2
+    let state=await host.query('coordination.get',{coordinationId})
+    assert.equal(state.members[0].taskId,'A');assert.equal(state.members[0].control,'paused',JSON.stringify(host.service.listAlerts()))
+    await host.service.ingest(message('ordered-answer','测试助手，第一项明确是B'));await host.service.whenIdle();revision=3
+    await host.service.ingest(message('ordered-pause-first','测试助手，第一个先别动'));await host.service.whenIdle()
+    state=await host.query('coordination.get',{coordinationId})
+    assert.equal(state.coordination.revision,4,JSON.stringify(host.service.listAlerts()))
+    assert.deepEqual(state.members.map(member=>[member.taskId,member.control]),[['A','paused'],['B','paused']])
+    assert.deepEqual(state.coordination.sourceOrder.map(slot=>slot.ordinal),[1,2])
+    assert.ok(state.coordination.sourceOrder[0].resolvedBy)
+    assert.equal(host.residentStore.listTopics('native-group').length,0)
+  })
+
 test('actual ingress applies a follow-up ordinal to the original coordination member and keeps original Tasks active',
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'coordination-change-native-'))

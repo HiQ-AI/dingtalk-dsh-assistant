@@ -1,4 +1,5 @@
 import { assertTaskContextSemantics } from './task-input-contract.js'
+import { freezeCoordinationSourceOrder } from './coordination-changes.js'
 
 // Trusted Host adapter. All callbacks share the TaskStore connection and transaction.
 export const coordinationSchema = `
@@ -109,7 +110,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
   function checkGraph(overrides) {
     const graph = new Map([...all('dynamic_coordination_members'), ...overrides].map(m => [m.id,m]))
     const edges = new Map()
-    for (const m of graph.values()) if (!['cancelled','superseded'].includes(m.state) && m.control !== 'cancelled') {
+    for (const m of graph.values()) if (graphMemberActive(m)) {
       const parents = edges.get(m.taskId) ?? new Set()
       const dependencies = ['pending','needs_clarification'].includes(m.reorderAssessment?.state)
         ? m.reorderAssessment.afterInstructionIds : m.dependencies
@@ -125,6 +126,12 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     const visit = id => { if (stack.has(id)) fail('DYNAMIC_COORDINATION_CYCLE'); if (seen.has(id)) return
       stack.add(id); for (const parent of edges.get(id) ?? []) visit(parent); stack.delete(id); seen.add(id) }
     for (const id of edges.keys()) visit(id)
+  }
+  function graphMemberActive(member) {
+    // Retain inactive records for stable dependency references and audit, but
+    // their retired constraints cannot participate in the effective graph.
+    return !['cancelled','superseded'].includes(member.state) && member.control !== 'cancelled'
+      && get('dynamic_coordination',member.coordinationId,true)?.state !== 'cancelled'
   }
   function instantiateRecurring({ coordinationId, occurrenceId, inputs }) {
     const coordination = get('dynamic_coordination', coordinationId)
@@ -207,16 +214,18 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       const pending = clone(array(a.pendingClarifications ?? []))
       if (pending.length > 100 || new Set(pending.map(item => text(item.clarificationId, 'clarificationId'))).size !== pending.length) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
       pending.forEach(item => { text(item.question, 'question'); array(item.candidates ?? []) })
+      const sourceOrder = freezeCoordinationSourceOrder(a.sourceOrder,source,members,pending)
       if (!members.length && !pending.length && a.readOnly !== true || new Set(members.map(m => m.id)).size !== members.length
         || new Set(members.map(m => m.taskId)).size !== members.length
         || new Set(members.map(m => m.command.id)).size !== members.length) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
-      const graph = new Map([...all('dynamic_coordination_members').filter(m => !['cancelled','superseded'].includes(m.state)), ...members].map(m => [m.id, m]))
+      const graph = new Map([...all('dynamic_coordination_members'), ...members].map(m => [m.id, m]))
       const visited = new Set()
       const visit = (id, stack = new Set()) => {
         if (stack.has(id)) fail('DYNAMIC_COORDINATION_CYCLE')
         if (visited.has(id)) return
         const member = graph.get(id)
         if (!member) fail('DYNAMIC_COORDINATION_DEPENDENCY_MISSING')
+        if (!graphMemberActive(member)) { visited.add(id); return }
         stack.add(id)
         for (const parent of member.dependencies) {
           if (!graph.has(parent)) fail('DYNAMIC_COORDINATION_DEPENDENCY_MISSING')
@@ -230,7 +239,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       // Dependencies from separate arrangements may use different instruction
       // identities for the same task; instruction-only cycle checks miss A↔B.
       const taskEdges = new Map()
-      for (const member of graph.values()) {
+      for (const member of graph.values()) if (graphMemberActive(member)) {
         const parents = taskEdges.get(member.taskId) ?? new Set()
         member.dependencies.forEach(id => parents.add(graph.get(id).taskId))
         taskEdges.set(member.taskId, parents)
@@ -249,11 +258,12 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         history: replacing ? [...(replacing.history ?? []), { revision: replacing.revision, sourceId: replacing.sourceId, reason: 'clarification-resolved', at: now() }] : [],
         ...(a.proposal ? { proposal: clone(record(a.proposal)) } : {}), allTogether: a.allTogether === true,
         pendingClarifications: pending, hadPartialClarifications: pending.length > 0, pendingSourceId: pending.length ? source.id : null }
+      if (sourceOrder) coordination.sourceOrder = sourceOrder
       members.forEach(m => put('dynamic_coordination_members', m))
       put('dynamic_coordination', coordination)
       if (replacing) {
         const old = get('dynamic_coordination_sources', replacing.sourceId)
-        old.state = 'accepted'; old.resolvedBy = source.id; old.coordinationId = id; put('dynamic_coordination_sources', old)
+        old.state = 'accepted'; old.resolvedBy = source.id; old.coordinationId = id; old.settled = true; put('dynamic_coordination_sources', old)
       }
       source.state = 'accepted'; source.coordinationId = id; source.settled = !pending.length
       source.pendingClarifications = clone(pending); put('dynamic_coordination_sources', source)
@@ -320,6 +330,17 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         if (!ids.length || new Set(ids).size !== ids.length || ids.some(id => !pending.some(item => item.clarificationId === id))) fail('DYNAMIC_COORDINATION_CLARIFICATION_STALE')
         const added = array(change.members).map(input => prepareMember(input, coordination.id, source))
         if (!added.length) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
+        if (coordination.sourceOrder) {
+          const assignments = array(change.resolvedClarifications ?? [])
+          if (assignments.length !== added.length || assignments.some(item => !ids.includes(item.clarificationId)
+            || !added.some(member => member.id === item.instructionId))
+            || new Set(assignments.map(item => item.instructionId)).size !== added.length
+            || ids.some(id => !assignments.some(item => item.clarificationId === id))) fail('DYNAMIC_COORDINATION_CLARIFICATION_STALE')
+          for (const slot of coordination.sourceOrder) if (ids.includes(slot.clarificationId)) {
+            slot.instructionIds = assignments.filter(item => item.clarificationId === slot.clarificationId).map(item => item.instructionId)
+            slot.resolvedBy = source.id
+          }
+        }
         checkGraph(added); added.forEach(m => put('dynamic_coordination_members', m)); coordination.memberIds.push(...added.map(m => m.id))
         coordination.pendingClarifications = pending.filter(item => !ids.includes(item.clarificationId))
         const original = get('dynamic_coordination_sources', coordination.pendingSourceId)
@@ -329,7 +350,9 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       } else if (change.action === 'resolve') {
         if (coordination.state !== 'needs_clarification') fail('DYNAMIC_COORDINATION_REVISION_STALE')
         const result = command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: coordination.id,
-          replaceClarificationRevision: coordination.revision, members: change.members ?? [], readOnly: change.readOnly === true, proposal: change.proposal })
+          replaceClarificationRevision: coordination.revision, members: change.members ?? [], readOnly: change.readOnly === true, proposal: change.proposal,
+          pendingClarifications: change.proposal?.pendingClarifications ?? [], allTogether: change.proposal?.allTogether === true,
+          ...(change.proposal?.sourceOrder ? {sourceOrder:change.proposal.sourceOrder} : {}) })
         const accepted = get('dynamic_coordination_sources', source.id)
         accepted.acceptedProposal = clone(a.proposal ?? change.proposal ?? {}); accepted.acceptedKind = 'resolve'; put('dynamic_coordination_sources', accepted)
         return result
@@ -355,6 +378,16 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       } else if (change.action === 'append') {
         const added = array(change.members).map(input => prepareMember(input, coordination.id, source))
         if (!added.length) fail('DYNAMIC_COORDINATION_MEMBERS_INVALID')
+        const appendedOrder = freezeCoordinationSourceOrder(change.sourceOrder, source, added, [])
+        if (coordination.sourceOrder) {
+          if (appendedOrder && !coordination.sourceOrderAppendGap) {
+            const offset = coordination.sourceOrder.length
+            coordination.sourceOrder.push(...appendedOrder.map(slot=>({...slot,localOrdinal:slot.ordinal,ordinal:offset+slot.ordinal})))
+          } else {
+            coordination.sourceOrderAppendGap = true
+            if (appendedOrder) (coordination.unmappedAppendSources ??= []).push({sourceId:source.id,slots:appendedOrder})
+          }
+        }
         for (const member of added) for (const oldId of coordination.memberIds) {
           const old = get('dynamic_coordination_members', oldId)
           if (old.taskId === member.taskId && old.control === 'cancelled') { old.state = 'superseded'; put('dynamic_coordination_members', old) }
