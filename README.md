@@ -22,9 +22,13 @@
 
 任务统筹会话使用 resident 插件中的 `taskSessions.provider` 和 `taskSessions.model` 独立配置，分别传入 DSH 原生 provider 和模型精确 ID。例如在既有 `taskSessions` 配置中加入 `provider: openai-codex` 与 `model: gpt-6-astra`。两项未配置、空字符串或纯空白（包括旧配置）分别默认 `openai-codex`、`gpt-6-astra`；其他非字符串值会拒绝启动。不继承执行 provider，不解析自造的斜杠完整标识，也不把显示名或 `astra` 别名转换成模型 ID。
 
-统筹 provider/model 独立于执行选择，reasoningEffort 仍继承当前默认选择；执行会话、消息/话题协调仍使用原默认模型选择，互不覆盖。当前安装的 Codex Connect 提供 `openai-codex / gpt-6-astra`；其他 provider 必须配置其实际支持的模型。统筹每轮在创建或恢复原 Session 前通过 DSH 原生 `resolveCallConfig` 校验精确 provider/model 及 reasoningEffort；不存在或无法解析时报告 `TASK_SESSION_MODEL_UNAVAILABLE`，保留原任务、唤醒和历史，不回退默认执行模型。继承的 reasoningEffort 不受统筹模型支持时报告 `TASK_SESSION_REASONING_EFFORT_UNSUPPORTED`，不静默丢弃、钳制或替换该值。认证、配额、请求阶段错误仍由原生 provider 处理；本地模型目录可解析不等于远端调用一定成功。
+插件配置页面在 Agent 配置内提供默认模型与统筹模型两行配置，均配有“推理深度”，统筹 provider 沿用 profile/已有设置，模型列表与推理选项来自 DSH 原生能力。默认仍为 `openai-codex / gpt-6-astra`，执行会话、消息/话题协调使用原默认选择。
 
-新统筹会话和已存在的统筹会话下一轮 resume 都使用当前 `taskSessions.provider` / `taskSessions.model`，包括升级前使用旧默认模型的会话；沿原 Session ID、历史及租约继续，不重建或迁移历史，不中断已在途的轮次。修改 profile 后何时生效由宿主配置加载生命周期决定；本配置不改写 DSH 全局默认模型。resident 当前直接读取配置字段，未提供自动生成配置表单的 `Config` schema；此项沿用既有 profile 配置方式，不新增 Web 页面。
+推理深度有三种语义：**继承默认**沿用执行/全局默认深度（显式配置继承仍兼容）；**模型默认**不继承执行深度，使用统筹模型原生默认；**指定深度**使用所选模型支持的明确值。未配置统筹深度默认轻度 `low`；profile 中显式 `reasoningMode: inherit` 表示继承，`null` 或空字符串表示模型默认，非空字符串表示指定深度。页面保存使用 `taskSessionModel.reasoningMode`（`inherit`、`model-default`、`explicit`）及 `reasoningEffort`，持久化到 resident 设置，优先于 profile 初始值；刷新及重启保留选择，不写入 DSH 全局默认。
+
+保存前及每轮创建/恢复前使用原生 `resolveCallConfig` 严格校验有效组合。不存在模型或不支持深度会明确失败，保存失败保留草稿；不会静默降级或回退。Agent 唯一保存入口先校验两组模型和其他字段，再写原生默认模型及 resident 设置，均成功并回读一致才提示成功。两个存储没有共同事务；写失败会回读并说明默认模型与插件设置分别是否生效，不盲目重试或补偿，不承诺崩溃时全有全无。修改全局深度时，也先校验继承它的统筹模型。目录列出可用模型并不证明远端认证、余额或调用成功。
+
+新会话和已有统筹下一轮正常 resume 使用当前配置，保留原 Session ID 和历史；正在运行的轮次不被中断。模型默认在恢复时也明确应用模型原生默认，不沿用旧会话的指定深度。执行 provider/model/深度不因统筹保存而改变。
 
 归类/协调会话在获得句柄、派发输入前失败时，持久记录启动故障与指数退避（最高5分钟）；恢复扫描先确认当前Agent预设可用，再沿原requestId续办。已记录派发输入、普通协议耗尽及未知业务效果不自动重放。未解决的消息协调故障持续进入健康告警，不因一次扫描成功而消失。
 

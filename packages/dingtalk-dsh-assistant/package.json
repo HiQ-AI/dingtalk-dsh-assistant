@@ -71,6 +71,7 @@
     "task-session-persistence.js",
     "task-session-service.js",
     "task-session.js",
+    "task-model-config.js",
     "task-source-instructions.js",
     "task-topic-coordinator.js",
     "tool-schema.js",

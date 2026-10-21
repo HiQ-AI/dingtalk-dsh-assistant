@@ -61,6 +61,7 @@ export async function nativeTaskHost(root, decide, options = {}) {
   assert.equal((await ctx.agentPresets.resolve()).broken, undefined)
   let sequence = 0
   class ScriptedModel extends LlmAdapter {
+    resolveModel(provider, model) { return { provider, id: model, name: model, reasoning: { efforts: ['low'].map(id => ({ id, name: id })), defaultEffort: 'low' } } }
     async *stream(request) {
       // Topic summary maintenance is an independent model invocation, not an
       // owner/executor step. Keep its real requests separately so scripted

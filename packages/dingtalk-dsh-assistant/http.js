@@ -398,6 +398,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())
+  if (request.method === 'GET' && url.pathname === '/state/task-model-options') return send(response, 200, await store.getTaskModelOptions({ provider: url.searchParams.get('provider'), model: url.searchParams.get('model') }))
   if (request.method === 'GET' && url.pathname === '/state/agent-config') {
     const { taskPrompts, taskPromptsVersion, taskGuidance, leafSessionPrompt, ...configuration } = store.getAgentConfig()
     return send(response, 200, configuration)
@@ -423,7 +424,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'PUT' && url.pathname === '/config/agent') {
     const body = await readJson(request)
     if (['taskPrompts', 'taskPromptsVersion', 'taskGuidance', 'leafSessionPrompt', 'workflowVariables', 'workflowBindings'].some(field => Object.hasOwn(body, field))) return send(response, 410, { error: 'WORKFLOW_RETIRED' })
-    return send(response, 200, await store.updateAgentConfig(body))
+    try { return send(response, 200, await store.updateAgentConfig(body)) }
+    catch (error) { return send(response, error.message === 'AGENT_CONFIG_SAVE_FAILED' ? 500 : residentErrorStatus(error), { error: error.message, ...(error.readback ? { readback: error.readback } : {}) }) }
   }
   if (request.method === 'GET' && url.pathname === '/config/groups/search') return send(response, 200, await store.searchGroups(url.searchParams.get('q') ?? ''))
   if (request.method === 'POST' && url.pathname === '/config/groups') return send(response, 200, await store.subscribe(await readJson(request)))
