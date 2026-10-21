@@ -1,0 +1,274 @@
+{
+  "pass": true,
+  "count": 31,
+  "scope": "loopback fixtures only; no UAT or business requests",
+  "cases": [
+    {
+      "case": "uninitialized-success",
+      "mode": "& same process",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-success-two-endpoints",
+      "mode": "& same process",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "one-unhealthy-endpoint",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-up",
+      "mode": "& same process",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-up",
+      "mode": "pwsh -File",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-health-json",
+      "mode": "& same process",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-health-json",
+      "mode": "pwsh -File",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-down",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-down",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-http503",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-http503",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-html200",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-html200",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-invalid-json",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-invalid-json",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-redirect",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-redirect",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-array",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-array",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-boolean-status",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-boolean-status",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "native17-lowercase-status",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "independent-lowercase-status",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 1,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "bounded-retry-success",
+      "mode": "& same process",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 2,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "bounded-retry-success-independent",
+      "mode": "pwsh -File",
+      "exitCode": 0,
+      "healthy": true,
+      "attempts": 2,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "bounded-retry-exhausted",
+      "mode": "& same process",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 3,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "bounded-retry-exhausted-independent",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "healthy": false,
+      "attempts": 3,
+      "callerContinued": true,
+      "pass": true
+    },
+    {
+      "case": "invalid-uri",
+      "mode": "& same process",
+      "threw": true,
+      "pass": true
+    },
+    {
+      "case": "invalid-parameter",
+      "mode": "& same process",
+      "threw": true,
+      "pass": true
+    },
+    {
+      "case": "invalid-uri-independent",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "pass": true
+    },
+    {
+      "case": "invalid-parameter-independent",
+      "mode": "pwsh -File",
+      "exitCode": 1,
+      "pass": true
+    }
+  ]
+}

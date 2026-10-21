@@ -146,7 +146,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       && execution.controlRevision === task.controlRevision && !execution.cancelRequested
   }
   const blockers = taskId => ({
-    executions: execs(taskId).filter(item => !item.drained || !terminalExecutions.has(item.status)).map(taskExecutionContext),
+    executions: executionViews(execs(taskId).filter(item => !item.drained || !terminalExecutions.has(item.status))).map(taskExecutionContext),
     operations: ops(taskId).filter(item => !terminalOperations.has(item.state)),
     legacy: legacy(),
   })
@@ -159,6 +159,38 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     return get('dynamic_tasks', execution.taskId)
   }
   const release = holder => db.prepare('DELETE FROM dynamic_resource_locks WHERE holder=?').run(holder)
+  const resourceKeys = value => [...new Set(array(value ?? []).map(key => text(key, 'resourceKey')))].sort()
+  const executionHolder = execution => `execution:${execution.executionId}`
+  const heldKeys = holder => db.prepare('SELECT resource_key FROM dynamic_resource_locks WHERE holder=? ORDER BY resource_key').all(holder).map(row => row.resource_key)
+  // 会话终态不证明外部效果排空；后台作业和 unknown 必须沿原操作对账。
+  const releaseExecution = executionId => {
+    if (!executionId) return
+    const execution = get('dynamic_executions', executionId, true)
+    if (!execution?.resourceLease || !execution.drained || ops(execution.taskId).some(operation => operation.executionId === executionId && !terminalOperations.has(operation.state))) return
+    release(executionHolder(execution))
+    execution.resourceLease = null
+    put('dynamic_executions', execution)
+  }
+  const releaseOperation = operation => { release(operation.operationId); releaseExecution(operation.executionId) }
+  // 每次读取一份实时锁快照，在内存投影全部执行；不跨请求缓存，也不逐执行/资源查库。
+  const executionViews = executions => {
+    const owners = new Map(), counts = new Map()
+    for (const { resource_key, holder } of db.prepare('SELECT resource_key,holder FROM dynamic_resource_locks').all()) {
+      owners.set(resource_key, holder); counts.set(holder, (counts.get(holder) ?? 0) + 1)
+    }
+    return executions.map(execution => {
+      if (!execution) return execution
+      const keys = resourceKeys(execution.resourceKeys), holder = executionHolder(execution)
+      const held = counts.get(holder) ?? 0
+      const blocking = keys.flatMap(resourceKey => {
+        const owner = owners.get(resourceKey)
+        return owner && owner !== holder ? [{ resourceKey, holder: owner }] : []
+      })
+      const state = !keys.length ? 'none' : held === keys.length && keys.every(key => owners.get(key) === holder) ? 'held'
+        : terminalExecutions.has(execution.status) ? 'released' : blocking.length ? 'waiting' : 'available'
+      return { ...execution, resources: { state, keys, holder: held ? holder : null, blocking } }
+    })
+  }
   const lock = (keys, holder) => {
     for (const resourceKey of keys) {
       const prior = db.prepare('SELECT holder FROM dynamic_resource_locks WHERE resource_key=?').get(resourceKey)
@@ -269,9 +301,18 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       for (const task of all('dynamic_tasks')) if (!task.drained) { task.recovering = true; saveTask(task) }
       for (const group of all('dynamic_groups')) if (!group.drained) { group.recovering = true; put('dynamic_groups', group) }
       importLegacy()
+      // 旧版活动执行未取得资源锁，不能在升级恢复时伪造此前已串行的保证。
+      for (const execution of all('dynamic_executions')) {
+        const keys = resourceKeys(execution.resourceKeys), held = heldKeys(executionHolder(execution))
+        if (execution.resourceLease) {
+          if (digest(held) !== digest(keys)) fail('DYNAMIC_RESOURCE_INVARIANT')
+        } else if (held.length || keys.length && (!execution.drained || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && !terminalOperations.has(operation.state)))) {
+          fail('DYNAMIC_EXECUTION_RESOURCE_UNGUARDED')
+        }
+      }
       for (const operation of ops()) if (['starting','unknown'].includes(operation.state)) {
-        const held = db.prepare('SELECT resource_key FROM dynamic_resource_locks WHERE holder=? ORDER BY resource_key').all(operation.operationId).map(item => item.resource_key)
-        if (digest(held) !== digest(operation.resourceKeys)) fail('DYNAMIC_RESOURCE_INVARIANT')
+        const held = heldKeys(operation.resourceHolder ?? operation.operationId)
+        if (operation.resourceHolder ? operation.resourceKeys.some(key => !held.includes(key)) : digest(held) !== digest(operation.resourceKeys)) fail('DYNAMIC_RESOURCE_INVARIANT')
       }
       db.exec('COMMIT')
       if (!marker) { marker = { version: 1, instanceId, phase: 'initialized', initToken: initToken ?? randomUUID(), ingressEpoch: boundIngressEpoch };
@@ -417,7 +458,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (execution.drained) execution.status = 'stale'
         put('dynamic_executions', execution)
       }
-      for (const operation of ops(task.taskId)) if (operation.state === 'prepared') { operation.state = 'cancelled'; put('dynamic_operations', operation) }
+      for (const operation of ops(task.taskId)) if (operation.state === 'prepared') {
+        operation.state = 'cancelled'; put('dynamic_operations', operation); releaseOperation(operation)
+      }
       saveTask(task); wake(task.taskId, kind, { requirementRevision: task.requirementRevision, controlRevision: task.controlRevision }, `wake:${commandId}`)
       return changed({ task })
     }
@@ -572,7 +615,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const task = currentTask(a.binding)
       assertNoLegacy(task.taskId)
       const key = text(a.key, 'key')
-      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, definition: a.definition ?? null, resourceKeys: a.resourceKeys ?? [] }
+      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, definition: a.definition ?? null, resourceKeys: resourceKeys(a.resourceKeys) }
       const dispatchDigest = digest({ requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, ...payload })
       const prior = execs(task.taskId).find(item => item.key === key)
       if (prior) {
@@ -597,13 +640,15 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       assertNoLegacy(task.taskId)
       if (a.definition?.recoveryReadOnly !== true && ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       const key = text(a.key, 'key')
-      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {} }
-      const continuationDigest = digest({ ...payload, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision })
       const previous = (execution.continuations ?? []).find(item => item.key === key)
+      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, resourceKeys: resourceKeys(a.resourceKeys ?? previous?.resourceKeys ?? execution.resourceKeys) }
+      const continuationDigest = digest({ ...payload, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision })
       if (previous) {
         if (previous.digest !== continuationDigest) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
         return changed({ execution })
       }
+      if (digest(payload.resourceKeys) !== digest(resourceKeys(execution.resourceKeys)) && (execution.resourceLease
+        || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && !terminalOperations.has(operation.state)))) fail('DYNAMIC_EXECUTION_RESOURCES_HELD')
       if (execution.result?.payload.error?.code === 'EXECUTION_PROVIDER_TRANSIENT' && execution.providerRecovery?.exhausted) {
         if (Date.parse(stamp) < Date.parse(execution.providerRecovery.retryNotBefore)) fail('DYNAMIC_PROVIDER_COOLDOWN_REQUIRED')
         execution.providerRecovery.coldAttempts = (execution.providerRecovery.coldAttempts ?? 0) + 1
@@ -614,11 +659,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       execution.result = null; execution.progressReview = null; execution.inputVersion++; execution.inputDigest = digest(payload.input)
       execution.title ||= executionSessionTitle(execution)
       execution.prompt = payload.prompt; execution.input = clone(payload.input)
+      execution.resourceKeys = payload.resourceKeys
       if (execution.providerRecovery) execution.providerRecovery = { ...execution.providerRecovery, nextAttemptAt: null, nextReviewAt: null, activeInputVersion: null }
       execution.definition = { ...execution.definition, recoveryReadOnly: a.definition?.recoveryReadOnly === true }
       execution.requirementRevision = task.requirementRevision; execution.controlRevision = task.controlRevision
       execution.cancelRequested = false; execution.status = 'queued'; execution.updatedAt = stamp
-      execution.continuations = [...(execution.continuations ?? []), { key, digest: continuationDigest, inputVersion: execution.inputVersion }]
+      execution.continuations = [...(execution.continuations ?? []), { key, digest: continuationDigest, inputVersion: execution.inputVersion, resourceKeys: payload.resourceKeys }]
       put('dynamic_executions', execution); return changed({ execution })
     }
     if (kind === 'execution.retry-provider') {
@@ -698,6 +744,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (!execution.drained || terminalExecutions.has(execution.status)) fail('DYNAMIC_EXECUTION_BUSY')
       if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (!execution.definition?.recoveryReadOnly && ops(execution.taskId).some(item => item.executionId === execution.executionId && ['starting','unknown'].includes(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
+      // 同一事务全取或全不取，禁止持有部分资源后等待另一部分。
+      const keys = resourceKeys(execution.resourceKeys)
+      lock(keys, executionHolder(execution))
+      if (keys.length) execution.resourceLease ??= { acquiredAt: stamp }
       execution.leaseEpoch++; execution.status = 'running'; execution.drained = false; execution.recovering = false
       // Legacy history stays explicitly incomplete; collect only this new, observed lease.
       execution.timeline ??= { version: 1, complete: false, segments: [] }
@@ -795,14 +845,17 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         }
       }
       execution.updatedAt = stamp; put('dynamic_executions', execution)
-      return changed({ execution, current: execution.result?.current ?? executionCurrent(execution) })
+      releaseExecution(execution.executionId)
+      return changed({ execution: get('dynamic_executions', execution.executionId), current: execution.result?.current ?? executionCurrent(execution) })
     }
     if (kind === 'operation.prepare') {
       const task = assertScope(a.binding)
       assertNoLegacy(task.taskId)
       const key = text(a.key, 'key'), definition = clone(record(a.definition))
-      const resourceKeys = [...new Set(array(a.resourceKeys ?? []).map(value => text(value, 'resourceKey')))].sort()
-      const specificationDigest = digest({ definition, resourceKeys, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision })
+      const keys = resourceKeys(a.resourceKeys)
+      const execution = a.binding.executionId ? get('dynamic_executions', a.binding.executionId) : null
+      if (execution?.resourceKeys?.length && keys.some(key => !execution.resourceKeys.includes(key))) fail('DYNAMIC_RESOURCE_SCOPE_EXPANSION')
+      const specificationDigest = digest({ definition, resourceKeys: keys, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision })
       const prior = ops(task.taskId).find(item => item.key === key)
       if (prior) {
         if (prior.specificationDigest !== specificationDigest) fail('DYNAMIC_OPERATION_KEY_CONFLICT')
@@ -811,7 +864,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const operationId = a.operationId ?? randomUUID()
       if (get('dynamic_operations', operationId, true)) fail('DYNAMIC_OPERATION_EXISTS')
       const operation = { id: operationId, operationId, taskId: task.taskId, executionId: a.binding.executionId ?? null,
-        key, definition, resourceKeys, specificationDigest, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision,
+        key, definition, resourceKeys: keys, ...(execution?.resourceKeys?.length ? { resourceHolder: executionHolder(execution) } : {}), specificationDigest, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision,
         ownerBinding: clone(a.binding), state: 'prepared', authorizationRef: a.authorizationRef ?? null, createdAt: stamp, updatedAt: stamp }
       put('dynamic_operations', operation); return changed({ operation })
     }
@@ -822,6 +875,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (operation.state !== 'prepared') fail('DYNAMIC_OPERATION_ALREADY_DISPATCHED')
       operation.state = 'cancelled'; operation.result = { notDispatched: true, reason: text(a.reason, 'reason') }; operation.updatedAt = stamp
       put('dynamic_operations', operation)
+      releaseOperation(operation)
       wake(operation.taskId, 'operation.not_dispatched', { operationId: operation.operationId }, `wake:${commandId}`)
       return changed({ operation })
     }
@@ -831,7 +885,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         || operation.requirementRevision !== task.requirementRevision || operation.controlRevision !== task.controlRevision) fail('DYNAMIC_OPERATION_SCOPE_STALE')
       assertNoLegacy(task.taskId)
       if (operation.state !== 'prepared') return changed({ operation })
-      lock(operation.resourceKeys, operation.operationId)
+      if (operation.resourceHolder) {
+        const execution = boundExecution(a.binding)
+        if (!execution.resourceLease || digest(heldKeys(operation.resourceHolder)) !== digest(resourceKeys(execution.resourceKeys))) fail('DYNAMIC_RESOURCE_INVARIANT')
+      } else lock(operation.resourceKeys, operation.operationId)
       operation.state = 'starting'; operation.dispatchBinding = clone(a.binding); operation.updatedAt = stamp
       put('dynamic_operations', operation)
       return { result: { operation }, dispatchEligible: true }
@@ -876,7 +933,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         instruction: jobRead ? 'The original native job read rejected a missing job before reading output. Retain the failed receipt; do not replay the job or its producer command.'
           : filePrecondition ? 'The original file mutation was rejected before publication. Read the current file and correct the request within the original authorization. This is not success or automatic replay.'
           : 'The original web read returned an error and its native turn ended. This is not success and does not replay the request.' }
-      put('dynamic_operations', operation); release(operation.operationId)
+      put('dynamic_operations', operation); releaseOperation(operation)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed' }, `wake:${commandId}`)
       return changed({ operation })
     }
@@ -919,7 +976,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       operation.result = { reconciled: true, partialEffectsPossible: true, previousObservation, proof,
         ...(investigated ? { operatorSourceId: a.operatorSourceId, humanRequestId: a.humanRequestId } : {}),
         instruction: investigated ? 'The original native call returned an error and its turn ended. Bound read-only investigation completed; partial effects remain possible. Retain the failed receipt and limitations. This is not success, noEffect, permission to replay, or authorization for new effects.' : 'The original operation was stopped and may have partial effects. Review the recorded readback before further work. This is not success or authorization to replay.' }
-      put('dynamic_operations', operation); release(operation.operationId)
+      put('dynamic_operations', operation); releaseOperation(operation)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed', partialEffectsPossible: true }, `wake:${commandId}`)
       return changed({ operation })
     }
@@ -932,7 +989,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       operation.state = job.status === 'completed' ? 'succeeded' : 'failed'
       operation.result = { jobReceipt: clone(job), previousObservation: clone(operation.result ?? null), reconciled: true, partialEffectsPossible: job.status !== 'completed' }
       operation.evidenceRef = `native-job:${operation.operationId}:${digest(job)}`
-      operation.updatedAt = stamp; put('dynamic_operations', operation); release(operation.operationId)
+      operation.updatedAt = stamp; put('dynamic_operations', operation); releaseOperation(operation)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: operation.state }, `wake:${commandId}`)
       return changed({ operation })
     }
@@ -950,7 +1007,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (operation.state === 'prepared' || operation.state === 'unknown' && kind !== 'operation.reconcile') fail('DYNAMIC_OPERATION_RECONCILIATION_REQUIRED')
       operation.state = a.state; operation.result = a.result ?? null; operation.evidenceRef = a.evidenceRef ?? null; operation.updatedAt = stamp
       put('dynamic_operations', operation)
-      if (terminalOperations.has(operation.state)) release(operation.operationId)
+      if (terminalOperations.has(operation.state)) releaseOperation(operation)
       const execution = operation.executionId ? get('dynamic_executions', operation.executionId, true) : null
       // 当前原执行会消费普通工具回执；统筹在执行终态或明确进度事件醒来。
       // 未知效果、对账、独立操作及失去原消费方的迟到结果仍须可靠唤醒。
@@ -1171,8 +1228,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'task.list') value = all('dynamic_tasks').filter(item => !q.groupId || item.groupId === q.groupId)
       else if (q.kind === 'task.blockers') value = blockers(q.taskId)
       else if (q.kind === 'task.binding') value = bindingOf(get('dynamic_tasks', q.taskId))
-      else if (q.kind === 'execution.get') value = get('dynamic_executions', q.executionId, true)
-      else if (q.kind === 'execution.list') value = q.taskId ? execs(q.taskId) : all('dynamic_executions')
+      else if (q.kind === 'execution.get') value = executionViews([get('dynamic_executions', q.executionId, true)])[0]
+      else if (q.kind === 'execution.list') value = executionViews(q.taskId ? execs(q.taskId) : all('dynamic_executions'))
       else if (q.kind === 'execution.binding') value = executionBinding(get('dynamic_executions', q.executionId))
       else if (q.kind === 'execution.current') { const e = boundExecution(q.binding); value = !e.drained && e.status === 'running' && executionCurrent(e) }
       else if (q.kind === 'operation.get') value = get('dynamic_operations', q.operationId, true)

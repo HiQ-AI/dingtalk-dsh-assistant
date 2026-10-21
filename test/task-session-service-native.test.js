@@ -1018,6 +1018,87 @@ for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2,
   }
 })
 
+test('native shared resources queue without occupying task capacity and promote on drain', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-resource-capacity-'), gate = Promise.withResolvers(), steps = new Map(), entered = []
+  const h = await fixture.host(async request => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      const required = requiredDecisionRead(request, input); if (required) return [required]
+      const key = input.task.taskId + ':' + input.task.leaseEpoch, step = steps.get(key) ?? 0
+      steps.set(key, step + 1)
+      if (!input.executions.length && step === 0) return [call('task_delegate', { key: 'run', objective: input.task.objective,
+        resourceKeys: [input.task.objective === 'independent' ? 'uat3' : 'uat2'] })]
+      return [decision(input.executions.length && input.executions.every(e => e.status === 'succeeded' && e.drained) ? 'complete' : 'wait', '核对实际执行结果')]
+    }
+    const step = steps.get(input.task.taskId) ?? 0; steps.set(input.task.taskId, step + 1)
+    if (!step) {
+      entered.push(input.objective)
+      if (input.objective === 'holder') await gate.promise
+      return [call('write', { file_path: 'resource-proof.txt', content: input.objective })]
+    }
+    return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: ['actual write'], limitations: [], artifacts: ['resource-proof.txt'] } })]
+  }, { config: { maxConcurrentTasks: 2, maxConcurrentExecutions: 2 } })
+  try {
+    await h.service.createTask({ groupId: 'native-group', requestId: 'resource-holder', objective: 'holder' })
+    await waitUntil(() => entered.includes('holder'), 'first execution holds resource')
+    const waiter = await h.service.createTask({ groupId: 'native-group', requestId: 'resource-waiter', objective: 'waiter' })
+    await waitUntil(async () => (await h.query('execution.list', { taskId: waiter.taskId }))[0]?.resources.state === 'waiting', 'same resource waits')
+    await h.service.createTask({ groupId: 'native-group', requestId: 'resource-independent', objective: 'independent' })
+    await waitUntil(() => entered.includes('independent'), 'waiting task gives capacity to independent resource')
+    assert.deepEqual(entered, ['holder', 'independent'])
+    const waiting = (await h.query('execution.list', { taskId: waiter.taskId }))[0]
+    assert.equal(waiting.status, 'queued'); assert.equal(waiting.leaseEpoch, 0)
+    assert.equal(waiting.resources.blocking[0].resourceKey, 'uat2')
+    assert.equal(h.service.listAlerts().length, 0)
+    // 在持有者不释放期间，等待者不能反复进入模型或增加执行租约。
+    await new Promise(resolve => setTimeout(resolve, 80))
+    assert.equal((await h.query('execution.get', { executionId: waiting.executionId })).leaseEpoch, 0)
+    assert.ok(h.requests.length < 20, 'resource conflict must not create a model/claim hot loop')
+  } finally { gate.resolve() }
+  await h.service.whenIdle()
+  assert.deepEqual(entered, ['holder', 'independent', 'waiter'])
+  assert.ok((await h.query('task.list')).every(task => task.status === 'completed'))
+  for (const execution of await h.query('execution.list')) {
+    assert.equal(execution.resources.state, 'released')
+    assert.equal(await readFile(join(fixture.root, 'tasks', execution.taskId, 'resource-proof.txt'), 'utf8'), execution.input.objective)
+  }
+})
+
+test('native delegation rejects changed keys on receipt replay and preserves omitted continuation keys', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-resource-continuation-')
+  let stage = 0, executions = 0
+  const h = await fixture.host(async (request, host) => {
+    const input = latestInput(request)
+    if (!request.tools.some(tool => tool.name === 'task_delegate')) {
+      executions++
+      return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: [], limitations: [], artifacts: [] } })]
+    }
+    const required = requiredDecisionRead(request, input); if (required) return [required]
+    if (stage === 0) { stage++; return [call('task_delegate', { key: 'original', objective: 'first', resourceKeys: ['uat2'] })] }
+    const execution = (await host.query('execution.list', { taskId: input.task.taskId }))[0]
+    if (!execution?.drained || execution.status !== 'succeeded') return [decision('wait', '等待排空')]
+    if (stage === 1) { stage++; return [call('task_delegate', { key: 'original', objective: 'first', resourceKeys: ['uat3'] })] }
+    if (stage === 2) { stage++; return [call('task_delegate', { key: 'original', objective: 'first', resourceKeys: ['uat2'] }), call('task_execution_read', { executionId: execution.executionId })] }
+    if (stage === 3) {
+      stage++
+      return [call('task_delegate', { key: 'continue', executionId: execution.executionId, objective: 'second' })]
+    }
+    return [decision(execution.inputVersion === 2 ? 'complete' : 'wait', '续办已核验')]
+  })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'resource-continuation', objective: 'resource continuation' })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal(executions, 2)
+  const all = await h.query('execution.list'); assert.equal(all.length, 1)
+  assert.deepEqual(all[0].resourceKeys, ['uat2']); assert.equal(all[0].inputVersion, 2)
+  const results = h.toolResults.filter(item => item.name === 'task_delegate')
+  assert.equal(results.filter(item => item.result.isError).length, 1)
+  assert.match(JSON.stringify(results[1].result), /DYNAMIC_DISPATCH_KEY_CONFLICT/)
+  assert.match(JSON.stringify(results[2].result), /"status":"succeeded"/)
+  assert.match(JSON.stringify(results[2].result), /"state":"released"/)
+  assert.match(JSON.stringify(h.toolResults.find(item => item.name === 'task_execution_read').result), /"state":"released"/)
+})
+
 test('recovering an idle owner with no pending wake does not consume a task slot', { timeout: 10000 }, async t => {
   const fixture = await nativeCase(t, 'task-service-idle-slot-')
   let rounds = 0

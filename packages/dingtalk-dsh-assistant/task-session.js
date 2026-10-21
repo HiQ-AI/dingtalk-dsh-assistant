@@ -132,7 +132,8 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
             }
           } })
         register('task_delegate', '委派小目标，或用executionId续原执行会话。executionId标识原执行；key标识本次委派请求，不是会话身份。同一次请求重试必须复用key及相同目标；已完成后依据新输入开展新的续办步骤，保留executionId并为新步骤使用新的稳定key。不得换key重放未知效果或已完成动作。同key不同目标会被拒绝，应核对原回执与新输入，不因此索取额外业务授权。新执行可用title提供简短中文业务名称（可保留技术专名）；无中文短名则沿用key名称。objective是完整目标，不截断作名称。续办保留原名。', { ...object({
-          key: text, title: { type: 'string', description: '可选中文业务短名，建议4至16字；技术专名可保留英文。没有中文短名时省略，沿用key；不要复制完整目标。续办不是改名操作。' }, objective: text, executionId: text, context: { type: 'string' }, resourceKeys: { type: 'array', items: text },
+          key: text, title: { type: 'string', description: '可选中文业务短名，建议4至16字；技术专名可保留英文。没有中文短名时省略，沿用key；不要复制完整目标。续办不是改名操作。' }, objective: text, executionId: text, context: { type: 'string' },
+          resourceKeys: { type: 'array', items: text, description: '本次整段执行要独占的全部共享资源键。Host开始执行前原子取得全部资源，直到会话与在途操作排空才释放；冲突自动排队，派发接收或queued不代表持锁，读resources核对实际占用。续办省略此字段保留原键，只有原执行安全排空后才能显式改集合；不能持锁后再扩大范围。' },
           feedback: { type: 'boolean', description: '向原executionId发送不改变目标和授权的运行中澄清/提醒时必须为true。保留原执行与作业，不启动续办；回执received不代表consumed，用task_execution_read核对feedback的consumedAt。真实目标授权变化不能用此路径。' },
           readOnly: { type: 'boolean', description: '标记原操作调查会话，用于绑定对账证据，不限制原生工具名单。未知效果仍须核验，不得重放原操作。' },
           readbackOperationId: { type: 'string', description: 'Bind readOnly investigation to this task operation; inspect its actual partial effects and report limits. This is not permission to replay it.' },
@@ -140,7 +141,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         }), required: ['key', 'objective'] }, (args, exec) => delegate(args, binding, exec))
         register('task_execution_read', '取得本任务执行的完整落账证据引用；用model_content_read按需读取，包括历史结果。', { ...object({ executionId: text }), required: ['executionId'] }, async args => {
           const record = await readExecution(args.executionId, binding)
-          return { executionId: record.executionId, inputVersion: record.inputVersion, status: record.status,
+          return { executionId: record.executionId, inputVersion: record.inputVersion, status: record.status, resources: record.resources,
             feedback: (record.feedback ?? []).map(({ id, receivedAt, consumedAt, modelStepEnteredAt, sequence }) => ({ id, receivedAt, consumedAt: consumedAt ?? null, modelStepEnteredAt: modelStepEnteredAt ?? null,
               consumptionMeaning: 'native-model-step-admission', sequence: sequence ?? null })), record: entry.content.store(record) }
         })
