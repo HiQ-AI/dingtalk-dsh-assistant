@@ -622,7 +622,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       try { claimed = await command('execution.claim', { executionId }) }
       catch (error) {
         // 预读后另一执行可能先获得资源；这是排队，不是执行失败。
-        if (error.code === 'DYNAMIC_RESOURCE_BUSY') return
+        if (['DYNAMIC_RESOURCE_BUSY', 'DYNAMIC_COORDINATION_WAITING', 'DYNAMIC_COORDINATION_COVERAGE_STALE'].includes(error.code)) return
         throw error
       }
       const { binding, execution } = claimed.result

@@ -16,6 +16,9 @@
   },
   "files": [
     "coordination-context.js",
+    "coordination-ledger.js",
+    "coordination-schedules.js",
+    "coordination-time.js",
     "coordination-resources.js",
     "coordination-sessions.js",
     "cordis.patch.yml",
