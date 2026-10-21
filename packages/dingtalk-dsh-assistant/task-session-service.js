@@ -631,9 +631,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const stageReports = new Map()
       try {
         const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: execution.input, definition: { ...models(), ...execution.definition,
-          prompt: execution.prompt + (execution.resourceKeys?.length ? `\nHost 已在本执行开始前取得资源 ${JSON.stringify(execution.resourceKeys)}；会话及在途操作排空前保持。queued/派发接收不等于其他执行已持锁。` : ''), allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
+          prompt: execution.prompt + (execution.resourceKeys?.length ? `\nHost 已在本执行开始前取得资源 ${JSON.stringify(execution.resourceKeys)}；会话及在途操作排空前保持。使用 execution_resources_read 无参数读取自身当前身份和资源状态，不需统筹另发持锁证明。queued/派发接收不等于其他执行已持锁；观察结果不替代后续写入门禁和真实目标版本核对。` : ''), allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title); return command('execution.sessionBound', { binding }, `execution-bound:${executionId}:${binding.leaseEpoch}`) },
           onNativeExecution: nativeOperation,
+          readResources: () => query('execution.resources', { binding }),
           readFeedback: async () => ((await query('execution.get', { executionId })).feedback ?? []).filter(item => item.requirementRevision === binding.requirementRevision && item.controlRevision === binding.controlRevision),
           onFeedbackConsumed: proof => command('execution.feedbackConsumed', { binding, ...proof }, `feedback-consumed:${executionId}:${proof.messageId}`),
           onProgress: async ({ summary, evidence, reportId, activity }) => {

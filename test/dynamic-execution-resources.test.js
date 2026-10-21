@@ -35,6 +35,57 @@ async function fixture(t) {
     async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }) } }
 }
 
+test('执行自身资源查询只返回绑定身份和当前租约，不改变锁或操作账本', async t => {
+  const f = await fixture(t)
+  const binding = await f.claim(await f.dispatch(await f.task('own'), ['uat2']))
+  await f.claim(await f.dispatch(await f.task('unrelated'), ['uat3']))
+  const empty = await f.claim(await f.dispatch(await f.task('no-resources'), []))
+  const locks = await f.query({ kind: 'resource.list' })
+  const snapshot = await f.query({ kind: 'execution.resources', binding })
+  assert.deepEqual(Object.keys(snapshot).sort(), ['taskId', 'executionId', 'sessionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'leaseEpoch', 'resources'].sort())
+  assert.equal(snapshot.executionId, binding.executionId)
+  assert.equal(snapshot.resources.state, 'held')
+  assert.deepEqual(snapshot.resources.keys, ['uat2'])
+  assert.equal(snapshot.resources.holder, `execution:${binding.executionId}`)
+  assert.deepEqual(snapshot.resources.blocking, [])
+  assert.deepEqual((await f.query({ kind: 'execution.resources', binding: empty })).resources, { state: 'none', keys: [], holder: null, blocking: [] })
+  snapshot.resources.keys.push('forged')
+  assert.deepEqual((await f.query({ kind: 'execution.resources', binding })).resources.keys, ['uat2'])
+  assert.deepEqual(await f.query({ kind: 'resource.list' }), locks)
+  assert.deepEqual(await f.query({ kind: 'operation.list' }), [])
+})
+
+test('执行自身资源查询拒绝身份错配、暂停及已提交但未排空的执行', async t => {
+  const f = await fixture(t)
+  const binding = await f.claim(await f.dispatch(await f.task('own'), ['uat2']))
+  const foreign = await f.dispatch(await f.task('foreign'), [])
+  // 所有版本字段都来自 Host；单独篡改任一字段不能查询当前租约。
+  for (const [key, value] of Object.entries({ kind: 'task', taskId: 'other', executionId: foreign.executionId, sessionId: 'other', requirementRevision: 2, controlRevision: 2, inputVersion: 2, inputDigest: 'other', leaseEpoch: 2 })) {
+    await assert.rejects(f.query({ kind: 'execution.resources', binding: { ...binding, [key]: value } }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' }, key)
+  }
+  await f.command('execution.result', { binding, output: { status: 'verified' } })
+  await assert.rejects(f.query({ kind: 'execution.resources', binding }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  const paused = await f.claim(await f.dispatch(await f.task('paused'), ['uat3']))
+  await f.command('task.control', { taskId: paused.taskId, control: 'paused' })
+  await assert.rejects(f.query({ kind: 'execution.resources', binding: paused }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+})
+
+test('执行续办按新绑定读取更新后的资源，旧绑定不能借用新持锁证明', async t => {
+  const f = await fixture(t), owner = await f.task('owner')
+  const execution = await f.dispatch(owner, ['uat2']), old = await f.claim(execution)
+  await f.finish(old)
+  const next = (await f.command('execution.continue', { binding: owner, executionId: execution.executionId, key: 'next', prompt: '核验新资源', input: {}, resourceKeys: ['uat3'] })).result.execution
+  const binding = await f.claim(next)
+  const snapshot = await f.query({ kind: 'execution.resources', binding })
+  assert.equal(snapshot.executionId, old.executionId)
+  assert.equal(snapshot.sessionId, old.sessionId)
+  assert.ok(snapshot.inputVersion > old.inputVersion)
+  assert.ok(snapshot.leaseEpoch > old.leaseEpoch)
+  assert.deepEqual(snapshot.resources.keys, ['uat3'])
+  assert.equal(snapshot.resources.holder, `execution:${binding.executionId}`)
+  await assert.rejects(f.query({ kind: 'execution.resources', binding: old }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+})
+
 test('同一资源只允许一个 execution 取得执行权，结果提交不提前释放', async t => {
   const f = await fixture(t)
   const first = await f.dispatch(await f.task('first'), ['uat2'])

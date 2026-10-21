@@ -1260,6 +1260,15 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'execution.list') value = executionViews(q.taskId ? execs(q.taskId) : all('dynamic_executions'))
       else if (q.kind === 'execution.binding') value = executionBinding(get('dynamic_executions', q.executionId))
       else if (q.kind === 'execution.current') { const e = boundExecution(q.binding); value = !e.drained && e.status === 'running' && executionCurrent(e) }
+      else if (q.kind === 'execution.resources') {
+        // 身份与资源在同一次账本查询中核验，续办前的租约不能读取新的持锁证明。
+        const execution = boundExecution(q.binding)
+        assertScope(q.binding)
+        const { resources } = executionViews([execution])[0]
+        value = { taskId: execution.taskId, executionId: execution.executionId, sessionId: execution.sessionId,
+          requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
+          inputVersion: execution.inputVersion, leaseEpoch: execution.leaseEpoch, resources }
+      }
       else if (q.kind === 'operation.get') value = get('dynamic_operations', q.operationId, true)
       else if (q.kind === 'operation.list') value = ops(q.taskId)
       else if (q.kind === 'wake.list') value = wakes(q.taskId).filter(item => !q.state || item.state === q.state)

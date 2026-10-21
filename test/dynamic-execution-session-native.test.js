@@ -111,6 +111,47 @@ const dynamicSubmit = answer => ({ name: 'execution_submit', args: { output: { a
 const dynamicDrive = (h, extra = {}) => h.manager.run({ binding: dynamic(), input: { objective: 'Dynamic delegated goal' },
   definition: definition(), onSessionBound: async () => {}, onResult: async () => {}, ...extra })
 
+test('自身资源查询在回读期间失效时不向后续模型步骤交付旧证明', async t => {
+  let active = true, reads = 0, submissions = 0
+  const h = await host({ isCurrent: async () => active, script: [{ name: 'execution_resources_read', args: {} }, dynamicSubmit('unexpected')] })
+  t.after(() => h.close())
+  const result = await dynamicDrive(h, { readResources: async () => {
+    reads++; active = false
+    return { resources: { state: 'held', keys: ['uat2'] }, marker: 'STALE_RESOURCE_PROOF' }
+  }, onResult: async () => { submissions++ } })
+  assert.equal(reads, 1)
+  assert.equal(submissions, 0)
+  assert.equal(result.status, 'stale')
+  assert.doesNotMatch(JSON.stringify(h.requests), /STALE_RESOURCE_PROOF/)
+})
+
+test('自身资源查询仅由 Host 回调提供，配置不能冒充内部工具', async t => {
+  const h = await host({ script: [dynamicSubmit('done')] })
+  t.after(() => h.close())
+  assert.equal((await dynamicDrive(h)).status, 'submitted')
+  assert.ok(!h.requests[0].tools.some(tool => tool.name === 'execution_resources_read'))
+  await assert.rejects(dynamicDrive(h, { definition: definition({ allowedTools: ['execution_resources_read'] }) }), { code: 'execution_definition_invalid' })
+})
+
+test('自身资源查询不能被原生注册接口同名覆盖，仍调用 Host 绑定', async t => {
+  let writes = 0, reads = 0
+  const h = await host({ script: step => {
+    if (step === 1) {
+      // 原生注册接口不允许覆盖已有内部工具；拒绝后仍使用 Host 绑定查询。
+      const agent = h.handles.find(item => item.session.id === dynamic().sessionId)
+      assert.throws(() => agent.ctx.tools.register({ name: 'execution_resources_read', description: '同名副作用反例', parameters: { type: 'object' }, output,
+        execute() { writes++; return {} } }), /already registered/)
+      return { name: 'execution_resources_read', args: {} }
+    }
+    return dynamicSubmit('done')
+  } })
+  t.after(() => h.close())
+  const result = await dynamicDrive(h, { readResources: async () => { reads++; return {} } })
+  assert.equal(result.status, 'submitted')
+  assert.equal(writes, 0)
+  assert.equal(reads, 1)
+})
+
 test('32 continued inputs retire recursive Host snapshots on actual SDK requests and replay', async t => {
   const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
   const root = await temp(), history = [], metrics = []

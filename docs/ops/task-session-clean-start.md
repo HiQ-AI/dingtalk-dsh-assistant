@@ -162,6 +162,10 @@ DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个s
 
 统筹应在派发前声明本阶段全部共享资源，同一环境使用一致键名；续办省略资源键保留原集合。需要改变集合时等原执行与效果排空，再开始下一阶段。执行中新增未声明资源会拒绝，避免持有部分资源后循环等待。本合同只约束同一控制库内已声明资源的执行，不替代外部平台跨实例并发控制。
 
+执行会话自身使用 `execution_resources_read {}`；它只接受空参数，由 Host 固定绑定 taskId、executionId、sessionId 和版本。回执含 inputVersion、leaseEpoch 及 `resources`，核对 `held` 和 `holder=execution:<executionId>`，续办或恢复后重新读取。读取不会产生 operation 或发送反馈，不必为了取得持锁证明再打断执行。原有方向纠偏和新输入检查仍适用；当前观察不保证后续任意时刻仍持锁。已停止/暂停或版本失效会拒绝，不能拿旧证明绕过控制状态。
+
+该工具需要安装包含此实现的 Assistant 并在当前执行工具目录中实际可见；仅更新个人 skill 不会给旧 Host 增加工具。能力缺失时由统筹沿现有 `task_execution_read` 核对并记录版本缺口，不猜造调用或查询内部 SQLite。定向验证使用隔离实例的 `test/task-execution-resources-native.test.js`，核验同会话续办后版本/资源更新、未知参数被拒绝及无外部操作；不能将其当作正式实例已升级。
+
 本机原任务重开入口随 Assistant 更新，无 schema 迁移。部署后通过受信 `/tasks/:taskId/reopen` 接纳带需求/控制版本的增量；核验原任务与会话身份、runSequence、来源记录和幂等收据，不直接改库。总任务先核对既有效果并取消其后续执行，再交回原事项。
 
 ## 原生编辑参数拒绝对账

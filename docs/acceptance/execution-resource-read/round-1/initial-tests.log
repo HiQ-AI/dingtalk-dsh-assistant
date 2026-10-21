@@ -1,0 +1,76 @@
+✔ 执行自身资源查询只返回绑定身份和当前租约，不改变锁或操作账本 (109.6114ms)
+✖ 执行自身资源查询拒绝身份错配、暂停及已提交但未排空的执行 (65.2964ms)
+✔ 执行续办按新绑定读取更新后的资源，旧绑定不能借用新持锁证明 (81.7963ms)
+✔ 同一资源只允许一个 execution 取得执行权，结果提交不提前释放 (95.7485ms)
+✔ 资源归一化及多键原子获取不留下部分锁，异键执行可以并行 (103.9519ms)
+✔ 续办省略资源时保留，安全排空后可以显式更新或清空 (116.8885ms)
+✔ 同一续办幂等键不能把变更的资源合同当作原请求 (80.7125ms)
+✔ unknown 效果保留资源，原执行只读对账可续办但不能扩大或清空资源 (119.3857ms)
+✔ 后台 job 未终止时执行排空也不释放，原 job 终态回执可解除等待 (95.4218ms)
+✔ 停止任务只请求取消，不在原执行和未知效果排空前释放资源 (93.9606ms)
+✔ 重启保留 execution 锁及 unknown 效果，恢复排空和对账后才能释放 (119.6177ms)
+✔ 执行声明内操作共享资源且不自锁，操作完成不抢先释放父执行 (118.5263ms)
+✔ 准备后未启动的操作也须明确取消，不能用 execution drained 绕过 (87.2403ms)
+✔ execution 与既有独立 operation 在相同资源上互斥 (87.7551ms)
+✔ 查询暴露真实持有者与等待资源，queued 回执不冒充持锁 (83.1632ms)
+✔ 失败或取消在确认执行排空后释放，不把无副作用终态永久占用 (163.055ms)
+✔ 多个未知效果须全部对账，最后一个完成也不能释放仍运行的只读续办 (118.4688ms)
+✔ 原 job 失败对账路径释放父执行锁并保留部分效果的不确定性 (98.8169ms)
+✔ 任务控制或需求修订取消最后一个 prepared 操作时释放已排空执行 (264.9735ms)
+✔ 多执行资源视图每次公开查询最多读取一次锁表，并在释放后读取新状态 (117.3779ms)
+ℹ {"executions":12,"declaredKeys":24,"observations":[{"query":"execution.list","resourceReads":1},{"query":"execution.get","resourceReads":1},{"query":"task.blockers","resourceReads":1},{"query":"execution.list","resourceReads":1},{"query":"execution.get","resourceReads":1},{"query":"task.blockers","resourceReads":1}]}
+✖ 执行原生工具读取自身租约并在续办刷新，初始资源=uat2 (31106.9535ms)
+✖ 执行原生工具读取自身租约并在续办刷新，初始资源=none (12338.3329ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 19
+ℹ fail 2
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 56165.2636
+
+✖ failing tests:
+
+test at test\dynamic-execution-resources.test.js:58:1
+✖ 执行自身资源查询拒绝身份错配、暂停及已提交但未排空的执行 (65.2964ms)
+  AssertionError [ERR_ASSERTION]: executionId
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:63:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: Error: dynamic_executions:other
+        at fail (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:18:61)
+        at get (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:102:28)
+        at boundExecution (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:139:23)
+        at Object.query (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1265:27)
+        at Object.query (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:16:31)
+        at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:63:28)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7),
+    expected: { code: 'DYNAMIC_EXECUTION_LEASE_STALE' },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at test\task-execution-resources-native.test.js:12:44
+✖ 执行原生工具读取自身租约并在续办刷新，初始资源=uat2 (31106.9535ms)
+  'test timed out after 30000ms'
+
+test at test\task-execution-resources-native.test.js:12:44
+✖ 执行原生工具读取自身租约并在续办刷新，初始资源=none (12338.3329ms)
+  AssertionError [ERR_ASSERTION]: 不需要统筹反馈补发持锁证明
+
+  undefined !== []
+
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-execution-resources-native.test.js:47:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
