@@ -12,3 +12,4 @@ two-distinct-inspection-decisions,2,PASS,coordination/native-final-tests.log,fin
 locked-profile-inspection-decisions,2,PASS,coordination/native-locked-profile-tests.log,same 5 tests on repository alpha.2
 native-quoted-body-and-all-attachments,2,BLOCKED,transport/upstream-protocol-question.md,verified transport protocol remains unavailable
 real-message-readback-and-presentation,2,NOT_RUN,transport/protocol-review.md,no message sent; no equivalent mock claim
+verified-fixes-pr-readback,2,PASS,round-2.md,PR246 OPEN; not merged or deployed

@@ -20,3 +20,7 @@ node --test test/task-session-progress-native.test.js
 技能最终 **21/21**、独立原反例复测、三个相关技能结构校验、七个文件摘要回读、相关 JavaScript 语法与 `git diff --check` 均通过。`goal.md` 初次检查因“当前子目标”混入说明被校验器拒绝，改为单一 SG ID 后检查通过；没有修改校验器绕过。
 
 组合消息能力仍未完成。组合交付模型场景通过，仅证明统筹能拒绝“拆发附件字节正确即完成”的错误判断；没有获得真实组合协议或发送任何测试消息。上游问题稿仍仅本地准备。未部署插件，现有个人技能目录已更新；不能把本轮 PR、单次合成场景或本地浏览器结果等同于线上业务与群内呈现验收。
+
+## PR 回读
+
+14:53 独立 `gh pr view 246 --json number,title,body,url,state,baseRefName,headRefName,headRefOid,mergedAt` 确认 [PR #246](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/246) 为 OPEN，`main ← worktree-unified-reply-validation`，代码修复提交 `cb82caec86b5ce64c4f2ba8e2d2a669b0c287b74` 与先前远端 ref 相同，`mergedAt=null`，标题和完整正文一致。后续收口提交仅记录本段和目标状态。已有 docs/tmp/ 与本轮原生会话原件保留，没有纳入 PR 或清理。整体目标仍有外部传输依赖。
