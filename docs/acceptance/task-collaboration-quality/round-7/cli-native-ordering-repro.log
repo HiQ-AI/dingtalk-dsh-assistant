@@ -1,0 +1,30 @@
+✖ CLI real file mutation is accounted before write and settled after its observed result (581.0698ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 897.6507
+
+✖ failing tests:
+
+test at test\claude-execution-session-native.test.js:219:1
+✖ CLI real file mutation is accounted before write and settled after its observed result (581.0698ms)
+  AssertionError [ERR_ASSERTION]: {"observations":[{"phase":"started","bytes":null},{"phase":"settled","bytes":"one actual effect"}],"bridge":[{"method":"tools/call","name":"permission","status":200,"response":{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\"behavior\":\"allow\",\"updatedInput\":{\"file_path\":\"D:\\\\codex\\\\worktrees\\\\task-collaboration-quality\\\\dingtalk-dsh-assistant\\\\docs\\\\tmp\\\\claude-execution-native-tests\\\\run-jJJUbb\\\\effect.txt\",\"content\":\"one actual effect\"}}"}]}}},{"method":"tools/call","name":"execution_submit","status":200,"response":{"jsonrpc":"2.0","id":4,"result":{"isError":true,"content":[{"type":"text","text":"claude_execution_operation_pending"}]}}}]}
+  + actual - expected
+  
+  + 'no_submission'
+  - 'submitted'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:223:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'no_submission',
+    expected: 'submitted',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

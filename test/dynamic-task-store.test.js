@@ -8,6 +8,32 @@ import { createHash } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 
+test('执行后端固定于创建定义，续办及重启不改派；CLI反馈不伪称原生模型准入', async t => {
+  const f = await fixture(t), owner = await f.task()
+  await assert.rejects(f.command('execution.dispatch', { binding: owner.binding, key: 'invalid', prompt: '核验', definition: { executionBackend: 'other' } }), { code: 'TASK_EXECUTION_BACKEND_INVALID' })
+  assert.equal((await f.query({ kind: 'execution.list' })).length, 0)
+  for (const backend of [undefined, 'dsh', 'claude-code']) {
+    const key = backend ?? 'historical'
+    const dispatched = (await f.command('execution.dispatch', { binding: owner.binding, key, prompt: '核验', ...(backend ? { definition: { executionBackend: backend } } : {}) })).result.execution
+    const binding = (await f.command('execution.claim', { executionId: dispatched.executionId })).result.binding
+    await f.command('execution.feedback', { binding: owner.binding, executionId: dispatched.executionId, messageId: key, text: '核对同一版本' })
+    await f.command('execution.feedbackConsumed', { binding, messageId: key, sequence: 3 })
+    await f.command('execution.result', { binding, output: {}, feedbackVersion: 1 })
+    await f.command('execution.drained', { binding })
+    const next = (await f.command('execution.continue', { binding: owner.binding, executionId: dispatched.executionId, key: `${key}-next`, prompt: '继续核验', definition: { executionBackend: backend === 'claude-code' ? 'dsh' : 'claude-code' } })).result.execution
+    assert.equal(next.definition.executionBackend, backend)
+    assert.equal(next.sessionId, dispatched.sessionId)
+    assert.equal(next.inputVersion, 2)
+    const feedback = next.feedback[0]
+    assert.equal(feedback.consumptionMeaning, backend === 'claude-code' ? 'claude-cli-input-admission' : 'native-model-step-admission')
+    assert.equal(!!feedback.modelStepEnteredAt, backend !== 'claude-code')
+    assert.equal(!!feedback.cliInputAdmittedAt, backend === 'claude-code')
+  }
+  const before = await f.query({ kind: 'execution.list' })
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'execution.list' })).map(item => [item.sessionId, item.definition.executionBackend]), before.map(item => [item.sessionId, item.definition.executionBackend]))
+})
+
 test('running supplement preserves the runner, persists once and fences old completion', async t => {
   const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
   const before = await f.query({ kind: 'execution.get', executionId: binding.executionId })

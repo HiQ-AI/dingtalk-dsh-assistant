@@ -116,6 +116,21 @@ test('任务与执行会话明确显示ID目录和日志，缺失会话不伪造
   assert.equal(elements(tree).filter(item => item.type === 'button').length, 0)
 })
 
+test('Claude Code绑定只显示后端、目录和当前轮文档，不提供DSH导航', () => {
+  const session = { executionBackend: 'claude-code', sessionId: 'cli-session', sessionBound: true, workspaceDir: '/task', workingDirectory: '/task/work',
+    logPath: '/task/outputs/execution/claude-events.jsonl', document: { path: '/task/outputs/execution/round-2.md', inputVersion: 2 } }
+  const h = harness('SessionLocation', { session, label: '执行会话', compact: true, onOpenSession() { assert.fail('CLI不能调用原生会话导航') } })
+  const tree = h.render()
+  assert.match(text(tree), /Claude Code/)
+  assert.ok(text(tree).includes(session.workingDirectory)); assert.ok(text(tree).includes(session.logPath)); assert.ok(text(tree).includes(session.document.path))
+  assert.match(text(tree), /第 2 轮/)
+  assert.equal(elements(tree).filter(item => item.type === 'button').length, 0)
+  assert.doesNotMatch(text(tree), /尚未绑定/)
+  assert.equal(elements(h.render({ session, label: '执行会话', entryOnly: true })).filter(item => item.type === 'button').length, 0)
+  const dsh = h.render({ session: { ...session, executionBackend: 'dsh' }, label: '执行会话' })
+  assert.ok(button(dsh, '打开执行会话'), 'DSH入口仍保留')
+})
+
 test('结果区分结论、证据与限制，不把限制当作已完成结果', () => {
   const tree = harness('TaskResult', { result: { summary: '服务状态已核对', evidence: ['https://example.test/evidence'], limitations: ['尚未部署'] } }).render()
   assert.match(text(tree), /服务状态已核对/)

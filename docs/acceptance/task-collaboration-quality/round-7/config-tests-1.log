@@ -1,0 +1,118 @@
+TAP version 13
+# Subtest: 概览在已移除任务表格同步接口后仍加载完整状态
+ok 1 - 概览在已移除任务表格同步接口后仍加载完整状态
+  ---
+  duration_ms: 27.9565
+  type: 'test'
+  ...
+# Subtest: Web client使用dsh原生插件页签slot注册唯一状态卡
+ok 2 - Web client使用dsh原生插件页签slot注册唯一状态卡
+  ---
+  duration_ms: 0.2841
+  type: 'test'
+  ...
+# Subtest: Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime
+ok 3 - Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime
+  ---
+  duration_ms: 8.3004
+  type: 'test'
+  ...
+# Subtest: 设置页异步展示版本状态且版本检查不阻塞核心配置加载
+ok 4 - 设置页异步展示版本状态且版本检查不阻塞核心配置加载
+  ---
+  duration_ms: 4.2228
+  type: 'test'
+  ...
+# Subtest: 设置页清退工作流与参数编辑，仍保留Agent与群连接配置
+ok 5 - 设置页清退工作流与参数编辑，仍保留Agent与群连接配置
+  ---
+  duration_ms: 3.0035
+  type: 'test'
+  ...
+# Subtest: 插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点
+ok 6 - 插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点
+  ---
+  duration_ms: 1.3217
+  type: 'test'
+  ...
+# Subtest: 执行后端沿用唯一Agent保存入口并在部分失败时准确说明未保存选择
+ok 7 - 执行后端沿用唯一Agent保存入口并在部分失败时准确说明未保存选择
+  ---
+  duration_ms: 1.3806
+  type: 'test'
+  ...
+# Subtest: 添加常驻群在操作位置反馈前置条件、进度和请求结果
+ok 8 - 添加常驻群在操作位置反馈前置条件、进度和请求结果
+  ---
+  duration_ms: 0.9191
+  type: 'test'
+  ...
+# Subtest: coordination selection defaults independently to astra/low and disabled selection never enables itself
+ok 9 - coordination selection defaults independently to astra/low and disabled selection never enables itself
+  ---
+  duration_ms: 1.9107
+  type: 'test'
+  ...
+# Subtest: HTTP coordination config preflights, persists and reopens while Owner/executor and enabled remain unchanged
+ok 10 - HTTP coordination config preflights, persists and reopens while Owner/executor and enabled remain unchanged
+  ---
+  duration_ms: 167.834
+  type: 'test'
+  ...
+# Subtest: combined save validates coordinator before either write and readbacks independent-store failures without compensation
+ok 11 - combined save validates coordinator before either write and readbacks independent-store failures without compensation
+  ---
+  duration_ms: 9.2428
+  type: 'test'
+  ...
+# Subtest: unset task depth defaults low; explicit inheritance and model default remain distinct
+ok 12 - unset task depth defaults low; explicit inheritance and model default remain distinct
+  ---
+  duration_ms: 2.0609
+  type: 'test'
+  ...
+# Subtest: HTTP task settings validate, persist, refresh and reopen without touching native default
+ok 13 - HTTP task settings validate, persist, refresh and reopen without touching native default
+  ---
+  duration_ms: 259.2754
+  type: 'test'
+  ...
+# Subtest: unified save preflights both models and reports readback on independent-store failures without compensation
+ok 14 - unified save preflights both models and reports readback on independent-store failures without compensation
+  ---
+  duration_ms: 9.8995
+  type: 'test'
+  ...
+# Subtest: execution backend defaults to DSH and validates, persists and reopens through the existing Agent HTTP configuration
+ok 15 - execution backend defaults to DSH and validates, persists and reopens through the existing Agent HTTP configuration
+  ---
+  duration_ms: 225.1319
+  type: 'test'
+  ...
+# Subtest: actual Web build emits one valid module, loads its factory, and matches the checked-in artifact
+ok 16 - actual Web build emits one valid module, loads its factory, and matches the checked-in artifact
+  ---
+  duration_ms: 554.9445
+  type: 'test'
+  ...
+# Subtest: actual Web build rejects invalid generated JavaScript before overwriting a usable artifact
+ok 17 - actual Web build rejects invalid generated JavaScript before overwriting a usable artifact
+  ---
+  duration_ms: 191.3869
+  type: 'test'
+  ...
+# Subtest: official DSH client registry serves the built resource and its real browser module system imports it
+ok 18 - official DSH client registry serves the built resource and its real browser module system imports it # SKIP Installed alpha2 profile required for official client integration; set DSH_NATIVE_TEST_PROFILE: Cannot find module '@deepseek-ai/dsh-client-modules'
+  ---
+  duration_ms: 33.2133
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 17
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 966.2124

@@ -1,0 +1,28 @@
+npm warn Unknown user config "disturl". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown user config "electron_mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+{
+  "findings": [
+    {
+      "severity": "info",
+      "message": "Design system defines 1 typography scale, 2 rounding levels, 4 spacing tokens.",
+      "rule": "token-summary"
+    },
+    {
+      "severity": "info",
+      "path": "omitted.colors",
+      "message": "colors intentionally omitted — no colors tokens will be validated",
+      "rule": "declared-omission"
+    },
+    {
+      "severity": "info",
+      "path": "omitted.components",
+      "message": "components intentionally omitted — no components tokens will be validated",
+      "rule": "declared-omission"
+    }
+  ],
+  "summary": {
+    "errors": 0,
+    "warnings": 0,
+    "infos": 3
+  }
+}

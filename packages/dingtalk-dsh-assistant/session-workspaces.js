@@ -71,6 +71,7 @@ export function renderExecutionDocument(execution) {
     'Host 根据持久执行记录生成。执行报告不等于独立核验，状态不等于业务验收；活动只表示报告时的活动。',
     '每次输入续办形成新轮，旧轮文件保留。日常先读本文件；证据缺失、矛盾或异常时，按会话身份读取原始记录。\n',
     section('身份与状态', [...Object.entries(identity).map(([key, value]) => `${key}: ${value}`),
+      `executionBackend: ${execution.definition?.executionBackend ?? 'dsh'}`,
       `leaseEpoch: ${execution.leaseEpoch}`, `status: ${execution.status}${execution.status === 'queued' ? '（已安排，待启动）' : ''}`,
       `drained: ${execution.drained === true}`, `cancelRequested: ${execution.cancelRequested === true}`,
       `updatedAt: ${execution.updatedAt ?? '未记录'}`].join('\n')),
@@ -96,7 +97,7 @@ export function renderExecutionDocument(execution) {
       `messageId: ${item.id}`, item.sourceExecutionId ? `来源: 执行 ${item.sourceExecutionId} / inputVersion=${item.sourceInputVersion} / leaseEpoch=${item.sourceLeaseEpoch}` : '来源: 统筹或当前任务补充',
       `接收: ${item.receivedAt ?? '未记录'}`, `消费: ${item.consumedAt || '尚未消费'}`,
     ].join('\n')).join('\n\n') : '无当前有效反馈。'),
-    '反馈消费只证明进入模型步骤，不证明已经落实；有未消费或存在争议的反馈时，按 messageId 读取原反馈正文。\n')
+    `反馈消费只证明${execution.definition?.executionBackend === 'claude-code' ? 'Claude CLI 已接纳输入' : '进入模型步骤'}，不证明已经落实；有未消费或存在争议的反馈时，按 messageId 读取原反馈正文。\n`)
   return lines.join('\n')
 }
 

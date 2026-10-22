@@ -54,3 +54,22 @@ execution-doc-dependency-and-baseline-contracts,6,PASS,round-4/execution-doc-map
 suite-map,6,PASS,round-4/execution-doc-mapping-check-after.log (299 files; historical 3; deleted 0)
 final-release-smoke,6,PASS,round-6/release-smoke-final.log (14 tests; 0 skip)
 pr-delivery,6,PASS,round-6.md (PR248 OPEN; head/body readback)
+backend-config-and-ui,7,PASS,round-7/config-execution.md (17 pass; optional registry separately 3 pass; UI112 and observer71)
+backend-browser-and-audit,7,PASS,round-7/config-browser-result.json + config-premium-audit.json + config-design-lint.log
+backend-store-contracts,7,PASS,round-7/coordinator-execution.md (103 Store tests; missing extra path not counted)
+backend-mixed-team-routing,7,PASS,round-7/backend-routing-1.log (real service and SQLite; 1 pass)
+backend-document-semantics,7,FAIL,round-7/backend-documents-1.log (DSH feedback wording regression)
+backend-document-semantics,8,PASS,round-7/backend-documents-2.log (29 tests including archive)
+backend-service-and-archive,7,FAIL,round-7/backend-service-regression-1.log (15 pass; archive extraction fixture failed)
+backend-service-and-archive,8,PASS,round-8.md (15 retained plus repaired archive 2 pass)
+claude-stream-mcp-ordering,7,FAIL,round-7/cli-native-independent-2.log + cli-native-ordering-repro.log
+claude-stream-mcp-ordering,8,PASS,round-7/cli-native-independent-4.log (26 tests; matching source hash)
+claude-drain-failure-listener,7,FAIL,round-7/cli-native-boundaries-1.log (assertions passed but listener kept process alive)
+claude-drain-failure-listener,8,PASS,round-7/cli-native-independent-4.log (occupancy retained and listener closed)
+claude-process-provider-assumption,7,FAIL,round-7/process-range-audit.log (incorrect fixture assumption)
+claude-process-provider-assumption,8,PASS,round-7/process-range-audit-2.log + cli-native-independent-4.log
+claude-real-cli-offline-rounds,8,PASS,round-7/cli-adapter-results.json (real 2.1.212; synthetic model; original UUID resume)
+backend-suite-contracts,7,PASS,round-7/backend-test-contracts-1.log (12 tests)
+backend-suite-map,8,PASS,round-7/backend-suite-map-2.log (301 files; historical3; deleted0)
+backend-release-smoke,7,FAIL,round-7/backend-release-smoke-1.log (13 pass; stale suite-map)
+backend-release-smoke,8,PASS,round-7/backend-release-smoke-2.log (14 tests; 0 skip)

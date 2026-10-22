@@ -1,0 +1,44 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (577.9334ms)
+✔ CLI exit zero cannot replace Host submit (436.1091ms)
+✔ CLI exit zero cannot replace submit tool result (424.0939ms)
+✔ CLI wrong provider session fails without binding or accepting a result (379.8888ms)
+✔ CLI stale lease before permission denies real file mutation (523.6298ms)
+✔ CLI operation gate failure denies a mutation before the child writes it (535.4698ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (790.5715ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (1009.3123ms)
+✔ CLI truncated output fails with zero acceptance and retained diagnostic log (533.2974ms)
+✖ CLI real file mutation is accounted before write and settled after its observed result (574.3589ms)
+✔ CLI interrupted real mutation retains unknown effect while physical process drain remains provable (622.7824ms)
+✔ CLI feedback ACK alone rejects final submit (507.6665ms)
+✔ CLI feedback ACK plus explicit review admits final submit (597.4235ms)
+✔ CLI progress uses current lease and the exact stored observation contract (620.1692ms)
+✔ CLI recovery requires a durable drain record and never launches work from an unfinished prefix (666.6084ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 14
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9120.7546
+
+✖ failing tests:
+
+test at test\claude-execution-session-native.test.js:219:1
+✖ CLI real file mutation is accounted before write and settled after its observed result (574.3589ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no_submission'
+  - 'submitted'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:222:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no_submission',
+    expected: 'submitted',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

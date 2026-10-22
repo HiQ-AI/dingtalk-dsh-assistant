@@ -1,0 +1,32 @@
+✔ three actual tgz and source identity round-trip; publish retry reuses identical bytes (1366.1955ms)
+✔ different run/SHA/tag, lock/profile/environment and manifest hashes all fail closed (7014.1118ms)
+✔ missing, extra and modified tarballs cannot reach publication (2060.2467ms)
+✔ dirty tracked source and untracked package content cannot claim a commit identity (1760.5706ms)
+✔ manual compatibility CI has no push, PR, schedule or publication side effects (10.1457ms)
+✔ release exact SHA validates all lanes before immutable build and same-run publication (6.4499ms)
+✖ every test file is mapped once; only reviewed historical registrations leave Release (1072.5314ms)
+✔ release publishes three tgz plus identity manifest and verifies every attachment (3.0433ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (1.4784ms)
+✔ resident profile 只解析到最新版 DSH 依赖边界 (1.004ms)
+✔ 常驻启动优先读取用户代理，避免为启动解析完整 resident 状态 (1.0275ms)
+✔ Web 启动优先使用当前 profile 的 DSH 入口 (0.5327ms)
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (25254.972ms)
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (9228.6026ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 13
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 48951.6036
+
+✖ failing tests:
+
+test at test\release-workflow.test.js:64:1
+✖ every test file is mapped once; only reviewed historical registrations leave Release (1072.5314ms)
+  Error: test_suite_map_stale: run node scripts/test-suites.mjs update and review every change
+      at checkedInventory (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/scripts/test-suites.mjs:57:65)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/release-workflow.test.js:65:15)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

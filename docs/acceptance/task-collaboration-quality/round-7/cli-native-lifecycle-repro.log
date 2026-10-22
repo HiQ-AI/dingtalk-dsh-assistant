@@ -1,0 +1,12 @@
+✔ CLI cancellation during pending resolve cannot leave a late process running (129.1075ms)
+✔ CLI cancellation during pending spawn cannot leave a late process running (305.3861ms)
+✔ CLI cancellation waits for an already admitted MCP callback to finish (541.0869ms)
+✔ CLI history from a different session is rejected before spawn and remains unchanged (459.6333ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1691.8603

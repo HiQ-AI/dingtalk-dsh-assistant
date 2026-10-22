@@ -1,0 +1,46 @@
+✔ integrated projection keeps stage evidence and provider decisions bound to the original versions (41.4246ms)
+✔ source content is unique while identities, Web request, human correction and material references remain exact (58.0883ms)
+✔ short authority bodies stay literal with exact authors instead of larger hash dictionaries (19.0278ms)
+✔ current team keeps short responsibilities and reported outcomes visible while evidence and ten-member overflow remain bounded (66.484ms)
+✔ completed stage reports and routing internals stay readable without inflating the current task snapshot (70.354ms)
+✔ result size, execution/failed counts and continuation self-result stay in lazy bounded catalogues (565.4284ms)
+ℹ {"scope":"projected current Host JSON UTF-8 bytes, catalogues are not eagerly expanded","metrics":[{"count":1,"beforeOwnerBytes":2357,"ownerBytes":791,"executionBytes":1907},{"count":20,"beforeOwnerBytes":646031,"ownerBytes":793,"executionBytes":11436},{"count":120,"beforeOwnerBytes":23073991,"ownerBytes":795,"executionBytes":11939}]}
+✔ current source windows retain operator authorization and later restrictions beyond the first twenty sources (52.9671ms)
+✔ first read is available, repeated readback uses references, reopen resolves and other sessions/tampering fail closed (99.7563ms)
+✔ nested quote graphs and identical bodies across distinct authors grow by identities and edges, not copied text (744.1544ms)
+ℹ {"scope":"nested source current Host UTF-8 JSON bytes","metrics":[{"depth":2,"beforeBytes":173630,"afterBytes":3375},{"depth":5,"beforeBytes":1470478,"afterBytes":5892},{"depth":9,"beforeBytes":23702160,"afterBytes":9250}]}
+✔ issue 172: seven operation memberships, stage wakes and historical objectives have one detail/readable catalog (246.6164ms)
+ℹ {"scope":"synthetic issue172 projected Host UTF-8 JSON bytes","bytes":2544,"operationsBytes":274,"blockersBytes":266,"contentIndexBytes":2}
+✔ issue 172: complete catalogs beyond the display window and explicit tool reads render bodies directly (266.3709ms)
+✔ decision view preserves request-only targets, all unknown identities and unreviewed current results (90.2211ms)
+✔ all long content surfaces expose existing readable files without contentIndex reinjection (77.9471ms)
+✔ many short requirements remain one lossless file after source-reference mapping (53.4176ms)
+✔ long configured task/execution instructions reuse the content file instead of a long prompt (20.8162ms)
+{"kind":"task","sources":5,"before":7514,"after":1393}
+{"kind":"execution","sources":5,"before":11485,"after":2575}
+{"kind":"group","sources":5,"before":8601,"after":2519}
+{"kind":"task","sources":100,"before":20076,"after":2173}
+{"kind":"execution","sources":100,"before":52552,"after":2575}
+{"kind":"group","sources":100,"before":122297,"after":2519}
+✔ whole Host UTF-8 budget retains every overflow field through admitted pointers (629.759ms)
+✔ execution round documents are the routine owner entry while the complete ledger stays readable (395.9773ms)
+✔ budget also covers tool render bypasses, long keys and reserved context names (989.4319ms)
+✔ 八种实际会话职责各有独立工作区，未知职责不创建目录 (19.7206ms)
+✔ 配置根之外的目录链接必须拒绝，不能在外部创建职责目录 (6.0212ms)
+✔ 原生标题包含事项和职责，去除内部身份、网址与本机路径 (0.8298ms)
+✔ 执行名称统一复用原生简短清理逻辑，持久名称优先于续办输入 (0.4773ms)
+✔ 仅显式中文title作为新短名，否则沿用key，不以长目标或动作词替代 (0.2091ms)
+✔ 执行文档只投影本轮计划证据和结果，明确活动与反馈消费的边界 (0.6961ms)
+✔ 同轮阶段和排空更新原子刷新；新轮保留旧文件并拒绝倒填历史 (98.6372ms)
+✔ 文档路径或内容身份错误拒绝写入，不接受调用者路径或覆盖异执行文件 (57.9429ms)
+✔ 文档输出目录 junction 不得写出 Task 边界，目标文件也不能是目录链接 (22.8653ms)
+✔ topic coordination list selection omits archived tasks while direct historical reads stay available (8.9672ms)
+✔ background recovery and pending wakes never run archived tasks, normal continuation still runs (190.6525ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4722.5027

@@ -680,8 +680,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (!feedback || !currentFeedback(execution, feedback)
         || !Number.isSafeInteger(a.sequence) || a.sequence < 0) fail('DYNAMIC_FEEDBACK_PROOF_INVALID')
       feedback.consumedAt ??= stamp; feedback.sequence ??= a.sequence
-      feedback.modelStepEnteredAt ??= feedback.consumedAt
-      feedback.consumptionMeaning = 'native-model-step-admission'
+      if (execution.definition?.executionBackend === 'claude-code') {
+        feedback.cliInputAdmittedAt ??= feedback.consumedAt
+        feedback.consumptionMeaning = 'claude-cli-input-admission'
+      } else {
+        feedback.modelStepEnteredAt ??= feedback.consumedAt
+        feedback.consumptionMeaning = 'native-model-step-admission'
+      }
       put('dynamic_executions', execution)
       return changed({ feedback })
     }
@@ -880,6 +885,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const task = currentTask(a.binding)
       assertNoLegacy(task.taskId)
       const key = text(a.key, 'key')
+      if (a.definition?.executionBackend !== undefined && !['dsh', 'claude-code'].includes(a.definition.executionBackend)) fail('TASK_EXECUTION_BACKEND_INVALID')
       const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, definition: a.definition ?? null, resourceKeys: resourceKeys(a.resourceKeys) }
       const dispatchDigest = digest({ requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, ...payload })
       const prior = execs(task.taskId).find(item => item.key === key)

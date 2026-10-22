@@ -1,0 +1,253 @@
+{
+  "status": "PASS",
+  "layer": "真实 Claude CLI 2.1.212 + 真实 Host subprocess + 生产 Store；仅回环合成模型响应",
+  "elapsedMs": 6325,
+  "sources": {
+    "packages/dingtalk-dsh-assistant/claude-execution-session.js": "1cb9e0123657080f99b73732115b666072bedb34c9b5b9c08d73589d9ff82a77",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "ead17a59dd1b6eb0afc1d04781e489a0f05caea188816c288129bee8f9ddc930",
+    "docs/acceptance/task-collaboration-quality/scripts/verify-claude-adapter.mjs": "a5ea34ec773ebf7f5d27e61bbd5aa43a254c683eb99655a8d0b2995fbb82284d"
+  },
+  "reproduction": {
+    "check": "node docs/acceptance/task-collaboration-quality/scripts/verify-claude-adapter.mjs --check",
+    "run": "node docs/acceptance/task-collaboration-quality/scripts/verify-claude-adapter.mjs docs/tmp/claude-adapter-native-<fresh-run>",
+    "prerequisites": [
+      "PATH 中的 Claude CLI；本次版本 2.1.212",
+      "已安装 test/fixtures/native-profile 锁定依赖",
+      "仅使用新建 docs/tmp 子目录；脚本提供隔离配置及合成鉴权，不读取真实凭据"
+    ]
+  },
+  "cases": [
+    {
+      "round": 1,
+      "status": "submitted",
+      "modelCalls": 6,
+      "executionId": "b351d40d-59ff-4691-91cc-2a4e465dc626",
+      "sessionId": "task-execution-f84d2e75-508d-4fd1-8498-babaefbd0ad1",
+      "inputVersion": 1,
+      "drained": true,
+      "launch": {
+        "sessionId": "f84d2e75-508d-4fd1-8498-babaefbd0ad1",
+        "resume": null,
+        "backgroundTasksDisabled": true
+      },
+      "criteria": [
+        "Write 实际效果前 Host operation.start；前置独立检查文件不存在",
+        "Read 独立读回固定内容",
+        "真实 progress/team/submit MCP 被接纳",
+        "提交对应 tool_result、CLI 终态及受管范围 waitForExit=true 后完成"
+      ],
+      "journal": [
+        {
+          "sequence": 1,
+          "type": "start",
+          "resumed": false
+        },
+        {
+          "sequence": 6,
+          "type": "session.bound"
+        },
+        {
+          "sequence": 9,
+          "type": "tool.started",
+          "tool": "Write"
+        },
+        {
+          "sequence": 10,
+          "type": "bridge.result",
+          "bridge": "permission"
+        },
+        {
+          "sequence": 12,
+          "type": "tool.settled",
+          "tool": "Write"
+        },
+        {
+          "sequence": 14,
+          "type": "tool.started",
+          "tool": "Read"
+        },
+        {
+          "sequence": 15,
+          "type": "bridge.result",
+          "bridge": "permission"
+        },
+        {
+          "sequence": 17,
+          "type": "tool.settled",
+          "tool": "Read"
+        },
+        {
+          "sequence": 19,
+          "type": "bridge.result",
+          "bridge": "execution_report_progress"
+        },
+        {
+          "sequence": 22,
+          "type": "bridge.result",
+          "bridge": "execution_team_read"
+        },
+        {
+          "sequence": 25,
+          "type": "submission"
+        },
+        {
+          "sequence": 26,
+          "type": "bridge.result",
+          "bridge": "execution_submit"
+        },
+        {
+          "sequence": 31,
+          "type": "exit"
+        },
+        {
+          "sequence": 32,
+          "type": "drained"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "status": "submitted",
+      "modelCalls": 5,
+      "executionId": "b351d40d-59ff-4691-91cc-2a4e465dc626",
+      "sessionId": "task-execution-f84d2e75-508d-4fd1-8498-babaefbd0ad1",
+      "inputVersion": 2,
+      "drained": true,
+      "launch": {
+        "sessionId": null,
+        "resume": "f84d2e75-508d-4fd1-8498-babaefbd0ad1",
+        "backgroundTasksDisabled": true
+      },
+      "criteria": [
+        "显式 --resume 原 UUID；没有 --session-id 或替身",
+        "同 executionId inputVersion 递增；旧结果保留",
+        "Read/progress/team/submit 继续通过；物理排空"
+      ],
+      "journal": [
+        {
+          "sequence": 33,
+          "type": "start",
+          "resumed": true
+        },
+        {
+          "sequence": 38,
+          "type": "session.bound"
+        },
+        {
+          "sequence": 41,
+          "type": "tool.started",
+          "tool": "Read"
+        },
+        {
+          "sequence": 42,
+          "type": "bridge.result",
+          "bridge": "permission"
+        },
+        {
+          "sequence": 44,
+          "type": "tool.settled",
+          "tool": "Read"
+        },
+        {
+          "sequence": 46,
+          "type": "bridge.result",
+          "bridge": "execution_report_progress"
+        },
+        {
+          "sequence": 49,
+          "type": "bridge.result",
+          "bridge": "execution_team_read"
+        },
+        {
+          "sequence": 52,
+          "type": "submission"
+        },
+        {
+          "sequence": 53,
+          "type": "bridge.result",
+          "bridge": "execution_submit"
+        },
+        {
+          "sequence": 58,
+          "type": "exit"
+        },
+        {
+          "sequence": 59,
+          "type": "drained"
+        }
+      ]
+    }
+  ],
+  "readback": {
+    "targetRelativePath": "work/fixture.txt",
+    "exactContent": "synthetic-cli-adapter\n",
+    "operations": [
+      {
+        "operationId": "operation-45f6f5523329eabb5114ebe7e12c469375cadeb8",
+        "state": "succeeded"
+      }
+    ],
+    "documents": [
+      {
+        "path": "outputs/b351d40d-59ff-4691-91cc-2a4e465dc626/round-1.md",
+        "bytes": 1919,
+        "sha256": "1789ac8e48ae3502e28c003cbac8a2880a3b60e3884db43b4923ca4442a37759"
+      },
+      {
+        "path": "outputs/b351d40d-59ff-4691-91cc-2a4e465dc626/round-2.md",
+        "bytes": 1922,
+        "sha256": "79ee0c402058d28332e6d1a9a9d08d7ae4d2f83406d90dc82cd49a26cbd7d2c2"
+      }
+    ],
+    "journal": {
+      "relativePath": "outputs/b351d40d-59ff-4691-91cc-2a4e465dc626/claude-events.jsonl",
+      "events": 59,
+      "sha256": "8b5772c0f2ac06de9369f77217b3828de2a024f97400e9bd1552e22de765fd85"
+    }
+  },
+  "background": {
+    "hostEnvironmentApplied": true,
+    "variable": "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+    "modelBashSchemaOffersRunInBackground": false,
+    "evidence": "所有 11 次合成模型请求均断言 Bash schema 不含 run_in_background；独立固定协议反例验证异常 backgroundTaskId 保留 unknown 并物理排空。",
+    "limitation": "本轮没有真实 Bash 前台超时提升探针；禁自动后台合同依据官方开关，非任意外部或远程进程清理证明。"
+  },
+  "nativeLifecycle": {
+    "status": "PASS",
+    "tests": 26,
+    "skipped": 0,
+    "seconds": 14.6,
+    "log": "cli-native-independent-4.log",
+    "sourceRecord": "cli-native-independent-4-source.json"
+  },
+  "preservedFirstObservations": [
+    {
+      "reference": "docs/tmp/claude-adapter-native-round-7-first",
+      "status": "协议运行 PASS；摘要缺陷",
+      "source": {
+        "packages/dingtalk-dsh-assistant/claude-execution-session.js": "023574c944efce869e7f463fbc5e9131a43d47ffe5f34ad53f8e58fccdf93cda",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "ead17a59dd1b6eb0afc1d04781e489a0f05caea188816c288129bee8f9ddc930",
+        "docs/acceptance/task-collaboration-quality/scripts/verify-claude-adapter.mjs": "ce66675087b0ef63a82fb84388b54a1d7ae67c1f1e1786d5123a23031d7807a4"
+      },
+      "defect": "第二轮缺 --session-id 时摘要误取 argv[0]；真实 resume 与 journal 正确。原证据保留，新目录复验已修 null。"
+    },
+    {
+      "reference": "cli-native-independent-2.log",
+      "status": "14/15 PASS，1 FAIL",
+      "defect": "stdout tool_result 结算与 HTTP submit 顺序竞争；以真实 toolUseId 和串行 stdout 消费关联后复验通过。"
+    },
+    {
+      "reference": "cli-native-boundaries-1.log",
+      "status": "断言通过但进程未退出，不计 PASS",
+      "defect": "waitForExit=false 时跳过关闭权限桥；改为始终关桥并保留未排空占位，26例复验通过。"
+    }
+  ],
+  "boundaries": [
+    "没有真实 Claude 账户或模型调用；固定响应不证明模型规划/协作能力",
+    "没有真实钉钉消息、业务任务或远程业务效果",
+    "没有真实多成员 peer 往返、新反馈跨真实模型请求或全部工具/平台/版本验证",
+    "两份本轮执行文档已独立读回；本探针未在切轮前冻结旧文档 SHA，不能据此反推全过程旧轮不变",
+    "权限准入不是 OS 沙箱；无法证明排空时保留占位，unknown 不自动结清或重放",
+    "原始 CLI transcript、合成 SQLite 和完整模型协议留 docs/tmp，不提交"
+  ]
+}

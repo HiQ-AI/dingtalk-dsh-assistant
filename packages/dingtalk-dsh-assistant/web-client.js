@@ -113,7 +113,8 @@ window.__ModuleLoader__.load({
       const modelSaved = desired.model.trim() === actual.model && (desired.reasoningEffort || '') === (actual.reasoningEffort || '')
       const pluginSaved = equal([...new Set(desired.agentNames)], actual.agentNames) && desired.replySignature.trim() === (actual.replySignature || '')
         && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel) && equal(desired.coordinationModel, actual.coordinationModel)
-      return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹和协调）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
+        && (desired.executionBackend ?? 'dsh') === (actual.executionBackend ?? 'dsh')
+      return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹、协调和执行后端）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
     }
 
     function Environment({ value }) {
@@ -134,6 +135,7 @@ window.__ModuleLoader__.load({
       const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
       const [taskModel, setTaskModel] = useState(independentModelDefault)
       const [coordinationModel, setCoordinationModel] = useState(independentModelDefault)
+      const [executionBackend, setExecutionBackend] = useState('dsh')
       const [defaultOptions, setDefaultOptions] = useState(null)
       const { options: taskOptions, error: taskOptionsError } = useIndependentModelOptions(taskModel)
       const { options: coordinationOptions, error: coordinationOptionsError } = useIndependentModelOptions(coordinationModel)
@@ -163,7 +165,8 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!taskDirty.current && overview?.agentConfig?.taskSessionModel) setTaskModel(overview.agentConfig.taskSessionModel)
         if (!taskDirty.current) setCoordinationModel(overview?.agentConfig?.coordinationModel ?? independentModelDefault)
-      }, [overview?.agentConfig?.taskSessionModel, overview?.agentConfig?.coordinationModel])
+        if (!taskDirty.current) setExecutionBackend(overview?.agentConfig?.executionBackend ?? 'dsh')
+      }, [overview?.agentConfig?.taskSessionModel, overview?.agentConfig?.coordinationModel, overview?.agentConfig?.executionBackend])
       useEffect(() => {
         if (taskFeedback?.kind !== 'success') return
         const timer = setTimeout(() => setTaskFeedback(null), 5000)
@@ -194,14 +197,15 @@ window.__ModuleLoader__.load({
         if (taskSaving.current || !taskValid || !coordinationValid || !(taskChanged || coordinationChanged || agentConfigChanged)) return
         taskDirty.current = true
         taskSaving.current = true; setTaskBusy(true); setTaskFeedback(null)
-        const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel, coordinationModel }
+        const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel, coordinationModel, executionBackend }
         try {
           const saved = await request('/config/agent', { method: 'PUT', body: JSON.stringify(desired) })
           refreshGeneration.current++
           taskDirty.current = false
           setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel); setCoordinationModel(saved.coordinationModel)
+          setExecutionBackend(saved.executionBackend ?? 'dsh')
           setAgentNames((saved.agentNames ?? []).join(',')); setReplySignature(saved.replySignature ?? ''); setAgentWorkspace(saved.workspaceDir); setAgentModel({ model: saved.model, reasoningEffort: saved.reasoningEffort ?? '' }); setProxyUrl(saved.proxyUrl ?? '')
-          setTaskFeedback({ kind: 'success', message: 'Agent 配置已保存；下一轮新建或恢复时生效，不中断当前会话。' })
+          setTaskFeedback({ kind: 'success', message: 'Agent 配置已保存；执行后端仅用于新执行，已有执行及续办保持原后端。' })
         } catch (cause) {
           refreshGeneration.current++
           let actual = cause.readback
@@ -243,7 +247,7 @@ window.__ModuleLoader__.load({
         }
       }
       const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
-      const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '')
+      const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '') || executionBackend !== (overview?.agentConfig?.executionBackend ?? 'dsh')
 
       return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
         React.createElement('section', { style: panel },
@@ -294,10 +298,15 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
         React.createElement(IndependentModelFields, { id: 'task', label: '统筹模型', value: taskModel, change: changeTask,
           options: taskOptions, error: taskOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
-          help: '仅影响任务统筹的下一轮请求；执行和话题仍使用默认处理模型。' }),
+          help: '仅影响任务统筹的下一轮请求；DSH 原生执行和话题仍使用默认处理模型。' }),
         React.createElement(IndependentModelFields, { id: 'coordination', label: '协调模型', value: coordinationModel, change: changeCoordination,
           options: coordinationOptions, error: coordinationOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
           help: '仅影响下一次协调规划；保存模型不会启用协调功能，也不改变运行中的规划会话。' }),
+          React.createElement('label', { htmlFor: 'dingtalk-execution-backend', style: { fontSize: 13, fontWeight: 600, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '执行后端'),
+          React.createElement('select', { id: 'dingtalk-execution-backend', disabled: taskBusy, style: input, value: executionBackend, 'aria-describedby': 'dingtalk-execution-backend-help', onChange: event => { taskDirty.current = true; setExecutionBackend(event.target.value); setTaskFeedback(null) } },
+            React.createElement('option', { value: 'dsh' }, 'DSH 原生（默认）'),
+            React.createElement('option', { value: 'claude-code' }, 'Claude Code CLI')),
+          React.createElement('div', { id: 'dingtalk-execution-backend-help', style: { fontSize: 12, color: colors.muted } }, '仅新执行使用此选择；已有执行及续办保持原后端。Claude Code CLI 使用 CLI 自身默认模型；需在服务账号下安装并登录。'),
           React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
           React.createElement('input', { 'aria-label': 'Agent 网络代理', disabled: taskBusy, placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),

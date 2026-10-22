@@ -21,6 +21,22 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 本机制依赖 DWS 真实消息时间，不把本地序号当流游标，也不承诺修复上游伪造/错误时间。epoch 之前尚未完成的交办不会自动继续，需要用户在新入口重新交办。
 
+## 执行后端配置与核验
+
+已经初始化的任务会话实例切换执行后端不需要新建数据库、迁移任务或重复本页历史清洁启动步骤。代码升级仍沿下文“已初始化实例更新核验”的受控部署流程；配置切换仅影响新建执行，不能迁移已经绑定的成员。
+
+在插件配置页的既有 Agent 表单选择“执行后端”，沿原有唯一保存按钮提交。选项为 DSH 原生（默认）和 Claude Code CLI。`GET /state/agent-config` 的 `executionBackend` 为 `dsh` 或 `claude-code`；未保存时读取 profile 中的 `taskSessions.executionBackend`，两者均缺省时读取 `dsh`，已保存值优先。保存后刷新回读，必要时在受控重启后再次核对。非法值应在写入任何配置前拒绝，保存失败保留页面草稿，不能只凭提示文字认定生效。
+
+启用 CLI 前，在实际服务账号与服务 PATH 下用 `Get-Command claude` 和 `claude --version` 只读核对已安装的命令及版本，操作者按 CLI 自身入口完成登录。插件不自动安装、登录或迁移凭据，也不会因 CLI 不可用改用 DSH。CLI 使用自身默认模型，不接收 DSH 的 provider/model、推理深度、preset、工具或 Skill 注册表；`CLAUDE.md` 按 CLI 自身行为处理，不能认定 DSH 指引已同步。配置页保存成功不证明 CLI 已登录或模型可调用。本轮离线验证后仍需操作者登录，再做下列限定本地文件的实际验收。
+
+- 新建隔离任务，核对新 execution 的 `executionBackend` 与配置一致；再次切换配置后续办原成员，原后端、executionId、会话身份与历史保持不变。缺少后端字段的旧成员继续使用 DSH，不能重建替身来完成切换。
+- 两种后端均沿同一 Task 的 3–10 人团队、阶段报告、成员消息和资源互斥运行。实际读取 `outputs/<executionId>/round-<inputVersion>.md`；续办后旧轮文件不变，新轮文件包含新职责。CLI 受管事件在同目录 `claude-events.jsonl`，DSH 原生日志仍在任务的 `.dsh/sessions/`。路径展示不证明文件写入成功，文档告警须单独核对。
+- 看板中 CLI 成员应显示 Claude Code 标签及原标题、状态、耗时，详情保留工作目录与文档/日志路径，没有“打开 DSH 会话”入口。DSH 成员原生入口仍可读取历史；不通过其他会话界面接管任务生命周期。
+- CLI 原生工具通过 permission MCP 进入 Host 当前身份、版本及 operation 准入。核对自定义 hooks、其他 MCP、嵌套 Agent 和后台任务被禁用，未使用跳过权限参数；适配器固定设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`，门禁仍拒绝 `run_in_background`，异常 Bash `backgroundTaskId` 回执会触发受管进程终止并保留 `unknown`。禁后台不是 OS 沙箱，终止请求不证明实际排空或远程效果消失；非受管进程须单独核验。内部成员消息和配置选择不构成新增业务授权，也不表示 CLI 继承了 DSH 沙箱或全部原生工具能力。
+- 取消与恢复分别核对实际受管进程的退出证明、当前操作账及原绑定。没有 DSH 句柄、已经请求取消或 CLI 输出了结果都不能单独证明排空；不能证明时保留执行占位及应保留的资源锁。CLI `unknown` 保留原记录和保护，本版不走 DSH 原生日志自动对账，也不接受原生失败处理材料冒充 CLI 证据；不得重放原动作、换身份或手改账本清除未知效果。
+
+上述检查分别保留配置回读、协议测试、真实 CLI 推理与产物证据。子进程协议夹具、页面测试或健康状态不能替代实际 CLI 登录、模型调用及业务交付验证；切换回 DSH 也只作用于新建执行。
+
 ## 开放前核验
 
 - 用新 profile 启动，核对实际 workspace、dbPath、instanceId、epoch 和独立 domain；确认旧任务/授权/通知均不出现在新看板。

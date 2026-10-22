@@ -1,0 +1,21 @@
+✔ fixed baseline registrations, variants and helper bodies survive the physical split (564.9589ms)
+▶ omissions, duplicates, classification changes and fixture edits cannot silently exit Release
+  ✔ omit (199.44ms)
+  ✔ duplicate (257.1194ms)
+  ✔ unclassified (179.1444ms)
+  ✔ fixture (126.4067ms)
+  ✔ mixed-boundary (84.5396ms)
+✔ omissions, duplicates, classification changes and fixture edits cannot silently exit Release (848.0477ms)
+✔ import changes and new historical helper statements require review (213.4541ms)
+✔ a classified destination cannot disappear from the runnable discovery set (154.3827ms)
+✔ registration catalog hashes full parameter loops, nested assertions, options and CRLF (0.4743ms)
+✔ recursive discovery sees new nested tests and rejects unsupported test extensions (7.2658ms)
+✔ unknown tests conservatively enter Release and historical selection never accepts globs or duplicates (624.0679ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2570.6977

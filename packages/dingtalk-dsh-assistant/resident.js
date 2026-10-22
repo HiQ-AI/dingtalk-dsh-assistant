@@ -79,6 +79,7 @@ export async function apply(ctx, config = {}) {
     agentReplySignature: config.agentReplySignature,
     taskSessionModel: taskConfig,
     coordinationModel: taskConfig.coordination ?? {},
+    executionBackend: taskConfig.executionBackend ?? 'dsh',
     resumeTimeoutMs: config.resumeTimeoutMs ?? 10_000,
     maxConcurrentTasks: config.maxConcurrentTasks ?? 5,
     maxGoalRounds: config.maxGoalRounds ?? 24,

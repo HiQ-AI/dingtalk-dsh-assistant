@@ -202,6 +202,7 @@ const taskSchema = z.object({
   reopenContext: z.string().min(1).optional(), resumeContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
 const schedulerSchema = z.object({
+  executionBackend: z.enum(['dsh', 'claude-code']).optional(),
   taskSessionModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
   coordinationModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
   performanceProjection: performanceProjectionSchema.optional(),
@@ -596,6 +597,7 @@ export async function openResidentStore(storageDomain) {
       return { workspaceDir: agentWorkspaceDir }
     },
     getProxyUrl: () => scheduler.get('runtime')?.proxyUrl,
+    getExecutionBackend: () => scheduler.get('runtime')?.executionBackend,
     getTaskSessionModelConfig: () => scheduler.get('runtime')?.taskSessionModel,
     getCoordinationModelConfig: () => scheduler.get('runtime')?.coordinationModel,
     setTaskSessionModelConfig: async (taskSessionModel) => {
