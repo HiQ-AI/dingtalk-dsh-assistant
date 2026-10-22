@@ -21,7 +21,7 @@ async function fixture(t, { loseAckAt } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'coordination-changes-')), snapshot = { tables: {}, global: null }
   const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'changes', initialize: true }
   let store = await openDynamicTaskStore(options), resident = await openResidentStore(facility(snapshot)), service, lost = false
-  const errors = [], handoffs = [], applied = []
+  const errors = [], recovered = [], handoffs = [], applied = []
   await resident.subscribe({ groupId: 'group' })
   const query = (kind, args = {}) => store.query({ kind, ...args })
   const command = async (kind, args, id = randomUUID()) => {
@@ -40,7 +40,7 @@ async function fixture(t, { loseAckAt } = {}) {
   const open = () => service = openIndependentCoordination({ config: {}, residentStore: residentAdapter, query, command,
     ownerActorId: 'author', planner: { plan: () => assert.fail('Recovery must not ask a model to reinterpret accepted or rejected work'), close() {} },
     onApplied: async member => applied.push(member.id), onError: (id, error) => errors.push({ id, code: error.code ?? error.message }),
-    onHandoff: groupId => handoffs.push(groupId) })
+    onHandoff: groupId => handoffs.push(groupId), onRecovered: id => recovered.push(id) })
   open()
   t.after(async () => { await service.close(); await resident.close(); await store.close(); await rm(directory, { recursive: true, force: true }) })
   for (const taskId of ['B','A']) await command('task.create', { taskId, groupId: 'group', ownerActorId: 'author', request: `original ${taskId}` })
@@ -55,7 +55,7 @@ async function fixture(t, { loseAckAt } = {}) {
   const arrangement = () => ({ kind: 'arrangement', commonContext: '', members: ['A','B'].map(taskId => ({ taskId,
     action: 'task-context', inputVersion: 1, runSequence: 1, progressImpact: 'preserve', impactReason: 'material only',
     context: `${taskId} material`, afterTaskIds: taskId === 'B' ? ['A'] : [] })) })
-  return { command, query, message, arrangement, errors, handoffs, applied,
+  return { command, query, message, arrangement, errors, recovered, handoffs, applied,
     get service() { return service }, get resident() { return resident },
     async runJobs() {
       for (const job of await query('coordination.job.list')) if (job.state === 'waiting') {
@@ -77,6 +77,7 @@ for (const loseAckAt of [undefined, 'coordination.source.freezeHandoff', 'reside
     const ledger = await f.query('coordination.source', { unitId: request.unitId, revision: request.unitRevision })
     assert.equal(resident.dispatchOwner, 'legacy-topic'); assert.equal(resident.generation, 2)
     assert.equal(ledger.dispatchOwner, 'legacy-topic'); assert.equal(ledger.fence, 2)
+    assert.ok(f.recovered.includes(request.reservationId))
     assert.equal(f.resident.getGroup('group').messages.find(message => message.messageId === 'wrong-route').routingStatus, 'pending')
     assert.deepEqual(await f.query('coordination.list'), [])
     assert.deepEqual(await f.query('task.list'), before)

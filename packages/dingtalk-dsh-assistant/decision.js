@@ -29,16 +29,16 @@ const taskReopen = z.strictObject({ kind: z.literal('task-reopen').describe('向
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel])
 const replyReviewSchema = z.strictObject({
-  kind: z.enum(['confirmation', 'substantive', 'correction']),
-  reviewedOutboundIds: z.array(z.string().min(1)).default([]),
-  sameMatterOutboundIds: z.array(z.string().min(1)).default([]),
-  replaceOutboundIds: z.array(z.string().min(1)).default([]),
+  kind: z.enum(['confirmation', 'substantive', 'correction']).describe('confirmation为接收/任务动作确认；substantive为实质结果且不得替换旧回复；correction为订正且必须指定同事项旧回复。只要有非空reply，即使没有历史候选也必须声明kind。'),
+  reviewedOutboundIds: z.array(z.string().min(1)).default([]).describe('逐一审阅当前历史回复候选后填写其全部outboundId，集合必须与当前候选完全一致，不重复、不猜造；无候选时为[]。'),
+  sameMatterOutboundIds: z.array(z.string().min(1)).default([]).describe('reviewedOutboundIds中经原文与任务事实核对属于同一事项的子集。confirmation必须包含候选中与本次确认Task相同的已有confirmation，不能漏掉；correction至少一个目标。'),
+  replaceOutboundIds: z.array(z.string().min(1)).default([]).describe('待替换旧回复ID，只能来自sameMatterOutboundIds。confirmation和correction必须与sameMatterOutboundIds集合完全相等；substantive必须为[]。不得自动补ID或跳过审阅。'),
 })
 // DSH 不支持数组长度约束；先按 reply / reason 分支，避免投影时把互斥字段合并为可同时填写。
 const replyDecisionSchema = z.strictObject({
   ...decisionBasis, actions: z.array(taskAction),
   reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，提交任务动作时 Host 也要求非空确认。此分支不得填写 reason。'),
-  replyReview: replyReviewSchema.optional(),
+  replyReview: replyReviewSchema.optional().describe('有非空reply时Host要求提交本审阅，包括kind；即使候选为空也须声明kind及三个空ID列表。optional保留补答协议，并不表示可省略回复审阅；先阅读当前候选再填真实ID。'),
 }).superRefine((decision, ctx) => {
   if (decision.actions.length === 0 && decision.reply.length === 0) ctx.addIssue({ code: 'custom', path: ['reply'], message: 'actions 为空时 reply 必须非空；不回复请改用 actions: [] + reason 分支。' })
 })

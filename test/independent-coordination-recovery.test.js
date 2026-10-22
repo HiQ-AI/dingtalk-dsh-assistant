@@ -14,8 +14,8 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
   let store = await openDynamicTaskStore(options), service
   const entry = { reservationId: 'reservation', generation: 1, unitId: 'unit', unitRevision: 1, dispatchOwner: 'coordination',
     semanticState: 'reserved', settled: false, frozen: false,
-    sourceSnapshot: { messageId: 'message', messageVersion: 1, actorId, unitText: '继续 A；稍后查询进度', text: '继续 A；稍后查询进度', sourceRefs: [] } }
-  const errors = [], handoffs = [], commands = []
+    sourceSnapshot: { messageId: 'message', messageVersion: 1, actorId, unitText: '继续 A；稍后查询进度', text: '继续 A；稍后查询进度', sourceRefs: [], occurredAt: new Date().toISOString() } }
+  const errors = [], recovered = [], handoffs = [], commands = []
   const residentStore = {
     getSourceDispatchOwnership: () => clone(entry),
     listSourceDispatchOwnership: () => [clone(entry)],
@@ -44,7 +44,7 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
   await command('task.create', { taskId: 'A', groupId: 'group', ownerActorId: 'task-owner', request: 'original A', requirements: ['A accepted'] })
   const open = () => service = openIndependentCoordination({ config: enabled ? { enabled: true, provider: 'test', model: 'test' } : {},
     residentStore, query, command, ownerActorId: 'configured-owner', planner: planner ?? { plan: async () => {}, close: async () => {} },
-    onApplied: async member => { handoffs.push(member.id) }, onError: (id, error) => errors.push({ id, code: error.code ?? error.message }) })
+    onApplied: async member => { handoffs.push(member.id) }, onError: (id, error) => errors.push({ id, code: error.code ?? error.message }), onRecovered: id => recovered.push(id) })
   open()
   t.after(async () => { await service.close(); await store.close(); await rm(directory, { recursive: true, force: true }) })
   const request = () => ({ ...clone(entry), groupId: 'group' })
@@ -52,7 +52,7 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
     members: [{ taskId: 'A', action, inputVersion: 1, runSequence: 1, progressImpact: 'preserve', impactReason: 'only extra context', context: 'additional material', afterTaskIds: [] }] })
   const schedule = () => ({ kind: 'schedule', timezone: 'Asia/Shanghai', rule: { kind: 'once', at: new Date(Math.floor(Date.now() / 1000) * 1000 + 3600000).toISOString() },
     taskIds: ['A'], recipientIds: ['author'], interpretation: 'one hour later' })
-  return { entry, errors, handoffs, commands, query, command, request, arrangement, schedule,
+  return { entry, errors, recovered, handoffs, commands, query, command, request, arrangement, schedule,
     get service() { return service },
     async runJobs() {
       for (const job of await query('coordination.job.list')) if (job.state === 'waiting') {
@@ -77,6 +77,81 @@ for (const invalid of ['recipient','timezone','past','rule']) test(`invalid sche
   assert.deepEqual(await f.query('coordination.list'), [])
   assert.deepEqual(await f.query('coordination.schedule.list'), [])
   assert.equal(f.entry.semanticState, 'reserved'); assert.equal(f.entry.settled, false)
+})
+
+test('read-query requires observed directory pages while mutations and conditional actions still require full contracts', async t => {
+  const f = await fixture(t)
+  await f.command('task.create', { taskId: 'B', groupId: 'group', request: 'B' })
+  await f.command('task.create', { taskId: 'foreign', groupId: 'other', request: 'foreign' })
+  await assert.rejects(f.service.context(f.request(), { taskIds: ['foreign'] }), { code: 'COORDINATION_TASK_SCOPE' })
+  await assert.rejects(f.service.submit(f.request(), f.schedule()), { code: 'COORDINATION_CONTEXT_REQUIRED' })
+  const page = await f.service.context(f.request(), { limit: 1 })
+  assert.equal(page.tasks.length, 1); assert.equal(page.nextOffset, 1)
+  assert.equal(page.taskContexts.length, 0)
+  assert.equal(page.source.occurredAt, f.entry.sourceSnapshot.occurredAt); assert.ok(Date.parse(page.currentTime))
+  const hidden = ['A','B'].find(id => id !== page.tasks[0].taskId)
+  await assert.rejects(f.service.submit(f.request(), { ...f.schedule(), taskIds: [hidden] }), { code: 'COORDINATION_CONTEXT_REQUIRED' })
+  await assert.rejects(f.service.context(f.request(), { taskIds: ['foreign'] }), { code: 'COORDINATION_TASK_SCOPE' })
+  await f.service.context(f.request(), { offset: page.nextOffset, limit: 1 })
+  await assert.rejects(f.service.submit(f.request(), f.arrangement()), { code: 'COORDINATION_CONTEXT_REQUIRED' })
+  await assert.rejects(f.service.submit(f.request(), { ...f.schedule(), actionKind: 'read-query', conditionalMembers: f.arrangement('task-continue').members }), { code: 'COORDINATION_CONTEXT_REQUIRED' })
+  assert.deepEqual(await f.query('coordination.list'), [])
+  const before = await f.query('task.list', { groupId: 'group' })
+  await f.service.submit(f.request(), { ...f.schedule(), taskIds: ['A','B'] })
+  assert.deepEqual((await f.query('coordination.schedule.list'))[0].action.taskIds, ['A','B'])
+  assert.deepEqual(await f.query('task.list', { groupId: 'group' }), before)
+})
+
+for (const args of [{ limit: 100 }, { offset: -1 }, { taskIds: Array(9).fill('A') }, { taskIds: 'A' },
+  { coordinationIds: Array(5).fill('C') }, { arrangementSourceUnitId: 'unit' }, { unknown: 1 }])
+  test(`context contract rejects invalid inputs before any authorization: ${JSON.stringify(args)}`, async t => {
+    const f = await fixture(t)
+    await assert.rejects(f.service.context(f.request(), args), { code: 'COORDINATION_CONTEXT_RANGE' })
+    await assert.rejects(f.service.submit(f.request(), f.schedule()), { code: 'COORDINATION_CONTEXT_REQUIRED' })
+    assert.deepEqual(await f.query('coordination.list'), [])
+  })
+
+for (const delay of [17_000, 900_001]) test(`processing delay ${delay}ms preserves original message time and delegates misfire to the schedule`, async t => {
+  const start = Date.parse('2026-10-22T07:31:45.000Z'), due = '2026-10-22T07:34:45.000Z'
+  t.mock.timers.enable({ apis: ['Date'], now: start })
+  const f = await fixture(t)
+  await f.service.context(f.request())
+  const before = await f.query('task.get', { taskId: 'A' })
+  t.mock.timers.tick(180_000 + delay)
+  await f.service.submit(f.request(), { ...f.schedule(), rule: { kind: 'once', at: due } })
+  const schedule = (await f.query('coordination.schedule.list'))[0]
+  assert.equal(schedule.nextDueAt, due)
+  await f.command('coordination.schedule.scan')
+  const occurrence = (await f.query('coordination.occurrence.list'))[0]
+  assert.equal(occurrence.plannedAt, due)
+  assert.equal(occurrence.actionState, delay > 900_000 ? 'expired' : 'waiting')
+  assert.deepEqual(await f.query('task.get', { taskId: 'A' }), before)
+})
+
+test('a past time without a reliable source timestamp remains unaccepted', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-22T07:35:00.000Z') })
+  const f = await fixture(t)
+  await f.service.context(f.request())
+  delete f.entry.sourceSnapshot.occurredAt
+  await assert.rejects(f.service.submit(f.request(), { ...f.schedule(), rule: { kind: 'once', at: '2026-10-22T07:34:45.000Z' } }), { code: 'DYNAMIC_COORDINATION_TIME_PAST' })
+  assert.deepEqual(await f.query('coordination.schedule.list'), [])
+})
+
+test('recovery keeps planning failures during backoff and retires the alert only after durable semantic settlement', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-22T07:00:00Z') })
+  let attempts = 0, f
+  f = await fixture(t, { enabled: true, planner: { close: async () => {}, plan: async request => {
+    if (++attempts === 1) throw Object.assign(new Error('no submission'), { code: 'COORDINATION_NO_SUBMISSION' })
+    return f.service.submit(request, { kind: 'clarify', question: 'Which task?', candidates: ['A','B'] })
+  } } })
+  await f.service.recoverGroup('group'); await f.service.recoverGroup('group')
+  assert.equal(attempts, 1); assert.deepEqual(f.recovered, [])
+  assert.equal(f.errors[0].code, 'COORDINATION_NO_SUBMISSION')
+  t.mock.timers.tick(5000); await f.service.recoverGroup('group')
+  assert.equal(attempts, 2); assert.deepEqual(f.recovered, ['reservation'])
+  assert.equal((await f.query('coordination.source', { unitId: 'unit', revision: 1 })).attemptCount, 1)
+  assert.equal(f.entry.semanticState, 'needs_clarification')
+  assert.equal((await f.query('notification.list')).length, 1)
 })
 
 test('accept plus schedule creation is one ledger transaction and an invalid direct schedule rolls both back', async t => {

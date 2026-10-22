@@ -1,0 +1,391 @@
+{
+  "coverage": {
+    "api": "observed-events-only",
+    "completeness": "incomplete",
+    "performanceRows": 3,
+    "sessions": 20,
+    "messages": 15,
+    "limitations": [
+      "只统计当日仍保留的消息与已投影outbox；sourceOccurredAt为消息发生时间，不是独立本机入站时钟。",
+      "会话关联以输入含消息ID或来源ownership为准，跨消息共享会话不等于独占耗时。",
+      "modelMs是step开始至assistant/message，包含本地准备与网络；不声称纯provider推理耗时。"
+    ]
+  },
+  "messages": [
+    {
+      "message": "72a41858e7f9",
+      "sourceOccurredAt": 1792630988044,
+      "earliestRelatedReplyMs": 114182,
+      "replyClassification": "confirmation",
+      "eligibleForAdmissionLatency": true,
+      "stages": [
+        {
+          "session": "7492b61641d7",
+          "kind": "route",
+          "start": 1792630988905,
+          "end": 1792631008427,
+          "turns": 1,
+          "steps": 4,
+          "modelMs": 18911,
+          "toolErrors": 1
+        },
+        {
+          "session": "754f97f36715",
+          "kind": "decision",
+          "start": 1792631008473,
+          "end": 1792631088887,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 79256,
+          "toolErrors": 3
+        }
+      ],
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "confirmation",
+          "sendStartedAt": "2026-10-22T01:04:50.174Z",
+          "deliveredAt": "2026-10-22T01:05:02.226Z",
+          "sendMs": 12052
+        }
+      ]
+    },
+    {
+      "message": "96b6d9b53f04",
+      "sourceOccurredAt": 1792633189000,
+      "earliestRelatedReplyMs": 119390,
+      "replyClassification": "confirmation",
+      "eligibleForAdmissionLatency": true,
+      "stages": [
+        {
+          "session": "49741b85a587",
+          "kind": "route",
+          "start": 1792633197825,
+          "end": 1792633213028,
+          "turns": 1,
+          "steps": 3,
+          "modelMs": 13468,
+          "toolErrors": 1
+        },
+        {
+          "session": "6661a365af09",
+          "kind": "decision",
+          "start": 1792633213609,
+          "end": 1792633281513,
+          "turns": 1,
+          "steps": 6,
+          "modelMs": 62922,
+          "toolErrors": 2
+        }
+      ],
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "confirmation",
+          "sendStartedAt": "2026-10-22T01:41:22.596Z",
+          "deliveredAt": "2026-10-22T01:41:48.390Z",
+          "sendMs": 25794
+        }
+      ]
+    },
+    {
+      "message": "420eeb776145",
+      "sourceOccurredAt": 1792633446489,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [
+        {
+          "session": "384873ff5716",
+          "kind": "route",
+          "start": 1792633448996,
+          "end": 1792633481243,
+          "turns": 1,
+          "steps": 4,
+          "modelMs": 28198,
+          "toolErrors": 1
+        },
+        {
+          "session": "bd5d1d449ed1",
+          "kind": "decision",
+          "start": 1792633481696,
+          "end": 1792633493933,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 10539,
+          "toolErrors": 0
+        }
+      ],
+      "replies": []
+    },
+    {
+      "message": "9835943da741",
+      "sourceOccurredAt": 1792633814721,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [
+        {
+          "session": "e255c9cb5f1b",
+          "kind": "route",
+          "start": 1792633815407,
+          "end": 1792633822302,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6116,
+          "toolErrors": 0
+        },
+        {
+          "session": "2c9784884ad1",
+          "kind": "route",
+          "start": 1792633822876,
+          "end": 1792633832055,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6446,
+          "toolErrors": 0
+        },
+        {
+          "session": "d28326b7cce2",
+          "kind": "decision",
+          "start": 1792633832459,
+          "end": 1792633844090,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 9676,
+          "toolErrors": 0
+        }
+      ],
+      "replies": []
+    },
+    {
+      "message": "c1ba7a6c65d0",
+      "sourceOccurredAt": 1792633833340,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [
+        {
+          "session": "0e813348ca84",
+          "kind": "route",
+          "start": 1792633844693,
+          "end": 1792633853008,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6276,
+          "toolErrors": 0
+        }
+      ],
+      "replies": []
+    },
+    {
+      "message": "1abf540c8fb0",
+      "sourceOccurredAt": 1792633909282,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [
+        {
+          "session": "61ea72998bef",
+          "kind": "route",
+          "start": 1792633910800,
+          "end": 1792633922811,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 9555,
+          "toolErrors": 0
+        },
+        {
+          "session": "b212024d95ef",
+          "kind": "decision",
+          "start": 1792633923595,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 0,
+          "toolErrors": 0
+        },
+        {
+          "session": "63ed0b876ecd",
+          "kind": "decision",
+          "start": 1792634330450,
+          "end": 1792634343121,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 11863,
+          "toolErrors": 0
+        }
+      ],
+      "replies": []
+    },
+    {
+      "message": "984bf6a64f9e",
+      "sourceOccurredAt": 1792633944000,
+      "earliestRelatedReplyMs": 756964,
+      "replyClassification": "related-substantive-unverified",
+      "eligibleForAdmissionLatency": false,
+      "stages": [
+        {
+          "session": "b9cd6897dda3",
+          "kind": "route",
+          "start": 1792634343229,
+          "end": 1792634359271,
+          "turns": 1,
+          "steps": 3,
+          "modelMs": 14015,
+          "toolErrors": 1
+        },
+        {
+          "session": "1147850ccf99",
+          "kind": "decision",
+          "start": 1792634359477,
+          "end": 1792634524284,
+          "turns": 2,
+          "steps": 10,
+          "modelMs": 125053,
+          "toolErrors": 1
+        }
+      ],
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "substantive",
+          "sendStartedAt": "2026-10-22T02:04:00.032Z",
+          "deliveredAt": "2026-10-22T02:05:00.964Z",
+          "sendMs": 60932
+        }
+      ]
+    },
+    {
+      "message": "7188058c8cd7",
+      "sourceOccurredAt": 1792634761312,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [],
+      "replies": []
+    },
+    {
+      "message": "303313e13afb",
+      "sourceOccurredAt": 1792635975734,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [],
+      "replies": []
+    },
+    {
+      "message": "d47fc0ecc5e6",
+      "sourceOccurredAt": 1792636757440,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [],
+      "replies": []
+    },
+    {
+      "message": "4a44001eed4b",
+      "sourceOccurredAt": 1792637275651,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [],
+      "replies": []
+    },
+    {
+      "message": "7a5e356eeefa",
+      "sourceOccurredAt": 1792637662545,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [],
+      "replies": []
+    },
+    {
+      "message": "f1aed7429261",
+      "sourceOccurredAt": 1792638325449,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [],
+      "replies": []
+    },
+    {
+      "message": "1508f4198d0b",
+      "sourceOccurredAt": 1792654305381,
+      "earliestRelatedReplyMs": 219088,
+      "replyClassification": "coordination-clarification",
+      "eligibleForAdmissionLatency": true,
+      "stages": [
+        {
+          "session": "0c24552e1a14",
+          "kind": "route",
+          "start": 1792654306089,
+          "end": 1792654312915,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6424,
+          "toolErrors": 0
+        },
+        {
+          "session": "a3df39f68b29",
+          "kind": "independent",
+          "start": 1792654313031,
+          "end": 1792654359129,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 45739,
+          "toolErrors": 2
+        },
+        {
+          "session": "d6a8d10771d3",
+          "kind": "independent",
+          "start": 1792654367404,
+          "end": 1792654435920,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 68261,
+          "toolErrors": 2
+        },
+        {
+          "session": "734a8fce5e9d",
+          "kind": "independent",
+          "start": 1792654502324,
+          "end": 1792654514142,
+          "turns": 1,
+          "steps": 2,
+          "modelMs": 11661,
+          "toolErrors": 0
+        }
+      ],
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "substantive",
+          "sendStartedAt": "2026-10-22T07:35:14.091Z",
+          "deliveredAt": "2026-10-22T07:35:24.469Z",
+          "sendMs": 10378
+        }
+      ]
+    },
+    {
+      "message": "98ec8155cb36",
+      "sourceOccurredAt": 1792654580070,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "stages": [
+        {
+          "session": "5af10a7ed766",
+          "kind": "route",
+          "start": 1792654580711,
+          "end": 1792654631282,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 49088,
+          "toolErrors": 0
+        }
+      ],
+      "replies": []
+    }
+  ]
+}

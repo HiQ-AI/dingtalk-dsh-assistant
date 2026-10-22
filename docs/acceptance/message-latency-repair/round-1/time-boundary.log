@@ -1,0 +1,26 @@
+✔ offset proposal persists a canonical due time and one slot across restart and repeated scans (125.4211ms)
+✔ future-only revision preserves an accepted occurrence and its frozen target across restart (58.5956ms)
+✔ a started occurrence keeps its accepted revision while a future rule and recipient change is committed (36.0851ms)
+✔ explicit same-slot replacement transfers current pointer and permanently fences the old occurrence (65.1465ms)
+✔ explicit reschedule preserves replacement chain and cannot run before the new slot (40.6946ms)
+✔ pause retains due cursor and resume coalesces offline periods under the original misfire policy (32.7239ms)
+✔ coordination cancellation stops new due instances and prevents already claimed read results (30.7842ms)
+✔ one waiting backlog is retained while active work or unknown delivery prevents overlapping execution (39.0446ms)
+✔ expired one-time schedule terminates visibly; multi-year offline coalescing has an exact count (79.5377ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=0 (60.9865ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=17000 (73.9856ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=900000 (70.6293ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=900001 (59.2865ms)
+✔ one-time creation already late uses original due instant rather than silently dropping the slot (48.6925ms)
+✔ proposal instants normalize once while durable scheduling retains canonical UTC identities (21.6122ms)
+✔ single UTC slot is never silently shifted or repeated (0.7769ms)
+✔ daily and weekly rules use local wall time (1.66ms)
+✔ DST missing wall time skips the day; repeated wall time runs at first UTC occurrence only (2.149ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1666.2106

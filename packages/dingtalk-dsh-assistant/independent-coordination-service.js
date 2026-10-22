@@ -1,4 +1,4 @@
-import { createIndependentCoordinationPlanner, coordinationModelSelection, coordinationProposalSchema } from './independent-coordination-planner.js'
+import { createIndependentCoordinationPlanner, coordinationModelSelection, coordinationProposalSchema, coordinationContextSchema } from './independent-coordination-planner.js'
 import { freezeCoordinationMembers } from './coordination-task-commands.js'
 import { stableId } from './topic-model.js'
 import { validateTimeRule } from './coordination-time.js'
@@ -10,9 +10,9 @@ const clone = value => JSON.parse(JSON.stringify(value))
 
 /** One Host-owned queue for independent source units; Topic is never its parent. */
 export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config = {}, residentStore, query, command,
-  ownerActorId, onApplied, onError, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
+  ownerActorId, onApplied, onError, onRecovered = () => {}, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
   coordinationModelSelection(config)
-  const observations = new Map(), arrangementObservations = new Map(), running = new Map(), admissions = new Set()
+  const observations = new Map(), catalogObservations = new Map(), arrangementObservations = new Map(), running = new Map(), admissions = new Set()
   let closed = false
   const ownership = request => residentStore.getSourceDispatchOwnership(request.groupId, request.unitId, request.unitRevision)
   const assertOwned = request => {
@@ -23,15 +23,13 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
   const isFrozen = async () => config.mode === 'frozen' || (await query('coordination.runtime'))?.mode === 'frozen'
   async function context(request, args = {}) {
     assertOwned(request)
+    const parsed = coordinationContextSchema.safeParse(args)
+    if (!parsed.success) fail('COORDINATION_CONTEXT_RANGE')
+    args = parsed.data
     const offset = args.offset ?? 0, limit = args.limit ?? 20, sourceOffset = args.sourceOffset ?? 0, arrangementSourceOffset = args.arrangementSourceOffset ?? 0,
       arrangementOffset = args.arrangementOffset ?? 0, memberOffset = args.memberOffset ?? 0
-    if (![offset, sourceOffset, arrangementSourceOffset, arrangementOffset, memberOffset].every(n => Number.isSafeInteger(n) && n >= 0)
-      || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 || (args.taskIds?.length ?? 0) > 8
-      || !Array.isArray(args.coordinationIds ?? []) || (args.coordinationIds?.length ?? 0) > 4) fail('COORDINATION_CONTEXT_RANGE')
-    if ((args.arrangementSourceUnitId !== undefined || args.arrangementSourceUnitRevision !== undefined)
-      && (typeof args.arrangementSourceUnitId !== 'string' || !args.arrangementSourceUnitId.trim()
-        || !Number.isSafeInteger(args.arrangementSourceUnitRevision) || args.arrangementSourceUnitRevision < 1)) fail('COORDINATION_CONTEXT_RANGE')
     const tasks = (await query('task.list', { groupId: request.groupId })).filter(t => !t.archivedAt)
+    const page = tasks.slice(offset, offset + limit)
     const full = (args.taskIds ?? []).map(id => {
       const task = tasks.find(t => t.taskId === id)
       if (!task) fail('COORDINATION_TASK_SCOPE')
@@ -91,13 +89,14 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     const sourceText = snapshot.text ?? ''
     const arrangements = (await query('coordination.list', { groupId: request.groupId })).reverse()
     const unresolved = residentStore.listSourceDispatchOwnership(request.groupId).filter(r => r.semanticState === 'needs_clarification')
-    return clone({ reservationId: request.reservationId, generation: request.generation, groupId: request.groupId,
+    const result = clone({ reservationId: request.reservationId, generation: request.generation, groupId: request.groupId, currentTime: new Date().toISOString(),
       source: { messageId: snapshot.messageId, messageVersion: snapshot.messageVersion, sourceRefs: snapshot.sourceRefs,
+        occurredAt: snapshot.occurredAt ?? null,
         actorId: snapshot.actorId, unitId: request.unitId, unitRevision: request.unitRevision,
         unitText: snapshot.unitText, original: sourceText.slice(sourceOffset, sourceOffset + 16000),
         sourceOffset, nextSourceOffset: sourceOffset + 16000 < sourceText.length ? sourceOffset + 16000 : null,
         truncated: sourceOffset > 0 || sourceText.length > sourceOffset + 16000 },
-      tasks: tasks.slice(offset, offset + limit).map(t => ({ taskId: t.taskId, title: t.title,
+      tasks: page.map(t => ({ taskId: t.taskId, title: t.title,
         objectivePreview: (t.objective ?? '').slice(0, 300), status: t.status, control: t.control,
         inputVersion: t.requirementRevision, runSequence: t.runSequence })),
       total: tasks.length, offset, nextOffset: offset + limit < tasks.length ? offset + limit : null, hasMore: offset + limit < tasks.length,
@@ -112,6 +111,10 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
         coordinationId: entry.coordinationId, question: entry.clarification, sourcePreview: entry.sourceSnapshot.unitText?.slice(0, 400) })),
       unresolvedTruncated: unresolved.length > 20,
       allowedActions: ['arrangement','schedule','clarify','reject','change','resolve','query','schedule-change','occurrence-control'], limitations: ['同群；收件人目录仅含有来源证据的已观察成员，缺失或重名必须澄清。'] })
+    const catalog = catalogObservations.get(request.reservationId) ?? new Set()
+    catalogObservations.set(request.reservationId, catalog)
+    for (const task of page) catalog.add(task.taskId)
+    return result
   }
   async function ensureSource(request) {
     const snapshot = request.sourceSnapshot
@@ -158,6 +161,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       || resident.handoff?.proof?.dynamicSourceId !== authoritative.id) fail('COORDINATION_HANDOFF_UNSAFE')
     await command('coordination.source.completeHandoff', { sourceId: authoritative.id, fence: authoritative.fence, handoffProof: proof },
       `coordination-complete-handoff:${request.reservationId}:${proof.generation}`)
+    onRecovered(request.reservationId)
     // The Host schedules the legacy router outside this queue; awaiting a nested
     // recoverGroup on the same group would deadlock the persistent handoff.
     try { Promise.resolve(onHandoff(request.groupId)).catch(error => onError(request.reservationId, error)) }
@@ -172,14 +176,16 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
   }
   async function checkObservedTasks(request, proposal) {
     const observed = observations.get(request.reservationId) ?? new Map()
+    const directoryOnly = proposal.kind === 'schedule' && (proposal.actionKind ?? 'read-query') === 'read-query' && !proposal.conditionalMembers?.length
     const targetIds = proposal.kind === 'schedule' && (proposal.actionKind ?? 'read-query') === 'read-query'
       ? proposal.taskIds ?? [] : (proposal.members ?? []).filter(member => member.action !== 'new-task').map(member => member.taskId)
     if (proposal.kind === 'schedule' && proposal.actionKind !== 'task-command' && !targetIds.length) fail('COORDINATION_QUERY_TARGET_REQUIRED')
     for (const id of targetIds) {
       const previous = observed.get(id), current = await query('task.get', { taskId: id })
-      if (!previous) fail('COORDINATION_CONTEXT_REQUIRED')
+      if (!previous && !(directoryOnly && catalogObservations.get(request.reservationId)?.has(id))) fail('COORDINATION_CONTEXT_REQUIRED')
       if (!current || current.groupId !== request.groupId || current.archivedAt) fail('COORDINATION_TASK_SCOPE')
-      if (['requirementRevision','controlRevision','runSequence','contextRevision'].some(key => (previous[key] ?? 0) !== (current[key] ?? 0))) fail('DYNAMIC_TASK_REVISION_STALE')
+      // 纯查询只冻结目标身份，到时读取最新事实；任何附带任务动作仍须完整合同与版本检查。
+      if (!directoryOnly && ['requirementRevision','controlRevision','runSequence','contextRevision'].some(key => (previous[key] ?? 0) !== (current[key] ?? 0))) fail('DYNAMIC_TASK_REVISION_STALE')
     }
     return observed
   }
@@ -197,7 +203,10 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     let schedule
     if (proposal.kind === 'schedule') {
       validateTimeRule(proposal.rule, proposal.timezone)
-      if (proposal.rule.kind === 'once' && Date.parse(proposal.rule.at) <= Date.now()) fail('DYNAMIC_COORDINATION_TIME_PAST')
+      if (proposal.rule.kind === 'once' && Date.parse(proposal.rule.at) <= Date.now()) {
+        const sourceTime = new Date(request.sourceSnapshot.occurredAt ?? NaN).getTime()
+        if (!Number.isFinite(sourceTime) || Date.parse(proposal.rule.at) < Math.floor(sourceTime / 1000) * 1000) fail('DYNAMIC_COORDINATION_TIME_PAST')
+      }
       const known = new Set((await context(request)).recipients.map(recipient => recipient.recipientId))
       if (proposal.recipientIds.some(id => !known.has(id))) fail('COORDINATION_RECIPIENT_UNRESOLVED')
       schedule = { scheduleId: `schedule:${coordinationId}`, timezone: proposal.timezone, rule: proposal.rule,
@@ -212,7 +221,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     : proposal?.kind === 'query' ? proposal.answerText
     : proposal?.pendingClarifications?.length ? `已记录 ${memberCount} 项明确安排；另有 ${proposal.pendingClarifications.length} 项待澄清：${proposal.pendingClarifications.map(item => `[${item.clarificationId}] ${item.question}`).join('；')}。${proposal.allTogether ? '整批一起的要求尚未通过澄清屏障，暂不派发。' : '明确且独立的成员继续处理。'}`
     : proposal?.kind === 'schedule'
-    ? `已记录时间安排：${proposal.interpretation}（${proposal.timezone}）。到期读取事实，动作结果与通知送达分别记录。`
+    ? `已记录时间安排：${proposal.interpretation}（${proposal.timezone}）。按原定时间和补执行窗口处理；超过窗口会报告过期且不执行。动作结果与通知送达分别记录。`
     : ['change','resolve','schedule-change','occurrence-control'].includes(proposal?.kind)
       ? `已记录对原安排的${proposal.kind === 'resolve' ? '澄清补全' : '变更'}；已生效或发送未知的效果不会因此撤回，原任务未被自动取消。`
       : `已记录 ${memberCount} 项原任务安排；接纳不表示业务完成。`
@@ -414,6 +423,8 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
                 const ledger = await query('coordination.source', { unitId: entry.unitId, revision: entry.unitRevision })
                 if (ledger?.dispatchOwner === 'coordination' && ledger.frozen)
                   await finishHandoff({ ...entry, generation: entry.handoff.proof.generation, groupId }, ledger)
+                else if (ledger?.dispatchOwner === 'legacy-topic' && ledger.fence === entry.generation
+                  && ledger.id === entry.handoff.proof.dynamicSourceId) onRecovered(entry.reservationId)
               } catch (error) { onError(entry.reservationId, error) }
             }
             continue
@@ -450,6 +461,8 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
                 throw error
               } finally { admissions.delete(entry.reservationId) }
             }
+            const settled = await query('coordination.source', { unitId: entry.unitId, revision: entry.unitRevision })
+            if (settled && (settled.resolvedBy || ['accepted','needs_clarification'].includes(settled.state))) onRecovered(entry.reservationId)
           } catch (error) { onError(entry.reservationId, error) }
         }
         if (!frozen) {

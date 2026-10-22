@@ -265,13 +265,13 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       if (read('schedules', id, true)) fail('DYNAMIC_COORDINATION_EXISTS')
       try { validateTimeRule(a.rule, a.timezone) } catch { fail('DYNAMIC_COORDINATION_TIME_INVALID') }
       const effectiveFrom = stamp
-      if (a.rule.kind === 'once' && Date.parse(a.rule.at) <= milliseconds) fail('DYNAMIC_COORDINATION_TIME_PAST')
       const schedule = { id, coordinationId: coordination.id, revision: 1, state: 'active', effectiveFrom,
         timezone: text(a.timezone, 'timezone'), rule: clone(a.rule), action: validAction(a.action, coordination.groupId, coordination.id),
         target: validTarget(a.target, coordination.groupId), graceMs: a.graceMs ?? 900000,
         freshnessWindowMs: a.freshnessWindowMs ?? 300000,
         misfirePolicy: a.misfirePolicy ?? 'coalesce-latest', overlapPolicy: 'serial', maxBacklog: 1, cursor: null, history: [],
-        nextDueAt: nextTimeSlot(a.rule, a.timezone, milliseconds), createdAt: stamp }
+        // 单次约定保留原时间：处理延迟由 scan 的既有补执行窗口裁决，不能丢失或改到次日。
+        nextDueAt: a.rule.kind === 'once' ? a.rule.at : nextTimeSlot(a.rule, a.timezone, milliseconds), createdAt: stamp }
       if (!Number.isSafeInteger(schedule.graceMs) || schedule.graceMs < 0 || schedule.graceMs > 604800000) fail('DYNAMIC_ARGUMENT_INVALID')
       if (!Number.isSafeInteger(schedule.freshnessWindowMs) || schedule.freshnessWindowMs < 1000 || schedule.freshnessWindowMs > 86400000) fail('DYNAMIC_ARGUMENT_INVALID')
       if (!['coalesce-latest','catch-up-once','expire'].includes(schedule.misfirePolicy)) fail('DYNAMIC_ARGUMENT_INVALID')

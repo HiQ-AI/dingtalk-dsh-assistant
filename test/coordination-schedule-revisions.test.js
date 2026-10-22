@@ -162,3 +162,47 @@ test('expired one-time schedule terminates visibly; multi-year offline coalescin
   const summary = summarizeTimeSlots({ kind: 'daily', time: '09:00' }, 'Asia/Shanghai', Date.parse('2024-01-01T01:00:00Z'), Date.parse('2026-01-01T01:00:00Z'))
   assert.deepEqual(summary, { latest: '2026-01-01T01:00:00.000Z', count: 732 })
 })
+
+for (const delayMs of [0,17000,900000,900001]) test(`late one-time acceptance preserves original slot and existing grace boundary: delayMs=${delayMs}`,async t=>{
+  const plannedAt='2026-10-21T00:00:00.000Z'
+  const f=await fixture(t,{kind:'once',at:plannedAt})
+  // Model processing may finish at the due instant; scanning can also be delayed.
+  f.tick(delayMs)
+  await f.restart()
+  const occurrence=(await f.scan()).result.occurrences[0]
+  assert.equal(occurrence.plannedAt,plannedAt)
+  assert.equal(occurrence.actionState,delayMs>900000?'expired':'waiting')
+  const schedule=(await f.query('coordination.schedule.list'))[0]
+  assert.equal(schedule.rule.at,plannedAt);assert.equal(schedule.nextDueAt,null)
+  if(delayMs>900000) {
+    assert.equal(schedule.outcome,'expired');assert.deepEqual(await f.jobs(),[])
+    const summary=(await f.command('coordination.aggregate',{coordinationId:'query'})).result
+    assert.match(summary.notification.payload.text,/已过期，本次未执行/)
+  } else {
+    const job=await f.claim(occurrence)
+    await f.command('coordination.job.read',{jobId:job.id,fence:job.fence})
+    const notification=(await f.command('coordination.notification.freeze',{occurrenceId:occurrence.id})).result.notification
+    const permit=(await f.command('notification.start',{notificationId:notification.id})).result.notification
+    await f.command('notification.receipt',{notificationId:notification.id,dispatchToken:permit.dispatchToken,state:'delivered',receipt:{messageId:'synthetic-delivery'}})
+    await f.restart()
+    const replay=(await f.command('coordination.notification.freeze',{occurrenceId:occurrence.id})).result.notification
+    assert.equal(replay.id,notification.id);assert.equal(replay.state,'delivered')
+  }
+  await f.restart();f.tick(86400000)
+  assert.equal((await f.scan()).result.occurrences.length,0)
+  assert.equal((await f.occurrences()).length,1)
+})
+
+for (const [plannedAt,expectedState] of [['2026-10-20T23:59:43.000Z','waiting'],['2026-10-20T23:44:59.000Z','expired']]) test(`one-time creation already late preserves due instant and scan outcome: ${expectedState}`,async t=>{
+  const f=await fixture(t,{kind:'once',at:plannedAt})
+  const schedule=(await f.query('coordination.schedule.list'))[0]
+  assert.equal(schedule.nextDueAt,plannedAt)
+  await f.restart()
+  const occurrence=(await f.scan()).result.occurrences[0]
+  assert.equal(occurrence.actionState,expectedState);assert.equal(occurrence.plannedAt,schedule.rule.at)
+  if(expectedState==='waiting') {
+    const job=await f.claim(occurrence)
+    assert.equal((await f.command('coordination.job.read',{jobId:job.id,fence:job.fence})).result.job.state,'completed')
+  } else assert.deepEqual(await f.jobs(),[])
+  await f.restart();assert.equal((await f.scan()).result.occurrences.length,0)
+})

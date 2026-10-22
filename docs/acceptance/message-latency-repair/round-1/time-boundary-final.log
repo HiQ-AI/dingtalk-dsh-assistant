@@ -1,0 +1,42 @@
+✔ offset proposal persists a canonical due time and one slot across restart and repeated scans (159.7715ms)
+✔ future-only revision preserves an accepted occurrence and its frozen target across restart (101.5409ms)
+✔ a started occurrence keeps its accepted revision while a future rule and recipient change is committed (59.3589ms)
+✔ explicit same-slot replacement transfers current pointer and permanently fences the old occurrence (71.3454ms)
+✔ explicit reschedule preserves replacement chain and cannot run before the new slot (59.3404ms)
+✔ pause retains due cursor and resume coalesces offline periods under the original misfire policy (53.2649ms)
+✔ coordination cancellation stops new due instances and prevents already claimed read results (55.6923ms)
+✔ one waiting backlog is retained while active work or unknown delivery prevents overlapping execution (93.4229ms)
+✔ expired one-time schedule terminates visibly; multi-year offline coalescing has an exact count (144.4795ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=0 (124.5376ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=17000 (122.567ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=900000 (122.8547ms)
+✔ late one-time acceptance preserves original slot and existing grace boundary: delayMs=900001 (87.0718ms)
+✔ one-time creation already late preserves due instant and scan outcome: waiting (101.9172ms)
+✔ one-time creation already late preserves due instant and scan outcome: expired (82.1571ms)
+✔ proposal instants normalize once while durable scheduling retains canonical UTC identities (38.8576ms)
+✔ single UTC slot is never silently shifted or repeated (1.1512ms)
+✔ daily and weekly rules use local wall time (2.7366ms)
+✔ DST missing wall time skips the day; repeated wall time runs at first UTC occurrence only (2.8424ms)
+✔ timer defers a frozen original Task command until due and receives it once without a new Task or session (137.9597ms)
+✔ daily accepted authorization freezes a new exact command per slot and recovers without another user confirmation (119.0025ms)
+✔ weekly command blocks a changed goal instead of extending its old recurring authorization (66.5171ms)
+✔ future schedule edits preserve each slot authorized original text rather than replacing it with the control message (61.9928ms)
+✔ recurring replan advances only through its own prior effective target version (84.3162ms)
+✔ per-slot instruction creation and Task effects survive lost acknowledgement under the original frozen identity (78.7293ms)
+✔ lost commit acknowledgement is reconciled by the original Task command receipt after restart (87.536ms)
+✔ due Task command waits for authoritative dependencies and later reuses its frozen command identity (84.0246ms)
+✔ stale frozen Task version is rejected rather than recomputing expected versions under the same command (63.7731ms)
+✔ replacing a future Task-command template cannot return its old ready member to immediate dispatch (49.9379ms)
+✔ message trigger needs no schedule fields and deduplicates each stable source revision/action (57.6035ms)
+✔ one authoritative business event may trigger two different actions but never the same action twice (58.3894ms)
+✔ business-event Task command rechecks the source proof after claim and before applying any effect (56.0547ms)
+✔ instance pause/resume fences the prior worker and cancelling the arrangement never cancels the Task (73.8074ms)
+✔ accepted recurring command keeps historical identity across future edits and restart, then advances next slot (124.8613ms)
+ℹ tests 34
+ℹ suites 0
+ℹ pass 34
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2060.9525
