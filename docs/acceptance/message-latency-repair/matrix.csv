@@ -15,3 +15,4 @@ B1,3,PASS,round-3/unit-tests.log,最终469项相关单元零失败零跳过
 H1,3,PASS,round-3/native-tests.log,最终47项原生Host零失败零跳过
 PK1,3,PASS,round-3/release-smoke.log,14项实际包与启动smoke零失败零跳过
 M1,3,PASS,round-3/suite-check.log,299文件各一次且没有删除历史覆盖
+PR1,3,PASS,report.md,PR247独立回读OPEN且正文与审定文件一致
