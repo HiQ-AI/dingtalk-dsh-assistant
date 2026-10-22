@@ -23,3 +23,7 @@
 - 源码与说明文档的 `git diff --check`、long-goal validator、PR 正文结构检查通过。原始测试 stdout 中的空白行尾空格原样保留，最终 diff 格式检查只排除这些 .log，不改写失败证据。源码没有再修改，交付状态另由 Git/PR 独立回读确认。
 
 未部署运行实例、未执行真实钉钉或业务发布/发送，未触发 CI；最终打包与模型样本只证明其各自测试范围。
+
+## Git / PR 独立回读
+
+代码提交 `2c36c6f531cc2dc2bd60bdbb74321f0b0df980cd`；`git ls-remote --heads origin worktree-task-collaboration-quality` 返回相同 SHA。`gh pr view 248` 独立返回 URL=https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/248、number=248、state=OPEN、base=main、headRefName=worktree-task-collaboration-quality、headRefOid=同代码提交、mergedAt=null、checks=0；正文逐字规范化换行后与通过正文检查的文件一致。PR 已附到本任务。其后仅提交本轮交付记录，不重跑已通过的源码测试。原始模型轨迹/临时SQLite位于未跟踪 docs/tmp，未进入提交。

@@ -53,3 +53,4 @@ final-release-smoke,5,FAIL,round-4/document-release-smoke.log (dependency coupli
 execution-doc-dependency-and-baseline-contracts,6,PASS,round-4/execution-doc-mapping-dependency.log (29 tests)
 suite-map,6,PASS,round-4/execution-doc-mapping-check-after.log (299 files; historical 3; deleted 0)
 final-release-smoke,6,PASS,round-6/release-smoke-final.log (14 tests; 0 skip)
+pr-delivery,6,PASS,round-6.md (PR248 OPEN; head/body readback)
