@@ -799,6 +799,7 @@ window.__ModuleLoader__.load({
             React.createElement('details', null, React.createElement('summary', null, '会话与记录信息'), React.createElement('p', { className: 'detail-muted' }, `执行记录更新 ${time(item.updatedAt)} · 会话 ${item.sessionId || '尚未建立'}`)))))) : null))
     }
     const taskDetailCss = `
+      .observer-session-detail .timeline-outcomes { display: grid; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid ${colors.border}; }
       [data-dingtalk-observer] .observer-session-detail { width: 100%; box-sizing: border-box; max-width: 1100px; margin: 0 auto; padding-bottom: 24px; display: grid; gap: 24px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
       .observer-session-detail :is(h1, h2, h3, p, ul) { margin: 0; }
       .observer-session-detail h1 { font-size: 24px; line-height: 1.4; font-weight: 650; }
@@ -938,7 +939,61 @@ window.__ModuleLoader__.load({
       @media (max-width: 800px) { .observer-session-detail .detail-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
       @media (max-width: 520px) { [data-dingtalk-observer] .observer-session-detail { gap: 16px; } .observer-session-detail .detail-sidebar { grid-template-columns: minmax(0, 1fr); } .observer-session-detail .detail-header { padding-bottom: 16px; } .observer-session-detail .detail-title-row { align-items: start; } .observer-session-detail .detail-execution-summary { padding: 12px; gap: 4px 8px; } }
     `
-    function TaskExecutionTimeline({ timeline }) {
+    const taskOutcomeRecords = (timeline, decisions = []) => {
+      const records = new Map()
+      for (const row of [...(timeline?.executions || []), ...(timeline?.human ? [timeline.human] : [])]) {
+        for (const event of row.milestones || []) {
+          const id = `stage:${row.id}:${event.id}`
+          records.set(id, { id, type: '阶段成果', at: event.at, summary: event.summary, source: row.label || row.title || row.id })
+        }
+      }
+      for (const item of decisions) {
+        if (!item.id || !(item.triggers || []).some(trigger => trigger.kind === 'execution.progress.review')) continue
+        records.set(`review:${item.id}`, { id: `review:${item.id}`, type: '统筹巡查', at: item.recordedAt,
+          summary: item.decision?.summary || '未记录判断正文', action: item.decision?.action,
+          evidence: item.decision?.evidence || [], limitations: item.decision?.limitations || [] })
+      }
+      const stamp = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity
+      return [...records.values()].sort((a, b) => stamp(b.at) - stamp(a.at) || a.id.localeCompare(b.id))
+    }
+    function TaskOutcomeRecords({ taskId, timeline, readonly = false }) {
+      const [page, setPage] = useState({ decisions: [], nextBefore: null, loaded: false })
+      const [loading, setLoading] = useState(false), [error, setError] = useState(''), [request, setRequest] = useState({ before: null, revision: 0 })
+      const pending = useRef(false)
+      useEffect(() => {
+        if (readonly) return
+        const controller = new AbortController(); let active = true
+        pending.current = true; setLoading(true); setError('')
+        const query = new URLSearchParams({ limit: '20', ...(request.before === null ? {} : { before: String(request.before) }) })
+        get(`/state/tasks/${encodeURIComponent(taskId)}/decisions?${query}`, { signal: controller.signal }).then(value => {
+          if (!active) return
+          setPage(previous => {
+            const records = new Map((request.before === null ? [] : previous.decisions).map(item => [item.id, item]))
+            for (const item of value.decisions || []) records.set(item.id, item)
+            return { decisions: [...records.values()], nextBefore: value.nextBefore ?? null, loaded: true }
+          })
+        }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) { pending.current = false; setLoading(false) } })
+        return () => { active = false; controller.abort() }
+      }, [taskId, readonly, request])
+      const load = before => { if (!pending.current) { pending.current = true; setRequest(previous => ({ before, revision: previous.revision + 1 })) } }
+      const records = taskOutcomeRecords(timeline, page.decisions)
+      const actions = { wait: '继续等待', blocked: '需要介入', complete: '提交完成判断' }
+      return React.createElement('div', { className: 'timeline-outcomes', 'aria-label': '阶段成果与统筹巡查' },
+        React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h3', null, '阶段成果与统筹巡查'),
+          !readonly ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(null) }, '刷新记录') : null),
+        React.createElement('p', { className: 'detail-muted', role: 'status' }, loading ? '正在读取统筹记录…' : error ? '统筹记录未全部读取，已有成果和记录仍保留。' : page.nextBefore !== null ? '仅展示已加载记录，还有更早的统筹决定可读取。' : '仅展示已落账的成果与巡查结论；检查触发不代表统筹已形成结论。'),
+        error ? React.createElement('p', { role: 'alert' }, `统筹记录读取失败：${error}`, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(request.before) }, '重试读取记录')) : null,
+        records.length ? React.createElement('ol', { style: { margin: 0, paddingLeft: 22, display: 'grid', gap: 16 } }, ...records.map(item => React.createElement('li', { key: item.id, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } },
+          React.createElement('strong', null, `${item.type} · ${item.at ? fmt(item.at) : '时间未记录'}`),
+          item.source ? React.createElement('p', { className: 'detail-muted' }, item.source) : null,
+          React.createElement('p', null, ...linkedTaskText(item.summary)),
+          item.action ? React.createElement('p', { className: 'detail-muted' }, `处理决定：${actions[item.action] || item.action}`) : null,
+          ...(item.evidence || []).map((value, index) => React.createElement('p', { key: `e:${index}` }, '依据：', ...linkedTaskText(value))),
+          ...(item.limitations || []).map((value, index) => React.createElement('p', { key: `l:${index}` }, '限制：', ...linkedTaskText(value))))))
+          : React.createElement('p', { className: 'detail-muted' }, readonly ? '历史记录未提供成果与巡查结论。' : page.loaded ? '已加载范围内暂无阶段成果或巡查结论。' : '阶段成果与巡查结论尚未完整读取。'),
+        !readonly && page.nextBefore !== null ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(page.nextBefore) }, '读取更早记录') : null)
+    }
+    function TaskExecutionTimeline({ timeline, taskId, readonly = false }) {
       const [now, setNow] = useState(Date.now)
       const tooltipRef = useRef(null), tooltipTarget = useRef(null)
       const [windowRange, setWindowRange] = useState(null)
@@ -975,7 +1030,7 @@ window.__ModuleLoader__.load({
         const timer = window.setInterval(() => setNow(Date.now()), 1000)
         return () => window.clearInterval(timer)
       }, [live, timeline])
-      if (!timeline) return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' }, React.createElement('h2', null, '执行时间'), React.createElement('p', { className: 'detail-muted' }, '历史执行过程未记录。'))
+      if (!timeline) return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' }, React.createElement('h2', null, '执行时间'), React.createElement('p', { className: 'detail-muted' }, '历史执行过程未记录。'), React.createElement(TaskOutcomeRecords, { taskId, timeline, readonly }))
       const rows = [...timeline.executions, timeline.human]
       const totalSegments = timeline.task.segments || [{ ...timeline.task, id: 'total', label: timeline.task.active ? '处理中' : timeline.task.status === 'completed' ? '已完成' : '已结束' }]
       const totalEvents = timeline.task.events || []
@@ -1160,12 +1215,13 @@ window.__ModuleLoader__.load({
                 React.createElement('td', null, React.createElement('div', { className: 'timeline-track' }, ...row.segments.map(segment => bar(segment, false, row.id === 'human')), ...markers(row),
                   !row.segments.length ? React.createElement('span', { className: 'timeline-empty' }, row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史区间未记录') : null),
                   React.createElement('span', { className: 'timeline-sr' }, `${row.segments.length} 个区段${row.complete ? '' : '，部分历史区间未记录'}`))))))),
+        React.createElement(TaskOutcomeRecords, { taskId, timeline, readonly }),
         React.createElement('details', { className: 'detail-disclosure timeline-details' }, React.createElement('summary', null, '活动与时间明细'),
           React.createElement('p', { className: 'detail-muted timeline-note' }, '靛蓝为执行会话，金色为人工介入。贯穿色带的细刻线为阶段成果，悬停或聚焦查看附近成果的准确时间；未记录区间不推算，人工处理不表示批准。'),
           React.createElement('section', null, React.createElement('h3', null, '任务完成与重开'), timeline.task.complete === false ? React.createElement('p', null, '部分任务历史时间未记录，不推算完成或重开的时间。') : null,
             totalEvents.length ? React.createElement('ul', null, ...totalEvents.map((event, index) => React.createElement('li', { key: `${event.kind}:${index}` }, `${time(event.at)} · 第 ${event.sequence} 次处理 · ${({ created: '创建任务', completed: '任务完成', reopened: '重新打开', cancelled: '取消任务' })[event.kind] || event.kind}`))) : React.createElement('p', null, '任务历史时间未完整记录。')),
           ...rows.map(row => React.createElement('section', { key: row.id }, React.createElement('h3', null, `${row.title}${row.status ? ` · ${status(row.status)}` : ''}`), !row.complete ? React.createElement('p', null, '部分历史区间未记录；恢复时未知的结束时间不作推算。') : null,
-            row.segments.length || row.milestones.length ? React.createElement('ul', null, ...row.segments.map(segment => React.createElement('li', { key: segment.id }, `${segment.label} · ${range(segment)} · ${elapsed(segment)} · ${status(segment.status)}`, segment.description ? React.createElement('p', null, segment.description) : null)), ...row.milestones.map(event => React.createElement('li', { key: event.id }, `${time(event.at)} · 阶段成果：${event.summary}`))) : React.createElement('p', null, row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史执行过程未记录。')))))
+            row.segments.length ? React.createElement('ul', null, ...row.segments.map(segment => React.createElement('li', { key: segment.id }, `${segment.label} · ${range(segment)} · ${elapsed(segment)} · ${status(segment.status)}`, segment.description ? React.createElement('p', null, segment.description) : null))) : React.createElement('p', null, row.milestones.length ? '成果见上方时间记录，活动区间未记录。' : row.complete ? row.id === 'human' ? '暂无人工介入' : '尚未开始执行' : '历史执行过程未记录。')))))
     }
     function TaskDialogue({ taskId, open: controlledOpen, onToggle, hideTrigger = false }) {
       const [localOpen, setLocalOpen] = useState(false), [draft, setDraft] = useState(''), [messages, setMessages] = useState([])
@@ -1256,7 +1312,7 @@ window.__ModuleLoader__.load({
               React.createElement('div', null, `任务 ID：${task.taskId}`), React.createElement('div', null, `需求修订 ${task.requirementRevision ?? task.inputVersion ?? '未记录'}`), React.createElement('div', null, `控制修订 ${task.controlRevision ?? '未记录'}`), React.createElement('div', null, `控制状态 ${taskStateLabel(task.controlState || task.control?.state || task.state)}`),
               task.blockers ? readout('待排空记录（原始信息）', task.blockers) : null)))),
         !task.legacyReadonly ? React.createElement(TaskDialogue, { key: `dialogue:${task.taskId}`, taskId: task.taskId, open: dialogueOpen, onToggle: setDialogueOpen, hideTrigger: true }) : null,
-        React.createElement(TaskExecutionTimeline, { key: `timeline:${task.taskId}`, timeline: task.timeline }),
+        React.createElement(TaskExecutionTimeline, { key: `timeline:${task.taskId}`, timeline: task.timeline, taskId: task.taskId, readonly: task.legacyReadonly }),
         task.legacyReadonly ? React.createElement('div', { className: 'detail-panel' }, React.createElement('h2', null, '历史执行'), React.createElement(LegacyTaskHistory, { key: task.taskId, task }))
           : React.createElement(TaskExecutions, { key: task.taskId, taskId: task.taskId, updatedAt, onOpenSession }))
     }
