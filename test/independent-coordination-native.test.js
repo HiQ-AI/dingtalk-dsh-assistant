@@ -8,13 +8,18 @@ import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicT
 const model = { enabled: true, provider: 'native-task-test', model: 'coordination-controlled' }
 
 // Scripted planning verifies actual ingress/Host contracts, not model comprehension.
-for (const existing of [false, true]) test(`one delivery keeps review/development/UAT in one original Task: existing=${existing}`,
+const stageCases = [
+  { name: 'software', objective: '需求X先方案评审，然后开发，开发完部署UAT', requirements: ['先完成方案评审', '评审后开发', '开发完成后部署UAT并验证'] },
+  { name: 'translation-two', objective: '这份稿件先翻译，再校对', requirements: ['翻译稿件', '翻译后校对'] },
+  { name: 'research-four', objective: '本次调研先设计问卷，再访谈，然后分析，最后撰写报告', requirements: ['设计问卷', '问卷后访谈', '访谈后分析', '分析后撰写报告'] },
+  { name: 'translation-reversed', objective: '这份已有译稿先校对，再翻译修订内容', requirements: ['先校对已有译稿', '校对后翻译修订内容'] },
+]
+for (const stageCase of stageCases) for (const existing of [false, true]) test(`one delivery preserves arbitrary user stages: ${stageCase.name}, existing=${existing}`,
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'single-task-stages-'))
     let host, admitted = false, delegated = false, ownerInput
     const prompts = { route: '', planner: '', owner: '' }
-    const objective = '需求X先方案评审，然后开发，开发完部署UAT'
-    const requirements = ['先完成方案评审', '评审后开发', '开发完成后部署UAT并验证']
+    const { objective, requirements } = stageCase
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
     host = await nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
@@ -43,25 +48,26 @@ for (const existing of [false, true]) test(`one delivery keeps review/developmen
           ownerInput = input
           if (!delegated) {
             delegated = true
-            return [{ name: 'task_delegate', args: { key: 'review', objective: '仅完成方案评审', resourceKeys: [] } }]
+            return [{ name: 'task_delegate', args: { key: 'first-stage', objective: requirements[0], resourceKeys: [] } }]
           }
         }
         return [{ name: 'task_session_submit', args: { decision: { action: 'wait',
-          summary: '评审结果仅是阶段证据，开发及UAT尚未交付', evidence: [], limitations: ['未开发部署'] } } }]
+          summary: '首阶段结果仅是证据，后续阶段尚未交付', evidence: [], limitations: requirements.slice(1) } } }]
       }
       if (names.includes('execution_submit')) return [{ name: 'execution_submit', args: { output: {
-        status: 'completed', summary: '方案评审完成', evidence: ['synthetic-review'], limitations: ['仅评审'], artifacts: [] } } }]
+        status: 'completed', summary: requirements[0], evidence: ['synthetic-first-stage'], limitations: requirements.slice(1), artifacts: [] } } }]
       return []
     }, { config: { coordination: model } })
     if (existing) await host.service.store.command({ id: 'original-create', kind: 'task.create',
-      args: { taskId: 'original', groupId: 'native-group', ownerActorId: 'native-user', request: '需求X方案评审' } })
+      args: { taskId: 'original', groupId: 'native-group', ownerActorId: 'native-user', request: requirements[0] } })
     if (existing) { await host.service.recover(); await host.service.whenIdle() }
     await host.service.ingest({ groupId: 'native-group', messageId: 'stages', senderOpenDingTalkId: 'native-user',
       text: `测试助手，${objective}`, timestamp: '2026-10-21T01:00:00Z' })
     await host.service.whenIdle()
     const tasks = await host.query('task.list')
-    assert.match(prompts.route, /同一需求的方案评审/)
-    assert.match(prompts.planner, /不以评审\/开发\/UAT分别生成new-task/)
+    assert.match(prompts.route, /任意用户指定阶段/)
+    assert.match(prompts.planner, /不按内部阶段分别生成new-task/)
+    assert.match(prompts.planner, /不得套用默认阶段模板/)
     assert.match(prompts.owner, /阶段执行结果仅为证据/)
     assert.equal(tasks.length, 1, JSON.stringify(host.service.listAlerts()))
     const task = tasks[0]
