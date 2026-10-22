@@ -11,3 +11,6 @@ local-installation,1,BLOCKED,round-1.md
 native-persistence-final,2,PASS,round-1.md
 full-profile-skills,2,PASS,round-1.md
 continuation-stress-32,1,FAIL,round-1.md
+native-workspace-resume,1,FAIL,round-1.md
+native-capacity-1-1,1,FAIL,round-1.md
+native-capacity-2-1,1,FAIL,round-1.md

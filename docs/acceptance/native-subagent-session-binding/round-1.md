@@ -26,3 +26,5 @@
 - 最终源码 `node --test test/task-session-persistence-native.test.js`：16 pass，0 fail，0 skip。
 - 设置 DSH_NATIVE_TEST_PROFILE=D:/dsh_home/profiles/web/package.json 后，skills-native：5 pass，0 fail，0 skip，补齐原5项skip。
 - 扩展集成的32次续办压力用例触发原120秒超时；本轮未取得该压力用例全绿，不把定向修复通过冒充所有集成通过。未扩大修改超时或断言。
+- 扩展集成还记录原生工作区恢复（20秒）、容量队列 tasks=1/executions=1 与 tasks=2/executions=1（15秒）超时；这些均保留失败，未归因为本修复或环境，尚未收敛。原修复相关定向结果保持独立。
+- 根因修复已提交ce293ca并推送；草稿PR #243回读OPEN，base=main、head=worktree-native-subagent-binding。现场health独立回读status=ok、recoveryIssueCount=0；第4轮截图执行仍active/running。
