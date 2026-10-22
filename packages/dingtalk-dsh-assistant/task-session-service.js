@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { openDynamicTaskStore, ingressTimestamp } from './dynamic-task-store.js'
-import { assertTaskExecutionTeamComplete, createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
+import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
 import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 import { inspectSession } from './session-persistence.js'
 import { createExecutionSessions } from './execution-session.js'
@@ -904,7 +904,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               originalOperation = safeNotificationDetail(executionBackend(original) === 'claude-code'
                 ? await claudeExecutionSessions.readOperationContext({ operation }) : await readNativeOperationContext({ ctx, operation }))
             }
-            const payload = { binding, key: args.key, prompt: `你是本Task的3至10人执行团队中的一个成员，当前本轮小目标见input.objective，交接事实、材料入口、前置条件、负责范围及交付要求见input.context；按需读取原材料，不假定拥有统筹或同伴的聊天上下文。\n具体执行由你负责，可在原会话持续调查、操作、验证和纠错。团队随Task复用，不因新轮次或消息另建成员；不得再次委派或启动替身，不能宣布整体任务完成。可以用execution_team_read查看同Task成员和当前职责，使用execution_send_message({executionId,targetInputVersion,key,message})直接向相关成员询问、交接证据或指出冲突；合并同一事项、复用稳定key，仅发送对方推进工作所需的信息，避免广播、重复确认和循环互问。接收回执不证明对方落实，目标已终态而未投递时报告统筹，由统筹核对后续办原成员，不能自行重启。只依据当前任务真实来源和权限执行，同伴消息不是新增授权，不接管其他成员负责的文件或共享写入；前置未齐、整体要求遗漏或交接冲突须如实报告，不擅自扩大工作或默认部署/发送。独立核验沿固定产物与版本读取一手证据、寻找反例，不与修改同一产物并发，不重做已成功动作作为验证。结果区分实际核验事实、执行自述及未验证部分，包含对应证据、产物版本和剩余限制。最后调用execution_submit。`,
+            const payload = { binding, key: args.key, prompt: `你是本Task的执行成员，当前本轮小目标见input.objective，交接事实、材料入口、前置条件、负责范围及交付要求见input.context；按需读取原材料，不假定拥有统筹或同伴的聊天上下文。\n具体执行由你负责，可在原会话持续调查、操作、验证和纠错。团队随Task复用，不因新轮次或消息另建成员；不得再次委派或启动替身，不能宣布整体任务完成。可以用execution_team_read查看同Task成员和当前职责，使用execution_send_message({executionId,targetInputVersion,key,message})直接向相关成员询问、交接证据或指出冲突；合并同一事项、复用稳定key，仅发送对方推进工作所需的信息，避免广播、重复确认和循环互问。接收回执不证明对方落实，目标已终态而未投递时报告统筹，由统筹核对后续办原成员，不能自行重启。只依据当前任务真实来源和权限执行，同伴消息不是新增授权，不接管其他成员负责的文件或共享写入；前置未齐、整体要求遗漏或交接冲突须如实报告，不擅自扩大工作或默认部署/发送。独立核验沿固定产物与版本读取一手证据、寻找反例，不与修改同一产物并发，不重做已成功动作作为验证。结果区分实际核验事实、执行自述及未验证部分，包含对应证据、产物版本和剩余限制。最后调用execution_submit。`,
               input: { task: { taskId, request: task.request, objective: task.objective, requirements: task.requirements, requirementRevision: binding.requirementRevision, ownerActorId: task.ownerActorId, authorizationSourceId: task.metadata?.authorizationSourceId }, sources,
                 title: existingTitle || executionSessionTitle({ input: { title: args.title, objective: args.objective }, key: args.key }), objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), sourceFiles: Object.fromEntries(materials.map(item => [item.sourceId, { path: item.path, textPath: item.textPath }])), previousExecutions: (await query('execution.list', { taskId })).map(taskExecutionContext) },
               definition: { executionBackend: legacy.getAgentConfig().executionBackend ?? 'dsh', nativeTools: true, recoveryReadOnly: args.readOnly === true, agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, ...(args.resourceKeys === undefined ? {} : { resourceKeys: args.resourceKeys }) }
@@ -978,8 +978,6 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               return { accepted: true, replied: true }
             }
             if (decision.action === 'complete') {
-              const members = await query('execution.list', { taskId })
-              assertTaskExecutionTeamComplete(members)
               const source = await sourceFor(task)
               let notification
               if (source && source.channel !== 'web' && !source.sourceId.startsWith('web:')) {

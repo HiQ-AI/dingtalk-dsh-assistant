@@ -1,0 +1,45 @@
+{
+  "round": 18,
+  "scope": "adaptive-team-production-and-direct-store",
+  "base": "12f13e0",
+  "sourceSha256": {
+    "packages/dingtalk-dsh-assistant/task-session.js": "de40b14728fc2aa0fa51e89b834c08c4791e465bf6809a7b84307c7811696807",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "bc155957fc9fa5b72e9b3577e67ea99a1fcb00389436eb456c7d25ef51d4110a",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "aaf903785578b07723d1b00a11b6a9cecc16c457ea2dff15699a258828bbd851",
+    "test/dynamic-task-store.test.js": "29be421d204d338deead810fa0552faa1aed70dfd84cbe2926aaf88ce8edc9dc"
+  },
+  "syntaxChecks": {
+    "paths": [
+      "packages/dingtalk-dsh-assistant/task-session.js",
+      "packages/dingtalk-dsh-assistant/task-session-service.js",
+      "packages/dingtalk-dsh-assistant/dynamic-task-store.js"
+    ],
+    "status": "PASS"
+  },
+  "test": {
+    "command": "node --test test/dynamic-task-store.test.js test/dynamic-execution-resources.test.js",
+    "status": "PASS",
+    "tests": 123,
+    "pass": 123,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "duration_ms": 9373.558,
+    "log": "store-adaptive-1.log",
+    "sha256": "23c2dd014e850682c9d418042622daf17c28516f3f8855dc5e858830a1a8f9f0",
+    "firstFailure": null
+  },
+  "cases": [
+    "12 execution identities can dispatch, claim, result and drain",
+    "same dispatch key stays idempotent and conflicts on changed goal",
+    "continuation retains execution/session identity and increments inputVersion",
+    "task completion rejects results before physical drain",
+    "reopen retains all execution records",
+    "existing feedback, requirement, unknown, resource exclusion and lifecycle protections pass"
+  ],
+  "limitations": [
+    "Direct Store tests submit synthetic execution results and do not run models or business actions.",
+    "Native service completion, process concurrency and document evidence are recorded separately by the native test owner.",
+    "No model calls, live ledger changes, installation, commit or push."
+  ]
+}

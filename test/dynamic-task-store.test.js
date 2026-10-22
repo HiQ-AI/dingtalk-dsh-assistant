@@ -180,17 +180,32 @@ test('continued recipients reject stale peer goals and ignore old peer inboxes w
   assert.equal((await f.query({ kind: 'execution.get', executionId: target.executionId })).feedback.find(item => item.id === peer.id).consumedAt, null)
 })
 
-test('tasks admit ten execution identities while retries and continuation reuse their existing slots', async t => {
+test('tasks admit more than ten execution identities while retries and continuation preserve their identities', async t => {
   const f = await fixture(t), owner = await f.task(), args = index => ({ binding: owner.binding, key: `member-${index}`, prompt: 'Work', input: { objective: `职责 ${index}` } })
   const executions = []
-  for (let index = 0; index < 10; index++) executions.push((await f.command('execution.dispatch', args(index))).result.execution)
-  assert.equal((await f.command('execution.dispatch', args(9))).result.execution.executionId, executions[9].executionId)
-  await assert.rejects(f.command('execution.dispatch', args(10)), { code: 'DYNAMIC_EXECUTION_LIMIT_EXCEEDED' })
-  const first = (await f.command('execution.claim', { executionId: executions[0].executionId })).result.binding
-  await f.command('execution.result', { binding: first, output: {} }); await f.command('execution.drained', { binding: first })
+  for (let index = 0; index < 12; index++) executions.push((await f.command('execution.dispatch', args(index))).result.execution)
+  assert.equal(new Set(executions.map(item => item.executionId)).size, 12)
+  assert.equal(new Set(executions.map(item => item.sessionId)).size, 12)
+  assert.equal((await f.command('execution.dispatch', args(11))).result.execution.executionId, executions[11].executionId)
+  await assert.rejects(f.command('execution.dispatch', { ...args(11), input: { objective: '不同职责' } }), { code: 'DYNAMIC_DISPATCH_KEY_CONFLICT' })
+  for (const execution of executions) {
+    const binding = (await f.command('execution.claim', { executionId: execution.executionId })).result.binding
+    await f.command('execution.result', { binding, output: { summary: '本轮职责完成' } })
+    await assert.rejects(f.command('task.complete', { binding: owner.binding, summary: '尚未排空' }), { code: 'DYNAMIC_TASK_NOT_QUIESCENT' })
+    await f.command('execution.drained', { binding })
+  }
+  const first = executions[0]
   const continued = (await f.command('execution.continue', { binding: owner.binding, executionId: first.executionId, key: 'next', prompt: 'Continue', input: { objective: '完成同一职责下一步' } })).result.execution
-  assert.equal(continued.inputVersion, 2); assert.equal(continued.sessionId, first.sessionId)
-  assert.equal((await f.query({ kind: 'execution.list', taskId: 'task' })).length, 10)
+  assert.equal(continued.executionId, first.executionId); assert.equal(continued.inputVersion, 2); assert.equal(continued.sessionId, first.sessionId)
+  const next = (await f.command('execution.claim', { executionId: first.executionId })).result.binding
+  await f.command('execution.result', { binding: next, output: { summary: '后续职责完成' } })
+  await f.command('execution.drained', { binding: next })
+  await f.command('task.complete', { binding: owner.binding, summary: '完整目标已核验' })
+  const before = await f.query({ kind: 'execution.list', taskId: 'task' })
+  assert.equal(before.length, 12)
+  await f.reopen()
+  assert.deepEqual(await f.query({ kind: 'execution.list', taskId: 'task' }), before)
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).status, 'completed')
 })
 
 test('timeline records activity switches, independent parallel leases and continuation gaps without duplicating stage events', async t => {

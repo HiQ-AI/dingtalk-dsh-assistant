@@ -1,0 +1,16 @@
+✔ native execution documents keep each input round and the owner reads the new duty and plan (3437.6126ms)
+✔ owner injects one authoritative source body across task, Web identity and materials (968.4922ms)
+ℹ {"scope":"actual native owner scripted adapter UTF-8 JSON bytes","bodyCopies":[0,0],"metrics":[{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":24903,"schemaBytes":12913,"adapterRequestBytes":54463},{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2488,"systemBytes":24903,"schemaBytes":12913,"adapterRequestBytes":57408}]}
+✔ native sequential handoff preserves one executor before independent review of the fixed artifact (9284.1644ms)
+✔ native service runs eleven independent members within the configured concurrency and completes (54202.5253ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (14143.9322ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (5769.4615ms)
+✔ native single-member completion keeps an unknown tool effect unresolved without replay (6147.7616ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 95341.6467

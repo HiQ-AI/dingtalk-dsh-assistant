@@ -1,0 +1,19 @@
+{
+  "checkedAtUtc": "2026-10-22T16:40:26.6344564Z",
+  "method": "GET",
+  "runtimeOrigin": "http://127.0.0.1:18998",
+  "effectiveConfiguration": {
+    "executionBackend": "dsh",
+    "maxConcurrentTasks": 8
+  },
+  "health": {
+    "status": "ok",
+    "recoveryIssueCount": 0,
+    "inboundProcessing": true,
+    "dwsBridgeHealthy": true
+  },
+  "mutationsPerformed": false,
+  "modelCalls": 0,
+  "credentialPrinted": false,
+  "boundary": "当前运行态读回，不证明R18已部署或真实业务验收"
+}

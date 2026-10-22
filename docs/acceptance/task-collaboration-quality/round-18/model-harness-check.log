@@ -1,0 +1,1 @@
+{"check":"PASS","policy":"adaptive-team","cases":["simple-complete","independent-ready","dependency-pending","dependency-ready","shared-writer","complex-ten-reuse","complex-self-claim","team-complete"],"modelCalls":0,"externalTools":0,"note":"场景与路径隔离自检；不代表模型行为通过。"}

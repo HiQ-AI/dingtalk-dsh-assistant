@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto'
 // --check-documents <docs/tmp/全新目录> 仅创建隔离账本和每轮文档，验证生产文档合同，不调用模型。
 // node evaluate-model.mjs <docs/tmp/全新目录> <Connect入口> <统筹模型> <推理深度> <代理URL> [case-id ...]
 const repo = fileURLToPath(new URL('../../../../', import.meta.url))
-const policy = 'bounded-team-3-10'
+const policy = 'adaptive-team'
 const originalId = 'original-execution'
 const candidate = '9dc9325e69ef5dd071adb99cccb1c11c01cb9b119'
 const member = (executionId, objective, status, output) => ({
@@ -23,14 +23,13 @@ const preparation = [
     summary: '验收输入、边界和检查步骤已准备，待金额单位与修复产物。', evidence: ['用例包括正常金额、零、小于一元及批量数据；按原始账单对照。'], limitations: ['没有可执行的修复产物，尚未进行改后验收。'] }),
 ]
 const cases = [
-  { id: 'simple-three', title: '单个拼写修正与小团队', goal: '将 /synthetic/help/intro.md 第 3 行唯一的拼写错误 instlal 改为 install，读取改后该行确认并报告。文件其余内容正确，范围只有这一处文字修改。请控制本次工作的成本和范围，不增加无关扫描或文档。',
+  { id: 'simple-complete', title: '单执行充分证据即可完成', goal: '将 /synthetic/help/intro.md 第 3 行唯一的拼写错误 instlal 改为 install，读取改后该行确认并报告。文件其余内容正确，范围只有这一处文字修改。请控制本次工作的成本和范围，不增加无关扫描或文档。',
     executions: [
-      member('typo-writer', '只修正指定拼写并保留其他内容，提交固定文件供核验。', 'succeeded', { summary: '已将唯一的instlal改为install，当前文件已冻结。', evidence: ['修改差异仅为第3行 instlal → install。'], artifacts: ['/synthetic/help/intro.md'], limitations: ['最终原文验收尚待完成。'] }),
-      member('scope-checker', '只读核对单行差异是否超出指定范围。', 'succeeded', { summary: '差异范围仅包含用户指定拼写，没有改其他行。', evidence: ['差异共1行、1个词替换；其他行及末尾换行保留。'], limitations: ['仅审查差异范围，不替代最终文件原文的独立验收。'] }),
+      member('typo-writer', '只修正指定拼写并保留其他内容，读取改后原文核对。', 'succeeded', { summary: '已修正并读回唯一拼写错误，当前文件已冻结。', evidence: ['修改前第3行全文：Run instlal to continue.；修改后读取第3行全文：Run install to continue.；差异仅包含此词替换，其他行及末尾换行保留。'], artifacts: ['/synthetic/help/intro.md'], limitations: [] }),
     ],
-    review: '前置产物已冻结，是否用第三个短小且有区分的最终原文验收职责补齐团队；既有修改和范围核对不重做，不为凑人数扩成无关扫描。通信仅传必要差异/版本/证据。' },
+    review: '单成员已交回指定单词改动及完整读回证据；统筹读当前执行文档后能否直接给出结论，不为人数增加重复核验或扩大扫描。' },
   { id: 'independent-ready', title: '两个独立模块交付', goal: '完成 Alpha 导出组件的空表头错误修复并验证；同时完成 Beta 帮助站的安装说明修订并核对示例。两个仓库和验收材料均已齐备，互不依赖：Alpha 仅写隔离工作区 /synthetic/alpha，Beta 仅写 /synthetic/beta，没有共享部署、数据或文件。两项都应尽快推进并分别提供改动与验证证据，最后汇总。',
-    review: 'Alpha与Beta的完整目标、工作区及交付证据是否在第一次wait前分别登记；团队可逐步形成3至10人，未具备前置的职责不要提前启动。不得重复分派凑人数；queued只称已安排。' },
+    review: 'Alpha与Beta的完整目标、工作区及交付证据是否在第一次wait前分别登记；未具备前置的职责不要提前启动。不得重复分派凑人数；queued只称已安排。' },
   { id: 'dependency-pending', title: '已有团队等待前置结论', goal: '先查清金额字段单位，再在同一个价格转换模块完成修复并验证。字段是分还是元尚未确定；转换公式必须依据原数据的调查结果。当前调查成员正在读取原始样本，尚无结论；另两名成员已经完成修改范围核对和验收用例准备，后续均需等单位结论与修复产物，没有未完成的独立准备事项。',
     executions: [member(originalId, '调查 /synthetic/prices 的原始样本，交回金额单位及实际样本，结论未确认前不改转换公式。', 'running'), ...preparation],
     progress: ['原始样本读取作业仍在运行，字段单位尚无结论。'],
@@ -128,10 +127,8 @@ function checkStructure(sample, result, actions, trace, finalExecutions, documen
     assert.ok(current.inputVersion > oldDocument.inputVersion)
   }
   assert.ok(feedback.every(action => originalIds.has(action.args.executionId)), 'feedback preserves an existing member')
-  assert.ok(finalExecutions.length <= 10, 'task never creates an eleventh member')
-  if (result.decision.action === 'complete' && finalExecutions.length) assert.ok(finalExecutions.length >= 3, 'delegated tasks reach three members before completion')
   assert.ok(finalExecutions.every(execution => execution.input.objective?.trim()), 'every member has an assigned objective')
-  assert.equal(result.decision.action, sample.id === 'team-complete' ? 'complete' : 'wait')
+  assert.equal(result.decision.action, ['simple-complete', 'team-complete'].includes(sample.id) ? 'complete' : 'wait')
   assert.ok(result.decision.summary.trim())
   // 生产完成合同允许空 evidence；简单结论是否充分须核对实际读取轨迹，不能以重复正文代替验收。
   if (result.decision.action === 'wait') {
@@ -139,10 +136,9 @@ function checkStructure(sample, result, actions, trace, finalExecutions, documen
     assert.ok(result.decision.limitations.length, 'wait states its remaining result')
   }
   if (sample.id === 'independent-ready') assert.ok(fresh.length >= 2 && continuations.length === 0, 'both ready goals dispatched before waiting')
-  if (sample.id === 'simple-three') {
-    assert.equal(finalExecutions.length, 3, 'simple closing task uses three small distinct duties')
-    assert.equal(fresh.length, 1, 'two completed duties are preserved; only final verification is missing')
-    assert.equal(continuations.length, 0, 'do not repeat completed editing or scope checking')
+  if (sample.id === 'simple-complete') {
+    assert.equal(finalExecutions.length, 1, 'sufficient single-member evidence needs no additional members')
+    assert.equal(dispatches.length, 0, 'do not repeat completed editing and readback')
   }
   if (sample.id === 'dependency-pending') assert.equal(dispatches.length, 0, 'dependent work waits for original result')
   if (sample.id === 'dependency-ready') {
@@ -157,7 +153,7 @@ function checkStructure(sample, result, actions, trace, finalExecutions, documen
   }
   if (sample.id === 'complex-ten-reuse') {
     assert.equal(finalExecutions.length, 10)
-    assert.equal(fresh.length, 0, 'reuse the bounded existing team')
+    assert.equal(fresh.length, 0, 'reuse the existing owners of these modules')
     for (const id of ['team-1', 'team-2']) assert.ok(continuations.some(action => action.args.executionId === id), 'both ready modules reuse their existing owners')
   }
   if (sample.id === 'complex-self-claim') {
@@ -165,7 +161,7 @@ function checkStructure(sample, result, actions, trace, finalExecutions, documen
     assert.ok(continuations.some(action => ['security-review', 'migration-acceptance'].includes(action.args.executionId)), 'high-risk claim gets existing independent verification')
   }
   if (sample.id === 'team-complete') assert.equal(dispatches.length, 0, 'completed distinct duties need no replacement team')
-  if (originalIds.size >= 3) assert.equal(finalExecutions.length, originalIds.size, 'do not recreate an established team each round')
+  if (originalIds.size) assert.equal(finalExecutions.length, originalIds.size, 'these existing goals already have assigned members')
 }
 
 if (process.argv[2] === '--check') {
@@ -181,10 +177,7 @@ if (process.argv[2] === '--check') {
   }
   const { validateJsonSchemaValue } = await import('@deepseek-ai/dsh-tools')
   const { dynamicExecutionOutputSchema } = await import('../../../../packages/dingtalk-dsh-assistant/task-session-service.js')
-  const { assertTaskExecutionTeamComplete } = await import('../../../../packages/dingtalk-dsh-assistant/task-session.js')
   const { renderExecutionDocument } = await import('../../../../packages/dingtalk-dsh-assistant/session-workspaces.js')
-  for (const size of [0, 3, 10]) assert.doesNotThrow(() => assertTaskExecutionTeamComplete(Array(size).fill({})))
-  for (const size of [1, 2]) assert.throws(() => assertTaskExecutionTeamComplete(Array(size).fill({})), { code: 'TASK_EXECUTION_TEAM_INCOMPLETE' })
   for (const sample of cases) for (const execution of sample.executions ?? []) if (execution.result)
     assert.deepEqual(validateJsonSchemaValue(dynamicExecutionOutputSchema, execution.result.payload.output), [])
   for (const inputVersion of [1, 2]) {
@@ -279,7 +272,7 @@ if (process.argv[2] === '--check') {
   }
   await writeFile(join(root, 'manifest.json'), JSON.stringify({ createdAt: new Date().toISOString(), policy, model, reasoningEffort, connectPath: resolve(connectPath), sourceDigests, cases: selected, semanticReview: 'REQUIRED；结构断言通过不等于业务语义通过。' }, null, 2) + '\n')
   const { nativeTaskHost } = await import('../../../../test/fixtures/task-session-native-host.js')
-  const { createTaskSessions, assertTaskExecutionTeamComplete } = await import('../../../../packages/dingtalk-dsh-assistant/task-session.js')
+  const { createTaskSessions } = await import('../../../../packages/dingtalk-dsh-assistant/task-session.js')
   const { inspectSession } = await import('../../../../packages/dingtalk-dsh-assistant/session-persistence.js')
   const { openDynamicTaskStore } = await import('../../../../packages/dingtalk-dsh-assistant/dynamic-task-store.js')
   const h = await nativeTaskHost(root, () => [], { resident: true })
@@ -333,10 +326,10 @@ if (process.argv[2] === '--check') {
       const folder = join(root, sample.id)
       await mkdir(folder)
       let fixturePath, expectedFixture, goal = sample.goal
-      if (sample.id === 'simple-three') {
+      if (sample.id === 'simple-complete') {
         const fixture = join(folder, 'fixtures', 'intro.md')
         await mkdir(dirname(fixture))
-        const content = '# Help\n\nRun install once.\nKeep this line.\n'
+        const content = '# Help\n\nRun install to continue.\nKeep this line.\n'
         await writeFile(fixture, content)
         fixturePath = await realpath(fixture)
         expectedFixture = content
@@ -431,7 +424,6 @@ if (process.argv[2] === '--check') {
           submit: async decision => {
             if (decision.action === 'blocked') actions.push({ tool: 'human', decision })
             const action = { tool: 'decision', decision, accepted: false }; actions.push(action)
-            if (decision.action === 'complete') assertTaskExecutionTeamComplete(await activeStore.query({ kind: 'execution.list', taskId }))
             action.accepted = true
             return { accepted: true }
           },
