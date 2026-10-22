@@ -893,7 +893,6 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (prior.dispatchDigest !== dispatchDigest) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
         return changed({ execution: prior })
       }
-      if (execs(task.taskId).length >= 10) fail('DYNAMIC_EXECUTION_LIMIT_EXCEEDED')
       const executionId = a.executionId ?? randomUUID()
       if (get('dynamic_executions', executionId, true)) fail('DYNAMIC_EXECUTION_EXISTS')
       const instructionScope = coordination.scope(task.taskId, 1)

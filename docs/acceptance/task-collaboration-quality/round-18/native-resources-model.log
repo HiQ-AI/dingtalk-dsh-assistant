@@ -1,0 +1,16 @@
+✔ 执行原生工具读取自身租约并在续办刷新，初始资源=uat2 (10437.5348ms)
+✔ 执行原生工具读取自身租约并在续办刷新，初始资源=none (14219.8756ms)
+✔ 同任务原生定向通信持久消费且不重启终态成员：并发1 (14235.8682ms)
+✔ 同任务原生定向通信持久消费且不重启终态成员：并发3 (12470.5305ms)
+✔ task model defaults and explicit selection preserve the execution selection (1.3653ms)
+✔ native create and resume use the current exact task model on the original session; missing model never creates or resumes (1051.9313ms)
+✔ native service isolates task model from delegated execution: old config (1582.5851ms)
+✔ native service isolates task model from delegated execution: explicit-owner (4515.5853ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 52068.4822

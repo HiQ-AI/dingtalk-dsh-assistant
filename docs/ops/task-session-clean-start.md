@@ -30,7 +30,7 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 启用 CLI 前，在实际服务账号与服务 PATH 下用 `Get-Command claude` 和 `claude --version` 只读核对已安装的命令及版本，操作者按 CLI 自身入口完成登录。插件不自动安装、登录或迁移凭据，也不会因 CLI 不可用改用 DSH。CLI 使用自身默认模型，不接收 DSH 的 provider/model、推理深度、preset、工具或 Skill 注册表；`CLAUDE.md` 按 CLI 自身行为处理，不能认定 DSH 指引已同步。配置页保存成功不证明 CLI 已登录或模型可调用。本轮离线验证后仍需操作者登录，再做下列限定本地文件的实际验收。
 
 - 新建隔离任务，核对新 execution 的 `executionBackend` 与配置一致；再次切换配置后续办原成员，原后端、executionId、会话身份与历史保持不变。缺少后端字段的旧成员继续使用 DSH，不能重建替身来完成切换。
-- 两种后端均沿同一 Task 的 3–10 人团队、阶段报告、成员消息和资源互斥运行。实际读取 `outputs/<executionId>/round-<inputVersion>.md`；续办后旧轮文件不变，新轮文件包含新职责。CLI 受管事件在同目录 `claude-events.jsonl`，DSH 原生日志仍在任务的 `.dsh/sessions/`。路径展示不证明文件写入成功，文档告警须单独核对。
+- 两种后端均沿同一 Task 的按需执行团队、阶段报告、成员消息和资源互斥运行。实际读取 `outputs/<executionId>/round-<inputVersion>.md`；续办后旧轮文件不变，新轮文件包含新职责。CLI 受管事件在同目录 `claude-events.jsonl`，DSH 原生日志仍在任务的 `.dsh/sessions/`。路径展示不证明文件写入成功，文档告警须单独核对。
 - 看板中 CLI 成员应显示 Claude Code 标签及原标题、状态、耗时，详情保留工作目录与文档/日志路径，没有“打开 DSH 会话”入口。DSH 成员原生入口仍可读取历史；不通过其他会话界面接管任务生命周期。
 - CLI 原生工具通过 permission MCP 进入 Host 当前身份、版本及 operation 准入。核对自定义 hooks、其他 MCP、嵌套 Agent 和后台任务被禁用，未使用跳过权限参数；适配器固定设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`，门禁仍拒绝 `run_in_background`，异常 Bash `backgroundTaskId` 回执会触发受管进程终止并保留 `unknown`。禁后台不是 OS 沙箱，终止请求不证明实际排空或远程效果消失；非受管进程须单独核验。内部成员消息和配置选择不构成新增业务授权，也不表示 CLI 继承了 DSH 沙箱或全部原生工具能力。
 - 取消与恢复分别核对实际受管进程的退出证明、当前操作账及原绑定。没有 DSH 句柄、已经请求取消或 CLI 输出了结果都不能单独证明排空；不能证明时保留执行占位及应保留的资源锁。CLI `unknown` 保留原记录和保护，本版不走 DSH 原生日志自动对账，也不接受原生失败处理材料冒充 CLI 证据；不得重放原动作、换身份或手改账本清除未知效果。
@@ -101,7 +101,7 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 进度巡检核验：execution.progressReview.checkedAt为持久上次检查时间，running当前版本到期600000毫秒后由既有recovery tick读取原生日志；wake.kind=execution.progress.review。统筹未调用task_execution_progress就提交会收到TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED纠正；该工具现在返回本轮document引用，统筹须用原生read读文档后判断，日常不再返回日志摘录。缺文件、身份/输入不匹配或无阶段报告如实呈现，不能仅查状态宣布推进。巡检不发额外群进度消息，不清unknown效果。
 
-协作质量更新沿本页现有部署流程，无新配置和数据库迁移。执行团队按 Task 复用 3–10 个成员：新建第 11 个被拒绝，有执行团队但未满 3 个时不能 complete；纯咨询可保持零执行。wait 不要求立即凑满，依赖未齐的工作延后派发，简单任务将三个必要职责保持短小。历史超过 10 人的记录仍可读和续办，不删除或重建。检查 objective/context 是否明确每成员本轮职责、任务、输入、负责范围、前置、交付物及验收方法，resourceKeys 是否对应真实冲突资源。独立就绪目标应在同轮登记后再 wait；高风险自证需固定产物版本后补独立只读核验，不能用重做外部写入来补证。隔离模型复验入口见 `docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs`，结果与语义审阅记入同特性轮次；不能以提示词存在或会话数量增加代替行为验证。
+协作质量更新沿本页现有部署流程，无新配置和数据库迁移。执行团队按 Task 按需拆分和复用，不设最低人数或固定总人数上限。核验零执行、单执行、双执行在成果齐备且排空后均可 complete，第11名及更多成员可正常登记；依赖未齐的工作延后派发，简单任务不凑人数。现有并发容量、同一执行单飞、资源互斥和未知效果/排空完成条件保持生效；人数不限不等于无限并发。历史成员继续按原身份读取和续办，不删除或重建。检查 objective/context 是否明确每成员本轮职责、任务、输入、负责范围、前置、交付物及验收方法，resourceKeys 是否对应真实冲突资源。独立就绪目标应在同轮登记后再 wait；高风险自证需固定产物版本后补独立只读核验，不能用重做外部写入来补证。隔离模型复验入口见 `docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs`，结果与语义审阅记入同特性轮次；不能以提示词存在或会话数量增加代替行为验证。
 
 每轮文档核验：在隔离任务独立读取 `tasks/<taskId>/outputs/<executionId>/round-<inputVersion>.md`，确认身份、职责、首次阶段报告 plan、进展与最终结果相符。同轮报告可以更新文件；原 execution 续办后须产生下一 inputVersion 文件，独立比较旧文件 SHA256，确认后续报告和重启未改变旧轮。不能拿旧阶段报告当成本轮进度。文档属于可读投影，原账本保留恢复权威；文档写入异常会出技术告警，先修复真实路径/权限，不手工覆盖身份头或删除历史轮次。已提交账本回执不会因文档错误丢失，严格文档读取与下一轮切换仍须成功。此升级不补造升级前已丢失完整输入的历史文档。
 

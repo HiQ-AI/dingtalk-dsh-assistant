@@ -88,7 +88,7 @@ test('native execution documents keep each input round and the owner reads the n
           objective: 'ROUND_TWO_DUTY：复核交付标识与限制', context: '新职责只读复核proof.txt，不沿用上一轮计划和成果为当前事实。' }), submit('wait')]
       }
       completed = true
-      return [submit('wait')]
+      return [submit('complete')]
     }
     const version = input.executionDocument.inputVersion, step = steps.get(version) ?? 0
     steps.set(version, step + 1)
@@ -113,6 +113,9 @@ test('native execution documents keep each input round and the owner reads the n
   assert.equal(initialProgressSteps, 3)
   assert.ok(!h.toolResults.some(item => item.name === 'task_execution_progress' && item.result.isError), '文档查询不产生INVALID_TOOL_OUTPUT')
   const [execution] = await h.query('execution.list', { taskId: task.taskId })
+  assert.equal((await h.query('execution.list', { taskId: task.taskId })).length, 1)
+  assert.equal(execution.definition.executionBackend, 'dsh')
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', 'One member can finish after both document rounds are verified')
   assert.deepEqual({ executionId: execution.executionId, sessionId: execution.sessionId }, firstIdentity)
   assert.equal(execution.inputVersion, 2)
   assert.equal(hash(await readFile(firstDocument)), firstHash)

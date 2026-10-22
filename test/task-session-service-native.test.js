@@ -280,6 +280,8 @@ test('owner injects one authoritative source body across task, Web identity and 
   assert.equal(dto.request, task.request)
   assert.deepEqual(dto.completion, task.completion, 'Observer still receives the original task completion')
   assert.equal(dto.executions.length, 0)
+  assert.equal(task.status, 'completed', 'A direct analysis task does not need an execution member')
+  assert.equal((await h.query('execution.list', { taskId: task.taskId })).length, 0)
   const saved = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
   const current = h.requests.at(-1).messages.find(message => message.source?.taskSession && !message.source.taskContextHistory)
   const raw = saved.events.flatMap(event => event.type === 'agent/inbox/spliced' ? event.data.inserted : []).find(message => message.id === current.source.rawHostMessageId)
@@ -812,7 +814,6 @@ test('native service routes authenticated source, delegates parallel execution, 
 
 test('native sequential handoff preserves one executor before independent review of the fixed artifact', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-sequential-review-'), steps = new Map(), reviewed = new Set()
-  const rejectedCounts = new Set()
   const artifact = 'candidate.txt', content = 'candidate-v1\ncandidate-proof:7\n'
   const sha256 = createHash('sha256').update(content).digest('hex')
   let firstIdentity, phase = 0, independentStartedAfterDrain = false
@@ -828,10 +829,6 @@ test('native sequential handoff preserves one executor before independent review
           context: '仅在本任务目录创建candidate.txt版本candidate-v1；先写入并报告产物和摘要，后续核对须等待本次结果。不得发送或发布。' }), decision('wait', '等待原候选生成')]
       }
       if (!writer?.drained || writer.status !== 'succeeded') return [decision('wait', '前置执行未结束，保留原执行')]
-      if ((executions.length === 1 || executions.length === 2 && reviewer?.drained && reviewer.status === 'succeeded') && !rejectedCounts.has(executions.length)) {
-        rejectedCounts.add(executions.length)
-        return [decision('complete', '尝试提前完成，Host必须拒绝不足三人的执行团队')]
-      }
       for (const execution of executions.filter(item => item.status === 'succeeded' && item.drained)) {
         const version = execution.executionId + ':' + execution.inputVersion
         if (!reviewed.has(version)) { reviewed.add(version); return [call('task_execution_read', { executionId: execution.executionId })] }
@@ -849,15 +846,8 @@ test('native sequential handoff preserves one executor before independent review
         return [call('task_delegate', { key: 'independent-review', objective: 'independently-review-candidate', resourceKeys: ['candidate'],
           context: `固定产物candidate.txt，版本candidate-v1，SHA256=${sha256}；原执行已排空。独立只读原文件，核对版本、内容和反例；不得改文件、部署、发送或重做原动作。报告真实证据与限制。` }), decision('wait', '候选已固定，等待独立核验')]
       }
-      const complete = reviewer?.drained && reviewer.status === 'succeeded'
-      if (phase === 3 && complete) {
-        phase++
-        assert.ok(host.toolResults.some(item => item.name === 'task_session_submit' && item.result.isError && JSON.stringify(item.result).includes('TASK_EXECUTION_TEAM_INCOMPLETE')))
-        return [call('task_delegate', { key: 'delivery-check', objective: 'check-delivery-completeness',
-          context: `固定产物candidate.txt，版本candidate-v1，SHA256=${sha256}；原候选与独立核验已结束。只读交付文件，核对内容包含版本及candidate-proof:7两项要求、交付路径有效；不修改、部署或发送。` }), decision('wait', '补齐尚未覆盖的交付完整性核验')]
-      }
-      const teamComplete = executions.length === 3 && executions.every(item => item.drained && item.status === 'succeeded')
-      return [decision(teamComplete ? 'complete' : 'wait', teamComplete ? '原候选、独立核验和交付完整性均已核对' : '等待尚未结束的真实核验')]
+      const teamComplete = executions.length === 2 && reviewer?.drained && executions.every(item => item.drained && item.status === 'succeeded')
+      return [decision(teamComplete ? 'complete' : 'wait', teamComplete ? '原候选及独立核验均已核对' : '等待尚未结束的真实核验')]
     }
     const step = steps.get(input.objective) ?? 0
     steps.set(input.objective, step + 1)
@@ -888,12 +878,10 @@ test('native sequential handoff preserves one executor before independent review
   assert.deepEqual((await h.service.recover()).failures, [])
   const executions = await h.query('execution.list', { taskId: created.taskId })
   assert.equal((await h.query('task.list')).length, 1)
-  assert.equal(executions.length, 3, 'Sequential continuation reuses the executor; two distinct verification goals add two members')
-  assert.deepEqual([...rejectedCounts], [1, 2])
+  assert.equal(executions.length, 2, 'Sequential continuation reuses the executor; only the independent review adds a member')
   const rejectedCompletions = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
-  assert.equal(rejectedCompletions.length, 2, 'Both one-member and two-member completion attempts must be rejected')
-  assert.ok(rejectedCompletions.every(item => JSON.stringify(item.result).includes('TASK_EXECUTION_TEAM_INCOMPLETE')))
-  assert.equal(new Set(rejectedCompletions.map(item => item.sessionId)).size, 1, 'A recoverable tool error preserves the original coordinator session')
+  assert.equal(rejectedCompletions.length, 0, 'Two members may complete once the actual work is verified')
+  assert.ok(executions.every(item => item.definition.executionBackend === 'dsh' && item.sessionBound))
   assert.equal(executions.find(item => item.key === 'candidate').continuations.length, 1)
   assert.equal(independentStartedAfterDrain, true)
   assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
@@ -908,14 +896,59 @@ test('native sequential handoff preserves one executor before independent review
   assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 1, 'Verification creates no second write effect')
 })
 
+test('native service runs eleven independent members within the configured concurrency and completes', { timeout: 45000 }, async t => {
+  const fixture = await nativeCase(t, 'task-eleven-members-'), steps = new Map()
+  const objectives = Array.from({ length: 11 }, (_, index) => `independent-proof-${index + 1}`)
+  let delegated = false, peakRunning = 0
+  const h = await fixture.host(async (request, host) => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      if (!delegated) {
+        delegated = true
+        return [...objectives.map(objective => call('task_delegate', { key: objective, objective,
+          resourceKeys: [objective], context: `仅生成并读取本任务目录的${objective}.txt，内容为${objective}；不修改其他成员文件，不部署或发送。` })), decision('wait', '等待各独立证据文件')]
+      }
+      const executions = await host.query('execution.list', { taskId: input.task.taskId })
+      return [decision(executions.length === objectives.length && executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '核对独立证据文件结果')]
+    }
+    const executions = await host.query('execution.list', { taskId: input.task.taskId })
+    const running = executions.filter(item => !item.drained).length
+    peakRunning = Math.max(peakRunning, running)
+    assert.ok(running <= 2, 'Removing the member ceiling does not remove the concurrent execution quota')
+    const step = steps.get(input.objective) ?? 0
+    steps.set(input.objective, step + 1)
+    const file = `${input.objective}.txt`
+    if (step === 0) return [call('write', { file_path: file, content: input.objective })]
+    if (step === 1) return [call('read', { file_path: file })]
+    const execution = executions.find(item => item.input.objective === input.objective)
+    const read = host.toolResults.findLast(item => item.name === 'read' && item.sessionId === execution.sessionId)
+    assert.ok(read && !read.result.isError)
+    assert.ok(JSON.stringify(read.result).includes(input.objective), 'Each native member reads back its own file before submitting')
+    return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: [file], limitations: [], artifacts: [file] } })]
+  }, { config: { maxConcurrentExecutions: 2 } })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'eleven-members', objective: '分别生成并读取十一份互不依赖的证据文件，全部核验后完成' })
+  await h.service.whenIdle()
+  const executions = await h.query('execution.list', { taskId: created.taskId })
+  assert.equal(executions.length, 11, JSON.stringify(h.toolResults.filter(item => item.result.isError)))
+  assert.equal(new Set(executions.map(item => item.sessionId)).size, 11)
+  assert.ok(peakRunning > 0 && peakRunning <= 2)
+  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  for (const execution of executions) {
+    assert.equal(execution.definition.executionBackend, 'dsh')
+    assert.equal(execution.status, 'succeeded'); assert.equal(execution.drained, true); assert.equal(execution.sessionBound, true)
+    assert.equal(await readFile(join(fixture.root, 'tasks', created.taskId, `${execution.input.objective}.txt`), 'utf8'), execution.input.objective)
+    assert.match(await readFile(join(fixture.root, 'tasks', created.taskId, 'outputs', execution.executionId, 'round-1.md'), 'utf8'), new RegExp(execution.input.objective))
+  }
+  assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 11)
+  assert.ok(!h.toolResults.some(item => item.result.isError))
+})
+
 test('native executor resumes in the same titled task workspace and all task sessions share the process cwd', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-workspace-resume-')
-  const team = nativeVerificationTeam({ filePath: 'resume-cwd.txt', expected: 'tasks' })
   function model(continuing) {
     const steps = new Map()
     return async (request, host) => {
       const input = latestInput(request), names = request.tools.map(tool => tool.name)
-      const verification = team.execute(request, input); if (verification) return verification
       if (names.includes('task_delegate')) {
         const step = steps.get('owner:' + input.task.leaseEpoch) ?? 0
         steps.set('owner:' + input.task.leaseEpoch, step + 1)
@@ -924,8 +957,7 @@ test('native executor resumes in the same titled task workspace and all task ses
         if (continuing && objective === 'first' && step === 0)
           return [call('task_delegate', { key: '继续核对', objective: 'second', executionId: input.executions[0].executionId })]
         if (objective === 'second' && input.executions[0].status === 'succeeded') {
-          const primary = (await host.query('execution.list'))[0], more = team.owner(input, primary); if (more) return more
-          return [decision(input.executions.length === 3 && input.executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '第二次核对与交付核验')]
+          return [decision(input.executions.length === 1 && input.executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '第二次核对已完成')]
         }
         return [decision(input.executions.every(execution => execution.drained) ? 'blocked' : 'wait', '等待下一次明确输入')]
       }
@@ -954,6 +986,8 @@ test('native executor resumes in the same titled task workspace and all task ses
   assert.equal(resumed.sessionId, execution.sessionId)
   assert.equal(resumed.executionId, execution.executionId)
   assert.equal(resumed.input.objective, 'second')
+  assert.equal((await next.query('execution.list')).length, 1, 'A continuation does not add members to satisfy a headcount')
+  assert.equal(resumed.definition.executionBackend, 'dsh')
   assert.equal(resumed.status, 'succeeded')
   assert.equal((await next.query('task.get', { taskId: created.taskId })).status, 'completed')
   assert.equal(await readFile(join(runtimeCwd, 'resume-cwd.txt'), 'utf8'), runtimeCwd)
@@ -1486,14 +1520,15 @@ test('resident listener startup failure disposes native resources and permits re
 test('native board keeps a drained coordinator running while its delegated target is executing', { timeout: 20000 }, async t => {
   const fixture = await nativeCase(t, 'task-board-active-execution-'), release = Promise.withResolvers()
   t.after(() => release.resolve())
-  let delegated = false
+  let delegated = false, prematureCompletion = false
   const h = await fixture.host(async request => {
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) return topicCalls
     const input = latestInput(request)
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
-      if (!delegated) { delegated = true; return ['执行状态', '输入版本', '交付限制'].map(role => call('task_delegate', { key: 'board-' + role, objective: '只读核对团队' + role })) }
-      return [decision(input.executions.length === 3 && input.executions.every(execution => execution.drained && execution.status === 'succeeded') ? 'complete' : 'wait', '等待小目标执行结果')]
+      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'board-state', objective: '只读核对当前执行状态' })] }
+      if (!prematureCompletion) { prematureCompletion = true; return [decision('complete', '尝试在唯一执行尚未排空时完成')] }
+      return [decision(input.executions.length === 1 && input.executions.every(execution => execution.drained && execution.status === 'succeeded') ? 'complete' : 'wait', '等待小目标执行结果')]
     }
     await release.promise
     if (!modelToolValues(request).some(value => value.taskId === input.task.taskId && Array.isArray(value.executions))) return [call('execution_team_read', {})]
@@ -1509,7 +1544,57 @@ test('native board keeps a drained coordinator running while its delegated targe
     assert.equal(view.state, 'running')
     assert.equal(view.waitingReason, '')
     assert.equal((await h.service.taskDetail(task.taskId)).state, 'running')
+    const rejection = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
+    assert.equal(rejection.length, 1)
+    const blockers = JSON.parse(rejection[0].result.error.message)
+    assert.equal(blockers.executions.length, 1)
+    assert.equal(blockers.executions[0].taskId, task.taskId)
+    assert.equal(blockers.executions[0].drained, false)
   } finally { release.resolve(); await h.service.whenIdle() }
+  assert.equal((await h.query('task.list'))[0].status, 'completed', 'The same single-member task completes only after physical drain')
+})
+
+test('native single-member completion keeps an unknown tool effect unresolved without replay', { timeout: 20000 }, async t => {
+  const fixture = await nativeCase(t, 'task-single-unknown-effect-')
+  let delegated = false, attemptedComplete = false, executed = false
+  const h = await fixture.host(async (request, host) => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      if (!delegated) {
+        delegated = true
+        host.ctx.tools.register({ name: 'uncertain_native_write', description: 'Write a real file then simulate loss of the tool acknowledgement', parameters: { type: 'object' },
+          output: { schema: { type: 'object' }, render: () => [] }, async execute() {
+            await writeFile(join(fixture.root, 'tasks', input.task.taskId, 'uncertain-effect.txt'), 'once')
+            throw new Error('lost acknowledgement after file write')
+          } })
+        return [call('task_delegate', { key: 'uncertain-effect', objective: '执行一次文件写入并保留工具失败事实' })]
+      }
+      const [execution] = await host.query('execution.list', { taskId: input.task.taskId })
+      if (!execution?.drained) return [decision('wait', '等待原执行排空')]
+      if (!attemptedComplete) { attemptedComplete = true; return [decision('complete', '尝试在原操作效果未知时完成')] }
+      return [decision('wait', '原操作效果未知，保留证据且不重放')]
+    }
+    if (!executed) {
+      executed = true
+      return [call('uncertain_native_write', {})]
+    }
+    return [call('execution_submit', { output: { status: 'blocked', summary: '原工具回执失败，未重放写入', evidence: ['uncertain-effect.txt'], limitations: ['操作账仍为未知效果'], artifacts: [] } })]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'single-unknown-effect', objective: '核对失败后原操作效果，不重放原动作' })
+  await h.service.whenIdle()
+  const [execution] = await h.query('execution.list', { taskId: created.taskId }), operations = await h.query('operation.list', { taskId: created.taskId })
+  assert.equal(execution.drained, true)
+  assert.equal(operations.length, 1); assert.equal(operations[0].state, 'unknown')
+  assert.equal(await readFile(join(fixture.root, 'tasks', created.taskId, 'uncertain-effect.txt'), 'utf8'), 'once')
+  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'active')
+  assert.equal(attemptedComplete, true)
+  const rejection = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
+  assert.equal(rejection.length, 1)
+  const blockers = JSON.parse(rejection[0].result.error.message)
+  assert.equal(blockers.operations.length, 1); assert.equal(blockers.operations[0].state, 'unknown')
+  assert.equal(blockers.operations[0].operationId, operations[0].operationId)
+  assert.equal(h.toolResults.filter(item => item.name === 'uncertain_native_write').length, 1)
+  assert.equal((await h.query('task.events')).events.length, 0, 'An unresolved effect cannot publish task completion')
 })
 
 

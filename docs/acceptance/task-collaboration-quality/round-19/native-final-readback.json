@@ -1,0 +1,31 @@
+{
+  "checkedAt": "2026-10-22T16:51:11.0487453Z",
+  "files": [
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-session.js",
+      "sha256": "de40b14728fc2aa0fa51e89b834c08c4791e465bf6809a7b84307c7811696807",
+      "unchanged": true
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-session-service.js",
+      "sha256": "bc155957fc9fa5b72e9b3577e67ea99a1fcb00389436eb456c7d25ef51d4110a",
+      "unchanged": true
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "sha256": "aaf903785578b07723d1b00a11b6a9cecc16c457ea2dff15699a258828bbd851",
+      "unchanged": true
+    },
+    {
+      "path": "test/task-session-service-native.test.js",
+      "sha256": "8fb468b698d912f640394e5b449b2b266e65a5874883e76ff60b18766e43ac90",
+      "unchanged": true
+    },
+    {
+      "path": "test/task-session-progress-native.test.js",
+      "sha256": "42e8ffb1ff70c2413feb358bf43887da16ba19f03bda877168c61e52bca42785",
+      "unchanged": true
+    }
+  ],
+  "allUnchanged": true
+}

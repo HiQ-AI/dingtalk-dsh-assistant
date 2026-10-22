@@ -1,0 +1,54 @@
+✔ native execution documents keep each input round and the owner reads the new duty and plan (26938.3155ms)
+✔ owner injects one authoritative source body across task, Web identity and materials (10357.8668ms)
+ℹ {"scope":"actual native owner scripted adapter UTF-8 JSON bytes","bodyCopies":[0,0],"metrics":[{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":24912,"schemaBytes":12913,"adapterRequestBytes":54472},{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2488,"systemBytes":24912,"schemaBytes":12913,"adapterRequestBytes":57417}]}
+✔ native sequential handoff preserves one executor before independent review of the fixed artifact (14298.2014ms)
+✔ native service runs eleven independent members within the configured concurrency and completes (53375.9703ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (13802.9369ms)
+✖ native board keeps a drained coordinator running while its delegated target is executing (5570.0106ms)
+✖ native single-member completion keeps an unknown shell effect unresolved without replay (5856.5121ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 5
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 121253.2894
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:50:38
+✖ native board keeps a drained coordinator running while its delegated target is executing (5570.0106ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /DYNAMIC_TASK_NOT_QUIESCENT/. Input:
+  
+  '{"isError":true,"error":{"message":"{\\"executions\\":[{\\"cancelRequested\\":false,\\"controlRevision\\":1,\\"drained\\":false,\\"executionId\\":\\"82d3b879-9f49-47df-91e8-2839580e3630\\",\\"input\\":{\\"objective\\":\\"只读核对当前执行状态\\",\\"readbackOperationId\\":null,\\"recoveryReadOnly\\":false,\\"skillNames\\":[],\\"title\\":\\"board-state\\"},\\"inputDigest\\":\\"9a9baea7ac4bfa9c133ed7a18171d6eb160b01962a015dd242194bda4d18d8d9\\",\\"inputVersion\\":1,\\"key\\":\\"board-state\\",\\"leaseEpoch\\":1,\\"recovering\\":false,\\"requirementRevision\\":1,\\"resourceKeys\\":[],\\"resources\\":{\\"blocking\\":[],\\"holder\\":null,\\"keys\\":[],\\"state\\":\\"none\\"},\\"sessionId\\":\\"task-execution-45208b92-8876-4df5-9a20-5ca988f49456\\",\\"status\\":\\"running\\",\\"taskId\\":\\"task-4e610d4cc9d23e801dfba4cfa2fcd9bf\\",\\"updatedAt\\":\\"2026-10-22T16:43:52.171Z\\"}],\\"legacy\\":[],\\"operations\\":[]}"},"content":[{"type":"text","text":"Error: {\\"executions\\":[{\\"cancelRequested\\":false,\\"controlRevision\\":1,\\"drained\\":false,\\"executionId\\":\\"82d3b879-9f49-47df-91e8-2839580e3630\\",\\"input\\":{\\"objective\\":\\"只读核对当前执行状态\\",\\"readbackOperationId\\":null,\\"recoveryReadOnly\\":false,\\"skillNames\\":[],\\"title\\":\\"board-state\\"},\\"inputDigest\\":\\"9a9baea7ac4bfa9c133ed7a18171d6eb160b01962a015dd242194bda4d18d8d9\\",\\"inputVersion\\":1,\\"key\\":\\"board-state\\",\\"leaseEpoch\\":1,\\"recovering\\":false,\\"requirementRevision\\":1,\\"resourceKeys\\":[],\\"resources\\":{\\"blocking\\":[],\\"holder\\":null,\\"keys\\":[],\\"state\\":\\"none\\"},\\"sessionId\\":\\"task-execution-45208b92-8876-4df5-9a20-5ca988f49456\\",\\"status\\":\\"running\\",\\"taskId\\":\\"task-4e610d4cc9d23e801dfba4cfa2fcd9bf\\",\\"updatedAt\\":\\"2026-10-22T16:43:52.171Z\\"}],\\"legacy\\":[],\\"operations\\":[]}"}]}'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/native-adaptive-team/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1549:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '{"isError":true,"error":{"message":"{\\"executions\\":[{\\"cancelRequested\\":false,\\"controlRevision\\":1,\\"drained\\":false,\\"executionId\\":\\"82d3b879-9f49-47df-91e8-2839580e3630\\",\\"input\\":{\\"objective\\":\\"只读核对当前执行状态\\",\\"readbackOperationId\\":null,\\"recoveryReadOnly\\":false,\\"skillNames\\":[],\\"title\\":\\"board-state\\"},\\"inputDigest\\":\\"9a9baea7ac4bfa9c133ed7a18171d6eb160b01962a015dd242194bda4d18d8d9\\",\\"inputVersion\\":1,\\"key\\":\\"board-state\\",\\"leaseEpoch\\":1,\\"recovering\\":false,\\"requirementRevision\\":1,\\"resourceKeys\\":[],\\"resources\\":{\\"blocking\\":[],\\"holder\\":null,\\"keys\\":[],\\"state\\":\\"none\\"},\\"sessionId\\":\\"task-execution-45208b92-8876-4df5-9a20-5ca988f49456\\",\\"status\\":\\"running\\",\\"taskId\\":\\"task-4e610d4cc9d23e801dfba4cfa2fcd9bf\\",\\"updatedAt\\":\\"2026-10-22T16:43:52.171Z\\"}],\\"legacy\\":[],\\"operations\\":[]}"},"content":[{"type":"text","text":"Error: {\\"executions\\":[{\\"cancelRequested\\":false,\\"controlRevision\\":1,\\"drained\\":false,\\"executionId\\":\\"82d3b879-9f49-47df-91e8-2839580e3630\\",\\"input\\":{\\"objective\\":\\"只读核对当前执行状态\\",\\"readbackOperationId\\":null,\\"recoveryReadOnly\\":false,\\"skillNames\\":[],\\"title\\":\\"board-state\\"},\\"inputDigest\\":\\"9a9baea7ac4bfa9c133ed7a18171d6eb160b01962a015dd242194bda4d18d8d9\\",\\"inputVersion\\":1,\\"key\\":\\"board-state\\",\\"leaseEpoch\\":1,\\"recovering\\":false,\\"requirementRevision\\":1,\\"resourceKeys\\":[],\\"resources\\":{\\"blocking\\":[],\\"holder\\":null,\\"keys\\":[],\\"state\\":\\"none\\"},\\"sessionId\\":\\"task-execution-45208b92-8876-4df5-9a20-5ca988f49456\\",\\"status\\":\\"running\\",\\"taskId\\":\\"task-4e610d4cc9d23e801dfba4cfa2fcd9bf\\",\\"updatedAt\\":\\"2026-10-22T16:43:52.171Z\\"}],\\"legacy\\":[],\\"operations\\":[]}"}]}',
+    expected: /DYNAMIC_TASK_NOT_QUIESCENT/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test\task-session-service-native.test.js:50:38
+✖ native single-member completion keeps an unknown shell effect unresolved without replay (5856.5121ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'succeeded'
+  - 'unknown'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/native-adaptive-team/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1578:46)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'succeeded',
+    expected: 'unknown',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

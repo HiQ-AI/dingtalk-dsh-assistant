@@ -51,7 +51,7 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.equal(duplicate.status, 200, JSON.stringify(duplicate.body)); assert.equal(duplicate.body.taskId, taskId)
     await service.whenIdle(); await service.recover(); await service.whenIdle()
     const executions = await service.store.query({ kind: 'execution.list', taskId })
-    assert.equal(executions.length, 10, 'production dispatch obeys the current ten-member cap')
+    assert.equal(executions.length, 10, 'The pagination fixture starts with ten dispatched executions')
     assert.ok(executions.every(execution => execution.status === 'succeeded' && execution.drained))
     // 历史读取夹具：旧任务可能已有超过十个执行；不经新派发绕过上限，也不删分页覆盖。
     // 十个真实服务执行保留原样，另复制43个已结束历史记录及其阶段事件，仅用于HTTP读取断言。
