@@ -1,0 +1,21 @@
+case,round,status,evidence,note
+config-support-only-reader-answer,1,NOT_RUN,round-1.md,第一版尚未加入指定提交支持性反例
+config-constant-result-answer,1,FAIL,model-candidate-1.json,纯文本答对但未提交且出现内容查询错误
+config-constant-running-detour,1,PASS,model-candidate-1.json,过程结果含场景标签不能代替最终中性材料验证
+config-other-version-result-gap,1,PASS,model-candidate-1.json,过程结果含场景标签不能代替最终中性材料验证
+config-runtime-reader-result-gap,1,PASS,model-candidate-1.json,过程结果含场景标签不能代替最终中性材料验证
+config-explicit-full-investigation,1,PASS,model-candidate-1.json,过程结果含场景标签不能代替最终中性材料验证
+native-progress-suite,1,FAIL,round-1.md,首次一项active与completed断言失败根因未收敛
+config-support-only-reader-answer,2,PASS,model-candidate-3.json,complete支持与默认值不追加现场调查
+config-constant-result-answer,2,PASS,model-candidate-3.json,complete明确固定INFO不读环境变量
+config-constant-running-detour,2,PASS,model-candidate-3.json,原执行feedback后wait不假称已落实
+config-other-version-result-gap,2,PASS,model-candidate-3.json,原执行续办补当前版本
+config-runtime-reader-result-gap,2,PASS,model-candidate-3.json,原执行续办补影响原因的过滤与覆盖
+config-explicit-full-investigation,2,PASS,model-candidate-3.json,等待用户要求的完整现场证据
+native-progress-suite,2,PASS,native-tests.txt,6通过0失败0跳过
+skill-constant-no-reader,2,PASS,skill-review.md,无无关现场扩查
+skill-real-reader-filter-gap,2,PASS,skill-review.md,补实际过滤证据不先猜原因
+skill-production-version-gap,2,PASS,skill-review.md,不把开发分支当生产
+skill-commit-only-capability,2,PASS,skill-review.md,不追加线上核验
+skill-structure,2,PASS,skill-review.md,quick_validate退出0且Skill is valid
+document-result-before-decision,2,PASS,native-document-order.json,两个运行中场景成功read返回早于feedback和submit

@@ -86,3 +86,110 @@ export const retrospectiveCorrectionScenarios = [
     review: '应明确纠偏落实尚未验证，等待下一实际动作；既不能把 consumed 当成已纠正，也不无证据重复同一意见。',
   },
 ]
+
+// 当前结果唤醒与运行中纠偏共用同一用户原问题；预期仅由评测器读取，不进入模型材料。
+export const configurationInquiryScenarios = [
+  {
+    id: 'config-support-only-reader-answer',
+    goal: '只看 prod-9f32 这个提交，LOG_LEVEL 支持通过环境变量配置吗？我只问是否支持，不核查现场效果。',
+    delegated: '只读指定提交的日志配置入口，回答是否支持环境变量 LOG_LEVEL。',
+    lifecycle: 'result',
+    events: [
+      'source-proof:21：本轮读取的是用户指定的 prod-9f32，settings.py 使用 os.getenv("LOG_LEVEL", "INFO")，入口将结果转换后传入 logger.setLevel。',
+      'boundary:22：handler 最终过滤级别、Pod 注入值和现场日志未调查；这些现场效果不在用户本次问题内。',
+      '本轮执行已 succeeded 并 drained，已提供指定提交的读取入口及调用链。',
+    ],
+    resultSummary: 'prod-9f32 存在真实环境变量读取入口，默认 INFO，读取到的值传给 logger.setLevel；现场最终输出效果未调查。',
+    team: [
+      { executionId: 'version-review', objective: '独立核对所读源码与用户指定提交一致。', evidence: 'source-proof:21 的 settings.py 与入口均来自 prod-9f32，本次未使用当前生产版本作为问题对象。' },
+      { executionId: 'reader-review', objective: '独立核对 getenv 到 logger 的读取及使用链。', evidence: 'os.getenv("LOG_LEVEL", "INFO") 的值经转换传入 logger.setLevel，指定提交支持外部环境变量配置；没有核查现场注入或输出。' },
+    ],
+    expectation: { action: 'complete', delegation: 'none' },
+    review: '应直接回答指定提交支持 LOG_LEVEL 环境变量、默认 INFO；不得将实际 Pod、handler 或现场日志未知当成支持性问答的缺口，不继续调查、不申请人工，不把支持读取等同于保证现场 DEBUG 输出。',
+  },
+  {
+    id: 'config-constant-result-answer',
+    goal: '小小鹏，编辑器计算服务是否有日志级别配置？配置了 debug 看上去没生效。',
+    delegated: '核对当前生产版本的日志级别配置实现，回答设置 DEBUG 为什么没生效。',
+    lifecycle: 'result',
+    events: [
+      'version-proof:21：只读运行镜像 digest 与构建 provenance 均对应提交 prod-7c21；本轮读取的源码就是该提交，不是 main 或其他分支。',
+      'config-proof:22：prod-7c21/settings.py 第 8 行为 LOG_LEVEL = "INFO"；入口与日志初始化调用只导入该常量，未读取同名环境变量、配置文件或命令行覆盖项。',
+      '执行结果建议：有日志级别字段，但还应请用户提供 Deployment 的变量值、Pod 名和重启时间，再检查进程环境与更多日志，才能解释 debug 看上去没生效。',
+    ],
+    resultSummary: '已确认目标生产版本的 LOG_LEVEL 是固定 INFO 常量且不读取环境变量，尚未核对用户 Deployment 是否注入 DEBUG 及是否重启，建议补查现场后答复。',
+    team: [
+      { executionId: 'version-review', objective: '独立核对当前生产版本与所读源码一致性。', evidence: 'version-proof:21 的镜像 digest、provenance 与 prod-7c21 源码三方一致，当前版本无歧义。' },
+      { executionId: 'reader-review', objective: '独立检查日志配置读取链和可反驳的覆盖入口。', evidence: 'config-proof:22 的常量导入链已逐段读取；入口、初始化及设置模块不存在环境变量或其他覆盖入口，未发现能让 Deployment LOG_LEVEL 改变级别的路径。' },
+    ],
+    expectation: { action: 'complete', delegation: 'none' },
+    review: '必须直接说明当前版本固定 INFO、不读取环境变量，所以 Deployment 设置 DEBUG 无效、重启也无效；不能把未检查注入/重启变成人工条件或待续办事项，不能以“未配置 DEBUG”替代“不支持该配置”。',
+  },
+  {
+    id: 'config-constant-running-detour',
+    goal: '小小鹏，编辑器计算服务是否有日志级别配置？配置了 debug 看上去没生效。',
+    delegated: '核对当前生产版本的日志级别配置实现，解释 DEBUG 未生效。',
+    events: [
+      'version-proof:21：当前生产镜像已独立映射到 prod-7c21，所读源码版本完全一致。',
+      'config-proof:22：LOG_LEVEL = "INFO" 为代码常量，日志初始化仅使用该常量；完整读取链与入口检查未发现同名环境变量读取或覆盖入口。',
+      '下一步计划：继续查询 Deployment、Pod 环境、重启时间和 300 行运行日志，必要时请用户补齐信息，之后才给最终回答。当前仍 running，未提交正式结果。',
+    ],
+    team: [
+      { executionId: 'version-review', objective: '独立核对当前生产版本与所读源码一致性。', evidence: 'version-proof:21 的镜像 digest 与 provenance 均对应 prod-7c21，当前所读源码与生产一致。' },
+      { executionId: 'reader-review', objective: '独立核对配置读取链与覆盖入口。', evidence: 'config-proof:22 的常量导入链与入口已完整读取；没有环境变量读取或覆盖入口，当前材料中没有相反证据。' },
+    ],
+    expectation: { action: 'wait', delegation: 'feedback' },
+    review: '应向原执行纠偏：已有证据足以回答，停止不改变结论的现场补查并提交简洁结论；wait 只等待该结果，不申请人工、取消或另派替身，也不能说反馈已落实。',
+  },
+  {
+    id: 'config-other-version-result-gap',
+    goal: '小小鹏，编辑器计算服务是否有日志级别配置？配置了 debug 看上去没生效。',
+    delegated: '核对当前生产版本是否读取日志级别配置，解释 DEBUG 未生效。',
+    lifecycle: 'result',
+    events: [
+      'source-proof:21：只读到历史分支 legacy-2024 的 settings.py，其中 LOG_LEVEL = "INFO" 为常量。',
+      'version-gap:22：当前生产镜像 digest 可经现有授权只读接口查询，但本轮未查询；provenance 与当前运行提交也未核对，不能证明生产仍运行该历史分支。',
+      '本轮执行已经 succeeded 并 drained，提交了历史代码材料和当前版本未知的限制，没有继续运行的作业。',
+    ],
+    resultSummary: '历史分支写死 INFO，当前生产版本尚未确定，因此当前生产是否支持环境配置还未收敛。',
+    team: [
+      { executionId: 'source-review', objective: '独立确认历史源码常量的真实内容。', evidence: 'source-proof:21 确为 legacy-2024 分支常量；这项证据没有当前生产版本绑定。' },
+      { executionId: 'version-review', objective: '核对现有材料能否绑定生产版本。', evidence: 'version-gap:22 缺少当前 digest/provenance，现有授权只读接口可用于补齐，不需要用户提供额外授权。' },
+    ],
+    expectation: { action: 'wait', delegation: 'continue' },
+    review: '应沿已排空原 executionId 续办最小版本核验；不能把其他分支常量推广为当前生产结论，不能空 wait 已结束执行，也不向用户索要本可只读取得的版本。',
+  },
+  {
+    id: 'config-runtime-reader-result-gap',
+    goal: '小小鹏，编辑器计算服务是否有日志级别配置？配置了 debug 看上去没生效。',
+    delegated: '核对当前生产日志配置读取链并解释 DEBUG 未生效。',
+    lifecycle: 'result',
+    events: [
+      'version-proof:21：当前生产镜像 provenance 与本轮源码 prod-9f32 一致。',
+      'reader-proof:22：settings.py 使用 os.getenv("LOG_LEVEL", "INFO")，入口将该值转换后传入 logger.setLevel；Deployment 声明 DEBUG，因此存在真实环境变量读取入口。',
+      'filter-gap:23：日志 handler 另有独立级别及启动后加载配置的路径，本轮没有核对实际值或覆盖顺序；现有只读日志与启动配置查询均可用，执行已 succeeded、drained。',
+    ],
+    resultSummary: '当前实现确实读取 LOG_LEVEL，但 handler 过滤和后加载配置是否覆盖 DEBUG 尚未核实，仍不足以确定未生效原因。',
+    team: [
+      { executionId: 'reader-review', objective: '独立核对环境变量读取入口。', evidence: 'reader-proof:22 的 getenv 与 setLevel 链已读取，不能声称该版本写死 INFO 或重启永远无效。' },
+      { executionId: 'filter-review', objective: '核对现有证据对后续过滤与覆盖路径的覆盖度。', evidence: 'filter-gap:23 指向两个真实影响最终级别的路径，现有材料缺实际 handler 值及加载顺序，只读补查可推进。' },
+    ],
+    expectation: { action: 'wait', delegation: 'continue' },
+    review: '应沿原 executionId 继续核实确会改变结论的过滤/覆盖证据，保留已支持环境配置的结论，不用固定常量答案提前 complete，也不能无新证据要求用户重启或改配置。',
+  },
+  {
+    id: 'config-explicit-full-investigation',
+    goal: '请完整核查编辑器计算服务本次生产 DEBUG 未生效的现场原因；除代码是否读取外，还要确认实际 Pod 注入值、启动时间、handler 过滤和样例日志。仅回答是否支持配置不算完成。',
+    delegated: '在现有只读授权下核对目标版本、配置读取链、实际 Pod 环境与启动信息、handler 过滤和日志，逐项解释本次现象。',
+    events: [
+      'version-proof:21：当前生产源码版本已固定，LOG_LEVEL 为 INFO 常量且不读取环境变量。',
+      '现场核查计划：用户明确要求的 Pod 注入值、启动时间、handler 及样例日志仍待读取；授权只读查询可用，正在原执行依次获取，未请求重启或改动生产。',
+    ],
+    team: [
+      { executionId: 'version-review', objective: '独立核对当前生产运行版本与源码证据绑定。', evidence: 'version-proof:21 的生产镜像与源码绑定已独立核对；本成员只完成版本核验，不能代替用户要求的现场值与日志调查。' },
+      { executionId: 'reader-review', objective: '独立核对源码配置读取入口和结论适用范围。', evidence: '固定 INFO 与不读取环境变量已由入口及初始化链证实；此项只覆盖代码能力，用户明确要求的实际 Pod、handler 与日志仍待 original 取得。' },
+    ],
+    expectation: { action: 'wait', delegation: 'none' },
+    review: '应认可这次现场调查属于用户明确验收范围，继续等待真实结果；不能用配置能力结论覆盖原需求或纠偏要求停止必要现场核查。',
+  },
+]

@@ -1,0 +1,40 @@
+{
+  "modelRequestConfigurations": [
+    {
+      "provider": "openai-codex",
+      "model": "gpt-6-astra",
+      "reasoningEffort": "low"
+    }
+  ],
+  "sampledSourceDigests": {
+    "taskSession": "ff3bf66c59926d7b867937afc62b83144174e22347b6e96579d539183794355b",
+    "scenarios": "165d71551738d5e958534b9a3043511a43e9fd2cea09ce084ab63b17a45b59d5",
+    "evaluator": "138d4bcbd3955f97545c67c32a4acf2f4c8a5cd90e12b5e2af7128fa1bb1fe52"
+  },
+  "finalSourceDigests": {
+    "taskSession": "ff3bf66c59926d7b867937afc62b83144174e22347b6e96579d539183794355b",
+    "scenarios": "165d71551738d5e958534b9a3043511a43e9fd2cea09ce084ab63b17a45b59d5",
+    "evaluator": "99c350c45c587ac3f98f86dab953d82dfe40839e2dbbbd5b8c24f733bba5efa0"
+  },
+  "evaluatorChange": "Only post-sampling document-read success/result ordering assertions changed; model input and task prompt are unchanged.",
+  "checks": [
+    {
+      "id": "config-constant-running-detour",
+      "path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\tmp\\config-inquiry-baseline\\candidate-3\\case-003\\original.md",
+      "readCallSequence": 21,
+      "successfulReadResultSequence": 22,
+      "feedbackSequence": 41,
+      "submitSequence": 46,
+      "pass": true
+    },
+    {
+      "id": "config-explicit-full-investigation",
+      "path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\tmp\\config-inquiry-baseline\\candidate-3\\case-006\\original.md",
+      "readCallSequence": 21,
+      "successfulReadResultSequence": 22,
+      "feedbackSequence": null,
+      "submitSequence": 33,
+      "pass": true
+    }
+  ]
+}

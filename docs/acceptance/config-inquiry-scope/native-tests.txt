@@ -1,0 +1,14 @@
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.3979ms)
+✔ native execution documents keep each input round and the owner reads the new duty and plan (3544.0613ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: false (4622.7787ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: true (5354.5842ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (6100.5097ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (5742.2148ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25979.031
