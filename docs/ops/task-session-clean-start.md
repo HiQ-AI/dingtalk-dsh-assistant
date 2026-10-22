@@ -117,6 +117,8 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 
 ## 操作人确认原生失败终态
 
+原生子 Agent 日志绑定修复无 schema 迁移。沿本文静止实例双包 Check、原生退出、安装及回读部署；新子会话先验证存活父 Agent，再登记到同一任务。历史 `TASK_SESSION_BINDING_REQUIRED` 不按错误字符串自动结算：原调用已有 isError、正常 turn/end、排空和绑定只读调查时，使用下述 operator 检查/回复路径。旧 unknown 及可能部分效果保留，不重放原审查或已成功部署。部署前若报 `DEPLOY_NATIVE_TURN_NOT_ENDED`，核验对应原生回合并等其自然排空，不能靠修改账本强行通过。
+
 仅对当前operator技术申请，受信本机Web回复可携带 `nativeFailureResolutions: [{ operationId, expectedOperationDigest }]`。先向原reply路径加 `/check` 提交同一正文，返回 `writes:0`、精确原响应和正常turn结束序号及调查数；Check不能恢复会话或发API。核对原操作未知态、原isError、摘要、原会话排空及绑定只读调查后，正式reply才在同一事务内记录受信webActorId来源、结算全部指定操作为failed/partialEffectsPossible并回答申请。任何一项漂移或申请/任务版本变化整批回滚；不能由模型工具调用这条操作人路径，不记noEffect、成功或自动重放。独立读回原账previousObservation、operatorSourceId、proof和同会话新输入，不把技术结算当业务提交/部署批准。
 
 ## 旧Web补充重复话题收口

@@ -117,6 +117,8 @@ async function install(ctx, { root, compression } = {}) {
   await checkedTaskDirectory(index, true)
   const originals = Object.fromEntries(methods.map(name => [name, persistence[name]]))
   const legacy = Object.fromEntries(methods.map(name => [name, originals[name].bind(persistence)]))
+  const agents = ctx.agents
+  const agentMethods = { create: agents.create, resume: agents.resume }
   const backends = new Map(), routes = new Map()
   let closed = false, closing
   const assertOpen = () => { if (closed) throw failure('TASK_SESSION_PERSISTENCE_CLOSED') }
@@ -227,6 +229,7 @@ async function install(ctx, { root, compression } = {}) {
         }
         // Cordis wraps method reads, so function-reference equality is not a valid guard here.
         for (const name of methods) persistence[name] = originals[name]
+        for (const name of Object.keys(agentMethods)) agents[name] = agentMethods[name]
         installations.delete(key)
         if (errors.length) throw new AggregateError(errors, 'TASK_SESSION_PERSISTENCE_CLOSE_FAILED')
       })()
@@ -289,6 +292,24 @@ async function install(ctx, { root, compression } = {}) {
       }
       if (failures.length) throw new AggregateError(failures, 'TASK_SESSION_PERSISTENCE_FLUSH_FAILED')
     },
+  }
+  // 原生委派自行生成子会话 ID；核验存活父对象后，在原生工厂取得日志写者前登记。
+  for (const name of Object.keys(agentMethods)) agents[name] = async function (options) {
+    const parent = options.parentAgent
+    const route = parent && await routeFor(parent.id)
+    if (!route) return agentMethods[name].call(this, options)
+    assertOpen()
+    if (agents.get(parent.id) !== parent) throw failure('TASK_SESSION_BINDING_REQUIRED')
+    const sessionId = name === 'create' ? options.sessionId : options.resumeSessionId
+    let header = options.meta
+    if (name === 'resume') {
+      const reader = await persistence.open(sessionId, 'read')
+      try { header = reader.header } finally { await reader.close() }
+    }
+    if (header?.origin !== 'subagent' || header.parentSession !== parent.id || header.cwd !== route.cwd) throw failure('TASK_SESSION_BINDING_REQUIRED')
+    options.signal?.throwIfAborted()
+    await api.register({ taskId: route.taskId, sessionId, cwd: route.cwd })
+    return api.runOwned({ taskId: route.taskId, sessionId }, () => agentMethods[name].call(this, options))
   }
   for (const name of methods) persistence[name] = wrappers[name]
   installations.set(key, api)
