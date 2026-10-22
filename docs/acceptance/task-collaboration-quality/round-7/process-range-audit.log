@@ -1,0 +1,8 @@
+file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/[eval1]:22
+ if(direct.exitCode!==0||whileAlive<=before||early!==false||drained!==true||after!==stopped)throw Error('range contract not proved');
+                                                                                                  ^
+
+Error: range contract not proved
+    at file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/[eval1]:22:99
+
+Node.js v24.19.0

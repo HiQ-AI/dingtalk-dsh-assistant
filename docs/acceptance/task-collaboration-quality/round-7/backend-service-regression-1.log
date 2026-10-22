@@ -1,0 +1,40 @@
+✖ topic coordination list selection omits archived tasks while direct historical reads stay available (5.0102ms)
+✔ background recovery and pending wakes never run archived tasks, normal continuation still runs (103.8284ms)
+✔ 默认DSH、混合团队、配置切换和重启保持原执行后端与逐轮文档 (904.7763ms)
+✔ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=false (22318.8308ms)
+✔ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=true (24181.714ms)
+✔ one unreadable provider terminal stops only its recovery and unrelated native task still completes (20369.4332ms)
+✔ provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=false (34825.1765ms)
+✔ provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=true (27519.5158ms)
+✔ business human answer replaces pending provider recovery input before any original session resumes (23053.8052ms)
+✔ anonymous field v12 error restores original execution with complete diagnostics and no human request or duplicate effect (18914.6936ms)
+✔ requirement supplement during provider cooldown wakes current owner after restart and resumes original executor once (32705.7985ms)
+✔ owner may honestly wait at each bounded provider review; all three reviews survive restart without replay (19206.0288ms)
+✔ 任务会话HTTP端到端：唯一会话、动态执行、需求修订、CAS取消与旧写入口退役 (32001.7302ms)
+✔ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (13936.1768ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=false (13167.9481ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=true (14241.4781ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 15
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 300507.6532
+
+✖ failing tests:
+
+test at test\task-archive-scheduling.test.js:9:1
+✖ topic coordination list selection omits archived tasks while direct historical reads stay available (5.0102ms)
+  evalmachine.<anonymous>:2
+  ;return store})()
+                ^
+  
+  SyntaxError: Unexpected token ')'
+      at new Script (node:vm:117:7)
+      at createScript (node:vm:269:10)
+      at runInNewContext (node:vm:310:10)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-archive-scheduling.test.js:13:20)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)

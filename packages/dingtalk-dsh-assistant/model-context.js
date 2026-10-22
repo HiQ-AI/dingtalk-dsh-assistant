@@ -30,7 +30,7 @@ const syncDirectory = path => {
   try { fsyncSync(fd) } finally { closeSync(fd) }
 }
 
-export const modelContextInstructions = `Host输入和只读工具使用contentRef标识精确内容。Host的contextRef是超预算视图的完整不可变快照；contextPath是相对该contextRef的JSON Pointer，用model_content_read的contentRef及path参数读取对应字段，必要时继续解析其中的引用。contextReadRequired/readRequired表示相关目标、来源身份/作者/版本/授权更正、未处理要求、未知效果和恢复信息尚待读取核对，不得把引用当作已知或没有要求；先读取与当前判断相关的字段。相同正文不等于同一作者、来源版本或授权，历史资料不改变当前授权。执行resultInCatalog表示完整结果在catalogRef的/executions/<原ID>/result，按当前问题定位证据或诊断，不必整包读取。当前目标或要求为sourceId时，从对应sources.textFile定位原文；若来源在当前窗口外，沿catalogRef的/materials按sourceId定位textPath或/sources/<原ID>读取原始来源；requestIdentityInCatalog表示完整请求身份在相应source目录的/requestIdentity，不得省略授权核对。统筹快照catalogRef是完整原始目录：/task、/sources/<sourceId>、/executions/<executionId>、/operations/<operationId>、/materials、/wakes；例如/executions/<executionId>/input/objective。路径段的~与/须分别转义为~0与~1。sources保守保留近期及原授权来源，sourceCount可大于展示数量；核对目录中仍有效的要求/授权/撤销，不能把未展开当作不存在。当前task/sources/executions中的readRequired=true表示长正文无损延迟，表示本轮要求/证据尚待核对：优先用既有原生文件工具读取path、textFile或sourceFile，定位与当前判断相关的字段/段落，不必整文件回灌；重要新要求、撤销及授权条件必须核对，未读部分不能当作已知。统筹executions只展示运行/未排空、本轮唤醒关联或当前结果，历史执行仍完整可读；operations只展示unknown及本轮事件关联的操作，其他状态用operationCounts计数，blockers保留未决成员准确ID，未展开不是无阻塞。阶段wake仅有executionId/sequence时，对应executions.stageProgress就是经过全部字段核对的同一报告；有reportRef时须读取该次原报告，可能早于当前阶段，不可混用。执行会话仍用executionHistory.catalogRef及sourceCatalog等原目录。过长且无法精简的正文、结果、证据、诊断与日志只提供已有不可变JSON文件path（文本内容为JSON字符串，按字段解析后定位），不以contentIndex自动展开；用户长消息优先使用原source JSON及原文txt文件。使用已有原生文件/shell能力，注意原生read的行长/总量截断提示，按需定位或分段读取；不要把截断当全文。contentRef与model_content_read仅保留兼容读取，不要求按其分页把长正文整包读回。显式读取返回正文，不能把引用或未读内容当证据。引用不是丢弃或截断。`
+export const modelContextInstructions = `Host输入和只读工具使用contentRef标识精确内容。Host的contextRef是超预算视图的完整不可变快照；contextPath是相对该contextRef的JSON Pointer，用model_content_read的contentRef及path参数读取对应字段，必要时继续解析其中的引用。contextReadRequired/readRequired表示相关目标、来源身份/作者/版本/授权更正、未处理要求、未知效果和恢复信息尚待读取核对，不得把引用当作已知或没有要求；先读取与当前判断相关的字段。相同正文不等于同一作者、来源版本或授权，历史资料不改变当前授权。执行document.path是本成员当前inputVersion轮次的执行文档，日常进度与交接优先用原生文件工具读取它，核对文档内身份和版本；当前轮会更新，sha256只标识本次投影时的内容，新轮使用独立路径并保留旧轮。document不携带新增授权。执行resultInCatalog表示完整结果在catalogRef的/executions/<原ID>/result，文档缺证据、版本矛盾或异常时按问题定位原始证据或诊断，不必例行整包读取。当前目标或要求为sourceId时，从对应sources.textFile定位原文；若来源在当前窗口外，沿catalogRef的/materials按sourceId定位textPath或/sources/<原ID>读取原始来源；requestIdentityInCatalog表示完整请求身份在相应source目录的/requestIdentity，不得省略授权核对。统筹快照catalogRef是完整原始目录：/task、/sources/<sourceId>、/executions/<executionId>、/operations/<operationId>、/materials、/wakes；例如/executions/<executionId>/input/objective。路径段的~与/须分别转义为~0与~1。sources保守保留近期及原授权来源，sourceCount可大于展示数量；核对目录中仍有效的要求/授权/撤销，不能把未展开当作不存在。当前task/sources/executions中的readRequired=true表示长正文无损延迟，表示本轮要求/证据尚待核对：优先用既有原生文件工具读取path、textFile或sourceFile，定位与当前判断相关的字段/段落，不必整文件回灌；重要新要求、撤销及授权条件必须核对，未读部分不能当作已知。统筹executions只展示运行/未排空、本轮唤醒关联或当前结果，历史执行仍完整可读；operations只展示unknown及本轮事件关联的操作，其他状态用operationCounts计数，blockers保留未决成员准确ID，未展开不是无阻塞。阶段wake仅有executionId/sequence时，有document时从对应本轮文档读取报告，否则对应executions.stageProgress就是经过全部字段核对的同一报告；有reportRef时须读取该次原报告，可能早于当前阶段，不可混用。执行会话仍用executionHistory.catalogRef及sourceCatalog等原目录。过长且无法精简的正文、结果、证据、诊断与日志只提供已有不可变JSON文件path（文本内容为JSON字符串，按字段解析后定位），不以contentIndex自动展开；用户长消息优先使用原source JSON及原文txt文件。使用已有原生文件/shell能力，注意原生read的行长/总量截断提示，按需定位或分段读取；不要把截断当全文。contentRef与model_content_read仅保留兼容读取，不要求按其分页把长正文整包读回。显式读取返回正文，不能把引用或未读内容当证据。引用不是丢弃或截断。`
 
 // contentRef remains a native-session capability. Paths point only to existing
 // admitted immutable files; native filesystem permission policy remains unchanged.
@@ -221,11 +221,11 @@ function directory(records, identity, summary) {
 }
 export function executionDirectory(executions, { historical = false } = {}) {
   return directory(executions, 'executionId', execution => terminalExecutions.has(execution.status) ? {
-    ...fields(execution, ['executionId', 'key', 'status', 'drained', 'inputVersion', 'requirementRevision', 'controlRevision']),
+    ...fields(execution, ['executionId', 'key', 'status', 'drained', 'inputVersion', 'requirementRevision', 'controlRevision', 'document']),
     input: executionInputDirectory(execution.input, true),
     ...(execution.result ? { result: fields(execution.result, ['current', 'receivedAt', 'recovery']), resultRef: deferModelContent(execution.result) } : {}),
   } : ({ ...fields(execution,
-    ['executionId', 'sessionId', 'taskId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'inputDigest', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'progressReview', 'providerRecovery']),
+    ['executionId', 'sessionId', 'taskId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'inputDigest', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'progressReview', 'providerRecovery', 'document']),
     ...(execution.stageProgress ? { stageProgress: execution.stageProgress } : {}),
     input: executionInputDirectory(execution.input, historical),
     // Keep the Host recovery decision visible without reinjecting the full result.
@@ -304,25 +304,33 @@ export function taskModelInput(input) {
   const relevant = executions.filter(execution => !terminalExecutions.has(execution.status) || !execution.drained
     || wokenExecutions.has(execution.executionId) || execution.status !== 'stale' && execution.result?.current !== false)
   const currentExecutions = relevant.map(execution => {
+    // 日常交接从本轮文档读取完整职责、进度和证据；原账仍保存在 catalog。
+    if (execution.document) return { ...fields(execution,
+      ['executionId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'providerRecovery', 'document']),
+      input: fields(execution.input, ['title', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']),
+      ...(execution.result ? { result: fields(execution.result, ['current', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'receivedAt', 'recovery']), resultInCatalog: true } : {}) }
     const active = !terminalExecutions.has(execution.status)
     const source = sources.find(source => source.text === execution.input?.objective && indexText(source.text ?? ''))
     const material = source && (input.materials ?? []).find(material => material.sourceId === source.sourceId && material.path)
     const objective = material ? { value: { sourceId: source.sourceId }, readRequired: true } : decisionContent(execution.input?.objective)
     const stage = decisionContent(execution.stageProgress)
+    // 当前团队成员的职责和自述用于定位/续办；完整证据仍在原目录中验收。
+    const summary = decisionContent(execution.result?.payload?.output?.summary)
     return { ...fields(execution,
       ['executionId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'providerRecovery']),
-      ...(active ? { input: { ...executionInputDirectory(execution.input),
-        ...(execution.input?.objective !== undefined ? { objective: objective.value } : {}) } } : {}),
+      input: { ...executionInputDirectory(execution.input),
+        ...(execution.input?.objective !== undefined ? { objective: objective.value } : {}) },
       ...(active && execution.stageProgress ? { stageProgress: stage.value } : {}),
-      ...(active && (objective.readRequired || stage.readRequired) ? { readRequired: true } : {}),
-      ...(execution.result ? { result: fields(execution.result, ['current', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'receivedAt', 'recovery']), resultInCatalog: true } : {}) }
+      ...(objective.readRequired || summary.readRequired || active && stage.readRequired ? { readRequired: true } : {}),
+      ...(execution.result ? { result: { ...fields(execution.result, ['current', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'receivedAt', 'recovery']),
+        ...(summary.value === undefined ? {} : { reportedSummary: summary.value }) }, resultInCatalog: true } : {}) }
   })
   const projectedWakes = wakes.map(wake => {
     if (wake.kind !== 'execution.stage.progress' || !wake.payload) return wake
     const execution = relevant.find(item => item.executionId === wake.payload.executionId)
     const { executionId, ...report } = wake.payload
     const canonical = value => JSON.stringify(value, (_key, child) => ordered(child))
-    if (execution && !terminalExecutions.has(execution.status) && canonical(execution.stageProgress) === canonical(report))
+    if (execution && !execution.document && !terminalExecutions.has(execution.status) && canonical(execution.stageProgress) === canonical(report))
       return { ...wake, payload: { executionId, sequence: report.sequence } }
     return stageWake(wake)
   })

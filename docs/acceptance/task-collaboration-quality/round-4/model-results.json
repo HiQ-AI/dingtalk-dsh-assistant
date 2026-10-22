@@ -1,0 +1,227 @@
+{
+  "round": 4,
+  "policy": "bounded-team-3-10",
+  "model": "gpt-6-astra",
+  "reasoningEffort": "low",
+  "snapshots": [
+    {
+      "batch": "single",
+      "rawEvidence": "docs/tmp/task-collaboration-model-round-4",
+      "sourceSha256": {
+        "packages/dingtalk-dsh-assistant/task-session.js": "7a19d19afddf0020d31f7ab6c9efa90f162df778d6f9f555dffbd8d86ff0b1d2",
+        "packages/dingtalk-dsh-assistant/model-context.js": "24cf69a1d65a5be03f44cf01511d970f3a54109cc074c67468c3e12ad255fbeb",
+        "packages/dingtalk-dsh-assistant/task-source-instructions.js": "9c5af60a619b4acb31fb387bcaaf4948a151e952787db00c33cf6d2809556fe2",
+        "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "b2c8ec6529986ea44e0e106e0210cb0dcd452515512dea78737298cb317cbfa6",
+        "packages/dingtalk-dsh-assistant/group-message.js": "d4f1447af3a88fced80dfd5909a067b1dfb3e3e20f24860785975938bf4ebbe4",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "d748a5b0902c5ec9e9f64e409517ca06a93543aaffce80c716b94d40a081d89b",
+        "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "307aacca33b2cd76ca3a28e5cc7639013477be42947f86569c2863b9b8c106f8",
+        "packages/dingtalk-dsh-assistant/task-session-service.js": "8058b0c63c6ab593998cb23514a72584363cce1ebfdf1ee83d6f7c6312ce3416",
+        "test/fixtures/task-session-native-host.js": "5e9add3fc22a7c1ff6899db3902cff0f93b6bb5168264b15a9ec7686c9aa739f",
+        "docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs": "83621a0ed28fa898b59a45838401afa55a477dd63de07f3c508199e3451e9b19"
+      }
+    }
+  ],
+  "boundary": "真实统筹模型与原生宿主；任务、执行结果、阶段报告及文档为隔离合成输入。未启动业务执行器、未执行实际业务验收、未验证成员模型通信。结构PASS不代替独立语义审阅；queued只证明已登记。",
+  "costBoundary": "每例仅一个样本；毫秒数为原生首末事件跨度。模型响应及并发环境不同，不能据此声称稳定性能提升；仍有文档元数据引用与目录展开开销。",
+  "documentBoundary": "本轮尚未使用执行文档，旧轨迹保留为3至10人策略阶段证据。",
+  "cases": [
+    {
+      "id": "simple-three",
+      "batch": "single",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "保留修改与范围审查两名成员，只补第三个单行原文核验职责，不重复修改或无关扫描。",
+      "nativeEvidence": "seq16–50读取已有结果；55仅增加单行原文核验；60等待。无fixture-edit。",
+      "modelCalls": 9,
+      "nativeEventSpanMs": 60681,
+      "finalTeamSize": 3,
+      "newMembers": 1,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 7,
+      "firstError": null
+    },
+    {
+      "id": "independent-ready",
+      "batch": "single",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "两个独立写域在首次等待前分别登记；第三核验职责待产物就绪，不以空任务凑数。",
+      "nativeEvidence": "seq21/26分别登记Alpha/Beta唯一写者；31等待并说明第三职责需产物就绪。",
+      "modelCalls": 4,
+      "nativeEventSpanMs": 46588,
+      "finalTeamSize": 2,
+      "newMembers": 2,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 1,
+      "firstError": null
+    },
+    {
+      "id": "dependency-pending",
+      "batch": "single",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "核对原调查与准备成果后保留三人等待，不猜单位、不提前实施、不重复反馈。",
+      "nativeEvidence": "seq21读取原进度，36/41核对已完成准备，71沿用三人等待。",
+      "modelCalls": 12,
+      "nativeEventSpanMs": 108219,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 6,
+      "firstError": null
+    },
+    {
+      "id": "dependency-ready",
+      "batch": "single",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "按原始分/元样本续办原执行身份，审查与验收成员等修复产物后再续办。",
+      "nativeEvidence": "seq73使用原ID和新key按分/元样本续办，78明确queued未完成。",
+      "modelCalls": 9,
+      "nativeEventSpanMs": 85516,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [
+        "original-execution"
+      ],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 15,
+      "firstError": null
+    },
+    {
+      "id": "shared-writer",
+      "batch": "single",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": false,
+      "accepted": false,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "同一文件紧密关联双字段由唯一成员一次修改，其他成员后置只读核验，不拆重复写入。",
+      "nativeEvidence": "seq16仅委派retryCount修改，21计划另一成员再覆盖同一文件修改timeoutMs；串行安全但人为拆细写入。",
+      "modelCalls": 2,
+      "nativeEventSpanMs": 41080,
+      "finalTeamSize": 1,
+      "newMembers": 1,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 0,
+      "firstError": null,
+      "classification": "串行无冲突，但将单次紧密修改拆为两次写入和交接，成本语义FAIL。",
+      "reverifiedBy": "round-5/shared-writer"
+    },
+    {
+      "id": "complex-ten-reuse",
+      "batch": "single",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "十人团队不增加第十一人，复用模块11/12原负责成员同轮安排独立修复。",
+      "nativeEvidence": "seq50/52复用team-1/team-2同轮续办，57明确等待启动；未增加第十一人。",
+      "modelCalls": 8,
+      "nativeEventSpanMs": 98949,
+      "finalTeamSize": 10,
+      "newMembers": 0,
+      "continuedMembers": [
+        "team-1",
+        "team-2"
+      ],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 7,
+      "firstError": null
+    },
+    {
+      "id": "complex-self-claim",
+      "batch": "single",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "实现者自述不足以完成高风险任务，复用独立审查与迁移验收成员核验固定候选。",
+      "nativeEvidence": "seq71/76复用两名原成员分工只读固定SHA；81如实说明排队。",
+      "modelCalls": 14,
+      "nativeEventSpanMs": 98535,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [
+        "security-review",
+        "migration-acceptance"
+      ],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 8,
+      "firstError": null
+    },
+    {
+      "id": "team-complete",
+      "batch": "single",
+      "structuralPass": false,
+      "structuralFalsePositive": true,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "核对三人职责与原始快照后准确回答2.4.1一致，无需重复委派或重复正文。",
+      "nativeEvidence": "seq32截断前包含结论审查证据；42解引用对象范围；47完整读取A/B=2.4.1原文；51准确完成。",
+      "modelCalls": 8,
+      "nativeEventSpanMs": 49051,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [],
+      "decision": "complete",
+      "documentReads": [],
+      "modelContentReadCalls": 5,
+      "firstError": {
+        "message": "decision retains concrete evidence",
+        "phase": "structural-check"
+      },
+      "classification": "评估器误报：生产schema允许evidence=[]；实际读取和准确简答足以支持本任务完成。原始结构FAIL不改写。"
+    }
+  ]
+}

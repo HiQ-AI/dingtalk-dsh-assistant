@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: native shared resources queue without occupying task capacity and promote on drain
+ok 1 - native shared resources queue without occupying task capacity and promote on drain
+  ---
+  duration_ms: 23601.5543
+  type: 'test'
+  ...
+# Subtest: empty owner recovery reviews the retained execution without replaying its completed native write
+ok 2 - empty owner recovery reviews the retained execution without replaying its completed native write
+  ---
+  duration_ms: 16569.9796
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 41034.8473

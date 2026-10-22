@@ -1,0 +1,13 @@
+{
+  "checkedAt": "2026-10-22T18:06:38.4212072+08:00",
+  "executable": "C:\\Users\\64554\\.local\\bin\\claude.exe",
+  "version": "2.1.212 (Claude Code)",
+  "versionExit": 0,
+  "authExit": 1,
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "helpExit": 0,
+  "helpSha256": "067B1754601C99196D8C9E91F99914434341EE807AA2CE50DD6C898F231D5F4D",
+  "limitation": "Only version/help/auth status; no login, credentials read, model run or session resume."
+}

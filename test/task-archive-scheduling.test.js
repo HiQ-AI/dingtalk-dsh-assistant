@@ -8,7 +8,8 @@ import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-
 
 test('topic coordination list selection omits archived tasks while direct historical reads stay available', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/task-topic-coordinator.js', import.meta.url), 'utf8')
-  const start = source.indexOf('  store = new Proxy('), end = source.indexOf('\n', start)
+  const start = source.indexOf('  store = new Proxy('), end = source.indexOf('\n  let closed', start)
+  assert.ok(start >= 0 && end > start, '读取完整的多行存储代理，而非仅首行')
   const rows = [{ taskId: 'old', archivedAt: 'now' }, { taskId: 'current' }]
   const selected = runInNewContext(`(()=>{let store=input;${source.slice(start, end)};return store})()`, { input: { listTasks: () => rows, getTask: id => rows.find(row => row.taskId === id) } })
   assert.deepEqual(selected.listTasks().map(task => task.taskId), ['current'])

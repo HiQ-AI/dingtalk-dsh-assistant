@@ -6,7 +6,7 @@
 
 验证：项目规定受影响5文件测试100/100、0 fail、0 skip；新增混排筛选/排序/去重与分页失败/重试/重复点击/卸载测试。Chromium 真实React和完整observerCss/taskDetailCss通过，合成阶段成果和巡查混排，桌面1280与手机390px、折叠活动明细、游标分页、失败重试、无横向页面溢出、字体样式与无pageerror均已核验。宿主Button在预览中映射原生button，未冒充原生宿主验收。严格premium audit 0发现。未调用真实模型、读取生产任务、群外发、创建PR或部署。
 
-运行预览：`node docs/acceptance/task-review-results/browser.mjs /workspace/coordination-ui-test-tools /workspace/task-review-results-preview`。Playwright/React使用已有隔离工具目录，不新增仓库依赖。
+运行预览：`node docs/acceptance/task-review-results/browser.mjs <Playwright工具根> <输出目录> <浏览器可执行文件> [React依赖根]`。工具根应包含 `node_modules/playwright-core`，React依赖根应包含 React 18 和 ReactDOM 18 的 UMD 文件；省略时沿工具根读取。浏览器路径由调用方显式提供，支持 Windows Edge/Chrome 与 Linux Chromium。依赖使用已有隔离目录，不新增仓库依赖。当前脚本同时验证阶段证据、报告时活动、安全链接、加载与空态，新的本轮结果见 `../task-collaboration-quality/round-1.md`。
 
 截图：`/workspace/task-review-results-preview/task-review-results-desktop.png`、`/workspace/task-review-results-preview/task-review-results-mobile.png`。Library prepare已返回上传会话，但官方上传工作流报 `hosted apps tools/call request failed: network`，没有成功创建Library文件，不能提供library_file_id或声称上传完成。
 

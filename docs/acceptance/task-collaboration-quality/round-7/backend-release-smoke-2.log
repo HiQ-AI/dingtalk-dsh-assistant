@@ -1,0 +1,22 @@
+✔ three actual tgz and source identity round-trip; publish retry reuses identical bytes (2135.3959ms)
+✔ different run/SHA/tag, lock/profile/environment and manifest hashes all fail closed (7266.6406ms)
+✔ missing, extra and modified tarballs cannot reach publication (2185.6639ms)
+✔ dirty tracked source and untracked package content cannot claim a commit identity (1778.2962ms)
+✔ manual compatibility CI has no push, PR, schedule or publication side effects (8.0153ms)
+✔ release exact SHA validates all lanes before immutable build and same-run publication (7.1002ms)
+✔ every test file is mapped once; only reviewed historical registrations leave Release (955.7797ms)
+✔ release publishes three tgz plus identity manifest and verifies every attachment (2.3622ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (1.4152ms)
+✔ resident profile 只解析到最新版 DSH 依赖边界 (0.6576ms)
+✔ 常驻启动优先读取用户代理，避免为启动解析完整 resident 状态 (1.5349ms)
+✔ Web 启动优先使用当前 profile 的 DSH 入口 (0.7391ms)
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (25431.8332ms)
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (8829.4338ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 49743.1265

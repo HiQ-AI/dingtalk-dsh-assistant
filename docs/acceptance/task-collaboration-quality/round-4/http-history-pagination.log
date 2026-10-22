@@ -1,0 +1,9 @@
+✔ 任务会话HTTP端到端：唯一会话、动态执行、需求修订、CAS取消与旧写入口退役 (30893.3112ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 31766.1941

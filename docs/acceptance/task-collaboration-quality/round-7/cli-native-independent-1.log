@@ -1,0 +1,17 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (499.6967ms)
+✔ CLI exit zero cannot replace Host submit (399.6969ms)
+✔ CLI exit zero cannot replace submit tool result (419.2471ms)
+✔ CLI wrong provider session fails without binding or accepting a result (408.4696ms)
+✔ CLI stale lease before permission denies real file mutation (483.4094ms)
+✔ CLI operation gate failure denies a mutation before the child writes it (521.4506ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (759.2479ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (1031.9984ms)
+✔ CLI truncated output fails with zero acceptance and retained diagnostic log (489.3323ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5248.3072

@@ -1,0 +1,29 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (498.9641ms)
+✔ CLI exit zero cannot replace Host submit (374.7961ms)
+✔ CLI exit zero cannot replace submit tool result (395.1186ms)
+✔ CLI wrong provider session fails without binding or accepting a result (357.082ms)
+✔ CLI stale lease before permission denies real file mutation (498.0478ms)
+✔ CLI operation gate failure denies a mutation before the child writes it (354.5276ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (602.6293ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (1103.6897ms)
+✔ CLI truncated output fails with zero acceptance and retained diagnostic log (541.0145ms)
+✔ CLI real file mutation is accounted before write and settled after its observed result (590.8548ms)
+✔ CLI interrupted real mutation retains unknown effect while physical process drain remains provable (621.1602ms)
+✔ CLI feedback ACK alone rejects final submit (577.2616ms)
+✔ CLI feedback ACK plus explicit review admits final submit (714.0449ms)
+✔ CLI progress uses current lease and the exact stored observation contract (652.6582ms)
+✔ CLI recovery requires a durable drain record and never launches work from an unfinished prefix (716.9648ms)
+✔ CLI cancellation during pending resolve cannot leave a late process running (125.18ms)
+✔ CLI cancellation during pending spawn cannot leave a late process running (327.6869ms)
+✔ CLI cancellation waits for an already admitted MCP callback to finish (538.1264ms)
+✔ CLI history from a different session is rejected before spawn and remains unchanged (629.6382ms)
+✔ CLI old planned native call cannot use a later feedback read to mutate files (774.7954ms)
+✔ CLI repeated native call identity does not replay a successful file effect (636.1276ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11926.5559

@@ -1,0 +1,39 @@
+✔ technical approach tolerates filenames, extra metadata and optional repeated criteria (0.8ms)
+✔ meaningful missing approach and repository escape remain errors (1.3725ms)
+✔ 工程校验器保留冻结发行文件和函数源码摘要 (3.7952ms)
+▶ 真实 Git add/checkout 在两种 autocrlf 设置下保留发行字节
+  ✔ core.autocrlf=false (478.7982ms)
+  ✔ core.autocrlf=true (563.6986ms)
+✔ 真实 Git add/checkout 在两种 autocrlf 设置下保留发行字节 (1044.4214ms)
+✔ 任务验收拒绝tmp和evidence祖先junction，外部零写入且无执行预约 (11984.0499ms)
+✔ 新任务验收runner及依赖跨LF/CRLF打包身份一致，真实源码变化仍改变身份 (6255.602ms)
+✔ 八种实际会话职责各有独立工作区，未知职责不创建目录 (19.5396ms)
+✔ 配置根之外的目录链接必须拒绝，不能在外部创建职责目录 (11.7527ms)
+✔ 原生标题包含事项和职责，去除内部身份、网址与本机路径 (1.1752ms)
+✔ 执行名称统一复用原生简短清理逻辑，持久名称优先于续办输入 (0.3466ms)
+✔ 仅显式中文title作为新短名，否则沿用key，不以长目标或动作词替代 (0.2603ms)
+✔ 执行文档只投影本轮计划证据和结果，明确活动与反馈消费的边界 (0.9006ms)
+✔ 同轮阶段和排空更新原子刷新；新轮保留旧文件并拒绝倒填历史 (84.9348ms)
+✔ 文档路径或内容身份错误拒绝写入，不接受调用者路径或覆盖异执行文件 (28.9386ms)
+✔ 文档输出目录 junction 不得写出 Task 边界，目标文件也不能是目录链接 (14.8815ms)
+✔ fixed baseline registrations, variants and helper bodies survive the physical split (592.4875ms)
+▶ omissions, duplicates, classification changes and fixture edits cannot silently exit Release
+  ✔ omit (201.0437ms)
+  ✔ duplicate (197.7076ms)
+  ✔ unclassified (255.8485ms)
+  ✔ fixture (140.0496ms)
+  ✔ mixed-boundary (132.7973ms)
+✔ omissions, duplicates, classification changes and fixture edits cannot silently exit Release (929.0182ms)
+✔ import changes and new historical helper statements require review (233.0238ms)
+✔ a classified destination cannot disappear from the runnable discovery set (130.8371ms)
+✔ registration catalog hashes full parameter loops, nested assertions, options and CRLF (0.6788ms)
+✔ recursive discovery sees new nested tests and rejects unsupported test extensions (15.2395ms)
+✔ unknown tests conservatively enter Release and historical selection never accepts globs or duplicates (925.2185ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 22826.6996

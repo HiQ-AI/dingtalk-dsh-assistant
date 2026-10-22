@@ -1,0 +1,114 @@
+TAP version 13
+# Subtest: execution progress due is exactly ten minutes and respects the current running lifecycle
+ok 1 - execution progress due is exactly ten minutes and respects the current running lifecycle
+  ---
+  duration_ms: 0.9164
+  type: 'test'
+  ...
+# Subtest: native execution documents keep each input round and the owner reads the new duty and plan
+ok 2 - native execution documents keep each input round and the owner reads the new duty and plan
+  ---
+  duration_ms: 9348.085
+  type: 'test'
+  ...
+# Subtest: native progress review reads the current execution document without replaying or bypassing human wait: false
+ok 3 - native progress review reads the current execution document without replaying or bypassing human wait: false
+  ---
+  duration_ms: 15529.9477
+  type: 'test'
+  ...
+# Subtest: native progress review reads the current execution document without replaying or bypassing human wait: true
+ok 4 - native progress review reads the current execution document without replaying or bypassing human wait: true
+  ---
+  duration_ms: 16206.9539
+  type: 'test'
+  ...
+# Subtest: scripted progress decision waits for evidence or steers the original execution once: detour=false
+ok 5 - scripted progress decision waits for evidence or steers the original execution once: detour=false
+  ---
+  duration_ms: 17411.0561
+  type: 'test'
+  ...
+# Subtest: scripted progress decision waits for evidence or steers the original execution once: detour=true
+ok 6 - scripted progress decision waits for evidence or steers the original execution once: detour=true
+  ---
+  duration_ms: 17513.2223
+  type: 'test'
+  ...
+# Subtest: integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation
+ok 7 - integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation
+  ---
+  duration_ms: 17888.355
+  type: 'test'
+  ...
+# Subtest: native nonterminal stage report continues execution and updates owner summary; human wait=false
+not ok 8 - native nonterminal stage report continues execution and updates owner summary; human wait=false
+  ---
+  duration_ms: 5715.6089
+  type: 'test'
+  location: 'D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\test\\task-stage-progress-native.test.js:128:40'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching current stage uses the execution document instead of a duplicated report reference
+    + actual - expected
+    
+    + {
+    +   contentRef: 'db6fc0e7393b238ffbee8f33c83f0ad26b42ae394e8884840b00b5a88600dd89:sha256:71193d447a42a3c7b466e149f8863b6c5755988a961d65211c1ce3a0473809ed',
+    +   format: 'json',
+    +   path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\native-stage-report-UVYz4F\\tasks\\task-7152ad828051c4e06a278910eefb70cd\\.dsh\\model-content\\db6fc0e7393b238ffbee8f33c83f0ad26b42ae394e8884840b00b5a88600dd89\\71193d447a42a3c7b466e149f8863b6c5755988a961d65211c1ce3a0473809ed.json'
+    + }
+    - undefined
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+    contentRef: 'db6fc0e7393b238ffbee8f33c83f0ad26b42ae394e8884840b00b5a88600dd89:sha256:71193d447a42a3c7b466e149f8863b6c5755988a961d65211c1ce3a0473809ed'
+    format: 'json'
+    path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\native-stage-report-UVYz4F\\tasks\\task-7152ad828051c4e06a278910eefb70cd\\.dsh\\model-content\\db6fc0e7393b238ffbee8f33c83f0ad26b42ae394e8884840b00b5a88600dd89\\71193d447a42a3c7b466e149f8863b6c5755988a961d65211c1ce3a0473809ed.json'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:191:10)
+    async Test.run (node:internal/test_runner/test:1389:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+  ...
+# Subtest: native nonterminal stage report continues execution and updates owner summary; human wait=true
+not ok 9 - native nonterminal stage report continues execution and updates owner summary; human wait=true
+  ---
+  duration_ms: 6153.5469
+  type: 'test'
+  location: 'D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\test\\task-stage-progress-native.test.js:128:40'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching current stage uses the execution document instead of a duplicated report reference
+    + actual - expected
+    
+    + {
+    +   contentRef: 'bf1e4382ae7813e4de3831ffc058110173a800b96c32a34a43a6e30e308055fc:sha256:454a4b24a865ec7c69f45cd30c89b53420a643078a2110916550b74e70151cd4',
+    +   format: 'json',
+    +   path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\native-stage-report-MJViGp\\tasks\\task-7152ad828051c4e06a278910eefb70cd\\.dsh\\model-content\\bf1e4382ae7813e4de3831ffc058110173a800b96c32a34a43a6e30e308055fc\\454a4b24a865ec7c69f45cd30c89b53420a643078a2110916550b74e70151cd4.json'
+    + }
+    - undefined
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+    contentRef: 'bf1e4382ae7813e4de3831ffc058110173a800b96c32a34a43a6e30e308055fc:sha256:454a4b24a865ec7c69f45cd30c89b53420a643078a2110916550b74e70151cd4'
+    format: 'json'
+    path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\native-stage-report-MJViGp\\tasks\\task-7152ad828051c4e06a278910eefb70cd\\.dsh\\model-content\\bf1e4382ae7813e4de3831ffc058110173a800b96c32a34a43a6e30e308055fc\\454a4b24a865ec7c69f45cd30c89b53420a643078a2110916550b74e70151cd4.json'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:191:10)
+    runNextTicks (node:internal/process/task_queues:65:5)
+    process.processTimers (node:internal/timers:568:9)
+    async Test.run (node:internal/test_runner/test:1389:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 7
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 107399.4138

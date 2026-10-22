@@ -1,0 +1,494 @@
+{
+  "round": 5,
+  "policy": "bounded-team-3-10",
+  "model": "gpt-6-astra",
+  "reasoningEffort": "low",
+  "snapshots": [
+    {
+      "batch": "batch-a",
+      "rawEvidence": "docs/tmp/task-collaboration-model-round-5/batch-a",
+      "sourceSha256": {
+        "packages/dingtalk-dsh-assistant/task-session.js": "1291e093f3db381ca0f430b4a2d9a10d4167c29f5ce7b84810b1cd0ad059c9af",
+        "packages/dingtalk-dsh-assistant/model-context.js": "b66bd26874aac599418f14f98e7a827fb739d8a912a9d8244a6cb8248e10e7ec",
+        "packages/dingtalk-dsh-assistant/task-source-instructions.js": "9c5af60a619b4acb31fb387bcaaf4948a151e952787db00c33cf6d2809556fe2",
+        "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "b2c8ec6529986ea44e0e106e0210cb0dcd452515512dea78737298cb317cbfa6",
+        "packages/dingtalk-dsh-assistant/group-message.js": "d4f1447af3a88fced80dfd5909a067b1dfb3e3e20f24860785975938bf4ebbe4",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "4bb836ab800026c355efde92d54fcaac33c2bd9c7d34db29e3b9bcf123149bed",
+        "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "307aacca33b2cd76ca3a28e5cc7639013477be42947f86569c2863b9b8c106f8",
+        "packages/dingtalk-dsh-assistant/task-session-service.js": "05d45a0ec22f4494a4efd7661b066af48714f03f6979c03116c58e45093b137e",
+        "packages/dingtalk-dsh-assistant/execution-context.js": "f08c44ddaa2a7572e50381ae3990b1ae5c035774cbf13ca5cdce0189c26a94ec",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js": "319f15e75dde02c38c8451e0cfd39a995ab25a68dde6973b1504653fa9e128d0",
+        "test/fixtures/task-session-native-host.js": "b96c328cb2201661a070fa83691ce2c3d6221d3a3924740376fb03bcdf780a66",
+        "docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs": "b0e10e58ade8ccb14d8b2eda7d79ab684b9e35b7344f56f2eae5acb8924ccc07"
+      }
+    },
+    {
+      "batch": "batch-b",
+      "rawEvidence": "docs/tmp/task-collaboration-model-round-5/batch-b",
+      "sourceSha256": {
+        "packages/dingtalk-dsh-assistant/task-session.js": "1291e093f3db381ca0f430b4a2d9a10d4167c29f5ce7b84810b1cd0ad059c9af",
+        "packages/dingtalk-dsh-assistant/model-context.js": "b66bd26874aac599418f14f98e7a827fb739d8a912a9d8244a6cb8248e10e7ec",
+        "packages/dingtalk-dsh-assistant/task-source-instructions.js": "9c5af60a619b4acb31fb387bcaaf4948a151e952787db00c33cf6d2809556fe2",
+        "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "b2c8ec6529986ea44e0e106e0210cb0dcd452515512dea78737298cb317cbfa6",
+        "packages/dingtalk-dsh-assistant/group-message.js": "d4f1447af3a88fced80dfd5909a067b1dfb3e3e20f24860785975938bf4ebbe4",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "4bb836ab800026c355efde92d54fcaac33c2bd9c7d34db29e3b9bcf123149bed",
+        "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "307aacca33b2cd76ca3a28e5cc7639013477be42947f86569c2863b9b8c106f8",
+        "packages/dingtalk-dsh-assistant/task-session-service.js": "05d45a0ec22f4494a4efd7661b066af48714f03f6979c03116c58e45093b137e",
+        "packages/dingtalk-dsh-assistant/execution-context.js": "f08c44ddaa2a7572e50381ae3990b1ae5c035774cbf13ca5cdce0189c26a94ec",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js": "319f15e75dde02c38c8451e0cfd39a995ab25a68dde6973b1504653fa9e128d0",
+        "test/fixtures/task-session-native-host.js": "b96c328cb2201661a070fa83691ce2c3d6221d3a3924740376fb03bcdf780a66",
+        "docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs": "b0e10e58ade8ccb14d8b2eda7d79ab684b9e35b7344f56f2eae5acb8924ccc07"
+      }
+    },
+    {
+      "batch": "batch-c",
+      "rawEvidence": "docs/tmp/task-collaboration-model-round-5/batch-c",
+      "sourceSha256": {
+        "packages/dingtalk-dsh-assistant/task-session.js": "1291e093f3db381ca0f430b4a2d9a10d4167c29f5ce7b84810b1cd0ad059c9af",
+        "packages/dingtalk-dsh-assistant/model-context.js": "b66bd26874aac599418f14f98e7a827fb739d8a912a9d8244a6cb8248e10e7ec",
+        "packages/dingtalk-dsh-assistant/task-source-instructions.js": "9c5af60a619b4acb31fb387bcaaf4948a151e952787db00c33cf6d2809556fe2",
+        "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "b2c8ec6529986ea44e0e106e0210cb0dcd452515512dea78737298cb317cbfa6",
+        "packages/dingtalk-dsh-assistant/group-message.js": "d4f1447af3a88fced80dfd5909a067b1dfb3e3e20f24860785975938bf4ebbe4",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "4bb836ab800026c355efde92d54fcaac33c2bd9c7d34db29e3b9bcf123149bed",
+        "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "307aacca33b2cd76ca3a28e5cc7639013477be42947f86569c2863b9b8c106f8",
+        "packages/dingtalk-dsh-assistant/task-session-service.js": "05d45a0ec22f4494a4efd7661b066af48714f03f6979c03116c58e45093b137e",
+        "packages/dingtalk-dsh-assistant/execution-context.js": "f08c44ddaa2a7572e50381ae3990b1ae5c035774cbf13ca5cdce0189c26a94ec",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js": "319f15e75dde02c38c8451e0cfd39a995ab25a68dde6973b1504653fa9e128d0",
+        "test/fixtures/task-session-native-host.js": "b96c328cb2201661a070fa83691ce2c3d6221d3a3924740376fb03bcdf780a66",
+        "docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs": "b0e10e58ade8ccb14d8b2eda7d79ab684b9e35b7344f56f2eae5acb8924ccc07"
+      }
+    }
+  ],
+  "finalSourceSha256": {
+    "packages/dingtalk-dsh-assistant/task-session.js": "1291e093f3db381ca0f430b4a2d9a10d4167c29f5ce7b84810b1cd0ad059c9af",
+    "packages/dingtalk-dsh-assistant/model-context.js": "2031029537ec898b8186b030e2a5925c1324df238b3f433df81fa8b659eeac51",
+    "packages/dingtalk-dsh-assistant/execution-context.js": "f58648c63c554ee5f9d2f8eeed7fbb1b10724c3a40e56c5ebe94fc8505b269d2",
+    "packages/dingtalk-dsh-assistant/session-workspaces.js": "997bd144a4cd0adec881b847b122f485407d08ad281a985bd611bd4874aff01f",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "544815acdb7056a3ec1e764f8ca3851370d399f26b27d7b4855a9e6ebf4eba07",
+    "docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs": "26ac626e8dde4e776a5167e7a97e01a622cd12d573e82ab826a9a7ae218a7f67"
+  },
+  "postEvaluationChanges": [
+    {
+      "kind": "renderer-relocation",
+      "from": "execution-context.js",
+      "to": "session-workspaces.js",
+      "hashMethod": "SHA256 of UTF-8 Function.prototype.toString()",
+      "beforeFunctionSha256": "8a8e8f062741e0d6dfb900500e84e68b85e32f1d5115b9766484dfb64a3d3cf2",
+      "afterFunctionSha256": "8a8e8f062741e0d6dfb900500e84e68b85e32f1d5115b9766484dfb64a3d3cf2",
+      "exactFunctionBytesEqual": true,
+      "explanation": "函数原文移到materializer所在现有模块，harness自检import同步调整；模型指引未变，未重复调用模型。"
+    },
+    {
+      "kind": "execution-team-read-defaults",
+      "explanation": "最终service仅将执行层readTeam出口的title及可选字段按原query合同提供默认值，避免undefined；本Owner评估未调用该出口，由独立native/smoke验证。"
+    },
+    {
+      "kind": "stage-wake-reference",
+      "explanation": "R6前model-context不再把已有document成员的stage wake折叠成已隐藏的stageProgress；R5样本无stage.progress唤醒，原7例证据沿用。"
+    }
+  ],
+  "boundary": "真实统筹模型与原生宿主；任务、执行结果、阶段报告及文档为隔离合成输入。未启动业务执行器、未执行实际业务验收、未验证成员模型通信。结构PASS不代替独立语义审阅；queued只证明已登记。",
+  "costBoundary": "每例仅一个样本；毫秒数为原生首末事件跨度。模型响应及并发环境不同，不能据此声称稳定性能提升；仍有文档元数据引用与目录展开开销。",
+  "documentBoundary": "使用生产生成器；记录实际原生read返回行和截断状态。当前轮可更新，续办另建round-N.md；旧轮哈希回读不变。此隔离无执行器样本不证明生产并发冻结。",
+  "cases": [
+    {
+      "id": "simple-three",
+      "batch": "batch-a",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "保留修改与范围审查两名成员，只补第三个单行原文核验职责，不重复修改或无关扫描。",
+      "nativeEvidence": "seq36/41的结果37/42完整读取两份MD1–70行；46只补第3成员单行核验；51等待。",
+      "modelCalls": 8,
+      "nativeEventSpanMs": 53909,
+      "finalTeamSize": 3,
+      "newMembers": 1,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [
+        {
+          "sequence": 36,
+          "resultSequence": 37,
+          "path": "tasks/evaluation-simple-three/outputs/typo-writer/round-1.md",
+          "executionId": "typo-writer",
+          "inputVersion": 1,
+          "sha256": "2d9ce28c9b48aea21ae6ea9eada2c58f4552b11427268a0ea8da6f058bb9e5f4",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 41,
+          "resultSequence": 42,
+          "path": "tasks/evaluation-simple-three/outputs/scope-checker/round-1.md",
+          "executionId": "scope-checker",
+          "inputVersion": 1,
+          "sha256": "46c9683377d958399dcc987ac6ccc692d669938616d21a096d342ba981d9d5bf",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        }
+      ],
+      "modelContentReadCalls": 1,
+      "firstError": null
+    },
+    {
+      "id": "independent-ready",
+      "batch": "batch-a",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "两个独立写域在首次等待前分别登记；第三核验职责待产物就绪，不以空任务凑数。",
+      "nativeEvidence": "seq16/21分别登记不同写域；26如实说明排队及第三职责前置。",
+      "modelCalls": 3,
+      "nativeEventSpanMs": 25950,
+      "finalTeamSize": 2,
+      "newMembers": 2,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 0,
+      "firstError": null
+    },
+    {
+      "id": "shared-writer",
+      "batch": "batch-a",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "同一文件紧密关联双字段由唯一成员一次修改，其他成员后置只读核验，不拆重复写入。",
+      "nativeEvidence": "seq16唯一成员一次整体修订两个字段；21安排写入排空后的两项只读核验职责。",
+      "modelCalls": 2,
+      "nativeEventSpanMs": 16706,
+      "finalTeamSize": 1,
+      "newMembers": 1,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [],
+      "modelContentReadCalls": 0,
+      "firstError": null,
+      "reverifyOf": "round-4/shared-writer"
+    },
+    {
+      "id": "dependency-pending",
+      "batch": "batch-b",
+      "structuralPass": false,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": false,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "核对原调查与准备成果后保留三人等待，不猜单位、不提前实施、不重复反馈。",
+      "nativeEvidence": "seq16/17巡检回执出现INVALID_TOOL_OUTPUT首错；36/51/56读取三份文档后61正确等待并披露接口错误。",
+      "modelCalls": 10,
+      "nativeEventSpanMs": 62530,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [],
+      "decision": "wait",
+      "documentReads": [
+        {
+          "sequence": 36,
+          "resultSequence": 37,
+          "path": "tasks/evaluation-dependency-pending/outputs/original-execution/round-1.md",
+          "executionId": "original-execution",
+          "inputVersion": 1,
+          "sha256": "0c5856cd02c45a0cf6e94dc0fcc55547565efb53c43615a937be1c05aed8ed74",
+          "firstLine": 1,
+          "lastLine": 66,
+          "totalLines": 66,
+          "truncated": false
+        },
+        {
+          "sequence": 51,
+          "resultSequence": 52,
+          "path": "tasks/evaluation-dependency-pending/outputs/scope-review/round-1.md",
+          "executionId": "scope-review",
+          "inputVersion": 1,
+          "sha256": "ac5406a98bc587e71a71eb3189be47ae9526b089344087a14e78ce6674cb9b40",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 56,
+          "resultSequence": 57,
+          "path": "tasks/evaluation-dependency-pending/outputs/acceptance-review/round-1.md",
+          "executionId": "acceptance-review",
+          "inputVersion": 1,
+          "sha256": "c07172f1127224cf440f00bc32a8e0f67ff8d06b72ebdf561c9c59e8b0d623ad",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        }
+      ],
+      "modelContentReadCalls": 2,
+      "firstError": {
+        "message": "a tool failure cannot be erased by retry\n\n1 !== 0\n",
+        "phase": "structural-check",
+        "nativeCode": "INVALID_TOOL_OUTPUT",
+        "nativeSequence": 17,
+        "nativeMessage": "Error: tool \"task_execution_progress\" returned invalid output: value is not lossless JSON"
+      },
+      "classification": "等待策略正确；合成review wake未先落progressReviewed，加上生产可选字段undefined导致工具回执错误。",
+      "reverifiedBy": "round-6/dependency-pending"
+    },
+    {
+      "id": "dependency-ready",
+      "batch": "batch-b",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "按原始分/元样本续办原执行身份，审查与验收成员等修复产物后再续办。",
+      "nativeEvidence": "seq36/41/46的结果37/42/47完整读取三份70行文档；56原ID续办分转元；61明确queued。",
+      "modelCalls": 10,
+      "nativeEventSpanMs": 59684,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [
+        "original-execution"
+      ],
+      "decision": "wait",
+      "documentReads": [
+        {
+          "sequence": 36,
+          "resultSequence": 37,
+          "path": "tasks/evaluation-dependency-ready/outputs/original-execution/round-1.md",
+          "executionId": "original-execution",
+          "inputVersion": 1,
+          "sha256": "948bc53e9ea281187d3352100ad891a95940924ffd7021f4c3ef880083eb25e6",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 41,
+          "resultSequence": 42,
+          "path": "tasks/evaluation-dependency-ready/outputs/scope-review/round-1.md",
+          "executionId": "scope-review",
+          "inputVersion": 1,
+          "sha256": "51b8009e5bdaeb0a89450e649a2f7cdd1257d6b517a5271e3fbd924450d88ce0",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 46,
+          "resultSequence": 47,
+          "path": "tasks/evaluation-dependency-ready/outputs/acceptance-review/round-1.md",
+          "executionId": "acceptance-review",
+          "inputVersion": 1,
+          "sha256": "c21a40979b0827d4385cd20cf93870d8e4b3d70a670a32af78ac66734be39d18",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        }
+      ],
+      "modelContentReadCalls": 3,
+      "firstError": null
+    },
+    {
+      "id": "team-complete",
+      "batch": "batch-b",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "核对三人职责与原始快照后准确回答2.4.1一致，无需重复委派或重复正文。",
+      "nativeEvidence": "seq36/37/38的结果39/40/41完整读取70/70/71行文档；45准确回答两version均为2.4.1。",
+      "modelCalls": 6,
+      "nativeEventSpanMs": 78693,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [],
+      "decision": "complete",
+      "documentReads": [
+        {
+          "sequence": 36,
+          "resultSequence": 39,
+          "path": "tasks/evaluation-team-complete/outputs/conclusion-review/round-1.md",
+          "executionId": "conclusion-review",
+          "inputVersion": 1,
+          "sha256": "92c1005c78032bd318e02052b365cd1bf7082061f4df04df297f076529cecf32",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 37,
+          "resultSequence": 40,
+          "path": "tasks/evaluation-team-complete/outputs/source-review/round-1.md",
+          "executionId": "source-review",
+          "inputVersion": 1,
+          "sha256": "db17f89c0a3e42a248012736fc78b9010fd4d4cdd27befd674629f57da9b8a2c",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 38,
+          "resultSequence": 41,
+          "path": "tasks/evaluation-team-complete/outputs/version-reader/round-1.md",
+          "executionId": "version-reader",
+          "inputVersion": 1,
+          "sha256": "a199dbeb72c27fdfb1f9da869da4f8314e7c10554274f26f5fa5547f83a1eafc",
+          "firstLine": 1,
+          "lastLine": 71,
+          "totalLines": 71,
+          "truncated": false
+        }
+      ],
+      "modelContentReadCalls": 3,
+      "firstError": null
+    },
+    {
+      "id": "complex-ten-reuse",
+      "batch": "batch-c",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "十人团队不增加第十一人，复用模块11/12原负责成员同轮安排独立修复。",
+      "nativeEvidence": "seq31/41的结果32/42完整读取两份MD1–70行；51/53原team-1/team-2同轮续办；58等待。",
+      "modelCalls": 9,
+      "nativeEventSpanMs": 69412,
+      "finalTeamSize": 10,
+      "newMembers": 0,
+      "continuedMembers": [
+        "team-1",
+        "team-2"
+      ],
+      "decision": "wait",
+      "documentReads": [
+        {
+          "sequence": 31,
+          "resultSequence": 32,
+          "path": "tasks/evaluation-complex-ten-reuse/outputs/team-1/round-1.md",
+          "executionId": "team-1",
+          "inputVersion": 1,
+          "sha256": "05a39fa446fc1730b0477cd99d3893f453fdff874dbb0d2a70e0cc697c80a947",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 41,
+          "resultSequence": 42,
+          "path": "tasks/evaluation-complex-ten-reuse/outputs/team-2/round-1.md",
+          "executionId": "team-2",
+          "inputVersion": 1,
+          "sha256": "4bc6f75d17cdc493d6504b1f4beed344c5e327f0443b6dd28b15c42b1afdd54d",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        }
+      ],
+      "modelContentReadCalls": 4,
+      "firstError": null
+    },
+    {
+      "id": "complex-self-claim",
+      "batch": "batch-c",
+      "structuralPass": true,
+      "structuralFalsePositive": false,
+      "semanticPass": true,
+      "accepted": true,
+      "reviewedBy": [
+        "collaboration_eval",
+        "progress_audit"
+      ],
+      "criterion": "实现者自述不足以完成高风险任务，复用独立审查与迁移验收成员核验固定候选。",
+      "nativeEvidence": "seq36/41/46的结果37/42/47完整读取三份MD1–70行；51/56复用原两名核验成员；61不冒称完成。",
+      "modelCalls": 10,
+      "nativeEventSpanMs": 117772,
+      "finalTeamSize": 3,
+      "newMembers": 0,
+      "continuedMembers": [
+        "security-review",
+        "migration-acceptance"
+      ],
+      "decision": "wait",
+      "documentReads": [
+        {
+          "sequence": 36,
+          "resultSequence": 37,
+          "path": "tasks/evaluation-complex-self-claim/outputs/original-execution/round-1.md",
+          "executionId": "original-execution",
+          "inputVersion": 1,
+          "sha256": "4bd6659529390e132b24f6b0f9944a015a8f307578ebd865c90038e6e102836b",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 41,
+          "resultSequence": 42,
+          "path": "tasks/evaluation-complex-self-claim/outputs/security-review/round-1.md",
+          "executionId": "security-review",
+          "inputVersion": 1,
+          "sha256": "648a50dd9552b62ca4c0f9824dcaae0b13fd509f42eb6d57e0417632033d1a34",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        },
+        {
+          "sequence": 46,
+          "resultSequence": 47,
+          "path": "tasks/evaluation-complex-self-claim/outputs/migration-acceptance/round-1.md",
+          "executionId": "migration-acceptance",
+          "inputVersion": 1,
+          "sha256": "01aa06efefe3dabcea8acc0742e0a219940e4abcdf1514cabb8c8ed47d3c53dc",
+          "firstLine": 1,
+          "lastLine": 70,
+          "totalLines": 70,
+          "truncated": false
+        }
+      ],
+      "modelContentReadCalls": 3,
+      "firstError": null
+    }
+  ]
+}

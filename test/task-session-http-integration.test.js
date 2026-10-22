@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
@@ -28,7 +29,7 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
   const service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } }, legacy, residentStore,
     config: { dbPath: join(root, 'control.sqlite'), workspaceDir: root, instanceId: 'http-fixture', initialize: true, webActorId: 'owner' },
     persistence: { register: noop, close: noop }, groupSessions: { run: noop, close: noop },
-    taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 53; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
+    taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 10; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
     executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult, onProgress }) => { await onSessionBound(); await onProgress({ summary: '已读取状态，开始验证', evidence: ['actual-evidence.txt'], activity: '验证状态', reportId: 'http-stage' }); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
   })
   const runtime = { ...legacy, listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args), getTaskSessionDecisions: (...args) => service.taskDecisions(...args),
@@ -49,6 +50,30 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     const duplicate = await post('/tasks', input)
     assert.equal(duplicate.status, 200, JSON.stringify(duplicate.body)); assert.equal(duplicate.body.taskId, taskId)
     await service.whenIdle(); await service.recover(); await service.whenIdle()
+    const executions = await service.store.query({ kind: 'execution.list', taskId })
+    assert.equal(executions.length, 10, 'production dispatch obeys the current ten-member cap')
+    assert.ok(executions.every(execution => execution.status === 'succeeded' && execution.drained))
+    // 历史读取夹具：旧任务可能已有超过十个执行；不经新派发绕过上限，也不删分页覆盖。
+    // 十个真实服务执行保留原样，另复制43个已结束历史记录及其阶段事件，仅用于HTTP读取断言。
+    const stage = (await service.store.query({ kind: 'wake.list', taskId })).find(wake => wake.kind === 'execution.stage.progress' && wake.payload.executionId === executions[0].executionId)
+    assert.ok(stage)
+    const db = new DatabaseSync(join(root, 'control.sqlite'))
+    try {
+      db.exec('BEGIN')
+      for (let index = 10; index < 53; index++) {
+        const execution = structuredClone(executions[0]), id = `historical-fixture-${index}`, title = `核对服务${index}`
+        delete execution.resources
+        Object.assign(execution, { id, executionId: id, sessionId: `task-execution-${id}`, key: title, title })
+        execution.input.title = title
+        db.prepare('INSERT INTO dynamic_executions(id,body) VALUES (?,?)').run(id, JSON.stringify(execution))
+        const wake = structuredClone(stage)
+        Object.assign(wake, { id: `stage-${id}`, wakeId: `stage-${id}`, state: 'acked' })
+        wake.payload.executionId = id
+        db.prepare('INSERT INTO dynamic_wakes(id,body) VALUES (?,?)').run(wake.id, JSON.stringify(wake))
+      }
+      db.exec('COMMIT')
+    } finally { db.close() }
+    assert.equal((await service.store.query({ kind: 'execution.list', taskId })).length, 53)
     const detail = await (await fetch(base + `/state/tasks/${taskId}/detail`)).json()
     assert.equal(detail.session.sessionId, sessionId)
     assert.ok(detail.session.workspaceDir.startsWith(root))

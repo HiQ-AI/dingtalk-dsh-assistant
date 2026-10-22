@@ -1,0 +1,25 @@
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (1061.2897ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1849.311
+
+✖ failing tests:
+
+test at test\task-stage-progress-native.test.js:13:1
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (1061.2897ms)
+  AssertionError [ERR_ASSERTION]: Owner never delegated: {"ownerInputs":0,"alerts":[{"alertId":"failure:task-c0d4f8e7f810a1bb7402ae18b315559f","taskId":"task-c0d4f8e7f810a1bb7402ae18b315559f","fingerprint":"task-session:task-c0d4f8e7f810a1bb7402ae18b315559f","detail":"TASK_SESSION_REASONING_EFFORT_UNSUPPORTED","status":"active","lastSeenAt":"2026-10-22T08:25:56.771Z"}],"native":"session \"task-session-efd48d99-81b0-4b6b-9ffd-71c24f332485\" not found"}
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:57:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }

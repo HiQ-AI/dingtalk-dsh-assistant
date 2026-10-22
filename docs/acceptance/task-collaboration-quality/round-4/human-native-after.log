@@ -1,0 +1,16 @@
+✔ operator technical reply retains business sources and shared scope protocol in the same resumed execution (5571.3002ms)
+✔ 技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问 (3209.401ms)
+✔ native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text (4874.0343ms)
+✔ an execution result cannot bypass human waiting; reply reads the original execution and continues the original task (11685.6055ms)
+✔ a native blocked decision without a human question is corrected into an explicit durable request (1678.5871ms)
+✔ original-group human input preserves clarification but fences explicit authorization change: changed=false (12334.1953ms)
+✔ original-group human input preserves clarification but fences explicit authorization change: changed=true (12075.0912ms)
+✔ Web answer recalls its delivered operator notification once without recalling group replies (3281.5351ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 55476.8152

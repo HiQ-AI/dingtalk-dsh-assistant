@@ -101,6 +101,21 @@ test('真实任务卡片展示全部会话名称及状态；点击原生入口�
  buttons[42].props.onClick();assert.deepEqual(actions,[['session','s42',undefined]])
 })
 
+test('混合后端卡片保留CLI名称状态耗时，仅DSH会话可导航', () => {
+ const timing = { startedAt: '2026-10-22T00:00:00Z', endedAt: null, active: true }
+ const {tree,actions} = card({taskId:'mixed',title:'混合后端',state:'running',session:{sessionId:'owner'},executionSessions:[
+  {executionId:'native',sessionId:'dsh-session',title:'原生核对',executionBackend:'dsh',status:'succeeded'},
+  {executionId:'cli',sessionId:'claude-session',sessionBound:true,title:'文件实施',executionBackend:'claude-code',status:'running',latestRoundTiming:timing},
+ ]})
+ const rows = flatten(tree).filter(node => node.props.className === 'observer-execution-session')
+ assert.equal(rows.length,2);assert.equal(rows[0].type,'button');assert.equal(rows[1].type,'div')
+ assert.equal(rows[1].props.onClick,undefined);assert.equal(rows[1].props.style.cursor,'default')
+ assert.match(JSON.stringify(rows[1]),/文件实施/);assert.match(JSON.stringify(rows[1]),/Claude Code/)
+ assert.ok(flatten(rows[1]).some(node => node.props['aria-label'] === 'running'))
+ assert.ok(flatten(rows[1]).some(node => node.props.timing === timing))
+ rows[0].props.onClick();assert.deepEqual(actions,[['session','dsh-session','owner']])
+})
+
 test('内嵌执行列表只按真实成功会话计数，支持单展开和归档',()=>{
  const {tree,actions}=card({taskId:'card-copy',title:'检查',state:'completed',executionSessions:[{executionId:'a',sessionId:'sa',title:'会话甲',status:'succeeded'},{executionId:'b',sessionId:'sb',title:'会话乙',status:'running'},{executionId:'c',sessionId:'sc',title:'会话丙',status:'failed'}]})
  const nodes=flatten(tree),list=nodes.find(x=>x.props['aria-label']==='全部执行会话')

@@ -1,0 +1,699 @@
+{
+  "model": "gpt-6-astra",
+  "reasoningEffort": "low",
+  "sourceDigests": {
+    "packages/dingtalk-dsh-assistant/task-session.js": "d4941c7d885e0f8bb2b584cc7290e253e1ed5ca6e3c2ac3b231aafff025c3a53",
+    "packages/dingtalk-dsh-assistant/model-context.js": "24cf69a1d65a5be03f44cf01511d970f3a54109cc074c67468c3e12ad255fbeb",
+    "packages/dingtalk-dsh-assistant/task-source-instructions.js": "9c5af60a619b4acb31fb387bcaaf4948a151e952787db00c33cf6d2809556fe2",
+    "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "b2c8ec6529986ea44e0e106e0210cb0dcd452515512dea78737298cb317cbfa6",
+    "packages/dingtalk-dsh-assistant/group-message.js": "d4f1447af3a88fced80dfd5909a067b1dfb3e3e20f24860785975938bf4ebbe4",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "c659b16414ac3aa19cd3303acb17cf0d3baa7dd4a142ce49a313990c7fc4aba4",
+    "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "307aacca33b2cd76ca3a28e5cc7639013477be42947f86569c2863b9b8c106f8",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "5bd5879072c168492245c8e89cbc4e2fb791da913ba77a564732984618f2ec52",
+    "test/fixtures/task-session-native-host.js": "5e9add3fc22a7c1ff6899db3902cff0f93b6bb5168264b15a9ec7686c9aa739f",
+    "docs\\acceptance\\task-collaboration-quality\\scripts\\evaluate-model.mjs": "6bb28c1447700e0e3c83c84267b3ebe54f9f2cd6e38d215eae46c7c85b468d64"
+  },
+  "cases": [
+    {
+      "id": "independent-ready",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "两份委派是否各自覆盖一个完整可独立目标、具体工作区及交付证据；是否在第一次 wait 前都已发出。不能把重复委派或一份泛化复核凑成两目标。",
+      "modelCalls": 2,
+      "actions": [
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "alpha-empty-header-fix",
+            "title": "Alpha空表头修复",
+            "objective": "在 /synthetic/alpha 修复 Alpha 导出组件的空表头错误并验证。先读取仓库说明和现有验收材料，定位及复现错误，做最小适当修复并运行相关验收与回归验证。交付具体改动文件、差异、复现及验证命令和实际结果、产物位置及未验证限制。",
+            "context": "用户明确要求两个独立模块同时推进，最终分别提供改动与验证证据再汇总。Alpha 仓库及验收材料已齐备，无 Beta 前置依赖。仅允许写隔离工作区 /synthetic/alpha；不得改写 Beta 或其他共享资源，不涉及部署或共享数据。遵循仓库实际验收要求，不以执行成功代替业务验证。",
+            "resourceKeys": [
+              "/synthetic/alpha"
+            ]
+          },
+          "receipt": {
+            "executionId": "ed8ebaa7-2bd4-4ca4-bfcb-d519d4fd7850",
+            "sessionId": "task-execution-acdb5092-d37d-47f5-8ed3-68fd6e64b253",
+            "status": "queued",
+            "resources": {
+              "state": "available",
+              "keys": [
+                "/synthetic/alpha"
+              ],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "beta-installation-docs",
+            "title": "Beta安装说明修订",
+            "objective": "在 /synthetic/beta 完成 Beta 帮助站安装说明修订并核对示例。先读取仓库说明和现有验收材料，依据实际安装配置修订文档，核对示例准确性与可用性并执行适用检查。交付具体改动文件、差异、示例核对依据、验证命令和实际结果、产物位置及未验证限制。",
+            "context": "用户明确要求两个独立模块同时推进，最终分别提供改动与验证证据再汇总。Beta 仓库及验收材料已齐备，无 Alpha 前置依赖。仅允许写隔离工作区 /synthetic/beta；不得改写 Alpha 或其他共享资源，不涉及部署或共享数据。遵循实际验收材料，不能把仅文本检查说成实际安装验证。",
+            "resourceKeys": [
+              "/synthetic/beta"
+            ]
+          },
+          "receipt": {
+            "executionId": "494244b8-33e7-4a81-b625-19d1cc0a5765",
+            "sessionId": "task-execution-3d0c0b23-73bd-410c-9749-1372c661986c",
+            "status": "queued",
+            "resources": {
+              "state": "available",
+              "keys": [
+                "/synthetic/beta"
+              ],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "Alpha 空表头修复与 Beta 安装说明修订已分别委派，并行推进；各自仅改动对应隔离工作区。待两项返回改动和验证证据后分别核验，再汇总。",
+            "evidence": [
+              "原始需求明确两项材料齐备、互不依赖且无共享写入。",
+              "两项执行均已登记，各自绑定 /synthetic/alpha 和 /synthetic/beta，当前无资源冲突。"
+            ],
+            "limitations": [
+              "执行尚未返回实际改动及验证结果，目前不能确认任一项已完成。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_delegate",
+          "args": {
+            "key": "alpha-empty-header-fix",
+            "title": "Alpha空表头修复",
+            "objective": "在 /synthetic/alpha 修复 Alpha 导出组件的空表头错误并验证。先读取仓库说明和现有验收材料，定位及复现错误，做最小适当修复并运行相关验收与回归验证。交付具体改动文件、差异、复现及验证命令和实际结果、产物位置及未验证限制。",
+            "context": "用户明确要求两个独立模块同时推进，最终分别提供改动与验证证据再汇总。Alpha 仓库及验收材料已齐备，无 Beta 前置依赖。仅允许写隔离工作区 /synthetic/alpha；不得改写 Beta 或其他共享资源，不涉及部署或共享数据。遵循仓库实际验收要求，不以执行成功代替业务验证。",
+            "resourceKeys": [
+              "/synthetic/alpha"
+            ]
+          }
+        },
+        {
+          "sequence": 18,
+          "tool": "task_delegate",
+          "args": {
+            "key": "beta-installation-docs",
+            "title": "Beta安装说明修订",
+            "objective": "在 /synthetic/beta 完成 Beta 帮助站安装说明修订并核对示例。先读取仓库说明和现有验收材料，依据实际安装配置修订文档，核对示例准确性与可用性并执行适用检查。交付具体改动文件、差异、示例核对依据、验证命令和实际结果、产物位置及未验证限制。",
+            "context": "用户明确要求两个独立模块同时推进，最终分别提供改动与验证证据再汇总。Beta 仓库及验收材料已齐备，无 Alpha 前置依赖。仅允许写隔离工作区 /synthetic/beta；不得改写 Alpha 或其他共享资源，不涉及部署或共享数据。遵循实际验收材料，不能把仅文本检查说成实际安装验证。",
+            "resourceKeys": [
+              "/synthetic/beta"
+            ]
+          }
+        },
+        {
+          "sequence": 23,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "Alpha 空表头修复与 Beta 安装说明修订已分别委派，并行推进；各自仅改动对应隔离工作区。待两项返回改动和验证证据后分别核验，再汇总。",
+              "evidence": [
+                "原始需求明确两项材料齐备、互不依赖且无共享写入。",
+                "两项执行均已登记，各自绑定 /synthetic/alpha 和 /synthetic/beta，当前无资源冲突。"
+              ],
+              "limitations": [
+                "执行尚未返回实际改动及验证结果，目前不能确认任一项已完成。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "Alpha 空表头修复与 Beta 安装说明修订已分别委派，并行推进；各自仅改动对应隔离工作区。待两项返回改动和验证证据后分别核验，再汇总。",
+          "evidence": [
+            "原始需求明确两项材料齐备、互不依赖且无共享写入。",
+            "两项执行均已登记，各自绑定 /synthetic/alpha 和 /synthetic/beta，当前无资源冲突。"
+          ],
+          "limitations": [
+            "执行尚未返回实际改动及验证结果，目前不能确认任一项已完成。"
+          ]
+        }
+      }
+    },
+    {
+      "id": "single-simple",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "是否由统筹直接完成合成文件修改与读回，或仅委派一次执行；没有人为增加角色或额外验收会话。complete 必须有真实改后文件和模型的后续读回。",
+      "modelCalls": 4,
+      "actions": [
+        {
+          "tool": "fixture-read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-2\\single-simple\\fixtures\\intro.md"
+          }
+        },
+        {
+          "tool": "fixture-edit",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-2\\single-simple\\fixtures\\intro.md",
+            "old_string": "instlal",
+            "new_string": "install"
+          }
+        },
+        {
+          "tool": "fixture-read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-2\\single-simple\\fixtures\\intro.md"
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "complete",
+            "summary": "已将 intro.md 第 3 行的 instlal 改为 install，并重读确认：`Run install once.` 其余内容未变。",
+            "evidence": [
+              "修改前后读取全文核对，仅第 3 行指定拼写发生变化。"
+            ],
+            "limitations": []
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-2\\single-simple\\fixtures\\intro.md"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "edit",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-2\\single-simple\\fixtures\\intro.md",
+            "old_string": "instlal",
+            "new_string": "install"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-2\\single-simple\\fixtures\\intro.md"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "complete",
+              "summary": "已将 intro.md 第 3 行的 instlal 改为 install，并重读确认：`Run install once.` 其余内容未变。",
+              "evidence": [
+                "修改前后读取全文核对，仅第 3 行指定拼写发生变化。"
+              ],
+              "limitations": []
+            }
+          }
+        }
+      ],
+      "fixtureReadback": "# Help\n\nRun install once.\nKeep this line.\n",
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "complete",
+          "summary": "已将 intro.md 第 3 行的 instlal 改为 install，并重读确认：`Run install once.` 其余内容未变。",
+          "evidence": [
+            "修改前后读取全文核对，仅第 3 行指定拼写发生变化。"
+          ],
+          "limitations": []
+        }
+      }
+    },
+    {
+      "id": "dependency-pending",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "是否等待原结果，保留原执行；是否未预先猜测单位、重启调查或派出依赖结论才能开始的修改。",
+      "modelCalls": 2,
+      "actions": [
+        {
+          "tool": "read-progress",
+          "executionId": "original-execution"
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "正在等待原始样本的单位调查结论；确认金额是分还是元后，再由原执行修复同一价格转换模块并验证。",
+            "evidence": [
+              "原执行最新工具记录显示原始样本读取作业仍在运行，字段单位尚无结论。",
+              "修复公式依赖单位调查结果，目前没有可独立推进的其他工作，不另行并发修改模块。"
+            ],
+            "limitations": [
+              "尚未确认金额单位，不能确定转换公式；修复与验证尚待前置调查完成。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_execution_progress",
+          "args": {
+            "executionId": "original-execution"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "正在等待原始样本的单位调查结论；确认金额是分还是元后，再由原执行修复同一价格转换模块并验证。",
+              "evidence": [
+                "原执行最新工具记录显示原始样本读取作业仍在运行，字段单位尚无结论。",
+                "修复公式依赖单位调查结果，目前没有可独立推进的其他工作，不另行并发修改模块。"
+              ],
+              "limitations": [
+                "尚未确认金额单位，不能确定转换公式；修复与验证尚待前置调查完成。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "正在等待原始样本的单位调查结论；确认金额是分还是元后，再由原执行修复同一价格转换模块并验证。",
+          "evidence": [
+            "原执行最新工具记录显示原始样本读取作业仍在运行，字段单位尚无结论。",
+            "修复公式依赖单位调查结果，目前没有可独立推进的其他工作，不另行并发修改模块。"
+          ],
+          "limitations": [
+            "尚未确认金额单位，不能确定转换公式；修复与验证尚待前置调查完成。"
+          ]
+        }
+      }
+    },
+    {
+      "id": "dependency-ready",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "是否核对已有结果后用同一个 executionId、新请求 key 续办修复；是否没有重新调查或重复新建实现会话。",
+      "modelCalls": 8,
+      "actions": [
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "implement-amount-unit-fix",
+            "executionId": "original-execution",
+            "objective": "沿原会话使用已查明的 amount 单位（分），修复同一金额转换模块并完成验证。检查原模块输出契约，正确实现分到目标金额单位的转换，补充相关回归测试并运行；报告实际修改文件、差异、验证命令和结果及剩余限制。不要重新开展已完成的单位调查或扩展到其他模块。",
+            "context": "用户明确要求调查后修复同一转换模块并验证，无其他独立范围。原调查已完成且执行已排空；结果证据：/synthetic/prices 样本 receipt-1 amount=12345 对应123.45元，receipt-2 amount=99 对应0.99元，确认 amount 为分。原结果明确转换模块尚未修改和验证。本次继续完成实施与验证，以这两个样本及必要边界回归核验，保留可读取的产物和测试证据供最终验收。",
+            "resourceKeys": [
+              "synthetic/prices/amount-conversion"
+            ]
+          },
+          "receipt": {
+            "executionId": "original-execution",
+            "sessionId": "task-execution-dafbb257-a6b8-4b67-a40c-739fb1e773b1",
+            "status": "queued",
+            "resources": {
+              "state": "available",
+              "keys": [
+                "synthetic/prices/amount-conversion"
+              ],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "已核对金额单位为分，已安排原会话继续修复同一转换模块并验证。",
+            "evidence": [
+              "原调查中，12345 对应123.45元，99 对应0.99元。",
+              "原执行已排空，已沿原会话登记修复和回归验证。"
+            ],
+            "limitations": [
+              "修复和测试结果尚未返回，当前不能认定任务完成。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "ce27851bdd714887dc5e6bfc6238fd8b8411e8900fe6069948bc2c2d98023e75:sha256:421f11969eaf6e84fcc85b8f8ada285e96c9fad506c4f9b28f91802cb19fb8af",
+            "path": "/executions/original-execution/result"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "ce27851bdd714887dc5e6bfc6238fd8b8411e8900fe6069948bc2c2d98023e75:sha256:bd045287e9e8fd82bb68116ac4d5fbd66c78adb32085102920b3f189946546bc"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "ce27851bdd714887dc5e6bfc6238fd8b8411e8900fe6069948bc2c2d98023e75:sha256:4db113e66d10005820065192db3191e203daa1fd3dc45231e9e4a68523308b52"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-2\\.dsh\\model-content\\ce27851bdd714887dc5e6bfc6238fd8b8411e8900fe6069948bc2c2d98023e75\\421f11969eaf6e84fcc85b8f8ada285e96c9fad506c4f9b28f91802cb19fb8af.json"
+          }
+        },
+        {
+          "sequence": 36,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "ce27851bdd714887dc5e6bfc6238fd8b8411e8900fe6069948bc2c2d98023e75:sha256:421f11969eaf6e84fcc85b8f8ada285e96c9fad506c4f9b28f91802cb19fb8af",
+            "path": "/sources/user-request"
+          }
+        },
+        {
+          "sequence": 41,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "ce27851bdd714887dc5e6bfc6238fd8b8411e8900fe6069948bc2c2d98023e75:sha256:6059e5e3c3e3e39021e34ae0324755ee6bdd60eda245dca8de3f3f015587e545"
+          }
+        },
+        {
+          "sequence": 46,
+          "tool": "task_delegate",
+          "args": {
+            "key": "implement-amount-unit-fix",
+            "executionId": "original-execution",
+            "objective": "沿原会话使用已查明的 amount 单位（分），修复同一金额转换模块并完成验证。检查原模块输出契约，正确实现分到目标金额单位的转换，补充相关回归测试并运行；报告实际修改文件、差异、验证命令和结果及剩余限制。不要重新开展已完成的单位调查或扩展到其他模块。",
+            "context": "用户明确要求调查后修复同一转换模块并验证，无其他独立范围。原调查已完成且执行已排空；结果证据：/synthetic/prices 样本 receipt-1 amount=12345 对应123.45元，receipt-2 amount=99 对应0.99元，确认 amount 为分。原结果明确转换模块尚未修改和验证。本次继续完成实施与验证，以这两个样本及必要边界回归核验，保留可读取的产物和测试证据供最终验收。",
+            "resourceKeys": [
+              "synthetic/prices/amount-conversion"
+            ]
+          }
+        },
+        {
+          "sequence": 51,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "已核对金额单位为分，已安排原会话继续修复同一转换模块并验证。",
+              "evidence": [
+                "原调查中，12345 对应123.45元，99 对应0.99元。",
+                "原执行已排空，已沿原会话登记修复和回归验证。"
+              ],
+              "limitations": [
+                "修复和测试结果尚未返回，当前不能认定任务完成。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "已核对金额单位为分，已安排原会话继续修复同一转换模块并验证。",
+          "evidence": [
+            "原调查中，12345 对应123.45元，99 对应0.99元。",
+            "原执行已排空，已沿原会话登记修复和回归验证。"
+          ],
+          "limitations": [
+            "修复和测试结果尚未返回，当前不能认定任务完成。"
+          ]
+        }
+      }
+    },
+    {
+      "id": "shared-writer",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "可以合为一个执行；若拆为多个，是否声明同一实际资源键让 Host 串行占用，并在交接里说明共同文件与覆盖风险。不同资源键或仅口头称不冲突不能通过。",
+      "modelCalls": 2,
+      "actions": [
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "settings-single-writer",
+            "title": "修订并核验共同配置",
+            "objective": "读取 /synthetic/service/settings.json，保持其他配置不变，将 retryCount 改为 3、timeoutMs 改为 8000，写回同一唯一文件。你是该文件唯一写入者，两个修订串行处理或合为一次整文件写回，不可并行覆盖。分别验证两个字段，并最终重新读取文件确认两项同时生效；报告原始值、实际写入及最终读回证据和任何限制。",
+            "context": "用户明确要求两项都写回 /synthetic/service/settings.json；整文件覆盖且没有分支合并机制。仅修改这两个字段，不改其他文件。不以工具成功替代最终读回。",
+            "resourceKeys": [
+              "/synthetic/service/settings.json"
+            ]
+          },
+          "receipt": {
+            "executionId": "46020658-515b-4634-9713-977cf8ea73d0",
+            "sessionId": "task-execution-2074132e-f407-48ac-bc65-3226c13dab06",
+            "status": "queued",
+            "resources": {
+              "state": "available",
+              "keys": [
+                "/synthetic/service/settings.json"
+              ],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "两处修改交由同一个执行处理，避免整文件写入相互覆盖；完成后分别核验字段并最终读回。",
+            "evidence": [
+              "已指定该配置文件的唯一写入执行，并声明同一文件的独占资源。"
+            ],
+            "limitations": [
+              "尚待实际修改结果及最终读回证据。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_delegate",
+          "args": {
+            "key": "settings-single-writer",
+            "title": "修订并核验共同配置",
+            "objective": "读取 /synthetic/service/settings.json，保持其他配置不变，将 retryCount 改为 3、timeoutMs 改为 8000，写回同一唯一文件。你是该文件唯一写入者，两个修订串行处理或合为一次整文件写回，不可并行覆盖。分别验证两个字段，并最终重新读取文件确认两项同时生效；报告原始值、实际写入及最终读回证据和任何限制。",
+            "context": "用户明确要求两项都写回 /synthetic/service/settings.json；整文件覆盖且没有分支合并机制。仅修改这两个字段，不改其他文件。不以工具成功替代最终读回。",
+            "resourceKeys": [
+              "/synthetic/service/settings.json"
+            ]
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "两处修改交由同一个执行处理，避免整文件写入相互覆盖；完成后分别核验字段并最终读回。",
+              "evidence": [
+                "已指定该配置文件的唯一写入执行，并声明同一文件的独占资源。"
+              ],
+              "limitations": [
+                "尚待实际修改结果及最终读回证据。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "两处修改交由同一个执行处理，避免整文件写入相互覆盖；完成后分别核验字段并最终读回。",
+          "evidence": [
+            "已指定该配置文件的唯一写入执行，并声明同一文件的独占资源。"
+          ],
+          "limitations": [
+            "尚待实际修改结果及最终读回证据。"
+          ]
+        }
+      }
+    },
+    {
+      "id": "complex-self-claim",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "是否依据越权与迁移风险安排独立会话核查这个具体候选、三类验收及反例；未读取原始测试或反证前不能把实现者自述当完成。新增委派仅补材料而不独立核验也不通过。",
+      "modelCalls": 6,
+      "actions": [
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "independent-auth-acceptance",
+            "title": "权限候选独立核验",
+            "objective": "对 /synthetic/auth-worktree 冻结候选 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119 开展独立只读验收。读取该版本实际差异、访问控制逻辑、规则迁移及原始测试材料，寻找跨租户越权和回归反例；逐项核验允许访问、拒绝访问、旧规则迁移三类行为，报告测试用例、断言、实际结果与版本关联及证据位置。判断候选是否可审阅，明确缺口，不能以实现者测试全通过自述代替证据。不得修改候选、部署、发送消息或重放外部操作。",
+            "context": "用户要求修复跨租户报表越权并迁移访问规则，交付可审阅候选及测试结果，必须覆盖允许/拒绝/旧规则迁移，不部署。原执行已 succeeded 且排空；读取其结果仅见实现者称测试全部通过，证据引用冻结SHA，尚不足以验收安全关键变更。请独立从指定候选与原始材料核实；材料不可访问则如实记录具体限制，不推断通过。"
+          },
+          "receipt": {
+            "executionId": "18273349-215e-44f8-8808-b819381bed1a",
+            "sessionId": "task-execution-a6e3f88c-1b01-4496-9a45-8e58a14ba9e5",
+            "status": "queued",
+            "resources": {
+              "state": "none",
+              "keys": [],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "候选已提交，正在独立核验权限修复及旧规则迁移，暂不判定验收完成；不会部署。",
+            "evidence": [
+              "原执行提供冻结版本 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119，并称测试全部通过。",
+              "已安排只读核验该版本差异及原始测试材料，逐项检查允许访问、拒绝访问和旧规则迁移。"
+            ],
+            "limitations": [
+              "当前测试通过仅为实现者结论，尚需核实三类行为的具体断言、结果及版本对应关系。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "102c6a54375cde92439f83932d9415f6c58eab79843067793e25c61626ddaa55:sha256:22f615e54bf635d75191e3343460f5d6d62f942f3268709521ecf0c51e2f3bd6",
+            "path": "/executions/original-execution/result"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "102c6a54375cde92439f83932d9415f6c58eab79843067793e25c61626ddaa55:sha256:8317618dc10b5a5a90017a0469330372eea6ad9c6d1aa3c2f52d1978697cebae"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "102c6a54375cde92439f83932d9415f6c58eab79843067793e25c61626ddaa55:sha256:99ad145d214a2f961299daf7533869d83332e4cf61ece5105828803c015fded1"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "102c6a54375cde92439f83932d9415f6c58eab79843067793e25c61626ddaa55:sha256:4ddd3489ab768b5826bdeadd708d26b1f943c2688cfb7c21519f455a2b56a8ef"
+          }
+        },
+        {
+          "sequence": 36,
+          "tool": "task_delegate",
+          "args": {
+            "key": "independent-auth-acceptance",
+            "title": "权限候选独立核验",
+            "objective": "对 /synthetic/auth-worktree 冻结候选 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119 开展独立只读验收。读取该版本实际差异、访问控制逻辑、规则迁移及原始测试材料，寻找跨租户越权和回归反例；逐项核验允许访问、拒绝访问、旧规则迁移三类行为，报告测试用例、断言、实际结果与版本关联及证据位置。判断候选是否可审阅，明确缺口，不能以实现者测试全通过自述代替证据。不得修改候选、部署、发送消息或重放外部操作。",
+            "context": "用户要求修复跨租户报表越权并迁移访问规则，交付可审阅候选及测试结果，必须覆盖允许/拒绝/旧规则迁移，不部署。原执行已 succeeded 且排空；读取其结果仅见实现者称测试全部通过，证据引用冻结SHA，尚不足以验收安全关键变更。请独立从指定候选与原始材料核实；材料不可访问则如实记录具体限制，不推断通过。"
+          }
+        },
+        {
+          "sequence": 41,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "候选已提交，正在独立核验权限修复及旧规则迁移，暂不判定验收完成；不会部署。",
+              "evidence": [
+                "原执行提供冻结版本 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119，并称测试全部通过。",
+                "已安排只读核验该版本差异及原始测试材料，逐项检查允许访问、拒绝访问和旧规则迁移。"
+              ],
+              "limitations": [
+                "当前测试通过仅为实现者结论，尚需核实三类行为的具体断言、结果及版本对应关系。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "候选已提交，正在独立核验权限修复及旧规则迁移，暂不判定验收完成；不会部署。",
+          "evidence": [
+            "原执行提供冻结版本 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119，并称测试全部通过。",
+            "已安排只读核验该版本差异及原始测试材料，逐项检查允许访问、拒绝访问和旧规则迁移。"
+          ],
+          "limitations": [
+            "当前测试通过仅为实现者结论，尚需核实三类行为的具体断言、结果及版本对应关系。"
+          ]
+        }
+      }
+    },
+    {
+      "id": "simple-proven",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "是否直接核对两份原文并完成；是否准确回答 2.4.1 一致且没有为简单只读对照再派审查会话。",
+      "modelCalls": 1,
+      "actions": [
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "complete",
+            "summary": "一致，两个快照的 version 均为 2.4.1。",
+            "evidence": [
+              "源 A：{\"version\":\"2.4.1\"}；源 B：{\"version\":\"2.4.1\"}。"
+            ],
+            "limitations": []
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "complete",
+              "summary": "一致，两个快照的 version 均为 2.4.1。",
+              "evidence": [
+                "源 A：{\"version\":\"2.4.1\"}；源 B：{\"version\":\"2.4.1\"}。"
+              ],
+              "limitations": []
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "complete",
+          "summary": "一致，两个快照的 version 均为 2.4.1。",
+          "evidence": [
+            "源 A：{\"version\":\"2.4.1\"}；源 B：{\"version\":\"2.4.1\"}。"
+          ],
+          "limitations": []
+        }
+      }
+    }
+  ]
+}

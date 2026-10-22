@@ -10,6 +10,28 @@ import { requestSystemText } from './fixtures/session-persistence.js'
 const call = (name, args) => ({ name, args })
 const requestHuman = (audience = 'operator') => call('task_request_human', { audience, reason: '目标环境尚未明确，不能自行扩大授权', question: '请明确本次允许的环境和操作范围', evidence: ['已读取原始交办'], attemptedActions: ['核对现有需求，未执行外部修改'] })
 const finish = summary => call('task_session_submit', { decision: { action: 'complete', summary, evidence: ['已核对人工原文和原执行结果'], limitations: [] } })
+function completionReviews() {
+  const read = new Set(); let delegated = false
+  const roles = ['独立核对原交办范围', '独立核对人工答复']
+  const wait = () => call('task_session_submit', { decision: { action: 'wait', summary: '已安排按原文核对范围，等待结果', evidence: [], limitations: [] } })
+  return {
+    execution(input) {
+      const index = roles.indexOf(input.objective)
+      if (index < 0) return null
+      const path = index === 0 ? input.materialPaths[0] : input.materialPaths.at(-1)
+      assert.ok(path)
+      if (!read.has(index)) { read.add(index); return [call('read', { file_path: path })] }
+      return [call('execution_submit', { output: { status: 'completed', summary: `${roles[index]}已读取原始材料`, evidence: [path], limitations: [], artifacts: [] } })]
+    },
+    owner(input, summary) {
+      if (!input.executions.every(item => item.status === 'succeeded' && item.drained)) return [wait()]
+      if (input.executionCount >= 3) return [finish(summary)]
+      if (delegated) return [wait()]
+      delegated = true
+      return [...roles.map((objective, index) => call('task_delegate', { key: `completion-review-${index}`, objective })), wait()]
+    },
+  }
+}
 async function fixture(t, decide, options) {
   const root = await mkdtemp(join(tmpdir(), 'task-human-native-'))
   const h = await nativeTaskHost(root, decide, options)
@@ -33,7 +55,7 @@ test('operator technical reply retains business sources and shared scope protoco
       if (!execution) return [call('task_delegate', { key: 'prepare', objective: '准备原交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '准备中', evidence: [], limitations: [] } })]
       if (!input.task.humanRequests.length) return [call('task_request_human', { reason: '准备已完成，工具配置需操作人恢复', question: '请恢复原工具配置', evidence: ['原生配置诊断'], attemptedActions: ['原配置检查'] })]
       if (execution.inputVersion === 1) return [call('task_delegate', { executionId: execution.executionId, key: 'continue', objective: '按原来源继续完整UAT交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '沿原执行继续', evidence: [], limitations: [] } })]
-      return [finish('原执行已收到完整来源')]
+      return [call('task_session_submit', { decision: { action: 'wait', summary: '原执行已收到完整来源，后续交付仍待统筹核验', evidence: [], limitations: ['本用例仅核验来源与原会话续办'] } })]
     }
     seen.push(input)
     return [call('execution_submit', { output: { status: 'completed', summary: '测试夹具仅记录输入，没有执行外部部署', evidence: [], limitations: [], artifacts: [] } })]
@@ -50,6 +72,8 @@ test('operator technical reply retains business sources and shared scope protoco
   assert.equal(executions[0].sessionId, original.sessionId)
   assert.equal(executions[0].inputVersion, 2)
   assert.equal(after.sessionId, before.sessionId)
+  assert.equal(after.status, 'active')
+  assert.equal(after.lastDecision.action, 'wait')
   assert.equal(after.humanRequests.length, 1)
   assert.equal(after.humanRequests[0].status, 'answered')
   assert.ok(h.toolResults.some(result => result.name === 'model_content_read'), '超预算上下文经过真实只读工具，不把引用视为已读')
@@ -149,9 +173,11 @@ test('native human request waits without repeat wakes; authenticated HTTP reply 
 
 test('an execution result cannot bypass human waiting; reply reads the original execution and continues the original task', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const released = Promise.withResolvers(); let turns = 0, executionId, afterReply, originalSummary
+  const reviewers = completionReviews()
   t.after(() => released.resolve())
   const h = await fixture(t, async request => {
     if (!request.tools.some(tool => tool.name === 'task_delegate')) {
+      const review = reviewers.execution(latestInput(request)); if (review) return review
       await released.promise
       return [call('execution_submit', { output: { status: 'completed', summary: '原执行已完成只读核对', evidence: ['原执行事实'], limitations: [], artifacts: [] } })]
     }
@@ -165,7 +191,7 @@ test('an execution result cannot bypass human waiting; reply reads the original 
     const page = modelToolValues(request).find(value => value.contentRef === ref.contentRef && value.path === path)
     if (!page) return [call('model_content_read', { contentRef: ref.contentRef, path })]
     originalSummary = page.text
-    return [finish('已读取原执行结果并按人工范围收束')]
+    return reviewers.owner(input, '已读取原执行结果并按人工范围收束')
   })
   const created = await h.service.createTask({ groupId: 'native-group', requestId: 'human-execution', objective: '核对原目标，边界不清时申请人工' })
   const request = await waitUntil(() => pending(h), 'persisted human request')
@@ -180,7 +206,10 @@ test('an execution result cannot bypass human waiting; reply reads the original 
   assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
   assert.equal(afterReply.executions[0].executionId, executionId)
   assert.equal(originalSummary, '原执行已完成只读核对')
-  assert.equal((await h.query('execution.list')).length, 1)
+  const completed = await h.query('execution.list')
+  assert.equal(completed.length, 3)
+  assert.equal(completed.filter(item => item.key === 'original-inspection').length, 1)
+  assert.equal(completed.find(item => item.key === 'original-inspection').executionId, executionId)
 })
 
 test('a native blocked decision without a human question is corrected into an explicit durable request', { skip: !available ? reason : false, timeout: 30000 }, async t => {
@@ -203,6 +232,7 @@ test('a native blocked decision without a human question is corrected into an ex
 
 for (const changed of [false, true]) test(`original-group human input preserves clarification but fences explicit authorization change: changed=${changed}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const release = Promise.withResolvers(); t.after(() => release.resolve())
+  const reviewers = completionReviews()
   let ownerTurns = 0, originalTask, originalTopic, answeredInput
   const replyText = '测试助手，本次只允许 UAT3 只读核对，保持现有执行，不得发布生产。'
   const h = await fixture(t, async request => {
@@ -224,6 +254,7 @@ for (const changed of [false, true]) test(`original-group human input preserves 
       return calls
     }
     if (!names.includes('task_delegate')) {
+      const review = reviewers.execution(latestInput(request)); if (review) return review
       await release.promise
       return [call('execution_submit', { output: { status: 'completed', summary: '原执行按只读范围完成', evidence: ['原执行结果'], limitations: [], artifacts: [] } })]
     }
@@ -234,7 +265,7 @@ for (const changed of [false, true]) test(`original-group human input preserves 
       answeredInput = input
       return [call('task_session_submit', { decision: { action: 'wait', summary: '已读取原群答复，等待原执行完成', evidence: [], limitations: [] } })]
     }
-    return [finish('原任务与原执行沿人工明确范围完成')]
+    return reviewers.owner(input, '原任务与原执行沿人工明确范围完成')
   })
   const created = await h.service.createTask({ groupId: 'native-group', requestId: 'original-group-answer', objective: '原群原任务核对' })
   await waitUntil(() => pending(h), 'human wait before original-group reply')
@@ -279,7 +310,10 @@ for (const changed of [false, true]) test(`original-group human input preserves 
   release.resolve(); await h.service.whenIdle()
   assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
   assert.equal((await h.query('task.list')).length, 1)
-  assert.equal((await h.query('execution.list')).length, 1)
+  const completed = await h.query('execution.list')
+  assert.equal(completed.length, 3)
+  assert.equal(completed.find(item => item.key === 'live-original').executionId, before.executionId)
+  assert.equal(completed.find(item => item.key === 'live-original').sessionId, before.sessionId)
 })
 
 test('Web answer recalls its delivered operator notification once without recalling group replies', { skip: !available ? reason : false, timeout: 30000 }, async t => {

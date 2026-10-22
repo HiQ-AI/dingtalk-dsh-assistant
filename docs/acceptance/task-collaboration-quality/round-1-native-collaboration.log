@@ -1,0 +1,74 @@
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (14979.6294ms)
+✖ native sequential handoff preserves one executor before independent review of the fixed artifact (11856.2993ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (12466.9369ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (12165.2075ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (9593.5409ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (10629.8793ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (9546.0146ms)
+✔ native shared resources queue without occupying task capacity and promote on drain (9101.7593ms)
+✔ native delegation rejects changed keys on receipt replay and preserves omitted continuation keys (5447.2951ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 8
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 96987.2334
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:46:38
+✖ native sequential handoff preserves one executor before independent review of the fixed artifact (11856.2993ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+  +   'model_content_read',
+      'read',
+      'execution_submit'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-service-native.test.js:867:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'model_content_read',
+      'model_content_read', 'read',
+      'execution_submit'
+    ],
+    expected: [ 'read', 'execution_submit' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

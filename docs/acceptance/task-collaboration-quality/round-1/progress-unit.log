@@ -1,0 +1,10 @@
+✔ timeline records activity switches, independent parallel leases and continuation gaps without duplicating stage events (128.1899ms)
+✔ stage reporting after continuation accepts only the new input and lease (44.6966ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 462.911

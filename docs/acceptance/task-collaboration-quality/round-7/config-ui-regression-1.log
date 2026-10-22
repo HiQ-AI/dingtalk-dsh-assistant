@@ -1,0 +1,616 @@
+TAP version 13
+# Subtest: 概览在已移除任务表格同步接口后仍加载完整状态
+ok 1 - 概览在已移除任务表格同步接口后仍加载完整状态
+  ---
+  duration_ms: 45.6983
+  type: 'test'
+  ...
+# Subtest: Web client使用dsh原生插件页签slot注册唯一状态卡
+ok 2 - Web client使用dsh原生插件页签slot注册唯一状态卡
+  ---
+  duration_ms: 0.3497
+  type: 'test'
+  ...
+# Subtest: Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime
+ok 3 - Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime
+  ---
+  duration_ms: 12.613
+  type: 'test'
+  ...
+# Subtest: 设置页异步展示版本状态且版本检查不阻塞核心配置加载
+ok 4 - 设置页异步展示版本状态且版本检查不阻塞核心配置加载
+  ---
+  duration_ms: 5.1704
+  type: 'test'
+  ...
+# Subtest: 设置页清退工作流与参数编辑，仍保留Agent与群连接配置
+ok 5 - 设置页清退工作流与参数编辑，仍保留Agent与群连接配置
+  ---
+  duration_ms: 5.5561
+  type: 'test'
+  ...
+# Subtest: 插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点
+ok 6 - 插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点
+  ---
+  duration_ms: 1.9489
+  type: 'test'
+  ...
+# Subtest: 执行后端沿用唯一Agent保存入口并在部分失败时准确说明未保存选择
+ok 7 - 执行后端沿用唯一Agent保存入口并在部分失败时准确说明未保存选择
+  ---
+  duration_ms: 2.4032
+  type: 'test'
+  ...
+# Subtest: 添加常驻群在操作位置反馈前置条件、进度和请求结果
+ok 8 - 添加常驻群在操作位置反馈前置条件、进度和请求结果
+  ---
+  duration_ms: 1.2663
+  type: 'test'
+  ...
+# Subtest: 旧话题关联修复入口全部410，预检、执行与身份变体均不能恢复旧服务
+ok 9 - 旧话题关联修复入口全部410，预检、执行与身份变体均不能恢复旧服务
+  ---
+  duration_ms: 93.777
+  type: 'test'
+  ...
+# Subtest: 消息列表投影当前版本首个完成判断原文与时间，后续话题更新和通知不延长历时
+ok 10 - 消息列表投影当前版本首个完成判断原文与时间，后续话题更新和通知不延长历时
+  ---
+  duration_ms: 71.7071
+  type: 'test'
+  ...
+# Subtest: 任务列表保留任务会话投影，不再合成固定阶段进度
+ok 11 - 任务列表保留任务会话投影，不再合成固定阶段进度
+  ---
+  duration_ms: 15.0699
+  type: 'test'
+  ...
+# Subtest: 群收发信箱合并新工作流持久消息与通知，按 ID 去重且保留旧群记录
+ok 12 - 群收发信箱合并新工作流持久消息与通知，按 ID 去重且保留旧群记录
+  ---
+  duration_ms: 8.8578
+  type: 'test'
+  ...
+# Subtest: 新工作流话题进入列表与详情，跨群详情不可读
+ok 13 - 新工作流话题进入列表与详情，跨群详情不可读
+  ---
+  duration_ms: 40.0767
+  type: 'test'
+  ...
+# Subtest: 控制账失效时健康状态降级并保留首因，不能只看群桥
+ok 14 - 控制账失效时健康状态降级并保留首因，不能只看群桥
+  ---
+  duration_ms: 7.748
+  type: 'test'
+  ...
+# Subtest: 已移除的任务表格同步接口在生产和测试模式均返回404
+ok 15 - 已移除的任务表格同步接口在生产和测试模式均返回404
+  ---
+  duration_ms: 54.6143
+  type: 'test'
+  ...
+# Subtest: 生产HTTP开放只读状态与明确的本机群配置接口，测试控制面仍关闭
+ok 16 - 生产HTTP开放只读状态与明确的本机群配置接口，测试控制面仍关闭
+  ---
+  duration_ms: 233.6766
+  type: 'test'
+  ...
+# Subtest: 活动审计历史缺源计入单独状态但不误报当前健康故障
+ok 17 - 活动审计历史缺源计入单独状态但不误报当前健康故障
+  ---
+  duration_ms: 9.5041
+  type: 'test'
+  ...
+# Subtest: 显式testApiEnabled才开放测试写入口
+ok 18 - 显式testApiEnabled才开放测试写入口
+  ---
+  duration_ms: 5.4881
+  type: 'test'
+  ...
+# Subtest: 历史任务报告仅可读取，显式恢复入口已退役
+ok 19 - 历史任务报告仅可读取，显式恢复入口已退役
+  ---
+  duration_ms: 45.6916
+  type: 'test'
+  ...
+# Subtest: 旧话题操作恢复统一410，任何参数均不能绕过清退
+ok 20 - 旧话题操作恢复统一410，任何参数均不能绕过清退
+  ---
+  duration_ms: 62.5715
+  type: 'test'
+  ...
+# Subtest: Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Session
+ok 21 - Web Task 入口强制稳定请求与执行版本且拒绝伪造来源和Session
+  ---
+  duration_ms: 139.6119
+  type: 'test'
+  ...
+# Subtest: 移除群遇到Topic引用或未完成决策返回409而非普通参数错误
+ok 22 - 移除群遇到Topic引用或未完成决策返回409而非普通参数错误
+  ---
+  duration_ms: 13.7028
+  type: 'test'
+  ...
+# Subtest: Web输入版本与幂等身份冲突返回409，可靠接收尚未完成返回202
+ok 23 - Web输入版本与幂等身份冲突返回409，可靠接收尚未完成返回202
+  ---
+  duration_ms: 16.8716
+  type: 'test'
+  ...
+# Subtest: Topic 查询有界分页且群摘要不泄漏内部决策、归类和预约记录
+ok 24 - Topic 查询有界分页且群摘要不泄漏内部决策、归类和预约记录
+  ---
+  duration_ms: 126.677
+  type: 'test'
+  ...
+# Subtest: 本机Web的127.0.0.1与localhost来源均可读取resident，其他来源不开放CORS
+ok 25 - 本机Web的127.0.0.1与localhost来源均可读取resident，其他来源不开放CORS
+  ---
+  duration_ms: 33.0687
+  type: 'test'
+  ...
+# Subtest: DWS健康状态以实际 bridge 存活和补拉状态为准
+ok 26 - DWS健康状态以实际 bridge 存活和补拉状态为准
+  ---
+  duration_ms: 10.5635
+  type: 'test'
+  ...
+# Subtest: 上下文只读 HTTP 路径完整传递分页与版本参数
+ok 27 - 上下文只读 HTTP 路径完整传递分页与版本参数
+  ---
+  duration_ms: 47.0063
+  type: 'test'
+  ...
+# Subtest: 当前任务详情与正文过期版本返回409，文档也不能绕过版本校验
+ok 28 - 当前任务详情与正文过期版本返回409，文档也不能绕过版本校验
+  ---
+  duration_ms: 15.0245
+  type: 'test'
+  ...
+# Subtest: 上下文只读 HTTP 对未启用接口和不存在资源返回404
+ok 29 - 上下文只读 HTTP 对未启用接口和不存在资源返回404
+  ---
+  duration_ms: 97.5414
+  type: 'test'
+  ...
+# Subtest: 节点文档下载沿用工件引用授权并以Markdown附件返回
+ok 30 - 节点文档下载沿用工件引用授权并以Markdown附件返回
+  ---
+  duration_ms: 7.3781
+  type: 'test'
+  ...
+# Subtest: Web 新任务验收入参接受 16/17/32/100 条并接受长文本且拒绝空白和非法类型
+ok 31 - Web 新任务验收入参接受 16/17/32/100 条并接受长文本且拒绝空白和非法类型
+  ---
+  duration_ms: 115.6872
+  type: 'test'
+  ...
+# Subtest: 旧人工介入decision和reissue退役，不能批准新执行
+ok 32 - 旧人工介入decision和reissue退役，不能批准新执行
+  ---
+  duration_ms: 8.4823
+  type: 'test'
+  ...
+# Subtest: 历史话题CLI只检查不写入，apply核对digest并独立读回且不自动维护
+ok 33 - 历史话题CLI只检查不写入，apply核对digest并独立读回且不自动维护
+  ---
+  duration_ms: 5.175
+  type: 'test'
+  ...
+# Subtest: 退役工作流配置和固定执行入口统一410且不调用任何旧服务
+ok 34 - 退役工作流配置和固定执行入口统一410且不调用任何旧服务
+  ---
+  duration_ms: 834.7594
+  type: 'test'
+  ...
+# Subtest: 任务会话详情与分页执行直接读取新服务，历史fallback明确只读
+ok 35 - 任务会话详情与分页执行直接读取新服务，历史fallback明确只读
+  ---
+  duration_ms: 50.2882
+  type: 'test'
+  ...
+# Subtest: 新任务只接受目标资料与普通验收要求，拒绝模板运行快照及伪造会话身份
+ok 36 - 新任务只接受目标资料与普通验收要求，拒绝模板运行快照及伪造会话身份
+  ---
+  duration_ms: 128.0699
+  type: 'test'
+  ...
+# Subtest: 任务修订和取消携带CAS版本，路径身份不可覆盖，历史任务不可操作
+ok 37 - 任务修订和取消携带CAS版本，路径身份不可覆盖，历史任务不可操作
+  ---
+  duration_ms: 91.9982
+  type: 'test'
+  ...
+# Subtest: Agent设置不再读取或修改流程提示词，但保留连接配置
+ok 38 - Agent设置不再读取或修改流程提示词，但保留连接配置
+  ---
+  duration_ms: 61.4978
+  type: 'test'
+  ...
+# Subtest: 新任务写入拒绝远程连接，即使Origin和Host声称本机也不触发服务
+ok 39 - 新任务写入拒绝远程连接，即使Origin和Host声称本机也不触发服务
+  ---
+  duration_ms: 1.2742
+  type: 'test'
+  ...
+# Subtest: 历史维护仅允许受信只读GET，旧test动作无旁路而inbound仍由testApi开关保护
+ok 40 - 历史维护仅允许受信只读GET，旧test动作无旁路而inbound仍由testApi开关保护
+  ---
+  duration_ms: 578.8683
+  type: 'test'
+  ...
+# Subtest: current task archive checks local identity, strict body, legacy protection and conflict feedback
+ok 41 - current task archive checks local identity, strict body, legacy protection and conflict feedback
+  ---
+  duration_ms: 61.4259
+  type: 'test'
+  ...
+# Subtest: 成果时间记录仅混排真实巡查决定，保留无动作wait、按身份去重和时间排序
+ok 42 - 成果时间记录仅混排真实巡查决定，保留无动作wait、按身份去重和时间排序
+  ---
+  duration_ms: 10.0083
+  type: 'test'
+  ...
+# Subtest: 顶部提示成功五秒关闭、手动关闭、持续错误不被刷新重开且清理定时器
+ok 43 - 顶部提示成功五秒关闭、手动关闭、持续错误不被刷新重开且清理定时器
+  ---
+  duration_ms: 7.39
+  type: 'test'
+  ...
+# Subtest: 消息与话题详情只展示有绑定的会话并支持分页
+ok 44 - 消息与话题详情只展示有绑定的会话并支持分页
+  ---
+  duration_ms: 2.5027
+  type: 'test'
+  ...
+# Subtest: 精简判断轨迹不包含技术详情，并展示容量受阻原因
+ok 45 - 精简判断轨迹不包含技术详情，并展示容量受阻原因
+  ---
+  duration_ms: 2.9661
+  type: 'test'
+  ...
+# Subtest: 收信箱按当前归类和话题版本计算状态，不受旧工作流字段影响
+ok 46 - 收信箱按当前归类和话题版本计算状态，不受旧工作流字段影响
+  ---
+  duration_ms: 3.36
+  type: 'test'
+  ...
+# Subtest: 收信箱分开表达材料读取责任及通知回读，详情可用键盘展开
+ok 47 - 收信箱分开表达材料读取责任及通知回读，详情可用键盘展开
+  ---
+  duration_ms: 2.1176
+  type: 'test'
+  ...
+# Subtest: 运行看板复用宿主插槽与共享导航，清退流程目录和变量配置
+ok 48 - 运行看板复用宿主插槽与共享导航，清退流程目录和变量配置
+  ---
+  duration_ms: 2.1904
+  type: 'test'
+  ...
+# Subtest: 任务卡不请求或展示执行轮次耗时统计
+ok 49 - 任务卡不请求或展示执行轮次耗时统计
+  ---
+  duration_ms: 1.8352
+  type: 'test'
+  ...
+# Subtest: 运行看板提供统一视觉尺度、响应式布局和可见键盘焦点
+ok 50 - 运行看板提供统一视觉尺度、响应式布局和可见键盘焦点
+  ---
+  duration_ms: 1.5847
+  type: 'test'
+  ...
+# Subtest: 发件状态按实际投递环节展示，pending不会伪装为已回读
+ok 51 - 发件状态按实际投递环节展示，pending不会伪装为已回读
+  ---
+  duration_ms: 3.3447
+  type: 'test'
+  ...
+# Subtest: 任务通知明确区分待发送、发送中、结果未知和确定的发送前阻止
+ok 52 - 任务通知明确区分待发送、发送中、结果未知和确定的发送前阻止
+  ---
+  duration_ms: 3.2203
+  type: 'test'
+  ...
+# Subtest: 任务通知发件行仅展示状态、脱敏诊断和重试时间，不读取 ACK 原文
+ok 53 - 任务通知发件行仅展示状态、脱敏诊断和重试时间，不读取 ACK 原文
+  ---
+  duration_ms: 10.3575
+  type: 'test'
+  ...
+# Subtest: 界面只保留发送状态筛选，关系与撤回不影响主状态筛选
+ok 54 - 界面只保留发送状态筛选，关系与撤回不影响主状态筛选
+  ---
+  duration_ms: 5.0303
+  type: 'test'
+  ...
+# Subtest: 现行通知账优先，历史字段与撤回结果不能覆盖未知或送达事实
+ok 55 - 现行通知账优先，历史字段与撤回结果不能覆盖未知或送达事实
+  ---
+  duration_ms: 2.3394
+  type: 'test'
+  ...
+# Subtest: 处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果
+ok 56 - 处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果
+  ---
+  duration_ms: 3.2418
+  type: 'test'
+  ...
+# Subtest: 消息处理历时固定截止已记录状态时间，不使用发送时间回退或当前时钟
+ok 57 - 消息处理历时固定截止已记录状态时间，不使用发送时间回退或当前时钟
+  ---
+  duration_ms: 2.4583
+  type: 'test'
+  ...
+# Subtest: 步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时
+ok 58 - 步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时
+  ---
+  duration_ms: 2.9945
+  type: 'test'
+  ...
+# Subtest: 历史人工介入只读且明确新执行使用原生权限流程
+ok 59 - 历史人工介入只读且明确新执行使用原生权限流程
+  ---
+  duration_ms: 3.9803
+  type: 'test'
+  ...
+# Subtest: 任务正文分页绑定当前详情版本，失败保留正文且旧版本慢响应被隔离
+ok 60 - 任务正文分页绑定当前详情版本，失败保留正文且旧版本慢响应被隔离
+  ---
+  duration_ms: 4.514
+  type: 'test'
+  ...
+# Subtest: 技术方案沿原组件展开正文并下载，修订意见保持可读标签
+ok 61 - 技术方案沿原组件展开正文并下载，修订意见保持可读标签
+  ---
+  duration_ms: 2.4877
+  type: 'test'
+  ...
+# Subtest: 未变产物的详情版本推进保留已读正文与分页，新页使用新版本
+ok 62 - 未变产物的详情版本推进保留已读正文与分页，新页使用新版本
+  ---
+  duration_ms: 2.2745
+  type: 'test'
+  ...
+# Subtest: 简短任务标题保留可读首句，完整目标仍可展开且不写回原任务
+ok 63 - 简短任务标题保留可读首句，完整目标仍可展开且不写回原任务
+  ---
+  duration_ms: 2.5626
+  type: 'test'
+  ...
+# Subtest: 历史工作流消息按收信处理进度展示，不混入任务执行状态
+ok 64 - 历史工作流消息按收信处理进度展示，不混入任务执行状态
+  ---
+  duration_ms: 3.8119
+  type: 'test'
+  ...
+# Subtest: 任务短名称合同拒绝超过30字，读模型回退截断不修改完整目标
+ok 65 - 任务短名称合同拒绝超过30字，读模型回退截断不修改完整目标
+  ---
+  duration_ms: 3.5425
+  type: 'test'
+  ...
+# Subtest: 自动与手动刷新共用一个请求，失败后可重新读取
+ok 66 - 自动与手动刷新共用一个请求，失败后可重新读取
+  ---
+  duration_ms: 2.6207
+  type: 'test'
+  ...
+# Subtest: 详情慢查询跨刷新复用，切换任务不接受旧响应
+ok 67 - 详情慢查询跨刷新复用，切换任务不接受旧响应
+  ---
+  duration_ms: 3.501
+  type: 'test'
+  ...
+# Subtest: 已选话题新版本刷新详情并重置旧分页，同版本及其他话题不打断阅读
+ok 68 - 已选话题新版本刷新详情并重置旧分页，同版本及其他话题不打断阅读
+  ---
+  duration_ms: 2.9593
+  type: 'test'
+  ...
+# Subtest: unlinked retired confirmation explicitly requires manual verification instead of promising an owner wake
+ok 69 - unlinked retired confirmation explicitly requires manual verification instead of promising an owner wake
+  ---
+  duration_ms: 2.3375
+  type: 'test'
+  ...
+# Subtest: 混排记录分页经过普通决定仍可续读，失败保留、重试去重、刷新与卸载防陈旧响应
+ok 70 - 混排记录分页经过普通决定仍可续读，失败保留、重试去重、刷新与卸载防陈旧响应
+  ---
+  duration_ms: 51.8584
+  type: 'test'
+  ...
+# Subtest: 时间泳道图保留多区段、并行、人工介入底行以及触屏可读的完整明细
+ok 71 - 时间泳道图保留多区段、并行、人工介入底行以及触屏可读的完整明细
+  ---
+  duration_ms: 26.11
+  type: 'test'
+  ...
+# Subtest: 任务详情只有一个任务会话入口，动态执行与结果拥有独立数据
+ok 72 - 任务详情只有一个任务会话入口，动态执行与结果拥有独立数据
+  ---
+  duration_ms: 14.1104
+  type: 'test'
+  ...
+# Subtest: 历史任务只读且保留产出读取，没有控制或动态新执行入口
+ok 73 - 历史任务只读且保留产出读取，没有控制或动态新执行入口
+  ---
+  duration_ms: 15.5143
+  type: 'test'
+  ...
+# Subtest: 任务与执行会话明确显示ID目录和日志，缺失会话不伪造入口
+ok 74 - 任务与执行会话明确显示ID目录和日志，缺失会话不伪造入口
+  ---
+  duration_ms: 13.6314
+  type: 'test'
+  ...
+# Subtest: 结果区分结论、证据与限制，不把限制当作已完成结果
+ok 75 - 结果区分结论、证据与限制，不把限制当作已完成结果
+  ---
+  duration_ms: 12.5353
+  type: 'test'
+  ...
+# Subtest: Web看板无新建入口或表单接线，空列表和已有任务仍显示看板
+ok 76 - Web看板无新建入口或表单接线，空列表和已有任务仍显示看板
+  ---
+  duration_ms: 4.7659
+  type: 'test'
+  ...
+# Subtest: 任务对话运行中可发送，IME不误发，失败保留草稿和幂等键，关闭重开与旧回读不丢消息
+ok 77 - 任务对话运行中可发送，IME不误发，失败保留草稿和幂等键，关闭重开与旧回读不丢消息
+  ---
+  duration_ms: 22.5373
+  type: 'test'
+  ...
+# Subtest: 对话按任务key隔离，历史任务不挂载，已结束任务只读回看
+ok 78 - 对话按任务key隔离，历史任务不挂载，已结束任务只读回看
+  ---
+  duration_ms: 11.2139
+  type: 'test'
+  ...
+# Subtest: 介入任务会话位于原任务会话卡片，两入口样式相同，完整面板不挤入侧栏
+ok 79 - 介入任务会话位于原任务会话卡片，两入口样式相同，完整面板不挤入侧栏
+  ---
+  duration_ms: 4.8797
+  type: 'test'
+  ...
+# Subtest: 任务详情移除需求与控制区，同时保留会话、结果、执行及返回看板
+ok 80 - 任务详情移除需求与控制区，同时保留会话、结果、执行及返回看板
+  ---
+  duration_ms: 2.0379
+  type: 'test'
+  ...
+# Subtest: 动态执行分页的失败可重试，离开后慢响应不能覆盖新查询
+ok 81 - 动态执行分页的失败可重试，离开后慢响应不能覆盖新查询
+  ---
+  duration_ms: 19.2414
+  type: 'test'
+  ...
+# Subtest: 执行加载状态区域与分页始终存在，空记录刷新及失败保留已显示内容
+ok 82 - 执行加载状态区域与分页始终存在，空记录刷新及失败保留已显示内容
+  ---
+  duration_ms: 7.0071
+  type: 'test'
+  ...
+# Subtest: 执行会话计数前复用成功刷新的时间，刷新失败保留旧时间，缺失或非法时间不显示
+ok 83 - 执行会话计数前复用成功刷新的时间，刷新失败保留旧时间，缺失或非法时间不显示
+  ---
+  duration_ms: 6.0636
+  type: 'test'
+  ...
+# Subtest: 取消新增蓝色覆盖后恢复PR196品牌状态色与原生StateDot，保留本轮列表内容
+ok 84 - 取消新增蓝色覆盖后恢复PR196品牌状态色与原生StateDot，保留本轮列表内容
+  ---
+  duration_ms: 4.9158
+  type: 'test'
+  ...
+# Subtest: 当前进展合并活跃阻塞记录，包含详情分页外的并行执行且不把已完成结果当进展
+ok 85 - 当前进展合并活跃阻塞记录，包含详情分页外的并行执行且不把已完成结果当进展
+  ---
+  duration_ms: 25.4023
+  type: 'test'
+  ...
+# Subtest: 当前进展准确区分暂停、完成、恢复、旧修订收尾与暂无数据
+ok 86 - 当前进展准确区分暂停、完成、恢复、旧修订收尾与暂无数据
+  ---
+  duration_ms: 8.8094
+  type: 'test'
+  ...
+# Subtest: 整体进展不从目标或结果推断，新回合保留已确认快照并标注非实时
+ok 87 - 整体进展不从目标或结果推断，新回合保留已确认快照并标注非实时
+  ---
+  duration_ms: 11.798
+  type: 'test'
+  ...
+# Subtest: 整体进展校验修订和记录时间，更新中不隐藏快照，暂停完成不误报实时
+ok 88 - 整体进展校验修订和记录时间，更新中不隐藏快照，暂停完成不误报实时
+  ---
+  duration_ms: 13.8788
+  type: 'test'
+  ...
+# Subtest: 新回合暂缺统筹记录时保留已读确认说明，跨任务或修订不得沿用
+ok 89 - 新回合暂缺统筹记录时保留已读确认说明，跨任务或修订不得沿用
+  ---
+  duration_ms: 2.3149
+  type: 'test'
+  ...
+# Subtest: 已取消任务仍出现在已结束桶，所有历史记录进入只读历史页
+ok 90 - 已取消任务仍出现在已结束桶，所有历史记录进入只读历史页
+  ---
+  duration_ms: 0.4988
+  type: 'test'
+  ...
+# Subtest: 预分配会话尚未绑定时只展示路径，不提供可继续的会话入口
+ok 91 - 预分配会话尚未绑定时只展示路径，不提供可继续的会话入口
+  ---
+  duration_ms: 3.5437
+  type: 'test'
+  ...
+# Subtest: 历史正文只在打开时读取，不因列表刷新读取全部旧工件
+ok 92 - 历史正文只在打开时读取，不因列表刷新读取全部旧工件
+  ---
+  duration_ms: 12.7929
+  type: 'test'
+  ...
+# Subtest: 当前人工问题答复必填、防重且失败保留原文和原修订，成功刷新原任务
+ok 93 - 当前人工问题答复必填、防重且失败保留原文和原修订，成功刷新原任务
+  ---
+  duration_ms: 14.0968
+  type: 'test'
+  ...
+# Subtest: 历史、已答复及失效问题只读，任务问题能导航人工介入页
+ok 94 - 历史、已答复及失效问题只读，任务问题能导航人工介入页
+  ---
+  duration_ms: 6.192
+  type: 'test'
+  ...
+# Subtest: 任务详情使用当前申请的原因、问题和证据，忽略历史已答申请
+ok 95 - 任务详情使用当前申请的原因、问题和证据，忽略历史已答申请
+  ---
+  duration_ms: 2.1194
+  type: 'test'
+  ...
+# Subtest: 人工请求分层保留完整范围，格式化链接和换行，原文可独立审计
+ok 96 - 人工请求分层保留完整范围，格式化链接和换行，原文可独立审计
+  ---
+  duration_ms: 12.7836
+  type: 'test'
+  ...
+# Subtest: 人工请求不把问题重复作为原因，不产生非HTTP链接或执行HTML
+ok 97 - 人工请求不把问题重复作为原因，不产生非HTTP链接或执行HTML
+  ---
+  duration_ms: 1.6096
+  type: 'test'
+  ...
+# Subtest: 人工详情使用原生Modal隔离背景，关闭恢复焦点和滚动，内部点击不关闭
+ok 98 - 人工详情使用原生Modal隔离背景，关闭恢复焦点和滚动，内部点击不关闭
+  ---
+  duration_ms: 12.3974
+  type: 'test'
+  ...
+# Subtest: alpha.2 observer waits for the current slot declaration and restores it across remounts
+ok 99 - alpha.2 observer waits for the current slot declaration and restores it across remounts
+  ---
+  duration_ms: 18.8013
+  type: 'test'
+  ...
+# Subtest: alpha.2 observer navigates root and discovered child sessions through uiWorkspace
+ok 100 - alpha.2 observer navigates root and discovered child sessions through uiWorkspace
+  ---
+  duration_ms: 5.4793
+  type: 'test'
+  ...
+# Subtest: alpha.2 observer propagates discovery failures without navigating to the wrong session
+ok 101 - alpha.2 observer propagates discovery failures without navigating to the wrong session
+  ---
+  duration_ms: 2.7224
+  type: 'test'
+  ...
+1..101
+# tests 101
+# suites 0
+# pass 101
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3590.6667

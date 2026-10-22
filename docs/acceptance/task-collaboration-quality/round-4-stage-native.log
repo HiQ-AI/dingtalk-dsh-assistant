@@ -1,0 +1,11 @@
+✔ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (7211.8776ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=false (5649.8827ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=true (5574.6333ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 19353.1567

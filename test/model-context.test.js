@@ -6,6 +6,7 @@ import { join, relative, isAbsolute, sep } from 'node:path'
 import { Session } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { taskExecutionContext } from '../packages/dingtalk-dsh-assistant/execution-context.js'
+import { materializeExecutionDocument } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import { createModelContentIndex, taskModelInput, executionModelInput, operationModelReadback } from '../packages/dingtalk-dsh-assistant/model-context.js'
 
 async function fixture(t) {
@@ -84,6 +85,28 @@ test('short authority bodies stay literal with exact authors instead of larger h
   assert.equal(resolve(index, projected.sources[0].text), text)
   assert.equal(projected.sources[1].actorId, 'other')
   assert.equal(resolve(index, projected.catalogRef, '/task/request'), text, '完整旧request仍可按需读取')
+})
+
+test('current team keeps short responsibilities and reported outcomes visible while evidence and ten-member overflow remain bounded', async t => {
+  const { index } = await fixture(t)
+  const members = Array.from({ length: 10 }, (_, i) => ({ executionId: 'member-' + i, inputVersion: 2, status: 'succeeded', drained: true,
+    input: { objective: ['实施指定修复', '核对差异范围', '验收固定结果'][i % 3] },
+    result: { current: true, inputVersion: 2, payload: { output: { summary: '指定职责已报告完成，须沿原证据核验', evidence: ['原始证据'.repeat(400)], limitations: ['未部署'] } } } }))
+  const projected = index.project(taskModelInput({ task: { taskId: 'team' }, executions: members.slice(0, 3) }))
+  assert.deepEqual(projected.executions.map(item => item.input.objective), members.slice(0, 3).map(item => item.input.objective))
+  for (const member of projected.executions) {
+    assert.equal(member.result.reportedSummary, '指定职责已报告完成，须沿原证据核验')
+    assert.equal(member.result.evidence, undefined, '简短报告不是已核验证据')
+    assert.equal(member.resultInCatalog, true)
+    assert.deepEqual(resolve(index, projected.catalogRef, `/executions/${member.executionId}/result`), members.find(item => item.executionId === member.executionId).result)
+  }
+  members[9].input.objective = '详细职责'.repeat(1000)
+  members[9].result.payload.output.summary = '长执行自述'.repeat(1000)
+  const ten = index.project(taskModelInput({ task: { taskId: 'team' }, executions: members }))
+  assert.equal(ten.executions[9].readRequired, true)
+  assert.equal(resolve(index, ten.executions[9].input.objective), members[9].input.objective)
+  assert.equal(resolve(index, ten.executions[9].result.reportedSummary), members[9].result.payload.output.summary)
+  assert.ok(Buffer.byteLength(JSON.stringify(index.host(taskModelInput({ task: { taskId: 'team' }, executions: members })))) <= 3000)
 })
 
 test('completed stage reports and routing internals stay readable without inflating the current task snapshot', async t => {
@@ -379,6 +402,38 @@ test('whole Host UTF-8 budget retains every overflow field through admitted poin
   }
 })
 
+
+test('execution round documents are the routine owner entry while the complete ledger stays readable', async t => {
+  const { index, root } = await fixture(t)
+  const document = { path: '/tasks/task-1/outputs/execution-1/round-2.md', inputVersion: 2, requirementRevision: 3, controlRevision: 1, bytes: 2000, sha256: 'a'.repeat(64) }
+  const execution = { executionId: 'execution-1', inputVersion: 2, requirementRevision: 3, controlRevision: 1,
+    status: 'succeeded', drained: true, input: { title: '独立验收', objective: '核对固定产物'.repeat(300) }, document,
+    result: { current: true, inputVersion: 2, payload: { output: { summary: '核验结果', evidence: ['完整证据'] } } } }
+  const projected = index.project(taskModelInput({ executions: [execution] }), { reuseVisible: false })
+  assert.deepEqual(projected.executions[0].document, document)
+  assert.deepEqual(projected.executions[0].input, { title: '独立验收' })
+  assert.equal(projected.executions[0].readRequired, undefined, 'a long ledger objective does not force an extra catalog read when the round document supplies it')
+  assert.equal(projected.executions[0].result.reportedSummary, undefined)
+  assert.deepEqual(resolve(index, projected.catalogRef, '/executions/execution-1/result'), execution.result)
+  assert.deepEqual(resolve(index, projected.catalogRef, '/executions/execution-1/input'), execution.input)
+  const stageProgress = { inputVersion: 2, requirementRevision: 3, controlRevision: 1, leaseEpoch: 1, sequence: 1,
+    recordedAt: '2026-10-22T10:00:00.000Z', summary: '本次唤醒原始阶段', evidence: ['original-stage-evidence'], activity: '核对第一个结果', plan: '先核对两个原始结果' }
+  const active = { ...execution, taskId: 'task-1', sessionId: 'execution-session-1', leaseEpoch: 1, status: 'running', drained: false, result: null, stageProgress }
+  active.document = await materializeExecutionDocument(root, active)
+  const wake = { kind: 'execution.stage.progress', payload: { executionId: active.executionId, ...stageProgress } }
+  const first = index.project(taskModelInput({ executions: [active], wakes: [wake] }), { reuseVisible: false })
+  assert.equal(first.executions[0].stageProgress, undefined)
+  assert.ok(first.wakes[0].payload.reportRef, 'a mutable round document must not replace the exact wake report')
+  assert.deepEqual(resolve(index, first.wakes[0].payload.reportRef), wake.payload)
+  const changed = { ...active, stageProgress: { ...stageProgress, sequence: 2, summary: '同轮后来的另一阶段', evidence: ['later-stage-evidence'] } }
+  changed.document = await materializeExecutionDocument(root, changed)
+  assert.equal(changed.document.path, active.document.path, 'same round updates its current document')
+  assert.notEqual(changed.document.sha256, active.document.sha256)
+  assert.ok((await readFile(changed.document.path, 'utf8')).includes('同轮后来的另一阶段'))
+  const later = index.project(taskModelInput({ executions: [changed], wakes: [wake] }), { reuseVisible: false })
+  assert.deepEqual(resolve(index, later.wakes[0].payload.reportRef), wake.payload)
+  assert.deepEqual(resolve(index, first.wakes[0].payload.reportRef), wake.payload, 'the admitted original report survives later document writes')
+})
 
 test('budget also covers tool render bypasses, long keys and reserved context names', async t => {
   const { index, root, session } = await fixture(t)

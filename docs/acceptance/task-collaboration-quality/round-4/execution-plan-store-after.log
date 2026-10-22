@@ -1,0 +1,12 @@
+✔ nonterminal stage reports persist and wake once without completing the execution (56.3279ms)
+✔ stage plan is optional, validates before writing and persists across reports and restart in one input round (54.2549ms)
+✔ stage reports reject forged input/lease, superseded requirements and cancellation (28.9171ms)
+✔ stage reporting after continuation accepts only the new input and lease (36.1972ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 354.945

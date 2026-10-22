@@ -577,27 +577,29 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const pending = useRef(false)
+      const nativeSession = (session?.executionBackend ?? 'dsh') === 'dsh'
       const open = async () => {
-        if (pending.current || !session?.sessionId || session.sessionBound === false) return
+        if (pending.current || !nativeSession || !session?.sessionId || session.sessionBound === false) return
         pending.current = true; setBusy(true); setError('')
         try { await onOpenSession(session.sessionId, session.parentSessionId) }
         catch (cause) { setError(cause.message) }
         finally { pending.current = false; setBusy(false) }
       }
-      const entry = session?.sessionId && session.sessionBound !== false ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: busy, onClick: open, 'aria-label': actionLabel, style: { justifySelf: 'start', minWidth: 110 } }, busy ? '正在打开…' : `打开${label}`) : null
+      const entry = nativeSession && session?.sessionId && session.sessionBound !== false ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: busy, onClick: open, 'aria-label': actionLabel, style: { justifySelf: 'start', minWidth: 110 } }, busy ? '正在打开…' : `打开${label}`) : null
       const failure = error ? React.createElement('p', { role: 'alert', style: { color: colors.danger } }, error) : null
-      if (entryOnly) return React.createElement('div', null, entry, failure)
+      if (entryOnly) return React.createElement('div', null, nativeSession ? entry : React.createElement('span', { className: 'detail-muted' }, 'Claude Code'), failure)
       const location = React.createElement(React.Fragment, null,
         React.createElement('div', null, '会话 ID：', session?.sessionId ? `${session.sessionId}${session.sessionBound === false ? '（尚未绑定）' : ''}` : '尚未建立'),
         React.createElement('div', null, '工作目录：', session?.workspaceDir || '尚未分配'),
         compact && session?.workingDirectory ? React.createElement('div', null, '执行目录：', session.workingDirectory) : null,
+        session?.document?.path ? React.createElement('div', null, `执行文档（第 ${session.document.inputVersion} 轮）：`, session.document.path) : null,
         React.createElement('div', null, '日志路径：', session?.logPath || '尚未记录'))
       return React.createElement('section', { className: compact ? 'detail-session' : undefined, 'aria-label': label, style: compact ? undefined : { ...card, display: 'grid', gap: 10, overflowWrap: 'anywhere' } },
-        React.createElement('strong', null, label),
+        React.createElement('strong', null, label, nativeSession ? null : ' · Claude Code'),
         compact ? React.createElement('p', { className: 'detail-muted' }, label === '任务会话' ? '统筹目标、安排独立执行并汇总结果。' : '本次执行的独立会话、工作目录与日志。') : null,
         primaryAction ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } }, primaryAction, entry) : null,
         compact ? React.createElement('details', { className: 'detail-disclosure' }, React.createElement('summary', null, '会话信息与路径'), React.createElement('div', { className: 'detail-location' }, location)) : location,
-        compact && (!session?.sessionId || session.sessionBound === false) ? React.createElement('p', { className: 'detail-muted' }, session?.sessionId ? '会话尚未绑定，暂不可打开。' : '会话尚未建立。') : null,
+        compact && nativeSession && (!session?.sessionId || session.sessionBound === false) ? React.createElement('p', { className: 'detail-muted' }, session?.sessionId ? '会话尚未绑定，暂不可打开。' : '会话尚未建立。') : null,
         primaryAction ? null : entry, failure)
     }
     function ExecutionSessionDuration({ timing }) {
@@ -694,6 +696,7 @@ window.__ModuleLoader__.load({
         ready ? React.createElement('ol', { className: 'detail-execution-list' }, ...page.items.map(execution => React.createElement('li', { key: execution.executionId, className: 'detail-execution' },
           React.createElement('details', null, React.createElement('summary', { className: 'detail-execution-summary' },
             React.createElement('span', { className: 'detail-execution-title' }, execution.title || execution.objective || execution.executionId),
+            execution.executionBackend === 'claude-code' ? React.createElement('span', { className: 'detail-muted' }, 'Claude Code') : null,
             statusTag(taskStateLabel(execution.status), taskStateTone(execution.status)),
             React.createElement('span', { className: 'detail-execution-time' }, `创建 ${fmt(execution.createdAt)}`)),
             React.createElement('div', { className: 'detail-execution-body' },
@@ -944,7 +947,8 @@ window.__ModuleLoader__.load({
       for (const row of [...(timeline?.executions || []), ...(timeline?.human ? [timeline.human] : [])]) {
         for (const event of row.milestones || []) {
           const id = `stage:${row.id}:${event.id}`
-          records.set(id, { id, type: '阶段成果', at: event.at, summary: event.summary, source: row.label || row.title || row.id })
+          records.set(id, { id, type: '阶段成果', at: event.at, summary: event.summary, source: row.label || row.title || row.id,
+            evidence: event.evidence || [], activity: event.activity })
         }
       }
       for (const item of decisions) {
@@ -981,12 +985,14 @@ window.__ModuleLoader__.load({
       return React.createElement('div', { className: 'timeline-outcomes', 'aria-label': '阶段成果与统筹巡查' },
         React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h3', null, '阶段成果与统筹巡查'),
           !readonly ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(null) }, '刷新记录') : null),
+        React.createElement('p', { className: 'detail-muted' }, '阶段成果为执行会话报告；报告本身不代表已独立核验。'),
         React.createElement('p', { className: 'detail-muted', role: 'status' }, loading ? '正在读取统筹记录…' : error ? '统筹记录未全部读取，已有成果和记录仍保留。' : page.nextBefore !== null ? '仅展示已加载记录，还有更早的统筹决定可读取。' : '仅展示已落账的成果与巡查结论；检查触发不代表统筹已形成结论。'),
         error ? React.createElement('p', { role: 'alert' }, `统筹记录读取失败：${error}`, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(request.before) }, '重试读取记录')) : null,
         records.length ? React.createElement('ol', { style: { margin: 0, paddingLeft: 22, display: 'grid', gap: 16 } }, ...records.map(item => React.createElement('li', { key: item.id, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } },
           React.createElement('strong', null, `${item.type} · ${item.at ? fmt(item.at) : '时间未记录'}`),
           item.source ? React.createElement('p', { className: 'detail-muted' }, item.source) : null,
           React.createElement('p', null, ...linkedTaskText(item.summary)),
+          item.activity ? React.createElement('p', { className: 'detail-muted' }, '报告时活动：', ...linkedTaskText(item.activity)) : null,
           item.action ? React.createElement('p', { className: 'detail-muted' }, `处理决定：${actions[item.action] || item.action}`) : null,
           ...(item.evidence || []).map((value, index) => React.createElement('p', { key: `e:${index}` }, '依据：', ...linkedTaskText(value))),
           ...(item.limitations || []).map((value, index) => React.createElement('p', { key: `l:${index}` }, '限制：', ...linkedTaskText(value))))))
@@ -1575,13 +1581,14 @@ window.__ModuleLoader__.load({
               const running = execution.status === 'running'
               const active = running && !execution.drained && !execution.recovering
               const failed = execution.status === 'failed'
+              const nativeSession = (execution.executionBackend ?? 'dsh') === 'dsh'
               const tone = done ? 'var(--dsw-alias-state-success-primary, #248a3d)' : running ? colors.accent : failed ? colors.danger : colors.muted
-              return React.createElement('button', { key: execution.sessionId || execution.executionId, className: 'observer-execution-session', type: 'button', disabled: !execution.sessionId || navigatingSessionId === execution.sessionId, 'aria-busy': navigatingSessionId === execution.sessionId, onClick: () => navigate(execution.sessionId, session.sessionId), style: { display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) auto', alignItems: 'start', gap: 7, minWidth: 0, padding: '6px 0', border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5, textAlign: 'left', cursor: execution.sessionId ? 'pointer' : 'default' } },
+              return React.createElement(nativeSession ? 'button' : 'div', { key: execution.sessionId || execution.executionId, className: 'observer-execution-session', ...(nativeSession ? { type: 'button', disabled: !execution.sessionId || navigatingSessionId === execution.sessionId, 'aria-busy': navigatingSessionId === execution.sessionId, onClick: () => navigate(execution.sessionId, session.sessionId) } : {}), style: { display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) auto', alignItems: 'start', gap: 7, minWidth: 0, padding: '6px 0', border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5, textAlign: 'left', cursor: nativeSession && execution.sessionId ? 'pointer' : 'default' } },
                 active ? React.createElement('span', { role: 'img', 'aria-label': taskStateLabel(execution.status), title: taskStateLabel(execution.status), style: { display: 'inline-flex', width: 14, height: 14, marginTop: 1 } }, React.createElement(StateDot, { state: 'ongoing', size: 14 })) : React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, role: 'img', 'aria-label': taskStateLabel(execution.status), style: { marginTop: 1 } },
                   React.createElement('title', null, taskStateLabel(execution.status)),
                   React.createElement('circle', { cx: 8, cy: 8, r: 5.6, fill: done ? tone : 'none' }),
                   done ? React.createElement('path', { d: 'm5 8 2 2 4-4', stroke: 'white' }) : running ? React.createElement('circle', { cx: 8, cy: 8, r: 2, fill: tone, stroke: 'none' }) : failed ? React.createElement('path', { d: 'M8 4.5v4M8 10v1' }) : null),
-                React.createElement('span', { title: execution.title, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, execution.title),
+                React.createElement('span', { title: execution.title, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, execution.title, nativeSession ? null : ' · Claude Code'),
                 React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, React.createElement(ExecutionSessionDuration, { timing: execution.latestRoundTiming })))
             }))) : null,
           task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,

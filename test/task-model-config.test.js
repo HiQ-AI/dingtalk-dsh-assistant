@@ -94,12 +94,13 @@ test('unified save preflights both models and reports readback on independent-st
     defaultWrites++;if(defaultFailure==='before')throw Error('PROFILE_WRITE_FAILED');current={...value};if(defaultFailure==='after')throw Error('PROFILE_ACK_LOST')
   }}}
   const runtime=await openTaskResidentRuntime(ctx,store,root);t.after(()=>runtime.close())
-  const desired={model:'sol-next',reasoningEffort:'high',agentNames:['Ada'],proxyUrl:'',replySignature:'',taskSessionModel:{provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'explicit',reasoningEffort:'low'}}
-  for(const input of [{...desired,model:'missing'},{...desired,taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'ultra'}},{...desired,proxyUrl:'invalid'}])await assert.rejects(runtime.updateAgentConfig(input))
+  const desired={model:'sol-next',reasoningEffort:'high',agentNames:['Ada'],proxyUrl:'',replySignature:'',executionBackend:'claude-code',taskSessionModel:{provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'explicit',reasoningEffort:'low'}}
+  for(const input of [{...desired,model:'missing'},{...desired,taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'ultra'}},{...desired,proxyUrl:'invalid'},{...desired,executionBackend:'unknown'}])await assert.rejects(runtime.updateAgentConfig(input))
   assert.equal(defaultWrites,0);assert.equal(residentWrites,0)
   const saved=await runtime.updateAgentConfig(desired)
   assert.equal(saved.model,'sol-next');assert.equal(saved.reasoningEffort,'high');assert.equal(saved.taskSessionModel.reasoningEffort,'low')
-  const next={...desired,model:'sol',reasoningEffort:'low',agentNames:['Grace'],taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'high'}}
+  assert.equal(saved.executionBackend,'claude-code')
+  const next={...desired,model:'sol',reasoningEffort:'low',agentNames:['Grace'],executionBackend:'dsh',taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'high'}}
   defaultFailure='before'
   await assert.rejects(runtime.updateAgentConfig(next),error=>error.message==='AGENT_CONFIG_SAVE_FAILED'&&error.readback.model==='sol-next'&&error.readback.agentNames[0]==='Ada')
   assert.equal(residentWrites,1)
@@ -107,8 +108,50 @@ test('unified save preflights both models and reports readback on independent-st
   await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.model==='sol'&&error.readback.agentNames[0]==='Ada')
   assert.equal(residentWrites,1,'unknown native acknowledgement never blindly repeats or compensates')
   defaultFailure='';residentFailure='before'
-  await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.model==='sol'&&error.readback.taskSessionModel.reasoningEffort==='low')
+  await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.model==='sol'&&error.readback.taskSessionModel.reasoningEffort==='low'&&error.readback.executionBackend==='claude-code')
   residentFailure='after'
-  await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.agentNames[0]==='Grace'&&error.readback.taskSessionModel.reasoningEffort==='high')
+  await assert.rejects(runtime.updateAgentConfig(next),error=>error.readback.agentNames[0]==='Grace'&&error.readback.taskSessionModel.reasoningEffort==='high'&&error.readback.executionBackend==='dsh')
   assert.equal(defaultWrites,5,'one native write per explicit save attempt')
+})
+
+test('execution backend defaults to DSH and validates, persists and reopens through the existing Agent HTTP configuration', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'execution-backend-settings-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const { seed, facility } = memoryFacility(), store = await openResidentStore(facility)
+  let nativeWrites = 0, pluginWrites = 0
+  const savePatch = store.setAgentSettings
+  store.setAgentSettings = async patch => { pluginWrites++; return savePatch(patch) }
+  const ctx = { agentDefaultModel: { currentSelection: () => ({ provider: 'executor', model: 'sol' }), saveSelection: async () => { nativeWrites++ } }, llm: { resolveCallConfig: async value => value } }
+  let runtime = await openTaskResidentRuntime(ctx, store, root)
+  const server = createServer((req, res) => handleRequest(req, res, runtime).catch(error => { res.writeHead(400); res.end(JSON.stringify({ error: error.message })) }))
+  await new Promise(done => server.listen(0, '127.0.0.1', done))
+  t.after(async () => { await new Promise(done => server.close(done)); await runtime.close() })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const read = async () => (await fetch(base + '/state/agent-config')).json()
+  const save = body => fetch(base + '/config/agent', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const initial = await read()
+  assert.equal(initial.executionBackend, 'dsh')
+  assert.equal(seed.get('scheduler:runtime').executionBackend, undefined, '读取默认值不伪造一次配置保存')
+  for (const executionBackend of ['', null, 1, {}, 'claude', 'DSH', 'dsh ']) {
+    const response = await save({ executionBackend, model: 'new-model', agentNames: ['不应写入'] })
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error, 'agent_execution_backend_invalid')
+    assert.deepEqual(await read(), initial)
+  }
+  assert.equal(nativeWrites, 0); assert.equal(pluginWrites, 0, '非法后端在任何配置写入前拒绝')
+  const response = await save({ executionBackend: 'claude-code' })
+  assert.equal(response.status, 200); assert.equal((await response.json()).executionBackend, 'claude-code')
+  assert.equal((await read()).executionBackend, 'claude-code')
+  assert.equal(residentDomainSpec.tables.scheduler.valueSchema.parse(seed.get('scheduler:runtime')).executionBackend, 'claude-code')
+  await runtime.close()
+  runtime = await openTaskResidentRuntime(ctx, await openResidentStore(facility), root, { executionBackend: 'dsh' })
+  assert.equal((await read()).executionBackend, 'claude-code', '持久设置优先于重启时的初值')
+  assert.equal((await save({ executionBackend: 'dsh' })).status, 200)
+  assert.equal((await read()).executionBackend, 'dsh')
+  assert.equal(nativeWrites, 0)
+  const fresh = await openResidentStore(memoryFacility().facility)
+  const configured = await openTaskResidentRuntime(ctx, fresh, root, { executionBackend: 'claude-code' })
+  assert.equal(configured.getAgentConfig().executionBackend, 'claude-code')
+  await configured.close()
+  await assert.rejects(openTaskResidentRuntime(ctx, fresh, root, { executionBackend: 'invalid' }), /agent_execution_backend_invalid/)
 })

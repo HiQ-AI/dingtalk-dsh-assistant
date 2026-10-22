@@ -1,5 +1,6 @@
-import { mkdir, realpath, lstat } from 'node:fs/promises'
+import { mkdir, realpath, lstat, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep, dirname, resolve } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
 
 const taskSegment = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value)
   && !/[.]$/.test(value) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value)
@@ -49,6 +50,107 @@ export async function taskWorkspace(root, taskId) {
 export async function taskExecutionWorkspace(root, taskId, sessionId) {
   if (!taskSegment(sessionId)) throw new Error('TASK_DIRECTORY_INVALID')
   return taskWorkspace(root, taskId)
+}
+
+/** 可再生成的每轮阅读视图；执行账和原生日志仍是事实来源。 */
+export function renderExecutionDocument(execution) {
+  const identity = Object.fromEntries(['taskId', 'executionId', 'sessionId', 'inputVersion', 'requirementRevision', 'controlRevision']
+    .map(key => [key, execution[key]]))
+  const quote = value => String(value ?? '').replaceAll('\r\n', '\n').split('\n').map(line => `> ${line}`).join('\n')
+  const section = (title, value) => `## ${title}\n\n${quote(value)}\n`
+  const list = values => Array.isArray(values) && values.length ? values.map(value => `- ${value}`).join('\n') : '无记录。'
+  const sameRound = value => value && ['inputVersion', 'requirementRevision', 'controlRevision'].every(key => value[key] === execution[key])
+  const stage = sameRound(execution.stageProgress) ? execution.stageProgress : null
+  const result = sameRound(execution.result) ? execution.result : null
+  const output = result?.payload?.output
+  const feedback = (execution.feedback ?? []).filter(item => item.requirementRevision === execution.requirementRevision
+    && item.controlRevision === execution.controlRevision && (!item.sourceExecutionId || item.inputVersion === execution.inputVersion))
+  const lines = [
+    `<!-- execution-document ${JSON.stringify(identity)} -->`,
+    `# 执行文档 · 第 ${execution.inputVersion} 轮\n`,
+    'Host 根据持久执行记录生成。执行报告不等于独立核验，状态不等于业务验收；活动只表示报告时的活动。',
+    '每次输入续办形成新轮，旧轮文件保留。日常先读本文件；证据缺失、矛盾或异常时，按会话身份读取原始记录。\n',
+    section('身份与状态', [...Object.entries(identity).map(([key, value]) => `${key}: ${value}`),
+      `executionBackend: ${execution.definition?.executionBackend ?? 'dsh'}`,
+      `leaseEpoch: ${execution.leaseEpoch}`, `status: ${execution.status}${execution.status === 'queued' ? '（已安排，待启动）' : ''}`,
+      `drained: ${execution.drained === true}`, `cancelRequested: ${execution.cancelRequested === true}`,
+      `updatedAt: ${execution.updatedAt ?? '未记录'}`].join('\n')),
+    section('本轮小目标', execution.input?.objective || '未记录小目标。'),
+    section('交接上下文与范围', execution.input?.context || '未提供交接上下文。'),
+    section('本轮计划', stage?.plan || '尚未报告计划，不能从目标或结果推断计划已执行。'),
+  ]
+  if (stage) {
+    lines.push(section('最新阶段报告', `recordedAt: ${stage.recordedAt}\nleaseEpoch: ${stage.leaseEpoch}\nsequence: ${stage.sequence}\n\n${stage.summary}`),
+      section('报告时活动', stage.activity || '未报告活动。'), section('阶段证据', list(stage.evidence)))
+  } else {
+    lines.push(section('最新阶段报告', execution.stageProgress
+      ? `本轮尚无阶段报告。保留的报告属于 inputVersion=${execution.stageProgress.inputVersion}、requirementRevision=${execution.stageProgress.requirementRevision}、controlRevision=${execution.stageProgress.controlRevision}，不能作为本轮进展。`
+      : '本轮尚无阶段报告。'))
+  }
+  if (result) {
+    lines.push(section('本轮执行结果', `receivedAt: ${result.receivedAt}\nleaseEpoch: ${result.leaseEpoch}\ncurrent: ${result.current}\n\n${output?.summary || '未提交业务结果。'}`))
+    if (output) lines.push(section('结果证据', list(output.evidence)), section('交付产物', list(output.artifacts)), section('限制与待处理事项', list(output.limitations)))
+    if (result.payload?.error) lines.push(section('执行错误', JSON.stringify(result.payload.error, null, 2)))
+  } else lines.push(section('本轮执行结果', '本轮尚无结果；历史轮次的结果不代表本轮已完成。'))
+  lines.push(section('资源状态', JSON.stringify(execution.resources ?? { keys: execution.resourceKeys ?? [], state: '未读取' }, null, 2)),
+    section('当前有效反馈索引', feedback.length ? feedback.map(item => [
+      `messageId: ${item.id}`, item.sourceExecutionId ? `来源: 执行 ${item.sourceExecutionId} / inputVersion=${item.sourceInputVersion} / leaseEpoch=${item.sourceLeaseEpoch}` : '来源: 统筹或当前任务补充',
+      `接收: ${item.receivedAt ?? '未记录'}`, `消费: ${item.consumedAt || '尚未消费'}`,
+    ].join('\n')).join('\n\n') : '无当前有效反馈。'),
+    `反馈消费只证明${execution.definition?.executionBackend === 'claude-code' ? 'Claude CLI 已接纳输入' : '进入模型步骤'}，不证明已经落实；有未消费或存在争议的反馈时，按 messageId 读取原反馈正文。\n`)
+  return lines.join('\n')
+}
+
+/** 调用方按 executionId 串行读取最新账后发布；每轮只替换自己的完整文件。 */
+export async function materializeExecutionDocument(root, execution) {
+  const fail = code => { throw Object.assign(new Error(code), { code }) }
+  if (!Number.isSafeInteger(execution.inputVersion) || execution.inputVersion < 1 || !taskSegment(execution.sessionId)
+    || !Number.isSafeInteger(execution.requirementRevision) || execution.requirementRevision < 1
+    || !Number.isSafeInteger(execution.controlRevision) || execution.controlRevision < 1) fail('EXECUTION_DOCUMENT_IDENTITY_INVALID')
+  const path = taskFilePath(root, execution.taskId, 'outputs', execution.executionId, `round-${execution.inputVersion}.md`)
+  const directory = dirname(path)
+  await checkedTaskDirectory(directory, true)
+  const expected = Object.fromEntries(['taskId', 'executionId', 'sessionId', 'inputVersion', 'requirementRevision', 'controlRevision'].map(key => [key, execution[key]]))
+  const validateIdentity = bytes => {
+    let identity
+    try { identity = JSON.parse(/^<!-- execution-document (.+) -->\n/.exec(bytes.toString('utf8'))?.[1]) } catch { fail('EXECUTION_DOCUMENT_IDENTITY_INVALID') }
+    if (!identity || Object.keys(expected).some(key => identity[key] !== expected[key])) fail('EXECUTION_DOCUMENT_IDENTITY_MISMATCH')
+  }
+  const readExisting = async () => {
+    const info = await lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error })
+    if (!info) return null
+    if (!info.isFile() || info.isSymbolicLink()) fail('EXECUTION_DOCUMENT_PATH_INVALID')
+    const bytes = await readFile(path)
+    validateIdentity(bytes)
+    return bytes
+  }
+  const bytes = Buffer.from(renderExecutionDocument(execution), 'utf8')
+  validateIdentity(bytes)
+  const prior = await readExisting()
+  const laterRound = (await readdir(directory, { withFileTypes: true })).some(entry => {
+    const match = /^round-([1-9]\d*)\.md$/.exec(entry.name)
+    return match && Number(match[1]) > execution.inputVersion
+  })
+  // 新轮出现后，旧轮只能回读，不能从后续输入/结果倒填历史。
+  if (laterRound && !prior?.equals(bytes)) fail('EXECUTION_DOCUMENT_ROUND_FROZEN')
+  if (!prior?.equals(bytes)) {
+    const temporary = join(directory, `.pending-${randomUUID()}`)
+    const handle = await open(temporary, 'wx', 0o600)
+    try {
+      try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
+      await checkedTaskDirectory(directory)
+      await readExisting()
+      await rename(temporary, path)
+      if (process.platform !== 'win32') {
+        const dir = await open(directory, 'r')
+        try { await dir.sync() } finally { await dir.close() }
+      }
+    } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error }) }
+  }
+  await checkedTaskDirectory(directory)
+  if (!(await readExisting())?.equals(bytes)) fail('EXECUTION_DOCUMENT_CONTENT_MISMATCH')
+  return { path, inputVersion: execution.inputVersion, requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
+    bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
 }
 
 export const sessionPurposes = Object.freeze({

@@ -1,12 +1,13 @@
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createServer } from 'node:net'
 import { get as httpGet } from 'node:http'
+import { createHash } from 'node:crypto'
 import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
-import { available, reason, nativeShell, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeShell, nativeTaskHost, nativeVerificationTeam, latestInput, modelToolValues, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
 import { retireTaskContext } from '../packages/dingtalk-dsh-assistant/task-session.js'
@@ -15,10 +16,12 @@ import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic
 testRunner('原生网页工具错误不建立未知效果，仍可完成后续读取', { skip: !available ? reason : false, timeout: 20000 }, async t => {
  const root=await mkdtemp(join(tmpdir(),'native-web-read-'))
  let host, delegated=false, calls=0
+ const team=nativeVerificationTeam()
  t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
  host=await nativeTaskHost(root, async(request,h)=>{
   const topics=topicTaskCalls(request);if(topics)return topics
-  const names=request.tools.map(tool=>tool.name)
+  const input=latestInput(request), names=request.tools.map(tool=>tool.name)
+  const verification=team.execute(request,input);if(verification)return verification
   if(names.includes('task_delegate')) {
    if(!delegated){
     delegated=true
@@ -26,6 +29,8 @@ testRunner('原生网页工具错误不建立未知效果，仍可完成后续�
      output:{schema:{type:'object'},render:()=>[]},execute(){calls++;throw new Error('unsupported content type')}})
     return [{name:'task_delegate',args:{key:'read',objective:'读取网页并如实记录错误'}}]
    }
+   const members=await h.query('execution.list');const more=team.owner(input,members[0]);if(more)return more
+   if(members.some(item=>!item.drained||item.status!=='succeeded'))return [decision('wait','等待核验')]
    return [{name:'task_session_submit',args:{decision:{action:'complete',summary:'已核对读取失败，未重放请求',evidence:[],limitations:['网页内容不支持']}}}]
   }
   if(calls===0)return [{name:'web_fetch',args:{}}]
@@ -47,11 +52,13 @@ const decision = (action, summary) => call('task_session_submit', { decision: { 
 
 test('running reminder and coordinator clarification preserve one native shell job with received and consumed receipts', { timeout: 20000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'native-running-feedback-'))
+  const team = nativeVerificationTeam({ filePath: 'effect.txt', expected: 'once' })
   let h, delegated = false, clarified = false, executions = 0
   t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
   h = await nativeTaskHost(root, async request => {
     const topics = topicTaskCalls(request); if (topics) return topics
     const input = latestInput(request)
+    const verification = team.execute(request, input); if (verification) return verification
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
       const required = requiredDecisionRead(request, input); if (required) return [required]
       if (!delegated) { delegated = true; return [call('task_delegate', { key: 'original', objective: '创建原作业并核对补充' }), decision('wait', '等待原作业')] }
@@ -61,7 +68,8 @@ test('running reminder and coordinator clarification preserve one native shell j
         clarified = true
         return [call('task_delegate', { executionId: execution.executionId, feedback: true, key: 'clarify', objective: '原目标不变，内置通知仍允许' }), decision('wait', '等待原执行消费说明')]
       }
-      return [decision(execution.drained && execution.status === 'succeeded' ? 'complete' : 'wait', '核对原执行及补充')]
+      const more = team.owner(input, execution); if (more) return more
+      return [decision(input.executions.length === 3 && input.executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '核对原执行及补充')]
     }
     if (++executions === 1) {
       const start = join(root, 'started'), release = join(root, 'release')
@@ -87,10 +95,14 @@ test('running reminder and coordinator clarification preserve one native shell j
   await h.service.whenIdle()
   const after = (await h.query('execution.list'))[0]
   for (const key of ['executionId', 'sessionId', 'inputVersion', 'leaseEpoch']) assert.equal(after[key], before[key])
-  assert.equal((await h.query('execution.list')).length, 1)
+  assert.equal((await h.query('execution.list')).length, 3)
+  assert.equal((await h.query('execution.list')).filter(item => item.key === 'original').length, 1)
   assert.ok(after.feedback.every(item => item.consumedAt && Number.isInteger(item.sequence)))
   assert.ok(after.feedback.every(item => item.modelStepEnteredAt === item.consumedAt && item.consumptionMeaning === 'native-model-step-admission'))
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify({
+    alerts: h.service.listAlerts(), recovery: (await h.query('task.get', { taskId: task.taskId })).providerRecovery,
+    executions: (await h.query('execution.list')).map(item => ({ key: item.key, status: item.status, error: item.result?.payload.error })),
+  }))
   assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
   const events = (await inspectSession(h.ctx.sessionPersistence, after.sessionId)).events
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source?.executionFeedback).length, 2)
@@ -98,15 +110,18 @@ test('running reminder and coordinator clarification preserve one native shell j
 
 test('native completion race drains then resumes the original execution without replaying its shell effect', { timeout: 15000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'native-feedback-completion-'))
+  const team = nativeVerificationTeam({ filePath: 'effect.txt', expected: 'once' })
   let h, delegated = false, steps = 0, injected = false
   t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
   h = await nativeTaskHost(root, async request => {
     const topics = topicTaskCalls(request); if (topics) return topics
     const input = latestInput(request)
+    const verification = team.execute(request, input); if (verification) return verification
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
       const required = requiredDecisionRead(request, input); if (required) return [required]
       if (!delegated) { delegated = true; return [call('task_delegate', { key: 'once', objective: '原作业只写入一次' }), decision('wait', '等待原执行')] }
-      return [decision(input.executions.some(item => !item.drained || item.status !== 'succeeded') ? 'wait' : 'complete', '核对当前结果')]
+      const members = await h.query('execution.list'), more = team.owner(input, members[0]); if (more) return more
+      return [decision(input.executions.length < 3 || input.executions.some(item => !item.drained || item.status !== 'succeeded') ? 'wait' : 'complete', '核对当前结果')]
     }
     if (++steps === 1) return [call(nativeShell, { command: nativeShell === 'pwsh' ? 'Add-Content effect.txt once' : 'echo once >> effect.txt', description: '真实原生单次写入' })]
     return [call('execution_submit', { output: { status: 'completed', summary: steps === 2 ? '过时结果' : '已核对新补充', evidence: [], limitations: [], artifacts: ['effect.txt'] } })]
@@ -562,12 +577,14 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
 
 test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 120000 }, async t => {
   const fixture = await nativeCase(t, 'task-five-context-'), metrics = []
+  const team = nativeVerificationTeam()
   let ownerSteps = 0
   const scope = 'ONLY_ANALYZE_AUTHORIZATION_'.repeat(300)
-  const h = await fixture.host(async request => {
+  const h = await fixture.host(async (request, serviceHost) => {
     const routed = topicTaskCalls(request)
     if (routed) return routed
     const input = latestInput(request)
+    const verification = team.execute(request, input); if (verification) return verification
     if (!request.tools.some(tool => tool.name === 'task_delegate')) return [call('execution_submit', { output: { status: 'completed', summary: 'done-' + input.objective, evidence: ['UNKNOWN_EFFECT: observed, never replay'], limitations: ['analysis only'], artifacts: [] } })]
     const host = request.messages.filter(m => m.source?.taskSession && !m.source.taskContextHistory)
     assert.equal(host.length, 1)
@@ -597,7 +614,8 @@ test('32 continuations bound owner Host input and execution-read tool results wh
     }
     if (execution?.inputVersion === 32) {
       assert.match(JSON.stringify(request.messages), /UNKNOWN_EFFECT/)
-      return [decision('complete', '32 inputs reviewed')]
+      const primary = (await serviceHost.query('execution.list'))[0], more = team.owner(input, primary); if (more) return more
+      return [decision(input.executions.length === 3 && input.executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '32 inputs reviewed')]
     }
     return [call('task_delegate', { key: 'continue-' + (execution?.inputVersion ?? 0), objective: 'generation-' + ((execution?.inputVersion ?? 0) + 1),
       ...(execution ? { executionId: execution.executionId } : {}), context: scope }), decision('wait', 'wait for result')]
@@ -605,7 +623,7 @@ test('32 continuations bound owner Host input and execution-read tool results wh
   await h.service.ingest({ ...message, text: '测试助手，仅分析并汇总32轮观察。' + scope }); await h.service.whenIdle()
   const [task] = await h.query('task.list'), executions = await h.query('execution.list')
   assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
-  assert.equal(executions.length, 1); assert.equal(executions[0].inputVersion, 32)
+  assert.equal(executions.length, 3); assert.equal(executions.filter(item => item.inputVersion === 32).length, 1); assert.equal(executions[0].inputVersion, 32)
   assert.ok(metrics.length >= 33)
   t.diagnostic(JSON.stringify({ scope: 'native owner scripted adapter, UTF-8 JSON bytes; no provider tokens', metrics: metrics.filter(m => [0, 1, 5, 32].includes(m.inputVersion)) }))
   assert.ok(metrics.every(m => m.currentInputBytes < 60000), 'current owner input must stay within fixture budget')
@@ -638,7 +656,9 @@ test('configured group responsibility reaches group and task models and its repl
 
 test('native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-service-native-'), { root } = fixture
+  const teamMessage = { ...message, text: '测试助手，分别生成 alpha、beta 和 gamma 的文件并用终端验证，再汇总结论。' }
   const steps = new Map(), executionStarted = new Set(), started = Promise.withResolvers()
+  const handoffs = Object.fromEntries(['alpha', 'beta', 'gamma'].map(key => [key, `负责${key}-native-proof.txt和${key}-process-cwd.txt；原请求要求分别生成并核验。另一组文件由其他执行负责，互无前置依赖。仅在本任务目录写这两个文件，用原生读取与终端核验内容和目录后报告证据，不发送消息。`]))
   const wrappedFilesystems = new Set(), readOverlap = { active: 0, peak: 0, started: 0 }
   let ownerRounds = 0, sawResultsBeforeWait = false, lateNativeCalls = 0
   const h = await fixture.host(async (request, host) => {
@@ -658,19 +678,21 @@ test('native service routes authenticated source, delegates parallel execution, 
           return [call('write', { file_path: 'owner-native-proof.txt', content: 'owner native proof' }), call('late_native_write', {})]
         }
         if (step === 1) return [call('read', { file_path: 'owner-native-proof.txt' }), call(nativeShell, { command: nativeShell === 'pwsh' ? "Get-Content -LiteralPath 'owner-native-proof.txt'" : 'cat owner-native-proof.txt', description: 'Read the task session native proof through its configured shell' })]
-        if (step === 2) return ['alpha', 'beta'].map(key => call('task_delegate', { key, objective: key }))
-        const executions = await waitUntil(async () => { const executions = await host.query('execution.list'); return executions.length === 2 && executions.every(e => e.drained && e.status === 'succeeded') ? executions : null }, 'both native executors persisted before owner wait')
-        assert.equal(executions.length, 2); sawResultsBeforeWait = true
+        if (step === 2) return ['alpha', 'beta', 'gamma'].map(key => call('task_delegate', { key, objective: key,
+          context: handoffs[key], resourceKeys: ['file:' + key] }))
+        const executions = await waitUntil(async () => { const executions = await host.query('execution.list'); return executions.length === 3 && executions.every(e => e.drained && e.status === 'succeeded') ? executions : null }, 'three native executors persisted before owner wait')
+        assert.equal(executions.length, 3); sawResultsBeforeWait = true
         return [decision('wait', '等待已落账结果唤醒')]
       }
       ownerRounds++
-      assert.equal(input.executions.length, 2)
+      assert.equal(input.executions.length, 3)
       assert.ok(input.executions.every(e => e.drained && e.status === 'succeeded'))
       assert.ok(input.wakes.some(wake => wake.kind.startsWith('execution.')))
-      return [decision('complete', 'alpha 和 beta 已分别生成并实际验证。')]
+      return [decision('complete', 'alpha、beta 和 gamma 已分别生成并实际验证。')]
     }
     assert.ok(names.includes('execution_submit'))
     const key = input.objective, step = steps.get(key) ?? 0
+    assert.equal(input.context, handoffs[key], 'Each independent native session receives its own complete handoff')
     steps.set(key, step + 1)
     if (step === 0) {
       const execution = (await host.query('execution.list')).find(item => item.input.objective === key)
@@ -685,14 +707,14 @@ test('native service routes authenticated source, delegates parallel execution, 
           if (!this.processPath(args[0]).endsWith('-native-proof.txt')) return readText.apply(this, args)
           readOverlap.started++; readOverlap.active++; readOverlap.peak = Math.max(readOverlap.peak, readOverlap.active)
           try {
-            await waitUntil(() => readOverlap.started === 2, 'both real filesystem reads entered together', 3000)
+            await waitUntil(() => readOverlap.started === 3, 'three real filesystem reads entered together', 3000)
             return await readText.apply(this, args)
           } finally { readOverlap.active-- }
         }
         t.after(() => { fs.readText = readText })
       }
       executionStarted.add(key)
-      if (executionStarted.size === 2) started.resolve()
+      if (executionStarted.size === 3) started.resolve()
       await started.promise
       assert.ok(names.includes('write') && names.includes('read') && names.includes(nativeShell))
       return [call('write', { file_path: key + '-native-proof.txt', content: key + '\n' })]
@@ -704,13 +726,18 @@ test('native service routes authenticated source, delegates parallel execution, 
     assert.ok(JSON.stringify(request).includes(key), 'Native tool results must reach the model')
     return [call('execution_submit', { output: { status: 'completed', summary: key + ' 已验证', evidence: ['native-process-verified'], limitations: [], artifacts: [key + '-native-proof.txt', key + '-process-cwd.txt'] } })]
   })
-  const first = await h.service.ingest(message)
+  const first = await h.service.ingest(teamMessage)
   assert.equal(first.accepted, true)
   await h.service.whenIdle()
   assert.deepEqual((await h.service.recover()).failures, [])
   const tasks = await h.query('task.list')
   assert.equal(tasks.length, 1)
   const task = tasks[0], executions = await h.query('execution.list', { taskId: task.taskId })
+  assert.equal(new Set(executions.map(execution => execution.sessionId)).size, 3)
+  for (const execution of executions) {
+    assert.equal(execution.input.context, handoffs[execution.key])
+    assert.deepEqual(execution.resourceKeys, ['file:' + execution.key])
+  }
   const executionViews = await h.service.taskExecutions(task.taskId)
   assert.ok(executionViews.executions.every(execution => execution.workspaceDir === join(root, 'tasks', task.taskId)
     && execution.workingDirectory === join(root, 'tasks', task.taskId)))
@@ -720,7 +747,7 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal(ownerRounds, 2)
   assert.equal(sawResultsBeforeWait, true)
   assert.equal(lateNativeCalls, 1)
-  assert.equal(readOverlap.peak, 2, 'Native concurrency-safe filesystem calls must overlap')
+  assert.equal(readOverlap.peak, 3, 'Native concurrency-safe filesystem calls must overlap')
   assert.equal(h.sent.length, 2); assert.equal(h.readbacks.length, 2)
   const echo = await h.service.ingest({ ...message, messageId: 'native-notification-2', senderOpenDingTalkId: 'notification-sender', text: 'completion echo' })
   assert.equal(echo.reason, 'own-notification')
@@ -730,6 +757,10 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal((await h.query('source.get', { sourceId: first.sourceId })).actorId, message.senderOpenDingTalkId)
   assert.equal((await h.query('source.get', { sourceId: first.sourceId })).routed, true)
   const ownerLog = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  const delegated = ownerLog.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_delegate')
+  const firstWait = ownerLog.events.find(event => event.type === 'tool/call' && event.data.name === 'task_session_submit')
+  assert.equal(delegated.length, 3)
+  assert.ok(delegated.every(event => event.seq < firstWait.seq), 'All three independent goals are delegated before the first wait')
   assert.equal(ownerLog.meta.cwd, join(root, 'tasks', task.taskId))
   assert.ok(!ownerLog.events.some(event => event.type === 'permission/preset' && event.data.preset === 'danger-full-access'))
   const ownerWorkspace = h.ctx.workspaceRegistry.list().find(workspace => workspace.path === ownerLog.meta.cwd)
@@ -758,11 +789,11 @@ test('native service routes authenticated source, delegates parallel execution, 
     assert.ok((await findSessionLog(root, execution.sessionId)).startsWith(taskSessionLogRoot(root, task.taskId)))
   }
   assert.ok((await findSessionLog(root, task.sessionId)).startsWith(taskSessionLogRoot(root, task.taskId)))
-  assert.equal((await h.query('operation.list', { taskId: task.taskId })).length, 4)
+  assert.equal((await h.query('operation.list', { taskId: task.taskId })).length, 6)
   assert.ok((await h.query('operation.list', { taskId: task.taskId })).every(operation => operation.state === 'succeeded'))
-  await h.service.ingest(message); await h.service.whenIdle(); await h.service.recover(); await h.service.whenIdle()
+  await h.service.ingest(teamMessage); await h.service.whenIdle(); await h.service.recover(); await h.service.whenIdle()
   assert.equal((await h.query('task.list')).length, 1)
-  assert.equal((await h.query('execution.list')).length, 2)
+  assert.equal((await h.query('execution.list')).length, 3)
   assert.equal(h.sent.length, 2)
   assert.ok((await readdir(join(root, 'tasks', task.taskId))).includes('alpha-native-proof.txt'))
   await h.close()
@@ -779,12 +810,112 @@ test('native service routes authenticated source, delegates parallel execution, 
   }
 })
 
-test('native executor resumes in the same titled task workspace and all task sessions share the process cwd', { timeout: 20000 }, async t => {
+test('native sequential handoff preserves one executor before independent review of the fixed artifact', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-sequential-review-'), steps = new Map(), reviewed = new Set()
+  const rejectedCounts = new Set()
+  const artifact = 'candidate.txt', content = 'candidate-v1\ncandidate-proof:7\n'
+  const sha256 = createHash('sha256').update(content).digest('hex')
+  let firstIdentity, phase = 0, independentStartedAfterDrain = false
+  const h = await fixture.host(async (request, host) => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      const required = requiredDecisionRead(request, input); if (required) return [required]
+      const executions = await host.query('execution.list', { taskId: input.task.taskId })
+      const writer = executions.find(execution => execution.key === 'candidate'), reviewer = executions.find(execution => execution.key === 'independent-review')
+      if (phase === 0) {
+        phase++
+        return [call('task_delegate', { key: 'candidate', objective: 'prepare-fixed-candidate', resourceKeys: ['candidate'],
+          context: '仅在本任务目录创建candidate.txt版本candidate-v1；先写入并报告产物和摘要，后续核对须等待本次结果。不得发送或发布。' }), decision('wait', '等待原候选生成')]
+      }
+      if (!writer?.drained || writer.status !== 'succeeded') return [decision('wait', '前置执行未结束，保留原执行')]
+      if ((executions.length === 1 || executions.length === 2 && reviewer?.drained && reviewer.status === 'succeeded') && !rejectedCounts.has(executions.length)) {
+        rejectedCounts.add(executions.length)
+        return [decision('complete', '尝试提前完成，Host必须拒绝不足三人的执行团队')]
+      }
+      for (const execution of executions.filter(item => item.status === 'succeeded' && item.drained)) {
+        const version = execution.executionId + ':' + execution.inputVersion
+        if (!reviewed.has(version)) { reviewed.add(version); return [call('task_execution_read', { executionId: execution.executionId })] }
+      }
+      if (phase === 1) {
+        firstIdentity = { executionId: writer.executionId, sessionId: writer.sessionId }
+        assert.equal(await readFile(join(fixture.root, 'tasks', input.task.taskId, artifact), 'utf8'), content)
+        phase++
+        return [call('task_delegate', { key: 'verify-original', executionId: writer.executionId, objective: 'verify-original-candidate',
+          context: `前置candidate-v1已生成；只读candidate.txt，预期SHA256=${sha256}，核对原内容并提交实际读取证据；不修改、发布或发送。` }), decision('wait', '沿原执行核对已生成候选')]
+      }
+      if (phase === 2 && writer.inputVersion === 2) {
+        assert.deepEqual({ executionId: writer.executionId, sessionId: writer.sessionId }, firstIdentity)
+        phase++
+        return [call('task_delegate', { key: 'independent-review', objective: 'independently-review-candidate', resourceKeys: ['candidate'],
+          context: `固定产物candidate.txt，版本candidate-v1，SHA256=${sha256}；原执行已排空。独立只读原文件，核对版本、内容和反例；不得改文件、部署、发送或重做原动作。报告真实证据与限制。` }), decision('wait', '候选已固定，等待独立核验')]
+      }
+      const complete = reviewer?.drained && reviewer.status === 'succeeded'
+      if (phase === 3 && complete) {
+        phase++
+        assert.ok(host.toolResults.some(item => item.name === 'task_session_submit' && item.result.isError && JSON.stringify(item.result).includes('TASK_EXECUTION_TEAM_INCOMPLETE')))
+        return [call('task_delegate', { key: 'delivery-check', objective: 'check-delivery-completeness',
+          context: `固定产物candidate.txt，版本candidate-v1，SHA256=${sha256}；原候选与独立核验已结束。只读交付文件，核对内容包含版本及candidate-proof:7两项要求、交付路径有效；不修改、部署或发送。` }), decision('wait', '补齐尚未覆盖的交付完整性核验')]
+      }
+      const teamComplete = executions.length === 3 && executions.every(item => item.drained && item.status === 'succeeded')
+      return [decision(teamComplete ? 'complete' : 'wait', teamComplete ? '原候选、独立核验和交付完整性均已核对' : '等待尚未结束的真实核验')]
+    }
+    const step = steps.get(input.objective) ?? 0
+    steps.set(input.objective, step + 1)
+    if (input.objective === 'prepare-fixed-candidate') {
+      if (step === 0) return [call('write', { file_path: artifact, content })]
+    } else {
+      const executions = await host.query('execution.list', { taskId: input.task.taskId })
+      const execution = executions.find(item => item.input.objective === input.objective)
+      assert.equal(execution.input.recoveryReadOnly, false, 'Ordinary verification does not borrow the reconciliation marker')
+      assert.ok(input.context.includes(sha256), 'The handoff pins the artifact rather than a mutable summary')
+      if (input.objective === 'independently-review-candidate') {
+        const writer = executions.find(item => item.key === 'candidate')
+        assert.equal(writer.drained, true)
+        assert.equal(writer.status, 'succeeded')
+        assert.equal(writer.inputVersion, 2)
+        assert.notEqual(execution.sessionId, writer.sessionId)
+        independentStartedAfterDrain = true
+      }
+      if (step === 0) return [call('read', { file_path: artifact })]
+      assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'tool')).includes('candidate-proof:7'), 'Actual native file contents reach each verifier')
+    }
+    return [call('execution_submit', { output: { status: 'completed', summary: input.objective,
+      evidence: [artifact, 'sha256:' + sha256], limitations: ['仅核验固定本地产物，未部署或发送'], artifacts: [artifact] } })]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'sequential-review',
+    objective: '生成固定候选，沿原执行核对后独立只读核验；未完成所有核验前不要宣布完成，不部署或发送。' })
+  await h.service.whenIdle()
+  assert.deepEqual((await h.service.recover()).failures, [])
+  const executions = await h.query('execution.list', { taskId: created.taskId })
+  assert.equal((await h.query('task.list')).length, 1)
+  assert.equal(executions.length, 3, 'Sequential continuation reuses the executor; two distinct verification goals add two members')
+  assert.deepEqual([...rejectedCounts], [1, 2])
+  const rejectedCompletions = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
+  assert.equal(rejectedCompletions.length, 2, 'Both one-member and two-member completion attempts must be rejected')
+  assert.ok(rejectedCompletions.every(item => JSON.stringify(item.result).includes('TASK_EXECUTION_TEAM_INCOMPLETE')))
+  assert.equal(new Set(rejectedCompletions.map(item => item.sessionId)).size, 1, 'A recoverable tool error preserves the original coordinator session')
+  assert.equal(executions.find(item => item.key === 'candidate').continuations.length, 1)
+  assert.equal(independentStartedAfterDrain, true)
+  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
+  assert.equal(createHash('sha256').update(await readFile(join(fixture.root, 'tasks', created.taskId, artifact))).digest('hex'), sha256)
+  const reviewer = executions.find(item => item.key === 'independent-review')
+  const reviewLog = await inspectSession(h.ctx.sessionPersistence, reviewer.sessionId)
+  const reviewTools = reviewLog.events.filter(event => event.type === 'tool/call').map(event => event.data.name)
+  assert.ok(reviewTools.every(name => ['model_content_read', 'read', 'execution_submit'].includes(name)), 'Independent review only reads evidence and submits its result')
+  assert.equal(reviewTools.filter(name => name === 'read').length, 1)
+  assert.equal(reviewTools.filter(name => name === 'execution_submit').length, 1)
+  assert.equal(reviewTools.at(-1), 'execution_submit')
+  assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 1, 'Verification creates no second write effect')
+})
+
+test('native executor resumes in the same titled task workspace and all task sessions share the process cwd', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-workspace-resume-')
+  const team = nativeVerificationTeam({ filePath: 'resume-cwd.txt', expected: 'tasks' })
   function model(continuing) {
     const steps = new Map()
     return async (request, host) => {
       const input = latestInput(request), names = request.tools.map(tool => tool.name)
+      const verification = team.execute(request, input); if (verification) return verification
       if (names.includes('task_delegate')) {
         const step = steps.get('owner:' + input.task.leaseEpoch) ?? 0
         steps.set('owner:' + input.task.leaseEpoch, step + 1)
@@ -792,7 +923,10 @@ test('native executor resumes in the same titled task workspace and all task ses
         const objective = (await host.query('execution.list')).find(e => e.executionId === input.executions[0]?.executionId)?.input.objective
         if (continuing && objective === 'first' && step === 0)
           return [call('task_delegate', { key: '继续核对', objective: 'second', executionId: input.executions[0].executionId })]
-        if (objective === 'second' && input.executions[0].status === 'succeeded') return [decision('complete', '第二次核对已完成')]
+        if (objective === 'second' && input.executions[0].status === 'succeeded') {
+          const primary = (await host.query('execution.list'))[0], more = team.owner(input, primary); if (more) return more
+          return [decision(input.executions.length === 3 && input.executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '第二次核对与交付核验')]
+        }
         return [decision(input.executions.every(execution => execution.drained) ? 'blocked' : 'wait', '等待下一次明确输入')]
       }
       const liveExecution = (await host.query('execution.list')).find(item => item.input.objective === input.objective)
@@ -984,7 +1118,7 @@ test('native requirement update resumes the same owner with new sources and fenc
   assert.equal((await h.query('task.list')).length, 1)
 })
 
-for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2, 1], [2, 3]]) test(`native capacity queues promote every task and execution: tasks=${maxConcurrentTasks}, executions=${maxConcurrentExecutions}`, { timeout: 15000 }, async t => {
+for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2, 1], [2, 3]]) test(`native capacity queues promote every task and execution: tasks=${maxConcurrentTasks}, executions=${maxConcurrentExecutions}`, { timeout: 25000 }, async t => {
   const fixture = await nativeCase(t, 'task-service-capacity-'), gate = Promise.withResolvers(), steps = new Map()
   let entered = 0
   const h = await fixture.host(async request => {
@@ -992,8 +1126,8 @@ for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2,
     if (names.includes('task_delegate')) {
       const key = input.task.taskId + ':' + input.task.leaseEpoch, step = steps.get(key) ?? 0
       steps.set(key, step + 1)
-      if (!input.executions.length && step === 0) return ['one', 'two'].map(key => call('task_delegate', { key, objective: key }))
-      return [decision(input.executions.length === 2 && input.executions.every(e => e.status === 'succeeded' && e.drained) ? 'complete' : 'wait', '容量测试负责人决定')]
+      if (!input.executions.length && step === 0) return ['one', 'two', 'three'].map(key => call('task_delegate', { key, objective: key }))
+      return [decision(input.executions.length === 3 && input.executions.every(e => e.status === 'succeeded' && e.drained) ? 'complete' : 'wait', '容量测试负责人决定')]
     }
     const key = input.task.taskId + ':' + input.objective, step = steps.get(key) ?? 0
     steps.set(key, step + 1)
@@ -1003,14 +1137,14 @@ for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2,
   try {
     await h.service.createTask({ groupId: 'native-group', requestId: 'capacity-a', objective: 'first task' })
     await h.service.createTask({ groupId: 'native-group', requestId: 'capacity-b', objective: 'second task' })
-    const admitted = Math.min(maxConcurrentTasks * 2, maxConcurrentExecutions)
+    const admitted = Math.min(maxConcurrentTasks * 3, maxConcurrentExecutions)
     await waitUntil(() => entered === admitted, 'available native executor slots admitted')
-    await waitUntil(async () => (await h.query('execution.list')).length === maxConcurrentTasks * 2, 'admitted owners persisted both delegations')
+    await waitUntil(async () => (await h.query('execution.list')).length === maxConcurrentTasks * 3, 'admitted owners persisted all three delegations')
     assert.equal((await h.query('task.list')).filter(task => task.sessionBound).length, maxConcurrentTasks)
     assert.equal((await h.query('execution.list')).filter(execution => execution.status === 'running').length, admitted)
   } finally { gate.resolve() }
   await h.service.whenIdle()
-  assert.equal(entered, 4, 'All four real execution sessions must run without a periodic recovery tick')
+  assert.equal(entered, 6, 'All six real execution sessions must run without a periodic recovery tick')
   assert.ok((await h.query('task.list')).every(task => task.status === 'completed'))
   for (const execution of await h.query('execution.list')) {
     assert.equal(execution.status, 'succeeded'); assert.equal(execution.drained, true)
@@ -1018,17 +1152,20 @@ for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2,
   }
 })
 
-test('native shared resources queue without occupying task capacity and promote on drain', { timeout: 30000 }, async t => {
+test('native shared resources queue without occupying task capacity and promote on drain', { timeout: 45000 }, async t => {
   const fixture = await nativeCase(t, 'task-resource-capacity-'), gate = Promise.withResolvers(), steps = new Map(), entered = []
-  const h = await fixture.host(async request => {
+  const team = nativeVerificationTeam({ filePath: 'resource-proof.txt', expected: '' })
+  const h = await fixture.host(async (request, host) => {
     const input = latestInput(request)
+    const verification = team.execute(request, input); if (verification) return verification
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
       const required = requiredDecisionRead(request, input); if (required) return [required]
       const key = input.task.taskId + ':' + input.task.leaseEpoch, step = steps.get(key) ?? 0
       steps.set(key, step + 1)
       if (!input.executions.length && step === 0) return [call('task_delegate', { key: 'run', objective: input.task.objective,
         resourceKeys: [input.task.objective === 'independent' ? 'uat3' : 'uat2'] })]
-      return [decision(input.executions.length && input.executions.every(e => e.status === 'succeeded' && e.drained) ? 'complete' : 'wait', '核对实际执行结果')]
+      const primary = (await host.query('execution.list', { taskId: input.task.taskId }))[0], more = team.owner(input, primary); if (more) return more
+      return [decision(input.executions.length === 3 && input.executions.every(e => e.status === 'succeeded' && e.drained) ? 'complete' : 'wait', '核对实际执行结果')]
     }
     const step = steps.get(input.task.taskId) ?? 0; steps.set(input.task.taskId, step + 1)
     if (!step) {
@@ -1053,12 +1190,12 @@ test('native shared resources queue without occupying task capacity and promote 
     // 在持有者不释放期间，等待者不能反复进入模型或增加执行租约。
     await new Promise(resolve => setTimeout(resolve, 80))
     assert.equal((await h.query('execution.get', { executionId: waiting.executionId })).leaseEpoch, 0)
-    assert.ok(h.requests.length < 20, 'resource conflict must not create a model/claim hot loop')
+    assert.ok(h.requests.filter(request => { try { return latestInput(request).task?.taskId === waiter.taskId } catch { return false } }).length < 6, 'resource conflict must not create a model/claim hot loop')
   } finally { gate.resolve() }
   await h.service.whenIdle()
   assert.deepEqual(entered, ['holder', 'independent', 'waiter'])
-  assert.ok((await h.query('task.list')).every(task => task.status === 'completed'))
-  for (const execution of await h.query('execution.list')) {
+  assert.ok((await h.query('task.list')).every(task => task.status === 'completed'), JSON.stringify({ tasks: (await h.query('task.list')).map(item => ({ status: item.status, recovery: item.providerRecovery })), executions: (await h.query('execution.list')).map(item => ({ key: item.key, objective: item.input.objective, status: item.status, error: item.result?.payload.error })), errors: h.toolResults.filter(item => item.result.isError) }))
+  for (const execution of (await h.query('execution.list')).filter(item => item.key === 'run')) {
     assert.equal(execution.resources.state, 'released')
     assert.equal(await readFile(join(fixture.root, 'tasks', execution.taskId, 'resource-proof.txt'), 'utf8'), execution.input.objective)
   }
@@ -1066,9 +1203,11 @@ test('native shared resources queue without occupying task capacity and promote 
 
 test('native delegation rejects changed keys on receipt replay and preserves omitted continuation keys', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-resource-continuation-')
+  const team = nativeVerificationTeam()
   let stage = 0, executions = 0
   const h = await fixture.host(async (request, host) => {
     const input = latestInput(request)
+    const verification = team.execute(request, input); if (verification) return verification
     if (!request.tools.some(tool => tool.name === 'task_delegate')) {
       executions++
       return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: [], limitations: [], artifacts: [] } })]
@@ -1083,13 +1222,14 @@ test('native delegation rejects changed keys on receipt replay and preserves omi
       stage++
       return [call('task_delegate', { key: 'continue', executionId: execution.executionId, objective: 'second' })]
     }
-    return [decision(execution.inputVersion === 2 ? 'complete' : 'wait', '续办已核验')]
+    if (execution.inputVersion === 2) { const more = team.owner(input, execution); if (more) return more }
+    return [decision(execution.inputVersion === 2 && input.executions.length === 3 && input.executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '续办已核验')]
   })
   const task = await h.service.createTask({ groupId: 'native-group', requestId: 'resource-continuation', objective: 'resource continuation' })
   await h.service.whenIdle()
   assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
   assert.equal(executions, 2)
-  const all = await h.query('execution.list'); assert.equal(all.length, 1)
+  const all = await h.query('execution.list'); assert.equal(all.length, 3); assert.equal(all.filter(item => item.key === 'original').length, 1)
   assert.deepEqual(all[0].resourceKeys, ['uat2']); assert.equal(all[0].inputVersion, 2)
   const results = h.toolResults.filter(item => item.name === 'task_delegate')
   assert.equal(results.filter(item => item.result.isError).length, 1)
@@ -1163,10 +1303,12 @@ for (const persistent of [false, true]) test(`native model failures settle witho
 test('empty owner recovery reviews the retained execution without replaying its completed native write', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-empty-after-write-')
   const effect = join(fixture.root, 'effect.txt')
+  const team = nativeVerificationTeam({ filePath: effect, expected: 'once' })
   let delegated = false, wrote = false, empty = false, reviewed = false, executionId
-  const h = await fixture.host(async request => {
+  const h = await fixture.host(async (request, host) => {
     const topics = topicTaskCalls(request); if (topics) return topics
-    const names = request.tools.map(tool => tool.name)
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    const verification = team.execute(request, input); if (verification) return verification
     if (names.includes('task_session_submit')) {
       if (!delegated) {
         delegated = true
@@ -1174,8 +1316,9 @@ test('empty owner recovery reviews the retained execution without replaying its 
       }
       executionId = latestInput(request).executions[0].executionId
       if (!empty) { empty = true; return [] }
-      assert.match(requestSystemText(request), /上轮正常结束但未提交有效决定/)
-      if (!reviewed) { reviewed = true; return [call('task_execution_read', { executionId })] }
+      if (!reviewed) { assert.match(requestSystemText(request), /上轮正常结束但未提交有效决定/); reviewed = true; return [call('task_execution_read', { executionId })] }
+      const primary = (await host.query('execution.list'))[0], more = team.owner(input, primary); if (more) return more
+      if (input.executions.length < 3 || input.executions.some(item => !item.drained || item.status !== 'succeeded')) return [decision('wait', '等待交付核验')]
       return [decision('complete', '已核对原执行，写入未重放')]
     }
     if (!wrote) {
@@ -1188,12 +1331,13 @@ test('empty owner recovery reviews the retained execution without replaying its 
   await h.service.whenIdle()
   assert.equal((await h.query('task.get', { taskId: created.taskId })).providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
   assert.deepEqual((await h.query('task.events')).events, [], 'An empty Owner turn cannot publish a business completion event')
-  await waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).status === 'completed', 'retained execution review', 15000)
+  try { await waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).status === 'completed', 'retained execution review', 15000) }
+  catch (error) { throw new Error(JSON.stringify({ task: await h.query('task.get', { taskId: created.taskId }), executions: (await h.query('execution.list')).map(item => ({ key: item.key, status: item.status, error: item.result?.payload.error })), errors: h.toolResults.filter(item => item.result.isError) }), { cause: error }) }
   await h.service.whenIdle()
   assert.equal(reviewed, true)
   assert.equal((await readFile(effect, 'utf8')).trim(), 'once')
   const executions = await h.query('execution.list', { taskId: created.taskId })
-  assert.equal(executions.length, 1)
+  assert.equal(executions.length, 3); assert.equal(executions.filter(item => item.key === 'once').length, 1)
   assert.equal(executions[0].executionId, executionId)
   assert.equal(executions[0].inputVersion, 1)
   assert.equal((await h.query('operation.list', { taskId: created.taskId })).filter(item => item.state === 'succeeded').length, 1)
@@ -1348,10 +1492,11 @@ test('native board keeps a drained coordinator running while its delegated targe
     if (topicCalls) return topicCalls
     const input = latestInput(request)
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
-      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'board-target', objective: '核对执行中的任务状态' })] }
-      return [decision(input.executions.some(execution => execution.status === 'succeeded') ? 'complete' : 'wait', '等待小目标执行结果')]
+      if (!delegated) { delegated = true; return ['执行状态', '输入版本', '交付限制'].map(role => call('task_delegate', { key: 'board-' + role, objective: '只读核对团队' + role })) }
+      return [decision(input.executions.length === 3 && input.executions.every(execution => execution.drained && execution.status === 'succeeded') ? 'complete' : 'wait', '等待小目标执行结果')]
     }
     await release.promise
+    if (!modelToolValues(request).some(value => value.taskId === input.task.taskId && Array.isArray(value.executions))) return [call('execution_team_read', {})]
     return [call('execution_submit', { output: { status: 'completed', summary: '已核对', evidence: [], limitations: [], artifacts: [] } })]
   })
   try {
@@ -1386,4 +1531,42 @@ test('native recovery no-op preserves an undrained task writer conflict alert', 
   const recovered = await h.service.recover()
   assert.equal(recovered.failures.find(item => item.id === task.taskId)?.code, original.code)
   assert.equal((await h.query('task.get', { taskId: task.taskId })).drained, false)
+})
+
+test('execution document publication failure after claim drains the committed execution and exposes an alert', { timeout: 20000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-document-claim-failure-'))
+  let h, backing, delegated = false, poisoned = false, executionCalls = 0, claimed
+  t.after(async () => { try { await h?.close(); await backing?.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  backing = await openDynamicTaskStore({ dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: true })
+  const store = { ...backing, async command(input) {
+    const receipt = await backing.command(input)
+    if (!poisoned && input.kind === 'execution.claim') {
+      claimed = await backing.query({ kind: 'execution.get', executionId: receipt.result.execution.executionId })
+      assert.equal(claimed.status, 'running'); assert.equal(claimed.drained, false)
+      const path = join(root, 'tasks', claimed.taskId, 'outputs', claimed.executionId, `round-${claimed.inputVersion}.md`)
+      assert.ok((await readFile(path, 'utf8')).startsWith('<!-- execution-document '))
+      // 真实文件故障发生在 claim 已提交之后；不模拟 Store 拒绝或改变生命周期。
+      await rm(path); await mkdir(path); poisoned = true
+    }
+    return receipt
+  } }
+  h = await nativeTaskHost(root, async request => {
+    const topics = topicTaskCalls(request); if (topics) return topics
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'document-failure-check', objective: '只读核对当前材料' })] }
+      return [decision('wait', '等待当前执行的实际结果')]
+    }
+    executionCalls++
+    return [call('execution_submit', { output: { status: 'completed', summary: '不应在文档读取失败时执行', evidence: [], limitations: [], artifacts: [] } })]
+  }, { store })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'document-write-failure', objective: '只读核对当前材料' })
+  await h.service.whenIdle()
+  assert.equal(poisoned, true)
+  const execution = await h.query('execution.get', { executionId: claimed.executionId })
+  assert.equal(execution.executionId, claimed.executionId); assert.equal(execution.leaseEpoch, claimed.leaseEpoch)
+  assert.equal(execution.status, 'failed'); assert.equal(execution.drained, true); assert.equal(execution.sessionBound, false)
+  assert.equal(execution.result.payload.error.code, 'EXECUTION_DOCUMENT_PATH_INVALID')
+  assert.equal(executionCalls, 0); assert.equal((await h.query('operation.list')).length, 0)
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'active')
+  assert.ok(h.service.listAlerts().some(item => item.alertId === `failure:execution-document:${execution.executionId}` && item.detail === 'EXECUTION_DOCUMENT_PATH_INVALID'))
 })

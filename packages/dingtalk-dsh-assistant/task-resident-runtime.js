@@ -6,8 +6,13 @@ import { normalizeReplySignature } from './group-reply-format.js'
 import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 
 const retired = () => { throw Object.assign(new Error('WORKFLOW_RETIRED'), { code: 'WORKFLOW_RETIRED' }) }
+const validateExecutionBackend = value => {
+  if (!['dsh', 'claude-code'].includes(value)) throw new Error('agent_execution_backend_invalid')
+  return value
+}
 /** Group transport/configuration facade. It has no legacy task scheduler, stage engine or Owner. */
-export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5, taskSessionModel = {}, coordinationModel = {} } = {}) {
+export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5, taskSessionModel = {}, coordinationModel = {}, executionBackend = 'dsh' } = {}) {
+  const initialExecutionBackend = validateExecutionBackend(store.getExecutionBackend?.() ?? executionBackend)
   const initialSignature = normalizeReplySignature(store.getReplySignature?.() ?? agentReplySignature)
   const resolveAgentWorkspace = async value => {
     if (typeof value !== 'string') throw new Error('agent_workspace_must_be_absolute')
@@ -34,6 +39,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: store.getAgentWorkspaceDir?.() ?? root, ...selection(),
     taskSessionModel: taskSelection(),
     coordinationModel: coordinationSelection(),
+    executionBackend: store.getExecutionBackend?.() ?? initialExecutionBackend,
     replySignature: store.getReplySignature?.() ?? initialSignature,
     proxyUrl: store.getProxyUrl?.() ?? '', maxConcurrentTasks: store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks })
   const api = {
@@ -58,6 +64,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
       try {
         if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
         const patch = {}
+        if (Object.hasOwn(input, 'executionBackend')) patch.executionBackend = validateExecutionBackend(input.executionBackend)
         if (input.workspaceDir !== undefined) {
           patch.agentWorkspaceDir = await resolveAgentWorkspace(input.workspaceDir)
           // Agent cwd may change for future coordination plans. Existing task files,

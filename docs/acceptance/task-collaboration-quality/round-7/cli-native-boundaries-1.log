@@ -1,0 +1,19 @@
+✔ CLI executable unavailable before init retries the original UUID with session-id instead of resume (842.0284ms)
+✔ CLI journal rejects hardlink without modifying its target or spawning (43.0113ms)
+✔ CLI journal rejects junction without modifying its target or spawning (16.3823ms)
+✔ CLI unproven process drain retains the execution slot and never accepts the result (490.3578ms)
+✖ test\claude-execution-session-native.test.js (63892.1013ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 4
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 63905.8389
+
+✖ failing tests:
+
+test at test\claude-execution-session-native.test.js:1:1
+✖ test\claude-execution-session-native.test.js (63892.1013ms)
+  'test failed'

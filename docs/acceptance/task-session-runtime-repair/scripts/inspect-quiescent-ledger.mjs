@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync, readdirSync, lstatSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, readdirSync, lstatSync, openSync, fstatSync, closeSync } from 'node:fs'
+import { join, resolve, dirname } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -26,6 +26,73 @@ export function inspectPackage(packagePath, source, installed) {
   if (names.some(name => (name.endsWith('.js') || name.endsWith('.ps1')) && !files.includes(name.slice('package/'.length)))) throw Error('PACKAGE_UNEXPECTED_SOURCE')
   return { verifiedFiles: files.length, sha256: hash(readFileSync(packagePath)) }
 }
+// 独立运维助手只依赖标准库，复制到 launchers 后仍按持久后端读取原排空证据。
+function inspectClaudeHistory(workspace, row) {
+  const fail = code => { throw Error(`DEPLOY_CLAUDE_${code}`) }
+  const identity = ['taskId','executionId','sessionId','inputVersion','inputDigest','requirementRevision','controlRevision','leaseEpoch']
+  const inputKeys = ['inputVersion','inputDigest','requirementRevision','controlRevision']
+  const same = (a,b,keys=identity) => keys.every(key=>a?.[key]===b?.[key])
+  const uuid = /^task-execution-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu.exec(row.sessionId)?.[1]
+  const taskSegment = value => typeof value==='string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u.test(value)
+    && !/[.]$/u.test(value) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(value)
+  if (!uuid || !taskSegment(row.taskId) || typeof row.executionId!=='string' || !/^[a-zA-Z0-9_-]+$/u.test(row.executionId)) fail('IDENTITY_INVALID')
+  if (row.sessionBound!==true || row.drained!==true || !Number.isSafeInteger(row.leaseEpoch) || row.leaseEpoch<1 || !Array.isArray(row.inputHistory)) fail('BINDING_INVALID')
+  const inputs = new Map()
+  for (const input of [...row.inputHistory,row]) {
+    if (!Number.isSafeInteger(input.inputVersion) || input.inputVersion<1 || input.inputVersion>row.inputVersion || inputs.has(input.inputVersion)
+      || !/^[a-f0-9]{64}$/u.test(input.inputDigest ?? '') || !['requirementRevision','controlRevision'].every(key=>Number.isSafeInteger(input[key]) && input[key]>=1)) fail('INPUT_HISTORY_INVALID')
+    inputs.set(input.inputVersion,input)
+  }
+  if (inputs.size!==row.inputVersion) fail('INPUT_HISTORY_INVALID')
+  const path = join(resolve(workspace),'tasks',row.taskId,'outputs',row.executionId,'claude-events.jsonl')
+  for (let directory=dirname(path);;directory=dirname(directory)) {
+    const info=lstatSync(directory)
+    if (info.isSymbolicLink() || !info.isDirectory()) fail('LOG_PATH_INVALID')
+    if (dirname(directory)===directory) break
+  }
+  const before=lstatSync(path)
+  if (before.isSymbolicLink() || !before.isFile() || before.nlink!==1) fail('LOG_PATH_INVALID')
+  const descriptor=openSync(path,'r')
+  let text
+  try {
+    const actual=fstatSync(descriptor)
+    if (!actual.isFile() || actual.nlink!==1 || actual.dev!==before.dev || actual.ino!==before.ino) fail('LOG_PATH_CHANGED')
+    text=readFileSync(descriptor,'utf8')
+  } finally { closeSync(descriptor) }
+  if (!text || !text.endsWith('\n')) fail('LOG_INCOMPLETE')
+  let events
+  try { events=text.slice(0,-1).split('\n').map(line=>JSON.parse(line)) } catch { fail('LOG_INVALID') }
+  let start, previous, bound=false
+  for (const [index,event] of events.entries()) {
+    if (event?.provider!=='claude-code' || event.binding?.kind!=='task-execution' || !same(event.binding,row,['taskId','executionId','sessionId'])) fail('LOG_IDENTITY')
+    if (event.sequence!==index+1) fail('LOG_SEQUENCE')
+    if (event.type==='start') {
+      const binding=event.binding, input=inputs.get(binding.inputVersion)
+      if (!input || !same(binding,input,inputKeys) || !Number.isSafeInteger(binding.leaseEpoch) || binding.leaseEpoch<1 || binding.leaseEpoch>row.leaseEpoch
+        || (start && (previous?.type!=='drained' || binding.inputVersion<start.inputVersion || binding.leaseEpoch<=start.leaseEpoch))) fail('LOG_GENERATION')
+      if (event.data?.providerSessionId!==uuid) fail('PROVIDER_IDENTITY')
+      start=binding
+    } else if (!start || !same(event.binding,start)) fail('LOG_GENERATION')
+    if (event.type==='session.bound') {
+      if (event.data?.providerSessionId!==uuid) fail('PROVIDER_IDENTITY')
+      bound=true
+    }
+    if (event.type==='cli' && event.data?.session_id && event.data.session_id!==uuid) fail('PROVIDER_IDENTITY')
+    previous=event
+  }
+  if (!bound || previous?.type!=='drained') fail('NOT_DRAINED')
+  if (same(previous.binding,row)) return null
+  // 连续 continue 不领取就不增租约；历史连续、同租约末轮已排空且没有较新 start 才证明新输入未启动。
+  const prior=inputs.get(previous.binding.inputVersion)
+  const unstartedState=row.status==='queued' || (['cancelled','stale'].includes(row.status) && row.cancelRequested===true)
+  if (unstartedState && previous.binding.inputVersion<row.inputVersion && previous.binding.leaseEpoch===row.leaseEpoch
+    && same(previous.binding,prior,inputKeys) && !events.some(event=>event.type==='start' && event.binding.inputVersion>previous.binding.inputVersion)) {
+    return { executionId:row.executionId,sessionId:row.sessionId,inputVersion:row.inputVersion,leaseEpoch:row.leaseEpoch,
+      previousInputVersion:previous.binding.inputVersion,previousDrainedSequence:previous.sequence,currentInputStartAbsent:true }
+  }
+  fail('DRAIN_BINDING_MISMATCH')
+}
+
 export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerPid) {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
@@ -50,9 +117,17 @@ export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerP
     // 下方仍独立核验所有持久回合结束；部署脚本另核验精确旧进程及子进程均退出。
     if (offline && !ownerProcessExited) throw Error('DEPLOY_OWNER_NOT_RELEASED')
     let verifiedSessions = 0
+    const unstartedCliExecutions = []
+    for (const row of tables.executions) if (!['dsh','claude-code'].includes(row.definition?.executionBackend === undefined ? 'dsh' : row.definition.executionBackend)) throw Error('DEPLOY_EXECUTION_BACKEND_INVALID')
     const unstartedTaskClaims = []
     if (tables.tasks.some(row => row.drained === false && !row.sessionBound)) throw Error('DEPLOY_NOT_DRAINED')
     for (const row of [...tables.tasks, ...tables.executions].filter(row => row.sessionBound)) {
+      if (tables.executions.includes(row) && row.definition?.executionBackend==='claude-code') {
+        const unstarted=inspectClaudeHistory(workspace,row)
+        if (unstarted) unstartedCliExecutions.push(unstarted)
+        verifiedSessions++
+        continue
+      }
       const root = join(workspace, 'tasks', row.taskId, '.dsh', 'sessions')
       const matches = []
       function walk(directory) {
@@ -95,7 +170,7 @@ export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerP
       verifiedSessions++
     }
     return { quiescent: true, candidateOnly: !offline, ownerReleased: !owner, ownerProcessExited, staleOwner: !!owner && ownerProcessExited,
-      drained: unstartedTaskClaims.length === 0, unstartedTaskClaims, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
+      drained: unstartedTaskClaims.length === 0, unstartedTaskClaims, unstartedCliExecutions, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
   } finally { db.close() }
 }
 // 冷启动走正式 Host 的恢复事务，不把部署要求的 turn/end 当作崩溃恢复前提。

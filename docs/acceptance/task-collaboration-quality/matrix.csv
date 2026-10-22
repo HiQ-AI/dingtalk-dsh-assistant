@@ -1,0 +1,83 @@
+case,round,status,evidence
+native-parallel-handoff-and-independent-review,1,FAIL,round-1-native-collaboration.log (fixture rejected normal content read)
+native-parallel-handoff-and-independent-review,2,PASS,round-2-native-collaboration.log (9 tests)
+progress-feedback-and-session-identity,1,PASS,round-1/existing-contracts-profile.log (12 tests)
+stage-recovery-and-progress-evidence,1,FAIL,round-1/stage-and-client-profile.log (fixture missing low capability)
+stage-recovery-and-progress-evidence,2,PASS,round-4-stage-native.log (3 tests)
+data-projection-and-ui-contracts,1,PASS,round-1/data-and-ui.log (220 passed; optional client separately verified)
+official-client-import,2,PASS,round-1/client-installed-profile.log (1 test)
+browser-states-and-evidence,1,PASS,round-1/browser-states.log
+ui-static-audit,1,PASS,round-1/ui-audit.json
+model-fixture-contract,1,FAIL,round-1.md (exploratory callbacks diverged)
+model-fixture-contract,2,PASS,round-2.md (production Store; independent audit)
+model-independent-ready,2,FAIL,round-2.md (ambiguous progress wording)
+model-independent-ready,3,PASS,round-3/model-results.json (semantic review in round-3.md)
+model-single-simple,2,PASS,round-2/model-results.json (exact file readback)
+model-dependency-pending,2,PASS,round-2/model-results.json
+model-dependency-ready,2,PASS,round-2/model-results.json
+model-shared-writer,2,PASS,round-2/model-results.json
+model-complex-self-claim,2,FAIL,round-2.md (queued described as executing)
+model-complex-self-claim,3,PASS,round-3/model-results.json (semantic review in round-3.md)
+model-simple-proven,2,PASS,round-2/model-results.json
+final-release-smoke,3,PASS,round-3/release-smoke.log (14 tests)
+suite-map,3,PASS,round-1/suite-check.log (299 files)
+team-store-boundaries-and-peer-feedback,4,PASS,round-4/peer-store-final.log (101 tests)
+team-native-service,4,FAIL,round-8-service-native.log (39 pass 2 fail; tool contextPath fixture)
+team-native-service,5,PASS,round-9-service-team.log (7 impacted tests; other 34 retained)
+team-native-jobs,4,PASS,round-8-job-native.log (11 tests)
+team-human-and-history,4,PASS,round-4/human-native-after.log + round-4/http-history-pagination.log
+execution-document-files,4,FAIL,round-4/execution-doc-files-before.log (isolated import fixture)
+execution-document-files,5,PASS,round-4/execution-doc-files-after.log (17 tests)
+execution-plan-rounds,4,PASS,round-4/execution-plan-store-after.log (4 tests)
+execution-document-claim-failure,4,PASS,round-4/execution-doc-claim-failure-native.log (1 test)
+execution-document-stage-wakes,4,PASS,round-4/model-context-doc-wakes.log (18 tests)
+execution-document-native-progress,4,FAIL,round-4/progress-documents-1.log (legacy inline assertions)
+execution-document-native-progress,5,FAIL,round-4/progress-documents-2.log (legacy reportRef assertions)
+execution-document-native-progress,6,PASS,round-4/progress-documents-3.log (9 tests)
+execution-peer-native-documents,4,FAIL,round-4/document-team-stage-native.log (tool contextPath fixture)
+execution-peer-native-documents,5,PASS,round-4/document-peer-native-after.log (2 tests)
+execution-provider-recovery-documents,4,FAIL,round-4/document-provider-recovery.log (8 pass 1 timeout)
+execution-provider-recovery-documents,5,PASS,round-4/document-provider-supplement-isolated.log (only timeout case rerun)
+final-ledger-documents-ui,6,PASS,round-4/final-ledger-documents-ui.log (145 tests)
+model-shared-writer,4,FAIL,round-4/model-results.json (semantic over-splitting)
+model-simple-three,5,PASS,round-5/model-results.json
+model-independent-ready,5,PASS,round-5/model-results.json
+model-shared-writer,5,PASS,round-5/model-results.json
+model-dependency-pending,5,FAIL,round-5/model-results.json (INVALID_TOOL_OUTPUT)
+model-dependency-pending,6,PASS,round-6/model-results.json
+model-dependency-ready,5,PASS,round-5/model-results.json
+model-complex-ten-reuse,5,PASS,round-5/model-results.json
+model-complex-self-claim,5,PASS,round-5/model-results.json
+model-team-complete,5,PASS,round-5/model-results.json
+final-release-smoke,5,FAIL,round-4/document-release-smoke.log (dependency coupling and package fixture overflow)
+execution-doc-dependency-and-baseline-contracts,6,PASS,round-4/execution-doc-mapping-dependency.log (29 tests)
+suite-map,6,PASS,round-4/execution-doc-mapping-check-after.log (299 files; historical 3; deleted 0)
+final-release-smoke,6,PASS,round-6/release-smoke-final.log (14 tests; 0 skip)
+pr-delivery,6,PASS,round-6.md (PR248 OPEN; head/body readback)
+backend-config-and-ui,7,PASS,round-7/config-execution.md (17 pass; optional registry separately 3 pass; UI112 and observer71)
+backend-browser-and-audit,7,PASS,round-7/config-browser-result.json + config-premium-audit.json + config-design-lint.log
+backend-store-contracts,7,PASS,round-7/coordinator-execution.md (103 Store tests; missing extra path not counted)
+backend-mixed-team-routing,7,PASS,round-7/backend-routing-1.log (real service and SQLite; 1 pass)
+backend-document-semantics,7,FAIL,round-7/backend-documents-1.log (DSH feedback wording regression)
+backend-document-semantics,8,PASS,round-7/backend-documents-2.log (29 tests including archive)
+backend-service-and-archive,7,FAIL,round-7/backend-service-regression-1.log (15 pass; archive extraction fixture failed)
+backend-service-and-archive,8,PASS,round-8.md (15 retained plus repaired archive 2 pass)
+claude-stream-mcp-ordering,7,FAIL,round-7/cli-native-independent-2.log + cli-native-ordering-repro.log
+claude-stream-mcp-ordering,8,PASS,round-7/cli-native-independent-4.log (26 tests; matching source hash)
+claude-drain-failure-listener,7,FAIL,round-7/cli-native-boundaries-1.log (assertions passed but listener kept process alive)
+claude-drain-failure-listener,8,PASS,round-7/cli-native-independent-4.log (occupancy retained and listener closed)
+claude-process-provider-assumption,7,FAIL,round-7/process-range-audit.log (incorrect fixture assumption)
+claude-process-provider-assumption,8,PASS,round-7/process-range-audit-2.log + cli-native-independent-4.log
+claude-real-cli-offline-rounds,8,PASS,round-7/cli-adapter-results.json (real 2.1.212; synthetic model; original UUID resume)
+backend-suite-contracts,7,PASS,round-7/backend-test-contracts-1.log (12 tests)
+backend-suite-map,8,PASS,round-7/backend-suite-map-2.log (301 files; historical3; deleted0)
+backend-release-smoke,7,FAIL,round-7/backend-release-smoke-1.log (13 pass; stale suite-map)
+backend-release-smoke,8,PASS,round-7/backend-release-smoke-2.log (14 tests; 0 skip)
+backend-pr-delivery,8,PASS,round-8.md (PR248 OPEN; source head and full body independently matched)
+merge-coordination-unit,9,PASS,round-9/merge-unit-1.log (201 tests; 0 skip)
+merge-native-boundaries,9,PASS,round-9/merge-native-boundaries-1.log (8 tests; 0 skip; independent audit)
+merge-installed-host-package,9,PASS,round-9/merge-release-smoke-1.log (installed rc.2 profile; 14 tests; 0 skip)
+deploy-cli-history-check,9,FAIL,round-9/deploy-cli-checker-first.log (old checker required DSH log for Claude)
+deploy-cli-history-check,10,PASS,round-9/deploy-cli-checker-verified.log (53 tests; 0 skip)
+deploy-cli-real-journal-check,10,PASS,round-9/checker-native-journal-replay-1.json (original real CLI bytes; execution-only; source unchanged)
+deploy-desktop-restart-contracts,10,PASS,round-9/restart-contracts.log (10 tests; 0 skip)

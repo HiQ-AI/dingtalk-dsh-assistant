@@ -1,0 +1,34 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (511.8618ms)
+✔ CLI exit zero cannot replace Host submit (466.3896ms)
+✔ CLI exit zero cannot replace submit tool result (526.8676ms)
+✔ CLI wrong provider session fails without binding or accepting a result (403.6225ms)
+✔ CLI stale lease before permission denies real file mutation (511.9933ms)
+✔ CLI operation gate failure denies a mutation before the child writes it (437.1496ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (808.5393ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (922.7248ms)
+✔ CLI truncated output fails with zero acceptance and retained diagnostic log (464.607ms)
+✔ CLI real file mutation is accounted before write and settled after its observed result (535.8532ms)
+✔ CLI interrupted real mutation retains unknown effect while physical process drain remains provable (612.5321ms)
+✔ CLI feedback ACK alone rejects final submit (620.4288ms)
+✔ CLI feedback ACK plus explicit review admits final submit (718.9747ms)
+✔ CLI progress uses current lease and the exact stored observation contract (678.3321ms)
+✔ CLI recovery requires a durable drain record and never launches work from an unfinished prefix (648.8884ms)
+✔ CLI cancellation during pending resolve cannot leave a late process running (117.4169ms)
+✔ CLI cancellation during pending spawn cannot leave a late process running (270.1283ms)
+✔ CLI cancellation waits for an already admitted MCP callback to finish (535.7949ms)
+✔ CLI history from a different session is rejected before spawn and remains unchanged (710.8894ms)
+✔ CLI old planned native call cannot use a later feedback read to mutate files (749.5226ms)
+✔ CLI repeated native call identity does not replay a successful file effect (667.3944ms)
+✔ CLI executable unavailable before init retries the original UUID with session-id instead of resume (1162.567ms)
+✔ CLI journal rejects hardlink without modifying its target or spawning (67.3417ms)
+✔ CLI journal rejects junction without modifying its target or spawning (52.1682ms)
+✔ CLI unproven process drain retains the execution slot and never accepts the result (551.8785ms)
+✔ CLI structured background receipt is unknown instead of a successful completed operation (577.8892ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14602.3021

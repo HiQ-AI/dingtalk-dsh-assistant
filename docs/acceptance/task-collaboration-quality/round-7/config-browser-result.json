@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "requests": 3,
+  "checks": [
+    "default DSH",
+    "native select label and keyboard",
+    "single save and busy guard",
+    "save readback and reload",
+    "stale refresh fenced",
+    "unsaved draft retained",
+    "failure readback and retry",
+    "390px no overflow",
+    "full generated bundle",
+    "CLI paths without DSH navigation; native entry retained"
+  ],
+  "boundary": "isolated HTTP fixture and native-button adapter for observer; no real CLI execution, permission or deployment proof"
+}

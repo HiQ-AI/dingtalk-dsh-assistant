@@ -42,6 +42,7 @@
     "execution-context.js",
     "execution-provider-failure.js",
     "execution-session.js",
+    "claude-execution-session.js",
     "fake-llm.js",
     "group-coordinator-session.js",
     "group-message.js",

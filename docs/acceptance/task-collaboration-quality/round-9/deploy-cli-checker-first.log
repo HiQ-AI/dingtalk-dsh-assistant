@@ -1,0 +1,26 @@
+✖ mixed native and Claude histories verify independently and keep unknown facts unchanged (92.3465ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 217.169
+
+✖ failing tests:
+
+test at docs\acceptance\task-session-runtime-repair\scripts\inspect-quiescent-ledger.test.mjs:110:1
+✖ mixed native and Claude histories verify independently and keep unknown facts unchanged (92.3465ms)
+  Error: ENOENT: no such file or directory, lstat 'C:\Users\64554\AppData\Local\Temp\task-cli-deploy-71XVwi\tasks\task-cli\.dsh\sessions'
+      at lstatSync (node:fs:1771:25)
+      at walk (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.mjs:59:13)
+      at inspectLedger (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.mjs:72:7)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.test.mjs:112:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    errno: -4058,
+    code: 'ENOENT',
+    syscall: 'lstat',
+    path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-cli-deploy-71XVwi\\tasks\\task-cli\\.dsh\\sessions'
+  }

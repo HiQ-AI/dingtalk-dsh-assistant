@@ -1,0 +1,21 @@
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (3.1288ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: false (14006.195ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: true (13933.7603ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (12809.575ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (13609.2167ms)
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (8197.8528ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (10413.6758ms)
+✔ task session permits late native tools and configured read and shell alongside skills (3973.0242ms)
+✔ unconfigured native profiles expose no bundled personal skills (2070.408ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (9239.0917ms)
+✔ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (12850.4616ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=false (10563.0607ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=true (12472.6692ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 127612.5777

@@ -13,6 +13,28 @@ const message = { groupId: 'native-group', messageId: 'personal-skills-1', sende
   text: '测试助手，Read the relevant personal guide and verify its reference in an independent execution.', occurredAt: '2026-10-13T16:00:00Z', timestamp: '2026-10-13T16:00:00Z' }
 const names = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf'].map(name => 'personal-' + name)
 
+function completionReviews(reference) {
+  const read = new Set(); let delegated = false
+  const roles = ['独立核对技能引用', '独立核对原始要求']
+  return {
+    execution(input) {
+      const index = roles.indexOf(input.objective)
+      if (index < 0) return null
+      const path = index === 0 ? reference : input.materialPaths[0]
+      assert.ok(path)
+      if (!read.has(index)) { read.add(index); return [call('read', { file_path: path })] }
+      return [call('execution_submit', { output: { status: 'completed', summary: `${roles[index]}已读取原始材料`, evidence: [path], limitations: [], artifacts: [] } })]
+    },
+    owner(input, summary) {
+      if (!input.executions.every(item => item.status === 'succeeded' && item.drained)) return [finish('wait', '等待原执行与独立核对结果。')]
+      if (input.executionCount >= 3) return [finish('complete', summary)]
+      if (delegated) return [finish('wait', '等待独立核对结果。')]
+      delegated = true
+      return [...roles.map((objective, index) => call('task_delegate', { key: `completion-review-${index}`, objective })), finish('wait', '已安排独立核对。')]
+    },
+  }
+}
+
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'native-personal-skills-'))
   // Personal assets are deliberately outside the managed task workspaces and plugin package.
@@ -30,6 +52,7 @@ async function fixture(t) {
 
 test('native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned', async t => {
   const f = await fixture(t), steps = new Map(), first = new Map()
+  const reviewers = completionReviews(join(f.skillRoot, names[0], 'references/procedure.md'))
   const h = await f.host(async (request, host) => {
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
     const topicCalls = topicTaskCalls(request)
@@ -39,7 +62,8 @@ test('native personal skills are discovered cheaply, loaded independently by bot
       return topicCalls
     }
     const role = tools.includes('task_delegate') ? 'owner' : 'execution'
-    if (role === 'owner' && input.executions.length) return [finish('complete', 'The delegated read was verified.')]
+    if (role === 'execution') { const review = reviewers.execution(input); if (review) return review }
+    if (role === 'owner' && input.executions.length) return reviewers.owner(input, 'The delegated read was verified.')
     const step = steps.get(role) ?? 0; steps.set(role, step + 1)
     const rendered = JSON.stringify(request)
     if (step === 0) {
@@ -68,6 +92,7 @@ test('native personal skills are discovered cheaply, loaded independently by bot
   assert.deepEqual((await h.service.recover()).failures, [])
   const [task] = await h.query('task.list'), [execution] = await h.query('execution.list')
   assert.equal(task.status, 'completed')
+  assert.equal((await h.query('execution.list')).length, 3)
   assert.equal(task.topicRefs.length, 1)
   assert.equal(h.residentStore.listTopics('native-group').length, 1)
   assert.notEqual(task.sessionId, execution.sessionId)
@@ -84,13 +109,15 @@ test('native personal skills are discovered cheaply, loaded independently by bot
 
 test('an unavailable native skill is a correctable read and does not leave unknown external effects', async t => {
   const f = await fixture(t); let step = 0
+  const reviewers = completionReviews(join(f.skillRoot, names[1], 'references/procedure.md'))
   const h = await f.host(async request => {
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) return topicCalls
     if (tools.includes('task_delegate')) return !input.executions.length
       ? [call('task_delegate', { key: 'missing-skill', objective: 'Handle a missing guide without a write' }), finish('wait', 'Waiting.')]
-      : [finish('complete', 'The missing guide was reported and an available one was read.')]
+      : reviewers.owner(input, 'The missing guide was reported and an available one was read.')
+    const review = reviewers.execution(input); if (review) return review
     if (step++ === 0) return [call('skill', { name: 'no-longer-present' })]
     if (step === 2) return [call('skill', { name: names[1] })]
     assert.ok(JSON.stringify(request).includes(`BODY_ONLY_${names[1]}`))
@@ -98,6 +125,7 @@ test('an unavailable native skill is a correctable read and does not leave unkno
   })
   await h.service.ingest(message); await h.service.whenIdle()
   assert.equal((await h.query('task.list'))[0].status, 'completed')
+  assert.equal((await h.query('execution.list')).length, 3)
   assert.ok(h.toolResults.some(result => result.name === 'skill' && result.result.isError))
   assert.deepEqual(await h.query('operation.list'), [])
   assert.deepEqual((await h.service.recover()).failures, [])
@@ -139,13 +167,15 @@ test('unconfigured native profiles expose no bundled personal skills', async t =
 
 test('an execution same-name replacement does not inherit the native loader read-only accounting', async t => {
   const f = await fixture(t); let step = 0, effects = 0
+  const reviewers = completionReviews(join(f.skillRoot, names[0], 'references/procedure.md'))
   const h = await f.host(async (request, host) => {
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) return topicCalls
     if (tools.includes('task_delegate')) return !input.executions.length
       ? [call('task_delegate', { key: 'shadow-test', objective: 'Verify same-name tool accounting' }), finish('wait', 'Waiting.')]
-      : [finish('complete', 'The replacement remained accounted for.')]
+      : reviewers.owner(input, 'The replacement remained accounted for.')
+    const review = reviewers.execution(input); if (review) return review
     if (step++ === 0) return [call('skill', { name: names[0] })]
     if (step === 2) {
       const [execution] = await host.query('execution.list')
@@ -164,4 +194,5 @@ test('an execution same-name replacement does not inherit the native loader read
   assert.equal(operations[0].definition.toolName, 'skill')
   assert.equal(operations[0].state, 'succeeded')
   assert.equal((await h.query('task.list'))[0].status, 'completed')
+  assert.equal((await h.query('execution.list')).length, 3)
 })

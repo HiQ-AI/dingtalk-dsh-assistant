@@ -1,0 +1,9 @@
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (25230.4927ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 26015.8492

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { apply, name, readResidentOverview } from '../packages/dingtalk-dsh-assistant/client.js'
+import { apply, name, readResidentOverview, agentSaveSummary } from '../packages/dingtalk-dsh-assistant/client.js'
 
 test('概览在已移除任务表格同步接口后仍加载完整状态', async (t) => {
   const responses = {
@@ -96,6 +96,20 @@ test('插件设置页提供统一视觉尺度、窄屏表单布局和可见键�
   assert.match(source, /:focus-visible/u)
   assert.match(source, /assistant-inline-form/u)
   assert.match(source, /data-dingtalk-assistant-settings/u)
+})
+
+test('执行后端沿用唯一Agent保存入口并在部分失败时准确说明未保存选择', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
+  assert.match(source, /htmlFor: 'dingtalk-execution-backend'/)
+  assert.match(source, /value: 'dsh'.*DSH 原生（默认）/)
+  assert.match(source, /value: 'claude-code'.*Claude Code CLI/)
+  assert.match(source, /已有执行及续办保持原后端/)
+  assert.match(source, /if \(!taskDirty.current\) setExecutionBackend/)
+  assert.equal((source.match(/request\('\/config\/agent'/g) ?? []).length, 1)
+  const desired = { model: 'sol', reasoningEffort: '', agentNames: [], replySignature: '', proxyUrl: '', executionBackend: 'claude-code' }
+  assert.match(agentSaveSummary(desired, { ...desired, executionBackend: 'dsh' }), /插件设置（含统筹、协调和执行后端）：未全部生效/)
+  assert.match(agentSaveSummary(desired, desired), /插件设置（含统筹、协调和执行后端）：已生效/)
+  assert.match(agentSaveSummary(desired, undefined), /保存结果未知.*草稿已保留/)
 })
 
 test('添加常驻群在操作位置反馈前置条件、进度和请求结果', async () => {

@@ -9,7 +9,7 @@ import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { get } from 'node:http'
-import { available, reason, nativeTaskHost, latestInput, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, topicTaskCalls, modelToolValues, resolveContextInput } from './fixtures/task-session-native-host.js'
 
 const exec = promisify(execFile)
 const source = fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/', import.meta.url))
@@ -93,15 +93,35 @@ test('actual npm tarball has only the generic runtime and runs a personal-skill 
   const personal = join(f.root, 'personal'), work = join(f.root, 'runtime')
   await mkdir(join(personal, 'external-guide'), { recursive: true }); await mkdir(work)
   await writeFile(join(personal, 'external-guide', 'SKILL.md'), '---\nname: external-guide\ndescription: External user-owned guide.\n---\nPACKED_PERSONAL_BODY\n')
-  let step = 0
+  let step = 0, reviewStarted = false
   const h = await nativeTaskHost(work, async request => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) return topicCalls
     if (names.includes('task_delegate')) {
-      if (input.executions.length) return [finish('complete')]
+      if (input.executions.some(item => !item.drained)) return [finish('wait')]
+      if (input.executions.length && !reviewStarted) {
+        reviewStarted = true
+        return [call('task_delegate', { key: 'metadata-review', objective: 'Review guide metadata' }),
+          call('task_delegate', { key: 'delivery-review', objective: 'Review original guide result' }), finish('wait')]
+      }
+      if (input.executions.length === 3) return [finish('complete')]
       assert.ok(JSON.stringify(request).includes('External user-owned guide.'))
       return [call('task_delegate', { key: 'packed-guide', objective: 'Read the external guide', skillNames: ['external-guide'] }), finish('wait')]
+    }
+    if (input.objective === 'Review guide metadata') {
+      if (!JSON.stringify(request.messages).includes('PACKED_PERSONAL_BODY')) return [call('read', { file_path: join(personal, 'external-guide', 'SKILL.md') })]
+      assert.match(JSON.stringify(request.messages), /name: external-guide/)
+      return [call('execution_submit', { output: { status: 'completed', summary: 'Confirmed actual guide metadata.', evidence: ['external-guide/SKILL.md'], limitations: [], artifacts: [] } })]
+    }
+    if (input.objective === 'Review original guide result') {
+      const projected = modelToolValues(request).findLast(item => item.executions || item.contextReadRequired)
+      let team
+      try { team = projected && resolveContextInput(request, projected) }
+      catch (error) { if (error.contextReads) return error.contextReads.map(args => call('model_content_read', args)); throw error }
+      if (!team) return [call('execution_team_read', {})]
+      assert.ok(team.executions.find(item => item.objective === 'Read the external guide')?.result)
+      return [call('execution_submit', { output: { status: 'completed', summary: 'Confirmed original guide result.', evidence: [], limitations: [], artifacts: [] } })]
     }
     if (step++ === 0) return [call('skill', { name: 'external-guide' })]
     assert.ok(JSON.stringify(request).includes('PACKED_PERSONAL_BODY'))
@@ -115,6 +135,7 @@ test('actual npm tarball has only the generic runtime and runs a personal-skill 
     assert.equal((await h.query('task.list'))[0].topicRefs.length, 1)
     assert.equal(h.residentStore.listTopics('native-group').length, 1)
     assert.deepEqual(await h.query('operation.list'), [])
+    assert.equal((await h.query('execution.list')).length, 3)
     assert.deepEqual((await h.service.recover()).failures, [])
   } finally { await h.close() }
 })

@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: 原生网页工具错误不建立未知效果，仍可完成后续读取
+ok 1 - 原生网页工具错误不建立未知效果，仍可完成后续读取
+  ---
+  duration_ms: 6257.0314
+  type: 'test'
+  ...
+# Subtest: running reminder and coordinator clarification preserve one native shell job with received and consumed receipts
+ok 2 - running reminder and coordinator clarification preserve one native shell job with received and consumed receipts
+  ---
+  duration_ms: 14382.3535
+  type: 'test'
+  ...
+# Subtest: native completion race drains then resumes the original execution without replaying its shell effect
+ok 3 - native completion race drains then resumes the original execution without replaying its shell effect
+  ---
+  duration_ms: 12173.9977
+  type: 'test'
+  ...
+# Subtest: native executor resumes in the same titled task workspace and all task sessions share the process cwd
+ok 4 - native executor resumes in the same titled task workspace and all task sessions share the process cwd
+  ---
+  duration_ms: 19820.9638
+  type: 'test'
+  ...
+# Subtest: native shared resources queue without occupying task capacity and promote on drain
+ok 5 - native shared resources queue without occupying task capacity and promote on drain
+  ---
+  duration_ms: 31547.2847
+  type: 'test'
+  ...
+# Subtest: native delegation rejects changed keys on receipt replay and preserves omitted continuation keys
+ok 6 - native delegation rejects changed keys on receipt replay and preserves omitted continuation keys
+  ---
+  duration_ms: 11313.6327
+  type: 'test'
+  ...
+# Subtest: empty owner recovery reviews the retained execution without replaying its completed native write
+ok 7 - empty owner recovery reviews the retained execution without replaying its completed native write
+  ---
+  duration_ms: 17559.6903
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 113875.0788

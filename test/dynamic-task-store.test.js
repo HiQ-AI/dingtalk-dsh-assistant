@@ -8,6 +8,32 @@ import { createHash } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 
+test('执行后端固定于创建定义，续办及重启不改派；CLI反馈不伪称原生模型准入', async t => {
+  const f = await fixture(t), owner = await f.task()
+  await assert.rejects(f.command('execution.dispatch', { binding: owner.binding, key: 'invalid', prompt: '核验', definition: { executionBackend: 'other' } }), { code: 'TASK_EXECUTION_BACKEND_INVALID' })
+  assert.equal((await f.query({ kind: 'execution.list' })).length, 0)
+  for (const backend of [undefined, 'dsh', 'claude-code']) {
+    const key = backend ?? 'historical'
+    const dispatched = (await f.command('execution.dispatch', { binding: owner.binding, key, prompt: '核验', ...(backend ? { definition: { executionBackend: backend } } : {}) })).result.execution
+    const binding = (await f.command('execution.claim', { executionId: dispatched.executionId })).result.binding
+    await f.command('execution.feedback', { binding: owner.binding, executionId: dispatched.executionId, messageId: key, text: '核对同一版本' })
+    await f.command('execution.feedbackConsumed', { binding, messageId: key, sequence: 3 })
+    await f.command('execution.result', { binding, output: {}, feedbackVersion: 1 })
+    await f.command('execution.drained', { binding })
+    const next = (await f.command('execution.continue', { binding: owner.binding, executionId: dispatched.executionId, key: `${key}-next`, prompt: '继续核验', definition: { executionBackend: backend === 'claude-code' ? 'dsh' : 'claude-code' } })).result.execution
+    assert.equal(next.definition.executionBackend, backend)
+    assert.equal(next.sessionId, dispatched.sessionId)
+    assert.equal(next.inputVersion, 2)
+    const feedback = next.feedback[0]
+    assert.equal(feedback.consumptionMeaning, backend === 'claude-code' ? 'claude-cli-input-admission' : 'native-model-step-admission')
+    assert.equal(!!feedback.modelStepEnteredAt, backend !== 'claude-code')
+    assert.equal(!!feedback.cliInputAdmittedAt, backend === 'claude-code')
+  }
+  const before = await f.query({ kind: 'execution.list' })
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'execution.list' })).map(item => [item.sessionId, item.definition.executionBackend]), before.map(item => [item.sessionId, item.definition.executionBackend]))
+})
+
 test('running supplement preserves the runner, persists once and fences old completion', async t => {
   const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
   const before = await f.query({ kind: 'execution.get', executionId: binding.executionId })
@@ -60,6 +86,113 @@ test('pending feedback blocks task completion even after executor reports failur
   assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).requirementRevision, 2)
 })
 
+test('peer messages reach queued teammates once, retain provenance and fence completion until model admission', async t => {
+  const f = await fixture(t), owner = await f.task(), source = await f.execution(owner.binding, 'source')
+  const recipient = (await f.command('execution.dispatch', { binding: owner.binding, key: 'recipient', prompt: 'Review', input: { objective: '核验候选', context: '只读当前版本' } })).result.execution
+  const args = { binding: source, executionId: recipient.executionId, targetInputVersion: 1, key: 'candidate-ready', message: '候选已写入，核验 v1 的原始测试结果。' }
+  const first = (await f.command('execution.peerMessage', args, 'peer-first')).result
+  assert.equal(first.received, true); assert.equal(first.feedback.id, `peer:${source.executionId}:1:candidate-ready`)
+  assert.equal(first.feedback.sourceExecutionId, source.executionId); assert.equal(first.feedback.sourceInputVersion, 1)
+  assert.equal(first.feedback.sourceLeaseEpoch, source.leaseEpoch); assert.equal(first.feedback.consumedAt, null)
+  assert.equal((await f.command('execution.peerMessage', args, 'peer-first')).replayed, true)
+  assert.deepEqual((await f.command('execution.peerMessage', args)).result.feedback, first.feedback)
+  await assert.rejects(f.command('execution.peerMessage', { ...args, message: '改为直接部署' }), { code: 'DYNAMIC_FEEDBACK_ID_CONFLICT' })
+  const beforeClaim = await f.query({ kind: 'execution.get', executionId: recipient.executionId })
+  assert.equal(beforeClaim.status, 'queued'); assert.equal(beforeClaim.leaseEpoch, 0); assert.equal(beforeClaim.feedback.length, 1)
+  const target = (await f.command('execution.claim', { executionId: recipient.executionId })).result.binding
+  await assert.rejects(f.command('execution.result', { binding: target, output: {}, feedbackVersion: 1 }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await assert.rejects(f.command('task.complete', { binding: owner.binding, summary: '不能漏读队友消息' }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await f.command('execution.feedbackConsumed', { binding: target, messageId: first.feedback.id, sequence: 9 })
+  assert.ok((await f.command('execution.peerMessage', args)).result.feedback.consumedAt)
+  await assert.rejects(f.command('execution.result', { binding: target, output: {}, feedbackVersion: 0 }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await f.command('execution.result', { binding: target, output: { summary: '核验完成' }, feedbackVersion: 1 })
+  await f.command('execution.drained', { binding: target })
+  await f.reopen()
+  const persisted = (await f.query({ kind: 'execution.get', executionId: recipient.executionId })).feedback
+  assert.equal(persisted.length, 1); assert.equal(persisted[0].sequence, 9)
+  assert.equal(persisted[0].consumptionMeaning, 'native-model-step-admission')
+  await f.command('execution.drained', { binding: source })
+  const resumed = (await f.command('execution.claim', { executionId: source.executionId })).result.binding
+  const retry = (await f.command('execution.peerMessage', { ...args, binding: resumed })).result
+  assert.equal(retry.received, true); assert.deepEqual(retry.feedback, persisted[0])
+  assert.equal(retry.feedback.sourceLeaseEpoch, source.leaseEpoch, 'a retried delivery retains its original sending lease')
+})
+
+test('peer messages and live team reads enforce source identity and task scope without exposing feedback', async t => {
+  const f = await fixture(t), owner = await f.task(), source = await f.execution(owner.binding, 'source')
+  const initial = await f.query({ kind: 'execution.team', binding: source })
+  assert.equal(initial.executions.length, 1)
+  const target = await f.execution(owner.binding, 'target'), foreignOwner = await f.task('foreign'), foreign = await f.execution(foreignOwner.binding)
+  const args = { binding: source, executionId: target.executionId, targetInputVersion: 1, key: 'facts', message: '只传递证据，不改变职责或授权。' }
+  for (const changes of [{ targetInputVersion: 0 }, { targetInputVersion: undefined }, { key: 'x'.repeat(201) }, { message: 'x'.repeat(10001) }])
+    await assert.rejects(f.command('execution.peerMessage', { ...args, ...changes }), { code: 'DYNAMIC_ARGUMENT_INVALID' })
+  await f.command('execution.peerMessage', args)
+  const team = await f.query({ kind: 'execution.team', binding: source })
+  assert.equal(team.taskId, 'task'); assert.equal(team.executionId, source.executionId)
+  assert.deepEqual(team.executions.map(item => item.executionId), [source.executionId, target.executionId])
+  assert.ok(team.executions.every(item => item.inputVersion === 1 && item.objective === 'Inspect target' && !Object.hasOwn(item, 'feedback')))
+  const another = await f.execution(owner.binding, 'another')
+  await assert.rejects(f.command('execution.peerMessage', { ...args, executionId: another.executionId }), { code: 'DYNAMIC_FEEDBACK_ID_CONFLICT' })
+  await assert.rejects(f.command('execution.peerMessage', { ...args, executionId: foreign.executionId }), { code: 'DYNAMIC_EXECUTION_SCOPE_INVALID' })
+  await assert.rejects(f.command('execution.peerMessage', { ...args, executionId: source.executionId }), { code: 'DYNAMIC_EXECUTION_SCOPE_INVALID' })
+  for (const binding of [{ ...source, leaseEpoch: source.leaseEpoch + 1 }, { ...source, taskId: 'foreign' }, { ...source, inputVersion: 2 }]) {
+    await assert.rejects(f.command('execution.peerMessage', { ...args, binding }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+    await assert.rejects(f.query({ kind: 'execution.team', binding }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+  }
+  await f.command('task.control', { taskId: 'task', control: 'cancelled' })
+  await assert.rejects(f.command('execution.peerMessage', { ...args, key: 'late' }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  await assert.rejects(f.query({ kind: 'execution.team', binding: source }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+})
+
+test('finished peer recipients stay finished and cannot be awakened by coordination messages', async t => {
+  const f = await fixture(t), owner = await f.task(), source = await f.execution(owner.binding, 'source'), target = await f.execution(owner.binding, 'target')
+  await f.command('execution.result', { binding: target, output: { summary: '完成' } })
+  await f.command('execution.drained', { binding: target })
+  const before = await f.query({ kind: 'execution.get', executionId: target.executionId }), wakes = await f.query({ kind: 'wake.list', taskId: 'task' })
+  const result = (await f.command('execution.peerMessage', { binding: source, executionId: target.executionId, targetInputVersion: 1, key: 'late', message: '请补充核查。' })).result
+  assert.deepEqual(result, { received: false, executionId: target.executionId, sessionId: target.sessionId, reason: 'recipient_finished' })
+  assert.deepEqual(await f.query({ kind: 'execution.get', executionId: target.executionId }), before)
+  assert.deepEqual(await f.query({ kind: 'wake.list', taskId: 'task' }), wakes)
+})
+
+test('continued recipients reject stale peer goals and ignore old peer inboxes while preserving owner feedback', async t => {
+  const f = await fixture(t), owner = await f.task(), source = await f.execution(owner.binding, 'source'), target = await f.execution(owner.binding, 'target')
+  const args = { binding: source, executionId: target.executionId, targetInputVersion: 1, key: 'original-goal', message: '核对原候选。' }
+  const peer = (await f.command('execution.peerMessage', args)).result.feedback
+  await f.command('execution.feedback', { binding: owner.binding, executionId: target.executionId, messageId: 'owner-note', text: '保留原授权和操作证据。' })
+  await f.command('execution.result', { binding: target, error: { code: 'transport_failed' } })
+  await f.command('execution.drained', { binding: target })
+  await f.command('execution.continue', { binding: owner.binding, executionId: target.executionId, key: 'next', prompt: 'Continue', input: { objective: '核对新候选' } })
+  const next = (await f.command('execution.claim', { executionId: target.executionId })).result.binding
+  assert.equal(next.inputVersion, 2)
+  assert.deepEqual((await f.command('execution.peerMessage', args)).result.feedback, peer, 'an old key rereads its original delivery without forwarding it to the new goal')
+  await assert.rejects(f.command('execution.peerMessage', { ...args, key: 'new-stale-message' }), { code: 'DYNAMIC_EXECUTION_INPUT_STALE' })
+  await assert.rejects(f.command('execution.peerMessage', { ...args, targetInputVersion: 2 }), { code: 'DYNAMIC_FEEDBACK_ID_CONFLICT' })
+  await assert.rejects(f.command('execution.feedbackConsumed', { binding: next, messageId: peer.id, sequence: 11 }), { code: 'DYNAMIC_FEEDBACK_PROOF_INVALID' })
+  await assert.rejects(f.command('execution.result', { binding: next, output: {}, feedbackVersion: 0 }), { code: 'DYNAMIC_EXECUTION_FEEDBACK_PENDING' })
+  await f.command('execution.feedbackConsumed', { binding: next, messageId: 'owner-note', sequence: 12 })
+  await f.command('execution.result', { binding: next, output: {}, feedbackVersion: 1 })
+  await f.command('execution.drained', { binding: next })
+  await f.command('execution.result', { binding: source, output: {} })
+  await f.command('execution.drained', { binding: source })
+  await f.command('task.complete', { binding: owner.binding, summary: '当前目标已完成；旧轮队友消息仅保留历史。' })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).status, 'completed')
+  assert.equal((await f.query({ kind: 'execution.get', executionId: target.executionId })).feedback.find(item => item.id === peer.id).consumedAt, null)
+})
+
+test('tasks admit ten execution identities while retries and continuation reuse their existing slots', async t => {
+  const f = await fixture(t), owner = await f.task(), args = index => ({ binding: owner.binding, key: `member-${index}`, prompt: 'Work', input: { objective: `职责 ${index}` } })
+  const executions = []
+  for (let index = 0; index < 10; index++) executions.push((await f.command('execution.dispatch', args(index))).result.execution)
+  assert.equal((await f.command('execution.dispatch', args(9))).result.execution.executionId, executions[9].executionId)
+  await assert.rejects(f.command('execution.dispatch', args(10)), { code: 'DYNAMIC_EXECUTION_LIMIT_EXCEEDED' })
+  const first = (await f.command('execution.claim', { executionId: executions[0].executionId })).result.binding
+  await f.command('execution.result', { binding: first, output: {} }); await f.command('execution.drained', { binding: first })
+  const continued = (await f.command('execution.continue', { binding: owner.binding, executionId: first.executionId, key: 'next', prompt: 'Continue', input: { objective: '完成同一职责下一步' } })).result.execution
+  assert.equal(continued.inputVersion, 2); assert.equal(continued.sessionId, first.sessionId)
+  assert.equal((await f.query({ kind: 'execution.list', taskId: 'task' })).length, 10)
+})
+
 test('timeline records activity switches, independent parallel leases and continuation gaps without duplicating stage events', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-16T00:00:00Z') })
   const f = await fixture(t), owner = await f.task(), first = await f.execution(owner.binding, '查询信息')
@@ -68,6 +201,10 @@ test('timeline records activity switches, independent parallel leases and contin
   const args = { binding: first, summary: '查询完成，开始核对差异', evidence: ['query-proof'], sequence: 1, activity: '排查差异' }
   await f.command('execution.progressReported', args, 'activity-one')
   await f.command('execution.progressReported', args, 'activity-one')
+  const firstReport = (await f.query({ kind: 'execution.get', executionId: first.executionId })).stageProgress
+  assert.equal(firstReport.activity, '排查差异')
+  assert.equal(firstReport.inputVersion, first.inputVersion)
+  assert.equal(firstReport.leaseEpoch, first.leaseEpoch)
   t.mock.timers.tick(2000)
   await f.command('execution.result', { binding: first, output: { summary: '不可倒推的最终摘要' } })
   await f.command('execution.drained', { binding: first })
@@ -89,11 +226,21 @@ test('timeline records activity switches, independent parallel leases and contin
   assert.equal(Date.parse(segments[2].startedAt) - Date.parse(segments[1].endedAt), 5000)
   assert.equal(segments[3].label, '验证修复')
   assert.equal(timeline.executions[0].milestones.length, 2)
+  const milestones = timeline.executions[0].milestones
+  assert.deepEqual(milestones[0].evidence, ['query-proof'])
+  assert.equal(milestones[0].activity, '排查差异')
+  assert.equal(milestones[0].inputVersion, first.inputVersion)
+  assert.equal(milestones[0].leaseEpoch, first.leaseEpoch)
+  assert.equal(milestones[1].activity, '验证修复')
+  assert.equal(milestones[1].inputVersion, resumed.inputVersion)
+  assert.equal(milestones[1].leaseEpoch, resumed.leaseEpoch)
   assert.ok(Date.parse(timeline.executions[1].segments[0].startedAt) < Date.parse(segments[1].endedAt))
   assert.equal(timeline.executions[0].complete, true)
   assert.equal(JSON.stringify(timeline).includes('不可倒推的最终摘要'), false)
   await f.reopen()
   assert.deepEqual((await f.query({ kind: 'execution.get', executionId: first.executionId })).timeline.segments, executions[0].timeline.segments)
+  const restoredTimeline = projectTaskTimeline(await f.query({ kind: 'task.get', taskId: 'task' }), await f.query({ kind: 'execution.list', taskId: 'task' }), await f.query({ kind: 'wake.list', taskId: 'task' }))
+  assert.deepEqual(restoredTimeline.executions[0].milestones, milestones)
 })
 
 test('timeline restart leaves an unknown interval rather than inventing an end; later claims collect only observed history', async t => {
@@ -308,6 +455,29 @@ test('nonterminal stage reports persist and wake once without completing the exe
   assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.summary, args.summary)
 })
 
+test('stage plan is optional, validates before writing and persists across reports and restart in one input round', async t => {
+  const f = await fixture(t), owner = await f.task()
+  let binding = await f.execution(owner.binding)
+  const report = (sequence, fields = {}) => f.command('execution.progressReported', { binding, summary: '核对当前证据', evidence: [], sequence, ...fields })
+  await report(1)
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.plan, undefined)
+  for (const plan of ['', '   ', 123, ['读取证据'], 'a'.repeat(4001)]) await assert.rejects(report(2, { plan }), { code: 'DYNAMIC_EXECUTION_PROGRESS_INVALID' })
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.sequence, 1)
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).filter(item => item.kind === 'execution.stage.progress').length, 1)
+  const plan = '1. 只读冻结候选\n2. 核对两个原始断言'
+  await report(2, { plan: `  ${plan}  ` })
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.plan, plan)
+  await f.command('execution.drained', { binding })
+  binding = (await f.command('execution.claim', { executionId: binding.executionId })).result.binding
+  assert.equal(binding.inputVersion, 1, '同输入的恢复 claim 不产生新计划轮次')
+  const retained = await report(3, { activity: '核对断言' })
+  assert.equal(retained.result.execution.stageProgress.plan, plan)
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).find(item => item.wakeId === retained.result.wakeId).payload.plan, plan)
+  await report(4, { plan: '新增证据冲突；先核对同一候选版本。' })
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.plan, '新增证据冲突；先核对同一候选版本。')
+})
+
 test('stage reports reject forged input/lease, superseded requirements and cancellation', async t => {
   const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
   const report = changes => f.command('execution.progressReported', { binding, summary: '阶段事实', evidence: [], sequence: 1, ...changes })
@@ -323,14 +493,22 @@ test('stage reports reject forged input/lease, superseded requirements and cance
 
 test('stage reporting after continuation accepts only the new input and lease', async t => {
   const f = await fixture(t), owner = await f.task(), old = await f.execution(owner.binding)
-  await f.command('execution.progressReported', { binding: old, summary: '原回合阶段证据', evidence: [], sequence: 1 })
+  await f.command('execution.progressReported', { binding: old, summary: '原回合阶段证据', evidence: [], sequence: 1, plan: '原回合只读核对' })
   await f.command('execution.result', { binding: old, output: { summary: '原回合结果' } })
   await f.command('execution.drained', { binding: old })
   await f.command('execution.continue', { binding: owner.binding, executionId: old.executionId, key: 'next', prompt: '继续验证', input: { objective: '继续验证' } })
   const binding = (await f.command('execution.claim', { executionId: old.executionId })).result.binding
+  const continued = await f.query({ kind: 'execution.get', executionId: old.executionId })
+  assert.equal(continued.stageProgress.inputVersion, old.inputVersion, '续办保留原报告的真实轮次，不冒充本轮成果')
+  assert.equal(continued.stageProgress.leaseEpoch, old.leaseEpoch)
+  assert.equal(continued.stageProgress.plan, '原回合只读核对', '原计划只随原报告保留，尚未变成本轮计划')
+  assert.notEqual(continued.stageProgress.inputVersion, continued.inputVersion)
+  assert.notEqual(continued.stageProgress.leaseEpoch, continued.leaseEpoch)
   await assert.rejects(f.command('execution.progressReported', { binding: old, summary: '延迟旧报告', evidence: [], sequence: 2 }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
   await f.command('execution.progressReported', { binding, summary: '新回合证据', evidence: [], sequence: 1 })
-  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.inputVersion, binding.inputVersion)
+  const freshStage = (await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress
+  assert.equal(freshStage.inputVersion, binding.inputVersion)
+  assert.equal(freshStage.plan, undefined, '新输入轮次首次省略计划不能自动继承旧计划')
 })
 
 test('active blockers never re-inject recursive execution inputs or historical results', async t => {

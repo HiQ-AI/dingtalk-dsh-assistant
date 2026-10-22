@@ -21,6 +21,22 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 本机制依赖 DWS 真实消息时间，不把本地序号当流游标，也不承诺修复上游伪造/错误时间。epoch 之前尚未完成的交办不会自动继续，需要用户在新入口重新交办。
 
+## 执行后端配置与核验
+
+已经初始化的任务会话实例切换执行后端不需要新建数据库、迁移任务或重复本页历史清洁启动步骤。代码升级仍沿下文“已初始化实例更新核验”的受控部署流程；配置切换仅影响新建执行，不能迁移已经绑定的成员。
+
+在插件配置页的既有 Agent 表单选择“执行后端”，沿原有唯一保存按钮提交。选项为 DSH 原生（默认）和 Claude Code CLI。`GET /state/agent-config` 的 `executionBackend` 为 `dsh` 或 `claude-code`；未保存时读取 profile 中的 `taskSessions.executionBackend`，两者均缺省时读取 `dsh`，已保存值优先。保存后刷新回读，必要时在受控重启后再次核对。非法值应在写入任何配置前拒绝，保存失败保留页面草稿，不能只凭提示文字认定生效。
+
+启用 CLI 前，在实际服务账号与服务 PATH 下用 `Get-Command claude` 和 `claude --version` 只读核对已安装的命令及版本，操作者按 CLI 自身入口完成登录。插件不自动安装、登录或迁移凭据，也不会因 CLI 不可用改用 DSH。CLI 使用自身默认模型，不接收 DSH 的 provider/model、推理深度、preset、工具或 Skill 注册表；`CLAUDE.md` 按 CLI 自身行为处理，不能认定 DSH 指引已同步。配置页保存成功不证明 CLI 已登录或模型可调用。本轮离线验证后仍需操作者登录，再做下列限定本地文件的实际验收。
+
+- 新建隔离任务，核对新 execution 的 `executionBackend` 与配置一致；再次切换配置后续办原成员，原后端、executionId、会话身份与历史保持不变。缺少后端字段的旧成员继续使用 DSH，不能重建替身来完成切换。
+- 两种后端均沿同一 Task 的 3–10 人团队、阶段报告、成员消息和资源互斥运行。实际读取 `outputs/<executionId>/round-<inputVersion>.md`；续办后旧轮文件不变，新轮文件包含新职责。CLI 受管事件在同目录 `claude-events.jsonl`，DSH 原生日志仍在任务的 `.dsh/sessions/`。路径展示不证明文件写入成功，文档告警须单独核对。
+- 看板中 CLI 成员应显示 Claude Code 标签及原标题、状态、耗时，详情保留工作目录与文档/日志路径，没有“打开 DSH 会话”入口。DSH 成员原生入口仍可读取历史；不通过其他会话界面接管任务生命周期。
+- CLI 原生工具通过 permission MCP 进入 Host 当前身份、版本及 operation 准入。核对自定义 hooks、其他 MCP、嵌套 Agent 和后台任务被禁用，未使用跳过权限参数；适配器固定设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`，门禁仍拒绝 `run_in_background`，异常 Bash `backgroundTaskId` 回执会触发受管进程终止并保留 `unknown`。禁后台不是 OS 沙箱，终止请求不证明实际排空或远程效果消失；非受管进程须单独核验。内部成员消息和配置选择不构成新增业务授权，也不表示 CLI 继承了 DSH 沙箱或全部原生工具能力。
+- 取消与恢复分别核对实际受管进程的退出证明、当前操作账及原绑定。没有 DSH 句柄、已经请求取消或 CLI 输出了结果都不能单独证明排空；不能证明时保留执行占位及应保留的资源锁。CLI `unknown` 保留原记录和保护，本版不走 DSH 原生日志自动对账，也不接受原生失败处理材料冒充 CLI 证据；不得重放原动作、换身份或手改账本清除未知效果。
+
+上述检查分别保留配置回读、协议测试、真实 CLI 推理与产物证据。子进程协议夹具、页面测试或健康状态不能替代实际 CLI 登录、模型调用及业务交付验证；切换回 DSH 也只作用于新建执行。
+
 ## 开放前核验
 
 - 用新 profile 启动，核对实际 workspace、dbPath、instanceId、epoch 和独立 domain；确认旧任务/授权/通知均不出现在新看板。
@@ -44,6 +60,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 普通代码更新保留同一数据库、初始化标记、instanceId、epoch 和原会话目录，不重复清洁启动。当前任务会话运行时没有旧 workflow maintenance 接口，不能直接使用依赖该接口的历史部署脚本。停机前须通过当前宿主的原生生命周期停止接纳并排空，确认原任务/执行/群会话及实际业务子进程已结束；不能仅凭一次 SQLite 快照声称原子排空。普通本地部署不备份历史副本。
 
 本机静止实例使用 [原生退出切换脚本](../acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1)：显式传入持久 Assistant 与 Observer 两个包及各自摘要、精确旧 PID、当前 profile 摘要及本轮证据目录，先 `-Check`，通过后同参数执行。脚本先核验共享控制台仅包含精确计划任务进程树，再经 Windows CTRL+C 触发 DSH 原生 SIGINT disposal；等待旧进程退出、SQLite owner 释放、原生日志回合结束和实际子进程退出后，才沿官方 `dsh plugin --profile web add` 安装。不修改 profile，核验其原字节摘要并还原自启状态，经计划任务启动并回读。失败保留现场与阶段记录，不自动强制重启；不得将其用于活动业务执行或其他实例。此脚本只支持既有已配置的本机身份与路径，不承担迁移。 profile 声明本地 `file:` 目录宿主时，先核对声明与已安装宿主版本一致；漂移以 `DEPLOY_HOST_CONFIGURATION_DRIFT` 在停机前拒绝，普通代码部署不得隐式切换宿主。停机前以 profile 原生 CLI 的只读 `plugin --help` 验证依赖装配。安装失败保留停机现场，先核对原包/profile摘要、旧PID已退出、端口关闭与原生离线账本排空，再用同一配置声明的原生CLI接续原安装阶段；不要重新发信或重做原业务。
+
+账本预检按执行创建时绑定的后端读取证据：DSH 沿原 JSONL；Claude 读取自身 `outputs/<executionId>/claude-events.jsonl`，验证原 UUID、连续输入历史、版本/摘要/修订/租约、事件序号与最后排空记录，拒绝缺失、损坏、未知后端及链接路径。连续续办尚未领取时，仅在同租约、历史连续且最后已排空轮次精确匹配原输入、没有较新 start，并且当前为 queued 或已正式取消/失效时返回独立未启动证明；不恢复会话、不重放或结清 unknown。此证明仍只是停机前候选，实际退出和子进程排空须由正式部署流程另证。
 
 恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的原 `openTaskId` 查询 SUCCESS 后须读取精确原消息，确认消息 ID 与目标会话一致即可结清送达，不再以钉钉渲染后的正文或引用/@元数据作为该路径的硬门槛。该路径记录 `mentionVerification=unavailable`，仅证明送达，不声称正文、引用或 @ 已验证。无成功发送任务回执的历史匹配继续严格核对原正文、发送者、引用和 @。unknown 只沿原通知正常回读核验，不重发、不直接改 SQLite；独立确认原 receipt.messageId 与 sendAttemptCount 未增加。
 
@@ -77,9 +95,17 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 阶段唤醒更新无schema迁移，按本页静止实例双包流程部署。普通operation.settle仅在原绑定完全匹配、执行仍运行且未排空/取消/恢复/修订失效时省略统筹唤醒；执行自己消费真实成功/失败。unknown、cancelled、对账、独立操作、迟到结果、阶段成果、执行结束和用户输入仍唤醒。验证时比较实际wake账与统筹回合数，不能仅断言工具返回成功。现场已等待真实人工决定时保持原请求，不为测试制造一次无意义统筹回合；可用精确原生输入对安装包做只读投影复验。此修复不删除已有会话历史，正常历史仍沿原生压缩处理。
 
+阶段成果核验同时检查原报告 evidence/activity 经落账、统筹输入与时间轴投影后仍可读。报告 activity 表示报告时开始的活动；续办保留的旧 stageProgress 只能作为历史证据，按 inputVersion/leaseEpoch 及需求/控制版本核对，不当作本轮正在执行。看板在现有成果区展示依据和“报告时活动”，不把执行报告标成独立验收通过。没有活动的旧报告不猜测补齐。
+
 人工介入核验：待答请求在/state/authorizations返回taskSessionRequest=true、status=waiting-reply，任务归等待中；POST /tasks/:taskId/human-requests/:requestId/reply只接纳本机受信Web请求，body含幂等requestId、reply及expectedRequirementRevision/expectedControlRevision。原文保留真实配置webActorId，旧版本/已答/非当前请求拒绝，成功后原task/session继续。修订或终态将旧申请superseded；不得通过手改账或伪造答复绕过边界。
 
-进度巡检核验：execution.progressReview.checkedAt为持久上次检查时间，running当前版本到期600000毫秒后由既有recovery tick读取原生日志；wake.kind=execution.progress.review。统筹未调用task_execution_progress就提交会收到TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED纠正。缺文件、身份/输入不匹配或无新记录如实呈现，不能仅查状态宣布推进。巡检不发额外群进度消息，不清unknown效果。
+进度巡检核验：execution.progressReview.checkedAt为持久上次检查时间，running当前版本到期600000毫秒后由既有recovery tick读取原生日志；wake.kind=execution.progress.review。统筹未调用task_execution_progress就提交会收到TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED纠正；该工具现在返回本轮document引用，统筹须用原生read读文档后判断，日常不再返回日志摘录。缺文件、身份/输入不匹配或无阶段报告如实呈现，不能仅查状态宣布推进。巡检不发额外群进度消息，不清unknown效果。
+
+协作质量更新沿本页现有部署流程，无新配置和数据库迁移。执行团队按 Task 复用 3–10 个成员：新建第 11 个被拒绝，有执行团队但未满 3 个时不能 complete；纯咨询可保持零执行。wait 不要求立即凑满，依赖未齐的工作延后派发，简单任务将三个必要职责保持短小。历史超过 10 人的记录仍可读和续办，不删除或重建。检查 objective/context 是否明确每成员本轮职责、任务、输入、负责范围、前置、交付物及验收方法，resourceKeys 是否对应真实冲突资源。独立就绪目标应在同轮登记后再 wait；高风险自证需固定产物版本后补独立只读核验，不能用重做外部写入来补证。隔离模型复验入口见 `docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs`，结果与语义审阅记入同特性轮次；不能以提示词存在或会话数量增加代替行为验证。
+
+每轮文档核验：在隔离任务独立读取 `tasks/<taskId>/outputs/<executionId>/round-<inputVersion>.md`，确认身份、职责、首次阶段报告 plan、进展与最终结果相符。同轮报告可以更新文件；原 execution 续办后须产生下一 inputVersion 文件，独立比较旧文件 SHA256，确认后续报告和重启未改变旧轮。不能拿旧阶段报告当成本轮进度。文档属于可读投影，原账本保留恢复权威；文档写入异常会出技术告警，先修复真实路径/权限，不手工覆盖身份头或删除历史轮次。已提交账本回执不会因文档错误丢失，严格文档读取与下一轮切换仍须成功。此升级不补造升级前已丢失完整输入的历史文档。
+
+升级后在隔离任务确认执行工具目录存在 `execution_team_read` 和 `execution_send_message`。用同 Task 当前成员身份及目标 inputVersion 发送一条必要消息，独立回读 feedback 的 sourceExecutionId、sourceInputVersion、inputVersion、consumedAt 和原生日志 sequence；队列接收、模型步骤消费与业务处理分别核验。重复 key 不重复投递，跨 Task、旧输入版本或旧发送租约拒绝；已终态目标返回 recipient_finished，不启动新回合。续办后的旧 peer 消息只保留历史，不阻塞新轮次；统筹原有补充语义不变。只需对依赖就绪、接口/证据交接和具体冲突发定向消息，无新事实不反复发送。此检查不操作或重放现场任务。
 
 统筹方向判断核验：除检查读取调用外，核对巡检决定是否把最新整体目标、受托目标、范围及验收条件与实际行动对照，说明当前进展和下一必要结果。首次出现具体偏离就应通过原executionId反馈，不以重复错误为触发条件；确认偏离后仅复述进展并wait不算有效纠偏。跟进时独立核对反馈后的真实动作/产物，received或modelStepEnteredAt不能证明落实。必要验证、正常等待、证据不足和真实人工等待分别验证，不以一律发反馈为通过标准；本项不改变原人工等待/暂停机制。
 
@@ -140,6 +166,8 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 ## 本机桌面重启入口
 
 `C:/Users/64554/Desktop/App/restart-dsh-web.ps1` 委托 `D:/dsh_home/launchers/restart-web.ps1`。当前启动器源码为 `scripts/restart-web.ps1`，更新时将该文件与 `docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.mjs` 一起同步到上述 launchers 目录，并分别独立核对 SHA256。此入口仅管理既有本机 `DSH Web Local`、`D:/dsh_home` 和 `D:/baibu-agent/.dsh/task-sessions.sqlite`，不安装插件、不修改 profile 或初始化标记。
+
+包含 Claude 执行的版本必须同步支持该后端日志的账本检查器；只更新插件包不会更新 launchers 副本。检查器仅依赖 Node 标准库，复制后不从仓库导入适配器，也不为核验启动 CLI。
 
 先运行桌面脚本 `-Check`：零写入、零信号，检查实例/端口、任务账本及原生回合；停止态验证数据库、初始化标记与原 owner 进程已退出，保留中断回合交正式 Host 恢复事务接管，不要求部署专用的全部 turn/end 前置证据。普通执行在停止态启动；运行态只允许静止账本，通过既有原生控制台退出脚本发送 CTRL+C，在同一有界等待内核对精确旧进程和既有子进程全部退出，再通过冷启动账本身份检查，恢复自启并启动。运行态存在未开始的任务领取也拒绝停机；检查后新进入的回合由 DSH 原生退出及正式 Host 恢复合同处理，不能把检查快照当原子排空。活动任务或未知启动中效果拒绝重启；unknown 历史操作不重放、不清账。
 
