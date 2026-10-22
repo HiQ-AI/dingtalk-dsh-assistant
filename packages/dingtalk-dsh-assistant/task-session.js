@@ -7,6 +7,7 @@ import { classifyExecutionProviderFailure } from './execution-provider-failure.j
 import { sourceInterpretationInstructions } from './task-source-instructions.js'
 import { groupReplyScopeInstructions } from './group-message.js'
 import { retireHostContext } from './host-context.js'
+import { taskBoundaryInstructions } from './task-boundary-instructions.js'
 
 const identityEvent = 'plugin:dingtalk/task-session'
 const fail = code => Object.assign(new Error(code), { code })
@@ -113,6 +114,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         }
         agentCtx.systemPrompt.section({ name: 'task:responsibility', order: 0, text: instructions })
         agentCtx.systemPrompt.section({ name: 'task:sources', order: 1, text: sourceInterpretationInstructions })
+        agentCtx.systemPrompt.section({ name: 'task:boundary', order: 1, text: taskBoundaryInstructions })
         if (input.task.providerRecovery?.failure?.code === 'TASK_SESSION_NO_SUBMISSION')
           agentCtx.systemPrompt.section({ name: 'task:decision-recovery', order: 1,
             text: '上轮正常结束但未提交有效决定，Host 正沿原会话恢复。核对已落账执行结果和操作账，再调用 task_session_submit 或确有必要的 task_request_human。已成功动作不得重做，未知效果先对账；不要将本次技术恢复当成新的业务授权。' })

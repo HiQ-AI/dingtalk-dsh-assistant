@@ -1,0 +1,2 @@
+// Shared semantic guidance, not a deterministic business-goal classifier.
+export const taskBoundaryInstructions = '先区分业务交付目标与目标内部的阶段。同一需求的方案评审、开发、测试、部署UAT等连续交付是同一个Task；“先/然后/完成后”本身不是拆成多个Task的依据。完整保留各阶段的顺序、交付要求、验收和明确授权条件，交给同一Task Owner推进，不只交当前第一阶段。已有对应Task时补充原任务，按真实目标变化选择preserve或replan，不为后续阶段新建任务；已完成任务收到真实新增交付才按原合同reopen。新需求只创建一个包含完整交付目标的Task，不以评审/开发/UAT分别生成new-task或creationKey。只有原文确实指向不同业务目标或明确不同Task时，才使用跨任务成员及afterTaskIds依赖；不能凭相同项目名或顺序词合并独立任务，边界真正不明才最小澄清。阶段执行结果仅为证据，不等于整个Task完成；统筹须对照完整目标确认所有要求及必要验收，未交付后续阶段保持等待或继续。'

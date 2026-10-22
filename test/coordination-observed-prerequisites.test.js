@@ -8,6 +8,31 @@ import { DatabaseSync } from 'node:sqlite'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { freezeCoordinationMembers } from '../packages/dingtalk-dsh-assistant/coordination-task-commands.js'
 import { coordinationProposalSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
+import { taskBoundaryInstructions } from '../packages/dingtalk-dsh-assistant/task-boundary-instructions.js'
+
+test('single-goal stages preserve one creation envelope or revise the original Task with all ordered requirements', () => {
+  const objective = '需求X先方案评审，然后开发，开发完部署UAT'
+  const requirements = ['方案评审', '评审后开发', '开发后部署UAT并验证']
+  const source = { sourceId: 'source', groupId: 'g', actorId: 'u', unitId: 'unit', unitRevision: 1 }
+  const proposal = coordinationProposalSchema.parse({ kind: 'arrangement', members: [
+    { action: 'new-task', creationKey: 'X', title: '需求X交付', objective, requirements }] })
+  const [created] = freezeCoordinationMembers({ coordinationId: 'one', proposal, tasks: new Map(), source })
+  assert.equal(created.createCommand.args.objective, objective)
+  assert.deepEqual(created.createCommand.args.requirements, requirements)
+  assert.deepEqual(created.dependencies, [])
+  const task = { taskId: 'X', groupId: 'g', request: '需求X评审', status: 'active', control: 'active',
+    requirementRevision: 1, controlRevision: 1, runSequence: 1 }
+  const update = coordinationProposalSchema.parse({ kind: 'arrangement', members: [
+    { action: 'task-context', taskId: 'X', inputVersion: 1, runSequence: 1, progressImpact: 'replan',
+      impactReason: '补充后续交付', context: objective, objective, requirements }] })
+  const [revised] = freezeCoordinationMembers({ coordinationId: 'update', proposal: update, tasks: new Map([['X', task]]), source })
+  assert.equal(revised.createCommand, undefined)
+  assert.equal(revised.command.args.taskId, 'X')
+  assert.equal(revised.command.args.objective, objective)
+  assert.deepEqual(revised.command.args.requirements, requirements)
+  assert.ok(revised.command.args.request.includes(objective))
+  assert.match(taskBoundaryInstructions, /不能凭相同项目名或顺序词合并独立任务/)
+})
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(),'observe-prerequisite-'))

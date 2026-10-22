@@ -4,6 +4,7 @@ import { createCoordinationResourceTools } from './coordination-resources.js'
 import { buildReplyReviewCandidates } from './decision.js'
 import { sessionWorkspace, nameSession } from './session-workspaces.js'
 import { groupReplyInstructions } from './group-message.js'
+import { taskBoundaryInstructions } from './task-boundary-instructions.js'
 
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const sameStringSet = (a, b) => a.length === b.length && a.every(value => b.includes(value))
@@ -92,6 +93,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
           agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions })
           agentCtx.systemPrompt.section({ name: 'dingtalk-task-continuation', order: 121, text: taskContinuationInstructions })
+          agentCtx.systemPrompt.section({ name: 'dingtalk-task-boundary', order: 123, text: taskBoundaryInstructions })
           if (role === 'route') agentCtx.systemPrompt.section({ name: 'dingtalk-independent-task-coordination', order: 122,
             text: coordinationEnabled
               ? '独立任务协调接纳已启用。用户明确授权的跨任务安排、依赖、批量修改、定时查询/继续及关联改口，应拆成稳定 source unit，并在 group_topic_route_submit 的对应 units 设置 dispatchOwner="coordination"。该 unit 的 topics 可为空，或仅提供真实 Topic 上下文引用，不设置 effectOwner，不新建总 Topic 或总 Task 替代原任务。普通讨论及原单项单独保留旧链，混合消息按 unit 划分，不能整条吞并。这里只提交候选归属和原文引用；任务目标、要求版本、时间与通知对象由独立协调服务核查和接纳。'
