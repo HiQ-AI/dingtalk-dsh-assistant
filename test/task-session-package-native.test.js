@@ -1,6 +1,6 @@
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, realpath, writeFile, symlink, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, writeFile, symlink, rm, readdir, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -35,16 +35,35 @@ async function pack(t) {
     if (path?.endsWith('npm-cli.js')) { npm = path; break }
   }
   assert.ok(npm, 'An installed npm CLI is required for a real package test')
-  const { stdout } = await exec(process.execPath, [npm, 'pack', '--json', '--ignore-scripts', '--pack-destination', root, '--cache', join(root, 'npm-cache')], { cwd: source })
+  // Give npm ordinary independent inodes: some cloud overlay source inodes exceed
+  // Number.MAX_SAFE_INTEGER and npm/tar can otherwise alias different files.
+  const staging = join(root, 'source'); await mkdir(staging)
+  for (const entry of await readdir(source, { withFileTypes: true })) {
+    if (entry.isFile()) await copyFile(join(source, entry.name), join(staging, entry.name))
+  }
+  const { stdout } = await exec(process.execPath, [npm, 'pack', '--json', '--ignore-scripts', '--pack-destination', root, '--cache', join(root, 'npm-cache')], { cwd: staging })
   ;[manifest] = JSON.parse(stdout)
   await exec('tar', ['-xzf', join(root, manifest.filename), '-C', root])
   }
   const dir = join(root, 'package'), pkg = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'))
+  // Inspect the extracted artifact, never resolve missing runtime imports from source.
+  // Cover static imports/re-exports and literal dynamic imports/require calls in every packed JS file.
+  const packedPaths = new Set(manifest.files.map(entry => entry.path))
+  assert.ok(packedPaths.has('task-boundary-instructions.js'), 'The shared task boundary runtime must ship')
+  for (const entry of manifest.files.filter(entry => entry.path.endsWith('.js'))) {
+    const code = await readFile(join(dir, entry.path), 'utf8')
+    assert.equal(code, await readFile(join(source, entry.path), 'utf8'), `Packed runtime bytes differ: ${entry.path}`)
+    const references = code.matchAll(/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)['"](\.{1,2}\/[^'"\r\n]+)['"]/g)
+    for (const [, specifier] of references) {
+      const target = fileURLToPath(new URL(specifier, pathToFileURL(join(dir, entry.path))))
+      const relative = target.slice(dir.length + 1).replaceAll('\\', '/')
+      assert.ok(target.startsWith(dir + '/') || target.startsWith(dir + '\\'), `Runtime import escapes package: ${entry.path}: ${specifier}`)
+      assert.ok(packedPaths.has(relative), `Missing packed runtime dependency: ${entry.path}: ${specifier}`)
+      await readFile(target)
+    }
+  }
   assert.ok(pkg.files.every(path => !path.includes('*')), 'Publication must use an explicit runtime allowlist')
   assert.ok(manifest.files.some(entry => entry.path === 'notification-delivery.js'), 'The durable notification helper must ship in the runtime tarball')
-  const delivery = await import(pathToFileURL(join(dir, 'notification-delivery.js')).href)
-  assert.equal(typeof delivery.deliverTaskNotification, 'function')
-  assert.equal(typeof (await import(pathToFileURL(join(dir, 'dws-adapter.js')).href)).createDwsAdapter, 'function')
   assert.equal(pkg.exports['./execution'], undefined)
   assert.equal(pkg.exports['./platform-host'], undefined)
   assert.doesNotMatch(await readFile(join(dir, 'README.md'), 'utf8'), /ownerContract|NodeRun|workflow\.register|task-workflow\.js/, 'The automatically included package README must not advertise the retired engine')
@@ -62,6 +81,9 @@ async function pack(t) {
     await mkdir(dirname(link), { recursive: true })
     await symlink(await realpath(target), link, 'junction')
   }
+  const delivery = await import(pathToFileURL(join(dir, 'notification-delivery.js')).href)
+  assert.equal(typeof delivery.deliverTaskNotification, 'function')
+  assert.equal(typeof (await import(pathToFileURL(join(dir, 'dws-adapter.js')).href)).createDwsAdapter, 'function')
   return { root, dir, pkg, manifest }
 }
 

@@ -73,6 +73,7 @@
     "task-session.js",
     "task-model-config.js",
     "task-source-instructions.js",
+    "task-boundary-instructions.js",
     "task-topic-coordinator.js",
     "tool-schema.js",
     "topic-model.js",
