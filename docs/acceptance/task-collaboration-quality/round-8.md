@@ -19,3 +19,9 @@ CLI 适配器 SHA256：`1cb9e0123657080f99b73732115b666072bedb34c9b5b9c08d73589d
 用户后续自行登录 Claude，本轮未验证真实账号模型 run/resume、真实多成员 CLI peer 往返或跨模型请求的所有反馈顺序。协议及混合团队夹具覆盖对应实现合同；真实 CLI 两轮只证明其明确列出的协议路径。该两轮探针未在切轮前记录旧文档 SHA，不用它替代混合团队和 SG6 的冻结断言。
 
 CLI 使用自身默认模型，不接收 DSH 模型/preset/Skill 注册表；严格工具与权限桥不等于 OS 沙箱。未知效果和无法证明排空均保留原保护，不移交替身或重放。未触发 CI、未合并、未部署现场、未执行真实钉钉或外部业务操作。Git/PR 状态在独立回读后另补。
+
+## Git / PR 独立回读
+
+代码提交 `9f2b8167a51e5accec76b183cabc99bd88293542` 已推送。`git ls-remote --heads origin worktree-task-collaboration-quality` 与本地提交相同；`gh pr view 248` 独立返回 number=248、URL=https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/248、state=OPEN、base=main、headRefName=worktree-task-collaboration-quality、headRefOid=同代码提交、mergedAt=null、checks=0。标题已更新为“完善任务团队协作、逐轮文档与可选 Claude Code 执行后端”，正文规范化换行后与通过检查的文件逐字一致。
+
+源码 diff 格式、long-goal validator、PR 正文结构检查和最终 suite-map 均通过。原始 stdout 的行尾空白保留，diff 检查仅排除 .log；docs/tmp 原始模型协议、临时 SQLite 与 PR 草稿未进入提交。后续仅补本交付记录，不重复已通过的源码验证。
