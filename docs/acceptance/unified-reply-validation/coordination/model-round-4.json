@@ -1,0 +1,393 @@
+{
+  "model": "gpt-6-astra",
+  "reasoningEffort": "low",
+  "cases": [
+    {
+      "id": "static-capability-before-gateway",
+      "pass": true,
+      "actions": [
+        {
+          "tool": "read-progress"
+        },
+        {
+          "tool": "read-execution"
+        },
+        {
+          "tool": "feedback",
+          "args": {
+            "executionId": "original",
+            "key": "correct-static-investigation-before-gateway",
+            "feedback": true,
+            "objective": "继续只读查明 UAT2 模板下载失败原因并给证据，不发布。序列20已证实前端调用 /unit-group/template 而当前后端无对应端点，序列21表明仓库及Git历史可读；序列22将网关配置和新登录作为继续查后端功能的前置条件不必要。先不要向用户索取这些信息，利用现有仓库核对端点、模板文件的存在及删除/变更历史、相关提交和前端调用匹配情况，给出可复核的路径和提交证据。区分已证实的代码能力缺失与尚未验证的线上请求链路；网关/浏览器证据只作为确认实际失败链路的后续缺口，不阻塞静态原因调查，不把缺失端点直接断言为已证实的线上唯一根因。"
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "已发现前端模板下载调用与当前后端端点不匹配，正继续核对端点和模板文件的变更历史；本次仅调查，不发布。已纠正将网关配置和新登录作为静态调查前置条件的方向。",
+            "evidence": [
+              "执行记录20：UAT2前后端提交已固定，前端调用 /unit-group/template，当前后端无对应端点。",
+              "执行记录21：后端仓库和Git历史可读取，端点及模板删除历史尚待核对。",
+              "已向原执行反馈先查现有代码与历史，反馈已接收，尚未消费。"
+            ],
+            "limitations": [
+              "尚不能将代码端点缺失认定为线上失败的唯一根因。",
+              "等待变更历史证据和实际纠偏结果；线上网关及请求链路尚未验证。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_execution_progress",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "task_execution_read",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "task_delegate",
+          "args": {
+            "executionId": "original",
+            "key": "correct-static-investigation-before-gateway",
+            "feedback": true,
+            "objective": "继续只读查明 UAT2 模板下载失败原因并给证据，不发布。序列20已证实前端调用 /unit-group/template 而当前后端无对应端点，序列21表明仓库及Git历史可读；序列22将网关配置和新登录作为继续查后端功能的前置条件不必要。先不要向用户索取这些信息，利用现有仓库核对端点、模板文件的存在及删除/变更历史、相关提交和前端调用匹配情况，给出可复核的路径和提交证据。区分已证实的代码能力缺失与尚未验证的线上请求链路；网关/浏览器证据只作为确认实际失败链路的后续缺口，不阻塞静态原因调查，不把缺失端点直接断言为已证实的线上唯一根因。"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "已发现前端模板下载调用与当前后端端点不匹配，正继续核对端点和模板文件的变更历史；本次仅调查，不发布。已纠正将网关配置和新登录作为静态调查前置条件的方向。",
+              "evidence": [
+                "执行记录20：UAT2前后端提交已固定，前端调用 /unit-group/template，当前后端无对应端点。",
+                "执行记录21：后端仓库和Git历史可读取，端点及模板删除历史尚待核对。",
+                "已向原执行反馈先查现有代码与历史，反馈已接收，尚未消费。"
+              ],
+              "limitations": [
+                "尚不能将代码端点缺失认定为线上失败的唯一根因。",
+                "等待变更历史证据和实际纠偏结果；线上网关及请求链路尚未验证。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "已发现前端模板下载调用与当前后端端点不匹配，正继续核对端点和模板文件的变更历史；本次仅调查，不发布。已纠正将网关配置和新登录作为静态调查前置条件的方向。",
+          "evidence": [
+            "执行记录20：UAT2前后端提交已固定，前端调用 /unit-group/template，当前后端无对应端点。",
+            "执行记录21：后端仓库和Git历史可读取，端点及模板删除历史尚待核对。",
+            "已向原执行反馈先查现有代码与历史，反馈已接收，尚未消费。"
+          ],
+          "limitations": [
+            "尚不能将代码端点缺失认定为线上失败的唯一根因。",
+            "等待变更历史证据和实际纠偏结果；线上网关及请求链路尚未验证。"
+          ]
+        }
+      },
+      "retainedDecisionSequence": 31,
+      "semanticReviewRequired": "应让原执行先完成可独立推进的实际分支/能力/历史调查，将网关或线上确认另列未知，不把外围依赖升级成人工阻塞。"
+    },
+    {
+      "id": "pass-conflicts-with-page-evidence",
+      "pass": true,
+      "actions": [
+        {
+          "tool": "read-progress"
+        },
+        {
+          "tool": "read-execution"
+        },
+        {
+          "tool": "feedback",
+          "args": {
+            "key": "correct-real-page-evidence",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "停止交付当前截图及用脚本清除红色提示的计划。用户要求真实只读页面、无本次验证错误、保留原按钮权限且不写业务数据；sequence20实际PNG读图存在Network Error，与JSON PASS冲突，不能按PASS验收或遮掩错误。依据sequence21继续核对两个精确路径POST /approval/list、POST /message/list的Controller/Service只查询证据及当前账号权限；确认无写入后仅调整验证拦截策略以允许已证实的这两个只读请求，不泛化放开POST，继续阻止业务写入，不修改原按钮权限。重新加载真实页面，核对请求结果并重新截图、实际读图，确认错误真实消失后提交证据供统筹验收；若仍有错误如实保留并调查，不自行发送截图。"
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "当前截图仍有 Network Error，不能交付。已要求停止清除提示的做法，修正只读请求误拦截后重新截图并实际读图核验，同时保留原按钮权限、禁止业务写入。",
+            "evidence": [
+              "实际PNG读图发现红色错误提示，与自动检查PASS冲突。",
+              "两个已记录为只查询的接口被全部禁止POST的策略拦截。",
+              "已向原执行发送纠偏要求。"
+            ],
+            "limitations": [
+              "纠偏尚未被执行会话消费，尚无修正后的页面与截图证据；需核验真实错误消失及只读边界后才能完成。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_execution_progress",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "task_execution_read",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "task_delegate",
+          "args": {
+            "key": "correct-real-page-evidence",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "停止交付当前截图及用脚本清除红色提示的计划。用户要求真实只读页面、无本次验证错误、保留原按钮权限且不写业务数据；sequence20实际PNG读图存在Network Error，与JSON PASS冲突，不能按PASS验收或遮掩错误。依据sequence21继续核对两个精确路径POST /approval/list、POST /message/list的Controller/Service只查询证据及当前账号权限；确认无写入后仅调整验证拦截策略以允许已证实的这两个只读请求，不泛化放开POST，继续阻止业务写入，不修改原按钮权限。重新加载真实页面，核对请求结果并重新截图、实际读图，确认错误真实消失后提交证据供统筹验收；若仍有错误如实保留并调查，不自行发送截图。"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "当前截图仍有 Network Error，不能交付。已要求停止清除提示的做法，修正只读请求误拦截后重新截图并实际读图核验，同时保留原按钮权限、禁止业务写入。",
+              "evidence": [
+                "实际PNG读图发现红色错误提示，与自动检查PASS冲突。",
+                "两个已记录为只查询的接口被全部禁止POST的策略拦截。",
+                "已向原执行发送纠偏要求。"
+              ],
+              "limitations": [
+                "纠偏尚未被执行会话消费，尚无修正后的页面与截图证据；需核验真实错误消失及只读边界后才能完成。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "当前截图仍有 Network Error，不能交付。已要求停止清除提示的做法，修正只读请求误拦截后重新截图并实际读图核验，同时保留原按钮权限、禁止业务写入。",
+          "evidence": [
+            "实际PNG读图发现红色错误提示，与自动检查PASS冲突。",
+            "两个已记录为只查询的接口被全部禁止POST的策略拦截。",
+            "已向原执行发送纠偏要求。"
+          ],
+          "limitations": [
+            "纠偏尚未被执行会话消费，尚无修正后的页面与截图证据；需核验真实错误消失及只读边界后才能完成。"
+          ]
+        }
+      },
+      "retainedDecisionSequence": 31,
+      "semanticReviewRequired": "应阻止发送错误图和隐藏提示，只精确放行已证明的只读请求，重取截图并读图；不扩展业务写权限或重新部署。"
+    },
+    {
+      "id": "split-attachment-delivery",
+      "pass": true,
+      "actions": [
+        {
+          "tool": "read-progress"
+        },
+        {
+          "tool": "read-execution"
+        },
+        {
+          "tool": "feedback",
+          "args": {
+            "key": "correct-unified-reply-delivery",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "纠正交付方向：用户要求正文、两张截图和文档在同一条原生引用回复中并引用本次请求，明确禁止先附件后文字。delivery:20 已分别发送三条无引用、无正文文件消息，delivery:21 拟单独补文字，均不满足要求；字节一致不能判定完成。停止单独补文字及任何试探性重发，不因旧附件已发送而宣布完成。先只读核实接口是否支持同一原生引用消息承载正文和三附件，并核对已发送效果；不要撤回或重复旧消息来试探。报告能力证据、已有消息关联及可行修正方式；若能力不能支持，明确具体技术缺口交统筹处理，不擅自改成分开发送。最终验收必须同时核对同一消息的引用目标、正文、三附件关联和字节。"
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "三份附件已被分开发送，未满足同一条原生引用回复包含正文和全部附件的要求，不能算完成。已要求原执行停止单独补文字，先核实合并引用回复的支持能力和修正方式。",
+            "evidence": [
+              "发送记录显示三条文件消息均无引用、无正文；附件字节一致只证明文件内容正确。",
+              "当前只证实独立文件发送和纯文本引用接口，尚未核实组合能力。",
+              "纠偏提醒已送达原执行，尚未确认消费或实际落实。"
+            ],
+            "limitations": [
+              "已发送的三条附件消息仍是既成效果。",
+              "等待接口能力核实及修正结果；不得用试探性重发或分开发送代替要求。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_execution_progress",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "task_execution_read",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "task_delegate",
+          "args": {
+            "key": "correct-unified-reply-delivery",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "纠正交付方向：用户要求正文、两张截图和文档在同一条原生引用回复中并引用本次请求，明确禁止先附件后文字。delivery:20 已分别发送三条无引用、无正文文件消息，delivery:21 拟单独补文字，均不满足要求；字节一致不能判定完成。停止单独补文字及任何试探性重发，不因旧附件已发送而宣布完成。先只读核实接口是否支持同一原生引用消息承载正文和三附件，并核对已发送效果；不要撤回或重复旧消息来试探。报告能力证据、已有消息关联及可行修正方式；若能力不能支持，明确具体技术缺口交统筹处理，不擅自改成分开发送。最终验收必须同时核对同一消息的引用目标、正文、三附件关联和字节。"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "三份附件已被分开发送，未满足同一条原生引用回复包含正文和全部附件的要求，不能算完成。已要求原执行停止单独补文字，先核实合并引用回复的支持能力和修正方式。",
+              "evidence": [
+                "发送记录显示三条文件消息均无引用、无正文；附件字节一致只证明文件内容正确。",
+                "当前只证实独立文件发送和纯文本引用接口，尚未核实组合能力。",
+                "纠偏提醒已送达原执行，尚未确认消费或实际落实。"
+              ],
+              "limitations": [
+                "已发送的三条附件消息仍是既成效果。",
+                "等待接口能力核实及修正结果；不得用试探性重发或分开发送代替要求。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "三份附件已被分开发送，未满足同一条原生引用回复包含正文和全部附件的要求，不能算完成。已要求原执行停止单独补文字，先核实合并引用回复的支持能力和修正方式。",
+          "evidence": [
+            "发送记录显示三条文件消息均无引用、无正文；附件字节一致只证明文件内容正确。",
+            "当前只证实独立文件发送和纯文本引用接口，尚未核实组合能力。",
+            "纠偏提醒已送达原执行，尚未确认消费或实际落实。"
+          ],
+          "limitations": [
+            "已发送的三条附件消息仍是既成效果。",
+            "等待接口能力核实及修正结果；不得用试探性重发或分开发送代替要求。"
+          ]
+        }
+      },
+      "retainedDecisionSequence": 31,
+      "semanticReviewRequired": "应指出字节送达不能证明引用及组合形式满足，不 complete、不重发旧图、不猜协议或拆条降级；沿原执行核实能力并明确保存未满足的交付缺口。"
+    },
+    {
+      "id": "insufficient-evidence",
+      "pass": true,
+      "actions": [
+        {
+          "tool": "read-progress"
+        },
+        {
+          "tool": "read-execution"
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "原 job-3 的结果尚未读完，继续等待原执行取得验证结果；目前不能判断验证成功或失败。",
+            "evidence": [
+              "用户要求运行指定验证并报告真实结果；原执行受托等待 job-3 并核对结果。",
+              "巡检记录 sequence 20 显示原 job-3 输出读取未结束、无新增输出；执行尚未排空。"
+            ],
+            "limitations": [
+              "现有证据不足以确认整体执行方向或验证结论，也不能据无新增输出判断卡死。下一检查点是原 job-3 的终态及完整结果，不重跑验证。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_execution_progress",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "task_execution_read",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "d86b5180547d8b36559c505b1d47e614e23bc9989d91d4734923509ca4d2a1a5:sha256:800557981b0d414e013f77b76fa1deee003b4edbb36c2345253f57c08c9c54f4",
+            "path": "/sources/user-request"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "d86b5180547d8b36559c505b1d47e614e23bc9989d91d4734923509ca4d2a1a5:sha256:350fcd958072d22a9bfd72f9ba2c35ed711215355f45879e56e2f571a6f836eb"
+          }
+        },
+        {
+          "sequence": 36,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "原 job-3 的结果尚未读完，继续等待原执行取得验证结果；目前不能判断验证成功或失败。",
+              "evidence": [
+                "用户要求运行指定验证并报告真实结果；原执行受托等待 job-3 并核对结果。",
+                "巡检记录 sequence 20 显示原 job-3 输出读取未结束、无新增输出；执行尚未排空。"
+              ],
+              "limitations": [
+                "现有证据不足以确认整体执行方向或验证结论，也不能据无新增输出判断卡死。下一检查点是原 job-3 的终态及完整结果，不重跑验证。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "原 job-3 的结果尚未读完，继续等待原执行取得验证结果；目前不能判断验证成功或失败。",
+          "evidence": [
+            "用户要求运行指定验证并报告真实结果；原执行受托等待 job-3 并核对结果。",
+            "巡检记录 sequence 20 显示原 job-3 输出读取未结束、无新增输出；执行尚未排空。"
+          ],
+          "limitations": [
+            "现有证据不足以确认整体执行方向或验证结论，也不能据无新增输出判断卡死。下一检查点是原 job-3 的终态及完整结果，不重跑验证。"
+          ]
+        }
+      },
+      "retainedDecisionSequence": 36,
+      "semanticReviewRequired": "核对实际反馈和决定是否符合该场景，不以工具计数替代语义判断。"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.0565ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: false (4304.9833ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: true (7591.2257ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (7943.1504ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (8763.8979ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 29230.6951

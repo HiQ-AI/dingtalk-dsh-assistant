@@ -1,0 +1,61 @@
+{
+  "recordedAt": "2026-10-22T06:41:35.775Z",
+  "node": "v24.19.0",
+  "productionTaskModel": {
+    "provider": "openai-codex",
+    "model": "gpt-6-astra",
+    "reasoningMode": "explicit",
+    "reasoningEffort": "low"
+  },
+  "historicalTaskModel": {
+    "source": "original coordinator request/header sequence 17",
+    "provider": "openai-codex",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "low"
+  },
+  "installedProfile": {
+    "path": "D:/dsh_home/profiles/web/package.json",
+    "packages": [
+      {
+        "name": "@deepseek-ai/cordis",
+        "version": "4.0.5"
+      },
+      {
+        "name": "@deepseek-ai/dsh-base",
+        "version": "0.2.1-rc.2"
+      },
+      {
+        "name": "@deepseek-ai/dsh-llm",
+        "version": "0.2.1-rc.2"
+      },
+      {
+        "name": "@deepseek-ai/dsh-session-persistence-jsonl",
+        "version": "0.2.1-rc.2"
+      },
+      {
+        "name": "dsh-codex-connect",
+        "version": "0.2.0-alpha.9"
+      }
+    ]
+  },
+  "lockedProfile": {
+    "path": "test/fixtures/native-profile/package.json",
+    "packages": [
+      {
+        "name": "@deepseek-ai/cordis",
+        "version": "4.0.5-alpha.1"
+      },
+      {
+        "name": "@deepseek-ai/dsh-base",
+        "version": "0.2.1-alpha.2"
+      }
+    ]
+  },
+  "hashes": {
+    "packages/dingtalk-dsh-assistant/task-session.js": "024a14e157c3cb6a5a79a162a7ca4c6894a81a376eca6c022353eb164fb62472",
+    "test/fixtures/task-progress-correction-scenarios.js": "5a281b08f827ebd3290dfa5c6fee0c0c22b71c598ebf2012c8595c0f2ec6d330",
+    "test/task-session-progress-native.test.js": "2b8586f3182009e5bdba55f48f2245e63fa32ce7f086d50a4f4b29fa12529c00",
+    "docs/acceptance/task-progress-steering/scripts/evaluate-model.mjs": "283c2b6eb0f2d4501cc9e35969ceadb5a6dba3fca725893e0efb31605925874b"
+  },
+  "boundary": "Only isolated synthetic task sessions. No original task, business login, business network tools, deployment or message sending."
+}

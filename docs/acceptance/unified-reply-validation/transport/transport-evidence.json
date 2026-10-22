@@ -1,0 +1,642 @@
+{
+  "checkedAt": "2026-10-22T14:29:34.1890012+08:00",
+  "installedVersion": "Version:        v1.0.63\r\nEdition:        open\r\nBuild:          2026-10-03T04:49:47Z\r\nCommit:         4cd5d05393a8748e89d9265eb9f7ec85745a0331\r\nArchitecture:   MCP Static Endpoint Mode\r\nGo:             1.24+",
+  "upstreamMain": "8ad873a59fe1df8f9f6c87cd0a88e86acf3a72a6",
+  "upstreamLatestRelease": "v1.0.65",
+  "schemas": [
+    {
+      "command": "chat +messages-reply",
+      "canonicalPath": "chat.shortcut_messages_reply",
+      "description": "当你要以当前用户身份对一条已有消息发送纯文本引用回复时使用；传原消息 ID，CLI 会只读定位会话和发送者；可显式传会话或 --ref-sender，所有模式均核对源消息身份。可用 --as bot 选择 Bot 群引用，--open-dingtalk-id 选择个人单聊，--reply-in-thread 追加到已核实的 Thread；所有模式先检查源消息 ID/会话归属；个人普通引用的 markdown/content 仍按纯文本解释，群聊可显式 @成员或 @所有人。成功结果在保留下层响应的同时增量返回 messageId（下层提供时）、conversationId、threadId（适用时）、deliveryStatus、idempotencyKey 和 referencedMessage 来源上下文。\n\n参数约束：\n  - Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致\n  - 省略会话时从源消息只读定位；显式会话/发送者必须匹配，所有模式均校验源消息；@仅群聊，成员使用openDingTalkId\n  - --ref-msg-id、--message-id 必须且只能指定一个\n  - --uuid、--idempotency-key 互斥，最多指定一个",
+      "parameters": {
+        "ai-tag": {
+          "default": "true",
+          "description": "消息是否带 AI 发送角标（默认 true）",
+          "required": false,
+          "type": "boolean"
+        },
+        "as": {
+          "default": "user",
+          "description": "回复身份，Bot 仅普通群文本/Markdown引用；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致（可选值: user, bot）",
+          "enum": [
+            "user",
+            "bot"
+          ],
+          "required": false,
+          "type": "string"
+        },
+        "at-all": {
+          "description": "群回复中 @所有人；省略会话时从源消息只读定位；显式会话/发送者必须匹配，所有模式均校验源消息；@仅群聊，成员使用openDingTalkId",
+          "required": false,
+          "type": "boolean"
+        },
+        "at-open-dingtalk-ids": {
+          "description": "群回复中 @ 的 openDingTalkId 列表；自动补齐缺少的提及占位符；省略会话时从源消息只读定位；显式会话/发送者必须匹配，所有模式均校验源消息；@仅群聊，成员使用openDingTalkId",
+          "required": false,
+          "type": "array"
+        },
+        "content": {
+          "description": "回复正文；普通引用中 content/markdown 均按纯文本解释，Bot群引用及已有Thread追加为Markdown；@仅群聊，可用 <@openDingTalkId> 定位提及（必填）",
+          "required": true,
+          "type": "string"
+        },
+        "create-thread": {
+          "description": "与reply-in-thread一起：仅源消息尚无Thread时先转换，再追加；转换后失败保留恢复ID",
+          "required": false,
+          "type": "boolean"
+        },
+        "group": {
+          "description": "可选会话 openConversationId；省略会话时从源消息只读定位；显式会话/发送者必须匹配，所有模式均校验源消息；@仅群聊，成员使用openDingTalkId",
+          "required": false,
+          "type": "string"
+        },
+        "idempotency-key": {
+          "description": "--uuid 的 lark-cli 对齐别名；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致",
+          "required": false,
+          "type": "string"
+        },
+        "message-id": {
+          "description": "--ref-msg-id 的 lark-cli 对齐别名",
+          "required": false,
+          "type": "string"
+        },
+        "open-dingtalk-id": {
+          "description": "个人单聊接收者；可省略 --group，自动读取源消息会话核实；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致；省略会话时从源消息只读定位；显式会话/发送者必须匹配，所有模式均校验源消息；@仅群聊，成员使用openDingTalkId",
+          "required": false,
+          "type": "string"
+        },
+        "ref-msg-id": {
+          "description": "被引用消息 openMessageId",
+          "required": false,
+          "type": "string"
+        },
+        "ref-sender": {
+          "description": "原消息发送者 openDingTalkId/userId（userId 通过通讯录搜索精确匹配；不传则自动读取）；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致；省略会话时从源消息只读定位；显式会话/发送者必须匹配，所有模式均校验源消息；@仅群聊，成员使用openDingTalkId",
+          "required": false,
+          "type": "string"
+        },
+        "reply-in-thread": {
+          "description": "直接追加到源消息所属 Thread，不生成引用消息；仅 user；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致",
+          "required": false,
+          "type": "boolean"
+        },
+        "robot-code": {
+          "description": "Bot 回复所用 robotCode；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致",
+          "required": false,
+          "type": "string"
+        },
+        "thread-id": {
+          "description": "可选 openConvThreadId，必须与源消息返回值一致；仅 reply-in-thread；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致",
+          "required": false,
+          "type": "string"
+        },
+        "uuid": {
+          "description": "幂等键（可选）；Bot 仅普通群引用且必须有 robot-code；Thread 仅 user，与单聊和 ref-sender 互斥；thread-id 必须与源消息一致",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "constraints": {
+        "mutually_exclusive": [
+          [
+            "ref-msg-id",
+            "message-id"
+          ],
+          [
+            "uuid",
+            "idempotency-key"
+          ]
+        ],
+        "require_one_of": [
+          [
+            "ref-msg-id",
+            "message-id"
+          ]
+        ]
+      },
+      "positionals": null,
+      "effect": "write"
+    },
+    {
+      "command": "chat message reply",
+      "canonicalPath": "chat.reply_personal_message",
+      "description": "以当前用户身份引用某条消息并回复。需要指定会话 ID、被引用消息 ID、原消息发送者 openDingTalkId，以及回复内容。群聊回复可通过 --at-open-dingtalk-ids @指定成员，或通过 --at-all @所有人；正文中的裸 @openDingTalkId 会自动规范化为 <@openDingTalkId>，缺少对应成员或 <@all> 占位符时会自动补齐。\n\n如何获取 openConversationId（如果上层已有则直接使用，不必再查）：\n  - 群聊：dws chat search --query \"群名\"\n  - 单聊：dws chat conversation-info --open-dingtalk-id <openDingTalkId>\n          （人员信息可通过 dws contact user search --keyword \"姓名\" --format json 获取）",
+      "parameters": {
+        "ai-tag": {
+          "default": "true",
+          "description": "消息是否带 AI 发送角标（默认 true）",
+          "required": false,
+          "type": "boolean"
+        },
+        "at-all": {
+          "description": "@所有人（仅群聊时生效；正文缺少 <@all> 时自动补齐）",
+          "required": false,
+          "type": "boolean"
+        },
+        "at-open-dingtalk-ids": {
+          "description": "@指定成员的 openDingTalkId 列表，逗号分隔（仅群聊时生效；正文缺少对应 <@id> 时自动补齐，裸 @id 自动规范化）",
+          "required": false,
+          "type": "string"
+        },
+        "content": {
+          "cli_required": true,
+          "description": "回复内容 (必填)",
+          "required": true,
+          "type": "string"
+        },
+        "group": {
+          "cli_required": true,
+          "description": "会话 openConversationId (必填，支持单聊/群聊)",
+          "required": true,
+          "type": "string"
+        },
+        "ref-msg-id": {
+          "cli_required": true,
+          "description": "被引用的消息 openMessageId (必填)",
+          "required": true,
+          "type": "string"
+        },
+        "ref-sender": {
+          "cli_required": true,
+          "description": "被引用消息的发送者 openDingTalkId (必填)",
+          "required": true,
+          "type": "string"
+        },
+        "uuid": {
+          "description": "幂等键（可选）",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "constraints": null,
+      "positionals": null,
+      "effect": "write"
+    },
+    {
+      "command": "chat +messages-send",
+      "canonicalPath": "chat.shortcut_messages_send",
+      "description": "当你需要文件、复杂 @、幂等，或选择 current-user、bot、webhook 身份发送消息时使用；current-user 可直接传稳定 ID，也可用 --user-query/--chat-query 在 CLI 内唯一解析自然目标，dry-run 与真实执行使用同一解析链。Bot 可用 --groups/--groups-file 向最多 100 个稳定群 ID 发送文本或 Markdown，去重后返回 im.batch-write.v1 逐目标 ledger；webhook 目标由 token 所在群决定。user 另支持名片、群邀请和 A2UI 卡片创建；bot 支持 --image-url 图片及单目标 --file 上传，图片支持多目标 ledger；webhook 仍仅文本/Markdown。\n\n参数约束：\n  - --text、--markdown、--media-id、--file、--file-path、--image-url、--contact-id、--share-chat-id、--a2ui-messages 至少指定一个\n  - --text、--markdown、--media-id、--file、--file-path、--image-url、--contact-id、--share-chat-id、--a2ui-messages 互斥，最多指定一个\n  - --identity、--as 互斥，最多指定一个\n  - --group、--chat-id 互斥，最多指定一个\n  - --user、--open-dingtalk-id 互斥，最多指定一个\n  - --uuid、--idempotency-key 互斥，最多指定一个\n  - 目标、凭据和幂等参数受发送身份能力矩阵约束：user 必须指定一个群聊或单聊目标；bot 必须指定 robot-code 和一类目标，多群最多 100 个并逐项返回 ledger；webhook 必须指定 webhook-token；幂等键仅 user 支持",
+      "parameters": {
+        "a2ui-messages": {
+          "description": "user 的 A2UI JSON 字符串数组；与正文/媒体互斥，不接受 Lark Card JSON",
+          "required": false,
+          "type": "string"
+        },
+        "ai-tag": {
+          "default": "true",
+          "description": "消息是否带 AI 发送角标（默认 true）",
+          "required": false,
+          "type": "boolean"
+        },
+        "as": {
+          "description": "--identity 的 lark-cli 对齐别名；受发送身份能力矩阵约束（可选值: user, bot, webhook）",
+          "enum": [
+            "user",
+            "bot",
+            "webhook"
+          ],
+          "required": false,
+          "type": "string"
+        },
+        "at-all": {
+          "description": "@所有人",
+          "required": false,
+          "type": "boolean"
+        },
+        "at-mobiles": {
+          "description": "@ 的手机号（webhook）",
+          "required": false,
+          "type": "array"
+        },
+        "at-open-dingtalk-ids": {
+          "description": "@ 的 openDingTalkId（user/bot 群聊）",
+          "required": false,
+          "type": "array"
+        },
+        "at-user-ids": {
+          "description": "@ 的 userId（bot/webhook）",
+          "required": false,
+          "type": "array"
+        },
+        "biz-card-id": {
+          "description": "A2UI 业务标识，省略生成；不承诺消息幂等",
+          "required": false,
+          "type": "string"
+        },
+        "card-summary": {
+          "description": "A2UI 降级摘要；省略使用 A2UI 消息文本",
+          "required": false,
+          "type": "string"
+        },
+        "chat-id": {
+          "description": "--group 的 lark-cli 对齐别名；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "chat-query": {
+          "description": "按群名解析唯一群聊（仅 user 的高级发送场景）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "contact-id": {
+          "description": "user 发送名片的 openDingTalkId",
+          "required": false,
+          "type": "string"
+        },
+        "expires-seconds": {
+          "description": "群邀请有效期秒数，0 为永久；仅 share-chat 使用",
+          "required": false,
+          "type": "integer"
+        },
+        "file": {
+          "description": "工作目录内安全相对文件路径（user 的 file/audio/video；bot 仅单目标 file）",
+          "required": false,
+          "type": "string"
+        },
+        "file-path": {
+          "description": "--file 的兼容别名",
+          "required": false,
+          "type": "string"
+        },
+        "group": {
+          "description": "群 openConversationId（user/bot 群聊）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "groups": {
+          "description": "多个群 openConversationId（仅 bot；受发送身份能力矩阵约束，逐群返回 typed ledger，最多 100 个）",
+          "required": false,
+          "type": "array"
+        },
+        "groups-file": {
+          "description": "工作目录内相对文本文件（仅 bot；受发送身份能力矩阵约束），每行或逗号分隔一个群 openConversationId",
+          "required": false,
+          "type": "string"
+        },
+        "idempotency-key": {
+          "description": "--uuid 的 lark-cli 对齐别名（仅 user）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "identity": {
+          "default": "user",
+          "description": "发送身份；目标、凭据和幂等参数受发送身份能力矩阵约束（可选值: user, bot, webhook）",
+          "enum": [
+            "user",
+            "bot",
+            "webhook"
+          ],
+          "required": false,
+          "type": "string"
+        },
+        "image-url": {
+          "description": "Bot 图片的 HTTP(S) URL（不接受已有 mediaId）",
+          "required": false,
+          "type": "string"
+        },
+        "markdown": {
+          "description": "Markdown 正文",
+          "required": false,
+          "type": "string"
+        },
+        "media-id": {
+          "description": "已有图片 mediaId（仅 user 的 image）",
+          "required": false,
+          "type": "string"
+        },
+        "msg-type": {
+          "description": "内容类型；省略时根据正文、--media-id 或 --file 自动推断（可选值: text, markdown, image, file, audio, video, profile, share-chat, a2ui）",
+          "enum": [
+            "text",
+            "markdown",
+            "image",
+            "file",
+            "audio",
+            "video",
+            "profile",
+            "share-chat",
+            "a2ui"
+          ],
+          "required": false,
+          "type": "string"
+        },
+        "open-dingtalk-id": {
+          "description": "单聊接收者 openDingTalkId（user）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "open-dingtalk-ids": {
+          "description": "批量单聊接收者 openDingTalkId（bot）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "array"
+        },
+        "request-id": {
+          "description": "A2UI 链路追踪标识，省略生成；不是幂等键",
+          "required": false,
+          "type": "string"
+        },
+        "robot-code": {
+          "description": "机器人 Code（identity=bot 时使用）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "share-chat-id": {
+          "description": "user 分享的源群 openConversationId；发送群邀请链接，不是 Lark share_chat 对象",
+          "required": false,
+          "type": "string"
+        },
+        "text": {
+          "description": "纯文本正文",
+          "required": false,
+          "type": "string"
+        },
+        "title": {
+          "description": "消息标题（不传则从正文生成）",
+          "required": false,
+          "type": "string"
+        },
+        "user": {
+          "description": "单聊接收者 userId（user；包括 --dry-run 也会先通过通讯录搜索精确匹配 openDingTalkId）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "user-query": {
+          "description": "按姓名解析唯一 openDingTalkId（仅 user 的高级发送场景）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "users": {
+          "description": "批量单聊接收者 userId（bot）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "array"
+        },
+        "uuid": {
+          "description": "幂等键（仅 user）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        },
+        "webhook-token": {
+          "description": "自定义机器人 Webhook token（identity=webhook 时使用）；受发送身份能力矩阵约束",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "constraints": {
+        "mutually_exclusive": [
+          [
+            "text",
+            "markdown",
+            "media-id",
+            "file",
+            "file-path",
+            "image-url",
+            "contact-id",
+            "share-chat-id",
+            "a2ui-messages"
+          ],
+          [
+            "identity",
+            "as"
+          ],
+          [
+            "group",
+            "chat-id"
+          ],
+          [
+            "user",
+            "open-dingtalk-id"
+          ],
+          [
+            "uuid",
+            "idempotency-key"
+          ]
+        ],
+        "require_one_of": [
+          [
+            "text",
+            "markdown",
+            "media-id",
+            "file",
+            "file-path",
+            "image-url",
+            "contact-id",
+            "share-chat-id",
+            "a2ui-messages"
+          ]
+        ]
+      },
+      "positionals": null,
+      "effect": "write"
+    },
+    {
+      "command": "mcp published tools",
+      "canonicalPath": "mcp.published_tools",
+      "description": "按 mcpId 列出当前用户和组织身份可用的已发布 MCP 工具",
+      "parameters": {},
+      "constraints": null,
+      "positionals": [
+        {
+          "description": "钉钉 MCP 市场中的 mcpId",
+          "index": 0,
+          "name": "mcp_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "effect": "read"
+    },
+    {
+      "command": "dev mcp service list",
+      "canonicalPath": "dev.mcp_service_list",
+      "description": "查询当前用户有开发权限的 MCP 服务",
+      "parameters": {
+        "creator-user-id": {
+          "description": "按创建人 staffId 过滤",
+          "required": false,
+          "type": "string"
+        },
+        "cursor": {
+          "description": "分页游标，从 1 开始",
+          "required": false,
+          "type": "integer"
+        },
+        "keyword": {
+          "description": "按服务名关键词过滤",
+          "required": false,
+          "type": "string"
+        },
+        "page-size": {
+          "description": "每页条数，最大 100",
+          "required": false,
+          "type": "integer"
+        }
+      },
+      "constraints": null,
+      "positionals": null,
+      "effect": "read"
+    }
+  ],
+  "sourceExcerpts": [
+    {
+      "file": "chat.go",
+      "start": 8288,
+      "end": 8297,
+      "sha256": "1FB4C5074D027D7994E17310B706FAA5DE8EB536B3F809F0C990F2B5516F9452",
+      "lines": [
+        "\t\t\treplyText = addMissingCurrentUserMentionPlaceholders(replyText, atOpenIDs)",
+        "\t\t\treplyContent := map[string]string{",
+        "\t\t\t\t\"referenceOpenMessageId\":   mustGetFlag(cmd, \"ref-msg-id\"),",
+        "\t\t\t\t\"srcMsgSendOpenDingTalkId\": refSender,",
+        "\t\t\t\t\"replyMsgType\":             \"text\",",
+        "\t\t\t\t\"content\":                  replyText,",
+        "\t\t\t}",
+        "\t\t\tcontentJSON, _ := marshalJSONRaw(replyContent)",
+        "\t\t\ttoolArgs[\"content\"] = string(contentJSON)",
+        "\t\t\tif v, _ := cmd.Flags().GetString(\"uuid\"); v != \"\" {"
+      ]
+    },
+    {
+      "file": "reply_extensions.go",
+      "start": 209,
+      "end": 218,
+      "sha256": "943B36EBC6B15567F1C8954D4B92098B2C6A2CF6F6B56522359888EB60E02FD6",
+      "lines": [
+        "\tcid := replyResponseValue(scope, \"openConversationId\", \"openCid\", \"conversationId\")",
+        "\tif fmt.Sprint(cid) != target.conversationID {",
+        "\t\treturn apperrors.NewValidation(\"单聊接收者与源消息会话不匹配，未执行回复\")",
+        "\t}",
+        "\tcontent, _ := json.Marshal(map[string]string{\"referenceOpenMessageId\": replyMessageID(rt), \"srcMsgSendOpenDingTalkId\": sender, \"replyMsgType\": \"text\", \"content\": body})",
+        "\targs := rt.AddAIMessageTag(map[string]any{\"receiverOpenDingTalkId\": peer, \"msgType\": \"reply\", \"content\": string(content)})",
+        "\tif key := rt.StrFirst(\"idempotency-key\", \"uuid\"); key != \"\" {",
+        "\t\targs[\"uuid\"] = key",
+        "\t}",
+        "\treturn executeReplyTransport(rt, \"chat\", \"send_personal_message\", args, target.conversationID, \"quote\")"
+      ]
+    },
+    {
+      "file": "chat.go",
+      "start": 4311,
+      "end": 4317,
+      "sha256": "1FB4C5074D027D7994E17310B706FAA5DE8EB536B3F809F0C990F2B5516F9452",
+      "lines": [
+        "\t\t\t\ttitle = sanitizeTitleFromText(text)",
+        "\t\t\t}",
+        "\t\t\tif strings.Contains(text, \"![\") {",
+        "\t\t\t\tresolved, report, err := ResolveMarkdownLocalImages(cmd.Context(), text, MarkdownImageOptions{DryRun: deps.Caller.DryRun()})",
+        "\t\t\t\tif err != nil {",
+        "\t\t\t\t\treturn err",
+        "\t\t\t\t}"
+      ]
+    },
+    {
+      "file": "chat.go",
+      "start": 4340,
+      "end": 4350,
+      "sha256": "1FB4C5074D027D7994E17310B706FAA5DE8EB536B3F809F0C990F2B5516F9452",
+      "lines": [
+        "\t\t\t\t// 群聊统一走 openDingTalkId @ 人接口。",
+        "\t\t\t\tnewParams := map[string]any{",
+        "\t\t\t\t\t\"openConversationId\": groupID,",
+        "\t\t\t\t\t\"msgType\":            \"markdown\",",
+        "\t\t\t\t\t\"clawType\":           clawType,",
+        "\t\t\t\t}",
+        "\t\t\t\ttext = applyCurrentUserGroupMentions(newParams, text, atOpenIdsStr, atAll)",
+        "\t\t\t\tcontentJSON, _ := marshalJSONRaw(map[string]string{\"title\": title, \"text\": text})",
+        "\t\t\t\tnewParams[\"content\"] = string(contentJSON)",
+        "\t\t\t\tif msgUuid != \"\" {",
+        "\t\t\t\t\tnewParams[\"uuid\"] = msgUuid"
+      ]
+    },
+    {
+      "file": "chat_markdown_image_upload.go",
+      "start": 91,
+      "end": 99,
+      "sha256": "0A90E9E88DF79E5AB91EF5BAADD617C99457D5F981BFD7BD655A838AAA3B69C6",
+      "lines": [
+        "\tctx, cancel := context.WithCancel(ctx)",
+        "\tdefer cancel()",
+        "\tids := make([]string, len(images))",
+        "\tsem := make(chan struct{}, 3)",
+        "\tvar wg sync.WaitGroup",
+        "\tvar firstErr error",
+        "\tvar mu sync.Mutex",
+        "\tfor index, image := range images {",
+        "\t\tif ctx.Err() != nil {"
+      ]
+    }
+  ],
+  "historicalMcpSchema": {
+    "commit": "d41ea586bf9514009e95137bd6befa8d8021c8fc",
+    "date": "2026-07-13",
+    "currentAuthority": false,
+    "value": {
+      "title": "send_personal_message",
+      "description": "以用户身份发消息，支持多种消息类型",
+      "parameters": {
+        "atAll": {
+          "type": "boolean",
+          "description": "是否@所有人"
+        },
+        "atOpenDingTalkIds": {
+          "type": "array",
+          "description": "@的用户atOpenDingTalkIds列表"
+        },
+        "clawType": {
+          "type": "string",
+          "description": "ai类型"
+        },
+        "content": {
+          "type": "string",
+          "description": "消息内容",
+          "required": true
+        },
+        "msgType": {
+          "type": "string",
+          "description": "消息类型",
+          "required": true
+        },
+        "openConversationId": {
+          "type": "string",
+          "description": "群聊openConversationId，发送群聊消息时使用"
+        },
+        "receiverOpenDingTalkId": {
+          "type": "string",
+          "description": "消息接收者的openDingTalkId，发送单聊消息时使用"
+        },
+        "uuid": {
+          "type": "string",
+          "description": "uuid"
+        }
+      },
+      "interface_ref": {
+        "product_id": "chat",
+        "rpc_name": "send_personal_message"
+      }
+    }
+  },
+  "authenticatedDiscovery": {
+    "availableCommand": "dws mcp published tools <mcpId>",
+    "needs": "verified official chat marketplace mcpId",
+    "lookupCommand": "dws dev mcp service list --keyword 群聊 --page-size 20 --format json",
+    "outcome": "failure",
+    "upstreamCode": "no_permission",
+    "reason": "当前身份在当前组织没有开放平台应用开发权限",
+    "identitySwitched": false,
+    "credentialsReadOrExported": false
+  },
+  "counterEvidence": [
+    {
+      "url": "https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pull/1450",
+      "state": "OPEN",
+      "head": "1dc52c8e6a6f039af6ee08316720845c7297026e",
+      "fact": "未合并文档 PR 报告现有 text 引用路径在客户端渲染标题、加粗、行内代码和列表",
+      "limit": "未提供多图/任意文件组合协议或验证证据"
+    },
+    {
+      "url": "https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/issues/497",
+      "state": "CLOSED",
+      "fact": "维护者说明引用图片/文件的读取投影在 v1.0.57 已修",
+      "limit": "读取客户端创建的富媒体引用不等同 CLI 能发送同种结构"
+    }
+  ]
+}

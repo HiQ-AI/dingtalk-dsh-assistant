@@ -1,0 +1,14 @@
+case,round,status,evidence,scope
+normal-login-and-page-helpers,1,PASS,skill-validation/round-3/results.json,21 local cases; no live UAT
+independent-helper-counterexamples,1,PASS,skill-validation/independent-review.md,original two counterexamples rerun after fix
+native-progress-and-decision-store,1,PASS,coordination/native-tests.log,101 tests; zero skipped
+two-distinct-inspection-decisions,1,PASS,coordination/native-retention-tests-fixed.log,5 tests overlap the preceding suite
+actual-owner-model-scenarios,1,FAIL,coordination/model-round-4.json,astra low baseline summary overstated execution progress
+combined-reply-protocol-investigation,1,PASS,transport/protocol-review.md,current entry gap confirmed; underlying protocol unknown
+native-quoted-body-and-all-attachments,1,BLOCKED,transport/upstream-protocol-question.md,verified transport protocol unavailable
+real-message-readback-and-presentation,1,NOT_RUN,transport/protocol-review.md,no message sent; no equivalent mock claim
+actual-owner-model-scenarios,2,PASS,coordination/model-round-5.json,astra low 8 cases; native trace and semantic review
+two-distinct-inspection-decisions,2,PASS,coordination/native-final-tests.log,final candidate 5 tests on installed Host rc.2
+locked-profile-inspection-decisions,2,PASS,coordination/native-locked-profile-tests.log,same 5 tests on repository alpha.2
+native-quoted-body-and-all-attachments,2,BLOCKED,transport/upstream-protocol-question.md,verified transport protocol remains unavailable
+real-message-readback-and-presentation,2,NOT_RUN,transport/protocol-review.md,no message sent; no equivalent mock claim

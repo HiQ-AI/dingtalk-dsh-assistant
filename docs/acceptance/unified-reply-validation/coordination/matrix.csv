@@ -1,0 +1,9 @@
+case,actual-before-astra-low,actual-after-astra-low,evidence
+static-capability-before-gateway,FAIL,PASS,model-round-4.json;model-round-5.json
+managed-account-script-failure,NOT_RUN,PASS,model-round-5.json
+pass-conflicts-with-page-evidence,PASS,PASS,model-round-4.json;model-round-5.json
+ordinary-build-wait,NOT_RUN,PASS,model-round-5.json
+controlled-maintenance-wait,NOT_RUN,PASS,model-round-5.json
+split-attachment-delivery,PASS,PASS,model-round-4.json;model-round-5.json
+consumed-without-correction-evidence,NOT_RUN,PASS,model-round-5.json
+insufficient-evidence,PASS,PASS,model-round-4.json;model-round-5.json

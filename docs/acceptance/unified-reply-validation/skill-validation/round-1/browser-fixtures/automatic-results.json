@@ -1,0 +1,72 @@
+{
+  "error": {
+    "status": "FAIL",
+    "checks": [
+      {
+        "stage": "unit-page",
+        "assertionId": "permissions-read",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      },
+      {
+        "stage": "unit-page",
+        "assertionId": "control-permission",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "stage": "unit-page",
+        "assertionId": "visible-errors",
+        "expected": 0,
+        "actual": 1,
+        "passed": false
+      }
+    ],
+    "failures": [],
+    "screenshots": [
+      {
+        "id": "unit-page",
+        "sha256": "00909f7b79093527ae3cbfaf4f190f728182ee598660b575ee402b6fd6938c7c",
+        "visualReviewed": false
+      }
+    ],
+    "screenshotChanged": false
+  },
+  "clean": {
+    "status": "PENDING_VISUAL_REVIEW",
+    "checks": [
+      {
+        "stage": "unit-page",
+        "assertionId": "permissions-read",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      },
+      {
+        "stage": "unit-page",
+        "assertionId": "control-permission",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "stage": "unit-page",
+        "assertionId": "visible-errors",
+        "expected": 0,
+        "actual": 0,
+        "passed": true
+      }
+    ],
+    "failures": [],
+    "screenshots": [
+      {
+        "id": "unit-page",
+        "sha256": "11fa7c7fee1859642456e59454854e4a706166877c5ec6712d93fadee92c2733",
+        "visualReviewed": false
+      }
+    ],
+    "screenshotChanged": false
+  }
+}
