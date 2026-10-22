@@ -1,0 +1,30 @@
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (1463.9962ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2459.7233
+
+✖ failing tests:
+
+test at test\coordination-final-native.test.js:14:1
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (1463.9962ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'sent'
+  - 'delivered'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/coordination-final-native.test.js:44:42)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'sent',
+    expected: 'delivered',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

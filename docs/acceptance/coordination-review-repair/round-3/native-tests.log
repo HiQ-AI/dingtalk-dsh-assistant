@@ -1,0 +1,51 @@
+✔ 恢复跳过二十个occurrence-pause作业，保持完成预算并跨安排跨群推进且重启不重放 (6600.9599ms)
+✔ 恢复跳过二十个schedule-pause作业，保持完成预算并跨安排跨群推进且重启不重放 (8465.555ms)
+✔ 恢复跳过二十个dependency作业，保持完成预算并跨安排跨群推进且重启不重放 (11492.7535ms)
+▶ 自动续行排队期间finish、版本失效和close均唤醒请求级等待者
+  ✔ finish (11.3993ms)
+  ✔ supersede (2.0855ms)
+  ✔ close (3.2418ms)
+✔ 自动续行排队期间finish、版本失效和close均唤醒请求级等待者 (20.7852ms)
+✔ 同群九次无效提交按step让出，工具结果落稳后路由和其他话题先运行且不cancel (195.1209ms)
+✔ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (843.8015ms)
+✔ competing actual ingress and recovery reserve one source, plan once and keep original receipt after restart (1008.6941ms)
+✔ automatic expired result refresh restores one outbox after restart with closed optional Topic (6988.2468ms)
+✔ automatic expired result refresh restores one outbox after restart with deleted optional Topic (1944.0407ms)
+✔ 真实协调器中九次非法旧决策不挡住新图文任务，公平续行不消耗请求重试次数 (115.3758ms)
+✔ saved coordination selection changes the next native plan only, with original cwd and independent Owner/executor selections (2584.4695ms)
+✔ saving a coordination model while admission is disabled cannot create an independent planning session (750.0877ms)
+✔ actual chat observes A without mutation and resumes original B: completed-A, scheduled=false (2245.1168ms)
+✔ actual chat observes A without mutation and resumes original B: waiting-A, scheduled=false (5531.2486ms)
+✔ actual chat observes A without mutation and resumes original B: paused-B, scheduled=false (5663.2905ms)
+✔ actual chat observes A without mutation and resumes original B: completed-A, scheduled=true (4451.5194ms)
+✔ actual chat observes A without mutation and resumes original B: waiting-A, scheduled=true (7177.1764ms)
+✔ chat daily Task command reaches two original Owner inputs with distinct slot identities and no replanning confirmation (2151.5175ms)
+✔ chat reorder wakes the original Owner into a read-only assessment and commits the validated safe-point receipt (1656.7754ms)
+✔ saved Agent cwd is injected into the next native coordination plan while active sessions and task log root stay fixed (2146.3638ms)
+✔ native scheduled query releases an explicitly authorized continuation only after fresh incomplete facts (2245.0181ms)
+✔ native partial clarification continues A, resolves B under the original arrangement, and answers a factual chat query (6957.5826ms)
+✔ native original source slots control interleaved clear and clarified members by their original ordinal (8152.1738ms)
+✔ actual ingress applies a follow-up ordinal to the original coordination member and keeps original Tasks active (4707.3438ms)
+✔ actual clarification reply resolves the original no-Topic arrangement instead of creating a replacement (3384.1791ms)
+✔ actual rejected ingress hands back one fenced unit and resumes the legacy discussion router without business effects (1540.0127ms)
+✔ one delivery preserves arbitrary user stages: software, existing=false (2809.3413ms)
+✔ one delivery preserves arbitrary user stages: software, existing=true (5214.2474ms)
+✔ one delivery preserves arbitrary user stages: translation-two, existing=false (4397.462ms)
+✔ one delivery preserves arbitrary user stages: translation-two, existing=true (5121.3728ms)
+✔ one delivery preserves arbitrary user stages: research-four, existing=false (4635.0791ms)
+✔ one delivery preserves arbitrary user stages: research-four, existing=true (5305.7022ms)
+✔ one delivery preserves arbitrary user stages: translation-reversed, existing=false (4235.9237ms)
+✔ one delivery preserves arbitrary user stages: translation-reversed, existing=true (5084.4823ms)
+✔ explicit chat creation separates durable creation from dependency/time start: scheduled=false (3386.8231ms)
+✔ explicit chat creation separates durable creation from dependency/time start: scheduled=true (2311.4605ms)
+✔ real ingress reserves a no-Topic unit, independently plans A then B and dispatches original Owners from completion facts (5066.623ms)
+✔ ambiguous no-Topic request remains exclusively pending clarification without changing original tasks (992.4238ms)
+✔ no-Topic scheduled query runs through Host recovery and the existing outbox without reopening the queried Task (1965.6371ms)
+ℹ tests 42
+ℹ suites 0
+ℹ pass 42
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 156942.2207

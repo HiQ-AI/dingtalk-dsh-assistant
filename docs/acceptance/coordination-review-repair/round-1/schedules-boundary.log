@@ -1,0 +1,41 @@
+✔ single-goal stages preserve one creation envelope or revise the original Task with all ordered requirements (6.4196ms)
+✔ observed A never receives a command or wake; authoritative completion survives restart: completedBefore=true (85.1757ms)
+✔ observed A never receives a command or wake; authoritative completion survives restart: completedBefore=false (75.7293ms)
+✔ completed status without a formal receipt cannot release observed prerequisite (105.6117ms)
+✔ formal receipt without event can release once, but cancellation or pause never releases B (115.2876ms)
+✔ first order on running B requires read-only Owner assessment and never stops existing work (61.4646ms)
+✔ continue never silently reopens an already completed B (46.3963ms)
+✔ running B first receives assessment when added through append (55.2749ms)
+✔ running B first receives assessment when added through resolve-members (106.7629ms)
+✔ offset proposal persists a canonical due time and one slot across restart and repeated scans (113.6237ms)
+✔ future-only revision preserves an accepted occurrence and its frozen target across restart (75.5464ms)
+✔ a started occurrence keeps its accepted revision while a future rule and recipient change is committed (52.4649ms)
+✔ explicit same-slot replacement transfers current pointer and permanently fences the old occurrence (68.3712ms)
+✔ explicit reschedule preserves replacement chain and cannot run before the new slot (61.4076ms)
+✔ pause retains due cursor and resume coalesces offline periods under the original misfire policy (58.0773ms)
+✔ coordination cancellation stops new due instances and prevents already claimed read results (58.6451ms)
+✔ one waiting backlog is retained while active work or unknown delivery prevents overlapping execution (94.6377ms)
+✔ expired one-time schedule terminates visibly; multi-year offline coalescing has an exact count (160.8196ms)
+✔ timer defers a frozen original Task command until due and receives it once without a new Task or session (101.4353ms)
+✔ daily accepted authorization freezes a new exact command per slot and recovers without another user confirmation (82.4453ms)
+✔ weekly command blocks a changed goal instead of extending its old recurring authorization (51.3287ms)
+✔ future schedule edits preserve each slot authorized original text rather than replacing it with the control message (62.1953ms)
+✔ recurring replan advances only through its own prior effective target version (79.1401ms)
+✔ per-slot instruction creation and Task effects survive lost acknowledgement under the original frozen identity (74.7576ms)
+✔ lost commit acknowledgement is reconciled by the original Task command receipt after restart (74.7134ms)
+✔ due Task command waits for authoritative dependencies and later reuses its frozen command identity (81.2442ms)
+✔ stale frozen Task version is rejected rather than recomputing expected versions under the same command (88.5737ms)
+✔ replacing a future Task-command template cannot return its old ready member to immediate dispatch (47.0393ms)
+✔ message trigger needs no schedule fields and deduplicates each stable source revision/action (52.2621ms)
+✔ one authoritative business event may trigger two different actions but never the same action twice (56.3446ms)
+✔ business-event Task command rechecks the source proof after claim and before applying any effect (54.5763ms)
+✔ instance pause/resume fences the prior worker and cancelling the arrangement never cancels the Task (55.8151ms)
+✔ accepted recurring command keeps historical identity across future edits and restart, then advances next slot (116.0159ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1351.3846

@@ -1,0 +1,12 @@
+✔ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (1216.1243ms)
+✔ competing actual ingress and recovery reserve one source, plan once and keep original receipt after restart (2628.7204ms)
+✔ automatic expired result refresh restores one outbox after restart with closed optional Topic (9739.3979ms)
+✔ automatic expired result refresh restores one outbox after restart with deleted optional Topic (1866.4346ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16369.8206

@@ -574,12 +574,16 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (page.events.length) await command('coordination.events.consume', { consumerId, expectedCursor: cursor, limit: 100 }, `coordination-events:${cursor}:${page.nextCursor}`)
     for (const group of residentStore.listGroups()) await independentCoordination.recoverGroup(group.groupId)
     await command('coordination.schedule.scan', {})
-    const jobs = (await query('coordination.job.list')).filter(job => job.state === 'waiting' || job.state === 'running' && Date.parse(job.leaseUntil) <= Date.now()).slice(0, 20)
+    const jobs = (await query('coordination.job.list')).filter(job => job.state === 'waiting' || job.state === 'running' && Date.parse(job.leaseUntil) <= Date.now())
+    let completedJobs = 0
     for (const candidate of jobs) {
+      if (completedJobs >= 20) break
       try {
         const job = (await command('coordination.job.claim', { jobId: candidate.id })).result.job
         const occurrence = await query('coordination.occurrence.get', { occurrenceId: job.occurrenceId })
-        await command(occurrence.action.kind === 'task-command' ? 'coordination.job.command' : 'coordination.job.read', { jobId: job.id, fence: job.fence })
+        const result = await command(occurrence.action.kind === 'task-command' ? 'coordination.job.command' : 'coordination.job.read', { jobId: job.id, fence: job.fence })
+        // 阻塞或失败项不占完成预算，否则固定前缀会在每轮（包括重启后）饿死其他安排。
+        if (result.result.job.state === 'completed') completedJobs++
       } catch (error) {
         if (!['DYNAMIC_COORDINATION_JOB_BUSY','DYNAMIC_COORDINATION_NOT_DUE','DYNAMIC_COORDINATION_OVERLAP','DYNAMIC_COORDINATION_CANCELLED','DYNAMIC_COORDINATION_PAUSED','DYNAMIC_COORDINATION_FROZEN'].includes(error.code))
           failures.set(candidate.id, { id: candidate.id, code: error.code ?? error.message })

@@ -1,0 +1,26 @@
+
+> dingtalk-dsh-assistant@2.1.0 test:release-smoke D:\codex\worktrees\coordination-review\dingtalk-dsh-assistant
+> node --test test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js
+
+✔ three actual tgz and source identity round-trip; publish retry reuses identical bytes (1601.105ms)
+✔ different run/SHA/tag, lock/profile/environment and manifest hashes all fail closed (8068.218ms)
+✔ missing, extra and modified tarballs cannot reach publication (2260.5643ms)
+✔ dirty tracked source and untracked package content cannot claim a commit identity (1955.8693ms)
+✔ manual compatibility CI has no push, PR, schedule or publication side effects (7.9929ms)
+✔ release exact SHA validates all lanes before immutable build and same-run publication (4.0918ms)
+✔ every test file is mapped once; only reviewed historical registrations leave Release (830.5637ms)
+✔ release publishes three tgz plus identity manifest and verifies every attachment (1.9589ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (1.4722ms)
+✔ resident profile 只解析到最新版 DSH 依赖边界 (1.0384ms)
+✔ 常驻启动优先读取用户代理，避免为启动解析完整 resident 状态 (1.2171ms)
+✔ Web 启动优先使用当前 profile 的 DSH 入口 (0.5831ms)
+﹣ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (0.6781ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ actual extracted resident starts and serves health without legacy entrypoints or personal assets (0.125ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+ℹ tests 14
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 2
+ℹ todo 0
+ℹ duration_ms 14021.2253

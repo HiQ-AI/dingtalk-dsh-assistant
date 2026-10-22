@@ -8,7 +8,7 @@ import { coordinationSchema, coordinationLedger } from './coordination-ledger.js
 import { scheduleSchema, coordinationSchedules } from './coordination-schedules.js'
 import { assertTaskContextSemantics } from './task-input-contract.js'
 import { migrationStateDigest } from './coordination-migration-state.js'
-import { coordinationSnapshot } from './coordination-summary.js'
+import { coordinationSnapshot, formatCoordinationSnapshot } from './coordination-summary.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs'
 import { isAbsolute, dirname } from 'node:path'
@@ -403,16 +403,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       && ['change','resolve'].includes(source.acceptedKind)
       && ['change','schedule-change','occurrence-control'].includes(source.acceptedProposal?.kind)
   }
+  function currentCoordinationSnapshot(item) {
+    const members = item.memberIds.map(id => coordination.view(get('dynamic_coordination_members', id)))
+    const occurrences = schedules.list('occurrences').filter(o => o.coordinationId === item.id)
+    const occurrenceIds = new Set(occurrences.map(o => o.id))
+    return coordinationSnapshot({ coordination: item, members, tasks: all('dynamic_tasks'),
+      schedules: schedules.list('schedules').filter(s => s.coordinationId === item.id), occurrences,
+      jobs: schedules.list('jobs').filter(j => occurrenceIds.has(j.occurrenceId)) })
+  }
   function reduce(kind, a, commandId) {
     const stamp = now()
     if (kind === 'coordination.aggregate') {
       const item = get('dynamic_coordination', a.coordinationId)
-      const members = item.memberIds.map(id => coordination.view(get('dynamic_coordination_members', id)))
-      const occurrences = schedules.list('occurrences').filter(o => o.coordinationId === item.id)
-      const occurrenceIds = new Set(occurrences.map(o => o.id))
-      const snapshot = coordinationSnapshot({ coordination: item, members, tasks: all('dynamic_tasks'),
-        schedules: schedules.list('schedules').filter(s => s.coordinationId === item.id), occurrences,
-        jobs: schedules.list('jobs').filter(j => occurrenceIds.has(j.occurrenceId)) })
+      const snapshot = currentCoordinationSnapshot(item)
       const snapshotDigest = digest(snapshot), changedSnapshot = item.aggregateDigest !== snapshotDigest
       item.lifecycleState = snapshot.state; item.aggregateSnapshot = snapshot; item.aggregateDigest = snapshotDigest
       let notification
@@ -421,17 +424,17 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         prior.state = 'superseded'; prior.retirement = { reason: 'coordination-facts-changed', at: stamp }; put('dynamic_notifications', prior)
         item.summaryNotificationId = null; item.lastNotifiedDigest = null; prior = null
       }
-      const shouldNotify = item.memberIds.length > 0 && !['needs_clarification','cancelled'].includes(item.state)
+      const failedOccurrences = snapshot.occurrences.filter(occurrence => !occurrence.cancelledAt && (['failed','expired','blocked'].includes(occurrence.actionState) || occurrence.deliveryState === 'failed'))
+      const shouldNotify = (item.memberIds.length > 0 || failedOccurrences.length > 0) && !['needs_clarification','cancelled'].includes(item.state)
         && ['completed','partially_completed','needs_attention'].includes(snapshot.state)
         && item.lastNotifiedDigest !== snapshotDigest
       if (shouldNotify && !prior?.state?.match(/^(starting|unknown|prepared)$/)) {
         item.summaryRevision = (item.summaryRevision ?? 0) + 1
         const notificationId = `coordination:${item.id}:summary:${item.summaryRevision}`
         notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
-          payload: { kind: 'coordination', replyKind: 'substantive', conversationId: item.groupId, atOpenDingTalkIds: [],
-            text: `协调安排：${snapshot.state}；${snapshot.fulfilled}/${members.length} 项具有正式结果证明；尚欠 ${snapshot.remainingInstructionIds.length} 项。各任务业务结果以原 Owner 回执为准。`
-              + snapshot.members.filter(member=>member.reorderAssessment?.state === 'needs_clarification' && member.blocker)
-                .map(member=>`\n${member.taskId} 顺序待澄清：${member.blocker}`).join(''),
+          payload: { kind: 'coordination', replyKind: 'substantive', conversationId: item.groupId,
+            atOpenDingTalkIds: [...new Set(failedOccurrences.flatMap(occurrence => occurrence.recipientIds))],
+            text: formatCoordinationSnapshot(snapshot),
             fact: { coordinationId: item.id, eventId: `summary:${item.summaryRevision}`, snapshotDigest, summaryRevision: item.summaryRevision } } }, commandId).result.notification
         item.summaryNotificationId = notification.id; item.lastNotifiedDigest = snapshotDigest
       }
@@ -1378,6 +1381,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (notification.kind === 'coordination' && runtimeMode && JSON.parse(runtimeMode).mode === 'frozen') return changed({ notification })
         if (notification.kind === 'coordination') {
           const fact = notification.payload.fact, coordination = get('dynamic_coordination', fact.coordinationId)
+          // 在发送许可同一事务内回读摘要事实，取消本次安排不能被尚未运行的聚合扫描绕过。
+          if (fact.snapshotDigest && fact.snapshotDigest !== digest(currentCoordinationSnapshot(coordination))) {
+            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-facts-changed', at: stamp }
+            put('dynamic_notifications', notification); return changed({ notification })
+          }
           const occurrence = fact.occurrenceId ? schedules.read('occurrences', fact.occurrenceId) : null
           if (notification.supersededBy || coordination.state === 'cancelled' && !controlNotice(notification.payload) || occurrence && (occurrence.cancelledAt
             || occurrence.notificationId !== notification.id || occurrence.resultVersion !== fact.resultVersion || digest(occurrence.result) !== fact.resultDigest

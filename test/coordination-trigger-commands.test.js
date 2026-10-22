@@ -276,3 +276,28 @@ test('instance pause/resume fences the prior worker and cancelling the arrangeme
   assert.equal((await f.task('B')).control, 'active')
   assert.equal((await f.task('B')).contextRevision, 1)
 })
+
+test('accepted recurring command keeps historical identity across future edits and restart, then advances next slot', async t => {
+  const f=await fixture(t,{scheduled:false})
+  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-history',timezone:'Asia/Shanghai',
+    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
+  const first=await f.due()
+  await f.command('coordination.schedule.change',{scheduleId:'daily-history',expectedRevision:1,scope:'future',
+    target:{...f.target,recipientIds:['new-recipient'],summaryOnly:true}})
+  await f.restart()
+  let job=await f.claim(first)
+  const applied=(await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result
+  assert.equal(applied.job.state,'completed')
+  assert.deepEqual(applied.occurrence.target.recipientIds,['member-id'])
+  assert.notEqual(applied.occurrence.action.instructionIds[0],'B')
+  assert.equal((await f.task('B')).contextRevision,1)
+  await f.restart();f.tick(86400000)
+  const second=(await f.command('coordination.schedule.scan')).result.occurrences[0]
+  job=await f.claim(second)
+  const next=(await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result
+  assert.equal(next.job.state,'completed')
+  assert.equal(next.occurrence.acceptedScheduleRevision,2)
+  assert.deepEqual(next.occurrence.target.recipientIds,['new-recipient'])
+  assert.notEqual(next.occurrence.action.instructionIds[0],applied.occurrence.action.instructionIds[0])
+  assert.equal((await f.task('B')).contextRevision,2)
+})

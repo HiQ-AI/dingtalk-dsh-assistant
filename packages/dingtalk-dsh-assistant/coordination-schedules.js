@@ -446,7 +446,8 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
         const schedule = read('schedules', occurrence.scheduleId)
         const definition = occurrence.acceptedScheduleRevision === schedule.revision ? schedule
           : schedule.history.find(revision => revision.revision === occurrence.acceptedScheduleRevision)
-        try { instantiateOccurrence(occurrence, definition) }
+        // 历史条目保存版本定义，稳定身份仍来自原计划；已接纳实例不能因此失去模板身份。
+        try { instantiateOccurrence(occurrence, { ...definition, id: schedule.id }) }
         catch (error) {
           if (!['DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE','DYNAMIC_COORDINATION_RECURRING_TASK_STATE_CHANGED'].includes(error.code)) throw error
           job.state = 'blocked'; job.waitingReason = error.code

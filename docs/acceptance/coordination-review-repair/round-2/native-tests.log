@@ -1,0 +1,72 @@
+✔ 恢复跳过二十个occurrence-pause作业，保持完成预算并跨安排跨群推进且重启不重放 (5660.1526ms)
+✔ 恢复跳过二十个schedule-pause作业，保持完成预算并跨安排跨群推进且重启不重放 (8164.9588ms)
+✔ 恢复跳过二十个dependency作业，保持完成预算并跨安排跨群推进且重启不重放 (9814.3629ms)
+▶ 自动续行排队期间finish、版本失效和close均唤醒请求级等待者
+  ✔ finish (9.5542ms)
+  ✔ supersede (2.0385ms)
+  ✔ close (2.0652ms)
+✔ 自动续行排队期间finish、版本失效和close均唤醒请求级等待者 (16.2032ms)
+✔ 同群九次无效提交按step让出，工具结果落稳后路由和其他话题先运行且不cancel (138.564ms)
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (834.6285ms)
+✔ competing actual ingress and recovery reserve one source, plan once and keep original receipt after restart (1135.4203ms)
+✔ automatic expired result refresh restores one outbox after restart with closed optional Topic (7236.989ms)
+✔ automatic expired result refresh restores one outbox after restart with deleted optional Topic (2073.3956ms)
+✔ saved coordination selection changes the next native plan only, with original cwd and independent Owner/executor selections (4427.7884ms)
+✔ saving a coordination model while admission is disabled cannot create an independent planning session (743.5377ms)
+✔ actual chat observes A without mutation and resumes original B: completed-A, scheduled=false (3151.3133ms)
+✔ actual chat observes A without mutation and resumes original B: waiting-A, scheduled=false (5702.6969ms)
+✔ actual chat observes A without mutation and resumes original B: paused-B, scheduled=false (5718.3147ms)
+✔ actual chat observes A without mutation and resumes original B: completed-A, scheduled=true (4447.4676ms)
+✔ actual chat observes A without mutation and resumes original B: waiting-A, scheduled=true (6726.7367ms)
+✔ chat daily Task command reaches two original Owner inputs with distinct slot identities and no replanning confirmation (3677.8139ms)
+✔ chat reorder wakes the original Owner into a read-only assessment and commits the validated safe-point receipt (2355.8365ms)
+✔ saved Agent cwd is injected into the next native coordination plan while active sessions and task log root stay fixed (2104.8827ms)
+✔ native scheduled query releases an explicitly authorized continuation only after fresh incomplete facts (1811.5653ms)
+✔ native partial clarification continues A, resolves B under the original arrangement, and answers a factual chat query (6021.4745ms)
+✔ native original source slots control interleaved clear and clarified members by their original ordinal (8205.1751ms)
+✔ actual ingress applies a follow-up ordinal to the original coordination member and keeps original Tasks active (4621.8092ms)
+✔ actual clarification reply resolves the original no-Topic arrangement instead of creating a replacement (3470.2306ms)
+✔ actual rejected ingress hands back one fenced unit and resumes the legacy discussion router without business effects (1599.6991ms)
+✔ one delivery preserves arbitrary user stages: software, existing=false (2208.0079ms)
+✔ one delivery preserves arbitrary user stages: software, existing=true (4834.4757ms)
+✔ one delivery preserves arbitrary user stages: translation-two, existing=false (4486.685ms)
+✔ one delivery preserves arbitrary user stages: translation-two, existing=true (5138.2932ms)
+✔ one delivery preserves arbitrary user stages: research-four, existing=false (4328.2593ms)
+✔ one delivery preserves arbitrary user stages: research-four, existing=true (4885.0255ms)
+✔ one delivery preserves arbitrary user stages: translation-reversed, existing=false (4372.0131ms)
+✔ one delivery preserves arbitrary user stages: translation-reversed, existing=true (5370.5114ms)
+✔ explicit chat creation separates durable creation from dependency/time start: scheduled=false (3381.3956ms)
+✔ explicit chat creation separates durable creation from dependency/time start: scheduled=true (2474.8695ms)
+✔ real ingress reserves a no-Topic unit, independently plans A then B and dispatches original Owners from completion facts (5095.3503ms)
+✔ ambiguous no-Topic request remains exclusively pending clarification without changing original tasks (1124.986ms)
+✔ no-Topic scheduled query runs through Host recovery and the existing outbox without reopening the queried Task (2024.0135ms)
+✔ real native completed task retires its definitively unsent start confirmation without re-dispatch (2763.6119ms)
+ℹ tests 42
+ℹ suites 0
+ℹ pass 41
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 160408.2651
+
+✖ failing tests:
+
+test at test\coordination-final-native.test.js:14:1
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (834.6285ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'sent'
+  - 'delivered'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/coordination-final-native.test.js:44:42)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'sent',
+    expected: 'delivered',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

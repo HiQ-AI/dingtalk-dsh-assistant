@@ -1,0 +1,44 @@
+✔ cancelled arrangement retires applied pending-reorder edges without deleting history or rejecting new opposite ordering (97.8726ms)
+✔ a review execution result cannot finish the delivery Task after restart (110.2374ms)
+✔ Host binds pending instructions despite caller empty ids; claim waits before locking while Owner controls remain available (66.7514ms)
+✔ running reorder requests read-only Owner assessment without revising or cancelling; safe point needs Host evidence (77.6431ms)
+✔ running reorder uncertainty persists clarification instead of pretending strict ordering or cancelling work (92.1295ms)
+✔ a second reorder cannot inherit an earlier existing-input exemption (82.2278ms)
+✔ opposite pending reorder proposals are rejected before either Owner decision (74.3023ms)
+✔ existing running input remains explicit prior scope, but a new continue input cannot inherit the exemption (77.8301ms)
+✔ a new reorder replaces initial ready-member clarification and preserves already running input (87.5427ms)
+✔ partial cancellation retires applied instruction gates while retaining history and other dependencies (80.3432ms)
+✔ completion receipt, coverage proof and independent ordered event commit atomically and replay once (90.2692ms)
+✔ event write failure rolls back business completion, instruction fulfillment and receipt (117.9678ms)
+✔ consuming an old completion after reopen reads current truth and cannot make B eligible (77.5569ms)
+✔ compatible context supplements preserve earlier instruction coverage in the current Owner completion (63.1663ms)
+✔ source reservation and fixed member apply survive restart without replaying task mutation (109.1697ms)
+✔ real process SIGKILL after third member commit resumes original six receipts without replay (553.3162ms)
+✔ dependency gate rejects claim before resource acquisition and cancellation does not cancel task (56.6748ms)
+✔ scope, impact and cycles reject the complete batch before any member exists (61.914ms)
+✔ six fixed members recover after the third apply; later conflict reports partial effects without compensation (107.2009ms)
+✔ formal current Owner completion releases B; reopening A invalidates its old proof (60.1547ms)
+✔ v1 migration requires opt in, validates identity and preserves history atomically (85.5494ms)
+✔ due scan is durable, read-query observes current facts without changing Task, no Topic required (100.0954ms)
+✔ cancel before permit prevents send; permit before cancel becomes unknown after restart and never replays (68.4967ms)
+✔ cancel wins send-permit CAS and stale query worker cannot publish after lease reclaim (52.2462ms)
+✔ real SIGKILL after permit: fake network called=false; recovery never issues a new send (420.5335ms)
+✔ real SIGKILL after permit: fake network called=true; recovery never issues a new send (366.6221ms)
+✔ SIGKILL after job claim recovers the same occurrence and preserves the lease instead of inventing success (339.1448ms)
+✔ single-goal stages preserve one creation envelope or revise the original Task with all ordered requirements (9.2199ms)
+✔ observed A never receives a command or wake; authoritative completion survives restart: completedBefore=true (114.8446ms)
+✔ observed A never receives a command or wake; authoritative completion survives restart: completedBefore=false (104.5253ms)
+✔ completed status without a formal receipt cannot release observed prerequisite (128.4745ms)
+✔ formal receipt without event can release once, but cancellation or pause never releases B (157.6343ms)
+✔ first order on running B requires read-only Owner assessment and never stops existing work (62.9184ms)
+✔ continue never silently reopens an already completed B (58.5305ms)
+✔ running B first receives assessment when added through append (71.2238ms)
+✔ running B first receives assessment when added through resolve-members (62.0288ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2763.8141
