@@ -1,8 +1,8 @@
 # 协调层审查修复
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：coordination-review-repair-20261022
-> 最近维护：2026-10-22T12:12:04.2712472+08:00
+> 最近维护：2026-10-22T12:13:56.9524800+08:00
 > 权威目标：goal.md
 
 ## 总目标
@@ -24,17 +24,17 @@
 
 | ID | 子目标 | 完成判据 | 状态 | 证据 |
 | --- | --- | --- | --- | --- |
-| SG1 | R2/R3 指令生命周期 | 澄清可收束、局部取消不阻断原任务且保留其他约束 | 定向通过 | round-1/ledger-tests.log、ledger-scope-tests.log |
-| SG2 | R1/F1 计划与前置组合 | future 修改和时间/观察前置两种顺序均正确 | 定向通过 | round-1/schedules-boundary.log、schedules-native-final.log |
-| SG3 | R4 公平恢复及 Windows 验证 | 后续可运行项推进，强退恢复断言执行 | 定向通过 | round-1/fairness-migration.log，含依赖等待分支 |
-| SG4 | F2/F3 查询与异常通知 | 异常原因可见、过期通知可恢复且不重复 | 定向通过 | round-3/unit-tests.log：307项；native-tests.log：42项全绿 |
-| SG5 | 集成验证与交付 | 文档、matrix、相关测试、PR 状态回读 | 进行中 | README/runbook已同步；最终364项通过、0失败0跳过；待提交及PR |
+| SG1 | R2/R3 指令生命周期 | 澄清可收束、局部取消不阻断原任务且保留其他约束 | 完成 | round-1/ledger-tests.log、ledger-scope-tests.log |
+| SG2 | R1/F1 计划与前置组合 | future 修改和时间/观察前置两种顺序均正确 | 完成 | round-1/schedules-boundary.log、schedules-native-final.log |
+| SG3 | R4 公平恢复及 Windows 验证 | 后续可运行项推进，强退恢复断言执行 | 完成 | round-1/fairness-migration.log，含依赖等待分支 |
+| SG4 | F2/F3 查询与异常通知 | 异常原因可见、过期通知可恢复且不重复 | 完成 | round-3/unit-tests.log：307项；native-tests.log：42项全绿 |
+| SG5 | 集成验证与交付 | 文档、matrix、相关测试、PR 状态回读 | 完成 | README/runbook已同步；最终364项通过、0失败0跳过；PR #244 OPEN，base main，head worktree-coordination-review-fixes，gh独立回读 |
 
 ## 当前检查点
 
 - 当前子目标：SG5
-- 唯一下一步：提交修复和验收证据，创建 PR 并独立回读状态。
-- 未闭环项：提交与 PR 状态回读；现场部署不在范围。
+- 唯一下一步：无；修复已交付 PR #244，等待代码审阅。
+- 未闭环项：本轮无；合并和现场部署不在范围。
 
 ## 进展
 
@@ -50,8 +50,8 @@
 
 ## 重要信息
 
-历史审查证据位于 ../task-coordination-v1.3/review-20261022.md；历史反例断言缺陷成立，不能作为修复通过证据。
+历史审查证据保留在本地 ../task-coordination-v1.3/review-20261022.md，未纳入本 PR；自包含问题说明及最终证据见 report.md 和 matrix.csv。历史反例不能作为修复通过证据。
 
 ## 下一步与未闭环项
 
-完成 PR 交付。真实模型/钉钉/现场部署不在本轮执行范围。
+PR 已交付并独立回读：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/244 （OPEN）。代码提交 2d69f76；本次收尾提交仅更新交付记录。真实模型/钉钉/现场部署不在本轮执行范围。
