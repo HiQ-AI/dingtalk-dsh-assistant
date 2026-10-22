@@ -83,6 +83,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 统筹方向判断核验：除检查读取调用外，核对巡检决定是否把最新整体目标、受托目标、范围及验收条件与实际行动对照，说明当前进展和下一必要结果。首次出现具体偏离就应通过原executionId反馈，不以重复错误为触发条件；确认偏离后仅复述进展并wait不算有效纠偏。跟进时独立核对反馈后的真实动作/产物，received或modelStepEnteredAt不能证明落实。必要验证、正常等待、证据不足和真实人工等待分别验证，不以一律发反馈为通过标准；本项不改变原人工等待/暂停机制。
 
+行为复验沿用 `docs/acceptance/task-progress-steering/scripts/evaluate-model.mjs`，使用完整的原生测试 profile 和当前已授权模型连接，外部业务工具保持禁止。先核对 `task_execution_read` 等合成响应符合当前真实合同；原生工具输出校验错误、模型超时或测试跳过均不算通过。人工申请与取消只连接合成出口，保留第一次选择，不能靠提前拒绝错误动作后让模型自纠正来判 PASS。逐例审阅反馈与完整决定，区别“已发出纠偏”和“执行已落实”，并从原生日志回读调用顺序、summary、evidence、limitations。此次调查、受管登录、错误截图、正常等待及组合交付的情境和结果见 [统一回复与复盘改进记录](../acceptance/unified-reply-validation/goal.md)。
+
 决定留存核验：通过 `GET /state/tasks/:taskId/decisions?limit=20` 读取历次完整决定，按 nextBefore 继续分页。至少核对连续两轮、同命令重试、人工介入、完成和重启后原记录不变；最新 lastDecision 更新不能删除旧说明。历史复用 dynamic_receipts 的不可覆盖命令收据，新版为 taskDecision.taskId 建部分索引，不增加历史数组或定时补录；首次升级建索引可能增加启动耗时。升级前原日志/收据保留，接口只列具备 taskDecision 结构的记录，不能据空列表声称历史从未决定过。
 
 任务会话因查看记录而被普通空闲Agent占用时，不热抢Agent、不改SQLite的drained字段。先读取原生API核实running=false、inbox为空、所有执行已结束，再走精确进程的SIGINT退出。部署检查对未开始的新lease须同时核验原生日志：没有当前lease输入、上一回合已结束、工具调用全部结束；停机后还必须独立证实旧PID消失。保留未开始lease，由正式重启恢复路径接管。同任务出现新Host输入才算恢复，health=ok不替代此项证据。

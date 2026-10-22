@@ -1,0 +1,37 @@
+[
+  {
+    "path": "D:\\dsh_home\\skills\\baibu-uat-account-verify\\SKILL.md",
+    "bytes": 2642,
+    "sha256": "9dad070ec86b47c77ec40460c0299ec270d0f1812012d7b0e6fa442e64330699"
+  },
+  {
+    "path": "D:\\dsh_home\\skills\\baibu-uat-account-verify\\references\\verified-flow.md",
+    "bytes": 7831,
+    "sha256": "a845d5bd026707b1a5fa328fb2e8ad39d65914919105c401f323adcc9b6783de"
+  },
+  {
+    "path": "D:\\dsh_home\\skills\\baibu-uat-account-verify\\scripts\\hiq_uat_session.py",
+    "bytes": 8001,
+    "sha256": "05b094617af9206d8aa8efe380f986596e15dd4ed2bc13b41fa4e90e316c88f0"
+  },
+  {
+    "path": "D:\\dsh_home\\skills\\business-development\\SKILL.md",
+    "bytes": 2538,
+    "sha256": "6777d6a88f558445a5f3a83281c63850b57bd68795da2ec83ec66be3bab8d410"
+  },
+  {
+    "path": "D:\\dsh_home\\skills\\business-development\\references\\procedure.md",
+    "bytes": 23888,
+    "sha256": "6219ef95aca64b1fc6ee71123e5bfe83845902622f58db9db3cbc1ac7d63bb70"
+  },
+  {
+    "path": "D:\\dsh_home\\skills\\business-development\\references\\page-verification.md",
+    "bytes": 4236,
+    "sha256": "8c6e4b5c43c0f70b073916146d8ac854419004056a8a439e5385ecdaf271e7c8"
+  },
+  {
+    "path": "D:\\dsh_home\\skills\\business-development\\scripts\\page_acceptance.py",
+    "bytes": 5997,
+    "sha256": "14d393eccd468b40abd9673f4209bf13ea435695a6ccc4ee2db3627f0749ff62"
+  }
+]

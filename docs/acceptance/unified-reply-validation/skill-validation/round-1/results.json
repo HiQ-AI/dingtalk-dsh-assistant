@@ -1,0 +1,77 @@
+{
+  "passed": true,
+  "testsRun": 17,
+  "failures": 0,
+  "errors": 0,
+  "cases": [
+    {
+      "case": "test_finish_is_idempotent",
+      "status": "PASS"
+    },
+    {
+      "case": "test_identity_unavailable_still_attempts_owned_logout",
+      "status": "PASS"
+    },
+    {
+      "case": "test_logout_200_without_revocation_is_failure",
+      "status": "PASS"
+    },
+    {
+      "case": "test_logout_exception_does_not_prevent_close_or_leak",
+      "status": "PASS"
+    },
+    {
+      "case": "test_managed_login_without_authorization_response_header",
+      "status": "PASS"
+    },
+    {
+      "case": "test_mismatched_identity_is_not_logged_out",
+      "status": "PASS"
+    },
+    {
+      "case": "test_page_failure_after_login_before_identity_still_cleans",
+      "status": "PASS"
+    },
+    {
+      "case": "test_unknown_login_is_preserved_without_retry",
+      "status": "PASS"
+    },
+    {
+      "case": "test_wrong_cookie_identity_does_not_supply_cleanup_material",
+      "status": "PASS"
+    },
+    {
+      "case": "test_actual_local_browser_error_and_clean_pages",
+      "status": "PASS"
+    },
+    {
+      "case": "test_clean_visual_review_checks_all_files_and_hashes",
+      "status": "PASS"
+    },
+    {
+      "case": "test_external_exception_cannot_be_swallowed_as_pass",
+      "status": "PASS"
+    },
+    {
+      "case": "test_failed_assertion_has_safe_stage_expected_and_actual",
+      "status": "PASS"
+    },
+    {
+      "case": "test_missing_permissions_cannot_be_assumed_readonly",
+      "status": "PASS"
+    },
+    {
+      "case": "test_pending_visual_review_and_conflicting_error_image",
+      "status": "PASS"
+    },
+    {
+      "case": "test_readonly_account_without_add_is_correct",
+      "status": "PASS"
+    },
+    {
+      "case": "test_readonly_post_exact_path_and_origin",
+      "status": "PASS"
+    }
+  ],
+  "scope": "in-memory auth service plus network-blocked local Edge; no credentials, UAT login or messaging"
+}

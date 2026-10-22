@@ -100,7 +100,7 @@ for (const detour of [false, true]) test(`scripted progress decision waits for e
   const extraTarget = join(root, 'unrelated-extra.txt')
   await writeFile(extraTarget, 'UNREQUESTED_EXTRA_CHECK')
   let delegated = false, steps = 0, reviews = 0
-  const phases = new Map()
+  const phases = new Map(), judgments = []
   const h = await nativeTaskHost(root, async request => {
     if (!request.tools.some(tool => tool.name === 'task_delegate')) {
       steps++
@@ -131,7 +131,14 @@ for (const detour of [false, true]) test(`scripted progress decision waits for e
     assert.ok(progress && record)
     assert.equal(history.taskId, input.task.taskId)
     assert.ok(history.decisions.length >= reviews + 1, 'each prior owner decision remains available through the actual tool')
-    assert.ok(history.decisions.every(item => item.decision.summary && Array.isArray(item.decision.evidence)))
+    assert.ok(history.decisions.every(item => item.decision.summary && Array.isArray(item.decision.evidence)
+      && Array.isArray(item.decision.limitations)))
+    for (const previous of judgments) {
+      const saved = history.decisions.find(item => item.decision.summary === previous.summary)?.decision
+      assert.ok(saved, 'the next inspection reads each previous judgment')
+      assert.deepEqual({ action: saved.action, summary: saved.summary, evidence: saved.evidence, limitations: saved.limitations }, previous,
+        'the stored judgment retains its explanation and unknowns in addition to Host metadata')
+    }
     for (const feedback of record.feedback) {
       assert.equal(feedback.consumedAt, null)
       assert.equal(feedback.modelStepEnteredAt, null)
@@ -145,7 +152,13 @@ for (const detour of [false, true]) test(`scripted progress decision waits for e
     }
     if (!detour) assert.equal(extraReads.length, 0, 'one requested read and silence do not prove detour')
     reviews++
-    return [submit('wait')]
+    const decision = { action: 'wait', summary: `第${reviews}次巡检：` + (detour
+      ? reviews === 1 ? '首次发现无关读取，已向原执行发出纠偏，尚未确认落实' : '原反馈仍待消费且没有新动作，不重复投递'
+      : reviews === 1 ? '已读取目标文件，等待原执行结果' : '没有新增结果，不能仅据日志沉默判定卡死'),
+    evidence: [`executionId=${execution.executionId}`, `lastSequence=${progress.lastSequence}`, `offTargetReads=${extraReads.length}`],
+    limitations: ['原执行尚未提交结果；下一检查点为原执行的真实动作与结果，而非反馈回执'] }
+    judgments.push(decision)
+    return [call('task_session_submit', { decision })]
   })
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
   const created = await h.service.createTask({ groupId: 'native-group', requestId: 'direction-review', objective: '核对文件并简短报告' })
@@ -167,6 +180,10 @@ for (const detour of [false, true]) test(`scripted progress decision waits for e
   for (const key of ['executionId', 'sessionId', 'inputVersion', 'leaseEpoch']) assert.equal(checked[key], before[key])
   assert.equal(checked.cancelRequested, false)
   assert.equal(checked.feedback?.length ?? 0, detour ? 1 : 0, 'second inspection must not repeat pending advice')
+  const history = await h.query('task.decisions', { taskId: created.taskId })
+  const savedJudgments = history.decisions.map(item => item.decision).filter(decision => decision.summary.startsWith('第'))
+    .map(({ action, summary, evidence, limitations }) => ({ action, summary, evidence, limitations }))
+  assert.deepEqual(savedJudgments, judgments.toReversed(), 'both inspections retain their distinct decisions, explanations and limits')
   gate.resolve(); await h.service.whenIdle()
   const after = await h.query('execution.get', { executionId: before.executionId })
   if (detour) assert.ok(after.feedback[0].modelStepEnteredAt, 'advice enters the original native model step')
