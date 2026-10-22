@@ -1,0 +1,20 @@
+✔ 执行原生工具读取自身租约并在续办刷新，初始资源=uat2 (3495.3934ms)
+✔ 执行原生工具读取自身租约并在续办刷新，初始资源=none (5384.8113ms)
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.4157ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: false (5407.2ms)
+✔ native progress review reads actual tool records without replaying or bypassing human wait: true (7651.1237ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (8724.8233ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (8746.9277ms)
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (3302.4583ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (4925.5634ms)
+✔ task session permits late native tools and configured read and shell alongside skills (3966.976ms)
+✔ unconfigured native profiles expose no bundled personal skills (2167.3265ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (4353.8219ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 60571.36

@@ -107,7 +107,10 @@ export function projectTaskTimeline(task, executions, wakes, lifecycle) {
     }
     row.milestones.push(...wakes.filter(wake => wake.taskId === task.taskId && wake.kind === 'execution.stage.progress'
       && wake.payload?.executionId === execution.executionId && timestamp(wake.payload.recordedAt))
-      .map(wake => ({ id: wake.wakeId || wake.id, at: wake.payload.recordedAt, summary: wake.payload.summary })))
+      .map(wake => ({ id: wake.wakeId || wake.id, at: wake.payload.recordedAt, summary: wake.payload.summary,
+        evidence: Array.isArray(wake.payload.evidence) ? [...wake.payload.evidence] : [],
+        ...(typeof wake.payload.activity === 'string' ? { activity: wake.payload.activity } : {}),
+        inputVersion: wake.payload.inputVersion, leaseEpoch: wake.payload.leaseEpoch })))
     rows.set(rowId, row)
   }
   const human = { id: 'human', title: '人工介入', complete: true, segments: [], milestones: [] }

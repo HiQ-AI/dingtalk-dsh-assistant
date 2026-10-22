@@ -1,0 +1,46 @@
+✔ running reminder and coordinator clarification preserve one native shell job with received and consumed receipts (13494.1678ms)
+✔ native completion race drains then resumes the original execution without replaying its shell effect (12719.1463ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (19857.9279ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (17612.5479ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (15713.9748ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (15453.8407ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (13178.4768ms)
+✖ native shared resources queue without occupying task capacity and promote on drain (28342.3609ms)
+✔ native delegation rejects changed keys on receipt replay and preserves omitted continuation keys (10990.4752ms)
+✖ empty owner recovery reviews the retained execution without replaying its completed native write (20014.472ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (6276.565ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 9
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 174637.6192
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:50:38
+✖ native shared resources queue without occupying task capacity and promote on drain (28342.3609ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok((await h.query('task.list')).every(task => task.status === 'completed'))
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1240:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test\task-session-service-native.test.js:50:38
+✖ empty owner recovery reviews the retained execution without replaying its completed native write (20014.472ms)
+  Error: Timed out: retained execution review
+      at waitUntil (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/fixtures/task-session-native-host.js:200:9)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1377:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

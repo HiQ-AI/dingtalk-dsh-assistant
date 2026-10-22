@@ -1,0 +1,20 @@
+﹣ 执行原生工具读取自身租约并在续办刷新，初始资源=uat2 (0.8582ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ 执行原生工具读取自身租约并在续办刷新，初始资源=none (0.1685ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.2511ms)
+﹣ native progress review reads actual tool records without replaying or bypassing human wait: false (0.242ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ native progress review reads actual tool records without replaying or bypassing human wait: true (0.1377ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ scripted progress decision waits for evidence or steers the original execution once: detour=false (0.1103ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ scripted progress decision waits for evidence or steers the original execution once: detour=true (0.1292ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (0.927ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ an unavailable native skill is a correctable read and does not leave unknown external effects (0.1622ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ task session permits late native tools and configured read and shell alongside skills (0.107ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ unconfigured native profiles expose no bundled personal skills (0.0911ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ an execution same-name replacement does not inherit the native loader read-only accounting (0.1273ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+ℹ tests 12
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 11
+ℹ todo 0
+ℹ duration_ms 745.3647

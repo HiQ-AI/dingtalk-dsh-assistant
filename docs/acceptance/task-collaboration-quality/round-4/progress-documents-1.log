@@ -1,0 +1,64 @@
+TAP version 13
+# Subtest: execution progress due is exactly ten minutes and respects the current running lifecycle
+ok 1 - execution progress due is exactly ten minutes and respects the current running lifecycle
+  ---
+  duration_ms: 3.694
+  type: 'test'
+  ...
+# Subtest: native execution documents keep each input round and the owner reads the new duty and plan
+ok 2 - native execution documents keep each input round and the owner reads the new duty and plan
+  ---
+  duration_ms: 12930.5496
+  type: 'test'
+  ...
+# Subtest: native progress review reads the current execution document without replaying or bypassing human wait: false
+not ok 3 - native progress review reads the current execution document without replaying or bypassing human wait: false
+  ---
+  duration_ms: 6654.9232
+  type: 'test'
+  location: 'D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\test\\task-session-progress-native.test.js:110:40'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'includes')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-progress-native.test.js:176:57)
+    async Test.run (node:internal/test_runner/test:1389:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+  ...
+# Subtest: native progress review reads the current execution document without replaying or bypassing human wait: true
+not ok 4 - native progress review reads the current execution document without replaying or bypassing human wait: true
+  ---
+  duration_ms: 6957.005
+  type: 'test'
+  location: 'D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\test\\task-session-progress-native.test.js:110:40'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'includes')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-progress-native.test.js:176:57)
+    async Test.run (node:internal/test_runner/test:1389:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+  ...
+# Subtest: scripted progress decision waits for evidence or steers the original execution once: detour=false
+ok 5 - scripted progress decision waits for evidence or steers the original execution once: detour=false
+  ---
+  duration_ms: 17128.2808
+  type: 'test'
+  ...
+# Subtest: scripted progress decision waits for evidence or steers the original execution once: detour=true
+ok 6 - scripted progress decision waits for evidence or steers the original execution once: detour=true
+  ---
+  duration_ms: 17228.9094
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 4
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 62095.1829

@@ -1,0 +1,30 @@
+✔ nonterminal stage reports persist and wake once without completing the execution (47.1465ms)
+✖ stage plan is optional, validates before writing and persists across reports and restart in one input round (46.1002ms)
+✔ stage reports reject forged input/lease, superseded requirements and cancellation (27.4943ms)
+✔ stage reporting after continuation accepts only the new input and lease (37.033ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 3
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 349.3849
+
+✖ failing tests:
+
+test at test\dynamic-task-store.test.js:432:1
+✖ stage plan is optional, validates before writing and persists across reports and restart in one input round (46.1002ms)
+  Error: DYNAMIC_EXECUTION_NOT_CURRENT
+      at fail (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:25:61)
+      at reduce (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1037:96)
+      at file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1540:28
+      at transaction (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:219:21)
+      at Object.command (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1530:20)
+      at Object.command (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:287:71)
+      at report (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:434:47)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/dynamic-task-store.test.js:443:26)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'DYNAMIC_EXECUTION_NOT_CURRENT'
+  }

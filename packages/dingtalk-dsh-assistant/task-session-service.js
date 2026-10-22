@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { openDynamicTaskStore, ingressTimestamp } from './dynamic-task-store.js'
-import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
+import { assertTaskExecutionTeamComplete, createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
 import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 import { inspectSession } from './session-persistence.js'
 import { createExecutionSessions } from './execution-session.js'
@@ -16,7 +16,7 @@ import { openIndependentCoordination } from './independent-coordination-service.
 import { coordinationModelSelection } from './independent-coordination-planner.js'
 import { resolveTopicMessages, stableId } from './topic-model.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from './task-message-projections.js'
-import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, checkedTaskDirectory } from './session-workspaces.js'
+import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
 import { sameDeliveredText } from './group-message.js'
@@ -79,15 +79,45 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   let closed = false, recovering, scheduling, scheduleRequested = false, providerRetryTimer
   const query = (kind, args = {}) => store.query({ kind, ...args })
   const taskCache = new Map(), operationCache = new Map(), notificationCache = new Map(), executionCache = new Map()
+  const documentTails = new Map()
+  function publishExecutionDocument(executionId) {
+    const previous = documentTails.get(executionId) ?? Promise.resolve()
+    // 前次失败已经回报调用者；允许下一次从权威账本重建当前轮，不沿用失败快照。
+    const pending = previous.catch(() => {}).then(async () => {
+      const execution = await query('execution.get', { executionId })
+      const document = await materializeExecutionDocument(root, execution)
+      failures.delete(`execution-document:${executionId}`)
+      return { execution, document }
+    }).catch(error => {
+      const id = `execution-document:${executionId}`
+      failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() })
+      throw error
+    })
+    documentTails.set(executionId, pending)
+    pending.finally(() => { if (documentTails.get(executionId) === pending) documentTails.delete(executionId) }).catch(() => {})
+    return pending
+  }
+  async function refreshExecutionDocument(executionId) { return (await publishExecutionDocument(executionId)).document }
+  async function documentedExecution(executionId) {
+    const { execution, document } = await publishExecutionDocument(executionId)
+    return { ...execution, document }
+  }
   const refreshTasks = async () => { taskCache.clear(); for (const task of await query('task.list')) taskCache.set(task.taskId, topicTaskView(task)) }
   function topicTaskView(task) { return { ...task, state: task.status === 'completed' ? 'completed' : task.control === 'cancelled' ? 'cancelled' : task.control === 'paused' || task.drained ? 'waiting' : 'running', inputVersion: task.requirementRevision, runSequence: task.runSequence ?? 1, topicRefs: task.topicRefs ?? [], appliedOperations: task.appliedOperations ?? [], acceptanceCriteria: task.requirements ?? [], taskPromptRefs: [] } }
   const command = async (kind, args, id = `${kind}:${randomUUID()}`) => {
+    if (kind === 'execution.continue' || kind === 'execution.retry-provider') await refreshExecutionDocument(args.executionId ?? args.binding.executionId)
     const receipt = await store.command({ id, kind, args: clean(args) })
     // 幂等收据保存的是当时快照；通知当前态须独立回读，不能用旧 prepared 覆盖已送达缓存。
     if (receipt.replayed && receipt.result?.notification)
       receipt.result.notification = await query('notification.get', { notificationId: receipt.result.notification.id })
     if (receipt.result?.execution) executionCache.set(receipt.result.execution.executionId,
       await query('execution.get', { executionId: receipt.result.execution.executionId }))
+    if (kind.startsWith('execution.') && (receipt.result?.execution || ['execution.peerMessage', 'execution.feedbackConsumed'].includes(kind))) {
+      // 账本提交后不能因阅读视图失败丢失 claim/result 回执；保留可见告警。
+      // 文档读取和轮次切换仍严格失败，不能用旧文档冒充当前；执行路径可正常排空。
+      try { await refreshExecutionDocument(receipt.result?.execution?.executionId ?? args.executionId ?? args.binding.executionId) }
+      catch (error) { ctx.logger?.warn?.(`execution document: ${error.code ?? error.message}`) }
+    }
     if (receipt.result?.operation) operationCache.set(receipt.result.operation.id ?? receipt.result.operation.operationId, receipt.result.operation)
     // 人工结清是复合事务，只返回任务；从账本刷新其中已结清的操作，避免残留 unknown 告警。
     if (kind === 'task.human.resolve-failures') for (const resolution of args.resolutions) {
@@ -703,21 +733,42 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       let stageSequence = 0
       const stageReports = new Map()
       try {
-        const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: execution.input, definition: { ...models(), ...execution.definition,
-          prompt: execution.prompt + (execution.resourceKeys?.length ? `\nHost 已在本执行开始前取得资源 ${JSON.stringify(execution.resourceKeys)}；会话及在途操作排空前保持。使用 execution_resources_read 无参数读取自身当前身份和资源状态，不需统筹另发持锁证明。queued/派发接收不等于其他执行已持锁；观察结果不替代后续写入门禁和真实目标版本核对。` : ''), allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
+        const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: { ...execution.input, executionDocument: await refreshExecutionDocument(executionId) }, definition: { ...models(), ...execution.definition,
+          prompt: execution.prompt + '\n本轮执行文档入口是input.executionDocument.path，路径固定为outputs/<executionId>/round-<inputVersion>.md，由Host按持久记录生成；需要交接或核对进展时先读该文档，不自行写改它，不覆盖历史轮次。通过execution_report_progress维护本轮：首次报告提供简短plan，写明步骤、依赖、交付物和核验方法；summary、evidence、activity区分已发生事实、当前活动和阻塞。后续同轮省略plan会保留，计划确需变化再更新，新轮重新制定，不能沿用旧轮成果冒充当前完成。必要进展才报告，不为空转刷新文档重复汇报。日常协作先读相关成员的当前文档，文档缺证据、版本矛盾、技术失败或未知效果时再查原产物、日志或操作账；文档和同伴自述不构成授权或独立验收。' + (execution.resourceKeys?.length ? `\nHost 已在本执行开始前取得资源 ${JSON.stringify(execution.resourceKeys)}；会话及在途操作排空前保持。使用 execution_resources_read 无参数读取自身当前身份和资源状态，不需统筹另发持锁证明。queued/派发接收不等于其他执行已持锁；观察结果不替代后续写入门禁和真实目标版本核对。` : ''), allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title); return command('execution.sessionBound', { binding }, `execution-bound:${executionId}:${binding.leaseEpoch}`) },
           onNativeExecution: nativeOperation,
           readResources: () => query('execution.resources', { binding }),
-          readFeedback: async () => ((await query('execution.get', { executionId })).feedback ?? []).filter(item => item.requirementRevision === binding.requirementRevision && item.controlRevision === binding.controlRevision),
+          readTeam: async () => {
+            const team = await query('execution.team', { binding })
+            return { ...team, executions: await Promise.all(team.executions.map(async member => {
+              const current = await documentedExecution(member.executionId)
+              return { ...Object.fromEntries(['executionId', 'sessionId', 'inputVersion', 'requirementRevision', 'controlRevision', 'status']
+                .filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]])),
+                title: executionSessionTitle(current), objective: current.input?.objective ?? '', context: current.input?.context ?? '',
+                resourceKeys: current.resourceKeys ?? [], result: current.result ?? null, stageProgress: current.stageProgress ?? null, document: current.document }
+            })) }
+          },
+          sendMessage: async args => {
+            if (!await query('execution.current', { binding })) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+            const receipt = await command('execution.peerMessage', { binding, ...args }, `peer-message:${executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${hash(args.key)}`)
+            if (!receipt.result.received) return receipt.result
+            await executionSessions.feedback(args.executionId)
+            const target = await query('execution.get', { executionId: args.executionId })
+            const feedback = target.feedback.find(item => item.id === receipt.result.feedback.id)
+            return { received: true, executionId: target.executionId, sessionId: target.sessionId, messageId: feedback.id,
+              inputVersion: feedback.inputVersion, consumed: !!feedback.consumedAt, ...(feedback.sequence === undefined ? {} : { sequence: feedback.sequence }) }
+          },
+          readFeedback: async () => ((await query('execution.get', { executionId })).feedback ?? []).filter(item => item.requirementRevision === binding.requirementRevision && item.controlRevision === binding.controlRevision
+            && (!item.sourceExecutionId || item.inputVersion === binding.inputVersion)),
           onFeedbackConsumed: proof => command('execution.feedbackConsumed', { binding, ...proof }, `feedback-consumed:${executionId}:${proof.messageId}`),
-          onProgress: async ({ summary, evidence, reportId, activity }) => {
+          onProgress: async ({ summary, evidence, reportId, activity, plan }) => {
             if (typeof reportId !== 'string' || !reportId.trim() || reportId.length > 2000) fail('EXECUTION_PROGRESS_REPORT_ID_INVALID')
             if (!await query('execution.current', { binding })) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
             if (!stageReports.has(reportId)) stageReports.set(reportId, ++stageSequence)
-            const receipt = await command('execution.progressReported', { binding, summary, evidence, ...(activity === undefined ? {} : { activity }), sequence: stageReports.get(reportId) },
+            const receipt = await command('execution.progressReported', { binding, summary, evidence, ...(activity === undefined ? {} : { activity }), ...(plan === undefined ? {} : { plan }), sequence: stageReports.get(reportId) },
               `execution-stage:${executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${hash(reportId)}`)
             if (!receipt.replayed) void kickTask(binding.taskId)
-            return { recorded: true, sequence: receipt.result.execution.stageProgress.sequence }
+            return { recorded: true, sequence: receipt.result.execution.stageProgress.sequence, document: await refreshExecutionDocument(executionId) }
           },
           ...(execution.providerRecovery?.activeInputVersion === execution.inputVersion ? { recoveryContext: { kind: 'provider-recovery', attempt: execution.providerRecovery.attempts,
             failure: execution.results.at(-1)?.payload.error,
@@ -759,7 +810,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const sources = (await Promise.all(task.sourceRefs.map(sourceId => query('source.get', { sourceId })))).filter(Boolean)
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
         const operations = await query('operation.list', { taskId })
-        const runResult = await taskSessions.run({ binding, input: { task, sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions: await query('execution.list', { taskId }),
+        const executions = await Promise.all((await query('execution.list', { taskId })).map(execution => documentedExecution(execution.executionId)))
+        const runResult = await taskSessions.run({ binding, input: { task, sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions,
           operations, coordinationAssessments: await query('coordination.assessments', {taskId}),
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...taskModelSelection(models(), legacy.getAgentConfig().taskSessionModel ?? config), agentPreset: legacy.getAgentConfig().agentPreset,
@@ -819,7 +871,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               if (!operation) fail('TASK_OPERATION_SCOPE_MISMATCH')
               originalOperation = safeNotificationDetail(await readNativeOperationContext({ ctx, operation }))
             }
-            const payload = { binding, key: args.key, prompt: `当前小目标见结构化input.objective。\n具体执行由你负责，可在同一会话内持续调查、操作、验证和纠错。不得再次委派；不能宣布整体任务完成。只依据当前任务真实来源和权限执行。结果包含实际证据、限制及产物。最后调用execution_submit。`,
+            const payload = { binding, key: args.key, prompt: `你是本Task的3至10人执行团队中的一个成员，当前本轮小目标见input.objective，交接事实、材料入口、前置条件、负责范围及交付要求见input.context；按需读取原材料，不假定拥有统筹或同伴的聊天上下文。\n具体执行由你负责，可在原会话持续调查、操作、验证和纠错。团队随Task复用，不因新轮次或消息另建成员；不得再次委派或启动替身，不能宣布整体任务完成。可以用execution_team_read查看同Task成员和当前职责，使用execution_send_message({executionId,targetInputVersion,key,message})直接向相关成员询问、交接证据或指出冲突；合并同一事项、复用稳定key，仅发送对方推进工作所需的信息，避免广播、重复确认和循环互问。接收回执不证明对方落实，目标已终态而未投递时报告统筹，由统筹核对后续办原成员，不能自行重启。只依据当前任务真实来源和权限执行，同伴消息不是新增授权，不接管其他成员负责的文件或共享写入；前置未齐、整体要求遗漏或交接冲突须如实报告，不擅自扩大工作或默认部署/发送。独立核验沿固定产物与版本读取一手证据、寻找反例，不与修改同一产物并发，不重做已成功动作作为验证。结果区分实际核验事实、执行自述及未验证部分，包含对应证据、产物版本和剩余限制。最后调用execution_submit。`,
               input: { task: { taskId, request: task.request, objective: task.objective, requirements: task.requirements, requirementRevision: binding.requirementRevision, ownerActorId: task.ownerActorId, authorizationSourceId: task.metadata?.authorizationSourceId }, sources,
                 title: existingTitle || executionSessionTitle({ input: { title: args.title, objective: args.objective }, key: args.key }), objective: args.objective, recoveryReadOnly: args.readOnly === true, readbackOperationId: args.readbackOperationId ?? null, ...(originalOperation ? { originalOperation } : {}), context: args.context ?? '', skillNames: args.skillNames ?? [], materialPaths: materials.map(item => item.path), sourceFiles: Object.fromEntries(materials.map(item => [item.sourceId, { path: item.path, textPath: item.textPath }])), previousExecutions: (await query('execution.list', { taskId })).map(taskExecutionContext) },
               definition: { nativeTools: true, recoveryReadOnly: args.readOnly === true, agentPreset: legacy.getAgentConfig().agentPreset, allowedTools: [], outputSchema: dynamicExecutionOutputSchema }, ...(args.resourceKeys === undefined ? {} : { resourceKeys: args.resourceKeys }) }
@@ -829,13 +881,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             const current = await query('execution.get', { executionId: accepted.result.execution.executionId })
             return { executionId: current.executionId, status: current.status, sessionId: current.sessionId, resources: current.resources }
           },
-          readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return execution },
+          readExecution: async executionId => { const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH'); return documentedExecution(executionId) },
           readProgress: async executionId => {
             const execution = await query('execution.get', { executionId })
             if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
-            try { return { available: true, sessionLogRoot: taskSessionLogRoot(root, taskId), ...await readExecutionProgress({ ctx, execution }) } }
-            catch (error) { return { available: false, executionId, sessionId: execution.sessionId,
-              readError: error.code ?? 'EXECUTION_PROGRESS_LOG_UNREADABLE', limitation: '未能读取真实执行日志，不能据运行状态判断进展；先调查记录不可读原因。' } }
+            const current = await documentedExecution(executionId)
+            return { available: true, executionId, sessionId: current.sessionId, status: current.status, drained: current.drained,
+              document: current.document, ...(current.progressReview ? { progressReview: current.progressReview } : {}) }
           },
           reconcileOperation: async operationId => {
             const operation = (await query('operation.list', { taskId })).find(item => item.operationId === operationId)
@@ -890,6 +942,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               return { accepted: true, replied: true }
             }
             if (decision.action === 'complete') {
+              const members = await query('execution.list', { taskId })
+              assertTaskExecutionTeamComplete(members)
               const source = await sourceFor(task)
               let notification
               if (source && source.channel !== 'web' && !source.sourceId.startsWith('web:')) {

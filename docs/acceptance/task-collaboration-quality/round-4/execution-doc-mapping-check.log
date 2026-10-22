@@ -1,0 +1,9 @@
+file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/scripts/test-suites.mjs:57
+  if (JSON.stringify(saved) !== JSON.stringify(expected)) throw Error('test_suite_map_stale: run node scripts/test-suites.mjs update and review every change')
+                                                                ^
+
+Error: test_suite_map_stale: run node scripts/test-suites.mjs update and review every change
+    at checkedInventory (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/scripts/test-suites.mjs:57:65)
+    at async file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/scripts/test-suites.mjs:79:18
+
+Node.js v24.19.0

@@ -1,0 +1,26 @@
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=false (1186.4919ms)
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=true (504.3677ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2478.6724
+
+✖ failing tests:
+
+test at test\task-session-execution-provider-recovery-native.test.js:9:42
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=false (1186.4919ms)
+  TypeError: Cannot read properties of undefined (reading 'status')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:80:22)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at test\task-session-execution-provider-recovery-native.test.js:9:42
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=true (504.3677ms)
+  TypeError: Cannot read properties of undefined (reading 'status')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:80:22)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

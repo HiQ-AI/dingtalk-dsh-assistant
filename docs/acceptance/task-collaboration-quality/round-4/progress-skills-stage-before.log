@@ -1,0 +1,213 @@
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.1832ms)
+✖ native progress review reads actual tool records without replaying or bypassing human wait: false (5203.1445ms)
+✖ native progress review reads actual tool records without replaying or bypassing human wait: true (8067.6901ms)
+✖ scripted progress decision waits for evidence or steers the original execution once: detour=false (9021.919ms)
+✖ scripted progress decision waits for evidence or steers the original execution once: detour=true (8593.2495ms)
+✖ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (3202.3809ms)
+✖ an unavailable native skill is a correctable read and does not leave unknown external effects (4100.9422ms)
+✔ task session permits late native tools and configured read and shell alongside skills (3713.8116ms)
+✔ unconfigured native profiles expose no bundled personal skills (2091.0263ms)
+✖ an execution same-name replacement does not inherit the native loader read-only accounting (3971.4094ms)
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (7025.7644ms)
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=false (6017.5142ms)
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=true (7202.4906ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 3
+ℹ fail 10
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70637.0296
+
+✖ failing tests:
+
+test at test\task-session-progress-native.test.js:21:40
+✖ native progress review reads actual tool records without replaying or bypassing human wait: false (5203.1445ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-progress-native.test.js:91:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-progress-native.test.js:21:40
+✖ native progress review reads actual tool records without replaying or bypassing human wait: true (8067.6901ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-progress-native.test.js:91:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-progress-native.test.js:95:37
+✖ scripted progress decision waits for evidence or steers the original execution once: detour=false (9021.919ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-progress-native.test.js:190:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-progress-native.test.js:95:37
+✖ scripted progress decision waits for evidence or steers the original execution once: detour=true (8593.2495ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-progress-native.test.js:190:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-skills-native.test.js:9:29
+✖ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (3202.3809ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:70:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-skills-native.test.js:9:29
+✖ an unavailable native skill is a correctable read and does not leave unknown external effects (4100.9422ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:100:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-skills-native.test.js:9:29
+✖ an execution same-name replacement does not inherit the native loader read-only accounting (3971.4094ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:166:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-stage-progress-native.test.js:13:1
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (7025.7644ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:80:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-stage-progress-native.test.js:84:40
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=false (6017.5142ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:166:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-stage-progress-native.test.js:84:40
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=true (7202.4906ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:166:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

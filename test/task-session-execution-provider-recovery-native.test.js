@@ -5,23 +5,31 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { available, reason, nativeTaskHost, latestInput, nativeShell, waitUntil, contextReadResponse, topicSummaryResponse } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, nativeShell, waitUntil, contextReadResponse, topicSummaryResponse, nativeVerificationTeam } from './fixtures/task-session-native-host.js'
 const test = (name, fn, options = {}) => testRunner(name, { timeout: 30000, ...options, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
 const decide = action => call('task_session_submit', { decision: { action, summary: 'Original goal', evidence: [], limitations: [] } })
 const submit = call('execution_submit', { output: { status: 'completed', summary: 'Original goal done', evidence: ['Original operation retained'], limitations: [], artifacts: ['effect.txt'] } })
 const overloaded = { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.\n[Codex diagnostics: {"httpStatus":200}]' }
+async function completed(h, taskId) {
+  const task = await h.query('task.get', { taskId })
+  assert.equal(task.status, 'completed', JSON.stringify({ recovery: task.providerRecovery, decision: task.lastDecision,
+    executions: (await h.query('execution.list', { taskId })).map(item => ({ key: item.key, status: item.status, result: item.result })),
+    errors: h.toolResults.filter(item => item.result.isError).map(item => ({ name: item.name, error: item.result.error, content: item.result.content })) }))
+}
 async function host(root, { initialize = true, fault = true, allowUnrelated = false, persistent = false, humanFlow = false, recoverAfterCold = false, providerError = overloaded, reviewWait = false, revisedReview = false } = {}) {
   let executionSteps = 0, sequence = 0, humanAttempts = 0
   const requests = []
+  const team = nativeVerificationTeam()
   const h = await nativeTaskHost(root, async () => [], { initialize, config: { provider: 'execution-recovery-fixture' }, agentConfig: { provider: 'execution-recovery-fixture' },
     serviceFactory: async options => {
       class Provider extends LlmAdapter {
+        resolveModel(provider, model) { return { provider, id: model, name: model, reasoning: { efforts: [{ id: 'low', name: 'low' }], defaultEffort: 'low' } } }
         async *stream(request) {
           if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
           if (yield* contextReadResponse(request)) return
           requests.push(structuredClone(request))
-          let calls
+          let calls, verificationCalls
           if (request.tools.some(tool => tool.name === 'task_delegate')) {
             const input = latestInput(request)
             if (revisedReview && input.wakes?.some(wake => wake.kind === 'execution.provider.review')) {
@@ -46,6 +54,12 @@ async function host(root, { initialize = true, fault = true, allowUnrelated = fa
               : persistent && input.executions.some(e => e.result?.recovery?.decision === 'exhausted') && humanAttempts++ === 0
                 ? [call('task_request_human', { reason: 'Bounded native provider recovery exhausted', question: 'Investigate original provider or transport failure using retained diagnostics', audience: 'operator', evidence: ['Native error, three managed recovery attempts'], attemptedActions: ['Same session bounded backoff'] })]
                 : [decide(input.executions.every(e => e.status === 'succeeded') ? 'complete' : 'wait')]
+            if (calls.some(call => call.name === 'task_session_submit' && call.args.decision.action === 'complete')) {
+              calls = team.owner(input, input.executions.find(item => item.key === 'original')) ?? calls
+            }
+          } else if ((verificationCalls = team.execute(request, latestInput(request)))) {
+            // 独立核验成员不进入原执行的故障计数或重放写入。
+            calls = verificationCalls
           } else {
             const step = executionSteps++
             if (fault && (step === 1 || persistent && step > 1 && !(recoverAfterCold && step >= 5))) { yield { type: 'finish', reason: { kind: 'error', failure: providerError } }; return }
@@ -88,7 +102,7 @@ for (const restart of [false, true]) test(`native provider failure resumes origi
   // 十秒只约束定时恢复准入；实际模型读取和执行由原生排空等待，仍受用例总时限约束。
   await waitUntil(async () => (await h.query('execution.list'))[0]?.inputVersion === 2, 'bounded native provider recovery admission', 10000)
   await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
+  await completed(h, task.taskId)
   const final = (await h.query('execution.list'))[0]
   assert.equal(final.executionId, first.executionId); assert.equal(final.sessionId, first.sessionId)
   assert.equal(final.inputVersion, 2); assert.equal(final.status, 'succeeded')
@@ -160,7 +174,7 @@ for (const recoverAfterCold of [false, true]) test(`provider short budget exhaus
     assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
   }
   if (recoverAfterCold) {
-    assert.equal(execution.status, 'succeeded'); assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
+    assert.equal(execution.status, 'succeeded'); await completed(h, task.taskId)
   } else {
     assert.equal(execution.providerRecovery.nextReviewAt, null)
     const count = h.requests.length
@@ -199,7 +213,7 @@ test('business human answer replaces pending provider recovery input before any 
   assert.equal(execution.sessionId, first.sessionId); assert.equal(execution.executionId, first.executionId)
   assert.equal(execution.inputVersion, 2); assert.equal(execution.input.objective, 'Authenticated UAT3 target')
   assert.equal(execution.status, 'succeeded')
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
+  await completed(h, task.taskId)
   assert.equal((await h.query('operation.list')).length, 1)
 })
 

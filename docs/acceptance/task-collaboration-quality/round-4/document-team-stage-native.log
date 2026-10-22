@@ -1,0 +1,80 @@
+✔ 执行原生工具读取自身租约并在续办刷新，初始资源=uat2 (14859.0594ms)
+✔ 执行原生工具读取自身租约并在续办刷新，初始资源=none (14192.0025ms)
+✖ 同任务原生定向通信持久消费且不重启终态成员：并发1 (12684.3634ms)
+✖ 同任务原生定向通信持久消费且不重启终态成员：并发3 (10800.0307ms)
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (13399.5706ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (12540.9317ms)
+✔ task session permits late native tools and configured read and shell alongside skills (4192.3514ms)
+✔ unconfigured native profiles expose no bundled personal skills (2111.6107ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (11749.5542ms)
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (30346.7034ms)
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=false (14016.4886ms)
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=true (13972.4859ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 7
+ℹ fail 4
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 59211.1055
+
+✖ failing tests:
+
+test at test\task-execution-resources-native.test.js:69:47
+✖ 同任务原生定向通信持久消费且不重启终态成员：并发1 (12684.3634ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-execution-resources-native.test.js:122:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-execution-resources-native.test.js:69:47
+✖ 同任务原生定向通信持久消费且不重启终态成员：并发3 (10800.0307ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-execution-resources-native.test.js:122:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-stage-progress-native.test.js:35:1
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (30346.7034ms)
+  'test timed out after 30000ms'
+
+test at test\task-stage-progress-native.test.js:113:40
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=false (14016.4886ms)
+  Error: Timed out: owner persists a new overall progress summary before execution completion
+      at waitUntil (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/fixtures/task-session-native-host.js:200:9)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:177:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\task-stage-progress-native.test.js:113:40
+✖ native nonterminal stage report continues execution and updates owner summary; human wait=true (13972.4859ms)
+  Error: Timed out: owner persists a new overall progress summary before execution completion
+      at waitUntil (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/fixtures/task-session-native-host.js:200:9)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:177:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

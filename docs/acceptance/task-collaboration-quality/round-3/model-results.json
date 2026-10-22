@@ -1,0 +1,268 @@
+{
+  "model": "gpt-6-astra",
+  "reasoningEffort": "low",
+  "sourceDigests": {
+    "packages/dingtalk-dsh-assistant/task-session.js": "b7d5b224f839ef71da2882a9bb5cb0b6a5a7386b26bb2dcc80cb2a39cef6d719",
+    "packages/dingtalk-dsh-assistant/model-context.js": "24cf69a1d65a5be03f44cf01511d970f3a54109cc074c67468c3e12ad255fbeb",
+    "packages/dingtalk-dsh-assistant/task-source-instructions.js": "9c5af60a619b4acb31fb387bcaaf4948a151e952787db00c33cf6d2809556fe2",
+    "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "b2c8ec6529986ea44e0e106e0210cb0dcd452515512dea78737298cb317cbfa6",
+    "packages/dingtalk-dsh-assistant/group-message.js": "d4f1447af3a88fced80dfd5909a067b1dfb3e3e20f24860785975938bf4ebbe4",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "c659b16414ac3aa19cd3303acb17cf0d3baa7dd4a142ce49a313990c7fc4aba4",
+    "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "307aacca33b2cd76ca3a28e5cc7639013477be42947f86569c2863b9b8c106f8",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "5bd5879072c168492245c8e89cbc4e2fb791da913ba77a564732984618f2ec52",
+    "test/fixtures/task-session-native-host.js": "5e9add3fc22a7c1ff6899db3902cff0f93b6bb5168264b15a9ec7686c9aa739f",
+    "docs\\acceptance\\task-collaboration-quality\\scripts\\evaluate-model.mjs": "6bb28c1447700e0e3c83c84267b3ebe54f9f2cd6e38d215eae46c7c85b468d64"
+  },
+  "cases": [
+    {
+      "id": "independent-ready",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "两份委派是否各自覆盖一个完整可独立目标、具体工作区及交付证据；是否在第一次 wait 前都已发出。不能把重复委派或一份泛化复核凑成两目标。",
+      "modelCalls": 3,
+      "actions": [
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "alpha-header-fix",
+            "title": "Alpha 空表头修复",
+            "objective": "在 /synthetic/alpha 中检查现有代码和验收材料，修复导出组件空表头错误并完成针对性及相关回归验证。报告根因、修改文件与差异、实际验证命令和结果、产物位置及剩余限制。",
+            "context": "用户明确要求 Alpha 修复验证与 Beta 文档修订同时尽快推进，两个仓库与验收材料齐备且互不依赖。本执行仅可写 /synthetic/alpha；不修改 Beta，不涉及部署、共享数据或额外消息。以仓库原始验收材料核对空表头预期，不凭猜测改变导出语义。保留既有用户改动，提供可独立回查的证据。",
+            "resourceKeys": [
+              "/synthetic/alpha"
+            ]
+          },
+          "receipt": {
+            "executionId": "f0f7c81e-9b65-48b3-bbdb-3d0dbd7fe688",
+            "sessionId": "task-execution-18d52f39-fa13-4257-9cf3-0cebefaa2939",
+            "status": "queued",
+            "resources": {
+              "state": "available",
+              "keys": [
+                "/synthetic/alpha"
+              ],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "beta-install-docs",
+            "title": "Beta 安装说明修订",
+            "objective": "在 /synthetic/beta 中读取安装说明、仓库实现和现有验收材料，完成安装说明修订并核对示例。报告修改文件与差异、示例核对方法和实际验证结果、产物位置及剩余限制。",
+            "context": "用户明确要求 Beta 帮助站安装说明修订与 Alpha 修复同时尽快推进；两个仓库和验收材料齐备，互不依赖。本执行仅可写 /synthetic/beta；不修改 Alpha，不涉及部署、共享数据或额外消息。按已有验收要求及实际安装接口校验说明和示例，保留既有用户改动；区分实际运行验证与静态核对，提供可独立回查的证据。",
+            "resourceKeys": [
+              "/synthetic/beta"
+            ]
+          },
+          "receipt": {
+            "executionId": "92269b9e-30a7-4dde-8520-e409e509bd95",
+            "sessionId": "task-execution-529aa899-8a48-443a-9134-16899869a114",
+            "status": "queued",
+            "resources": {
+              "state": "available",
+              "keys": [
+                "/synthetic/beta"
+              ],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "已分别安排 Alpha 空表头修复与验证、Beta 安装说明修订与示例核对，两项独立推进，结果齐备后核验并汇总。",
+            "evidence": [
+              "Alpha 委派已登记，仅写 /synthetic/alpha。",
+              "Beta 委派已登记，仅写 /synthetic/beta。",
+              "两项均要求提供具体改动和实际验证证据。"
+            ],
+            "limitations": [
+              "两项当前均待启动，尚无改动或验证结果可供验收。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_delegate",
+          "args": {
+            "key": "alpha-header-fix",
+            "title": "Alpha 空表头修复",
+            "objective": "在 /synthetic/alpha 中检查现有代码和验收材料，修复导出组件空表头错误并完成针对性及相关回归验证。报告根因、修改文件与差异、实际验证命令和结果、产物位置及剩余限制。",
+            "context": "用户明确要求 Alpha 修复验证与 Beta 文档修订同时尽快推进，两个仓库与验收材料齐备且互不依赖。本执行仅可写 /synthetic/alpha；不修改 Beta，不涉及部署、共享数据或额外消息。以仓库原始验收材料核对空表头预期，不凭猜测改变导出语义。保留既有用户改动，提供可独立回查的证据。",
+            "resourceKeys": [
+              "/synthetic/alpha"
+            ]
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "task_delegate",
+          "args": {
+            "key": "beta-install-docs",
+            "title": "Beta 安装说明修订",
+            "objective": "在 /synthetic/beta 中读取安装说明、仓库实现和现有验收材料，完成安装说明修订并核对示例。报告修改文件与差异、示例核对方法和实际验证结果、产物位置及剩余限制。",
+            "context": "用户明确要求 Beta 帮助站安装说明修订与 Alpha 修复同时尽快推进；两个仓库和验收材料齐备，互不依赖。本执行仅可写 /synthetic/beta；不修改 Alpha，不涉及部署、共享数据或额外消息。按已有验收要求及实际安装接口校验说明和示例，保留既有用户改动；区分实际运行验证与静态核对，提供可独立回查的证据。",
+            "resourceKeys": [
+              "/synthetic/beta"
+            ]
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "已分别安排 Alpha 空表头修复与验证、Beta 安装说明修订与示例核对，两项独立推进，结果齐备后核验并汇总。",
+              "evidence": [
+                "Alpha 委派已登记，仅写 /synthetic/alpha。",
+                "Beta 委派已登记，仅写 /synthetic/beta。",
+                "两项均要求提供具体改动和实际验证证据。"
+              ],
+              "limitations": [
+                "两项当前均待启动，尚无改动或验证结果可供验收。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "已分别安排 Alpha 空表头修复与验证、Beta 安装说明修订与示例核对，两项独立推进，结果齐备后核验并汇总。",
+          "evidence": [
+            "Alpha 委派已登记，仅写 /synthetic/alpha。",
+            "Beta 委派已登记，仅写 /synthetic/beta。",
+            "两项均要求提供具体改动和实际验证证据。"
+          ],
+          "limitations": [
+            "两项当前均待启动，尚无改动或验证结果可供验收。"
+          ]
+        }
+      }
+    },
+    {
+      "id": "complex-self-claim",
+      "structuralPass": true,
+      "semanticReview": "PENDING",
+      "review": "是否依据越权与迁移风险安排独立会话核查这个具体候选、三类验收及反例；未读取原始测试或反证前不能把实现者自述当完成。新增委派仅补材料而不独立核验也不通过。",
+      "modelCalls": 6,
+      "actions": [
+        {
+          "tool": "delegate",
+          "args": {
+            "key": "independent-auth-candidate-review",
+            "title": "权限候选独立验收",
+            "objective": "独立只读验收 /synthetic/auth-worktree 的冻结候选 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119：读取实际差异、测试代码及原始测试结果，核实跨租户报表越权修复和旧访问规则迁移，逐项验证允许访问、拒绝访问、旧规则迁移三类行为。主动寻找绕过权限及迁移遗漏反例，报告每类用例、断言、实际结果及证据位置，并指出候选是否可审阅及任何证据缺口。不得修改候选、部署、发送消息或重放外部操作。",
+            "context": "用户要求交付可审阅候选及测试结果，不部署；唯一来源 user-request 已明确候选路径和冻结版本。原执行已排空，仅提供实现者自述“三个场景均已验证通过”，无实际差异或原始测试证据，不能据此完成高风险权限变更验收。请以冻结版本一手材料而非实现者结论为依据；若无法访问或证据不足如实报告，不猜测通过。"
+          },
+          "receipt": {
+            "executionId": "461252f9-8ce1-4b36-acf9-8d87018c363b",
+            "sessionId": "task-execution-3f7d306f-04e0-47cf-9411-a2cc4eac695d",
+            "status": "queued",
+            "resources": {
+              "state": "none",
+              "keys": [],
+              "holder": null,
+              "blocking": []
+            }
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "已安排对冻结候选做独立只读验收，重点核对允许访问、拒绝访问和旧规则迁移三类行为，不部署。",
+            "evidence": [
+              "候选版本为 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119。",
+              "原执行仅提供测试全部通过的自述，尚无可核验的差异和原始测试结果。"
+            ],
+            "limitations": [
+              "独立验收已登记，等待结果；目前不能确认全部要求已完成。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "d72a045544fd7d8120dd914b2335b18d9ead1659947ca74d5712a9c9d4052a05:sha256:698de1fbd752df179595c4414ae678132254991793216518388fb6b57accbd5e",
+            "path": "/executions/original-execution/result"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "d72a045544fd7d8120dd914b2335b18d9ead1659947ca74d5712a9c9d4052a05:sha256:8317618dc10b5a5a90017a0469330372eea6ad9c6d1aa3c2f52d1978697cebae"
+          }
+        },
+        {
+          "sequence": 26,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "d72a045544fd7d8120dd914b2335b18d9ead1659947ca74d5712a9c9d4052a05:sha256:99ad145d214a2f961299daf7533869d83332e4cf61ece5105828803c015fded1"
+          }
+        },
+        {
+          "sequence": 31,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\task-collaboration-model-round-3\\.dsh\\model-content\\d72a045544fd7d8120dd914b2335b18d9ead1659947ca74d5712a9c9d4052a05\\99ad145d214a2f961299daf7533869d83332e4cf61ece5105828803c015fded1.json"
+          }
+        },
+        {
+          "sequence": 36,
+          "tool": "task_delegate",
+          "args": {
+            "key": "independent-auth-candidate-review",
+            "title": "权限候选独立验收",
+            "objective": "独立只读验收 /synthetic/auth-worktree 的冻结候选 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119：读取实际差异、测试代码及原始测试结果，核实跨租户报表越权修复和旧访问规则迁移，逐项验证允许访问、拒绝访问、旧规则迁移三类行为。主动寻找绕过权限及迁移遗漏反例，报告每类用例、断言、实际结果及证据位置，并指出候选是否可审阅及任何证据缺口。不得修改候选、部署、发送消息或重放外部操作。",
+            "context": "用户要求交付可审阅候选及测试结果，不部署；唯一来源 user-request 已明确候选路径和冻结版本。原执行已排空，仅提供实现者自述“三个场景均已验证通过”，无实际差异或原始测试证据，不能据此完成高风险权限变更验收。请以冻结版本一手材料而非实现者结论为依据；若无法访问或证据不足如实报告，不猜测通过。"
+          }
+        },
+        {
+          "sequence": 41,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "已安排对冻结候选做独立只读验收，重点核对允许访问、拒绝访问和旧规则迁移三类行为，不部署。",
+              "evidence": [
+                "候选版本为 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119。",
+                "原执行仅提供测试全部通过的自述，尚无可核验的差异和原始测试结果。"
+              ],
+              "limitations": [
+                "独立验收已登记，等待结果；目前不能确认全部要求已完成。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "已安排对冻结候选做独立只读验收，重点核对允许访问、拒绝访问和旧规则迁移三类行为，不部署。",
+          "evidence": [
+            "候选版本为 9dc9325e69ef5dd071adb99cccb1c11c01cb9b119。",
+            "原执行仅提供测试全部通过的自述，尚无可核验的差异和原始测试结果。"
+          ],
+          "limitations": [
+            "独立验收已登记，等待结果；目前不能确认全部要求已完成。"
+          ]
+        }
+      }
+    }
+  ]
+}

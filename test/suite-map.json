@@ -4403,7 +4403,8 @@
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/execution-context.js",
-        "packages/dingtalk-dsh-assistant/model-context.js"
+        "packages/dingtalk-dsh-assistant/model-context.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js"
       ],
       "retainedCompatibilityImports": [],
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"

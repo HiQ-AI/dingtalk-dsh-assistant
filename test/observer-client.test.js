@@ -9,7 +9,7 @@ test('成果时间记录仅混排真实巡查决定，保留无动作wait、按�
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const code = source.slice(source.indexOf('    const taskOutcomeRecords ='), source.indexOf('    function TaskOutcomeRecords('))
   const merge = runInNewContext(`${code}; taskOutcomeRecords`)
-  const stage = { id: 'stage', at: '2026-10-22T01:00:00Z', summary: '阶段产物' }
+  const stage = { id: 'stage', at: '2026-10-22T01:00:00Z', summary: '阶段产物', evidence: ['https://example.com/readback'], activity: '继续核对边界' }
   const review = { id: 'review', recordedAt: '2026-10-22T01:10:00Z', triggers: [{ kind: 'execution.progress.review' }, { kind: 'execution.progress.review' }],
     decision: { action: 'wait', summary: '方向正常，继续等待', evidence: ['真实记录'], limitations: ['尚未完成'] } }
   const records = merge({ executions: [{ id: 'e', title: '执行', milestones: [stage, stage] }] }, [review, review,
@@ -17,10 +17,17 @@ test('成果时间记录仅混排真实巡查决定，保留无动作wait、按�
   assert.equal(records.length, 2)
   assert.equal(records[0].type, '统筹巡查'); assert.equal(records[0].action, 'wait')
   assert.equal(records[1].type, '阶段成果')
+  assert.equal(records[1].evidence[0], 'https://example.com/readback')
+  assert.equal(records[1].activity, '继续核对边界')
   assert.equal(records[0].evidence[0], '真实记录')
+  const legacy = merge({ executions: [{ id: 'legacy', milestones: [{ id: 'old', summary: '历史报告' }] }] })[0]
+  assert.equal(legacy.evidence.length, 0)
+  assert.equal(legacy.activity, undefined)
   assert.equal(merge(undefined, []).length, 0)
   assert.match(source, /nextBefore !== null/)
   assert.match(source, /已加载范围内暂无阶段成果或巡查结论/)
+  assert.match(source, /报告时活动：/)
+  assert.match(source, /报告本身不代表已独立核验/)
   assert.doesNotMatch(code, /progressReview|checkedAt/)
 })
 

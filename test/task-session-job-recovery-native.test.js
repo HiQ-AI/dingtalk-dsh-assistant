@@ -6,13 +6,31 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
-import { available, reason, nativeShell, nativeTaskHost, latestInput, waitUntil, modelToolValues } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeShell, nativeTaskHost, nativeVerificationTeam, latestInput, waitUntil, modelToolValues } from './fixtures/task-session-native-host.js'
 const test = (name, fn) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
 const decide = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
-async function fixture(t, model) {
+async function fixture(t, model, { verifyTeam = false } = {}) {
  const root = await mkdtemp(join(tmpdir(), 'native-job-recovery-'))
- const h = await nativeTaskHost(root, model, { promoteOnTimeout: true })
+ const team = nativeVerificationTeam(), completions = new Map()
+ const h = await nativeTaskHost(root, verifyTeam ? async (request, host) => {
+  const input = latestInput(request), verification = team.execute(request, input)
+  if (verification) return verification
+  if (!request.tools.some(tool => tool.name === 'task_delegate')) return model(request, host)
+  const members = await host.query('execution.list', { taskId: input.task.taskId })
+  const prior = completions.get(input.task.taskId)
+  const calls = prior ? [prior] : await model(request, host)
+  const completion = calls.find(item => item.name === 'task_session_submit' && item.args.decision.action === 'complete')
+  if (!completion || members.length === 0) return calls
+  completions.set(input.task.taskId, completion)
+  if (members.length < 3) {
+   const primary = members.find(item => item.status === 'succeeded' && item.drained)
+   const delegated = team.owner({ ...input, executions: members }, primary)
+   if (delegated) return delegated
+  }
+  return members.length >= 3 && members.every(item => item.status === 'succeeded' && item.drained)
+   ? [completion] : [decide('wait', '原作业完成，等待结果版本和交付限制核验')]
+ } : model, { promoteOnTimeout: true })
  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
  return h
 }
@@ -33,19 +51,20 @@ test('native execution consumes serial tool results and wakes the coordinator on
   if (currentStep === 4) return [call('execution_submit', { output: { status: 'completed', summary: '三项原生操作完成并核验', evidence: ['serial-results.txt'], limitations: [], artifacts: ['serial-results.txt'] } })]
   const value = currentStep === 3 ? 3 : currentStep + 1
   return [call(nativeShell, { command: nativeShell === 'pwsh' ? `Add-Content serial-results.txt '${value}'; Get-Content serial-results.txt` : `printf '${value}\\n' >> serial-results.txt; cat serial-results.txt`, description: '写入并回读本执行的隔离证据' })]
- })
+ }, { verifyTeam: true })
  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'serial-operation-wakes', objective: '阶段成果驱动统筹' })
  await h.service.whenIdle()
- assert.equal(ownerTurns, 3, '仅初次委派、阶段成果、最终成果各一次统筹回合')
+ assert.equal(ownerTurns, 3, '主要作业仅初次委派、阶段成果、最终成果各一次统筹回合；独立核验单独安排')
  assert.equal(step, 5)
  const operations = await h.query('operation.list', { taskId: task.taskId }), executions = await h.query('execution.list', { taskId: task.taskId })
  assert.equal(operations.length, 3)
  assert.ok(operations.every(item => item.state === 'succeeded' && item.executionId === executions[0].executionId))
- assert.equal(executions.length, 1); assert.equal(executions[0].inputVersion, 1); assert.equal(executions[0].drained, true)
+ assert.equal(executions.length, 3); assert.equal(executions[0].inputVersion, 1); assert.equal(executions[0].drained, true)
  const wakes = await h.query('wake.list', { taskId: task.taskId })
  assert.equal(wakes.filter(item => item.kind === 'operation.result').length, 0)
  assert.equal(wakes.filter(item => item.kind === 'execution.stage.progress').length, 1)
- assert.equal(wakes.filter(item => item.kind === 'execution.result').length, 1)
+ assert.equal(wakes.filter(item => item.kind === 'execution.result' && item.payload.executionId === executions[0].executionId).length, 1)
+ assert.equal(wakes.filter(item => item.kind === 'execution.result').length, 3, '三个实际成员各有一次最终结果，原执行没有重复结果')
  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
  assert.deepEqual((await readFile(join(h.root, 'tasks', task.taskId, 'serial-results.txt'), 'utf8')).trim().split(/\r?\n/), ['1', '2', '3'])
 })
@@ -64,7 +83,7 @@ for (const background of [false, true]) test(`native shell retains its original 
   }
   assert.match(JSON.stringify(request), /after/)
   return [call('execution_submit',{output:{status:'completed',summary:'done',evidence:['actual terminal output'],limitations:[],artifacts:['result.txt']}})]
- })
+ }, { verifyTeam: true })
  const created = await h.service.createTask({groupId:'native-group',requestId:'job-complete',objective:'long task'})
  await h.service.whenIdle()
  const operations = (await h.query('operation.list',{taskId:created.taskId})).filter(op => op.definition.toolName === nativeShell)
@@ -87,7 +106,7 @@ test('native missing-job read stays a real error without creating unknown effect
   if(step++===0)return [call('job_output',{job_id:'pwsh-777777'})]
   if(step===2){assert.match(JSON.stringify(request),/unknown job pwsh-777777/);return [call('job_list',{})]}
   return [call('execution_submit',{output:{status:'completed',summary:'Missing read remains failed, no external effects',evidence:['original missing-job receipt'],limitations:[],artifacts:[]}})]
- })
+ }, { verifyTeam: true })
  await h.service.createTask({groupId:'native-group',requestId:'read-job',objective:'inspect job'})
  await h.service.whenIdle()
  assert.equal((await h.query('operation.list')).length,0)
@@ -120,7 +139,7 @@ for (const explicitStop of [false, true]) test(`native background HTTP service r
   assert.match(JSON.stringify(request), /original-service/)
   if (explicitStop && step === 3) return [call('job_kill', { job_id: originalJob })]
   return [call('execution_submit', { output: { status: 'completed', summary: 'Actual HTTP request passed', evidence: ['original-service response'], limitations: [], artifacts: [] } })]
- })
+ }, { verifyTeam: true })
  await h.service.createTask({ groupId: 'native-group', requestId: 'service', objective: 'Use and clean original service' })
  await h.service.whenIdle()
  assert.equal((await h.query('execution.list'))[0].drained, true)
@@ -253,7 +272,7 @@ test('operator exact error resolution has zero-write HTTP check, retains partial
   }
   if(originalStep===2)return [call('test_remote_write',{})]
   return [call('execution_submit',{output:{status:'blocked',summary:'Original request failed',evidence:[],limitations:['partial effects possible'],artifacts:[]}})]
- })
+ }, { verifyTeam: true })
  const created=await h.service.createTask({groupId:'native-group',requestId:'operator-resolution',objective:'investigate original'})
  await h.service.whenIdle()
  const waiting=await h.query('task.get',{taskId:created.taskId}),original=(await h.query('execution.list')).find(e=>e.key==='original-error')

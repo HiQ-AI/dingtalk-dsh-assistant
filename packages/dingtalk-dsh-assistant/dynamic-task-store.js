@@ -20,6 +20,8 @@ const APPLICATION = 0x44535453
 const livePaths = new Set()
 const terminalOperations = new Set(['succeeded', 'failed', 'cancelled'])
 const terminalExecutions = new Set(['succeeded', 'failed', 'cancelled', 'stale'])
+const currentFeedback = (execution, item) => item.requirementRevision === execution.requirementRevision
+  && item.controlRevision === execution.controlRevision && (!item.sourceExecutionId || item.inputVersion === execution.inputVersion)
 const fail = (code, detail = code) => { throw Object.assign(new Error(detail), { code }) }
 const text = (value, name) => typeof value === 'string' && value.trim() && value.length <= 1000000 ? value : fail('DYNAMIC_ARGUMENT_INVALID', name)
 const record = value => value && Object.getPrototypeOf(value) === Object.prototype ? value : fail('DYNAMIC_ARGUMENT_INVALID')
@@ -633,6 +635,31 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       saveTask(task); wake(task.taskId, kind, { messageId, contextRevision: task.contextRevision }, `wake:${commandId}`)
       return changed({ task })
     }
+    if (kind === 'execution.peerMessage') {
+      const source = boundExecution(a.binding), task = assertScope(a.binding)
+      const execution = get('dynamic_executions', a.executionId)
+      if (execution.taskId !== task.taskId || execution.executionId === source.executionId) fail('DYNAMIC_EXECUTION_SCOPE_INVALID')
+      const key = text(a.key, 'key'), message = text(a.message, 'message'), targetInputVersion = integer(a.targetInputVersion, 'targetInputVersion')
+      if (key.length > 200 || message.length > 10000) fail('DYNAMIC_ARGUMENT_INVALID')
+      const id = `peer:${source.executionId}:${source.inputVersion}:${key}`
+      for (const recipient of execs(task.taskId)) {
+        const prior = recipient.feedback?.find(item => item.id === id)
+        if (!prior) continue
+        if (recipient.executionId !== execution.executionId || prior.text !== message || prior.inputVersion !== targetInputVersion
+          || prior.sourceExecutionId !== source.executionId || prior.sourceInputVersion !== source.inputVersion) fail('DYNAMIC_FEEDBACK_ID_CONFLICT')
+        return changed({ received: true, executionId: execution.executionId, sessionId: execution.sessionId, feedback: prior })
+      }
+      if (targetInputVersion !== execution.inputVersion) fail('DYNAMIC_EXECUTION_INPUT_STALE')
+      if (terminalExecutions.has(execution.status)) return changed({ received: false, executionId: execution.executionId,
+        sessionId: execution.sessionId, reason: 'recipient_finished' })
+      if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+      const feedback = { id, text: message, sourceExecutionId: source.executionId, sourceInputVersion: source.inputVersion,
+        sourceLeaseEpoch: source.leaseEpoch, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision,
+        inputVersion: execution.inputVersion, receivedAt: stamp, consumedAt: null }
+      ;(execution.feedback ??= []).push(feedback)
+      put('dynamic_executions', execution)
+      return changed({ received: true, executionId: execution.executionId, sessionId: execution.sessionId, feedback })
+    }
     if (kind === 'execution.feedback') {
       const task = currentTask(a.binding), execution = get('dynamic_executions', a.executionId)
       if (execution.taskId !== task.taskId) fail('DYNAMIC_EXECUTION_SCOPE_INVALID')
@@ -650,7 +677,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const execution = boundExecution(a.binding)
       if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       const feedback = execution.feedback?.find(item => item.id === a.messageId)
-      if (!feedback || feedback.requirementRevision !== execution.requirementRevision || feedback.controlRevision !== execution.controlRevision
+      if (!feedback || !currentFeedback(execution, feedback)
         || !Number.isSafeInteger(a.sequence) || a.sequence < 0) fail('DYNAMIC_FEEDBACK_PROOF_INVALID')
       feedback.consumedAt ??= stamp; feedback.sequence ??= a.sequence
       feedback.modelStepEnteredAt ??= feedback.consumedAt
@@ -829,7 +856,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         && get('dynamic_coordination',member.coordinationId).state === 'active' && coordination.current(member))) fail('DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED')
       if (task.coordinationHold) fail('DYNAMIC_COORDINATION_WAITING')
       if (task.dialogue?.some(item => !item.reply)) fail('DYNAMIC_TASK_DIALOGUE_PENDING')
-      if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt
+      if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt && currentFeedback(execution, item)
         && item.requirementRevision === task.requirementRevision && item.controlRevision === task.controlRevision))) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
       assertClear(task.taskId)
       const instructionIds = coordination.coverage(task.taskId)
@@ -860,6 +887,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (prior.dispatchDigest !== dispatchDigest) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
         return changed({ execution: prior })
       }
+      if (execs(task.taskId).length >= 10) fail('DYNAMIC_EXECUTION_LIMIT_EXCEEDED')
       const executionId = a.executionId ?? randomUUID()
       if (get('dynamic_executions', executionId, true)) fail('DYNAMIC_EXECUTION_EXISTS')
       const instructionScope = coordination.scope(task.taskId, 1)
@@ -1010,9 +1038,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const summary = text(a.summary, 'summary').trim(), evidence = array(a.evidence)
       if (summary.length > 2000 || evidence.length > 4 || evidence.some(item => typeof item !== 'string' || !item.trim() || item.length > 512)) fail('DYNAMIC_EXECUTION_PROGRESS_INVALID')
       if (a.activity !== undefined && (typeof a.activity !== 'string' || !a.activity.trim() || a.activity.length > 120)) fail('DYNAMIC_EXECUTION_PROGRESS_INVALID')
+      if (a.plan !== undefined && (typeof a.plan !== 'string' || !a.plan.trim() || a.plan.length > 4000)) fail('DYNAMIC_EXECUTION_PROGRESS_INVALID')
       const sequence = integer(a.sequence, 'sequence')
       if (execution.stageProgress?.inputVersion === execution.inputVersion && execution.stageProgress?.leaseEpoch === execution.leaseEpoch && sequence <= execution.stageProgress.sequence) fail('DYNAMIC_EXECUTION_PROGRESS_STALE')
-      const report = { summary, evidence: clone(evidence), sequence, recordedAt: stamp, inputVersion: execution.inputVersion,
+      const plan = a.plan?.trim() ?? (execution.stageProgress?.inputVersion === execution.inputVersion ? execution.stageProgress.plan : undefined)
+      const report = { summary, evidence: clone(evidence), ...(a.activity === undefined ? {} : { activity: a.activity.trim() }), ...(plan === undefined ? {} : { plan }), sequence, recordedAt: stamp, inputVersion: execution.inputVersion,
         leaseEpoch: execution.leaseEpoch, requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision }
       execution.stageProgress = report
       // A result summary describes the past, so never use it to infer a timed activity.
@@ -1044,10 +1074,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         else if (execution.status === 'running' && !execution.result) execution.status = 'queued'
       }
       if (kind === 'execution.result') {
-        if (!a.error && (a.feedbackVersion ?? 0) !== (execution.feedback ?? []).filter(item => item.requirementRevision === execution.requirementRevision
-          && item.controlRevision === execution.controlRevision).length) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
-        if (!a.error && (execution.feedback ?? []).some(item => item.requirementRevision === execution.requirementRevision
-          && item.controlRevision === execution.controlRevision && !item.consumedAt)) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
+        if (!a.error && (a.feedbackVersion ?? 0) !== (execution.feedback ?? []).filter(item => currentFeedback(execution, item)).length) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
+        if (!a.error && (execution.feedback ?? []).some(item => currentFeedback(execution, item) && !item.consumedAt)) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
         const payload = { output: a.output ?? null, error: a.error ?? null }
         if (execution.result && digest(execution.result.payload) !== digest(payload)) fail('DYNAMIC_EXECUTION_RESULT_CONFLICT')
         if (!execution.result) {
@@ -1586,6 +1614,16 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'execution.list') value = executionViews(q.taskId ? execs(q.taskId) : all('dynamic_executions'))
       else if (q.kind === 'execution.binding') value = executionBinding(get('dynamic_executions', q.executionId))
       else if (q.kind === 'execution.current') { const e = boundExecution(q.binding); value = !e.drained && e.status === 'running' && executionCurrent(e) }
+      else if (q.kind === 'execution.team') {
+        const source = boundExecution(q.binding), task = assertScope(q.binding)
+        value = { taskId: task.taskId, executionId: source.executionId, executions: execs(task.taskId).map(execution => ({
+          executionId: execution.executionId, sessionId: execution.sessionId, inputVersion: execution.inputVersion,
+          requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
+          title: executionSessionTitle(execution), status: execution.status, objective: execution.input?.objective ?? '',
+          context: execution.input?.context ?? '', resourceKeys: execution.resourceKeys ?? [],
+          result: execution.result ?? null, stageProgress: execution.stageProgress ?? null,
+        })) }
+      }
       else if (q.kind === 'execution.resources') {
         // 身份与资源在同一次账本查询中核验，续办前的租约不能读取新的持锁证明。
         const execution = boundExecution(q.binding)

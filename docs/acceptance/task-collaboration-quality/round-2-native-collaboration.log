@@ -1,0 +1,17 @@
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (12967.5917ms)
+✔ native sequential handoff preserves one executor before independent review of the fixed artifact (11936.8209ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (12123.8901ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (11586.8113ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (9610.1086ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (11056.1298ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (9272.2712ms)
+✔ native shared resources queue without occupying task capacity and promote on drain (9746.0892ms)
+✔ native delegation rejects changed keys on receipt replay and preserves omitted continuation keys (5675.7957ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 94956.9734

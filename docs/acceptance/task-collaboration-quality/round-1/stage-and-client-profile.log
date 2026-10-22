@@ -1,0 +1,23 @@
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (907.8327ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=false (2424.2097ms)
+✔ native nonterminal stage report continues execution and updates owner summary; human wait=true (5526.0736ms)
+✔ actual Web build emits one valid module, loads its factory, and matches the checked-in artifact (501.2213ms)
+✔ actual Web build rejects invalid generated JavaScript before overwriting a usable artifact (209.2445ms)
+﹣ official DSH client registry serves the built resource and its real browser module system imports it (23.7445ms) # Installed alpha2 profile required for official client integration; set DSH_NATIVE_TEST_PROFILE: Cannot find module '@deepseek-ai/dsh-client-modules'
+ℹ tests 6
+ℹ suites 0
+ℹ pass 4
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 10536.554
+
+✖ failing tests:
+
+test at test\task-stage-progress-native.test.js:12:1
+✖ integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation (907.8327ms)
+  TypeError: Cannot read properties of undefined (reading 'stageProgress')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-stage-progress-native.test.js:53:23)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)

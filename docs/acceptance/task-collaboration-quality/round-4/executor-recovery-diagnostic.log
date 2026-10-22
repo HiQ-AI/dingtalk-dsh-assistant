@@ -1,0 +1,53 @@
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=true (17687.3273ms)
+✖ provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=true (22028.2468ms)
+✔ business human answer replaces pending provider recovery input before any original session resumes (17136.5741ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 57649.128
+
+✖ failing tests:
+
+test at test\task-session-execution-provider-recovery-native.test.js:9:42
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=true (17687.3273ms)
+  AssertionError [ERR_ASSERTION]: {"recovery":null,"decision":{"action":"wait","at":"2026-10-22T09:22:31.869Z","controlRevision":1,"decision":null,"evidence":[],"limitations":[],"question":null,"requirementRevision":1,"summary":"Original goal"},"executions":[{"key":"original","status":"succeeded","result":{"controlRevision":1,"current":true,"inputVersion":2,"instructionScope":{"acceptedVersion":{"contextRevision":0,"controlRevision":1,"requirementRevision":1,"runSequence":1},"boundAt":"2026-10-22T09:22:22.912Z","contextRevision":0,"controlRevision":1,"effectiveInstructions":[],"inputVersion":2,"instructionIds":[],"kind":"instruction-scope","requirementRevision":1,"runSequence":1,"taskId":"task-aebaaa62ee53f2d3a47e677f581074eb"},"leaseEpoch":2,"payload":{"error":null,"output":{"artifacts":["effect.txt"],"evidence":["Original operation retained"],"limitations":[],"status":"completed","summary":"Original goal done"}},"receivedAt":"2026-10-22T09:22:23.906Z","recovery":{"attempts":1,"decision":"recovered","maxAttempts":3,"nextAttemptAt":null},"requirementRevision":1}},{"key":"verify-result-version","status":"succeeded","result":{"controlRevision":1,"current":true,"inputVersion":1,"instructionScope":{"acceptedVersion":{"contextRevision":0,"controlRevision":1,"requirementRevision":1,"runSequence":1},"boundAt":"2026-10-22T09:22:25.123Z","contextRevision":0,"controlRevision":1,"effectiveInstructions":[],"inputVersion":1,"instructionIds":[],"kind":"instruction-scope","requirementRevision":1,"runSequence":1,"taskId":"task-aebaaa62ee53f2d3a47e677f581074eb"},"leaseEpoch":1,"payload":{"error":null,"output":{"artifacts":[],"evidence":["b37118f0-d6c3-4b0b-9360-116c74bdcded:2"],"limitations":["只核对指定结果版本与交付证据，不代替整体业务验收"],"status":"completed","summary":"只读核对原执行结果与当前输入版本一致，不能重放原作业。"}},"receivedAt":"2026-10-22T09:22:28.532Z","requirementRevision":1}},{"key":"verify-delivery-evidence","status":"failed","result":{"controlRevision":1,"current":true,"inputVersion":1,"instructionScope":{"acceptedVersion":{"contextRevision":0,"controlRevision":1,"requirementRevision":1,"runSequence":1},"boundAt":"2026-10-22T09:22:25.151Z","contextRevision":0,"controlRevision":1,"effectiveInstructions":[],"inputVersion":1,"instructionIds":[],"kind":"instruction-scope","requirementRevision":1,"runSequence":1,"taskId":"task-aebaaa62ee53f2d3a47e677f581074eb"},"leaseEpoch":1,"payload":{"error":{"code":"EXECUTION_PROVIDER_FAILED","message":"独立成员必须实际读取同Task团队记录","phase":"provider","providerError":{"code":"UNKNOWN","message":"独立成员必须实际读取同Task团队记录"},"recovery":{"category":"unclassified","nextAction":"inspect-native-provider-error-before-requesting-an-operation","retryable":false},"terminal":{"endSeq":97,"inputVersion":1,"reason":"error","sessionId":"task-execution-7b452943-1117-4e88-b2a0-a793a10b56df"}},"output":null},"receivedAt":"2026-10-22T09:22:28.716Z","recovery":{"attempts":0,"coldAttempts":0,"decision":"not-admitted","maxAttempts":3,"nextAttemptAt":null,"nextReviewAt":null,"retryNotBefore":null,"reviewAttempts":0},"requirementRevision":1}}],"errors":[]}
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at completed (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:16:10)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:105:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-execution-provider-recovery-native.test.js:9:42
+✖ provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=true (22028.2468ms)
+  AssertionError [ERR_ASSERTION]: {"recovery":null,"decision":{"action":"wait","at":"2026-10-22T09:33:07.724Z","controlRevision":1,"decision":null,"evidence":[],"limitations":[],"question":null,"requirementRevision":1,"summary":"Original goal"},"executions":[{"key":"original","status":"succeeded","result":{"controlRevision":1,"current":true,"inputVersion":5,"instructionScope":{"acceptedVersion":{"contextRevision":0,"controlRevision":1,"requirementRevision":1,"runSequence":1},"boundAt":"2026-10-22T09:33:07.724Z","contextRevision":0,"controlRevision":1,"effectiveInstructions":[],"inputVersion":5,"instructionIds":[],"kind":"instruction-scope","requirementRevision":1,"runSequence":1,"taskId":"task-7d9b5cb0c21eb94c46162dc31d6c82ee"},"leaseEpoch":5,"payload":{"error":null,"output":{"artifacts":["effect.txt"],"evidence":["Original operation retained"],"limitations":[],"status":"completed","summary":"Original goal done"}},"receivedAt":"2026-10-22T09:33:07.724Z","recovery":{"attempts":3,"decision":"recovered","maxAttempts":3,"nextAttemptAt":null},"requirementRevision":1}},{"key":"verify-result-version","status":"succeeded","result":{"controlRevision":1,"current":true,"inputVersion":1,"instructionScope":{"acceptedVersion":{"contextRevision":0,"controlRevision":1,"requirementRevision":1,"runSequence":1},"boundAt":"2026-10-22T09:33:07.724Z","contextRevision":0,"controlRevision":1,"effectiveInstructions":[],"inputVersion":1,"instructionIds":[],"kind":"instruction-scope","requirementRevision":1,"runSequence":1,"taskId":"task-7d9b5cb0c21eb94c46162dc31d6c82ee"},"leaseEpoch":1,"payload":{"error":null,"output":{"artifacts":[],"evidence":["8bfcf3cb-c466-48ad-bc22-43354c5b134a:5"],"limitations":["只核对指定结果版本与交付证据，不代替整体业务验收"],"status":"completed","summary":"只读核对原执行结果与当前输入版本一致，不能重放原作业。"}},"receivedAt":"2026-10-22T09:33:07.724Z","requirementRevision":1}},{"key":"verify-delivery-evidence","status":"failed","result":{"controlRevision":1,"current":true,"inputVersion":1,"instructionScope":{"acceptedVersion":{"contextRevision":0,"controlRevision":1,"requirementRevision":1,"runSequence":1},"boundAt":"2026-10-22T09:33:07.724Z","contextRevision":0,"controlRevision":1,"effectiveInstructions":[],"inputVersion":1,"instructionIds":[],"kind":"instruction-scope","requirementRevision":1,"runSequence":1,"taskId":"task-7d9b5cb0c21eb94c46162dc31d6c82ee"},"leaseEpoch":1,"payload":{"error":{"code":"EXECUTION_PROVIDER_FAILED","message":"独立成员必须实际读取同Task团队记录","phase":"provider","providerError":{"code":"UNKNOWN","message":"独立成员必须实际读取同Task团队记录"},"recovery":{"category":"unclassified","nextAction":"inspect-native-provider-error-before-requesting-an-operation","retryable":false},"terminal":{"endSeq":97,"inputVersion":1,"reason":"error","sessionId":"task-execution-153b7dd3-a81a-42bf-bb14-5faf69157c2b"}},"output":null},"receivedAt":"2026-10-22T09:33:07.724Z","recovery":{"attempts":0,"coldAttempts":0,"decision":"not-admitted","maxAttempts":3,"nextAttemptAt":null,"nextReviewAt":null,"retryNotBefore":null,"reviewAttempts":0},"requirementRevision":1}}],"errors":[{"name":"task_request_human","error":{"message":"DYNAMIC_PROVIDER_TECHNICAL_WAIT"},"content":[{"type":"text","text":"Error: DYNAMIC_PROVIDER_TECHNICAL_WAIT"}]}]}
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at completed (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:16:10)
+      at async test.timeout (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:177:50)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -1,0 +1,64 @@
+TAP version 13
+# Subtest: execution progress due is exactly ten minutes and respects the current running lifecycle
+ok 1 - execution progress due is exactly ten minutes and respects the current running lifecycle
+  ---
+  duration_ms: 0.8949
+  type: 'test'
+  ...
+# Subtest: native execution documents keep each input round and the owner reads the new duty and plan
+ok 2 - native execution documents keep each input round and the owner reads the new duty and plan
+  ---
+  duration_ms: 9499.1571
+  type: 'test'
+  ...
+# Subtest: native progress review reads the current execution document without replaying or bypassing human wait: false
+ok 3 - native progress review reads the current execution document without replaying or bypassing human wait: false
+  ---
+  duration_ms: 14452.3421
+  type: 'test'
+  ...
+# Subtest: native progress review reads the current execution document without replaying or bypassing human wait: true
+ok 4 - native progress review reads the current execution document without replaying or bypassing human wait: true
+  ---
+  duration_ms: 15092.9028
+  type: 'test'
+  ...
+# Subtest: scripted progress decision waits for evidence or steers the original execution once: detour=false
+ok 5 - scripted progress decision waits for evidence or steers the original execution once: detour=false
+  ---
+  duration_ms: 17023.4926
+  type: 'test'
+  ...
+# Subtest: scripted progress decision waits for evidence or steers the original execution once: detour=true
+ok 6 - scripted progress decision waits for evidence or steers the original execution once: detour=true
+  ---
+  duration_ms: 17102.8998
+  type: 'test'
+  ...
+# Subtest: integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation
+ok 7 - integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation
+  ---
+  duration_ms: 13935.6762
+  type: 'test'
+  ...
+# Subtest: native nonterminal stage report continues execution and updates owner summary; human wait=false
+ok 8 - native nonterminal stage report continues execution and updates owner summary; human wait=false
+  ---
+  duration_ms: 13045.1714
+  type: 'test'
+  ...
+# Subtest: native nonterminal stage report continues execution and updates owner summary; human wait=true
+ok 9 - native nonterminal stage report continues execution and updates owner summary; human wait=true
+  ---
+  duration_ms: 14458.1427
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 116103.5623

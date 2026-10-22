@@ -1,0 +1,290 @@
+TAP version 13
+# Subtest: 原生网页工具错误不建立未知效果，仍可完成后续读取
+not ok 1 - 原生网页工具错误不建立未知效果，仍可完成后续读取
+  ---
+  duration_ms: 8748.2319
+  type: 'test'
+  location: 'D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\test\\task-session-service-native.test.js:16:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'active'
+    - 'completed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'completed'
+  actual: 'active'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-service-native.test.js:43:9)
+    async Test.run (node:internal/test_runner/test:1389:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# Subtest: running reminder and coordinator clarification preserve one native shell job with received and consumed receipts
+ok 2 - running reminder and coordinator clarification preserve one native shell job with received and consumed receipts
+  ---
+  duration_ms: 14552.8879
+  type: 'test'
+  ...
+# Subtest: native completion race drains then resumes the original execution without replaying its shell effect
+ok 3 - native completion race drains then resumes the original execution without replaying its shell effect
+  ---
+  duration_ms: 12989.3233
+  type: 'test'
+  ...
+# Subtest: real coordinator input enforces explicit context semantics without default cancellation: missing
+ok 4 - real coordinator input enforces explicit context semantics without default cancellation: missing
+  ---
+  duration_ms: 4389.5479
+  type: 'test'
+  ...
+# Subtest: real coordinator input enforces explicit context semantics without default cancellation: preserve
+ok 5 - real coordinator input enforces explicit context semantics without default cancellation: preserve
+  ---
+  duration_ms: 6567.154
+  type: 'test'
+  ...
+# Subtest: real coordinator input enforces explicit context semantics without default cancellation: replan
+ok 6 - real coordinator input enforces explicit context semantics without default cancellation: replan
+  ---
+  duration_ms: 7403.9776
+  type: 'test'
+  ...
+# Subtest: real coordinator input enforces explicit context semantics without default cancellation: cancel
+ok 7 - real coordinator input enforces explicit context semantics without default cancellation: cancel
+  ---
+  duration_ms: 4504.4955
+  type: 'test'
+  ...
+# Subtest: owner injects one authoritative source body across task, Web identity and materials
+ok 8 - owner injects one authoritative source body across task, Web identity and materials
+  ---
+  duration_ms: 1942.9066
+  type: 'test'
+  ...
+# {"scope":"actual native owner scripted adapter UTF-8 JSON bytes","bodyCopies":[0,0],"metrics":[{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":22838,"schemaBytes":12711,"adapterRequestBytes":51994},{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2488,"systemBytes":22838,"schemaBytes":12711,"adapterRequestBytes":54939}]}
+# Subtest: 不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话
+ok 9 - 不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话
+  ---
+  duration_ms: 4418.2445
+  type: 'test'
+  ...
+# Subtest: 话题历史自身通知不阻断人工补充-native-user
+ok 10 - 话题历史自身通知不阻断人工补充-native-user
+  ---
+  duration_ms: 2809.5809
+  type: 'test'
+  ...
+# Subtest: 话题历史自身通知不阻断人工补充-colleague
+ok 11 - 话题历史自身通知不阻断人工补充-colleague
+  ---
+  duration_ms: 3251.7103
+  type: 'test'
+  ...
+# Subtest: 话题历史未准入真实消息仍拒绝更新且不发送成功回复-native-user
+ok 12 - 话题历史未准入真实消息仍拒绝更新且不发送成功回复-native-user
+  ---
+  duration_ms: 4480.1027
+  type: 'test'
+  ...
+# Subtest: 180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay
+ok 13 - 180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay
+  ---
+  duration_ms: 650.1059
+  type: 'test'
+  ...
+# {"scope":"actual native foldSurface UTF-8 JSON message bytes; source/task identity retained","legacyHostCount":180,"beforeBytes":65206,"afterBytes":983,"newInputBytes":282,"retainedBaselineBytes":0,"afterCompactionBytes":1170,"rawAuditEvents":367}
+# {"contextProof":{"ownerRequests":11,"latestInputBytes":3606,"totalRequestBytes":81631}}
+# Subtest: owner keeps one current Host snapshot and delegates non-recursive execution context across three generations
+ok 14 - owner keeps one current Host snapshot and delegates non-recursive execution context across three generations
+  ---
+  duration_ms: 11864.0484
+  type: 'test'
+  ...
+# Subtest: 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects
+ok 15 - 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects
+  ---
+  duration_ms: 103129.722
+  type: 'test'
+  ...
+# {"scope":"native owner scripted adapter, UTF-8 JSON bytes; no provider tokens","metrics":[{"lease":1,"inputVersion":0,"currentInputBytes":2198,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2844,"messagesBytes":29270,"adapterRequestBytes":54904},{"lease":2,"inputVersion":1,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":39048,"adapterRequestBytes":64682},{"lease":2,"inputVersion":1,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":40251,"adapterRequestBytes":65885},{"lease":2,"inputVersion":1,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":43452,"adapterRequestBytes":69086},{"lease":2,"inputVersion":1,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":45002,"adapterRequestBytes":70636},{"lease":2,"inputVersion":1,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":46579,"adapterRequestBytes":72213},{"lease":6,"inputVersion":5,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":106576,"adapterRequestBytes":132210},{"lease":6,"inputVersion":5,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":107779,"adapterRequestBytes":133413},{"lease":6,"inputVersion":5,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":110980,"adapterRequestBytes":136614},{"lease":6,"inputVersion":5,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":112530,"adapterRequestBytes":138164},{"lease":6,"inputVersion":5,"currentInputBytes":2623,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3334,"messagesBytes":114107,"adapterRequestBytes":139741},{"lease":33,"inputVersion":32,"currentInputBytes":2631,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3343,"messagesBytes":562890,"adapterRequestBytes":588524},{"lease":33,"inputVersion":32,"currentInputBytes":2631,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3343,"messagesBytes":564097,"adapterRequestBytes":589731},{"lease":33,"inputVersion":32,"currentInputBytes":2631,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3343,"messagesBytes":567301,"adapterRequestBytes":592935},{"lease":33,"inputVersion":32,"currentInputBytes":2631,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3343,"messagesBytes":568855,"adapterRequestBytes":594489},{"lease":33,"inputVersion":32,"currentInputBytes":2631,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3343,"messagesBytes":570435,"adapterRequestBytes":596069},{"lease":34,"inputVersion":32,"currentInputBytes":2503,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3183,"messagesBytes":583905,"adapterRequestBytes":609539},{"lease":34,"inputVersion":32,"currentInputBytes":2503,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3183,"messagesBytes":587109,"adapterRequestBytes":612743},{"lease":34,"inputVersion":32,"currentInputBytes":2503,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3183,"messagesBytes":588663,"adapterRequestBytes":614297},{"lease":34,"inputVersion":32,"currentInputBytes":2503,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3183,"messagesBytes":590243,"adapterRequestBytes":615877}]}
+# Subtest: configured group responsibility reaches group and task models and its reply signature survives notification formatting
+ok 16 - configured group responsibility reaches group and task models and its reply signature survives notification formatting
+  ---
+  duration_ms: 2171.5929
+  type: 'test'
+  ...
+# Subtest: native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback
+ok 17 - native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback
+  ---
+  duration_ms: 17423.9435
+  type: 'test'
+  ...
+# Subtest: native sequential handoff preserves one executor before independent review of the fixed artifact
+ok 18 - native sequential handoff preserves one executor before independent review of the fixed artifact
+  ---
+  duration_ms: 16153.0585
+  type: 'test'
+  ...
+# Subtest: native executor resumes in the same titled task workspace and all task sessions share the process cwd
+ok 19 - native executor resumes in the same titled task workspace and all task sessions share the process cwd
+  ---
+  duration_ms: 18859.0613
+  type: 'test'
+  ...
+# Subtest: native service reopens an unknown notification for readback without resending completed business work
+ok 20 - native service reopens an unknown notification for readback without resending completed business work
+  ---
+  duration_ms: 7350.5184
+  type: 'test'
+  ...
+# Subtest: native service cancellation stops the real execution process, drains the session, and rejects late completion
+ok 21 - native service cancellation stops the real execution process, drains the session, and rejects late completion
+  ---
+  duration_ms: 4414.6531
+  type: 'test'
+  ...
+# Subtest: native requirement update resumes the same owner with new sources and fences the interrupted old execution result
+ok 22 - native requirement update resumes the same owner with new sources and fences the interrupted old execution result
+  ---
+  duration_ms: 7126.6697
+  type: 'test'
+  ...
+# Subtest: native capacity queues promote every task and execution: tasks=1, executions=1
+ok 23 - native capacity queues promote every task and execution: tasks=1, executions=1
+  ---
+  duration_ms: 16961.4224
+  type: 'test'
+  ...
+# Subtest: native capacity queues promote every task and execution: tasks=1, executions=2
+ok 24 - native capacity queues promote every task and execution: tasks=1, executions=2
+  ---
+  duration_ms: 14899.2027
+  type: 'test'
+  ...
+# Subtest: native capacity queues promote every task and execution: tasks=2, executions=1
+ok 25 - native capacity queues promote every task and execution: tasks=2, executions=1
+  ---
+  duration_ms: 15518.8787
+  type: 'test'
+  ...
+# Subtest: native capacity queues promote every task and execution: tasks=2, executions=3
+ok 26 - native capacity queues promote every task and execution: tasks=2, executions=3
+  ---
+  duration_ms: 11906.1888
+  type: 'test'
+  ...
+# Subtest: native shared resources queue without occupying task capacity and promote on drain
+not ok 27 - native shared resources queue without occupying task capacity and promote on drain
+  ---
+  duration_ms: 26588.5364
+  type: 'test'
+  location: 'D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\test\\task-session-service-native.test.js:50:38'
+  failureType: 'testCodeFailure'
+  error: '{"tasks":[{"status":"completed","recovery":null},{"status":"active","recovery":null},{"status":"active","recovery":null}],"executions":[{"key":"run","objective":"holder","status":"succeeded","error":null},{"key":"run","objective":"waiter","status":"succeeded","error":null},{"key":"run","objective":"independent","status":"succeeded","error":null},{"key":"verify-result-version","objective":"verify-result-version","status":"succeeded","error":null},{"key":"verify-delivery-evidence","objective":"verify-delivery-evidence","status":"failed","error":{"code":"EXECUTION_PROVIDER_FAILED","message":"独立成员必须实际读取同Task团队记录","phase":"provider","providerError":{"code":"UNKNOWN","message":"独立成员必须实际读取同Task团队记录"},"recovery":{"category":"unclassified","nextAction":"inspect-native-provider-error-before-requesting-an-operation","retryable":false},"terminal":{"endSeq":92,"inputVersion":1,"reason":"error","sessionId":"task-execution-8da8f3e6-1f4d-4729-8293-e4fc5685da28"}}},{"key":"verify-result-version","objective":"verify-result-version","status":"succeeded","error":null},{"key":"verify-delivery-evidence","objective":"verify-delivery-evidence","status":"succeeded","error":null},{"key":"verify-result-version","objective":"verify-result-version","status":"succeeded","error":null},{"key":"verify-delivery-evidence","objective":"verify-delivery-evidence","status":"failed","error":{"code":"EXECUTION_PROVIDER_FAILED","message":"独立成员必须实际读取同Task团队记录","phase":"provider","providerError":{"code":"UNKNOWN","message":"独立成员必须实际读取同Task团队记录"},"recovery":{"category":"unclassified","nextAction":"inspect-native-provider-error-before-requesting-an-operation","retryable":false},"terminal":{"endSeq":92,"inputVersion":1,"reason":"error","sessionId":"task-execution-db04bce5-fdb4-4f65-aa81-f473507adfae"}}}],"errors":[]}'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1197:10)
+    async Test.run (node:internal/test_runner/test:1389:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+  ...
+# Subtest: native delegation rejects changed keys on receipt replay and preserves omitted continuation keys
+ok 28 - native delegation rejects changed keys on receipt replay and preserves omitted continuation keys
+  ---
+  duration_ms: 11095.4254
+  type: 'test'
+  ...
+# Subtest: recovering an idle owner with no pending wake does not consume a task slot
+ok 29 - recovering an idle owner with no pending wake does not consume a task slot
+  ---
+  duration_ms: 2826.8514
+  type: 'test'
+  ...
+# Subtest: native session creation failure has bounded recovery retries: persistent=false
+ok 30 - native session creation failure has bounded recovery retries: persistent=false
+  ---
+  duration_ms: 4209.8716
+  type: 'test'
+  ...
+# Subtest: native session creation failure has bounded recovery retries: persistent=true
+ok 31 - native session creation failure has bounded recovery retries: persistent=true
+  ---
+  duration_ms: 3508.2657
+  type: 'test'
+  ...
+# Subtest: native model failures settle without repeated owner requests: persistent=false
+ok 32 - native model failures settle without repeated owner requests: persistent=false
+  ---
+  duration_ms: 4132.9612
+  type: 'test'
+  ...
+# Subtest: native model failures settle without repeated owner requests: persistent=true
+ok 33 - native model failures settle without repeated owner requests: persistent=true
+  ---
+  duration_ms: 3919.1814
+  type: 'test'
+  ...
+# Subtest: empty owner recovery reviews the retained execution without replaying its completed native write
+ok 34 - empty owner recovery reviews the retained execution without replaying its completed native write
+  ---
+  duration_ms: 16794.6065
+  type: 'test'
+  ...
+# Subtest: native owner empty-summary corrections are bounded and may recover: correctOnce=false
+ok 35 - native owner empty-summary corrections are bounded and may recover: correctOnce=false
+  ---
+  duration_ms: 1659.5119
+  type: 'test'
+  ...
+# Subtest: native owner empty-summary corrections are bounded and may recover: correctOnce=true
+ok 36 - native owner empty-summary corrections are bounded and may recover: correctOnce=true
+  ---
+  duration_ms: 1570.4686
+  type: 'test'
+  ...
+# Subtest: native topic routing rejects incomplete source coverage and accepts correction in the same real session
+ok 37 - native topic routing rejects incomplete source coverage and accepts correction in the same real session
+  ---
+  duration_ms: 2168.5847
+  type: 'test'
+  ...
+# Subtest: resident.apply boots and disposes with only its declared native service dependencies
+ok 38 - resident.apply boots and disposes with only its declared native service dependencies
+  ---
+  duration_ms: 1169.5932
+  type: 'test'
+  ...
+# Subtest: resident listener startup failure disposes native resources and permits reopening the same task database
+ok 39 - resident listener startup failure disposes native resources and permits reopening the same task database
+  ---
+  duration_ms: 1419.2066
+  type: 'test'
+  ...
+# Subtest: native board keeps a drained coordinator running while its delegated target is executing
+ok 40 - native board keeps a drained coordinator running while its delegated target is executing
+  ---
+  duration_ms: 6360.3948
+  type: 'test'
+  ...
+# Subtest: native recovery no-op preserves an undrained task writer conflict alert
+ok 41 - native recovery no-op preserves an undrained task writer conflict alert
+  ---
+  duration_ms: 1330.6474
+  type: 'test'
+  ...
+1..41
+# tests 41
+# suites 0
+# pass 39
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 414437.252

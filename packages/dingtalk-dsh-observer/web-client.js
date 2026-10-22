@@ -944,7 +944,8 @@ window.__ModuleLoader__.load({
       for (const row of [...(timeline?.executions || []), ...(timeline?.human ? [timeline.human] : [])]) {
         for (const event of row.milestones || []) {
           const id = `stage:${row.id}:${event.id}`
-          records.set(id, { id, type: '阶段成果', at: event.at, summary: event.summary, source: row.label || row.title || row.id })
+          records.set(id, { id, type: '阶段成果', at: event.at, summary: event.summary, source: row.label || row.title || row.id,
+            evidence: event.evidence || [], activity: event.activity })
         }
       }
       for (const item of decisions) {
@@ -981,12 +982,14 @@ window.__ModuleLoader__.load({
       return React.createElement('div', { className: 'timeline-outcomes', 'aria-label': '阶段成果与统筹巡查' },
         React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h3', null, '阶段成果与统筹巡查'),
           !readonly ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(null) }, '刷新记录') : null),
+        React.createElement('p', { className: 'detail-muted' }, '阶段成果为执行会话报告；报告本身不代表已独立核验。'),
         React.createElement('p', { className: 'detail-muted', role: 'status' }, loading ? '正在读取统筹记录…' : error ? '统筹记录未全部读取，已有成果和记录仍保留。' : page.nextBefore !== null ? '仅展示已加载记录，还有更早的统筹决定可读取。' : '仅展示已落账的成果与巡查结论；检查触发不代表统筹已形成结论。'),
         error ? React.createElement('p', { role: 'alert' }, `统筹记录读取失败：${error}`, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(request.before) }, '重试读取记录')) : null,
         records.length ? React.createElement('ol', { style: { margin: 0, paddingLeft: 22, display: 'grid', gap: 16 } }, ...records.map(item => React.createElement('li', { key: item.id, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } },
           React.createElement('strong', null, `${item.type} · ${item.at ? fmt(item.at) : '时间未记录'}`),
           item.source ? React.createElement('p', { className: 'detail-muted' }, item.source) : null,
           React.createElement('p', null, ...linkedTaskText(item.summary)),
+          item.activity ? React.createElement('p', { className: 'detail-muted' }, '报告时活动：', ...linkedTaskText(item.activity)) : null,
           item.action ? React.createElement('p', { className: 'detail-muted' }, `处理决定：${actions[item.action] || item.action}`) : null,
           ...(item.evidence || []).map((value, index) => React.createElement('p', { key: `e:${index}` }, '依据：', ...linkedTaskText(value))),
           ...(item.limitations || []).map((value, index) => React.createElement('p', { key: `l:${index}` }, '限制：', ...linkedTaskText(value))))))

@@ -1,0 +1,76 @@
+✔ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=false (15632.5837ms)
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=true (17132.1218ms)
+✔ one unreadable provider terminal stops only its recovery and unrelated native task still completes (14050.623ms)
+✔ provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=false (30207.319ms)
+✖ provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=true (21105.5109ms)
+✖ business human answer replaces pending provider recovery input before any original session resumes (17110.2311ms)
+✔ anonymous field v12 error restores original execution with complete diagnostics and no human request or duplicate effect (12420.0316ms)
+✔ requirement supplement during provider cooldown wakes current owner after restart and resumes original executor once (24522.6385ms)
+✔ owner may honestly wait at each bounded provider review; all three reviews survive restart without replay (18141.2759ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 6
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 171144.2792
+
+✖ failing tests:
+
+test at test\task-session-execution-provider-recovery-native.test.js:9:42
+✖ native provider failure resumes original executor after persisted backoff; successful write never replays: restart=true (17132.1218ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:99:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-execution-provider-recovery-native.test.js:9:42
+✖ provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=true (21105.5109ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at test.timeout (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:171:57)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-execution-provider-recovery-native.test.js:9:42
+✖ business human answer replaces pending provider recovery input before any original session resumes (17110.2311ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/test/task-session-execution-provider-recovery-native.test.js:210:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

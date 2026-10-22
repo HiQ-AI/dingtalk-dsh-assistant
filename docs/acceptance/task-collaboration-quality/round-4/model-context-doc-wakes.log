@@ -1,0 +1,35 @@
+✔ integrated projection keeps stage evidence and provider decisions bound to the original versions (56.2347ms)
+✔ source content is unique while identities, Web request, human correction and material references remain exact (65.5156ms)
+✔ short authority bodies stay literal with exact authors instead of larger hash dictionaries (23.6471ms)
+✔ current team keeps short responsibilities and reported outcomes visible while evidence and ten-member overflow remain bounded (87.4434ms)
+✔ completed stage reports and routing internals stay readable without inflating the current task snapshot (79.2218ms)
+✔ result size, execution/failed counts and continuation self-result stay in lazy bounded catalogues (520.5628ms)
+ℹ {"scope":"projected current Host JSON UTF-8 bytes, catalogues are not eagerly expanded","metrics":[{"count":1,"beforeOwnerBytes":2357,"ownerBytes":791,"executionBytes":1907},{"count":20,"beforeOwnerBytes":646031,"ownerBytes":793,"executionBytes":11436},{"count":120,"beforeOwnerBytes":23073991,"ownerBytes":795,"executionBytes":11939}]}
+✔ current source windows retain operator authorization and later restrictions beyond the first twenty sources (51.3844ms)
+✔ first read is available, repeated readback uses references, reopen resolves and other sessions/tampering fail closed (105.3234ms)
+✔ nested quote graphs and identical bodies across distinct authors grow by identities and edges, not copied text (812.4895ms)
+ℹ {"scope":"nested source current Host UTF-8 JSON bytes","metrics":[{"depth":2,"beforeBytes":173630,"afterBytes":3375},{"depth":5,"beforeBytes":1470478,"afterBytes":5892},{"depth":9,"beforeBytes":23702160,"afterBytes":9250}]}
+✔ issue 172: seven operation memberships, stage wakes and historical objectives have one detail/readable catalog (197.555ms)
+ℹ {"scope":"synthetic issue172 projected Host UTF-8 JSON bytes","bytes":2544,"operationsBytes":274,"blockersBytes":266,"contentIndexBytes":2}
+✔ issue 172: complete catalogs beyond the display window and explicit tool reads render bodies directly (230.4543ms)
+✔ decision view preserves request-only targets, all unknown identities and unreviewed current results (70.6305ms)
+✔ all long content surfaces expose existing readable files without contentIndex reinjection (84.0447ms)
+✔ many short requirements remain one lossless file after source-reference mapping (34.9064ms)
+✔ long configured task/execution instructions reuse the content file instead of a long prompt (49.6773ms)
+{"kind":"task","sources":5,"before":7514,"after":1393}
+{"kind":"execution","sources":5,"before":11485,"after":2575}
+{"kind":"group","sources":5,"before":8601,"after":2519}
+{"kind":"task","sources":100,"before":20076,"after":2173}
+{"kind":"execution","sources":100,"before":52552,"after":2575}
+{"kind":"group","sources":100,"before":122297,"after":2519}
+✔ whole Host UTF-8 budget retains every overflow field through admitted pointers (402.9989ms)
+✔ execution round documents are the routine owner entry while the complete ledger stays readable (370.4013ms)
+✔ budget also covers tool render bypasses, long keys and reserved context names (993.1777ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4504.2241

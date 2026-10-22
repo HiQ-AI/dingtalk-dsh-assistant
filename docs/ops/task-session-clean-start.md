@@ -77,9 +77,17 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 阶段唤醒更新无schema迁移，按本页静止实例双包流程部署。普通operation.settle仅在原绑定完全匹配、执行仍运行且未排空/取消/恢复/修订失效时省略统筹唤醒；执行自己消费真实成功/失败。unknown、cancelled、对账、独立操作、迟到结果、阶段成果、执行结束和用户输入仍唤醒。验证时比较实际wake账与统筹回合数，不能仅断言工具返回成功。现场已等待真实人工决定时保持原请求，不为测试制造一次无意义统筹回合；可用精确原生输入对安装包做只读投影复验。此修复不删除已有会话历史，正常历史仍沿原生压缩处理。
 
+阶段成果核验同时检查原报告 evidence/activity 经落账、统筹输入与时间轴投影后仍可读。报告 activity 表示报告时开始的活动；续办保留的旧 stageProgress 只能作为历史证据，按 inputVersion/leaseEpoch 及需求/控制版本核对，不当作本轮正在执行。看板在现有成果区展示依据和“报告时活动”，不把执行报告标成独立验收通过。没有活动的旧报告不猜测补齐。
+
 人工介入核验：待答请求在/state/authorizations返回taskSessionRequest=true、status=waiting-reply，任务归等待中；POST /tasks/:taskId/human-requests/:requestId/reply只接纳本机受信Web请求，body含幂等requestId、reply及expectedRequirementRevision/expectedControlRevision。原文保留真实配置webActorId，旧版本/已答/非当前请求拒绝，成功后原task/session继续。修订或终态将旧申请superseded；不得通过手改账或伪造答复绕过边界。
 
-进度巡检核验：execution.progressReview.checkedAt为持久上次检查时间，running当前版本到期600000毫秒后由既有recovery tick读取原生日志；wake.kind=execution.progress.review。统筹未调用task_execution_progress就提交会收到TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED纠正。缺文件、身份/输入不匹配或无新记录如实呈现，不能仅查状态宣布推进。巡检不发额外群进度消息，不清unknown效果。
+进度巡检核验：execution.progressReview.checkedAt为持久上次检查时间，running当前版本到期600000毫秒后由既有recovery tick读取原生日志；wake.kind=execution.progress.review。统筹未调用task_execution_progress就提交会收到TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED纠正；该工具现在返回本轮document引用，统筹须用原生read读文档后判断，日常不再返回日志摘录。缺文件、身份/输入不匹配或无阶段报告如实呈现，不能仅查状态宣布推进。巡检不发额外群进度消息，不清unknown效果。
+
+协作质量更新沿本页现有部署流程，无新配置和数据库迁移。执行团队按 Task 复用 3–10 个成员：新建第 11 个被拒绝，有执行团队但未满 3 个时不能 complete；纯咨询可保持零执行。wait 不要求立即凑满，依赖未齐的工作延后派发，简单任务将三个必要职责保持短小。历史超过 10 人的记录仍可读和续办，不删除或重建。检查 objective/context 是否明确每成员本轮职责、任务、输入、负责范围、前置、交付物及验收方法，resourceKeys 是否对应真实冲突资源。独立就绪目标应在同轮登记后再 wait；高风险自证需固定产物版本后补独立只读核验，不能用重做外部写入来补证。隔离模型复验入口见 `docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs`，结果与语义审阅记入同特性轮次；不能以提示词存在或会话数量增加代替行为验证。
+
+每轮文档核验：在隔离任务独立读取 `tasks/<taskId>/outputs/<executionId>/round-<inputVersion>.md`，确认身份、职责、首次阶段报告 plan、进展与最终结果相符。同轮报告可以更新文件；原 execution 续办后须产生下一 inputVersion 文件，独立比较旧文件 SHA256，确认后续报告和重启未改变旧轮。不能拿旧阶段报告当成本轮进度。文档属于可读投影，原账本保留恢复权威；文档写入异常会出技术告警，先修复真实路径/权限，不手工覆盖身份头或删除历史轮次。已提交账本回执不会因文档错误丢失，严格文档读取与下一轮切换仍须成功。此升级不补造升级前已丢失完整输入的历史文档。
+
+升级后在隔离任务确认执行工具目录存在 `execution_team_read` 和 `execution_send_message`。用同 Task 当前成员身份及目标 inputVersion 发送一条必要消息，独立回读 feedback 的 sourceExecutionId、sourceInputVersion、inputVersion、consumedAt 和原生日志 sequence；队列接收、模型步骤消费与业务处理分别核验。重复 key 不重复投递，跨 Task、旧输入版本或旧发送租约拒绝；已终态目标返回 recipient_finished，不启动新回合。续办后的旧 peer 消息只保留历史，不阻塞新轮次；统筹原有补充语义不变。只需对依赖就绪、接口/证据交接和具体冲突发定向消息，无新事实不反复发送。此检查不操作或重放现场任务。
 
 统筹方向判断核验：除检查读取调用外，核对巡检决定是否把最新整体目标、受托目标、范围及验收条件与实际行动对照，说明当前进展和下一必要结果。首次出现具体偏离就应通过原executionId反馈，不以重复错误为触发条件；确认偏离后仅复述进展并wait不算有效纠偏。跟进时独立核对反馈后的真实动作/产物，received或modelStepEnteredAt不能证明落实。必要验证、正常等待、证据不足和真实人工等待分别验证，不以一律发反馈为通过标准；本项不改变原人工等待/暂停机制。
 

@@ -136,7 +136,7 @@ export function latestInput(request) {
 // Scripted decisions must observe overflow through the same admitted tool as a
 // real model. Only contextPath fields are expanded; ordinary contentRef bodies
 // remain explicit references for the individual test's judgment.
-function resolveContextInput(request, input) {
+export function resolveContextInput(request, input) {
   const pages = modelToolValues(request), pending = new Map()
   const read = (contentRef, path = '') => {
     let offset = 0, text = '', entries = [], kind
@@ -233,5 +233,55 @@ export function topicTaskCalls(request, { title = '原消息交办', objective }
       actions: [{ kind: 'new-task', title, objective: text, acceptanceCriteria: ['完成原消息要求并核验证据'], topicRefs: [{ topicId: input.topicId, revision: input.revision }], basisUnitRefs,
         dispatchAssessment: { businessObject: title, agentDeliverable: text, externalFollowup: [], sourceUnitRefs: basisUnitRefs, workflowRefs: [], workflowReason: '当前没有专用流程' } }], reply: '收到，已交办任务。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
     } } }]
+  }
+}
+
+// 给原流程补充两项实际验收：核对结果所属版本、核对交付引用/限制。
+// 通过原生团队读取与文件读取取证，不重放原作业，不改变原执行身份。
+export function nativeVerificationTeam({ filePath, expected } = {}) {
+  const call = (name, args) => ({ name, args })
+  const decision = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
+  const assigned = new Set(), steps = new Map()
+  return {
+    owner(input, primary) {
+      if (!primary?.drained || primary.status !== 'succeeded') return null
+      if (input.executions.length >= 3) return null
+      if (assigned.has(input.task.taskId)) return null
+      assigned.add(input.task.taskId)
+      const roles = input.executions.length === 2 ? ['delivery-evidence'] : ['result-version', 'delivery-evidence']
+      return roles.map(role => call('task_delegate', {
+        key: 'verify-' + role, objective: 'verify-' + role,
+        context: JSON.stringify({ role, executionId: primary.executionId, inputVersion: primary.inputVersion,
+          instruction: role === 'result-version' ? '只读核对原执行结果与当前输入版本一致，不能重放原作业。' : '只读核对原结果的交付引用和限制；有文件则读取实际交付，不扩大为业务完成。',
+          ...(filePath ? { filePath, expected: expected || primary.input.objective } : {}) }),
+      })).concat(decision('wait', '原作业已结束，等待结果版本和交付证据核验'))
+    },
+    execute(request, input) {
+      if (!['verify-result-version', 'verify-delivery-evidence'].includes(input.objective)) return null
+      const scope = JSON.parse(input.context), key = input.task.taskId + ':' + input.objective
+      const step = steps.get(key) ?? 0
+      if (step === 0) { steps.set(key, 1); return [call('execution_team_read', {})] }
+      const projected = modelToolValues(request).findLast(value => value.taskId === input.task.taskId && value.executions)
+      let team
+      try { team = projected && resolveContextInput(request, projected) }
+      catch (error) { if (error.contextReads) return error.contextReads.map(args => call('model_content_read', args)); throw error }
+      assert.ok(team, '独立成员必须实际读取同Task团队记录')
+      const original = team.executions.find(item => item.executionId === scope.executionId)
+      assert.equal(original?.inputVersion, scope.inputVersion)
+      assert.equal(original.status, 'succeeded')
+      assert.ok(original.result, '核验必须基于已落账结果')
+      if (scope.role === 'delivery-evidence') {
+        assert.ok(original.result.payload.output)
+        assert.ok(Array.isArray(original.result.payload.output.artifacts))
+        assert.ok(Array.isArray(original.result.payload.output.limitations))
+        if (scope.filePath) {
+          if (step === 1) { steps.set(key, 2); return [call('read', { file_path: scope.filePath })] }
+          assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'tool')).includes(scope.expected), '实际交付内容必须进入核验成员上下文')
+        }
+      }
+      return [call('execution_submit', { output: { status: 'completed', summary: scope.instruction,
+        evidence: [scope.executionId + ':' + scope.inputVersion, ...(scope.filePath ? [scope.filePath] : [])],
+        limitations: ['只核对指定结果版本与交付证据，不代替整体业务验收'], artifacts: [] } })]
+    },
   }
 }
