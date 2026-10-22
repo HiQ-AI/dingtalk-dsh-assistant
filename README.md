@@ -72,7 +72,7 @@
 - 通过原生 subprocess 服务创建的进程按该 provider 的 `terminate` / `waitForExit` 合同排空；无法证明排空时保留占位。这个保证不超过 provider 的实际受管范围。
 - 动态任务执行不再挂接插件的文件路径拦截；任务日志及当前已授权文件沿原生文件工具、sandbox/approval 和实际操作系统权限读取。工作区与原任务/会话归属不变。
 - 通用执行依赖实际 preset 能力；旧工程、UAT、Bytebase、文件交付等固定流程不再是新任务入口。保留源码和历史合同不代表动态任务已自动接通这些旧适配器。
-- 当前任务通知与个人引用回复只承载正文，尚未接通正文和多件图片、文档的组合发送。独立文件消息字节核对通过，不证明同一条引用回复的交付要求已经满足；遇到该要求须保留具体能力缺口，不能用拆条发送或链接清单宣称完成。当前 DWS 入口、上游源码及待确认协议见[组合引用能力核实](docs/acceptance/unified-reply-validation/transport/protocol-review.md)。
+- 当前任务通知与个人引用回复只承载正文，尚未接通正文和多件图片、文档的组合发送。用户允许分开发送时，正文引用对应原消息并说明附件用途，文件经已授权入口发送并逐件核验，按任务清单关联各自消息；不要求共用 messageId。若用户明确要求同条组合回复，独立文件送达仍不等于满足该要求，须说明具体能力缺口。当前能力依据见[组合引用能力核实](docs/acceptance/unified-reply-validation/transport/protocol-review.md)，本轮允许分开发送的范围调整见[第三轮记录](docs/acceptance/unified-reply-validation/round-3.md)。
 
 ## 工作目录与原生日志
 
