@@ -61,6 +61,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 本机静止实例使用 [原生退出切换脚本](../acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1)：显式传入持久 Assistant 与 Observer 两个包及各自摘要、精确旧 PID、当前 profile 摘要及本轮证据目录，先 `-Check`，通过后同参数执行。脚本先核验共享控制台仅包含精确计划任务进程树，再经 Windows CTRL+C 触发 DSH 原生 SIGINT disposal；等待旧进程退出、SQLite owner 释放、原生日志回合结束和实际子进程退出后，才沿官方 `dsh plugin --profile web add` 安装。不修改 profile，核验其原字节摘要并还原自启状态，经计划任务启动并回读。失败保留现场与阶段记录，不自动强制重启；不得将其用于活动业务执行或其他实例。此脚本只支持既有已配置的本机身份与路径，不承担迁移。 profile 声明本地 `file:` 目录宿主时，先核对声明与已安装宿主版本一致；漂移以 `DEPLOY_HOST_CONFIGURATION_DRIFT` 在停机前拒绝，普通代码部署不得隐式切换宿主。停机前以 profile 原生 CLI 的只读 `plugin --help` 验证依赖装配。安装失败保留停机现场，先核对原包/profile摘要、旧PID已退出、端口关闭与原生离线账本排空，再用同一配置声明的原生CLI接续原安装阶段；不要重新发信或重做原业务。
 
+账本预检按执行创建时绑定的后端读取证据：DSH 沿原 JSONL；Claude 读取自身 `outputs/<executionId>/claude-events.jsonl`，验证原 UUID、连续输入历史、版本/摘要/修订/租约、事件序号与最后排空记录，拒绝缺失、损坏、未知后端及链接路径。连续续办尚未领取时，仅在同租约、历史连续且最后已排空轮次精确匹配原输入、没有较新 start，并且当前为 queued 或已正式取消/失效时返回独立未启动证明；不恢复会话、不重放或结清 unknown。此证明仍只是停机前候选，实际退出和子进程排空须由正式部署流程另证。
+
 恢复后核对包 SHA256、安装版本、新进程及健康，再分别核对收信箱、原通知及原任务。通知的原 `openTaskId` 查询 SUCCESS 后须读取精确原消息，确认消息 ID 与目标会话一致即可结清送达，不再以钉钉渲染后的正文或引用/@元数据作为该路径的硬门槛。该路径记录 `mentionVerification=unavailable`，仅证明送达，不声称正文、引用或 @ 已验证。无成功发送任务回执的历史匹配继续严格核对原正文、发送者、引用和 @。unknown 只沿原通知正常回读核验，不重发、不直接改 SQLite；独立确认原 receipt.messageId 与 sendAttemptCount 未增加。
 
 若原通知只因顶层有序列表的 `1./2./3.` 在分段回读时变为 `1./1./1.` 而停留 unknown，安装列表回读修复后交由既有 notification.reconcile 正式结清；不手改 SQLite、正文或发送回执，不调用发送/重试发送接口。独立回读原 notificationId、原 messageId、delivered、sendAttemptCount 仍为 1，再核对恢复告警消失及健康状态。代码围栏、非连续编号、列表顺序或正文数字变化继续拒绝。
@@ -164,6 +166,8 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 ## 本机桌面重启入口
 
 `C:/Users/64554/Desktop/App/restart-dsh-web.ps1` 委托 `D:/dsh_home/launchers/restart-web.ps1`。当前启动器源码为 `scripts/restart-web.ps1`，更新时将该文件与 `docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.mjs` 一起同步到上述 launchers 目录，并分别独立核对 SHA256。此入口仅管理既有本机 `DSH Web Local`、`D:/dsh_home` 和 `D:/baibu-agent/.dsh/task-sessions.sqlite`，不安装插件、不修改 profile 或初始化标记。
+
+包含 Claude 执行的版本必须同步支持该后端日志的账本检查器；只更新插件包不会更新 launchers 副本。检查器仅依赖 Node 标准库，复制后不从仓库导入适配器，也不为核验启动 CLI。
 
 先运行桌面脚本 `-Check`：零写入、零信号，检查实例/端口、任务账本及原生回合；停止态验证数据库、初始化标记与原 owner 进程已退出，保留中断回合交正式 Host 恢复事务接管，不要求部署专用的全部 turn/end 前置证据。普通执行在停止态启动；运行态只允许静止账本，通过既有原生控制台退出脚本发送 CTRL+C，在同一有界等待内核对精确旧进程和既有子进程全部退出，再通过冷启动账本身份检查，恢复自启并启动。运行态存在未开始的任务领取也拒绝停机；检查后新进入的回合由 DSH 原生退出及正式 Host 恢复合同处理，不能把检查快照当原子排空。活动任务或未知启动中效果拒绝重启；unknown 历史操作不重放、不清账。
 

@@ -943,7 +943,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       return { status: result.status, decisionId: args.requestId }
     })
-    tool('group_topic_list', '搜索本群 Topic 摘要，按需召回历史话题。', { type: 'object', properties: { requestId: { type: 'string', description: '读取当前路由引用命中的关联目录；省略则查询全群目录' }, query: { type: 'string' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, additionalProperties: false }, ({ requestId, query = '', offset = 0, limit = 50 }) => {
+    tool('group_topic_list', '搜索本群 Topic 摘要，按需召回历史话题。', { type: 'object', properties: { requestId: { type: 'string', description: '读取当前路由引用命中的关联目录；省略则查询全群目录' }, query: { type: 'string' }, offset: { type: 'integer', description: 'Topic条目偏移，非负整数，默认0；续页使用返回的nextOffset。' }, limit: { type: 'integer', description: '请求的Topic条数，整数1..100，默认50；关联目录仍受字符预算限制，实际条数可能更少。' } }, additionalProperties: false }, ({ requestId, query = '', offset = 0, limit = 50 }) => {
       if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('topic_page_invalid')
       const route = requestId ? routes.get(requestId) : undefined
       if (requestId && (!route || route.groupId !== groupId)) throw new Error('topic_route_request_unknown')
@@ -975,7 +975,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       return page
     })
-    tool('group_topic_context_get', '读取本群 Topic 固定版本及消息原文；返回不超过字符预算，按 nextOffset/nextTextOffset 连续读取完整历史。', { type: 'object', properties: { topicId: { type: 'string' }, revision: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' }, textOffset: { type: 'integer' } }, required: ['topicId'], additionalProperties: false }, (args) => {
+    tool('group_topic_context_get', '读取本群 Topic 固定版本及消息原文；返回不超过字符预算，按 nextOffset/nextTextOffset 连续读取完整历史。', { type: 'object', properties: { topicId: { type: 'string' }, revision: { type: 'integer', description: '固定Topic版本，整数1..当前Topic revision；省略使用当前版本。续读同一历史须保留原revision。' }, offset: { type: 'integer', description: '消息条目偏移，非负整数，默认0；续页使用返回的nextOffset。' }, limit: { type: 'integer', description: '请求的消息条数，非字符数，整数1..500，默认10；字符预算可能提前截断，按nextOffset/nextTextOffset续读。' }, textOffset: { type: 'integer', description: '本页首条消息的UTF-16字符偏移，非负整数且不超过该消息原文长度，默认0；仅按返回的nextTextOffset续读。' } }, required: ['topicId'], additionalProperties: false }, (args) => {
       const context = boundedTopicContext(store.getTopicContext({ ...args, groupId, limit: args.limit ?? 10 }), { textOffset: args.textOffset ?? 0 })
       for (const request of decisions.values()) {
         if (request.groupId !== groupId || request.topicId !== context.topic.topicId || request.revision !== context.topic.revision) continue

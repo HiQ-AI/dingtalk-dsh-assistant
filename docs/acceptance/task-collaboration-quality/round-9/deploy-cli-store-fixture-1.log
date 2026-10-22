@@ -1,0 +1,28 @@
+✔ real Store repeated unstarted Claude continuation preserves proof when queued (185.7069ms)
+✔ real Store repeated unstarted Claude continuation preserves proof when cancelled (125.0038ms)
+✖ real Store repeated unstarted Claude continuation preserves proof when stale (49.2389ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 630.7196
+
+✖ failing tests:
+
+test at docs\acceptance\task-session-runtime-repair\scripts\inspect-quiescent-ledger.test.mjs:186:51
+✖ real Store repeated unstarted Claude continuation preserves proof when stale (49.2389ms)
+  Error: task.update
+      at fail (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:25:61)
+      at reduce (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1527:5)
+      at file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1546:28
+      at transaction (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:219:21)
+      at Object.command (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1536:20)
+      at command (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.test.mjs:191:35)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-collaboration-quality/dingtalk-dsh-assistant/docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.test.mjs:207:27)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'DYNAMIC_COMMAND_UNKNOWN'
+  }

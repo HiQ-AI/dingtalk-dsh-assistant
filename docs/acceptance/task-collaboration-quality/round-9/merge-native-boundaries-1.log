@@ -1,0 +1,16 @@
+✔ successful clarification after retry clears its old planning alert without resetting the persisted attempt (905.7542ms)
+✔ 默认DSH、混合团队、配置切换和重启保持原执行后端与逐轮文档 (1155.4843ms)
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.0637ms)
+✔ native execution documents keep each input round and the owner reads the new duty and plan (9187.5021ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: false (14979.9146ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: true (16125.3002ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (16784.2062ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (17176.253ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 78362.7525

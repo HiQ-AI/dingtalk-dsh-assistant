@@ -598,6 +598,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       enabled: config.coordination?.enabled === true }, models()),
     config: config.coordination ?? {}, residentStore, query, command, ownerActorId: config.ownerActorId,
     onError: (id, error) => failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() }),
+    onRecovered: id => failures.delete(id),
     onHandoff: groupId => { rerouteGroups.add(groupId); if (!inflightGroups.has(groupId)) { rerouteGroups.delete(groupId); void kickGroup(groupId) } },
     onChanged: async result => {
       await refreshTasks()

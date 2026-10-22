@@ -4,10 +4,98 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { coordinationContextSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
 
 const model = { enabled: true, provider: 'native-task-test', model: 'coordination-controlled' }
 
+test('coordination context shares exact bounded inputs, including paired source identity', () => {
+  assert.ok(coordinationContextSchema.safeParse({ limit: 50, offset: 0, taskIds: Array.from({length:8}, (_, i) => `t${i}`),
+    coordinationIds: ['a','b','c','d'], arrangementSourceUnitId: 'source', arrangementSourceUnitRevision: 1 }).success)
+  for (const args of [{limit:0},{limit:100},{taskIds:Array(17).fill('t')},{coordinationIds:Array(5).fill('c')},
+    {taskIds:'t'},{arrangementSourceUnitId:'s'},{arrangementSourceUnitRevision:1},{arrangementSourceUnitRevision:0,arrangementSourceUnitId:'s'},
+    ...['offset','sourceOffset','arrangementSourceOffset','arrangementOffset','memberOffset'].flatMap(key => [-1,0.5,Number.MAX_SAFE_INTEGER+1].map(value => ({[key]:value})))])
+    assert.equal(coordinationContextSchema.safeParse(args).success, false, JSON.stringify(args))
+})
+
+for (const taskCount of [17,41]) test(`read-only scheduling selects ${taskCount} observed directory tasks without detail reads`,
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+    const root=await mkdtemp(join(tmpdir(),'coordination-directory-query-'))
+    let host, plannerCalls=0, contextCalls=0, observed=[]
+    const modelErrors=[]
+    t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+    host=await nativeTaskHost(root,request=>{
+      const names=request.tools.map(tool=>tool.name), input=latestInput(request)
+      if(names.includes('group_topic_route_submit')) return [{name:'group_topic_route_submit',args:{requestId:input.requestId,
+        routes:input.messages.map(message=>({messageId:message.messageId,messageVersion:message.messageVersion,ignoredRefs:[],
+          units:[{unitKey:'query',summary:'三分钟后查询全部原任务',sourceRefs:[{quote:message.text}],dispatchOwner:'coordination',topics:[],reason:'定时只读查询'}]}))}}]
+      if(names.includes('coordination_submit')) {
+        try {
+        plannerCalls++
+        const schema=request.tools.find(tool=>tool.name==='coordination_context_get').parameters
+        assert.match(schema.properties.limit.description,/"minimum":1/);assert.match(schema.properties.limit.description,/"maximum":50/)
+        assert.match(schema.properties.taskIds.description,/"maxItems":8/);assert.match(schema.properties.coordinationIds.description,/"maxItems":4/)
+        assert.match(schema.properties.offset.description,/"minimum":0/)
+        const page=modelToolValues(request).filter(value=>Array.isArray(value.tasks)).at(-1)??input
+        assert.equal(page.taskContexts.length,0)
+        observed=[...new Set([...observed,...page.tasks.map(task=>task.taskId)])]
+        if(page.hasMore){contextCalls++;return [{name:'coordination_context_get',args:{offset:page.nextOffset,limit:50}}]}
+        assert.equal(observed.length,taskCount)
+        assert.equal(input.source.occurredAt,'2026-10-21T00:00:00.000Z')
+        assert.equal(input.currentTime,'2026-10-21T00:00:00.000Z')
+        return [{name:'coordination_submit',args:{kind:'schedule',timezone:'Asia/Shanghai',rule:{kind:'once',at:'2026-10-21T00:03:00.000Z'},
+          taskIds:observed,recipientIds:['native-user'],interpretation:'原消息三分钟后查询已观察的全部原任务'}}]
+        } catch(error) { modelErrors.push(error); throw error }
+      }
+      return topicTaskCalls(request)??[{name:'task_session_submit',args:{decision:{action:'wait',summary:'保持原任务',evidence:[],limitations:[]}}}]
+    },{config:{coordination:model}})
+    for(let i=0;i<taskCount;i++) await host.service.store.command({id:`seed:${i}`,kind:'task.create',args:{taskId:`T${i}`,groupId:'native-group',request:`原任务${i}`}})
+    await host.service.ingest({groupId:'native-group',messageId:'directory-query',senderOpenDingTalkId:'native-user',senderName:'测试用户',
+      text:'测试助手，三分钟后查询当前群所有任务进度，通知我。',timestamp:'2026-10-21T00:00:00Z'})
+    await host.service.whenIdle()
+    assert.deepEqual(modelErrors,[])
+    const schedules=await host.query('coordination.schedule.list')
+    assert.equal(schedules.length,1,JSON.stringify(host.service.listAlerts()))
+    assert.deepEqual(schedules[0].action.taskIds,observed)
+    assert.equal(contextCalls,taskCount===17?0:1);assert.equal(plannerCalls,contextCalls+1)
+    assert.ok((await host.query('task.list')).every(task=>(task.contextRevision??0)===0&&task.requirementRevision===1&&task.runSequence===1))
+  })
+
 // Scripted planning verifies actual ingress/Host contracts, not model comprehension.
+test('successful clarification after retry clears its old planning alert without resetting the persisted attempt',
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+    const root=await mkdtemp(join(tmpdir(),'coordination-recovered-alert-'))
+    let host, plans=0
+    t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+    host=await nativeTaskHost(root,request=>{
+      const names=request.tools.map(tool=>tool.name),input=latestInput(request)
+      if(names.includes('group_topic_route_submit')) return [{name:'group_topic_route_submit',args:{requestId:input.requestId,
+        routes:input.messages.map(message=>({messageId:message.messageId,messageVersion:message.messageVersion,ignoredRefs:[],
+          units:[{unitKey:'query',summary:'查询目标待确认',sourceRefs:[{quote:message.text}],dispatchOwner:'coordination',topics:[],reason:'定时对象不明'}]}))}}]
+      if(names.includes('coordination_submit')) {
+        if(++plans===1)return []
+        return [{name:'coordination_submit',args:{kind:'clarify',question:'要查询哪个原任务？',candidates:[]}}]
+      }
+      return topicTaskCalls(request)??[]
+    },{config:{coordination:model}})
+    await host.service.ingest({groupId:'native-group',messageId:'retry-query',senderOpenDingTalkId:'native-user',senderName:'测试用户',
+      text:'测试助手，三分钟后查那个任务。',timestamp:'2026-10-21T00:00:00Z'})
+    await host.service.whenIdle()
+    const entry=host.residentStore.listSourceDispatchOwnership('native-group')[0]
+    const alertId=`failure:${entry.reservationId}`
+    assert.ok(host.service.listAlerts().some(alert=>alert.alertId===alertId&&alert.detail==='COORDINATION_NO_SUBMISSION'))
+    assert.equal(plans,1)
+    t.mock.timers.tick(4999);await host.service.recover();await host.service.whenIdle()
+    assert.equal(plans,1);assert.ok(host.service.listAlerts().some(alert=>alert.alertId===alertId))
+    t.mock.timers.tick(1);await host.service.recover();await host.service.whenIdle()
+    assert.equal(plans,2)
+    const ledger=await host.query('coordination.source',{unitId:entry.unitId,revision:entry.unitRevision})
+    assert.equal(ledger.state,'needs_clarification');assert.equal(ledger.attemptCount,1)
+    assert.equal(host.service.listAlerts().some(alert=>alert.alertId===alertId),false)
+    assert.equal(host.sent.filter(notice=>notice.payload.text==='要查询哪个原任务？').length,1)
+  })
+
 const stageCases = [
   { name: 'software', objective: '需求X先方案评审，然后开发，开发完部署UAT', requirements: ['先完成方案评审', '评审后开发', '开发完成后部署UAT并验证'] },
   { name: 'translation-two', objective: '这份稿件先翻译，再校对', requirements: ['翻译稿件', '翻译后校对'] },

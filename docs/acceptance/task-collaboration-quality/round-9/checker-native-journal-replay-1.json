@@ -1,0 +1,34 @@
+{
+  "status": "PASS",
+  "checkerSha256": "2c2c0438a572319669a884fc880bcf810856103f831c4cf0f314c29d38e7715b",
+  "sourceRoot": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\claude-adapter-native-round-7-final",
+  "sourceExecution": "b351d40d-59ff-4691-91cc-2a4e465dc626",
+  "sessionId": "task-execution-f84d2e75-508d-4fd1-8498-babaefbd0ad1",
+  "inputVersion": 2,
+  "leaseEpoch": 2,
+  "originalWholeLedgerRejected": "DEPLOY_NOT_DRAINED",
+  "fixtureRoot": "D:\\codex\\worktrees\\task-collaboration-quality\\dingtalk-dsh-assistant\\docs\\tmp\\cli-checker-native-replay-round9-c7c5467a-467a-443f-b2a8-918c931d4f9c",
+  "proof": {
+    "quiescent": true,
+    "candidateOnly": true,
+    "ownerReleased": true,
+    "ownerProcessExited": true,
+    "staleOwner": false,
+    "drained": true,
+    "unstartedTaskClaims": [],
+    "unstartedCliExecutions": [],
+    "verifiedSessions": 1,
+    "unknownOperations": 0,
+    "unknownNotifications": 0
+  },
+  "journal": {
+    "bytes": 61947,
+    "sha256": "8b5772c0f2ac06de9369f77217b3828de2a024f97400e9bd1552e22de765fd85",
+    "events": 59,
+    "lastType": "drained",
+    "lastSequence": 59
+  },
+  "sourceRowsUnchanged": true,
+  "sourceJournalUnchanged": true,
+  "boundary": "Execution-only replay of original R7 real CLI + Host adapter + Store bytes. Original synthetic Task owner remains undrained and its whole ledger is rejected. No original writes, account login, live deployment, or new model call."
+}

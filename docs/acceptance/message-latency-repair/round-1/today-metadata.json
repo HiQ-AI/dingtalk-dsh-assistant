@@ -1,0 +1,5230 @@
+{
+  "day": "2026-10-22",
+  "start": 1792598400000,
+  "end": 1792655967319,
+  "coverage": {
+    "api": "observed-events-only",
+    "completeness": "incomplete",
+    "performanceRows": 3,
+    "sessions": 20,
+    "messages": 15,
+    "limitations": [
+      "只统计当日仍保留的消息与已投影outbox；sourceOccurredAt为消息发生时间，不是独立本机入站时钟。",
+      "会话关联以输入含消息ID或来源ownership为准，跨消息共享会话不等于独占耗时。",
+      "modelMs是step开始至assistant/message，包含本地准备与网络；不声称纯provider推理耗时。"
+    ]
+  },
+  "messages": [
+    {
+      "message": "72a41858e7f9",
+      "sourceOccurredAt": 1792630988044,
+      "processingCompletedAt": "2026-10-22T01:04:50.311Z",
+      "agentDeliveryAt": "2026-10-22T01:04:50.311Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T01:03:08.044Z",
+      "routingStatus": "routed",
+      "textChars": 17,
+      "earliestRelatedReplyMs": 114182,
+      "replyClassification": "confirmation",
+      "eligibleForAdmissionLatency": true,
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "confirmation",
+          "sendStartedAt": "2026-10-22T01:04:50.174Z",
+          "deliveredAt": "2026-10-22T01:05:02.226Z",
+          "sendMs": 12052
+        }
+      ],
+      "stages": [
+        {
+          "session": "7492b61641d7",
+          "kind": "route",
+          "start": 1792630988905,
+          "end": 1792631008427,
+          "turns": 1,
+          "steps": 4,
+          "modelMs": 18911,
+          "toolErrors": 1
+        },
+        {
+          "session": "754f97f36715",
+          "kind": "decision",
+          "start": 1792631008473,
+          "end": 1792631088887,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 79256,
+          "toolErrors": 3
+        }
+      ]
+    },
+    {
+      "message": "96b6d9b53f04",
+      "sourceOccurredAt": 1792633189000,
+      "processingCompletedAt": "2026-10-22T01:41:22.936Z",
+      "agentDeliveryAt": "2026-10-22T01:41:22.936Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T01:39:49.000Z",
+      "routingStatus": "routed",
+      "textChars": 14,
+      "earliestRelatedReplyMs": 119390,
+      "replyClassification": "confirmation",
+      "eligibleForAdmissionLatency": true,
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "confirmation",
+          "sendStartedAt": "2026-10-22T01:41:22.596Z",
+          "deliveredAt": "2026-10-22T01:41:48.390Z",
+          "sendMs": 25794
+        }
+      ],
+      "stages": [
+        {
+          "session": "49741b85a587",
+          "kind": "route",
+          "start": 1792633197825,
+          "end": 1792633213028,
+          "turns": 1,
+          "steps": 3,
+          "modelMs": 13468,
+          "toolErrors": 1
+        },
+        {
+          "session": "6661a365af09",
+          "kind": "decision",
+          "start": 1792633213609,
+          "end": 1792633281513,
+          "turns": 1,
+          "steps": 6,
+          "modelMs": 62922,
+          "toolErrors": 2
+        }
+      ]
+    },
+    {
+      "message": "420eeb776145",
+      "sourceOccurredAt": 1792633446489,
+      "processingCompletedAt": "2026-10-22T01:44:53.736Z",
+      "agentDeliveryAt": "2026-10-22T01:44:53.737Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T01:44:06.489Z",
+      "routingStatus": "routed",
+      "textChars": 106,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": [
+        {
+          "session": "384873ff5716",
+          "kind": "route",
+          "start": 1792633448996,
+          "end": 1792633481243,
+          "turns": 1,
+          "steps": 4,
+          "modelMs": 28198,
+          "toolErrors": 1
+        },
+        {
+          "session": "bd5d1d449ed1",
+          "kind": "decision",
+          "start": 1792633481696,
+          "end": 1792633493933,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 10539,
+          "toolErrors": 0
+        }
+      ]
+    },
+    {
+      "message": "9835943da741",
+      "sourceOccurredAt": 1792633814721,
+      "processingCompletedAt": "2026-10-22T01:50:54.320Z",
+      "agentDeliveryAt": "2026-10-22T01:50:54.320Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T01:50:14.721Z",
+      "routingStatus": "routed",
+      "textChars": 4,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": [
+        {
+          "session": "e255c9cb5f1b",
+          "kind": "route",
+          "start": 1792633815407,
+          "end": 1792633822302,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6116,
+          "toolErrors": 0
+        },
+        {
+          "session": "2c9784884ad1",
+          "kind": "route",
+          "start": 1792633822876,
+          "end": 1792633832055,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6446,
+          "toolErrors": 0
+        },
+        {
+          "session": "d28326b7cce2",
+          "kind": "decision",
+          "start": 1792633832459,
+          "end": 1792633844090,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 9676,
+          "toolErrors": 0
+        }
+      ]
+    },
+    {
+      "message": "c1ba7a6c65d0",
+      "sourceOccurredAt": 1792633833340,
+      "processingCompletedAt": "2026-10-22T01:50:51.650Z",
+      "agentDeliveryAt": "2026-10-22T01:50:51.650Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T01:50:33.340Z",
+      "routingStatus": "routed",
+      "textChars": 10,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": [
+        {
+          "session": "0e813348ca84",
+          "kind": "route",
+          "start": 1792633844693,
+          "end": 1792633853008,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6276,
+          "toolErrors": 0
+        }
+      ]
+    },
+    {
+      "message": "1abf540c8fb0",
+      "sourceOccurredAt": 1792633909282,
+      "processingCompletedAt": "2026-10-22T01:59:19.199Z",
+      "agentDeliveryAt": "2026-10-22T01:59:19.199Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T01:51:49.282Z",
+      "routingStatus": "routed",
+      "textChars": 13,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": [
+        {
+          "session": "61ea72998bef",
+          "kind": "route",
+          "start": 1792633910800,
+          "end": 1792633922811,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 9555,
+          "toolErrors": 0
+        },
+        {
+          "session": "b212024d95ef",
+          "kind": "decision",
+          "start": 1792633923595,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 0,
+          "toolErrors": 0
+        },
+        {
+          "session": "63ed0b876ecd",
+          "kind": "decision",
+          "start": 1792634330450,
+          "end": 1792634343121,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 11863,
+          "toolErrors": 0
+        }
+      ]
+    },
+    {
+      "message": "984bf6a64f9e",
+      "sourceOccurredAt": 1792633944000,
+      "processingCompletedAt": "2026-10-22T02:04:00.777Z",
+      "agentDeliveryAt": "2026-10-22T02:04:00.777Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T01:52:24.000Z",
+      "routingStatus": "routed",
+      "textChars": 101,
+      "earliestRelatedReplyMs": 756964,
+      "replyClassification": "related-substantive-unverified",
+      "eligibleForAdmissionLatency": false,
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "substantive",
+          "sendStartedAt": "2026-10-22T02:04:00.032Z",
+          "deliveredAt": "2026-10-22T02:05:00.964Z",
+          "sendMs": 60932
+        }
+      ],
+      "stages": [
+        {
+          "session": "b9cd6897dda3",
+          "kind": "route",
+          "start": 1792634343229,
+          "end": 1792634359271,
+          "turns": 1,
+          "steps": 3,
+          "modelMs": 14015,
+          "toolErrors": 1
+        },
+        {
+          "session": "1147850ccf99",
+          "kind": "decision",
+          "start": 1792634359477,
+          "end": 1792634524284,
+          "turns": 2,
+          "steps": 10,
+          "modelMs": 125053,
+          "toolErrors": 1
+        }
+      ]
+    },
+    {
+      "message": "7188058c8cd7",
+      "sourceOccurredAt": 1792634761312,
+      "processingCompletedAt": "2026-10-22T02:06:06.228Z",
+      "sourceKind": "web",
+      "processingSentAt": "2026-10-22T02:06:01.312Z",
+      "routingStatus": "routed",
+      "textChars": 427,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": []
+    },
+    {
+      "message": "303313e13afb",
+      "sourceOccurredAt": 1792635975734,
+      "processingCompletedAt": "2026-10-22T02:26:17.683Z",
+      "sourceKind": "web",
+      "processingSentAt": "2026-10-22T02:26:15.734Z",
+      "routingStatus": "routed",
+      "textChars": 310,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": []
+    },
+    {
+      "message": "d47fc0ecc5e6",
+      "sourceOccurredAt": 1792636757440,
+      "processingCompletedAt": "2026-10-22T02:39:18.270Z",
+      "sourceKind": "web",
+      "processingSentAt": "2026-10-22T02:39:17.440Z",
+      "routingStatus": "routed",
+      "textChars": 850,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": []
+    },
+    {
+      "message": "4a44001eed4b",
+      "sourceOccurredAt": 1792637275651,
+      "processingCompletedAt": "2026-10-22T02:47:56.787Z",
+      "sourceKind": "web",
+      "processingSentAt": "2026-10-22T02:47:55.651Z",
+      "routingStatus": "routed",
+      "textChars": 296,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": []
+    },
+    {
+      "message": "7a5e356eeefa",
+      "sourceOccurredAt": 1792637662545,
+      "processingCompletedAt": "2026-10-22T02:54:22.892Z",
+      "sourceKind": "web",
+      "processingSentAt": "2026-10-22T02:54:22.545Z",
+      "routingStatus": "routed",
+      "textChars": 269,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": []
+    },
+    {
+      "message": "f1aed7429261",
+      "sourceOccurredAt": 1792638325449,
+      "processingCompletedAt": "2026-10-22T03:05:26.452Z",
+      "sourceKind": "web",
+      "processingSentAt": "2026-10-22T03:05:25.449Z",
+      "routingStatus": "routed",
+      "textChars": 356,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": []
+    },
+    {
+      "message": "1508f4198d0b",
+      "sourceOccurredAt": 1792654305381,
+      "processingCompletedAt": null,
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T07:31:45.381Z",
+      "routingStatus": "routed",
+      "textChars": 21,
+      "earliestRelatedReplyMs": 219088,
+      "replyClassification": "coordination-clarification",
+      "eligibleForAdmissionLatency": true,
+      "replies": [
+        {
+          "status": "sent",
+          "replyKind": "substantive",
+          "sendStartedAt": "2026-10-22T07:35:14.091Z",
+          "deliveredAt": "2026-10-22T07:35:24.469Z",
+          "sendMs": 10378
+        }
+      ],
+      "stages": [
+        {
+          "session": "0c24552e1a14",
+          "kind": "route",
+          "start": 1792654306089,
+          "end": 1792654312915,
+          "turns": 1,
+          "steps": 1,
+          "modelMs": 6424,
+          "toolErrors": 0
+        },
+        {
+          "session": "a3df39f68b29",
+          "kind": "independent",
+          "start": 1792654313031,
+          "end": 1792654359129,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 45739,
+          "toolErrors": 2
+        },
+        {
+          "session": "d6a8d10771d3",
+          "kind": "independent",
+          "start": 1792654367404,
+          "end": 1792654435920,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 68261,
+          "toolErrors": 2
+        },
+        {
+          "session": "734a8fce5e9d",
+          "kind": "independent",
+          "start": 1792654502324,
+          "end": 1792654514142,
+          "turns": 1,
+          "steps": 2,
+          "modelMs": 11661,
+          "toolErrors": 0
+        }
+      ]
+    },
+    {
+      "message": "98ec8155cb36",
+      "sourceOccurredAt": 1792654580070,
+      "processingCompletedAt": "2026-10-22T07:37:11.167Z",
+      "agentDeliveryAt": "2026-10-22T07:37:11.167Z",
+      "sourceKind": "dingtalk",
+      "processingSentAt": "2026-10-22T07:36:20.070Z",
+      "routingStatus": "routed",
+      "textChars": 1,
+      "earliestRelatedReplyMs": null,
+      "replyClassification": "no-retained-related-reply",
+      "eligibleForAdmissionLatency": false,
+      "replies": [],
+      "stages": [
+        {
+          "session": "5af10a7ed766",
+          "kind": "route",
+          "start": 1792654580711,
+          "end": 1792654631282,
+          "turns": 1,
+          "steps": 8,
+          "modelMs": 49088,
+          "toolErrors": 0
+        }
+      ]
+    }
+  ],
+  "sessions": [
+    {
+      "session": "a3df39f68b29",
+      "kind": "independent",
+      "bytes": 250583,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792654313031,
+          "line": 8,
+          "end": 1792654359129,
+          "ms": 46098,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792654313083,
+          "line": 10,
+          "responseAt": 1792654315825,
+          "modelMs": 2742,
+          "usage": {
+            "inputTokens": 17681,
+            "outputTokens": 24,
+            "totalTokens": 17705
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654315875,
+          "ms": 2792
+        },
+        {
+          "step": 2,
+          "at": 1792654315935,
+          "line": 22,
+          "responseAt": 1792654318851,
+          "modelMs": 2916,
+          "usage": {
+            "inputTokens": 189,
+            "outputTokens": 24,
+            "totalTokens": 17749,
+            "cacheReadTokens": 17536
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654318867,
+          "ms": 2932
+        },
+        {
+          "step": 3,
+          "at": 1792654318886,
+          "line": 27,
+          "responseAt": 1792654331562,
+          "modelMs": 12676,
+          "usage": {
+            "inputTokens": 2966,
+            "outputTokens": 383,
+            "totalTokens": 20885,
+            "cacheReadTokens": 17536
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654331571,
+          "ms": 12685
+        },
+        {
+          "step": 4,
+          "at": 1792654331586,
+          "line": 32,
+          "responseAt": 1792654338804,
+          "modelMs": 7218,
+          "usage": {
+            "inputTokens": 553,
+            "outputTokens": 124,
+            "totalTokens": 21029,
+            "cacheReadTokens": 20352
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654338820,
+          "ms": 7234
+        },
+        {
+          "step": 5,
+          "at": 1792654338829,
+          "line": 37,
+          "responseAt": 1792654345336,
+          "modelMs": 6507,
+          "usage": {
+            "inputTokens": 10292,
+            "outputTokens": 107,
+            "totalTokens": 31135,
+            "cacheReadTokens": 20736
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654345354,
+          "ms": 6525
+        },
+        {
+          "step": 6,
+          "at": 1792654345372,
+          "line": 42,
+          "responseAt": 1792654350462,
+          "modelMs": 5090,
+          "usage": {
+            "inputTokens": 5984,
+            "outputTokens": 117,
+            "totalTokens": 36949,
+            "cacheReadTokens": 30848
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654350470,
+          "ms": 5098
+        },
+        {
+          "step": 7,
+          "at": 1792654350480,
+          "line": 47,
+          "responseAt": 1792654356049,
+          "modelMs": 5569,
+          "usage": {
+            "inputTokens": 7150,
+            "outputTokens": 106,
+            "totalTokens": 43992,
+            "cacheReadTokens": 36736
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654356061,
+          "ms": 5581
+        },
+        {
+          "step": 8,
+          "at": 1792654356077,
+          "line": 52,
+          "responseAt": 1792654359098,
+          "modelMs": 3021,
+          "usage": {
+            "inputTokens": 5270,
+            "outputTokens": 45,
+            "totalTokens": 49091,
+            "cacheReadTokens": 43776
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654359111,
+          "ms": 3034
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792654315826,
+          "line": 19,
+          "step": 1,
+          "name": "coordination_context_get",
+          "argBytes": 24,
+          "argumentKeys": [
+            "offset",
+            "limit"
+          ],
+          "limit": 100,
+          "offset": 0,
+          "end": 1792654315874,
+          "ms": 48,
+          "resultBytes": 60,
+          "isError": true,
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ],
+          "resultLine": 20
+        },
+        {
+          "at": 1792654318852,
+          "line": 24,
+          "step": 2,
+          "name": "coordination_context_get",
+          "argBytes": 23,
+          "argumentKeys": [
+            "offset",
+            "limit"
+          ],
+          "limit": 20,
+          "offset": 0,
+          "end": 1792654318866,
+          "ms": 14,
+          "resultBytes": 9593,
+          "isError": false,
+          "codes": [],
+          "resultLine": 25,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654331563,
+          "line": 29,
+          "step": 3,
+          "name": "coordination_context_get",
+          "argBytes": 693,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 17,
+          "end": 1792654331571,
+          "ms": 8,
+          "resultBytes": 60,
+          "isError": true,
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ],
+          "resultLine": 30
+        },
+        {
+          "at": 1792654338806,
+          "line": 34,
+          "step": 4,
+          "name": "coordination_context_get",
+          "argBytes": 173,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 4,
+          "end": 1792654338819,
+          "ms": 13,
+          "resultBytes": 35820,
+          "isError": false,
+          "codes": [],
+          "resultLine": 35,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654345337,
+          "line": 39,
+          "step": 5,
+          "name": "coordination_context_get",
+          "argBytes": 183,
+          "argumentKeys": [
+            "taskIds",
+            "limit"
+          ],
+          "taskIdCount": 4,
+          "limit": 1,
+          "end": 1792654345353,
+          "ms": 16,
+          "resultBytes": 20317,
+          "isError": false,
+          "codes": [],
+          "resultLine": 40,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": true,
+          "nextOffset": 1
+        },
+        {
+          "at": 1792654350462,
+          "line": 44,
+          "step": 6,
+          "name": "coordination_context_get",
+          "argBytes": 183,
+          "argumentKeys": [
+            "taskIds",
+            "limit"
+          ],
+          "taskIdCount": 4,
+          "limit": 1,
+          "end": 1792654350470,
+          "ms": 8,
+          "resultBytes": 24523,
+          "isError": false,
+          "codes": [],
+          "resultLine": 45,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": true,
+          "nextOffset": 1
+        },
+        {
+          "at": 1792654356049,
+          "line": 49,
+          "step": 7,
+          "name": "coordination_context_get",
+          "argBytes": 183,
+          "argumentKeys": [
+            "taskIds",
+            "limit"
+          ],
+          "taskIdCount": 4,
+          "limit": 1,
+          "end": 1792654356060,
+          "ms": 11,
+          "resultBytes": 17644,
+          "isError": false,
+          "codes": [],
+          "resultLine": 50,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": true,
+          "nextOffset": 1
+        },
+        {
+          "at": 1792654359099,
+          "line": 54,
+          "step": 8,
+          "name": "coordination_context_get",
+          "argBytes": 63,
+          "argumentKeys": [
+            "taskIds",
+            "limit"
+          ],
+          "taskIdCount": 1,
+          "limit": 1,
+          "end": 1792654359110,
+          "ms": 11,
+          "resultBytes": 14007,
+          "isError": false,
+          "codes": [],
+          "resultLine": 55,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": true,
+          "nextOffset": 1
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792654313111,
+          "line": 12,
+          "bytes": 9593
+        },
+        {
+          "at": 1792654313112,
+          "line": 13,
+          "bytes": 20007
+        },
+        {
+          "at": 1792654313112,
+          "line": 14,
+          "bytes": 853
+        },
+        {
+          "at": 1792654313112,
+          "line": 15,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792654313113,
+          "line": 16,
+          "bytes": 35836
+        }
+      ],
+      "errors": [
+        {
+          "line": 20,
+          "at": 1792654315874,
+          "name": "coordination_context_get",
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ]
+        },
+        {
+          "line": 30,
+          "at": 1792654331571,
+          "name": "coordination_context_get",
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "1508f4198d0b"
+      ]
+    },
+    {
+      "session": "d6a8d10771d3",
+      "kind": "independent",
+      "bytes": 276986,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792654367404,
+          "line": 8,
+          "end": 1792654435920,
+          "ms": 68516,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792654367431,
+          "line": 10,
+          "responseAt": 1792654370780,
+          "modelMs": 3349,
+          "usage": {
+            "inputTokens": 17681,
+            "outputTokens": 24,
+            "totalTokens": 17705
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654370795,
+          "ms": 3364
+        },
+        {
+          "step": 2,
+          "at": 1792654370813,
+          "line": 22,
+          "responseAt": 1792654375332,
+          "modelMs": 4519,
+          "usage": {
+            "inputTokens": 189,
+            "outputTokens": 24,
+            "totalTokens": 17749,
+            "cacheReadTokens": 17536
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654375346,
+          "ms": 4533
+        },
+        {
+          "step": 3,
+          "at": 1792654375363,
+          "line": 27,
+          "responseAt": 1792654384398,
+          "modelMs": 9035,
+          "usage": {
+            "inputTokens": 2966,
+            "outputTokens": 387,
+            "totalTokens": 20889,
+            "cacheReadTokens": 17536
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654384411,
+          "ms": 9048
+        },
+        {
+          "step": 4,
+          "at": 1792654384426,
+          "line": 32,
+          "responseAt": 1792654389643,
+          "modelMs": 5217,
+          "usage": {
+            "inputTokens": 557,
+            "outputTokens": 104,
+            "totalTokens": 21013,
+            "cacheReadTokens": 20352
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654389663,
+          "ms": 5237
+        },
+        {
+          "step": 5,
+          "at": 1792654389675,
+          "line": 37,
+          "responseAt": 1792654401319,
+          "modelMs": 11644,
+          "usage": {
+            "inputTokens": 10276,
+            "outputTokens": 118,
+            "totalTokens": 31130,
+            "cacheReadTokens": 20736
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654401334,
+          "ms": 11659
+        },
+        {
+          "step": 6,
+          "at": 1792654401345,
+          "line": 42,
+          "responseAt": 1792654421766,
+          "modelMs": 20421,
+          "usage": {
+            "inputTokens": 7732,
+            "outputTokens": 113,
+            "totalTokens": 38693,
+            "cacheReadTokens": 30848
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654421775,
+          "ms": 20430
+        },
+        {
+          "step": 7,
+          "at": 1792654421785,
+          "line": 47,
+          "responseAt": 1792654429222,
+          "modelMs": 7437,
+          "usage": {
+            "inputTokens": 8983,
+            "outputTokens": 102,
+            "totalTokens": 47485,
+            "cacheReadTokens": 38400
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654429235,
+          "ms": 7450
+        },
+        {
+          "step": 8,
+          "at": 1792654429248,
+          "line": 52,
+          "responseAt": 1792654435887,
+          "modelMs": 6639,
+          "usage": {
+            "inputTokens": 7060,
+            "outputTokens": 41,
+            "totalTokens": 54333,
+            "cacheReadTokens": 47232
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654435902,
+          "ms": 6654
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792654370782,
+          "line": 19,
+          "step": 1,
+          "name": "coordination_context_get",
+          "argBytes": 24,
+          "argumentKeys": [
+            "offset",
+            "limit"
+          ],
+          "limit": 100,
+          "offset": 0,
+          "end": 1792654370794,
+          "ms": 12,
+          "resultBytes": 60,
+          "isError": true,
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ],
+          "resultLine": 20
+        },
+        {
+          "at": 1792654375334,
+          "line": 24,
+          "step": 2,
+          "name": "coordination_context_get",
+          "argBytes": 23,
+          "argumentKeys": [
+            "offset",
+            "limit"
+          ],
+          "limit": 20,
+          "offset": 0,
+          "end": 1792654375345,
+          "ms": 11,
+          "resultBytes": 9593,
+          "isError": false,
+          "codes": [],
+          "resultLine": 25,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654384400,
+          "line": 29,
+          "step": 3,
+          "name": "coordination_context_get",
+          "argBytes": 704,
+          "argumentKeys": [
+            "taskIds",
+            "limit"
+          ],
+          "taskIdCount": 17,
+          "limit": 20,
+          "end": 1792654384411,
+          "ms": 11,
+          "resultBytes": 60,
+          "isError": true,
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ],
+          "resultLine": 30
+        },
+        {
+          "at": 1792654389645,
+          "line": 34,
+          "step": 4,
+          "name": "coordination_context_get",
+          "argBytes": 173,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 4,
+          "end": 1792654389662,
+          "ms": 17,
+          "resultBytes": 35820,
+          "isError": false,
+          "codes": [],
+          "resultLine": 35,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654401321,
+          "line": 39,
+          "step": 5,
+          "name": "coordination_context_get",
+          "argBytes": 173,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 4,
+          "end": 1792654401333,
+          "ms": 12,
+          "resultBytes": 26974,
+          "isError": false,
+          "codes": [],
+          "resultLine": 40,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654421767,
+          "line": 44,
+          "step": 6,
+          "name": "coordination_context_get",
+          "argBytes": 173,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 4,
+          "end": 1792654421774,
+          "ms": 7,
+          "resultBytes": 31180,
+          "isError": false,
+          "codes": [],
+          "resultLine": 45,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654429223,
+          "line": 49,
+          "step": 7,
+          "name": "coordination_context_get",
+          "argBytes": 173,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 4,
+          "end": 1792654429235,
+          "ms": 12,
+          "resultBytes": 24301,
+          "isError": false,
+          "codes": [],
+          "resultLine": 50,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654435888,
+          "line": 54,
+          "step": 8,
+          "name": "coordination_context_get",
+          "argBytes": 53,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 1,
+          "end": 1792654435902,
+          "ms": 14,
+          "resultBytes": 20664,
+          "isError": false,
+          "codes": [],
+          "resultLine": 55,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792654367435,
+          "line": 12,
+          "bytes": 9593
+        },
+        {
+          "at": 1792654367436,
+          "line": 13,
+          "bytes": 20007
+        },
+        {
+          "at": 1792654367436,
+          "line": 14,
+          "bytes": 853
+        },
+        {
+          "at": 1792654367437,
+          "line": 15,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792654367438,
+          "line": 16,
+          "bytes": 35836
+        }
+      ],
+      "errors": [
+        {
+          "line": 20,
+          "at": 1792654370794,
+          "name": "coordination_context_get",
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ]
+        },
+        {
+          "line": 30,
+          "at": 1792654384411,
+          "name": "coordination_context_get",
+          "codes": [
+            "COORDINATION_CONTEXT_RANGE"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "1508f4198d0b"
+      ]
+    },
+    {
+      "session": "734a8fce5e9d",
+      "kind": "independent",
+      "bytes": 113340,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792654502324,
+          "line": 8,
+          "end": 1792654514142,
+          "ms": 11818,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792654502355,
+          "line": 10,
+          "responseAt": 1792654507268,
+          "modelMs": 4913,
+          "usage": {
+            "inputTokens": 17681,
+            "outputTokens": 16,
+            "totalTokens": 17697
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654507275,
+          "ms": 4920
+        },
+        {
+          "step": 2,
+          "at": 1792654507290,
+          "line": 22,
+          "responseAt": 1792654514038,
+          "modelMs": 6748,
+          "usage": {
+            "inputTokens": 2914,
+            "outputTokens": 107,
+            "totalTokens": 20557,
+            "cacheReadTokens": 17536
+          },
+          "model": "gpt-6-astra",
+          "end": 1792654514131,
+          "ms": 6841
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792654507268,
+          "line": 19,
+          "step": 1,
+          "name": "coordination_context_get",
+          "argBytes": 2,
+          "argumentKeys": [],
+          "end": 1792654507275,
+          "ms": 7,
+          "resultBytes": 9593,
+          "isError": false,
+          "codes": [],
+          "resultLine": 20,
+          "resultKeys": [
+            "reservationId",
+            "generation",
+            "groupId",
+            "source",
+            "tasks",
+            "total",
+            "offset",
+            "nextOffset",
+            "hasMore",
+            "taskContexts",
+            "recipients",
+            "recipientsTruncated",
+            "arrangements",
+            "arrangementContexts",
+            "arrangementOffset",
+            "arrangementsTotal",
+            "arrangementsHasMore",
+            "nextArrangementOffset",
+            "unresolved",
+            "unresolvedTruncated",
+            "allowedActions",
+            "limitations"
+          ],
+          "hasMore": false,
+          "nextOffset": null
+        },
+        {
+          "at": 1792654514039,
+          "line": 24,
+          "step": 2,
+          "name": "coordination_submit",
+          "argBytes": 253,
+          "argumentKeys": [
+            "kind",
+            "question",
+            "candidates"
+          ],
+          "proposalKind": "clarify",
+          "end": 1792654514130,
+          "ms": 91,
+          "resultBytes": 308,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "needs_clarification",
+          "resultLine": 25,
+          "resultKeys": [
+            "status",
+            "coordinationId",
+            "question"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792654502359,
+          "line": 12,
+          "bytes": 9593
+        },
+        {
+          "at": 1792654502359,
+          "line": 13,
+          "bytes": 20007
+        },
+        {
+          "at": 1792654502359,
+          "line": 14,
+          "bytes": 853
+        },
+        {
+          "at": 1792654502359,
+          "line": 15,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792654502362,
+          "line": 16,
+          "bytes": 35836
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "1508f4198d0b"
+      ]
+    },
+    {
+      "session": "49741b85a587",
+      "kind": "route",
+      "bytes": 96099,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633197825,
+          "line": 12,
+          "end": 1792633213028,
+          "ms": 15203,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633198068,
+          "line": 14,
+          "responseAt": 1792633201749,
+          "modelMs": 3681,
+          "usage": {
+            "inputTokens": 12859,
+            "outputTokens": 56,
+            "totalTokens": 12915
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633201771,
+          "ms": 3703
+        },
+        {
+          "step": 2,
+          "at": 1792633201868,
+          "line": 26,
+          "responseAt": 1792633204780,
+          "modelMs": 2912,
+          "usage": {
+            "inputTokens": 133,
+            "outputTokens": 47,
+            "totalTokens": 12980,
+            "cacheReadTokens": 12800
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633204804,
+          "ms": 2936
+        },
+        {
+          "step": 3,
+          "at": 1792633204879,
+          "line": 31,
+          "responseAt": 1792633211754,
+          "modelMs": 6875,
+          "usage": {
+            "inputTokens": 5506,
+            "outputTokens": 275,
+            "totalTokens": 18581,
+            "cacheReadTokens": 12800
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633212652,
+          "ms": 7773
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633201751,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_context_get",
+          "argBytes": 91,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "offset",
+            "limit"
+          ],
+          "limit": 10000,
+          "offset": 0,
+          "topic": "6b0f2746d81d",
+          "end": 1792633201769,
+          "ms": 18,
+          "resultBytes": 52,
+          "isError": true,
+          "codes": [
+            "topic_page_invalid"
+          ],
+          "resultLine": 24
+        },
+        {
+          "at": 1792633204783,
+          "line": 28,
+          "step": 2,
+          "name": "group_topic_context_get",
+          "argBytes": 66,
+          "argumentKeys": [
+            "topicId",
+            "revision"
+          ],
+          "topic": "6b0f2746d81d",
+          "end": 1792633204802,
+          "ms": 19,
+          "resultBytes": 16332,
+          "isError": false,
+          "codes": [],
+          "resultLine": 29,
+          "resultKeys": [
+            "groupId",
+            "topicId",
+            "revision",
+            "topic",
+            "messages",
+            "total",
+            "offset",
+            "limit",
+            "taskRefs",
+            "totalTaskRefs",
+            "hasMoreTaskRefs",
+            "completedMessageIds",
+            "completedUnitRefs",
+            "nextOffset",
+            "hasMoreMessages"
+          ],
+          "hasMoreMessages": false,
+          "nextOffset": 9,
+          "messageCount": 9
+        },
+        {
+          "at": 1792633211757,
+          "line": 33,
+          "step": 3,
+          "name": "group_topic_route_submit",
+          "argBytes": 773,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792633212650,
+          "ms": 893,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 34,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633198079,
+          "line": 16,
+          "bytes": 8252
+        },
+        {
+          "at": 1792633198080,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633198081,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633198082,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633198085,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [
+        {
+          "line": 24,
+          "at": 1792633201769,
+          "name": "group_topic_context_get",
+          "codes": [
+            "topic_page_invalid"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "96b6d9b53f04"
+      ]
+    },
+    {
+      "session": "2c9784884ad1",
+      "kind": "route",
+      "bytes": 73931,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633822876,
+          "line": 12,
+          "end": 1792633832055,
+          "ms": 9179,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633824158,
+          "line": 14,
+          "responseAt": 1792633830604,
+          "modelMs": 6446,
+          "usage": {
+            "inputTokens": 13088,
+            "outputTokens": 248,
+            "totalTokens": 13336
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633831686,
+          "ms": 7528
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633830608,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_route_submit",
+          "argBytes": 706,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792633831684,
+          "ms": 1076,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633824313,
+          "line": 16,
+          "bytes": 8833
+        },
+        {
+          "at": 1792633824314,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633824315,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633824315,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633824318,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "9835943da741"
+      ]
+    },
+    {
+      "session": "b9cd6897dda3",
+      "kind": "route",
+      "bytes": 100760,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792634343229,
+          "line": 12,
+          "end": 1792634359271,
+          "ms": 16042,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792634343611,
+          "line": 14,
+          "responseAt": 1792634346913,
+          "modelMs": 3302,
+          "usage": {
+            "inputTokens": 15161,
+            "outputTokens": 52,
+            "totalTokens": 15213
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634346952,
+          "ms": 3341
+        },
+        {
+          "step": 2,
+          "at": 1792634347051,
+          "line": 26,
+          "responseAt": 1792634350151,
+          "modelMs": 3100,
+          "usage": {
+            "inputTokens": 255,
+            "outputTokens": 47,
+            "totalTokens": 15278,
+            "cacheReadTokens": 14976
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634350172,
+          "ms": 3121
+        },
+        {
+          "step": 3,
+          "at": 1792634350243,
+          "line": 31,
+          "responseAt": 1792634357856,
+          "modelMs": 7613,
+          "usage": {
+            "inputTokens": 6112,
+            "outputTokens": 261,
+            "totalTokens": 21477,
+            "cacheReadTokens": 15104
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634358813,
+          "ms": 8570
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792634346915,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_context_get",
+          "argBytes": 80,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "limit"
+          ],
+          "limit": 10000,
+          "topic": "6b0f2746d81d",
+          "end": 1792634346951,
+          "ms": 36,
+          "resultBytes": 52,
+          "isError": true,
+          "codes": [
+            "topic_page_invalid"
+          ],
+          "resultLine": 24
+        },
+        {
+          "at": 1792634350153,
+          "line": 28,
+          "step": 2,
+          "name": "group_topic_context_get",
+          "argBytes": 66,
+          "argumentKeys": [
+            "topicId",
+            "revision"
+          ],
+          "topic": "6b0f2746d81d",
+          "end": 1792634350170,
+          "ms": 17,
+          "resultBytes": 18256,
+          "isError": false,
+          "codes": [],
+          "resultLine": 29,
+          "resultKeys": [
+            "groupId",
+            "topicId",
+            "revision",
+            "topic",
+            "messages",
+            "total",
+            "offset",
+            "limit",
+            "taskRefs",
+            "totalTaskRefs",
+            "hasMoreTaskRefs",
+            "completedMessageIds",
+            "completedUnitRefs",
+            "nextOffset",
+            "hasMoreMessages"
+          ],
+          "hasMoreMessages": false,
+          "nextOffset": 10,
+          "messageCount": 10
+        },
+        {
+          "at": 1792634357860,
+          "line": 33,
+          "step": 3,
+          "name": "group_topic_route_submit",
+          "argBytes": 782,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792634358812,
+          "ms": 952,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 34,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792634343620,
+          "line": 16,
+          "bytes": 9683
+        },
+        {
+          "at": 1792634343621,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792634343622,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792634343623,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792634343626,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [
+        {
+          "line": 24,
+          "at": 1792634346951,
+          "name": "group_topic_context_get",
+          "codes": [
+            "topic_page_invalid"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "984bf6a64f9e"
+      ]
+    },
+    {
+      "session": "0e813348ca84",
+      "kind": "route",
+      "bytes": 68798,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633844693,
+          "line": 12,
+          "end": 1792633853008,
+          "ms": 8315,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633845136,
+          "line": 14,
+          "responseAt": 1792633851412,
+          "modelMs": 6276,
+          "usage": {
+            "inputTokens": 12651,
+            "outputTokens": 128,
+            "totalTokens": 12779
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633852612,
+          "ms": 7476
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633851414,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_route_submit",
+          "argBytes": 274,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792633852610,
+          "ms": 1196,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633845147,
+          "line": 16,
+          "bytes": 7505
+        },
+        {
+          "at": 1792633845147,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633845148,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633845149,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633845152,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "c1ba7a6c65d0"
+      ]
+    },
+    {
+      "session": "61ea72998bef",
+      "kind": "route",
+      "bytes": 72415,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633910800,
+          "line": 12,
+          "end": 1792633922811,
+          "ms": 12011,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633911194,
+          "line": 14,
+          "responseAt": 1792633920749,
+          "modelMs": 9555,
+          "usage": {
+            "inputTokens": 12846,
+            "outputTokens": 237,
+            "totalTokens": 13083
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633921878,
+          "ms": 10684
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633920751,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_route_submit",
+          "argBytes": 652,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792633921877,
+          "ms": 1126,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633911204,
+          "line": 16,
+          "bytes": 8224
+        },
+        {
+          "at": 1792633911205,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633911207,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633911208,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633911210,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "1abf540c8fb0"
+      ]
+    },
+    {
+      "session": "0c24552e1a14",
+      "kind": "route",
+      "bytes": 71842,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792654306089,
+          "line": 12,
+          "end": 1792654312915,
+          "ms": 6826,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792654306269,
+          "line": 14,
+          "responseAt": 1792654312693,
+          "modelMs": 6424,
+          "usage": {
+            "inputTokens": 12918,
+            "outputTokens": 192,
+            "totalTokens": 13110
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654312834,
+          "ms": 6565
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792654312695,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_route_submit",
+          "argBytes": 616,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792654312834,
+          "ms": 139,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792654306294,
+          "line": 16,
+          "bytes": 7542
+        },
+        {
+          "at": 1792654306295,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792654306295,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792654306295,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792654306296,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "1508f4198d0b"
+      ]
+    },
+    {
+      "session": "7492b61641d7",
+      "kind": "route",
+      "bytes": 99625,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792630988905,
+          "line": 12,
+          "end": 1792631008427,
+          "ms": 19522,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792630989044,
+          "line": 14,
+          "responseAt": 1792630993593,
+          "modelMs": 4549,
+          "usage": {
+            "inputTokens": 12832,
+            "outputTokens": 23,
+            "totalTokens": 12855
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792630993612,
+          "ms": 4568
+        },
+        {
+          "step": 2,
+          "at": 1792630993706,
+          "line": 26,
+          "responseAt": 1792630996728,
+          "modelMs": 3022,
+          "usage": {
+            "inputTokens": 840,
+            "outputTokens": 52,
+            "totalTokens": 13564,
+            "cacheReadTokens": 12672
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792630996746,
+          "ms": 3040
+        },
+        {
+          "step": 3,
+          "at": 1792630996856,
+          "line": 31,
+          "responseAt": 1792631001057,
+          "modelMs": 4201,
+          "usage": {
+            "inputTokens": 142,
+            "outputTokens": 47,
+            "totalTokens": 13629,
+            "cacheReadTokens": 13440
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631001062,
+          "ms": 4206
+        },
+        {
+          "step": 4,
+          "at": 1792631001082,
+          "line": 36,
+          "responseAt": 1792631008221,
+          "modelMs": 7139,
+          "usage": {
+            "inputTokens": 4921,
+            "outputTokens": 286,
+            "totalTokens": 18647,
+            "cacheReadTokens": 13440
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631008410,
+          "ms": 7328
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792630993595,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_list",
+          "argBytes": 30,
+          "argumentKeys": [
+            "query",
+            "limit"
+          ],
+          "limit": 100,
+          "query": {
+            "chars": 2,
+            "alias": "ad1c50c9367c"
+          },
+          "end": 1792630993611,
+          "ms": 16,
+          "resultBytes": 2474,
+          "isError": false,
+          "codes": [],
+          "resultLine": 24,
+          "resultKeys": [
+            "topics",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 3,
+          "topicCount": 3
+        },
+        {
+          "at": 1792630996730,
+          "line": 28,
+          "step": 2,
+          "name": "group_topic_context_get",
+          "argBytes": 80,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "limit"
+          ],
+          "limit": 10000,
+          "topic": "6b0f2746d81d",
+          "end": 1792630996745,
+          "ms": 15,
+          "resultBytes": 52,
+          "isError": true,
+          "codes": [
+            "topic_page_invalid"
+          ],
+          "resultLine": 29
+        },
+        {
+          "at": 1792631001058,
+          "line": 33,
+          "step": 3,
+          "name": "group_topic_context_get",
+          "argBytes": 66,
+          "argumentKeys": [
+            "topicId",
+            "revision"
+          ],
+          "topic": "6b0f2746d81d",
+          "end": 1792631001062,
+          "ms": 4,
+          "resultBytes": 14524,
+          "isError": false,
+          "codes": [],
+          "resultLine": 34,
+          "resultKeys": [
+            "groupId",
+            "topicId",
+            "revision",
+            "topic",
+            "messages",
+            "total",
+            "offset",
+            "limit",
+            "taskRefs",
+            "totalTaskRefs",
+            "hasMoreTaskRefs",
+            "completedMessageIds",
+            "completedUnitRefs",
+            "nextOffset",
+            "hasMoreMessages"
+          ],
+          "hasMoreMessages": false,
+          "nextOffset": 8,
+          "messageCount": 8
+        },
+        {
+          "at": 1792631008222,
+          "line": 38,
+          "step": 4,
+          "name": "group_topic_route_submit",
+          "argBytes": 815,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792631008409,
+          "ms": 187,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 39,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792630989052,
+          "line": 16,
+          "bytes": 8174
+        },
+        {
+          "at": 1792630989053,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792630989053,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792630989053,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792630989054,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [
+        {
+          "line": 29,
+          "at": 1792630996745,
+          "name": "group_topic_context_get",
+          "codes": [
+            "topic_page_invalid"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "72a41858e7f9"
+      ]
+    },
+    {
+      "session": "384873ff5716",
+      "kind": "route",
+      "bytes": 108888,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633448996,
+          "line": 12,
+          "end": 1792633481243,
+          "ms": 32247,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633449308,
+          "line": 14,
+          "responseAt": 1792633458324,
+          "modelMs": 9016,
+          "usage": {
+            "inputTokens": 15238,
+            "outputTokens": 24,
+            "totalTokens": 15262
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633458391,
+          "ms": 9083
+        },
+        {
+          "step": 2,
+          "at": 1792633458909,
+          "line": 26,
+          "responseAt": 1792633463320,
+          "modelMs": 4411,
+          "usage": {
+            "inputTokens": 841,
+            "outputTokens": 47,
+            "totalTokens": 15992,
+            "cacheReadTokens": 15104
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633463397,
+          "ms": 4488
+        },
+        {
+          "step": 3,
+          "at": 1792633463875,
+          "line": 31,
+          "responseAt": 1792633469086,
+          "modelMs": 5211,
+          "usage": {
+            "inputTokens": 138,
+            "outputTokens": 46,
+            "totalTokens": 16056,
+            "cacheReadTokens": 15872
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633469167,
+          "ms": 5292
+        },
+        {
+          "step": 4,
+          "at": 1792633469950,
+          "line": 36,
+          "responseAt": 1792633479510,
+          "modelMs": 9560,
+          "usage": {
+            "inputTokens": 7662,
+            "outputTokens": 277,
+            "totalTokens": 23811,
+            "cacheReadTokens": 15872
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633480823,
+          "ms": 10873
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633458326,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_list",
+          "argBytes": 30,
+          "argumentKeys": [
+            "query",
+            "limit"
+          ],
+          "limit": 100,
+          "query": {
+            "chars": 2,
+            "alias": "2a2fd29bd27a"
+          },
+          "end": 1792633458389,
+          "ms": 63,
+          "resultBytes": 2516,
+          "isError": false,
+          "codes": [],
+          "resultLine": 24,
+          "resultKeys": [
+            "topics",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 3,
+          "topicCount": 3
+        },
+        {
+          "at": 1792633463323,
+          "line": 28,
+          "step": 2,
+          "name": "group_topic_context_get",
+          "argBytes": 79,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "limit"
+          ],
+          "limit": 1000,
+          "topic": "97e0e940d912",
+          "end": 1792633463394,
+          "ms": 71,
+          "resultBytes": 52,
+          "isError": true,
+          "codes": [
+            "topic_page_invalid"
+          ],
+          "resultLine": 29
+        },
+        {
+          "at": 1792633469089,
+          "line": 33,
+          "step": 3,
+          "name": "group_topic_context_get",
+          "argBytes": 77,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "limit"
+          ],
+          "limit": 20,
+          "topic": "97e0e940d912",
+          "end": 1792633469165,
+          "ms": 76,
+          "resultBytes": 23212,
+          "isError": false,
+          "codes": [],
+          "resultLine": 34,
+          "resultKeys": [
+            "groupId",
+            "topicId",
+            "revision",
+            "topic",
+            "messages",
+            "total",
+            "offset",
+            "limit",
+            "taskRefs",
+            "totalTaskRefs",
+            "hasMoreTaskRefs",
+            "completedMessageIds",
+            "completedUnitRefs",
+            "nextOffset",
+            "hasMoreMessages"
+          ],
+          "hasMoreMessages": false,
+          "nextOffset": 14,
+          "messageCount": 14
+        },
+        {
+          "at": 1792633479514,
+          "line": 38,
+          "step": 4,
+          "name": "group_topic_route_submit",
+          "argBytes": 881,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792633480821,
+          "ms": 1307,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 39,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633449322,
+          "line": 16,
+          "bytes": 8335
+        },
+        {
+          "at": 1792633449324,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633449325,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633449326,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633449328,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [
+        {
+          "line": 29,
+          "at": 1792633463394,
+          "name": "group_topic_context_get",
+          "codes": [
+            "topic_page_invalid"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "420eeb776145"
+      ]
+    },
+    {
+      "session": "e255c9cb5f1b",
+      "kind": "route",
+      "bytes": 73010,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633815407,
+          "line": 12,
+          "end": 1792633822302,
+          "ms": 6895,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633815712,
+          "line": 14,
+          "responseAt": 1792633821828,
+          "modelMs": 6116,
+          "usage": {
+            "inputTokens": 12886,
+            "outputTokens": 248,
+            "totalTokens": 13134
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633822035,
+          "ms": 6323
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633821833,
+          "line": 23,
+          "step": 1,
+          "name": "group_topic_route_submit",
+          "argBytes": 715,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792633822033,
+          "ms": 200,
+          "resultBytes": 267,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "stale",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "reason",
+            "currentRequest",
+            "nextAction"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633815721,
+          "line": 16,
+          "bytes": 8291
+        },
+        {
+          "at": 1792633815722,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633815723,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633815724,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633815727,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "9835943da741"
+      ]
+    },
+    {
+      "session": "5af10a7ed766",
+      "kind": "route",
+      "bytes": 158661,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792654580711,
+          "line": 12,
+          "end": 1792654631282,
+          "ms": 50571,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792654580777,
+          "line": 14,
+          "responseAt": 1792654584785,
+          "modelMs": 4008,
+          "usage": {
+            "inputTokens": 12905,
+            "outputTokens": 37,
+            "totalTokens": 12942
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654585523,
+          "ms": 4746
+        },
+        {
+          "step": 2,
+          "at": 1792654585576,
+          "line": 26,
+          "responseAt": 1792654589771,
+          "modelMs": 4195,
+          "usage": {
+            "inputTokens": 13162,
+            "outputTokens": 60,
+            "totalTokens": 13222
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654589780,
+          "ms": 4204
+        },
+        {
+          "step": 3,
+          "at": 1792654589841,
+          "line": 31,
+          "responseAt": 1792654597086,
+          "modelMs": 7245,
+          "usage": {
+            "inputTokens": 204,
+            "outputTokens": 78,
+            "totalTokens": 13338,
+            "cacheReadTokens": 13056
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654597093,
+          "ms": 7252
+        },
+        {
+          "step": 4,
+          "at": 1792654597178,
+          "line": 36,
+          "responseAt": 1792654602663,
+          "modelMs": 5485,
+          "usage": {
+            "inputTokens": 6539,
+            "outputTokens": 39,
+            "totalTokens": 19378,
+            "cacheReadTokens": 12800
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654602668,
+          "ms": 5490
+        },
+        {
+          "step": 5,
+          "at": 1792654602683,
+          "line": 41,
+          "responseAt": 1792654606706,
+          "modelMs": 4023,
+          "usage": {
+            "inputTokens": 382,
+            "outputTokens": 36,
+            "totalTokens": 19618,
+            "cacheReadTokens": 19200
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654606710,
+          "ms": 4027
+        },
+        {
+          "step": 6,
+          "at": 1792654606805,
+          "line": 46,
+          "responseAt": 1792654611577,
+          "modelMs": 4772,
+          "usage": {
+            "inputTokens": 9401,
+            "outputTokens": 73,
+            "totalTokens": 22530,
+            "cacheReadTokens": 13056
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654611730,
+          "ms": 4925
+        },
+        {
+          "step": 7,
+          "at": 1792654611773,
+          "line": 51,
+          "responseAt": 1792654618948,
+          "modelMs": 7175,
+          "usage": {
+            "inputTokens": 903,
+            "outputTokens": 64,
+            "totalTokens": 23239,
+            "cacheReadTokens": 22272
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654618958,
+          "ms": 7185
+        },
+        {
+          "step": 8,
+          "at": 1792654618971,
+          "line": 56,
+          "responseAt": 1792654631156,
+          "modelMs": 12185,
+          "usage": {
+            "inputTokens": 1226,
+            "outputTokens": 238,
+            "totalTokens": 24504,
+            "cacheReadTokens": 23040
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792654631261,
+          "ms": 12290
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792654584786,
+          "line": 23,
+          "step": 1,
+          "name": "group_message_get",
+          "argBytes": 43,
+          "argumentKeys": [
+            "messageId"
+          ],
+          "end": 1792654585523,
+          "ms": 737,
+          "resultBytes": 582,
+          "isError": false,
+          "codes": [],
+          "resultLine": 24,
+          "resultKeys": [
+            "text",
+            "offset",
+            "nextOffset",
+            "totalChars",
+            "hasMore",
+            "complete",
+            "contentFingerprint",
+            "message",
+            "resourceRefs",
+            "resourcesRead"
+          ],
+          "hasMore": false,
+          "nextOffset": 1
+        },
+        {
+          "at": 1792654589772,
+          "line": 28,
+          "step": 2,
+          "name": "group_topic_list",
+          "argBytes": 103,
+          "argumentKeys": [
+            "requestId",
+            "limit"
+          ],
+          "limit": 40,
+          "end": 1792654589779,
+          "ms": 7,
+          "resultBytes": 115,
+          "isError": false,
+          "codes": [],
+          "resultLine": 29,
+          "resultKeys": [
+            "topics",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 0,
+          "topicCount": 0
+        },
+        {
+          "at": 1792654597087,
+          "line": 33,
+          "step": 3,
+          "name": "group_topic_context_get",
+          "argBytes": 76,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "limit"
+          ],
+          "limit": 10,
+          "topic": "4078ef3530b2",
+          "end": 1792654597093,
+          "ms": 6,
+          "resultBytes": 19242,
+          "isError": false,
+          "codes": [],
+          "resultLine": 34,
+          "resultKeys": [
+            "groupId",
+            "topicId",
+            "revision",
+            "topic",
+            "messages",
+            "total",
+            "offset",
+            "limit",
+            "taskRefs",
+            "totalTaskRefs",
+            "hasMoreTaskRefs",
+            "completedMessageIds",
+            "completedUnitRefs",
+            "nextOffset",
+            "hasMoreMessages"
+          ],
+          "hasMoreMessages": false,
+          "nextOffset": 8,
+          "messageCount": 8
+        },
+        {
+          "at": 1792654602664,
+          "line": 38,
+          "step": 4,
+          "name": "group_topic_list",
+          "argBytes": 29,
+          "argumentKeys": [
+            "limit",
+            "query"
+          ],
+          "limit": 40,
+          "query": {
+            "chars": 2,
+            "alias": "4c10ae80ac88"
+          },
+          "end": 1792654602667,
+          "ms": 3,
+          "resultBytes": 762,
+          "isError": false,
+          "codes": [],
+          "resultLine": 39,
+          "resultKeys": [
+            "topics",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 1,
+          "topicCount": 1
+        },
+        {
+          "at": 1792654606706,
+          "line": 43,
+          "step": 5,
+          "name": "group_topic_list",
+          "argBytes": 29,
+          "argumentKeys": [
+            "limit",
+            "query"
+          ],
+          "limit": 40,
+          "query": {
+            "chars": 2,
+            "alias": "36f33adaf094"
+          },
+          "end": 1792654606710,
+          "ms": 4,
+          "resultBytes": 10861,
+          "isError": false,
+          "codes": [],
+          "resultLine": 44,
+          "resultKeys": [
+            "topics",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 16,
+          "topicCount": 16
+        },
+        {
+          "at": 1792654611579,
+          "line": 48,
+          "step": 6,
+          "name": "group_topic_context_get",
+          "argBytes": 76,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "limit"
+          ],
+          "limit": 10,
+          "topic": "55a4b48ffc2b",
+          "end": 1792654611728,
+          "ms": 149,
+          "resultBytes": 2067,
+          "isError": false,
+          "codes": [],
+          "resultLine": 49,
+          "resultKeys": [
+            "groupId",
+            "topicId",
+            "revision",
+            "topic",
+            "messages",
+            "total",
+            "offset",
+            "limit",
+            "taskRefs",
+            "totalTaskRefs",
+            "hasMoreTaskRefs",
+            "completedMessageIds",
+            "completedUnitRefs",
+            "nextOffset",
+            "hasMoreMessages"
+          ],
+          "hasMoreMessages": false,
+          "nextOffset": 1,
+          "messageCount": 1
+        },
+        {
+          "at": 1792654618949,
+          "line": 53,
+          "step": 7,
+          "name": "group_topic_context_get",
+          "argBytes": 76,
+          "argumentKeys": [
+            "topicId",
+            "revision",
+            "limit"
+          ],
+          "limit": 10,
+          "topic": "1dc28c6787e8",
+          "end": 1792654618958,
+          "ms": 9,
+          "resultBytes": 3429,
+          "isError": false,
+          "codes": [],
+          "resultLine": 54,
+          "resultKeys": [
+            "groupId",
+            "topicId",
+            "revision",
+            "topic",
+            "messages",
+            "total",
+            "offset",
+            "limit",
+            "taskRefs",
+            "totalTaskRefs",
+            "hasMoreTaskRefs",
+            "completedMessageIds",
+            "completedUnitRefs",
+            "nextOffset",
+            "hasMoreMessages"
+          ],
+          "hasMoreMessages": false,
+          "nextOffset": 2,
+          "messageCount": 2
+        },
+        {
+          "at": 1792654631156,
+          "line": 58,
+          "step": 8,
+          "name": "group_topic_route_submit",
+          "argBytes": 509,
+          "argumentKeys": [
+            "requestId",
+            "routes"
+          ],
+          "end": 1792654631261,
+          "ms": 105,
+          "resultBytes": 147,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 59,
+          "resultKeys": [
+            "status",
+            "requestId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792654580780,
+          "line": 16,
+          "bytes": 7482
+        },
+        {
+          "at": 1792654580781,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792654580781,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792654580781,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792654580782,
+          "line": 20,
+          "bytes": 7832
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "98ec8155cb36"
+      ]
+    },
+    {
+      "session": "1147850ccf99",
+      "kind": "decision",
+      "bytes": 251819,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792634359477,
+          "line": 12,
+          "end": 1792634460379,
+          "ms": 100902,
+          "reason": "completed"
+        },
+        {
+          "at": 1792634491008,
+          "line": 56,
+          "end": 1792634524284,
+          "ms": 33276,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792634359718,
+          "line": 14,
+          "responseAt": 1792634362584,
+          "modelMs": 2866,
+          "usage": {
+            "inputTokens": 15694,
+            "outputTokens": 23,
+            "totalTokens": 15717
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634362742,
+          "ms": 3024
+        },
+        {
+          "step": 2,
+          "at": 1792634364448,
+          "line": 26,
+          "responseAt": 1792634369449,
+          "modelMs": 5001,
+          "usage": {
+            "inputTokens": 670,
+            "outputTokens": 41,
+            "totalTokens": 16199,
+            "cacheReadTokens": 15488
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634369466,
+          "ms": 5018
+        },
+        {
+          "step": 3,
+          "at": 1792634370253,
+          "line": 31,
+          "responseAt": 1792634375618,
+          "modelMs": 5365,
+          "usage": {
+            "inputTokens": 5147,
+            "outputTokens": 83,
+            "totalTokens": 21230,
+            "cacheReadTokens": 16000
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634375919,
+          "ms": 5666
+        },
+        {
+          "step": 4,
+          "at": 1792634376493,
+          "line": 36,
+          "responseAt": 1792634403880,
+          "modelMs": 27387,
+          "usage": {
+            "inputTokens": 5097,
+            "outputTokens": 1120,
+            "totalTokens": 27209,
+            "cacheReadTokens": 20992
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634404099,
+          "ms": 27606
+        },
+        {
+          "step": 5,
+          "at": 1792634404220,
+          "line": 41,
+          "responseAt": 1792634426363,
+          "modelMs": 22143,
+          "usage": {
+            "inputTokens": 230,
+            "outputTokens": 1036,
+            "totalTokens": 28274,
+            "cacheReadTokens": 27008
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634426608,
+          "ms": 22388
+        },
+        {
+          "step": 6,
+          "at": 1792634427039,
+          "line": 46,
+          "responseAt": 1792634453852,
+          "modelMs": 26813,
+          "usage": {
+            "inputTokens": 261,
+            "outputTokens": 1165,
+            "totalTokens": 29458,
+            "cacheReadTokens": 28032
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634454152,
+          "ms": 27113
+        },
+        {
+          "step": 7,
+          "at": 1792634455002,
+          "line": 51,
+          "responseAt": 1792634460373,
+          "modelMs": 5371,
+          "usage": {
+            "inputTokens": 165,
+            "outputTokens": 28,
+            "totalTokens": 29505,
+            "cacheReadTokens": 29312
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634460376,
+          "ms": 5374
+        },
+        {
+          "step": 1,
+          "at": 1792634491247,
+          "line": 58,
+          "responseAt": 1792634494865,
+          "modelMs": 3618,
+          "usage": {
+            "inputTokens": 269,
+            "outputTokens": 67,
+            "totalTokens": 29648,
+            "cacheReadTokens": 29312
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634494895,
+          "ms": 3648
+        },
+        {
+          "step": 2,
+          "at": 1792634494992,
+          "line": 64,
+          "responseAt": 1792634498788,
+          "modelMs": 3796,
+          "usage": {
+            "inputTokens": 336,
+            "outputTokens": 76,
+            "totalTokens": 29852,
+            "cacheReadTokens": 29440
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634499002,
+          "ms": 4010
+        },
+        {
+          "step": 3,
+          "at": 1792634499132,
+          "line": 69,
+          "responseAt": 1792634521825,
+          "modelMs": 22693,
+          "usage": {
+            "inputTokens": 5015,
+            "outputTokens": 975,
+            "totalTokens": 35686,
+            "cacheReadTokens": 29696
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634523268,
+          "ms": 24136
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792634362586,
+          "line": 23,
+          "step": 1,
+          "name": "group_task_list",
+          "argBytes": 29,
+          "argumentKeys": [
+            "query",
+            "limit"
+          ],
+          "limit": 50,
+          "query": {
+            "chars": 2,
+            "alias": "80b19d68b149"
+          },
+          "end": 1792634362740,
+          "ms": 154,
+          "resultBytes": 1581,
+          "isError": false,
+          "codes": [],
+          "resultLine": 24,
+          "resultKeys": [
+            "tasks",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 2
+        },
+        {
+          "at": 1792634369452,
+          "line": 28,
+          "step": 2,
+          "name": "group_task_context_get",
+          "argBytes": 53,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 1,
+          "end": 1792634369464,
+          "ms": 12,
+          "resultBytes": 16458,
+          "isError": false,
+          "codes": [],
+          "resultLine": 29,
+          "resultKeys": [
+            "tasks"
+          ]
+        },
+        {
+          "at": 1792634375621,
+          "line": 33,
+          "step": 3,
+          "name": "group_reply_review_get",
+          "argBytes": 98,
+          "argumentKeys": [
+            "requestIds"
+          ],
+          "end": 1792634375918,
+          "ms": 297,
+          "resultBytes": 15399,
+          "isError": false,
+          "codes": [],
+          "resultLine": 34,
+          "resultKeys": [
+            "requestIds",
+            "candidates",
+            "candidateCount"
+          ]
+        },
+        {
+          "at": 1792634403884,
+          "line": 38,
+          "step": 4,
+          "name": "group_decision_submit",
+          "argBytes": 3719,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 81,
+            "actionKinds": [
+              "task-context"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 4,
+              "sameMatter": 1,
+              "replace": 0
+            }
+          },
+          "end": 1792634404097,
+          "ms": 213,
+          "resultBytes": 115,
+          "isError": false,
+          "codes": [
+            "group_reply_review_replacement_incomplete",
+            "group_reply_review_replacement_incomplete"
+          ],
+          "resultStatus": "review-required",
+          "resultLine": 39,
+          "resultKeys": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "at": 1792634426367,
+          "line": 43,
+          "step": 5,
+          "name": "group_decision_submit",
+          "argBytes": 3335,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 81,
+            "actionKinds": [
+              "task-context"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 4,
+              "sameMatter": 0,
+              "replace": 0
+            }
+          },
+          "end": 1792634426607,
+          "ms": 240,
+          "resultBytes": 59,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "review-required",
+          "resultLine": 44,
+          "resultKeys": [
+            "status"
+          ]
+        },
+        {
+          "at": 1792634453857,
+          "line": 48,
+          "step": 6,
+          "name": "group_decision_submit",
+          "argBytes": 3454,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 81,
+            "actionKinds": [
+              "task-context"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "correction",
+              "reviewed": 4,
+              "sameMatter": 4,
+              "replace": 4
+            }
+          },
+          "end": 1792634454150,
+          "ms": 293,
+          "resultBytes": 59,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "review-required",
+          "resultLine": 49,
+          "resultKeys": [
+            "status"
+          ]
+        },
+        {
+          "at": 1792634494866,
+          "line": 61,
+          "step": 1,
+          "name": "group_decision_context_get",
+          "argBytes": 125,
+          "argumentKeys": [
+            "requestId",
+            "section"
+          ],
+          "end": 1792634494893,
+          "ms": 27,
+          "resultBytes": 333,
+          "isError": false,
+          "codes": [],
+          "resultLine": 62,
+          "resultKeys": [
+            "requestId",
+            "section",
+            "offset",
+            "nextOffset",
+            "totalChars",
+            "hasMore",
+            "text",
+            "contentFingerprint"
+          ],
+          "hasMore": false,
+          "nextOffset": 2
+        },
+        {
+          "at": 1792634498790,
+          "line": 66,
+          "step": 2,
+          "name": "group_reply_review_get",
+          "argBytes": 98,
+          "argumentKeys": [
+            "requestIds"
+          ],
+          "end": 1792634499000,
+          "ms": 210,
+          "resultBytes": 15399,
+          "isError": false,
+          "codes": [],
+          "resultLine": 67,
+          "resultKeys": [
+            "requestIds",
+            "candidates",
+            "candidateCount"
+          ]
+        },
+        {
+          "at": 1792634521830,
+          "line": 71,
+          "step": 3,
+          "name": "group_decision_submit",
+          "argBytes": 3148,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 78,
+            "actionKinds": [
+              "task-context"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "substantive",
+              "reviewed": 4,
+              "sameMatter": 0,
+              "replace": 0
+            }
+          },
+          "end": 1792634523266,
+          "ms": 1436,
+          "resultBytes": 151,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 72,
+          "resultKeys": [
+            "status",
+            "decisionId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792634359733,
+          "line": 16,
+          "bytes": 4923
+        },
+        {
+          "at": 1792634359734,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792634359734,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792634359735,
+          "line": 19,
+          "bytes": 290
+        },
+        {
+          "at": 1792634491258,
+          "line": 59,
+          "bytes": 233
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792634359738,
+          "line": 20,
+          "bytes": 18678
+        }
+      ],
+      "errors": [
+        {
+          "line": 39,
+          "at": 1792634404097,
+          "name": "group_decision_submit",
+          "codes": [
+            "group_reply_review_replacement_incomplete",
+            "group_reply_review_replacement_incomplete"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "984bf6a64f9e"
+      ]
+    },
+    {
+      "session": "bd5d1d449ed1",
+      "kind": "decision",
+      "bytes": 74862,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633481696,
+          "line": 12,
+          "end": 1792633493933,
+          "ms": 12237,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633482381,
+          "line": 14,
+          "responseAt": 1792633492920,
+          "modelMs": 10539,
+          "usage": {
+            "inputTokens": 15711,
+            "outputTokens": 321,
+            "totalTokens": 16032
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633493627,
+          "ms": 11246
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633492924,
+          "line": 23,
+          "step": 1,
+          "name": "group_decision_submit",
+          "argBytes": 1005,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "d605ebb9d6db",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reason"
+            ],
+            "actionKinds": [],
+            "review": null
+          },
+          "end": 1792633493626,
+          "ms": 702,
+          "resultBytes": 151,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "decisionId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633482524,
+          "line": 16,
+          "bytes": 3424
+        },
+        {
+          "at": 1792633482526,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633482527,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633482529,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633482535,
+          "line": 20,
+          "bytes": 18678
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "420eeb776145"
+      ]
+    },
+    {
+      "session": "d28326b7cce2",
+      "kind": "decision",
+      "bytes": 75771,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633832459,
+          "line": 12,
+          "end": 1792633844090,
+          "ms": 11631,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633832974,
+          "line": 14,
+          "responseAt": 1792633842650,
+          "modelMs": 9676,
+          "usage": {
+            "inputTokens": 13452,
+            "outputTokens": 352,
+            "totalTokens": 13804
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633843106,
+          "ms": 10132
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633842653,
+          "line": 23,
+          "step": 1,
+          "name": "group_decision_submit",
+          "argBytes": 1115,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "d605ebb9d6db",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reason"
+            ],
+            "actionKinds": [],
+            "review": null
+          },
+          "end": 1792633843105,
+          "ms": 452,
+          "resultBytes": 319,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "routing-required",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "decisionId",
+            "routeRequestId",
+            "nextAction",
+            "retryScheduled"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633832982,
+          "line": 16,
+          "bytes": 3489
+        },
+        {
+          "at": 1792633832983,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633832984,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633832984,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633832988,
+          "line": 20,
+          "bytes": 18678
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "9835943da741"
+      ]
+    },
+    {
+      "session": "b212024d95ef",
+      "kind": "decision",
+      "bytes": 65958,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633923595,
+          "line": 12
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633924144,
+          "line": 14
+        }
+      ],
+      "tools": [],
+      "inputs": [
+        {
+          "at": 1792633924154,
+          "line": 16,
+          "bytes": 3271
+        },
+        {
+          "at": 1792633924155,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633924156,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633924157,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633924160,
+          "line": 20,
+          "bytes": 18678
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "1abf540c8fb0"
+      ]
+    },
+    {
+      "session": "63ed0b876ecd",
+      "kind": "decision",
+      "bytes": 74973,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792634330450,
+          "line": 12,
+          "end": 1792634343121,
+          "ms": 12671,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792634330820,
+          "line": 14,
+          "responseAt": 1792634342683,
+          "modelMs": 11863,
+          "usage": {
+            "inputTokens": 13342,
+            "outputTokens": 337,
+            "totalTokens": 13679
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792634342993,
+          "ms": 12173
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792634342689,
+          "line": 23,
+          "step": 1,
+          "name": "group_decision_submit",
+          "argBytes": 1046,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "d605ebb9d6db",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reason"
+            ],
+            "actionKinds": [],
+            "review": null
+          },
+          "end": 1792634342989,
+          "ms": 300,
+          "resultBytes": 319,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "routing-required",
+          "resultLine": 24,
+          "resultKeys": [
+            "status",
+            "decisionId",
+            "routeRequestId",
+            "nextAction",
+            "retryScheduled"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792634330841,
+          "line": 16,
+          "bytes": 3271
+        },
+        {
+          "at": 1792634330842,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792634330843,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792634330844,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792634330848,
+          "line": 20,
+          "bytes": 18678
+        }
+      ],
+      "errors": [],
+      "messageRefs": [
+        "1abf540c8fb0"
+      ]
+    },
+    {
+      "session": "754f97f36715",
+      "kind": "decision",
+      "bytes": 186563,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792631008473,
+          "line": 12,
+          "end": 1792631088887,
+          "ms": 80414,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792631008532,
+          "line": 14,
+          "responseAt": 1792631010438,
+          "modelMs": 1906,
+          "usage": {
+            "inputTokens": 13525,
+            "outputTokens": 25,
+            "totalTokens": 13550
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631010442,
+          "ms": 1910
+        },
+        {
+          "step": 2,
+          "at": 1792631010461,
+          "line": 26,
+          "responseAt": 1792631012973,
+          "modelMs": 2512,
+          "usage": {
+            "inputTokens": 371,
+            "outputTokens": 41,
+            "totalTokens": 13852,
+            "cacheReadTokens": 13440
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631012982,
+          "ms": 2521
+        },
+        {
+          "step": 3,
+          "at": 1792631013082,
+          "line": 31,
+          "responseAt": 1792631028218,
+          "modelMs": 15136,
+          "usage": {
+            "inputTokens": 3443,
+            "outputTokens": 667,
+            "totalTokens": 17806,
+            "cacheReadTokens": 13696
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631028248,
+          "ms": 15166
+        },
+        {
+          "step": 4,
+          "at": 1792631028350,
+          "line": 36,
+          "responseAt": 1792631042648,
+          "modelMs": 14298,
+          "usage": {
+            "inputTokens": 167,
+            "outputTokens": 688,
+            "totalTokens": 18519,
+            "cacheReadTokens": 17664
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631042702,
+          "ms": 14352
+        },
+        {
+          "step": 5,
+          "at": 1792631042725,
+          "line": 41,
+          "responseAt": 1792631045515,
+          "modelMs": 2790,
+          "usage": {
+            "inputTokens": 106,
+            "outputTokens": 62,
+            "totalTokens": 18600,
+            "cacheReadTokens": 18432
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631045559,
+          "ms": 2834
+        },
+        {
+          "step": 6,
+          "at": 1792631045635,
+          "line": 46,
+          "responseAt": 1792631060876,
+          "modelMs": 15241,
+          "usage": {
+            "inputTokens": 3288,
+            "outputTokens": 775,
+            "totalTokens": 22495,
+            "cacheReadTokens": 18432
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631060918,
+          "ms": 15283
+        },
+        {
+          "step": 7,
+          "at": 1792631060940,
+          "line": 51,
+          "responseAt": 1792631075302,
+          "modelMs": 14362,
+          "usage": {
+            "inputTokens": 124,
+            "outputTokens": 717,
+            "totalTokens": 23241,
+            "cacheReadTokens": 22400
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631075351,
+          "ms": 14411
+        },
+        {
+          "step": 8,
+          "at": 1792631075430,
+          "line": 56,
+          "responseAt": 1792631088441,
+          "modelMs": 13011,
+          "usage": {
+            "inputTokens": 230,
+            "outputTokens": 751,
+            "totalTokens": 24021,
+            "cacheReadTokens": 23040
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792631088796,
+          "ms": 13366
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792631010439,
+          "line": 23,
+          "step": 1,
+          "name": "group_task_list",
+          "argBytes": 36,
+          "argumentKeys": [
+            "query",
+            "limit"
+          ],
+          "limit": 100,
+          "query": {
+            "chars": 4,
+            "alias": "22e49fde943d"
+          },
+          "end": 1792631010442,
+          "ms": 3,
+          "resultBytes": 907,
+          "isError": false,
+          "codes": [],
+          "resultLine": 24,
+          "resultKeys": [
+            "tasks",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 1
+        },
+        {
+          "at": 1792631012975,
+          "line": 28,
+          "step": 2,
+          "name": "group_task_context_get",
+          "argBytes": 53,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 1,
+          "end": 1792631012981,
+          "ms": 6,
+          "resultBytes": 10992,
+          "isError": false,
+          "codes": [],
+          "resultLine": 29,
+          "resultKeys": [
+            "tasks"
+          ]
+        },
+        {
+          "at": 1792631028220,
+          "line": 33,
+          "step": 3,
+          "name": "group_decision_submit",
+          "argBytes": 2059,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply"
+            ],
+            "replyChars": 42,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": null
+          },
+          "end": 1792631028247,
+          "ms": 27,
+          "resultBytes": 93,
+          "isError": false,
+          "codes": [
+            "reply_kind_required"
+          ],
+          "resultStatus": "review-required",
+          "resultLine": 34,
+          "resultKeys": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "at": 1792631042650,
+          "line": 38,
+          "step": 4,
+          "name": "group_decision_submit",
+          "argBytes": 2097,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 42,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": {
+              "keys": [
+                "kind"
+              ],
+              "kind": "confirmation"
+            }
+          },
+          "end": 1792631042701,
+          "ms": 51,
+          "resultBytes": 59,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "review-required",
+          "resultLine": 39,
+          "resultKeys": [
+            "status"
+          ]
+        },
+        {
+          "at": 1792631045516,
+          "line": 43,
+          "step": 5,
+          "name": "group_reply_review_get",
+          "argBytes": 98,
+          "argumentKeys": [
+            "requestIds"
+          ],
+          "end": 1792631045558,
+          "ms": 42,
+          "resultBytes": 9175,
+          "isError": false,
+          "codes": [],
+          "resultLine": 44,
+          "resultKeys": [
+            "requestIds",
+            "candidates",
+            "candidateCount"
+          ]
+        },
+        {
+          "at": 1792631060877,
+          "line": 48,
+          "step": 6,
+          "name": "group_decision_submit",
+          "argBytes": 2299,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 42,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 3,
+              "sameMatter": 3,
+              "replace": 0
+            }
+          },
+          "end": 1792631060918,
+          "ms": 41,
+          "resultBytes": 115,
+          "isError": false,
+          "codes": [
+            "group_reply_review_replacement_incomplete",
+            "group_reply_review_replacement_incomplete"
+          ],
+          "resultStatus": "review-required",
+          "resultLine": 49,
+          "resultKeys": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "at": 1792631075304,
+          "line": 53,
+          "step": 7,
+          "name": "group_decision_submit",
+          "argBytes": 2147,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 42,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 3,
+              "sameMatter": 0,
+              "replace": 0
+            }
+          },
+          "end": 1792631075350,
+          "ms": 46,
+          "resultBytes": 123,
+          "isError": false,
+          "codes": [
+            "group_reply_review_same_task_confirmation_missing",
+            "group_reply_review_same_task_confirmation_missing"
+          ],
+          "resultStatus": "review-required",
+          "resultLine": 54,
+          "resultKeys": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "at": 1792631088443,
+          "line": 58,
+          "step": 8,
+          "name": "group_decision_submit",
+          "argBytes": 2233,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 42,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 3,
+              "sameMatter": 1,
+              "replace": 1
+            }
+          },
+          "end": 1792631088795,
+          "ms": 352,
+          "resultBytes": 151,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 59,
+          "resultKeys": [
+            "status",
+            "decisionId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792631008535,
+          "line": 16,
+          "bytes": 3849
+        },
+        {
+          "at": 1792631008535,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792631008535,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792631008536,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792631008536,
+          "line": 20,
+          "bytes": 18678
+        }
+      ],
+      "errors": [
+        {
+          "line": 34,
+          "at": 1792631028247,
+          "name": "group_decision_submit",
+          "codes": [
+            "reply_kind_required"
+          ]
+        },
+        {
+          "line": 49,
+          "at": 1792631060918,
+          "name": "group_decision_submit",
+          "codes": [
+            "group_reply_review_replacement_incomplete",
+            "group_reply_review_replacement_incomplete"
+          ]
+        },
+        {
+          "line": 54,
+          "at": 1792631075350,
+          "name": "group_decision_submit",
+          "codes": [
+            "group_reply_review_same_task_confirmation_missing",
+            "group_reply_review_same_task_confirmation_missing"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "72a41858e7f9"
+      ]
+    },
+    {
+      "session": "6661a365af09",
+      "kind": "decision",
+      "bytes": 167994,
+      "dispatches": [],
+      "turns": [
+        {
+          "at": 1792633213609,
+          "line": 12,
+          "end": 1792633281513,
+          "ms": 67904,
+          "reason": "blocked"
+        }
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "at": 1792633214081,
+          "line": 14,
+          "responseAt": 1792633217197,
+          "modelMs": 3116,
+          "usage": {
+            "inputTokens": 13559,
+            "outputTokens": 25,
+            "totalTokens": 13584
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633217252,
+          "ms": 3171
+        },
+        {
+          "step": 2,
+          "at": 1792633217628,
+          "line": 26,
+          "responseAt": 1792633220432,
+          "modelMs": 2804,
+          "usage": {
+            "inputTokens": 438,
+            "outputTokens": 41,
+            "totalTokens": 13919,
+            "cacheReadTokens": 13440
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633220451,
+          "ms": 2823
+        },
+        {
+          "step": 3,
+          "at": 1792633221020,
+          "line": 31,
+          "responseAt": 1792633228805,
+          "modelMs": 7785,
+          "usage": {
+            "inputTokens": 4594,
+            "outputTokens": 73,
+            "totalTokens": 18363,
+            "cacheReadTokens": 13696
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633229022,
+          "ms": 8002
+        },
+        {
+          "step": 4,
+          "at": 1792633229531,
+          "line": 36,
+          "responseAt": 1792633247421,
+          "modelMs": 17890,
+          "usage": {
+            "inputTokens": 4761,
+            "outputTokens": 823,
+            "totalTokens": 23760,
+            "cacheReadTokens": 18176
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633247704,
+          "ms": 18173
+        },
+        {
+          "step": 5,
+          "at": 1792633247818,
+          "line": 41,
+          "responseAt": 1792633263467,
+          "modelMs": 15649,
+          "usage": {
+            "inputTokens": 1005,
+            "outputTokens": 793,
+            "totalTokens": 24582,
+            "cacheReadTokens": 22784
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633263687,
+          "ms": 15869
+        },
+        {
+          "step": 6,
+          "at": 1792633264006,
+          "line": 46,
+          "responseAt": 1792633279684,
+          "modelMs": 15678,
+          "usage": {
+            "inputTokens": 931,
+            "outputTokens": 748,
+            "totalTokens": 25359,
+            "cacheReadTokens": 23680
+          },
+          "model": "gpt-6.1-sol",
+          "end": 1792633280850,
+          "ms": 16844
+        }
+      ],
+      "tools": [
+        {
+          "at": 1792633217199,
+          "line": 23,
+          "step": 1,
+          "name": "group_task_list",
+          "argBytes": 36,
+          "argumentKeys": [
+            "query",
+            "limit"
+          ],
+          "limit": 100,
+          "query": {
+            "chars": 4,
+            "alias": "22e49fde943d"
+          },
+          "end": 1792633217251,
+          "ms": 52,
+          "resultBytes": 989,
+          "isError": false,
+          "codes": [],
+          "resultLine": 24,
+          "resultKeys": [
+            "tasks",
+            "total",
+            "offset",
+            "limit",
+            "nextOffset",
+            "hasMore"
+          ],
+          "hasMore": false,
+          "nextOffset": 1
+        },
+        {
+          "at": 1792633220434,
+          "line": 28,
+          "step": 2,
+          "name": "group_task_context_get",
+          "argBytes": 53,
+          "argumentKeys": [
+            "taskIds"
+          ],
+          "taskIdCount": 1,
+          "end": 1792633220449,
+          "ms": 15,
+          "resultBytes": 14401,
+          "isError": false,
+          "codes": [],
+          "resultLine": 29,
+          "resultKeys": [
+            "tasks"
+          ]
+        },
+        {
+          "at": 1792633228807,
+          "line": 33,
+          "step": 3,
+          "name": "group_reply_review_get",
+          "argBytes": 98,
+          "argumentKeys": [
+            "requestIds"
+          ],
+          "end": 1792633229021,
+          "ms": 214,
+          "resultBytes": 14009,
+          "isError": false,
+          "codes": [],
+          "resultLine": 34,
+          "resultKeys": [
+            "requestIds",
+            "candidates",
+            "candidateCount"
+          ]
+        },
+        {
+          "at": 1792633247424,
+          "line": 38,
+          "step": 4,
+          "name": "group_decision_submit",
+          "argBytes": 2523,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 55,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 4,
+              "sameMatter": 1
+            }
+          },
+          "end": 1792633247702,
+          "ms": 278,
+          "resultBytes": 115,
+          "isError": false,
+          "codes": [
+            "group_reply_review_replacement_incomplete",
+            "group_reply_review_replacement_incomplete"
+          ],
+          "resultStatus": "review-required",
+          "resultLine": 39,
+          "resultKeys": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "at": 1792633263471,
+          "line": 43,
+          "step": 5,
+          "name": "group_decision_submit",
+          "argBytes": 2407,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "basisUnitRefs",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 55,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 4,
+              "sameMatter": 0,
+              "replace": 0
+            }
+          },
+          "end": 1792633263686,
+          "ms": 215,
+          "resultBytes": 123,
+          "isError": false,
+          "codes": [
+            "group_reply_review_same_task_confirmation_missing",
+            "group_reply_review_same_task_confirmation_missing"
+          ],
+          "resultStatus": "review-required",
+          "resultLine": 44,
+          "resultKeys": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "at": 1792633279688,
+          "line": 48,
+          "step": 6,
+          "name": "group_decision_submit",
+          "argBytes": 2207,
+          "argumentKeys": [
+            "requestId",
+            "topicId",
+            "revision",
+            "decision"
+          ],
+          "topic": "6b0f2746d81d",
+          "decision": {
+            "keys": [
+              "topicUpdate",
+              "basisMessageIds",
+              "actions",
+              "reply",
+              "replyReview"
+            ],
+            "replyChars": 55,
+            "actionKinds": [
+              "task-reopen"
+            ],
+            "review": {
+              "keys": [
+                "kind",
+                "reviewedOutboundIds",
+                "sameMatterOutboundIds",
+                "replaceOutboundIds"
+              ],
+              "kind": "confirmation",
+              "reviewed": 4,
+              "sameMatter": 1,
+              "replace": 1
+            }
+          },
+          "end": 1792633280849,
+          "ms": 1161,
+          "resultBytes": 151,
+          "isError": false,
+          "codes": [],
+          "resultStatus": "accepted",
+          "resultLine": 49,
+          "resultKeys": [
+            "status",
+            "decisionId"
+          ]
+        }
+      ],
+      "inputs": [
+        {
+          "at": 1792633214094,
+          "line": 16,
+          "bytes": 3947
+        },
+        {
+          "at": 1792633214095,
+          "line": 17,
+          "bytes": 20007
+        },
+        {
+          "at": 1792633214097,
+          "line": 18,
+          "bytes": 823
+        },
+        {
+          "at": 1792633214098,
+          "line": 19,
+          "bytes": 290
+        }
+      ],
+      "headers": [
+        {
+          "at": 1792633214104,
+          "line": 20,
+          "bytes": 18678
+        }
+      ],
+      "errors": [
+        {
+          "line": 39,
+          "at": 1792633247702,
+          "name": "group_decision_submit",
+          "codes": [
+            "group_reply_review_replacement_incomplete",
+            "group_reply_review_replacement_incomplete"
+          ]
+        },
+        {
+          "line": 44,
+          "at": 1792633263686,
+          "name": "group_decision_submit",
+          "codes": [
+            "group_reply_review_same_task_confirmation_missing",
+            "group_reply_review_same_task_confirmation_missing"
+          ]
+        }
+      ],
+      "messageRefs": [
+        "96b6d9b53f04"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-10-22T19:13:55.3735126+08:00",
+  "status": "degraded",
+  "recoveryIssueCount": 2,
+  "inboundProcessing": true,
+  "bridgeHealthy": true,
+  "issueKeys": [
+    {
+      "id": null,
+      "kind": "task-session",
+      "status": "active"
+    },
+    {
+      "id": null,
+      "kind": "task-session",
+      "status": "active"
+    }
+  ]
+}
