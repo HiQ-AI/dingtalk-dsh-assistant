@@ -20,3 +20,9 @@
 - 通用化后的定向复验：`independent-coordination-native.test.js`、`coordination-observed-native.test.js`、`coordination-observed-prerequisites.test.js`、`coordination-execution-proof.test.js` 共 **36/36，0 fail，0 skip**；其中任意阶段新建/补充 8 项原生入口用例全部通过。与此前组重叠，不相加。
 
 本次没有真实模型调用、群外发、PR、合并或部署。真实语言理解质量仍须另行获授权的模型回放验证。
+
+## 发布清单补救
+
+首次合并 b668912 的源码/原生回归未覆盖实际 npm tarball，遗漏了新模块 `task-boundary-instructions.js` 的显式 files 清单；百部在停机安装前发现并阻止部署。补丁将其加入清单。实际 package 回归现检查解包后每个 JS 的字节与源码一致，并核对全部静态相对 import/re-export 与字面量动态 import/require 的目标确实在 tarball，不从源码补找缺文件。
+
+云端 overlay 的超大 inode 会被 npm/tar 数值转换误认成同一硬链接；测试逐字节复制源码到独立临时目录后实际 npm pack，仍沿发布 files 清单选取产物。现有 package 测试先接入已安装依赖再 import 解包模块，未下载依赖。两项真实解包原生回归 **2/2，0 fail，0 skip**，包括个人 skill 执行及 resident health 启动。此项仅修打包与验证，不改变业务规则或 schema。
