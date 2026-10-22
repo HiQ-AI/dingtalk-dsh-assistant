@@ -1,0 +1,20 @@
+{
+  "model": "gpt-6-astra",
+  "reasoningEffort": "low",
+  "sourceDigests": {
+    "taskSession": "2c4a4e38b459750e5f4e33652c82be6803103b82e2c24b01d027e51796c7a7c6",
+    "scenarios": "52e7dfc1762fddde625ec1a383713229479883c884a71403599765b304a40192",
+    "evaluator": "67af58ea41189d5ea196ce16f0306ea9d89059a01c37aaa4f9aea17c787a69fd"
+  },
+  "cases": [
+    {
+      "id": "config-constant-result-answer",
+      "pass": false,
+      "error": "TASK_SESSION_PROVIDER_TRANSIENT",
+      "providerErrorCode": "TRANSPORT",
+      "actions": [],
+      "nativeTrace": [],
+      "semanticReviewRequired": "必须直接说明当前版本固定 INFO、不读取环境变量，所以 Deployment 设置 DEBUG 无效、重启也无效；不能把未检查注入/重启变成人工条件或待续办事项，不能以“未配置 DEBUG”替代“不支持该配置”。"
+    }
+  ]
+}

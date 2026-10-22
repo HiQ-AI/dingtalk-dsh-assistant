@@ -1,0 +1,37 @@
+{
+  "boundary": "隔离合成材料，仅据提供材料与指定技能作答，不连接任何服务，不执行代码，不改动文件。",
+  "cases": [
+    {
+      "id": "a",
+      "request": "编辑器计算服务是否有日志级别配置？配置了 debug 看上去没生效。",
+      "materials": [
+        "只读制品核验记录：目标服务当前镜像中的 config/logger.py 与下列源码逐字一致；gRPC 和 REST 两个入口都调用 get_logger()，项目其他路径没有传入级别覆盖。",
+        "config/logger.py: LOG_LEVEL = 'INFO'\nclass LoggerConfig:\n    def __init__(self, log_level=LOG_LEVEL): self.log_level = log_level\n    def setup(self):\n        logger.remove()\n        logger.add(sys.stdout, level=self.log_level)\ndef get_logger():\n    LoggerConfig().setup()\n    return logger"
+      ]
+    },
+    {
+      "id": "b",
+      "request": "服务设置 LOG_LEVEL=DEBUG 后仍没看到 DEBUG，帮我查原因。",
+      "materials": [
+        "目标镜像源码已核验，日志初始化：level = os.getenv('LOG_LEVEL', 'INFO'); handler = build_handler(load_output_config()); handler.setLevel(output_threshold); logger.setLevel(level); logger.addHandler(handler)。",
+        "当前实际进程 LOG_LEVEL=DEBUG 已读取并传给 logger.setLevel；本次操作经过 logger.debug('finished')。load_output_config 内容及 handler 的有效 output_threshold 尚未取得，已有只读配置入口可继续查询。"
+      ]
+    },
+    {
+      "id": "c",
+      "request": "当前生产计算服务能通过 LOG_LEVEL 设置日志级别吗？",
+      "materials": [
+        "开发检出 feature/logging 中 LOG_LEVEL='INFO'，调用链没有读取环境变量。",
+        "生产仅观察到镜像 digest=sha256:synthetic-runtime-7；尚未读取镜像源码，也没有任何记录将该镜像对应到上述分支或提交。现有只读制品入口可核验镜像文件。"
+      ]
+    },
+    {
+      "id": "d",
+      "request": "只看 tools-api 仓库 release-2.4 这个提交，CACHE_LIMIT 能通过环境变量配置吗？不需要核查线上实例。",
+      "materials": [
+        "release-2.4 已解析为固定提交 synthetic-c42，完整设置模块内容：CACHE_LIMIT = 1000。入口直接 import CACHE_LIMIT，并将其传给 Cache(max_items=CACHE_LIMIT)。所有调用方和入口均已读取，没有 getenv、配置文件或参数覆盖该值的路径。",
+        "未提供任何线上环境、镜像或部署信息。"
+      ]
+    }
+  ]
+}
