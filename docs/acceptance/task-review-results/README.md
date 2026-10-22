@@ -9,3 +9,7 @@
 运行预览：`node docs/acceptance/task-review-results/browser.mjs /workspace/coordination-ui-test-tools /workspace/task-review-results-preview`。Playwright/React使用已有隔离工具目录，不新增仓库依赖。
 
 截图：`/workspace/task-review-results-preview/task-review-results-desktop.png`、`/workspace/task-review-results-preview/task-review-results-mobile.png`。Library prepare已返回上传会话，但官方上传工作流报 `hosted apps tools/call request failed: network`，没有成功创建Library文件，不能提供library_file_id或声称上传完成。
+
+后续交付：排查未重复创建后，通过受支持本地文件上传完成两张截图：桌面 `libfile_53c68175b3188191a698de300342fbfa`，手机 `libfile_fbf8bdf473f88191874a57622c680887`。
+
+发布前将 main #244（8fe0eeb）无冲突合入，业务代码未额外调整。实际 npm 双包解包逐文件比对：Assistant 67 文件、141 本地引用目标完整；Observer 4 文件，新混排UI及decisions读取资源均在web-client.js。针对同一实际Assistant tarball的原生启动/skill及Observer相关回归62/62、0失败0跳过，未重复全量或调用真实模型。
