@@ -12,6 +12,8 @@
 - `coordination-execution-proof.test.js`：新增评审 execution.result/drained、Owner wait 及重开账本后 Task 仍 active、完整要求保留的回归。既有 A→B 正式证明及版本回归继续通过。
 - 上述两文件与 `dynamic-task-store.test.js` 首轮 115/115；补第二个测试后前两文件 20/20。组间重叠，不相加。
 - `independent-coordination-native.test.js` 新增两项真实 Host + scripted LLM 的入口测试，检查实际路由/planner/Owner 提示注入、新需求只一 Task、已有 Task 不另建、Owner 完整输入及评审结果不结项。
-- 默认 profile 缺 `@deepseek-ai/dsh-base`，两份 native 文件共 10 项跳过。已有 `/workspace/coordination-replay-runtime/package.json` 可加载 base，但原生 preset 在 fixture 初始化时报告 `fs-local` / `tool-fs: never started`，10 项失败均在业务场景前；另一个已有 LLM-only profile 也缺 base。没有修改共享 fixture、安装依赖或放宽断言掩盖该阻断。这两项新 native 测试尚未经可用 profile 实跑，不具备已验证原生入口的交付结论。
+- 初轮选错 profile：默认 resident 缺 `@deepseek-ai/dsh-base`，10 项跳过；旧 replay runtime 的 preset 报 `fs-local/tool-fs: never started`，10 项均在业务场景前失败。仓库已有 `test/fixtures/native-profile/package.json` 专用 profile，37 模块预检通过，无须安装或修改共享环境。
+- 在专用 profile 上修正两项测试夹具：断言执行权威成功状态 `succeeded`；已有 Task 先 recover/whenIdle 到稳定等待后再补充，避免初始化竞争；脚本模型中断言移到测试主体，避免断言异常触发模型失败恢复。两项新增 native 实跑 2/2，0 skip。模型由 scripted adapter 提供，原生 Host、Session、账本及工具调用实际运行，不是真实模型理解验证。
+- 最终专用 profile 回归：`independent-coordination-native.test.js`、`coordination-observed-native.test.js`、`coordination-workspace-native.test.js` 合计 **11/11，0 fail，0 skip**，包含上述新增两项及真正不同任务 A→B、已完成 A、暂停 B、定时查询与 cwd。没有重复全量或真实模型测试。
 
-本次没有真实模型调用、群外发、PR、合并或部署。后续需在兼容原生 profile 补跑上述两个 native 文件；真实语言理解质量仍须另行获授权的模型回放验证。
+本次没有真实模型调用、群外发、PR、合并或部署。真实语言理解质量仍须另行获授权的模型回放验证。
