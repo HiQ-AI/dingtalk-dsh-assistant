@@ -145,7 +145,9 @@ async function install(ctx, { root, compression } = {}) {
     const directory = taskSessionLogRoot(root, taskId)
     // A cached native backend still resolves paths afresh when it writes. Never let
     // a directory replacement after its first use turn that cache into a bypass.
-    await checkedNativeLogRoot(directory, !backends.has(taskId))
+    if (!backends.has(taskId)) {
+      await checkedNativeLogRoot(directory, true)
+    }
     if (!backends.has(taskId)) {
       const creating = (async () => {
         const scope = ctx.isolate('sessionPersistence')
