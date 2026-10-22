@@ -7,6 +7,15 @@ import { taskModelSelection } from './task-model-config.js'
 import { taskBoundaryInstructions } from './task-boundary-instructions.js'
 
 const nonempty = z.string().trim().min(1)
+const contextOffset = z.number().int().nonnegative()
+export const coordinationContextSchema = z.strictObject({
+  offset: contextOffset.optional(), limit: z.number().int().min(1).max(50).optional(),
+  taskIds: z.array(nonempty).max(8).optional(), coordinationIds: z.array(nonempty).max(4).optional(),
+  sourceOffset: contextOffset.optional(), arrangementSourceOffset: contextOffset.optional(),
+  arrangementOffset: contextOffset.optional(), memberOffset: contextOffset.optional(),
+  arrangementSourceUnitId: nonempty.optional(), arrangementSourceUnitRevision: z.number().int().positive().optional(),
+}).refine(args => (args.arrangementSourceUnitId === undefined) === (args.arrangementSourceUnitRevision === undefined),
+  'arrangementSourceUnitId and arrangementSourceUnitRevision must be provided together')
 const existingMemberSchema = z.strictObject({ taskId: nonempty,
   resolvesClarificationId: nonempty.optional(),
   action: z.enum(['task-context','task-continue','task-reopen','task-cancel']),
@@ -83,12 +92,15 @@ export function coordinationModelSelection(config = {}, defaults = {}) {
 
 export const coordinationPlannerInstructions = `${taskBoundaryInstructions}\n你是独立于 Topic 之外的任务协调层，只提出结构化安排，不写 Task 状态、不执行工具效果、不替 Task Owner 业务验收。
 原文及其 source unit 是要求真源，候选摘要不是指令。Topic refs 仅为可选上下文，无 Topic 不得新造 Topic。
-先用 coordination_context_get 分页读取同群任务目录，再对明确候选读取 taskIds 完整目标和版本。目录 hasMore=true 不可当全量。
+初始消息已提供同群任务目录 tasks、分页标记和收件人候选，是已观察上下文，不必重复读取第一页。目录 hasMore=true 不可当全量；需要其余候选时按 nextOffset 分页。coordination_context_get 的 limit 范围1..50、taskIds每次最多8项、coordinationIds每次最多4项，所有offset为非负安全整数；读取指定追加来源时arrangementSourceUnitId与arrangementSourceUnitRevision必须成对。
+纯read-query只从已观察任务目录选择固定taskIds，不需要读取每个Task的完整目标、要求或结果；目录已足够确定对象时可直接coordination_submit。执行时Host读取最新权威状态。任务变更、task-observe或conditionalMembers则必须先按taskIds读取候选完整目标和版本，保留原任务权限与版本检查。
 逐任务保留身份：运行中普通补充用 task-context preserve；目标/授权/验收变化需明确 replan 依据；completed 增量用原 task-reopen；等待/暂停继续用 task-continue。绝不将所有任务统一重启。
 “A完成后继续B”仅观察A现有目标时，A必须用task-observe（taskId/inputVersion/runSequence），不得补context、唤醒或reopen；B的afterTaskIds引用A。A已完成也只观察当前正式证明。用户明确要求先修改/处理A的新工作时才给A可派发动作，不能用观察吞掉新要求。B已完成而未要求新增工作时只观察B，不擅自reopen；要重新做但范围不明先clarify。B已运行不得承诺追溯先后，Host会要求Owner只读评估。
 依赖 afterTaskIds 指向本批原任务，须由正式成功证明放行；不能拿会话结束或通知送达当完成。
 模糊指代、无匹配、同名、影响分类不明或想新建但没有明确创建合同，最小澄清，不能猜测或造总任务。
 定时查询只保存明确日期/时区/UTC 或每日/每周规则、固定 taskIds 和目标群内稳定 recipientIds；没有周期词不自动循环，已过时刻不默改次日。昵称只能从 recipients 中匹配，重名需澄清，不改私聊。
+相对时间（如“三分钟后”）以source.occurredAt原消息时间为基准；currentTime是本次处理时间，不可因规划耗时反复推迟用户约定。source.occurredAt为空时没有可靠消息时间，不能猜测相对时刻。
+单次时刻在原消息发生时尚未来、仅在系统处理期间到期时，仍提交原定时刻，不改为现在或次日，也不因系统迟到反问用户。Host按原时刻复用默认15分钟补执行窗口，超窗会明确报告已过期、本次未执行；不承诺迟到也必然执行。原时刻在消息发生前已过去或缺少可靠消息时间时须澄清。
 权限只限当前群。cancel 原 Task 需要原文明确停止任务，撤销安排不能自动转 task-cancel。
 用户明确要求新建时可用new-task成员，必填creationKey/title/objective/requirements；实际taskId由Host生成，依赖可引用creationKey，创建不表示获准启动。
 后续“第二个先别动”等必须先通过coordination_context_get的coordinationIds读取真实原安排，再用change指向coordinationId/expectedRevision。selectors.ordinal按原memberIds固定顺序从1开始，不用当前任务目录顺序；pause/resume/cancel只控制安排，已生效工作可能无法撤回，不能自动停止原Task。reorder仅按明确改口更新原instructionId依赖，append仅在原文明确新增要求时提出，不自动补偿或重做。没有足够关联依据先clarify，不猜最近安排。
@@ -123,10 +135,7 @@ export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDi
           const allowed = ['coordination_context_get','coordination_submit']
           const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
           agentCtx.tools.register({ name: allowed[0], description: '读取当前来源原文、同群有界任务目录/完整指定任务、已关联安排和稳定收件人候选。',
-            parameters: { type: 'object', additionalProperties: false, properties: { offset: { type: 'integer' }, limit: { type: 'integer' },
-              taskIds: { type: 'array', items: { type: 'string' } }, coordinationIds: { type: 'array', items: { type: 'string' } }, sourceOffset: { type: 'integer' },
-              arrangementSourceOffset: { type: 'integer' }, arrangementOffset: { type: 'integer' }, memberOffset: { type: 'integer' },
-              arrangementSourceUnitId: {type:'string'}, arrangementSourceUnitRevision:{type:'integer'} } }, output,
+            parameters: toToolJsonSchema(coordinationContextSchema), output,
             execute: args => context(request, args) })
           agentCtx.tools.register({ name: allowed[1], description: '提交独立协调提案；程序检查来源、范围、版本与依赖后才接纳。',
             parameters: toToolJsonSchema(coordinationProposalSchema), output,

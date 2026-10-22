@@ -1,0 +1,24 @@
+✔ coordination context shares exact bounded inputs, including paired source identity (3.3751ms)
+✔ read-only scheduling selects 17 observed directory tasks without detail reads (3615.1695ms)
+✔ read-only scheduling selects 41 observed directory tasks without detail reads (15320.9395ms)
+✔ one delivery preserves arbitrary user stages: software, existing=false (4562.7717ms)
+✔ one delivery preserves arbitrary user stages: software, existing=true (4707.7501ms)
+✔ one delivery preserves arbitrary user stages: translation-two, existing=false (4236.1861ms)
+✔ one delivery preserves arbitrary user stages: translation-two, existing=true (4614.6634ms)
+✔ one delivery preserves arbitrary user stages: research-four, existing=false (4216.3409ms)
+✔ one delivery preserves arbitrary user stages: research-four, existing=true (4827.219ms)
+✔ one delivery preserves arbitrary user stages: translation-reversed, existing=false (4430.3555ms)
+✔ one delivery preserves arbitrary user stages: translation-reversed, existing=true (4873.48ms)
+✔ explicit chat creation separates durable creation from dependency/time start: scheduled=false (3500.0981ms)
+✔ explicit chat creation separates durable creation from dependency/time start: scheduled=true (2335.8295ms)
+✔ real ingress reserves a no-Topic unit, independently plans A then B and dispatches original Owners from completion facts (5040.9674ms)
+✔ ambiguous no-Topic request remains exclusively pending clarification without changing original tasks (1026.9731ms)
+✔ no-Topic scheduled query runs through Host recovery and the existing outbox without reopening the queried Task (2100.9978ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70016.2981

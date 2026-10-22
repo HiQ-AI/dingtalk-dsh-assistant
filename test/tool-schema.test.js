@@ -14,6 +14,26 @@ const validateJsonSchemaValue = (schema, value) => assert.deepEqual(violations(s
 test('真实DSH接受同源生成的工具契约，无Zod元属性或不支持关键字', () => {
   for (const schema of [taskCheckpointJsonSchema, taskResultJsonSchema, groupDecisionSubmissionJsonSchema, replyReviewJsonSchema]) assert.doesNotThrow(() => assertSupportedJsonSchema(schema))
 })
+
+test('群回复工具公开审阅集合合同，保留optional补答及原精确校验', () => {
+  const replyBranch=groupDecisionSubmissionJsonSchema.properties.decision.oneOf.find(branch=>branch.properties.reply)
+  assert.ok(!replyBranch.required.includes('replyReview'),'仍由Host按回复事实请求补答，不改为schema必填')
+  assert.match(replyBranch.properties.replyReview.description,/候选为空也须声明kind/)
+  for(const schema of [replyReviewJsonSchema,replyBranch.properties.replyReview]) {
+    assert.doesNotThrow(()=>assertSupportedJsonSchema(schema))
+    assert.match(schema.properties.kind.description,/没有历史候选也必须声明kind/)
+    assert.match(schema.properties.reviewedOutboundIds.description,/全部outboundId.*完全一致/)
+    assert.match(schema.properties.sameMatterOutboundIds.description,/相同的已有confirmation/)
+    assert.match(schema.properties.replaceOutboundIds.description,/confirmation和correction.*集合完全相等/)
+    assert.match(schema.properties.replaceOutboundIds.description,/substantive必须为\[\]/)
+  }
+  const decision={basisMessageIds:['m'],actions:[],reply:'收到'}
+  assert.deepEqual(groupDecisionSchema.parse(decision),decision)
+  assert.deepEqual(groupDecisionSchema.parse({...decision,replyReview:{kind:'confirmation'}}).replyReview,
+    {kind:'confirmation',reviewedOutboundIds:[],sameMatterOutboundIds:[],replaceOutboundIds:[]})
+  assert.throws(()=>groupDecisionSchema.parse({...decision,replyReview:{kind:'unknown'}}))
+  assert.throws(()=>groupDecisionSchema.parse({...decision,replyReview:{kind:'confirmation',replaceOutboundIds:[1]}}))
+})
 test('DSH wire保留checkpoint kind互斥、错误字段拒绝；长度由Zod精确执行', () => {
   const diagnostic = { inputVersion: 1, runSequence: 1, kind: 'risk-changed', summary: '风险', nextStep: '核对', stageTask: '部署' }
   assert.doesNotThrow(() => validateJsonSchemaValue(taskCheckpointJsonSchema, diagnostic))
