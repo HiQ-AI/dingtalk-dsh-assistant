@@ -126,6 +126,47 @@ test('native AgentLoop and live flush write each task log only to its task while
   assert.equal((await readdir(join(root, 'legacy-sessions')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error))).length, 0)
 })
 
+test('native child agents create, run and resume in the parent task without pre-registration', async t => {
+  const root = await temporary(), h = await host(root); t.after(() => h.close())
+  const parent = await h.create('child-task', 'child-parent')
+  const options = { sessionId: 'native-child', parentAgent: parent,
+    meta: { origin: 'subagent', parentSession: parent.id, cwd: parent.session.header.cwd },
+    agentOptions: { provider: 'task-native-fixture', model: 'fixture' } }
+  const child = await h.ctx.agents.create(options)
+  try {
+    child.agent.followup(message('child work')); await child.agent.whenIdle()
+    await h.ctx.sessions.flush(child.agent.session)
+    assert.equal(h.actualCwds.at(-1).cwd, parent.session.header.cwd)
+    assert.ok((await findSessionLog(root, child.agent.id)).startsWith(taskSessionLogRoot(root, 'child-task')))
+    const nested = await h.ctx.agents.create({ ...options, sessionId: 'native-grandchild', parentAgent: child.agent,
+      meta: { ...options.meta, parentSession: child.agent.id } })
+    await nested.dispose()
+  } finally { await child.dispose() }
+  const resumed = await h.ctx.agents.resume({ resumeSessionId: options.sessionId, parentAgent: parent, agentOptions: options.agentOptions })
+  try {
+    resumed.agent.followup(message('resume work')); await resumed.agent.whenIdle()
+    assert.equal(resumed.agent.session.header.parentSession, parent.id)
+  } finally { await resumed.dispose() }
+  await assert.rejects(h.ctx.sessionPersistence.open(options.sessionId, 'write'), { code: 'TASK_SESSION_HOST_WRITER_REQUIRED' })
+})
+
+test('native child binding rejects forged parents, cross-task cwd and unrelated resume identities', async t => {
+  const root = await temporary(), h = await host(root); t.after(() => h.close())
+  const parent = await h.create('parent-task', 'real-parent'), other = await h.create('other-task', 'other-parent')
+  const options = { sessionId: 'rejected-child', parentAgent: parent,
+    meta: { origin: 'subagent', parentSession: parent.id, cwd: parent.session.header.cwd },
+    agentOptions: { provider: 'task-native-fixture', model: 'fixture' } }
+  for (const invalid of [
+    { ...options, parentAgent: { id: parent.id } },
+    { ...options, meta: { ...options.meta, cwd: other.session.header.cwd } },
+    { ...options, meta: { ...options.meta, parentSession: other.id } },
+    { ...options, meta: { ...options.meta, origin: undefined } },
+  ]) await assert.rejects(h.ctx.agents.create(invalid), { code: 'TASK_SESSION_BINDING_REQUIRED' })
+  assert.equal(await h.ctx.sessionPersistence.stat(options.sessionId), undefined)
+  for (const resumeSessionId of [other.id, parent.id]) await assert.rejects(
+    h.ctx.agents.resume({ parentAgent: parent, resumeSessionId, agentOptions: options.agentOptions }), { code: 'TASK_SESSION_BINDING_REQUIRED' })
+})
+
 test('durable registration precedes session creation, survives router close/reinstall and rejects cwd or task rebinding', async t => {
   const root = await temporary(), h = await host(root); t.after(() => h.close())
   const cwd = await taskWorkspace(root, 'task-a')

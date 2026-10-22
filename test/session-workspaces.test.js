@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { executionSessionTitle, sessionWorkspace, sessionPurposes, sessionTitle, nameSession } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 
-test('七种实际会话职责各有独立工作区，未知职责不创建目录', async () => {
+test('八种实际会话职责各有独立工作区，未知职责不创建目录', async () => {
   const root = await mkdtemp(join(tmpdir(), 'session-purposes-'))
   await writeFile(join(root, 'AGENTS.md'), '当前工作区指引')
   const directories = await Promise.all(Object.keys(sessionPurposes).map(role => sessionWorkspace(root, role)))
-  assert.equal(new Set(directories).size, 7)
+  assert.equal(new Set(directories).size, 8)
   assert.deepEqual(directories.map(dir => relative(root, dir)), Object.values(sessionPurposes).map(label => join('session-workspaces', label)))
   assert.equal(await readFile(join(root, 'AGENTS.md'), 'utf8'), '当前工作区指引')
   await assert.rejects(sessionWorkspace(root, 'intent'), /SESSION_WORKSPACE_INVALID/)

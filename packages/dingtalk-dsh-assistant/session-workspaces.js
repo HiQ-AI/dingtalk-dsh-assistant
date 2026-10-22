@@ -14,15 +14,20 @@ export function taskFilePath(root, logicalTaskId, area, ...segments) {
 /** 写前逐层核对，避免先 mkdir 穿过已有 junction 再发现越界。 */
 export async function checkedTaskDirectory(path, create = false) {
   if (!isAbsolute(path ?? '')) throw new Error('TASK_DIRECTORY_INVALID')
-  const parent = dirname(path)
-  if (parent !== path) await checkedTaskDirectory(parent, create)
-  let entry = await lstat(path).catch(error => { if (create && error.code === 'ENOENT') return null; throw error })
-  if (!entry) {
-    await mkdir(path).catch(error => { if (error.code !== 'EEXIST') throw error })
-    entry = await lstat(path)
+  async function inspect(current) {
+    const parent = dirname(current)
+    if (parent !== current) await inspect(parent)
+    let entry = await lstat(current).catch(error => { if (create && error.code === 'ENOENT') return null; throw error })
+    if (!entry) {
+      // 创建前仍解析真实父链；已有目录只在末端解析一次，避免逐祖先重复解析。
+      if (relative(parent, await realpath(parent)) !== '') throw new Error('TASK_DIRECTORY_OUTSIDE_ROOT')
+      await mkdir(current).catch(error => { if (error.code !== 'EEXIST') throw error })
+      entry = await lstat(current)
+    }
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('TASK_DIRECTORY_OUTSIDE_ROOT')
   }
-  if (!entry.isDirectory() || entry.isSymbolicLink() || relative(path, await realpath(path)) !== '')
-    throw new Error('TASK_DIRECTORY_OUTSIDE_ROOT')
+  await inspect(path)
+  if (relative(path, await realpath(path)) !== '') throw new Error('TASK_DIRECTORY_OUTSIDE_ROOT')
   return path
 }
 
