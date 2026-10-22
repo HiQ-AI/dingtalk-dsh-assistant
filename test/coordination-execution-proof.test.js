@@ -28,6 +28,23 @@ async function fixture(t) {
     async reopen() { await store.close(); store = await openDynamicTaskStore(options) } }
 }
 
+test('a review execution result cannot finish the delivery Task after restart', async t => {
+  const f = await fixture(t)
+  await f.command('task.create', { taskId: 'delivery', groupId: 'group',
+    request: '先方案评审，然后开发，开发完部署UAT', requirements: ['评审', '开发', '部署UAT'] })
+  const binding = await f.owner('delivery'), execution = await f.dispatch(binding, 'review-only')
+  await f.command('execution.claim', { executionId: execution.id })
+  const executionBinding = await f.query('execution.binding', { executionId: execution.id })
+  await f.command('execution.result', { binding: executionBinding, output: { summary: '仅方案评审完成', evidence: ['review-proof'] } })
+  await f.command('execution.drained', { binding: executionBinding })
+  await f.command('task.wait', { binding, action: 'wait', summary: '开发和UAT尚待交付', evidence: ['review-proof'], limitations: [] })
+  await f.reopen()
+  const task = await f.query('task.get', { taskId: 'delivery' })
+  assert.equal(task.status, 'active')
+  assert.equal(task.completion, undefined)
+  assert.deepEqual(task.requirements, ['评审', '开发', '部署UAT'])
+})
+
 test('Host binds pending instructions despite caller empty ids; claim waits before locking while Owner controls remain available', async t => {
   const f = await fixture(t)
   await f.task('A'); await f.task('B'); await f.task('unrelated')

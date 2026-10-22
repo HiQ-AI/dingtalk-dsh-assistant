@@ -7,6 +7,86 @@ import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicT
 
 const model = { enabled: true, provider: 'native-task-test', model: 'coordination-controlled' }
 
+// Scripted planning verifies actual ingress/Host contracts, not model comprehension.
+const stageCases = [
+  { name: 'software', objective: '需求X先方案评审，然后开发，开发完部署UAT', requirements: ['先完成方案评审', '评审后开发', '开发完成后部署UAT并验证'] },
+  { name: 'translation-two', objective: '这份稿件先翻译，再校对', requirements: ['翻译稿件', '翻译后校对'] },
+  { name: 'research-four', objective: '本次调研先设计问卷，再访谈，然后分析，最后撰写报告', requirements: ['设计问卷', '问卷后访谈', '访谈后分析', '分析后撰写报告'] },
+  { name: 'translation-reversed', objective: '这份已有译稿先校对，再翻译修订内容', requirements: ['先校对已有译稿', '校对后翻译修订内容'] },
+]
+for (const stageCase of stageCases) for (const existing of [false, true]) test(`one delivery preserves arbitrary user stages: ${stageCase.name}, existing=${existing}`,
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'single-task-stages-'))
+    let host, admitted = false, delegated = false, ownerInput
+    const prompts = { route: '', planner: '', owner: '' }
+    const { objective, requirements } = stageCase
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) {
+        prompts.route = JSON.stringify(request)
+        return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
+          routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion,
+            ignoredRefs: [], units: [{ unitKey: 'delivery', summary: objective, sourceRefs: [{ quote: message.text }],
+              dispatchOwner: 'coordination', topics: [], reason: '一个完整交付目标' }] })) } }]
+      }
+      if (names.includes('coordination_submit')) {
+        prompts.planner = JSON.stringify(request)
+        const full = modelToolValues(request).find(value => value.taskContexts?.some(task => task.taskId === 'original'))
+        if (existing && !full) return [{ name: 'coordination_context_get', args: { taskIds: ['original'] } }]
+        const task = full?.taskContexts.find(task => task.taskId === 'original')
+        admitted = true
+        return [{ name: 'coordination_submit', args: { kind: 'arrangement', members: [existing
+          ? { action: 'task-context', taskId: task.taskId, inputVersion: task.requirementRevision, runSequence: task.runSequence,
+              progressImpact: 'replan', impactReason: '明确补齐后续交付范围', context: objective, objective, requirements }
+          : { action: 'new-task', creationKey: 'delivery-X', title: '需求X交付', objective, requirements }] } }]
+      }
+      const topic = topicTaskCalls(request); if (topic) return topic
+      if (names.includes('task_session_submit')) {
+        prompts.owner = JSON.stringify(request)
+        if (admitted) {
+          ownerInput = input
+          if (!delegated) {
+            delegated = true
+            return [{ name: 'task_delegate', args: { key: 'first-stage', objective: requirements[0], resourceKeys: [] } }]
+          }
+        }
+        return [{ name: 'task_session_submit', args: { decision: { action: 'wait',
+          summary: '首阶段结果仅是证据，后续阶段尚未交付', evidence: [], limitations: requirements.slice(1) } } }]
+      }
+      if (names.includes('execution_submit')) return [{ name: 'execution_submit', args: { output: {
+        status: 'completed', summary: requirements[0], evidence: ['synthetic-first-stage'], limitations: requirements.slice(1), artifacts: [] } } }]
+      return []
+    }, { config: { coordination: model } })
+    if (existing) await host.service.store.command({ id: 'original-create', kind: 'task.create',
+      args: { taskId: 'original', groupId: 'native-group', ownerActorId: 'native-user', request: requirements[0] } })
+    if (existing) { await host.service.recover(); await host.service.whenIdle() }
+    await host.service.ingest({ groupId: 'native-group', messageId: 'stages', senderOpenDingTalkId: 'native-user',
+      text: `测试助手，${objective}`, timestamp: '2026-10-21T01:00:00Z' })
+    await host.service.whenIdle()
+    const tasks = await host.query('task.list')
+    assert.match(prompts.route, /任意用户指定阶段/)
+    assert.match(prompts.planner, /不按内部阶段分别生成new-task/)
+    assert.match(prompts.planner, /不得套用默认阶段模板/)
+    assert.match(prompts.owner, /阶段执行结果仅为证据/)
+    assert.equal(tasks.length, 1, JSON.stringify(host.service.listAlerts()))
+    const task = tasks[0]
+    if (existing) assert.equal(task.taskId, 'original')
+    assert.equal(task.objective, objective)
+    assert.deepEqual(task.requirements, requirements)
+    assert.equal(ownerInput.task.objective, objective)
+    assert.deepEqual(ownerInput.task.requirements, requirements)
+    assert.ok(ownerInput.sources.some(source => source.text.includes(objective)))
+    assert.equal(task.status, 'active')
+    assert.equal(task.completion, undefined)
+    const executions = await host.query('execution.list', { taskId: task.taskId })
+    assert.equal(executions.length, 1)
+    assert.equal(executions[0].status, 'succeeded')
+    await host.service.recover(); await host.service.whenIdle()
+    assert.equal((await host.query('task.list')).length, 1)
+    assert.equal((await host.query('task.get', { taskId: task.taskId })).status, 'active')
+  })
+
 for (const scheduled of [false, true]) test(`explicit chat creation separates durable creation from dependency/time start: scheduled=${scheduled}`,
   { skip: !available ? reason : false, timeout: 15000 }, async t => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
