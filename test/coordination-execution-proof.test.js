@@ -152,6 +152,87 @@ test('existing running input remains explicit prior scope, but a new continue in
   await assert.rejects(f.command('execution.claim', { executionId: execution.id }), { code: 'DYNAMIC_COORDINATION_WAITING' })
 })
 
+test('a new reorder replaces initial ready-member clarification and preserves already running input', async t => {
+  const f = await fixture(t)
+  await f.task('A'); await f.task('B')
+  const binding = await f.owner('B'), execution = await f.dispatch(binding, 'already-running')
+  await f.command('execution.claim', { executionId: execution.id })
+  await f.arrange('batch', [f.member('batch','a','A'), f.member('batch','b','B',['a'])])
+  const initial = (await f.query('coordination.get', { coordinationId: 'batch' })).members.find(m => m.id === 'b')
+  const assess = assessmentId => ({ binding, instructionId: 'b', assessmentId,
+    decision: 'continue_existing', summary: '用户撤回 A 前置，保留原 B 工作', evidence: ['原输入已运行，未取消'] })
+  await f.command('coordination.reorder.assess', { ...assess(initial.reorderAssessment.id), decision: 'needs_clarification' })
+  const source = (await f.command('coordination.reserve', { unitId: 'clarified-order', revision: 1,
+    groupId: 'group', original: 'B 不必等待 A，继续原工作' })).result.source
+  await f.command('coordination.change', { sourceId: source.id, fence: source.fence, coordinationId: 'batch', expectedRevision: 1,
+    change: { action: 'reorder', dependencies: [{ instructionId: 'b', afterInstructionIds: [] }] } })
+  const updated = (await f.query('coordination.get', { coordinationId: 'batch' })).members.find(m => m.id === 'b')
+  assert.equal(updated.state, 'ready')
+  assert.equal(updated.reorderAssessment.state, 'pending')
+  assert.notEqual(updated.reorderAssessment.id, initial.reorderAssessment.id)
+  assert.deepEqual(updated.reorderAssessment.afterInstructionIds, [])
+  await assert.rejects(f.command('coordination.reorder.assess', assess(initial.reorderAssessment.id)), { code: 'DYNAMIC_COORDINATION_ASSESSMENT_STALE' })
+  assert.deepEqual((await f.command('coordination.apply', { instructionId: 'b', expectedRevision: 2 })).result.waiting, ['owner_assessment'])
+  const running = await f.query('execution.get', { executionId: execution.id })
+  assert.equal(running.status, 'running'); assert.equal(running.cancelRequested, false)
+  await f.command('coordination.reorder.assess', assess(updated.reorderAssessment.id))
+  assert.equal((await f.command('coordination.apply', { instructionId: 'b', expectedRevision: 2 })).result.member.state, 'applied')
+  await f.command('execution.drained', { binding: await f.query('execution.binding', { executionId: execution.id }) })
+  await f.command('task.drained', { binding })
+  await f.command('execution.continue', { binding: await f.owner('B'), executionId: execution.id, key: 'after-clarification', prompt: '继续 B', input: {} })
+  await f.command('execution.claim', { executionId: execution.id })
+  assert.deepEqual((await f.query('execution.get', { executionId: execution.id })).instructionScope.instructionIds, ['b'])
+})
+
+test('partial cancellation retires applied instruction gates while retaining history and other dependencies', async t => {
+  const f = await fixture(t)
+  await f.task('A'); await f.task('B'); await f.task('C')
+  await f.arrange('batch', [f.member('batch','a','A'), f.member('batch','b','B'), f.member('batch','c','C',['b'])])
+  await f.command('coordination.apply', { instructionId: 'b', expectedRevision: 1 })
+  const before = (await f.query('coordination.get', { coordinationId: 'batch' })).members.find(m => m.id === 'b')
+  const source = (await f.command('coordination.reserve', { unitId: 'cancel-b', revision: 1, groupId: 'group', original: '仅撤销 B 安排' })).result.source
+  await f.command('coordination.change', { sourceId: source.id, fence: source.fence, coordinationId: 'batch', expectedRevision: 1,
+    change: { action: 'cancel', instructionIds: ['b'] } })
+  await f.command('task.supplement', { taskId: 'B', expectedRequirementRevision: 1, expectedControlRevision: 1,
+    messageId: 'independent-b', text: '继续原 B', request: 'B\n继续原 B' })
+  const binding = await f.owner('B'), execution = await f.dispatch(binding, 'independent-b')
+  assert.deepEqual(execution.instructionScope.instructionIds, [])
+  await f.command('execution.claim', { executionId: execution.id })
+  assert.deepEqual((await f.query('execution.get', { executionId: execution.id })).instructionScope.effectiveInstructions, [])
+  const task = await f.query('task.get', { taskId: 'B' })
+  assert.equal(task.status, 'active'); assert.equal(task.control, 'active'); assert.equal(task.contextRevision, 2)
+  const after = (await f.query('coordination.get', { coordinationId: 'batch' })).members.find(m => m.id === 'b')
+  assert.equal(after.state, 'applied'); assert.equal(after.control, 'cancelled')
+  assert.deepEqual(after.receipt, before.receipt)
+  assert.deepEqual((await f.command('coordination.apply', { instructionId: 'c', expectedRevision: 2 })).result.waiting, ['b'])
+  // Another active arrangement on the same Task must still gate future work.
+  await f.arrange('other', [f.member('other','other-a','A'), f.member('other','other-b','B',['other-a'])])
+  await f.command('execution.drained', { binding: await f.query('execution.binding', { executionId: execution.id }) })
+  await f.command('execution.continue', { binding, executionId: execution.id, key: 'other-constraint', prompt: '下一步', input: {} })
+  await assert.rejects(f.command('execution.claim', { executionId: execution.id }), { code: 'DYNAMIC_COORDINATION_WAITING' })
+  assert.deepEqual(await f.query('resource.list'), [])
+})
+
+test('claim after cancellation preserves pre-dispatch instruction history without effective cancelled coverage', async t => {
+  const f = await fixture(t)
+  await f.task('B')
+  await f.arrange('batch', [f.member('batch','b','B')])
+  await f.command('coordination.apply', { instructionId: 'b', expectedRevision: 1 })
+  const binding = await f.owner('B'), execution = await f.dispatch(binding, 'queued-before-cancel')
+  assert.deepEqual(execution.instructionScope.instructionIds, ['b'])
+  assert.equal(execution.status, 'queued')
+  const source = (await f.command('coordination.reserve', { unitId: 'cancel-queued', revision: 1,
+    groupId: 'group', original: '只撤销安排，保留原 B' })).result.source
+  await f.command('coordination.change', { sourceId: source.id, fence: source.fence, coordinationId: 'batch', expectedRevision: 1,
+    change: { action: 'cancel', instructionIds: ['b'] } })
+  await f.command('execution.claim', { executionId: execution.id })
+  const claimed = await f.query('execution.get', { executionId: execution.id })
+  assert.equal(claimed.status, 'running')
+  assert.deepEqual(claimed.instructionScope.instructionIds, ['b'])
+  assert.deepEqual(claimed.instructionScope.effectiveInstructions, [])
+  assert.equal((await f.query('resource.list')).length, 1)
+})
+
 test('completion receipt, coverage proof and independent ordered event commit atomically and replay once', async t => {
   const f = await fixture(t)
   await f.task('A')

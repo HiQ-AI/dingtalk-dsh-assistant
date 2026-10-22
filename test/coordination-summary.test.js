@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { coordinationSnapshot } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
+import { coordinationSnapshot, formatCoordinationSnapshot } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
 const member = (id, state) => ({ id, taskId: id, state, control: state === 'cancelled' ? 'cancelled' : 'active',
@@ -65,6 +65,64 @@ test('a recurring authorization blocked at trigger remains visible as outstandin
     jobs:[{id:'job',state:'blocked',waitingReason:'authorization_changed'}]})
   assert.equal(result.state,'needs_attention');assert.deepEqual(result.outstanding.occurrenceIds,['slot'])
   assert.equal(result.occurrences[0].failureReason,'authorization_changed');assert.equal(result.jobs[0].failureReason,'authorization_changed')
+  const explanation=formatCoordinationSnapshot(result)
+  assert.match(explanation,/受阻/);assert.match(explanation,/authorization_changed/)
+})
+
+test('cancelled blocked occurrence retires execution obligations but preserves unknown delivery readback',()=>{
+  for(const deliveryState of ['none','unknown']){
+    const result=coordinationSnapshot({coordination:{id:'coordination',revision:1,state:'active'},members:[],tasks:[],schedules:[],
+      occurrences:[{id:'slot',actionState:'blocked',cancelledAt:'2026-10-21T00:00:00Z',deliveryState,failureReason:'authorization_changed'}],jobs:[]})
+    assert.deepEqual(result.outstanding.occurrenceIds,deliveryState==='unknown'?['slot']:[])
+    if(deliveryState==='none')assert.equal(result.state,'cancelled')
+    assert.match(formatCoordinationSnapshot(result),/已取消本次安排/)
+  }
+})
+
+for (const delivery of ['delivered','unknown','cancelled']) test(`expired read-only schedule prepares one recoverable notice and preserves ${delivery} boundary`, async t => {
+  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+  const directory=await mkdtemp(join(tmpdir(),'coordination-expired-notice-'))
+  const options={dbPath:join(directory,'tasks.sqlite'),instanceId:'expired-notice',initialize:true}
+  let store=await openDynamicTaskStore(options)
+  t.after(async()=>{await store.close();await rm(directory,{recursive:true,force:true})})
+  const command=(kind,args={})=>store.command({id:randomUUID(),kind,args})
+  await command('task.create',{taskId:'A',groupId:'group',request:'原目标'})
+  const before=await store.query({kind:'task.get',taskId:'A'})
+  const source=(await command('coordination.reserve',{unitId:'expired-query',revision:1,groupId:'group',original:'九点查询A'})).result.source
+  await command('coordination.accept',{coordinationId:'expired',sourceId:source.id,fence:source.fence,members:[],readOnly:true,
+    schedule:{scheduleId:'at-nine',timezone:'Asia/Shanghai',rule:{kind:'once',at:'2026-10-21T01:00:00.000Z'},
+      action:{kind:'read-query',taskIds:['A']},target:{conversationId:'group',recipientIds:['recipient']}}})
+  t.mock.timers.tick(76*60000)
+  const occurrence=(await command('coordination.schedule.scan')).result.occurrences[0]
+  assert.equal(occurrence.actionState,'expired');assert.equal(occurrence.deliveryState,'none')
+  assert.deepEqual(await store.query({kind:'coordination.job.list'}),[])
+  const first=(await command('coordination.aggregate',{coordinationId:'expired'})).result.notification
+  assert.ok(first);assert.match(first.payload.text,/已过期，本次未执行/);assert.match(first.payload.text,/09:00:00/)
+  assert.deepEqual(first.payload.atOpenDingTalkIds,['recipient'])
+  assert.match(first.payload.text,/Asia\/Shanghai/);assert.match(first.payload.text,/recipient/)
+  await store.close();store=await openDynamicTaskStore(options)
+  assert.equal((await command('coordination.aggregate',{coordinationId:'expired'})).result.notification,undefined)
+  assert.equal((await store.query({kind:'notification.list'})).length,1)
+  if (delivery==='cancelled') {
+    await command('coordination.occurrence.cancel',{occurrenceId:occurrence.id,expectedControlRevision:1})
+    // 不先 aggregate，直接竞争发送许可，证明最终门禁回读取消事实。
+    const rejected=await command('notification.start',{notificationId:first.id})
+    assert.equal(rejected.dispatchEligible,false);assert.equal(rejected.result.notification.state,'superseded')
+    const after=(await command('coordination.aggregate',{coordinationId:'expired'})).result
+    assert.equal(after.notification,undefined);assert.equal(after.snapshot.state,'cancelled')
+    assert.equal((await store.query({kind:'notification.list'})).length,1)
+    assert.deepEqual(await store.query({kind:'task.get',taskId:'A'}),before)
+    return
+  }
+  const permitted=(await command('notification.start',{notificationId:first.id})).result.notification
+  if (delivery==='unknown') await command('coordination.occurrence.cancel',{occurrenceId:occurrence.id,expectedControlRevision:1})
+  await command('notification.receipt',{notificationId:first.id,dispatchToken:permitted.dispatchToken,state:delivery})
+  await store.close();store=await openDynamicTaskStore(options)
+  await command('coordination.schedule.scan');await command('coordination.aggregate',{coordinationId:'expired'})
+  const notices=await store.query({kind:'notification.list'})
+  assert.equal(notices.length,1);assert.equal(notices[0].id,first.id);assert.equal(notices[0].state,delivery)
+  assert.equal(notices[0].payloadDigest,first.payloadDigest)
+  assert.deepEqual(await store.query({kind:'task.get',taskId:'A'}),before)
 })
 
 test('a past recurring slot retains its own fulfillment without releasing current-version dependencies', () => {

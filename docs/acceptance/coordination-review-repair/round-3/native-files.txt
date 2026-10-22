@@ -1,0 +1,10 @@
+test/coordination-fairness-native.test.js
+test/coordination-final-native.test.js
+test/coordination-latency-native.test.js
+test/coordination-model-native.test.js
+test/coordination-observed-native.test.js
+test/coordination-recurring-native.test.js
+test/coordination-reorder-native.test.js
+test/coordination-workspace-native.test.js
+test/independent-coordination-changes-native.test.js
+test/independent-coordination-native.test.js

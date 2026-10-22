@@ -33,7 +33,9 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       && proof.contextRevision >= member.effectiveVersion.contextRevision
   }
   const waiting = member => member.dependencies.filter(id => !fulfilled(get('dynamic_coordination_members', id)))
+  // 已生效后撤销只保留历史效果，不再约束原 Task 的后续输入。
   const taskMembers = taskId => all('dynamic_coordination_members').filter(m => !m.observation && m.taskId === taskId
+    && m.control !== 'cancelled'
     && !['cancelled','superseded','fulfilled','template'].includes(m.state)
     && get('dynamic_coordination', m.coordinationId).state !== 'cancelled')
   const scope = (taskId, inputVersion) => {
@@ -81,7 +83,8 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       contextRevision: bound.contextRevision ?? null, controlRevision: bound.controlRevision ?? execution.controlRevision,
       runSequence: bound.runSequence ?? task.runSequence }, ...version(task),
       effectiveInstructions: bound.instructionIds.map(id => get('dynamic_coordination_members', id))
-        .filter(m => m.state === 'applied' && current(m))
+        .filter(m => m.state === 'applied' && m.control !== 'cancelled' && current(m)
+          && get('dynamic_coordination', m.coordinationId).state !== 'cancelled')
         .map(m => ({ instructionId: m.id, effectiveVersion: clone(m.effectiveVersion), commandId: m.command.id })) }
   }
   function reconcileObservation(member) {
@@ -447,8 +450,9 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         const changed = array(change.dependencies).map(item => {
           if (!coordination.memberIds.includes(item.instructionId)) fail('DYNAMIC_COORDINATION_SCOPE')
           const member = get('dynamic_coordination_members', item.instructionId)
-          if (member.state !== 'ready') {
-            if (member.state !== 'applied' || !current(member)) fail('DYNAMIC_COORDINATION_ALREADY_STARTED')
+          // ready 也可能已有运行输入或待澄清评估；新改口必须产生新评估身份。
+          if (member.state !== 'ready' || member.reorderAssessment || member.existingInputs.length) {
+            if (!['ready','applied'].includes(member.state) || !current(member)) fail('DYNAMIC_COORDINATION_ALREADY_STARTED')
             member.reorderAssessment = {id:`reorder:${source.id}:${member.id}`,sourceId:source.id,revision:coordination.revision+1,
               state:'pending',afterInstructionIds:array(item.afterInstructionIds),original:source.original,requestedAt:now()}
             member.reorderExistingInputs = []

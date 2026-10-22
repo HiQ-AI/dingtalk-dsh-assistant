@@ -6,8 +6,9 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues } from './fixtures/task-session-native-host.js'
 
-for (const mode of ['completed-A','waiting-A','paused-B']) test(`actual chat observes A without mutation and resumes original B: ${mode}`,
+for (const [mode,scheduled] of [['completed-A',false],['waiting-A',false],['paused-B',false],['completed-A',true],['waiting-A',true]]) test(`actual chat observes A without mutation and resumes original B: ${mode}, scheduled=${scheduled}`,
   {skip:!available?reason:false,timeout:20000},async t=>{
+    if(scheduled)t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
     const root=await mkdtemp(join(tmpdir(),'observed-native-'));let h, admitted=false, plans=0
     const ownerSessions=[]
     const decide=request=>{
@@ -19,7 +20,7 @@ for (const mode of ['completed-A','waiting-A','paused-B']) test(`actual chat obs
         const context=modelToolValues(request).find(v=>v.taskContexts?.length===2)
         if(!context)return [{name:'coordination_context_get',args:{taskIds:['A','B']}}]
         const [a,b]=['A','B'].map(id=>context.taskContexts.find(x=>x.taskId===id));plans++
-        return [{name:'coordination_submit',args:{kind:'arrangement',members:[
+        return [{name:'coordination_submit',args:{...(scheduled?{kind:'schedule',actionKind:'task-command',timezone:'Asia/Shanghai',rule:{kind:'once',at:'2026-10-21T01:00:00.000Z'},recipientIds:[],interpretation:'九点后等原A完成再继续B'}:{kind:'arrangement'}),members:[
           {action:'task-observe',taskId:'A',inputVersion:a.requirementRevision,runSequence:a.runSequence},
           {action:'task-continue',taskId:'B',inputVersion:b.requirementRevision,runSequence:b.runSequence,progressImpact:'preserve',
             impactReason:'继续原目标',context:'A完成后继续B',afterTaskIds:['A']}]}}]
@@ -39,9 +40,13 @@ for (const mode of ['completed-A','waiting-A','paused-B']) test(`actual chat obs
     if(mode==='paused-B') {const b=await h.query('task.get',{taskId:'B'});await cmd('task.control',{taskId:'B',expectedControlRevision:b.controlRevision,control:'paused',reason:'existing pause'})}
     const aBefore=await h.query('task.get',{taskId:'A'}), aWakes=await h.query('wake.list',{taskId:'A'}), bBefore=await h.query('task.get',{taskId:'B'})
     admitted=true
-    await h.service.ingest({groupId:'native-group',messageId:'order',senderOpenDingTalkId:'native-user',text:'A任务处理完之后继续B任务',timestamp:'2026-10-21T01:00:00Z'})
+    await h.service.ingest({groupId:'native-group',messageId:'order',senderOpenDingTalkId:'native-user',text:scheduled?'九点以后等A任务处理完之后继续B任务':'A任务处理完之后继续B任务',timestamp:'2026-10-21T01:00:00Z'})
     await h.service.whenIdle()
     assert.equal(plans,1,JSON.stringify(h.service.listAlerts()))
+    if(scheduled) {
+      assert.deepEqual(await h.query('task.get',{taskId:'B'}),bBefore)
+      t.mock.timers.tick(3600000);await h.service.recover();await h.service.whenIdle()
+    }
     assert.deepEqual(await h.query('task.get',{taskId:'A'}),aBefore)
     assert.deepEqual(await h.query('wake.list',{taskId:'A'}),aWakes)
     if(mode!=='completed-A') {

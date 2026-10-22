@@ -1,0 +1,165 @@
+✔ timer defers a frozen original Task command until due and receives it once without a new Task or session (101.3591ms)
+✔ daily accepted authorization freezes a new exact command per slot and recovers without another user confirmation (91.5098ms)
+✔ weekly command blocks a changed goal instead of extending its old recurring authorization (57.7521ms)
+✔ future schedule edits preserve each slot authorized original text rather than replacing it with the control message (61.9824ms)
+✔ recurring replan advances only through its own prior effective target version (95.906ms)
+✔ per-slot instruction creation and Task effects survive lost acknowledgement under the original frozen identity (79.659ms)
+✔ lost commit acknowledgement is reconciled by the original Task command receipt after restart (77.1499ms)
+✔ due Task command waits for authoritative dependencies and later reuses its frozen command identity (65.2251ms)
+✔ stale frozen Task version is rejected rather than recomputing expected versions under the same command (59.769ms)
+✔ replacing a future Task-command template cannot return its old ready member to immediate dispatch (55.2866ms)
+✔ message trigger needs no schedule fields and deduplicates each stable source revision/action (60.03ms)
+✔ one authoritative business event may trigger two different actions but never the same action twice (59.0446ms)
+✔ business-event Task command rechecks the source proof after claim and before applying any effect (60.5602ms)
+✔ instance pause/resume fences the prior worker and cancelling the arrangement never cancels the Task (66.0975ms)
+✔ accepted recurring command keeps historical identity across future edits and restart, then advances next slot (118.844ms)
+✔ rejected source handoff reconciles frozen identity across normal boundary (137.6193ms)
+✔ rejected source handoff reconciles frozen identity across coordination.source.freezeHandoff boundary (81.8427ms)
+✔ rejected source handoff reconciles frozen identity across resident.complete boundary (76.0691ms)
+✔ rejected source handoff reconciles frozen identity across coordination.source.completeHandoff boundary (77.1914ms)
+✔ unknown effect evidence cannot satisfy the explicit handoff proof (0.9992ms)
+✔ follow-up ordinal resolves the original member order and pauses only that arrangement member (142.9158ms)
+✔ a genuine clarification reply resolves the same coordination identity and settles both source units (90.4401ms)
+✖ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=false (154.5367ms)
+✖ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=true (141.3384ms)
+✔ persisted frozen mode blocks new semantic submit and accepted member dispatch while reconciliation remains readable (77.1132ms)
+✖ member-level ambiguity preserves source ownership and continues clear members (128.8434ms)
+✖ member-level ambiguity preserves source ownership and holds the explicit batch (139.1327ms)
+✔ chat aggregate query freezes authoritative obligations and recovers the same answer without changing Tasks (83.2726ms)
+✖ resolving one of several pending members settles neither the other ambiguity nor its original source (153.0893ms)
+✔ interleaved unknown source order cannot ordinal-control the clear subset, even after clarification resolves (55.3158ms)
+✔ arrangement member context pages remain bounded and preserve persisted ordinals (61.7616ms)
+✔ persisted original source slots directly select interleaved members before and after clarification and restart (94.2457ms)
+✔ source slot indices are checked against immutable original instead of summary or guessed order (39.3432ms)
+✔ source slot contracts reject duplicate, overlapping and out-of-range indices and retain genuine multi-target ambiguity (0.825ms)
+✔ appended user member receives a sourced third ordinal across restart only with a verified append span: true (217.4233ms)
+✔ appended user member receives a sourced third ordinal across restart only with a verified append span: false (72.1638ms)
+✔ legacy ordinal fallback and bounded context exclude recurring children before an explicit appended member (61.1434ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=false (111.8949ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=true (76.0691ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=false (151.3922ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=true (263.797ms)
+ℹ tests 41
+ℹ suites 0
+ℹ pass 36
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3315.1172
+
+✖ failing tests:
+
+test at test\independent-coordination-changes.test.js:140:40
+✖ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=false (154.5367ms)
+  AssertionError [ERR_ASSERTION]: frozen partial-resolution acknowledgement remains identical after later member resolution
+  + actual - expected
+  
+  + [
+  +   {
+  +     code: 'DYNAMIC_ARGUMENT_INVALID',
+  +     id: 'coordination-9ef374c4c0a9324445e49634406d20fe'
+  +   },
+  +   {
+  +     code: 'DYNAMIC_ARGUMENT_INVALID',
+  +     id: 'coordination-9ef374c4c0a9324445e49634406d20fe'
+  +   }
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:172:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ { id: 'coordination-9ef374c4c0a9324445e49634406d20fe', code: 'DYNAMIC_ARGUMENT_INVALID' }, { id: 'coordination-9ef374c4c0a9324445e49634406d20fe', code: 'DYNAMIC_ARGUMENT_INVALID' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\independent-coordination-changes.test.js:140:40
+✖ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=true (141.3384ms)
+  AssertionError [ERR_ASSERTION]: frozen partial-resolution acknowledgement remains identical after later member resolution
+  + actual - expected
+  
+  + [
+  +   {
+  +     code: 'DYNAMIC_ARGUMENT_INVALID',
+  +     id: 'coordination-d9d34a1660f17d1e06b456fcf6b88e8c'
+  +   }
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:172:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ { id: 'coordination-d9d34a1660f17d1e06b456fcf6b88e8c', code: 'DYNAMIC_ARGUMENT_INVALID' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\independent-coordination-changes.test.js:187:41
+✖ member-level ambiguity preserves source ownership and continues clear members (128.8434ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  4 !== 0
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:211:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 4,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\independent-coordination-changes.test.js:187:41
+✖ member-level ambiguity preserves source ownership and holds the explicit batch (139.1327ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  2 !== 0
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:211:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\independent-coordination-changes.test.js:232:1
+✖ resolving one of several pending members settles neither the other ambiguity nor its original source (153.0893ms)
+  AssertionError [ERR_ASSERTION]: recovery must reuse frozen initial acceptance content after a partial clarification changes member count
+  + actual - expected
+  
+  + [
+  +   {
+  +     code: 'DYNAMIC_ARGUMENT_INVALID',
+  +     id: 'coordination-f60c38374503a8cb1b44469d314a474f'
+  +   },
+  +   {
+  +     code: 'DYNAMIC_ARGUMENT_INVALID',
+  +     id: 'coordination-f60c38374503a8cb1b44469d314a474f'
+  +   }
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:248:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ { id: 'coordination-f60c38374503a8cb1b44469d314a474f', code: 'DYNAMIC_ARGUMENT_INVALID' }, { id: 'coordination-f60c38374503a8cb1b44469d314a474f', code: 'DYNAMIC_ARGUMENT_INVALID' } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

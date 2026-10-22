@@ -1,0 +1,14 @@
+✔ actual chat observes A without mutation and resumes original B: completed-A (2658.9289ms)
+✔ actual chat observes A without mutation and resumes original B: waiting-A (5521.4388ms)
+✔ actual chat observes A without mutation and resumes original B: paused-B (5923.6362ms)
+✔ actual scheduled chat waits for both due time and observed A: completed-A (4708.3514ms)
+✔ actual scheduled chat waits for both due time and observed A: waiting-A (7279.6164ms)
+✔ chat daily Task command reaches two original Owner inputs with distinct slot identities and no replanning confirmation (3236.3258ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30973.0154

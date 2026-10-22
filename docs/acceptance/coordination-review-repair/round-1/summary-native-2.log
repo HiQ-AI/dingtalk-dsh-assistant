@@ -1,0 +1,76 @@
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (1433.1828ms)
+✔ competing actual ingress and recovery reserve one source, plan once and keep original receipt after restart (2442.0273ms)
+✔ automatic expired result refresh restores one outbox after restart with closed optional Topic (9775.4035ms)
+✔ automatic expired result refresh restores one outbox after restart with deleted optional Topic (2135.592ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 3
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16673.7896
+
+✖ failing tests:
+
+test at test\coordination-final-native.test.js:14:1
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (1433.1828ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+      appliedOperations: [],
+  +   claimContextRevision: 0,
+  +   claimControlRevision: 1,
+  +   claimRequirementRevision: 1,
+      control: 'active',
+      controlRevision: 1,
+      createdAt: '2026-10-21T00:00:00.000Z',
+      drained: true,
+      groupId: 'native-group',
+      humanRequests: [],
+      id: 'A',
+  +   lastDecision: {
+  +     action: 'wait',
+  +     at: '2026-10-21T01:16:00.000Z',
+  +     controlRevision: 1,
+  +     decision: null,
+  +     evidence: [],
+  +     limitations: [],
+  +     question: null,
+  +     requirementRevision: 1,
+  +     summary: '保持原任务目标'
+  +   },
+  +   leaseEpoch: 1,
+  -   leaseEpoch: 0,
+      metadata: {},
+      objective: '原目标',
+      ownerActorId: 'native-user',
+  +   providerRecovery: null,
+  +   recovering: false,
+      request: '原目标',
+      requirementRevision: 1,
+      requirements: [],
+      runSequence: 1,
+  +   sessionBound: true,
+  -   sessionBound: false,
+      sessionId: 'task-session-965eaba9-8ca0-4fa2-ba90-bb91622abbee',
+      sourceRefs: [],
+      status: 'active',
+      taskId: 'A',
+      title: '原目标',
+      topicRefs: [],
+  +   updatedAt: '2026-10-21T01:16:00.000Z'
+  -   updatedAt: '2026-10-21T00:00:00.000Z'
+    }
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/coordination-final-native.test.js:36:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { appliedOperations: [], claimContextRevision: 0, claimControlRevision: 1, claimRequirementRevision: 1, control: 'active', controlRevision: 1, createdAt: '2026-10-21T00:00:00.000Z', drained: true, groupId: 'native-group', humanRequests: [], id: 'A', lastDecision: { action: 'wait', at: '2026-10-21T01:16:00.000Z', controlRevision: 1, decision: null, evidence: [], limitations: [], question: null, requirementRevision: 1, summary: '保持原任务目标' }, leaseEpoch: 1, metadata: {}, objective: '原目标', ownerActorId: 'native-user', providerRecovery: null, recovering: false, request: '原目标', requirementRevision: 1, requirements: [], runSequence: 1, sessionBound: true, sessionId: 'task-session-965eaba9-8ca0-4fa2-ba90-bb91622abbee', sourceRefs: [], status: 'active', taskId: 'A', title: '原目标', topicRefs: [], updatedAt: '2026-10-21T01:16:00.000Z' },
+    expected: { appliedOperations: [], control: 'active', controlRevision: 1, createdAt: '2026-10-21T00:00:00.000Z', drained: true, groupId: 'native-group', humanRequests: [], id: 'A', leaseEpoch: 0, metadata: {}, objective: '原目标', ownerActorId: 'native-user', request: '原目标', requirementRevision: 1, requirements: [], runSequence: 1, sessionBound: false, sessionId: 'task-session-965eaba9-8ca0-4fa2-ba90-bb91622abbee', sourceRefs: [], status: 'active', taskId: 'A', title: '原目标', topicRefs: [], updatedAt: '2026-10-21T00:00:00.000Z' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

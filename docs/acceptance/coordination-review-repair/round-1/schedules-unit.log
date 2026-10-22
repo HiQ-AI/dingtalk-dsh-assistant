@@ -1,0 +1,79 @@
+✔ timer defers a frozen original Task command until due and receives it once without a new Task or session (107.2567ms)
+✔ daily accepted authorization freezes a new exact command per slot and recovers without another user confirmation (81.7254ms)
+✔ weekly command blocks a changed goal instead of extending its old recurring authorization (48.3307ms)
+✔ future schedule edits preserve each slot authorized original text rather than replacing it with the control message (57.5755ms)
+✔ recurring replan advances only through its own prior effective target version (73.6079ms)
+✔ per-slot instruction creation and Task effects survive lost acknowledgement under the original frozen identity (65.4116ms)
+✔ lost commit acknowledgement is reconciled by the original Task command receipt after restart (68.4879ms)
+✔ due Task command waits for authoritative dependencies and later reuses its frozen command identity (54.5977ms)
+✔ stale frozen Task version is rejected rather than recomputing expected versions under the same command (45.1084ms)
+✔ replacing a future Task-command template cannot return its old ready member to immediate dispatch (39.3678ms)
+✔ message trigger needs no schedule fields and deduplicates each stable source revision/action (47.4774ms)
+✔ one authoritative business event may trigger two different actions but never the same action twice (53.1276ms)
+✔ business-event Task command rechecks the source proof after claim and before applying any effect (50.4292ms)
+✔ instance pause/resume fences the prior worker and cancelling the arrangement never cancels the Task (60.3301ms)
+✔ accepted recurring command keeps historical identity across future edits and restart, then advances next slot (112.4501ms)
+✔ rejected source handoff reconciles frozen identity across normal boundary (106.4368ms)
+✔ rejected source handoff reconciles frozen identity across coordination.source.freezeHandoff boundary (59.5894ms)
+✔ rejected source handoff reconciles frozen identity across resident.complete boundary (72.8575ms)
+✔ rejected source handoff reconciles frozen identity across coordination.source.completeHandoff boundary (62.3591ms)
+✔ unknown effect evidence cannot satisfy the explicit handoff proof (2.6615ms)
+✔ follow-up ordinal resolves the original member order and pauses only that arrangement member (113.477ms)
+✔ a genuine clarification reply resolves the same coordination identity and settles both source units (80.4197ms)
+✔ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=false (137.7469ms)
+✔ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=true (126.7967ms)
+✔ persisted frozen mode blocks new semantic submit and accepted member dispatch while reconciliation remains readable (69.2547ms)
+✔ member-level ambiguity preserves source ownership and continues clear members (137.5866ms)
+✔ member-level ambiguity preserves source ownership and holds the explicit batch (129.5314ms)
+✔ chat aggregate query freezes authoritative obligations and recovers the same answer without changing Tasks (88.1053ms)
+✔ resolving one of several pending members settles neither the other ambiguity nor its original source (133.4805ms)
+✔ interleaved unknown source order cannot ordinal-control the clear subset, even after clarification resolves (62.4325ms)
+✔ arrangement member context pages remain bounded and preserve persisted ordinals (65.4431ms)
+✔ persisted original source slots directly select interleaved members before and after clarification and restart (111.239ms)
+✔ source slot indices are checked against immutable original instead of summary or guessed order (46.3208ms)
+✔ source slot contracts reject duplicate, overlapping and out-of-range indices and retain genuine multi-target ambiguity (0.9786ms)
+✔ appended user member receives a sourced third ordinal across restart only with a verified append span: true (244.6864ms)
+✔ appended user member receives a sourced third ordinal across restart only with a verified append span: false (106.2407ms)
+✔ legacy ordinal fallback and bounded context exclude recurring children before an explicit appended member (75.7943ms)
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=false (63.9742ms)
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=true (56.5398ms)
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=false (59.1035ms)
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=true (54.1436ms)
+ℹ tests 41
+ℹ suites 0
+ℹ pass 37
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2824.0146
+
+✖ failing tests:
+
+test at test\independent-coordination-changes.test.js:433:82
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=false (63.9742ms)
+  TypeError: Cannot read properties of undefined (reading '0')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:449:77)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\independent-coordination-changes.test.js:433:82
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=true (56.5398ms)
+  TypeError: Cannot read properties of undefined (reading '0')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:449:77)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\independent-coordination-changes.test.js:433:82
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=false (59.1035ms)
+  TypeError: Cannot read properties of undefined (reading '0')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:449:77)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\independent-coordination-changes.test.js:433:82
+✖ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=true (54.1436ms)
+  TypeError: Cannot read properties of undefined (reading '0')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/independent-coordination-changes.test.js:449:77)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

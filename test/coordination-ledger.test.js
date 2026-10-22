@@ -54,12 +54,13 @@ test('real process SIGKILL after third member commit resumes original six receip
   const script = `import {openDynamicTaskStore} from ${JSON.stringify(moduleUrl)};
     const store=await openDynamicTaskStore(JSON.parse(process.argv[1]));
     for(const id of ['A','B','C']) await store.command({id:'apply:'+id,kind:'coordination.apply',args:{instructionId:id,expectedRevision:1}});
-    process.kill(process.pid,'SIGKILL');`
+    process.stderr.write('kill-ready',()=>process.kill(process.pid,'SIGKILL'));`
   const child=spawn(process.execPath,['--input-type=module','-e',script,JSON.stringify(f.options)],{stdio:['ignore','ignore','pipe']})
   let errors='';child.stderr.on('data',chunk=>{errors+=chunk})
   t.after(()=>child.kill('SIGKILL'))
   const [code,signal]=await once(child,'exit')
-  assert.equal(signal,'SIGKILL',errors);assert.equal(code,null)
+  assert.ok(errors.includes('kill-ready'),errors)
+  assert.deepEqual([code,signal],process.platform === 'win32' ? [1,null] : [null,'SIGKILL'],errors)
   await f.reopen()
   assert.deepEqual((await f.query({kind:'coordination.get',coordinationId:'batch'})).members.map(m=>m.state),
     ['applied','applied','applied','ready','ready','ready'])
@@ -214,11 +215,12 @@ for (const fakeNetworkCalled of [false,true]) test(`real SIGKILL after permit: f
     const permit=await store.command({id:'crash-permit',kind:'notification.start',args:{notificationId:process.argv[2]}});
     if(!permit.dispatchEligible)throw new Error('permit missing');
     if(process.argv[3]==='true')writeFileSync(process.argv[4],'one isolated fake send');
-    process.kill(process.pid,'SIGKILL');`
+    process.stderr.write('kill-ready',()=>process.kill(process.pid,'SIGKILL'));`
   const child=spawn(process.execPath,['--input-type=module','-e',script,JSON.stringify(f.options),notification.id,String(fakeNetworkCalled),marker],{stdio:['ignore','ignore','pipe']})
   let errors='';child.stderr.on('data',chunk=>{errors+=chunk})
   t.after(()=>child.kill('SIGKILL'))
-  const [code,signal]=await once(child,'exit');assert.equal(signal,'SIGKILL',errors);assert.equal(code,null)
+  const [code,signal]=await once(child,'exit');assert.ok(errors.includes('kill-ready'),errors)
+  assert.deepEqual([code,signal],process.platform === 'win32' ? [1,null] : [null,'SIGKILL'],errors)
   await f.reopen()
   assert.equal((await f.query({kind:'notification.get',notificationId:notification.id})).state,'unknown')
   for(const commandId of ['crash-permit','new-recovery-attempt'])
