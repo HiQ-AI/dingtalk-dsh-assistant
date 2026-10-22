@@ -20,7 +20,7 @@ function harness(componentName, initialProps = {}) {
   }
   runInNewContext(source.replace('return module.exports', `return { ...module.exports, testComponent: ${componentName} }`), {
     document: initialProps.testDocument,
-    AbortController, URL, console, setTimeout: () => 1, clearTimeout() {}, crypto: { randomUUID: () => `request-${++uuid}` },
+    AbortController, URL, URLSearchParams, console, setTimeout: () => 1, clearTimeout() {}, crypto: { randomUUID: () => `request-${++uuid}` },
     fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, resolve: value => resolve({ ok: true, json: async () => value }), reject })) },
     window: { addEventListener: (...args) => events.push(['add', ...args]), removeEventListener: (...args) => events.push(['remove', ...args]),
       __ModuleLoader__: { load: ({ factory }) => { component = factory(name => name === 'react' ? React : { Button: 'button', StateDot: 'dot' }).testComponent } } },
@@ -32,6 +32,28 @@ function harness(componentName, initialProps = {}) {
 }
 const button = (tree, label) => elements(tree).find(item => item.type === 'button' && text(item) === label)
 const input = (tree, label) => elements(tree).find(item => item.type === 'label' && item.children[0] === label)?.children.find(item => typeof item === 'object')
+
+test('混排记录分页经过普通决定仍可续读，失败保留、重试去重、刷新与卸载防陈旧响应', async () => {
+  const h = harness('TaskOutcomeRecords', { taskId: 'task', timeline: { executions: [{ id: 'e', milestones: [{ id: 's', at: '2026-10-22T00:00:00Z', summary: '已有成果' }] }] } })
+  let tree = h.render()
+  assert.match(h.requests[0].url, /\/decisions\?limit=20$/)
+  h.requests[0].resolve({ decisions: [{ id: 'ordinary', triggers: [], decision: { summary: '不能混入' } }], nextBefore: 10 }); await settle()
+  tree = h.render(); assert.doesNotMatch(text(tree), /不能混入/); assert.match(text(tree), /还有更早/)
+  button(tree, '读取更早记录').props.onClick(); button(tree, '读取更早记录').props.onClick(); h.render()
+  assert.equal(h.requests.length, 2); assert.match(h.requests[1].url, /before=10/)
+  h.requests[1].reject(new Error('offline')); await settle(); tree = h.render()
+  assert.match(text(tree), /已有成果/); assert.match(text(tree), /未全部读取/)
+  button(tree, '重试读取记录').props.onClick(); h.render()
+  const review = { id: 'r', recordedAt: '2026-10-22T00:10:00Z', triggers: [{ kind: 'execution.progress.review' }], decision: { action: 'wait', summary: '无新动作，继续等待', evidence: ['日志'], limitations: [] } }
+  h.requests[2].resolve({ decisions: [review, review], nextBefore: null }); await settle(); tree = h.render()
+  assert.equal(text(tree).split('无新动作，继续等待').length - 1, 1)
+  assert.match(text(tree), /统筹巡查/); assert.match(text(tree), /阶段成果/)
+  assert.equal(button(tree, '读取更早记录'), undefined)
+  button(tree, '刷新记录').props.onClick(); h.render(); h.unmount()
+  assert.equal(h.requests[3].options.signal.aborted, true)
+  h.requests[3].resolve({ decisions: [{ ...review, decision: { summary: '过期响应' } }], nextBefore: null }); await settle()
+  assert.doesNotMatch(text(h.render()), /过期响应/)
+})
 
 test('时间泳道图保留多区段、并行、人工介入底行以及触屏可读的完整明细', () => {
   const segment = { id: 'one', label: '查询业务信息并完整核对证据'.repeat(5), startedAt: '2026-10-16T00:00:00Z', endedAt: '2026-10-16T00:01:00Z', status: 'recorded' }
@@ -52,7 +74,7 @@ test('时间泳道图保留多区段、并行、人工介入底行以及触屏�
     assert.ok(trigger.props['aria-label'])
   }
   assert.ok(nodes.some(node => node.props.className === 'timeline-duration' && text(node) === '1分0秒'))
-  assert.match(text(tree), /成果说明/)
+  assert.match(text(harness('TaskOutcomeRecords', { taskId: 'task', timeline }).render()), /成果说明/)
   assert.ok(nodes.some(node => node.props.role === 'region' && node.props.tabIndex === 0))
   assert.match(text(harness('TaskExecutionTimeline', {}).render()), /历史执行过程未记录/)
 })

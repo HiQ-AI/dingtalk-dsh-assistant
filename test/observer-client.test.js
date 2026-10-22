@@ -5,6 +5,25 @@ import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/wor
 import { runInNewContext } from 'node:vm'
 import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 
+test('成果时间记录仅混排真实巡查决定，保留无动作wait、按身份去重和时间排序', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const code = source.slice(source.indexOf('    const taskOutcomeRecords ='), source.indexOf('    function TaskOutcomeRecords('))
+  const merge = runInNewContext(`${code}; taskOutcomeRecords`)
+  const stage = { id: 'stage', at: '2026-10-22T01:00:00Z', summary: '阶段产物' }
+  const review = { id: 'review', recordedAt: '2026-10-22T01:10:00Z', triggers: [{ kind: 'execution.progress.review' }, { kind: 'execution.progress.review' }],
+    decision: { action: 'wait', summary: '方向正常，继续等待', evidence: ['真实记录'], limitations: ['尚未完成'] } }
+  const records = merge({ executions: [{ id: 'e', title: '执行', milestones: [stage, stage] }] }, [review, review,
+    { id: 'ordinary', recordedAt: '2026-10-22T01:20:00Z', triggers: [{ kind: 'execution.result' }], decision: { summary: '普通决定' } }])
+  assert.equal(records.length, 2)
+  assert.equal(records[0].type, '统筹巡查'); assert.equal(records[0].action, 'wait')
+  assert.equal(records[1].type, '阶段成果')
+  assert.equal(records[0].evidence[0], '真实记录')
+  assert.equal(merge(undefined, []).length, 0)
+  assert.match(source, /nextBefore !== null/)
+  assert.match(source, /已加载范围内暂无阶段成果或巡查结论/)
+  assert.doesNotMatch(code, /progressReview|checkedAt/)
+})
+
 test('顶部提示成功五秒关闭、手动关闭、持续错误不被刷新重开且清理定时器', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const fragment = source.slice(source.indexOf('    function FeedbackNotice('), source.indexOf('    function ObserverContent('))
