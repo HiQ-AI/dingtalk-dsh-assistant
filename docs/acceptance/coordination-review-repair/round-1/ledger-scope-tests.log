@@ -1,0 +1,22 @@
+✔ a review execution result cannot finish the delivery Task after restart (56.8002ms)
+✔ Host binds pending instructions despite caller empty ids; claim waits before locking while Owner controls remain available (45.9335ms)
+✔ running reorder requests read-only Owner assessment without revising or cancelling; safe point needs Host evidence (44.613ms)
+✔ running reorder uncertainty persists clarification instead of pretending strict ordering or cancelling work (54.2736ms)
+✔ a second reorder cannot inherit an earlier existing-input exemption (35.6851ms)
+✔ opposite pending reorder proposals are rejected before either Owner decision (36.6529ms)
+✔ existing running input remains explicit prior scope, but a new continue input cannot inherit the exemption (37.0913ms)
+✔ a new reorder replaces initial ready-member clarification and preserves already running input (45.9912ms)
+✔ partial cancellation retires applied instruction gates while retaining history and other dependencies (42.5685ms)
+✔ claim after cancellation preserves pre-dispatch instruction history without effective cancelled coverage (28.898ms)
+✔ completion receipt, coverage proof and independent ordered event commit atomically and replay once (40.0681ms)
+✔ event write failure rolls back business completion, instruction fulfillment and receipt (88.5981ms)
+✔ consuming an old completion after reopen reads current truth and cannot make B eligible (68.5585ms)
+✔ compatible context supplements preserve earlier instruction coverage in the current Owner completion (49.1829ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 896.4091

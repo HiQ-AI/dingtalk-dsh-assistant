@@ -229,6 +229,34 @@ test('chat aggregate query freezes authoritative obligations and recovers the sa
   assert.equal(recovered.length,1);assert.equal(recovered[0].id,notice.id);assert.equal(recovered[0].payloadDigest,digest);assert.equal(recovered[0].payload.text,text)
 })
 
+test('chat schedule query explains the agreed time and expired outcome and preserves its frozen answer',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+  const f=await fixture(t),request=await f.message('time-plan','九点查询A并通知我')
+  await f.service.context(request,{taskIds:['A']})
+  const accepted=await f.service.submit(request,{kind:'schedule',timezone:'Asia/Shanghai',rule:{kind:'once',at:'2026-10-21T01:00:00Z'},
+    taskIds:['A'],recipientIds:['author'],interpretation:'今天九点查询A'})
+  const before=await f.query('task.list')
+  const ask=async(id,text)=>{
+    const request=await f.message(id,text)
+    await f.service.context(request,{coordinationIds:[accepted.coordinationId]})
+    const answer=await f.service.submit(request,{kind:'query',coordinationIds:[accepted.coordinationId]})
+    const notification=(await f.query('notification.list')).find(n=>n.payload.sourceMessageId===id)
+    return {answer,notification}
+  }
+  const upcoming=await ask('when','约定几点，通知谁？')
+  assert.match(upcoming.notification.payload.text,/09:00:00/)
+  assert.match(upcoming.notification.payload.text,/Asia\/Shanghai/);assert.match(upcoming.notification.payload.text,/author/)
+  t.mock.timers.tick(76*60000);await f.command('coordination.schedule.scan',{})
+  const expired=await ask('why','为什么没执行？')
+  assert.equal(expired.answer.snapshots[0].occurrences[0].actionState,'expired')
+  assert.match(expired.notification.payload.text,/已过期，本次未执行/)
+  assert.match(expired.notification.payload.text,/错过允许补执行的时间/)
+  await f.restart();await f.service.recoverGroup('group')
+  const recovered=(await f.query('notification.list')).filter(n=>n.payload.sourceMessageId==='why')
+  assert.equal(recovered.length,1);assert.equal(recovered[0].payloadDigest,expired.notification.payloadDigest)
+  assert.deepEqual(await f.query('task.list'),before);assert.deepEqual(f.errors,[])
+})
+
 test('resolving one of several pending members settles neither the other ambiguity nor its original source', async t => {
   const f=await fixture(t),original=await f.message('two-missing','分别给两个同名任务补充材料')
   const pending=['first','second'].map(clarificationId=>({clarificationId,question:`${clarificationId}是哪项？`,candidates:['A','B']}))
@@ -428,4 +456,68 @@ test('legacy ordinal fallback and bounded context exclude recurring children bef
     change:{action:'pause',selectors:[{ordinal:3}],reason:'第三个先别动'}})
   const changed=await f.query('coordination.get',{coordinationId:accepted.coordinationId})
   assert.deepEqual(changed.members.map(m=>[m.taskId,m.control??'active']),[['A','active'],['B','active'],['C','paused']])
+})
+
+for (const recurring of [false,true]) for (const completedFirst of [false,true]) test(`scheduled observed prerequisite joins time and formal proof across restart: recurring=${recurring}, completedFirst=${completedFirst}`,async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+  const f=await fixture(t), request=await f.message('timed-observation','九点以后等原A完成再继续原B')
+  const completeA=async()=>{
+    const binding=(await f.command('task.claim',{taskId:'A',force:true})).result.binding
+    await f.command('task.complete',{binding,summary:'原A正式验收',result:{evidence:['original-proof']}})
+    await f.command('task.drained',{binding})
+  }
+  await f.service.context(request,{taskIds:['A','B']})
+  await f.service.submit(request,{kind:'schedule',actionKind:'task-command',timezone:'Asia/Shanghai',
+    rule:recurring?{kind:'daily',time:'09:00'}:{kind:'once',at:'2026-10-21T01:00:00.000Z'},recipientIds:[],interpretation:'九点后等待原A正式完成再继续B',members:[
+      {action:'task-observe',taskId:'A',inputVersion:1,runSequence:1},
+      {action:'task-continue',taskId:'B',inputVersion:1,runSequence:1,progressImpact:'preserve',impactReason:'原目标',context:'等待A后继续',afterTaskIds:['A']}]})
+  const coordination=(await f.query('coordination.list'))[0], getState=()=>f.query('coordination.get',{coordinationId:coordination.id})
+  let state=await getState()
+  const observedId=state.members.find(m=>m.observation).id
+  const schedules=await f.query('coordination.schedule.list')
+  await f.command('coordination.schedule.change',{scheduleId:schedules[0].id,expectedRevision:1,scope:'future',target:{conversationId:'group',recipientIds:[],summaryOnly:true}})
+  assert.equal(schedules[0].action.instructionIds.length,1)
+  assert.ok(!schedules[0].action.instructionIds.includes(observedId))
+  const aBefore=await f.query('task.get',{taskId:'A'}), wakesBefore=await f.query('wake.list',{taskId:'A'})
+  await f.restart();await f.service.recoverGroup('group')
+  assert.deepEqual(await f.query('task.get',{taskId:'A'}),aBefore)
+  assert.deepEqual(await f.query('wake.list',{taskId:'A'}),wakesBefore)
+  if(completedFirst) {await completeA();await f.command('coordination.observe.reconcile',{coordinationId:coordination.id})}
+  assert.equal((await f.query('task.get',{taskId:'B'})).contextRevision??0,0)
+  t.mock.timers.tick(3600000)
+  let occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0]
+  const run=async()=>{
+    const job=(await f.command('coordination.job.claim',{jobId:occurrence.jobId})).result.job
+    return (await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result
+  }
+  let outcome=await run()
+  if(!completedFirst) {
+    assert.equal(outcome.job.state,'waiting')
+    assert.equal((await f.query('task.get',{taskId:'B'})).contextRevision??0,0)
+    await f.restart();await completeA();await f.command('coordination.observe.reconcile',{coordinationId:coordination.id})
+    outcome=await run()
+  }
+  assert.equal(outcome.job.state,'completed')
+  assert.equal((await f.query('task.get',{taskId:'B'})).contextRevision,1)
+  state=await getState()
+  const executable=state.members.find(m=>m.id===outcome.occurrence.action.instructionIds[0])
+  assert.deepEqual(executable.dependencies,[observedId])
+  const a=await f.query('task.get',{taskId:'A'})
+  assert.equal(a.contextRevision,aBefore.contextRevision);assert.equal(a.runSequence,aBefore.runSequence)
+  assert.deepEqual(a.completion.instructionIds,[])
+  if(recurring) {
+    await f.restart();t.mock.timers.tick(86400000)
+    occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0]
+    outcome=await run()
+    assert.equal(outcome.job.state,'completed')
+    assert.equal((await f.query('task.get',{taskId:'B'})).contextRevision,2)
+    state=await getState()
+    assert.ok(state.members.filter(m=>m.recurringOccurrenceId).every(m=>m.dependencies.length===1&&m.dependencies[0]===observedId))
+    // A new run is not the old formal proof and cannot authorize a subsequent slot.
+    await f.command('task.reopen',{taskId:'A',expectedRequirementRevision:a.requirementRevision,expectedControlRevision:a.controlRevision,request:'A新目标'})
+    await f.command('coordination.observe.reconcile',{coordinationId:coordination.id})
+    t.mock.timers.tick(86400000);occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0]
+    outcome=await run()
+    assert.equal(outcome.job.state,'waiting');assert.equal((await f.query('task.get',{taskId:'B'})).contextRevision,2)
+  }
 })

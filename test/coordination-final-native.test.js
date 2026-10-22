@@ -11,6 +11,40 @@ const model={enabled:true,provider:'native-task-test',model:'coordination-contro
 const wait=request=>topicTaskCalls(request)??(request.tools.some(t=>t.name==='task_session_submit')
   ? [{name:'task_session_submit',args:{decision:{action:'wait',summary:'保持原任务目标',evidence:[],limitations:[]}}}] : [])
 
+test('expired no-Topic query reaches the real outbox once after offline restart without reopening its Task',
+  {skip:!available?reason:false,timeout:20000},async t=>{
+    t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+    const root=await mkdtemp(join(tmpdir(),'coordination-expired-native-'));let host
+    t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
+    host=await nativeTaskHost(root,wait)
+    const command=(kind,args,id=kind)=>host.service.store.command({id,kind,args})
+    await command('task.create',{taskId:'A',groupId:'native-group',ownerActorId:'native-user',request:'原目标'})
+    const binding=(await command('task.claim',{taskId:'A'})).result.binding
+    await command('task.complete',{binding,summary:'已有正式结果',result:{evidence:['original-completion']}})
+    await command('task.drained',{binding})
+    const before=await host.query('task.get',{taskId:'A'})
+    const source=(await command('coordination.reserve',{unitId:'expired-source',revision:1,groupId:'native-group',original:'九点查询A'})).result.source
+    await command('coordination.accept',{coordinationId:'expired-query',sourceId:source.id,fence:source.fence,members:[],readOnly:true,
+      schedule:{scheduleId:'nine',timezone:'Asia/Shanghai',rule:{kind:'once',at:'2026-10-21T01:00:00.000Z'},
+        action:{kind:'read-query',taskIds:['A']},target:{conversationId:'native-group',recipientIds:['native-user']}}})
+    await host.close();t.mock.timers.tick(76*60000)
+    host=await nativeTaskHost(root,wait,{initialize:false})
+    await host.service.recover();await host.service.whenIdle()
+    const sent=host.sent.filter(n=>n.payload.fact.coordinationId==='expired-query')
+    assert.equal(sent.length,1,JSON.stringify(host.service.listAlerts()))
+    assert.match(sent[0].payload.text,/已过期，本次未执行/);assert.match(sent[0].payload.text,/09:00:00/)
+    assert.deepEqual(sent[0].payload.atOpenDingTalkIds,['native-user'])
+    assert.equal((await host.query('notification.get',{notificationId:sent[0].id})).state,'delivered')
+    assert.equal((await host.query('coordination.occurrence.list'))[0].actionState,'expired')
+    assert.deepEqual(await host.query('coordination.job.list'),[])
+    assert.deepEqual(await host.query('task.get',{taskId:'A'}),before)
+    await host.close();host=await nativeTaskHost(root,wait,{initialize:false})
+    await host.service.recover();await host.service.whenIdle()
+    assert.equal(host.sent.length,0)
+    const outbox=host.residentStore.getGroup('native-group').outbox.filter(o=>o.outboundId===sent[0].id)
+    assert.equal(outbox.length,1);assert.equal(outbox[0].status,'sent');assert.equal(outbox[0].notificationState,'delivered')
+  })
+
 test('competing actual ingress and recovery reserve one source, plan once and keep original receipt after restart',
   {skip:!available?reason:false,timeout:20000},async t=>{
     const root=await mkdtemp(join(tmpdir(),'coordination-final-ingress-'));let host,plans=0

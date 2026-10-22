@@ -1,0 +1,30 @@
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (760.8104ms)
+✔ competing actual ingress and recovery reserve one source, plan once and keep original receipt after restart (1654.2824ms)
+✔ automatic expired result refresh restores one outbox after restart with closed optional Topic (9465.0159ms)
+✔ automatic expired result refresh restores one outbox after restart with deleted optional Topic (2138.6466ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 3
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14723.356
+
+✖ failing tests:
+
+test at test\coordination-final-native.test.js:14:1
+✖ expired no-Topic query reaches the real outbox once after offline restart without reopening its Task (760.8104ms)
+  Error: DYNAMIC_COORDINATION_TIME_INVALID
+      at fail (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:23:61)
+      at Object.command (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/coordination-schedules.js:266:60)
+      at reduce (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:500:37)
+      at file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1503:28
+      at transaction (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:217:21)
+      at Object.command (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1493:20)
+      at command (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/coordination-final-native.test.js:20:59)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/coordination-review/dingtalk-dsh-assistant/test/coordination-final-native.test.js:24:11)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    code: 'DYNAMIC_COORDINATION_TIME_INVALID'
+  }

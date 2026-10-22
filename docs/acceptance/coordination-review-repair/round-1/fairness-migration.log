@@ -1,0 +1,25 @@
+✔ 恢复跳过二十个occurrence-pause作业，保持完成预算并跨安排跨群推进且重启不重放 (5790.7461ms)
+✔ 恢复跳过二十个schedule-pause作业，保持完成预算并跨安排跨群推进且重启不重放 (8663.6778ms)
+✔ 恢复跳过二十个dependency作业，保持完成预算并跨安排跨群推进且重启不重放 (11516.8163ms)
+▶ 自动续行排队期间finish、版本失效和close均唤醒请求级等待者
+  ✔ finish (9.965ms)
+  ✔ supersede (3.5859ms)
+  ✔ close (2.0733ms)
+✔ 自动续行排队期间finish、版本失效和close均唤醒请求级等待者 (18.9298ms)
+✔ 同群九次无效提交按step让出，工具结果落稳后路由和其他话题先运行且不cancel (193.2705ms)
+✔ default CLI check reads a genuine historical v1 ledger without changing its database or marker (1272.3856ms)
+✔ genuine v1 migrates with historical receipts and identities intact; the actual old v1 program refuses v2 (503.291ms)
+✔ a real process killed after migration DDL but before version update leaves atomic v1 state and retries safely (685.7216ms)
+✔ migration review digest is checked again inside the exclusive transaction before any DDL (678.302ms)
+✔ live legacy owner and undrained legacy group prevent migration before schema changes (848.4829ms)
+✔ identity and review mismatches never initialize a new ledger or clear historical state (457.5301ms)
+✔ compatible admission-off mode preserves ownership and resumes accepted work without planning new units (630.3293ms)
+✔ compatible frozen mode survives restart and blocks coordinated claims and send permits without freezing unrelated work (659.93ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 32918.5659

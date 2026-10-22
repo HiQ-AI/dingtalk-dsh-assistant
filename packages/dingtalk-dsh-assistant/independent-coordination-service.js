@@ -3,7 +3,7 @@ import { freezeCoordinationMembers } from './coordination-task-commands.js'
 import { stableId } from './topic-model.js'
 import { validateTimeRule } from './coordination-time.js'
 import { selectCoordinationInstructions, assertCoordinationHandoffProof, coordinationOrdinalInstructionIds } from './coordination-changes.js'
-import { coordinationSnapshot } from './coordination-summary.js'
+import { coordinationSnapshot, formatCoordinationSnapshot } from './coordination-summary.js'
 
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clone = value => JSON.parse(JSON.stringify(value))
@@ -184,7 +184,6 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     return observed
   }
   async function freezeProposal(request, proposal, coordinationId, source, extra = {}) {
-    if (proposal.kind === 'schedule' && proposal.members?.some(member => member.action === 'task-observe')) fail('COORDINATION_OBSERVATION_SCHEDULE_UNSUPPORTED')
     const observed = await checkObservedTasks(request, proposal)
     const taskCommand = proposal.kind === 'arrangement' || proposal.kind === 'schedule' && proposal.actionKind === 'task-command'
     const conditionalProposal = proposal.kind === 'schedule' ? proposal.conditionalMembers : undefined
@@ -202,7 +201,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       const known = new Set((await context(request)).recipients.map(recipient => recipient.recipientId))
       if (proposal.recipientIds.some(id => !known.has(id))) fail('COORDINATION_RECIPIENT_UNRESOLVED')
       schedule = { scheduleId: `schedule:${coordinationId}`, timezone: proposal.timezone, rule: proposal.rule,
-        action: taskCommand ? { kind: 'task-command', instructionIds: members.map(member => member.instructionId) }
+        action: taskCommand ? { kind: 'task-command', instructionIds: members.filter(member => !member.observation).map(member => member.instructionId) }
           : { kind: 'read-query', taskIds: proposal.taskIds, ...(conditional?.length ? { onIncomplete: { kind: 'task-command', instructionIds: members.map(member => member.instructionId) } } : {}) },
         target: { conversationId: request.groupId, recipientIds: proposal.recipientIds } }
     }
@@ -297,7 +296,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
         snapshots.push(coordinationSnapshot({ ...state, tasks: await query('task.list', { groupId: request.groupId }), schedules, occurrences,
           jobs: (await query('coordination.job.list')).filter(job => occurrenceIds.has(job.occurrenceId)) }))
       }
-      const answerText = `截至 ${new Date().toISOString()} 的协调事实：\n${snapshots.map(snapshot => `${snapshot.coordinationId}（revision ${snapshot.revision}）：${snapshot.state}；正式完成 ${snapshot.fulfilled} 项；尚欠 ${snapshot.remainingInstructionIds.length} 项。\n${snapshot.members.map(member => `${member.instructionId} / ${member.taskId}：${member.state}；要求：${member.requirement}；等待：${member.waitingReason?.code ?? member.blocker ?? '无'}；回执：${member.receiptRef ?? '尚未接收'}；完成证明：${member.completionProof?.commandId ?? '无'}`).join('\n')}\n待澄清：${(snapshot.pendingClarifications ?? []).map(item => item.question).join('；') || '无'}；活动计划：${snapshot.outstanding.activeScheduleIds.length}；待结实例：${snapshot.outstanding.occurrenceIds.length}。`).join('\n')}`
+      const answerText = `截至 ${new Date().toISOString()} 的协调事实：\n${snapshots.map(formatCoordinationSnapshot).join('\n')}`
       const frozenProposal = { ...proposal, answerText, snapshots }
       await command('coordination.accept', { sourceId: ledger.id, fence: ledger.fence, coordinationId, members: [], readOnly: true,
         proposal: frozenProposal }, `coordination-accept:${request.reservationId}:${request.generation}`)

@@ -1,0 +1,45 @@
+✔ historical Owner blockers do not override completed or cancelled member facts (1.3555ms)
+✔ all individually cancelled members report cancelled rather than zero-result business completion (0.7327ms)
+✔ Owner reorder clarification remains visible as an outstanding reason but never overrides terminal facts (0.3784ms)
+✔ pending members stay outstanding while recurring templates are not unexecuted business work (0.6756ms)
+✔ fulfilled and individually cancelled members report partial completion and retain distinct member facts (0.2025ms)
+✔ a recurring authorization blocked at trigger remains visible as outstanding with its actual reason (0.5818ms)
+✔ expired read-only schedule prepares one recoverable notice and preserves delivered identity (88.6304ms)
+✔ expired read-only schedule prepares one recoverable notice and preserves unknown identity (70.3959ms)
+✔ a past recurring slot retains its own fulfillment without releasing current-version dependencies (0.3441ms)
+✔ unsent summary A superseded by active facts B can freeze A again, while an unknown permitted summary keeps its identity (44.2514ms)
+✔ rejected source handoff reconciles frozen identity across normal boundary (77.7217ms)
+✔ rejected source handoff reconciles frozen identity across coordination.source.freezeHandoff boundary (57.6146ms)
+✔ rejected source handoff reconciles frozen identity across resident.complete boundary (60.1144ms)
+✔ rejected source handoff reconciles frozen identity across coordination.source.completeHandoff boundary (51.5343ms)
+✔ unknown effect evidence cannot satisfy the explicit handoff proof (0.4981ms)
+✔ follow-up ordinal resolves the original member order and pauses only that arrangement member (80.8353ms)
+✔ a genuine clarification reply resolves the same coordination identity and settles both source units (63.2549ms)
+✔ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=false (101.6568ms)
+✔ full clarification can resolve into a partial arrangement without dropping pending ownership: barrier=true (102.4401ms)
+✔ persisted frozen mode blocks new semantic submit and accepted member dispatch while reconciliation remains readable (68.1421ms)
+✔ member-level ambiguity preserves source ownership and continues clear members (133.0821ms)
+✔ member-level ambiguity preserves source ownership and holds the explicit batch (120.751ms)
+✔ chat aggregate query freezes authoritative obligations and recovers the same answer without changing Tasks (87.4856ms)
+✔ chat schedule query explains the agreed time and expired outcome and preserves its frozen answer (94.4802ms)
+✔ resolving one of several pending members settles neither the other ambiguity nor its original source (130.4592ms)
+✔ interleaved unknown source order cannot ordinal-control the clear subset, even after clarification resolves (74.9254ms)
+✔ arrangement member context pages remain bounded and preserve persisted ordinals (84.1132ms)
+✔ persisted original source slots directly select interleaved members before and after clarification and restart (101.0932ms)
+✔ source slot indices are checked against immutable original instead of summary or guessed order (52.614ms)
+✔ source slot contracts reject duplicate, overlapping and out-of-range indices and retain genuine multi-target ambiguity (1.3511ms)
+✔ appended user member receives a sourced third ordinal across restart only with a verified append span: true (265.3593ms)
+✔ appended user member receives a sourced third ordinal across restart only with a verified append span: false (97.3193ms)
+✔ legacy ordinal fallback and bounded context exclude recurring children before an explicit appended member (74.9127ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=false (140.3129ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=false, completedFirst=true (109.1615ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=false (176.2565ms)
+✔ scheduled observed prerequisite joins time and formal proof across restart: recurring=true, completedFirst=true (143.9899ms)
+ℹ tests 37
+ℹ suites 0
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2918.5099

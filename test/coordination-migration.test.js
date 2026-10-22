@@ -113,10 +113,13 @@ test('genuine v1 migrates with historical receipts and identities intact; the ac
 test('a real process killed after migration DDL but before version update leaves atomic v1 state and retries safely', async t => {
   const f = await realV1(t), before = inspectCoordinationMigration(f.options)
   const script = `import {DatabaseSync} from 'node:sqlite';import {openDynamicTaskStore} from ${JSON.stringify(currentStoreUrl)};
-    const exec=DatabaseSync.prototype.exec;DatabaseSync.prototype.exec=function(sql){if(sql.includes('PRAGMA user_version=2'))process.kill(process.pid,'SIGKILL');return exec.call(this,sql)};
+    const exec=DatabaseSync.prototype.exec;DatabaseSync.prototype.exec=function(sql){if(sql.includes('PRAGMA user_version=2')){process.stdout.write('migration-kill-point\\n');process.kill(process.pid,'SIGKILL')}return exec.call(this,sql)};
     await openDynamicTaskStore({...JSON.parse(process.argv[1]),migrate:true,migrationExpectedDigest:process.argv[2]});`
   const child = spawnSync(process.execPath,['--input-type=module','--eval',script,JSON.stringify(f.options),before.expectedDigest],{encoding:'utf8'})
-  assert.equal(child.signal,'SIGKILL')
+  assert.equal(child.error,undefined)
+  assert.match(child.stdout,/migration-kill-point/)
+  if(process.platform==='win32'){assert.equal(child.signal,null);assert.equal(child.status,1)}
+  else assert.equal(child.signal,'SIGKILL')
   const after = inspectCoordinationMigration(f.options)
   assert.equal(after.schemaVersion,1); assert.equal(after.expectedDigest,before.expectedDigest)
   assert.equal(after.markerDigest,before.markerDigest)
