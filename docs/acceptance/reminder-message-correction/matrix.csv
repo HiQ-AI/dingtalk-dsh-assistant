@@ -92,3 +92,8 @@ recipient-change-on-demand,10,PASS,round-10.md
 quoted-reminder-real-model-one-call,10,PASS,round-10.md
 package-native-and-recipients,10,PASS,round-10.md
 local-deployment,10,PASS,round-10.md
+live-d-single-schedule-correction,10,PASS,round-10.md
+live-d-readable-notifications,10,PASS,round-10.md
+live-d-due-delivery-native-mention,10,PASS,round-10.md
+live-d-no-original-slot-duplicate,10,PASS,round-10.md
+live-end-to-end-latency,10,FAIL,round-10.md
