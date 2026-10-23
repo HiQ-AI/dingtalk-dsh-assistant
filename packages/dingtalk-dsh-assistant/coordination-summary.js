@@ -1,3 +1,5 @@
+import { assertGroupReply } from './group-message.js'
+
 // Read authoritative facts and persist a bounded cross-task view. Delivery is a
 // separate obligation; neither a receipt nor a released lock proves completion.
 export function coordinationSnapshot({ coordination, members, tasks, schedules, occurrences, jobs }) {
@@ -39,7 +41,7 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
       ...(s.action?.kind === 'message-reminder' ? { reminderText: s.action.text } : {}),
       timezone: s.timezone ?? null, rule: s.rule ?? null, recipientIds: s.target?.recipientIds ?? [] })),
     occurrences: occurrences.map(o => ({ occurrenceId: o.id, scheduleId: o.scheduleId ?? null, plannedAt: o.plannedAt ?? null,
-      cancelledAt: o.cancelledAt ?? null,
+      cancelledAt: o.cancelledAt ?? null, ...(o.paused ? { paused: true } : {}),
       recipientIds: o.target?.recipientIds ?? [],
       actionState: o.actionState, deliveryState: o.deliveryState,
       failureReason: o.failureReason ?? null,
@@ -50,33 +52,120 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
 }
 
 const statusLabels = { active: '进行中', completed: '已完成', partially_completed: '部分完成', needs_attention: '需要处理',
-  needs_clarification: '待澄清', cancelled: '已取消', paused: '已暂停', ready: '待派发', observing: '等待原任务完成',
-  applied: '已接收', fulfilled: '正式完成', template: '周期授权', superseded: '已替代', version_changed: '目标版本已变化',
-  waiting: '等待执行', running: '执行中', succeeded: '动作成功', failed: '失败', blocked: '受阻', expired: '已过期，本次未执行',
-  none: '未产生', pending: '待送达', delivered: '已送达', unknown: '送达结果未知，等待核对' }
-const statusText = state => statusLabels[state] ?? state
-const reasonText = reason => typeof reason === 'string' ? reason : JSON.stringify(reason)
-const timeText = (instant, timezone = 'UTC') => instant
-  ? `${new Intl.DateTimeFormat('zh-CN', { timeZone: timezone, dateStyle: 'short', timeStyle: 'medium', hourCycle: 'h23' }).format(new Date(instant))}（${timezone}）` : '无'
+  needs_clarification: '还需要补充信息', cancelled: '已取消', paused: '已暂停', ready: '等待处理', observing: '等待原事项完成',
+  applied: '已接收，尚未完成', fulfilled: '已完成', template: '按约定周期处理', superseded: '已由新安排替代', version_changed: '任务要求已变化，需要重新核对',
+  waiting: '等待执行', running: '执行中', succeeded: '已执行', failed: '未能完成', blocked: '暂时受阻', expired: '已过期，本次未执行' }
+const statusText = state => statusLabels[state] ?? '状态待核实'
+const sentence = value => { const text = String(value ?? '').trim(); return text ? /[。！？!?]$/u.test(text) ? text : `${text}。` : '' }
+const body = value => String(value ?? '').trim().replace(/。+$/u, '')
+const cancellationDeliveryText = occurrence => occurrence?.deliveryState === 'unknown' ? '之前的通知是否送达尚未确认。'
+  : occurrence?.deliveryState === 'delivered' ? '之前的通知已经送达，取消不会撤回已发消息。' : ''
+const workingTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+const zoneLabel = (timeZone, instant = new Date()) => timeZone === 'Asia/Shanghai' ? '北京时间'
+  : new Intl.DateTimeFormat('zh-CN', { timeZone, timeZoneName: 'long' }).formatToParts(instant).find(item => item.type === 'timeZoneName').value
 
-// 聊天查询和主动摘要共用同一权威事实格式，避免账本有原因而用户只看到零计数。
-export function formatCoordinationSnapshot(snapshot) {
-  const lines = [`协调安排 ${snapshot.coordinationId}（版本 ${snapshot.revision}）：${statusText(snapshot.state)}；正式完成 ${snapshot.fulfilled} 项；尚欠 ${snapshot.remainingInstructionIds.length} 项。`]
-  for (const member of snapshot.members) lines.push(`${member.taskId} / ${member.instructionId}：${statusText(member.state)}；要求：${member.requirement}；等待原因：${member.blocker ?? (member.waitingReason ? reasonText(member.waitingReason) : '无')}；回执：${member.receiptRef ?? '尚未接收'}；完成证明：${member.completionProof?.commandId ?? '无'}。`)
-  lines.push(`待澄清：${snapshot.pendingClarifications.map(item => item.question).join('；') || '无'}；活动计划：${snapshot.outstanding.activeScheduleIds.length}；待结实例：${snapshot.outstanding.occurrenceIds.length}。`)
+/** 群内只展示工作时区的时间；同一单次约定不重复列出 UTC 和“下次时间”。 */
+export function formatCoordinationTime(instant, timeZone = workingTimeZone()) {
+  if (!instant || !Number.isFinite(Date.parse(instant))) return ''
+  const date = new Date(instant), parts = Object.fromEntries(new Intl.DateTimeFormat('zh-CN', { timeZone,
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(date).map(item => [item.type, item.value]))
+  return `${parts.year}年${parts.month}月${parts.day}日 ${parts.hour}:${parts.minute}${parts.second === '00' ? '' : `:${parts.second}`}（${zoneLabel(timeZone, date)}）`
+}
+
+export function formatCoordinationTiming(rule, timezone, timeZone = workingTimeZone()) {
+  if (!rule) return ''
+  if (rule.kind === 'once') return formatCoordinationTime(rule.at, timeZone)
+  // 周期时间属于约定的当地钟点，不能直接贴上另一时区；下次具体时刻另按工作时区显示。
+  return `${rule.kind === 'daily' ? '每天' : `每周${'日一二三四五六'[rule.weekday]}`} ${rule.time}（${zoneLabel(timezone ?? timeZone)}）`
+}
+
+const reasonLabels = {
+  authorization_changed: '相关授权已变化，暂时无法继续', target_version_changed: '任务要求已变化，需要核对后继续',
+  waiting_batch_clarification: '还需要补充安排信息', waiting_dependency: '需要先完成前面的事项',
+  dependency_pending: '需要先完成前面的事项', paused: '安排已暂停', cancelled: '安排已取消',
+  waiting_trigger: '尚未满足约定的执行条件', trigger_paused: '安排已暂停', trigger_cancelled: '安排已取消', trigger_superseded: '已由新安排替代',
+  waiting_completion_proof: '还在等待完成结果', reorder_pending: '正在核对调整后的处理顺序', reorder_needs_clarification: '调整处理顺序还需要补充信息',
+  DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE: '相关授权已变化，暂时无法继续',
+  DYNAMIC_COORDINATION_RECURRING_TASK_STATE_CHANGED: '任务状态已变化，需要核对后继续',
+}
+// 技术失败码和诊断对象用于账本核查，不作为正文直接输出或 JSON.stringify。
+const reasonText = reason => reason ? reasonLabels[typeof reason === 'string' ? reason : reason.code] ?? '处理遇到问题，原因仍需核查' : ''
+
+/** 接纳与修改只说明已保存的业务安排，不输出提案解释、内部编号或实现协议。 */
+export function formatCoordinationAcceptance(proposal, { memberCount = 0, schedule, occurrence, timeZone = workingTimeZone() } = {}) {
+  if (proposal?.kind === 'resolve') return formatCoordinationAcceptance(proposal.resolution, { memberCount, timeZone })
+  if (proposal?.kind === 'query') return proposal.answerText
+  if (proposal?.pendingClarifications?.length) return `${memberCount ? '已记录明确的安排。' : ''}${proposal.pendingClarifications.map(item => sentence(item.question)).join('')}`
+  if (proposal?.kind === 'schedule') {
+    const timing = formatCoordinationTiming(proposal.rule, proposal.timezone, timeZone)
+    return proposal.actionKind === 'message-reminder' ? sentence(`已安排提醒：${timing}，${body(proposal.reminderText)}`)
+      : sentence(`已安排在${timing}${proposal.actionKind === 'task-command' ? '处理这些事项' : '查看进度'}`)
+  }
+  if (proposal?.kind === 'schedule-change') {
+    const reminder = schedule?.action?.kind === 'message-reminder', subject = reminder ? '提醒' : '安排'
+    const detail = reminder ? `：${body(schedule.action.text)}` : ''
+    // 丢失确认后的恢复可能读到后来再次调整的计划，只说明当前事实，不能混用旧动作与新时间。
+    if (schedule?.revision > proposal.expectedScheduleRevision + 1) return sentence(`这项${subject}后来又有调整，目前${schedule.state === 'active'
+      ? `安排在${formatCoordinationTiming(schedule.rule, schedule.timezone, timeZone)}` : statusText(schedule.state)}${detail}`)
+    if (proposal.state === 'cancelled') return sentence(`已取消这项${subject}的后续安排${detail}`)
+    if (proposal.state === 'paused') return sentence(`已暂停这项${subject}${detail}`)
+    if (proposal.rule || proposal.replacementPlannedAt || proposal.timezone) {
+      const rule = proposal.replacementPlannedAt ? { kind: 'once', at: proposal.replacementPlannedAt } : proposal.rule ?? schedule?.rule
+      return sentence(`已将${subject}时间改为${formatCoordinationTiming(rule, schedule?.timezone ?? proposal.timezone, timeZone)}${detail}`)
+    }
+    if (proposal.state === 'active') return sentence(`已恢复这项${subject}${detail}`)
+    return sentence(`已更新这项${subject}${proposal.recipientIds ? '的通知对象' : ''}${detail}`)
+  }
+  if (proposal?.kind === 'occurrence-control') {
+    const subject = occurrence?.action?.kind === 'message-reminder' ? '提醒' : '安排'
+    if (occurrence?.instanceControlRevision > proposal.expectedControlRevision + 1) return sentence(`这次${subject}后来又有调整，目前${occurrence.cancelledAt ? '已取消'
+      : occurrence.paused ? '已暂停' : statusText(occurrence.actionState)}`)
+      + (occurrence.cancelledAt ? cancellationDeliveryText(occurrence) : '')
+    return sentence(`已${{ pause: '暂停', resume: '恢复', cancel: '取消' }[proposal.control]}本次${subject}`)
+      + (proposal.control === 'cancel' ? cancellationDeliveryText(occurrence) : '')
+  }
+  if (proposal?.kind === 'change') return sentence({ pause: '已暂停所选安排', resume: '已恢复所选安排', cancel: '已取消所选安排',
+    append: '已补充新的安排', reorder: '已更新处理顺序' }[proposal.change.action])
+  return '已记录你的安排。'
+}
+
+/** 复用权威快照，但只选业务内容展示；审计身份、版本、回执和收件人标识仍留在账本。 */
+export function formatCoordinationSnapshot(snapshot, { timeZone = workingTimeZone(), requesterId, recipientNames = new Map() } = {}) {
+  const lines = []
+  for (const member of snapshot.members) {
+    let detail = member.blocker || reasonText(member.waitingReason)
+    // 历史诊断保留在快照；含内部身份的阻塞原因改成明确的待核查说明，不截取拼接残句。
+    if (member.blocker) try { assertGroupReply(member.blocker, [snapshot.coordinationId, member.instructionId, member.taskId, member.commandId, member.receiptRef]) }
+    catch (error) { if (error.code !== 'GROUP_REPLY_INTERNAL_DETAILS') throw error; detail = reasonText(member.waitingReason) || '处理暂时受阻，具体原因还需核查' }
+    lines.push(`${sentence(`${member.observation ? '原事项' : body(member.requirement) || '这项工作'}：${statusText(member.state)}`)}${sentence(detail)}`)
+  }
+  if (snapshot.state !== 'cancelled') lines.push(...snapshot.pendingClarifications.map(item => sentence(item.question)))
+  const schedules = new Map(snapshot.schedules.map(item => [item.scheduleId, item]))
   for (const schedule of snapshot.schedules) {
-    const rule = schedule.rule
-    const timing = !rule ? '未记录' : rule.kind === 'once' ? timeText(rule.at, schedule.timezone)
-      : `${rule.kind === 'daily' ? '每日' : `每周${'日一二三四五六'[rule.weekday]}`} ${rule.time}（${schedule.timezone}）`
-    lines.push(`计划 ${schedule.scheduleId}：${statusText(schedule.state)}；约定时间：${timing}；下次：${timeText(schedule.nextDueAt, schedule.timezone)}；通知对象：${schedule.recipientIds.join('、') || '当前群'}${schedule.reminderText ? `；提醒内容：${schedule.reminderText}` : ''}${schedule.outcome ? `；结果：${statusText(schedule.outcome)}` : ''}。`)
+    if (schedule.rule?.kind === 'once' && snapshot.occurrences.some(item => item.scheduleId === schedule.scheduleId
+      && Date.parse(item.plannedAt) === Date.parse(schedule.rule.at))) continue
+    const subject = schedule.reminderText ? `提醒内容：${body(schedule.reminderText)}` : '定时安排'
+    const timing = formatCoordinationTiming(schedule.rule, schedule.timezone, timeZone)
+    const state = schedule.state === 'active' ? '已安排' : statusText(schedule.state)
+    const recipients = [...new Set((schedule.recipientIds ?? []).map(id => id === requesterId ? '你' : recipientNames.get(id)?.trim() || '指定人员'))]
+    lines.push(`${sentence(subject)}${timing ? sentence(`时间：${timing}`) : ''}${sentence(state)}${schedule.state === 'active' && schedule.rule?.kind !== 'once' && schedule.nextDueAt ? sentence(`下次时间：${formatCoordinationTime(schedule.nextDueAt, timeZone)}`) : ''}${schedule.state === 'active' ? sentence(recipients.length ? `到时在本群通知${recipients.join('、')}` : '通知会发到本群') : ''}`)
   }
-  const exceptional = snapshot.occurrences.filter(item => !item.cancelledAt && (['failed','expired','blocked'].includes(item.actionState) || item.deliveryState === 'failed'))
-  if (exceptional.length) {
-    const expired = exceptional.filter(item => item.actionState === 'expired').length
-    lines.push(`异常执行记录 ${exceptional.length} 次，其中过期 ${expired} 次。${expired ? '过期表示错过允许补执行的时间，本次未执行。' : ''}`)
+  if (snapshot.occurrences.length > 20) lines.push('以下是最近 20 次执行情况。')
+  for (const occurrence of snapshot.occurrences.slice(-20)) {
+    const schedule = schedules.get(occurrence.scheduleId), reminder = Boolean(schedule?.reminderText)
+    const timing = formatCoordinationTime(occurrence.plannedAt, timeZone)
+    const subject = `${timing ? `原定于${timing}的` : '本次'}${reminder ? '提醒' : '安排'}`
+    let state = occurrence.cancelledAt ? '已取消' : occurrence.paused ? '已暂停' : statusText(occurrence.actionState)
+    if (!occurrence.cancelledAt && occurrence.actionState === 'succeeded') state = occurrence.deliveryState === 'delivered'
+      ? reminder ? '已送达' : '已执行，结果已送达' : occurrence.deliveryState === 'failed'
+        ? reminder ? '通知发送失败，送达情况需要核查' : '已执行，但结果通知发送失败，送达情况需要核查' : occurrence.deliveryState === 'unknown'
+          ? reminder ? '是否送达尚未确认' : '已执行，结果通知是否送达尚未确认' : occurrence.deliveryState === 'pending'
+            ? reminder ? '正在等待发送' : '已执行，正在等待发送结果' : '已执行'
+    const delivery = occurrence.cancelledAt ? cancellationDeliveryText(occurrence) : ''
+    lines.push(`${sentence(`${subject}${state}`)}${reminder ? sentence(`提醒内容：${body(schedule.reminderText)}`) : ''}${delivery}${!occurrence.cancelledAt ? sentence(reasonText(occurrence.failureReason)) : ''}`)
   }
-  if (snapshot.occurrences.length > 20) lines.push(`执行记录共 ${snapshot.occurrences.length} 次，以下为最近 20 次。`)
-  for (const occurrence of snapshot.occurrences.slice(-20)) lines.push(`执行记录 ${occurrence.occurrenceId}：${statusText(occurrence.actionState)}${occurrence.cancelledAt ? '；已取消本次安排' : ''}；原计划时间：${timeText(occurrence.plannedAt)}；结果通知：${statusText(occurrence.deliveryState)}${occurrence.failureReason ? `；原因：${reasonText(occurrence.failureReason)}` : ''}${occurrence.resultRef ? `；结果记录：${occurrence.resultRef}` : ''}。`)
-  for (const job of snapshot.jobs.filter(job => job.failureReason).slice(-20)) lines.push(`作业 ${job.jobId}：${statusText(job.state)}；原因：${reasonText(job.failureReason)}。`)
-  return lines.join('\n')
+  // 执行记录已说明失败时，不再重复列一次作业及其内部失败码。
+  if (!snapshot.occurrences.some(item => item.failureReason)) for (const job of snapshot.jobs.filter(item => item.failureReason).slice(-20))
+    lines.push(`${sentence(`安排${statusText(job.state)}`)}${sentence(reasonText(job.failureReason))}`)
+  return lines.join('\n') || sentence(snapshot.state === 'needs_attention' ? '这项安排还需要补充信息' : `这项安排${statusText(snapshot.state)}`)
 }

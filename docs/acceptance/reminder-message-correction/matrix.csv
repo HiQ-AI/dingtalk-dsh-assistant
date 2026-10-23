@@ -60,3 +60,13 @@ live-rejected-notification-no-resend,7,PASS,round-7.md
 live-independent-dws-readback,7,PASS,round-7.md
 live-latency-measurement,7,PASS,round-7.md
 live-end-to-end-latency,7,FAIL,round-7.md
+native-mention-parameter-propagation,8,PASS,round-8.md
+typed-mention-readback,8,PASS,round-8.md
+coordination-readable-business-summary,8,PASS,round-8.md
+coordination-state-and-recovery-wording,8,PASS,round-8.md
+human-topic-completion-preaccept-guard,8,PASS,round-8.md
+business-id-url-preservation,8,PASS,round-8.md
+notification-regression,8,PASS,round-8.md
+release-smoke-parallel,8,FAIL,round-8.md
+release-smoke-serial,8,PASS,round-8.md
+suite-map,8,PASS,round-8.md

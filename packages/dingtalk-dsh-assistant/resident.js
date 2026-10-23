@@ -108,7 +108,8 @@ export async function apply(ctx, config = {}) {
       canDisclose: notification => dwsConfig.enabled === true && dwsConfig.writesAuthorized === true
         && (notification.payload.audience === 'operator' || !!runtime.getGroup(notification.payload.conversationId)),
       send: notification => notification.payload.audience === 'operator'
-        ? dwsAdapter.sendSelfIntent({ userId: notification.payload.recipientUserId, text: notification.payload.text, idempotencyKey: notification.id })
+        ? dwsAdapter.sendSelfIntent({ userId: notification.payload.recipientUserId, text: notification.payload.text, idempotencyKey: notification.id,
+          taskId: notification.taskId, humanRequestId: notification.payload.humanRequestId })
         : sendWorkflowNotification(dwsAdapter, notification),
       recall: notification => recallOperatorNotification(dwsAdapter, notification),
       readback: notification => notification.payload.audience === 'operator'

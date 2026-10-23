@@ -27,8 +27,9 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
   const quote = observed.quotedMessage
   if (quote?.messageId !== payload.sourceMessageId || quote?.conversationId !== payload.conversationId) return undefined
   const expected = payload.atOpenDingTalkIds ?? []
+  // userId 与 openDingTalkId 不是同一身份类型，不能据前者宣称原生提及已核验。
   const actual = observed.atOpenDingTalkIds ?? observed.at?.atOpenDingTalkIds
-    ?? (Array.isArray(observed.mentions) ? observed.mentions.map(item => typeof item === 'string' ? item : item.openDingTalkId ?? item.userId) : undefined)
+    ?? (Array.isArray(observed.mentions) ? observed.mentions.map(item => item && typeof item === 'object' ? item.openDingTalkId : undefined) : undefined)
   const exactReceipt = acknowledgedMessageId === messageId
   const observedKey = observed.uuid ?? observed.idempotencyKey
   // 新发送使用有界外部键；历史原始键只作为回读证据，不改变通知状态或授权重发。

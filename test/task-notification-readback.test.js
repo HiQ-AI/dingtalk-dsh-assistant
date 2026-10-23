@@ -30,7 +30,28 @@ test('私聊申请按原发送收据回读，发送结果未知仅精确查找�
 test('native quote and mention must be verified independently of text', () => {
   const verify = value => verifyTaskNotificationReadback(notification, value, { acknowledgedMessageId: 'm' })
   assert.ok(verify(observed))
+  assert.ok(verify({ ...observed, atOpenDingTalkIds: undefined, mentions: [{ openDingTalkId: 'u', userId: 'different-user-id' }] }))
+  for (const mentions of [['u'], [{ userId: 'u' }], [null], [{}], [42]])
+    assert.equal(verify({ ...observed, atOpenDingTalkIds: undefined, mentions }), undefined)
   for (const change of [{quotedMessage: undefined}, {quotedMessage:{messageId:'other',conversationId:'g'}}, {quotedMessage:{messageId:'s',conversationId:'other'}}, {atOpenDingTalkIds:undefined}, {atOpenDingTalkIds:['other']}, {conversationId:'other'}]) assert.equal(verify({...observed,...change}),undefined)
+})
+
+test('普通提醒已传原生@仍以精确SUCCESS确认送达，不把缺失元数据伪称提及已核验', async () => {
+  const commands = [], pending = { id: 'reminder-notice', payload: { conversationId: 'group-id', text: '提醒查看进度。', atOpenDingTalkIds: ['open-person-a'] } }
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    commands.push(args)
+    if (args.includes('+messages-send')) return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'send-task' } }) }
+    if (args.includes('+messages-query-send-status')) return { exitCode: 0, stdout: JSON.stringify({ result: { sendStatus: 'SUCCESS', openConversationId: 'group-id', openMessageId: 'message-id' } }) }
+    return { exitCode: 0, stdout: JSON.stringify({ complete: true, hasMore: false, failedCount: 0, failures: [], foundCount: 1, notFoundMessageIds: [],
+      messages: [{ messageId: 'message-id', conversationId: 'group-id', text: '@张三 提醒查看进度。' }] }) }
+  } } })
+  pending.ack = await sendWorkflowNotification(adapter, pending)
+  assert.equal(commands[0][commands[0].indexOf('--at-open-dingtalk-ids') + 1], 'open-person-a')
+  const proof = await readTaskNotificationDelivery(adapter, pending)
+  assert.equal(proof.messageId, 'message-id')
+  assert.equal(proof.mentionVerification, 'unavailable')
+  assert.deepEqual(proof.atOpenDingTalkIds, [])
+  assert.equal(commands.filter(args => args.includes('+messages-send')).length, 1)
 })
 test('unknown send cannot be reconciled from somebody else quoting identical text', () => {
   assert.equal(verifyTaskNotificationReadback(notification,observed),undefined)

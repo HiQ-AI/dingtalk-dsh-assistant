@@ -3,10 +3,26 @@ export const groupReplyScopeInstructions = '群内回复像同事日常交流，
 
 export const groupReplyInstructions = `依据当前原始消息、真实作者和群职责说明实际业务结果与限制，不编造业务名称、数据、链接或已执行动作。${groupReplyScopeInstructions}引用和提及使用受信消息身份；Host 已提供钉钉原生引用，正文直接写答复，不再以 Markdown 引文或其他方式复述被引用消息。只分享接收者可访问的交付结果。公开正文不包含内部任务、会话、调度、诊断编号或凭据。需要用户决定或补充时具体说明缺口，已有材料与可取得事实先自主核对。个人姓名、语气偏好和业务流程以当前工作区规则与所属群会话职责为准；署名由Host按显式Agent配置在完整最终正文末尾统一附加一次，模型正文和中间内容不生成署名，不从旧报告推断默认身份。通知仅按当前任务授权及Host唯一出口处理，不自行补发或重放未知效果。`
 
+/** 格式兜底不猜测合法业务 URL 内的同形编号；已知内部身份仍由正文全范围校验。 */
+function containsRuntimeDetails(text) {
+  const matches = [...text.matchAll(/(?:task|owner|run|session|coordination|human)-[a-f0-9]{32,}\b|(?:unit|topic)-[a-f0-9]{32}(?![a-f0-9])|execution-[a-f0-9]{40}(?![a-f0-9])|coord-route-[a-f0-9]{64}(?![a-f0-9])|(?:time|message|business-event):[a-f0-9]{32,}\b|(?:任务|会话|执行|流程|协调|调度)(?:编号|[ _-]?id)\s*[:：=]\s*\S+|(?:taskId|sessionId|runId|coordinationId|scheduleId|occurrenceId|humanRequestId|leaseEpoch|inputDigest)\s*[:：=]\s*\S+|任务会话|执行会话|叶子会话|平台机制|(?:Task Owner|Outbox|IntentRun)\s*(?:已|将|正在|等待|调度|提交|写入)/giu)]
+  if (!matches.length) return false
+  const urls = []
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"'，。；！？、（）【】]+/giu)) {
+    try {
+      const url = new URL(match[0])
+      if (['http:', 'https:'].includes(url.protocol) && url.hostname) urls.push([match.index, match.index + match[0].length])
+    } catch { /* 不合法的 URL 不豁免内部格式检查。 */ }
+  }
+  return matches.some(match => !urls.some(([start, end]) => match.index >= start && match.index + match[0].length <= end))
+}
+
 export function assertGroupReply(text, internalIds = []) {
   if (typeof text !== 'string') return
-  if (internalIds.some(id => typeof id === 'string' && id.length >= 8 && text.includes(id))
-    || /(?:task|owner|run|session)-[a-f0-9]{32,}\b|(?:任务|会话|执行|流程)(?:编号|[ _-]?id)\s*[:：=]\s*\S+|(?:taskId|sessionId|runId|leaseEpoch|inputDigest)\s*[:：=]\s*\S+|任务会话|执行会话|叶子会话|平台机制|(?:Task Owner|Outbox|IntentRun)\s*(?:已|将|正在|等待|调度|提交|写入)/iu.test(text)) {
+  // 已知身份按原值检查；短 ID 还需边界，避免误命中正常单词中的几个字母。
+  if (internalIds.some(id => typeof id === 'string' && id.trim()
+    && (id.length >= 8 ? text.includes(id) : new RegExp(`(?<![a-zA-Z0-9_-])${RegExp.escape(id)}(?![a-zA-Z0-9_-])`, 'u').test(text)))
+    || containsRuntimeDetails(text)) {
     const error = new Error('GROUP_REPLY_INTERNAL_DETAILS: 请将公开正文改成群成员能理解的业务进展，不包含插件内部编号或机制。')
     error.code = 'GROUP_REPLY_INTERNAL_DETAILS'
     throw error
@@ -69,14 +85,29 @@ export function notificationOpenTaskId(ack) {
   return ack?.openTaskId ?? ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
 }
 
+/** 只收集事实里的结构化身份和摘要；业务正文、标题及普通数值不作为内部标识。 */
+function factInternalIds(fact) {
+  if (!fact || typeof fact !== 'object') return []
+  return Object.entries(fact).flatMap(([key, value]) => {
+    const identity = /(?:Id|Ids|Digest|Ref|Refs)$/u.test(key) || key === 'id'
+    if (Array.isArray(value)) return value.flatMap(item => item && typeof item === 'object' ? factInternalIds(item) : identity ? [item] : [])
+    if (value && typeof value === 'object') return factInternalIds(value)
+    return identity ? [value] : []
+  })
+}
+
 export function sendWorkflowNotification(adapter, notification) {
   const payload = notification.payload
   if (payload.reportChannel === 'web' || payload.externalMessaging === false
     || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) throw new Error('WORKFLOW_WEB_NOTIFICATION_FORBIDDEN')
-  assertGroupReply(payload.text)
-  const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id }
+  assertGroupReply(payload.text, [notification.id, notification.taskId, payload.conversationId, payload.sourceMessageId,
+    payload.actorId, payload.recipientUserId, payload.humanRequestId,
+    ...(Array.isArray(payload.atOpenDingTalkIds) ? payload.atOpenDingTalkIds : []), ...factInternalIds(payload.fact)])
+  // 普通提醒与引用回复都使用原生提及参数，不把人员 ID 或 @ 姓名拼进正文。
+  const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id,
+    atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [] }
   return payload.sourceMessageId && payload.actorId
-    ? adapter.sendGroupReply({ ...base, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId, ...(payload.atOpenDingTalkIds ? { atOpenDingTalkIds: payload.atOpenDingTalkIds } : {}) })
+    ? adapter.sendGroupReply({ ...base, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId })
     : adapter.sendGroup(base)
 }
 

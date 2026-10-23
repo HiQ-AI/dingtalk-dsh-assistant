@@ -19,6 +19,15 @@ export function dwsIdempotencyKey(value) {
   return value.length <= DWS_UUID_MAX_LENGTH ? value : `dsh:sha256:${createHash('sha256').update(value).digest('hex')}`
 }
 
+/** 只编码来源已核实的 openDingTalkId；拒绝会改变 CLI 列表含义的空白、逗号和引号。 */
+function nativeMentionIds(values) {
+  if (!Array.isArray(values)) throw new Error('dws_at_open_dingtalk_ids_invalid')
+  for (const value of values) {
+    if (typeof value !== 'string' || !value || /[\s,"\u0000-\u001f\u007f]/u.test(value)) throw new Error('dws_at_open_dingtalk_ids_invalid')
+  }
+  return values.join(',')
+}
+
 function assertFileName(value) {
   assertStableId(value, 'file_name')
   if (value !== value.trim() || /[<>:"/\\|?*\u0000-\u001f\u007f]/u.test(value) || /[. ]$/u.test(value)
@@ -138,8 +147,10 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     compileGroupReadRange(groupId, { start, end }) {
       return withProfile(['chat', '+chat-messages', '--group', assertStableId(groupId, 'group_id'), '--start', assertStableId(start, 'start'), '--end', assertStableId(end, 'end'), '--order', 'asc', '--page-all', '--page-limit', '50', '--format', 'json'])
     },
-    compileGroupSend({ groupId, text, idempotencyKey }) {
+    compileGroupSend({ groupId, text, idempotencyKey, atOpenDingTalkIds = [] }) {
       const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
+      const mentions = nativeMentionIds(atOpenDingTalkIds)
+      if (mentions) args.push('--at-open-dingtalk-ids', mentions)
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
@@ -150,7 +161,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     },
     compileGroupReply({ groupId, text, idempotencyKey, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds = [] }) {
       const args = ['chat', 'message', 'reply', '--group', assertStableId(groupId, 'group_id'), '--ref-msg-id', assertStableId(replyToMessageId, 'reply_message_id'), '--ref-sender', assertStableId(replyToSenderOpenDingTalkId, 'reply_sender_id'), '--content', assertStableId(text, 'text'), '--uuid', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
-      if (atOpenDingTalkIds.length > 0) args.push('--at-open-dingtalk-ids', atOpenDingTalkIds.map((value) => assertStableId(value, 'at_open_dingtalk_id')).join(','))
+      const mentions = nativeMentionIds(atOpenDingTalkIds)
+      if (mentions) args.push('--at-open-dingtalk-ids', mentions)
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
@@ -208,7 +220,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     async sendGroup(request) {
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
-      assertGroupReply(request.text)
+      assertGroupReply(request.text, [request.groupId, request.idempotencyKey, ...(Array.isArray(request.atOpenDingTalkIds) ? request.atOpenDingTalkIds : [])])
       const result = await runner.run(this.compileGroupSend(request))
       if (result.exitCode !== 0) throw commandError('dws_send_failed', result)
       return sendCommandReceipt(result, 'send')
@@ -261,7 +273,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     async sendGroupReply(request) {
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
-      assertGroupReply(request.text)
+      assertGroupReply(request.text, [request.groupId, request.idempotencyKey, request.replyToMessageId,
+        request.replyToSenderOpenDingTalkId, ...(Array.isArray(request.atOpenDingTalkIds) ? request.atOpenDingTalkIds : [])])
       const result = await runner.run(this.compileGroupReply(request))
       if (result.exitCode !== 0) {
         const error = commandError('dws_reply_failed', result)
@@ -287,6 +300,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     async sendSelfIntent(request) {
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      assertGroupReply(request.text, [request.userId, request.idempotencyKey, request.taskId, request.requestId, request.humanRequestId])
       const args = this.compileSelfSend(request)
       const sentKey = args[args.indexOf('--idempotency-key') + 1]
       const sent = await runner.run(args)
@@ -564,7 +578,7 @@ export async function dispatchOutbox({ adapter, groupId, outbound, beforeSend, b
     phase = 'send'
     const sent = outbound.replyToMessageId && outbound.replyToSenderOpenDingTalkId
       ? await adapter.sendGroupReply({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, replyToMessageId: outbound.replyToMessageId, replyToSenderOpenDingTalkId: outbound.replyToSenderOpenDingTalkId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
-      : await adapter.sendGroup({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId })
+      : await adapter.sendGroup({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
     if (sent?.deliveryStatus === 'unknown') return { status: 'pending', reason: 'delivery_unknown', sendResult: sent }
 
     phase = 'postflight'

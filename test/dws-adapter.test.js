@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
 import { createDwsAdapter, dispatchOutbox, dwsIdempotencyKey, matchesOutbound } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
-import { persistedUuidSendRejectionProof } from '../packages/dingtalk-dsh-assistant/group-message.js'
+import { assertGroupReply, persistedUuidSendRejectionProof, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
 
 test('DWS adapter 默认禁用且不会调用 runner', async () => {
   let calls = 0
@@ -75,6 +75,128 @@ test('Task完成通知使用DWS原生引用回复并@提出人', async () => {
   assert.equal(readbackAttempts, 2)
   assert.deepEqual(request.atOpenDingTalkIds, ['od-requester'])
   assert.equal(request.replyToMessageId, 'm-source')
+})
+
+test('普通提醒和引用通知都将来源openDingTalkId送入DWS原生参数且正文不拼人员标识', async () => {
+  const commands = [], text = '提醒你查看云端专家的开发进度。'
+  const recipients = ['open-person-a', 'open-person-b'], before = [...recipients]
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, profile: 'corp:user', runner: { run: async args => {
+    commands.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  for (const quoted of [false, true]) {
+    const notification = { id: `notice-${quoted}`, payload: { conversationId: 'group-id', text,
+      atOpenDingTalkIds: recipients, ...(quoted ? { sourceMessageId: 'source-message', actorId: recipients[0] } : {}) } }
+    await sendWorkflowNotification(adapter, notification)
+    const args = commands.at(-1)
+    assert.equal(args[args.indexOf('--at-open-dingtalk-ids') + 1], recipients.join(','))
+    assert.equal(args[args.indexOf(quoted ? '--content' : '--text') + 1], text)
+    assert.equal(args.includes('--at-user-ids'), false)
+    assert.equal(args.includes('--at-all'), false)
+    assert.deepEqual(args.slice(-2), ['--profile', 'corp:user'])
+    assert.equal(args.includes('--yes'), true)
+    if (quoted) {
+      assert.equal(args[args.indexOf('--ref-msg-id') + 1], 'source-message')
+      assert.equal(args[args.indexOf('--ref-sender') + 1], recipients[0])
+    } else assert.equal(args[args.indexOf('--as') + 1], 'user')
+    assert.equal(notification.payload.text, text)
+  }
+  assert.deepEqual(recipients, before)
+  assert.equal(commands.length, 2)
+})
+
+test('普通与引用发送空提及不添加任何@参数，非法列表在调用DWS前拒绝', async () => {
+  let calls = 0
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => { calls++; return { exitCode: 0, stdout: '{}' } } } })
+  const request = { groupId: 'group-id', text: '核验完成。', idempotencyKey: 'notice-id', replyToMessageId: 'source-message', replyToSenderOpenDingTalkId: 'open-person-a' }
+  for (const compile of [args => adapter.compileGroupSend(args), args => adapter.compileGroupReply(args)]) {
+    for (const atOpenDingTalkIds of [undefined, []]) assert.equal(compile({ ...request, atOpenDingTalkIds }).some(arg => arg.startsWith('--at-')), false)
+  }
+  for (const atOpenDingTalkIds of [null, 'open-person-a', {}, [null], [42], [''], [' '], ['open,a'], ['open a'], ['open\na'], ['"open"']]) {
+    await assert.rejects(adapter.sendGroup({ ...request, atOpenDingTalkIds }), /dws_at_open_dingtalk_ids_invalid/u)
+    await assert.rejects(adapter.sendGroupReply({ ...request, atOpenDingTalkIds }), /dws_at_open_dingtalk_ids_invalid/u)
+  }
+  assert.equal(calls, 0)
+})
+
+test('无引用outbox透传原生提及且空列表不会补为全员', async () => {
+  for (const atOpenDingTalkIds of [undefined, [], ['open-person-a']]) {
+    let reads = 0, sent
+    const adapter = { readGroup: async () => ({ complete: true, messages: ++reads === 1 ? [] : [{ messageId: 'delivered', text: '提醒查看进度。' }] }),
+      sendGroup: async request => { sent = request; return { deliveryStatus: 'success' } } }
+    const result = await dispatchOutbox({ adapter, groupId: 'group-id', outbound: { outboundId: 'notice-id', text: '提醒查看进度。', atOpenDingTalkIds } })
+    assert.equal(result.status, 'sent')
+    assert.deepEqual(sent.atOpenDingTalkIds, atOpenDingTalkIds ?? [])
+    assert.equal(sent.text, '提醒查看进度。')
+  }
+})
+
+test('外发正文拒绝已知身份与运行时前缀，保留业务编号和普通链接而不静默改写', () => {
+  const hash = 'a'.repeat(32)
+  for (const id of [`coordination-${hash}`, `schedule:coordination-${hash}`, `time:${hash}`, `human-${hash}`,
+    `coordination:coordination-${hash}:summary:1`, `task-${hash}`, `session-${hash}`]) {
+    assert.throws(() => assertGroupReply(`当前安排：${id}`), error => error.code === 'GROUP_REPLY_INTERNAL_DETAILS')
+  }
+  for (const id of ['known-source-1', '329881099', 'open+person/id==', 'short'])
+    assert.throws(() => assertGroupReply(`原始标识：${id}。`, [id]), /GROUP_REPLY_INTERNAL_DETAILS/u)
+  assert.throws(() => assertGroupReply('附加xknown-source-1suffix', ['known-source-1']), /GROUP_REPLY_INTERNAL_DETAILS/u)
+  const business = '业务单号 TIME-20261023-001，PR #255，https://example.com/docs/schedule-reference；请查看库存开票进度。'
+  assert.doesNotThrow(() => assertGroupReply(business, ['id', 'time']))
+  assert.equal(business.includes('TIME-20261023-001'), true)
+})
+
+test('遗漏knownIds时仍拦截源码确认的unit/topic/execution/coord-route精确格式', () => {
+  for (const [prefix, length] of [['unit', 32], ['topic', 32], ['execution', 40], ['coord-route', 64]]) {
+    assert.throws(() => assertGroupReply(`当前状态：${prefix}-${'a'.repeat(length)}`), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.doesNotThrow(() => assertGroupReply(`业务单号 ${prefix}-20261023-001，链接 https://example.com/${prefix}-guide`))
+    for (const otherLength of [length - 1, length + 1])
+      assert.doesNotThrow(() => assertGroupReply(`参考编号 ${prefix}-${'a'.repeat(otherLength)}`))
+  }
+})
+
+test('合法业务URL的同形编号保留，已知内部身份藏在URL中仍拒绝且正文不改写', () => {
+  for (const [prefix, length] of [['unit', 32], ['topic', 32], ['execution', 40], ['coord-route', 64]]) {
+    const id = `${prefix}-${'a'.repeat(length)}`, text = `查看业务记录：https://crm.example.com/${id}`
+    assert.doesNotThrow(() => assertGroupReply(text))
+    assert.throws(() => assertGroupReply(text, [id]), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.throws(() => assertGroupReply(`链接：https://[invalid]/${id}`), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.throws(() => assertGroupReply(`链接：https://crm.example.com/detail。内部标识：${id}`), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.equal(text, `查看业务记录：https://crm.example.com/${id}`)
+  }
+})
+
+test('通知正文检查全部已知身份和fact标识，结构化身份保留且零外发拒绝', async () => {
+  let calls = 0
+  const notification = { id: 'opaque-notification', taskId: 'opaque-task', payload: {
+    conversationId: 'opaque-conversation', sourceMessageId: 'opaque-source', actorId: 'opaque-actor', recipientUserId: 'opaque-user',
+    humanRequestId: 'opaque-human', atOpenDingTalkIds: ['opaque-mention'],
+    fact: { coordinationId: 'opaque-coordination', occurrenceId: 'opaque-occurrence', eventId: 'opaque-event',
+      resultDigest: 'b'.repeat(64), taskIds: ['opaque-task-list'], topicRefs: [{ topicId: 'opaque-topic' }], title: '业务进度', revision: 1 } } }
+  const adapter = { sendGroup: async () => { calls++ }, sendGroupReply: async () => { calls++ } }
+  const internalIds = ['opaque-notification', 'opaque-task', 'opaque-conversation', 'opaque-source', 'opaque-actor', 'opaque-user',
+    'opaque-human', 'opaque-mention', 'opaque-coordination', 'opaque-occurrence', 'opaque-event', 'b'.repeat(64), 'opaque-task-list', 'opaque-topic']
+  for (const id of internalIds) {
+    notification.payload.text = `请查看进度：${id}。`
+    const before = structuredClone(notification)
+    assert.throws(() => sendWorkflowNotification(adapter, notification), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.deepEqual(notification, before)
+  }
+  assert.equal(calls, 0)
+  notification.payload.text = '业务进度已核实，数量 1。'
+  await sendWorkflowNotification(adapter, notification)
+  assert.equal(calls, 1)
+})
+
+test('私聊与群聊共用正文门禁，私聊已知身份拒绝前不调用DWS', async () => {
+  let calls = 0
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => {
+    calls++; return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  const request = { userId: 'recipient-id', idempotencyKey: 'notice-id', taskId: 'opaque-task', requestId: 'request-id', humanRequestId: 'human-id' }
+  for (const value of [...Object.values(request), `human-${'c'.repeat(64)}`, `time:${'d'.repeat(64)}`])
+    await assert.rejects(adapter.sendSelfIntent({ ...request, text: `需要确认：${value}` }), /GROUP_REPLY_INTERNAL_DETAILS/u)
+  assert.equal(calls, 0)
+  await adapter.sendSelfIntent({ ...request, text: '请核对业务单 20261023，链接 https://example.com/orders/20261023。' })
+  assert.equal(calls, 1)
 })
 
 test('引用回复回读即使正文完全相同也必须匹配quoted message ID', () => {

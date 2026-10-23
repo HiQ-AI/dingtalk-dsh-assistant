@@ -20,7 +20,7 @@ import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceI
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
-import { sameDeliveredText } from './group-message.js'
+import { assertGroupReply, sameDeliveredText } from './group-message.js'
 import { taskExecutionContext } from './execution-context.js'
 import { assertTaskContextSemantics, taskContextInputContract } from './task-input-contract.js'
 import { projectTaskTimeline, readTaskLifecycle, latestExecutionRoundTiming } from './task-execution-timeline.js'
@@ -588,8 +588,24 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     for (const item of sources) await materializeSource(task.taskId, item)
     if (action.kind !== 'task-cancel') void kickTask(task.taskId)
   }
+  async function topicReplyInternalIds(args) {
+    const group = residentStore.getGroup(args.groupId)
+    const refs = args.topicRefs ?? (args.topicId ? [{ topicId: args.topicId, revision: args.revision }] : [])
+    const messageIds = new Set([args.replyToMessageId, ...(args.decision?.basisMessageIds ?? [])].filter(Boolean))
+    for (const ref of refs) for (const message of resolveTopicMessages(group, ref.topicId, ref.revision)) messageIds.add(message.messageId)
+    const messages = (group?.messages ?? []).filter(message => messageIds.has(message.messageId))
+    const taskIds = [...new Set([...(args.taskIds ?? []), ...(args.decision?.actions ?? []).map(action => action.taskId)].filter(Boolean))]
+    const tasks = (await Promise.all(taskIds.map(taskId => query('task.get', { taskId })))).filter(Boolean)
+    return [args.groupId, args.decisionId, args.outboundId, args.sourceMessageId, args.replyToSenderOpenDingTalkId,
+      ...(args.atOpenDingTalkIds ?? []), ...refs.map(ref => ref.topicId), ...taskIds,
+      ...messages.flatMap(message => [message.messageId, `im:${hash([args.groupId, message.messageId, message.messageVersion])}`,
+        message.senderOpenDingTalkId, message.actorId, ...(message.units ?? []).map(unit => unit.unitId)]),
+      ...(await Promise.all(tasks.map(task => replyInternalIds(task)))).flat()].filter(Boolean)
+  }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
     coordinationEnabled: config.coordination?.enabled === true,
+    // 在接纳业务决定前拒绝泄漏正文，让原模型修改后重提，不能先创建任务再卡在外发。
+    validateReply: async args => assertGroupReply(args.decision.reply, await topicReplyInternalIds(args)),
     appendOutbox: async args => {
       const prepared = (await query('notification.list')).find(item => item.id === args.outboundId)
       if (prepared) {
@@ -601,7 +617,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const sourceText = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)?.text
       const previous = residentStore.getGroup(args.groupId)?.outbox.find(item => item.outboundId === args.outboundId)
       // The resident outbox can survive a crash before notification.prepare.
-      const reply = previous ? { text: previous.text } : formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature, includeSignature: args.replyKind === 'substantive' })
+      const reply = previous ? { text: previous.text } : formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature, includeSignature: args.replyKind === 'substantive', internalIds: await topicReplyInternalIds(args) })
       args = { ...args, ...reply }
       const group = await residentStore.appendOutbox(args)
       const notificationId = args.outboundId
@@ -999,6 +1015,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             return result
           },
           submit: async decision => {
+            const publicInternalIds = decision.question?.trim() || decision.action === 'complete' || dialogue ? await replyInternalIds(task, sources) : []
+            if (decision.question?.trim()) {
+              // 人工问题和已尝试事项会外发；evidence 保留在内部账本，不拿调试 ID 当用户操作入口。
+              for (const text of [task.title, decision.question, ...(decision.attemptedActions ?? [])]) assertGroupReply(text, publicInternalIds)
+            }
+            if (decision.action === 'complete' || dialogue)
+              for (const text of [decision.summary, ...(dialogue ? [] : [...(decision.evidence ?? []), ...(decision.limitations ?? [])])]) assertGroupReply(text, publicInternalIds)
             if (dialogue) {
               if (decision.action !== 'wait' || decision.question?.trim()) fail('TASK_DIALOGUE_REPLY_ONLY')
               await command('task.dialogue.reply', { binding, messageId: dialogue.id, reply: decision.summary, decision }, `dialogue-reply:${taskId}:${dialogue.id}`)
@@ -1011,7 +1034,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               if (source && source.channel !== 'web' && !source.sourceId.startsWith('web:')) {
                 const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId, senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text },
                   summary: decision.summary, evidence: decision.evidence, limitations: decision.limitations,
-                  signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
+                  signature: legacy.getAgentConfig().replySignature, internalIds: publicInternalIds })
                 notification = { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId, fact: { taskId }, kind: 'task-completed' }
               }
               await command('task.complete', { binding, summary: decision.summary, result: decision, ...(notification ? { notification } : {}) }, `complete:${taskId}:${binding.requirementRevision}`)
@@ -1048,10 +1071,17 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       }
     })
   }
-  async function replyInternalIds(task) {
-    const executions = await query('execution.list', { taskId: task.taskId })
-    return [task.taskId, task.sessionId, ...task.sourceRefs,
-      ...executions.flatMap(item => [item.executionId, item.sessionId])].filter(Boolean)
+  async function replyInternalIds(task, knownSources) {
+    const [executions, operations, current] = await Promise.all([
+      query('execution.list', { taskId: task.taskId }), query('operation.list', { taskId: task.taskId }), query('task.get', { taskId: task.taskId }),
+    ])
+    const sourceIds = new Set([...task.sourceRefs, ...(current?.sourceRefs ?? [])])
+    // 复用本轮已读来源；恢复出口也只读取本任务绑定项，不扫描所有历史消息。
+    const sources = knownSources ?? (await Promise.all([...sourceIds].map(sourceId => query('source.get', { sourceId })))).filter(Boolean)
+    return [task.taskId, task.sessionId, task.groupId, task.ownerActorId, config.operatorUserId, ...sourceIds,
+      ...sources.flatMap(source => [source.messageId, source.actorId]),
+      ...(current?.humanRequests ?? task.humanRequests ?? []).map(item => item.requestId),
+      ...executions.flatMap(item => [item.executionId, item.sessionId]), ...operations.map(item => item.operationId)].filter(Boolean)
   }
   async function queueReply(task, source, decision, id, kind, humanRequest) {
     if (!source || source.channel === 'web' || source.sourceId.startsWith('web:')) return
@@ -1077,9 +1107,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }
     if (!config.operatorUserId) return // 未配置/登录时仍保留Web人工介入，不能转发给需求提出人。
     const notificationId = `operator-request:${request.requestId}`
-    const text = ['【任务技术问题，需要操作人处理】', `任务：${task.title}`, `申请：${request.requestId}`,
+    const text = ['【需要协助处理】', `事项：${task.title}`,
       request.question, ...(request.attemptedActions?.length ? ['已尝试：', ...request.attemptedActions] : []),
-      '请在Web人工介入页答复，或在本私聊中引用本申请回复处理结果。'].join('\n\n')
+      '请在人工介入页答复，或引用本消息回复处理结果。'].join('\n\n')
+    assertGroupReply(text, [request.requestId, notificationId, ...await replyInternalIds(task)])
     await command('notification.prepare', { notificationId, taskId: task.taskId, requirementRevision: request.requirementRevision,
       kind: 'question', payload: { text, audience: 'operator', humanRequestId: request.requestId,
         recipientUserId: config.operatorUserId, fact: { taskId: task.taskId }, kind: 'question' } }, `prepare-notification:${notificationId}`)

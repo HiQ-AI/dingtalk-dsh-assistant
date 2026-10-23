@@ -7,7 +7,7 @@ import { resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.j
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { groupReplyScopeInstructions } from '../packages/dingtalk-dsh-assistant/group-message.js'
 import { taskIndexPage } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
-import { available, reason, nativeTaskHost, latestInput, waitUntil, modelToolValues } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, waitUntil, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 const call = (name, args) => ({ name, args: name === 'group_decision_submit' ? { ...args, decision: { ...args.decision, topicUpdate: { summary: '围绕原始事项持续核对，当前结论以任务真实进展为准。' } } } : args })
 function envelope(request, prefix) {
@@ -239,6 +239,36 @@ async function extraHost(t, prefix, decide) {
   host = await nativeTaskHost(root, decide)
   return host
 }
+
+testRunner('Topic外发标识在接纳前被拒绝，原轮修改后只创建一项任务且保留业务编号链接', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+  let attempts = 0
+  const publicText = '已安排核查 PR #253 与订单 SG18：https://example.com/orders/SG18'
+  const h = await extraHost(t, 'topic-public-identities-', async (request, host) => {
+    const calls = topicTaskCalls(request), input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'group_decision_submit')) {
+      assert.equal((await host.query('task.list')).length, 0, '正文校验必须早于业务任务创建')
+      assert.equal(host.residentStore.listTopics('native-group')[0].decisions.length, 0, '无效正文不能持久接纳为待执行决定')
+      const source = (await host.query('source.list'))[0]
+      const ids = [input.requestId, input.topicId, input.messages[0].unitId, input.messages[0].messageId, source.sourceId]
+      calls[0].args.decision.reply = attempts < ids.length ? `已处理：${ids[attempts]}` : publicText
+      attempts++
+      return calls
+    }
+    if (calls) return calls
+    return [call('task_session_submit', { decision: { action: 'wait', summary: '等待实际核验结果', evidence: [], limitations: [] } })]
+  })
+  await h.service.ingest(message('business-request-with-identities', '测试助手，核查 PR #253 与订单 SG18 的关联。'))
+  await h.service.whenIdle()
+  assert.equal(attempts, 6)
+  assert.equal((await h.query('task.list')).length, 1)
+  assert.equal(h.residentStore.listTopics('native-group')[0].decisions.length, 1)
+  const rejected = h.toolResults.filter(item => item.name === 'group_decision_submit' && item.result.isError)
+  assert.equal(rejected.length, 5)
+  assert.ok(rejected.every(item => JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')))
+  assert.equal(h.sent.length, 1)
+  assert.equal(h.sent[0].payload.text, publicText)
+  assert.equal(h.sent[0].payload.sourceMessageId, 'business-request-with-identities')
+})
 
 testRunner('native Topic handoff keeps the explicit requester as task and completion notification owner', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
   const reviewed = new Set()

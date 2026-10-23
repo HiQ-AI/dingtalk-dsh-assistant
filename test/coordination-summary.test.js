@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { coordinationSnapshot, formatCoordinationSnapshot } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
+import { coordinationSnapshot, formatCoordinationSnapshot, formatCoordinationAcceptance, formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
 const member = (id, state) => ({ id, taskId: id, state, control: state === 'cancelled' ? 'cancelled' : 'active',
@@ -12,6 +12,100 @@ const member = (id, state) => ({ id, taskId: id, state, control: state === 'canc
 const snapshot = members => coordinationSnapshot({ coordination: { id: 'coordination', revision: 2, state: 'active' },
   members, tasks: members.map(m => ({ taskId: m.taskId, status: m.state === 'fulfilled' ? 'completed' : 'active' })),
   schedules: [], occurrences: [], jobs: [] })
+
+for (const [actionState, deliveryState, expected] of [
+  ['expired', 'none', '已过期，本次未执行'], ['failed', 'none', '未能完成'], ['blocked', 'none', '暂时受阻'],
+  ['succeeded', 'failed', '通知发送失败，送达情况需要核查'], ['succeeded', 'unknown', '是否送达尚未确认'], ['succeeded', 'delivered', '已送达'],
+]) test(`群摘要只解释提醒业务结果与工作时区，不输出内部审计字段: ${actionState}/${deliveryState}`, () => {
+  const result = coordinationSnapshot({ coordination: { id: 'coordination-secret', revision: 77, state: 'active' }, members: [], tasks: [],
+    schedules: [{ id: 'schedule:secret', revision: 12, state: 'completed', timezone: 'UTC', rule: { kind: 'once', at: '2026-10-23T08:22:00Z' },
+      action: { kind: 'message-reminder', text: '查看订单 BIZ-413 的进度。' }, target: { recipientIds: ['recipientOpenID-secret'] } }],
+    occurrences: [{ id: 'time:secret', scheduleId: 'schedule:secret', plannedAt: '2026-10-23T08:22:00Z', actionState, deliveryState,
+      target: { recipientIds: ['recipientOpenID-secret'] }, result: { text: '内部结果' }, notificationId: 'notification-secret' }], jobs: [] })
+  const before = structuredClone(result), text = formatCoordinationSnapshot(result, { timeZone: 'Asia/Shanghai' })
+  assert.match(text, new RegExp(expected)); assert.match(text, /2026年10月23日 16:22（北京时间）/)
+  assert.match(text, /查看订单 BIZ-413 的进度。/)
+  assert.equal((text.match(/16:22/g) ?? []).length, 1)
+  assert.doesNotMatch(text, /secret|版本|0 项|0成员|UTC|T08:22|回执|完成证明|。。|已修复|不会补发/)
+  if (deliveryState === 'unknown') assert.doesNotMatch(text, /已送达|已完成|未能发送/)
+  assert.deepEqual(result, before, '只调整外发正文，不改快照和幂等事实')
+})
+
+test('业务要求和业务ID保留，机器等待码译成说明而不泄露内部结构', () => {
+  const result = snapshot([{ ...member('internal-task', 'applied'), id: 'instruction-secret',
+    command: { id: 'command-secret', args: { request: '核查订单 BIZ-413 https://example.test/order/BIZ-413' } },
+    waitingReason: { code: 'waiting_dependency', dependencyInstructionIds: ['dependency-secret'] } }])
+  const text = formatCoordinationSnapshot(result)
+  assert.match(text, /核查订单 BIZ-413 https:\/\/example.test\/order\/BIZ-413/)
+  assert.match(text, /需要先完成前面的事项/)
+  assert.doesNotMatch(text, /internal-task|instruction-secret|command-secret|dependency-secret|waiting_dependency|正式完成 0/)
+})
+
+test('接纳、改期、暂停、恢复、取消和未明确事项都使用自然文案', () => {
+  const options = { timeZone: 'Asia/Shanghai' }
+  const proposal = { kind: 'schedule', actionKind: 'message-reminder', rule: { kind: 'once', at: '2026-10-23T08:22:00Z' },
+    timezone: 'UTC', reminderText: '查看进度。', recipientIds: ['recipient-secret'], interpretation: 'coordination-secret schedule-secret 版本9' }
+  assert.equal(formatCoordinationAcceptance(proposal, options), '已安排提醒：2026年10月23日 16:22（北京时间），查看进度。')
+  const schedule = { rule: proposal.rule, timezone: 'UTC', action: { kind: 'message-reminder', text: proposal.reminderText } }
+  const changed = { kind: 'schedule-change', scheduleId: 'schedule-secret', expectedScheduleRevision: 9, rule: proposal.rule }
+  assert.equal(formatCoordinationAcceptance(changed, { ...options, schedule }), '已将提醒时间改为2026年10月23日 16:22（北京时间）：查看进度。')
+  for (const [state, verb] of [['paused', '暂停'], ['active', '恢复'], ['cancelled', '取消']]) {
+    assert.equal(formatCoordinationAcceptance({ ...changed, rule: undefined, state }, { ...options, schedule }), `已${verb}这项提醒${state === 'cancelled' ? '的后续安排' : ''}：查看进度。`)
+  }
+  for (const [control, verb] of [['pause', '暂停'], ['resume', '恢复'], ['cancel', '取消']]) {
+    assert.equal(formatCoordinationAcceptance({ kind: 'occurrence-control', occurrenceId: 'time-secret', control },
+      { ...options, occurrence: { action: { kind: 'message-reminder' } } }), `已${verb}本次提醒。`)
+  }
+  assert.equal(formatCoordinationAcceptance({ kind: 'arrangement', pendingClarifications: [{ clarificationId: 'internal-question', question: '提醒你查看哪个项目？' }] }, options), '提醒你查看哪个项目？')
+  assert.doesNotMatch(formatCoordinationAcceptance({ ...proposal, actionKind: 'read-query' }, options), /secret|补执行|0 项|动作结果|UTC|。。/)
+})
+
+test('改期、单次暂停、取消后的送达和无结果通知都按真实状态说明', () => {
+  const result = coordinationSnapshot({ coordination: { id: 'coordination-secret', revision: 3, state: 'active' }, members: [], tasks: [],
+    schedules: [{ id: 'schedule-secret', revision: 2, state: 'active', timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-23T08:40:00Z' },
+      action: { kind: 'message-reminder', text: '查看进度。' }, target: { recipientIds: [] } }],
+    occurrences: [{ id: 'old-time', scheduleId: 'schedule-secret', plannedAt: '2026-10-23T08:22:00Z', actionState: 'waiting', deliveryState: 'none', paused: true }], jobs: [] })
+  let text = formatCoordinationSnapshot(result, { timeZone: 'Asia/Shanghai' })
+  assert.match(text, /16:40/); assert.match(text, /16:22（北京时间）的提醒已暂停/)
+  result.occurrences[0].cancelledAt = '2026-10-23T08:30:00Z'; result.occurrences[0].deliveryState = 'delivered'
+  text = formatCoordinationSnapshot(result, { timeZone: 'Asia/Shanghai' })
+  assert.match(text, /已取消/); assert.match(text, /之前的通知已经送达，取消不会撤回已发消息/)
+  result.schedules = []; result.occurrences = [{ actionState: 'succeeded', deliveryState: 'none' }]
+  assert.equal(formatCoordinationSnapshot(result), '本次安排已执行。')
+  assert.equal(Object.hasOwn(snapshot([]), 'paused'), false)
+  const unpaused = coordinationSnapshot({ coordination: { id: 'c', state: 'active', revision: 1 }, members: [], tasks: [], schedules: [], jobs: [],
+    occurrences: [{ id: 'o', actionState: 'waiting', deliveryState: 'none', paused: false }] })
+  assert.equal(Object.hasOwn(unpaused.occurrences[0], 'paused'), false, '未暂停历史快照的字段和 digest 不因文案升级改变')
+  for (const deliveryState of ['unknown', 'delivered']) {
+    const acknowledgement = formatCoordinationAcceptance({ kind: 'occurrence-control', control: 'cancel' }, { occurrence: { action: { kind: 'message-reminder' }, deliveryState } })
+    assert.match(acknowledgement, deliveryState === 'unknown' ? /是否送达尚未确认/ : /已经送达，取消不会撤回/)
+  }
+})
+
+test('恢复旧控制确认使用已被再次调整的当前事实，不混用旧操作与新时间', () => {
+  const options = { timeZone: 'Asia/Shanghai', schedule: { revision: 3, state: 'cancelled', action: { kind: 'message-reminder', text: '查看进度。' },
+    rule: { kind: 'once', at: '2026-10-23T08:40:00Z' }, timezone: 'Asia/Shanghai' } }
+  const text = formatCoordinationAcceptance({ kind: 'schedule-change', expectedScheduleRevision: 1, rule: { kind: 'once', at: '2026-10-23T08:30:00Z' } }, options)
+  assert.equal(text, '这项提醒后来又有调整，目前已取消：查看进度。')
+  assert.doesNotMatch(text, /已将|16:40|16:30/)
+  assert.equal(formatCoordinationAcceptance({ kind: 'occurrence-control', control: 'resume', expectedControlRevision: 1 }, {
+    occurrence: { instanceControlRevision: 3, cancelledAt: '2026-10-23T08:30:00Z', action: { kind: 'message-reminder' } } }), '这次提醒后来又有调整，目前已取消。')
+  for (const [deliveryState, boundary] of [['unknown', '之前的通知是否送达尚未确认。'], ['delivered', '之前的通知已经送达，取消不会撤回已发消息。']]) {
+    assert.equal(formatCoordinationAcceptance({ kind: 'occurrence-control', control: 'pause', expectedControlRevision: 1 }, {
+      occurrence: { instanceControlRevision: 3, cancelledAt: '2026-10-23T08:30:00Z', deliveryState, action: { kind: 'message-reminder' } },
+    }), `这次提醒后来又有调整，目前已取消。${boundary}`)
+  }
+})
+
+test('历史阻塞诊断保留原证据，公开文本给出可读待核查说明', () => {
+  const result = snapshot([member('A', 'applied')])
+  result.members[0].blocker = 'coordinationId: coordination-secret 执行失败'
+  assert.match(formatCoordinationSnapshot(result), /具体原因还需核查/)
+  assert.doesNotMatch(formatCoordinationSnapshot(result), /coordinationId|coordination-secret/)
+  assert.equal(result.members[0].blocker, 'coordinationId: coordination-secret 执行失败')
+  result.members[0].blocker = '需要补充订单 BIZ-413 的凭证，查看 https://example.test/order/BIZ-413'
+  assert.match(formatCoordinationSnapshot(result), /订单 BIZ-413 的凭证，查看 https:\/\/example.test\/order\/BIZ-413/)
+})
 
 test('historical Owner blockers do not override completed or cancelled member facts', () => {
   for (const state of ['fulfilled','cancelled']) {
@@ -66,7 +160,7 @@ test('a recurring authorization blocked at trigger remains visible as outstandin
   assert.equal(result.state,'needs_attention');assert.deepEqual(result.outstanding.occurrenceIds,['slot'])
   assert.equal(result.occurrences[0].failureReason,'authorization_changed');assert.equal(result.jobs[0].failureReason,'authorization_changed')
   const explanation=formatCoordinationSnapshot(result)
-  assert.match(explanation,/受阻/);assert.match(explanation,/authorization_changed/)
+  assert.match(explanation,/受阻/);assert.match(explanation,/相关授权已变化/);assert.doesNotMatch(explanation,/authorization_changed/)
 })
 
 test('cancelled blocked occurrence retires execution obligations but preserves unknown delivery readback',()=>{
@@ -75,7 +169,7 @@ test('cancelled blocked occurrence retires execution obligations but preserves u
       occurrences:[{id:'slot',actionState:'blocked',cancelledAt:'2026-10-21T00:00:00Z',deliveryState,failureReason:'authorization_changed'}],jobs:[]})
     assert.deepEqual(result.outstanding.occurrenceIds,deliveryState==='unknown'?['slot']:[])
     if(deliveryState==='none')assert.equal(result.state,'cancelled')
-    assert.match(formatCoordinationSnapshot(result),/已取消本次安排/)
+    assert.match(formatCoordinationSnapshot(result),/本次安排已取消/)
   }
 })
 
@@ -97,9 +191,9 @@ for (const delivery of ['delivered','unknown','cancelled']) test(`expired read-o
   assert.equal(occurrence.actionState,'expired');assert.equal(occurrence.deliveryState,'none')
   assert.deepEqual(await store.query({kind:'coordination.job.list'}),[])
   const first=(await command('coordination.aggregate',{coordinationId:'expired'})).result.notification
-  assert.ok(first);assert.match(first.payload.text,/已过期，本次未执行/);assert.match(first.payload.text,/09:00:00/)
+  assert.ok(first);assert.match(first.payload.text,/已过期，本次未执行/);assert.ok(first.payload.text.includes(formatCoordinationTime('2026-10-21T01:00:00Z')))
   assert.deepEqual(first.payload.atOpenDingTalkIds,['recipient'])
-  assert.match(first.payload.text,/Asia\/Shanghai/);assert.match(first.payload.text,/recipient/)
+  assert.doesNotMatch(first.payload.text,/recipient|Asia\/Shanghai|at-nine|time:|版本|0 项/)
   await store.close();store=await openDynamicTaskStore(options)
   assert.equal((await command('coordination.aggregate',{coordinationId:'expired'})).result.notification,undefined)
   assert.equal((await store.query({kind:'notification.list'})).length,1)

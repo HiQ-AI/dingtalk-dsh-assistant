@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openIndependentCoordination } from '../packages/dingtalk-dsh-assistant/independent-coordination-service.js'
 import { localSlot } from '../packages/dingtalk-dsh-assistant/coordination-time.js'
+import { formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 
 const clone = value => JSON.parse(JSON.stringify(value))
 async function fixture(t, { enabled = false, planner, failApplyAck = false, failResidentAcceptance = false, authenticated = true, actorId = 'author', seedTask = true, legacySummaryText } = {}) {
@@ -68,6 +69,21 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
     async observe() { await service.context(request(), { taskIds: ['A'] }) },
     async restart() { await service.close(); await store.close(); store = await openDynamicTaskStore(options); open() } }
 }
+
+for (const kind of ['clarify', 'schedule', 'arrangement', 'resolve']) test(`公开字段泄漏已知身份在接纳前拒绝，修正文案后可接纳: ${kind}`, async t => {
+  const f = await fixture(t, { seedTask: false }), request = f.request()
+  const schedule = { ...f.schedule(), taskIds: [], actionKind: 'message-reminder', reminderText: '查看订单 BIZ-413 https://example.test/orders/BIZ-413' }
+  let proposal = kind === 'clarify' ? { kind, question: `确认 ${request.unitId}？`, candidates: [] }
+    : kind === 'schedule' ? { ...schedule, reminderText: `提醒 ${request.sourceSnapshot.actorId} 查看进度` }
+      : kind === 'arrangement' ? { kind, members: [], pendingClarifications: [{ clarificationId: 'clarification-private', question: 'clarification-private 是哪个项目？' }] }
+        : { kind, coordinationId: 'coordination-private', expectedRevision: 1, resolution: { ...schedule, reminderText: '确认 coordination-private 的进度' } }
+  await assert.rejects(f.service.submit(request, proposal), { code: 'GROUP_REPLY_INTERNAL_DETAILS' })
+  assert.deepEqual(await f.query('coordination.list'), []); assert.deepEqual(await f.query('coordination.schedule.list'), [])
+  assert.deepEqual(await f.query('notification.list'), []); assert.equal(f.entry.semanticState, 'reserved')
+  await f.service.submit(request, schedule)
+  assert.equal((await f.query('coordination.schedule.list'))[0].action.text, schedule.reminderText)
+  assert.match((await f.query('notification.list'))[0].payload.text, /订单 BIZ-413 https:\/\/example.test\/orders\/BIZ-413/)
+})
 
 test('recovery retains a previously frozen acknowledgement when the current reply template changed', async t => {
   const f = await fixture(t, { legacySummaryText: '已记录 1 项明确安排；另有 1 项待澄清：[other] 另一个是哪项？。明确且独立的成员继续处理。' })
@@ -134,7 +150,7 @@ for (const previousState of ['prepared','starting','unknown','delivered'])
     assert.equal(result.dispatchEligible, false)
     if (previousState !== 'prepared') assert.deepEqual(result.result.notification, before[0])
     const accepted = (await f.query('notification.list')).find(item => item.id !== oldNotification.id)
-    assert.equal(accepted.payload.text, '已安排提醒：2026-10-23 15:20（Asia/Shanghai），提醒你查看云端专家的开发进度。')
+    assert.equal(accepted.payload.text, `已安排提醒：${formatCoordinationTime('2026-10-23T07:20:00Z')}，提醒你查看云端专家的开发进度。`)
     assert.doesNotMatch(accepted.payload.text, /确认|0 项|clarification|Host|补执行|内部/)
     await f.command('coordination.schedule.change', { scheduleId: schedules[0].id, expectedRevision: 1,
       rule: { kind: 'once', at: '2026-10-23T07:30:00.000Z' } })

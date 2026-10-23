@@ -114,7 +114,11 @@ test('技术申请进入Web和登录人私聊，精确引用及真实作者恢�
   const request = await pending(h), waiting = (await h.query('task.list'))[0]
   assert.equal(request.audience, 'operator')
   assert.equal(request.notification.state, 'delivered')
-  assert.equal(sent.find(item => item.payload.audience === 'operator').payload.recipientUserId, 'actual-login-user')
+  const privateNotice = sent.find(item => item.payload.audience === 'operator')
+  assert.equal(privateNotice.payload.recipientUserId, 'actual-login-user')
+  assert.equal(privateNotice.payload.humanRequestId, request.requestId, '内部申请关联保留在元数据')
+  assert.ok(!privateNotice.payload.text.includes(request.requestId), '原生引用即可定位申请，无需在正文展示编号')
+  assert.match(privateNotice.payload.text, /引用本消息回复/)
   assert.equal(h.residentStore.getGroup('native-group').outbox.length, 1, '私聊通知不投影为业务群发件箱')
   assert.ok(!h.residentStore.getGroup('native-group').outbox.some(item => item.text.includes('恢复GitHub')))
   const reply = { groupId: 'self-private', messageId: 'human-private-answer', senderOpenDingTalkId: 'actual-operator',
@@ -131,6 +135,44 @@ test('技术申请进入Web和登录人私聊，精确引用及真实作者恢�
   await h.service.respondPrivateHumanReply(reply); await h.service.whenIdle()
   assert.equal(ownerTurns, 2)
   assert.equal(sent.filter(item => item.payload.audience === 'operator').length, 1)
+})
+
+test('人工外发问题在入账前拒绝已知运行标识，内部证据与业务链接原样保留', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const operationId = 'opaque-internal-operation-identity', business = '请核对 PR #253 与订单 SG18：https://example.com/orders/SG18'
+  let step = 0
+  const h = await fixture(t, async (request, host) => {
+    const input = latestInput(request)
+    if (step === 0) {
+      const binding = await host.query('task.binding', { taskId: input.task.taskId })
+      await host.service.store.command({ id: 'prepare-test-operation', kind: 'operation.prepare', args: {
+        binding, operationId, key: 'known-operation', definition: { toolName: 'fixture', effectClass: 'read' }, resourceKeys: [],
+      } })
+      await host.service.store.command({ id: 'cancel-test-operation', kind: 'operation.cancelPrepared', args: {
+        binding, operationId, key: 'known-operation', reason: '隔离用例不执行外部操作',
+      } })
+    }
+    assert.equal((await host.query('task.get', { taskId: input.task.taskId })).humanRequests.length, 0,
+      '泄漏正文不能先生成待答申请，再让外发卡住')
+    const args = { reason: '需要核对业务信息', question: business, evidence: [`内部诊断：${operationId}`], attemptedActions: ['已核对现有资料'] }
+    if (step === 0) args.question = `请处理 ${operationId}`
+    if (step === 1) args.attemptedActions = [`已检查 ${operationId}`]
+    step++
+    return [call('task_request_human', args)]
+  }, { config: { operatorUserId: 'actual-login-user' } })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'public-human-copy', title: '业务信息核对', objective: '核对业务信息' })
+  await h.service.whenIdle()
+  assert.equal(step, 3)
+  const current = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(current.humanRequests.length, 1)
+  assert.deepEqual(current.humanRequests[0].evidence, [`内部诊断：${operationId}`])
+  const notices = h.sent.filter(item => item.payload.audience === 'operator')
+  assert.equal(notices.length, 1)
+  assert.match(notices[0].payload.text, /PR #253 与订单 SG18：https:\/\/example\.com\/orders\/SG18/)
+  assert.ok(!notices[0].payload.text.includes(operationId))
+  assert.ok(!notices[0].payload.text.includes(current.humanRequests[0].requestId))
+  const rejected = h.toolResults.filter(item => item.name === 'task_request_human' && item.result.isError)
+  assert.equal(rejected.length, 2)
+  assert.ok(rejected.every(item => JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')))
 })
 
 test('native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text', { skip: !available ? reason : false, timeout: 30000 }, async t => {

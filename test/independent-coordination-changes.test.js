@@ -8,6 +8,7 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openIndependentCoordination } from '../packages/dingtalk-dsh-assistant/independent-coordination-service.js'
+import { formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 import { assertCoordinationHandoffProof, freezeCoordinationSourceOrder, selectCoordinationInstructions } from '../packages/dingtalk-dsh-assistant/coordination-changes.js'
 
 function facility(snapshot) {
@@ -222,7 +223,8 @@ test('chat aggregate query freezes authoritative obligations and recovers the sa
   const answer=await f.service.submit(request,{kind:'query',coordinationIds:[accepted.coordinationId]})
   assert.equal(answer.snapshots[0].remainingInstructionIds.length,2)
   const notice=(await f.query('notification.list')).find(n=>n.payload.sourceMessageId==='query-message')
-  assert.match(notice.payload.text,/B/);assert.match(notice.payload.text,/waiting_dependency|waiting_trigger/)
+  assert.match(notice.payload.text,/B/);assert.match(notice.payload.text,/需要先完成前面的事项|尚未满足约定的执行条件/)
+  assert.doesNotMatch(notice.payload.text,/waiting_dependency|waiting_trigger/)
   const digest=notice.payloadDigest, text=notice.payload.text
   assert.deepEqual(await f.query('task.list'),before)
   await f.restart(); await f.service.recoverGroup('group')
@@ -245,13 +247,14 @@ test('chat schedule query explains the agreed time and expired outcome and prese
     return {answer,notification}
   }
   const upcoming=await ask('when','约定几点，通知谁？')
-  assert.match(upcoming.notification.payload.text,/09:00:00/)
-  assert.match(upcoming.notification.payload.text,/Asia\/Shanghai/);assert.match(upcoming.notification.payload.text,/author/)
+  assert.ok(upcoming.notification.payload.text.includes(formatCoordinationTime('2026-10-21T01:00:00Z')))
+  assert.match(upcoming.notification.payload.text,/在本群通知你/)
+  assert.doesNotMatch(upcoming.notification.payload.text,/author|Asia\/Shanghai|coordination-|schedule:|版本|0 项/)
   t.mock.timers.tick(76*60000);await f.command('coordination.schedule.scan',{})
   const expired=await ask('why','为什么没执行？')
   assert.equal(expired.answer.snapshots[0].occurrences[0].actionState,'expired')
   assert.match(expired.notification.payload.text,/已过期，本次未执行/)
-  assert.match(expired.notification.payload.text,/错过允许补执行的时间/)
+  assert.doesNotMatch(expired.notification.payload.text,/补执行|窗口/)
   await f.restart();await f.service.recoverGroup('group')
   const recovered=(await f.query('notification.list')).filter(n=>n.payload.sourceMessageId==='why')
   assert.equal(recovered.length,1);assert.equal(recovered[0].payloadDigest,expired.notification.payloadDigest)
@@ -260,7 +263,7 @@ test('chat schedule query explains the agreed time and expired outcome and prese
 
 test('resolving one of several pending members settles neither the other ambiguity nor its original source', async t => {
   const f=await fixture(t),original=await f.message('two-missing','分别给两个同名任务补充材料')
-  const pending=['first','second'].map(clarificationId=>({clarificationId,question:`${clarificationId}是哪项？`,candidates:['A','B']}))
+  const pending=['first','second'].map((clarificationId,index)=>({clarificationId,question:`第${index+1}项具体是哪个任务？`,candidates:['A','B']}))
   const accepted=await f.service.submit(original,{kind:'arrangement',members:[],pendingClarifications:pending})
   for(const [index,taskId] of ['A','B'].entries()){
     const reply=await f.message(`resolve-${taskId}`,`明确${taskId}`)
