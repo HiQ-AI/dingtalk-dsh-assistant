@@ -1,0 +1,38 @@
+{
+  "status": "PASS",
+  "mergeCommit": "11ae6621de000d9d1100fb3acc14128e41b8d19e",
+  "oldPid": 25964,
+  "oldPidAlive": false,
+  "newPid": 65132,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 65132
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 65132
+    }
+  ],
+  "health": "ok",
+  "recoveryIssueCount": 0,
+  "inboundProcessing": true,
+  "dwsHealthy": true,
+  "executionBackend": "dsh",
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "taskEnabled": true,
+  "packages": [
+    {
+      "path": "D:\\dsh_home\\packages\\main-11ae662-interactive-team\\zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "sha256": "ad92f6894bfdd6b2e2b378352d4d47728bb0c41f34d9c3a1c9079f20aca57d81"
+    },
+    {
+      "path": "D:\\dsh_home\\packages\\main-11ae662-interactive-team\\zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "sha256": "c53efa1f16e836dabf7e572bbdf053e23ed6e301b30ba03fbd9b54ac3ef79e51"
+    }
+  ],
+  "assistantDependency": "file:D:/dsh_home/packages/main-11ae662-interactive-team/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+  "observerDependency": "file:D:/dsh_home/packages/main-11ae662-interactive-team/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+  "assistantVersion": "2.1.0",
+  "observerVersion": "2.1.0"
+}
