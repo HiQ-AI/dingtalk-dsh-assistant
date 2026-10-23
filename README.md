@@ -23,7 +23,7 @@
 
 ## 执行后端选择
 
-插件配置页的 Agent 表单提供一个“执行后端”选择，默认 **DSH 原生**，也可选择 **交互式 Claude Code（Agent Teams）**，沿原有唯一保存入口生效。`agentConfig.executionBackend` 只接受 `dsh` 或 `claude-code`；未保存时读取 `taskSessions.executionBackend`，仍缺省时用 `dsh`，已保存值优先于 profile。非法值在写入配置前拒绝。选择只用于新建执行：已有执行、续办和恢复保持创建时绑定的后端；缺少该字段的既有执行继续使用 DSH，不通过新建替身迁移。
+插件配置页的 Agent 表单提供一个“执行后端”选择，默认 **DSH 原生**，也可选择 **交互式 Claude Code（Agent Teams，内测）**，沿原有唯一保存入口生效。`agentConfig.executionBackend` 只接受 `dsh` 或 `claude-code`；未保存时读取 `taskSessions.executionBackend`，仍缺省时用 `dsh`，已保存值优先于 profile。非法值在写入配置前拒绝。选择只用于新建执行：已有执行、续办和恢复保持创建时绑定的后端；缺少该字段的既有执行继续使用 DSH，不通过新建替身迁移。
 
 任务统筹始终使用 DSH 原生会话。Claude 执行后端通过 DSH 的 PTY 启动服务进程 PATH 中已安装的交互式 `claude`（不使用 `-p`），由 Claude Lead 按实际任务需要创建和调度原生 Agent Teams 队友，不固定队友数量。队友采用 in-process 模式；配置项不表示每个队友会打开独立窗口。Lead 使用 CLI 自身默认模型，不传入 DSH 的 provider/model 或推理深度。CLI 至少为 2.1.309；启动固定 `--system-prompt-snapshot off`，确保续办使用本轮职责提示，不复用首次会话的 system prompt 快照。操作者须自行安装并完成 CLI 登录；插件不自动安装、登录或迁移凭据，启动失败也不自动改用 DSH。CLI 不继承 DSH preset、工具或 Skill 注册表；`CLAUDE.md` 的发现和处理属于 CLI 自身行为，不能据此认定 DSH 工作区指引已同步。
 
