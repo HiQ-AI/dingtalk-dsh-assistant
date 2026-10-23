@@ -50,8 +50,9 @@ const instantSchema = nonempty.refine(value => {
 const ruleSchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('once'), at: instantSchema }),
   z.strictObject({ kind: z.literal('daily'), time: nonempty }),
   z.strictObject({ kind: z.literal('weekly'), time: nonempty, weekday: z.number().int().min(0).max(6) })])
-const scheduleSchema = z.strictObject({ kind: z.literal('schedule'), actionKind: z.enum(['read-query','task-command']).default('read-query'), timezone: nonempty,
+const scheduleSchema = z.strictObject({ kind: z.literal('schedule'), actionKind: z.enum(['read-query','task-command','message-reminder']).default('read-query'), timezone: nonempty,
   rule: ruleSchema, taskIds: z.array(nonempty).max(100).optional(), members: membersSchema.optional(),
+  reminderText: nonempty.optional(),
   conditionalMembers: z.array(existingMemberSchema).min(1).max(100).optional(),
   commonContext: z.string().default(''), allTogether: z.boolean().default(false),
   recipientIds: z.array(nonempty).max(100), interpretation: nonempty })
@@ -98,7 +99,9 @@ export const coordinationPlannerInstructions = `${taskBoundaryInstructions}\n你
 “A完成后继续B”仅观察A现有目标时，A必须用task-observe（taskId/inputVersion/runSequence），不得补context、唤醒或reopen；B的afterTaskIds引用A。A已完成也只观察当前正式证明。用户明确要求先修改/处理A的新工作时才给A可派发动作，不能用观察吞掉新要求。B已完成而未要求新增工作时只观察B，不擅自reopen；要重新做但范围不明先clarify。B已运行不得承诺追溯先后，Host会要求Owner只读评估。
 依赖 afterTaskIds 指向本批原任务，须由正式成功证明放行；不能拿会话结束或通知送达当完成。
 模糊指代、无匹配、同名、影响分类不明或想新建但没有明确创建合同，最小澄清，不能猜测或造总任务。
-定时查询只保存明确日期/时区/UTC 或每日/每周规则、固定 taskIds 和目标群内稳定 recipientIds；没有周期词不自动循环，已过时刻不默改次日。昵称只能从 recipients 中匹配，重名需澄清，不改私聊。
+区分“提醒我查看/处理某事”与“到时由你查询并告诉我”：前者用schedule/actionKind=message-reminder和reminderText保存到时应说的简洁正文，不需要taskIds、members或任务目录匹配，不新建Task；后者才用read-query或明确授权的task-command。提醒对象“我”取当前source.actorId，目标仍为本群。
+本通道未限定时区的时间按Host提供的timeContext.timeZone工作时区解释；浏览器时区缺失不代表本通道时区缺失。用户明确的日期、时区及上午/下午优先；按sourceLocal的日期和时刻理解省略表达，同日未来时刻已能确定时直接安排，不再询问是否当天。确有跨日、时区冲突或原消息时刻已过去才澄清，不默改次日。定时查询保存确定的日期/时区/UTC或每日/每周规则、固定taskIds和同群稳定recipientIds；没有周期词不自动循环。昵称只从recipients匹配，重名才澄清，不改私聊。
+同群同人同一事项的连续消息只改时间、没有新增事项意图时，结合原文与原安排处理为订正，保留原coordinationId；已确认的新时间取代旧时间，不重问已补齐的信息。先读取原安排：原来待澄清用resolve补成schedule，已有提醒用schedule-change改原schedule；不同发送者或“另外”等独立事项不得合并。不要把简单订正包装成0成员、内部clarificationId或重复确认。
 相对时间（如“三分钟后”）以source.occurredAt原消息时间为基准；currentTime是本次处理时间，不可因规划耗时反复推迟用户约定。source.occurredAt为空时没有可靠消息时间，不能猜测相对时刻。
 单次时刻在原消息发生时尚未来、仅在系统处理期间到期时，仍提交原定时刻，不改为现在或次日，也不因系统迟到反问用户。Host按原时刻复用默认15分钟补执行窗口，超窗会明确报告已过期、本次未执行；不承诺迟到也必然执行。原时刻在消息发生前已过去或缺少可靠消息时间时须澄清。
 权限只限当前群。cancel 原 Task 需要原文明确停止任务，撤销安排不能自动转 task-cancel。
@@ -110,7 +113,7 @@ export const coordinationPlannerInstructions = `${taskBoundaryInstructions}\n你
 append新增用户成员也可提供change.sourceOrder，局部ordinal从1开始，原文索引相对本次追加消息；Host在既有可验证slot后接续全局序号并保留本次来源。没有提供可验证追加映射时，新增成员只用稳定instructionId；ordinalAppendRequiresClarification=true时不可越过此前缺口猜测后续序号。周期子指令不是新增用户成员，不参与原文序号。
 若原安排没有可验证sourceOrder且ordinalSelectionRequiresClarification=true，明确成员目录不代表用户原文完整顺序；先最小澄清实际任务或稳定instructionId。已有slot仍未解析、一个slot解析成多任务或原文真有歧义时也必须澄清，不能猜测序号。
 追加来源原文被截断时，用coordination_context_get的arrangementSourceUnitId/arrangementSourceUnitRevision选中slot的真实来源，再用arrangementSourceOffset分页读取；不得以截断quote或summary代替完整原文。
-定时修改用schedule-change明确scheduleId/expectedScheduleRevision及future或unstarted影响范围；“只取消这一次”用occurrence-control和真实occurrenceId/instanceControlRevision，不能误取消以后所有。收件人变化只适用于尚未越过许可边界的冻结候选，已获许可或未知不承诺撤回。schedule.actionKind=task-command必须给members，read-query只给固定taskIds；定时触发不新增授权。
+定时修改用schedule-change明确scheduleId/expectedScheduleRevision及future或unstarted影响范围；“只取消这一次”用occurrence-control和真实occurrenceId/instanceControlRevision，不能误取消以后所有。收件人变化只适用于尚未越过许可边界的冻结候选，已获许可或未知不承诺撤回。schedule.actionKind=task-command必须给members，read-query只给固定taskIds，message-reminder只给reminderText；定时触发不新增授权。
 仅原文明确“查询后若未完成就继续”时，read-query可带conditionalMembers，限所查询原任务的task-continue/preserve及明确原要求；Host到期查询权威完成事实，仅未完成成员进入已授权原任务命令。不能从查询中自行推导修复、新目标或reopen授权。
 错误归类、原文没有协调意图时可reject，Host将先冻结并核对无命令，只有安全CAS交回后旧链才可接管；不能把reject当作已交回或已执行。
 通过 coordination_submit 提交。accepted 表示安排已持久接纳，不是业务完成或群通知送达。`

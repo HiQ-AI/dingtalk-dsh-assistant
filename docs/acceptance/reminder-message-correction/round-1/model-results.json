@@ -1,0 +1,837 @@
+{
+  "round": 1,
+  "configuredModel": {
+    "provider": "openai-codex",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "low"
+  },
+  "sourceDigests": {
+    "planner": "0547fe67a7f78a36c5aeefdfc9bb5232c0e568d7f85afc6e1d951a2a8d1dba27",
+    "fixtures": "e8eddcc2f2a3c6122d4f059009d0aa0ed5e02cddaab2c39f5a5d2fec2810e232",
+    "evaluator": "f1e2650be55c0fb979504e2a1c4d1c8f2572fefb32dacdee515feb34c11d791b",
+    "timeContext": "b1fe32437d4a62c35292783d652b60b5a167568cc1a3d6b67cb3712f29f9e3b3"
+  },
+  "rawReport": {
+    "path": "docs\\tmp\\reminder-model-round-1\\results.json",
+    "sha256": "fb7498b13fc832dc28164dbe43fbd97569617b39ca14baf6d366a9ba62b63500"
+  },
+  "runtime": "isolated native-test preset plus the actual installed time-context plugin; production planner and two real tool schemas",
+  "limitation": "仅验证生产planner语义与隔离工具调用；无真实计划落库、无钉钉通知或生产端到端延迟证明。原生文件保留在docs/tmp。模型网络重试次数及费用未知。",
+  "accountingSource": "assistant/message.data.usage；首轮raw report的request/usage筛选为空，本文直接从原生持久日志抽取，不重跑模型、不推算费用。",
+  "cases": [
+    {
+      "id": "correction-resolves-original",
+      "status": "passed",
+      "rawEvaluatorPassed": true,
+      "note": "已逐项回读实际提案及调用顺序，符合该情境语义。",
+      "elapsedMs": 9597,
+      "failures": [],
+      "actualProposals": [
+        {
+          "kind": "resolve",
+          "coordinationId": "arrangement-001",
+          "expectedRevision": 1,
+          "resolution": {
+            "kind": "schedule",
+            "actionKind": "message-reminder",
+            "timezone": "Asia/Shanghai",
+            "rule": {
+              "kind": "once",
+              "at": "2026-10-23T07:20:00.000Z"
+            },
+            "reminderText": "提醒你查看云端专家的开发进度。",
+            "commonContext": "",
+            "allTogether": false,
+            "recipientIds": [
+              "actor-001"
+            ],
+            "interpretation": "同人同事项时间订正为消息当天北京时间下午15:20，提醒本人查看开发进度，不查询任务。原消息时该时刻尚未来；保留原定时刻，由Host判断迟到补执行窗口。"
+          }
+        }
+      ],
+      "toolTrace": [
+        {
+          "sequence": 15,
+          "tool": "coordination_context_get",
+          "args": {
+            "coordinationIds": [
+              "arrangement-001"
+            ]
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "coordination_submit",
+          "args": {
+            "kind": "resolve",
+            "coordinationId": "arrangement-001",
+            "expectedRevision": 1,
+            "resolution": {
+              "kind": "schedule",
+              "actionKind": "message-reminder",
+              "timezone": "Asia/Shanghai",
+              "rule": {
+                "kind": "once",
+                "at": "2026-10-23T15:20:00+08:00"
+              },
+              "reminderText": "提醒你查看云端专家的开发进度。",
+              "recipientIds": [
+                "actor-001"
+              ],
+              "interpretation": "同人同事项时间订正为消息当天北京时间下午15:20，提醒本人查看开发进度，不查询任务。原消息时该时刻尚未来；保留原定时刻，由Host判断迟到补执行窗口。"
+            }
+          }
+        }
+      ],
+      "actualTimeMessages": [
+        "Time sampled while preparing turn 1, step 1: 2026-10-23T15:42:38+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding model-visible message: unavailable.",
+        "Time sampled while preparing turn 1, step 2: 2026-10-23T15:42:41+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding step context: 3s."
+      ],
+      "actualModelConfigurations": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "reasoningEffort": "low"
+        }
+      ],
+      "actualToolNames": [
+        [
+          "coordination_context_get",
+          "coordination_submit"
+        ]
+      ],
+      "usage": [
+        {
+          "sequence": 14,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 9708,
+            "outputTokens": 26,
+            "totalTokens": 9734
+          }
+        },
+        {
+          "sequence": 20,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 1119,
+            "outputTokens": 156,
+            "totalTokens": 10875,
+            "cacheReadTokens": 9600
+          }
+        }
+      ],
+      "responseCount": 2,
+      "source": {
+        "messageId": "message-001",
+        "messageVersion": 1,
+        "sourceRefs": [
+          {
+            "quote": "小小鹏，三点20提醒我一下查看云端专家的开发进度"
+          }
+        ],
+        "occurredAt": "2026-10-23T07:11:51.000Z",
+        "actorId": "actor-001",
+        "unitId": "unit-001",
+        "unitRevision": 1,
+        "unitText": "小小鹏，三点20提醒我一下查看云端专家的开发进度",
+        "original": "小小鹏，三点20提醒我一下查看云端专家的开发进度",
+        "sourceOffset": 0,
+        "nextSourceOffset": null,
+        "truncated": false
+      },
+      "timeContext": {
+        "timeZone": "Asia/Shanghai",
+        "source": "host-working-timezone",
+        "currentLocal": {
+          "date": "2026-10-23",
+          "time": "15:42"
+        },
+        "sourceLocal": {
+          "date": "2026-10-23",
+          "time": "15:11"
+        }
+      },
+      "currentTime": "2026-10-23T07:42:38.181Z",
+      "semanticReview": "应直接订正为当天15:20，不再确认当天、时区、上午下午或业务任务；处理期间已过时刻仍保留原计划。",
+      "nativeEvidence": {
+        "path": "docs\\tmp\\reminder-model-round-1\\case-001\\native-session.json",
+        "sha256": "762e6075bd86003dc7ec7b9bba7eafe7f1d6b7ece0e3b35fe9c599de91fc0c0b"
+      }
+    },
+    {
+      "id": "future-reminder-no-task",
+      "status": "passed",
+      "rawEvaluatorPassed": true,
+      "note": "已逐项回读实际提案及调用顺序，符合该情境语义。",
+      "elapsedMs": 9294,
+      "failures": [],
+      "actualProposals": [
+        {
+          "kind": "schedule",
+          "actionKind": "message-reminder",
+          "timezone": "Asia/Shanghai",
+          "rule": {
+            "kind": "once",
+            "at": "2026-10-24T07:20:00.000Z"
+          },
+          "reminderText": "请查看云端专家的开发进度。",
+          "commonContext": "",
+          "allTogether": false,
+          "recipientIds": [
+            "actor-001"
+          ],
+          "interpretation": "于2026年10月24日下午15:20（北京时间）在本群提醒用户查看云端专家的开发进度。"
+        }
+      ],
+      "toolTrace": [
+        {
+          "sequence": 15,
+          "tool": "coordination_submit",
+          "args": {
+            "kind": "schedule",
+            "actionKind": "message-reminder",
+            "timezone": "Asia/Shanghai",
+            "rule": {
+              "kind": "once",
+              "at": "2026-10-24T15:20:00+08:00"
+            },
+            "reminderText": "请查看云端专家的开发进度。",
+            "recipientIds": [
+              "actor-001"
+            ],
+            "interpretation": "于2026年10月24日下午15:20（北京时间）在本群提醒用户查看云端专家的开发进度。"
+          }
+        }
+      ],
+      "actualTimeMessages": [
+        "Time sampled while preparing turn 1, step 1: 2026-10-23T15:42:47+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding model-visible message: unavailable."
+      ],
+      "actualModelConfigurations": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "reasoningEffort": "low"
+        }
+      ],
+      "actualToolNames": [
+        [
+          "coordination_context_get",
+          "coordination_submit"
+        ]
+      ],
+      "usage": [
+        {
+          "sequence": 14,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 9512,
+            "outputTokens": 113,
+            "totalTokens": 9625
+          }
+        }
+      ],
+      "responseCount": 1,
+      "source": {
+        "messageId": "message-002",
+        "messageVersion": 1,
+        "sourceRefs": [
+          {
+            "quote": "小小鹏，2026年10月24日下午三点20提醒我查看云端专家的开发进度。"
+          }
+        ],
+        "occurredAt": "2026-10-23T07:11:51.000Z",
+        "actorId": "actor-001",
+        "unitId": "unit-002",
+        "unitRevision": 1,
+        "unitText": "小小鹏，2026年10月24日下午三点20提醒我查看云端专家的开发进度。",
+        "original": "小小鹏，2026年10月24日下午三点20提醒我查看云端专家的开发进度。",
+        "sourceOffset": 0,
+        "nextSourceOffset": null,
+        "truncated": false
+      },
+      "timeContext": {
+        "timeZone": "Asia/Shanghai",
+        "source": "host-working-timezone",
+        "currentLocal": {
+          "date": "2026-10-23",
+          "time": "15:42"
+        },
+        "sourceLocal": {
+          "date": "2026-10-23",
+          "time": "15:11"
+        }
+      },
+      "currentTime": "2026-10-23T07:42:47.752Z",
+      "semanticReview": "只安排提醒，不把正文对象当成必须查询的业务任务。",
+      "nativeEvidence": {
+        "path": "docs\\tmp\\reminder-model-round-1\\case-002\\native-session.json",
+        "sha256": "d7bbcb32d46bc8e7398fba6a8d0830de1cb5b4fea0f6e58d224462e445071374"
+      }
+    },
+    {
+      "id": "explicit-query-stays-query",
+      "status": "passed",
+      "rawEvaluatorPassed": true,
+      "note": "已逐项回读实际提案及调用顺序，符合该情境语义。",
+      "elapsedMs": 4893,
+      "failures": [],
+      "actualProposals": [
+        {
+          "kind": "schedule",
+          "actionKind": "read-query",
+          "timezone": "Asia/Shanghai",
+          "rule": {
+            "kind": "once",
+            "at": "2026-10-24T07:20:00.000Z"
+          },
+          "taskIds": [
+            "task-001"
+          ],
+          "commonContext": "",
+          "allTogether": false,
+          "recipientIds": [
+            "actor-001"
+          ],
+          "interpretation": "2026年10月24日下午15:20（Asia/Shanghai）查询云端专家开发任务的最新进度，并在本群向用户报告结果。"
+        }
+      ],
+      "toolTrace": [
+        {
+          "sequence": 15,
+          "tool": "coordination_submit",
+          "args": {
+            "kind": "schedule",
+            "actionKind": "read-query",
+            "timezone": "Asia/Shanghai",
+            "rule": {
+              "kind": "once",
+              "at": "2026-10-24T15:20:00+08:00"
+            },
+            "taskIds": [
+              "task-001"
+            ],
+            "recipientIds": [
+              "actor-001"
+            ],
+            "interpretation": "2026年10月24日下午15:20（Asia/Shanghai）查询云端专家开发任务的最新进度，并在本群向用户报告结果。"
+          }
+        }
+      ],
+      "actualTimeMessages": [
+        "Time sampled while preparing turn 1, step 1: 2026-10-23T15:42:57+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding model-visible message: unavailable."
+      ],
+      "actualModelConfigurations": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "reasoningEffort": "low"
+        }
+      ],
+      "actualToolNames": [
+        [
+          "coordination_context_get",
+          "coordination_submit"
+        ]
+      ],
+      "usage": [
+        {
+          "sequence": 14,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 9582,
+            "outputTokens": 111,
+            "totalTokens": 9693
+          }
+        }
+      ],
+      "responseCount": 1,
+      "source": {
+        "messageId": "message-003",
+        "messageVersion": 1,
+        "sourceRefs": [
+          {
+            "quote": "小小鹏，2026年10月24日下午三点20，由你查询云端专家开发任务的最新进度，在本群告诉我结果。"
+          }
+        ],
+        "occurredAt": "2026-10-23T07:11:51.000Z",
+        "actorId": "actor-001",
+        "unitId": "unit-003",
+        "unitRevision": 1,
+        "unitText": "小小鹏，2026年10月24日下午三点20，由你查询云端专家开发任务的最新进度，在本群告诉我结果。",
+        "original": "小小鹏，2026年10月24日下午三点20，由你查询云端专家开发任务的最新进度，在本群告诉我结果。",
+        "sourceOffset": 0,
+        "nextSourceOffset": null,
+        "truncated": false
+      },
+      "timeContext": {
+        "timeZone": "Asia/Shanghai",
+        "source": "host-working-timezone",
+        "currentLocal": {
+          "date": "2026-10-23",
+          "time": "15:42"
+        },
+        "sourceLocal": {
+          "date": "2026-10-23",
+          "time": "15:11"
+        }
+      },
+      "currentTime": "2026-10-23T07:42:57.123Z",
+      "semanticReview": "用户明确委托代查，不能降为仅提醒用户自己查看；不新增任务。",
+      "nativeEvidence": {
+        "path": "docs\\tmp\\reminder-model-round-1\\case-003\\native-session.json",
+        "sha256": "06f7e1582ac282c7fddce722701eb9ae3f327c76f5d6e67141d3772e92c27281"
+      }
+    },
+    {
+      "id": "explicit-zone-overrides-host",
+      "status": "passed",
+      "rawEvaluatorPassed": true,
+      "note": "已逐项回读实际提案及调用顺序，符合该情境语义。",
+      "elapsedMs": 7687,
+      "failures": [],
+      "actualProposals": [
+        {
+          "kind": "schedule",
+          "actionKind": "message-reminder",
+          "timezone": "America/New_York",
+          "rule": {
+            "kind": "once",
+            "at": "2026-10-24T19:20:00.000Z"
+          },
+          "reminderText": "请提交周报。",
+          "commonContext": "",
+          "allTogether": false,
+          "recipientIds": [
+            "actor-001"
+          ],
+          "interpretation": "按纽约当地时间2026年10月24日下午3:20，在本群提醒你提交周报。"
+        }
+      ],
+      "toolTrace": [
+        {
+          "sequence": 15,
+          "tool": "coordination_submit",
+          "args": {
+            "kind": "schedule",
+            "actionKind": "message-reminder",
+            "timezone": "America/New_York",
+            "rule": {
+              "kind": "once",
+              "at": "2026-10-24T15:20:00-04:00"
+            },
+            "reminderText": "请提交周报。",
+            "recipientIds": [
+              "actor-001"
+            ],
+            "interpretation": "按纽约当地时间2026年10月24日下午3:20，在本群提醒你提交周报。"
+          }
+        }
+      ],
+      "actualTimeMessages": [
+        "Time sampled while preparing turn 1, step 1: 2026-10-23T15:43:02+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding model-visible message: unavailable."
+      ],
+      "actualModelConfigurations": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "reasoningEffort": "low"
+        }
+      ],
+      "actualToolNames": [
+        [
+          "coordination_context_get",
+          "coordination_submit"
+        ]
+      ],
+      "usage": [
+        {
+          "sequence": 14,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 9512,
+            "outputTokens": 104,
+            "totalTokens": 9616
+          }
+        }
+      ],
+      "responseCount": 1,
+      "source": {
+        "messageId": "message-004",
+        "messageVersion": 1,
+        "sourceRefs": [
+          {
+            "quote": "小小鹏，按纽约当地时间，2026年10月24日下午三点20提醒我提交周报。"
+          }
+        ],
+        "occurredAt": "2026-10-23T07:11:51.000Z",
+        "actorId": "actor-001",
+        "unitId": "unit-004",
+        "unitRevision": 1,
+        "unitText": "小小鹏，按纽约当地时间，2026年10月24日下午三点20提醒我提交周报。",
+        "original": "小小鹏，按纽约当地时间，2026年10月24日下午三点20提醒我提交周报。",
+        "sourceOffset": 0,
+        "nextSourceOffset": null,
+        "truncated": false
+      },
+      "timeContext": {
+        "timeZone": "Asia/Shanghai",
+        "source": "host-working-timezone",
+        "currentLocal": {
+          "date": "2026-10-23",
+          "time": "15:43"
+        },
+        "sourceLocal": {
+          "date": "2026-10-23",
+          "time": "15:11"
+        }
+      },
+      "currentTime": "2026-10-23T07:43:01.997Z",
+      "semanticReview": "显式纽约时区覆盖Host的Asia/Shanghai，不询问浏览器时区。",
+      "nativeEvidence": {
+        "path": "docs\\tmp\\reminder-model-round-1\\case-004\\native-session.json",
+        "sha256": "b97b555cbeb021b5a4de81bda0d3400faa63fa50238d7d85f176d430f79b8f9c"
+      }
+    },
+    {
+      "id": "already-past-needs-time-choice",
+      "status": "passed",
+      "rawEvaluatorPassed": true,
+      "note": "已逐项回读实际提案及调用顺序，符合该情境语义。",
+      "elapsedMs": 6244,
+      "failures": [],
+      "actualProposals": [
+        {
+          "kind": "clarify",
+          "question": "你发消息时已是今天15:30，15:20已经过去。你希望改到什么时间提醒提交周报？",
+          "candidates": []
+        }
+      ],
+      "toolTrace": [
+        {
+          "sequence": 15,
+          "tool": "coordination_submit",
+          "args": {
+            "kind": "clarify",
+            "question": "你发消息时已是今天15:30，15:20已经过去。你希望改到什么时间提醒提交周报？"
+          }
+        }
+      ],
+      "actualTimeMessages": [
+        "Time sampled while preparing turn 1, step 1: 2026-10-23T15:43:09+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding model-visible message: unavailable."
+      ],
+      "actualModelConfigurations": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "reasoningEffort": "low"
+        }
+      ],
+      "actualToolNames": [
+        [
+          "coordination_context_get",
+          "coordination_submit"
+        ]
+      ],
+      "usage": [
+        {
+          "sequence": 14,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 9482,
+            "outputTokens": 51,
+            "totalTokens": 9533
+          }
+        }
+      ],
+      "responseCount": 1,
+      "source": {
+        "messageId": "message-005",
+        "messageVersion": 1,
+        "sourceRefs": [
+          {
+            "quote": "小小鹏，今天下午三点20提醒我提交周报。"
+          }
+        ],
+        "occurredAt": "2026-10-23T07:30:00.000Z",
+        "actorId": "actor-001",
+        "unitId": "unit-005",
+        "unitRevision": 1,
+        "unitText": "小小鹏，今天下午三点20提醒我提交周报。",
+        "original": "小小鹏，今天下午三点20提醒我提交周报。",
+        "sourceOffset": 0,
+        "nextSourceOffset": null,
+        "truncated": false
+      },
+      "timeContext": {
+        "timeZone": "Asia/Shanghai",
+        "source": "host-working-timezone",
+        "currentLocal": {
+          "date": "2026-10-23",
+          "time": "15:43"
+        },
+        "sourceLocal": {
+          "date": "2026-10-23",
+          "time": "15:30"
+        }
+      },
+      "currentTime": "2026-10-23T07:43:09.737Z",
+      "semanticReview": "来源时刻15:30已超过明确的15:20，只问必要的重新安排时间；不默改明天、不追问已知时区。",
+      "nativeEvidence": {
+        "path": "docs\\tmp\\reminder-model-round-1\\case-005\\native-session.json",
+        "sha256": "2ac1d101a49ab3efa0734c2bee8020956e54f060d4f19b1a40f487256782951f"
+      }
+    },
+    {
+      "id": "different-subject-is-independent",
+      "status": "passed",
+      "rawEvaluatorPassed": true,
+      "note": "已逐项回读实际提案及调用顺序，符合该情境语义。",
+      "elapsedMs": 5404,
+      "failures": [],
+      "actualProposals": [
+        {
+          "kind": "schedule",
+          "actionKind": "message-reminder",
+          "timezone": "Asia/Shanghai",
+          "rule": {
+            "kind": "once",
+            "at": "2026-10-24T07:20:00.000Z"
+          },
+          "reminderText": "提醒你提交周报。",
+          "commonContext": "",
+          "allTogether": false,
+          "recipientIds": [
+            "actor-001"
+          ],
+          "interpretation": "独立新增提醒：2026年10月24日下午15:20（Asia/Shanghai）在本群提醒你提交周报，不修改原有待澄清安排。"
+        }
+      ],
+      "toolTrace": [
+        {
+          "sequence": 15,
+          "tool": "coordination_submit",
+          "args": {
+            "kind": "schedule",
+            "actionKind": "message-reminder",
+            "timezone": "Asia/Shanghai",
+            "rule": {
+              "kind": "once",
+              "at": "2026-10-24T15:20:00+08:00"
+            },
+            "reminderText": "提醒你提交周报。",
+            "recipientIds": [
+              "actor-001"
+            ],
+            "interpretation": "独立新增提醒：2026年10月24日下午15:20（Asia/Shanghai）在本群提醒你提交周报，不修改原有待澄清安排。"
+          }
+        }
+      ],
+      "actualTimeMessages": [
+        "Time sampled while preparing turn 1, step 1: 2026-10-23T15:43:16+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding model-visible message: unavailable."
+      ],
+      "actualModelConfigurations": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "reasoningEffort": "low"
+        }
+      ],
+      "actualToolNames": [
+        [
+          "coordination_context_get",
+          "coordination_submit"
+        ]
+      ],
+      "usage": [
+        {
+          "sequence": 14,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 834,
+            "outputTokens": 119,
+            "totalTokens": 9785,
+            "cacheReadTokens": 8832
+          }
+        }
+      ],
+      "responseCount": 1,
+      "source": {
+        "messageId": "message-006",
+        "messageVersion": 1,
+        "sourceRefs": [
+          {
+            "quote": "小小鹏，另外，2026年10月24日下午三点20提醒我提交周报。"
+          }
+        ],
+        "occurredAt": "2026-10-23T07:11:51.000Z",
+        "actorId": "actor-001",
+        "unitId": "unit-006",
+        "unitRevision": 1,
+        "unitText": "小小鹏，另外，2026年10月24日下午三点20提醒我提交周报。",
+        "original": "小小鹏，另外，2026年10月24日下午三点20提醒我提交周报。",
+        "sourceOffset": 0,
+        "nextSourceOffset": null,
+        "truncated": false
+      },
+      "timeContext": {
+        "timeZone": "Asia/Shanghai",
+        "source": "host-working-timezone",
+        "currentLocal": {
+          "date": "2026-10-23",
+          "time": "15:43"
+        },
+        "sourceLocal": {
+          "date": "2026-10-23",
+          "time": "15:11"
+        }
+      },
+      "currentTime": "2026-10-23T07:43:15.991Z",
+      "semanticReview": "另外且对象不同是独立事项，不能拿来resolve原云端专家澄清。",
+      "nativeEvidence": {
+        "path": "docs\\tmp\\reminder-model-round-1\\case-006\\native-session.json",
+        "sha256": "08c65490a9281a1722c71126ac68385bb4d9dbd04e34ae991e2819e4236466bb"
+      }
+    },
+    {
+      "id": "accepted-reminder-changes-original",
+      "status": "invalid_fixture",
+      "rawEvaluatorPassed": false,
+      "note": "原fixture的可选question为undefined，工具输出无损JSON校验拒绝；不计模型语义失败。已有schedule字段同时需对齐生产。",
+      "elapsedMs": 47478,
+      "failures": [
+        {
+          "reason": "no captured proposal"
+        },
+        {
+          "reason": "COORDINATION_NO_SUBMISSION"
+        },
+        {
+          "reason": "proposal count",
+          "count": 0
+        },
+        {
+          "reason": "tool error cannot be erased by later retry"
+        }
+      ],
+      "actualProposals": [],
+      "toolTrace": [
+        {
+          "sequence": 15,
+          "tool": "coordination_context_get",
+          "args": {
+            "coordinationIds": [
+              "arrangement-001"
+            ]
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "coordination_context_get",
+          "args": {
+            "coordinationIds": [
+              "arrangement-001"
+            ],
+            "limit": 1
+          }
+        }
+      ],
+      "actualTimeMessages": [
+        "Time sampled while preparing turn 1, step 1: 2026-10-23T15:43:21+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding model-visible message: unavailable.",
+        "Time sampled while preparing turn 1, step 2: 2026-10-23T15:43:30+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding step context: 9s.",
+        "Time sampled while preparing turn 1, step 3: 2026-10-23T15:43:53+08:00[Asia/Shanghai]\nBrowser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\nElapsed since the preceding step context: 22s."
+      ],
+      "actualModelConfigurations": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "reasoningEffort": "low"
+        }
+      ],
+      "actualToolNames": [
+        [
+          "coordination_context_get",
+          "coordination_submit"
+        ]
+      ],
+      "usage": [
+        {
+          "sequence": 14,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 9586,
+            "outputTokens": 26,
+            "totalTokens": 9612
+          }
+        },
+        {
+          "sequence": 20,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 242,
+            "outputTokens": 30,
+            "totalTokens": 9744,
+            "cacheReadTokens": 9472
+          }
+        },
+        {
+          "sequence": 26,
+          "provider": "openai-codex",
+          "model": "gpt-6-astra",
+          "usage": {
+            "inputTokens": 246,
+            "outputTokens": 35,
+            "totalTokens": 9881,
+            "cacheReadTokens": 9600
+          }
+        }
+      ],
+      "responseCount": 3,
+      "source": {
+        "messageId": "message-007",
+        "messageVersion": 1,
+        "sourceRefs": [
+          {
+            "quote": "小小鹏，查看云端专家开发进度的提醒改到明天下午三点20。"
+          }
+        ],
+        "occurredAt": "2026-10-23T07:11:51.000Z",
+        "actorId": "actor-001",
+        "unitId": "unit-007",
+        "unitRevision": 1,
+        "unitText": "小小鹏，查看云端专家开发进度的提醒改到明天下午三点20。",
+        "original": "小小鹏，查看云端专家开发进度的提醒改到明天下午三点20。",
+        "sourceOffset": 0,
+        "nextSourceOffset": null,
+        "truncated": false
+      },
+      "timeContext": {
+        "timeZone": "Asia/Shanghai",
+        "source": "host-working-timezone",
+        "currentLocal": {
+          "date": "2026-10-23",
+          "time": "15:43"
+        },
+        "sourceLocal": {
+          "date": "2026-10-23",
+          "time": "15:11"
+        }
+      },
+      "currentTime": "2026-10-23T07:43:21.422Z",
+      "semanticReview": "读取原安排再改原scheduleId，不新建第二个提醒、不把已有提醒取消重建。",
+      "nativeEvidence": {
+        "path": "docs\\tmp\\reminder-model-round-1\\case-007\\native-session.json",
+        "sha256": "bc3b3bbce530d51e146c3975920e083a74a5e594883f75d6de139058b77b5852"
+      }
+    }
+  ]
+}

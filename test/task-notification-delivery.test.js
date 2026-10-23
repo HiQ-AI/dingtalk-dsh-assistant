@@ -11,12 +11,18 @@ import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter
 import { formatTaskGroupReply } from '../packages/dingtalk-dsh-assistant/group-reply-format.js'
 
 test('发送时间随送达回执持久保存，历史记录不以创建时间或回读时间冒充', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-19T02:25:00Z') })
   const f = await fixture(t)
+  t.mock.timers.tick(90000)
+  const sendStartedAt = new Date().toISOString()
   const proof = { messageId: 'actual', conversationId: 'g', sentAt: '2026-10-19T02:27:14.000Z', observedAt: '2026-10-19T02:27:24.000Z' }
   await deliverTaskNotification({ notification: f.notification, command: f.command, notifications: { send: async () => ({ openTaskId: 'accepted' }), readback: async () => proof } })
   await f.reopen()
   const saved = await f.read(), outbound = taskNotificationOutbound(saved)
   assert.equal(outbound.sentAt, proof.sentAt)
+  assert.equal(saved.sendStartedAt, sendStartedAt)
+  assert.notEqual(saved.sendStartedAt, saved.createdAt)
+  assert.equal(outbound.sendStartedAt, sendStartedAt)
   assert.equal(outbound.deliveredAt, proof.observedAt)
   assert.equal(taskNotificationOutbound({ ...saved, receipt: { messageId: 'old', observedAt: proof.observedAt } }).sentAt, undefined)
 })

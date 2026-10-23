@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { ingestTaskResidentMessage, taskNotificationOutbound, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 
-function memoryFacility(seed = new Map()) {
+function memoryFacility(seed = new Map(), onWrite = () => {}) {
   const table = name => ({
     get: key => seed.get(`${name}:${key}`),
     entries: () => [...seed.entries()].filter(([key]) => key.startsWith(`${name}:`)).map(([key, value]) => [key.slice(name.length + 1), value])[Symbol.iterator](),
     async put(key, value) { seed.set(`${name}:${key}`, value) },
     async delete(key) { seed.delete(`${name}:${key}`) },
-    async update(key, transform) { const id = `${name}:${key}`; const value = transform(seed.get(id)); seed.set(id, value); return value },
+    async update(key, transform) { const id = `${name}:${key}`; const value = transform(seed.get(id)); onWrite(name, key); seed.set(id, value); return value },
   })
   return { async open() { return { table, close: async () => undefined } } }
 }
@@ -54,6 +54,8 @@ test('notification projections retain unknown and only verified delivery becomes
   assert.equal(unknown.status, 'pending')
   assert.equal(unknown.notificationState, 'unknown')
   assert.equal(unknown.deliveredMessageId, undefined)
+  assert.equal(unknown.sendStartedAt, undefined, '历史通知缺少真实开始时间，不使用创建时间')
+  assert.equal(taskNotificationOutbound({ ...notification, sendStartedAt: 'actual-start' }).sendStartedAt, 'actual-start')
   assert.equal(unknown.deliveryPendingReason, 'task-notification-unknown')
   assert.deepEqual(unknown.topicRefs, notification.payload.topicRefs)
   const delivered = taskNotificationOutbound({ ...notification, state: 'delivered', receipt: { messageId: 'proof', observedAt: 'seen' } })
@@ -63,6 +65,27 @@ test('notification projections retain unknown and only verified delivery becomes
   const calls = []
   await projectTaskNotification({ residentStore: { projectTaskNotification: async value => calls.push(value) }, notification })
   assert.deepEqual(calls, [{ groupId: 'g', outbound: unknown }])
+})
+
+test('通知重复投影不再持久写，真实状态变化只写一次并保留既有业务关联', async t => {
+  let writes = 0
+  const seed = new Map(), facility = memoryFacility(seed, name => { if (name === 'groups') writes++ })
+  const store = await openResidentStore(facility); t.after(() => store.close())
+  await store.subscribe({ groupId: 'g' })
+  await store.appendOutbox({ groupId: 'g', outboundId: 'n', sourceMessageId: 'source', text: '回复', decisionId: 'decision' })
+  const notification = { id: 'n', state: 'prepared', payload: { conversationId: 'g', text: '回复' } }
+  await projectTaskNotification({ residentStore: store, notification })
+  const initialWrites = writes
+  for (let i = 0; i < 100; i++) await projectTaskNotification({ residentStore: store, notification })
+  assert.equal(writes, initialWrites)
+  const delivered = { ...notification, state: 'delivered', sendStartedAt: '2026-10-23T07:12:52Z',
+    receipt: { messageId: 'sent', observedAt: '2026-10-23T07:12:56Z' } }
+  await projectTaskNotification({ residentStore: store, notification: delivered })
+  await projectTaskNotification({ residentStore: store, notification: delivered })
+  await projectTaskNotification({ residentStore: store, notification })
+  assert.equal(writes, initialWrites + 1)
+  assert.equal(store.getGroup('g').outbox[0].decisionId, 'decision')
+  assert.equal(store.getGroup('g').outbox[0].notificationState, 'delivered')
 })
 
 test('retired coordination notification projects terminal superseded even before a replacement exists', async t => {

@@ -473,7 +473,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const notificationId = `coordination:${occurrence.coordinationId}:${occurrence.id}:result:${occurrence.resultVersion}`
       const notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
         payload: { kind: 'coordination', replyKind: 'substantive', conversationId: occurrence.target.conversationId, atOpenDingTalkIds: occurrence.target.recipientIds,
-          text: JSON.stringify(occurrence.result), fact: { coordinationId: occurrence.coordinationId, eventId: `${occurrence.id}:result:${occurrence.resultVersion}`,
+          text: occurrence.action.kind === 'message-reminder' ? occurrence.result.text : JSON.stringify(occurrence.result), fact: { coordinationId: occurrence.coordinationId, eventId: `${occurrence.id}:result:${occurrence.resultVersion}`,
             occurrenceId: occurrence.id, instanceControlRevision: occurrence.instanceControlRevision,
             deliveryControlRevision: occurrence.deliveryControlRevision, resultVersion: occurrence.resultVersion, resultDigest: digest(occurrence.result) } } }, commandId)
       occurrence.notificationId = notificationId; put('dynamic_coordination_occurrences', occurrence)
@@ -1416,6 +1416,20 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (notification.kind === 'coordination' && runtimeMode && JSON.parse(runtimeMode).mode === 'frozen') return changed({ notification })
         if (notification.kind === 'coordination') {
           const fact = notification.payload.fact, coordination = get('dynamic_coordination', fact.coordinationId)
+          // 只有账本已确认被后续来源补全的旧回复才失效；未知发送不会重新进入此许可分支。
+          const source = fact.sourceUnitId ? get('dynamic_coordination_sources', digest({ unitId: fact.sourceUnitId, revision: fact.sourceUnitRevision }), true) : null
+          if (source?.resolvedBy) {
+            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-source-resolved', resolvedBy: source.resolvedBy, at: stamp }
+            notification.updatedAt = stamp; put('dynamic_notifications', notification); return changed({ notification })
+          }
+          const accepted = source?.acceptedProposal
+          const initialSchedule = accepted?.kind === 'schedule' || accepted?.kind === 'resolve' && accepted.resolution?.kind === 'schedule'
+          // 此类来源只创建 revision=1 的计划；从原接纳事实判断，避免改写历史通知 payload 破坏幂等回放。
+          if (fact.eventId.startsWith('accepted:') && !fact.occurrenceId && initialSchedule
+            && schedules.read('schedules', `schedule:${coordination.id}`, true)?.revision > 1) {
+            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-schedule-changed', at: stamp }
+            notification.updatedAt = stamp; put('dynamic_notifications', notification); return changed({ notification })
+          }
           // 在发送许可同一事务内回读摘要事实，取消本次安排不能被尚未运行的聚合扫描绕过。
           if (fact.snapshotDigest && fact.snapshotDigest !== digest(currentCoordinationSnapshot(coordination))) {
             notification.state = 'superseded'; notification.retirement = { reason: 'coordination-facts-changed', at: stamp }
@@ -1440,6 +1454,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         assertNoLegacy(task?.taskId)
         notification.sendAttemptCount = (notification.sendAttemptCount ?? 0) + 1
         notification.state = 'starting'; notification.dispatchToken = randomUUID(); notification.updatedAt = stamp
+        notification.sendStartedAt = stamp
         notification.sendPermit = { notificationId: notification.id, payloadDigest: notification.payloadDigest ?? digest(notification.payload),
           attempt: notification.sendAttemptCount, fence: notification.dispatchToken,
           ...(notification.kind === 'coordination' ? notification.payload.fact : {}) }

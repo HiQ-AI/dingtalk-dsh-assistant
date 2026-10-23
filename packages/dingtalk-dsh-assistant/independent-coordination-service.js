@@ -1,7 +1,7 @@
 import { createIndependentCoordinationPlanner, coordinationModelSelection, coordinationProposalSchema, coordinationContextSchema } from './independent-coordination-planner.js'
 import { freezeCoordinationMembers } from './coordination-task-commands.js'
 import { stableId } from './topic-model.js'
-import { validateTimeRule } from './coordination-time.js'
+import { localSlot, validateTimeRule } from './coordination-time.js'
 import { selectCoordinationInstructions, assertCoordinationHandoffProof, coordinationOrdinalInstructionIds } from './coordination-changes.js'
 import { coordinationSnapshot, formatCoordinationSnapshot } from './coordination-summary.js'
 
@@ -66,7 +66,8 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
           oldRevision: entry.oldRevision, reason: entry.reason, original: entry.original?.slice(0, 2000), at: entry.at })),
         historyTruncated: (state.coordination.history?.length ?? 0) > 20 },
         source: original ? { unitText: originalText.slice(arrangementSourceOffset, arrangementSourceOffset + 16000), messageId: original.sourceSnapshot.messageId,
-          unitId: original.unitId, unitRevision: original.unitRevision,
+          unitId: original.unitId, unitRevision: original.unitRevision, actorId: original.sourceSnapshot.actorId,
+          occurredAt: original.sourceSnapshot.occurredAt ?? null,
           sourceRefs: original.sourceSnapshot.sourceRefs, sourceOffset: arrangementSourceOffset,
           nextSourceOffset: arrangementSourceOffset + 16000 < originalText.length ? arrangementSourceOffset + 16000 : null,
           truncated: arrangementSourceOffset > 0 || originalText.length > arrangementSourceOffset + 16000 } : null,
@@ -88,8 +89,13 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
         evidenceRef: message.messageId, observedAt: message.occurredAt })
     const sourceText = snapshot.text ?? ''
     const arrangements = (await query('coordination.list', { groupId: request.groupId })).reverse()
-    const unresolved = residentStore.listSourceDispatchOwnership(request.groupId).filter(r => r.semanticState === 'needs_clarification')
-    const result = clone({ reservationId: request.reservationId, generation: request.generation, groupId: request.groupId, currentTime: new Date().toISOString(),
+    const dispatchSources = residentStore.listSourceDispatchOwnership(request.groupId)
+    const unresolved = dispatchSources.filter(r => r.semanticState === 'needs_clarification')
+    const currentTime = new Date().toISOString(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    // 钉钉来源没有浏览器时区；提供真实工作时区，并保持来源时间与处理时间各自独立。
+    const result = clone({ reservationId: request.reservationId, generation: request.generation, groupId: request.groupId, currentTime,
+      timeContext: { timeZone, source: 'host-working-timezone', currentLocal: localSlot(currentTime, timeZone),
+        sourceLocal: Number.isFinite(Date.parse(snapshot.occurredAt ?? '')) ? localSlot(snapshot.occurredAt, timeZone) : null },
       source: { messageId: snapshot.messageId, messageVersion: snapshot.messageVersion, sourceRefs: snapshot.sourceRefs,
         occurredAt: snapshot.occurredAt ?? null,
         actorId: snapshot.actorId, unitId: request.unitId, unitRevision: request.unitRevision,
@@ -104,7 +110,9 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       arrangements: arrangements.slice(arrangementOffset, arrangementOffset + 20).map(arrangement => ({
         id: arrangement.id, revision: arrangement.revision, lifecycleState: arrangement.lifecycleState ?? arrangement.state,
         state: arrangement.state, memberCount: arrangement.memberIds.length, sourceId: arrangement.sourceId,
-        question: arrangement.question, createdAt: arrangement.createdAt })), arrangementContexts,
+        question: arrangement.question, createdAt: arrangement.createdAt,
+        sourcePreview: dispatchSources.find(entry => entry.coordinationId === arrangement.id)?.sourceSnapshot.unitText?.slice(0, 400),
+        actorId: dispatchSources.find(entry => entry.coordinationId === arrangement.id)?.sourceSnapshot.actorId })), arrangementContexts,
       arrangementOffset, arrangementsTotal: arrangements.length, arrangementsHasMore: arrangementOffset + 20 < arrangements.length,
       nextArrangementOffset: arrangementOffset + 20 < arrangements.length ? arrangementOffset + 20 : null,
       unresolved: unresolved.slice(-20).map(entry => ({ reservationId: entry.reservationId, unitId: entry.unitId, unitRevision: entry.unitRevision,
@@ -176,6 +184,11 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
   }
   async function checkObservedTasks(request, proposal) {
     const observed = observations.get(request.reservationId) ?? new Map()
+    if (proposal.kind === 'schedule' && proposal.actionKind === 'message-reminder') {
+      if (!proposal.reminderText?.trim() || proposal.taskIds?.length || proposal.members?.length || proposal.conditionalMembers?.length) fail('COORDINATION_REMINDER_INVALID')
+      return observed
+    }
+    if (proposal.reminderText !== undefined) fail('COORDINATION_REMINDER_INVALID')
     const directoryOnly = proposal.kind === 'schedule' && (proposal.actionKind ?? 'read-query') === 'read-query' && !proposal.conditionalMembers?.length
     const targetIds = proposal.kind === 'schedule' && (proposal.actionKind ?? 'read-query') === 'read-query'
       ? proposal.taskIds ?? [] : (proposal.members ?? []).filter(member => member.action !== 'new-task').map(member => member.taskId)
@@ -210,16 +223,26 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       const known = new Set((await context(request)).recipients.map(recipient => recipient.recipientId))
       if (proposal.recipientIds.some(id => !known.has(id))) fail('COORDINATION_RECIPIENT_UNRESOLVED')
       schedule = { scheduleId: `schedule:${coordinationId}`, timezone: proposal.timezone, rule: proposal.rule,
-        action: taskCommand ? { kind: 'task-command', instructionIds: members.filter(member => !member.observation).map(member => member.instructionId) }
+        action: proposal.actionKind === 'message-reminder' ? { kind: 'message-reminder', text: proposal.reminderText }
+          : taskCommand ? { kind: 'task-command', instructionIds: members.filter(member => !member.observation).map(member => member.instructionId) }
           : { kind: 'read-query', taskIds: proposal.taskIds, ...(conditional?.length ? { onIncomplete: { kind: 'task-command', instructionIds: members.map(member => member.instructionId) } } : {}) },
         target: { conversationId: request.groupId, recipientIds: proposal.recipientIds } }
     }
     return { members, schedule }
   }
-  const acceptanceText = (proposal, memberCount) => proposal?.kind === 'resolve' && proposal.resolution?.pendingClarifications?.length
+  function reminderAcceptance(proposal) {
+    const { rule, timezone, reminderText } = proposal
+    const slot = rule.kind === 'once' ? localSlot(rule.at, timezone) : null
+    const timing = slot ? `${slot.date} ${slot.time}` : `${rule.kind === 'daily' ? '每天' : `每周${'日一二三四五六'[rule.weekday]}`} ${rule.time}`
+    // 用已验证的时间和正文确认，不把模型的内部 interpretation 推理直接发给用户。
+    return `已安排提醒：${timing}（${timezone}），${reminderText}`
+  }
+  const acceptanceText = (proposal, memberCount) => proposal?.kind === 'resolve' && (proposal.resolution.kind === 'schedule' || proposal.resolution.pendingClarifications?.length)
     ? acceptanceText(proposal.resolution, memberCount)
     : proposal?.kind === 'query' ? proposal.answerText
-    : proposal?.pendingClarifications?.length ? `已记录 ${memberCount} 项明确安排；另有 ${proposal.pendingClarifications.length} 项待澄清：${proposal.pendingClarifications.map(item => `[${item.clarificationId}] ${item.question}`).join('；')}。${proposal.allTogether ? '整批一起的要求尚未通过澄清屏障，暂不派发。' : '明确且独立的成员继续处理。'}`
+    : proposal?.pendingClarifications?.length ? `${memberCount ? `已记录 ${memberCount} 项明确安排。` : ''}${proposal.pendingClarifications.map(item => item.question).join('；')}`
+    : proposal?.kind === 'schedule' && proposal.actionKind === 'message-reminder'
+      ? reminderAcceptance(proposal)
     : proposal?.kind === 'schedule'
     ? `已记录时间安排：${proposal.interpretation}（${proposal.timezone}）。按原定时间和补执行窗口处理；超过窗口会报告过期且不执行。动作结果与通知送达分别记录。`
     : ['change','resolve','schedule-change','occurrence-control'].includes(proposal?.kind)
@@ -338,6 +361,8 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
   }
   async function prepareSummary(request, coordinationId, eventId, text, fact = {}) {
     const notificationId = `coordination:${coordinationId}:${eventId}`
+    // 通知正文已冻结；恢复不能用新版本文案重写旧 payload 或再次申请发送。
+    if (await query('notification.get', { notificationId })) return
     const snapshot = request.sourceSnapshot
     await command('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
       payload: { kind: 'coordination', conversationId: request.groupId, text, atOpenDingTalkIds: [], replyKind: 'substantive',

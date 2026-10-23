@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
+import { available, reason, nativeTaskHost, latestInput, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 
 // Real service scheduler with injected durable-store boundary and transport. No native profile/model required.
 for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-claim']) test(`recall scan converges and permits ordinary delivery: ${scenario}`, { timeout: 3000 }, async t => {
@@ -23,6 +24,8 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
       if (q.kind === 'notification.list') return structuredClone(rows)
       if (q.kind === 'notification.get') return structuredClone(rows.find(row => row.id === q.notificationId))
       if (q.kind === 'task.get') { taskReads++; return { taskId: 'task', humanRequests: [{ requestId: 'request', status: 'answered', replyChannel: 'web' }] } }
+      if (q.kind === 'coordination.runtime') return { mode: 'active' }
+      if (q.kind === 'task.events') return { events: [], nextCursor: 0 }
       return []
     },
     async command({ kind, args }) {
@@ -38,7 +41,7 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
   const noop = async () => {}
   const open = () => openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } },
     config: { dbPath: join(root, 'unused.sqlite'), workspaceDir: root, instanceId: 'scan' },
-    legacy: { getAgentConfig: () => ({ workspaceDir: root }) }, residentStore: { getGroup() {} }, store,
+    legacy: { getAgentConfig: () => ({ workspaceDir: root }) }, residentStore: { getGroup() {}, listGroups: () => [] }, store,
     persistence: { register: noop, close: noop }, taskSessions: { close: noop }, executionSessions: { close: noop },
     notifications: { async send() { sends++; return { messageId: 'ordinary-sent' } },
       async readback() { return { messageId: 'ordinary-sent', visible: true } },
@@ -56,3 +59,65 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
   assert.equal(recalls, ['due', 'expired-claim'].includes(scenario) ? 1 : 0)
   assert.equal(taskReads, ['due', 'expired-claim'].includes(scenario) ? 1 : 0, 'ineligible recalls must not perform task reads or occupy transport slots')
 })
+
+test('协调通知提交后即可发送，不等待同群下一条慢规划或恢复轮询', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'notification-plan-wake-'))
+  const slowRelease = Promise.withResolvers()
+  let host, slowFinished = false, slowStarted = false
+  t.after(async () => { slowRelease.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
+  host = await nativeTaskHost(root, async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
+      routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
+        units: ['测试助手，第一条；', '第二条'].map(quote => ({ unitKey: quote, summary: quote, sourceRefs: [{ quote }], dispatchOwner: 'coordination', topics: [], reason: '独立安排' })) })) } }]
+    if (names.includes('coordination_submit')) {
+      if (input.source.unitText.includes('第二条')) { slowStarted = true; await slowRelease.promise; slowFinished = true }
+      return [{ name: 'coordination_submit', args: { kind: 'clarify', question: `${input.source.unitText}需要的内容`, candidates: [] } }]
+    }
+    return topicTaskCalls(request) ?? []
+  }, { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } } })
+  await host.service.ingest({ groupId: 'native-group', messageId: 'source', senderOpenDingTalkId: 'native-user',
+    text: '测试助手，第一条；第二条', timestamp: new Date().toISOString() })
+  await waitUntil(() => slowStarted, '下一条规划已挂起', 4000).catch(error => { throw new Error(`${error.message}: ${JSON.stringify(host.service.listAlerts())}`) })
+  await waitUntil(async () => (await host.query('notification.list')).some(item => item.state === 'delivered'), '第一条通知独立送达', 2000)
+  assert.equal(slowFinished, false)
+  assert.equal(host.sent.length, 1)
+  slowRelease.resolve()
+  await host.service.whenIdle()
+})
+
+for (const firstOutcome of ['delivered', 'unknown', 'rate-limited']) test(`通知释放串行槽后自动递进并保留发送边界: ${firstOutcome}`,
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'notification-drain-'))
+    const entered = Promise.withResolvers(), release = Promise.withResolvers(), sent = [], reads = []
+    let host
+    t.after(async () => { release.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, request => topicTaskCalls(request) ?? [], { notifications: {
+      async send(notification) {
+        sent.push(notification.id)
+        if (notification.id === 'first') {
+          entered.resolve(); await release.promise
+          if (firstOutcome === 'rate-limited') throw Object.assign(new Error('rate limited'), { code: 'RATE_LIMIT_ERROR' })
+        }
+        return { messageId: notification.id }
+      },
+      async readback(notification) { reads.push(notification.id); return notification.id === 'first' && firstOutcome === 'unknown'
+        ? undefined : { messageId: notification.id, visible: true } },
+    } })
+    for (const id of ['first', 'second']) await host.service.store.command({ id: `prepare-${id}`, kind: 'notification.prepare', args: {
+      notificationId: id, taskId: null, requirementRevision: 1, kind: 'topic-reply',
+      payload: { conversationId: 'native-group', sourceMessageId: 'source', actorId: 'native-user', text: id, fact: { topicRefs: [{ topicId: 'topic', revision: 1 }] } } } })
+    await host.service.recover()
+    await entered.promise
+    assert.deepEqual(sent, ['first'])
+    release.resolve()
+    if (firstOutcome === 'rate-limited') {
+      await waitUntil(async () => (await host.query('notification.get', { notificationId: 'first' })).state === 'unknown', '限流结果落盘')
+      await host.service.recover()
+      assert.deepEqual(sent, ['first'], '主动续队不能绕过全局限流')
+    } else {
+      await waitUntil(async () => (await host.query('notification.get', { notificationId: 'second' })).state === 'delivered', '无需第二轮恢复即可投递下一条', 2000)
+      assert.deepEqual(sent, ['first', 'second'])
+      assert.deepEqual(reads, ['first', 'second'], '未知效果等待退避，不在续队时重发或循环回读')
+    }
+  })

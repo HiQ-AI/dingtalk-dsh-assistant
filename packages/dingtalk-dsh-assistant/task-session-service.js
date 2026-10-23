@@ -80,6 +80,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return (failures.get(id)?.retryAfter ?? 0) <= Date.now()
   }
   let closed = false, recovering, scheduling, scheduleRequested = false, providerRetryTimer
+  let notificationScan, notificationScanRequested = false, notificationTransportRetryAt = 0
   const query = (kind, args = {}) => store.query({ kind, ...args })
   const taskCache = new Map(), operationCache = new Map(), notificationCache = new Map(), executionCache = new Map()
   const documentTails = new Map()
@@ -133,6 +134,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     // 原效果终态可能晚于会话退出；释放后直接提升持久队列，不等待恢复定时器。
     if (['execution.drained', 'execution.cancel', 'task.control', 'task.revise', 'task.reopen'].includes(kind)
       || kind.startsWith('operation.') && ['succeeded', 'failed', 'cancelled'].includes(receipt.result?.operation?.state)) void schedulePending()
+    // 持久通知已可发送，无需等待协调规划、其他群恢复或下个轮询周期。
+    if (!closed && receipt.result?.notification?.state === 'prepared') void deliverNotifications().catch(error => {
+      ctx.logger?.warn?.(`notification scan: ${error.code ?? error.message}`)
+    })
     return receipt
   }
   await refreshTasks()
@@ -639,7 +644,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       try {
         const job = (await command('coordination.job.claim', { jobId: candidate.id })).result.job
         const occurrence = await query('coordination.occurrence.get', { occurrenceId: job.occurrenceId })
-        const result = await command(occurrence.action.kind === 'task-command' ? 'coordination.job.command' : 'coordination.job.read', { jobId: job.id, fence: job.fence })
+        const result = await command(occurrence.action.kind === 'task-command' ? 'coordination.job.command'
+          : occurrence.action.kind === 'message-reminder' ? 'coordination.job.remind' : 'coordination.job.read', { jobId: job.id, fence: job.fence })
         // 阻塞或失败项不占完成预算，否则固定前缀会在每轮（包括重启后）饿死其他安排。
         if (result.result.job.state === 'completed') completedJobs++
       } catch (error) {
@@ -1057,9 +1063,27 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         recipientUserId: config.operatorUserId, fact: { taskId: task.taskId }, kind: 'question' } }, `prepare-notification:${notificationId}`)
     void deliverNotifications()
   }
-  let notificationTransportRetryAt = 0
-  async function deliverNotifications(attempted) {
+  function deliverNotifications(attempted = new Set()) {
+    if (closed) return Promise.resolve()
+    notificationScanRequested = true
+    if (notificationScan) return notificationScan
+    notificationScan = (async () => {
+      do {
+        notificationScanRequested = false
+        await scanNotifications(attempted)
+      } while (!closed && notificationScanRequested)
+    })().finally(() => { notificationScan = undefined })
+    return notificationScan
+  }
+  function continueNotificationDelivery(pending, attempted) {
+    // 同一轮每条最多尝试一次，拒发、未知和限流仍由原恢复/退避条件控制。
+    void pending.catch(() => {}).then(() => { if (!closed) return deliverNotifications(attempted) }).catch(error => {
+      ctx.logger?.warn?.(`notification drain: ${error.code ?? error.message}`)
+    })
+  }
+  async function scanNotifications(attempted) {
     for (let notification of await query('notification.list')) {
+      if (closed) return
       if (notification.kind === 'coordination' && notification.state === 'prepared' && !notification.sendPermit && notification.payload.fact.occurrenceId) {
         const occurrence = await query('coordination.occurrence.get', { occurrenceId: notification.payload.fact.occurrenceId })
         if (occurrence.action.kind === 'read-query' && !occurrence.cancelledAt && Date.now() - Date.parse(occurrence.result.observedAt) >= (occurrence.freshnessWindowMs ?? 300000)) {
@@ -1084,7 +1108,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const request = task?.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
         if (request?.status === 'answered' && request.replyChannel === 'web') {
           attempted?.add(notification.id)
-          void track(inflightNotifications, notification.id, () => recallTaskOperatorNotification({ notification, notifications, command }))
+          continueNotificationDelivery(track(inflightNotifications, notification.id, () => recallTaskOperatorNotification({ notification, notifications, command })), attempted)
         }
       }
 
@@ -1109,13 +1133,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (notification.state === 'delivered' || notification.state === 'failed' && !(notification.deliveryError?.knownNotSent && notification.deliveryError?.retryable)
         || inflightNotifications.size > 0 || Date.now() < notificationTransportRetryAt || !retryReady(notification.id) || Date.parse(notification.nextAttemptAt ?? '') > Date.now() || inflightNotifications.has(notification.id) || attempted?.has(notification.id)) continue
       attempted?.add(notification.id)
-      void track(inflightNotifications, notification.id, async () => {
+      continueNotificationDelivery(track(inflightNotifications, notification.id, async () => {
         try { await deliverTaskNotification({ notification, notifications, command }) }
         catch (error) {
           if (error.serverErrorCode === 'RATE_LIMIT_ERROR' || error.code === 'RATE_LIMIT_ERROR' || error.knownNotSent === true) notificationTransportRetryAt = Math.max(notificationTransportRetryAt, Date.parse(error.notificationRetryAt) || Date.now() + 60000)
           throw error
         }
-      })
+      }), attempted)
     }
   }
   async function recover() {
@@ -1412,12 +1436,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await schedulePending()
       await deliverNotifications(notificationAttempts)
       do {
-        await Promise.allSettled([scheduling, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
+        await Promise.allSettled([scheduling, notificationScan, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
         await independentCoordination.whenIdle()
         await recoverCoordination()
         await schedulePending()
         await deliverNotifications(notificationAttempts)
-      } while (scheduling || [inflightTasks,inflightExecutions,inflightGroups,inflightNotifications].some(map => map.size))
+      } while (scheduling || notificationScan || [inflightTasks,inflightExecutions,inflightGroups,inflightNotifications].some(map => map.size))
     },
     async close() {
       closed = true
@@ -1427,7 +1451,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await topicCoordinator.close()
       await independentCoordination.close()
       await Promise.all([taskSessions.close(), executionSessions.close()])
-      await Promise.allSettled([scheduling, recovering, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
+      await Promise.allSettled([scheduling, recovering, notificationScan, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
       await persistence.close()
       if (!suppliedStore) await store.close()
     },

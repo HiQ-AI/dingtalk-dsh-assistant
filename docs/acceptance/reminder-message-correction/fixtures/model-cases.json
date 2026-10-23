@@ -1,0 +1,63 @@
+{
+  "cases": [
+    {
+      "id": "correction-resolves-original",
+      "message": "小小鹏，三点20提醒我一下查看云端专家的开发进度",
+      "occurredAt": "2026-10-23T07:11:51.000Z",
+      "prior": { "state": "needs_clarification", "message": "小小鹏，三点提醒我一下查看云端专家的开发进度", "occurredAt": "2026-10-23T07:11:12.000Z", "question": "三点是哪一天、哪个时区的凌晨三点还是下午三点？本群没有云端专家任务，你是提醒自己查看，还是让我查询任务进度？" },
+      "expect": [ { "path": "kind", "equals": "resolve" }, { "path": "coordinationId", "equals": "arrangement-001" }, { "path": "expectedRevision", "equals": 1 }, { "path": "resolution.kind", "equals": "schedule" }, { "path": "resolution.actionKind", "equals": "message-reminder" }, { "path": "resolution.rule.at", "equals": "2026-10-23T07:20:00.000Z" }, { "path": "resolution.timezone", "equals": "Asia/Shanghai" }, { "path": "resolution.taskIds", "absent": true }, { "path": "resolution.members", "absent": true }, { "path": "resolution.recipientIds", "equals": ["actor-001"] } ],
+      "readPrior": true, "noTaskReads": true, "reminderContains": "云端专家",
+      "review": "应直接订正为当天15:20，不再确认当天、时区、上午下午或业务任务；处理期间已过时刻仍保留原计划。"
+    },
+    {
+      "id": "future-reminder-no-task",
+      "message": "小小鹏，2026年10月24日下午三点20提醒我查看云端专家的开发进度。",
+      "occurredAt": "2026-10-23T07:11:51.000Z",
+      "expect": [ { "path": "kind", "equals": "schedule" }, { "path": "actionKind", "equals": "message-reminder" }, { "path": "rule.at", "equals": "2026-10-24T07:20:00.000Z" }, { "path": "timezone", "equals": "Asia/Shanghai" }, { "path": "taskIds", "absent": true }, { "path": "members", "absent": true }, { "path": "recipientIds", "equals": ["actor-001"] } ],
+      "noTaskReads": true, "reminderContains": "云端专家",
+      "review": "只安排提醒，不把正文对象当成必须查询的业务任务。"
+    },
+    {
+      "id": "explicit-query-stays-query",
+      "message": "小小鹏，2026年10月24日下午三点20，由你查询云端专家开发任务的最新进度，在本群告诉我结果。",
+      "occurredAt": "2026-10-23T07:11:51.000Z",
+      "task": { "taskId": "task-001", "title": "云端专家开发", "objective": "完成云端专家开发并报告进度", "status": "active", "control": "active", "requirementRevision": 1, "runSequence": 1 },
+      "expect": [ { "path": "kind", "equals": "schedule" }, { "path": "actionKind", "equals": "read-query" }, { "path": "taskIds", "equals": ["task-001"] }, { "path": "rule.at", "equals": "2026-10-24T07:20:00.000Z" }, { "path": "reminderText", "absent": true }, { "path": "recipientIds", "equals": ["actor-001"] } ],
+      "review": "用户明确委托代查，不能降为仅提醒用户自己查看；不新增任务。"
+    },
+    {
+      "id": "explicit-zone-overrides-host",
+      "message": "小小鹏，按纽约当地时间，2026年10月24日下午三点20提醒我提交周报。",
+      "occurredAt": "2026-10-23T07:11:51.000Z",
+      "expect": [ { "path": "kind", "equals": "schedule" }, { "path": "actionKind", "equals": "message-reminder" }, { "path": "rule.at", "equals": "2026-10-24T19:20:00.000Z" }, { "path": "timezone", "equals": "America/New_York" }, { "path": "taskIds", "absent": true }, { "path": "recipientIds", "equals": ["actor-001"] } ],
+      "noTaskReads": true, "reminderContains": "周报",
+      "review": "显式纽约时区覆盖Host的Asia/Shanghai，不询问浏览器时区。"
+    },
+    {
+      "id": "already-past-needs-time-choice",
+      "message": "小小鹏，今天下午三点20提醒我提交周报。",
+      "occurredAt": "2026-10-23T07:30:00.000Z",
+      "expect": [ { "path": "kind", "equals": "clarify" } ],
+      "noTaskReads": true,
+      "review": "来源时刻15:30已超过明确的15:20，只问必要的重新安排时间；不默改明天、不追问已知时区。"
+    },
+    {
+      "id": "different-subject-is-independent",
+      "message": "小小鹏，另外，2026年10月24日下午三点20提醒我提交周报。",
+      "occurredAt": "2026-10-23T07:11:51.000Z",
+      "prior": { "state": "needs_clarification", "message": "小小鹏，三点提醒我查看云端专家的开发进度", "occurredAt": "2026-10-23T07:11:12.000Z", "question": "三点提醒查看云端专家，是哪一天？" },
+      "expect": [ { "path": "kind", "equals": "schedule" }, { "path": "actionKind", "equals": "message-reminder" }, { "path": "rule.at", "equals": "2026-10-24T07:20:00.000Z" }, { "path": "coordinationId", "absent": true }, { "path": "taskIds", "absent": true }, { "path": "recipientIds", "equals": ["actor-001"] } ],
+      "noTaskReads": true, "reminderContains": "周报",
+      "review": "另外且对象不同是独立事项，不能拿来resolve原云端专家澄清。"
+    },
+    {
+      "id": "accepted-reminder-changes-original",
+      "message": "小小鹏，查看云端专家开发进度的提醒改到明天下午三点20。",
+      "occurredAt": "2026-10-23T07:11:51.000Z",
+      "prior": { "state": "active", "message": "小小鹏，明天下午三点提醒我查看云端专家的开发进度", "occurredAt": "2026-10-23T07:11:12.000Z", "at": "2026-10-24T07:00:00.000Z" },
+      "expect": [ { "path": "kind", "equals": "schedule-change" }, { "path": "coordinationId", "equals": "arrangement-001" }, { "path": "expectedRevision", "equals": 1 }, { "path": "scheduleId", "equals": "schedule-001" }, { "path": "expectedScheduleRevision", "equals": 1 }, { "path": "rule.at", "equals": "2026-10-24T07:20:00.000Z" } ],
+      "readPrior": true, "noTaskReads": true,
+      "review": "读取原安排再改原scheduleId，不新建第二个提醒、不把已有提醒取消重建。"
+    }
+  ]
+}

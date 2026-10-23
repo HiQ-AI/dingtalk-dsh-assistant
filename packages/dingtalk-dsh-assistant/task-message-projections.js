@@ -101,7 +101,8 @@ export function taskNotificationOutbound(notification) {
     atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [],
     replyKind: payload.replyKind ?? 'substantive',
     matterSourceMessageIds: payload.sourceMessageId ? [payload.sourceMessageId] : [],
-    ...(notification.dispatchToken ? { sendStartedAt: notification.createdAt } : {}),
+    // 创建通知到获得发送许可之间可能排队；历史缺失时不伪造发送开始。
+    sendStartedAt: notification.sendStartedAt,
     ...(delivered ? { deliveredAt: receipt?.observedAt ?? notification.updatedAt,
       ...(receipt?.sentAt ? { sentAt: receipt.sentAt } : {}),
       ...(receipt?.messageId ? { deliveredMessageId: receipt.messageId } : {}) }
