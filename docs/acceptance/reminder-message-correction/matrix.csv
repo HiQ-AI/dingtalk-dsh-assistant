@@ -91,3 +91,4 @@ setter-recipient-separation,10,PASS,round-10.md
 recipient-change-on-demand,10,PASS,round-10.md
 quoted-reminder-real-model-one-call,10,PASS,round-10.md
 package-native-and-recipients,10,PASS,round-10.md
+local-deployment,10,PASS,round-10.md
