@@ -122,3 +122,6 @@ pty-upgrade-proposal,30,PASS,round-30/config-execution.md (3 cases; v2 only; tru
 interactive-adapter-contracts,31,PASS,round-31/adapter-tests.log (50 cases; snapshot off; minimum CLI version)
 interactive-native-team-integration,31,PASS,round-31/live-team-proof.json (real two members; same UUID resume; new instruction marker; history SHA; actual exit0)
 interactive-release-native-package,31,PASS,round-31/package-native.log (fixed final artifact; two native tests)
+interactive-merged-local-deployment,32,PASS,round-32/independent-readback.json (exact merged packages; new PID; health; default dsh; profile unchanged)
+interactive-installed-service-chain,32,PASS,round-32/installed-service-proof.json (real native owner; installed service; real Claude; actual document read; complete; no external messages)
+interactive-installed-pty-consumer,32,PASS,round-32/pty-independent-readback.json (actual base provider chain; exact v2 versions and bytes)

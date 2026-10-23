@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "closed": true,
+  "taskStatus": "completed",
+  "executionStatus": "succeeded",
+  "backend": "claude-code",
+  "drained": true,
+  "summary": "DSH_NATIVE_OWNER_CLAUDE_OK",
+  "ownerNativeRequests": 16,
+  "externalMessagesSent": 0,
+  "wrapperPid": 89256,
+  "wrapperAlive": false,
+  "documentSha256": "68a87447df83c3a144b42eed54fd2b5d4aaad055812fc9431c681196c0c3c15a",
+  "packageRoot": "D:\\dsh_home\\profiles\\web\\node_modules\\@zzusp\\dingtalk-dsh-assistant"
+}
