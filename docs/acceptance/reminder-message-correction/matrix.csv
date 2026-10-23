@@ -51,3 +51,12 @@ uuid-negative-proof-failed-only,6,PASS,round-6.md
 targeted-regression,6,PASS,round-6.md
 release-smoke,6,PASS,round-6.md
 suite-map,6,PASS,round-6.md
+merged-local-deployment,7,PASS,round-7.md
+live-correction-single-reminder,7,PASS,round-7.md
+live-no-unnecessary-date-confirm,7,PASS,round-7.md
+live-inbound-stale-reply-fence,7,PASS,round-7.md
+live-due-reminder-delivery,7,PASS,round-7.md
+live-rejected-notification-no-resend,7,PASS,round-7.md
+live-independent-dws-readback,7,PASS,round-7.md
+live-latency-measurement,7,PASS,round-7.md
+live-end-to-end-latency,7,FAIL,round-7.md
