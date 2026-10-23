@@ -24,6 +24,7 @@ const profile = createRequire(pathToFileURL(resolve(process.env.DSH_NATIVE_TEST_
 const timeModulePath = profile.resolve('@deepseek-ai/dsh-time-context')
 const digests = Object.fromEntries(await Promise.all([
   ['planner', new URL('../../../../packages/dingtalk-dsh-assistant/independent-coordination-planner.js', import.meta.url)],
+  ['contextService', new URL('../../../../packages/dingtalk-dsh-assistant/independent-coordination-service.js', import.meta.url)],
   ['fixtures', fixturesPath], ['evaluator', new URL(import.meta.url)], ['timeContext', timeModulePath],
 ].map(async ([name, path]) => [name, createHash('sha256').update(await readFile(path)).digest('hex')])))
 const h = await nativeTaskHost(root, () => [], { resident: true })
@@ -45,23 +46,24 @@ function contextFor(sample, number, args, reads) {
     sourceOffset: 0, nextSourceOffset: null, truncated: false }
   const schedule = prior?.at ? [{ id: 'schedule-001', coordinationId: 'arrangement-001', revision: 1,
     state: 'active', timezone: 'Asia/Shanghai', rule: { kind: 'once', at: prior.at }, nextDueAt: prior.at,
-    action: { kind: 'message-reminder', text: '提醒你查看云端专家的开发进度。' }, target: { conversationId: 'group-001', recipientIds: ['actor-001'] } }] : []
+    action: { kind: 'message-reminder', text: prior.reminderText ?? '提醒你查看云端专家的开发进度。' },
+    target: { conversationId: 'group-001', recipientIds: prior.recipientIds ?? ['actor-001'] } }] : []
   for (const id of args.coordinationIds ?? []) assert.equal(id, 'arrangement-001', 'fixture arrangement must exist')
   for (const id of args.taskIds ?? []) assert.equal(id, sample.task?.taskId, 'fixture task must exist')
   if (reads) reads.push(structuredClone(args))
   const task = sample.task
   // 与生产context的clone一致，省略不存在的可选字段，满足原生工具无损JSON契约。
-  return JSON.parse(JSON.stringify({ reservationId: `reservation-${number}`, generation: 1, groupId: 'group-001', currentTime: now,
+  const value = { reservationId: `reservation-${number}`, generation: 1, groupId: 'group-001', currentTime: now,
     timeContext: { timeZone, source: 'host-working-timezone', currentLocal: localSlot(now, timeZone), sourceLocal: localSlot(sample.occurredAt, timeZone) },
     source, tasks: task ? [{ taskId: task.taskId, title: task.title, objectivePreview: task.objective,
       status: task.status, control: task.control, inputVersion: task.requirementRevision, runSequence: task.runSequence }] : [],
     total: task ? 1 : 0, offset: 0, nextOffset: null, hasMore: false,
     taskContexts: args.taskIds?.length ? [task] : [],
-    recipients: [{ recipientId: 'actor-001', name: '测试用户', evidenceRef: source.messageId, observedAt: sample.occurredAt }], recipientsTruncated: false,
+    recipients: [{ recipientId: 'actor-001', name: '测试用户', evidenceRef: source.messageId, observedAt: sample.occurredAt }, ...(sample.recipients ?? [])], recipientsTruncated: false,
     arrangements: prior ? [{ id: 'arrangement-001', revision: 1, lifecycleState: prior.state, state: prior.state,
       memberCount: 0, sourceId: 'source-000', question: prior.question, createdAt: prior.occurredAt,
       sourcePreview: prior.message, actorId: 'actor-001' }] : [],
-    arrangementContexts: args.coordinationIds?.length && prior ? [{
+    arrangementContexts: (args.coordinationIds?.length || sample.quotedReminder) && prior ? [{
       coordination: { id: 'arrangement-001', revision: 1, state: prior.state, memberIds: [], question: prior.question,
         pendingClarifications: [], ordinalSelectionRequiresClarification: false, sourceOrderTotal: 0,
         ordinalAppendRequiresClarification: false, sourceOrderTruncated: false, nextSourceOrderOffset: null, history: [], historyTruncated: false },
@@ -73,7 +75,22 @@ function contextFor(sample, number, args, reads) {
       coordinationId: 'arrangement-001', question: prior.question, sourcePreview: prior.message }] : [],
     unresolvedTruncated: false,
     allowedActions: ['arrangement', 'schedule', 'clarify', 'reject', 'change', 'resolve', 'query', 'schedule-change', 'occurrence-control'],
-    limitations: ['同群；收件人目录仅含有来源证据的已观察成员，缺失或重名必须澄清。'] }))
+    limitations: ['同群；收件人目录仅含有来源证据的已观察成员，缺失或重名必须澄清。'] }
+  if (sample.quotedReminder) {
+    // 对齐生产精确引用首屏：详情已由 Host 预读，未加载目录不能假报总数为零。
+    const tasksDeferred = args.offset === undefined && args.limit === undefined && !args.taskIds?.length
+    const arrangementsDeferred = args.arrangementOffset === undefined
+    value.quotedReminder = { quotedMessageId: sample.quotedReminder.messageId, notificationId: 'notification-001',
+      coordinationId: 'arrangement-001', coordinationRevision: 1, schedule: schedule[0],
+      source: { messageId: priorSource.messageId, actorId: priorSource.actorId, unitId: priorSource.unitId, unitRevision: 1, text: prior.message } }
+    value.catalogsDeferred = { tasks: tasksDeferred, arrangements: arrangementsDeferred, recipients: tasksDeferred && arrangementsDeferred }
+    if (tasksDeferred) for (const key of ['total', 'offset', 'nextOffset', 'hasMore']) delete value[key]
+    if (arrangementsDeferred) {
+      value.arrangements = []; value.unresolved = []
+      for (const key of ['arrangementOffset', 'arrangementsTotal', 'arrangementsHasMore', 'nextArrangementOffset']) delete value[key]
+    }
+  }
+  return JSON.parse(JSON.stringify(value))
 }
 
 try {
@@ -118,12 +135,17 @@ try {
     if (trace.some(call => !permitted.has(call.tool))) failures.push({ reason: 'unexpected tool' })
     if (events.some(event => event.type === 'tool/result' && event.data.message?.isError)) failures.push({ reason: 'tool error cannot be erased by later retry' })
     if (sample.noTaskReads && reads.some(args => args.taskIds?.length)) failures.push({ reason: 'unnecessary task detail read' })
+    if (sample.noContextReads && reads.length) failures.push({ reason: 'prefetched context unnecessarily read again', count: reads.length })
+    if (sample.expectedRequestCount !== undefined && headers.length !== sample.expectedRequestCount) failures.push({ reason: 'model request count', count: headers.length })
+    const simulatedRecipientIds = sample.preserveRecipientIds ? proposal?.recipientIds ?? inputs[0]?.quotedReminder?.schedule.target.recipientIds : undefined
+    if (sample.preserveRecipientIds && JSON.stringify(simulatedRecipientIds) !== JSON.stringify(sample.preserveRecipientIds)) failures.push({ reason: 'original reminder recipients changed', simulatedRecipientIds })
     if (sample.readPrior && !reads.some(args => args.coordinationIds?.includes('arrangement-001'))) failures.push({ reason: 'original arrangement not read' })
     if (sample.reminderContains && !(proposal?.resolution ?? proposal)?.reminderText?.includes(sample.reminderContains)) failures.push({ reason: 'reminder subject lost' })
     await writeFile(join(caseDir, 'inputs.json'), JSON.stringify(inputs, null, 2) + '\n')
     if (native) await writeFile(join(caseDir, 'native-session.json'), JSON.stringify(native, null, 2) + '\n')
     const result = { id: sample.id, artifactDirectory: relative(root, caseDir), passed: !failures.length,
-      elapsedMs: Date.now() - startedAt, error, failures, proposals, reads, trace, timeMessages, headers, usages, semanticReview: sample.review }
+      elapsedMs: Date.now() - startedAt, error, failures, proposals, reads, trace, timeMessages, headers, usages,
+      ...(simulatedRecipientIds ? { simulatedRecipientIds } : {}), semanticReview: sample.review }
     results.push(result)
     await writeFile(join(root, 'results.json'), JSON.stringify({ model, reasoningEffort, provider: 'openai-codex', digests,
       runtime: 'isolated native-test preset plus the actual installed time-context plugin; production planner and two real tool schemas',

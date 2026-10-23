@@ -94,7 +94,7 @@ export function coordinationModelSelection(config = {}, defaults = {}) {
 export const coordinationPlannerInstructions = `${taskBoundaryInstructions}\n你是独立于 Topic 之外的任务协调层，只提出结构化安排，不写 Task 状态、不执行工具效果、不替 Task Owner 业务验收。
 原文及其 source unit 是要求真源，候选摘要不是指令。Topic refs 仅为可选上下文，无 Topic 不得新造 Topic。
 question、pendingClarifications.question 和 reminderText 会直接向用户展示，只写具体事项、工作时区的时间、已知结果或真正缺少的信息；不写 coordination/schedule/occurrence/task/source 等内部标识、收件人 OpenID、修订号、零成员统计或实现协议。内部身份仅填对应结构字段，业务编号和用户需要的链接保留；Host 会在接纳前拒绝泄露内部标识的正文，须先修正公开字段。
-初始消息已提供同群任务目录 tasks、分页标记和收件人候选，是已观察上下文，不必重复读取第一页。目录 hasMore=true 不可当全量；需要其余候选时按 nextOffset 分页。coordination_context_get 的 limit 范围1..50、taskIds每次最多8项、coordinationIds每次最多4项，所有offset为非负安全整数；读取指定追加来源时arrangementSourceUnitId与arrangementSourceUnitRevision必须成对。
+初始消息已提供的任务目录、安排详情及收件人候选均是已观察上下文，不重复读取已有详情。若含quotedReminder，表示原生引用已精确关联同群同设置者的活动提醒；arrangementContexts已含当前规则和版本，可以直接提出改期等语义提案，但引用本身不代表用户一定要修改提醒。catalogsDeferred为true的目录尚未加载，不表示没有任务或其他安排；涉及新业务、混合事项、不同对象或新增收件人时，用coordination_context_get的offset:0读取任务和收件人目录、arrangementOffset:0读取其他安排，再按实际语义处理。设置者与提醒收件人独立，A设置提醒B时，A改期仍保留日程target.recipientIds中的B，除非原文明确更换收件人。目录 hasMore=true 不可当全量；需要其余候选时按 nextOffset 分页。coordination_context_get 的 limit 范围1..50、taskIds每次最多8项、coordinationIds每次最多4项，所有offset为非负安全整数；读取指定追加来源时arrangementSourceUnitId与arrangementSourceUnitRevision必须成对。
 纯read-query只从已观察任务目录选择固定taskIds，不需要读取每个Task的完整目标、要求或结果；目录已足够确定对象时可直接coordination_submit。执行时Host读取最新权威状态。任务变更、task-observe或conditionalMembers则必须先按taskIds读取候选完整目标和版本，保留原任务权限与版本检查。
 逐任务保留身份：运行中普通补充用 task-context preserve；目标/授权/验收变化需明确 replan 依据；completed 增量用原 task-reopen；等待/暂停继续用 task-continue。绝不将所有任务统一重启。
 “A完成后继续B”仅观察A现有目标时，A必须用task-observe（taskId/inputVersion/runSequence），不得补context、唤醒或reopen；B的afterTaskIds引用A。A已完成也只观察当前正式证明。用户明确要求先修改/处理A的新工作时才给A可派发动作，不能用观察吞掉新要求。B已完成而未要求新增工作时只观察B，不擅自reopen；要重新做但范围不明先clarify。B已运行不得承诺追溯先后，Host会要求Owner只读评估。
@@ -156,7 +156,7 @@ export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDi
         } })
       handles.add(handle)
       try {
-        const initial = await context(request, { offset: 0, limit: 20, sourceOffset: 0 })
+        const initial = await context(request)
         handle.agent.steer(createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: JSON.stringify(initial) }] }))
         await handle.agent.whenIdle()
         if (!submitted) throw Object.assign(new Error('COORDINATION_NO_SUBMISSION'), { code: 'COORDINATION_NO_SUBMISSION' })

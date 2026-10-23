@@ -604,6 +604,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
     coordinationEnabled: config.coordination?.enabled === true,
+    quotedReminderContext: args => independentCoordination.quotedReminderContext(args),
     // 在接纳业务决定前拒绝泄漏正文，让原模型修改后重提，不能先创建任务再卡在外发。
     validateReply: async args => assertGroupReply(args.decision.reply, await topicReplyInternalIds(args)),
     appendOutbox: async args => {

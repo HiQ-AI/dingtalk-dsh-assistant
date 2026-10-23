@@ -22,6 +22,82 @@ async function seed(host) {
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '测试用户', text,
   timestamp: '2026-10-21T01:00:00Z' })
 
+for (const action of ['改期保留B', '改为提醒C', '另建提醒C']) test(`原生精确引用：${action}保留语义判断和按需读取`,
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-23T09:00:00Z') })
+    const root = await mkdtemp(join(tmpdir(), 'quoted-reminder-native-'))
+    let host, correctionCalls = 0
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, request => {
+      const input = latestInput(request), names = request.tools.map(tool => tool.name)
+      if (names.includes('group_topic_route_submit')) {
+        if (input.messages.every(item => item.messageId.startsWith('recipient-evidence'))) return [{ name: 'group_topic_route_submit', args: {
+          requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
+            units: [], ignoredRefs: [{ quote: item.text, reason: '普通发言，只保留可信成员身份' }] })) } }]
+        return unitRoute(input)
+      }
+      if (names.includes('coordination_submit')) {
+        if (input.source.messageId === 'reminder-for-b') return [{ name: 'coordination_submit', args: {
+          kind: 'schedule', actionKind: 'message-reminder', timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-23T09:10:00Z' },
+          reminderText: '查看云端专家的开发进度。', recipientIds: ['recipient-b'], interpretation: '十分钟后提醒B查看进度' } }]
+        correctionCalls += 1
+        assert.equal(input.source.unitText, action === '改期保留B' ? '提前三分钟' : action === '改为提醒C' ? '改为提醒C' : '另外给C安排一个提醒')
+        assert.deepEqual(input.catalogsDeferred, { tasks: true, arrangements: true, recipients: true })
+        assert.deepEqual(input.tasks, []); assert.deepEqual(input.arrangements, [])
+        assert.equal(input.total, undefined); assert.equal(input.arrangementsTotal, undefined)
+        assert.deepEqual(input.quotedReminder.schedule.target.recipientIds, ['recipient-b'])
+        if (action !== '改期保留B') {
+          assert.ok(!input.recipients.some(item => item.recipientId === 'recipient-c'), '首屏不扩大到无关成员')
+          const expanded = modelToolValues(request).find(value => value.catalogsDeferred?.recipients === false)
+          if (!expanded) return [{ name: 'coordination_context_get', args: { offset: 0, arrangementOffset: 0 } }]
+          assert.ok(expanded.recipients.some(item => item.recipientId === 'recipient-c'))
+          if (action === '另建提醒C') return [{ name: 'coordination_submit', args: {
+            kind: 'schedule', actionKind: 'message-reminder', timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-23T09:15:00Z' },
+            reminderText: '核对资料。', recipientIds: ['recipient-c'], interpretation: '另建提醒给C，保留原提醒' } }]
+        }
+        const current = input.arrangementContexts[0], schedule = current.schedules[0]
+        assert.equal(current.source.actorId, 'native-user')
+        // 首屏已按真实版本登记观察，直接提交；不用重复读取，也不能把设置者替换成收件人。
+        return [{ name: 'coordination_submit', args: { kind: 'schedule-change', coordinationId: current.coordination.id,
+          expectedRevision: current.coordination.revision, scheduleId: schedule.id, expectedScheduleRevision: schedule.revision,
+          scope: 'unstarted', timezone: schedule.timezone, rule: { kind: 'once', at: '2026-10-23T09:07:00Z' },
+          ...(action === '改为提醒C' ? { recipientIds: ['recipient-c'] } : {}), reason: action } }]
+      }
+      return topicTaskCalls(request) ?? []
+    }, { config })
+    await seed(host)
+    await host.service.ingest({ ...message('recipient-evidence', '大家好'), senderOpenDingTalkId: 'recipient-b', senderName: '成员B' })
+    await host.service.whenIdle()
+    if (action !== '改期保留B') {
+      await host.service.ingest({ ...message('recipient-evidence-c', '我也在群里'), senderOpenDingTalkId: 'recipient-c', senderName: '成员C' })
+      await host.service.whenIdle()
+    }
+    await host.service.ingest(message('reminder-for-b', '测试助手，十分钟后提醒B查看云端专家的开发进度。'))
+    await host.service.whenIdle()
+    const confirmation = (await host.query('notification.list')).find(item => item.payload.sourceMessageId === 'reminder-for-b')
+    assert.equal(confirmation?.state, 'delivered', JSON.stringify(host.service.listAlerts()))
+    const before = await host.query('task.list'), firstCall = host.requests.length
+    await host.service.ingest({ ...message('quoted-correction', action === '改期保留B' ? '提前三分钟' : action === '改为提醒C' ? '改为提醒C' : '另外给C安排一个提醒'),
+      quotedMessage: { messageId: confirmation.receipt.messageId, content: confirmation.payload.text } })
+    await host.service.whenIdle()
+    const expectedCalls = action === '改期保留B' ? 1 : 2
+    assert.equal(correctionCalls, expectedCalls, JSON.stringify(host.service.listAlerts()))
+    const plannerCalls = host.requests.slice(firstCall).filter(request => request.tools.some(tool => tool.name === 'coordination_submit'))
+    assert.equal(plannerCalls.length, expectedCalls, '简单改期一次完成；新对象仅按需补一次目录')
+    assert.equal(host.toolResults.filter(item => item.name === 'coordination_context_get').length, expectedCalls - 1)
+    const schedules = await host.query('coordination.schedule.list')
+    assert.equal(schedules.length, action === '另建提醒C' ? 2 : 1)
+    if (action === '另建提醒C') {
+      assert.deepEqual(schedules.map(item => [item.rule.at, item.target.recipientIds]), [
+        ['2026-10-23T09:10:00.000Z', ['recipient-b']], ['2026-10-23T09:15:00.000Z', ['recipient-c']],
+      ])
+    } else {
+      assert.equal(schedules[0].revision, 2); assert.equal(schedules[0].rule.at, '2026-10-23T09:07:00.000Z')
+      assert.deepEqual(schedules[0].target.recipientIds, [action === '改为提醒C' ? 'recipient-c' : 'recipient-b'])
+    }
+    assert.deepEqual(await host.query('task.list'), before)
+  })
+
 test('两条原始提醒相隔39秒由原安排订正，未建Task且到15:20仅投递一次提醒',
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const firstAt = Date.parse('2026-10-23T07:11:12Z'), dueAt = '2026-10-23T07:20:00.000Z'

@@ -19,3 +19,15 @@
 
 - 实际打包加载测试 2/2 通过、0 跳过，总耗时 20.437 秒；使用 test/fixtures/native-profile/package.json，覆盖 Task 与 Resident 原生装载。证据：round-9/package-native.log。
 
+
+## 收件人与设置者
+
+用户澄清提醒可能由 A 设置、到期提醒 B。当前 payload.actorId/sourceMessageId 仅确定被引用来源；atOpenDingTalkIds 独立取日程保存的 recipientIds，不回退到设置者。真实 CLI 不发送校验使用 A≠B：引用作者 A、提及列表仅 B、传输内容仅含 B 的原生占位符，executed=false。见 round-9/dws-quoted-recipient-dry-run.json；这不代替真实 B 客户端送达。
+
+## 本地部署与恢复
+
+a1b5785 已安装。初次安装后检查失败：打包后同一开发检出继续编辑，当前源码与冻结包不再一致。旧进程已沿 SIGINT 排空，双包已经安装；未重复安装或强制重启。随后以 git archive a1b5785 的不可变源码独立核对 Assistant 67 文件、Observer 4 文件与冻结包、实际安装内容全部一致，确认旧 PID 退出、端口关闭、账本排空与 profile 不变，再继续既有计划任务启动阶段。原失败 evidence 保留在 deployment/failure.json，恢复前证明在 deployment/recovery-check.json。
+
+18:26:56 独立回读新 PID 31628 同时持有 3080/18998，health=ok、recoveryIssueCount=0、DWS healthy、入站启用，匿名 Web=401，profile 未改变。Assistant SHA256 57910c8395fdd337cc29a70dd4dec65dbfad717ace91529e10970a3c1611cd10，Observer SHA256 88a51be3b4d532da19740620512daa26c7c36e377a550563ba660aca06a61396。见 independent-deployment-readback.json。
+
+C 原到期通知正式结清 failed，sendAttemptCount 仍为 1，无重发；两条已送达确认各一次发送。状态变化后自动产生一条简洁失败摘要并送达，平台原生“@我”查询完整返回且命中该新消息，真实显示 @孙鹏。items/messages 为同一结果的两个别名，按 messageId 去重后只有一条，不能算两次。该证据证明新普通通知的原生提及，不证明原 C 到期提醒成功。证据 live-c-after-restart.json、mentions-after.json。

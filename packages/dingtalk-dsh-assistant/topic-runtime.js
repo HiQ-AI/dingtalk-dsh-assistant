@@ -201,7 +201,7 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
@@ -535,11 +535,28 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.dispatch()
     return request
   }
-  function createRouteRequest(groupId, messages, reason) {
+  async function createRouteRequest(groupId, messages, reason) {
     const group = store.getGroup(groupId)
     messages = structuredClone(messages.map(({ facts, ...message }) => message))
     const request = { requestId: requestIdentity('route', { groupId, routingRevision: group.routingRevision, messages: messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })), reason }), groupId, routingRevision: group.routingRevision, messages, readOffsets: new Map(), ...(reason ? { reason } : {}) }
     routes.set(request.requestId, request)
+    // 仅复用已送达通知的精确来源关联；这只是缩小首屏，不替模型判定本次是否订正。
+    const quotedReminders = new Map()
+    try {
+      if (quotedReminderContext) await Promise.all(messages.filter(message => message.quotedMessage?.messageId).map(async message => {
+        const reminder = await quotedReminderContext({ groupId, messageId: message.messageId, messageVersion: message.messageVersion, actorId: message.senderOpenDingTalkId })
+        if (reminder) quotedReminders.set(message.messageId, { coordinationId: reminder.coordinationId, quotedMessageId: reminder.quotedMessageId })
+      }))
+    } catch (error) { if (routes.get(request.requestId) === request) routes.delete(request.requestId); throw error }
+    if (!live() || routes.get(request.requestId) !== request) return
+    const currentGroup = store.getGroup(groupId)
+    const currentMessages = messages.map(message => currentGroup?.messages.find(item => item.messageId === message.messageId)).filter(Boolean)
+    if (!currentGroup || request.routingRevision !== currentGroup.routingRevision || !sameVersions(messages, currentMessages)) {
+      routes.delete(request.requestId)
+      // await 期间的富化会使原快照失效；只重取原批次，后来的独立消息仍由提交后的调度接续。
+      if (currentGroup && currentMessages.length === messages.length) return createRouteRequest(groupId, currentMessages, reason)
+      return
+    }
     const allTopics = store.listTopics(groupId).filter(topic => !topic.mergedInto)
     const referencedIds = new Set(messages.flatMap(message => [message.messageId, message.quotedMessage?.messageId]).filter(Boolean))
     const relatedIds = new Set(allTopics.filter(topic => {
@@ -551,10 +568,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const allRelatedTopics = allTopics.filter(topic => relatedIds.has(topic.topicId)).map(({ topicId, revision, summary }) => ({ topicId, revision, summary: summary?.slice(0, 240) }))
     request.relatedTopics = allRelatedTopics
     const relatedTopics = boundedItems(allRelatedTopics, 3_000, 20)
-    const topics = boundedItems(allTopics.map(({ topicId, title, revision, status }) => ({ topicId, title, revision, status })), 5_000, 100)
+    const quotedReminderOnly = messages.length > 0 && quotedReminders.size === messages.length && allRelatedTopics.length === 0
+    const topics = quotedReminderOnly ? [] : boundedItems(allTopics.map(({ topicId, title, revision, status }) => ({ topicId, title, revision, status })), 5_000, 100)
     const visibleMessages = []
     for (const message of messages) {
-      const base = { ...message, text: '' }
+      const base = { ...message, ...(quotedReminders.has(message.messageId) ? { quotedReminder: quotedReminders.get(message.messageId) } : {}), text: '' }
       const remaining = ROUTE_CONTEXT_MAX_CHARS - JSON.stringify({ requestId: request.requestId, messages: [...visibleMessages, base], topics, relatedTopics }).length
       const size = Math.max(0, Math.min(message.text.length, remaining - 256))
       if (size === 0 && message.text.length) {
@@ -563,11 +581,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         continue
       }
       const complete = size === message.text.length
-      visibleMessages.push({ ...message, text: message.text.slice(0, size), ...(complete ? {} : { textOffset: 0, textTotal: message.text.length, textHasMore: true }) })
+      visibleMessages.push({ ...base, text: message.text.slice(0, size), ...(complete ? {} : { textOffset: 0, textTotal: message.text.length, textHasMore: true }) })
       request.readOffsets.set(message.messageId, size)
       if (!complete) continue
     }
     const envelope = { requestId: request.requestId, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length || visibleMessages.some((message) => message.textHasMore), topics, relatedTopics, totalRelatedTopics: allRelatedTopics.length, hasMoreRelatedTopics: relatedTopics.length < allRelatedTopics.length, nextRelatedTopicOffset: relatedTopics.length, totalTopics: allTopics.length, hasMoreTopics: topics.length < allTopics.length, nextTopicOffset: topics.length, ...(reason ? { reason } : {}) }
+    if (quotedReminders.size) envelope.quotedReminderGuide = 'quotedReminder 是 Host 按原生引用和已送达回执核验的原提醒，仅为关联背景，不代表本条消息必然订正。只改变原提醒的事项可交 coordination；新增或混合事项仍逐项判断，必要时用 group_topic_list 省略 requestId 查询完整话题目录。首屏省略目录不表示没有旧话题，不得自动把同人新要求归入旧提醒。'
     const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\nTopic 请求：${JSON.stringify(envelope)}\n目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用命中事项的首包；hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，才将可独立补充、取消、验收或反馈的事项归入已有 Topic 或新 Topic；优先复用确属同一事项的已有 Topic，只有独立新事项才新建。不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。四个验收项可属于同一回归事项，两个独立需求必须分别建事项；共同业务领域不是合并理由。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
     monitor(agent, request, routes)
     return envelope
@@ -597,7 +616,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       if (request.groupId === groupId && request.exhausted && !sameVersions(request.messages, pending)) routes.delete(id)
     }
     if (pending.length && ![...routes.values()].some((request) => request.groupId === groupId)) {
-      createRouteRequest(groupId, boundedItems(pending, 40_000, 50))
+      await createRouteRequest(groupId, boundedItems(pending, 40_000, 50))
     }
     const metadataMigrationPending = [...summaryMigrations.values(), ...titleMigrations.values()].some((request) => request.groupId === groupId)
     if (!metadataMigrationPending) {

@@ -80,3 +80,14 @@ native-quoted-reminder-regression,9,PASS,round-9.md
 change-recovery-native-store,9,PASS,round-9.md
 strict-known-unsent-and-alert-race,9,PASS,round-9.md
 package-native,9,PASS,round-9.md
+frozen-package-independent-recovery,9,PASS,round-9.md
+local-deployment,9,PASS,round-9.md
+live-known-unsent-no-resend,9,PASS,round-9.md
+live-recovery-health,9,PASS,round-9.md
+live-readable-failure-native-mention,9,PASS,round-9.md
+quoted-reminder-trusted-context,10,PASS,round-10.md
+quoted-reminder-route-and-races,10,PASS,round-10.md
+setter-recipient-separation,10,PASS,round-10.md
+recipient-change-on-demand,10,PASS,round-10.md
+quoted-reminder-real-model-one-call,10,PASS,round-10.md
+package-native-and-recipients,10,PASS,round-10.md

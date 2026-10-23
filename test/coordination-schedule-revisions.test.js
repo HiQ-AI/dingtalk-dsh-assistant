@@ -130,6 +130,7 @@ test('rescheduling a pending reminder supersedes the old slot and sends only the
   assert.equal(notification.payload.text, replacementText)
   assert.equal(notification.payload.sourceMessageId, 'correction-message', '订正后的提醒引用最新接纳来源')
   assert.equal(notification.payload.actorId, 'source-actor')
+  assert.deepEqual(notification.payload.atOpenDingTalkIds, ['first'], '设置者改期仍提醒原收件人，引用作者不能代替收件人')
   assert.equal((await f.query('notification.list')).length, 1)
   assert.deepEqual((await f.scan()).result.occurrences, [])
 })
