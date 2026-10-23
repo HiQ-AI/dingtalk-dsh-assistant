@@ -9,6 +9,7 @@ import { deliverTaskNotification, notificationRetryAt, safeNotificationDetail } 
 import { readTaskNotificationDelivery } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 import { formatTaskGroupReply } from '../packages/dingtalk-dsh-assistant/group-reply-format.js'
+import { persistedMentionSendRejectionProof } from '../packages/dingtalk-dsh-assistant/group-message.js'
 
 test('发送时间随送达回执持久保存，历史记录不以创建时间或回读时间冒充', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-19T02:25:00Z') })
@@ -38,6 +39,45 @@ async function fixture(t, text = 'done') {
   const read = async () => (await store.query({ kind: 'notification.list' }))[0]
   return { command, notification, read, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }) } }
 }
+
+test('原单成员占位符校验拒绝跨重启只结清failed，不回读不重发', async t => {
+  const f = await fixture(t), started = (await f.command('notification.start', { notificationId: f.notification.id })).result.notification
+  const failure = { phase: 'send', exitCode: 3, stdout: '', message: 'dws_send_failed:3', stderr: JSON.stringify({ error: {
+    category: 'validation', code: 3, message: '--at-open-dingtalk-ids 中的成员必须在正文中使用对应 <@openDingTalkId> 占位符；缺少: owner',
+  } }) }
+  await f.command('notification.receipt', { notificationId: started.id, dispatchToken: started.dispatchToken,
+    state: 'unknown', error: failure, nextAttemptAt: '2099-01-01T00:00:00Z' })
+  await f.reopen()
+  const original = await f.read()
+  assert.equal(persistedMentionSendRejectionProof(original).kind, 'dws-mention-validation-rejected')
+  const invalid = [
+    row => { row.ack = { openTaskId: 'accepted' } }, row => { row.receipt = { messageId: 'actual' } },
+    row => { row.sendAttemptCount = 2 }, row => { row.sendPermit.attempt = 2 },
+    row => { row.sendPermit.fence = 'other' }, row => { row.sendPermit.payloadDigest = 'a'.repeat(64) },
+    row => { row.sendPermit.notificationId = 'other' }, row => { row.deliveryError.phase = 'readback' },
+    row => { row.deliveryError.stdout = '{}' }, row => { row.deliveryError.exitCode = 1 },
+    row => { row.deliveryError.stderr = 'not-json' }, row => { row.deliveryError.message = 'send failed' },
+    row => { row.payload.atOpenDingTalkIds = ['owner', 'second'] }, row => { row.payload.atOpenDingTalkIds = ['other'] },
+    row => { row.payload.text = '<@owner> done' },
+    row => { row.deliveryError.stderr = JSON.stringify({ error: { category: 'validation', code: 3, message: 'other validation failure' } }) },
+  ]
+  for (const change of invalid) {
+    const row = structuredClone(original); change(row)
+    assert.equal(persistedMentionSendRejectionProof(row), undefined)
+  }
+  let sends = 0, reads = 0
+  const notifications = { async send() { sends++ }, async readback() { reads++ } }
+  await deliverTaskNotification({ notification: original, command: f.command, notifications })
+  await f.reopen()
+  const failed = await f.read()
+  assert.equal(failed.state, 'failed'); assert.equal(failed.sendAttemptCount, 1)
+  assert.equal(failed.deliveryError.knownNotSent, true); assert.equal(failed.deliveryError.retryable, false)
+  assert.equal(failed.deliveryError.stderr, failure.stderr)
+  assert.equal(failed.deliveryError.proof.kind, 'dws-mention-validation-rejected')
+  assert.match(failed.evidenceRef, /^notification-readback:/u)
+  await deliverTaskNotification({ notification: failed, command: f.command, notifications })
+  assert.equal(sends, 0); assert.equal(reads, 0)
+})
 
 test('acceptance ack is durable before readback; readback errors survive restart and never resend', { timeout: 10000 }, async t => {
   const f = await fixture(t), ack = { sendReceipt: { openTaskId: 'accepted-operation' } }

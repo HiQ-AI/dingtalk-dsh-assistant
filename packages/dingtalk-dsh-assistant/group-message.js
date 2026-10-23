@@ -150,3 +150,26 @@ export function persistedUuidSendRejectionProof(notification) {
     origin: error.origin, operation: error.operation, stage: error.stage, reason: error.reason,
     serverErrorCode: error.server_error_code, maximumLength: 128, actualLength: id.length, errorMessage: message }
 }
+
+/** 已观察到的单成员 CLI 占位符校验在发送前拒绝；历史通知只能结清失败，不能自动补发。 */
+export function persistedMentionSendRejectionProof(notification) {
+  const id = notification?.id, permit = notification?.sendPermit, failure = notification?.deliveryError
+  const mentions = notification?.payload?.atOpenDingTalkIds
+  if (notification?.state !== 'unknown' || notification.sendAttemptCount !== 1
+    || notification.ack != null || notification.receipt != null || typeof id !== 'string' || !id.trim()
+    || !/^[a-f0-9]{64}$/u.test(notification.payloadDigest ?? '') || permit?.notificationId !== id
+    || permit.payloadDigest !== notification.payloadDigest || permit.attempt !== 1
+    || typeof notification.dispatchToken !== 'string' || !notification.dispatchToken.trim() || permit.fence !== notification.dispatchToken
+    || failure?.phase !== 'send' || failure.exitCode !== 3 || failure.stdout !== ''
+    || !['dws_send_failed:3', 'dws_reply_failed:3'].includes(failure.message)
+    || !Array.isArray(mentions) || mentions.length !== 1 || typeof mentions[0] !== 'string' || !mentions[0]
+    || /[\s,<>]/u.test(mentions[0]) || typeof notification.payload.text !== 'string'
+    || notification.payload.text.includes(`<@${mentions[0]}>`)) return undefined
+  let error
+  try { error = JSON.parse(failure.stderr)?.error } catch { return undefined }
+  const message = `--at-open-dingtalk-ids 中的成员必须在正文中使用对应 <@openDingTalkId> 占位符；缺少: ${mentions[0]}`
+  if (error?.category !== 'validation' || error.code !== 3 || error.message !== message
+    || Object.keys(error).sort().join(',') !== 'category,code,message') return undefined
+  return { kind: 'dws-mention-validation-rejected', notificationId: id, payloadDigest: notification.payloadDigest,
+    attempt: 1, fence: permit.fence, category: error.category, code: error.code, errorMessage: message }
+}

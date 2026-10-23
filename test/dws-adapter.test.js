@@ -77,7 +77,7 @@ test('Task完成通知使用DWS原生引用回复并@提出人', async () => {
   assert.equal(request.replyToMessageId, 'm-source')
 })
 
-test('普通提醒和引用通知都将来源openDingTalkId送入DWS原生参数且正文不拼人员标识', async () => {
+test('普通群发仅传输正文编码原生提及，引用交由DWS补齐且持久业务正文不变', async () => {
   const commands = [], text = '提醒你查看云端专家的开发进度。'
   const recipients = ['open-person-a', 'open-person-b'], before = [...recipients]
   const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, profile: 'corp:user', runner: { run: async args => {
@@ -89,7 +89,7 @@ test('普通提醒和引用通知都将来源openDingTalkId送入DWS原生参数
     await sendWorkflowNotification(adapter, notification)
     const args = commands.at(-1)
     assert.equal(args[args.indexOf('--at-open-dingtalk-ids') + 1], recipients.join(','))
-    assert.equal(args[args.indexOf(quoted ? '--content' : '--text') + 1], text)
+    assert.equal(args[args.indexOf(quoted ? '--content' : '--text') + 1], quoted ? text : `<@open-person-a> <@open-person-b> ${text}`)
     assert.equal(args.includes('--at-user-ids'), false)
     assert.equal(args.includes('--at-all'), false)
     assert.deepEqual(args.slice(-2), ['--profile', 'corp:user'])
@@ -109,9 +109,13 @@ test('普通与引用发送空提及不添加任何@参数，非法列表在调�
   const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => { calls++; return { exitCode: 0, stdout: '{}' } } } })
   const request = { groupId: 'group-id', text: '核验完成。', idempotencyKey: 'notice-id', replyToMessageId: 'source-message', replyToSenderOpenDingTalkId: 'open-person-a' }
   for (const compile of [args => adapter.compileGroupSend(args), args => adapter.compileGroupReply(args)]) {
-    for (const atOpenDingTalkIds of [undefined, []]) assert.equal(compile({ ...request, atOpenDingTalkIds }).some(arg => arg.startsWith('--at-')), false)
+    for (const atOpenDingTalkIds of [undefined, []]) {
+      const args = compile({ ...request, atOpenDingTalkIds })
+      assert.equal(args.some(arg => arg.startsWith('--at-')), false)
+      assert.equal(args[args.indexOf(args.includes('--content') ? '--content' : '--text') + 1], request.text)
+    }
   }
-  for (const atOpenDingTalkIds of [null, 'open-person-a', {}, [null], [42], [''], [' '], ['open,a'], ['open a'], ['open\na'], ['"open"']]) {
+  for (const atOpenDingTalkIds of [null, 'open-person-a', {}, [null], [42], [''], [' '], ['open,a'], ['open a'], ['open\na'], ['"open"'], ['open>'], ['<open'], ['open@all']]) {
     await assert.rejects(adapter.sendGroup({ ...request, atOpenDingTalkIds }), /dws_at_open_dingtalk_ids_invalid/u)
     await assert.rejects(adapter.sendGroupReply({ ...request, atOpenDingTalkIds }), /dws_at_open_dingtalk_ids_invalid/u)
   }

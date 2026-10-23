@@ -31,6 +31,20 @@
 
 同组串行 `node --test --test-concurrency=1 test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js` 最终 14/14 PASS、0 失败/取消/跳过，总 46.960 秒；实际任务 21.267 秒、resident 6.983 秒。证据 `release-smoke-serial.log`，原超时仍保留。
 
-候选部署与真实群原生提及仍待验证；测试不替代这两层证据。
+真实群原生提及仍待验证；测试和部署健康不替代该证据。
+
+最终状态：真实 C 验收未通过原生提及发送。用户 17:50:48/17:50:53 两条输入正确合并，旧澄清未发送；17:51:29 回复 17:57 提醒，约 36 秒可见、38.767 秒核验。用户 17:52:01 再说“提前三分钟”，17:52:42 正确改原计划为 17:54，约 41 秒可见，文案简洁且无内部标识。
+
+17:54 的提醒在 17:54:20.812 接纳、17:54:23.366 准备，随后 CLI 以缺原生提及占位符拒绝（exit 3、validation），没有发送回执。新包只验证参数透传，遗漏 CLI 的内容约束；这是本轮实现/验收缺口，不能归因于网络。另真实恢复暴露不存在的 schedule.get 查询以及已送达后旧快照多余回读的告警。现场记录 `live-c-4.json`、`c-due-notification.json`、`due-recovery-issues.json`，后续改用已有原生引用链路，见第 9 轮。
+
+### 受控部署
+
+已将候选提交 `0c1b5d10463057f424f0e721a5deacb19f001119` 部署到本机；PR #255 仍为 OPEN。先零写入、零信号 Check，确认 59 个原生会话已排空、未知操作/通知为 0，再原生退出和双包安装。Assistant 包 SHA256 `8628a0f644ed9098d723ae7db1abaabb8207c3fa560bb61c4193d4e1331459ac`，Observer `88a51be3b4d532da19740620512daa26c7c36e377a550563ba660aca06a61396`；均为 2.1.0。
+
+17:50:20 独立回读：旧进程退出，新 PID 44488 同时持有 3080/18998，两包摘要一致，profile 不变，health=ok、recoveryIssueCount=0、DWS healthy、入站启用、匿名 Web=401。证据 `packages.json`、`deployment/`、`independent-deployment-readback.json`。A/B 历史通知数量、正文、状态、发送次数和送达时间均与部署前一致，未因新文案重发，见 `history-no-resend.json`。
+
+### 原失败记录只读重排版
+
+从当前数据库以 `readOnly + query_only` 读取原失败安排的权威聚合快照，调用新 formatter，正文为：“原定于2026年10月23日 16:22（北京时间）的提醒通知发送失败，送达情况需要核查。提醒内容：请查看提醒订正验收结果（部署验收1023A）。” 已知协调、计划、实例、收件人身份校验通过；业务写入与外发均为 0。证据 `old-failure-new-format.json`，这是同一事实的本地展示验证，不冒充重新发送成功。
 
 原始命令输出和消息采样保存在本机 `round-8/`，真实人员/群/消息身份不提交到仓库。

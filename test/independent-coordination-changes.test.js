@@ -261,6 +261,37 @@ test('chat schedule query explains the agreed time and expired outcome and prese
   assert.deepEqual(await f.query('task.list'),before);assert.deepEqual(f.errors,[])
 })
 
+for (const loseAckAt of [undefined, 'coordination.change']) test(`提醒改期重启通过真实查询恢复，保留既有冻结确认: ${loseAckAt ?? 'prepared'}`, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-23T07:11:00Z') })
+  const f = await fixture(t, { loseAckAt }), original = await f.message('reminder-plan', '15:20提醒我查看进度')
+  const accepted = await f.service.submit(original, { kind: 'schedule', actionKind: 'message-reminder', timezone: 'Asia/Shanghai',
+    rule: { kind: 'once', at: '2026-10-23T07:20:00Z' }, recipientIds: ['author'], reminderText: '查看进度。', interpretation: '当天提醒' })
+  const schedule = (await f.query('coordination.schedule.list', { coordinationId: accepted.coordinationId }))[0]
+  const followup = await f.message('reminder-retime', '提前三分钟')
+  await f.service.context(followup, { coordinationIds: [accepted.coordinationId] })
+  const proposal = { kind: 'schedule-change', coordinationId: accepted.coordinationId, expectedRevision: 1,
+    scheduleId: schedule.id, expectedScheduleRevision: 1, rule: { kind: 'once', at: '2026-10-23T07:17:00Z' }, reason: '用户订正提醒时间' }
+  if (loseAckAt) await assert.rejects(f.service.submit(followup, proposal), { code: 'DYNAMIC_COMMIT_ACK_UNKNOWN' })
+  else await f.service.submit(followup, proposal)
+  const frozen = await f.query('notification.list'), tasks = await f.query('task.list')
+  assert.equal(frozen.filter(item => item.payload.sourceMessageId === 'reminder-retime').length, loseAckAt ? 0 : 1)
+  await f.restart(); await f.service.recoverGroup('group')
+  assert.deepEqual(f.errors, [], '真实 store 查询不允许隐藏 DYNAMIC_QUERY_UNKNOWN')
+  const restored = (await f.query('notification.list')).filter(item => item.payload.sourceMessageId === 'reminder-retime')
+  assert.equal(restored.length, 1)
+  assert.equal(restored[0].payload.text, `已将提醒时间改为${formatCoordinationTime('2026-10-23T07:17:00Z')}：查看进度。`)
+  for (const before of frozen) {
+    const after = await f.query('notification.get', { notificationId: before.id })
+    assert.equal(after.payloadDigest, before.payloadDigest); assert.deepEqual(after.payload, before.payload)
+  }
+  assert.equal((await f.query('coordination.schedule.list'))[0].revision, 2)
+  assert.equal((await f.query('coordination.source', { unitId: followup.unitId, revision: followup.unitRevision })).state, 'accepted')
+  assert.equal(f.resident.getSourceDispatchOwnership('group', followup.unitId, followup.unitRevision).settled, true)
+  await f.service.recoverGroup('group')
+  assert.deepEqual((await f.query('notification.list')).filter(item => item.payload.sourceMessageId === 'reminder-retime'), restored)
+  assert.deepEqual(await f.query('task.list'), tasks); assert.deepEqual(f.errors, [])
+})
+
 test('resolving one of several pending members settles neither the other ambiguity nor its original source', async t => {
   const f=await fixture(t),original=await f.message('two-missing','分别给两个同名任务补充材料')
   const pending=['first','second'].map((clarificationId,index)=>({clarificationId,question:`第${index+1}项具体是哪个任务？`,candidates:['A','B']}))

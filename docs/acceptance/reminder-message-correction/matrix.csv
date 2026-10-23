@@ -70,3 +70,13 @@ notification-regression,8,PASS,round-8.md
 release-smoke-parallel,8,FAIL,round-8.md
 release-smoke-serial,8,PASS,round-8.md
 suite-map,8,PASS,round-8.md
+local-deployment,8,PASS,round-8.md
+live-correction-and-relative-change,8,PASS,round-8.md
+live-readable-confirmation,8,PASS,round-8.md
+live-native-mention-and-due-delivery,8,FAIL,round-8.md
+live-change-recovery,8,FAIL,round-8.md
+live-delivered-alert-cleanup,8,FAIL,round-8.md
+native-quoted-reminder-regression,9,PASS,round-9.md
+change-recovery-native-store,9,PASS,round-9.md
+strict-known-unsent-and-alert-race,9,PASS,round-9.md
+package-native,9,PASS,round-9.md

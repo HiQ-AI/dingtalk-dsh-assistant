@@ -19,11 +19,11 @@ export function dwsIdempotencyKey(value) {
   return value.length <= DWS_UUID_MAX_LENGTH ? value : `dsh:sha256:${createHash('sha256').update(value).digest('hex')}`
 }
 
-/** 只编码来源已核实的 openDingTalkId；拒绝会改变 CLI 列表含义的空白、逗号和引号。 */
+/** 只编码来源已核实的 openDingTalkId；拒绝改变列表或原生提及占位符含义的字符。 */
 function nativeMentionIds(values) {
   if (!Array.isArray(values)) throw new Error('dws_at_open_dingtalk_ids_invalid')
   for (const value of values) {
-    if (typeof value !== 'string' || !value || /[\s,"\u0000-\u001f\u007f]/u.test(value)) throw new Error('dws_at_open_dingtalk_ids_invalid')
+    if (typeof value !== 'string' || !value || /[\s,"<>@\u0000-\u001f\u007f]/u.test(value)) throw new Error('dws_at_open_dingtalk_ids_invalid')
   }
   return values.join(',')
 }
@@ -148,8 +148,10 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       return withProfile(['chat', '+chat-messages', '--group', assertStableId(groupId, 'group_id'), '--start', assertStableId(start, 'start'), '--end', assertStableId(end, 'end'), '--order', 'asc', '--page-all', '--page-limit', '50', '--format', 'json'])
     },
     compileGroupSend({ groupId, text, idempotencyKey, atOpenDingTalkIds = [] }) {
-      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       const mentions = nativeMentionIds(atOpenDingTalkIds)
+      // 普通发送要求原生占位符；仅编码传输正文，不改持久业务正文。引用回复由 DWS 原生补齐。
+      const content = mentions ? `${atOpenDingTalkIds.map(id => `<@${id}>`).join(' ')} ${assertStableId(text, 'text')}` : assertStableId(text, 'text')
+      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', content, '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (mentions) args.push('--at-open-dingtalk-ids', mentions)
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)

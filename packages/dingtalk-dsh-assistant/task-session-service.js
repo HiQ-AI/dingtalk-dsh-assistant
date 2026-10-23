@@ -1186,6 +1186,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         }
       }
       await projectTaskNotification({ residentStore, notification })
+      // 投影的 await 期间原投递可能已完成；使用命令更新的当前态，不能再按旧 starting 快照回读。
+      notification = notificationCache.get(notification.id) ?? notification
+      if (notification.state === 'delivered' && failures.get(notification.id)?.code === 'TASK_NOTIFICATION_INCOMPLETE_READBACK')
+        failures.delete(notification.id)
       if (['prepared', 'failed'].includes(notification.state) && (previousOutbound?.supersededByOutboundId || previousOutbound?.status === 'superseded' || previousOutbound?.recallStatus)) continue
       if (notification.state === 'delivered' || notification.state === 'failed' && !(notification.deliveryError?.knownNotSent && notification.deliveryError?.retryable)
         || inflightNotifications.size > 0 || Date.now() < notificationTransportRetryAt || !retryReady(notification.id) || Date.parse(notification.nextAttemptAt ?? '') > Date.now() || inflightNotifications.has(notification.id) || attempted?.has(notification.id)) continue

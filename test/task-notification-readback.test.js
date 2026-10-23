@@ -31,6 +31,10 @@ test('native quote and mention must be verified independently of text', () => {
   const verify = value => verifyTaskNotificationReadback(notification, value, { acknowledgedMessageId: 'm' })
   assert.ok(verify(observed))
   assert.ok(verify({ ...observed, atOpenDingTalkIds: undefined, mentions: [{ openDingTalkId: 'u', userId: 'different-user-id' }] }))
+  const rendered = { ...observed, text: '@张三 核验完成。', quotedMessage: { ...observed.quotedMessage, sender: '张三' } }
+  assert.ok(verify(rendered), '原生提及渲染后仍比较持久业务正文，不把传输占位符写回通知')
+  assert.equal(notification.payload.text, '核验完成。')
+  assert.equal(verify({ ...rendered, text: '@张三 核验失败。' }), undefined)
   for (const mentions of [['u'], [{ userId: 'u' }], [null], [{}], [42]])
     assert.equal(verify({ ...observed, atOpenDingTalkIds: undefined, mentions }), undefined)
   for (const change of [{quotedMessage: undefined}, {quotedMessage:{messageId:'other',conversationId:'g'}}, {quotedMessage:{messageId:'s',conversationId:'other'}}, {atOpenDingTalkIds:undefined}, {atOpenDingTalkIds:['other']}, {conversationId:'other'}]) assert.equal(verify({...observed,...change}),undefined)

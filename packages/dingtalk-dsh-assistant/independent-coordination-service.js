@@ -233,7 +233,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
   }
   async function acceptanceText(proposal, memberCount, result = {}) {
     const schedule = proposal?.kind === 'schedule-change' ? result.schedule
-      ?? await query('coordination.schedule.get', { scheduleId: proposal.scheduleId }) : undefined
+      ?? (await query('coordination.schedule.list', { coordinationId: proposal.coordinationId })).find(item => item.id === proposal.scheduleId) : undefined
     const occurrence = proposal?.kind === 'occurrence-control' ? result.occurrence
       ?? await query('coordination.occurrence.get', { occurrenceId: proposal.occurrenceId }) : undefined
     return formatCoordinationAcceptance(proposal, { memberCount, schedule, occurrence })

@@ -1,4 +1,4 @@
-import { quotedSendRejectionProof, persistedUuidSendRejectionProof } from './group-message.js'
+import { quotedSendRejectionProof, persistedUuidSendRejectionProof, persistedMentionSendRejectionProof } from './group-message.js'
 import { createHash } from 'node:crypto'
 
 // Diagnostics are bounded and scrubbed before they cross the durable/UI boundary.
@@ -37,11 +37,11 @@ const knownPreSendRejection = (error, notification) => error.knownNotSent === tr
 
 export async function deliverTaskNotification({ notification, notifications, command }) {
   if (!notifications || notification.state === 'delivered') return
-  const uuidRejection = persistedUuidSendRejectionProof(notification)
-  if (uuidRejection) {
+  const persistedRejection = persistedUuidSendRejectionProof(notification) ?? persistedMentionSendRejectionProof(notification)
+  if (persistedRejection) {
     // 原尝试的完整参数拒绝证据只能结清为未发送失败，不能借升级重放历史提醒。
     await command('notification.reconcile', { notificationId: notification.id, state: 'failed', receipt: null,
-      error: { ...notification.deliveryError, knownNotSent: true, retryable: false, proof: uuidRejection }, evidenceRef: evidence(uuidRejection) })
+      error: { ...notification.deliveryError, knownNotSent: true, retryable: false, proof: persistedRejection }, evidenceRef: evidence(persistedRejection) })
     return
   }
   if (notification.state === 'unknown' && !notification.ack && !notification.receipt && notification.deliveryError?.phase === 'send'

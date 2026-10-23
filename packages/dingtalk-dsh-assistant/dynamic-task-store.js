@@ -474,8 +474,14 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (occurrence.notificationId) return changed({ notification: get('dynamic_notifications', occurrence.notificationId) })
       occurrence.resultVersion ??= 1
       const notificationId = `coordination:${occurrence.coordinationId}:${occurrence.id}:result:${occurrence.resultVersion}`
+      // 提醒沿已接纳来源回复，复用任务的原生引用与提及；已冻结通知在上方直接返回，不改写历史 payload。
+      const source = occurrence.action.kind === 'message-reminder'
+        ? get('dynamic_coordination_sources', get('dynamic_coordination', occurrence.coordinationId).sourceId, true) : null
+      const reply = source?.sourceMessageId && source.actorId && source.groupId === occurrence.target.conversationId
+        ? { sourceMessageId: source.sourceMessageId, actorId: source.actorId } : {}
       const notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
         payload: { kind: 'coordination', replyKind: 'substantive', conversationId: occurrence.target.conversationId, atOpenDingTalkIds: occurrence.target.recipientIds,
+          ...reply,
           text: occurrence.action.kind === 'message-reminder' ? occurrence.result.text : JSON.stringify(occurrence.result), fact: { coordinationId: occurrence.coordinationId, eventId: `${occurrence.id}:result:${occurrence.resultVersion}`,
             occurrenceId: occurrence.id, instanceControlRevision: occurrence.instanceControlRevision,
             deliveryControlRevision: occurrence.deliveryControlRevision, resultVersion: occurrence.resultVersion, resultDigest: digest(occurrence.result) } } }, commandId)
