@@ -1,0 +1,26 @@
+{
+  "wrapperPid": 86448,
+  "modelCalls": 0,
+  "cases": [
+    {
+      "argument": "--help",
+      "pid": 15312,
+      "outcome": {
+        "exitCode": 0,
+        "signal": null
+      },
+      "bytes": 15674,
+      "status": "PASS"
+    },
+    {
+      "argument": "--version",
+      "pid": 60620,
+      "outcome": {
+        "exitCode": 0,
+        "signal": null
+      },
+      "bytes": 62,
+      "status": "PASS"
+    }
+  ]
+}

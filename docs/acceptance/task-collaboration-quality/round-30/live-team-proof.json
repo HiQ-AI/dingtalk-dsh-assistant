@@ -1,0 +1,167 @@
+{
+  "status": "PASS",
+  "startedAt": "2026-10-23T07:12:32.552Z",
+  "completedAt": "2026-10-23T07:22:45.121Z",
+  "sources": {
+    "packages/dingtalk-dsh-assistant/claude-execution-session.js": "fef786be61417bcaf2f6d42134bd5a30a80efdd284649e3a5a26da87fc0cc415",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "7489274835a7bba3f493e09a8251de28ef30cb72cc3d97f7b71e56bd14218ae7",
+    "packages/dingtalk-dsh-assistant/session-workspaces.js": "3caf64e263022586d9bdd563c4ddfcbb7dcdff9cff114c52f432323e615061d9",
+    "docs/acceptance/task-collaboration-quality/scripts/verify-interactive-claude-team.mjs": "0d36873ad1117b80f65f81af9b47189cbd5639b59637a93ff5756d894d3302db"
+  },
+  "wrapperPid": 41860,
+  "launches": [
+    {
+      "sessionId": "a62d9182-8ad3-41ec-aaff-cf94e73bd152",
+      "resume": null,
+      "interactive": true,
+      "pid": 86204,
+      "outcome": {
+        "exitCode": 0,
+        "signal": null
+      }
+    },
+    {
+      "sessionId": null,
+      "resume": "a62d9182-8ad3-41ec-aaff-cf94e73bd152",
+      "interactive": true,
+      "pid": 35408,
+      "outcome": {
+        "exitCode": 0,
+        "signal": null
+      }
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "binding": {
+        "kind": "task-execution",
+        "taskId": "interactive-team-live",
+        "executionId": "4121335d-089d-45ef-a9cc-ba04b004bc33",
+        "requirementRevision": 1,
+        "controlRevision": 1,
+        "inputDigest": "b50be45c67c3cd7a66867c99d2b2c54db33a799ddb755ea970a5756d0b3a94ef",
+        "sessionId": "task-execution-a62d9182-8ad3-41ec-aaff-cf94e73bd152",
+        "sessionBound": false,
+        "leaseEpoch": 1,
+        "inputVersion": 1,
+        "claudeSessionMode": "interactive-team-v1",
+        "inputHistory": []
+      },
+      "status": "PASS",
+      "progressSequence": 5,
+      "members": [
+        {
+          "agentId": "acalc-22c3f82c70878201",
+          "name": "calc",
+          "teamName": "session-0f578072",
+          "relativePath": "outputs/4121335d-089d-45ef-a9cc-ba04b004bc33/round-1-lease-1/acalc-22c3f82c70878201.md"
+        },
+        {
+          "agentId": "acheck-6d276b450fff22d5",
+          "name": "check",
+          "teamName": "session-0f578072",
+          "relativePath": "outputs/4121335d-089d-45ef-a9cc-ba04b004bc33/round-1-lease-1/acheck-6d276b450fff22d5.md"
+        }
+      ],
+      "output": {
+        "artifacts": [],
+        "evidence": [
+          "通过 Agent 分别创建名为 calc、check 的 dsh-worker 原生队友；calc 负责计算，check 负责独立核算并分别向 calc 与 main 发消息。",
+          "calc → main 实际消息：「calc 初始计算结果：37×19＝703。心算步骤：37×(20−1)＝740−37＝703。」",
+          "check → main 实际消息：「独立核算完成：37×19＝703。先自行心算：37×(20−1)＝740−37＝703；未依赖 calc 的结果。已分别发送给 calc 和 main，现保持可接收消息，等待 shutdown_request。」",
+          "calc → main 实际消息：「calc 已收到 check 的独立核算结果并向 check 确认收到。双方结论一致：37×19＝703；双方心算均为 37×(20−1)＝740−37＝703。本轮计算与协作汇报完成，等待 shutdown_request。」",
+          "分别仅发送一次原生 shutdown_request：calc 的 request_id 为 shutdown-1792739689625@calc；check 的 request_id 为 shutdown-1792739696383@check。",
+          "关闭请求发出后的原生 ListAgents 只读状态：先仅剩 calc 一名 Teammate，随后无 Teammates 区块，仅有 Peer sessions；本轮 calc、check 均已不在活动团队，确认团队排空。未向外部 peer 会话发消息。"
+        ],
+        "limitations": [
+          "本轮仅验证纯算术、原生队友协作通信及团队排空；无业务验证。",
+          "未使用 Bash、PowerShell、文件写入、Web 或外部会话；未另建 DSH 执行。"
+        ],
+        "status": "completed",
+        "summary": "完成 calc/check 两名 dsh-worker 原生队友的计算、独立核算与交叉沟通验收：37×19＝703。双方均明确报告703，check向calc与main发送结论，calc确认收到且一致；向两人各发送一次关闭请求后，原生成员名单为空，团队已排空。未自行退出CLI，由Host负责退出。"
+      },
+      "drained": true
+    },
+    {
+      "round": 2,
+      "binding": {
+        "kind": "task-execution",
+        "taskId": "interactive-team-live",
+        "executionId": "4121335d-089d-45ef-a9cc-ba04b004bc33",
+        "requirementRevision": 1,
+        "controlRevision": 1,
+        "inputDigest": "48b3cc92636ab2a8ae30385dbb3a880406b59fabf066d816bad61a09ba7ef652",
+        "sessionId": "task-execution-a62d9182-8ad3-41ec-aaff-cf94e73bd152",
+        "sessionBound": true,
+        "leaseEpoch": 2,
+        "inputVersion": 2,
+        "claudeSessionMode": "interactive-team-v1",
+        "inputHistory": [
+          {
+            "inputVersion": 1,
+            "inputDigest": "b50be45c67c3cd7a66867c99d2b2c54db33a799ddb755ea970a5756d0b3a94ef",
+            "requirementRevision": 1,
+            "controlRevision": 1
+          }
+        ]
+      },
+      "status": "PASS",
+      "progressSequence": 3,
+      "members": [],
+      "output": {
+        "artifacts": [],
+        "evidence": [
+          "已读取 round-1.md 与 round-2.md：两轮 executionId 均为 4121335d-089d-45ef-a9cc-ba04b004bc33，sessionId 均为 task-execution-a62d9182-8ad3-41ec-aaff-cf94e73bd152；inputVersion 从1变为2、leaseEpoch从1变为2。",
+          "round-1.md:18 显示 status=succeeded，round-1.md:19 显示 drained=true；本轮命令探针后再次只读读取 round-1.md:58，第一轮703结果与calc/check消息证据仍保留。",
+          "PowerShell 调用 hostname.exe 被 PreToolUse 门禁拒绝，实际错误包含 actual='hostname.exe'、expected=\"Write-Output 'DSH_CLAUDE_PTY_OK'\"；未更换通道重试被拒命令。",
+          "按门禁指定执行 PowerShell 命令 Write-Output 'DSH_CLAUDE_PTY_OK'，实际输出：DSH_CLAUDE_PTY_OK。",
+          "本轮原生 ListAgents 只读结果没有 Teammates 区块，仅列 Peer sessions；未创建新队友，未重复发送关闭请求，未联系外部会话。",
+          "最新 execution_feedback_read 返回 feedback=[]，本轮未收到追加事项。"
+        ],
+        "limitations": [
+          "无业务验证；本轮仅核对续办身份、历史文档内容保留及Windows命令门禁的一个拒绝样例和一个允许探针，不代表完整门禁覆盖。",
+          "续办身份依据Host文档中的executionId/sessionId及本对话上下文；未独立核验底层CLI进程或原生会话UUID。",
+          "第一轮文档以只读内容核对确认仍保留，未作字节级哈希比对；全部执行文档由Host维护，本轮未手动修改文件。"
+        ],
+        "status": "completed",
+        "summary": "完成第二轮原会话续办核验：两轮Host执行及会话标识一致，第一轮文档仍保留703计算及协作结果。Windows命令门禁拒绝hostname.exe，指定PowerShell探针成功输出DSH_CLAUDE_PTY_OK。当前无活动原生队友，已报告实际证据；不自行退出CLI，后续由Host负责。"
+      },
+      "drained": true
+    }
+  ],
+  "operations": [
+    {
+      "operationId": "operation-1774fdb944b2799c4dcfbdad4589294be2798991",
+      "state": "succeeded",
+      "definition": {
+        "argumentsDigest": "ff3a1277e9e7564dde57e5b0e09175f2bf855026194d00da9af21c6e8f5f809e",
+        "effectClass": "unknown",
+        "toolName": "PowerShell"
+      },
+      "result": {
+        "callId": "call_19ff79f4a05c4cb3bbce2e16e7593513",
+        "isError": false,
+        "resultDigest": "39eecbaeca9685136b623e1d6f5ff4a5b28d956b7a4da16e989605eabeeef461",
+        "toolName": "PowerShell"
+      }
+    }
+  ],
+  "independentProcessReadback": [
+    {
+      "pid": 41860,
+      "alive": false
+    },
+    {
+      "pid": 86204,
+      "alive": false
+    },
+    {
+      "pid": 35408,
+      "alive": false
+    }
+  ],
+  "historyShaVerifiedByScript": true,
+  "leadReceiptVerifiedByScript": true,
+  "limitation": "隔离真实Claude与真实PTY，未连接钉钉业务出口；第二轮hostname误调用被拒，指定探针成功。"
+}

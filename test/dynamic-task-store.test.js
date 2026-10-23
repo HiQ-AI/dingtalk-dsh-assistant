@@ -16,6 +16,9 @@ test('执行后端固定于创建定义，续办及重启不改派；CLI反馈�
     const key = backend ?? 'historical'
     const dispatched = (await f.command('execution.dispatch', { binding: owner.binding, key, prompt: '核验', ...(backend ? { definition: { executionBackend: backend } } : {}) })).result.execution
     const binding = (await f.command('execution.claim', { executionId: dispatched.executionId })).result.binding
+    assert.equal(dispatched.claudeSessionMode, backend === 'claude-code' ? 'interactive-team-v1' : undefined)
+    assert.equal(binding.claudeSessionMode, dispatched.claudeSessionMode)
+    await assert.rejects(f.command('execution.result', { binding: { ...binding, claudeSessionMode: 'forged-mode' }, output: {} }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
     await f.command('execution.feedback', { binding: owner.binding, executionId: dispatched.executionId, messageId: key, text: '核对同一版本' })
     await f.command('execution.feedbackConsumed', { binding, messageId: key, sequence: 3 })
     await f.command('execution.result', { binding, output: {}, feedbackVersion: 1 })
@@ -24,6 +27,7 @@ test('执行后端固定于创建定义，续办及重启不改派；CLI反馈�
     assert.equal(next.definition.executionBackend, backend)
     assert.equal(next.sessionId, dispatched.sessionId)
     assert.equal(next.inputVersion, 2)
+    assert.equal(next.claudeSessionMode, dispatched.claudeSessionMode)
     const feedback = next.feedback[0]
     assert.equal(feedback.consumptionMeaning, backend === 'claude-code' ? 'claude-cli-input-admission' : 'native-model-step-admission')
     assert.equal(!!feedback.modelStepEnteredAt, backend !== 'claude-code')

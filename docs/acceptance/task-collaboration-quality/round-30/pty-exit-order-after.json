@@ -1,0 +1,24 @@
+{
+  "wrapperPid": 79436,
+  "cases": [
+    {
+      "expected": 0,
+      "outcome": {
+        "exitCode": 0
+      },
+      "nativeCallbacksAtExit": [
+        0
+      ]
+    },
+    {
+      "expected": 7,
+      "outcome": {
+        "exitCode": 7
+      },
+      "nativeCallbacksAtExit": [
+        0,
+        7
+      ]
+    }
+  ]
+}

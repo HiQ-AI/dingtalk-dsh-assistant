@@ -1,0 +1,77 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (951.4965ms)
+✔ CLI exit zero cannot replace Host submit (934.0251ms)
+✔ CLI exit zero cannot replace submit tool result (1126.6272ms)
+✔ CLI wrong provider session fails without binding or accepting a result (1461.4283ms)
+✔ CLI stale lease before permission denies real file mutation (1292.6471ms)
+✔ CLI operation gate failure denies a mutation before the child writes it (1276.5237ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (1464.649ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (2516.3782ms)
+✔ CLI malformed hook event fails with zero acceptance and retained diagnostic log (11211.0374ms)
+✔ CLI real file mutation is accounted before write and settled after its observed result (1380.7691ms)
+✔ CLI interrupted real mutation retains unknown effect while physical process drain remains provable (1123.7065ms)
+✔ CLI feedback ACK alone rejects final submit (1259.0132ms)
+✖ CLI feedback ACK plus explicit review admits final submit (7143.0784ms)
+✔ CLI progress uses current lease and the exact stored observation contract (1380.1698ms)
+✔ CLI recovery requires a durable drain record and never launches work from an unfinished prefix (1404.78ms)
+✔ CLI cancellation during pending resolve cannot leave a late process running (131.2946ms)
+✔ CLI cancellation during pending spawn cannot leave a late process running (780.7531ms)
+✔ CLI cancellation waits for an already admitted MCP callback to finish (1176.2282ms)
+✔ CLI history from a different session is rejected before spawn and remains unchanged (1180.2786ms)
+✖ CLI old planned native call cannot use a later feedback read to mutate files (7137.5381ms)
+✔ CLI repeated native call identity does not replay a successful file effect (1234.2205ms)
+✔ CLI executable unavailable before init retries the original UUID with session-id instead of resume (1755.0448ms)
+✔ CLI journal rejects hardlink without modifying its target or spawning (51.043ms)
+✔ CLI journal rejects junction without modifying its target or spawning (37.9606ms)
+✔ CLI unproven process drain retains the execution slot and never accepts the result (1188.5601ms)
+✔ CLI structured background receipt is unknown instead of a successful completed operation (1638.7243ms)
+✔ Interactive Claude refuses an unmarked historical headless execution before spawning (14.839ms)
+✔ Interactive Lead records native teammate responsibility and waits for shutdown approval (2068.509ms)
+✔ Interactive team rejects external peer (1322.9342ms)
+✔ Interactive team rejects background teammate (1116.5926ms)
+✔ Interactive team rejects worktree teammate (1118.5579ms)
+✔ Interactive member startup racing Agent Post waits for admitted native identity (1325.6959ms)
+✔ Interactive Agent Post rejects ordinary subagent (1206.5863ms)
+✔ Interactive Agent Post rejects split pane (1018.7905ms)
+✔ Interactive Agent Post rejects wrong pane (2006.7374ms)
+✔ Interactive Agent Post rejects unsafe agent id (2254.1754ms)
+✔ Interactive Agent Post rejects unsafe team name (1595.133ms)
+✔ Interactive member cannot spawn a nested teammate (1479.198ms)
+✔ Lead feedback review alone cannot admit member file mutation (1322.6231ms)
+✖ Lead feedback review plus member review admits member file mutation (1482.9028ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 37
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 71977.9464
+
+✖ failing tests:
+
+test at test\claude-execution-session-native.test.js:269:39
+✖ CLI feedback ACK plus explicit review admits final submit (7143.0784ms)
+  Error: Timed out: feedback review tool result persisted
+      at until (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:29:9)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:275:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\claude-execution-session-native.test.js:362:1
+✖ CLI old planned native call cannot use a later feedback read to mutate files (7137.5381ms)
+  Error: Timed out: new review result persisted
+      at until (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:29:9)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:371:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\claude-execution-session-native.test.js:525:42
+✖ Lead feedback review plus member review admits member file mutation (1482.9028ms)
+  Error: claude_execution_terminal_missing
+      at failure (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:19:57)
+      at Object.run (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:496:78)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:533:17)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'claude_execution_terminal_missing'
+  }

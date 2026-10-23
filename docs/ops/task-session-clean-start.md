@@ -25,14 +25,14 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 已经初始化的任务会话实例切换执行后端不需要新建数据库、迁移任务或重复本页历史清洁启动步骤。代码升级仍沿下文“已初始化实例更新核验”的受控部署流程；配置切换仅影响新建执行，不能迁移已经绑定的成员。
 
-在插件配置页的既有 Agent 表单选择“执行后端”，沿原有唯一保存按钮提交。选项为 DSH 原生（默认）和 Claude Code CLI。`GET /state/agent-config` 的 `executionBackend` 为 `dsh` 或 `claude-code`；未保存时读取 profile 中的 `taskSessions.executionBackend`，两者均缺省时读取 `dsh`，已保存值优先。保存后刷新回读，必要时在受控重启后再次核对。非法值应在写入任何配置前拒绝，保存失败保留页面草稿，不能只凭提示文字认定生效。
+在插件配置页的既有 Agent 表单选择“执行后端”，沿原有唯一保存按钮提交。选项为 DSH 原生（默认）和交互式 Claude Code（Agent Teams）。统筹会话仍为 DSH；选择 Claude 时，由 PTY 中的交互式 Lead 按需创建和调度原生队友，默认 in-process，不要求安装 tmux，也不为每个队友新开系统窗口。`GET /state/agent-config` 的 `executionBackend` 为 `dsh` 或 `claude-code`；未保存时读取 profile 中的 `taskSessions.executionBackend`，两者均缺省时读取 `dsh`，已保存值优先。保存后刷新回读，必要时在受控重启后再次核对。非法值应在写入任何配置前拒绝，保存失败保留页面草稿，不能只凭提示文字认定生效。
 
-启用 CLI 前，在实际服务账号与服务 PATH 下用 `Get-Command claude` 和 `claude --version` 只读核对已安装的命令及版本，操作者按 CLI 自身入口完成登录。插件不自动安装、登录或迁移凭据，也不会因 CLI 不可用改用 DSH。CLI 使用自身默认模型，不接收 DSH 的 provider/model、推理深度、preset、工具或 Skill 注册表；`CLAUDE.md` 按 CLI 自身行为处理，不能认定 DSH 指引已同步。配置页保存成功不证明 CLI 已登录或模型可调用。本轮离线验证后仍需操作者登录，再做下列限定本地文件的实际验收。
+启用 CLI 前，在实际服务账号与服务 PATH 下用 `Get-Command claude` 和 `claude --version` 只读核对已安装的命令及版本，操作者按 CLI 自身入口完成登录。插件不自动安装、登录或迁移凭据，也不会因 CLI 不可用改用 DSH。CLI 使用自身默认模型，不接收 DSH 的 provider/model、推理深度、preset、工具或 Skill 注册表；`CLAUDE.md` 按 CLI 自身行为处理，不能认定 DSH 指引已同步。配置页保存成功不证明 CLI 已登录或模型可调用。须在已登录的实际服务环境做下列限定本地文件的实际验收。
 
 - 新建隔离任务，核对新 execution 的 `executionBackend` 与配置一致；再次切换配置后续办原成员，原后端、executionId、会话身份与历史保持不变。缺少后端字段的旧成员继续使用 DSH，不能重建替身来完成切换。
 - 两种后端均沿同一 Task 的按需执行团队、阶段报告、成员消息和资源互斥运行。实际读取 `outputs/<executionId>/round-<inputVersion>.md`；续办后旧轮文件不变，新轮文件包含新职责。CLI 受管事件在同目录 `claude-events.jsonl`，DSH 原生日志仍在任务的 `.dsh/sessions/`。路径展示不证明文件写入成功，文档告警须单独核对。
 - 看板中 CLI 成员应显示 Claude Code 标签及原标题、状态、耗时，详情保留工作目录与文档/日志路径，没有“打开 DSH 会话”入口。DSH 成员原生入口仍可读取历史；不通过其他会话界面接管任务生命周期。
-- CLI 原生工具通过 permission MCP 进入 Host 当前身份、版本及 operation 准入。核对自定义 hooks、其他 MCP、嵌套 Agent 和后台任务被禁用，未使用跳过权限参数；适配器固定设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`，门禁仍拒绝 `run_in_background`，异常 Bash `backgroundTaskId` 回执会触发受管进程终止并保留 `unknown`。禁后台不是 OS 沙箱，终止请求不证明实际排空或远程效果消失；非受管进程须单独核验。内部成员消息和配置选择不构成新增业务授权，也不表示 CLI 继承了 DSH 沙箱或全部原生工具能力。
+- 核对真实进程由 `spawnTerminal` 启动且不带 `-p`，CLI 版本至少 2.1.309（HTTP hook 失败必须阻断，并支持 `--system-prompt-snapshot off` 刷新续办职责提示）；Lead 的 `Agent` 回执必须是 `teammate_spawned`、in-process，并有原生团队身份。Lead/队友工具通过受管 HTTP hooks 进入 Host 当前身份、版本及 operation 准入；结构化 MCP 提交和匹配工具结果才是结果候选，终端文字不作凭证。允许 Lead 按需组队，禁止队友再次派生、跨团队 peer、后台命令、自定义 hooks 和其他 MCP，不使用跳过权限参数。成员文档位于 `outputs/<executionId>/round-<inputVersion>-lease-<leaseEpoch>/`；核对职责、消息/工具事件与关闭批准。新执行必须有 `claudeSessionMode: interactive-team-v1`；旧 headless 无标记记录须明确拒绝自动恢复，不能手改标记迁移。内部成员消息不构成新增业务授权，CLI 不因此继承 DSH 沙箱。
 - 取消与恢复分别核对实际受管进程的退出证明、当前操作账及原绑定。没有 DSH 句柄、已经请求取消或 CLI 输出了结果都不能单独证明排空；不能证明时保留执行占位及应保留的资源锁。CLI `unknown` 保留原记录和保护，本版不走 DSH 原生日志自动对账，也不接受原生失败处理材料冒充 CLI 证据；不得重放原动作、换身份或手改账本清除未知效果。
 
 上述检查分别保留配置回读、协议测试、真实 CLI 推理与产物证据。子进程协议夹具、页面测试或健康状态不能替代实际 CLI 登录、模型调用及业务交付验证；切换回 DSH 也只作用于新建执行。
@@ -70,6 +70,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 启动时 active、已排空、lastDecision=wait、无 question 且有 unknown 操作的任务，按相关运行模块摘要和当前需求/控制版本补一次 `runtime.updated` 唤醒。重复定时恢复或同代码重启不再补发；暂停、取消、人工问题等待和仍有执行的任务不适用。Owner 沿原任务调查并使用 `task_operation_reconcile` 核验，未知操作未被证明前不能放行原动作。
 
 批量跟进原任务的决策修复只更新 Assistant，无数据迁移。按本页原生部署流程应用后，新协调会话将分页读取轻量任务目录，并分别续办已查明的原 Task。已接纳的新建总任务不会自动撤销或重路由；处理旧现场前先核对其已发生效果，防止与原任务重复修改、发信或提测。部署验收应独立确认目录分页与原任务身份延续，测试中的模拟动作不代表现场任务已重开。
+
+交互 Claude 的初始输入与运行设置经 CLI 参数传入；Windows 命令行长度上限仍适用，超大上下文尚未验证。启动失败按原失败回执处理，不截断输入、不改派为 DSH。
 
 ## 回退
 
@@ -206,3 +208,13 @@ DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个s
 
 原生 edit 的空路径、空匹配串及新旧内容相同属于写入前参数拒绝。仅在原调用参数、精确错误回执、任务身份和正常回合终态全部核对且执行排空后，对账为 failed/noEffect；不重放编辑。IO、权限、取消和其他歧义错误继续保持 unknown。
 部署沿 task-session-clean-start.md 的静止实例原生双包脚本切换，无 schema 迁移；恢复后回读原 operation 终态及原 Owner 的完成状态，保留旧 unknown 观察和原 PR，不重新执行提交推送。
+
+### 本地 PTY 生命周期补丁双包
+
+交互式 Claude 后端需要修复后的 PTY 实现。沿同一原生退出切换脚本额外传入 `-PtyUpgradeProposal <绝对JSON路径>`；此参数仅允许 `@deepseek-ai/dsh-subprocess-local@0.2.1-rc.2.pty.2` 与 `node-pty@1.2.0-beta.15.dsh.2` 两个包，不切换整个宿主。先将构建包放入 `D:/dsh_home/packages/<本轮提交>/` 等持久目录，不以临时工作树路径作为安装依赖。R30 候选使用新的版本与目录，禁止覆盖旧 `pty.1` / `dsh.1` 包及其持久证据；旧包不满足本次退出码顺序修复门禁。
+
+提案字段为 `schemaVersion: 1`、当前 profile `package.json` 的 `expectedPackageJsonSha256` 和恰好两项 `packages`；每项包含 `name`、`version`、绝对 `.tgz` 的 `path`、`sha256` 及 `files`（相对路径到 SHA256 的映射）。subprocess-local 必须核对 `lib/index.js`；node-pty 必须核对 `lib/windowsPtyAgent.js`、`lib/windowsTerminal.js` 和 `lib/unixTerminal.js`。helper 会读取压缩包中的名称、版本、依赖和关键字节，不能只凭提案声称正确。
+
+`-Check` 调用 `scripts/pty-package-upgrade.mjs check`，零写核对两包与当前 manifest。实际执行在原进程、子进程和账本排空后再次做 manifest CAS，仅更新 `pnpm.overrides` 的这两个精确键，保留其他依赖与 overrides，并把前后 manifest SHA 写入 `pty-manifest-applied.json`。随后沿原官方 `plugin add` 安装；不直接编辑安装后的 node_modules。
+
+安装后 `verify` 从实际 `dsh-base` 消费者解析 subprocess-local，再从该 provider 解析 node-pty，核对实际安装版本、关键文件字节与原 tgz 摘要，结果写入 `pty-installed.json`；仅根 node_modules 存在正确包不算通过。原 `cordis.patch.yml` 摘要保持不变，普通部署不传该参数。任一步失败保留停机状态与阶段证据，不以部分安装启动实例，也不自动回退或全量升级宿主。

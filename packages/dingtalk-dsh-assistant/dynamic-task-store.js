@@ -129,11 +129,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const executionBinding = execution => ({ kind: 'task-execution', taskId: execution.taskId, executionId: execution.executionId,
     requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, inputDigest: execution.inputDigest,
     sessionId: execution.sessionId, sessionBound: execution.sessionBound, leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion,
+    ...(execution.claudeSessionMode ? { claudeSessionMode: execution.claudeSessionMode } : {}),
     // Attribution is Host-owned ledger evidence, not a native session identity extension.
     inputHistory: execution.inputHistory.map(({ inputVersion, inputDigest, requirementRevision, controlRevision }) =>
       ({ inputVersion, inputDigest, requirementRevision, controlRevision })) })
   const matchesExecutionBinding = (execution, binding) => binding?.kind === 'task-execution' && !!execution
-    && ['taskId', 'executionId', 'sessionId', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'inputDigest', 'inputVersion']
+    && ['taskId', 'executionId', 'sessionId', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'inputDigest', 'inputVersion', 'claudeSessionMode']
       .every(key => binding[key] === execution[key])
   const currentTask = (binding, { active = true, current = true } = {}) => {
     record(binding)
@@ -898,6 +899,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const instructionScope = coordination.scope(task.taskId, 1)
       const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), instructionScope, instructionIds: instructionScope.instructionIds, title: executionSessionTitle({ input: payload.input, key }), dispatchDigest, inputDigest: digest(payload.input),
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, sessionId: `task-execution-${randomUUID()}`,
+        ...(payload.definition?.executionBackend === 'claude-code' ? { claudeSessionMode: 'interactive-team-v1' } : {}),
         status: 'queued', inputVersion: 1, inputHistory: [], results: [], leaseEpoch: 0, sessionBound: false, drained: true, cancelRequested: false, createdAt: stamp, updatedAt: stamp,
         runTiming: { recorded: true, elapsedMs: 0, startedAt: null }, timeline: { version: 1, complete: true, segments: [] } }
       put('dynamic_executions', execution)

@@ -1,0 +1,17 @@
+{
+  "pass": 46,
+  "fail": 0,
+  "tests": 46,
+  "observedAt": "2026-10-23T06:57:40.3553429Z",
+  "source": [
+    {
+      "path": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\packages\\dingtalk-dsh-assistant\\claude-execution-session.js",
+      "sha256": "021ee9faa8c2a897f12c3508d3e030f939a3858bbe735438b6f5bebe6396172a"
+    },
+    {
+      "path": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\test\\claude-execution-session-native.test.js",
+      "sha256": "ff8dce6fb8260965e8a67a026e7cbc5625f8c1f76d544879424373b127ba1a00"
+    }
+  ],
+  "skipped": 0
+}

@@ -1,0 +1,25 @@
+{
+  "fail": 0,
+  "pass": 31,
+  "observedAt": "2026-10-23T06:46:48.9160619Z",
+  "tests": 31,
+  "source": [
+    {
+      "sha256": "4bc95af279f7b5e474ddb200241f2fcc2ec7bdfefbce05893a35dbae9ad842f3",
+      "path": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\packages\\dingtalk-dsh-assistant\\claude-execution-session.js"
+    },
+    {
+      "sha256": "edcfa9b8dd6be339aec1b6131fdb1c48714edb4e5e2e7079e43ba837d2a08713",
+      "path": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\test\\claude-execution-session-native.test.js"
+    },
+    {
+      "sha256": "14e121e0eb5b502ea8c88ea72df999bb7a94717ea814c2eb0291cf0c161619f4",
+      "path": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\scripts\\pty-package-upgrade.mjs"
+    },
+    {
+      "sha256": "d70ec5abb9c5ced1ced73dc00fc703074544edb8b5735e86f6e9f5c036f7b37a",
+      "path": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\test\\pty-package-upgrade.test.js"
+    }
+  ],
+  "skipped": 0
+}

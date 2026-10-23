@@ -1,0 +1,195 @@
+diff --git a/packages/subprocess/subprocess-local/README.md b/packages/subprocess/subprocess-local/README.md
+index 05a6c3e4..8fce63ad 100644
+--- a/packages/subprocess/subprocess-local/README.md
++++ b/packages/subprocess/subprocess-local/README.md
+@@ -61,6 +61,8 @@ With `shellActivity: true`, plain non-login `bash -i` and `zsh -i` launches inst
+ 
+ Opted-in root exit does not terminate surviving descendants. A confirmed empty Linux managed range or complete empty Linux session can authorize reclamation of its retained record; macOS cannot confirm an unobserved process range after root exit and keeps that record unknown. The existing fallback visibility limits still apply: shell lifecycle records do not make escaped, unobserved descendants discoverable. Lifecycle records coordinate ordinary shell behavior, not hostile same-user processes.
+ 
++Windows terminal `pid` reflects node-pty's asynchronous allocation: it can initially be zero and becomes the real shell PID when the native connection is ready. The first observable live start identity is retained for signalling. Cleanup closes the PTY transport even after natural shell exit; observing an exit never authorizes adopting a new process with the same PID.
++
+ ### Shutdown behavior
+ 
+ Normal disposal terminates every running managed range and terminal session and awaits quiescence. During a JavaScript-observable host exit — direct `process.exit()`, default uncaught exceptions, default unhandled rejections — synchronous finalization asks a Linux scope to kill its members, kills each Windows runner so its sole Job handle closes, and uses the existing PGID, `taskkill`, or captured-identity operation for fallbacks. It creates no promises or timers and does not claim quiescence. The same exit removes the private per-process spill directory when it holds no completed spill file; completed spill files remain as full-output recovery artifacts until an external cleanup. Unhandled `SIGTERM`/`SIGINT`/`SIGHUP`, `SIGKILL`, fatal OOM, native crashes, and power loss need an external supervisor.
+diff --git a/packages/subprocess/subprocess-local/README.zh.md b/packages/subprocess/subprocess-local/README.zh.md
+index e8589765..f6ec9173 100644
+--- a/packages/subprocess/subprocess-local/README.zh.md
++++ b/packages/subprocess/subprocess-local/README.zh.md
+@@ -61,6 +61,8 @@ Windows 普通子进程通过 `windowsHide` 启动私有 Job runner，并为原
+ 
+ 启用后，根进程退出不会终止仍在运行的后代。明确为空的 Linux 受管范围或完整且为空的 Linux 会话可允许回收保留的记录；macOS 无法在根进程退出后确认未观察到的进程范围，会将该记录保持为 unknown。原有 fallback 可见性限制仍然适用：shell 生命周期记录不能让已逃逸且未观察到的后代变得可发现。这些记录协调普通 shell 行为，不用于防御同一用户的恶意进程。
+ 
++Windows 终端的 `pid` 跟随 node-pty 的异步分配：初值可能为零，原生连接就绪后才变为真实 shell PID。首次可观察到的存活启动身份会保留供发送信号时核验。即使 shell 自然退出，清理仍会关闭 PTY 传输；观察到退出后，不会重新认领复用了该 PID 的进程。
++
+ ### 关闭行为
+ 
+ 正常 dispose 会终止每个仍在运行的受管范围与终端会话并等待其完全停稳。在 JavaScript 可观察的宿主退出期间——直接 `process.exit()`、默认未捕获异常、默认未处理 rejection——同步最终清理会请求 Linux scope 终止其成员，同步终止每个 Windows runner 以关闭其唯一 Job handle，并为 fallback 使用既有 PGID、`taskkill` 或已捕获身份操作。它不创建 Promise 或定时器，也不声称已经完全停稳。同一退出阶段会删除未持有任何已完成 spill 文件的每进程私有 spill 目录；已完成的 spill 文件作为完整输出恢复产物保留，直到外部机制清理。未处理的 `SIGTERM`/`SIGINT`/`SIGHUP`、`SIGKILL`、fatal OOM、native crash 与断电需要外部 supervisor。
+diff --git a/packages/subprocess/subprocess-local/src/terminal.ts b/packages/subprocess/subprocess-local/src/terminal.ts
+index 1f11b5d0..1ad743f0 100644
+--- a/packages/subprocess/subprocess-local/src/terminal.ts
++++ b/packages/subprocess/subprocess-local/src/terminal.ts
+@@ -57,7 +57,6 @@ function signalName(number: number | undefined): NodeJS.Signals | null {
+  * the tracking a remote provider needs.
+  */
+ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+-  readonly pid: number
+   readonly output = new PassThrough()
+   readonly done: Promise<SubprocessOutcome>
+ 
+@@ -74,7 +73,9 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+   private quiescent = false
+   private managedRangeEmpty = false
+   /** The spawned shell's start identity; scans stop adopting members once the root pid no longer carries it. */
+-  private readonly rootIdentity: ProcessIdentity | undefined
++  private rootIdentity: ProcessIdentity | undefined
++  private rootIdentityObserved = false
++  private terminalClosed = false
+ 
+   /**
+    * @param terminal - allocated node-pty process.
+@@ -93,9 +94,7 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+     private readonly onQuiescence?: () => void,
+     private readonly observeShellExit = false,
+   ) {
+-    this.pid = terminal.pid
+-    try { this.rootIdentity = inspector.snapshot().tree(this.pid).find(member => member.pid === this.pid) }
+-    catch (_rootIdentityUnavailable) { this.rootIdentity = undefined }
++    this.observeRootIdentity()
+     this.done = this.outcome.promise
+     const resume = (): void => {
+       if (!this.outputPaused) return
+@@ -105,6 +104,7 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+     this.output.on('drain', resume)
+     this.output.once('close', () => { this.output.off('drain', resume) })
+     this.dataDisposable = terminal.onData((data) => {
++      this.observeRootIdentity()
+       if (!this.output.write(Buffer.from(data, 'utf8')) && this.cleanup === undefined && !this.outputPaused) {
+         this.outputPaused = true
+         terminal.pause()
+@@ -131,6 +131,17 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+     })
+   }
+ 
++  get pid(): number {
++    return this.terminal.pid
++  }
++
++  private observeRootIdentity(): void {
++    if (this.rootIdentityObserved || this.exited || this.pid <= 0) return
++    this.rootIdentityObserved = true
++    try { this.rootIdentity = this.inspector.snapshot().tree(this.pid).find(member => member.pid === this.pid) }
++    catch (_rootIdentityUnavailable) { this.rootIdentity = undefined }
++  }
++
+   /** Whether node-pty has not yet published the top-level exit event. */
+   get running(): boolean {
+     return !this.exited
+@@ -221,6 +232,7 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+ 
+   terminate(): Promise<void> {
+     if (this.cleanup !== undefined) return this.cleanup
++    this.observeRootIdentity()
+     if (this.outputPaused) { this.outputPaused = false; this.terminal.resume() }
+     const cleanup = this.closeOnce().then(() => {
+       this.quiescent = true
+@@ -382,7 +394,7 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+     }
+     if (!shellGone() && this.rootIdentity === undefined) {
+       try {
+-        this.terminal.kill()
++        this.closeWindowsTerminal()
+       } catch (_topLevelAlreadyExitedDuringKill) {
+         // The exit callback is authoritative.
+       }
+@@ -393,6 +405,13 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
+       await this.waitForWindowsShellExit()
+     }
+     if (!shellGone()) throw new Error(`terminal cleanup failed; surviving pid: ${this.pid}`)
++    this.closeWindowsTerminal()
++  }
++
++  private closeWindowsTerminal(): void {
++    if (this.terminalClosed) return
++    this.terminal.kill()
++    this.terminalClosed = true
+   }
+ 
+   private async waitForWindowsShellExit(): Promise<void> {
+diff --git a/packages/subprocess/subprocess-local/tests/terminal.spec.ts b/packages/subprocess/subprocess-local/tests/terminal.spec.ts
+index fa998ce5..2e5734de 100644
+--- a/packages/subprocess/subprocess-local/tests/terminal.spec.ts
++++ b/packages/subprocess/subprocess-local/tests/terminal.spec.ts
+@@ -755,7 +755,7 @@ describe('LocalTerminalHandle on Windows', () => {
+     await expect(handle.signalForeground('SIGKILL')).rejects.toThrow('terminate the terminal session')
+   })
+ 
+-  it('escalates the shell through taskkill tiers instead of node-pty signal kills', async () => {
++  it('signals the verified Windows shell before closing its PTY transport', async () => {
+     vi.useFakeTimers()
+     const pty = new FakePty()
+     const inspector = new FakeInspector()
+@@ -764,12 +764,12 @@ describe('LocalTerminalHandle on Windows', () => {
+     const quiescent = handle.terminate()
+     await vi.advanceTimersByTimeAsync(5)
+     expect(inspector.processes).toEqual([[123, 'SIGTERM']])
+-    expect(pty.kills).toEqual([])
++    expect(pty.kills).toEqual(['SIGHUP'])
+ 
+     pty.emitExit()
+     await quiescent
+     expect(inspector.processes).toEqual([[123, 'SIGTERM']])
+-    expect(pty.kills).toEqual([])
++    expect(pty.kills).toEqual(['SIGHUP'])
+   })
+ 
+   it('reports a shell that survives both taskkill tiers', async () => {
+@@ -789,15 +789,47 @@ describe('LocalTerminalHandle on Windows', () => {
+     await handle.terminate()
+   })
+ 
+-  it('skips taskkill escalation entirely when the shell already exited', async () => {
++  it('closes the Windows PTY transport without taskkill after natural shell exit', async () => {
+     const pty = new FakePty()
+     const inspector = new FakeInspector()
+     inspector.alive.add(123)
+     const handle = new LocalTerminalHandle(pty.asPty(), inspector, 10, win32)
+     pty.emitExit()
+     await handle.terminate()
++    await handle.terminate()
+     expect(inspector.processes).toEqual([])
+-    expect(pty.kills).toEqual([])
++    expect(pty.kills).toEqual(['SIGHUP'])
++  })
++
++  it('reads the Windows pid after asynchronous allocation and fences its first observed identity', async () => {
++    const pty = new FakePty()
++    pty.pid = 0
++    const inspector = new FakeInspector()
++    const handle = new LocalTerminalHandle(pty.asPty(), inspector, 10, win32)
++    expect(handle.pid).toBe(0)
++    expect(inspector.captures).toBe(0)
++    pty.pid = 123
++    expect(handle.pid).toBe(123)
++    pty.emitData('ready')
++    inspector.root = { pid: 123, started: 'reused' }
++    inspector.members = [{ pid: 999, started: 'unrelated' }]
++    inspector.alive.add(999)
++    pty.emitExit()
++    await handle.terminate()
++    expect(inspector.processes).toEqual([])
++    expect(pty.kills).toEqual(['SIGHUP'])
++  })
++
++  it('captures an allocated silent Windows shell before termination without waiting for output', async () => {
++    const pty = new FakePty()
++    pty.pid = 0
++    const inspector = new FakeInspector()
++    const handle = new LocalTerminalHandle(pty.asPty(), inspector, 1, win32)
++    pty.pid = 123
++    inspector.alive.add(123)
++    await handle.terminate()
++    expect(inspector.processes).toEqual([[123, 'SIGTERM']])
++    expect(pty.kills).toEqual(['SIGHUP'])
+   })
+ 
+   it('falls back to the bare node-pty kill when the shell identity was never observable', async () => {

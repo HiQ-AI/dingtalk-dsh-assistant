@@ -1,0 +1,49 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (983.7639ms)
+✔ CLI exit zero cannot replace Host submit (759.9481ms)
+✔ CLI exit zero cannot replace submit tool result (714.8001ms)
+✔ CLI wrong provider session fails without binding or accepting a result (640.8544ms)
+✔ CLI stale lease before permission denies real file mutation (1005.7226ms)
+✔ CLI operation gate failure denies a mutation before the child writes it (934.4447ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (1255.034ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (1887.3761ms)
+✔ CLI malformed hook event fails with zero acceptance and retained diagnostic log (10948.6201ms)
+✔ CLI real file mutation is accounted before write and settled after its observed result (1068.9998ms)
+✔ CLI interrupted real mutation retains unknown effect while physical process drain remains provable (984.8076ms)
+✔ CLI feedback ACK alone rejects final submit (1051.3403ms)
+✔ CLI feedback ACK plus explicit review admits final submit (1249.2168ms)
+✔ CLI progress uses current lease and the exact stored observation contract (957.8493ms)
+✔ CLI recovery requires a durable drain record and never launches work from an unfinished prefix (982.963ms)
+✔ CLI cancellation during pending resolve cannot leave a late process running (401.5526ms)
+✔ CLI cancellation during pending spawn cannot leave a late process running (628.9717ms)
+✔ CLI cancellation waits for an already admitted MCP callback to finish (954.2689ms)
+✔ CLI history from a different session is rejected before spawn and remains unchanged (1122.8178ms)
+✔ CLI old planned native call cannot use a later feedback read to mutate files (1302.6373ms)
+✔ CLI repeated native call identity does not replay a successful file effect (1120.7042ms)
+✔ CLI executable unavailable before init retries the original UUID with session-id instead of resume (1564.9058ms)
+✔ CLI journal rejects hardlink without modifying its target or spawning (52.7776ms)
+✔ CLI journal rejects junction without modifying its target or spawning (48.4257ms)
+✖ CLI unproven process drain retains the execution slot and never accepts the result (972.8045ms)
+✔ CLI structured background receipt is unknown instead of a successful completed operation (1088.1338ms)
+✔ Interactive Claude refuses an unmarked historical headless execution before spawning (18.5833ms)
+✔ Interactive Lead records native teammate responsibility and waits for shutdown approval (1649.7678ms)
+✔ Interactive team rejects external peer (1303.6822ms)
+✔ Interactive team rejects background teammate (1057.9774ms)
+✔ Interactive team rejects worktree teammate (1057.9765ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 30
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 123871.1707
+
+✖ failing tests:
+
+test at test\claude-execution-session-native.test.js:416:1
+✖ CLI unproven process drain retains the execution slot and never accepts the result (972.8045ms)
+  Error: unproven drain
+      at Proxy.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:418:116)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+    code: 'claude_execution_drain_timeout'
+  }

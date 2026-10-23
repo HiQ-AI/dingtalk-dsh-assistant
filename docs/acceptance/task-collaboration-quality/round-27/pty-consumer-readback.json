@@ -1,0 +1,11 @@
+{
+  "provider": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\docs\\tmp\\claude-pty-consumer\\node_modules\\@deepseek-ai\\dsh-subprocess-local\\lib\\index.js",
+  "providerVersion": "0.2.1-rc.2.pty.1",
+  "pty": "D:\\codex\\worktrees\\interactive-claude-team\\dingtalk-dsh-assistant\\docs\\tmp\\claude-pty-consumer\\node_modules\\node-pty\\lib\\index.js",
+  "ptyVersion": "1.2.0-beta.15.dsh.1",
+  "files": {
+    "host": "c2f2132166169369b6baa44f7204187716a6def516697328d6a0157c0c8e55de",
+    "windowsPtyAgent": "00a93c3ad068e3fc14b516ceea9f707b6dd6667532b6cefcd237eb2078dd42bf",
+    "unixTerminal": "23d8ae86eaf44c44c8cc30aaaacd335c9388dfeb9de1d8370dfa851077e83305"
+  }
+}
