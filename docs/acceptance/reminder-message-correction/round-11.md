@@ -35,4 +35,10 @@
 
 发布冒烟首次 13/14 通过，失败为本分支之前新增发送测试导入后漏更新 suite-map。按现有脚本重新生成并语义比对：303 个文件及全部 release 标志不变；仅 coordination-schedule-revisions 从 unit 归到 compat，新增实际 dws-adapter/notification-delivery 导入，顺序分组导致 185 项 lane 变化；没有退出门禁或删除测试。映射修正后仅复跑相关 release-workflow 8/8 通过，其余首次通过的包运行/产物测试无代码变化。原失败记录 release-smoke.log 和复跑 release-mapping-recheck.log 均保留。
 
-目前只证明代码路径省去归类调用；实际部署和新的群内总耗时尚待记录，不更改线上性能 FAIL。
+## 部署
+
+544c32a 已推送 PR #255，状态独立回读 OPEN。部署零写预检确认 59 个原生会话已排空，未开始领取为空，unknown 操作/通知均为 0；按原 runbook 双包安装，未改 profile 或数据。19:56:15 独立回读：新 PID 52212（19:54:32 创建）拥有 3080/18998，双包版本 2.1.0，health=ok、恢复问题 0、入站和 DWS 健康、匿名 Web=401。
+
+Assistant 持久包位于 D:/dsh_home/packages/544c32a-reminder-direct，382,985 字节，SHA256 604575196B5AFEE011219592F5E7E3DF6CA95885EDECE7D5DD347ABA9BA4614D；Observer 52,806 字节，SHA256 88A51BE3B4D532DA19740620512DAA26C7C36E377A550563BA660ACA06A61396。profile SHA256 74FE100C0019F5E4C76C06903FDB622B0AF5696AFC60AB38CBD252CE8F948499 未变。证据 deployment/、deployment-independent.json。
+
+目前证明代码路径省去归类调用且部署正常；新的群内总耗时仍待用户客户端验收，继续保留线上性能 FAIL。原 E 已结束，不能用它验证活动提醒快速改期；已请求在同一授权测试群创建 F 后引用确认提前一分钟，不重新询问群或日期。

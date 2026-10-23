@@ -106,3 +106,4 @@ direct-followup-native-handoff,11,PASS,round-11.md
 direct-followup-real-model-retime-and-mixed,11,PASS,round-11.md
 release-smoke-mapping-stale,11,FAIL,round-11.md
 release-smoke-mapping-recheck,11,PASS,round-11.md
+direct-followup-local-deployment,11,PASS,round-11.md
