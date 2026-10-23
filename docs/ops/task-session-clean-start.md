@@ -25,7 +25,7 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 已经初始化的任务会话实例切换执行后端不需要新建数据库、迁移任务或重复本页历史清洁启动步骤。代码升级仍沿下文“已初始化实例更新核验”的受控部署流程；配置切换仅影响新建执行，不能迁移已经绑定的成员。
 
-在插件配置页的既有 Agent 表单选择“执行后端”，沿原有唯一保存按钮提交。选项为 DSH 原生（默认）和交互式 Claude Code（Agent Teams）。统筹会话仍为 DSH；选择 Claude 时，由 PTY 中的交互式 Lead 按需创建和调度原生队友，默认 in-process，不要求安装 tmux，也不为每个队友新开系统窗口。`GET /state/agent-config` 的 `executionBackend` 为 `dsh` 或 `claude-code`；未保存时读取 profile 中的 `taskSessions.executionBackend`，两者均缺省时读取 `dsh`，已保存值优先。保存后刷新回读，必要时在受控重启后再次核对。非法值应在写入任何配置前拒绝，保存失败保留页面草稿，不能只凭提示文字认定生效。
+在插件配置页的既有 Agent 表单选择“执行后端”，沿原有唯一保存按钮提交。选项为 DSH 原生（默认）和交互式 Claude Code（Agent Teams，内测）。统筹会话仍为 DSH；选择 Claude 时，由 PTY 中的交互式 Lead 按需创建和调度原生队友，默认 in-process，不要求安装 tmux，也不为每个队友新开系统窗口。`GET /state/agent-config` 的 `executionBackend` 为 `dsh` 或 `claude-code`；未保存时读取 profile 中的 `taskSessions.executionBackend`，两者均缺省时读取 `dsh`，已保存值优先。保存后刷新回读，必要时在受控重启后再次核对。非法值应在写入任何配置前拒绝，保存失败保留页面草稿，不能只凭提示文字认定生效。
 
 启用 CLI 前，在实际服务账号与服务 PATH 下用 `Get-Command claude` 和 `claude --version` 只读核对已安装的命令及版本，操作者按 CLI 自身入口完成登录。插件不自动安装、登录或迁移凭据，也不会因 CLI 不可用改用 DSH。CLI 使用自身默认模型，不接收 DSH 的 provider/model、推理深度、preset、工具或 Skill 注册表；`CLAUDE.md` 按 CLI 自身行为处理，不能认定 DSH 指引已同步。配置页保存成功不证明 CLI 已登录或模型可调用。须在已登录的实际服务环境做下列限定本地文件的实际验收。
 
