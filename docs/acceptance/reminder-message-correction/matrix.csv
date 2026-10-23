@@ -112,3 +112,7 @@ live-reminder-timeliness,12,FAIL,round-12.md
 live-f-delivery-native-mention-no-duplicate,12,PASS,round-12.md
 live-f-pending-failure-feedback,12,FAIL,round-12.md
 live-f-overdue-confirmation-readability,12,FAIL,round-12.md
+live-direct-followup-single-model,13,PASS,round-13.md
+live-g-delivery-native-mention,13,PASS,round-13.md
+live-g-original-slot-no-duplicate,13,PASS,round-13.md
+live-end-to-end-latency,13,FAIL,round-13.md
