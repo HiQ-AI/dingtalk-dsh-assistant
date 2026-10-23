@@ -102,8 +102,10 @@ test('执行后端沿用唯一Agent保存入口并在部分失败时准确说明
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
   assert.match(source, /htmlFor: 'dingtalk-execution-backend'/)
   assert.match(source, /value: 'dsh'.*DSH 原生（默认）/)
-  assert.match(source, /value: 'claude-code'.*Claude Code CLI/)
+  assert.match(source, /value: 'claude-code'.*交互式 Claude Code（Agent Teams）/)
   assert.match(source, /已有执行及续办保持原后端/)
+  assert.match(source, /统筹始终使用 DSH/)
+  assert.match(source, /交互式 Claude Lead 可按需创建和调度队友/)
   assert.match(source, /if \(!taskDirty.current\) setExecutionBackend/)
   assert.equal((source.match(/request\('\/config\/agent'/g) ?? []).length, 1)
   const desired = { model: 'sol', reasoningEffort: '', agentNames: [], replySignature: '', proxyUrl: '', executionBackend: 'claude-code' }

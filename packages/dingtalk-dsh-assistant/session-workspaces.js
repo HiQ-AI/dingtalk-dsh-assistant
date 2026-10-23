@@ -72,6 +72,7 @@ export function renderExecutionDocument(execution) {
     '每次输入续办形成新轮，旧轮文件保留。日常先读本文件；证据缺失、矛盾或异常时，按会话身份读取原始记录。\n',
     section('身份与状态', [...Object.entries(identity).map(([key, value]) => `${key}: ${value}`),
       `executionBackend: ${execution.definition?.executionBackend ?? 'dsh'}`,
+      ...(execution.claudeSessionMode ? [`claudeSessionMode: ${execution.claudeSessionMode}`] : []),
       `leaseEpoch: ${execution.leaseEpoch}`, `status: ${execution.status}${execution.status === 'queued' ? '（已安排，待启动）' : ''}`,
       `drained: ${execution.drained === true}`, `cancelRequested: ${execution.cancelRequested === true}`,
       `updatedAt: ${execution.updatedAt ?? '未记录'}`].join('\n')),
@@ -79,6 +80,9 @@ export function renderExecutionDocument(execution) {
     section('交接上下文与范围', execution.input?.context || '未提供交接上下文。'),
     section('本轮计划', stage?.plan || '尚未报告计划，不能从目标或结果推断计划已执行。'),
   ]
+  if (execution.claudeSessionMode === 'interactive-team-v1') {
+    lines.push(section('原生队友执行文档', `本轮队友的职责、工具事件与状态记录在 outputs/${execution.executionId}/round-${execution.inputVersion}-lease-${execution.leaseEpoch}/。只有实际创建队友后才生成文件；目录不存在不表示已完成。旧轮及旧租约目录保留，不覆盖。`))
+  }
   if (stage) {
     lines.push(section('最新阶段报告', `recordedAt: ${stage.recordedAt}\nleaseEpoch: ${stage.leaseEpoch}\nsequence: ${stage.sequence}\n\n${stage.summary}`),
       section('报告时活动', stage.activity || '未报告活动。'), section('阶段证据', list(stage.evidence)))

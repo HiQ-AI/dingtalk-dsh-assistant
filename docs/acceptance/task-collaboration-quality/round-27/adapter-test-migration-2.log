@@ -1,0 +1,109 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (1126.4013ms)
+✖ CLI exit zero cannot replace Host submit (630.2505ms)
+✖ CLI exit zero cannot replace submit tool result (705.7771ms)
+✔ CLI wrong provider session fails without binding or accepting a result (763.1409ms)
+✖ CLI stale lease before permission denies real file mutation (960.2114ms)
+✖ CLI operation gate failure denies a mutation before the child writes it (860.0065ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (1154.3709ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (1830.9407ms)
+✔ CLI malformed hook event fails with zero acceptance and retained diagnostic log (10872.292ms)
+✔ CLI real file mutation is accounted before write and settled after its observed result (1193.3781ms)
+✔ CLI interrupted real mutation retains unknown effect while physical process drain remains provable (1492.137ms)
+✖ CLI feedback ACK alone rejects final submit (20113.5521ms)
+✖ CLI feedback ACK plus explicit review admits final submit (7150.8213ms)
+✔ CLI progress uses current lease and the exact stored observation contract (1120.2734ms)
+✔ CLI recovery requires a durable drain record and never launches work from an unfinished prefix (1130.2023ms)
+✔ CLI cancellation during pending resolve cannot leave a late process running (375.0487ms)
+✔ CLI cancellation during pending spawn cannot leave a late process running (660.3754ms)
+✔ CLI cancellation waits for an already admitted MCP callback to finish (874.4465ms)
+✔ CLI history from a different session is rejected before spawn and remains unchanged (999.5408ms)
+✖ CLI old planned native call cannot use a later feedback read to mutate files (7133.3591ms)
+✖ CLI repeated native call identity does not replay a successful file effect (1021.1953ms)
+✔ CLI executable unavailable before init retries the original UUID with session-id instead of resume (1469.6254ms)
+✔ CLI journal rejects hardlink without modifying its target or spawning (52.7333ms)
+✔ CLI journal rejects junction without modifying its target or spawning (52.1469ms)
+✔ CLI unproven process drain retains the execution slot and never accepts the result (955.9192ms)
+✔ CLI structured background receipt is unknown instead of a successful completed operation (926.6216ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 18
+ℹ fail 7
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 66263.0921
+
+✖ failing tests:
+
+test at test\claude-execution-session-native.test.js:166:47
+✖ CLI exit zero cannot replace Host submit (630.2505ms)
+  Error: claude_execution_terminal_missing
+      at failure (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:19:57)
+      at Object.run (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:471:78)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:168:40)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'claude_execution_terminal_missing'
+  }
+
+test at test\claude-execution-session-native.test.js:166:47
+✖ CLI exit zero cannot replace submit tool result (705.7771ms)
+  Error: claude_execution_terminal_missing
+      at failure (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:19:57)
+      at Object.run (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:471:78)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:168:40)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'claude_execution_terminal_missing'
+  }
+
+test at test\claude-execution-session-native.test.js:181:1
+✖ CLI stale lease before permission denies real file mutation (960.2114ms)
+  Error: claude_execution_terminal_missing
+      at failure (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:19:57)
+      at Object.run (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:471:78)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:189:17)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'claude_execution_terminal_missing'
+  }
+
+test at test\claude-execution-session-native.test.js:194:1
+✖ CLI operation gate failure denies a mutation before the child writes it (860.0065ms)
+  Error: claude_execution_terminal_missing
+      at failure (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:19:57)
+      at Object.run (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:471:78)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:198:18)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'claude_execution_terminal_missing'
+  }
+
+test at test\claude-execution-session-native.test.js:265:39
+✖ CLI feedback ACK alone rejects final submit (20113.5521ms)
+  'test timed out after 20000ms'
+
+test at test\claude-execution-session-native.test.js:265:39
+✖ CLI feedback ACK plus explicit review admits final submit (7150.8213ms)
+  Error: Timed out: feedback review tool result persisted
+      at until (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:28:9)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:271:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\claude-execution-session-native.test.js:358:1
+✖ CLI old planned native call cannot use a later feedback read to mutate files (7133.3591ms)
+  Error: Timed out: new review result persisted
+      at until (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:28:9)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:367:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at test\claude-execution-session-native.test.js:377:1
+✖ CLI repeated native call identity does not replay a successful file effect (1021.1953ms)
+  Error: claude_execution_hook_call_invalid
+      at failure (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:19:57)
+      at hook (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:182:54)
+      at async Server.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/claude-execution-session.js:308:35) {
+    code: 'claude_execution_hook_call_invalid'
+  }

@@ -1,0 +1,71 @@
+✔ CLI candidate requires Host submit and matching tool result before final acceptance (899.7073ms)
+✔ CLI exit zero cannot replace Host submit (676.5765ms)
+✔ CLI exit zero cannot replace submit tool result (998.1305ms)
+✔ CLI wrong provider session fails without binding or accepting a result (1157.9103ms)
+✔ CLI stale lease before permission denies real file mutation (1299.9753ms)
+✔ CLI operation gate failure denies a mutation before the child writes it (1329.5612ms)
+✔ CLI cancellation drains the actual parent and heartbeat descendant before releasing the identity (1760.392ms)
+✔ CLI original identity resumes explicitly and missing bound history cannot launch a substitute (2735.1375ms)
+✔ CLI malformed hook event fails with zero acceptance and retained diagnostic log (11150.7654ms)
+✔ CLI real file mutation is accounted before write and settled after its observed result (1108.2193ms)
+✔ CLI interrupted real mutation retains unknown effect while physical process drain remains provable (1073.2261ms)
+✔ CLI feedback ACK alone rejects final submit (1655.2323ms)
+✔ CLI feedback ACK plus explicit review admits final submit (1384.8102ms)
+✔ CLI progress uses current lease and the exact stored observation contract (1150.9709ms)
+✔ CLI recovery requires a durable drain record and never launches work from an unfinished prefix (1246.6475ms)
+✔ CLI cancellation during pending resolve cannot leave a late process running (517.7897ms)
+✖ CLI cancellation during pending spawn cannot leave a late process running (822.2202ms)
+✔ CLI cancellation waits for an already admitted MCP callback to finish (1050.5949ms)
+✔ CLI history from a different session is rejected before spawn and remains unchanged (1303.0587ms)
+✔ CLI old planned native call cannot use a later feedback read to mutate files (1420.277ms)
+✔ CLI repeated native call identity does not replay a successful file effect (1227.405ms)
+✔ CLI executable unavailable before init retries the original UUID with session-id instead of resume (1600.3917ms)
+✔ CLI journal rejects hardlink without modifying its target or spawning (57.1371ms)
+✔ CLI journal rejects junction without modifying its target or spawning (55.3832ms)
+✖ CLI unproven process drain retains the execution slot and never accepts the result (1079.0829ms)
+✔ CLI structured background receipt is unknown instead of a successful completed operation (1179.8108ms)
+✔ Interactive Claude refuses an unmarked historical headless execution before spawning (25.0727ms)
+✔ Interactive Lead records native teammate responsibility and waits for shutdown approval (1383.3735ms)
+✔ Interactive team rejects external peer (989.9295ms)
+✔ Interactive team rejects background teammate (943.9585ms)
+✔ Interactive team rejects worktree teammate (1042.1263ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 29
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 44702.2762
+
+✖ failing tests:
+
+test at test\claude-execution-session-native.test.js:318:43
+✖ CLI cancellation during pending spawn cannot leave a late process running (822.2202ms)
+  AssertionError [ERR_ASSERTION]: 真实 provider 已释放晚到的进程范围
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:333:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\claude-execution-session-native.test.js:416:1
+✖ CLI unproven process drain retains the execution slot and never accepts the result (1079.0829ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/interactive-claude-team/dingtalk-dsh-assistant/test/claude-execution-session-native.test.js:421:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    operator: 'rejects',
+    diff: 'simple'
+  }

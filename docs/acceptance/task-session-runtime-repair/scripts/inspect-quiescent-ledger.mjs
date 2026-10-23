@@ -29,13 +29,14 @@ export function inspectPackage(packagePath, source, installed) {
 // 独立运维助手只依赖标准库，复制到 launchers 后仍按持久后端读取原排空证据。
 function inspectClaudeHistory(workspace, row) {
   const fail = code => { throw Error(`DEPLOY_CLAUDE_${code}`) }
-  const identity = ['taskId','executionId','sessionId','inputVersion','inputDigest','requirementRevision','controlRevision','leaseEpoch']
+  const identity = ['taskId','executionId','sessionId','inputVersion','inputDigest','requirementRevision','controlRevision','leaseEpoch','claudeSessionMode']
   const inputKeys = ['inputVersion','inputDigest','requirementRevision','controlRevision']
   const same = (a,b,keys=identity) => keys.every(key=>a?.[key]===b?.[key])
   const uuid = /^task-execution-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu.exec(row.sessionId)?.[1]
   const taskSegment = value => typeof value==='string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u.test(value)
     && !/[.]$/u.test(value) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(value)
   if (!uuid || !taskSegment(row.taskId) || typeof row.executionId!=='string' || !/^[a-zA-Z0-9_-]+$/u.test(row.executionId)) fail('IDENTITY_INVALID')
+  if (row.claudeSessionMode !== undefined && row.claudeSessionMode !== 'interactive-team-v1') fail('SESSION_MODE_INVALID')
   if (row.sessionBound!==true || row.drained!==true || !Number.isSafeInteger(row.leaseEpoch) || row.leaseEpoch<1 || !Array.isArray(row.inputHistory)) fail('BINDING_INVALID')
   const inputs = new Map()
   for (const input of [...row.inputHistory,row]) {
@@ -64,7 +65,7 @@ function inspectClaudeHistory(workspace, row) {
   try { events=text.slice(0,-1).split('\n').map(line=>JSON.parse(line)) } catch { fail('LOG_INVALID') }
   let start, previous, bound=false
   for (const [index,event] of events.entries()) {
-    if (event?.provider!=='claude-code' || event.binding?.kind!=='task-execution' || !same(event.binding,row,['taskId','executionId','sessionId'])) fail('LOG_IDENTITY')
+    if (event?.provider!=='claude-code' || event.binding?.kind!=='task-execution' || !same(event.binding,row,['taskId','executionId','sessionId','claudeSessionMode'])) fail('LOG_IDENTITY')
     if (event.sequence!==index+1) fail('LOG_SEQUENCE')
     if (event.type==='start') {
       const binding=event.binding, input=inputs.get(binding.inputVersion)

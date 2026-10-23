@@ -1,0 +1,11 @@
+✔ PTY双包check零写、apply只改两override并CAS拒绝重复应用 (4681.9253ms)
+✔ PTY提案缺包、错误名、伪造摘要和删关键文件全部拒绝 (4504.9817ms)
+✔ PTY安装验证沿实际base consumer拒绝root假成功 (6473.1564ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16009.9898

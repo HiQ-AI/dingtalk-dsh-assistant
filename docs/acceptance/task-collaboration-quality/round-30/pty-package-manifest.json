@@ -1,0 +1,17 @@
+{
+  "lifecyclePatchSha256": "cc7480ac4d36ace80ad75a92f2d4897c946e5772a21b3f299c6eba7526b5956c",
+  "artifacts": [
+    {
+      "bytes": 77095,
+      "sha256": "b04c8c50c9a8753f95b042d6506a8a1a998d00321da3d9a0d0e83bb4380a36a0",
+      "file": "deepseek-ai-dsh-subprocess-local-0.2.1-rc.2.pty.2.tgz"
+    },
+    {
+      "bytes": 7150961,
+      "sha256": "4a4e5a8d516eb9a9eb837378c0f0efb4a27e26871137712a2ba78769fbc3973f",
+      "file": "node-pty-1.2.0-beta.15.dsh.2.tgz"
+    }
+  ],
+  "base": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "exitOrderPatchSha256": "821ecba7ea0bb70354654a74d772b32154e37d3345a9de969247e3869c3fc84d"
+}

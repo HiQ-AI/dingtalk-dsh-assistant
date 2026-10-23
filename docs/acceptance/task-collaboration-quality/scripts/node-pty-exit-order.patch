@@ -1,0 +1,56 @@
+--- a/lib/windowsPtyAgent.js
++++ b/lib/windowsPtyAgent.js
+@@ -38,6 +38,7 @@
+         this._useConptyDll = _useConptyDll;
+         this._innerPid = 0;
+         this._onError = new eventEmitter2_1.EventEmitter2();
++        this._onExit = new eventEmitter2_1.EventEmitter2();
+         if (!conptyNative) {
+             conptyNative = (0, utils_1.loadNativeModule)('conpty').module;
+         }
+@@ -91,6 +92,11 @@
+         });
+         this._inSocket.setEncoding('utf8');
+     }
++    Object.defineProperty(WindowsPtyAgent.prototype, "onExit", {
++        get: function () { return this._onExit.event; },
++        enumerable: false,
++        configurable: true
++    });
+     Object.defineProperty(WindowsPtyAgent.prototype, "onError", {
+         get: function () { return this._onError.event; },
+         enumerable: false,
+@@ -248,6 +254,7 @@
+     WindowsPtyAgent.prototype._$onProcessExit = function (exitCode) {
+         var _this = this;
+         this._exitCode = exitCode;
++        this._onExit.fire(exitCode);
+         if (!this._useConptyDll) {
+             this._flushDataAndCleanUp();
+             this._outSocket.on('data', function () { return _this._flushDataAndCleanUp(); });
+--- a/lib/windowsTerminal.js
++++ b/lib/windowsTerminal.js
+@@ -105,8 +105,21 @@
+             });
+             // Cleanup after the socket is closed.
+             _this._socket.on('close', function () {
+-                _this.emit('exit', _this._agent.exitCode);
+-                _this._close();
++                // ConPTY output can close before the native process-exit callback.
++                // Join both observations; never publish an unknown exit code.
++                var finish = function () {
++                    _this.emit('exit', _this._agent.exitCode);
++                    _this._close();
++                };
++                if (_this._agent.exitCode !== undefined) {
++                    finish();
++                }
++                else {
++                    var subscription = _this._agent.onExit(function () {
++                        subscription.dispose();
++                        finish();
++                    });
++                }
+             });
+         });
+         _this._file = file;

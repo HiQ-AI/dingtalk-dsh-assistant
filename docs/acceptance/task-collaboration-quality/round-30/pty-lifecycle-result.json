@@ -1,0 +1,57 @@
+{
+  "wrapperPid": 29760,
+  "modelCalls": 0,
+  "cases": [
+    {
+      "mode": "silent-exit",
+      "startedAt": "2026-10-23T07:13:01.707Z",
+      "initialPid": 0,
+      "child": {
+        "pid": 35824,
+        "stdinTTY": true,
+        "stdoutTTY": true
+      },
+      "readyPid": 35824,
+      "outcome": {
+        "exitCode": 0,
+        "signal": null
+      },
+      "status": "PASS",
+      "completedAt": "2026-10-23T07:13:05.739Z"
+    },
+    {
+      "mode": "silent-cancel",
+      "startedAt": "2026-10-23T07:13:05.748Z",
+      "initialPid": 0,
+      "child": {
+        "pid": 83040,
+        "stdinTTY": true,
+        "stdoutTTY": true
+      },
+      "readyPid": 83040,
+      "outcome": {
+        "exitCode": null,
+        "signal": null
+      },
+      "status": "PASS",
+      "completedAt": "2026-10-23T07:13:17.168Z"
+    },
+    {
+      "mode": "dispose-running",
+      "startedAt": "2026-10-23T07:13:17.174Z",
+      "initialPid": 0,
+      "child": {
+        "pid": 5112,
+        "stdinTTY": true,
+        "stdoutTTY": true
+      },
+      "readyPid": 5112,
+      "outcome": {
+        "exitCode": null,
+        "signal": null
+      },
+      "status": "PASS",
+      "completedAt": "2026-10-23T07:13:29.775Z"
+    }
+  ]
+}

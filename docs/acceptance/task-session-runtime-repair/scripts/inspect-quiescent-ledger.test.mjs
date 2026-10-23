@@ -108,6 +108,20 @@ async function cliFixture(t) {
  return {root,path,db,row,events,log,directory,save}
 }
 
+test('interactive Claude mode is bound to every log generation; legacy history remains readable',async t=>{
+ const f=await cliFixture(t)
+ assert.equal(inspectLedger(f.path,f.root).drained,true)
+ f.row.claudeSessionMode='interactive-team-v1'
+ await f.save()
+ assert.throws(()=>inspectLedger(f.path,f.root),/DEPLOY_CLAUDE_LOG_IDENTITY/)
+ for(const event of f.events)event.binding.claudeSessionMode=f.row.claudeSessionMode
+ await f.save()
+ assert.equal(inspectLedger(f.path,f.root).drained,true)
+ f.row.claudeSessionMode='unsupported'
+ await f.save()
+ assert.throws(()=>inspectLedger(f.path,f.root),/DEPLOY_CLAUDE_SESSION_MODE_INVALID/)
+})
+
 test('mixed native and Claude histories verify independently and keep unknown facts unchanged',async t=>{
  const f=await cliFixture(t),before=await readFile(f.log),beforeRows=f.db.prepare('SELECT body FROM dynamic_executions').all()
  const proof=inspectLedger(f.path,f.root)

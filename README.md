@@ -23,11 +23,13 @@
 
 ## 执行后端选择
 
-插件配置页的 Agent 表单提供一个“执行后端”选择，默认 **DSH 原生**，也可选择 **Claude Code CLI**，沿原有唯一保存入口生效。`agentConfig.executionBackend` 只接受 `dsh` 或 `claude-code`；未保存时读取 `taskSessions.executionBackend`，仍缺省时用 `dsh`，已保存值优先于 profile。非法值在写入配置前拒绝。选择只用于新建执行：已有执行、续办和恢复保持创建时绑定的后端；缺少该字段的既有执行继续使用 DSH，不通过新建替身迁移。
+插件配置页的 Agent 表单提供一个“执行后端”选择，默认 **DSH 原生**，也可选择 **交互式 Claude Code（Agent Teams）**，沿原有唯一保存入口生效。`agentConfig.executionBackend` 只接受 `dsh` 或 `claude-code`；未保存时读取 `taskSessions.executionBackend`，仍缺省时用 `dsh`，已保存值优先于 profile。非法值在写入配置前拒绝。选择只用于新建执行：已有执行、续办和恢复保持创建时绑定的后端；缺少该字段的既有执行继续使用 DSH，不通过新建替身迁移。
 
-Claude 后端调用服务进程 PATH 中已安装的 `claude`，使用 CLI 自身默认模型，不传入 DSH 的 provider/model 或推理深度。操作者须自行安装并完成 CLI 登录；插件不自动安装、登录或迁移凭据，启动失败也不自动改用 DSH。CLI 不继承 DSH preset、工具或 Skill 注册表；`CLAUDE.md` 的发现和处理属于 CLI 自身行为，不能据此认定 DSH 工作区指引已同步。
+任务统筹始终使用 DSH 原生会话。Claude 执行后端通过 DSH 的 PTY 启动服务进程 PATH 中已安装的交互式 `claude`（不使用 `-p`），由 Claude Lead 按实际任务需要创建和调度原生 Agent Teams 队友，不固定队友数量。队友采用 in-process 模式；配置项不表示每个队友会打开独立窗口。Lead 使用 CLI 自身默认模型，不传入 DSH 的 provider/model 或推理深度。CLI 至少为 2.1.309；启动固定 `--system-prompt-snapshot off`，确保续办使用本轮职责提示，不复用首次会话的 system prompt 快照。操作者须自行安装并完成 CLI 登录；插件不自动安装、登录或迁移凭据，启动失败也不自动改用 DSH。CLI 不继承 DSH preset、工具或 Skill 注册表；`CLAUDE.md` 的发现和处理属于 CLI 自身行为，不能据此认定 DSH 工作区指引已同步。
 
-两种后端共用同一 Task 的按需执行团队、成员通信、资源互斥、阶段报告和每轮执行文档。CLI 原生工具经 permission MCP 接入 Host 的当前身份、版本及 operation 准入；本版禁用自定义 hooks、其他 MCP、嵌套 Agent 和后台任务，不传跳过权限校验参数。适配器固定设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`，门禁仍拒绝 `run_in_background`；若 Bash 回执异常包含 `backgroundTaskId`，则请求终止受管进程并保留未知效果。禁后台不是 OS 沙箱，也不证明非受管进程或远程效果已消失。这些限制和后端选择都不新增业务授权。CLI 的未知效果保留原账及保护，不重放，也不套用 DSH 原生日志的自动对账；无法证明受管进程排空时继续占用执行容量和应保留的资源锁。配置及受控核验步骤见[执行后端配置与核验](docs/ops/task-session-clean-start.md#执行后端配置与核验)。
+两种后端共用同一 Task 的按需执行团队、成员通信、资源互斥、阶段报告和每轮执行文档。交互式 Claude 使用受管 HTTP hooks 对 Lead 和原生队友的工具执行做身份、版本及 operation 准入，MCP 提供结构化报告与结果提交；终端显示文本不作为完成证据。Lead 可派生具名 in-process 队友，队友不得再派生；禁止向非本团队 peer 发消息、后台命令、隔离工作树以及未受管 hooks 和 MCP，不传跳过权限校验参数。原生队友的职责和事件按轮次/租约保留文档，Lead 必须确认队友关闭后提交结果。`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 仍限制后台命令，异常后台回执保留未知效果。禁后台不是 OS 沙箱，也不证明远程效果已消失；这些限制和后端选择都不新增业务授权。CLI 的未知效果保留原账及保护，不重放，也不套用 DSH 原生日志的自动对账；无法证明 PTY 及原生队友排空时继续占用执行容量和应保留的资源锁。新 Claude 执行持久绑定 `claudeSessionMode: interactive-team-v1`；缺少该标记的历史非交互 Claude 执行明确拒绝自动恢复，保留原历史和未知效果，不能换身份暗中迁移。配置及受控核验步骤见[执行后端配置与核验](docs/ops/task-session-clean-start.md#执行后端配置与核验)。
+
+当前交互启动把初始输入及运行设置作为 CLI 参数传入，Windows 超长命令行仍受系统上限限制；尚未验证超大上下文输入，不会静默截断或改派后端。
 
 ## 持久账、通知与恢复
 

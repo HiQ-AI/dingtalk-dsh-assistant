@@ -7,7 +7,8 @@ import { resolve, join, dirname } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createClaudeExecutionSessions, claudeExecutionLogPath } from '../packages/dingtalk-dsh-assistant/claude-execution-session.js'
 
-// 只替换 Claude 可执行文件为固定协议程序；进程范围、管道和 MCP HTTP 均真实运行。
+// 固定协议程序替代 Claude；真实 DSH 受管子进程与 MCP/hooks HTTP，管道适配 PTY 接口。
+// 本文件不声称真实 PTY 或真实 Claude；二者由独立本轮集成探针验证。
 // 不使用真实账户或模型，不把合成协议通过称为 Claude 推理/业务验收。
 const profile = createRequire(resolve(process.env.DSH_NATIVE_TEST_PROFILE ?? 'test/fixtures/native-profile/package.json'))
 let Context, LocalSubprocessRuntime, unavailable
@@ -19,7 +20,7 @@ try {
 const options = { skip: unavailable ? `Locked native profile required: ${unavailable}` : false, timeout: 20000 }
 const output = { status: 'completed', summary: '已读取合成证据', evidence: ['fixture.txt'], limitations: [], artifacts: [] }
 const schema = { type: 'object', properties: { status: { type: 'string' }, summary: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } }, limitations: { type: 'array', items: { type: 'string' } }, artifacts: { type: 'array', items: { type: 'object' } } }, required: ['status', 'summary', 'evidence', 'limitations', 'artifacts'], additionalProperties: false }
-const identity = extra => ({ kind: 'task-execution', taskId: 'cli-task', executionId: randomUUID(), sessionId: `task-execution-${randomUUID()}`,
+const identity = extra => ({ kind: 'task-execution', claudeSessionMode: 'interactive-team-v1', taskId: 'cli-task', executionId: randomUUID(), sessionId: `task-execution-${randomUUID()}`,
   requirementRevision: 1, controlRevision: 1, inputVersion: 1, inputDigest: 'synthetic-input-one', inputHistory: [], leaseEpoch: 1, sessionBound: false, ...extra })
 
 async function until(read, label, timeout = 7000) {
@@ -40,8 +41,28 @@ async function fixtureMain() {
   const session = argument(args.includes('--resume') ? '--resume' : '--session-id')
   const configuration = JSON.parse(argument('--mcp-config')), server = Object.values(configuration.mcpServers)[0]
   const trace = data => appendFile(plan.trace, JSON.stringify(data) + '\n')
-  const emit = data => new Promise(resolve => process.stdout.write(JSON.stringify({ session_id: session, ...data }) + '\n', resolve))
-  let sequence = 0, feedbackReceipt
+  const hookConfig = JSON.parse(argument('--settings')).hooks.UserPromptSubmit[0].hooks[0]
+  const calls = new Map(), decisions = new Map()
+  const hook = async body => {
+    const response = await fetch(hookConfig.url, { method: 'POST', headers: { ...hookConfig.headers, 'content-type': 'application/json' }, body: JSON.stringify({ session_id: session, cwd: process.cwd(), ...body }) })
+    const value = await response.json(); await trace({kind:'hook', event:body.hook_event_name, status:response.status, toolUseId:body.tool_use_id, agentId:body.agent_id, value}); return value
+  }
+  const emit = async data => {
+    if (data.type === 'system') return hook({hook_event_name:'UserPromptSubmit', session_id:data.session_id ?? session, prompt:JSON.stringify({input:{}})})
+    if (data.type === 'assistant') for (const call of data.message?.content ?? []) {
+      calls.set(call.id,call)
+      decisions.set(call.id,await hook({hook_event_name:'PreToolUse',tool_use_id:call.id,tool_name:call.name,tool_input:call.input, ...(data.agent_id ? {agent_id:data.agent_id}:{})}))
+    }
+    if (data.type === 'user' && data.isReplay) return hook({hook_event_name:'UserPromptSubmit',prompt:JSON.stringify(data.message?.content ?? data)})
+    if (data.type === 'user') for (const result of data.message?.content ?? []) {
+      const call=calls.get(result.tool_use_id); if(!call) continue
+      if(decisions.get(call.id)?.hookSpecificOutput?.permissionDecision !== 'allow') continue
+      await hook({hook_event_name:result.is_error?'PostToolUseFailure':'PostToolUse',tool_use_id:call.id,tool_name:call.name,tool_input:call.input,tool_response:{content:result.content,isError:result.is_error===true,...(data.tool_use_result??{})},...(data.agent_id?{agent_id:data.agent_id}:{})})
+    }
+    if(data.type==='result') return hook({hook_event_name:'Stop'})
+  }
+  let sequence = 0
+  const feedbackReceipts = new Map()
   const rpc = async (method, params) => {
     const response = await fetch(server.url, { method: 'POST', headers: { ...server.headers, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++sequence, method, params }) })
     const text = await response.text()
@@ -51,9 +72,9 @@ async function fixtureMain() {
   }
   const inputs = [], readers = []
   const lines = createInterface({ input: process.stdin })
-  lines.on('line', line => { const input = JSON.parse(line); const reader = readers.shift(); if (reader) reader(input); else inputs.push(input) })
+  lines.on('line', line => { let input; try { input=JSON.parse(line) } catch { return };  const reader = readers.shift(); if (reader) reader(input); else inputs.push(input) })
   const nextInput = () => inputs.length ? Promise.resolve(inputs.shift()) : new Promise(resolve => readers.push(resolve))
-  const input = await nextInput()
+  const input = {message:{content:args.at(-1)}}
   await trace({ kind: 'input', uuid: input.uuid, text: input.message?.content })
   await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'synthetic-cli', version: '1' } })
   await rpc('tools/list', {})
@@ -65,35 +86,37 @@ async function fixtureMain() {
       for (;;) { try { await readFile(step.path); break } catch (e) { if (e.code !== 'ENOENT') throw e; await delay(10) } }
     } else if (step.kind === 'native') {
       const id = step.id ?? `toolu_${index}`
-      if (!step.alreadyEmitted) await emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: step.name, input: step.args }] } })
-      const result = await rpc('tools/call', { name: 'permission', arguments: { tool_name: step.name, tool_use_id: id, input: step.args } })
-      let decision
-      try { decision = JSON.parse(result?.content?.[0]?.text) } catch {}
+      if (!step.alreadyEmitted) await emit({ type: 'assistant', agent_id:step.agent_id, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: step.name, input: step.args }] } })
+      const raw = decisions.get(id)
+      const decision = {behavior:raw?.hookSpecificOutput?.permissionDecision==='allow'?'allow':'deny'}
       if (decision?.behavior === 'allow' && step.write) await writeFile(step.write, step.bytes)
       await trace({ kind: 'native-decision', id, allowed: decision?.behavior === 'allow' })
-      if (!step.omitResult) await emit({ type: 'user', ...(step.backgroundReceipt ? { tool_use_result: { backgroundTaskId: 'synthetic-background-task' } } : {}), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: decision?.behavior !== 'allow', content: decision?.behavior === 'allow' ? 'synthetic tool completed' : 'synthetic denied' }] } })
+      if (!step.omitResult) await emit({ type: 'user', agent_id:step.agent_id, ...(step.backgroundReceipt ? { tool_use_result: { backgroundTaskId: 'synthetic-background-task' } } : {}), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: decision?.behavior !== 'allow', content: decision?.behavior === 'allow' ? 'synthetic tool completed' : 'synthetic denied' }] } })
     } else if (step.kind === 'tool') {
       const id = step.id ?? `toolu_${index}`
-      const args = { ...step.args, ...(step.useFeedbackReceipt ? { feedbackReceipt } : {}) }
-      await emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: `mcp__dsh__${step.name}`, input: args }] } })
+      const args = { ...step.args, ...(step.useFeedbackReceipt ? { feedbackReceipt: feedbackReceipts.get(step.agent_id ?? 'lead') } : {}) }
+      await emit({ type: 'assistant', agent_id:step.agent_id, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: `mcp__dsh__${step.name}`, input: args }] } })
       const result = await rpc('tools/call', { name: step.name, arguments: args, _meta: { 'claudecode/toolUseId': id } })
-      if (step.name === 'execution_feedback_read' && !result?.isError) feedbackReceipt = JSON.parse(result.content[0].text).feedbackReceipt
-      if (!step.omitResult) await emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: result?.isError === true, content: result?.content ?? [] }] } })
+      if (step.name === 'execution_feedback_read' && !result?.isError) feedbackReceipts.set(step.agent_id ?? 'lead', JSON.parse(result.content[0].text).feedbackReceipt)
+      if (!step.omitResult) await emit({ type: 'user', agent_id:step.agent_id, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: result?.isError === true, content: result?.content ?? [] }] } })
     } else if (step.kind === 'ack-input') {
       const next = await nextInput()
       await trace({ kind: 'feedback', uuid: next.uuid, text: next.message?.content })
-      await emit({ ...next, type: 'user', isReplay: true })
+      await hook({hook_event_name:'UserPromptSubmit',prompt:JSON.stringify(next)})
     } else if (step.kind === 'descendant') {
       const source = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(step.pidPath)},String(process.pid));setInterval(()=>fs.appendFileSync(${JSON.stringify(step.path)},'x'),20)`
       spawn(process.execPath, ['-e', source], { stdio: 'ignore', windowsHide: true })
-    } else if (step.kind === 'emit') await emit(step.value)
-    else if (step.kind === 'bad-json') process.stdout.write('{broken-json\n')
+    } else if (step.kind === 'hook-race') {
+      const early=hook(step.early); await delay(30); await hook(step.late); await early
+    } else if (step.kind === 'hook') await hook(step.value)
+    else if (step.kind === 'emit') await emit(step.value)
+    else if (step.kind === 'bad-json') { process.stdout.write('{broken-json\n'); await hook({hook_event_name:'PostToolUse',tool_use_id:'missing',tool_name:'Write',tool_input:{}}) }
   }
   if (!plan.omitTerminal) await emit({ type: 'result', subtype: 'success', is_error: false, result: '合成终态，不是 Host 提交证据' })
   lines.close(); process.stdin.destroy()
 }
 
-async function harness(t, { steps = [], isCurrent = async () => true, beforeResolve, beforeSpawn, wrapHandle, ...planExtra } = {}) {
+async function harness(t, { steps = [], isCurrent = async () => true, beforeResolve, beforeSpawn, wrapHandle, cliVersion = '2.1.309', ...planExtra } = {}) {
   const bucket = resolve('docs/tmp/claude-execution-native-tests')
   await mkdir(bucket, { recursive: true })
   const root = await mkdtemp(join(bucket, 'run-')), tracePath = join(root, 'trace.jsonl'), fixture = join(root, 'fixture.mjs'), planPath = join(root, 'plan.json')
@@ -102,10 +125,11 @@ async function harness(t, { steps = [], isCurrent = async () => true, beforeReso
   await writeFile(planPath, JSON.stringify(plan))
   const ctx = new Context(); new LocalSubprocessRuntime(ctx)
   const real = ctx.subprocess, spawns = [], effects = [], results = [], progress = [], consumed = [], feedback = []
-  const subprocess = { resolveExecutable: async name => { assert.equal(name, 'claude'); await beforeResolve?.(); return process.execPath }, async spawn(spec) {
+  const subprocess = { resolveExecutable: async name => { assert.equal(name, 'claude'); await beforeResolve?.(); return process.execPath }, async spawn(spec) { return real.spawn({ ...spec, argv: [process.execPath, '-e', `console.log(${JSON.stringify(cliVersion + ' (Claude Code)')})`] }) }, async spawnTerminal(spec) {
     spawns.push(structuredClone({ argv: spec.argv, cwd: spec.cwd, env: spec.env }))
     await beforeSpawn?.()
-    const handle = real.spawn({ ...spec, argv: [process.execPath, fixture, planPath, ...spec.argv.slice(1)] })
+    const child = real.spawn({ ...spec, stdio: {stdin:'pipe',stdout:'pipe',stderr:'pipe'}, argv: [process.execPath, fixture, planPath, ...spec.argv.slice(1)] })
+    const handle = new Proxy(child, {get(target,key) { if(key==='output')return target.stdout; if(key==='terminate')return async ()=>{target.terminate();if(!await target.waitForExit(AbortSignal.timeout(10000)))throw Object.assign(new Error('drain timeout'),{code:'claude_execution_drain_timeout'})}; if(key==='write')return async text=>{await target.stdin.write(text.replaceAll('\x1b[200~','').replaceAll('\x1b[201~','').replaceAll('\r','\n'))};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value }})
     return wrapHandle ? wrapHandle(handle) : handle
   } }
   const manager = createClaudeExecutionSessions({ ctx: { subprocess }, isCurrent, getWorkspaceDir: async () => root })
@@ -135,9 +159,10 @@ test('CLI candidate requires Host submit and matching tool result before final a
   assert.equal(argv[argv.indexOf('--session-id') + 1], binding.sessionId.slice('task-execution-'.length))
   assert.equal(argv.includes('--continue'), false); assert.equal(argv.includes('--dangerously-skip-permissions'), false)
   assert.equal(argv.includes('--strict-mcp-config'), true)
-  assert.deepEqual(h.spawns[0].env, { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, '只提供固定控制参数，不转发整个Host环境')
+  assert.equal(argv[argv.indexOf('--system-prompt-snapshot') + 1], 'off')
+  assert.deepEqual(h.spawns[0].env, { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, '只提供固定控制参数，不转发整个Host环境')
   const settings = JSON.parse(argv[argv.indexOf('--settings') + 1])
-  assert.equal(settings.disableAllHooks, true); assert.equal(settings.sandbox.autoAllowBashIfSandboxed, false)
+  assert.equal(argv.includes('-p'), false); assert.equal(settings.teammateMode, 'in-process'); assert.ok(settings.hooks.PreToolUse); assert.equal(settings.hooks.SubagentStart, undefined); assert.equal(settings.hooks.SubagentStop, undefined); assert.ok(settings.hooks.TeammateIdle); assert.equal(settings.sandbox.autoAllowBashIfSandboxed, false)
   const records = (await readFile(claudeExecutionLogPath(h.root, binding.executionId), 'utf8')).trim().split('\n').map(JSON.parse)
   assert.equal(records.at(-1).type, 'drained')
   assert.ok(records.every(event => event.provider === 'claude-code' && event.binding.sessionId === binding.sessionId))
@@ -146,15 +171,15 @@ test('CLI candidate requires Host submit and matching tool result before final a
 
 for (const omitSubmitResult of [false, true]) test(`CLI exit zero cannot replace ${omitSubmitResult ? 'submit tool result' : 'Host submit'}`, options, async t => {
   const h = await harness(t, { steps: omitSubmitResult ? [{ kind: 'tool', name: 'execution_submit', args: { output }, omitResult: true }] : [] })
-  const binding = identity(), result = await h.run(binding)
-  assert.equal(result.status, 'no_submission'); assert.equal(h.results.length, 0)
+  const binding = identity()
+  await assert.rejects(h.run(binding), { code: 'claude_execution_terminal_missing' }); assert.equal(h.results.length, 0)
   h.manager.assertDrained(binding)
 })
 
 test('CLI wrong provider session fails without binding or accepting a result', options, async t => {
   const h = await harness(t, { wrongSession: true })
   const binding = identity()
-  await assert.rejects(h.run(binding), { code: 'claude_execution_provider_session_mismatch' })
+  await assert.rejects(h.run(binding), { code: 'claude_execution_hook_identity_mismatch' })
   assert.equal(h.bound, 0); assert.equal(h.results.length, 0)
   h.manager.assertDrained(binding)
 })
@@ -167,7 +192,7 @@ test('CLI stale lease before permission denies real file mutation', options, asy
   const binding = identity(), running = h.run(binding)
   await until(async () => (await h.trace()).some(item => item.kind === 'waiting'), 'before permission')
   current = false; await writeFile(gate, 'go')
-  assert.equal((await running).status, 'stale')
+  await assert.rejects(running, { code: 'claude_execution_terminal_missing' })
   assert.equal(await exists(target), null); assert.equal(h.effects.length, 0); assert.equal(h.results.length, 0)
   h.manager.assertDrained(binding)
 })
@@ -176,8 +201,8 @@ test('CLI operation gate failure denies a mutation before the child writes it', 
   const h = await harness(t), target = join(h.root, 'effect.txt')
   await h.setPlan({ steps: [{ kind: 'native', name: 'Write', args: { file_path: target, content: 'forbidden' }, write: target, bytes: 'forbidden' }] })
   const attempted = []
-  const result = await h.run(identity(), { onNativeExecution: async event => { attempted.push(event.phase); throw Object.assign(new Error('unknown earlier effect'), { code: 'DYNAMIC_OPERATION_UNRESOLVED' }) } })
-  assert.equal(result.status, 'no_submission'); assert.equal(await exists(target), null)
+  await assert.rejects(h.run(identity(), { onNativeExecution: async event => { attempted.push(event.phase); throw Object.assign(new Error('unknown earlier effect'), { code: 'DYNAMIC_OPERATION_UNRESOLVED' }) } }), { code: 'claude_execution_terminal_missing' })
+  assert.equal(await exists(target), null)
   assert.deepEqual(attempted, ['started']); assert.equal(h.results.length, 0)
   assert.ok((await h.trace()).some(item => item.kind === 'native-decision' && item.allowed === false))
 })
@@ -201,22 +226,25 @@ test('CLI original identity resumes explicitly and missing bound history cannot 
   await h.run(first)
   const next = { ...first, inputVersion: 2, inputDigest: 'synthetic-input-two', leaseEpoch: 2, sessionBound: true,
     inputHistory: [{ inputVersion: 1, inputDigest: first.inputDigest, requirementRevision: 1, controlRevision: 1 }] }
-  assert.equal((await h.run(next)).status, 'submitted')
+  assert.equal((await h.run(next, { definition: { nativeTools: true, allowedTools: [], outputSchema: schema, prompt: '第二轮不同职责：只执行新的明确指令' } })).status, 'submitted')
   const argv = h.spawns[1].argv
   assert.equal(argv[argv.indexOf('--resume') + 1], first.sessionId.slice('task-execution-'.length))
   assert.equal(argv.includes('--session-id'), false); assert.equal(argv.includes('--continue'), false)
+  assert.equal(argv[argv.indexOf('--system-prompt-snapshot') + 1], 'off')
+  assert.match(argv[argv.indexOf('--append-system-prompt') + 1], /^第二轮不同职责：只执行新的明确指令/)
+  assert.notEqual(argv[argv.indexOf('--append-system-prompt') + 1], h.spawns[0].argv[h.spawns[0].argv.indexOf('--append-system-prompt') + 1])
   const missing = identity({ sessionBound: true })
   await assert.rejects(h.run(missing), { code: 'claude_execution_bound_history_missing' })
   assert.equal(h.spawns.length, 2, '日志缺失不得用新进程替代原会话')
 })
 
-test('CLI truncated output fails with zero acceptance and retained diagnostic log', options, async t => {
+test('CLI malformed hook event fails with zero acceptance and retained diagnostic log', options, async t => {
   const h = await harness(t, { steps: [{ kind: 'bad-json' }] }), binding = identity()
-  await assert.rejects(h.run(binding), { code: 'claude_execution_stream_invalid' })
+  await assert.rejects(h.run(binding), { code: 'claude_execution_tool_unobserved' })
   assert.equal(h.results.length, 0)
   h.manager.assertDrained(binding)
   const log = await readFile(claudeExecutionLogPath(h.root, binding.executionId), 'utf8')
-  assert.match(log, /claude_execution_stream_invalid/)
+  assert.match(log, /claude_execution_tool_unobserved/)
 })
 
 test('CLI real file mutation is accounted before write and settled after its observed result', options, async t => {
@@ -251,14 +279,14 @@ for (const reviewed of [false, true]) test(`CLI feedback ACK ${reviewed ? 'plus 
   if (reviewed) {
     await until(async () => {
       const bytes = await exists(claudeExecutionLogPath(h.root, binding.executionId))
-      return bytes?.toString().split('\n').some(line => line && JSON.parse(line).data?.message?.content?.some?.(part => part.type === 'tool_result' && part.tool_use_id === 'review-one'))
+      return bytes?.toString().split('\n').some(line => line && JSON.parse(line).type === 'hook.result' && JSON.parse(line).data?.callId === 'review-one')
     }, 'feedback review tool result persisted')
     await writeFile(release, 'go')
   }
-  const result = await run
+  const result = reviewed ? await run : await assert.rejects(run, { code: 'claude_execution_terminal_missing' })
   assert.equal(h.consumed.length, 1, 'ACK 只登记一次输入准入')
   assert.equal(h.consumed[0].messageId, 'peer-one')
-  assert.equal(result.status, reviewed ? 'submitted' : 'no_submission')
+  if (reviewed) assert.equal(result.status, 'submitted')
   assert.equal(h.results.length, reviewed ? 1 : 0)
   if (reviewed) assert.equal(h.results[0].proof.feedbackVersion, 1)
   else assert.ok((await h.trace()).some(item => item.response?.result?.isError && JSON.stringify(item.response).includes('feedback_review_required')))
@@ -347,10 +375,10 @@ test('CLI old planned native call cannot use a later feedback read to mutate fil
   const run = h.run(binding)
   await until(async () => {
     const bytes = await exists(claudeExecutionLogPath(h.root, binding.executionId))
-    return bytes?.toString().split('\n').some(line => line && JSON.parse(line).data?.message?.content?.some?.(part => part.type === 'tool_result' && part.tool_use_id === 'fresh-review'))
+    return bytes?.toString().split('\n').some(line => line && JSON.parse(line).type === 'hook.result' && JSON.parse(line).data?.callId === 'fresh-review')
   }, 'new review result persisted')
   await writeFile(release, 'go')
-  assert.equal((await run).status, 'no_submission')
+  await assert.rejects(run, { code: 'claude_execution_terminal_missing' })
   assert.equal(h.consumed.length, 1); assert.equal(h.effects.length, 0); assert.equal(await exists(target), null)
   assert.ok((await h.trace()).some(item => item.kind === 'native-decision' && item.id === 'old-write' && !item.allowed))
 })
@@ -360,10 +388,10 @@ test('CLI repeated native call identity does not replay a successful file effect
   const args = { file_path: target, content: 'once only' }
   await h.setPlan({ steps: [{ kind: 'native', id: 'one-write', name: 'Write', args, write: target, bytes: 'once only' },
     { kind: 'native', id: 'one-write', name: 'Write', args, write: target, bytes: 'REPLAYED' }] })
-  await h.run(identity())
+  await assert.rejects(h.run(identity()), { code: 'claude_execution_hook_call_invalid' })
   assert.equal(await readFile(target, 'utf8'), 'once only')
   assert.deepEqual(h.effects.map(event => event.phase), ['started', 'settled'])
-  assert.deepEqual((await h.trace()).filter(item => item.kind === 'native-decision').map(item => item.allowed), [true, false])
+  assert.equal((await h.trace()).filter(item => item.kind === 'native-decision' && item.allowed).length, 1)
 })
 
 test('CLI executable unavailable before init retries the original UUID with session-id instead of resume', options, async t => {
@@ -395,7 +423,7 @@ for (const kind of ['hardlink', 'junction']) test(`CLI journal rejects ${kind} w
 
 test('CLI unproven process drain retains the execution slot and never accepts the result', options, async t => {
   const h = await harness(t, { steps: [{ kind: 'tool', name: 'execution_submit', args: { output } }], wrapHandle: handle => new Proxy(handle, {
-    get(target, key) { if (key === 'waitForExit') return async () => false; const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value },
+    get(target, key) { if (key === 'terminate') return async () => { await target.terminate(); throw Object.assign(new Error('unproven drain'), { code: 'claude_execution_drain_timeout' }) }; const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value },
   }) }), binding = identity()
   h.expectedCloseError = 'claude_execution_drain_timeout'
   await assert.rejects(h.run(binding), error => error.code === h.expectedCloseError && error.executionDrained === false)
@@ -408,8 +436,8 @@ test('CLI unproven process drain retains the execution slot and never accepts th
   assert.notEqual(records.at(-1).type, 'drained', '不能以CLI成功终态补造受管范围排空')
 })
 
-test('CLI structured background receipt is unknown instead of a successful completed operation', options, async t => {
-  const h = await harness(t, { steps: [{ kind: 'native', name: 'Bash', args: { command: 'synthetic-foreground-command', run_in_background: false }, backgroundReceipt: true }] }), binding = identity()
+for (const shell of ['Bash', 'PowerShell']) test(`CLI ${shell} structured background receipt is unknown instead of a successful completed operation`, options, async t => {
+  const h = await harness(t, { steps: [{ kind: 'native', name: shell, args: { command: 'synthetic-foreground-command', run_in_background: false }, backgroundReceipt: true }] }), binding = identity()
   await assert.rejects(h.run(binding), { code: 'claude_execution_background_not_supported' })
   assert.equal(h.results.length, 0)
   assert.equal(h.effects.length, 2)
@@ -420,4 +448,154 @@ test('CLI structured background receipt is unknown instead of a successful compl
   assert.ok(records.some(item => item.type === 'tool.unknown'))
   assert.equal(records.some(item => item.type === 'tool.settled'), false, '后台启动回执不能记为工具已完成')
   assert.equal(records.at(-1).type, 'drained')
+})
+
+
+test('Interactive Claude refuses an unmarked historical headless execution before spawning', options, async t => {
+  const h = await harness(t)
+  const binding = identity(); delete binding.claudeSessionMode
+  await assert.rejects(h.run(binding), { code: 'claude_execution_legacy_session_mode' })
+  assert.equal(h.spawns.length, 0); assert.equal(h.bound, 0)
+})
+
+test('Interactive Lead records native teammate responsibility and waits for shutdown approval', options, async t => {
+  const name='fixture-check', agent='fixture-check-agent', team='session-fixture'
+  const spawnArgs={name,prompt:'独立核验合成结果',subagent_type:'dsh-worker'}, shutdownArgs={type:'shutdown_response',approve:true,recipient:'team-lead'}
+  const h=await harness(t,{steps:[
+    {kind:'hook',value:{hook_event_name:'PreToolUse',tool_use_id:'spawn-check',tool_name:'Agent',tool_input:spawnArgs}},
+    {kind:'hook',value:{hook_event_name:'PostToolUse',tool_use_id:'spawn-check',tool_name:'Agent',tool_input:spawnArgs,tool_response:{status:'teammate_spawned',name,agent_id:agent,team_name:team,tmux_pane_id:'in-process',is_splitpane:false}}},
+    {kind:'hook',value:{hook_event_name:'PreToolUse',agent_id:agent,tool_use_id:'shutdown-check',tool_name:'SendMessage',tool_input:shutdownArgs}},
+    {kind:'hook',value:{hook_event_name:'PostToolUse',agent_id:agent,tool_use_id:'shutdown-check',tool_name:'SendMessage',tool_input:shutdownArgs,tool_response:{success:true}}},
+    {kind:'tool',name:'execution_submit',args:{output}},
+  ]}), binding=identity()
+  assert.equal((await h.run(binding)).status,'submitted')
+  const doc=await readFile(join(h.root,'outputs',binding.executionId,'round-1-lease-1',`${agent}.md`),'utf8')
+  assert.ok((await h.trace()).some(row=>row.toolUseId==='spawn-check'&&row.value?.hookSpecificOutput?.permissionDecision==='allow'))
+  assert.match(doc,/独立核验合成结果/);assert.match(doc,/shutdown_response/)
+  h.manager.assertDrained(binding)
+})
+
+for(const [label,name,args] of [
+  ['external peer','SendMessage',{recipient:'unrelated-peer',content:'forbidden'}],
+  ['background teammate','Agent',{name:'check',prompt:'check',subagent_type:'dsh-worker',run_in_background:true}],
+  ['worktree teammate','Agent',{name:'check',prompt:'check',subagent_type:'dsh-worker',isolation:'worktree'}],
+]) test(`Interactive team rejects ${label}`,options,async t=>{
+  const h=await harness(t,{steps:[{kind:'hook',value:{hook_event_name:'PreToolUse',tool_use_id:'bad-team-call',tool_name:name,tool_input:args}}]})
+  await assert.rejects(h.run(identity()),{code:'claude_execution_terminal_missing'})
+  assert.equal(h.results.length,0)
+  assert.ok((await h.trace()).some(row=>row.value?.hookSpecificOutput?.permissionDecision==='deny'))
+})
+
+
+const teammate = () => {
+  const name='fixture-check', agent='fixture-check-agent', team='session-fixture'
+  const args={name,prompt:'本轮只负责核对合成证据',subagent_type:'dsh-worker'}
+  const pre={hook_event_name:'PreToolUse',tool_use_id:'spawn-member',tool_name:'Agent',tool_input:args}
+  const post={hook_event_name:'PostToolUse',tool_use_id:'spawn-member',tool_name:'Agent',tool_input:args,tool_response:{status:'teammate_spawned',name,agent_id:agent,team_name:team,tmux_pane_id:'in-process',is_splitpane:false}}
+  const stopArgs={type:'shutdown_response',approve:true,recipient:'team-lead'}
+  const shutdown=[
+    {kind:'hook',value:{hook_event_name:'PreToolUse',agent_id:agent,tool_use_id:'member-shutdown',tool_name:'SendMessage',tool_input:stopArgs}},
+    {kind:'hook',value:{hook_event_name:'PostToolUse',agent_id:agent,tool_use_id:'member-shutdown',tool_name:'SendMessage',tool_input:stopArgs,tool_response:{success:true}}},
+  ]
+  return {agent,pre,post,shutdown}
+}
+
+test('Interactive member PreToolUse racing Agent Post waits for admitted native identity', options,async t=>{
+  const member=teammate(), binding=identity()
+  const h=await harness(t,{steps:[{kind:'hook',value:member.pre},{kind:'hook-race',early:{hook_event_name:'PreToolUse',agent_id:member.agent,tool_use_id:'racing-report',tool_name:'SendMessage',tool_input:{type:'message',recipient:'main',content:'startup report'}},late:member.post},...member.shutdown,{kind:'tool',name:'execution_submit',args:{output}}]})
+  assert.equal((await h.run(binding)).status,'submitted')
+  const early=(await h.trace()).find(row=>row.toolUseId==='racing-report')
+  assert.equal(early.status,200);assert.equal(early.value.hookSpecificOutput.permissionDecision,'allow')
+  assert.match(await readFile(join(h.root,'outputs',binding.executionId,'round-1-lease-1',`${member.agent}.md`),'utf8'),/racing-report/)
+})
+
+for(const [label,changes] of [
+  ['ordinary subagent',{status:'completed'}],['split pane',{is_splitpane:true}],['wrong pane',{tmux_pane_id:'%1'}],
+  ['unsafe agent id',{agent_id:'../escape'}],['unsafe team name',{team_name:'../escape'}],
+]) test(`Interactive Agent Post rejects ${label}`,options,async t=>{
+  const member=teammate();Object.assign(member.post.tool_response,changes)
+  const h=await harness(t,{steps:[{kind:'hook',value:member.pre},{kind:'hook',value:member.post}]})
+  await assert.rejects(h.run(identity()),{code:'claude_execution_native_team_required'})
+  assert.equal(h.results.length,0)
+})
+
+test('Interactive member cannot spawn a nested teammate',options,async t=>{
+  const member=teammate()
+  const h=await harness(t,{steps:[{kind:'hook',value:member.pre},{kind:'hook',value:member.post},
+    {kind:'hook',value:{...member.pre,agent_id:member.agent,tool_use_id:'nested-spawn'}},...member.shutdown,{kind:'tool',name:'execution_submit',args:{output}}]})
+  assert.equal((await h.run(identity())).status,'submitted')
+  assert.ok((await h.trace()).some(row=>row.toolUseId==='nested-spawn'&&row.value?.hookSpecificOutput?.permissionDecision==='deny'))
+})
+
+for(const memberReviews of [false,true]) test(`Lead feedback review ${memberReviews?'plus member review admits':'alone cannot admit'} member file mutation`,options,async t=>{
+  const member=teammate(), h=await harness(t), target=join(h.root,'member-effect.txt')
+  h.feedback.push({id:'scope-update',text:'需按新证据范围执行',receivedAt:'fixture',consumedAt:null})
+  await h.setPlan({steps:[{kind:'ack-input'},{kind:'tool',name:'execution_feedback_read',id:'lead-review',args:{}},
+    {kind:'hook',value:member.pre},{kind:'hook',value:member.post},
+    ...(memberReviews?[{kind:'tool',agent_id:member.agent,name:'execution_feedback_read',id:'member-review',args:{}}]:[]),
+    {kind:'native',agent_id:member.agent,id:'member-write',name:'Write',args:{file_path:target,content:'reviewed'},write:target,bytes:'reviewed'},
+    ...member.shutdown,{kind:'tool',name:'execution_submit',args:{output},useFeedbackReceipt:true}]})
+  assert.equal((await h.run(identity())).status,'submitted')
+  assert.equal((await exists(target))?.toString()??null,memberReviews?'reviewed':null)
+  assert.equal(h.effects.filter(event=>event.phase==='started').length,memberReviews?1:0)
+})
+
+
+test('Interactive rejected spawn cannot forge an accepted native teammate Post',options,async t=>{
+  const member=teammate();member.pre.tool_input.subagent_type='general-purpose'
+  const h=await harness(t,{steps:[{kind:'hook',value:member.pre},{kind:'hook',value:member.post}]})
+  await assert.rejects(h.run(identity()),{code:'claude_execution_tool_not_admitted'})
+  assert.equal(h.results.length,0)
+})
+
+
+for(const kind of ['wrong-name','duplicate-agent','duplicate-name']) test(`Interactive Agent Post rejects ${kind}`,options,async t=>{
+  const member=teammate(), steps=[]
+  if(kind==='wrong-name')member.post.tool_response.name='unexpected-member'
+  else {
+    steps.push({kind:'hook',value:structuredClone(member.pre)},{kind:'hook',value:structuredClone(member.post)})
+    member.pre.tool_use_id=member.post.tool_use_id='second-spawn'
+    if(kind==='duplicate-agent') {member.pre.tool_input.name='second';member.post.tool_response.name='second'}
+    else member.post.tool_response.agent_id='second-agent'
+  }
+  steps.push({kind:'hook',value:member.pre},{kind:'hook',value:member.post})
+  const h=await harness(t,{steps})
+  await assert.rejects(h.run(identity()),{code:'claude_execution_member_identity_mismatch'})
+  assert.equal(h.results.length,0)
+})
+
+
+test('Interactive member reports to main and rejects the non-delivering team-lead alias',options,async t=>{
+  const member=teammate(), h=await harness(t,{steps:[{kind:'hook',value:member.pre},{kind:'hook',value:member.post},
+    {kind:'hook',value:{hook_event_name:'PreToolUse',agent_id:member.agent,tool_use_id:'wrong-report',tool_name:'SendMessage',tool_input:{type:'message',recipient:'team-lead',content:'report'}}},
+    {kind:'hook',value:{hook_event_name:'PreToolUse',agent_id:member.agent,tool_use_id:'main-report',tool_name:'SendMessage',tool_input:{type:'message',recipient:'main',content:'report'}}},
+    ...member.shutdown,{kind:'tool',name:'execution_submit',args:{output}}]})
+  assert.equal((await h.run(identity())).status,'submitted')
+  const trace=await h.trace()
+  assert.ok(trace.some(row=>row.toolUseId==='wrong-report'&&row.value?.hookSpecificOutput?.permissionDecision==='deny'))
+  assert.ok(trace.some(row=>row.toolUseId==='main-report'&&row.value?.hookSpecificOutput?.permissionDecision==='allow'))
+  assert.ok(trace.some(row=>row.toolUseId==='member-shutdown'&&row.value?.hookSpecificOutput?.permissionDecision==='allow'))
+})
+
+
+for(const missing of ['binding-mode','start-mode']) test(`Historical Claude ${missing} remains readable but cannot resume after top-level mode is added`,options,async t=>{
+  const h=await harness(t,{steps:[{kind:'tool',name:'execution_submit',args:{output}}]}), binding=identity()
+  await h.run(binding)
+  const path=claudeExecutionLogPath(h.root,binding.executionId), records=(await readFile(path,'utf8')).trim().split('\n').map(JSON.parse)
+  for(const event of records) if(event.type==='start') {
+    if(missing==='binding-mode')delete event.binding.claudeSessionMode
+    else delete event.data.sessionMode
+  }
+  const legacy=records.map(event=>JSON.stringify(event)).join('\n')+'\n';await writeFile(path,legacy)
+  const progress=await h.manager.readProgress({execution:binding});assert.ok(progress.newEventCount>0)
+  const next={...binding,sessionBound:true,inputVersion:2,inputDigest:'second-input',leaseEpoch:2,inputHistory:[{inputVersion:1,inputDigest:binding.inputDigest,requirementRevision:1,controlRevision:1}]}
+  await assert.rejects(h.run(next),{code:'claude_execution_legacy_session_mode'})
+  assert.equal(h.spawns.length,1);assert.equal(await readFile(path,'utf8'),legacy)
+})
+
+for (const cliVersion of ['2.1.295', '2.1.308']) test(`CLI ${cliVersion} cannot launch without verified snapshot refresh support`, options, async t => {
+  const h = await harness(t, { cliVersion }), binding = identity()
+  await assert.rejects(h.run(binding), { code: 'claude_execution_version_unsupported' })
+  assert.equal(h.spawns.length, 0); assert.equal(h.results.length, 0)
+  h.manager.assertDrained(binding)
 })

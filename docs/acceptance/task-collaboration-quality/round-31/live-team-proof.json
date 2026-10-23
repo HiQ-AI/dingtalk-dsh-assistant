@@ -1,0 +1,153 @@
+{
+  "status": "PASS",
+  "startedAt": "2026-10-23T07:26:55.584Z",
+  "completedAt": "2026-10-23T07:35:53.265Z",
+  "sources": {
+    "packages/dingtalk-dsh-assistant/claude-execution-session.js": "b3cc15e04ad5f66eac66f17b4063033e3d49e8ccea4cc07b4e8a1c47a541e3a1",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "7489274835a7bba3f493e09a8251de28ef30cb72cc3d97f7b71e56bd14218ae7",
+    "packages/dingtalk-dsh-assistant/session-workspaces.js": "3caf64e263022586d9bdd563c4ddfcbb7dcdff9cff114c52f432323e615061d9",
+    "docs/acceptance/task-collaboration-quality/scripts/verify-interactive-claude-team.mjs": "cf4c58f46da0095f49c9a6f1b65d7bd654589281f16655603783f21bc8870e2f"
+  },
+  "wrapperPid": 61188,
+  "launches": [
+    {
+      "sessionId": "3cfea156-5506-4502-adf4-a4c709a7c0c5",
+      "resume": null,
+      "interactive": true,
+      "pid": 85260,
+      "outcome": {
+        "exitCode": 0,
+        "signal": null
+      }
+    },
+    {
+      "sessionId": null,
+      "resume": "3cfea156-5506-4502-adf4-a4c709a7c0c5",
+      "interactive": true,
+      "pid": 27180,
+      "outcome": {
+        "exitCode": 0,
+        "signal": null
+      }
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "binding": {
+        "kind": "task-execution",
+        "taskId": "interactive-team-live",
+        "executionId": "43291509-c324-4775-81e6-fd1e22505fab",
+        "requirementRevision": 1,
+        "controlRevision": 1,
+        "inputDigest": "b50be45c67c3cd7a66867c99d2b2c54db33a799ddb755ea970a5756d0b3a94ef",
+        "sessionId": "task-execution-3cfea156-5506-4502-adf4-a4c709a7c0c5",
+        "sessionBound": false,
+        "leaseEpoch": 1,
+        "inputVersion": 1,
+        "claudeSessionMode": "interactive-team-v1",
+        "inputHistory": []
+      },
+      "status": "PASS",
+      "progressSequence": 3,
+      "members": [
+        {
+          "agentId": "acalc-61c4fef44c9cdd93",
+          "name": "calc",
+          "teamName": "session-860303a9",
+          "relativePath": "outputs/43291509-c324-4775-81e6-fd1e22505fab/round-1-lease-1/acalc-61c4fef44c9cdd93.md"
+        },
+        {
+          "agentId": "acheck-133becfcfbe3863b",
+          "name": "check",
+          "teamName": "session-860303a9",
+          "relativePath": "outputs/43291509-c324-4775-81e6-fd1e22505fab/round-1-lease-1/acheck-133becfcfbe3863b.md"
+        }
+      ],
+      "output": {
+        "artifacts": [],
+        "evidence": [
+          "本轮通过 Agent 分别创建 name=calc、name=check、subagent_type=dsh-worker 的原生队友；首次 ListAgents 明确列出 Teammates (2)：calc、check。",
+          "calc 的实际团队消息：「计算结论：37 × 19 = 37 × (20 − 1) = 740 − 37 = 703。」",
+          "check 的实际团队消息：「独立核算结果为 703：37 × 19 = 37 × (20 - 1) = 740 - 37 = 703。已通过原生 SendMessage 向 calc 发送一次该数值结论及计算过程。」",
+          "calc 的实际团队消息：「实际收到 check 的独立核算消息……我已向 check 确认收到，双方结果一致。」check 随后报告：「已收到 calc 回复，确认双方独立核算结果一致，均为 703。」",
+          "分别且仅一次向 calc/check 发送 shutdown_request，请求标识为 shutdown-1792740558576@calc、shutdown-1792740566040@check；随后独立 ListAgents 查询已无 Teammates，calc/check 均不再列出，确认团队排空。",
+          "职责、计算协作结果及排空证据均已使用 execution_report_progress 报告；execution_feedback_read 返回 feedback=[]。"
+        ],
+        "limitations": [
+          "仅验证隔离原生 Agent Teams 的创建、计算协作、消息交换、关闭与排空；无业务验证。",
+          "未运行命令、未写文件、未访问 Web、未向外部会话发消息，也未另建 DSH 执行；CLI 退出由 Host 负责。"
+        ],
+        "status": "completed",
+        "summary": "原生团队验收完成：已创建 calc/check 两名 dsh-worker 队友，两人均明确报告 37×19=703，并完成原生 SendMessage 交叉确认。分别发送一次关闭请求后，独立查询确认两名队友均已停止、团队排空。"
+      },
+      "drained": true
+    },
+    {
+      "round": 2,
+      "binding": {
+        "kind": "task-execution",
+        "taskId": "interactive-team-live",
+        "executionId": "43291509-c324-4775-81e6-fd1e22505fab",
+        "requirementRevision": 1,
+        "controlRevision": 1,
+        "inputDigest": "48b3cc92636ab2a8ae30385dbb3a880406b59fabf066d816bad61a09ba7ef652",
+        "sessionId": "task-execution-3cfea156-5506-4502-adf4-a4c709a7c0c5",
+        "sessionBound": true,
+        "leaseEpoch": 2,
+        "inputVersion": 2,
+        "claudeSessionMode": "interactive-team-v1",
+        "inputHistory": [
+          {
+            "inputVersion": 1,
+            "inputDigest": "b50be45c67c3cd7a66867c99d2b2c54db33a799ddb755ea970a5756d0b3a94ef",
+            "requirementRevision": 1,
+            "controlRevision": 1
+          }
+        ]
+      },
+      "status": "PASS",
+      "progressSequence": 2,
+      "members": [],
+      "output": {
+        "artifacts": [],
+        "evidence": [
+          "已使用原生 Read 读取第一轮 Lead 文档 outputs/43291509-c324-4775-81e6-fd1e22505fab/round-1.md；:18 为 status=succeeded，:19 为 drained=true，:69 记录计算式 37×19=37×(20−1)=740−37=703。独立复算该等式成立。",
+          "已使用原生 Read 读取 calc 执行文档 outputs/43291509-c324-4775-81e6-fd1e22505fab/round-1-lease-1/acalc-61c4fef44c9cdd93.md；:29 向 main 报告 703，:103 向 check 确认一致，:171 向 main 确认实际收到 check 消息，:319 记录 shutdown_response、请求 shutdown-1792740558576@calc、approve=true。",
+          "已使用原生 Read 读取 check 执行文档 outputs/43291509-c324-4775-81e6-fd1e22505fab/round-1-lease-1/acheck-133becfcfbe3863b.md；:29 独立核算 703 并发给 calc，:97 向 main 汇报，:171 确认收到 calc 回复，:245 记录 shutdown_response、请求 shutdown-1792740566040@check、approve=true。",
+          "本轮原生 PowerShell 工具精确执行一次 Write-Output 'DSH_CLAUDE_PTY_OK'，实际输出 DSH_CLAUDE_PTY_OK；未执行其他命令。",
+          "execution_team_read 显示沿用原 executionId 与 sessionId、inputVersion=2；本轮未创建队友、未写入或修改第一轮文档，计划与复核结果均通过 execution_report_progress 交由 Host 记录。",
+          "本轮最新 execution_feedback_read 返回 feedback=[]；已结合反馈重新判断，无需调整范围。"
+        ],
+        "limitations": [
+          "本轮只验证历史执行文档、703 计算结论及指定 Windows 命令通路，不扩展为业务验证或其他命令测试。",
+          "文档定位曾遇到 Glob 门禁拒绝及 Read 路径错误；最终按上一轮已知原生队友身份，使用允许的原生 Read 成功读取两份文档，未修改门禁或使用额外命令。",
+          "提交回执 received 仅代表候选被接收；最终完成状态由 Host 验证，不自行退出 CLI。"
+        ],
+        "status": "completed",
+        "summary": "第二轮原会话续办完成：Lead 只读复核第一轮文档及 calc/check 两位队员执行文档，确认 37×19=703、双方原生消息互认与关闭批准，第一轮记录 succeeded 且 drained=true；本轮未创建队友、未修改第一轮文档。原生 PowerShell 精确且仅执行一次指定命令，实际输出 DSH_CLAUDE_PTY_OK，未执行其他命令。DSH_RESUME_INSTRUCTION_R31。"
+      },
+      "drained": true
+    }
+  ],
+  "operations": [
+    {
+      "operationId": "operation-bb74febdb346de31495b6ccd6f3da715e60242ad",
+      "state": "succeeded",
+      "definition": {
+        "argumentsDigest": "00c2b958a41f74766b90ee54dbef569b2c06a626190caea1e8935e1a1d892f14",
+        "effectClass": "unknown",
+        "toolName": "PowerShell"
+      },
+      "result": {
+        "callId": "call_bcb5bdfb8031482a901507983b438807",
+        "isError": false,
+        "resultDigest": "39eecbaeca9685136b623e1d6f5ff4a5b28d956b7a4da16e989605eabeeef461",
+        "toolName": "PowerShell"
+      }
+    }
+  ],
+  "historyShaVerifiedByScript": true,
+  "leadReceiptVerifiedByScript": true,
+  "resumeInstructionMarkerVerified": true
+}
