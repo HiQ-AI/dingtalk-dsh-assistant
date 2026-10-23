@@ -11,6 +11,14 @@ function assertStableId(value, label) {
   return value
 }
 
+const DWS_UUID_MAX_LENGTH = 128
+
+/** 仅压缩超过 DWS uuid 上限的外部键；完整摘要保留差异，内部通知 ID 不变。 */
+export function dwsIdempotencyKey(value) {
+  assertStableId(value, 'idempotency_key')
+  return value.length <= DWS_UUID_MAX_LENGTH ? value : `dsh:sha256:${createHash('sha256').update(value).digest('hex')}`
+}
+
 function assertFileName(value) {
   assertStableId(value, 'file_name')
   if (value !== value.trim() || /[<>:"/\\|?*\u0000-\u001f\u007f]/u.test(value) || /[. ]$/u.test(value)
@@ -131,25 +139,23 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       return withProfile(['chat', '+chat-messages', '--group', assertStableId(groupId, 'group_id'), '--start', assertStableId(start, 'start'), '--end', assertStableId(end, 'end'), '--order', 'asc', '--page-all', '--page-limit', '50', '--format', 'json'])
     },
     compileGroupSend({ groupId, text, idempotencyKey }) {
-      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', assertStableId(idempotencyKey, 'idempotency_key'), '--format', 'json']
+      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
     compileGroupFileSend({ groupId, fileName, idempotencyKey }) {
-      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--msg-type', 'file', '--file', `./${assertFileName(fileName)}`, '--idempotency-key', assertStableId(idempotencyKey, 'idempotency_key'), '--format', 'json']
+      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--msg-type', 'file', '--file', `./${assertFileName(fileName)}`, '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
     compileGroupReply({ groupId, text, idempotencyKey, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds = [] }) {
-      const args = ['chat', 'message', 'reply', '--group', assertStableId(groupId, 'group_id'), '--ref-msg-id', assertStableId(replyToMessageId, 'reply_message_id'), '--ref-sender', assertStableId(replyToSenderOpenDingTalkId, 'reply_sender_id'), '--content', assertStableId(text, 'text'), '--uuid', assertStableId(idempotencyKey, 'idempotency_key'), '--format', 'json']
+      const args = ['chat', 'message', 'reply', '--group', assertStableId(groupId, 'group_id'), '--ref-msg-id', assertStableId(replyToMessageId, 'reply_message_id'), '--ref-sender', assertStableId(replyToSenderOpenDingTalkId, 'reply_sender_id'), '--content', assertStableId(text, 'text'), '--uuid', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (atOpenDingTalkIds.length > 0) args.push('--at-open-dingtalk-ids', atOpenDingTalkIds.map((value) => assertStableId(value, 'at_open_dingtalk_id')).join(','))
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
     compileSelfSend({ userId, text, idempotencyKey }) {
-      assertStableId(idempotencyKey, 'idempotency_key')
-      if (idempotencyKey.length > 128) throw new Error('dws_self_send_uuid_too_long')
-      const args = ['chat', '+messages-send', '--as', 'user', '--user', assertStableId(userId, 'human_user_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', assertStableId(idempotencyKey, 'idempotency_key'), '--format', 'json']
+      const args = ['chat', '+messages-send', '--as', 'user', '--user', assertStableId(userId, 'human_user_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
@@ -281,7 +287,9 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     async sendSelfIntent(request) {
       requireEnabled()
       if (!writesAuthorized) throw new Error('dws_write_not_authorized')
-      const sent = await runner.run(this.compileSelfSend(request))
+      const args = this.compileSelfSend(request)
+      const sentKey = args[args.indexOf('--idempotency-key') + 1]
+      const sent = await runner.run(args)
       if (sent.exitCode !== 0) {
         const error = commandError('dws_self_send_failed', sent)
         let payload, details
@@ -290,7 +298,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
         const match = /^sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is (\d+)\.$/u.exec(errorMessage ?? '')
         const traceId = details?.trace_id ?? details?.traceId ?? payload?.trace_id ?? payload?.traceId
         // 仅平台明确的uuid前置拒绝可证明未发送；网络错误及未知回执仍保持unknown。
-        if (String(error.serverErrorCode) === '1001' && match && Number(match[1]) === request.idempotencyKey.length && request.idempotencyKey.length > 128 && typeof traceId === 'string' && traceId.trim()) {
+        if (String(error.serverErrorCode) === '1001' && match && sentKey === request.idempotencyKey
+          && Number(match[1]) === sentKey.length && sentKey.length > DWS_UUID_MAX_LENGTH && typeof traceId === 'string' && traceId.trim()) {
           error.knownNotSent = true
           error.proof = { kind: 'dws-uuid-rejected', idempotencyKey: request.idempotencyKey, serverErrorCode: '1001', errorMessage,
             traceId }

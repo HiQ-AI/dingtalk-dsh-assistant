@@ -1,4 +1,4 @@
-import { matchesOutbound } from './dws-adapter.js'
+import { dwsIdempotencyKey, matchesOutbound } from './dws-adapter.js'
 import { notificationOpenTaskId } from './group-message.js'
 import { sameDeliveredText } from './group-message.js'
 import { messageTimestamp } from './dws-bridge.js'
@@ -30,7 +30,9 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
   const actual = observed.atOpenDingTalkIds ?? observed.at?.atOpenDingTalkIds
     ?? (Array.isArray(observed.mentions) ? observed.mentions.map(item => typeof item === 'string' ? item : item.openDingTalkId ?? item.userId) : undefined)
   const exactReceipt = acknowledgedMessageId === messageId
-  const exactUuid = (observed.uuid ?? observed.idempotencyKey) === notification.id
+  const observedKey = observed.uuid ?? observed.idempotencyKey
+  // 新发送使用有界外部键；历史原始键只作为回读证据，不改变通知状态或授权重发。
+  const exactUuid = observedKey === notification.id || observedKey === dwsIdempotencyKey(notification.id)
   const ownSender = senderActorId && (observed.senderOpenDingTalkId ?? observed.senderId) === senderActorId
   if (senderActorId && !ownSender) return undefined
   // DWS 查询不暴露原生 @ 元数据；只在 SUCCESS 的精确发送回执和发送者均核实时确认送达。

@@ -67,6 +67,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 若原通知只因顶层有序列表的 `1./2./3.` 在分段回读时变为 `1./1./1.` 而停留 unknown，安装列表回读修复后交由既有 notification.reconcile 正式结清；不手改 SQLite、正文或发送回执，不调用发送/重试发送接口。独立回读原 notificationId、原 messageId、delivered、sendAttemptCount 仍为 1，再核对恢复告警消失及健康状态。代码围栏、非连续编号、列表顺序或正文数字变化继续拒绝。
 
+若新提醒因旧版本把超长内部 ID 直接作为 DWS uuid 而被平台明确拒绝，升级后仅在完整持久负回执、许可、长度与唯一尝试均匹配且无 ACK/receipt 时，自动沿 notification.reconcile 结清为 failed；这是失败确认，不是送达或重发。按原生排空流程保留原 unknown，启动后独立核对 notification/occurrence 失败、sendAttemptCount 仍为 1、负回执保留和健康状态。新发送使用有界外部键；验收必须重新发出获授权的新测试指令，不直接重放旧通知。
+
 启动时 active、已排空、lastDecision=wait、无 question 且有 unknown 操作的任务，按相关运行模块摘要和当前需求/控制版本补一次 `runtime.updated` 唤醒。重复定时恢复或同代码重启不再补发；暂停、取消、人工问题等待和仍有执行的任务不适用。Owner 沿原任务调查并使用 `task_operation_reconcile` 核验，未知操作未被证明前不能放行原动作。
 
 批量跟进原任务的决策修复只更新 Assistant，无数据迁移。按本页原生部署流程应用后，新协调会话将分页读取轻量任务目录，并分别续办已查明的原 Task。已接纳的新建总任务不会自动撤销或重路由；处理旧现场前先核对其已发生效果，防止与原任务重复修改、发信或提测。部署验收应独立确认目录分页与原任务身份延续，测试中的模拟动作不代表现场任务已重开。

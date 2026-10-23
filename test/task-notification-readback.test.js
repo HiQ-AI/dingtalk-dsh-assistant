@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readTaskNotificationDelivery, verifyTaskNotificationReadback, readOperatorNotificationDelivery } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
+import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
 const notification = { id: 'n', payload: { conversationId: 'g', sourceMessageId: 's', text: '核验完成。', atOpenDingTalkIds: ['u'] } }
 const observed = { messageId: 'm', conversationId: 'g', text: '核验完成。', quotedMessage: { messageId: 's', conversationId: 'g' }, atOpenDingTalkIds: ['u'] }
 
@@ -35,6 +37,36 @@ test('unknown send cannot be reconciled from somebody else quoting identical tex
   assert.ok(verifyTaskNotificationReadback(notification,{...observed,uuid:'n'}))
   assert.ok(verifyTaskNotificationReadback(notification,{...observed,senderId:'bot'},{senderActorId:'bot'}))
   assert.equal(verifyTaskNotificationReadback(notification,{...observed,senderId:'other'},{senderActorId:'bot'}),undefined)
+})
+
+test('超长通知使用同一外部摘要键发送和精确回读，历史原始键仍可读且unknown不重发', async () => {
+  const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
+  const longId = `coordination:${'x'.repeat(124)}`, commands = []
+  const pending = { ...notification, id: longId, state: 'unknown', sendAttemptCount: 1,
+    payload: { ...notification.payload, actorId: 'u' } }
+  let sentKey
+  const sender = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    sentKey = args[args.indexOf('--uuid') + 1]
+    return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  // 编译及发送使用新通知的固定内部 ID；不把本测试的发送动作当作恢复 unknown 的步骤。
+  await sendWorkflowNotification(sender, { ...pending, state: 'prepared' })
+  assert.notEqual(sentKey, longId); assert.ok(sentKey.length <= 128); assert.equal(pending.id, longId)
+  const message = { ...observed, uuid: sentKey }
+  const adapter = { readGroup: async () => ({ complete: true, messages: [message] }), readMessage: async () => message }
+  const notifications = { send: async () => assert.fail('unknown must never resend'),
+    readback: value => readTaskNotificationDelivery(adapter, value) }
+  for (const key of [sentKey, longId]) {
+    message.uuid = key; commands.length = 0
+    await deliverTaskNotification({ notification: pending, notifications, command: async (kind, args) => commands.push({ kind, args }) })
+    assert.equal(commands[0].kind, 'notification.reconcile')
+    assert.equal(commands[0].args.notificationId, longId)
+    assert.equal(commands[0].args.receipt.identity, 'idempotency-key')
+  }
+  assert.equal(pending.sendAttemptCount, 1)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...message, uuid: `${sentKey}other` }), undefined)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...message, uuid: sentKey, text: '其他正文' }), undefined)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...message, uuid: undefined, idempotencyKey: sentKey }).identity, 'idempotency-key')
 })
 
 test('原任务SUCCESS与精确消息ID证明送达，不再以正文或引用元数据判定送达', async () => {

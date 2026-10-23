@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDwsAdapter, dispatchOutbox, matchesOutbound } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { createHash } from 'node:crypto'
+import { createDwsAdapter, dispatchOutbox, dwsIdempotencyKey, matchesOutbound } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { persistedUuidSendRejectionProof } from '../packages/dingtalk-dsh-assistant/group-message.js'
 
 test('DWS adapter 默认禁用且不会调用 runner', async () => {
   let calls = 0
@@ -256,13 +258,28 @@ test('历史命中但缺少真实消息ID时不得确认或盲目重发', async 
   }
 })
 
-test('私聊uuid长度预检拒绝超过128且零外发，合法key保持原值', async () => {
-  let sends = 0
-  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => { sends++; return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) } } } })
-  await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: 'x'.repeat(129) }), /dws_self_send_uuid_too_long/u)
-  assert.equal(sends, 0)
-  const legal = 'x'.repeat(128)
-  assert.equal(adapter.compileSelfSend({ userId: 'u', text: 't', idempotencyKey: legal }).includes(legal), true)
+test('DWS所有发送入口压缩超长uuid，128字符以内保持原值且不同后缀不碰撞', async () => {
+  const sent = []
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    sent.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  const compile = [
+    key => adapter.compileGroupSend({ groupId: 'g', text: 't', idempotencyKey: key }),
+    key => adapter.compileGroupReply({ groupId: 'g', text: 't', idempotencyKey: key, replyToMessageId: 'm', replyToSenderOpenDingTalkId: 'u' }),
+    key => adapter.compileGroupFileSend({ groupId: 'g', fileName: 'report.txt', idempotencyKey: key }),
+    key => adapter.compileSelfSend({ userId: 'u', text: 't', idempotencyKey: key }),
+  ]
+  const keyFrom = args => args[args.findIndex(value => value === '--uuid' || value === '--idempotency-key') + 1]
+  for (const key of ['short', 'x'.repeat(128), 'x'.repeat(129), 'coordination:' + 'x'.repeat(124)]) {
+    const expected = key.length <= 128 ? key : `dsh:sha256:${createHash('sha256').update(key).digest('hex')}`
+    for (const build of compile) { assert.equal(keyFrom(build(key)), expected); assert.ok(keyFrom(build(key)).length <= 128) }
+    assert.equal(dwsIdempotencyKey(dwsIdempotencyKey(key)), expected)
+  }
+  const prefix = 'x'.repeat(128)
+  assert.notEqual(dwsIdempotencyKey(`${prefix}a`), dwsIdempotencyKey(`${prefix}b`))
+  assert.deepEqual(await adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: `${prefix}a` }), { openTaskId: 'open' })
+  assert.equal(keyFrom(sent[0]), dwsIdempotencyKey(`${prefix}a`))
+  for (const value of [undefined, '', ' ']) assert.throws(() => dwsIdempotencyKey(value), /idempotency_key_required/u)
 })
 
 test('私聊负回执只对服务端精确uuid拒绝声明确定未发送', async () => {
@@ -274,8 +291,8 @@ test('私聊负回执只对服务端精确uuid拒绝声明确定未发送', asyn
     ['1001', "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 157.", false],
   ]) {
     const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => ({ exitCode: 1, stderr: JSON.stringify({ error: { server_error_code: serverErrorCode, errorMsg, trace_id: 'trace' } }) }) } })
-    // 模拟旧版本已经编译的156字符请求；新版本正常编译已在上一用例零外发拒绝。
-    adapter.compileSelfSend = () => ['existing-compiled-command']
+    // 模拟旧版本已经编译的156字符请求；新发送会使用完整摘要后的有界键。
+    adapter.compileSelfSend = () => ['existing-compiled-command', '--idempotency-key', key]
     await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: key }), error => {
       assert.equal(error.serverErrorCode, serverErrorCode)
       assert.equal(error.knownNotSent === true, known)
@@ -283,6 +300,48 @@ test('私聊负回执只对服务端精确uuid拒绝声明确定未发送', asyn
       return true
     })
   }
+})
+
+test('已压缩发送键不能以原内部ID长度构造确定未发送的负回执', async () => {
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => ({ exitCode: 1,
+    stderr: JSON.stringify({ error: { server_error_code: '1001', trace_id: 'trace',
+      errorMsg: "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 156." } }) }) } })
+  await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: 'x'.repeat(156) }), error => {
+    assert.equal(error.knownNotSent, undefined); assert.equal(error.proof, undefined); return true
+  })
+})
+
+test('持久uuid校验拒绝只认完整原尝试证据，缺失冲突或可能已发均保持未知', () => {
+  const id = `coordination:${'x'.repeat(124)}`
+  const error = { category: 'api', code: 1, origin: 'dingtalk_api', operation: 'tools/call', reason: 'invalid_request',
+    retryable: false, server_error_code: 'PARAM_ERROR', server_key: 'chat', stage: 'tool_validation',
+    message: "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 137." }
+  const notification = { id, state: 'unknown', sendAttemptCount: 1, receipt: null, payloadDigest: 'a'.repeat(64), dispatchToken: 'original-fence',
+    sendPermit: { notificationId: id, payloadDigest: 'a'.repeat(64), attempt: 1, fence: 'original-fence' },
+    deliveryError: { phase: 'send', exitCode: 1, stdout: '', message: 'dws_send_failed:1:PARAM_ERROR', serverErrorCode: 'PARAM_ERROR',
+      origin: 'dingtalk_api', operation: 'tools/call', reason: 'invalid_request', retryable: false, stderr: JSON.stringify({ error }) } }
+  const before = structuredClone(notification), proof = persistedUuidSendRejectionProof(notification)
+  assert.equal(proof.kind, 'dws-uuid-validation-rejected'); assert.equal(proof.actualLength, 137)
+  assert.equal(proof.notificationId, id); assert.equal(proof.fence, notification.dispatchToken)
+  assert.deepEqual(notification, before)
+  for (const patch of [
+    { state: 'starting' }, { state: 'delivered' }, { sendAttemptCount: 2 }, { sendAttemptCount: undefined },
+    { ack: {} }, { receipt: {} }, { sendPermit: undefined }, { payloadDigest: 'b'.repeat(64) }, { dispatchToken: 'other-fence' },
+  ]) assert.equal(persistedUuidSendRejectionProof({ ...notification, ...patch }), undefined)
+  for (const patch of [{ notificationId: 'other' }, { payloadDigest: 'b'.repeat(64) }, { attempt: 2 }, { fence: 'other' }])
+    assert.equal(persistedUuidSendRejectionProof({ ...notification, sendPermit: { ...notification.sendPermit, ...patch } }), undefined)
+  for (const patch of [{ phase: 'readback' }, { exitCode: 0 }, { stdout: '{}' }, { serverErrorCode: 'TIMEOUT' }, { retryable: true },
+    { origin: 'transport' }, { stderr: '{truncated' }])
+    assert.equal(persistedUuidSendRejectionProof({ ...notification, deliveryError: { ...notification.deliveryError, ...patch } }), undefined)
+  for (const patch of [{ stage: undefined }, { stage: 'execution' }, { message: 'PARAM_ERROR' }, { message: error.message.replace('137', '138') },
+    { message: error.message.replace('137', '128') }, { message: error.message + ' extra' }, { category: 'network' }, { code: 2 },
+    { origin: 'mcp_gateway' }, { operation: 'chat/get_conversation_info' }, { reason: 'timeout' }, { retryable: true },
+    { server_error_code: '1001' }, { server_key: 'other' }])
+    assert.equal(persistedUuidSendRejectionProof({ ...notification, deliveryError: { ...notification.deliveryError,
+      stderr: JSON.stringify({ error: { ...error, ...patch } }) } }), undefined)
+  const shortId = 'x'.repeat(128)
+  assert.equal(persistedUuidSendRejectionProof({ ...notification, id: shortId, sendPermit: { ...notification.sendPermit, notificationId: shortId },
+    deliveryError: { ...notification.deliveryError, stderr: JSON.stringify({ error: { ...error, message: error.message.replace('137', '128') } }) } }), undefined)
 })
 
 test('DWS读取错误保留结构化服务端错误码', async () => {

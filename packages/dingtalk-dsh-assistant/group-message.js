@@ -94,3 +94,28 @@ export function quotedSendRejectionProof(result, request) {
     operation: error.operation, reason: error.reason, retryable: true, message: error.message,
     groupId: request.groupId, replyToMessageId: request.replyToMessageId, replyToSenderOpenDingTalkId: request.replyToSenderOpenDingTalkId, idempotencyKey: request.idempotencyKey }
 }
+
+/** 仅凭原发送尝试的完整 uuid 校验拒绝结清失败；不为未知网络结果或重发提供许可。 */
+export function persistedUuidSendRejectionProof(notification) {
+  const id = notification?.id, permit = notification?.sendPermit, failure = notification?.deliveryError
+  if (notification?.state !== 'unknown' || notification.sendAttemptCount !== 1
+    || notification.ack != null || notification.receipt != null || typeof id !== 'string' || id.length <= 128
+    || !/^[a-f0-9]{64}$/u.test(notification.payloadDigest ?? '') || permit?.notificationId !== id
+    || permit.payloadDigest !== notification.payloadDigest || permit.attempt !== 1
+    || typeof notification.dispatchToken !== 'string' || !notification.dispatchToken.trim() || permit.fence !== notification.dispatchToken
+    || failure?.phase !== 'send' || failure.exitCode !== 1 || failure.stdout !== ''
+    || !['dws_send_failed:1:PARAM_ERROR', 'dws_reply_failed:1:PARAM_ERROR'].includes(failure.message)
+    || failure.serverErrorCode !== 'PARAM_ERROR' || failure.origin !== 'dingtalk_api'
+    || failure.operation !== 'tools/call' || failure.reason !== 'invalid_request' || failure.retryable !== false) return undefined
+  let error
+  try { error = JSON.parse(failure.stderr)?.error } catch { return undefined }
+  const message = `sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is ${id.length}.`
+  if (error?.category !== 'api' || error.code !== 1 || error.origin !== 'dingtalk_api'
+    || error.operation !== 'tools/call' || error.reason !== 'invalid_request' || error.retryable !== false
+    || error.server_error_code !== 'PARAM_ERROR' || error.server_key !== 'chat' || error.stage !== 'tool_validation'
+    || error.message !== message) return undefined
+  return { kind: 'dws-uuid-validation-rejected', notificationId: id, idempotencyKey: id,
+    payloadDigest: notification.payloadDigest, attempt: 1, fence: permit.fence,
+    origin: error.origin, operation: error.operation, stage: error.stage, reason: error.reason,
+    serverErrorCode: error.server_error_code, maximumLength: 128, actualLength: id.length, errorMessage: message }
+}
