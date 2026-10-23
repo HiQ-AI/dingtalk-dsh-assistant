@@ -699,6 +699,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     // 正在处理旧来源时的新入站必须续跑一轮，不能等恢复定时器才解除发送暂缓。
     if (inflightGroups.has(groupId)) { rerouteGroups.add(groupId); return inflightGroups.get(groupId) }
     return track(inflightGroups, groupId, async () => {
+      // 精确引用的完整来源先交协调模型；其安全归还后仍走下面原有的事项路由。
+      if (await independentCoordination.reserveQuotedReminderFollowup(groupId)) await independentCoordination.recoverGroup(groupId)
       await refreshTasks()
       await topicCoordinator.schedule(groupId)
       await topicCoordinator.whenIdle()

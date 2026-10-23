@@ -45,6 +45,37 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       coordinationRevision: state.coordination.revision, schedule,
       source: { messageId: origin.sourceMessageId, actorId: origin.actorId, unitId: origin.unitId, unitRevision: origin.revision, text: origin.original } })
   }
+  /** 精确引用只选择先处理的模型；整条原文仍由协调模型判断，已归还来源绝不再次收回。 */
+  async function reserveQuotedReminderFollowup(groupId) {
+    if (closed || config.enabled !== true || await isFrozen()) return false
+    const group = residentStore.getGroup(groupId)
+    const pending = (group?.messages ?? []).filter(message => message.routingStatus !== 'routed')
+    if (pending.length !== 1) return false
+    const message = pending[0]
+    if (!message.text?.trim() || message.units?.length || message.activeUnitRefs?.length
+      || message.imageRefs?.length || message.resourceRefs?.length || message.mediaUnavailable?.length
+      || residentStore.listSourceDispatchOwnership(groupId).some(entry => entry.sourceSnapshot.messageId === message.messageId)) return false
+    const reminder = await quotedReminderContext({ groupId, messageId: message.messageId,
+      messageVersion: message.messageVersion, actorId: message.senderOpenDingTalkId })
+    if (!reminder || closed) return false
+    const latest = residentStore.getGroup(groupId)
+    const current = (latest?.messages ?? []).filter(item => item.routingStatus !== 'routed')
+    // 查询关联期间可能有消息富化或另一条入站；保留旧候选没有价值，普通路由将读取新快照。
+    if (latest?.routingRevision !== group.routingRevision || current.length !== 1
+      || current[0].messageId !== message.messageId || current[0].messageVersion !== message.messageVersion
+      || current[0].units?.length || residentStore.listSourceDispatchOwnership(groupId).some(entry => entry.sourceSnapshot.messageId === message.messageId)) return false
+    try {
+      await residentStore.routeMessages({ groupId, routeId: stableId('quoted-reminder-route', `${groupId}:${message.messageId}:${message.messageVersion}:${group.routingRevision}`),
+        routingRevision: group.routingRevision, requireAllPending: true,
+        routes: [{ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
+          units: [{ unitKey: 'quoted-reminder-followup', summary: '引用提醒的后续消息待语义判断', sourceRefs: [{ wholeMessage: true }],
+            dispatchOwner: 'coordination', topics: [], reason: '精确引用已送达纯提醒，先判断完整原文；不代表已认定订正' }] }] })
+    } catch (error) {
+      if (['topic_routing_stale', 'topic_message_version_stale'].includes(error.message)) return false
+      throw error
+    }
+    return true
+  }
   async function context(request, args = {}) {
     assertOwned(request)
     const parsed = coordinationContextSchema.safeParse(args)
@@ -130,7 +161,8 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       source: { messageId: snapshot.messageId, messageVersion: snapshot.messageVersion, sourceRefs: snapshot.sourceRefs,
         occurredAt: snapshot.occurredAt ?? null,
         actorId: snapshot.actorId, unitId: request.unitId, unitRevision: request.unitRevision,
-        unitText: snapshot.unitText, original: sourceText.slice(sourceOffset, sourceOffset + 16000),
+        unitText: snapshot.unitText, ...(snapshot.unit?.unitKey === 'quoted-reminder-followup' ? { admission: 'quoted-reminder-followup' } : {}),
+        original: sourceText.slice(sourceOffset, sourceOffset + 16000),
         sourceOffset, nextSourceOffset: sourceOffset + 16000 < sourceText.length ? sourceOffset + 16000 : null,
         truncated: sourceOffset > 0 || sourceText.length > sourceOffset + 16000 },
       tasks: page.map(t => ({ taskId: t.taskId, title: t.title,
@@ -545,7 +577,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       })().finally(() => running.delete(groupId))
       running.set(groupId, work); return work
     },
-    context, submit, quotedReminderContext,
+    context, submit, quotedReminderContext, reserveQuotedReminderFollowup,
     async whenIdle() { await Promise.allSettled([...running.values()]) },
     async close() { closed = true; await planner.close?.(); await Promise.allSettled([...running.values()]) },
   }

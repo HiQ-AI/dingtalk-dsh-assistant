@@ -97,3 +97,12 @@ live-d-readable-notifications,10,PASS,round-10.md
 live-d-due-delivery-native-mention,10,PASS,round-10.md
 live-d-no-original-slot-duplicate,10,PASS,round-10.md
 live-end-to-end-latency,10,FAIL,round-10.md
+live-quoted-context-prefetch,11,PASS,round-11.md
+live-e-due-native-mention,11,PASS,round-11.md
+live-e-original-slot-no-duplicate,11,PASS,round-11.md
+live-end-to-end-latency,11,FAIL,round-11.md
+direct-followup-store-and-boundaries,11,PASS,round-11.md
+direct-followup-native-handoff,11,PASS,round-11.md
+direct-followup-real-model-retime-and-mixed,11,PASS,round-11.md
+release-smoke-mapping-stale,11,FAIL,round-11.md
+release-smoke-mapping-recheck,11,PASS,round-11.md

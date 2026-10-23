@@ -37,7 +37,10 @@ const missingPolicy = 'Browser time zone for this request: unavailable. Ask the 
 
 function contextFor(sample, number, args, reads) {
   const now = new Date().toISOString(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  const source = { messageId: `message-${number}`, messageVersion: 1, sourceRefs: [{ quote: sample.message }],
+  const source = { messageId: `message-${number}`, messageVersion: 1,
+    // wholeMessage在生产入账时已规范化为覆盖全文的UTF-16来源范围。
+    sourceRefs: sample.wholeMessage ? [{ start: 0, end: sample.message.length, quote: sample.message }] : [{ quote: sample.message }],
+    ...(sample.sourceAdmission ? { admission: sample.sourceAdmission } : {}),
     occurredAt: sample.occurredAt, actorId: 'actor-001', unitId: `unit-${number}`, unitRevision: 1,
     unitText: sample.message, original: sample.message, sourceOffset: 0, nextSourceOffset: null, truncated: false }
   const prior = sample.prior
@@ -124,8 +127,12 @@ try {
     const timeMessages = events.filter(event => event.type === 'user/message' && event.data.source?.kind === 'time-context')
       .flatMap(event => event.data.content ?? []).filter(part => part.type === 'text').map(part => part.text)
     const headers = events.filter(event => event.type === 'request/header').map(event => ({ sequence: event.seq, time: event.time, data: event.data }))
+    // header只在配置初始化时记录；按实际模型步骤及失败重试分别计数，不能把多轮请求算成一次。
+    const modelSteps = events.filter(event => event.type === 'step/start').length
+    const retries = events.filter(event => event.type === 'llm/retry').map(event => ({
+      time: event.time, retry: event.data.retry, delayMs: event.data.delayMs, failure: event.data.failure }))
     const usages = events.filter(event => event.type === 'assistant/message' && event.data.usage)
-      .map(event => ({ sequence: event.seq, provider: event.data.message?.source?.provider,
+      .map(event => ({ sequence: event.seq, time: event.time, provider: event.data.message?.source?.provider,
         model: event.data.message?.source?.model, usage: event.data.usage }))
     const proposal = proposals[0], failures = proposal ? compareProposal(proposal, sample.expect) : [{ reason: 'no captured proposal' }]
     if (error) failures.push({ reason: error })
@@ -136,15 +143,21 @@ try {
     if (events.some(event => event.type === 'tool/result' && event.data.message?.isError)) failures.push({ reason: 'tool error cannot be erased by later retry' })
     if (sample.noTaskReads && reads.some(args => args.taskIds?.length)) failures.push({ reason: 'unnecessary task detail read' })
     if (sample.noContextReads && reads.length) failures.push({ reason: 'prefetched context unnecessarily read again', count: reads.length })
-    if (sample.expectedRequestCount !== undefined && headers.length !== sample.expectedRequestCount) failures.push({ reason: 'model request count', count: headers.length })
+    if (sample.expectedRequestCount !== undefined && modelSteps !== sample.expectedRequestCount) failures.push({ reason: 'model step count', count: modelSteps })
+    if (sample.noEffectProposal && proposals.some(item => item.kind !== 'reject')) failures.push({ reason: 'whole-message rejection required before any effect proposal' })
     const simulatedRecipientIds = sample.preserveRecipientIds ? proposal?.recipientIds ?? inputs[0]?.quotedReminder?.schedule.target.recipientIds : undefined
     if (sample.preserveRecipientIds && JSON.stringify(simulatedRecipientIds) !== JSON.stringify(sample.preserveRecipientIds)) failures.push({ reason: 'original reminder recipients changed', simulatedRecipientIds })
     if (sample.readPrior && !reads.some(args => args.coordinationIds?.includes('arrangement-001'))) failures.push({ reason: 'original arrangement not read' })
     if (sample.reminderContains && !(proposal?.resolution ?? proposal)?.reminderText?.includes(sample.reminderContains)) failures.push({ reason: 'reminder subject lost' })
     await writeFile(join(caseDir, 'inputs.json'), JSON.stringify(inputs, null, 2) + '\n')
     if (native) await writeFile(join(caseDir, 'native-session.json'), JSON.stringify(native, null, 2) + '\n')
+    const transportFailed = !proposals.length && retries.some(retry => retry.failure?.code === 'TRANSPORT')
     const result = { id: sample.id, artifactDirectory: relative(root, caseDir), passed: !failures.length,
+      outcome: transportFailed ? 'transport-error' : failures.length ? 'validation-failed' : 'passed',
       elapsedMs: Date.now() - startedAt, error, failures, proposals, reads, trace, timeMessages, headers, usages,
+      modelSteps, retries, observedModelAttempts: modelSteps + retries.length,
+      modelElapsedMs: usages.length && headers.length ? usages.at(-1).time - headers[0].time : null,
+      businessEffects: 0,
       ...(simulatedRecipientIds ? { simulatedRecipientIds } : {}), semanticReview: sample.review }
     results.push(result)
     await writeFile(join(root, 'results.json'), JSON.stringify({ model, reasoningEffort, provider: 'openai-codex', digests,

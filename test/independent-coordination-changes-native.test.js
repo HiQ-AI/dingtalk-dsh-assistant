@@ -82,6 +82,8 @@ for (const action of ['改期保留B', '改为提醒C', '另建提醒C']) test(`
     await host.service.whenIdle()
     const expectedCalls = action === '改期保留B' ? 1 : 2
     assert.equal(correctionCalls, expectedCalls, JSON.stringify(host.service.listAlerts()))
+    assert.equal(host.requests.slice(firstCall).filter(request => request.tools.some(tool => tool.name === 'group_topic_route_submit')).length, 0,
+      '精确引用先由协调模型完整判断，省去原有Topic路由调用')
     const plannerCalls = host.requests.slice(firstCall).filter(request => request.tools.some(tool => tool.name === 'coordination_submit'))
     assert.equal(plannerCalls.length, expectedCalls, '简单改期一次完成；新对象仅按需补一次目录')
     assert.equal(host.toolResults.filter(item => item.name === 'coordination_context_get').length, expectedCalls - 1)
@@ -96,6 +98,69 @@ for (const action of ['改期保留B', '改为提醒C', '另建提醒C']) test(`
       assert.deepEqual(schedules[0].target.recipientIds, [action === '改为提醒C' ? 'recipient-c' : 'recipient-b'])
     }
     assert.deepEqual(await host.query('task.list'), before)
+  })
+
+test('原生引用混合要求在效果前整条归还，原路由拆分后处理且不重新快路接管',
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-23T09:00:00Z') })
+    const root = await mkdtemp(join(tmpdir(), 'quoted-reminder-mixed-native-'))
+    let host, rejected = 0, rerouted = 0, changed = 0
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, async request => {
+      const input = latestInput(request), names = request.tools.map(tool => tool.name)
+      if (names.includes('group_topic_route_submit')) {
+        if (input.messages[0].messageId === 'original-reminder') return unitRoute(input)
+        rerouted += 1
+        assert.equal(rejected, 1, '只有完整候选安全归还后才可进入路由')
+        assert.equal((await host.query('coordination.schedule.list'))[0].revision, 1, '不能先执行提醒部分再归还')
+        const source = input.messages[0], prior = source.units.find(unit => unit.unitKey === 'quoted-reminder-followup')
+        return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: [{ messageId: source.messageId,
+          messageVersion: source.messageVersion, ignoredRefs: [], units: [
+            { unitKey: 'reminder-change', summary: '提醒提前', sourceRefs: [{ quote: '提前三分钟' }], replacesUnitIds: [prior.unitId],
+              effectInheritance: 'new-scope', revisionReason: '候选无效果归还后完整拆分', dispatchOwner: 'coordination', topics: [], reason: '独立提醒修改' },
+            { unitKey: 'release-discussion', summary: '上线安排讨论', sourceRefs: [{ quote: '另讨论上线安排' }], replacesUnitIds: [prior.unitId],
+              effectInheritance: 'new-scope', revisionReason: '候选无效果归还后完整拆分', dispatchOwner: 'legacy-topic',
+              topics: [{ newTopicKey: 'release-discussion', title: '上线安排讨论' }] },
+          ] }] } }]
+      }
+      if (names.includes('coordination_submit')) {
+        if (input.source.messageId === 'original-reminder') return [{ name: 'coordination_submit', args: {
+          kind: 'schedule', actionKind: 'message-reminder', timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-23T09:10:00Z' },
+          reminderText: '查看进度。', recipientIds: ['native-user'], interpretation: '十分钟后提醒本人' } }]
+        if (input.source.admission === 'quoted-reminder-followup') {
+          rejected += 1
+          assert.equal(input.source.unitText, '提前三分钟\n另讨论上线安排')
+          return [{ name: 'coordination_submit', args: { kind: 'reject', reason: '同时含提醒变更与普通讨论，需要整条按事项拆分' } }]
+        }
+        changed += 1
+        assert.equal(input.source.unitText, '提前三分钟')
+        const current = input.arrangementContexts[0], schedule = current.schedules[0]
+        return [{ name: 'coordination_submit', args: { kind: 'schedule-change', coordinationId: current.coordination.id,
+          expectedRevision: current.coordination.revision, scheduleId: schedule.id, expectedScheduleRevision: schedule.revision,
+          scope: 'unstarted', timezone: schedule.timezone, rule: { kind: 'once', at: '2026-10-23T09:07:00Z' }, reason: '提前三分钟' } }]
+      }
+      const calls = topicTaskCalls(request)
+      if (names.includes('group_decision_submit')) {
+        calls[0].args.decision = { ...calls[0].args.decision, actions: [], reason: '保留普通讨论，不产生执行授权' }
+        delete calls[0].args.decision.reply; delete calls[0].args.decision.replyReview
+      }
+      return calls ?? []
+    }, { config })
+    await host.service.ingest(message('original-reminder', '测试助手，十分钟后提醒我查看进度。'))
+    await host.service.whenIdle()
+    const notice = (await host.query('notification.list')).find(item => item.payload.sourceMessageId === 'original-reminder')
+    assert.equal(notice?.state, 'delivered', JSON.stringify(host.service.listAlerts()))
+    const followup = { ...message('mixed-followup', '提前三分钟\n另讨论上线安排'), quotedMessage: { messageId: notice.receipt.messageId, content: notice.payload.text } }
+    await host.service.ingest(followup); await host.service.whenIdle()
+    assert.deepEqual([rejected, rerouted, changed], [1, 1, 1], JSON.stringify(host.service.listAlerts()))
+    const schedule = (await host.query('coordination.schedule.list'))[0]
+    assert.equal(schedule.revision, 2); assert.equal(schedule.rule.at, '2026-10-23T09:07:00.000Z')
+    assert.equal(host.residentStore.listTopics('native-group').length, 1)
+    assert.deepEqual(await host.query('task.list'), [])
+    const returned = host.residentStore.listSourceDispatchOwnership('native-group').find(item => item.sourceSnapshot.unit?.unitKey === 'quoted-reminder-followup')
+    assert.equal(returned.dispatchOwner, 'legacy-topic'); assert.equal(returned.generation, 2)
+    await host.service.ingest(followup); await host.service.recover(); await host.service.whenIdle()
+    assert.deepEqual([rejected, rerouted, changed], [1, 1, 1], '重复入站和恢复不重放已归还或已接纳的来源')
   })
 
 test('两条原始提醒相隔39秒由原安排订正，未建Task且到15:20仅投递一次提醒',
