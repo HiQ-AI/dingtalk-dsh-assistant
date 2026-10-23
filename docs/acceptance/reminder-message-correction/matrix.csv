@@ -107,3 +107,8 @@ direct-followup-real-model-retime-and-mixed,11,PASS,round-11.md
 release-smoke-mapping-stale,11,FAIL,round-11.md
 release-smoke-mapping-recheck,11,PASS,round-11.md
 direct-followup-local-deployment,11,PASS,round-11.md
+live-end-to-end-latency,12,FAIL,round-12.md
+live-reminder-timeliness,12,FAIL,round-12.md
+live-f-delivery-native-mention-no-duplicate,12,PASS,round-12.md
+live-f-pending-failure-feedback,12,FAIL,round-12.md
+live-f-overdue-confirmation-readability,12,FAIL,round-12.md
