@@ -25,7 +25,7 @@ test('offset proposal persists a canonical due time and one slot across restart 
   assert.equal((await f.occurrences()).length, 1)
 })
 
-async function fixture(t, rule = { kind: 'once', at: '2026-10-21T01:00:00.000Z' }) {
+async function fixture(t, rule = { kind: 'once', at: '2026-10-21T01:00:00.000Z' }, action = { kind: 'read-query', taskIds: ['A'] }) {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
   const directory = await mkdtemp(join(tmpdir(), 'coordination-schedule-'))
   const config = { dbPath: join(directory, 'task.sqlite'), instanceId: 'test', initialize: true }
@@ -33,11 +33,11 @@ async function fixture(t, rule = { kind: 'once', at: '2026-10-21T01:00:00.000Z' 
   t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
   const command = (kind, args = {}, id = randomUUID()) => store.command({ id, kind, args })
   const query = (kind, args = {}) => store.query({ kind, ...args })
-  await command('task.create', { taskId: 'A', groupId: 'group', request: 'A' })
-  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: '查询A' })).result.source
+  if (action.kind !== 'message-reminder') await command('task.create', { taskId: 'A', groupId: 'group', request: 'A' })
+  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: action.text ?? '查询A' })).result.source
   await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'query', members: [], readOnly: true })
   await command('coordination.schedule.create', { coordinationId: 'query', scheduleId: 'schedule', timezone: 'Asia/Shanghai', rule,
-    action: { kind: 'read-query', taskIds: ['A'] }, target: { conversationId: 'group', recipientIds: ['first'] } })
+    action, target: { conversationId: 'group', recipientIds: ['first'] } })
   return { command, query,
     tick: milliseconds => t.mock.timers.tick(milliseconds),
     change: args => command('coordination.schedule.change', { scheduleId: 'schedule', ...args }),
@@ -60,6 +60,123 @@ test('future-only revision preserves an accepted occurrence and its frozen targe
   assert.equal(result.result.occurrence.acceptedScheduleRevision, 1)
   assert.deepEqual(result.result.occurrence.target.recipientIds, ['first'])
   assert.equal((await f.scan()).result.occurrences.length, 0)
+})
+
+test('a pure reminder freezes its original text without any Task and reuses one notification after restart', async t => {
+  const action = { kind: 'message-reminder', text: '提醒你查看云端专家的开发进度。' }
+  const f = await fixture(t, undefined, action)
+  assert.deepEqual(await f.query('task.list'), [])
+  await f.restart(); f.tick(3600000)
+  const occurrence = (await f.scan()).result.occurrences[0]
+  const replay = await f.command('coordination.occurrence.accept', { coordinationId: 'query', trigger: occurrence.trigger,
+    action, target: occurrence.target })
+  assert.equal(replay.result.replayed, true)
+  await assert.rejects(f.command('coordination.occurrence.accept', { coordinationId: 'query', trigger: occurrence.trigger,
+    action: { ...action, text: '未授权的其他提醒。' }, target: occurrence.target }), { code: 'DYNAMIC_COORDINATION_TRIGGER_CONFLICT' })
+  const job = await f.claim(occurrence)
+  await assert.rejects(f.command('coordination.job.read', { jobId: job.id, fence: job.fence }), { code: 'DYNAMIC_COORDINATION_ACTION_INVALID' })
+  const result = (await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence }, 'remind-once')).result
+  assert.deepEqual(result.occurrence.result, { ...action, plannedAt: occurrence.plannedAt })
+  assert.equal(result.occurrence.deliveryState, 'pending', '正文准备完成不等于发送成功')
+  const notification = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
+  assert.equal(notification.payload.text, action.text)
+  assert.deepEqual(notification.payload.atOpenDingTalkIds, ['first'])
+  await f.restart()
+  const repeated = await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence }, 'remind-once')
+  assert.deepEqual(repeated.result.occurrence.result, result.occurrence.result)
+  assert.equal((await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification.id, notification.id)
+  assert.equal((await f.query('notification.list')).length, 1)
+  const permit = (await f.command('notification.start', { notificationId: notification.id })).result.notification
+  await f.command('notification.receipt', { notificationId: notification.id, dispatchToken: permit.dispatchToken,
+    state: 'delivered', receipt: { messageId: 'synthetic-reminder' } })
+  await f.restart(); f.tick(86400000)
+  assert.deepEqual((await f.scan()).result.occurrences, [])
+  assert.equal((await f.query('coordination.schedule.list'))[0].state, 'completed')
+  assert.deepEqual(await f.query('task.list'), [])
+})
+
+test('rescheduling a pending reminder supersedes the old slot and sends only the replacement text', async t => {
+  const action = { kind: 'message-reminder', text: '查看云端专家的开发进度。' }
+  const f = await fixture(t, undefined, action)
+  f.tick(3600000)
+  const original = (await f.scan()).result.occurrences[0]
+  const replacementText = '查看云端专家的开发进度并记录待办。'
+  const changed = await f.change({ expectedRevision: 1, scope: 'unstarted', replacementPlannedAt: '2026-10-21T01:20:00.000Z',
+    action: { ...action, text: replacementText } })
+  const replacement = changed.result.replacements[0]
+  await assert.rejects(f.claim(original), { code: 'DYNAMIC_COORDINATION_CANCELLED' })
+  await assert.rejects(f.claim(replacement), { code: 'DYNAMIC_COORDINATION_NOT_DUE' })
+  await f.restart(); f.tick(1200000)
+  const job = await f.claim(replacement)
+  await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence })
+  const notification = (await f.command('coordination.notification.freeze', { occurrenceId: replacement.id })).result.notification
+  assert.equal(notification.payload.text, replacementText)
+  assert.equal((await f.query('notification.list')).length, 1)
+  assert.deepEqual((await f.scan()).result.occurrences, [])
+})
+
+test('a periodic reminder waits for unknown delivery and cancellation stops its next claimed job', async t => {
+  const f = await fixture(t, { kind: 'daily', time: '09:00' }, { kind: 'message-reminder', text: '查看进度。' })
+  f.tick(3600000)
+  const first = (await f.scan()).result.occurrences[0]
+  const firstJob = await f.claim(first)
+  await f.command('coordination.job.remind', { jobId: firstJob.id, fence: firstJob.fence })
+  const notification = (await f.command('coordination.notification.freeze', { occurrenceId: first.id })).result.notification
+  const permit = (await f.command('notification.start', { notificationId: notification.id })).result.notification
+  await f.command('notification.receipt', { notificationId: notification.id, dispatchToken: permit.dispatchToken, state: 'unknown' })
+  await f.restart(); f.tick(86400000)
+  const second = (await f.scan()).result.occurrences[0]
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_COORDINATION_OVERLAP' })
+  await f.command('notification.reconcile', { notificationId: notification.id, state: 'delivered',
+    receipt: { messageId: 'synthetic-confirmed' }, evidenceRef: 'isolated-test-proof' })
+  const secondJob = await f.claim(second)
+  await f.change({ expectedRevision: 1, state: 'cancelled' })
+  await assert.rejects(f.command('coordination.job.remind', { jobId: secondJob.id, fence: secondJob.fence }), { code: 'DYNAMIC_COORDINATION_JOB_STALE' })
+  assert.deepEqual((await f.scan()).result.occurrences, [])
+  assert.equal((await f.query('notification.list')).length, 1)
+})
+
+test('cancelling a reminder with an unknown send does not grant a new send or hide the uncertainty', async t => {
+  const f = await fixture(t, undefined, { kind: 'message-reminder', text: '查看进度。' })
+  f.tick(3600000)
+  const occurrence = (await f.scan()).result.occurrences[0]
+  const job = await f.claim(occurrence)
+  await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence })
+  const notification = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
+  const permit = (await f.command('notification.start', { notificationId: notification.id })).result.notification
+  await f.command('notification.receipt', { notificationId: notification.id, dispatchToken: permit.dispatchToken, state: 'unknown' })
+  await f.change({ expectedRevision: 1, state: 'cancelled' })
+  await f.restart()
+  const after = (await f.query('notification.list'))[0]
+  assert.equal(after.state, 'unknown'); assert.equal(after.dispatchToken, permit.dispatchToken)
+  assert.equal((await f.occurrences())[0].deliveryState, 'unknown')
+  assert.equal((await f.command('notification.start', { notificationId: notification.id })).dispatchEligible, false)
+})
+
+test('an expired reminder is reported without creating an overdue reminder notification', async t => {
+  const f = await fixture(t, undefined, { kind: 'message-reminder', text: '查看云端专家的开发进度。' })
+  f.tick(4500001)
+  const occurrence = (await f.scan()).result.occurrences[0]
+  assert.equal(occurrence.actionState, 'expired'); assert.deepEqual(await f.jobs(), [])
+  const summary = (await f.command('coordination.aggregate', { coordinationId: 'query' })).result.notification
+  assert.match(summary.payload.text, /已过期，本次未执行/)
+  assert.match(summary.payload.text, /提醒内容：查看云端专家的开发进度。/)
+  await assert.rejects(f.command('coordination.notification.freeze', { occurrenceId: occurrence.id }), { code: 'DYNAMIC_COORDINATION_JOB_STALE' })
+  await f.restart(); f.tick(86400000)
+  assert.deepEqual((await f.scan()).result.occurrences, [])
+})
+
+test('a reminder rejects attached task effects and cannot become a conditional task command', async t => {
+  const f = await fixture(t)
+  for (const action of [{ kind: 'message-reminder', text: '查看进度。', taskIds: ['A'] },
+    { kind: 'message-reminder', text: '查看进度。', onIncomplete: { kind: 'task-command', instructionIds: [] } }])
+    await assert.rejects(f.change({ expectedRevision: 1, action }), { code: 'DYNAMIC_COORDINATION_ACTION_INVALID' })
+  await assert.rejects(f.change({ expectedRevision: 1, action: { kind: 'message-reminder', text: '  ' } }), { code: 'DYNAMIC_ARGUMENT_INVALID' })
+  await assert.rejects(f.change({ expectedRevision: 1, action: { kind: 'read-query', taskIds: ['A'],
+    onIncomplete: { kind: 'message-reminder', text: '查看进度。' } } }), { code: 'DYNAMIC_COORDINATION_CONDITIONAL_SCOPE_INVALID' })
+  const schedule = (await f.query('coordination.schedule.list'))[0]
+  assert.equal(schedule.revision, 1)
+  assert.deepEqual(schedule.action, { kind: 'read-query', taskIds: ['A'] })
 })
 
 test('a started occurrence keeps its accepted revision while a future rule and recipient change is committed', async t => {

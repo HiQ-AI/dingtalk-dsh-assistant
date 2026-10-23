@@ -20,9 +20,15 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
   }
   const validAction = (action, groupId, coordinationId) => {
     record(action)
+    if (action.kind === 'message-reminder') {
+      // 纯提醒只冻结用户要收到的正文，不借任务查询或附带命令扩大执行范围。
+      if (Object.keys(action).some(key => !['kind','text'].includes(key))) fail('DYNAMIC_COORDINATION_ACTION_INVALID')
+      return { kind: action.kind, text: text(action.text, 'reminderText') }
+    }
     if (action.kind === 'read-query') {
       if (!array(action.taskIds).length || action.taskIds.length > 100 || new Set(action.taskIds).size !== action.taskIds.length) fail('DYNAMIC_COORDINATION_ACTION_INVALID')
       for (const id of action.taskIds) if (get('dynamic_tasks', id).groupId !== groupId) fail('DYNAMIC_COORDINATION_SCOPE')
+      if (action.onIncomplete !== undefined && action.onIncomplete?.kind !== 'task-command') fail('DYNAMIC_COORDINATION_CONDITIONAL_SCOPE_INVALID')
       const conditional = action.onIncomplete === undefined ? null : validAction(action.onIncomplete, groupId, coordinationId)
       if (conditional) {
         for (const frozen of conditional.frozenInstructions) {
@@ -390,6 +396,16 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
       occurrence.actionState = 'running'; save('jobs', job); save('occurrences', occurrence)
       return { job, occurrence }
     }
+    if (kind === 'coordination.job.remind') {
+      const job = read('jobs', a.jobId), occurrence = read('occurrences', job.occurrenceId)
+      assertJob(job, occurrence, a.fence, stamp)
+      if (occurrence.action.kind !== 'message-reminder') fail('DYNAMIC_COORDINATION_ACTION_INVALID')
+      // 动作完成只表示提醒正文已冻结；真正送达仍走现有通知许可、回执与对账。
+      job.result = { kind: 'message-reminder', text: occurrence.action.text, plannedAt: occurrence.plannedAt }
+      job.state = 'completed'
+      occurrence.actionState = 'succeeded'; occurrence.result = clone(job.result); occurrence.deliveryState = 'pending'
+      save('jobs', job); save('occurrences', occurrence); return { job, occurrence }
+    }
     if (kind === 'coordination.job.read') {
       const job = read('jobs', a.jobId), occurrence = read('occurrences', job.occurrenceId)
       assertJob(job, occurrence, a.fence, stamp)
@@ -475,7 +491,8 @@ export function coordinationSchedules({ get, put, all, fail, text, integer, arra
           const acceptedAction = previous.templateAction ?? previous.action
           const action = acceptedAction.kind === 'task-command'
             ? { kind: acceptedAction.kind, instructionIds: acceptedAction.instructionIds }
-            : { kind: acceptedAction.kind, taskIds: acceptedAction.taskIds }
+            : acceptedAction.kind === 'message-reminder' ? { kind: acceptedAction.kind, text: acceptedAction.text }
+              : { kind: acceptedAction.kind, taskIds: acceptedAction.taskIds }
           if (previous.coordinationId !== coordination.id || digest(previous.trigger) !== digest(trigger)
             || digest(action) !== digest(a.action) || digest(previous.target) !== digest(a.target)) fail('DYNAMIC_COORDINATION_TRIGGER_CONFLICT')
           return { occurrence: previous, replayed: true }

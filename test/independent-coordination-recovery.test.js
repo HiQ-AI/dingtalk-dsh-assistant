@@ -6,9 +6,10 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openIndependentCoordination } from '../packages/dingtalk-dsh-assistant/independent-coordination-service.js'
+import { localSlot } from '../packages/dingtalk-dsh-assistant/coordination-time.js'
 
 const clone = value => JSON.parse(JSON.stringify(value))
-async function fixture(t, { enabled = false, planner, failApplyAck = false, failResidentAcceptance = false, authenticated = true, actorId = 'author' } = {}) {
+async function fixture(t, { enabled = false, planner, failApplyAck = false, failResidentAcceptance = false, authenticated = true, actorId = 'author', seedTask = true, legacySummaryText } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'independent-recovery-'))
   const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'independent-test', initialize: true }
   let store = await openDynamicTaskStore(options), service
@@ -32,6 +33,10 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
   const query = (kind, args = {}) => store.query({ kind, ...args })
   const command = async (kind, args, id = randomUUID()) => {
     commands.push(kind)
+    if (kind === 'notification.prepare' && legacySummaryText) {
+      args = { ...args, payload: { ...args.payload, text: legacySummaryText } }
+      legacySummaryText = undefined
+    }
     const receipt = await store.command({ kind, args, id })
     if (kind === 'coordination.job.command' && failApplyAck) {
       failApplyAck = false
@@ -41,7 +46,7 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
   }
   if (authenticated) await command('source.record', { sourceId: 'source', groupId: 'group', messageId: 'message', version: 1,
     actorId: 'author', text: entry.sourceSnapshot.text, timestamp: new Date().toISOString() })
-  await command('task.create', { taskId: 'A', groupId: 'group', ownerActorId: 'task-owner', request: 'original A', requirements: ['A accepted'] })
+  if (seedTask) await command('task.create', { taskId: 'A', groupId: 'group', ownerActorId: 'task-owner', request: 'original A', requirements: ['A accepted'] })
   const open = () => service = openIndependentCoordination({ config: enabled ? { enabled: true, provider: 'test', model: 'test' } : {},
     residentStore, query, command, ownerActorId: 'configured-owner', planner: planner ?? { plan: async () => {}, close: async () => {} },
     onApplied: async member => { handoffs.push(member.id) }, onError: (id, error) => errors.push({ id, code: error.code ?? error.message }), onRecovered: id => recovered.push(id) })
@@ -63,6 +68,116 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
     async observe() { await service.context(request(), { taskIds: ['A'] }) },
     async restart() { await service.close(); await store.close(); store = await openDynamicTaskStore(options); open() } }
 }
+
+test('recovery retains a previously frozen acknowledgement when the current reply template changed', async t => {
+  const f = await fixture(t, { legacySummaryText: '已记录 1 项明确安排；另有 1 项待澄清：[other] 另一个是哪项？。明确且独立的成员继续处理。' })
+  await f.observe()
+  await f.service.submit(f.request(), { ...f.arrangement(), pendingClarifications: [{ clarificationId: 'other', question: '另一个是哪项？', candidates: [] }] })
+  const before = await f.query('notification.list')
+  await f.restart(); await f.service.recoverGroup('group')
+  assert.deepEqual(f.errors, [])
+  assert.deepEqual(await f.query('notification.get', { notificationId: before[0].id }), before[0])
+  assert.equal(f.commands.filter(kind => kind === 'notification.prepare').length, 1)
+})
+
+test('non-browser coordination receives working timezone and original local time without fabricating a missing source time', async t => {
+  const f = await fixture(t, { seedTask: false })
+  f.entry.sourceSnapshot.occurredAt = '2026-10-23T07:11:51.000Z'
+  const context = await f.service.context(f.request())
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  assert.equal(context.timeContext.timeZone, timeZone)
+  assert.equal(context.timeContext.source, 'host-working-timezone')
+  assert.deepEqual(context.timeContext.sourceLocal, localSlot(f.entry.sourceSnapshot.occurredAt, timeZone))
+  assert.deepEqual(context.taskContexts, [])
+  delete f.entry.sourceSnapshot.occurredAt
+  assert.equal((await f.service.context(f.request())).timeContext.sourceLocal, null)
+})
+
+for (const previousState of ['prepared','starting','unknown','delivered'])
+  test(`time correction resolves one reminder and preserves ${previousState} send boundary`, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-23T07:11:12.000Z') })
+    const f = await fixture(t, { seedTask: false })
+    f.entry.sourceSnapshot.unitText = '小小鹏，三点提醒我一下查看云端专家的开发进度'
+    await f.service.submit(f.request(), { kind: 'clarify', question: '三点已过，改到几点？', candidates: [] })
+    const original = (await f.query('coordination.list'))[0]
+    const oldNotification = (await f.query('notification.list'))[0]
+    if (previousState !== 'prepared') {
+      const started = (await f.command('notification.start', { notificationId: oldNotification.id })).result.notification
+      if (previousState !== 'starting') await f.command('notification.receipt', {
+        notificationId: oldNotification.id, dispatchToken: started.dispatchToken, state: previousState,
+        evidenceRef: 'fixture-send-evidence', receipt: { messageId: 'sent-original' },
+      })
+    }
+    const before = await f.query('notification.list')
+    t.mock.timers.tick(39_000)
+    Object.assign(f.entry, { reservationId: 'correction', unitId: 'correction-unit', semanticState: 'reserved', settled: false })
+    Object.assign(f.entry.sourceSnapshot, { messageId: 'correction-message',
+      text: '小小鹏，三点20提醒我一下查看云端专家的开发进度',
+      unitText: '小小鹏，三点20提醒我一下查看云端专家的开发进度', occurredAt: new Date().toISOString() })
+    await f.command('source.record', { sourceId: 'correction-source', groupId: 'group', messageId: 'correction-message',
+      version: 1, actorId: 'author', text: f.entry.sourceSnapshot.text, timestamp: new Date().toISOString() })
+    await f.service.context(f.request(), { coordinationIds: [original.id] })
+    await f.service.submit(f.request(), { kind: 'resolve', coordinationId: original.id, expectedRevision: 1,
+      resolution: { kind: 'schedule', actionKind: 'message-reminder', timezone: 'Asia/Shanghai',
+        rule: { kind: 'once', at: '2026-10-23T07:20:00.000Z' }, recipientIds: ['author'],
+        reminderText: '提醒你查看云端专家的开发进度。', interpretation: '内部来源订正；由Host判断补执行窗口。' } })
+    assert.equal((await f.query('coordination.list')).length, 1)
+    const schedules = await f.query('coordination.schedule.list')
+    assert.equal(schedules.length, 1)
+    assert.equal(schedules[0].nextDueAt, '2026-10-23T07:20:00.000Z')
+    assert.equal(schedules[0].action.kind, 'message-reminder')
+    assert.deepEqual(await f.query('task.list'), [])
+    const originalSource = await f.query('coordination.source', { unitId: 'unit', revision: 1 })
+    assert.ok(originalSource.resolvedBy)
+    const result = await f.command('notification.start', { notificationId: oldNotification.id })
+    assert.equal(result.result.notification.state, previousState === 'prepared' ? 'superseded' : previousState)
+    assert.equal(result.dispatchEligible, false)
+    if (previousState !== 'prepared') assert.deepEqual(result.result.notification, before[0])
+    const accepted = (await f.query('notification.list')).find(item => item.id !== oldNotification.id)
+    assert.equal(accepted.payload.text, '已安排提醒：2026-10-23 15:20（Asia/Shanghai），提醒你查看云端专家的开发进度。')
+    assert.doesNotMatch(accepted.payload.text, /确认|0 项|clarification|Host|补执行|内部/)
+    await f.command('coordination.schedule.change', { scheduleId: schedules[0].id, expectedRevision: 1,
+      rule: { kind: 'once', at: '2026-10-23T07:30:00.000Z' } })
+    const changedPermit = await f.command('notification.start', { notificationId: accepted.id })
+    assert.equal(changedPermit.result.notification.state, 'superseded', 'resolve-created schedule acknowledgement is stale after retiming too')
+    assert.equal(changedPermit.dispatchEligible, false)
+    await f.restart(); await f.service.recoverGroup('group')
+    assert.equal((await f.query('coordination.schedule.list')).length, 1)
+    assert.equal((await f.query('notification.list')).length, 2)
+  })
+
+for (const previousState of ['prepared','starting','unknown','delivered'])
+  test(`accepted reminder retiming retires only unsent acknowledgement: ${previousState}`, async t => {
+    const f = await fixture(t, { seedTask: false })
+    await f.service.submit(f.request(), { ...f.schedule(), taskIds: [], actionKind: 'message-reminder', reminderText: '提醒查看进度。' })
+    const schedule = (await f.query('coordination.schedule.list'))[0]
+    const notification = (await f.query('notification.list'))[0]
+    if (previousState !== 'prepared') {
+      const started = (await f.command('notification.start', { notificationId: notification.id })).result.notification
+      if (previousState !== 'starting') await f.command('notification.receipt', { notificationId: notification.id,
+        dispatchToken: started.dispatchToken, state: previousState, evidenceRef: 'fixture-evidence' })
+    }
+    await f.command('coordination.schedule.change', { scheduleId: schedule.id, expectedRevision: 1,
+      rule: { kind: 'once', at: new Date(Math.floor(Date.now() / 1000) * 1000 + 7200000).toISOString() } })
+    await f.restart(); await f.service.recoverGroup('group')
+    const permit = await f.command('notification.start', { notificationId: notification.id })
+    // 重启把已开始但缺回执的发送恢复成 unknown；改期不能重新授予发送许可。
+    assert.equal(permit.result.notification.state, previousState === 'prepared' ? 'superseded' : previousState === 'starting' ? 'unknown' : previousState)
+    assert.equal(permit.dispatchEligible, false)
+    assert.deepEqual(permit.result.notification.payload, notification.payload, 'recovery must keep the original frozen payload')
+    if (previousState === 'prepared') assert.equal(permit.result.notification.retirement.reason, 'coordination-schedule-changed')
+    assert.equal((await f.query('notification.list')).length, 1)
+  })
+
+for (const field of ['taskIds','members','conditionalMembers'])
+  test(`pure reminder rejects task effect field ${field} before acceptance`, async t => {
+    const f = await fixture(t)
+    const proposal = { ...f.schedule(), actionKind: 'message-reminder', taskIds: [], reminderText: '提醒你查看进度。',
+      [field]: field === 'taskIds' ? ['A'] : f.arrangement('task-continue').members }
+    await assert.rejects(f.service.submit(f.request(), proposal), { code: 'COORDINATION_REMINDER_INVALID' })
+    assert.deepEqual(await f.query('coordination.list'), [])
+    assert.deepEqual(await f.query('coordination.schedule.list'), [])
+  })
 
 for (const invalid of ['recipient','timezone','past','rule']) test(`invalid schedule ${invalid} has zero semantic acceptance or resident settlement`, async t => {
   const f = await fixture(t)

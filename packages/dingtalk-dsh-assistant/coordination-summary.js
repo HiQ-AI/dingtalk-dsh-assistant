@@ -36,6 +36,7 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
   return { coordinationId: coordination.id, revision: coordination.revision, state, members: items, pendingClarifications,
     fulfilled, remainingInstructionIds: remaining.map(m => m.instructionId),
     schedules: schedules.map(s => ({ scheduleId: s.id, revision: s.revision, state: s.state, nextDueAt: s.nextDueAt, outcome: s.outcome ?? null,
+      ...(s.action?.kind === 'message-reminder' ? { reminderText: s.action.text } : {}),
       timezone: s.timezone ?? null, rule: s.rule ?? null, recipientIds: s.target?.recipientIds ?? [] })),
     occurrences: occurrences.map(o => ({ occurrenceId: o.id, scheduleId: o.scheduleId ?? null, plannedAt: o.plannedAt ?? null,
       cancelledAt: o.cancelledAt ?? null,
@@ -67,7 +68,7 @@ export function formatCoordinationSnapshot(snapshot) {
     const rule = schedule.rule
     const timing = !rule ? '未记录' : rule.kind === 'once' ? timeText(rule.at, schedule.timezone)
       : `${rule.kind === 'daily' ? '每日' : `每周${'日一二三四五六'[rule.weekday]}`} ${rule.time}（${schedule.timezone}）`
-    lines.push(`计划 ${schedule.scheduleId}：${statusText(schedule.state)}；约定时间：${timing}；下次：${timeText(schedule.nextDueAt, schedule.timezone)}；通知对象：${schedule.recipientIds.join('、') || '当前群'}${schedule.outcome ? `；结果：${statusText(schedule.outcome)}` : ''}。`)
+    lines.push(`计划 ${schedule.scheduleId}：${statusText(schedule.state)}；约定时间：${timing}；下次：${timeText(schedule.nextDueAt, schedule.timezone)}；通知对象：${schedule.recipientIds.join('、') || '当前群'}${schedule.reminderText ? `；提醒内容：${schedule.reminderText}` : ''}${schedule.outcome ? `；结果：${statusText(schedule.outcome)}` : ''}。`)
   }
   const exceptional = snapshot.occurrences.filter(item => !item.cancelledAt && (['failed','expired','blocked'].includes(item.actionState) || item.deliveryState === 'failed'))
   if (exceptional.length) {

@@ -1,5 +1,6 @@
 import { stableTaskResourceIdentity, mergeTaskResources } from './task-message-projections.js'
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { taskPlanSchema } from './task-plan.js'
@@ -1155,14 +1156,16 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       const value = outboundSchema.parse(outbound)
-      return groups.update(entry[0], latest => {
-        const previous = latest.outbox.find(item => item.outboundId === value.outboundId)
-        if (previous && previous.text !== value.text) throw new Error('task_notification_projection_conflict')
-        if (previous?.notificationState === 'delivered' && value.notificationState !== 'delivered') return latest
-        if (previous?.notificationState === 'superseded' && value.notificationState !== 'superseded') return latest
-        const outbox = previous ? latest.outbox.map(item => item.outboundId === value.outboundId ? { ...item, ...value, ...(value.status === 'sent' ? { deliveryPendingReason: undefined, deliveryError: undefined } : {}) } : item) : [...latest.outbox, value]
-        return { ...latest, outbox }
-      })
+      const previous = entry[1].outbox.find(item => item.outboundId === value.outboundId)
+      if (previous && previous.text !== value.text) throw new Error('task_notification_projection_conflict')
+      if (previous?.notificationState === 'delivered' && value.notificationState !== 'delivered'
+        || previous?.notificationState === 'superseded' && value.notificationState !== 'superseded') return entry[1]
+      const next = Object.fromEntries(Object.entries({ ...previous, ...value,
+        ...(value.status === 'sent' ? { deliveryPendingReason: undefined, deliveryError: undefined } : {}) }).filter(([, item]) => item !== undefined))
+      // storage-domain.update 即使返回原对象也写盘，必须在调用之前跳过无变化投影。
+      if (isDeepStrictEqual(previous, next)) return entry[1]
+      return groups.update(entry[0], latest => ({ ...latest,
+        outbox: previous ? latest.outbox.map(item => item.outboundId === value.outboundId ? next : item) : [...latest.outbox, next] }))
     }),
     appendOutbox: ({ groupId, preflight, outboundId, topicRefs, decisionId, resultFingerprint, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, matterSourceMessageIds, matterUnitRefs, taskIds, taskInputVersion, taskRunSequence, replacesOutboundIds }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)

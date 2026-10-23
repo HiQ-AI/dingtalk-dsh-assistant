@@ -22,6 +22,77 @@ async function seed(host) {
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '测试用户', text,
   timestamp: '2026-10-21T01:00:00Z' })
 
+test('两条原始提醒相隔39秒由原安排订正，未建Task且到15:20仅投递一次提醒',
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    const firstAt = Date.parse('2026-10-23T07:11:12Z'), dueAt = '2026-10-23T07:20:00.000Z'
+    t.mock.timers.enable({ apis: ['Date'], now: firstAt })
+    const root = await mkdtemp(join(tmpdir(), 'reminder-correction-native-'))
+    const reminderText = '提醒你查看云端专家的开发进度。'
+    let host
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    // 受控提案只验证原生 ingress 到通知的执行合同，不冒充真实模型语义评测。
+    host = await nativeTaskHost(root, request => {
+      const input = latestInput(request), names = request.tools.map(tool => tool.name)
+      if (names.includes('group_topic_route_submit')) return unitRoute(input)
+      if (names.includes('coordination_submit')) {
+        assert.deepEqual(input.tasks, [], '纯提醒不需要任何预置Task')
+        if (input.source.messageId === 'reminder-original') return [{ name: 'coordination_submit', args: {
+          kind: 'clarify', question: '今天15:00已经过去，提醒改到几点？', candidates: [] } }]
+        const context = modelToolValues(request).find(value => value.arrangementContexts?.length)
+        if (!context) return [{ name: 'coordination_context_get', args: { coordinationIds: [input.unresolved[0].coordinationId] } }]
+        const original = context.arrangementContexts[0]
+        assert.equal(original.source.unitText, '小小鹏，三点提醒我一下查看云端专家的开发进度')
+        return [{ name: 'coordination_submit', args: { kind: 'resolve', coordinationId: original.coordination.id,
+          expectedRevision: original.coordination.revision, resolution: { kind: 'schedule', actionKind: 'message-reminder',
+            timezone: 'Asia/Shanghai', rule: { kind: 'once', at: dueAt }, recipientIds: [input.source.actorId], reminderText,
+            interpretation: '同一提醒订正为今天15:20，在本群提醒本人查看云端专家的开发进度。' } } }]
+      }
+      return topicTaskCalls(request) ?? []
+    }, { config, agentConfig: { agentNames: ['小小鹏'] } })
+    await host.residentStore.setAgentNames(['小小鹏'])
+    await host.service.ingest({ ...message('reminder-original', '小小鹏，三点提醒我一下查看云端专家的开发进度'), timestamp: new Date().toISOString() })
+    await host.service.whenIdle()
+    const original = (await host.query('coordination.list'))[0]
+    assert.equal(original.state, 'needs_clarification', JSON.stringify(host.service.listAlerts()))
+    t.mock.timers.tick(39000)
+    await host.service.ingest({ ...message('reminder-correction', '小小鹏，三点20提醒我一下查看云端专家的开发进度'), timestamp: new Date().toISOString() })
+    await host.service.whenIdle()
+    const arrangements = await host.query('coordination.list'), schedules = await host.query('coordination.schedule.list')
+    assert.equal(arrangements.length, 1, JSON.stringify(host.service.listAlerts()))
+    assert.equal(arrangements[0].id, original.id)
+    assert.equal(arrangements[0].revision, 2)
+    assert.equal(schedules.length, 1)
+    assert.equal(schedules[0].rule.at, dueAt)
+    assert.deepEqual(schedules[0].action, { kind: 'message-reminder', text: reminderText })
+    assert.deepEqual(await host.query('task.list'), [])
+    const ownership = host.residentStore.listSourceDispatchOwnership('native-group')
+    assert.equal(ownership.length, 2)
+    assert.deepEqual(ownership.map(entry => [entry.coordinationId, entry.semanticState, entry.settled]), [
+      [original.id, 'accepted', true], [original.id, 'accepted', true],
+    ])
+    const sources = await Promise.all(ownership.map(entry => host.query('coordination.source', { unitId: entry.unitId, revision: entry.unitRevision })))
+    assert.equal(sources[0].resolvedBy, sources[1].id)
+    assert.equal((await host.query('coordination.occurrence.list')).length, 0)
+    t.mock.timers.tick(Date.parse(dueAt) - Date.now())
+    await host.service.recover(); await host.service.whenIdle()
+    const occurrences = await host.query('coordination.occurrence.list'), jobs = await host.query('coordination.job.list')
+    assert.equal(occurrences.length, 1, JSON.stringify(host.service.listAlerts()))
+    assert.equal(occurrences[0].plannedAt, dueAt)
+    assert.deepEqual(occurrences[0].result, { kind: 'message-reminder', text: reminderText, plannedAt: dueAt })
+    assert.equal(occurrences[0].deliveryState, 'delivered')
+    assert.equal(jobs.length, 1); assert.equal(jobs[0].state, 'completed')
+    const reminders = host.sent.filter(notification => notification.payload.fact.occurrenceId === occurrences[0].id)
+    assert.equal(reminders.length, 1)
+    assert.equal(reminders[0].payload.text, reminderText)
+    assert.deepEqual(reminders[0].payload.atOpenDingTalkIds, ['native-user'])
+    const outbound = host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === reminders[0].id)
+    assert.equal(outbound.notificationState, 'delivered'); assert.equal(outbound.status, 'sent')
+    await host.service.recover(); await host.service.whenIdle()
+    assert.equal(host.sent.filter(notification => notification.payload.fact.occurrenceId === occurrences[0].id).length, 1)
+    assert.deepEqual(await host.query('task.list'), [])
+    assert.equal(host.residentStore.listTopics('native-group').length, 0)
+  })
+
 test('native scheduled query releases an explicitly authorized continuation only after fresh incomplete facts',
   {skip:!available?reason:false,timeout:20000},async t=>{
     t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
