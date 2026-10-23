@@ -320,6 +320,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       // 决策沿原命令收据追加保存；索引只服务按任务分页，不把历史数组塞进每轮任务快照。
       db.exec(`CREATE INDEX IF NOT EXISTS dynamic_receipt_decision_task
         ON dynamic_receipts(json_extract(body,'$.taskDecision.taskId')) WHERE json_type(body,'$.taskDecision')='object'`)
+      db.exec(`CREATE INDEX IF NOT EXISTS dynamic_pending_source_sender
+        ON dynamic_sources(json_extract(body,'$.groupId'),json_extract(body,'$.actorId'))
+        WHERE coalesce(json_extract(body,'$.routed'),0)=0 AND json_type(body,'$.processingCompleted') IS NULL`)
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
       for (const operation of ops()) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
       for (const notification of all('dynamic_notifications')) if (notification.state === 'starting') { notification.state = 'unknown'; put('dynamic_notifications', notification) }
@@ -471,8 +474,14 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (occurrence.notificationId) return changed({ notification: get('dynamic_notifications', occurrence.notificationId) })
       occurrence.resultVersion ??= 1
       const notificationId = `coordination:${occurrence.coordinationId}:${occurrence.id}:result:${occurrence.resultVersion}`
+      // 提醒沿已接纳来源回复，复用任务的原生引用与提及；已冻结通知在上方直接返回，不改写历史 payload。
+      const source = occurrence.action.kind === 'message-reminder'
+        ? get('dynamic_coordination_sources', get('dynamic_coordination', occurrence.coordinationId).sourceId, true) : null
+      const reply = source?.sourceMessageId && source.actorId && source.groupId === occurrence.target.conversationId
+        ? { sourceMessageId: source.sourceMessageId, actorId: source.actorId } : {}
       const notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
         payload: { kind: 'coordination', replyKind: 'substantive', conversationId: occurrence.target.conversationId, atOpenDingTalkIds: occurrence.target.recipientIds,
+          ...reply,
           text: occurrence.action.kind === 'message-reminder' ? occurrence.result.text : JSON.stringify(occurrence.result), fact: { coordinationId: occurrence.coordinationId, eventId: `${occurrence.id}:result:${occurrence.resultVersion}`,
             occurrenceId: occurrence.id, instanceControlRevision: occurrence.instanceControlRevision,
             deliveryControlRevision: occurrence.deliveryControlRevision, resultVersion: occurrence.resultVersion, resultDigest: digest(occurrence.result) } } }, commandId)
@@ -1430,6 +1439,20 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             notification.state = 'superseded'; notification.retirement = { reason: 'coordination-schedule-changed', at: stamp }
             notification.updatedAt = stamp; put('dynamic_notifications', notification); return changed({ notification })
           }
+          if (!fact.occurrenceId && /^(?:clarification|accepted):/u.test(fact.eventId)) {
+            const originId = source?.sourceRefs?.[0]
+            const origin = originId && db.prepare('SELECT rowid AS sequence,body FROM dynamic_sources WHERE id=?').get(originId)
+            if (origin) {
+              const admitted = JSON.parse(origin.body)
+              // 按准入账本顺序拦住已收到的后续消息，不依赖同秒消息或客户端时钟。
+              // 抛出暂缓信号使事务回滚：不能缓存本次 start ID，也不能消耗发送次数。
+              const pending = db.prepare(`SELECT id FROM dynamic_sources WHERE rowid>?
+                AND json_extract(body,'$.groupId')=? AND json_extract(body,'$.actorId')=?
+                AND coalesce(json_extract(body,'$.routed'),0)=0
+                AND json_type(body,'$.processingCompleted') IS NULL LIMIT 1`).get(origin.sequence, admitted.groupId, admitted.actorId)
+              if (pending) fail('DYNAMIC_NOTIFICATION_SOURCE_PENDING')
+            }
+          }
           // 在发送许可同一事务内回读摘要事实，取消本次安排不能被尚未运行的聚合扫描绕过。
           if (fact.snapshotDigest && fact.snapshotDigest !== digest(currentCoordinationSnapshot(coordination))) {
             notification.state = 'superseded'; notification.retirement = { reason: 'coordination-facts-changed', at: stamp }
@@ -1501,7 +1524,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (epochGated && !eventTimestamp) return changed({ ignored: true, reason: 'invalid-ingress-timestamp', source: null })
       if (epochGated && Date.parse(eventTimestamp) < Date.parse(boundIngressEpoch)) return changed({ ignored: true, reason: 'before-ingress-epoch', source: null })
       if (prior) {
-        const { routed: _routed, routeReceipt: _receipt, routeDecision: _decision, routePreparedAt: _prepared, ...previous } = prior
+        const { routed: _routed, routeReceipt: _receipt, routeDecision: _decision, routePreparedAt: _prepared, processingCompleted: _processing, ...previous } = prior
         if (digest(previous) !== digest(source)) fail('DYNAMIC_SOURCE_CONFLICT')
         return changed({ source: prior })
       }
@@ -1518,6 +1541,29 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const source = get('dynamic_sources', a.sourceId)
       if (source.routeDecision && digest(source.routeDecision) !== digest(a.decision)) fail('DYNAMIC_SOURCE_ROUTE_CONFLICT')
       source.routeDecision = clone(record(a.decision)); source.routePreparedAt ??= stamp
+      put('dynamic_sources', source); return changed({ source })
+    }
+    if (kind === 'source.processingCompleted') {
+      const source = get('dynamic_sources', a.sourceId)
+      if (source.version !== a.messageVersion) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+      const units = array(a.units), refs = array(a.activeUnitRefs)
+      integer(a.routingRevision, 'routingRevision')
+      const key = unit => `${text(unit.unitId, 'unitId')}:${integer(unit.unitRevision, 'unitRevision')}`
+      if (new Set(refs.map(key)).size !== refs.length || digest(refs.map(key).sort()) !== digest(units.map(key).sort()))
+        fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+      const unitIds = refs.map(unit => digest({ unitId: unit.unitId, revision: unit.unitRevision }))
+      const coordinated = new Map(db.prepare('SELECT body FROM dynamic_coordination_sources WHERE id IN (SELECT value FROM json_each(?))')
+        .all(JSON.stringify(unitIds)).map(row => JSON.parse(row.body)).filter(item => item.sourceRefs?.includes(source.sourceId))
+        .map(item => [`${item.unitId}:${item.revision}`, item]))
+      for (const unit of units) {
+        const ledger = coordinated.get(key(unit))
+        if (unit.dispatchOwner === 'coordination') {
+          if (!ledger || ledger.groupId !== source.groupId || ledger.sourceMessageId !== source.messageId
+            || !(ledger.resolvedBy || ['accepted', 'needs_clarification'].includes(ledger.state))) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+        } else if (unit.dispatchOwner !== 'legacy-topic' || ledger && ledger.dispatchOwner !== 'legacy-topic') fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+      }
+      // 完成本轮语义判定不等于业务 settled；已提出澄清的来源也不能永久阻塞其他回复。
+      source.processingCompleted ??= { at: stamp, routingRevision: a.routingRevision, activeUnitRefs: clone(refs) }
       put('dynamic_sources', source); return changed({ source })
     }
     if (kind === 'source.routed') {

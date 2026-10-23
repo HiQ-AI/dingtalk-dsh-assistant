@@ -192,3 +192,62 @@ test('真实完成出口将模型重复署名移到证据和限制后', nativeOp
   assert.equal(f.sent.length, 1)
   assert.equal(f.sent[0].payload.text, '核验完成。\n\n- 材料已核对。\n\n未部署。\n\n- Configured Agent')
 })
+
+for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : '完成'}在入账前拒绝来源消息和人员标识，原轮订正保留业务编号与链接`, nativeOptions, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'reply-public-identity-'))
+  const messageId = 'opaque-native-message-184', actorId = 'opaque-open-dingtalk-875'
+  const businessText = '已核对 PR #253 与订单 SG18：https://example.com/orders/SG18'
+  let host, modelFailure, steps = 0
+  t.after(async () => { try { await host?.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  host = await nativeTaskHost(root, async (request, h) => {
+    try {
+      assert.ok(h.requests.length <= 30, 'Rejected public text must be corrected in the original native turn')
+      const routed = topicTaskCalls(request)
+      if (routed) return routed
+      const input = latestInput(request), current = await h.query('task.get', { taskId: input.task.taskId })
+      const source = input.sources.find(item => item.messageId === messageId)
+      assert.equal(source.actorId, actorId)
+      if (dialogueCase && !input.dialogue) return [{ name: 'task_session_submit', args: { decision: {
+        action: 'wait', summary: `等待内部核查来源 ${source.messageId}`, evidence: [], limitations: [],
+      } } }]
+      const step = ++steps
+      if (input.dialogue) {
+        assert.equal(current.status, 'active')
+        assert.equal(current.dialogue.find(item => item.id === input.dialogue.id).reply, null, 'Rejected dialogue must not be displayed')
+      } else {
+        assert.notEqual(current.status, 'completed', 'Rejected completion must not finish the task')
+        assert.equal((await h.query('notification.list')).filter(item => item.payload.kind === 'task-completed').length, 0)
+      }
+      return [{ name: 'task_session_submit', args: { decision: {
+        action: input.dialogue ? 'wait' : 'complete',
+        summary: step === 1 ? `已核对来源 ${source.messageId}` : step === 2 ? `已通知人员 ${source.actorId}` : businessText,
+        evidence: input.dialogue ? [`内部核查来源 ${source.messageId}`] : ['结果已核对'], limitations: [],
+      } } }]
+    } catch (error) { modelFailure = error; return [] }
+  })
+  await host.service.ingest({ groupId: 'native-group', messageId, senderOpenDingTalkId: actorId,
+    senderName: '真实发起人', text: '@测试助手 核对订单 SG18', occurredAt: '2026-10-23T08:00:00Z' })
+  await host.service.whenIdle()
+  if (modelFailure) throw modelFailure
+  const [task] = await host.query('task.list')
+  if (dialogueCase) {
+    assert.match(task.lastDecision.summary, new RegExp(messageId), 'Internal wait diagnostics retain source identity')
+    await host.service.sendTaskDialogue({ taskId: task.taskId, requestId: 'public-dialogue', text: '核查结果是什么？' })
+    await host.service.whenIdle()
+    if (modelFailure) throw modelFailure
+    const dialogue = await host.service.taskDialogue(task.taskId)
+    assert.equal(dialogue.messages.length, 1)
+    assert.equal(dialogue.messages[0].reply, businessText)
+    assert.equal((await host.query('task.get', { taskId: task.taskId })).status, 'active')
+    assert.equal(host.sent.filter(item => item.payload.kind === 'task-completed').length, 0)
+  } else {
+    assert.equal(task.status, 'completed')
+    const notices = host.sent.filter(item => item.payload.kind === 'task-completed')
+    assert.equal(notices.length, 1)
+    assert.equal(notices[0].payload.text, `${businessText}\n\n- 结果已核对`)
+    assert.equal(notices[0].payload.replyToMessageId, messageId)
+    assert.deepEqual(notices[0].payload.atOpenDingTalkIds, [actorId])
+  }
+  assert.equal(steps, 3)
+  assert.equal(host.toolResults.filter(item => item.name === 'task_session_submit' && JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')).length, 2)
+})

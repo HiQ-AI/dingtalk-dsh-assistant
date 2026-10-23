@@ -30,7 +30,7 @@ async function setup(t, options = {}) {
   const sent = [], errors = [], tools = new Map(), applications = []
   const agent = { session: options.session, inbox: options.inbox, steer(message) { sent.push(message.content[0].text); options.onSteer?.(message) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
   const coordinator = createTopicCoordinator({
-    dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery,
+    dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery, quotedReminderContext: options.quotedReminderContext,
     store, getAgent: () => agent, assertSession(exec, groupId) { if (exec?.groupId !== groupId) throw new Error('wrong_session') },
     serializeTasks: options.serializeTasks ?? ((fn) => fn()), isClosing: options.isClosing ?? (() => false), retryDelayMs: options.retryDelayMs ?? 60_000,
     reviewCandidates: options.reviewCandidates ?? (() => []), onDecisionRequest: options.onDecisionRequest, maxRequestAttempts: options.maxRequestAttempts ?? 3,
@@ -1989,6 +1989,117 @@ test('结构校验一次返回全部引用歧义及字段位置，整批零副�
   assert.ok(result.issues.some(issue => issue.field === 'routes.0.units.0.contextRefs.0' && issue.candidates.length === 2))
   assert.deepEqual(h.store.getGroup('g'), before)
   assert.equal(h.applications.length, 0)
+})
+
+async function quotedReminderRouting(t, quotedReminderContext) {
+  const h = await setup(t, { quotedReminderContext })
+  await ingest(h, 'reminder-catalog-seed')
+  const topics = Array.from({ length: 34 }, (_, index) => ({ newTopicKey: `history-${index}`, title: `历史事项${index}`, relationship: 'affected', reason: '历史关系' }))
+  await h.store.routeMessages({ groupId: 'g', routeId: 'reminder-seed', routingRevision: 0,
+    routes: [{ messageId: 'reminder-catalog-seed', messageVersion: 1, topics, effectOwner: { newTopicKey: 'history-0' } }] })
+  return h
+}
+const quotedReminder = { quotedMessageId: 'delivered-reminder', coordinationId: 'coordination-reminder',
+  schedule: { id: 'schedule-reminder', action: { kind: 'message-reminder', text: '提醒小李查看进度' }, target: { recipientIds: ['recipient-b'] } } }
+
+test('精确引用提醒首屏省略34个无关话题，A设置B不改变收件人且完整目录仍可读取', async t => {
+  const calls = [], before = structuredClone(quotedReminder)
+  const h = await quotedReminderRouting(t, async args => { calls.push(args); return quotedReminder })
+  await ingest(h, 'quoted-change', { text: '提前三分钟', quotedMessage: { messageId: 'delivered-reminder', content: '已安排17:57提醒小李查看进度。' } })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.deepEqual(calls, [{ groupId: 'g', messageId: 'quoted-change', messageVersion: 1, actorId: 'od-a' }])
+  assert.deepEqual(request.topics, []); assert.equal(request.totalTopics, 34); assert.equal(request.hasMoreTopics, true); assert.equal(request.nextTopicOffset, 0)
+  assert.equal(request.messages[0].quotedReminder.coordinationId, quotedReminder.coordinationId)
+  assert.match(request.quotedReminderGuide, /新增或混合事项仍逐项判断/)
+  assert.equal((await h.call('group_topic_list', { offset: request.nextTopicOffset, limit: 100 })).topics.length, 34)
+  assert.deepEqual(quotedReminder, before, '路由只消费引用关联，不修改A设置的B收件人')
+  assert.deepEqual(h.applications, []); assert.deepEqual(h.store.getGroup('g').outbox, [])
+})
+
+test('引用提醒内的新业务仍可按需查目录并拆成独立事项，不被强制归入原提醒', async t => {
+  const h = await quotedReminderRouting(t, async () => quotedReminder)
+  await ingest(h, 'quoted-mixed', { text: '提前三分钟。另外查一下登录失败。', quotedMessage: { messageId: 'delivered-reminder', content: '已安排17:57提醒。' } })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.deepEqual(request.topics, [])
+  assert.equal((await h.call('group_topic_list', { query: '登录失败' })).topics.length, 0)
+  const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-mixed', messageVersion: 1, ignoredRefs: [], units: [
+    { unitKey: 'reminder-change', summary: '提醒提前三分钟', sourceRefs: [{ quote: '提前三分钟。' }], dispatchOwner: 'coordination', topics: [], reason: '独立提醒订正' },
+    { unitKey: 'login-investigation', summary: '登录失败排查', sourceRefs: [{ quote: '另外查一下登录失败。' }], topics: [{ newTopicKey: 'login', title: '登录失败排查' }] },
+  ] }] })
+  assert.equal(result.status, 'accepted', JSON.stringify(result))
+  const ownership = h.store.listSourceDispatchOwnership('g').filter(item => item.sourceSnapshot.messageId === 'quoted-mixed')
+  assert.equal(ownership.filter(item => item.dispatchOwner === 'coordination').length, 1)
+  assert.equal(h.store.getGroup('g').topics.length, 35)
+})
+
+test('精确关联未通过时保留普通话题目录，路由不自行猜测关联', async t => {
+  const h = await quotedReminderRouting(t, async () => null)
+  await ingest(h, 'unverified-quote', { text: '提前三分钟', quotedMessage: { messageId: 'unverified-reminder', content: '未经证实的引用' } })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.ok(request.topics.length > 0); assert.equal(request.totalTopics, 34)
+  assert.equal(request.messages[0].quotedReminder, undefined); assert.equal(request.quotedReminderGuide, undefined)
+})
+
+test('普通新事项不调用提醒关联，混合批次保留原目录', async t => {
+  let calls = 0
+  const h = await quotedReminderRouting(t, async () => { calls++; return quotedReminder })
+  await ingest(h, 'ordinary-new', { text: '请检查新的登录问题' })
+  await ingest(h, 'quoted-in-batch', { text: '提前三分钟', quotedMessage: { messageId: 'delivered-reminder', content: '17:57提醒' } })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.equal(calls, 1); assert.ok(request.topics.length > 0)
+  assert.equal(request.messages.find(item => item.messageId === 'ordinary-new').quotedReminder, undefined)
+})
+
+test('精确引用查询异常显式报告并释放未派发路由请求，恢复后沿原路径重试', async t => {
+  let broken = true
+  const h = await quotedReminderRouting(t, async () => { if (broken) throw new Error('quote-query-failed'); return quotedReminder })
+  await ingest(h, 'quoted-error', { quotedMessage: { messageId: 'delivered-reminder', content: '17:57提醒' } })
+  await h.coordinator.schedule('g')
+  assert.equal(h.envelope('[GROUP_TOPIC_ROUTE]'), undefined); assert.match(h.errors[0].message, /quote-query-failed/)
+  broken = false; await h.coordinator.schedule('g')
+  assert.deepEqual(h.envelope('[GROUP_TOPIC_ROUTE]').topics, [])
+})
+
+test('引用关联等待期间版本变化只重建原批次，新增消息不丢失也不混入旧请求', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), versions = []
+  t.after(() => release.resolve())
+  const h = await quotedReminderRouting(t, async args => {
+    versions.push(args.messageVersion)
+    if (versions.length === 1) { entered.resolve(); await release.promise }
+    return quotedReminder
+  })
+  const original = { text: '提前三分钟', quotedMessage: { messageId: 'delivered-reminder', content: '17:57提醒' } }
+  await ingest(h, 'quoted-enrichment', original)
+  const scheduled = h.coordinator.schedule('g')
+  await entered.promise
+  await ingest(h, 'quoted-enrichment', { ...original, senderName: '真实发送人' })
+  await ingest(h, 'later-independent', { text: '另外核查登录失败' })
+  const concurrent = h.coordinator.schedule('g')
+  release.resolve(); await Promise.all([scheduled, concurrent])
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.deepEqual(versions, [1, 2])
+  assert.equal(h.sent.filter(item => item.startsWith('[GROUP_TOPIC_ROUTE]')).length, 1, '旧版本不能占用一次模型往返')
+  assert.deepEqual(request.messages.map(item => [item.messageId, item.messageVersion]), [['quoted-enrichment', 2]])
+  const accepted = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-enrichment', messageVersion: 2,
+    ignoredRefs: [], units: [{ unitKey: 'change', summary: '提醒提前三分钟', sourceRefs: [{ quote: original.text }],
+      dispatchOwner: 'coordination', topics: [], reason: '提醒订正' }] }] })
+  assert.equal(accepted.status, 'accepted')
+  assert.deepEqual(h.envelope('[GROUP_TOPIC_ROUTE]').messages.map(item => item.messageId), ['later-independent'])
+  assert.equal(h.errors.length, 0)
+})
+
+test('引用关联等待期间关闭不会派发尚未准备的路由', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  t.after(() => release.resolve())
+  const h = await quotedReminderRouting(t, async () => { entered.resolve(); await release.promise; return quotedReminder })
+  await ingest(h, 'quoted-close', { quotedMessage: { messageId: 'delivered-reminder', content: '17:57提醒' } })
+  const scheduled = h.coordinator.schedule('g')
+  await entered.promise; await h.coordinator.close(); release.resolve(); await scheduled
+  assert.equal(h.envelope('[GROUP_TOPIC_ROUTE]'), undefined)
 })
 
 test('紧凑目录连续分页无漏项，引用同消息全部旧事项保留摘要', async (t) => {

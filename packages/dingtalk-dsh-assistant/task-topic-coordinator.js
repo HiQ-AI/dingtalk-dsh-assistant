@@ -27,10 +27,14 @@ export function taskIndexPage(tasks, offset, limit) {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, coordinationEnabled = false, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, validateReply, quotedReminderContext, coordinationEnabled = false, onError = () => {} }) {
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
   store = new Proxy(store, { get(target, key) {
+    if (key === 'acceptTopicDecision' && validateReply) return async args => {
+      if (args.decision.reply?.trim()) await validateReply(args)
+      return target.acceptTopicDecision(args)
+    }
     if (key === 'routeMessages') return args => {
       if (!coordinationEnabled && args.routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))
         && !target.getGroup(args.groupId)?.routeHistory.some(record => record.routeId === args.routeId)) throw new Error('coordination_ingress_disabled')
@@ -142,7 +146,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     }
     return normalized
   }
-  topics = createTopicCoordinator({ store,
+  topics = createTopicCoordinator({ store, quotedReminderContext,
     getAgent: (groupId, request) => request ? sessions.get(groupId, request) : !closed && store.getGroup(groupId) ? presence : undefined,
     dispatchRequest: (request, message) => {
       const work = sessions.dispatch(request, message)

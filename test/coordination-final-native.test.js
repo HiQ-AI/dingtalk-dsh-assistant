@@ -6,6 +6,7 @@ import {join} from 'node:path'
 import {available,reason,nativeTaskHost,latestInput,modelToolValues,topicTaskCalls} from './fixtures/task-session-native-host.js'
 import {projectTaskNotification} from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import {residentDomainSpec} from '../packages/dingtalk-dsh-assistant/store.js'
+import {formatCoordinationTime} from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 
 const model={enabled:true,provider:'native-task-test',model:'coordination-controlled'}
 const wait=request=>topicTaskCalls(request)??(request.tools.some(t=>t.name==='task_session_submit')
@@ -32,7 +33,7 @@ test('expired no-Topic query reaches the real outbox once after offline restart 
     await host.service.recover();await host.service.whenIdle()
     const sent=host.sent.filter(n=>n.payload.fact.coordinationId==='expired-query')
     assert.equal(sent.length,1,JSON.stringify(host.service.listAlerts()))
-    assert.match(sent[0].payload.text,/已过期，本次未执行/);assert.match(sent[0].payload.text,/09:00:00/)
+    assert.match(sent[0].payload.text,/已过期，本次未执行/);assert.ok(sent[0].payload.text.includes(formatCoordinationTime('2026-10-21T01:00:00Z')))
     assert.deepEqual(sent[0].payload.atOpenDingTalkIds,['native-user'])
     assert.equal((await host.query('notification.get',{notificationId:sent[0].id})).state,'delivered')
     assert.equal((await host.query('coordination.occurrence.list'))[0].actionState,'expired')

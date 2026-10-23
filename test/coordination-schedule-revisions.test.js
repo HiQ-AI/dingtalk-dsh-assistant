@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { summarizeTimeSlots } from '../packages/dingtalk-dsh-assistant/coordination-time.js'
 import { coordinationProposalSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
+import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
 
 test('offset proposal persists a canonical due time and one slot across restart and repeated scans', async t => {
   const proposal = coordinationProposalSchema.parse({kind:'schedule',timezone:'Asia/Shanghai',
@@ -34,7 +36,8 @@ async function fixture(t, rule = { kind: 'once', at: '2026-10-21T01:00:00.000Z' 
   const command = (kind, args = {}, id = randomUUID()) => store.command({ id, kind, args })
   const query = (kind, args = {}) => store.query({ kind, ...args })
   if (action.kind !== 'message-reminder') await command('task.create', { taskId: 'A', groupId: 'group', request: 'A' })
-  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: action.text ?? '查询A' })).result.source
+  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: action.text ?? '查询A',
+    reservationId: 'source-reservation', reservationGeneration: 1, sourceMessageId: 'source-message', actorId: 'source-actor', sourceRefs: ['authenticated-source'] })).result.source
   await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'query', members: [], readOnly: true })
   await command('coordination.schedule.create', { coordinationId: 'query', scheduleId: 'schedule', timezone: 'Asia/Shanghai', rule,
     action, target: { conversationId: 'group', recipientIds: ['first'] } })
@@ -81,10 +84,21 @@ test('a pure reminder freezes its original text without any Task and reuses one 
   const notification = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
   assert.equal(notification.payload.text, action.text)
   assert.deepEqual(notification.payload.atOpenDingTalkIds, ['first'])
+  assert.equal(notification.payload.sourceMessageId, 'source-message')
+  assert.equal(notification.payload.actorId, 'source-actor')
+  const commands = [], adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    commands.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'isolated-send' } }) }
+  } } })
+  await sendWorkflowNotification(adapter, notification)
+  assert.deepEqual(commands[0].slice(0, 3), ['chat', 'message', 'reply'])
+  assert.equal(commands[0][commands[0].indexOf('--ref-msg-id') + 1], 'source-message')
+  assert.equal(commands[0][commands[0].indexOf('--ref-sender') + 1], 'source-actor')
+  assert.equal(commands[0][commands[0].indexOf('--at-open-dingtalk-ids') + 1], 'first')
+  assert.equal(commands[0][commands[0].indexOf('--content') + 1], action.text)
   await f.restart()
   const repeated = await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence }, 'remind-once')
   assert.deepEqual(repeated.result.occurrence.result, result.occurrence.result)
-  assert.equal((await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification.id, notification.id)
+  assert.deepEqual((await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification, notification)
   assert.equal((await f.query('notification.list')).length, 1)
   const permit = (await f.command('notification.start', { notificationId: notification.id })).result.notification
   await f.command('notification.receipt', { notificationId: notification.id, dispatchToken: permit.dispatchToken,
@@ -101,9 +115,12 @@ test('rescheduling a pending reminder supersedes the old slot and sends only the
   f.tick(3600000)
   const original = (await f.scan()).result.occurrences[0]
   const replacementText = '查看云端专家的开发进度并记录待办。'
-  const changed = await f.change({ expectedRevision: 1, scope: 'unstarted', replacementPlannedAt: '2026-10-21T01:20:00.000Z',
-    action: { ...action, text: replacementText } })
-  const replacement = changed.result.replacements[0]
+  const source = (await f.command('coordination.reserve', { unitId: 'correction-unit', revision: 1, groupId: 'group', original: '稍后提醒',
+    reservationId: 'correction-reservation', reservationGeneration: 1, sourceMessageId: 'correction-message', actorId: 'source-actor', sourceRefs: ['correction-source'] })).result.source
+  await f.command('coordination.change', { coordinationId: 'query', expectedRevision: 1, sourceId: source.id, fence: source.fence,
+    change: { action: 'schedule', scheduleChange: { scheduleId: 'schedule', expectedRevision: 1, scope: 'unstarted',
+      replacementPlannedAt: '2026-10-21T01:20:00.000Z', action: { ...action, text: replacementText } } } })
+  const replacement = (await f.occurrences()).find(item => item.id !== original.id)
   await assert.rejects(f.claim(original), { code: 'DYNAMIC_COORDINATION_CANCELLED' })
   await assert.rejects(f.claim(replacement), { code: 'DYNAMIC_COORDINATION_NOT_DUE' })
   await f.restart(); f.tick(1200000)
@@ -111,6 +128,9 @@ test('rescheduling a pending reminder supersedes the old slot and sends only the
   await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence })
   const notification = (await f.command('coordination.notification.freeze', { occurrenceId: replacement.id })).result.notification
   assert.equal(notification.payload.text, replacementText)
+  assert.equal(notification.payload.sourceMessageId, 'correction-message', '订正后的提醒引用最新接纳来源')
+  assert.equal(notification.payload.actorId, 'source-actor')
+  assert.deepEqual(notification.payload.atOpenDingTalkIds, ['first'], '设置者改期仍提醒原收件人，引用作者不能代替收件人')
   assert.equal((await f.query('notification.list')).length, 1)
   assert.deepEqual((await f.scan()).result.occurrences, [])
 })

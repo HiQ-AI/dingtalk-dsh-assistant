@@ -8,6 +8,7 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openIndependentCoordination } from '../packages/dingtalk-dsh-assistant/independent-coordination-service.js'
+import { formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 import { assertCoordinationHandoffProof, freezeCoordinationSourceOrder, selectCoordinationInstructions } from '../packages/dingtalk-dsh-assistant/coordination-changes.js'
 
 function facility(snapshot) {
@@ -17,7 +18,7 @@ function facility(snapshot) {
     async deleteRecord(table, key) { delete snapshot.tables[table][key] },
   } } } }) } } }, { backend: 'isolated-coordination-changes' })
 }
-async function fixture(t, { loseAckAt } = {}) {
+async function fixture(t, { loseAckAt, coordinationConfig = {} } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'coordination-changes-')), snapshot = { tables: {}, global: null }
   const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'changes', initialize: true }
   let store = await openDynamicTaskStore(options), resident = await openResidentStore(facility(snapshot)), service, lost = false
@@ -37,16 +38,17 @@ async function fixture(t, { loseAckAt } = {}) {
     }
     return resident[key]
   } })
-  const open = () => service = openIndependentCoordination({ config: {}, residentStore: residentAdapter, query, command,
+  const open = () => service = openIndependentCoordination({ config: coordinationConfig, residentStore: residentAdapter, query, command,
     ownerActorId: 'author', planner: { plan: () => assert.fail('Recovery must not ask a model to reinterpret accepted or rejected work'), close() {} },
     onApplied: async member => applied.push(member.id), onError: (id, error) => errors.push({ id, code: error.code ?? error.message }),
     onHandoff: groupId => handoffs.push(groupId), onRecovered: id => recovered.push(id) })
   open()
   t.after(async () => { await service.close(); await resident.close(); await store.close(); await rm(directory, { recursive: true, force: true }) })
   for (const taskId of ['B','A']) await command('task.create', { taskId, groupId: 'group', ownerActorId: 'author', request: `original ${taskId}` })
-  const message = async (id, text) => {
-    await command('source.record', { sourceId: `source:${id}`, groupId: 'group', messageId: id, version: 1, actorId: 'author', text, timestamp: new Date().toISOString() })
-    await resident.ingest({ groupId: 'group', messageId: id, text, occurredAt: new Date().toISOString(), senderName: 'Author', senderOpenDingTalkId: 'author' })
+  const message = async (id, text, { actorId = 'author', quote, route = true } = {}) => {
+    await command('source.record', { sourceId: `source:${id}`, groupId: 'group', messageId: id, version: 1, actorId, text, ...(quote ? { quote } : {}), timestamp: new Date().toISOString() })
+    await resident.ingest({ groupId: 'group', messageId: id, text, occurredAt: new Date().toISOString(), senderName: 'Author', senderOpenDingTalkId: actorId, ...(quote ? { quotedMessage: quote } : {}) })
+    if (!route) return
     await resident.routeMessages({ groupId: 'group', routeId: `route:${id}`, routingRevision: resident.getGroup('group').routingRevision,
       routes: [{ messageId: id, messageVersion: 1, units: [{ unitKey: 'request', summary: text, sourceRefs: [{ quote: text }],
         dispatchOwner: 'coordination', topics: [], reason: 'independent request' }] }] })
@@ -65,6 +67,125 @@ async function fixture(t, { loseAckAt } = {}) {
     },
     async restart() { await service.close(); await resident.close(); await store.close(); store = await openDynamicTaskStore(options); resident = await openResidentStore(facility(snapshot)); open() } }
 }
+
+async function quotedReminderFixture(t, { delivery = 'delivered', requester = 'author', actionKind = 'message-reminder', quote = 'visible-reminder', unrouted = false, coordinationConfig = {} } = {}) {
+  const f = await fixture(t, { coordinationConfig })
+  await f.message('recipient-evidence', '收件人身份已知', { actorId: 'recipient' })
+  const request = await f.message('reminder-request', '稍后提醒收件人查看进度')
+  if (actionKind === 'read-query') await f.service.context(request)
+  await f.service.submit(request, { kind: 'schedule', actionKind, timezone: 'Asia/Shanghai',
+    rule: { kind: 'once', at: new Date(Math.floor(Date.now() / 1000) * 1000 + 600000).toISOString() }, recipientIds: ['recipient'],
+    ...(actionKind === 'message-reminder' ? { reminderText: '查看项目进度。' } : { taskIds: ['A'] }), interpretation: '稍后提醒' })
+  const notice = (await f.query('notification.list'))[0]
+  const started = (await f.command('notification.start', { notificationId: notice.id })).result.notification
+  await f.command('notification.receipt', { notificationId: notice.id, dispatchToken: started.dispatchToken,
+    state: delivery, ...(delivery === 'delivered' ? { receipt: { messageId: 'visible-reminder' } } : {}) })
+  const correction = await f.message('correction', '提前三分钟', { actorId: requester, route: !unrouted, ...(quote ? { quote: { messageId: quote, content: notice.payload.text } } : {}) })
+  const identity = { groupId: 'group', messageId: 'correction', messageVersion: 1, actorId: requester }
+  return Object.assign(f, { correction, identity, notice })
+}
+
+test('直接引用入口只保留完整原文，重复、重启及安全归还均不重新接管', async t => {
+  const f = await quotedReminderFixture(t, { unrouted: true, coordinationConfig: { enabled: true } })
+  const schedules = await f.query('coordination.schedule.list')
+  assert.equal(await f.service.reserveQuotedReminderFollowup('group'), true)
+  let request = { ...f.resident.listSourceDispatchOwnership('group').find(item => item.sourceSnapshot.messageId === 'correction'), groupId: 'group' }
+  assert.equal(request.sourceSnapshot.unitText, '提前三分钟')
+  assert.equal(request.sourceSnapshot.unit.unitKey, 'quoted-reminder-followup')
+  assert.equal(await f.service.reserveQuotedReminderFollowup('group'), false)
+  await f.restart()
+  assert.equal(await f.service.reserveQuotedReminderFollowup('group'), false)
+  assert.equal((await f.service.context(request)).source.admission, 'quoted-reminder-followup')
+  await f.service.submit(request, { kind: 'reject', reason: '整条含有不能由单提案完整表达的普通事项，交原路由拆分' })
+  request = f.resident.getSourceDispatchOwnership('group', request.unitId, request.unitRevision)
+  assert.equal(request.dispatchOwner, 'legacy-topic'); assert.equal(request.generation, 2)
+  assert.equal(f.resident.getGroup('group').messages.find(item => item.messageId === 'correction').routingStatus, 'pending')
+  assert.equal(await f.service.reserveQuotedReminderFollowup('group'), false)
+  await f.restart()
+  assert.equal(await f.service.reserveQuotedReminderFollowup('group'), false)
+  assert.equal(f.resident.listSourceDispatchOwnership('group').filter(item => item.sourceSnapshot.messageId === 'correction').length, 1)
+  assert.deepEqual(await f.query('coordination.schedule.list'), schedules, '仅选择模型与归还不能产生提醒效果')
+})
+
+for (const [name, options] of [['关闭', { coordinationConfig: {} }], ['未知送达', { delivery: 'unknown' }], ['异作者', { requester: 'other' }],
+  ['无引用', { quote: null }], ['已有归属', { unrouted: false }], ['多条待处理', {}], ['带附件', {}], ['冻结', {}]]) {
+  test(`直接引用入口不接管：${name}`, async t => {
+    const f = await quotedReminderFixture(t, { unrouted: true, coordinationConfig: { enabled: true }, ...options })
+    if (name === '多条待处理') await f.message('another', '另一个事项', { route: false })
+    if (name === '带附件') await f.resident.ingest({ groupId: 'group', messageId: 'correction', text: '提前三分钟',
+      senderOpenDingTalkId: 'author', occurredAt: new Date().toISOString(), imageRefs: [{ attachmentId: 'followup-image', mediaType: 'image/png' }] })
+    if (name === '冻结') await f.command('coordination.runtime.set', { mode: 'frozen', reason: '本测试暂停接纳' })
+    const before = f.resident.listSourceDispatchOwnership('group')
+    assert.equal(await f.service.reserveQuotedReminderFollowup('group'), false)
+    assert.deepEqual(f.resident.listSourceDispatchOwnership('group'), before)
+  })
+}
+
+for (const race of ['版本变化', '新消息入站', '既有消息富化']) test(`直接引用入口在原子提交前遇到${race}时不接纳旧候选`, async t => {
+  const f = await quotedReminderFixture(t, { unrouted: true, coordinationConfig: { enabled: true } })
+  const route = f.resident.routeMessages
+  t.mock.method(f.resident, 'routeMessages', async args => {
+    await f.resident.ingest({ groupId: 'group', messageId: race === '版本变化' ? 'correction' : race === '既有消息富化' ? 'reminder-request' : 'concurrent-message', senderOpenDingTalkId: 'author',
+      text: '新的完整要求', messageVersion: race === '新消息入站' ? 1 : 2, occurredAt: new Date().toISOString() })
+    return route(args)
+  })
+  assert.equal(await f.service.reserveQuotedReminderFollowup('group'), false)
+  assert.equal(f.resident.listSourceDispatchOwnership('group').filter(item => item.sourceSnapshot.messageId === 'correction').length, 0)
+})
+
+test('精确引用预带当前提醒且按需扩展目录，A改期仍提醒B并保留版本校验', async t => {
+  const f = await quotedReminderFixture(t)
+  const compact = await f.service.context(f.correction)
+  assert.deepEqual(compact.tasks, []); assert.equal(compact.total, undefined)
+  assert.deepEqual(compact.arrangements, []); assert.equal(compact.arrangementsTotal, undefined)
+  assert.deepEqual(compact.catalogsDeferred, { tasks: true, arrangements: true, recipients: true })
+  assert.equal(compact.arrangementContexts.length, 1)
+  assert.equal(compact.arrangementContexts[0].source.messageId, 'reminder-request')
+  assert.equal(compact.quotedReminder.source.actorId, 'author')
+  assert.deepEqual(compact.quotedReminder.schedule.target.recipientIds, ['recipient'])
+  assert.equal(compact.quotedReminder.schedule.history, undefined)
+  const expanded = await f.service.context(f.correction, { offset: 0, arrangementOffset: 0 })
+  assert.equal(expanded.tasks.length, 2); assert.equal(expanded.arrangements.length, 1)
+  assert.deepEqual(expanded.catalogsDeferred, { tasks: false, arrangements: false, recipients: false })
+  const current = compact.arrangementContexts[0], schedule = current.schedules[0]
+  const proposal = { kind: 'schedule-change', coordinationId: current.coordination.id, expectedRevision: current.coordination.revision,
+    scheduleId: schedule.id, expectedScheduleRevision: schedule.revision, scope: 'unstarted', timezone: schedule.timezone,
+    rule: { kind: 'once', at: new Date(Date.parse(schedule.rule.at) - 180000).toISOString() }, reason: '提前三分钟' }
+  await f.service.submit(f.correction, proposal)
+  const after = (await f.query('coordination.schedule.list'))[0]
+  assert.equal(after.rule.at, proposal.rule.at); assert.deepEqual(after.target.recipientIds, ['recipient'])
+  assert.ok((await f.query('task.list')).every(task => task.requirementRevision === 1))
+})
+
+for (const [name, options] of [['异作者', { requester: 'other' }], ['无引用', { quote: null }],
+  ['引用其他消息', { quote: 'unrelated' }], ['未知送达', { delivery: 'unknown' }], ['非纯提醒', { actionKind: 'read-query' }]]) {
+  test(`引用提醒关联不猜测：${name}`, async t => {
+    const f = await quotedReminderFixture(t, options)
+    assert.equal(await f.service.quotedReminderContext(f.identity), null)
+    const context = await f.service.context(f.correction)
+    assert.equal(context.catalogsDeferred, undefined); assert.equal(context.tasks.length, 2)
+  })
+}
+
+test('跨群、旧消息版本、暂停安排及重复送达身份不能缩小引用上下文', async t => {
+  const f = await quotedReminderFixture(t)
+  assert.equal(await f.service.quotedReminderContext({ ...f.identity, groupId: 'other-group' }), null)
+  const match = await f.service.quotedReminderContext(f.identity)
+  await f.command('coordination.schedule.change', { scheduleId: match.schedule.id, expectedRevision: 1, state: 'paused' })
+  assert.equal(await f.service.quotedReminderContext(f.identity), null)
+  await f.command('coordination.schedule.change', { scheduleId: match.schedule.id, expectedRevision: 2, state: 'active' })
+  await f.command('source.record', { sourceId: 'edited-correction', groupId: 'group', messageId: 'correction', version: 2,
+    actorId: 'author', text: '改了新的事项', quote: { messageId: 'visible-reminder' }, timestamp: new Date().toISOString() })
+  assert.equal(await f.service.quotedReminderContext(f.identity), null)
+  const fresh = { ...f.identity, messageVersion: 2 }
+  assert.ok(await f.service.quotedReminderContext(fresh), '引用只是候选，不按正文正则判定是否订正')
+  const duplicate = (await f.command('notification.prepare', { notificationId: 'duplicate-receipt', kind: 'coordination', requirementRevision: 1,
+    payload: { ...f.notice.payload, fact: { ...f.notice.payload.fact, eventId: 'duplicate-event' } } })).result.notification
+  const started = (await f.command('notification.start', { notificationId: duplicate.id })).result.notification
+  await f.command('notification.receipt', { notificationId: duplicate.id, dispatchToken: started.dispatchToken,
+    state: 'delivered', receipt: { messageId: 'visible-reminder' } })
+  assert.equal(await f.service.quotedReminderContext(fresh), null)
+})
 
 for (const loseAckAt of [undefined, 'coordination.source.freezeHandoff', 'resident.complete', 'coordination.source.completeHandoff']) {
   test(`rejected source handoff reconciles frozen identity across ${loseAckAt ?? 'normal'} boundary`, async t => {
@@ -222,7 +343,8 @@ test('chat aggregate query freezes authoritative obligations and recovers the sa
   const answer=await f.service.submit(request,{kind:'query',coordinationIds:[accepted.coordinationId]})
   assert.equal(answer.snapshots[0].remainingInstructionIds.length,2)
   const notice=(await f.query('notification.list')).find(n=>n.payload.sourceMessageId==='query-message')
-  assert.match(notice.payload.text,/B/);assert.match(notice.payload.text,/waiting_dependency|waiting_trigger/)
+  assert.match(notice.payload.text,/B/);assert.match(notice.payload.text,/需要先完成前面的事项|尚未满足约定的执行条件/)
+  assert.doesNotMatch(notice.payload.text,/waiting_dependency|waiting_trigger/)
   const digest=notice.payloadDigest, text=notice.payload.text
   assert.deepEqual(await f.query('task.list'),before)
   await f.restart(); await f.service.recoverGroup('group')
@@ -245,22 +367,54 @@ test('chat schedule query explains the agreed time and expired outcome and prese
     return {answer,notification}
   }
   const upcoming=await ask('when','约定几点，通知谁？')
-  assert.match(upcoming.notification.payload.text,/09:00:00/)
-  assert.match(upcoming.notification.payload.text,/Asia\/Shanghai/);assert.match(upcoming.notification.payload.text,/author/)
+  assert.ok(upcoming.notification.payload.text.includes(formatCoordinationTime('2026-10-21T01:00:00Z')))
+  assert.match(upcoming.notification.payload.text,/在本群通知你/)
+  assert.doesNotMatch(upcoming.notification.payload.text,/author|Asia\/Shanghai|coordination-|schedule:|版本|0 项/)
   t.mock.timers.tick(76*60000);await f.command('coordination.schedule.scan',{})
   const expired=await ask('why','为什么没执行？')
   assert.equal(expired.answer.snapshots[0].occurrences[0].actionState,'expired')
   assert.match(expired.notification.payload.text,/已过期，本次未执行/)
-  assert.match(expired.notification.payload.text,/错过允许补执行的时间/)
+  assert.doesNotMatch(expired.notification.payload.text,/补执行|窗口/)
   await f.restart();await f.service.recoverGroup('group')
   const recovered=(await f.query('notification.list')).filter(n=>n.payload.sourceMessageId==='why')
   assert.equal(recovered.length,1);assert.equal(recovered[0].payloadDigest,expired.notification.payloadDigest)
   assert.deepEqual(await f.query('task.list'),before);assert.deepEqual(f.errors,[])
 })
 
+for (const loseAckAt of [undefined, 'coordination.change']) test(`提醒改期重启通过真实查询恢复，保留既有冻结确认: ${loseAckAt ?? 'prepared'}`, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-23T07:11:00Z') })
+  const f = await fixture(t, { loseAckAt }), original = await f.message('reminder-plan', '15:20提醒我查看进度')
+  const accepted = await f.service.submit(original, { kind: 'schedule', actionKind: 'message-reminder', timezone: 'Asia/Shanghai',
+    rule: { kind: 'once', at: '2026-10-23T07:20:00Z' }, recipientIds: ['author'], reminderText: '查看进度。', interpretation: '当天提醒' })
+  const schedule = (await f.query('coordination.schedule.list', { coordinationId: accepted.coordinationId }))[0]
+  const followup = await f.message('reminder-retime', '提前三分钟')
+  await f.service.context(followup, { coordinationIds: [accepted.coordinationId] })
+  const proposal = { kind: 'schedule-change', coordinationId: accepted.coordinationId, expectedRevision: 1,
+    scheduleId: schedule.id, expectedScheduleRevision: 1, rule: { kind: 'once', at: '2026-10-23T07:17:00Z' }, reason: '用户订正提醒时间' }
+  if (loseAckAt) await assert.rejects(f.service.submit(followup, proposal), { code: 'DYNAMIC_COMMIT_ACK_UNKNOWN' })
+  else await f.service.submit(followup, proposal)
+  const frozen = await f.query('notification.list'), tasks = await f.query('task.list')
+  assert.equal(frozen.filter(item => item.payload.sourceMessageId === 'reminder-retime').length, loseAckAt ? 0 : 1)
+  await f.restart(); await f.service.recoverGroup('group')
+  assert.deepEqual(f.errors, [], '真实 store 查询不允许隐藏 DYNAMIC_QUERY_UNKNOWN')
+  const restored = (await f.query('notification.list')).filter(item => item.payload.sourceMessageId === 'reminder-retime')
+  assert.equal(restored.length, 1)
+  assert.equal(restored[0].payload.text, `已将提醒时间改为${formatCoordinationTime('2026-10-23T07:17:00Z')}：查看进度。`)
+  for (const before of frozen) {
+    const after = await f.query('notification.get', { notificationId: before.id })
+    assert.equal(after.payloadDigest, before.payloadDigest); assert.deepEqual(after.payload, before.payload)
+  }
+  assert.equal((await f.query('coordination.schedule.list'))[0].revision, 2)
+  assert.equal((await f.query('coordination.source', { unitId: followup.unitId, revision: followup.unitRevision })).state, 'accepted')
+  assert.equal(f.resident.getSourceDispatchOwnership('group', followup.unitId, followup.unitRevision).settled, true)
+  await f.service.recoverGroup('group')
+  assert.deepEqual((await f.query('notification.list')).filter(item => item.payload.sourceMessageId === 'reminder-retime'), restored)
+  assert.deepEqual(await f.query('task.list'), tasks); assert.deepEqual(f.errors, [])
+})
+
 test('resolving one of several pending members settles neither the other ambiguity nor its original source', async t => {
   const f=await fixture(t),original=await f.message('two-missing','分别给两个同名任务补充材料')
-  const pending=['first','second'].map(clarificationId=>({clarificationId,question:`${clarificationId}是哪项？`,candidates:['A','B']}))
+  const pending=['first','second'].map((clarificationId,index)=>({clarificationId,question:`第${index+1}项具体是哪个任务？`,candidates:['A','B']}))
   const accepted=await f.service.submit(original,{kind:'arrangement',members:[],pendingClarifications:pending})
   for(const [index,taskId] of ['A','B'].entries()){
     const reply=await f.message(`resolve-${taskId}`,`明确${taskId}`)

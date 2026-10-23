@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readTaskNotificationDelivery, verifyTaskNotificationReadback, readOperatorNotificationDelivery } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
+import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
 const notification = { id: 'n', payload: { conversationId: 'g', sourceMessageId: 's', text: '核验完成。', atOpenDingTalkIds: ['u'] } }
 const observed = { messageId: 'm', conversationId: 'g', text: '核验完成。', quotedMessage: { messageId: 's', conversationId: 'g' }, atOpenDingTalkIds: ['u'] }
 
@@ -28,13 +30,68 @@ test('私聊申请按原发送收据回读，发送结果未知仅精确查找�
 test('native quote and mention must be verified independently of text', () => {
   const verify = value => verifyTaskNotificationReadback(notification, value, { acknowledgedMessageId: 'm' })
   assert.ok(verify(observed))
+  assert.ok(verify({ ...observed, atOpenDingTalkIds: undefined, mentions: [{ openDingTalkId: 'u', userId: 'different-user-id' }] }))
+  const rendered = { ...observed, text: '@张三 核验完成。', quotedMessage: { ...observed.quotedMessage, sender: '张三' } }
+  assert.ok(verify(rendered), '原生提及渲染后仍比较持久业务正文，不把传输占位符写回通知')
+  assert.equal(notification.payload.text, '核验完成。')
+  assert.equal(verify({ ...rendered, text: '@张三 核验失败。' }), undefined)
+  for (const mentions of [['u'], [{ userId: 'u' }], [null], [{}], [42]])
+    assert.equal(verify({ ...observed, atOpenDingTalkIds: undefined, mentions }), undefined)
   for (const change of [{quotedMessage: undefined}, {quotedMessage:{messageId:'other',conversationId:'g'}}, {quotedMessage:{messageId:'s',conversationId:'other'}}, {atOpenDingTalkIds:undefined}, {atOpenDingTalkIds:['other']}, {conversationId:'other'}]) assert.equal(verify({...observed,...change}),undefined)
+})
+
+test('普通提醒已传原生@仍以精确SUCCESS确认送达，不把缺失元数据伪称提及已核验', async () => {
+  const commands = [], pending = { id: 'reminder-notice', payload: { conversationId: 'group-id', text: '提醒查看进度。', atOpenDingTalkIds: ['open-person-a'] } }
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    commands.push(args)
+    if (args.includes('+messages-send')) return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'send-task' } }) }
+    if (args.includes('+messages-query-send-status')) return { exitCode: 0, stdout: JSON.stringify({ result: { sendStatus: 'SUCCESS', openConversationId: 'group-id', openMessageId: 'message-id' } }) }
+    return { exitCode: 0, stdout: JSON.stringify({ complete: true, hasMore: false, failedCount: 0, failures: [], foundCount: 1, notFoundMessageIds: [],
+      messages: [{ messageId: 'message-id', conversationId: 'group-id', text: '@张三 提醒查看进度。' }] }) }
+  } } })
+  pending.ack = await sendWorkflowNotification(adapter, pending)
+  assert.equal(commands[0][commands[0].indexOf('--at-open-dingtalk-ids') + 1], 'open-person-a')
+  const proof = await readTaskNotificationDelivery(adapter, pending)
+  assert.equal(proof.messageId, 'message-id')
+  assert.equal(proof.mentionVerification, 'unavailable')
+  assert.deepEqual(proof.atOpenDingTalkIds, [])
+  assert.equal(commands.filter(args => args.includes('+messages-send')).length, 1)
 })
 test('unknown send cannot be reconciled from somebody else quoting identical text', () => {
   assert.equal(verifyTaskNotificationReadback(notification,observed),undefined)
   assert.ok(verifyTaskNotificationReadback(notification,{...observed,uuid:'n'}))
   assert.ok(verifyTaskNotificationReadback(notification,{...observed,senderId:'bot'},{senderActorId:'bot'}))
   assert.equal(verifyTaskNotificationReadback(notification,{...observed,senderId:'other'},{senderActorId:'bot'}),undefined)
+})
+
+test('超长通知使用同一外部摘要键发送和精确回读，历史原始键仍可读且unknown不重发', async () => {
+  const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
+  const longId = `coordination:${'x'.repeat(124)}`, commands = []
+  const pending = { ...notification, id: longId, state: 'unknown', sendAttemptCount: 1,
+    payload: { ...notification.payload, actorId: 'u' } }
+  let sentKey
+  const sender = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    sentKey = args[args.indexOf('--uuid') + 1]
+    return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  // 编译及发送使用新通知的固定内部 ID；不把本测试的发送动作当作恢复 unknown 的步骤。
+  await sendWorkflowNotification(sender, { ...pending, state: 'prepared' })
+  assert.notEqual(sentKey, longId); assert.ok(sentKey.length <= 128); assert.equal(pending.id, longId)
+  const message = { ...observed, uuid: sentKey }
+  const adapter = { readGroup: async () => ({ complete: true, messages: [message] }), readMessage: async () => message }
+  const notifications = { send: async () => assert.fail('unknown must never resend'),
+    readback: value => readTaskNotificationDelivery(adapter, value) }
+  for (const key of [sentKey, longId]) {
+    message.uuid = key; commands.length = 0
+    await deliverTaskNotification({ notification: pending, notifications, command: async (kind, args) => commands.push({ kind, args }) })
+    assert.equal(commands[0].kind, 'notification.reconcile')
+    assert.equal(commands[0].args.notificationId, longId)
+    assert.equal(commands[0].args.receipt.identity, 'idempotency-key')
+  }
+  assert.equal(pending.sendAttemptCount, 1)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...message, uuid: `${sentKey}other` }), undefined)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...message, uuid: sentKey, text: '其他正文' }), undefined)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...message, uuid: undefined, idempotencyKey: sentKey }).identity, 'idempotency-key')
 })
 
 test('原任务SUCCESS与精确消息ID证明送达，不再以正文或引用元数据判定送达', async () => {

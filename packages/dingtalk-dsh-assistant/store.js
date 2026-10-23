@@ -753,11 +753,11 @@ export async function openResidentStore(storageDomain) {
       return { groupId, topicId, revision: selectedRevision, topic: snapshot, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit,
         taskRefs: currentTasks().filter((task) => task.groupId === groupId && task.topicRefs.some((ref) => ref.topicId === topicId)).map((task) => ({ taskId: task.taskId, inputVersion: task.inputVersion, topicRefs: task.topicRefs })) }
     },
-    routeMessages: ({ groupId, routeId, routingRevision, routes }) => serialize(groupId, async () => {
+    routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (!routeId || !Array.isArray(routes) || routes.length === 0) throw new Error('topic_routes_invalid')
-      const requestFingerprint = fingerprint({ routingRevision, routes })
+      const requestFingerprint = fingerprint({ routingRevision, routes, ...(requireAllPending === true ? { requireAllPending: true } : {}) })
       let receipt
       const group = await groups.update(entry[0], (latest) => {
         const previous = latest.routeHistory.find((item) => item.routeId === routeId)
@@ -766,6 +766,12 @@ export async function openResidentStore(storageDomain) {
           receipt = previous; return latest
         }
         if (latest.routingRevision !== routingRevision) throw new Error('topic_routing_stale')
+        // Host 直达入口必须在提交时覆盖全部待路由来源，包含新入站和旧消息富化产生的 pending。
+        if (requireAllPending === true) {
+          const pending = latest.messages.filter(message => message.routingStatus !== 'routed')
+          if (pending.length !== routes.length || pending.some(message => !routes.some(route => route.messageId === message.messageId
+            && route.messageVersion === message.messageVersion))) throw new Error('topic_routing_stale')
+        }
         if (new Set(routes.map((route) => route.messageId)).size !== routes.length) throw new Error('topic_route_message_duplicate')
         const { newTopics, topicIdsByKey, unitsByMessage, ignoredByMessage } = resolveRouteBatch(latest, { groupId, routeId, routes })
         const sourceDispatchOwnership = [...(latest.sourceDispatchOwnership ?? [])]

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDwsAdapter, dispatchOutbox, matchesOutbound } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { createHash } from 'node:crypto'
+import { createDwsAdapter, dispatchOutbox, dwsIdempotencyKey, matchesOutbound } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { assertGroupReply, persistedUuidSendRejectionProof, sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
 
 test('DWS adapter 默认禁用且不会调用 runner', async () => {
   let calls = 0
@@ -73,6 +75,132 @@ test('Task完成通知使用DWS原生引用回复并@提出人', async () => {
   assert.equal(readbackAttempts, 2)
   assert.deepEqual(request.atOpenDingTalkIds, ['od-requester'])
   assert.equal(request.replyToMessageId, 'm-source')
+})
+
+test('普通群发仅传输正文编码原生提及，引用交由DWS补齐且持久业务正文不变', async () => {
+  const commands = [], text = '提醒你查看云端专家的开发进度。'
+  const recipients = ['open-person-a', 'open-person-b'], before = [...recipients]
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, profile: 'corp:user', runner: { run: async args => {
+    commands.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  for (const quoted of [false, true]) {
+    const notification = { id: `notice-${quoted}`, payload: { conversationId: 'group-id', text,
+      atOpenDingTalkIds: recipients, ...(quoted ? { sourceMessageId: 'source-message', actorId: recipients[0] } : {}) } }
+    await sendWorkflowNotification(adapter, notification)
+    const args = commands.at(-1)
+    assert.equal(args[args.indexOf('--at-open-dingtalk-ids') + 1], recipients.join(','))
+    assert.equal(args[args.indexOf(quoted ? '--content' : '--text') + 1], quoted ? text : `<@open-person-a> <@open-person-b> ${text}`)
+    assert.equal(args.includes('--at-user-ids'), false)
+    assert.equal(args.includes('--at-all'), false)
+    assert.deepEqual(args.slice(-2), ['--profile', 'corp:user'])
+    assert.equal(args.includes('--yes'), true)
+    if (quoted) {
+      assert.equal(args[args.indexOf('--ref-msg-id') + 1], 'source-message')
+      assert.equal(args[args.indexOf('--ref-sender') + 1], recipients[0])
+    } else assert.equal(args[args.indexOf('--as') + 1], 'user')
+    assert.equal(notification.payload.text, text)
+  }
+  assert.deepEqual(recipients, before)
+  assert.equal(commands.length, 2)
+})
+
+test('普通与引用发送空提及不添加任何@参数，非法列表在调用DWS前拒绝', async () => {
+  let calls = 0
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => { calls++; return { exitCode: 0, stdout: '{}' } } } })
+  const request = { groupId: 'group-id', text: '核验完成。', idempotencyKey: 'notice-id', replyToMessageId: 'source-message', replyToSenderOpenDingTalkId: 'open-person-a' }
+  for (const compile of [args => adapter.compileGroupSend(args), args => adapter.compileGroupReply(args)]) {
+    for (const atOpenDingTalkIds of [undefined, []]) {
+      const args = compile({ ...request, atOpenDingTalkIds })
+      assert.equal(args.some(arg => arg.startsWith('--at-')), false)
+      assert.equal(args[args.indexOf(args.includes('--content') ? '--content' : '--text') + 1], request.text)
+    }
+  }
+  for (const atOpenDingTalkIds of [null, 'open-person-a', {}, [null], [42], [''], [' '], ['open,a'], ['open a'], ['open\na'], ['"open"'], ['open>'], ['<open'], ['open@all']]) {
+    await assert.rejects(adapter.sendGroup({ ...request, atOpenDingTalkIds }), /dws_at_open_dingtalk_ids_invalid/u)
+    await assert.rejects(adapter.sendGroupReply({ ...request, atOpenDingTalkIds }), /dws_at_open_dingtalk_ids_invalid/u)
+  }
+  assert.equal(calls, 0)
+})
+
+test('无引用outbox透传原生提及且空列表不会补为全员', async () => {
+  for (const atOpenDingTalkIds of [undefined, [], ['open-person-a']]) {
+    let reads = 0, sent
+    const adapter = { readGroup: async () => ({ complete: true, messages: ++reads === 1 ? [] : [{ messageId: 'delivered', text: '提醒查看进度。' }] }),
+      sendGroup: async request => { sent = request; return { deliveryStatus: 'success' } } }
+    const result = await dispatchOutbox({ adapter, groupId: 'group-id', outbound: { outboundId: 'notice-id', text: '提醒查看进度。', atOpenDingTalkIds } })
+    assert.equal(result.status, 'sent')
+    assert.deepEqual(sent.atOpenDingTalkIds, atOpenDingTalkIds ?? [])
+    assert.equal(sent.text, '提醒查看进度。')
+  }
+})
+
+test('外发正文拒绝已知身份与运行时前缀，保留业务编号和普通链接而不静默改写', () => {
+  const hash = 'a'.repeat(32)
+  for (const id of [`coordination-${hash}`, `schedule:coordination-${hash}`, `time:${hash}`, `human-${hash}`,
+    `coordination:coordination-${hash}:summary:1`, `task-${hash}`, `session-${hash}`]) {
+    assert.throws(() => assertGroupReply(`当前安排：${id}`), error => error.code === 'GROUP_REPLY_INTERNAL_DETAILS')
+  }
+  for (const id of ['known-source-1', '329881099', 'open+person/id==', 'short'])
+    assert.throws(() => assertGroupReply(`原始标识：${id}。`, [id]), /GROUP_REPLY_INTERNAL_DETAILS/u)
+  assert.throws(() => assertGroupReply('附加xknown-source-1suffix', ['known-source-1']), /GROUP_REPLY_INTERNAL_DETAILS/u)
+  const business = '业务单号 TIME-20261023-001，PR #255，https://example.com/docs/schedule-reference；请查看库存开票进度。'
+  assert.doesNotThrow(() => assertGroupReply(business, ['id', 'time']))
+  assert.equal(business.includes('TIME-20261023-001'), true)
+})
+
+test('遗漏knownIds时仍拦截源码确认的unit/topic/execution/coord-route精确格式', () => {
+  for (const [prefix, length] of [['unit', 32], ['topic', 32], ['execution', 40], ['coord-route', 64]]) {
+    assert.throws(() => assertGroupReply(`当前状态：${prefix}-${'a'.repeat(length)}`), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.doesNotThrow(() => assertGroupReply(`业务单号 ${prefix}-20261023-001，链接 https://example.com/${prefix}-guide`))
+    for (const otherLength of [length - 1, length + 1])
+      assert.doesNotThrow(() => assertGroupReply(`参考编号 ${prefix}-${'a'.repeat(otherLength)}`))
+  }
+})
+
+test('合法业务URL的同形编号保留，已知内部身份藏在URL中仍拒绝且正文不改写', () => {
+  for (const [prefix, length] of [['unit', 32], ['topic', 32], ['execution', 40], ['coord-route', 64]]) {
+    const id = `${prefix}-${'a'.repeat(length)}`, text = `查看业务记录：https://crm.example.com/${id}`
+    assert.doesNotThrow(() => assertGroupReply(text))
+    assert.throws(() => assertGroupReply(text, [id]), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.throws(() => assertGroupReply(`链接：https://[invalid]/${id}`), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.throws(() => assertGroupReply(`链接：https://crm.example.com/detail。内部标识：${id}`), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.equal(text, `查看业务记录：https://crm.example.com/${id}`)
+  }
+})
+
+test('通知正文检查全部已知身份和fact标识，结构化身份保留且零外发拒绝', async () => {
+  let calls = 0
+  const notification = { id: 'opaque-notification', taskId: 'opaque-task', payload: {
+    conversationId: 'opaque-conversation', sourceMessageId: 'opaque-source', actorId: 'opaque-actor', recipientUserId: 'opaque-user',
+    humanRequestId: 'opaque-human', atOpenDingTalkIds: ['opaque-mention'],
+    fact: { coordinationId: 'opaque-coordination', occurrenceId: 'opaque-occurrence', eventId: 'opaque-event',
+      resultDigest: 'b'.repeat(64), taskIds: ['opaque-task-list'], topicRefs: [{ topicId: 'opaque-topic' }], title: '业务进度', revision: 1 } } }
+  const adapter = { sendGroup: async () => { calls++ }, sendGroupReply: async () => { calls++ } }
+  const internalIds = ['opaque-notification', 'opaque-task', 'opaque-conversation', 'opaque-source', 'opaque-actor', 'opaque-user',
+    'opaque-human', 'opaque-mention', 'opaque-coordination', 'opaque-occurrence', 'opaque-event', 'b'.repeat(64), 'opaque-task-list', 'opaque-topic']
+  for (const id of internalIds) {
+    notification.payload.text = `请查看进度：${id}。`
+    const before = structuredClone(notification)
+    assert.throws(() => sendWorkflowNotification(adapter, notification), /GROUP_REPLY_INTERNAL_DETAILS/u)
+    assert.deepEqual(notification, before)
+  }
+  assert.equal(calls, 0)
+  notification.payload.text = '业务进度已核实，数量 1。'
+  await sendWorkflowNotification(adapter, notification)
+  assert.equal(calls, 1)
+})
+
+test('私聊与群聊共用正文门禁，私聊已知身份拒绝前不调用DWS', async () => {
+  let calls = 0
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => {
+    calls++; return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  const request = { userId: 'recipient-id', idempotencyKey: 'notice-id', taskId: 'opaque-task', requestId: 'request-id', humanRequestId: 'human-id' }
+  for (const value of [...Object.values(request), `human-${'c'.repeat(64)}`, `time:${'d'.repeat(64)}`])
+    await assert.rejects(adapter.sendSelfIntent({ ...request, text: `需要确认：${value}` }), /GROUP_REPLY_INTERNAL_DETAILS/u)
+  assert.equal(calls, 0)
+  await adapter.sendSelfIntent({ ...request, text: '请核对业务单 20261023，链接 https://example.com/orders/20261023。' })
+  assert.equal(calls, 1)
 })
 
 test('引用回复回读即使正文完全相同也必须匹配quoted message ID', () => {
@@ -256,13 +384,28 @@ test('历史命中但缺少真实消息ID时不得确认或盲目重发', async 
   }
 })
 
-test('私聊uuid长度预检拒绝超过128且零外发，合法key保持原值', async () => {
-  let sends = 0
-  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => { sends++; return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) } } } })
-  await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: 'x'.repeat(129) }), /dws_self_send_uuid_too_long/u)
-  assert.equal(sends, 0)
-  const legal = 'x'.repeat(128)
-  assert.equal(adapter.compileSelfSend({ userId: 'u', text: 't', idempotencyKey: legal }).includes(legal), true)
+test('DWS所有发送入口压缩超长uuid，128字符以内保持原值且不同后缀不碰撞', async () => {
+  const sent = []
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    sent.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
+  } } })
+  const compile = [
+    key => adapter.compileGroupSend({ groupId: 'g', text: 't', idempotencyKey: key }),
+    key => adapter.compileGroupReply({ groupId: 'g', text: 't', idempotencyKey: key, replyToMessageId: 'm', replyToSenderOpenDingTalkId: 'u' }),
+    key => adapter.compileGroupFileSend({ groupId: 'g', fileName: 'report.txt', idempotencyKey: key }),
+    key => adapter.compileSelfSend({ userId: 'u', text: 't', idempotencyKey: key }),
+  ]
+  const keyFrom = args => args[args.findIndex(value => value === '--uuid' || value === '--idempotency-key') + 1]
+  for (const key of ['short', 'x'.repeat(128), 'x'.repeat(129), 'coordination:' + 'x'.repeat(124)]) {
+    const expected = key.length <= 128 ? key : `dsh:sha256:${createHash('sha256').update(key).digest('hex')}`
+    for (const build of compile) { assert.equal(keyFrom(build(key)), expected); assert.ok(keyFrom(build(key)).length <= 128) }
+    assert.equal(dwsIdempotencyKey(dwsIdempotencyKey(key)), expected)
+  }
+  const prefix = 'x'.repeat(128)
+  assert.notEqual(dwsIdempotencyKey(`${prefix}a`), dwsIdempotencyKey(`${prefix}b`))
+  assert.deepEqual(await adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: `${prefix}a` }), { openTaskId: 'open' })
+  assert.equal(keyFrom(sent[0]), dwsIdempotencyKey(`${prefix}a`))
+  for (const value of [undefined, '', ' ']) assert.throws(() => dwsIdempotencyKey(value), /idempotency_key_required/u)
 })
 
 test('私聊负回执只对服务端精确uuid拒绝声明确定未发送', async () => {
@@ -274,8 +417,8 @@ test('私聊负回执只对服务端精确uuid拒绝声明确定未发送', asyn
     ['1001', "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 157.", false],
   ]) {
     const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => ({ exitCode: 1, stderr: JSON.stringify({ error: { server_error_code: serverErrorCode, errorMsg, trace_id: 'trace' } }) }) } })
-    // 模拟旧版本已经编译的156字符请求；新版本正常编译已在上一用例零外发拒绝。
-    adapter.compileSelfSend = () => ['existing-compiled-command']
+    // 模拟旧版本已经编译的156字符请求；新发送会使用完整摘要后的有界键。
+    adapter.compileSelfSend = () => ['existing-compiled-command', '--idempotency-key', key]
     await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: key }), error => {
       assert.equal(error.serverErrorCode, serverErrorCode)
       assert.equal(error.knownNotSent === true, known)
@@ -283,6 +426,48 @@ test('私聊负回执只对服务端精确uuid拒绝声明确定未发送', asyn
       return true
     })
   }
+})
+
+test('已压缩发送键不能以原内部ID长度构造确定未发送的负回执', async () => {
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => ({ exitCode: 1,
+    stderr: JSON.stringify({ error: { server_error_code: '1001', trace_id: 'trace',
+      errorMsg: "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 156." } }) }) } })
+  await assert.rejects(adapter.sendSelfIntent({ userId: 'u', text: 't', idempotencyKey: 'x'.repeat(156) }), error => {
+    assert.equal(error.knownNotSent, undefined); assert.equal(error.proof, undefined); return true
+  })
+})
+
+test('持久uuid校验拒绝只认完整原尝试证据，缺失冲突或可能已发均保持未知', () => {
+  const id = `coordination:${'x'.repeat(124)}`
+  const error = { category: 'api', code: 1, origin: 'dingtalk_api', operation: 'tools/call', reason: 'invalid_request',
+    retryable: false, server_error_code: 'PARAM_ERROR', server_key: 'chat', stage: 'tool_validation',
+    message: "sendPersonalMessageByServerPush error: Length of filed: 'uuid' cannot greater than 128 but actual is 137." }
+  const notification = { id, state: 'unknown', sendAttemptCount: 1, receipt: null, payloadDigest: 'a'.repeat(64), dispatchToken: 'original-fence',
+    sendPermit: { notificationId: id, payloadDigest: 'a'.repeat(64), attempt: 1, fence: 'original-fence' },
+    deliveryError: { phase: 'send', exitCode: 1, stdout: '', message: 'dws_send_failed:1:PARAM_ERROR', serverErrorCode: 'PARAM_ERROR',
+      origin: 'dingtalk_api', operation: 'tools/call', reason: 'invalid_request', retryable: false, stderr: JSON.stringify({ error }) } }
+  const before = structuredClone(notification), proof = persistedUuidSendRejectionProof(notification)
+  assert.equal(proof.kind, 'dws-uuid-validation-rejected'); assert.equal(proof.actualLength, 137)
+  assert.equal(proof.notificationId, id); assert.equal(proof.fence, notification.dispatchToken)
+  assert.deepEqual(notification, before)
+  for (const patch of [
+    { state: 'starting' }, { state: 'delivered' }, { sendAttemptCount: 2 }, { sendAttemptCount: undefined },
+    { ack: {} }, { receipt: {} }, { sendPermit: undefined }, { payloadDigest: 'b'.repeat(64) }, { dispatchToken: 'other-fence' },
+  ]) assert.equal(persistedUuidSendRejectionProof({ ...notification, ...patch }), undefined)
+  for (const patch of [{ notificationId: 'other' }, { payloadDigest: 'b'.repeat(64) }, { attempt: 2 }, { fence: 'other' }])
+    assert.equal(persistedUuidSendRejectionProof({ ...notification, sendPermit: { ...notification.sendPermit, ...patch } }), undefined)
+  for (const patch of [{ phase: 'readback' }, { exitCode: 0 }, { stdout: '{}' }, { serverErrorCode: 'TIMEOUT' }, { retryable: true },
+    { origin: 'transport' }, { stderr: '{truncated' }])
+    assert.equal(persistedUuidSendRejectionProof({ ...notification, deliveryError: { ...notification.deliveryError, ...patch } }), undefined)
+  for (const patch of [{ stage: undefined }, { stage: 'execution' }, { message: 'PARAM_ERROR' }, { message: error.message.replace('137', '138') },
+    { message: error.message.replace('137', '128') }, { message: error.message + ' extra' }, { category: 'network' }, { code: 2 },
+    { origin: 'mcp_gateway' }, { operation: 'chat/get_conversation_info' }, { reason: 'timeout' }, { retryable: true },
+    { server_error_code: '1001' }, { server_key: 'other' }])
+    assert.equal(persistedUuidSendRejectionProof({ ...notification, deliveryError: { ...notification.deliveryError,
+      stderr: JSON.stringify({ error: { ...error, ...patch } }) } }), undefined)
+  const shortId = 'x'.repeat(128)
+  assert.equal(persistedUuidSendRejectionProof({ ...notification, id: shortId, sendPermit: { ...notification.sendPermit, notificationId: shortId },
+    deliveryError: { ...notification.deliveryError, stderr: JSON.stringify({ error: { ...error, message: error.message.replace('137', '128') } }) } }), undefined)
 })
 
 test('DWS读取错误保留结构化服务端错误码', async () => {

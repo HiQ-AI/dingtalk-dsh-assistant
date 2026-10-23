@@ -1,4 +1,4 @@
-import { quotedSendRejectionProof } from './group-message.js'
+import { quotedSendRejectionProof, persistedUuidSendRejectionProof, persistedMentionSendRejectionProof } from './group-message.js'
 import { createHash } from 'node:crypto'
 
 // Diagnostics are bounded and scrubbed before they cross the durable/UI boundary.
@@ -37,6 +37,13 @@ const knownPreSendRejection = (error, notification) => error.knownNotSent === tr
 
 export async function deliverTaskNotification({ notification, notifications, command }) {
   if (!notifications || notification.state === 'delivered') return
+  const persistedRejection = persistedUuidSendRejectionProof(notification) ?? persistedMentionSendRejectionProof(notification)
+  if (persistedRejection) {
+    // 原尝试的完整参数拒绝证据只能结清为未发送失败，不能借升级重放历史提醒。
+    await command('notification.reconcile', { notificationId: notification.id, state: 'failed', receipt: null,
+      error: { ...notification.deliveryError, knownNotSent: true, retryable: false, proof: persistedRejection }, evidenceRef: evidence(persistedRejection) })
+    return
+  }
   if (notification.state === 'unknown' && !notification.ack && !notification.receipt && notification.deliveryError?.phase === 'send'
     && quotedSendRejectionProof(notification.deliveryError, { groupId: notification.payload.conversationId, replyToMessageId: notification.payload.sourceMessageId,
       replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id })) {
@@ -63,7 +70,13 @@ export async function deliverTaskNotification({ notification, notifications, com
     return
   }
   if (notifications.canDisclose && !await notifications.canDisclose(notification)) return
-  const started = await command('notification.start', { notificationId: notification.id }, `notification-start:${notification.id}:${notification.sendAttemptCount ?? 0}`)
+  let started
+  try { started = await command('notification.start', { notificationId: notification.id }, `notification-start:${notification.id}:${notification.sendAttemptCount ?? 0}`) }
+  catch (error) {
+    // 后续来源仍在处理时保持 prepared；本轮不占发送槽重试，完成事实会重新唤醒。
+    if (error.code === 'DYNAMIC_NOTIFICATION_SOURCE_PENDING') return { sourcePending: true }
+    throw error
+  }
   if (!started.dispatchEligible) return
   const claimed = started.result.notification
   let ack, phase = 'send'

@@ -1,6 +1,30 @@
 {
   "cases": [
     {
+      "id": "quoted-reminder-retimes-other-recipient",
+      "message": "提前三分钟",
+      "occurredAt": "2026-10-23T09:52:01.000Z",
+      "quotedReminder": { "messageId": "delivered-reminder-001" },
+      "sourceAdmission": "quoted-reminder-followup", "wholeMessage": true,
+      "prior": { "state": "active", "message": "小小鹏，今天17:57提醒小李查看云端专家的开发进度。", "occurredAt": "2026-10-23T09:50:00.000Z", "at": "2026-10-23T09:57:00.000Z", "reminderText": "提醒小李查看云端专家的开发进度。", "recipientIds": ["colleague-002"] },
+      "recipients": [{ "recipientId": "colleague-002", "name": "小李", "evidenceRef": "colleague-message-001", "observedAt": "2026-10-23T09:49:00.000Z" }],
+      "expect": [ { "path": "kind", "equals": "schedule-change" }, { "path": "coordinationId", "equals": "arrangement-001" }, { "path": "expectedRevision", "equals": 1 }, { "path": "scheduleId", "equals": "schedule-001" }, { "path": "expectedScheduleRevision", "equals": 1 }, { "path": "rule.at", "equals": "2026-10-23T09:54:00.000Z" } ],
+      "noContextReads": true, "noTaskReads": true, "expectedRequestCount": 1, "preserveRecipientIds": ["colleague-002"],
+      "review": "原设置者引用已送达的17:57提醒确认并订正提前三分钟，首屏已带当前安排详情。单次提交原schedule-change至17:54，无重复context_get；收件人仍为小李，不改为设置者。仅仿真提案语义，不是实际调度或线上耗时。"
+    },
+    {
+      "id": "quoted-reminder-mixed-whole-message-rejected",
+      "message": "提前三分钟，并修复导出报错",
+      "occurredAt": "2026-10-23T09:52:01.000Z",
+      "quotedReminder": { "messageId": "delivered-reminder-001" },
+      "sourceAdmission": "quoted-reminder-followup", "wholeMessage": true,
+      "prior": { "state": "active", "message": "小小鹏，今天17:57提醒小李查看云端专家的开发进度。", "occurredAt": "2026-10-23T09:50:00.000Z", "at": "2026-10-23T09:57:00.000Z", "reminderText": "提醒小李查看云端专家的开发进度。", "recipientIds": ["colleague-002"] },
+      "recipients": [{ "recipientId": "colleague-002", "name": "小李", "evidenceRef": "colleague-message-001", "observedAt": "2026-10-23T09:49:00.000Z" }],
+      "expect": [ { "path": "kind", "equals": "reject" }, { "path": "rule", "absent": true }, { "path": "members", "absent": true } ],
+      "noContextReads": true, "noTaskReads": true, "expectedRequestCount": 1, "noEffectProposal": true,
+      "review": "精确引用只准入整条原文，不代表只处理提醒；改期加修复不能由一个提案完整表达，应一次reject整条归还拆分，不能先改期或丢失修复要求。评测仅捕获提案，无业务库和发送器。"
+    },
+    {
       "id": "correction-resolves-original",
       "message": "小小鹏，三点20提醒我一下查看云端专家的开发进度",
       "occurredAt": "2026-10-23T07:11:51.000Z",
