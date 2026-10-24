@@ -19,3 +19,15 @@
 - 本机原通知只读套用候选投影与真实分类器，结果为已送达 147、异常 2、已取消 2；异常重试计划为 0。
 
 本机详细证据与截图：`docs/tmp/outbox-cancellation-status/`，不入库；浏览器脚本和上述命令为再生成入口。部署与真实浏览器回读在本轮下方追加，状态以 matrix.csv 为准。
+
+## 本地部署与真实页面
+
+源码 `9f415100d51c876dcc79909ac13637b38fdf6ae3` 打包后冻结，先执行原生脚本 Check（writes=0、signals=0、quiescent=true、drained=true），再用完全相同参数更新。未新建历史备份、未升级宿主、未改 profile 或初始化身份。旧 PID 52212 正常退出，新 PID 73984 绑定 3080/18998；独立 GET health 为 ok、recoveryIssueCount=0，入站与 DWS 桥均正常。
+
+两包版本均 2.1.0，安装内容由原生脚本独立比对：Assistant 384445 bytes，SHA256 `643327a1bf64a3c723baf2e475a45de4a098f5c400bb88a78d79e159ed0e81bf`；Observer 53572 bytes，SHA256 `e89abfe9ebc8dbf1fa221ad7feb74da277d7791018a582dba48e9eac4085da57`。持久包在 `D:/dsh_home/packages/9f41510-outbox-cancelled/`，profile SHA256 仍为 `74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499`。
+
+本次新进程从 18:21:16 启动至约 18:24:45 传输就绪，启动耗时偏长；没有据端口未开放强制杀进程或重做安装。最终正式部署脚本成功，未修改启动机制。
+
+18:25 独立回读通知账：原 182 条 body 逐条 SHA256 changed=0、总数仍 182、新增=0。实际 HTTP 发信箱仍 151 条，已送达 147、异常 2、已取消 2，异常/取消无过时重试计划。该证明覆盖原发送次数、状态、回执保持不变，不声称异常通知已送达。
+
+真实 Chrome 重载已安装页面，六个筛选项可见；“已取消”只列两条被订正的旧澄清，说明“后续消息已补充或订正原安排，已取消旧回复；本次未发送”。“异常”仍列两条失败提醒，均无计划重试；来源默认可读且标识折叠。真实截图 `docs/tmp/outbox-cancellation-status/live-cancelled.png`。第八轮所有新增矩阵项通过，PR 为 #256；未合并，未运行 CI。

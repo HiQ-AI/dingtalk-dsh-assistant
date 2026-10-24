@@ -18,5 +18,5 @@
 "cancelled-filter-and-retry","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","PASS"
 "projection-clears-stale-facts","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","PASS"
 "six-status-browser-narrow","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","PASS"
-"cancelled-native-deployment","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN"
-"cancelled-live-ledger-readback","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN"
+"cancelled-native-deployment","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","PASS"
+"cancelled-live-ledger-readback","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","NOT_RUN","PASS"
