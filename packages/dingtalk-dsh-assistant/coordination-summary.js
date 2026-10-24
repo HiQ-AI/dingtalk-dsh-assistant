@@ -43,6 +43,7 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
     occurrences: occurrences.map(o => ({ occurrenceId: o.id, scheduleId: o.scheduleId ?? null, plannedAt: o.plannedAt ?? null,
       cancelledAt: o.cancelledAt ?? null, ...(o.paused ? { paused: true } : {}),
       recipientIds: o.target?.recipientIds ?? [],
+      ...(o.action?.kind === 'task-command' ? { actionKind: o.action.kind, instructionIds: o.action.instructionIds } : {}),
       actionState: o.actionState, deliveryState: o.deliveryState,
       failureReason: o.failureReason ?? null,
       resultRef: o.result ? `${o.id}:result:${o.resultVersion ?? 1}` : null, notificationId: o.notificationId ?? null })),
@@ -161,6 +162,12 @@ export function formatCoordinationSnapshot(snapshot, { timeZone = workingTimeZon
         ? reminder ? '通知发送失败，送达情况需要核查' : '已执行，但结果通知发送失败，送达情况需要核查' : occurrence.deliveryState === 'unknown'
           ? reminder ? '是否送达尚未确认' : '已执行，结果通知是否送达尚未确认' : occurrence.deliveryState === 'pending'
             ? reminder ? '正在等待发送' : '已执行，正在等待发送结果' : '已执行'
+    if (!occurrence.cancelledAt && occurrence.actionState === 'succeeded' && occurrence.actionKind === 'task-command') {
+      // 命令接纳与通知送达都不是 Task 的正式完成证明。
+      const members = occurrence.instructionIds.map(id => snapshot.members.find(member => member.instructionId === id))
+      const completed = members.length > 0 && members.every(member => member?.state === 'fulfilled' && member.completionProof)
+      state = completed ? '对应任务已正式完成' : '已接纳处理要求，任务尚未正式完成'
+    }
     const delivery = occurrence.cancelledAt ? cancellationDeliveryText(occurrence) : ''
     lines.push(`${sentence(`${subject}${state}`)}${reminder ? sentence(`提醒内容：${body(schedule.reminderText)}`) : ''}${delivery}${!occurrence.cancelledAt ? sentence(reasonText(occurrence.failureReason)) : ''}`)
   }

@@ -15,6 +15,7 @@ import { createTaskSessionObservability } from './task-session-observability.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { openIndependentCoordination } from './independent-coordination-service.js'
 import { coordinationModelSelection } from './independent-coordination-planner.js'
+import { resolveTaskArtifactScope } from './task-artifact-scope.js'
 import { resolveTopicMessages, stableId } from './topic-model.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
@@ -808,7 +809,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       let stageSequence = 0
       const stageReports = new Map()
       try {
-        const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: { ...execution.input, executionDocument: await refreshExecutionDocument(executionId) }, definition: { ...models(), ...execution.definition,
+        const artifactScope = await resolveTaskArtifactScope({ root, task: await requireTask(binding.taskId), query })
+        if (artifactScope && executionBackend(execution) !== 'dsh') fail('TASK_ARTIFACT_EXECUTION_BACKEND_UNSUPPORTED')
+        const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: { ...execution.input, artifactScope, executionDocument: await refreshExecutionDocument(executionId) }, definition: { ...models(), ...execution.definition,
           prompt: execution.prompt + '\n本轮执行文档入口是input.executionDocument.path，路径固定为outputs/<executionId>/round-<inputVersion>.md，由Host按持久记录生成；需要交接或核对进展时先读该文档，不自行写改它，不覆盖历史轮次。通过execution_report_progress维护本轮：首次报告提供简短plan，写明步骤、依赖、交付物和核验方法；summary、evidence、activity区分已发生事实、当前活动和阻塞。后续同轮省略plan会保留，计划确需变化再更新，新轮重新制定，不能沿用旧轮成果冒充当前完成。必要进展才报告，不为空转刷新文档重复汇报。日常协作先读相关成员的当前文档，文档缺证据、版本矛盾、技术失败或未知效果时再查原产物、日志或操作账；文档和同伴自述不构成授权或独立验收。' + (execution.resourceKeys?.length ? `\nHost 已在本执行开始前取得资源 ${JSON.stringify(execution.resourceKeys)}；会话及在途操作排空前保持。使用 execution_resources_read 无参数读取自身当前身份和资源状态，不需统筹另发持锁证明。queued/派发接收不等于其他执行已持锁；观察结果不替代后续写入门禁和真实目标版本核对。` : ''), allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => {
             if (executionBackend(execution) === 'dsh') await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title)
@@ -889,7 +892,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
         const operations = await query('operation.list', { taskId })
         const executions = await Promise.all((await query('execution.list', { taskId })).map(execution => documentedExecution(execution.executionId)))
-        const runResult = await taskSessions.run({ binding, input: { task, sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions,
+        const runResult = await taskSessions.run({ binding, input: { task, artifactScope: await resolveTaskArtifactScope({ root, task, query }), sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions,
           operations, coordinationAssessments: await query('coordination.assessments', {taskId}),
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...taskModelSelection(models(), legacy.getAgentConfig().taskSessionModel ?? config), agentPreset: legacy.getAgentConfig().agentPreset,
@@ -1364,8 +1367,26 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       || args.expectedControlRevision !== task.controlRevision)) fail('DYNAMIC_HUMAN_REQUEST_STALE')
     if (prior && !args.checkOnly) {
       const originalSource = await query('source.get', { sourceId })
-      if (originalSource?.text !== args.reply || hash(originalSource.requestIdentity?.nativeFailureResolutions ?? []) !== hash(args.nativeFailureResolutions ?? [])) fail('DYNAMIC_COMMAND_ID_CONFLICT')
+      if (originalSource?.text !== args.reply || hash(originalSource.requestIdentity?.nativeFailureResolutions ?? []) !== hash(args.nativeFailureResolutions ?? [])
+        || hash(originalSource.requestIdentity?.artifactScopeCorrectionRequest ?? null) !== hash(args.artifactScopeCorrection ?? null)) fail('DYNAMIC_COMMAND_ID_CONFLICT')
       return taskDTO(prior.result.task)
+    }
+    let artifactScopeCorrection
+    if (args.artifactScopeCorrection) {
+      const correction = args.artifactScopeCorrection
+      const state = await query('coordination.get', { coordinationId: correction.coordinationId })
+      if (request.audience !== 'operator' || config.webActorId !== task.ownerActorId
+        || state.coordination.groupId !== task.groupId || state.coordination.revision !== correction.expectedRevision
+        || state.coordination.state !== 'active' || !correction.reason?.trim()) fail('TASK_ARTIFACT_CORRECTION_SCOPE')
+      const members = state.members.filter(member => !member.observation && member.control !== 'cancelled'
+        && !['cancelled', 'superseded', 'template'].includes(member.state))
+      if (!members.some(member => member.taskId === task.taskId)) fail('TASK_ARTIFACT_CORRECTION_SCOPE')
+      for (const member of members) {
+        const sibling = await requireTask(member.taskId)
+        if (sibling.ownerActorId !== task.ownerActorId || sibling.groupId !== task.groupId) fail('TASK_ARTIFACT_CORRECTION_SCOPE')
+      }
+      artifactScopeCorrection = { coordinationId: correction.coordinationId, revision: correction.expectedRevision,
+        artifactRoot: taskFilePath(root, correction.coordinationId, 'outputs'), reason: correction.reason.trim(), actorId: config.webActorId }
     }
     const resolutions = args.nativeFailureResolutions ?? []
     if (resolutions.length && request.audience !== 'operator') fail('TASK_OPERATION_OPERATOR_REQUIRED')
@@ -1383,16 +1404,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!proof) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
       proofs.push({ operationId: operation.operationId, proof })
     }
-    if (args.checkOnly) return { checkOnly: true, writes: 0, taskId: task.taskId,
+    if (args.checkOnly) return { checkOnly: true, writes: 0, taskId: task.taskId, ...(artifactScopeCorrection ? { artifactScopeCorrection } : {}),
       resolutions: proofs.map(({ operationId, proof }) => ({ operationId, operationDigest: proof.operationDigest,
         resultSequence: proof.resultSequence, turnEndSequence: proof.turnEndSequence,
         investigationCount: new Set(proof.observations.map(item => item.executionId)).size,
         outcome: 'failed', partialEffectsPossible: true })) }
     const source = { sourceId, groupId: task.groupId, messageId: sourceId, actorId: config.webActorId,
       text: args.reply, timestamp: '', channel: 'web',
-      ...(resolutions.length ? { requestIdentity: { humanRequestId: args.humanRequestId, nativeFailureResolutions: resolutions } } : {}) }
+      ...(resolutions.length || artifactScopeCorrection ? { requestIdentity: { humanRequestId: args.humanRequestId,
+        ...(resolutions.length ? { nativeFailureResolutions: resolutions } : {}),
+        ...(artifactScopeCorrection ? { artifactScopeCorrectionRequest: args.artifactScopeCorrection, artifactScopeCorrection } : {}) } } : {}) }
     const response = { taskId: task.taskId, requestId: args.humanRequestId, sourceId,
-      expectedRequirementRevision: args.expectedRequirementRevision, expectedControlRevision: args.expectedControlRevision }
+      expectedRequirementRevision: args.expectedRequirementRevision, expectedControlRevision: args.expectedControlRevision,
+      ...(artifactScopeCorrection ? { artifactScopeCorrection } : {}) }
     let result
     if (resolutions.length) result = await command('task.human.resolve-failures', { ...response, source, resolutions: proofs }, receiptId)
     else {

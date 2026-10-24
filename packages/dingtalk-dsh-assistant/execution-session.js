@@ -3,6 +3,7 @@ import { collectNativeJob } from './dynamic-native-job.js'
 import { inspectSession, inboxHasPending } from './session-persistence.js'
 import { executionSessionTitle, nameSession, renameTaskSession } from './session-workspaces.js'
 import { sourceInterpretationInstructions } from './task-source-instructions.js'
+import { bindTaskArtifactScope, assertTaskArtifactScopePresent } from './task-artifact-scope.js'
 import { isAbsolute, dirname, basename, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -316,6 +317,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     return async (agentCtx, agent) => {
       const SUBMIT = dynamicExecution(entry.binding) ? DYNAMIC_SUBMIT : 'execution_node_submit'
       const nativeEnabled = dynamicExecution(entry.binding) && definition.nativeTools === true
+      if (nativeEnabled) assertTaskArtifactScopePresent(agentCtx, agent.session, entry.input.artifactScope)
       if (dynamicExecution(entry.binding)) {
         entry.content = createModelContentIndex(agent.session, contentRoot ? { root: contentRoot } : undefined)
       }
@@ -323,13 +325,21 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       if (nativeEnabled) {
         const presets = ctx.get?.('agentPresets') ?? ctx.agentPresets
         if (!presets?.mount) throw failure('execution_native_preset_unavailable')
+        if (entry.input.artifactScope) {
+          const permissions = ctx.get?.('permissionPresets') ?? ctx.permissionPresets
+          if (!permissions?.set) throw failure('execution_permission_preset_unavailable')
+          permissions.set(agent.session, 'workspace-write')
+          await bindTaskArtifactScope(agentCtx, { root: dirname(dirname(entry.cwd)), scope: entry.input.artifactScope, taskId: entry.binding.taskId, session: agent.session })
+          agentCtx.systemPrompt.section({ name: 'execution:artifacts', order: 1,
+            text: `本团队唯一业务产物目录为 ${entry.input.artifactScope.artifactRoot}。${entry.input.artifactScope.authorizationSource ? `Host已核验同协调链受信技术答复 ${JSON.stringify(entry.input.artifactScope.authorizationSource)}，仅纠正旧fixture路径。` : ''}仅在该目录写业务产物；原任务工作目录、日志和执行文档保持不变。跨Task读取必须使用Host提供的正式绝对路径并核对真实文件，不得猜测、复制或写入其他目录。` })
+        }
         const selected = ctx.sessionProjections.stateOf(agent.session, 'agentPreset')
         const mounted = await presets.mount(agentCtx, selected ?? definition.agentPreset ?? undefined)
         if (!selected) agent.session.append('agent-preset/selected', { agentPreset: mounted.id })
         // Only independent native executors receive the user-approved durable full-access preset.
         const permissions = ctx.get?.('permissionPresets') ?? ctx.permissionPresets
         if (!permissions?.set) throw failure('execution_permission_preset_unavailable')
-        permissions.set(agent.session, 'danger-full-access')
+        if (!entry.input.artifactScope) permissions.set(agent.session, 'danger-full-access')
         presetService = presets.serviceFor?.(agent, 'subprocess') ?? agentCtx.get?.('subprocess') ?? ctx.get?.('subprocess')
         const filesystem = presets.serviceFor?.(agent, 'fs') ?? agentCtx.get?.('fs') ?? ctx.get?.('fs')
         if (filesystem && !dynamicExecution(entry.binding)) {

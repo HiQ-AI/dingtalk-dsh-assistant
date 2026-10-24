@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { artifactPolicySource } from '../../scripts/sandbox-artifact-policy.mjs'
 import { pathToFileURL } from 'node:url'
 import { openResidentStore } from '../../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -32,12 +34,28 @@ export async function nativeTaskHost(root, decide, options = {}) {
   ctx.baseUrl = pathToFileURL(join(root, 'cordis.yml')).href
   await ctx.plugin(Loader)
   ctx.loader.builtins.group = createRequire(profile.resolve('@deepseek-ai/dsh-agent-preset-registry'))('@deepseek-ai/cordis-plugin-group').default
+  let artifactPolicyEntry = options.artifactPolicyEntry ?? process.env.DSH_ARTIFACT_POLICY_MODULE
+  if (!artifactPolicyEntry) {
+    const installed = native.resolve('@deepseek-ai/dsh-sandbox-policy')
+    const original = await readFile(installed)
+    if (original.includes('bindArtifactRoot(session, value)')) artifactPolicyEntry = installed
+    else {
+      artifactPolicyEntry = join(root, '.native-policy', 'index.mjs')
+      let patched = artifactPolicySource(original)
+      const policyRequire = createRequire(installed)
+      for (const dependency of ['@deepseek-ai/cordis', 'zod', '@deepseek-ai/schemastery'])
+        patched = patched.replace(`from "${dependency}"`, `from "${pathToFileURL(policyRequire.resolve(dependency)).href}"`)
+      await mkdir(dirname(artifactPolicyEntry), { recursive: true })
+      await writeFile(artifactPolicyEntry, patched)
+    }
+  }
+  const policyRow = { name: pathToFileURL(resolve(artifactPolicyEntry)).href, config: { mode: 'workspace-write', workspaceRoot: root } }
   await ctx.loader.root.update([
     row('agent'), row('session'), row('session-projection'),
     row('system-prompt', { includeRuntimeContext: false, includeHarnessIdentity: false }),
     row('llm'), row('tools'), row('user-approval', { policy: 'never' }),
     ...(options.promoteOnTimeout ? [row('jobs-local'), row('tool-jobs')] : []),
-    row('subprocess-local'), row('sandbox-local'), row('sandbox-policy', { mode: 'workspace-write', workspaceRoot: root }), row(nativeShell + '-sandbox', { cwd: root }),
+    row('subprocess-local'), row('sandbox-local'), policyRow, row(nativeShell + '-sandbox', { cwd: root }),
     row('permission-presets', { defaultPreset: 'workspace-write', presets: { 'workspace-write': { sandbox: 'workspace-write', approval: 'ask' }, 'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' } } }),
     row('session-title', { fallbackMaxWords: 10, fallbackMaxBytes: 120, maxTitleBytes: 200 }), row('session-persistence-jsonl', { root: join(root, 'legacy-sessions'), compression: 'none' }),
     row('storage'), row('storage-json', { root: join(root, 'storage') }), row('storage-domain', { backend: 'json' }),
@@ -52,7 +70,7 @@ export async function nativeTaskHost(root, decide, options = {}) {
   await ctx.plugin({ inject: ['agentPresets'], async *apply(child) {
     yield await child.agentPresets.register({ id: 'native-test', plugins: [{ name: 'cordis:group', group: true,
       isolate: { fs: true, workingDirectory: true, shellEnv: true }, config: [
-      row('fs-local', { cwd: root }), row('working-directory', { defaultDirectory: root }),
+      row(options.fsSandbox ? 'fs-sandbox' : 'fs-local', { cwd: root }), row('working-directory', { defaultDirectory: root }),
       row('shell-env'), row('tool-fs'), row('tool-' + nativeShell, { enableRunInBackground: options.promoteOnTimeout === true, promoteOnTimeout: options.promoteOnTimeout === true }),
       ...(options.fsObservationPolicy ? [row('fs-observation-policy')] : []),
       ...(options.skillDirs ? [row('skill-filesystem', { includeDefaultRoots: false, customSkillDirs: options.skillDirs, watch: false }), row('tool-skill')] : []),

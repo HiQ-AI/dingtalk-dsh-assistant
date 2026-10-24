@@ -31,6 +31,46 @@ for (const [actionState, deliveryState, expected] of [
   assert.deepEqual(result, before, '只调整外发正文，不改快照和幂等事实')
 })
 
+for (const [state, blocked, proof, deliveryState, expected] of [
+  ['applied', false, null, 'none', '已接纳处理要求，任务尚未正式完成'],
+  ['applied', true, null, 'none', '已接纳处理要求，任务尚未正式完成'],
+  ['applied', false, null, 'delivered', '已接纳处理要求，任务尚未正式完成'],
+  ['fulfilled', false, null, 'none', '已接纳处理要求，任务尚未正式完成'],
+  ['fulfilled', false, { commandId: 'complete:A' }, 'none', '对应任务已正式完成'],
+]) test(`任务命令接纳不冒充业务完成: ${state}/${blocked}/${Boolean(proof)}/${deliveryState}`, () => {
+  const result = coordinationSnapshot({ coordination: { id: 'coordination', revision: 1, state: 'active' },
+    members: [{ ...member('A', state), completionProof: proof },
+      { ...member('B', 'ready'), waitingReason: { code: 'waiting_dependency', dependencyInstructionIds: ['A'] } }],
+    tasks: [{ taskId: 'A', status: state === 'fulfilled' ? 'completed' : 'active',
+      ...(blocked ? { lastDecision: { action: 'blocked', summary: '终端权限阻断，产物尚未生成' } } : {}) }, { taskId: 'B', status: 'active' }],
+    schedules: [], jobs: [], occurrences: [{ id: 'start:A', action: { kind: 'task-command', instructionIds: ['A'] },
+      actionState: 'succeeded', deliveryState, result: { semantics: 'Task command acceptance receipts; not business completion.' } }] })
+  const before = structuredClone(result), text = formatCoordinationSnapshot(result)
+  assert.match(text, new RegExp(`本次安排${expected}。`))
+  assert.match(text, /需要先完成前面的事项/)
+  assert.doesNotMatch(text, /本次安排已执行|已执行，结果已送达|complete:A|start:A|task-command/)
+  if (blocked) { assert.equal(result.state, 'needs_attention'); assert.match(text, /终端权限阻断，产物尚未生成/) }
+  assert.deepEqual(result, before)
+})
+
+test('任务命令只核对本次目标，不把其他已完成成员作为本次完成证明', () => {
+  const result = snapshot([{ ...member('A', 'fulfilled'), completionProof: { commandId: 'complete:A' } }, member('B', 'applied')])
+  for (const instructionIds of [['B'], ['A', 'B'], ['missing'], []]) {
+    result.occurrences = [{ actionKind: 'task-command', instructionIds, actionState: 'succeeded', deliveryState: 'none' }]
+    assert.match(formatCoordinationSnapshot(result), /本次安排已接纳处理要求，任务尚未正式完成。/)
+  }
+})
+
+for (const [deliveryState, expected] of [
+  ['none', '本次安排已执行。'], ['delivered', '本次安排已执行，结果已送达。'],
+  ['unknown', '本次安排已执行，结果通知是否送达尚未确认。'],
+]) test(`只读查询仍区分实际执行与结果送达: ${deliveryState}`, () => {
+  const result = coordinationSnapshot({ coordination: { id: 'coordination', revision: 1, state: 'active' }, members: [], tasks: [], schedules: [], jobs: [],
+    occurrences: [{ id: 'query:A', action: { kind: 'read-query', taskIds: ['A'] }, actionState: 'succeeded', deliveryState }] })
+  assert.equal(formatCoordinationSnapshot(result), expected)
+  assert.equal(Object.hasOwn(result.occurrences[0], 'actionKind'), false, '其他动作不改变快照字段和摘要')
+})
+
 test('业务要求和业务ID保留，机器等待码译成说明而不泄露内部结构', () => {
   const result = snapshot([{ ...member('internal-task', 'applied'), id: 'instruction-secret',
     command: { id: 'command-secret', args: { request: '核查订单 BIZ-413 https://example.test/order/BIZ-413' } },

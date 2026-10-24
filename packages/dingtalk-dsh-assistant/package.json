@@ -58,6 +58,7 @@
     "session-persistence.js",
     "session-workspaces.js",
     "store.js",
+    "task-artifact-scope.js",
     "task-input-contract.js",
     "task-execution-timeline.js",
     "task-input-revision.js",
