@@ -36,3 +36,8 @@
 ## 原始证据
 只读SQLite快照与命令收据；原生任务会话session.v4.jsonl；本机docs/tmp/coordinator-abc-validation/current-live/a-detail.json、group.json。原始JSON不入库。
 本轮只读分析，没有修复权限、启动B/C、改代码或部署。
+
+## 新增已证文案问题（lead独立复核）
+- 独立DWS messages-mget读取msg5Gxj+CaTsjY+gj5DX3MO/A==：complete=true/foundCount=1/failedCount=0；21:09:31测试群真实消息明确A尚未完成、B/C等待，但末句却为本次安排已执行。
+- 已安装coordination-summary.js:154-165在occurrence.actionState=succeeded且deliveryState=none时使用已执行；本轮occurrence只表示task-command接纳而不是业务完成，导致通知语义泛化。此为已触发的用户文案缺陷，不是任务被误标完成。未修改源码或补发。
+- 当前完整时延仍未收敛：A五次模型调用合计34.821秒、工具调用合计223毫秒只是独立审查员性能接口观测，completeness=incomplete，不可填补初始路由或后继切换耗时。
