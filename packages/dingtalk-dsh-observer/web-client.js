@@ -53,23 +53,41 @@ window.__ModuleLoader__.load({
     const short = (value) => value ? String(value).replace(/^session-/, '').slice(0, 14) : '—'
     const outboxDelivery = (message) => {
       const reason = message.deliveryPendingReason
-      const historical = !message.notificationState
-      const retired = ['task-notification-task-terminal', 'task-notification-superseded', 'task-notification-confirmation-reassessment-required'].includes(reason)
+      const notificationState = message.notificationState || message.notificationStatus
+      const historical = !notificationState
+      const cancellationReasons = {
+        'task-notification-task-terminal': '关联任务已结束，已取消这条通知；本次未发送',
+        'task-notification-superseded': '这条通知已被替代；本次未发送',
+        'task-notification-coordination-source-resolved': '后续消息已补充或订正原安排，已取消旧回复；本次未发送',
+        'task-notification-coordination-schedule-changed': '提醒时间或安排已调整，已取消旧确认；本次未发送',
+        'task-notification-coordination-facts-changed': '安排已有更新，已取消过时通知；本次未发送',
+        'task-notification-coordination-cancelled': '相关安排已取消或不再适用，已取消这条通知；本次未发送',
+        'task-notification-stale-question': '原问题已失效，已取消这条通知；本次未发送',
+      }
+      const reassessment = reason === 'task-notification-confirmation-reassessment-required'
+      const knownNotSent = message.notificationKnownNotSent === true
+      // 取消必须有未发送证明；替代关系、旧错误和撤回记录不能覆盖当前发送事实。
+      const cancelled = knownNotSent && (notificationState === 'superseded' || cancellationReasons[reason]) && !reassessment
       // 旧字段仅适配历史事实，不推断仍会派发、重试或撤回。
       const legacy = () => {
-        if (message.status === 'sent') return message.deliveredMessageId ? 'confirmed' : 'unverified'
-        if (message.status === 'superseded') return 'stopped'
+        if (message.deliveredMessageId) return 'confirmed'
+        if (message.status === 'sent') return 'unverified'
+        if (['postflight_history_partial', 'postflight_failed', 'message_not_observed'].includes(reason)) return 'waiting'
+        if (['task-notification-unknown', 'delivery_unknown', 'send_unknown'].includes(reason)) return message.notificationFailurePhase === 'readback' ? 'waiting' : 'checking'
+        if (knownNotSent && (message.status === 'superseded' || cancellationReasons[reason]) && !reassessment) return 'cancelled'
+        if (reassessment) return 'failed'
+        if (message.status === 'superseded') return 'checking'
         if (reason === 'task-notification-prepared') return 'queued'
         if (reason === 'task-notification-starting') return 'sending'
-        if (retired) return 'stopped'
-        if (['postflight_history_partial', 'postflight_failed', 'message_not_observed'].includes(reason)) return 'waiting'
-        if (reason === 'task-notification-unknown' || reason === 'delivery_unknown') return message.notificationFailurePhase === 'readback' ? 'waiting' : 'checking'
-        if (message.deliveryBlockedAt || message.deliveryError || ['preflight_failed', 'preflight_history_partial', 'send_failed', 'task-notification-failed', 'task-notification-pre-send-rejected'].includes(reason)) return 'failed'
+        if (cancellationReasons[reason] || message.deliveryBlockedAt || message.deliveryError || ['preflight_failed', 'preflight_history_partial', 'send_failed', 'task-notification-failed', 'task-notification-pre-send-rejected'].includes(reason)) return 'failed'
         return 'checking'
       }
-      const current = { prepared: 'queued', starting: 'sending', unknown: message.notificationFailurePhase === 'readback' ? 'waiting' : 'checking', delivered: 'confirmed', failed: retired ? 'stopped' : 'failed' }
-      const phaseId = historical ? legacy() : current[message.notificationState] || 'checking'
-      const id = ['waiting', 'checking', 'unverified'].includes(phaseId) ? 'confirmation' : phaseId === 'stopped' ? 'failed' : phaseId
+      const current = { prepared: 'queued', starting: 'sending', sending: 'sending', acknowledged: 'waiting',
+        unknown: message.notificationFailurePhase === 'readback' ? 'waiting' : 'checking', delivered: 'confirmed',
+        superseded: reassessment ? 'failed' : cancelled ? 'cancelled' : 'checking', failed: cancelled ? 'cancelled' : 'failed' }
+      const legacyDelivered = !message.notificationState && notificationState === 'superseded' && message.deliveredMessageId
+      const phaseId = historical ? legacy() : legacyDelivered ? 'confirmed' : current[notificationState] || 'checking'
+      const id = ['waiting', 'checking', 'unverified'].includes(phaseId) ? 'confirmation' : phaseId
       const states = {
         queued: ['待发送', 'ongoing', '通知已准备，等待发送'],
         sending: ['发送中', 'ongoing', '正在执行发送，尚未确认送达'],
@@ -77,14 +95,12 @@ window.__ModuleLoader__.load({
         checking: ['待核对', 'warning', '发送结果未知，等待核验'],
         confirmed: ['已送达', 'done', '回读已确认送达'],
         failed: ['投递异常', 'error', '需核验投递原因'],
-        stopped: ['已停止', 'neutral', '旧通知意图已停止发送'],
+        cancelled: ['已取消', 'neutral', '已取消这条通知，本次未发送；不代表撤回已发消息'],
         unverified: ['已发送', 'warning', '历史发送记录，缺少回读消息 ID'],
       }
       const [phaseLabel, state, hint] = states[phaseId]
       const label = ({ confirmation: '待确认', failed: '异常' })[id] || phaseLabel
       const reasons = {
-        'task-notification-task-terminal': ['stopped', '关联任务已结束，停止旧通知发送；本次未发送'],
-        'task-notification-superseded': ['stopped', '通知意图已被替代，停止旧通知发送；本次未发送'],
         'task-notification-confirmation-reassessment-required': ['verification', '旧确认意图关联不足，需人工核验；不会自动恢复或发送'],
         'task-notification-pre-send-rejected': ['pre-send', '发送前检查已拒绝，本次未发送'],
         preflight_history_partial: ['pre-send', '历史发送前检查：消息不完整，本次未发送'],
@@ -93,16 +109,18 @@ window.__ModuleLoader__.load({
         postflight_failed: ['readback', '历史发送后回读失败'],
         message_not_observed: ['readback', '已调用发送，回读尚未找到对应消息'],
       }
-      let [reasonId, detail] = ((historical || message.notificationState === 'failed') && reasons[reason]) || (phaseId === 'waiting' ? ['readback', hint] : phaseId === 'checking' ? ['verification', hint]
-        : phaseId === 'stopped' ? ['stopped', hint] : phaseId === 'unverified' ? ['history', hint] : id === 'failed' ? ['failure', message.notificationKnownNotSent === true ? '已确认本次未发送' : '尚未确认送达，需核验失败原因'] : ['none', ''])
-      if (!historical && !Object.hasOwn(current, message.notificationState)) { reasonId = 'verification'; detail = `通知状态无法识别：${message.notificationState}；需人工核验` }
+      let [reasonId, detail] = ((historical || ['failed', 'superseded'].includes(notificationState)) && reasons[reason]) || (phaseId === 'waiting' ? ['readback', hint] : phaseId === 'checking' ? ['verification', hint]
+        : phaseId === 'unverified' ? ['history', hint] : id === 'failed' ? ['failure', knownNotSent ? '已确认本次未发送' : '尚未确认送达，需核验失败原因'] : ['none', ''])
+      if (phaseId === 'cancelled') { reasonId = 'cancelled'; detail = cancellationReasons[reason] || hint }
+      else if (!historical && !Object.hasOwn(current, notificationState)) { reasonId = 'verification'; detail = '通知状态暂无法识别，需人工核验' }
       else if (!historical && ['checking', 'waiting'].includes(phaseId)) { reasonId = phaseId === 'waiting' ? 'readback' : 'verification'; detail = hint }
+      if (phaseId === 'checking' && (notificationState === 'superseded' || historical && message.status === 'superseded')) detail = '这条通知的发送意图已停止，历史送达情况仍需核验'
       if (id === 'confirmed') { reasonId = 'none'; detail = '' }
       const recallId = ({ requested: 'requested', recalled: 'recalled', failed: 'failed' })[message.recallStatus] || 'none'
       const recall = { id: recallId, label: ({ requested: '已申请', recalled: '已撤回', failed: '撤回受阻', none: '无记录' })[recallId],
-        detail: recallId === 'failed' ? message.recallError === 'replacement_delivery_unknown' ? '历史送达证据不足，撤回结果需核验' : typeof message.recallError === 'string' ? message.recallError : '原因未记录' : '' }
+        detail: recallId === 'failed' ? message.recallError === 'replacement_delivery_unknown' ? '历史送达证据不足，撤回结果需核验' : '撤回未完成，需核验原因' : '' }
       return { id, label, state, hint, detail, reasonId, phaseId, historical, recall, replacementId: message.supersededByOutboundId,
-        retryDisabled: historical || ['stopped', 'unverified'].includes(phaseId) }
+        retryDisabled: historical || reassessment || notificationState === 'superseded' || phaseId === 'cancelled' || !Object.hasOwn(current, notificationState) }
     }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
     const observerCss = `
@@ -1537,14 +1555,16 @@ window.__ModuleLoader__.load({
               status.recall.id !== 'none' ? React.createElement('span', null, `撤回：${status.recall.label}${status.recall.detail ? `（${status.recall.detail}）` : ''}`) : null) : null,
             !status.retryDisabled && (status.id === 'confirmation' || status.id === 'failed' && message.notificationKnownNotSent === true) && message.notificationRetryAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `计划${status.id === 'confirmation' ? '核验' : '重试'} ${fmt(message.notificationRetryAt)}`) : null),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } },
-            singleLineTableContent(React.createElement('code', { title: message.replyToMessageId || message.sourceMessageId, style: { fontSize: 12, color: colors.muted } }, message.replyToMessageId ? `回复 ${short(message.replyToMessageId)}` : short(message.sourceMessageId))),
+            singleLineTableContent(React.createElement('span', { style: { fontSize: 12, color: colors.muted } }, message.replyToMessageId ? '回复群消息' : message.notificationTaskId ? '任务通知' : message.sourceMessageId ? '群消息' : '来源未记录')),
             React.createElement('details', { style: { marginTop: 5, fontSize: 11, color: colors.muted, overflowWrap: 'anywhere' } }, React.createElement('summary', { style: { cursor: 'pointer' } }, '消息记录'),
               React.createElement('div', null, `来源 ID：${message.sourceMessageId || '未记录'}`),
+              message.replyToMessageId ? React.createElement('div', null, `引用消息 ID：${message.replyToMessageId}`) : null,
               React.createElement('div', null, `投递 ID：${message.deliveredMessageId || '尚未确认'}`),
               React.createElement('div', null, `发信 ID：${message.outboundId}`),
               message.deliveryPendingReason ? React.createElement('div', null, `原因记录：${message.deliveryPendingReason}`) : null,
               status.replacementId ? React.createElement('div', null, `替代通知：${status.replacementId}`) : null,
               typeof message.deliveryError === 'string' && message.deliveryError ? React.createElement('div', null, `${status.id === 'confirmed' ? '历史诊断' : '诊断'}：${message.deliveryError}`) : null,
+              typeof message.recallError === 'string' && message.recallError ? React.createElement('div', null, `撤回诊断：${message.recallError}`) : null,
               message.deliveryAttemptedAt ? React.createElement('div', null, `最近尝试 ${fmt(message.deliveryAttemptedAt)} · 共 ${message.deliveryAttemptCount || 1} 次`) : null)))
       })
       const renderTaskCard = task => {
@@ -1652,7 +1672,7 @@ window.__ModuleLoader__.load({
         menu)
       const dataViewTabs = React.createElement('div', { role: 'tablist', 'aria-label': '群聊数据视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } },
         ...[{ id: 'messages', label: `收信箱 · ${selectedMessages.length}` }, { id: 'outbox', label: `发信箱 · ${selectedOutbox.length}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': groupTableView === item.id, type: 'button', onClick: () => setGroupTableView(item.id), style: navigationTabStyle(groupTableView === item.id, { paddingBottom: 4 }) }, item.label)))
-      const groupTableToolbar = React.createElement('div', { style: toolbar },
+      const groupTableToolbar = React.createElement('div', { style: { ...toolbar, flexWrap: 'wrap' } },
         dataViewTabs,
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' } },
           (data?.groups || []).length ? React.createElement(SelectMenu, { label: '选择群聊', value: selectedGroup?.groupId || '', options: (data?.groups || []).map((group) => ({ id: group.groupId, label: group.name || group.groupId })), onChange: (value) => { setSelectedGroupId(value); setMessagePage(1); setOutboxPage(1); setSelectedMessageRunId('') }, fitContent: true }) : null,
@@ -1661,7 +1681,7 @@ window.__ModuleLoader__.load({
           groupTableView === 'messages'
             ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '话题处理中' }, { id: 'processed', label: '已处理' }, { id: 'failed', label: '归类失败' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发送状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部状态' }, ...[
-              { notificationState: 'prepared' }, { notificationState: 'starting' }, { notificationState: 'unknown' }, { notificationState: 'delivered' }, { notificationState: 'failed' },
+              { notificationState: 'prepared' }, { notificationState: 'starting' }, { notificationState: 'unknown' }, { notificationState: 'delivered' }, { notificationState: 'superseded', notificationKnownNotSent: true }, { notificationState: 'failed' },
             ].map(message => { const { id, label } = outboxDelivery(message); return { id, label } })], onChange: value => { setOutboxStatusFilter(value); setOutboxPage(1) } })))
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 1040, borderCollapse: 'collapse', tableLayout: 'fixed' } },
@@ -1673,7 +1693,7 @@ window.__ModuleLoader__.load({
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 124 } }, '状态'), React.createElement('th', { style: { ...tableHeadCell, width: 180 } }, '送达时间'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 220 } }, '来源'))),
           React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 4, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的 Agent 发件记录'))])))),
         React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
-      const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', null, React.createElement('div', { style: tableFrame }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
+      const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', { style: { minWidth: 0 } }, React.createElement('div', { style: { ...tableFrame, minWidth: 0 } }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
       const selectedTask = taskDetail?.taskId === selectedTaskId ? taskDetail : undefined
       const tasksPage = selectedTaskId ? React.createElement('div', { className: 'observer-task-detail-route', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 16 } },
           React.createElement('style', null, taskDetailCss),
@@ -1754,7 +1774,7 @@ window.__ModuleLoader__.load({
       )
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: openTask, onOpenSession: navigate })
       const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
-      const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
+      const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, ...(activePage === 'groups' ? { minWidth: 0 } : {}), minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement(FeedbackNotice, { text: `无法连接 resident 插件：${error}`, error: true }) : null,
         archiveFeedback ? React.createElement(FeedbackNotice, { text: archiveFeedback.text, error: Boolean(archiveFeedback.error) }) : null,

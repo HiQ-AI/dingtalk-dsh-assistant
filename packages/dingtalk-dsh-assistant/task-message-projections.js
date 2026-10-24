@@ -78,21 +78,33 @@ export async function ingestTaskResidentMessage({ ctx, residentStore, message, r
 export function taskNotificationOutbound(notification) {
   const payload = notification.payload
   const receipt = notification.receipt
-  const knownNotSent = notification.state === 'failed' && !notification.ack && !notification.receipt && notification.deliveryError?.knownNotSent === true
-  const error = knownNotSent ? notification.deliveryError : notification.lastReadbackError ?? notification.deliveryError
   const delivered = notification.state === 'delivered'
+  const retired = ['failed', 'superseded'].includes(notification.state)
+  const cancelledReason = { coordination_cancelled: 'coordination-cancelled', stale_question: 'stale-question' }[notification.reason]
+  // 失效不等于未发送：只有未领取发送许可，或已有严格拒发结论且无接纳回执，才投影未发送事实。
+  const unclaimed = !notification.sendPermit && !notification.dispatchToken && !notification.sendStartedAt && !(notification.sendAttemptCount > 0)
+  const knownNotSent = retired && !notification.ack && !receipt && (notification.deliveryError?.knownNotSent === true
+    || unclaimed && (notification.state === 'superseded' || !!cancelledReason))
+  const error = knownNotSent ? notification.deliveryError : notification.lastReadbackError ?? notification.deliveryError
+  const retryable = !delivered && notification.state !== 'superseded'
+    && (notification.state !== 'failed' || knownNotSent && notification.deliveryError?.retryable === true && !notification.retirement && !cancelledReason)
+  const pendingReason = retired && notification.retirement ? notification.retirement.reason
+    : notification.state === 'failed' && cancelledReason ? cancelledReason
+      : knownNotSent && notification.state === 'failed' ? 'pre-send-rejected' : notification.state
   return {
     outboundId: notification.id,
     ...(notification.supersededBy ? { supersededByOutboundId: notification.supersededBy, supersededAt: notification.updatedAt } : {}),
     // One source can produce both a question and completion. Deduplicate by notification.
     sourceMessageId: `task-notification:${notification.id}`,
     text: payload.text,
-    status: notification.state === 'superseded' || notification.supersededBy ? 'superseded' : delivered ? 'sent' : 'pending',
+    status: delivered ? 'sent' : notification.state === 'superseded' || notification.supersededBy ? 'superseded' : 'pending',
     notificationState: notification.state,
-    notificationRetryAt: !delivered ? notification.nextAttemptAt ?? undefined : undefined,
+    notificationRetryAt: retryable ? notification.nextAttemptAt ?? undefined : undefined,
     notificationKnownNotSent: knownNotSent,
-    ...(error && !delivered ? { notificationFailurePhase: error.phase,
-      deliveryError: [error.serverErrorCode, error.reason, error.message].filter(Boolean).join(': ').slice(0, 512) } : {}),
+    // 显式清空可选字段，避免与旧发信箱记录合并时残留上一阶段的失败诊断。
+    notificationFailurePhase: !delivered ? error?.phase : undefined,
+    deliveryError: error && !delivered ? [error.serverErrorCode, error.reason, error.message].filter(Boolean).join(': ').slice(0, 512) || undefined : undefined,
+    deliveryPendingReason: !delivered ? `task-notification-${pendingReason}` : undefined,
     ...(notification.taskId ? { notificationTaskId: notification.taskId } : {}),
     ...(payload.topicRefs ? { topicRefs: payload.topicRefs } : {}),
     readbackRequired: true,
@@ -105,8 +117,7 @@ export function taskNotificationOutbound(notification) {
     sendStartedAt: notification.sendStartedAt,
     ...(delivered ? { deliveredAt: receipt?.observedAt ?? notification.updatedAt,
       ...(receipt?.sentAt ? { sentAt: receipt.sentAt } : {}),
-      ...(receipt?.messageId ? { deliveredMessageId: receipt.messageId } : {}) }
-      : { deliveryPendingReason: notification.retirement ? `task-notification-${notification.retirement.reason}` : knownNotSent ? 'task-notification-pre-send-rejected' : `task-notification-${notification.state}` }),
+      ...(receipt?.messageId ? { deliveredMessageId: receipt.messageId } : {}) } : {}),
   }
 }
 

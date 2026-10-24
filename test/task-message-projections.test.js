@@ -101,6 +101,80 @@ test('retired coordination notification projects terminal superseded even before
   assert.equal(outbound.notificationState,'superseded');assert.equal(outbound.status,'superseded')
 })
 
+test('取消投影只使用未领取发送许可或明确拒发事实，保留原通知生命周期', () => {
+  const base = { id: 'cancelled', state: 'superseded', payload: { conversationId: 'g', text: '旧确认' },
+    retirement: { reason: 'coordination-source-resolved' }, nextAttemptAt: '2099-01-01T00:00:00Z' }
+  const cancelled = taskNotificationOutbound(base)
+  assert.equal(cancelled.notificationState, 'superseded')
+  assert.equal(cancelled.notificationKnownNotSent, true)
+  assert.equal(cancelled.deliveryPendingReason, 'task-notification-coordination-source-resolved')
+  assert.equal(cancelled.notificationRetryAt, undefined)
+  for (const evidence of [{ ack: {} }, { receipt: {} }, { sendPermit: {} }, { dispatchToken: 'claimed' },
+    { sendStartedAt: '2026-10-24T01:00:00Z' }, { sendAttemptCount: 1 }]) {
+    assert.equal(taskNotificationOutbound({ ...base, ...evidence }).notificationKnownNotSent, false, JSON.stringify(evidence))
+  }
+  const rejected = { ...base, sendPermit: {}, sendAttemptCount: 1, deliveryError: { phase: 'send', knownNotSent: true, retryable: false } }
+  assert.equal(taskNotificationOutbound(rejected).notificationKnownNotSent, true)
+  for (const evidence of [{ ack: {} }, { receipt: {} }]) {
+    assert.equal(taskNotificationOutbound({ ...rejected, ...evidence }).notificationKnownNotSent, false)
+  }
+  for (const [reason, projected] of [['coordination_cancelled', 'coordination-cancelled'], ['stale_question', 'stale-question']]) {
+    const failed = { ...base, state: 'failed', reason, retirement: undefined }
+    assert.equal(taskNotificationOutbound(failed).notificationKnownNotSent, true)
+    assert.equal(taskNotificationOutbound(failed).deliveryPendingReason, `task-notification-${projected}`)
+    assert.equal(taskNotificationOutbound(failed).notificationRetryAt, undefined)
+    assert.equal(taskNotificationOutbound({ ...failed, sendPermit: {} }).notificationKnownNotSent, false)
+  }
+})
+
+test('旧取消原因不能覆盖当前待发送、发送中、未知和已送达事实', () => {
+  const base = { id: 'current', payload: { conversationId: 'g', text: '通知' }, reason: 'coordination_cancelled',
+    retirement: { reason: 'task-terminal' }, deliveryError: { phase: 'send', knownNotSent: true, message: '旧错误' },
+    nextAttemptAt: '2099-01-01T00:00:00Z', supersededBy: 'new' }
+  for (const state of ['prepared', 'starting', 'unknown']) {
+    const outbound = taskNotificationOutbound({ ...base, state })
+    assert.equal(outbound.notificationKnownNotSent, false)
+    assert.equal(outbound.deliveryPendingReason, `task-notification-${state}`)
+    assert.equal(outbound.notificationRetryAt, base.nextAttemptAt)
+  }
+  const delivered = taskNotificationOutbound({ ...base, state: 'delivered', receipt: { messageId: 'actual', observedAt: 'seen' } })
+  assert.equal(delivered.status, 'sent')
+  assert.equal(delivered.notificationKnownNotSent, false)
+  assert.equal(delivered.notificationRetryAt, undefined)
+  assert.equal(delivered.deliveryPendingReason, undefined)
+  assert.equal(delivered.deliveryError, undefined)
+  assert.equal(delivered.notificationFailurePhase, undefined)
+  assert.equal(delivered.deliveredMessageId, 'actual')
+})
+
+test('正式终止与可重试拒发分开投影，重投影清除已失效的诊断和重试计划', async t => {
+  const base = { id: 'retired', state: 'failed', payload: { conversationId: 'g', text: '旧确认' },
+    deliveryError: { phase: 'send', knownNotSent: true, retryable: true, message: '发送前检查失败' },
+    nextAttemptAt: '2099-01-01T00:00:00Z' }
+  assert.equal(taskNotificationOutbound(base).notificationRetryAt, base.nextAttemptAt)
+  for (const reason of ['task-terminal', 'superseded', 'confirmation-reassessment-required']) {
+    const retired = taskNotificationOutbound({ ...base, retirement: { reason } })
+    assert.equal(retired.notificationState, 'failed')
+    assert.equal(retired.notificationKnownNotSent, true)
+    assert.equal(retired.deliveryPendingReason, `task-notification-${reason}`)
+    assert.equal(retired.notificationRetryAt, undefined)
+  }
+  assert.equal(taskNotificationOutbound({ ...base, deliveryError: { ...base.deliveryError, retryable: false } }).notificationRetryAt, undefined)
+  const seed = new Map(), store = await openResidentStore(memoryFacility(seed)); t.after(() => store.close())
+  await store.subscribe({ groupId: 'g' })
+  await projectTaskNotification({ residentStore: store, notification: base })
+  assert.equal(store.getGroup('g').outbox[0].notificationFailurePhase, 'send')
+  await projectTaskNotification({ residentStore: store, notification: { ...base, state: 'superseded', deliveryError: undefined,
+    retirement: { reason: 'coordination-source-resolved' } } })
+  const saved = store.getGroup('g').outbox[0]
+  assert.equal(saved.notificationState, 'superseded')
+  assert.equal(saved.notificationKnownNotSent, true)
+  for (const key of ['notificationRetryAt', 'notificationFailurePhase', 'deliveryError']) assert.equal(Object.hasOwn(saved, key), false, key)
+  await store.close()
+  const reopened = await openResidentStore(memoryFacility(seed)); t.after(() => reopened.close())
+  assert.deepEqual(reopened.getGroup('g').outbox[0], saved)
+})
+
 test('question and completion for the same source have separate stable timeline identities', () => {
   const payload = { conversationId: 'g', sourceMessageId: 'm', text: '?' }
   assert.notEqual(taskNotificationOutbound({ id: 'question', state: 'prepared', payload }).sourceMessageId,

@@ -159,9 +159,11 @@ test('发件状态按实际投递环节展示，pending不会伪装为已回读'
     [{ status: 'sent', deliveredMessageId: 'actual-message-id' }, 'confirmed', '已送达'],
     [{ status: 'sent' }, 'confirmation', '待确认'],
     [{ status: 'sent', recallStatus: 'recalled' }, 'confirmation', '待确认'],
-    [{ status: 'superseded', supersededByOutboundId: 'new' }, 'failed', '异常'],
+    [{ status: 'superseded', supersededByOutboundId: 'new' }, 'confirmation', '待确认'],
+    [{ status: 'superseded', deliveredMessageId: 'actual' }, 'confirmed', '已送达'],
+    [{ status: 'superseded', notificationKnownNotSent: true }, 'cancelled', '已取消'],
     [{ status: 'sent', deliveredMessageId: 'actual', supersededByOutboundId: 'new' }, 'confirmed', '已送达'],
-    [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'failed', '异常'],
+    [{ status: 'superseded', recallStatus: 'failed', recallError: 'replacement_delivery_unknown' }, 'confirmation', '待确认'],
     [{ status: 'sent', recallStatus: 'failed', recallError: 'dws_recall_failed:1:1001' }, 'confirmation', '待确认'],
   ]
   for (const [message, id, label] of scenarios) {
@@ -200,8 +202,8 @@ test('任务通知明确区分待发送、发送中、结果未知和确定的�
     [{ notificationState: 'unknown', deliveryBlockedAt: '2026-10-14T00:00:00Z', notificationKnownNotSent: false }, 'confirmation', '待确认'],
     [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-pre-send-rejected', notificationKnownNotSent: true }, 'failed', '异常'],
     [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-failed', deliveryError: 'delivery failed' }, 'failed', '异常'],
-    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-task-terminal', notificationKnownNotSent: true }, 'failed', '异常'],
-    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-superseded', notificationKnownNotSent: true }, 'failed', '异常'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-task-terminal', notificationKnownNotSent: true }, 'cancelled', '已取消'],
+    [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-superseded', notificationKnownNotSent: true }, 'cancelled', '已取消'],
     [{ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required', notificationKnownNotSent: true }, 'failed', '异常'],
     [{ notificationState: 'delivered', deliveredMessageId: 'observed-message' }, 'confirmed', '已送达'],
     [{ deliveryPendingReason: 'task-notification-prepared' }, 'queued', '待发送'],
@@ -236,6 +238,7 @@ test('任务通知明确区分待发送、发送中、结果未知和确定的�
   assert.doesNotMatch(filter, /筛选发送原因|筛选替代关系|筛选撤回结果/)
   assert.match(filter, /notificationState: 'unknown'/)
   assert.match(filter, /notificationState: 'failed'/)
+  assert.match(filter, /notificationState: 'superseded', notificationKnownNotSent: true/)
   assert.equal((filter.match(/筛选发送状态/g) || []).length, 1)
 })
 
@@ -280,7 +283,7 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
   assert.match(blocked, /异常/)
   assert.match(blocked, /本次未发送/)
   assert.match(blocked, /计划重试 本地时间 2026-10-14T00:01:00\.000Z/)
-  for (const [reason, label] of [['task-notification-task-terminal', '异常'], ['task-notification-superseded', '异常'], ['task-notification-confirmation-reassessment-required', '异常']]) {
+  for (const [reason, label] of [['task-notification-task-terminal', '已取消'], ['task-notification-superseded', '已取消'], ['task-notification-confirmation-reassessment-required', '异常']]) {
     const retired = text(render(withFacts({ notificationState: 'failed', deliveryPendingReason: reason, notificationKnownNotSent: true }))[0])
     assert.ok(retired.includes(label))
     assert.doesNotMatch(retired, /计划重试|计划核验|已发送|已回读/)
@@ -297,18 +300,27 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
   assert.doesNotMatch(timed, /未记录|回读确认|2026-10-19T02:27:14Z/)
   const superseded = text(render(withFacts({ supersededByOutboundId: 'replacement' }))[0])
   assert.match(superseded, /已替代/); assert.match(superseded, /待确认/); assert.doesNotMatch(superseded, /等待替换通知|送达后撤回/)
+  const recalled = render(withFacts({ replyToMessageId: 'private-source-message', recallStatus: 'failed', recallError: 'RAW_RECALL_ERROR' }))[0]
+  const visible = recalled.children.filter(child => child?.type === 'td').map(cell => ({ ...cell, children: cell.children.filter(child => child?.type !== 'details') }))
+  assert.match(text({ children: visible }), /回复群消息/)
+  assert.doesNotMatch(text({ children: visible }), /private-source-message|RAW_RECALL_ERROR|CLI_READBACK_FAILED/)
+  assert.match(text(flattenElements(recalled).find(element => element.type === 'details')), /private-source-message[\s\S]*RAW_RECALL_ERROR/)
 })
 
 test('界面只保留发送状态筛选，关系与撤回不影响主状态筛选', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const classify = runInNewContext(`(${source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))})`)
   const fragment = source.slice(source.indexOf('      const filteredOutbox ='), source.indexOf('      const outboxPageSize ='))
-  const selectedOutbox = [{ status: 'sent', notificationState: 'delivered', supersededByOutboundId: 'new', recallStatus: 'recalled' }, { status: 'sent' }, { notificationState: 'unknown' }]
+  const selectedOutbox = [{ status: 'sent', notificationState: 'delivered', supersededByOutboundId: 'new', recallStatus: 'recalled' }, { status: 'sent' }, { notificationState: 'unknown' },
+    { notificationState: 'superseded', notificationKnownNotSent: true, supersededByOutboundId: 'new' }, { notificationState: 'failed', notificationKnownNotSent: true }]
   const filter = outboxStatusFilter => runInNewContext(`${fragment}; filteredOutbox.length`, { selectedOutbox, outboxStatusFilter, outboxDelivery: classify })
   assert.equal(filter('confirmed'), 1)
   assert.equal(filter('confirmation'), 2)
-  assert.equal(filter('all'), 3)
-  assert.equal(filter('failed'), 0)
+  assert.equal(filter('all'), 5)
+  assert.equal(filter('cancelled'), 1)
+  assert.equal(filter('failed'), 1)
+  assert.match(source, /const groupTableToolbar = React\.createElement\('div', \{ style: \{ \.\.\.toolbar, flexWrap: 'wrap' \} \}/, '窄屏时群选择与状态筛选可换行，不被表格宽度挤出屏幕')
+  assert.match(source, /activePage === 'groups' \? \{ minWidth: 0 \} : \{\}/, '仅群列表解除外层网格最小宽度，宽表格保留局部滚动')
 })
 
 test('现行通知账优先，历史字段与撤回结果不能覆盖未知或送达事实', async () => {
@@ -332,6 +344,59 @@ test('现行通知账优先，历史字段与撤回结果不能覆盖未知或�
     assert.ok(classify(message).label.length <= 4, '发送状态使用最多四字短名称')
   }
   assert.equal(classify({ notificationState: 'failed', deliveryPendingReason: 'task-notification-confirmation-reassessment-required' }).reasonId, 'verification')
+})
+
+test('真实通知投影只有确证未发送的失效通知显示已取消，发送许可和未知结果不被掩盖', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const classify = runInNewContext(`(${source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))})`)
+  const base = { id: 'notice', payload: { text: '通知正文', conversationId: 'g' }, nextAttemptAt: '2099-01-01T00:00:00Z' }
+  const cancelled = [
+    ...['coordination-source-resolved', 'coordination-schedule-changed', 'coordination-facts-changed'].map(reason => ({ state: 'superseded', retirement: { reason } })),
+    ...['coordination_cancelled', 'stale_question'].map(reason => ({ state: 'failed', reason })),
+    ...['task-terminal', 'superseded'].map(reason => ({ state: 'failed', retirement: { reason }, deliveryError: { knownNotSent: true } })),
+  ]
+  for (const facts of cancelled) {
+    const result = classify(taskNotificationOutbound({ ...base, ...facts }))
+    assert.equal(result.id, 'cancelled', JSON.stringify(facts))
+    assert.equal(result.label, '已取消'); assert.equal(result.state, 'neutral')
+    assert.match(result.detail, /本次未发送/); assert.equal(result.retryDisabled, true)
+    assert.doesNotMatch(result.detail, /coordination|stale_question|task-terminal/)
+  }
+  for (const facts of [
+    { state: 'superseded', dispatchToken: 'permit', retirement: { reason: 'coordination-source-resolved' } },
+    { state: 'unknown', supersededBy: 'new', retirement: { reason: 'coordination-source-resolved' } },
+    { state: 'unknown', reason: 'coordination_cancelled', deliveryError: { knownNotSent: true } },
+  ]) {
+    const result = classify(taskNotificationOutbound({ ...base, ...facts }))
+    assert.equal(result.id, 'confirmation'); assert.doesNotMatch(result.detail, /本次未发送|已取消/)
+    if (facts.state === 'superseded') assert.equal(result.retryDisabled, true, '已停止意图仅保留人工核验，不承诺自动核验')
+  }
+  const sending = classify(taskNotificationOutbound({ ...base, state: 'starting', reason: 'coordination_cancelled', supersededBy: 'new' }))
+  assert.equal(sending.id, 'sending'); assert.doesNotMatch(sending.detail, /已取消|未发送/)
+  for (const facts of [{ state: 'failed', reason: 'coordination_cancelled', ack: { id: 'accepted' } },
+    { state: 'failed', retirement: { reason: 'confirmation-reassessment-required' }, deliveryError: { knownNotSent: true } }]) {
+    assert.equal(classify(taskNotificationOutbound({ ...base, ...facts })).id, 'failed')
+  }
+  const delivered = classify(taskNotificationOutbound({ ...base, state: 'delivered', supersededBy: 'new', reason: 'coordination_cancelled', receipt: { messageId: 'observed' } }))
+  assert.equal(delivered.id, 'confirmed'); assert.equal(delivered.detail, '')
+  const legacyUnknown = classify({ status: 'superseded', deliveryPendingReason: 'delivery_unknown', notificationKnownNotSent: true })
+  assert.equal(legacyUnknown.id, 'confirmation'); assert.doesNotMatch(legacyUnknown.detail, /已取消|未发送/)
+  const unlinked = classify({ notificationState: 'superseded', notificationKnownNotSent: true, deliveryPendingReason: 'task-notification-confirmation-reassessment-required' })
+  assert.equal(unlinked.id, 'failed'); assert.match(unlinked.detail, /关联不足.*人工核验/); assert.equal(unlinked.retryDisabled, true)
+})
+
+test('工作流通知沿实际 prepared、sending、acknowledged 状态展示，不被旧状态或诊断覆盖', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const classify = runInNewContext(`(${source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))})`)
+  for (const [notificationStatus, id] of [['prepared', 'queued'], ['sending', 'sending'], ['acknowledged', 'confirmation'], ['unknown', 'confirmation'], ['delivered', 'confirmed'], ['superseded', 'confirmation']]) {
+    const result = classify({ notificationStatus, status: 'superseded', deliveryError: 'old_failure', supersededByOutboundId: 'new', recallStatus: 'recalled' })
+    assert.equal(result.id, id); assert.doesNotMatch(result.detail, /old_failure|本次未发送/)
+    assert.equal(result.recall.id, 'recalled')
+  }
+  assert.equal(classify({ notificationState: 'unknown', notificationStatus: 'delivered' }).id, 'confirmation', '现行通知账优先于历史工作流字段')
+  assert.equal(classify({ notificationStatus: 'superseded', notificationKnownNotSent: true }).id, 'cancelled')
+  assert.equal(classify({ notificationStatus: 'superseded', deliveredMessageId: 'observed', deliveryError: 'old_failure' }).id, 'confirmed')
+  assert.equal(classify({ notificationState: 'unknown', notificationStatus: 'superseded', deliveredMessageId: 'old' }).id, 'confirmation')
 })
 
 test('处理步骤直接展示事项、关联对象和动作结论，未知结构不编造结果', async () => {
