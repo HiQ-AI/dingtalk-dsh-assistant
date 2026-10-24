@@ -8,6 +8,8 @@ import { sourceInterpretationInstructions } from './task-source-instructions.js'
 import { groupReplyScopeInstructions } from './group-message.js'
 import { retireHostContext } from './host-context.js'
 import { taskBoundaryInstructions } from './task-boundary-instructions.js'
+import { bindTaskArtifactScope, assertTaskArtifactScopePresent } from './task-artifact-scope.js'
+import { dirname } from 'node:path'
 
 const identityEvent = 'plugin:dingtalk/task-session'
 const fail = code => Object.assign(new Error(code), { code })
@@ -106,6 +108,12 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
       }
       const setup = async (agentCtx, agent) => {
         entry.content = createModelContentIndex(agent.session)
+        assertTaskArtifactScopePresent(agentCtx, agent.session, input.artifactScope)
+        if (input.artifactScope) {
+          await bindTaskArtifactScope(agentCtx, { root: dirname(dirname(cwd)), scope: input.artifactScope, taskId: binding.taskId, session: agent.session })
+          agentCtx.systemPrompt.section({ name: 'task:artifacts', order: 1,
+            text: `本团队唯一业务产物目录为 ${input.artifactScope.artifactRoot}。全部成员只在此目录写业务产物；原任务工作目录、日志和Host阅读投影保持不变，不得写改。${input.artifactScope.authorizationSource ? `Host已核验较新受信技术答复，纠正来源为 ${JSON.stringify(input.artifactScope.authorizationSource)}；该纠正只将旧测试产物路径替换为本团队正式目录，其他目标、要求、任务身份和依赖不变。` : '旧来源若要求不同产物路径，先核对正式技术恢复答复中的路径纠正，不得默默忽略冲突要求。'}使用绝对路径读取和写入共同产物；未核验真实文件前不得称完成。` })
+        }
         const assessmentOnly = input.coordinationAssessments?.length > 0
         if (assessmentOnly) agentCtx.systemPrompt.section({name:'coordination-preassessment',order:122,text:
           '本轮是已运行任务的顺序无破坏预评估。只读核验当前执行和原效果；用task_coordination_reorder_assess提交结构化判断，再wait。禁止业务写入、取消、委派、目标变更和完成任务；safe_point仅Host验证排空后生效，不能以模型声明代替。'})

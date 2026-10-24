@@ -387,6 +387,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     try {
       const parsed = z.strictObject({ requestId: requiredText.max(200), reply: requiredText.max(20000),
         expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
+        artifactScopeCorrection: z.strictObject({ coordinationId: requiredText, expectedRevision: z.number().int().positive(), reason: requiredText.max(2000) }).optional(),
         nativeFailureResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u) })).min(1).max(8)
           .refine(items => new Set(items.map(item => item.operationId)).size === items.length).optional() }).safeParse(await readJson(request))
       if (!parsed.success) return send(response, 400, { error: 'human_reply_invalid' })

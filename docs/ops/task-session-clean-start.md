@@ -169,6 +169,36 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 
 本机完整冷启动可能超过两分钟；部署脚本对新进程端口就绪等待最多五分钟，退出排空仍为两分钟。若安装已核验且脚本只在启动等待超时，先回读原新PID、端口、profile和健康。该进程随后自然就绪时补记恢复证据即可，不重新安装或启动第二个实例；原超时证据保留。
 
+## Windows 精确 Task 沙箱目录修复
+
+仅当 Windows ACL sandbox 在已授权 Task 根目录报 `SetNamedSecurityInfoW` / `grantWrite` Win32 5，且零写入检查同时证明当前 Host 用户是该根 Owner、`WRITE_DAC=true`、`WRITE_OWNER=false` 时，使用 `docs/acceptance/task-coordination-v1.3/scripts/repair-task-sandbox-acl.ps1`。这不是通用 ACL 管理工具，也不替代业务授权或 sandbox 边界。
+
+先执行零副作用检查；它只以 `OPEN_EXISTING` 核验真实 `WRITE_DAC`/`WRITE_OWNER`，不会创建证据或修改权限：
+
+```powershell
+& docs/acceptance/task-coordination-v1.3/scripts/repair-task-sandbox-acl.ps1 -Check
+```
+
+只有经用户批准指定根目录后，才执行同一脚本的 `-Execute` 并传入已存在、持久且位于目标根目录之外的证据目录。脚本默认仅接受本轮固定的 A/B/C Task 根 ID；可用 `-TaskId` 缩至单个根。正式团队产物根使用互斥的 `-CoordinationId coordination-f1767af593d66d5eabe73d31dfbc9a30`，只解析 `D:/baibu-agent/tasks/<该固定协调ID>/outputs`，不接受任意 Path；先由 Host 可信 scope 解析器创建空目录并核对绝对路径，再以同模式 Check、核准、Execute，不能用业务产物创建代替目录准备。它为当前 Owner 添加一条**不继承**的 `WRITE_OWNER` Allow ACE，不修改父目录、Owner、SACL、Low label 或既有 deny ACE；DACL 写入前后保存 SDDL 证据，并独立复验有效权限、Owner、SACL、DACL 和最终全目标集合。执行期间不得有任何并发 ACL writer（包括 sandbox `grantWrite`）；脚本不是原子 CAS，发现变化即停止，不自动重试。
+
+```powershell
+& docs/acceptance/task-coordination-v1.3/scripts/repair-task-sandbox-acl.ps1 `
+  -Execute -TaskId '<批准的固定 Task ID>' `
+  -EvidenceDirectory '<已存在的持久证据目录>'
+```
+
+不得使用 `runas`/UAC、`icacls` 手改、递归继承、删除 deny、关闭 sandbox 或扩大到 `tasks` 父目录。修复后沿原 Task 的受支持恢复路径重试；仅权限探针通过不代表 native `grantWrite`、业务文件写入或协调依赖已通过，须分别回读原工具结果和账本事实。
+
+## 正式团队产物绑定
+
+单 Task 团队沿用 `tasks/<taskId>/outputs`。跨 Task 协调团队的唯一业务产物容器为 Host 根据稳定 coordinationId 计算的 `tasks/<coordinationId>/outputs`，不是新增总 Task；原 Task 材料、内部日志、会话 header.cwd 与 Host 阅读投影保持原址。插件从唯一有效协调成员关系解析该目录，不接受模型提供的任意根；多协调归属、重复 Task 成员及周期实例目前拒绝自动绑定，不能猜测第一项或最近安排。
+
+部署此功能前，先使用 `scripts/sandbox-artifact-policy.mjs` 为精确原生 `dsh-sandbox-policy` 制作并核验支持 `bindArtifactRoot(session,{ownerId,artifactRoot})` 的补丁包，按其 Check/Apply/Verify 流程固定 tgz 摘要与 profile override，再按本页正常排空部署插件。仅安装 Assistant 不会补齐原生 API；缺少 API 时插件明确拒绝进入绑定任务，不退回宽权限。不得直接改 node_modules、全局替换 policy.resolve、修改旧 session.header 或切换 danger-full-access。
+
+原生绑定把 `sandbox/mode` 携带完整产物绑定的 事件持久化于各原会话；相同绑定幂等、不同绑定拒绝，每次解析重验目录链。Owner 与 DSH 执行通过同一 API 绑定共同产物根，shell 与 native FS 使用同一策略并拒绝根外业务写；平台临时区域维持原生语义，不作为业务产物目录。绑定会话拒绝模型请求 full-access 绕过。外部执行后端不能据此自动视为已受原生策略约束，须独立支持或拒绝，不能静默放行。
+
+核验需同时实跑根内 native write 与 shell 写入、另一个团队及原 cwd 的根外拒绝、跨 Task 原生 read、持久重启后同绑定、旧 header.cwd 不变；再验证原协调链的正式完成事件自然释放后继。原路径要求发生冲突时通过正式技术恢复说明明确纠正，不能仅口头通知而假称冻结需求已经重写，不能手改 Task 或完成账。原生能力证据不等于真实群业务验收通过。
+
 ## 本机桌面重启入口
 
 `C:/Users/64554/Desktop/App/restart-dsh-web.ps1` 委托 `D:/dsh_home/launchers/restart-web.ps1`。当前启动器源码为 `scripts/restart-web.ps1`，更新时将该文件与 `docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.mjs` 一起同步到上述 launchers 目录，并分别独立核对 SHA256。此入口仅管理既有本机 `DSH Web Local`、`D:/dsh_home` 和 `D:/baibu-agent/.dsh/task-sessions.sqlite`，不安装插件、不修改 profile 或初始化标记。
@@ -220,3 +250,13 @@ DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个s
 `-Check` 调用 `scripts/pty-package-upgrade.mjs check`，零写核对两包与当前 manifest。实际执行在原进程、子进程和账本排空后再次做 manifest CAS，仅更新 `pnpm.overrides` 的这两个精确键，保留其他依赖与 overrides，并把前后 manifest SHA 写入 `pty-manifest-applied.json`。随后沿原官方 `plugin add` 安装；不直接编辑安装后的 node_modules。
 
 安装后 `verify` 从实际 `dsh-base` 消费者解析 subprocess-local，再从该 provider 解析 node-pty，核对实际安装版本、关键文件字节与原 tgz 摘要，结果写入 `pty-installed.json`；仅根 node_modules 存在正确包不算通过。原 `cordis.patch.yml` 摘要保持不变，普通部署不传该参数。任一步失败保留停机状态与阶段证据，不以部分安装启动实例，也不自动回退或全量升级宿主。
+
+## 团队统一业务产物根
+
+同一协调团队的正式业务产物根为 <Agent工作区>/tasks/<coordinationId>/outputs，Owner和DSH执行成员共用，所有业务产物只写此处。原Task的cwd/header/session/log/Host执行阅读文档保持原址；不要通过改旧session.cwd、junction、分散fixture、额外docs目录或关闭沙箱恢复。当前外部CLI执行后端不承载该新scope，明确拒绝而非自动放宽。
+
+所需原生 policy 扩展为本地精确包 `@deepseek-ai/dsh-sandbox-policy@0.2.1-rc.2.artifact.2`，再生成配方 `node scripts/sandbox-artifact-policy.mjs build <原生 rc.2 包绝对目录> <新空目标目录>`，只接受已审阅原入口 SHA。补丁通过持久 `sandbox/mode` 携带完整产物绑定的 原生投影保留 root 绑定，不改共享 service 方法；FS 与 shell 读取同一 resolve 结果，绑定会话禁止 danger 模式，根内写成功、根外拒绝必须实跑。
+
+沿本页原生双包部署脚本增加 -ArtifactPolicyProposal <绝对JSON路径>，与PTY补丁模式互斥。提案只含schemaVersion1、固定name/version、当前profile package.json的expectedManifestSha256、持久packagePath/packageSha256/entrySha256。先 -Check 零写/零信号，正式执行仅在原PID/子进程/账本原生排空后CAS增加这一个原生包的直接file依赖与pnpm.overrides；保留其他依赖/overrides/profile patch，使用官方plugin add安装，不直接编辑node_modules。启动前verify从真实dsh-base消费者解析policy并核版本/入口字节；任一步失败保留阶段，不启动部分安装或重发历史消息。
+
+旧链技术路径纠正沿原 Task operator 申请 `/tasks/:id/human-requests/:request/reply/check` 提交与正式 reply 完全相同正文，添加 `artifactScopeCorrection: {coordinationId, expectedRevision, reason}`；不得提交任意 artifactRoot。Check 返回 writes=0 及 Host 派生正式根。正式 reply 同事务记录受信 webActorId 纠正来源与 coordination 历史，旧 requirement/control/context/run、成员依赖、hold 和完成事实保持；B/C 在自然启动时读相同纠正来源。不得用该入口人工完成 Task 或调用后继启动。

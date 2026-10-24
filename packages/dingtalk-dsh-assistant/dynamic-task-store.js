@@ -11,7 +11,7 @@ import { migrationStateDigest } from './coordination-migration-state.js'
 import { coordinationSnapshot, formatCoordinationSnapshot } from './coordination-summary.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs'
-import { isAbsolute, dirname } from 'node:path'
+import { isAbsolute, dirname, basename } from 'node:path'
 
 // This ledger belongs to the trusted Host. None of its write commands are model tools.
 // SQLite transactions commit command receipts and causal wakes together, before dispatch.
@@ -854,6 +854,24 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const webReply = source.channel === 'web' && typeof webActorId === 'string' && webActorId.trim() && source.actorId === webActorId
       const requesterReply = request.audience === 'requester' && source.actorId === task.ownerActorId
       if (source.groupId !== task.groupId || !(webReply || privateReply || requesterReply)) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
+      const correction = a.artifactScopeCorrection
+      if (correction) {
+        const coordination = get('dynamic_coordination', text(correction.coordinationId, 'coordinationId'))
+        const members = all('dynamic_coordination_members').filter(member => member.coordinationId === coordination.id
+          && !member.observation && member.control !== 'cancelled' && !['cancelled', 'superseded', 'template'].includes(member.state))
+        if (!coordination || coordination.groupId !== task.groupId || coordination.state !== 'active'
+          || coordination.revision !== correction.revision || !members.some(member => member.taskId === task.taskId)
+          || members.some(member => get('dynamic_tasks', member.taskId).ownerActorId !== task.ownerActorId)) fail('TASK_ARTIFACT_CORRECTION_SCOPE')
+        if (!webReply || request.audience !== 'operator' || source.actorId !== task.ownerActorId || correction.actorId !== source.actorId
+          || canonical(source.requestIdentity?.artifactScopeCorrection ?? null) !== canonical(correction)) fail('TASK_ARTIFACT_CORRECTION_SCOPE')
+        if (!isAbsolute(correction.artifactRoot) || basename(correction.artifactRoot) !== 'outputs'
+          || basename(dirname(correction.artifactRoot)) !== correction.coordinationId
+          || basename(dirname(dirname(correction.artifactRoot))) !== 'tasks') fail('TASK_ARTIFACT_CORRECTION_ROOT')
+        coordination.artifactScopeCorrection = { ...clone(correction), sourceId: source.sourceId, recordedAt: stamp }
+        ;(coordination.history ??= []).push({ kind: 'artifact-scope-correction', sourceId: source.sourceId,
+          revision: coordination.revision, artifactRoot: correction.artifactRoot, recordedAt: stamp })
+        put('dynamic_coordination', coordination)
+      }
       const reply = text(source.text, 'reply')
       request.status = 'answered'; request.reply = reply; request.sourceId = source.sourceId; request.actorId = source.actorId; request.answeredAt = stamp
       request.replyChannel = source.channel === 'web' ? 'web' : privateReply ? 'private' : 'dingtalk'
