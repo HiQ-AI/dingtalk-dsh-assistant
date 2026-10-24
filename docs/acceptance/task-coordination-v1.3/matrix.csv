@@ -17,3 +17,13 @@ artifact-a-consumed-by-b,6,BLOCKED,round-6.md
 artifact-b-consumed-by-c,6,BLOCKED,round-6.md
 final-notification-readback,6,BLOCKED,round-6.md
 scope-no-manual-step-start,6,BLOCKED,round-6.md
+group-identity,7,PASS,round-7.md
+installed-runtime,7,PASS,round-7.md
+single-real-ingress,7,PASS,round-7.md
+three-dependent-tasks,7,PASS,round-7.md
+formal-completion-order,7,BLOCKED,round-7.md
+artifact-a-consumed-by-b,7,BLOCKED,round-7.md
+artifact-b-consumed-by-c,7,BLOCKED,round-7.md
+final-notification-readback,7,BLOCKED,round-7.md
+scope-no-manual-step-start,7,PARTIAL,round-7.md
+operator-help-delivery,7,OBSERVED,round-7.md
