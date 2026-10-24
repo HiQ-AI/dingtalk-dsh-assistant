@@ -8,7 +8,7 @@
 ## Attempt
 - 发送接口：dws chat +send-to-group --group cid2HnVI0zvC2dOr5RmJ5ZCJg== --ai-tag=false --yes。openTaskId=YfqqJgAsi4ZLsvT/s89GSH/XoWIjPDkrwHnn2IfpwTU=。
 - DWS独立回读：messageId=msg2U3HmEqVemsd40enEG+zEA==，createTime=2026-10-24 18:40:49，conversationId正确，complete=true/count=2/failures=0；但 messageAiSendFlag=DWS。上一轮R1同样为DWS，messageId=msgrLQj9V80bAV7DhawZLO+Pw==。
-- 插件独立状态回读：测试群 messages=7、routingRevision=7、topicProgress total/pending/unrouted=0；没有R2 message、coordination reservation或任务；目标目录仍不存在。发送成功不等于真实插件入站。
+- 插件独立状态回读：测试群 messages=7、routingRevision=7、topicProgress total/pending/unrouted=0；没有R2 message或coordination reservation，未取得本轮任务创建证据；目标目录仍不存在。发送成功不等于真实插件入站。
 
 ## Result: BLOCKED (external channel identity)
 - 已证当前 dws v1.0.63 的 send-to-group 两次实际发送读回均为 messageAiSendFlag=DWS；messages-send 仅做dry-run，未执行真实发送，不能据此断言高级入口实际结果；公开 --ai-tag=false 未改变实际消息标签，且 dry-run arguments 不含 aiTag。正式回声门禁按 assistant actor + DWS 丢弃，不能为验收关闭或绕过。
@@ -27,3 +27,6 @@
 - 候选2：服务端对代理调用强制DWS。结果兼容此可能，但没有服务端原始请求与日志，未证实。
 - 候选3：查询或入站投影统一标DWS。结果兼容此可能，但无法区分投影与服务端行为，未证实。
 - 仅收敛本路径真实入站阻断，不把候选根因写成已定位bug，不改插件安全门禁。
+
+## Independent review
+- evidence-worker于18:48:34+08:00独立回读两份原始JSON、round记录、矩阵及当前本群HTTP，确认targetMessages=0/targetReservations=0。详见round-6/team-review.md；不只依赖lead转述。
