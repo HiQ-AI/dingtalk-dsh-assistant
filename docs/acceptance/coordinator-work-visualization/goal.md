@@ -12,7 +12,7 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 | G2 | Grounded UI/domain/API design and sensitive-data boundaries | PASS | docs/spec/coordinator-work-visualization.md; docs/manual/observer-design-contract.md |
 | G3 | Focused implementation using existing UI primitives and real data | PASS | Production source-driven API/service/resident + CoordinationBrowser; 167/167 final relevant regression and package whitelist PASS |
 | G4 | Relevant tests plus isolated browser core/mobile/empty/error acceptance | PASS | round-3: 6 real Chrome variants PASS; current-source hash matches; task-service return and production-command polling verified; round-2 failure preserved |
-| G5 | Final review, clean scoped commit and independently read PR | IN_PROGRESS | Review complete; no confirmed findings. Original lead recovered from response-stream error, read back existing artifacts/ports/remote PR before proceeding; scoped commit/push/PR next |
+| G5 | Final review, clean scoped commit and independently read PR | PASS | 6c495d09a3c30381f29558a0068bb1ef88d2d910 pushed; gh readback PR258 OPEN, main <- worktree-coordinator-work-visualization; report.md |
 
 ## Decisions and Important Information
 

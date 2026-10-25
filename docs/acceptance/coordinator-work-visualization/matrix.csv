@@ -8,4 +8,4 @@ empty,Empty coordinator state,PENDING,PASS,PASS
 responsive,Narrow screen with no overflow,PENDING,FAIL,PASS
 regression,Existing observer functionality preserved,PENDING,PASS,PASS
 review,Independent code review,PENDING,PASS,PASS
-pr,Scoped commit and independently read PR state,PENDING,PENDING,PENDING
+pr,Scoped commit and independently read PR state,PENDING,PENDING,PASS

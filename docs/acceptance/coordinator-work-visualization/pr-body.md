@@ -42,7 +42,7 @@ return () => { active = false; controller?.abort(); window.clearInterval(timer) 
 - [x] 独立 backend/frontend 只读审查与反证核实 → 没有保留 confirmed 缺陷；“详情返回永久禁用刷新”候选被 path identity/cleanup 生命周期反证排除。
 - [x] 真实 Chrome 最终 round-3：seeded desktop light 13 cases、desktop dark/mobile light/mobile dark 各 12 cases，独立 empty desktop light/mobile dark 各 2 cases 全通过。覆盖真实生产 task service 详情→返回协调来源、生产 command→SQLite→5 秒轮询、慢响应隔离、失败恢复、焦点及 390px 无横溢出。lead 独立校验 6 JSON 的 36 次源码摘要/大小和 10 PNG 摘要/大小（合计 1,009,890 bytes），直接查看明暗手机/桌面暗色/空态截图；旧 394/390px 失败保留在 round-2。
 - [x] 脚本正式输出绑定本验收根的 round-N：外部路径与非 round-N 目标均实跑 exit 2；host `--check` PASS。四个隔离端口独立回读无监听，根目录无散落审计产物。
-- [ ] 完整已安装宿主、共享部署、真实模型和钉钉渠道验收未执行：本次只授权代码/PR及隔离运行，不声称已部署。
+- [ ] 完整已安装宿主、共享部署、真实模型和钉钉渠道验收未执行：本次只授权代码/PR及隔离运行，不声称已部署。另一次 native package 测试尝试有 2 项因缺完整 `@deepseek-ai/dsh-base` profile 跳过，不计入 167/167 通过结果，也不作为完整宿主通过证明。
 
 验收唯一状态表：`docs/acceptance/coordinator-work-visualization/matrix.csv`；失败与修复前证据在 `round-2.md`，重跑另记轮次。截图/SQLite 大文件不入库，scripts 提供再生成配方；修改前浏览器截图未捕获，不制造前后对照。
 
