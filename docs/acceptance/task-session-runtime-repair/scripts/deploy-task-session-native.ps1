@@ -7,7 +7,8 @@ param(
  [Parameter(Mandatory)][string]$EvidenceDirectory,
  [Parameter(Mandatory)][string]$ObserverPackage,
  [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedObserverPackageSha256,
- [string]$PtyUpgradeProposal
+ [string]$PtyUpgradeProposal,
+ [string]$ArtifactPolicyProposal
 )
 $ErrorActionPreference='Stop'
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..'))
@@ -34,6 +35,9 @@ $ledger=Join-Path $PSScriptRoot 'inspect-quiescent-ledger.mjs'
 $taskName='DSH Web Local'
 $phase='check'
 $ptyHelper=Join-Path $workspace 'scripts/pty-package-upgrade.mjs'
+$artifactPolicyHelper=Join-Path $workspace 'scripts/sandbox-artifact-policy.mjs'
+if($PtyUpgradeProposal -and $ArtifactPolicyProposal){throw 'DEPLOY_PATCH_MODES_CONFLICT'}
+if($ArtifactPolicyProposal){$ArtifactPolicyProposal=[IO.Path]::GetFullPath($ArtifactPolicyProposal)}
 if($PtyUpgradeProposal){$PtyUpgradeProposal=[IO.Path]::GetFullPath($PtyUpgradeProposal)}
 function Hash([string]$file){(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()}
 function RunNode([string[]]$Arguments){
@@ -82,6 +86,13 @@ $packageProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packa
 if($ObserverPackage){$observerProof=RunNode @($checker,'package',$ObserverPackage,(Join-Path $workspace 'packages/dingtalk-dsh-observer'))}
 $ledgerProof=RunNode @($ledger,$db,$agentWorkspace)
 if($PtyUpgradeProposal){$ptyProposalSha256=Hash $PtyUpgradeProposal;$ptyCheck=RunNode @($ptyHelper,'check',$profile,$PtyUpgradeProposal);if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'}}
+$artifactPolicyCheck=$null
+if($ArtifactPolicyProposal){
+ if(-not(Test-Path -LiteralPath $ArtifactPolicyProposal -PathType Leaf)){throw 'DEPLOY_ARTIFACT_POLICY_PROPOSAL_MISSING'}
+ $artifactPolicyProposalSha256=Hash $ArtifactPolicyProposal
+ $artifactPolicyCheck=RunNode @($artifactPolicyHelper,'check',$profile,$ArtifactPolicyProposal)
+ if((Hash $ArtifactPolicyProposal)-ne$artifactPolicyProposalSha256){throw 'DEPLOY_ARTIFACT_POLICY_PROPOSAL_CHANGED'}
+}
 # 停机前先证明安装CLI可装配；只读help不运行安装，也不输出可能包含凭据的CLI正文。
 $previousCliHome=$env:DSH_HOME
 try{$env:DSH_HOME='D:/dsh_home';& $node $entry plugin --help *> $null;if($LASTEXITCODE){throw 'DEPLOY_CLI_PREFLIGHT_FAILED'}}finally{$env:DSH_HOME=$previousCliHome}
@@ -114,6 +125,10 @@ try{
  Record 'quiescent' @{ledger=($offlineProof|ConvertFrom-Json);pid=$ExpectedPid;creationDate=$original.CreationDate;remainingDescendants=0;runtimePortClosed=$true;observedAt=[DateTime]::UtcNow.ToString('o');shutdown='SIGINT'}
  $phase='install'
  if($PtyUpgradeProposal){if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'};Record 'pty-manifest-applied' ((RunNode @($ptyHelper,'apply',$profile,$PtyUpgradeProposal))|ConvertFrom-Json)}
+ if($ArtifactPolicyProposal){
+  if((Hash $ArtifactPolicyProposal)-ne$artifactPolicyProposalSha256){throw 'DEPLOY_ARTIFACT_POLICY_PROPOSAL_CHANGED'}
+  Record 'artifact-policy-manifest-applied' ((RunNode @($artifactPolicyHelper,'apply',$profile,$ArtifactPolicyProposal))|ConvertFrom-Json)
+ }
  if((Hash $Package)-ne$ExpectedPackageSha256.ToLowerInvariant()){throw 'DEPLOY_PACKAGE_CHANGED'}
  # 官方CLI输出可能带登录链接，仅保留退出码；失败现场保留停机和禁用状态。
  $previousDshHome=$env:DSH_HOME
@@ -124,11 +139,19 @@ try{
    if((Hash $ObserverPackage)-ne$ExpectedObserverPackageSha256.ToLowerInvariant()){throw 'DEPLOY_OBSERVER_PACKAGE_CHANGED'}
    $installPackages+="@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"
   }
+  if($ArtifactPolicyProposal){
+   $policyInput=Get-Content -LiteralPath $ArtifactPolicyProposal -Raw|ConvertFrom-Json
+   $installPackages+="@deepseek-ai/dsh-sandbox-policy@file:$($policyInput.packagePath)"
+  }
   & $node $entry plugin --profile web add @installPackages *> $null;$installExit=$LASTEXITCODE
  }
  finally{$env:DSH_HOME=$previousDshHome}
  if($installExit){throw 'DEPLOY_PACKAGE_INSTALL_FAILED'}
  if($PtyUpgradeProposal){if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'};Record 'pty-installed' ((RunNode @($ptyHelper,'verify',$profile,$PtyUpgradeProposal))|ConvertFrom-Json)}
+ if($ArtifactPolicyProposal){
+  if((Hash $ArtifactPolicyProposal)-ne$artifactPolicyProposalSha256){throw 'DEPLOY_ARTIFACT_POLICY_PROPOSAL_CHANGED'}
+  Record 'artifact-policy-installed' ((RunNode @($artifactPolicyHelper,'verify',$profile,$ArtifactPolicyProposal))|ConvertFrom-Json)
+ }
  $installedProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packages/dingtalk-dsh-assistant'),$installed)
  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_INSTALL_CHANGED_UNRELATED_INPUT'}
  Record 'installed' ($installedProof|ConvertFrom-Json)

@@ -244,7 +244,7 @@ test('real ingress reserves a no-Topic unit, independently plans A then B and di
         const supplemented = input.wakes.some(wake => wake.kind === 'task.supplement')
         if (supplemented) completions.push(input.task.taskId)
         return [{ name: 'task_session_submit', args: { decision: { action: supplemented ? 'complete' : 'wait',
-          summary: supplemented ? `已核验${input.task.taskId}补充` : '等候原任务补充', evidence: supplemented ? [`proof:${input.task.taskId}`] : [], limitations: [] } } }]
+          summary: supplemented ? '已核验本轮补充材料' : '等候原任务补充', evidence: supplemented ? ['已读取并核验本轮补充材料'] : [], limitations: [] } } }]
       }
       return []
     }, { config: { coordination: model } })
@@ -255,7 +255,7 @@ test('real ingress reserves a no-Topic unit, independently plans A then B and di
     await host.service.whenIdle()
     assert.equal(plans, 1, JSON.stringify(host.service.listAlerts()))
     assert.equal(host.residentStore.listTopics('native-group').length, 0)
-    assert.deepEqual((await host.query('task.list')).map(t => [t.taskId,t.status]), [['A','completed'],['B','completed']])
+    assert.deepEqual((await host.query('task.list')).map(t => [t.taskId,t.status]), [['A','completed'],['B','completed']], JSON.stringify(host.service.listAlerts()))
     assert.deepEqual(completions, ['A','B'])
     const reservations = host.residentStore.listSourceDispatchOwnership('native-group')
     assert.equal(reservations.length, 1); assert.equal(reservations[0].dispatchOwner, 'coordination'); assert.equal(reservations[0].settled, true)

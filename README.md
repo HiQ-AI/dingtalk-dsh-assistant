@@ -41,7 +41,7 @@
 
 独立协调支持原任务补充/继续/重开、明确新建、依赖顺序、部分澄清，以及单次/每日/每周计划。“明早九点以后，等原 A 完成再继续 B”同时等待时间和 A 当前版本的正式完成证明；只观察 A 不会给 A 补要求、唤醒或重开。周期计划每次保留独立执行身份；修改未来时间或收件人不改变已经接纳的本次安排。用户改变运行中任务的先后顺序时，原 Owner 重新评估；新的改口替换旧澄清评估，不自动停止已经开始的工作。局部撤销只解除相应安排的未来约束，原任务和其他有效依赖继续保留。
 
-聊天查询安排时会列出任务要求、等待原因、计划时间与时区、通知对象，以及执行/送达结果。单次计划错过允许补执行的时间后，会说明“已过期，本次未执行”，不伪造成功或悄悄挪到次日；异常摘要复用原发信箱，已送达不重复发送，结果未知沿原身份核对。正常定时查询仍只读原任务事实，不因为查询而唤醒 Owner。
+聊天查询安排时会列出任务要求、等待原因、计划时间与时区、通知对象，以及执行/送达结果。任务启动、继续等命令接纳成功只说明已接纳处理要求，不表示业务完成；对应成员仍未取得正式完成证明时，摘要明确说明任务尚未正式完成，不因启动回执或结果通知送达而显示“本次安排已执行”。只读查询和纯消息提醒继续分别说明实际执行与通知送达。单次计划错过允许补执行的时间后，会说明“已过期，本次未执行”，不伪造成功或悄悄挪到次日；异常摘要复用原发信箱，已送达不重复发送，结果未知沿原身份核对。正常定时查询仍只读原任务事实，不因为查询而唤醒 Owner。
 
 纯定时查询可从已读取的任务目录直接选择固定目标，不逐项加载完整需求与历史结果；目录有后续页时仍须读取所需页面。任务变更、观察前置和查询后的条件续办仍要求完整任务合同与当前版本。协调工具公开分页和批量上限，话题回复工具说明回复类型、历史确认与替换关系，减少为猜测参数和审阅规则重复调用模型。
 
@@ -109,7 +109,8 @@ DSH 模型故障冷却期间补充需求后，到期复核仍会沿原执行身�
   .dsh/task-sessions.sqlite.initialized
   tasks/.session-routes/              原生日志持久路由
   tasks/<taskId>/materials/           共享材料
-  tasks/<taskId>/outputs/             任务产物
+  tasks/<taskId>/outputs/             未加入协调团队的任务产物及 Host 执行文档
+  tasks/<coordinationId>/outputs/     同一协调团队全部 Task 唯一业务产物根
   tasks/<taskId>/outputs/<executionId>/round-<inputVersion>.md  每轮执行文档
   tasks/<taskId>/outputs/<executionId>/claude-events.jsonl     CLI 受管事件日志
   tasks/<taskId>/tmp/
@@ -118,6 +119,8 @@ DSH 模型故障冷却期间补充需求后，到期复核仍会沿原执行身�
   tasks/<taskId>/.dsh/sessions/        该任务的 DSH 原生会话日志
   groups/<groupId的摘要>/             群会话 cwd
 ```
+
+协调团队由受信协调账的唯一成员关系确定，共同产物根复用 `taskFilePath(workspaceRoot, coordinationId, 'outputs')`，不由消息路径、标题或模型自行选择。Owner 与 DSH 执行成员均通过原生 `sandboxPolicy.bindArtifactRoot` 绑定同一个根，shell 和 nativeFS 使用相同的受限写边界；原 Task 的 cwd、会话 ID、日志和 Host 阅读投影不搬迁。缺少原生 API、多协调归属、周期范围或外部执行后端无法承载该合同均明确拒绝，不退回全权限。旧来源中的测试路径需要纠正时，沿原 operator 人工申请的 `reply/check` 与正式 `reply` 提交 `artifactScopeCorrection`（coordinationId、expectedRevision、reason）；Host 派生正式根、核验同团队同所有者，并把受信纠正来源提供给全队，不修改完成账本或手动释放后继。
 
 统筹与 DSH 原生执行的日志由官方 JSONL 后端直接写入任务目录，保持原生 replay、恢复和压缩能力；不是日志副本。CLI 的受管输入、工具回执和排空记录保存在上述 `claude-events.jsonl`，CLI 自身会话续办沿原身份处理，不能当作 DSH Session replay。群会话使用新 profile 配置的原生持久化根；旧会话不接入当前运行时，不能一概认定在 `%DSH_HOME%/sessions`。会话 ID、后端、路由、控制库与工作目录需一致恢复。在线更换 Agent 工作区被拒绝；离线搬迁与恢复要求见[清洁启动 Runbook](docs/ops/task-session-clean-start.md#回退)。
 
