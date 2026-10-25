@@ -1,0 +1,73 @@
+{
+  "creationDate": "2026-10-25T21:40:11.035197+08:00",
+  "restarts": 0,
+  "authenticatedWeb": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "normalizedExchangeTarget": "http://127.0.0.1:3080/",
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "hostVersion": "0.2.1-rc.2",
+  "health": {
+    "inboundProcessing": true,
+    "status": "ok",
+    "recoveryIssueCount": 0,
+    "listeners": [
+      "ready",
+      "ready"
+    ],
+    "backfills": [
+      "ok",
+      "ok"
+    ],
+    "bridgeHealthy": true
+  },
+  "packages": {
+    "observer": {
+      "version": "2.1.0",
+      "dependency": "file:D:/dsh_home/packages/coordinator-entity-ledger-20261025/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "bytes": 59580,
+      "sha256": "6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a"
+    },
+    "assistant": {
+      "version": "2.1.0",
+      "dependency": "file:D:/dsh_home/packages/coordinator-entity-ledger-20261025/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "bytes": 393285,
+      "sha256": "9cd8634c4e9381a3a07147468a5d94ac5ad4f8498b7d9df844ac0402cbb410e8"
+    }
+  },
+  "checkOnly": true,
+  "oldPid": 45548,
+  "writes": 0,
+  "autostartEnabled": true,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 69140
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 69140
+    }
+  ],
+  "oldProcessExited": true,
+  "taskState": "Running",
+  "workCounts": {
+    "total": 10,
+    "originalFailurePrimary": true,
+    "failed": 2,
+    "dispatches": 0,
+    "schedules": 7
+  },
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "installs": 0,
+  "newPid": 69140,
+  "observedAt": "2026-10-25T13:50:59.5509843Z",
+  "parentPid": 61284,
+  "sourceCount": 18,
+  "backupCreated": false,
+  "maintenance": "Retired workflow API; native lifecycle restores inbound/autostart, no legacy Resume"
+}

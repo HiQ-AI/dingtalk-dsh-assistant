@@ -22,6 +22,12 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 | G12 | Independent low review and related/browser acceptance | PASS | Native low2 confirmed issues+forced-colors blind spot fixed;136/136 relatedPASS;round11 five source browser variants7 cases eachPASS; same-native comparison in G13 |
 | G13 | Check then candidate local deployment and PR259 readback | PASS | Check bh9oacd7r PASS; candidate install bvasopdof exit0; independent readback new45548 owns3080/18998 with pinned package/profile hashes,health ok,autostart/inbound/bridge ready; round16 five actual browser variants PASS; PR259 remains OPEN and unmerged |
 
+| G14 | Entity grain and result-priority contract from live failed reminder | PASS | docs/spec/coordination-entity-ledger.md; live source change accepted,once active nextDue null,action succeeded/delivery failed/job completed |
+| G15 | Read-only unique schedule/dispatch projection with truthful result and next step | PASS | New native backend low owns projection/tests; no runtime state/schema mutation |
+| G16 | Entity UI with compact first-group list and result-first detail | PASS | Lead integration; source edits become collapsed history,not rows |
+| G17 | New-state matrix and independent native low review | PASS | New named low final reviewer found current-proof completion masked by cancelled unsent notice; lead independently reproduced FAIL then fixed precedence,76directed/149riskPASS; reviewer did not independently rerun newdiff; round28 |
+| G18 | Check/drain/install and real3080 result screenshots plus unmerged PR | IN_PROGRESS | Final round30 native91256/package5bf60b8c/health recovery0 verified;round31 four native6PASS/screenshots inspected;PR259 OPEN,scoped push/body readback pending |
+
 ## Decisions and Important Information
 
 - 2026-10-25: Original lead remains sole deployment owner. Evidence branch worktree-coordinator-work-deployment starts at merge22d5738; never push the merged implementation branch. Package source remains frozen during deployment.
@@ -40,3 +46,7 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 - 2026-10-25: Round12/13/15 browser failures are retained. Round12/13 exposed the real Host update notice intercepting an ordinary click; round14 proved ordinary dismissal and task-service HTTP200; round15 preserved the same mobile timing plus a driver reporting bug. Round16 fixed the driver with Playwright's ordinary locator handler and passed desktop/mobile light/dark plus forced-colors; no forced click or Host configuration change.
 
 - Final refinement delivery: PR259 https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259 independently read OPEN/unmerged,main <- worktree-coordinator-work-deployment. Implementation7cdf44d6141204aa3a0029598d6361062e322124 matches local/remote/PR head; complete body matched checked deployment-pr-body.md. Snapshot in round16/pr-readback.json precedes this docs-only closure; no merge or CI dispatch.
+
+- 2026-10-25 entity-ledger iteration: user explicitly authorizes read-only entity/UI refactor and controlled local candidate deployment. PR259 independently OPEN at66ac009; same worktree clean at start. Three grains considered; stable schedule and direct dispatch chosen,source and single-batch-only grains rejected. Old rounds1-16 are historical,not this iteration acceptance.
+
+- 2026-10-25: Original entity teammates did not return final reports; explicit new native member coordination-ledger-final-review at low spawn setting provided one reproducible completed-task/cancelled-notice defect. Lead reproduced and fixed with a new regression,76directed/149expandedPASS. Final candidate5bf60b8c replaces prior270fb2ac; round30 Check old18784 passed before one native execution. Earlier candidates/results remain historical,not final proof.

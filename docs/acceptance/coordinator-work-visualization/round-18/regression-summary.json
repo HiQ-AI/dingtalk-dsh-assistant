@@ -1,0 +1,32 @@
+{
+  "scope": "entity-ledger iteration, before final cross-review",
+  "directedTests": {
+    "pass": 69,
+    "fail": 0
+  },
+  "riskTests": {
+    "pass": 135,
+    "fail": 0
+  },
+  "releaseSmokeNativePowerShell": {
+    "pass": 12,
+    "fail": 0,
+    "skip": 2,
+    "skipReason": "full native profile dsh-base missing"
+  },
+  "releaseSmokeGitBash": {
+    "pass": 9,
+    "fail": 3,
+    "skip": 2,
+    "cause": "GNU tar treats Windows C: as remote host"
+  },
+  "suiteMap": {
+    "files": 308,
+    "eachExactlyOnce": true,
+    "historical": 3
+  },
+  "finalIntegrationTests": {
+    "pass": 130,
+    "fail": 0
+  }
+}

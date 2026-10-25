@@ -1,35 +1,38 @@
-## 本轮改动
+## 本轮：协调实体台账
 
-续修 PR258 合并后的独立开发线；本 PR **保持 OPEN，不合并**。本轮按用户 UI 反馈继续 PR259，不向已合并 PR258 追加提交。原启动预算修复和历史部署证据保留。
+继续原 PR259 / `worktree-coordinator-work-deployment`，保持 OPEN、不合并；PR258 已合并，不向其分支追加。旧启动预算修复300→600秒仍保留，相关restart回归已实跑。
 
-- `packages/dingtalk-dsh-observer/web-client.js:568`：默认按既有顺序选首个有效群；区分群加载与空群，首群就绪前不读取全部；保序去重、失效范围清理、显式全部、手选/轮询/刷新/任务返回保持。
-- `packages/dingtalk-dsh-observer/web-client.js:130`：协调列表改为67px紧凑双行；柔和选中底色、2px细标识、独立focus-visible；forced-colors使用Highlight实体边条；全部群模式保留来源群以区分同文输入。
-- `packages/dingtalk-dsh-observer/web-client.js:626`：先展示真实定时状态/下次触发/周期，或任务状态/依赖/阻塞/已记录下一动作；历史结论独立命名，不伪造成未来动作。原始输入/历史/证据折叠，空section隐藏，接纳/送达/正式完成保持独立。
-- `test/observer-node-control-display.test.js:548`：补异步首群、空群/失效、显式全部/重排刷新、定时重点、跨群同文与历史结论回归。README和设计合同同步。
-- 原续修 `docs/acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1:164` 将启动观察预算300->600秒，仍拒绝旧PID/单端口、保留超时失败；相关生产AST测试11/11通过。
+### 改动与原因
 
-## 本地实跑证据
+- `packages/dingtalk-dsh-assistant/coordination-observer.js:92`：新增只读实体列表/详情；schedule跨revision稳定一行，定时模板/派生成员归原schedule，独立无计划触发按occurrence身份，剩余直接成员按协调批次聚合。source只进历史，未接纳输入不制造工作行；完整集合先计算后分页/截断。
+- `packages/dingtalk-dsh-assistant/coordination-observer.js:33`：统一真实主要结果。具体送达失败/未知、执行受阻/失败优先于active/accepted；当前任务/版本/指令匹配的proof才是正式完成；计划控制与真实nextDue/安全retry/readback分层，不拿source retry承诺重发。
+- `packages/dingtalk-dsh-assistant/coordination-observer.js:114`：只有内部`coordination_cancelled`且无发送许可/次数/ACK/receipt的发送前拒绝才是取消，不误称发送失败；取消结果通知不能抹当前正式完成，取消后既有failed/delivered/unknown仍保留。真实SQLite反例先FAIL再修复，不改通知账或调度状态机。
+- `packages/dingtalk-dsh-assistant/http.js:287`：接线GET `/state/coordination-work`与编码实体详情；重复/非法参数400，缺实体404，不可用503，保留Host/Origin边界。service/resident只导出读方法，旧sources诊断接口保留。
+- `packages/dingtalk-dsh-observer/web-client.js:568`：现有协调工作页改读实体，紧凑行只一个后端结果；详情先结果/计划/下一步/任务，输入、修订、触发、证明与边界折叠。保留首群默认、显式全部、分页、5秒刷新、过期/慢响应隔离、独立focus/选中、任务往返。
+- `test/coordination-observer.test.js:214`与`test/observer-node-control-display.test.js:548`：稳定身份/真实结果、只读守恒/隐私、取消前后、当前proof、下一步、异步范围和任务返回回归。README、API、设计合同与原生runbook同步；无schema迁移。
 
-- 最终命令：`node --test test/coordination-observer.test.js test/observer-client.test.js test/observer-slot-compatibility.test.js test/observer-board-restoration.test.js test/observer-archive-interaction.test.js test/observer-node-control-display.test.js test/restart-web.test.js` → **101/101 PASS**，0 fail/cancel/skip。此前round11风险回归136/136独立留档，不混算。
-- `node scripts/test-suites.mjs check` → 308 files，每个恰好一次；`node --check packages/dingtalk-dsh-observer/web-client.js`与`git diff --check`通过。
-- round11真实源码隔离React/primitives/HTTP/SQLite/任务服务五变体UI断言通过；不是完整安装宿主证明。旧驱动未监听隔离API19088，故其零流量计数不作证明；已改用显式--api端口并用18998/19088真实驱动AST检查2/2PASS。真实round16的18998监控不受影响。原生low队友发现的群归属、历史结论误标与高对比盲点已修复；队友最终回读并实跑新增断言1/1 PASS。
-- round16在**真实已安装3080宿主**运行桌面/390px、light/dark偏好、高对比五变体，每种7项PASS：首群无all请求，真实定时重点，跨群任务服务HTTP200/往返，焦点，手选后手动/5秒刷新保持，无横向溢出。console/API错误/resident写请求均0。
-- 同尺寸真实前后：桌面1440x1000 **5→10条**，手机390x844 **4→8条**，行高111–153px→67px。五份JSON source hash与当前源码一致，20张截图bytes/SHA全部独立MATCH；截图脱敏且仅本地保留。
+### 本地实跑（不是CI）
 
-## 已授权候选本地部署
+- 最终定向76PASS；扩展风险149PASS/0FAIL/0SKIP。命令：`node --test test/coordination-observer.test.js test/observer-node-control-display.test.js test/observer-client.test.js test/observer-slot-compatibility.test.js test/observer-board-restoration.test.js test/observer-archive-interaction.test.js test/restart-web.test.js test/coordination-concurrency-contracts.test.js test/coordination-notification-freshness.test.js`。
+- `pnpm test:release-smoke`：12PASS/0FAIL/2SKIP（缺完整native profile的dsh-base，两项原生解包路径未验证）；测试映射308文件每个恰好一次、historical3。语法、Python AST及diff检查通过；不将历史中间测试数相加。
+- round29最终冻结源码的真实React/primitives/HTTP/SQLite四变体各8PASS，十种持久提醒场景均实际渲染：单次成功/失败/未知/待送达、周期失败、暂停/取消保留真实结果、取消许可前未发送。实际暗色、390px、forced-colors、空群、首群/显式全部、手动/轮询/任务返回/focus覆盖；错误/写请求0，24个source/PNG身份独立匹配。它不是完整安装宿主证明。
 
-先Check：writes0/signals0、62会话排空、unknown operations/notifications0。冻结最终双包后仅安装一次，部署命令exit0；独立`candidate-deployment-readback.ps1 -Check`确认：
+### 最终原生部署与真实效果
 
-- Assistant/Observer均2.1.0；Assistant SHA256 `043b065f558be0de0c9deacab1f1caf54f0cf3b1db959ba55a0c68965339088d`；Observer `fa55a28849bc894fdd4e44b63e2d6cd4ae914675eb528dbca07a63b641ee35a4`。
-- 旧91732退出，新45548同时占有3080/18998；profileSHA `74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499`未变，Host仍0.2.1-rc.2；自启enabled/running，health ok/recovery0/inbound true，listeners ready/backfills ok，认证Web200，既有来源18条。
-- 独立回读writes/installs/restarts0只描述该次回读，不否认此前安装。原始含群标识健康收据本地忽略，提交aggregate candidate-readback.json。
+round30先Check：writes0/signals0、62会话排空、未知操作/通知0。冻结70+4文件逐字节匹配后，一次原生排空安装最终双包；独立脚本读回：
 
-## 保留失败与未验证边界
+- Assistant/Observer均2.1.0；Assistant SHA256`5bf60b8cb3446292b68d2323e56fa0c962b2c56ad3420ee327c3f12dc9862dee`（393380字节），Observer`6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a`（59580字节）。旧候选未覆盖，最终目录`D:/dsh_home/packages/coordinator-entity-ledger-proof-20261025`。
+- 旧18784退出，新91256同时拥有3080/18998；profileSHA`74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499`不变，Host仍0.2.1-rc.2。health ok/recovery0/inbound true，自启enabled/running，bridge/listeners ready/backfills ok，认证Web200。
+- 18条历史输入投影为10个独立实体：7个schedule（5已送达、2发送失败）+3个无计划trigger任务（当前证明正式完成）。指定原失败source仍accepted、单次计划active且nextDue=null、作业completed，但实体主要结果为“提醒发送失败”，无后续触发/重试安排。未为验收修改业务数据。
 
-- 原round4五分钟部署超时保持FAIL，未追认成功。当前候选一次正式部署成功另记round12。
-- round8 favicon失败、round12/13/15浏览器失败全部保留；后者由真实Codex Connect更新提示拦截点击，round15还暴露驱动退出上下文后查询错误。驱动改为Playwright原生locator handler点击真实“稍后提醒”；不强制穿透、不移除DOM、不改Host配置。round16另起新轮全通过。
-- **真实安装暗色仍未验证**：Host持久浅色覆盖浏览器偏好；不把dark请求当dark证明。源码隔离暗色单独通过。release smoke此前12 PASS+2 SKIP，缺完整native profile的dsh-base，不声称14 PASS。
-- 未进行真实模型推理、钉钉测试发送、通知重放、业务写入或生产故障/空态注入；未升级无关Host/插件。无schema迁移；回退仍按原生排空runbook恢复双包，不改账或重放输入。
-- 唯一进度/证据在`docs/acceptance/coordinator-work-visualization/goal.md`、`shared-tasks.md`、`matrix.csv`和各round；round16为本轮最终功能证据。未触发CI、未强推、未推main、未合并本PR。
+round31在**最终已安装3080/PID91256**实跑桌面1440×1000、390px、dark偏好、forced-colors四变体，每种6PASS：指定原失败/一行一结果、首群无all请求、手选后手动/5秒刷新、真实任务HTTP200/详情往返、焦点与选择、高对比、无横向溢出。console/API/写请求均0。12PNG+12source身份独立匹配，亲自查看最终桌面/手机脱敏截图；结果、计划与下一步保持可读。宿主dark偏好仍实际浅色，不能声称native dark通过。
+
+### 失败、审查与未验证边界
+
+- round17保留取消后通知真实结果丢失的FAIL，round22保留驱动只认dispatch而真实数据为trigger的四变体FAIL，round24保留“发送许可前取消被误称发送失败”的正式SQLite FAIL，round28保留“取消通知覆盖当前正式完成”的独立回归FAIL；修复后新round29/30/31重验，不覆盖旧证据。Git Bash GNUtar把Windows盘符当远程导致的3FAIL保留，原生PowerShell重跑通过。
+- 原生low独立成员发现取消通知掩盖当前正式完成的P2；lead新增test:509独立先FAIL再修结果优先级。当前正式完成优先于取消未发送结果通知，真实失败/unknown仍更高。队友曾75/75定向PASS，但未独立重跑最终76或浏览器；最终回归与页面证据由lead实跑，不冒称队友复验。其他重点暂未发现可复现阻断。
+- 真实Host持久浅色覆盖dark preference，不声称已验证原生暗色；真实暗色只由隔离宿主验证。未做真实模型推理、钉钉测试发送、通知重放或业务修复，不升级无关Host、不手改账本，不制造生产失败状态。隔离夹具无发送/模型能力。
+- 大PNG只保留本地，提交脱敏JSON/哈希与可再生脚本。唯一goal/shared-tasks/matrix/各round和report同根；历史round1–16不算本轮实体证明。最终隔离19087/19088已停止且独立确认无监听，native91256保持运行。
+- 未触发CI/workflow_dispatch、未强推、未推main、未合并259。没有发行tag或对外npm发布。
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

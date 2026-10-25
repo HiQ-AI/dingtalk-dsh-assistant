@@ -1,0 +1,53 @@
+{
+  "result": "FAIL",
+  "cases": [
+    "stable-entity-dedup-and-original-failure-api",
+    "default-first-group-no-all-request",
+    "failure-prominent-next-step-disclosure-and-focus"
+  ],
+  "synthetic": false,
+  "screenshots": {
+    "after-desktop-light-forced-list.png": {
+      "bytes": 32607,
+      "sha256": "eaa7e3d3071e8523ab1fccce5b0e7c9293f13b2109d1bf1b6db430d1429ff8bc"
+    },
+    "after-desktop-light-forced-failed-reminder.png": {
+      "bytes": 40865,
+      "sha256": "bc681ade3a534b7924bdf7c46611197125f7974c289c7f57dcb7cb76a300aa61"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "sourceHashes": {
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "bytes": 255660,
+      "sha256": "8c3f396024506f58e069a9d0db14edae92ebd792b45929d952038c0f7d121bf1"
+    },
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "bytes": 27258,
+      "sha256": "d9b10f2a7e298c24949274b6f2e1accf1b0a970849f3ad004708d41c93350a83"
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py": {
+      "bytes": 15305,
+      "sha256": "c47113825377d2ea291102e1a7a8d5e8f5782e451ea3fabe3947083d013863d6"
+    }
+  },
+  "firstGroupWorkCount": 3,
+  "originalFailureFacts": {
+    "sourceAccepted": true,
+    "planActive": true,
+    "nextDueAt": null,
+    "deliveryFailed": true,
+    "jobCompleted": true
+  },
+  "visibleRows": 3,
+  "rowHeights": [
+    67,
+    67,
+    67
+  ],
+  "failureType": "StopIteration",
+  "failureSignals": [],
+  "failureLine": 178
+}

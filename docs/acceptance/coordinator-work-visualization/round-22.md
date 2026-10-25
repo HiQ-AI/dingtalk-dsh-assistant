@@ -1,0 +1,3 @@
+# Round 22
+
+2026-10-25. Installed native3080 four variants FAIL, retained without overwrite. Original failed reminder API/entity, first-group request boundary and result/focus tests passed. All variants stopped at driver line178 (`StopIteration`): the driver required `kind=dispatch`, but current persisted native task entities are three independent unscheduled `trigger` works. This is a driver contract error, not absent task data. API inventory:10 stable works,7schedules+3triggers,5delivered/2failed reminders+3current-formal-completed tasks. Correct only the driver to choose task-bearing dispatch/trigger works; frozen package bytes unchanged. Fresh rerun is round23.

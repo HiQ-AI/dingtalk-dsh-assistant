@@ -34,60 +34,72 @@ function harness(componentName, initialProps = {}) {
 const button = (tree, label) => elements(tree).find(item => item.type === 'button' && text(item) === label)
 const input = (tree, label) => elements(tree).find(item => item.type === 'label' && item.children[0] === label)?.children.find(item => typeof item === 'object')
 
-test('协调工作从真实接口读取输入，保留未接纳输入并区分加载、空态和失败', async () => {
+const workFixture = (id, overrides = {}) => ({ id, kind: 'schedule', groupId: 'g', title: `安排 ${id}`, updatedAt: '2026-10-25T00:00:00Z', result: { code: 'delivery_failed', label: '提醒发送失败', tone: 'danger' }, plan: { label: '单次计划已启用', state: 'active', rule: { kind: 'once', at: '2026-10-25T00:00:00Z' }, timezone: 'Asia/Shanghai' }, nextStep: { label: '无后续触发安排；无重试安排', triggerAt: null, sendRetryAt: null, readbackAt: null }, ...overrides })
+const detailFixture = (work, overrides = {}) => ({ work, members: [], history: { sources: [], changes: [], occurrences: [], jobs: [] }, observedAt: '2026-10-25T00:00:00Z', ...overrides })
+
+test('协调工作从实体接口读取结果而非输入，区分加载空态失败并保留同范围数据', async () => {
   const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g', name: '验收群' }] })
   let tree = h.render()
-  assert.match(h.requests[0].url, /\/state\/coordination-sources\?offset=0&limit=10&groupId=g$/)
-  assert.match(text(tree), /正在读取协调输入/); assert.doesNotMatch(text(tree), /暂无协调输入/)
-  h.requests[0].resolve({ sources: [{ id: 'reserved', groupId: 'g', original: '真实未接纳输入', state: 'reserved' }], total: 1, observedAt: '2026-10-25T00:00:00Z' }); await settle()
-  tree = h.render(); assert.match(text(tree), /真实未接纳输入/)
+  assert.match(h.requests[0].url, /\/state\/coordination-work\?offset=0&limit=10&groupId=g$/)
+  assert.match(text(tree), /正在读取协调工作/); assert.doesNotMatch(text(tree), /暂无协调工作/)
+  h.requests[0].resolve({ works: [workFixture('schedule:one', { title: '真实提醒安排', sources: [{ original: '修改输入不能成为行标题', state: 'accepted' }] })], total: 1, observedAt: '2026-10-25T00:00:00Z' }); await settle()
+  tree = h.render(); assert.match(text(tree), /真实提醒安排/); assert.doesNotMatch(text(tree), /修改输入不能成为行标题|已接纳|进行中|已完成/)
+  const rows = elements(tree).filter(item => item.props['data-work-id'])
+  assert.equal(rows.length, 1); assert.equal(elements(rows[0]).filter(item => item.props['data-work-result']).length, 1)
+  assert.match(text(rows[0]), /提醒发送失败/)
+  assert.equal(elements(rows[0]).find(item => item.type === 'dot').props.state, 'error')
   assert.equal(h.intervals.size, 1)
   const tick = [...h.intervals.values()][0]; assert.equal(tick.delay, 5000)
   tick.fn(); tick.fn(); assert.equal(h.requests.length, 2, '单范围轮询不能重复发起慢请求')
   h.requests[1].reject(new Error('private raw diagnostic')); await settle(); tree = h.render()
-  assert.match(text(tree), /保留上次列表/); assert.match(text(tree), /真实未接纳输入/); assert.doesNotMatch(text(tree), /private raw diagnostic/)
+  assert.match(text(tree), /保留上次列表/); assert.match(text(tree), /真实提醒安排/); assert.doesNotMatch(text(tree), /private raw diagnostic/)
   button(tree, '重试列表').props.onClick(); h.render()
-  h.requests[2].resolve({ sources: [], total: 0, observedAt: '2026-10-25T00:00:01Z' }); await settle(); tree = h.render()
-  assert.match(text(tree), /暂无协调输入/); assert.doesNotMatch(text(tree), /真实未接纳输入/)
+  h.requests[2].resolve({ works: [], total: 0, observedAt: '2026-10-25T00:00:01Z' }); await settle(); tree = h.render()
+  assert.match(text(tree), /暂无协调工作/); assert.doesNotMatch(text(tree), /真实提醒安排/)
   h.unmount(); assert.equal(h.intervals.size, 0); assert.equal(h.timeouts.size, 0)
 })
 
-test('协调详情按来源隔离慢响应，依赖按指令解析，证据只读且可返回原协调输入', async () => {
+test('协调详情按实体隔离慢响应，任务依赖证据只读且返回目标保留实体身份', async () => {
   const navigations = [], h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], onOpenTask: (...args) => navigations.push(args) })
-  h.render(); h.requests[0].resolve({ sources: [{ id: 'one', original: '输入一' }, { id: 'two', original: '输入二' }], total: 2 }); await settle()
+  h.render(); h.requests[0].resolve({ works: [workFixture('one'), workFixture('dispatch:two')], total: 2 }); await settle()
   let tree = h.render()
-  elements(tree).find(item => item.props['data-source-id'] === 'one').props.onClick(); h.render()
-  elements(tree).find(item => item.props['data-source-id'] === 'two').props.onClick(); tree = h.render()
+  elements(tree).find(item => item.props['data-work-id'] === 'one').props.onClick(); h.render()
+  elements(tree).find(item => item.props['data-work-id'] === 'dispatch:two').props.onClick(); tree = h.render()
   assert.equal(h.requests[1].options.signal.aborted, true)
-  h.requests[1].resolve({ source: { id: 'one', original: '过期输入' } }); await settle()
-  const detail = { source: { id: 'two', original: '<script>untrusted()</script>', state: 'accepted', acceptedKind: 'create', acceptedRevision: 1 }, coordination: { id: 'c', history: [] }, snapshot: { state: 'active', schedules: [], occurrences: [{ occurrenceId: 'o', actionState: 'succeeded', deliveryState: 'unknown' }], jobs: [] }, members: [
+  assert.match(h.requests[2].url, /coordination-work\/dispatch%3Atwo$/)
+  h.requests[1].resolve(detailFixture(workFixture('one', { title: '过期安排' }))); await settle()
+  const detail = detailFixture(workFixture('dispatch:two', { title: '<script>untrusted()</script>', kind: 'dispatch', result: { code: 'waiting_completion', label: '等待任务完成', tone: 'warning' }, plan: null }), { history: { sources: [{ id: 's', original: '修改输入', state: 'accepted' }], occurrences: [{ occurrenceId: 'o', actionState: 'succeeded', deliveryState: 'unknown' }] }, members: [
     { instructionId: 'i-a', taskId: 'task-a', title: '前置任务', state: 'applied', dependencies: [], taskState: 'active' },
     { instructionId: 'i-b', taskId: 'task-b', title: '后续任务', state: 'ready', dependencies: ['i-a'], waitingReason: { code: 'waiting_dependency' }, reorderAssessment: { state: 'assessed', summary: '保持既有工作', evidence: ['顺序核验'] }, decision: { action: 'blocked', summary: '等待证据', evidence: ['javascript:alert(1)'], limitations: ['未核验'] } },
-    { instructionId: 'i-c', taskId: 'task-c', title: '历史证明任务', state: 'version_changed', dependencies: [], completionProof: { eventId: 'old-proof', commandId: 'old-completion' } },
-  ], collections: { history: { truncated: true, returned: 100, total: 101 } } }
+    { instructionId: 'i-c', taskId: 'task-c', title: '历史证明任务', state: 'version_changed', dependencies: [], completionProofCurrent: false, completionProof: null, historicalCompletionProof: { eventId: 'old-proof', commandId: 'old-completion' } },
+  ], collections: { changes: { truncated: true, returned: 100, total: 101 } } })
   h.requests[2].resolve(detail); await settle(); tree = h.render()
-  assert.doesNotMatch(text(tree), /过期输入/); assert.match(text(tree), /前置事项：前置任务/)
+  assert.doesNotMatch(text(tree), /过期安排/); assert.match(text(tree), /前置事项：前置任务/)
   assert.match(text(tree), /已接纳，尚未完成/); assert.match(text(tree), /结果未知/); assert.match(text(tree), /暂无当前指令的正式完成证明/)
   assert.match(text(tree), /历史完成证明引用（不证明当前指令完成）/); assert.match(text(tree), /仅显示最近 100 \/ 101 条/); assert.match(text(tree), /保持既有工作/)
   assert.match(text(tree), /<script>untrusted/); assert.equal(elements(tree).some(item => item.type === 'a' || item.props.dangerouslySetInnerHTML), false)
+  for (const label of ['输入与变更历史', '任务要求与证据', '触发与送达记录', '证据与读取边界']) {
+    const node = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === label)
+    assert.ok(node); assert.equal(node.props.open, undefined)
+  }
   const actions = elements(tree).filter(item => item.type === 'button' && text(item) === '查看任务')
-  actions[1].props.onClick(); assert.equal(navigations[0][0].taskId, 'task-b'); assert.equal(navigations[0][1].sourceId, 'two')
-  button(tree, '返回协调输入').props.onClick(); h.render(); assert.equal(h.requests[2].options.signal.aborted, true)
+  actions[1].props.onClick(); assert.equal(navigations[0][0].taskId, 'task-b'); assert.equal(navigations[0][1].workId, 'dispatch:two'); assert.equal(navigations[0][1].groupId, 'g'); assert.equal(navigations[0][1].offset, 0)
+  button(tree, '返回协调工作').props.onClick(); h.render(); assert.equal(h.requests[2].options.signal.aborted, true)
   h.unmount(); assert.equal(h.intervals.size, 0)
 })
 
-test('协调筛群立即移除旧数据且拒绝迟到响应，新页空态不泄露旧详情', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g', name: '新群' }], target: { groupId: '', sourceId: 'old' } })
+test('协调筛群立即移除旧实体且拒绝迟到响应，新页空态不泄露旧详情', async () => {
+  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g', name: '新群' }], target: { groupId: '', workId: 'old' } })
   let tree = h.render()
   assert.equal(h.requests.length, 2)
   const filter = elements(tree).find(item => item.props.label === '筛选协调群组')
   filter.props.onChange('g'); tree = h.render()
   assert.match(h.requests[2].url, /groupId=g/)
-  h.requests[0].resolve({ sources: [{ id: 'old', original: '旧群正文' }], total: 1 })
-  h.requests[1].resolve({ source: { id: 'old', original: '旧群详情' } }); await settle()
+  h.requests[0].resolve({ works: [workFixture('old', { title: '旧群正文' })], total: 1 })
+  h.requests[1].resolve(detailFixture(workFixture('old', { title: '旧群详情' }))); await settle()
   tree = h.render(); assert.doesNotMatch(text(tree), /旧群正文|旧群详情/)
   h.requests[2].reject(new Error('coordination_observer_unavailable')); await settle(); tree = h.render()
-  assert.match(text(tree), /尚未提供协调工作读取/); assert.doesNotMatch(text(tree), /暂无协调输入/)
+  assert.match(text(tree), /尚未提供协调工作读取/); assert.doesNotMatch(text(tree), /暂无协调工作/)
   h.unmount()
 })
 
@@ -552,13 +564,13 @@ test('协调首群按稳定顺序初始化，异步不读全部，空群与失�
   assert.equal(h.requests.length, 0); assert.match(text(tree), /正在读取群聊/)
   tree = h.render({ groupsReady: true, groups: [{ groupId: '' }, { groupId: 'b', name: '首群' }, { groupId: 'a' }, { groupId: 'b', name: '重复群' }] })
   assert.equal(h.requests.length, 1); assert.match(h.requests[0].url, /groupId=b/)
-  h.requests[0].resolve({ sources: [], total: 0 }); await settle(); tree = h.render()
-  assert.match(text(tree), /暂无协调输入/)
+  h.requests[0].resolve({ works: [], total: 0 }); await settle(); tree = h.render()
+  assert.match(text(tree), /暂无协调工作/)
   const filter = elements(tree).find(item => item.props.label === '筛选协调群组')
   assert.equal(filter.props.value, 'b'); assert.equal(filter.props.options.length, 3)
   filter.props.onChange('a'); h.render()
   assert.match(h.requests[1].url, /groupId=a/)
-  h.requests[0].resolve({ sources: [{ id: 'late', original: '迟到旧群' }], total: 1 }); await settle()
+  h.requests[0].resolve({ works: [{ id: 'late', title: '迟到旧群' }], total: 1 }); await settle()
   tree = h.render({ groupsReady: true, groups: [{ groupId: 'b' }, { groupId: 'a' }] })
   assert.equal(elements(tree).find(item => item.props.label === '筛选协调群组').props.value, 'a')
   assert.doesNotMatch(text(tree), /迟到旧群/)
@@ -575,12 +587,12 @@ test('协调首群按稳定顺序初始化，异步不读全部，空群与失�
 
 test('协调手选与显式全部在重排刷新后保持，失效返回目标不读旧详情', async () => {
   const groups = [{ groupId: 'a' }, { groupId: 'b' }]
-  const h = harness('CoordinationBrowser', { groups, target: { groupId: 'removed', sourceId: 'secret', offset: 30 } })
+  const h = harness('CoordinationBrowser', { groups, target: { groupId: 'removed', workId: 'secret', offset: 30 } })
   let tree = h.render()
   assert.equal(h.requests.length, 1); assert.match(h.requests[0].url, /offset=0&limit=10&groupId=a/)
   assert.equal(h.requests.some(req => req.url.includes('secret')), false)
   elements(tree).find(item => item.props.label === '筛选协调群组').props.onChange('b'); tree = h.render()
-  h.requests.at(-1).resolve({ sources: [], total: 0 }); await settle(); tree = h.render()
+  h.requests.at(-1).resolve({ works: [], total: 0 }); await settle(); tree = h.render()
   button(tree, '刷新协调记录').props.onClick(); tree = h.render({ groups: [...groups].reverse() })
   assert.match(h.requests.at(-1).url, /groupId=b/)
   elements(tree).find(item => item.props.label === '筛选协调群组').props.onChange(''); tree = h.render()
@@ -589,29 +601,94 @@ test('协调手选与显式全部在重排刷新后保持，失效返回目标�
   h.unmount()
 })
 
-test('协调按真实类型突出定时，不铺空任务，原文和证据渐进展开且缺失周期不编造', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', sourceId: 's' } })
-  h.render(); h.requests[1].resolve({ source: { id: 's', original: '原始长文本', state: 'accepted' }, members: [], snapshot: { state: 'active', schedules: [{ scheduleId: 'schedule', state: 'active', reminderText: '真实定时', nextDueAt: null, rule: null }], occurrences: [], jobs: [] } }); await settle()
-  const tree = h.render(), words = text(tree)
-  assert.match(words, /定时安排概览/); assert.match(words, /下次触发：未记录/); assert.match(words, /周期：未记录/)
+test('协调单次active空nextDue且作业完成仍突出提醒发送失败，输入变更只在历史', async () => {
+  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'schedule:s' } })
+  h.render()
+  const work = workFixture('schedule:s', { title: '真实定时提醒' })
+  h.requests[0].resolve({ works: [work], total: 1 })
+  h.requests[1].resolve(detailFixture(work, { history: { sources: [{ id: 'create', original: '原始长文本', state: 'accepted' }, { id: 'change', original: '修改时间', state: 'accepted' }], changes: [{ action: 'reschedule', revision: 2 }], occurrences: [{ occurrenceId: 'o', actionState: 'succeeded', deliveryState: 'failed' }], jobs: [{ jobId: 'j', state: 'completed' }] } })); await settle()
+  const tree = h.render(), words = text(tree), article = elements(tree).find(item => item.type === 'article')
+  assert.equal(elements(tree).filter(item => item.props['data-work-id']).length, 1)
+  assert.equal(elements(article).filter(item => item.props['data-work-result']).length, 1)
+  assert.equal(text(elements(article).find(item => item.props['data-work-result'])).trim(), '提醒发送失败')
+  assert.match(words, /计划：单次计划已启用/); assert.match(words, /下次触发：无后续触发安排/); assert.match(words, /重试：无重试安排/)
+  assert.doesNotMatch(words, /下次触发：未记录|进行中/)
   assert.equal(elements(tree).some(item => item.type === 'h3' && text(item) === '任务调度'), false)
-  const raw = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === '原始输入')
-  assert.ok(raw); assert.equal(raw.props.open, undefined)
-  assert.match(words, /通知送达不等于任务完成/)
+  const history = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === '输入与变更历史')
+  assert.ok(history); assert.equal(history.props.open, undefined); assert.match(text(history), /原始长文本/); assert.match(text(history), /修改时间/)
+  const visibleWords = node => node?.type === 'details' ? text(node.children[0]) : node && typeof node === 'object' ? (node.children || []).map(visibleWords).join('\n') : String(node ?? '')
+  assert.doesNotMatch(visibleWords(article), /已完成|已接纳|已执行|修改时间/)
   h.unmount()
 })
 
-test('协调全部群同文仍显示归属，历史结论不冒充下一动作', async () => {
+test('协调全部群同文实体仍显示归属，历史结论不冒充下一动作', async () => {
   const h = harness('CoordinationBrowser', { groups: [{ groupId: 'a', name: '甲群' }, { groupId: 'b', name: '乙群' }], target: { groupId: '' } })
-  h.render(); h.requests[0].resolve({ sources: [{ id: 'a', groupId: 'a', original: '同文', state: 'accepted' }, { id: 'b', groupId: 'b', original: '同文', state: 'accepted' }], total: 2 }); await settle()
+  h.render(); h.requests[0].resolve({ works: [workFixture('a', { groupId: 'a', title: '同文' }), workFixture('b', { groupId: 'b', title: '同文' })], total: 2 }); await settle()
   let tree = h.render()
-  const rows = elements(tree).filter(item => item.props['data-source-id'])
+  const rows = elements(tree).filter(item => item.props['data-work-id'])
   assert.match(text(rows[0]), /甲群/); assert.match(text(rows[1]), /乙群/)
   rows[1].props.onClick(); h.render()
-  h.requests[1].resolve({ source: { id: 'b', groupId: 'b', state: 'accepted' }, members: [{ instructionId: 'i', taskId: 't', state: 'applied', decision: { action: 'complete', summary: '历史完成结论' } }] }); await settle()
+  h.requests[1].resolve(detailFixture(workFixture('b', { kind: 'dispatch', groupId: 'b', result: { code: 'waiting_completion', label: '等待任务完成', tone: 'warning' } }), { members: [{ instructionId: 'i', taskId: 't', state: 'applied', decision: { action: 'complete', summary: '历史完成结论' } }] })); await settle()
   tree = h.render(); assert.match(text(tree), /所属群聊：乙群/)
   assert.match(text(tree), /下一动作：未记录下一动作/)
   assert.doesNotMatch(text(tree), /下一动作：.*历史完成结论/)
-  assert.match(text(tree), /最近结论：历史完成结论/)
+  assert.match(text(tree), /任务最近记录的结论（complete）：历史完成结论/)
   h.unmount()
+})
+
+test('协调主结果只消费后端投影，未知状态不推导成功且周期下次与重试分层', async () => {
+  for (const result of [
+    { code: 'delivery_pending', label: '等待发送提醒', tone: 'warning' },
+    { code: 'delivery_unknown', label: '提醒送达未确认', tone: 'warning' },
+    { code: 'delivered', label: '提醒已送达', tone: 'success' },
+    { code: 'dispatch_applied', label: '任务已调度', tone: 'warning' },
+    { code: 'dispatch_fulfilled', label: '任务调度已完成', tone: 'success' },
+    { code: 'future_raw_state' },
+  ]) {
+    const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }] })
+    h.render(); h.requests[0].resolve({ works: [workFixture(result.code, { result })], total: 1 }); await settle()
+    const tree = h.render(), row = elements(tree).find(item => item.props['data-work-id'])
+    assert.equal(elements(row).filter(item => item.props['data-work-result']).length, 1)
+    assert.match(text(row), new RegExp(result.label || '状态未确认'))
+    h.unmount()
+  }
+  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'recurring' } })
+  h.render(); h.requests[1].resolve(detailFixture(workFixture('recurring', { result: { code: 'failed', label: '最近提醒发送失败', tone: 'danger' }, plan: { label: '周期计划已启用', rule: { kind: 'daily', time: '09:00' } }, nextStep: { label: '等待下次触发', triggerAt: '2026-10-26T01:00:00Z', sendRetryAt: '2026-10-25T02:00:00Z', readbackAt: null } }))); await settle()
+  const words = text(h.render())
+  assert.match(words, /最近提醒发送失败/); assert.match(words, /周期计划已启用/); assert.match(words, /每日 09:00/)
+  assert.doesNotMatch(words, /下次触发：无后续触发安排|重试：无重试安排/)
+  h.unmount()
+})
+
+
+test('协调当前与历史proof独立折叠，计划修订展示历史状态周期与下次事实', async () => {
+  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'dispatch:proof' } })
+  h.render(); h.requests[1].resolve(detailFixture(workFixture('dispatch:proof', { kind: 'dispatch', result: { code: 'partially_completed', label: '部分任务已正式完成', tone: 'info' } }), {
+    members: [
+      { instructionId: 'current', taskId: 'current', title: '当前完成任务', state: 'fulfilled', completionProofCurrent: true, completionProof: { eventId: 'current-event', commandId: 'current-command' } },
+      { instructionId: 'old', taskId: 'old', title: '版本变化任务', state: 'version_changed', completionProofCurrent: false, completionProof: null, historicalCompletionProof: { eventId: 'old-event', commandId: 'old-command' } },
+    ], history: { sources: [], changes: [{ action: 'schedule-revision', revision: 1, state: 'paused', timezone: 'Asia/Shanghai', rule: { kind: 'daily', time: '09:30' }, nextDueAt: null }], occurrences: [], jobs: [] },
+  })); await settle()
+  const tree = h.render(), words = text(tree)
+  assert.match(words, /当前指令已有正式完成证明/); assert.match(words, /历史完成证明引用（不证明当前指令完成）/)
+  assert.equal(elements(tree).filter(item => item.type === 'summary' && text(item) === '正式完成证明引用').length, 1)
+  for (const label of ['正式完成证明引用', '历史完成证明引用（不证明当前指令完成）']) {
+    const node = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === label)
+    assert.equal(node.props.open, undefined)
+  }
+  const history = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === '输入与变更历史')
+  assert.match(text(history), /计划修订/); assert.match(text(history), /历史计划状态：已暂停/); assert.match(text(history), /历史周期：每日 09:30/); assert.match(text(history), /历史下次触发：无后续触发安排/)
+  h.unmount()
+})
+
+test('协调实体分页收缩回有效页并清理选中，轮询与卸载不泄漏请求', async () => {
+  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', offset: 20, workId: 'schedule:old' } })
+  h.render(); h.requests[0].resolve({ works: [], total: 11 }); await settle(); h.render(); h.render()
+  assert.match(h.requests.at(-1).url, /offset=10&limit=10&groupId=g/)
+  assert.equal(h.requests[1].options.signal.aborted, true)
+  const before = h.requests.length
+  h.unmount(); assert.equal(h.intervals.size, 0)
+  assert.equal(h.requests.every(request => request.options.signal.aborted), true)
+  h.requests[1].reject(new Error('aborted')); h.requests.at(-1).reject(new Error('aborted')); await settle()
+  assert.equal(h.timeouts.size, 0); assert.equal(h.requests.length, before)
 })

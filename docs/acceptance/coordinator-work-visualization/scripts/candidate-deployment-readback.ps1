@@ -44,9 +44,19 @@ $web=& node $verifier --log D:/project/dingtalk-dsh-assistant/docs/tmp/dsh-web-l
 if($LASTEXITCODE){throw 'CANDIDATE_AUTHENTICATED_WEB_FAILED'}
 $web=$web|ConvertFrom-Json
 $sources=Invoke-RestMethod 'http://127.0.0.1:18998/state/coordination-sources?limit=100' -NoProxy -TimeoutSec 20
+$work=Invoke-RestMethod 'http://127.0.0.1:18998/state/coordination-work?limit=100' -NoProxy -TimeoutSec 20
+if(@($work.works.id|Select-Object -Unique).Count-ne$work.works.Count){throw 'CANDIDATE_DUPLICATE_WORK_ID'}
+$original=Invoke-RestMethod 'http://127.0.0.1:18998/state/coordination-sources/fcc522d86cd7d242fc9c7240ab672a19bc0ecbf19eb6964831e642e1ea254a16' -NoProxy -TimeoutSec 20
+$failedId='schedule:'+$original.snapshot.schedules[0].scheduleId
+$failed=@($work.works|Where-Object id -eq $failedId)
+if($failed.Count-ne1-or$failed[0].result.code-ne'delivery_failed'-or$failed[0].result.label-ne'提醒发送失败'){throw 'CANDIDATE_ORIGINAL_FAILURE_NOT_PRIMARY'}
+if($failed[0].nextStep.triggerAt-or$failed[0].nextStep.sendRetryAt){throw 'CANDIDATE_UNRECORDED_NEXT_STEP'}
+$workCounts=@{total=$work.total;schedules=@($work.works|Where-Object kind -eq 'schedule').Count;dispatches=@($work.works|Where-Object kind -eq 'dispatch').Count;triggers=@($work.works|Where-Object kind -eq 'trigger').Count;
+ failed=@($work.works|Where-Object {$_.result.code-eq'delivery_failed'}).Count;originalFailurePrimary=$true}
+
 @{observedAt=[DateTime]::UtcNow.ToString('o');checkOnly=[bool]$Check;writes=0;installs=0;restarts=0;
  packages=$packages;profileSha256=$actualProfile;hostVersion=$hostVersion;oldPid=$OldPid;oldProcessExited=$true;
  newPid=$process.ProcessId;parentPid=$process.ParentProcessId;creationDate=$process.CreationDate;ports=$ports;
- autostartEnabled=$task.Settings.Enabled;taskState=[string]$task.State;authenticatedWeb=$web;sourceCount=$sources.total;
+ autostartEnabled=$task.Settings.Enabled;taskState=[string]$task.State;authenticatedWeb=$web;sourceCount=$sources.total;workCounts=$workCounts;
  health=@{status=$health.status;recoveryIssueCount=$health.recoveryIssueCount;inboundProcessing=$health.inboundProcessing;bridgeHealthy=$health.dwsBridge.healthy;listeners=$listeners;backfills=$backfills};
  maintenance='Retired workflow API; native lifecycle restores inbound/autostart, no legacy Resume';backupCreated=$false}|ConvertTo-Json -Depth 6

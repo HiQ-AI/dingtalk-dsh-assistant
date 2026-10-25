@@ -1,0 +1,14 @@
+{
+  "result": "FAIL",
+  "scope": "isolated real SQLite API, intermediate module loaded before notification authority fix",
+  "case": "cancelled-known-not-sent-failure",
+  "actual": "dispatched",
+  "expected": "delivery_failed",
+  "otherOutcomes": {
+    "cancelled-delivered": "delivered",
+    "cancelled-unknown": "delivery_unknown"
+  },
+  "productionWrites": 0,
+  "diagnostic": "cancelOccurrence rewrites occurrence deliveryState; notification persisted failed must remain authoritative",
+  "driverPrecheckFailure": "esbuild dependency-root module missing; use manifest-recorded exact esbuild module path"
+}

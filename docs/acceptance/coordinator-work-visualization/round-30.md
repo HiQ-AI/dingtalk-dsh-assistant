@@ -1,0 +1,7 @@
+# Round 30
+
+2026-10-25. Final current-proof-preserving candidate: Assistant5bf60b8cb3446292b68d2323e56fa0c962b2c56ad3420ee327c3f12dc9862dee (393380bytes); Observer6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a (59580bytes); both2.1.0. Independent70+4source files exactbyte MATCH. New persistent PackageRoot coordinator-entity-ledger-proof-20261025; prior frozen packages not overwritten. No package edits after freeze.
+
+Runbook native Check old18784 passed,writes0/signals0,62verifiedSessionsdrained,unknownoperations/notifications0,profile74fe100c unchanged. Candidate proof not owner exit. One executionbu93xtxn4 with identical args minus Check. Native terminal and independent newPID/health readback pending; no blind reinstall/restart. Final actual3080 acceptance belongs to round31; earlier installed rounds do not certify this package.
+
+Native executionbu93xtxn4 completedexit0. Independent read-only candidate-deployment-readback at2026-10-25 confirmed old18784exited,new91256 owns3080/18998,Assistant5bf60b8c/Observer6f58d449 installed2.1.0,profile74fe100c unchanged,Host0.2.1-rc.2 unchanged;autostartenabled/running,healthok/recovery0/inboundtrue/listenersready/backfillsok/authenticatedWeb200. Ten uniqueworks=7schedules+3triggers,2deliveryfailed;originalfailureprimarytrue/noinventedtriggerretry. Summary is candidate-readback.json,rawhealth with groupidentities localignored. Native finalUIround31 remains distinct from isolatedround29.

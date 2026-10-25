@@ -1,0 +1,100 @@
+{
+  "result": "PASS",
+  "cases": [
+    "stable-entity-dedup-and-original-failure-api",
+    "default-first-group-no-all-request",
+    "failure-prominent-next-step-disclosure-and-focus",
+    "nine-persisted-reminder-scenarios-rendered",
+    "dispatch-task-return-manual-and-five-second-refresh",
+    "no-overflow-console-api-errors-or-mutations"
+  ],
+  "synthetic": true,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 80571,
+      "sha256": "188f4fe9e596dc5df4608924aea2877fa7a3a96dca6566ce02a7a6bc6c4ef7c4"
+    },
+    "after-desktop-light-failed-reminder.png": {
+      "bytes": 106856,
+      "sha256": "48237327399789ee49151f240d3951d5515cf4e1e371c965e598053231db964f"
+    },
+    "after-desktop-light-dispatch.png": {
+      "bytes": 74699,
+      "sha256": "8df816474bff812f81ede81e9e7b47e295b77d8dac87465ccee95e09c50e5d48"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "sourceHashes": {
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "bytes": 254943,
+      "sha256": "2d30cda01e8fa36efa8455320b1cb018e7798a9c26dce9e19b36b7fdf8d9c9bc"
+    },
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "bytes": 26047,
+      "sha256": "3705f2a871d3dd593a49f71a2baa320d7f877d8ee1754d22fd12213dfe817a44"
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py": {
+      "bytes": 13756,
+      "sha256": "fb8e0b8aeb30c4d7430cde657389de1aa1e4f404e96a11e3eae4b2e405b62772"
+    }
+  },
+  "firstGroupWorkCount": 12,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "syntheticRenderedResults": [
+    {
+      "id": "schedule:synthetic-cancelled-unknown",
+      "result": "提醒是否送达尚未确认"
+    },
+    {
+      "id": "schedule:synthetic-cancelled-delivered",
+      "result": "提醒已送达"
+    },
+    {
+      "id": "schedule:synthetic-cancelled-failed",
+      "result": "提醒发送失败"
+    },
+    {
+      "id": "schedule:synthetic-paused-failed",
+      "result": "提醒发送失败"
+    },
+    {
+      "id": "schedule:synthetic-recurring-failed",
+      "result": "提醒发送失败"
+    },
+    {
+      "id": "schedule:synthetic-once-pending",
+      "result": "提醒待送达"
+    },
+    {
+      "id": "schedule:synthetic-once-unknown",
+      "result": "提醒是否送达尚未确认"
+    },
+    {
+      "id": "schedule:synthetic-once-delivered",
+      "result": "提醒已送达"
+    },
+    {
+      "id": "schedule:synthetic-once-failed",
+      "result": "提醒发送失败"
+    }
+  ],
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}

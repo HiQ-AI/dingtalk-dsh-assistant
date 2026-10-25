@@ -1,0 +1,74 @@
+{
+  "writes": 0,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 91256
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 91256
+    }
+  ],
+  "restarts": 0,
+  "checkOnly": true,
+  "authenticatedWeb": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "normalizedExchangeTarget": "http://127.0.0.1:3080/",
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "parentPid": 21824,
+  "packages": {
+    "observer": {
+      "version": "2.1.0",
+      "bytes": 59580,
+      "dependency": "file:D:/dsh_home/packages/coordinator-entity-ledger-proof-20261025/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "sha256": "6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a"
+    },
+    "assistant": {
+      "version": "2.1.0",
+      "bytes": 393380,
+      "dependency": "file:D:/dsh_home/packages/coordinator-entity-ledger-proof-20261025/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "sha256": "5bf60b8cb3446292b68d2323e56fa0c962b2c56ad3420ee327c3f12dc9862dee"
+    }
+  },
+  "health": {
+    "bridgeHealthy": true,
+    "listeners": [
+      "ready",
+      "ready"
+    ],
+    "status": "ok",
+    "backfills": [
+      "ok",
+      "ok"
+    ],
+    "inboundProcessing": true,
+    "recoveryIssueCount": 0
+  },
+  "creationDate": "2026-10-25T22:21:45.582626+08:00",
+  "installs": 0,
+  "oldPid": 18784,
+  "oldProcessExited": true,
+  "newPid": 91256,
+  "hostVersion": "0.2.1-rc.2",
+  "backupCreated": false,
+  "observedAt": "2026-10-25T14:23:21.6687726Z",
+  "maintenance": "Retired workflow API; native lifecycle restores inbound/autostart, no legacy Resume",
+  "autostartEnabled": true,
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "workCounts": {
+    "originalFailurePrimary": true,
+    "total": 10,
+    "schedules": 7,
+    "triggers": 3,
+    "dispatches": 0,
+    "failed": 2
+  },
+  "sourceCount": 18,
+  "taskState": "Running"
+}

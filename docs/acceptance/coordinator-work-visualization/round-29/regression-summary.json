@@ -1,0 +1,32 @@
+{
+  "directed": {
+    "pass": 76,
+    "fail": 0,
+    "skipped": 0
+  },
+  "expandedRisk": {
+    "pass": 149,
+    "fail": 0,
+    "skipped": 0
+  },
+  "releaseSmoke": {
+    "pass": 12,
+    "fail": 0,
+    "skipped": 2,
+    "reason": "Full native profile dsh-base unavailable"
+  },
+  "mapping": {
+    "files": 308,
+    "eachExactlyOnce": true,
+    "historical": 3
+  },
+  "hashChecks": 24,
+  "isolatedCleanup": {
+    "listeners": 0,
+    "ports": [
+      19087,
+      19088
+    ],
+    "nativePidUnaffected": 91256
+  }
+}
