@@ -19,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--forced-colors', action='store_true')
+    parser.add_argument('--relations', action='store_true', help='Verify named prerequisite-to-dispatch relations and target task waiting links')
     parser.add_argument('--mobile', action='store_true')
     parser.add_argument('--web', default='http://127.0.0.1:3080')
     parser.add_argument('--api', default='http://127.0.0.1:18998')
@@ -35,7 +36,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     result = dict(result='FAIL', cases=[], synthetic=urlparse(args.web).port != 3080, screenshots={}, errors=[], failedObserverApi=[], mutations=[])
     result['sourceHashes'] = {}
-    for relative in ['packages/dingtalk-dsh-observer/web-client.js', 'packages/dingtalk-dsh-assistant/coordination-observer.js', 'docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py']:
+    for relative in ['packages/dingtalk-dsh-observer/web-client.js', 'packages/dingtalk-dsh-assistant/coordination-observer.js', 'packages/dingtalk-dsh-assistant/task-session-service.js', 'docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py']:
         raw = (ROOT.parents[2] / relative).read_bytes()
         result['sourceHashes'][relative] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
 
@@ -107,9 +108,50 @@ def main():
             result['visibleRows'] = rows.evaluate_all("es=>es.filter(e=>{const r=e.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight&&r.width>0}).length")
             result['rowHeights'] = rows.evaluate_all('es=>es.map(e=>Math.round(e.getBoundingClientRect().height))')
             def shot(name):
+                # Screenshots do not trigger locator handlers; dismiss a late Host notice normally.
+                if later.is_visible():
+                    later.click()
+                expect(later).not_to_be_visible()
                 path = out / f'{prefix}-{name}.png'
                 masks = [page.locator('aside'), menu, page.locator('.observer-coordination-title, .observer-coordination-group, .observer-coordination-disclosure .observer-coordination-text, article section[aria-label] .observer-coordination-text, .observer-session-detail, article h2, article h4, article li')]
-                page.locator('[data-dingtalk-observer]').screenshot(path=str(path), mask=[] if result['synthetic'] else masks, mask_color='#8b929b')
+                if args.relations:
+                    # Keep relation/gate/result semantics readable; mask only sensitive titles and unrelated task content.
+                    masks = [page.locator('aside'), menu, page.locator('.observer-coordination-group, article h2, .observer-coordination-disclosure, [data-screenshot-private-title]'), page.locator('.observer-coordination-title').filter(has_not_text='→')]
+                    if not result['synthetic']:
+                        # Wrap only real task-name text; retain arrows, condition, result and waiting reason.
+                        native_works = read('/state/coordination-work?limit=100')['works']
+                        titles = sorted({item['title'] for work in native_works for relation in work.get('relations', [])
+                                         for item in [relation['target'], *relation['prerequisites']] if item.get('title')}, key=len, reverse=True)
+                        page.evaluate('''titles => {
+                          const root = document.querySelector('[data-dingtalk-observer]');
+                          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [];
+                          while (walker.nextNode()) nodes.push(walker.currentNode);
+                          for (const node of nodes) {
+                            if (!node.parentElement.closest('.observer-coordination-title, [data-dispatch-target], [data-prerequisite-task]')) continue;
+                            const text = node.textContent, parts = document.createDocumentFragment(); let at = 0, matched = false;
+                            while (at < text.length) {
+                              const hits = titles.map(title => ({title, start: text.indexOf(title, at)})).filter(hit => hit.start >= 0).sort((a,b) => a.start-b.start || b.title.length-a.title.length);
+                              if (!hits.length) { parts.append(text.slice(at)); break; }
+                              const {title, start} = hits[0]; parts.append(text.slice(at, start));
+                              const mask = document.createElement('span'); mask.dataset.screenshotPrivateTitle = ''; mask.textContent = title; parts.append(mask);
+                              at = start + title.length; matched = true;
+                            }
+                            if (matched) node.replaceWith(parts);
+                          }
+                        }''', titles)
+                try:
+                    page.locator('[data-dingtalk-observer]').screenshot(path=str(path), mask=[] if result['synthetic'] else masks, mask_color='#8b929b')
+                    if name.startswith('native-relation-'):
+                        # The relation can sit below the mobile viewport; retain an unclipped detail image.
+                        if later.is_visible():
+                            later.click()
+                        expect(later).not_to_be_visible()
+                        detail_path = out / f'{prefix}-{name}-detail.png'
+                        page.get_by_role('article', name='协调工作详情').locator('[data-dispatch-target]').first.screenshot(path=str(detail_path), mask=masks, mask_color='#8b929b')
+                        detail_raw = detail_path.read_bytes()
+                        result['screenshots'][detail_path.name] = dict(bytes=len(detail_raw), sha256=hashlib.sha256(detail_raw).hexdigest())
+                finally:
+                    page.locator('[data-screenshot-private-title]').evaluate_all("es=>es.forEach(e=>{const parent=e.parentNode;e.replaceWith(document.createTextNode(e.textContent));parent.normalize()})")
                 raw = path.read_bytes()
                 result['screenshots'][path.name] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
             shot('list')
@@ -135,6 +177,45 @@ def main():
                 expect(article.get_by_role('heading', level=2)).to_be_focused()
                 expect(article.locator('[data-work-result]').first).to_have_text(work['result']['label'])
                 return row, article
+            if args.relations and result['synthetic']:
+                with urlopen(args.web + '/manifest.json', timeout=20) as response:
+                    relation_cases = json.load(response)['relationCases']
+                result['relationCases'] = []
+                for relation_case in relation_cases:
+                    work = next(w for w in works if w['id'] == relation_case['workId'])
+                    _, relation_article = select_work(work, works)
+                    relation = relation_article.locator('[data-dispatch-target="' + relation_case['target'] + '"]')
+                    expect(relation).to_be_visible()
+                    prerequisite = relation.locator('[data-prerequisite-task="' + relation_case['prerequisite'] + '"]')
+                    expect(prerequisite).to_be_visible()
+                    expect(relation).to_contain_text('调度')
+                    assert '当前指令已有正式完成证明' not in relation_article.inner_text()
+                    if relation_case['name'] == 'waiting':
+                        expect(relation).to_contain_text('等待')
+                        with page.expect_response(lambda response: '/state/tasks/' in response.url and response.status == 200, timeout=20000):
+                            relation.get_by_role('button', name=re.compile(r'^查看目标任务：')).click()
+                        target_detail = page.get_by_role('region', name='任务会话详情')
+                        expect(target_detail).to_be_visible()
+                        gate = target_detail.get_by_role('region', name='前置任务等待')
+                        expect(gate).to_be_visible()
+                        expect(gate).to_contain_text('等待')
+                        link = gate.locator('[data-prerequisite-task="' + relation_case['prerequisite'] + '"]')
+                        expect(link).to_be_visible()
+                        shot('task-waits-for-prerequisite')
+                        with page.expect_response(lambda response: '/state/tasks/' in response.url and response.status == 200, timeout=20000):
+                            link.click()
+                        expect(page.get_by_role('region', name='任务会话详情')).to_be_visible()
+                        page.get_by_role('button', name='返回看板', exact=True).click()
+                        expect(relation_article).to_be_visible()
+                    elif relation_case['name'] == 'pending':
+                        expect(relation).to_contain_text('等待调度')
+                    else:
+                        expect(relation).to_contain_text('调度成功')
+                        assert '尚未正式完成' not in relation.inner_text()
+                    shot('relation-' + relation_case['name'])
+                    result['relationCases'].append(dict(name=relation_case['name'], target=relation_case['target'], prerequisite=relation_case['prerequisite'], result=work['result']['code']))
+                    relation_article.get_by_role('button', name='返回协调工作', exact=True).click()
+                result['cases'].append('waiting-pending-receipted-dispatch-and-prerequisite-task-link')
             row, article = select_work(failed, works)
             for label in ['输入与变更历史', '证据与读取边界']:
                 for node in article.locator('details').filter(has=page.locator('summary', has_text=label)).all():
@@ -177,15 +258,49 @@ def main():
             other = read('/state/coordination-work?limit=100&groupId=' + quote(selected_group['groupId'], safe=''))['works']
             dispatch = next(w for w in other if w['kind'] in ['dispatch', 'trigger'] and w['counts']['total'] > 0)
             row, article = select_work(dispatch, other)
-            expect(article.get_by_role('heading', name='任务调度', exact=True)).to_be_visible()
+            expect(article.get_by_role('heading', name='任务调度关系', exact=True)).to_be_visible()
             with page.expect_response(lambda response: '/state/tasks/' in response.url and response.status == 200, timeout=20000):
-                article.get_by_role('button', name='查看任务', exact=True).first.click()
+                article.get_by_role('button', name=re.compile(r'^查看目标任务：')).first.click()
             expect(page.get_by_role('region', name='任务会话详情')).to_be_visible()
             page.get_by_role('button', name='返回看板', exact=True).click()
             expect(article).to_be_visible()
             expect(menu).to_contain_text(selected_group.get('name') or selected_group['groupId'])
             shot('dispatch')
             result['cases'].append('dispatch-task-return-manual-and-five-second-refresh')
+            if args.relations and not result['synthetic']:
+                article.get_by_role('button', name='返回协调工作', exact=True).click()
+                candidates = [w for w in other if any(r.get('prerequisites') for r in w.get('relations', []))]
+                assert candidates, 'NO_EXISTING_NATIVE_DEPENDENCY_RELATION'
+                result['nativeRelations'] = []
+                for candidate in candidates:
+                    _, relation_article = select_work(candidate, other)
+                    relation_data = next(r for r in candidate['relations'] if r.get('prerequisites'))
+                    relation = relation_article.locator('[data-dispatch-target="' + relation_data['target']['taskId'] + '"]')
+                    expect(relation).to_be_visible()
+                    expect(relation).to_contain_text('前置')
+                    assert relation_data['state'] not in ['running', 'completed', 'task_completed']
+                    expect(relation.locator('[data-dispatch-state]')).to_have_attribute('data-dispatch-state', relation_data['state'])
+                    shot('native-relation-' + str(len(result['nativeRelations']) + 1))
+                    with page.expect_response(lambda response: '/state/tasks/' in response.url and response.status == 200, timeout=20000):
+                        relation.get_by_role('button', name=re.compile(r'^查看目标任务：')).click()
+                    target_detail = page.get_by_role('region', name='任务会话详情')
+                    expect(target_detail).to_be_visible()
+                    target_relation = target_detail.locator('[data-dispatch-target="' + relation_data['target']['taskId'] + '"]')
+                    expect(target_relation).to_be_visible()
+                    expect(target_relation.locator('[data-dispatch-state]')).to_have_attribute('data-dispatch-state', relation_data['state'])
+                    if relation_data['state'] == 'waiting':
+                        gate = target_relation.get_by_role('region', name='前置任务等待')
+                        expect(gate).to_be_visible()
+                        assert gate.locator('[data-prerequisite-task]').count() == sum(not item['fulfilled'] for item in relation_data['prerequisites'])
+                    else:
+                        assert target_relation.get_by_role('region', name='前置任务等待').count() == 0
+                    result['nativeRelations'].append(dict(prerequisiteCount=len(relation_data['prerequisites']), state=relation_data['state'], receipt=relation_data['dispatch']['receipt'], targetPageLinked=True))
+                    page.get_by_role('button', name='返回看板', exact=True).click()
+                    expect(relation_article).to_be_visible()
+                    relation_article.get_by_role('button', name='返回协调工作', exact=True).click()
+                _, article = select_work(dispatch, other)
+                result['cases'].append('existing-native-dependency-relations-and-target-pages')
+
             article.get_by_role('button', name='返回协调工作', exact=True).click()
             menu.click()
             page.get_by_role('menuitem', name='全部群组', exact=True).click()

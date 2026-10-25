@@ -7,3 +7,6 @@ round-*/browser-run-*/
 
 # Raw native receipt contains local group identifiers; publish candidate-readback.json instead.
 round-*/native-deploy/
+
+# Native deployment receipts contain local group IDs; track independent sanitized readback.
+round-*/deployment/

@@ -28,6 +28,11 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 | G17 | New-state matrix and independent native low review | PASS | New named low final reviewer found current-proof completion masked by cancelled unsent notice; lead independently reproduced FAIL then fixed precedence,76directed/149riskPASS; reviewer did not independently rerun newdiff; round28 |
 | G18 | Check/drain/install and real3080 result screenshots plus unmerged PR | PASS | Final round30 native91256/package5bf60b8c/recovery0;round31 four native6PASS/screenshots inspected;round32 PR259 OPEN/unmerged,implementation9844c48 local/remote/PR head and complete body matched |
 
+| G19 | Receipt-owned A-completion to B-dispatch contract and direct defects | PASS | Dispatch-relations spec; keyed command/version receipts; ID/timezone/pre-start cancellation; round36 |
+| G20 | Named relation ledger and B task-page prerequisite links | PASS | Named A-to-B ledger and B task detail; unsatisfied all prerequisites, task links and actual nextStep; UI491123de |
+| G21 | Official-command relation matrix and real isolated browser | PASS | round36:164directed/135risk/14frozen-native-smoke; four browser9cases; reviewer dedup2PASS; generic failed-receipt chain explicitly unverified |
+| G22 | Check/native deployment actual3080 screenshots and OPEN PR delivery | IN_PROGRESS | round36 native93604/dualports/health/inbound/autostart/auth200; final round39 four7PASS and16source/28PNG matches; rounds37/38 visual FAIL retained; scoped PR delivery pending |
+
 ## Decisions and Important Information
 
 - 2026-10-25: Original lead remains sole deployment owner. Evidence branch worktree-coordinator-work-deployment starts at merge22d5738; never push the merged implementation branch. Package source remains frozen during deployment.
@@ -50,3 +55,7 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 - 2026-10-25 entity-ledger iteration: user explicitly authorizes read-only entity/UI refactor and controlled local candidate deployment. PR259 independently OPEN at66ac009; same worktree clean at start. Three grains considered; stable schedule and direct dispatch chosen,source and single-batch-only grains rejected. Old rounds1-16 are historical,not this iteration acceptance.
 
 - 2026-10-25: Original entity teammates did not return final reports; explicit new native member coordination-ledger-final-review at low spawn setting provided one reproducible completed-task/cancelled-notice defect. Lead reproduced and fixed with a new regression,76directed/149expandedPASS. Final candidate5bf60b8c replaces prior270fb2ac; round30 Check old18784 passed before one native execution. Earlier candidates/results remain historical,not final proof.
+
+- 2026-10-25 authorized relation iteration: ledger explains prerequisite completion -> target dispatch, not target execution. Original native roster reused; lead owns deployment. Existing cross-trigger dependency edges allow real validation without production fixtures. Prior ID/timezone/pre-start-cancel defects are directly related. Historical G14-G18 do not certify this iteration.
+
+- 2026-10-26: Final dispatch-relations native installation93604 passed independent package/profile/Host/health/inbound/autostart/auth200 readback. Native existing relations both dispatched/accepted, waiting and failed dispatch absent. Round37 late Host notice and round38 incomplete mobile viewport are visual FAIL despite functional PASS; screenshot-only driver corrections lead to round39 full relation detail7PASS/four variants. Actual Host remains light under dark preference. Product source unchanged after freeze.

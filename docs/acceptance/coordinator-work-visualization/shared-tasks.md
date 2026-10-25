@@ -107,3 +107,15 @@ All formal artifacts are relative to this worktree's `docs/acceptance/coordinato
 - FINAL candidate5bf60b8c nativeexecutionbu93xtxn4exit0; independentreadbacknew91256dualports/old18784exited/packageprofileHostexact/healthokrecovery0/inboundautostartbridgeauth200. Finalisolatedround29tenstates/four8PASS; finalinstalledround31four6PASS;12source+12PNGhashMATCHeach. Personally inspected finalnativefailed desktop/mobile. Isolatedhoststopped,19087/19088listeners0,native91256unaffected. PRstateOPEN; scoped implementation push and complete body readback now closed in round32, with docs-only closure remaining.
 
 - FINAL PR closure: implementation9844c48095af01272711243af1edd3f960b8fdb0 independently equals local/remote/PR259 head; complete body matched; OPEN/unmerged,main base,clean before closure. round32/pr-readback.json precedes final docs-only closure. Every ledger case has latest applicable PASS; historical FAIL/UNVERIFIED retained. No merge,CI dispatch,main push or force-push.
+
+
+## Active Dispatch Relation Iteration
+
+- 2026-10-25 explicit end-to-end authorization without another plan approval. PR259 independently OPEN/unmerged/headca7a3fd,worktree clean. Original root/goal/matrix/branch; rounds33+.
+- Original native backend/UI teammates contacted by existing names: analysis first, no package edits before grounded contract. Lead owns integration/docs/browser/deployment. Actual lead CLAUDE_EFFORT=null; requested high/original low spawn settings are not actual runtime proof. Do not edit harness configuration.
+- Read-only baseline10works:7reminders+3tasktriggers,2cross-trigger dependencyedges,all3membersfulfilled. Business names remain local; no production seed/replay.
+- Currentca7a3fd defects independently reproduced: slashID list->detailinvalid; UTC09:54 labelledShanghai instead of17:54; cancelled-before-start reminder falselydispatched/queryexecuted. Already-fixed after-start cancellation/currentcompletion tests2PASS do not cover pre-start.
+
+- Final relation source403d9597/UI491123de/service6d792c0f frozen. Original reviewer found scope/gate/title/receipt and task-page first-wins counterexamples; backend repaired, reviewer incrementally ran2PASS on final dedup source. Final lead164directed/135risk/14frozen-native-smokePASS; round36fourbrowser9PASS. Final test-only extension66observer/118backend noted, product source unchanged. Native62sessionCheckPASS/zeroeffects; one executionb9hkapqxl pending finalreadback. Backend raw efforthigh despite requestedlow,lead envnull; no actual-effort claims.
+
+- Native relation candidate executed once, b9hkapqxl exit0. Independent readback old91256exit/new93604dualports,exactpackages/profile/Host/health/inbound/autostart/auth200PASS. Round37notice-occlusion and38mobile-clipping visual FAIL retained; driver-only repair yields final39four7PASS,16source/28PNG identities matched, mobile/desktop complete relation personally inspected. No native waiting/failed sample; dark preference remainslight. Ownisolated5452stopped/ports0,nativeunaffected. PR259 stillOPEN, delivery pending scopedpush/readback.

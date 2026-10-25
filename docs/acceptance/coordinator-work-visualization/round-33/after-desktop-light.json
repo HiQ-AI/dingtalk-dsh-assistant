@@ -1,0 +1,49 @@
+{
+  "result": "FAIL",
+  "cases": [
+    "stable-entity-dedup-and-original-failure-api",
+    "default-first-group-no-all-request"
+  ],
+  "synthetic": true,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 80601,
+      "sha256": "af419b47ac6b660638d737448b864ad73cff89700c1c205c379830967f6c35bc"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "sourceHashes": {
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "bytes": 255660,
+      "sha256": "8c3f396024506f58e069a9d0db14edae92ebd792b45929d952038c0f7d121bf1"
+    },
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "bytes": 27681,
+      "sha256": "92d4a77cd611ed1a313c9183894653296c05a2c1c5f2cd515a36b804d25423f5"
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py": {
+      "bytes": 18739,
+      "sha256": "914298233574fdb58f3afdf0dcc14a9559781abce126d61c1ca6cb731c127a76"
+    }
+  },
+  "firstGroupWorkCount": 15,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "relationCases": [],
+  "failureType": "AssertionError",
+  "failureSignals": [],
+  "failureLine": 147
+}

@@ -1,0 +1,30 @@
+[
+  {
+    "file": "after-desktop-light-forced.json",
+    "cases": 9,
+    "sourceCount": 4,
+    "screenshotCount": 7,
+    "verified": true
+  },
+  {
+    "file": "after-desktop-light.json",
+    "cases": 9,
+    "sourceCount": 4,
+    "screenshotCount": 7,
+    "verified": true
+  },
+  {
+    "file": "after-mobile-dark.json",
+    "cases": 9,
+    "sourceCount": 4,
+    "screenshotCount": 7,
+    "verified": true
+  },
+  {
+    "file": "after-mobile-light.json",
+    "cases": 9,
+    "sourceCount": 4,
+    "screenshotCount": 7,
+    "verified": true
+  }
+]

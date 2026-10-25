@@ -264,3 +264,8 @@ DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个s
 沿本页原生双包部署脚本增加 -ArtifactPolicyProposal <绝对JSON路径>，与PTY补丁模式互斥。提案只含schemaVersion1、固定name/version、当前profile package.json的expectedManifestSha256、持久packagePath/packageSha256/entrySha256。先 -Check 零写/零信号，正式执行仅在原PID/子进程/账本原生排空后CAS增加这一个原生包的直接file依赖与pnpm.overrides；保留其他依赖/overrides/profile patch，使用官方plugin add安装，不直接编辑node_modules。启动前verify从真实dsh-base消费者解析policy并核版本/入口字节；任一步失败保留阶段，不启动部分安装或重发历史消息。
 
 旧链技术路径纠正沿原 Task operator 申请 `/tasks/:id/human-requests/:request/reply/check` 提交与正式 reply 完全相同正文，添加 `artifactScopeCorrection: {coordinationId, expectedRevision, reason}`；不得提交任意 artifactRoot。Check 返回 writes=0 及 Host 派生正式根。正式 reply 同事务记录受信 webActorId 纠正来源与 coordination 历史，旧 requirement/control/context/run、成员依赖、hold 和完成事实保持；B/C 在自然启动时读相同纠正来源。不得用该入口人工完成 Task 或调用后继启动。
+
+
+## 协调调度关系只读升级
+
+A 正式完成后调度 B 的关系投影及任务页前置等待说明同时修改 Assistant 与 Observer，无 schema 迁移，不重建业务库、不重放触发或通知。沿用本页原生双包 Check、排空、退出、安装和独立回读流程；部署核对包 SHA/版本、profile、新旧 PID、3080/18998、健康、入站与自启恢复后，再用既有真实关系只读验收。协调页只表达等待前置、待下发、下发成功/失败及真实原因，B 的执行或完成状态仅在 B 任务页；不能据 B active/fulfilled 猜测协调成功。任务页前置等待须可点击具体前置任务，多前置依真实 all 契约列未满足项，不虚构任一触发。隔离正式命令夹具覆盖等待到下发，生产不可为截图手改任务/回执；不存在真实等待中的关系时，应明确原生等待态未验证，而不是造生产状态。合法实体 ID 往返、单次计划时区与取消前未发送文案随本版只读修正，既有真实发送结果仍保留。

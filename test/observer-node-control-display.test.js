@@ -36,6 +36,7 @@ const input = (tree, label) => elements(tree).find(item => item.type === 'label'
 
 const workFixture = (id, overrides = {}) => ({ id, kind: 'schedule', groupId: 'g', title: `安排 ${id}`, updatedAt: '2026-10-25T00:00:00Z', result: { code: 'delivery_failed', label: '提醒发送失败', tone: 'danger' }, plan: { label: '单次计划已启用', state: 'active', rule: { kind: 'once', at: '2026-10-25T00:00:00Z' }, timezone: 'Asia/Shanghai' }, nextStep: { label: '无后续触发安排；无重试安排', triggerAt: null, sendRetryAt: null, readbackAt: null }, ...overrides })
 const detailFixture = (work, overrides = {}) => ({ work, members: [], history: { sources: [], changes: [], occurrences: [], jobs: [] }, observedAt: '2026-10-25T00:00:00Z', ...overrides })
+const relationFixture = (overrides = {}) => ({ id: 'relation-b', instructionId: 'i-b', coordinationId: 'coord', condition: 'all', target: { taskId: 'task-b', title: '后续任务' }, prerequisites: [{ instructionId: 'i-a', taskId: 'task-a', title: '前置任务', fulfilled: false, state: 'observing', reason: '等待前置正式完成' }], state: 'waiting', dispatch: { status: 'waiting', receipt: 'absent', reason: '前置尚未满足', nextStep: '等待前置任务完成后调度后续任务' }, trigger: null, ...overrides })
 
 test('协调工作从实体接口读取结果而非输入，区分加载空态失败并保留同范围数据', async () => {
   const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g', name: '验收群' }] })
@@ -68,14 +69,14 @@ test('协调详情按实体隔离慢响应，任务依赖证据只读且返回�
   assert.equal(h.requests[1].options.signal.aborted, true)
   assert.match(h.requests[2].url, /coordination-work\/dispatch%3Atwo$/)
   h.requests[1].resolve(detailFixture(workFixture('one', { title: '过期安排' }))); await settle()
-  const detail = detailFixture(workFixture('dispatch:two', { title: '<script>untrusted()</script>', kind: 'dispatch', result: { code: 'waiting_completion', label: '等待任务完成', tone: 'warning' }, plan: null }), { history: { sources: [{ id: 's', original: '修改输入', state: 'accepted' }], occurrences: [{ occurrenceId: 'o', actionState: 'succeeded', deliveryState: 'unknown' }] }, members: [
+  const detail = detailFixture(workFixture('dispatch:two', { title: '<script>untrusted()</script>', kind: 'dispatch', result: { code: 'waiting_completion', label: '等待任务完成', tone: 'warning' }, plan: null }), { relations: [relationFixture()], history: { sources: [{ id: 's', original: '修改输入', state: 'accepted' }], occurrences: [{ occurrenceId: 'o', actionState: 'succeeded', deliveryState: 'unknown' }] }, members: [
     { instructionId: 'i-a', taskId: 'task-a', title: '前置任务', state: 'applied', dependencies: [], taskState: 'active' },
     { instructionId: 'i-b', taskId: 'task-b', title: '后续任务', state: 'ready', dependencies: ['i-a'], waitingReason: { code: 'waiting_dependency' }, reorderAssessment: { state: 'assessed', summary: '保持既有工作', evidence: ['顺序核验'] }, decision: { action: 'blocked', summary: '等待证据', evidence: ['javascript:alert(1)'], limitations: ['未核验'] } },
     { instructionId: 'i-c', taskId: 'task-c', title: '历史证明任务', state: 'version_changed', dependencies: [], completionProofCurrent: false, completionProof: null, historicalCompletionProof: { eventId: 'old-proof', commandId: 'old-completion' } },
   ], collections: { changes: { truncated: true, returned: 100, total: 101 } } })
   h.requests[2].resolve(detail); await settle(); tree = h.render()
-  assert.doesNotMatch(text(tree), /过期安排/); assert.match(text(tree), /前置事项：前置任务/)
-  assert.match(text(tree), /已接纳，尚未完成/); assert.match(text(tree), /结果未知/); assert.match(text(tree), /暂无当前指令的正式完成证明/)
+  assert.doesNotMatch(text(tree), /过期安排/); assert.match(text(tree), /前置任务 → 后续任务/)
+  assert.doesNotMatch(text(tree), /已接纳，尚未完成/); assert.match(text(tree), /结果未知/); assert.match(text(tree), /暂无当前指令的正式完成证明/)
   assert.match(text(tree), /历史完成证明引用（不证明当前指令完成）/); assert.match(text(tree), /仅显示最近 100 \/ 101 条/); assert.match(text(tree), /保持既有工作/)
   assert.match(text(tree), /<script>untrusted/); assert.equal(elements(tree).some(item => item.type === 'a' || item.props.dangerouslySetInnerHTML), false)
   for (const label of ['输入与变更历史', '任务要求与证据', '触发与送达记录', '证据与读取边界']) {
@@ -630,7 +631,7 @@ test('协调全部群同文实体仍显示归属，历史结论不冒充下一�
   rows[1].props.onClick(); h.render()
   h.requests[1].resolve(detailFixture(workFixture('b', { kind: 'dispatch', groupId: 'b', result: { code: 'waiting_completion', label: '等待任务完成', tone: 'warning' } }), { members: [{ instructionId: 'i', taskId: 't', state: 'applied', decision: { action: 'complete', summary: '历史完成结论' } }] })); await settle()
   tree = h.render(); assert.match(text(tree), /所属群聊：乙群/)
-  assert.match(text(tree), /下一动作：未记录下一动作/)
+  assert.doesNotMatch(text(tree), /下一动作：/)
   assert.doesNotMatch(text(tree), /下一动作：.*历史完成结论/)
   assert.match(text(tree), /任务最近记录的结论（complete）：历史完成结论/)
   h.unmount()
@@ -670,7 +671,7 @@ test('协调当前与历史proof独立折叠，计划修订展示历史状态周
     ], history: { sources: [], changes: [{ action: 'schedule-revision', revision: 1, state: 'paused', timezone: 'Asia/Shanghai', rule: { kind: 'daily', time: '09:30' }, nextDueAt: null }], occurrences: [], jobs: [] },
   })); await settle()
   const tree = h.render(), words = text(tree)
-  assert.match(words, /当前指令已有正式完成证明/); assert.match(words, /历史完成证明引用（不证明当前指令完成）/)
+  assert.doesNotMatch(words, /当前指令已有正式完成证明/); assert.match(words, /历史完成证明引用（不证明当前指令完成）/)
   assert.equal(elements(tree).filter(item => item.type === 'summary' && text(item) === '正式完成证明引用').length, 1)
   for (const label of ['正式完成证明引用', '历史完成证明引用（不证明当前指令完成）']) {
     const node = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === label)
@@ -691,4 +692,98 @@ test('协调实体分页收缩回有效页并清理选中，轮询与卸载不�
   assert.equal(h.requests.every(request => request.options.signal.aborted), true)
   h.requests[1].reject(new Error('aborted')); h.requests.at(-1).reject(new Error('aborted')); await settle()
   assert.equal(h.timeouts.size, 0); assert.equal(h.requests.length, before)
+})
+
+
+test('任务页跨安排前置等待仅列真实未满足项，链接可导航且不借目标完成释放门禁', () => {
+  const opened = [], satisfied = { instructionId: 'i-c', taskId: 'task-c', title: '已满足前置', fulfilled: true }
+  const relation = relationFixture({ prerequisites: [...relationFixture().prerequisites, satisfied] })
+  const h = harness('TaskSessionDetail', { task: { taskId: 'task-b', title: '后续任务', state: 'completed', coordination: { condition: 'all', relations: [relation, relationFixture({ id: 'second', state: 'paused', dispatch: { status: 'paused', nextStep: '等待安排恢复' } })] } }, onOpenTask: task => opened.push(task.taskId) })
+  const tree = h.render(), waiting = elements(tree).filter(item => item.props['aria-label'] === '前置任务等待')
+  assert.equal(waiting.length, 1)
+  assert.match(text(waiting[0]), /前置任务/); assert.doesNotMatch(text(waiting[0]), /已满足前置/)
+  assert.equal(elements(tree).filter(item => item.props['data-dispatch-target']).length, 2)
+  assert.match(text(tree), /所有前置任务正式完成后/)
+  assert.match(text(tree), /调度结果：等待前置任务完成/)
+  const prerequisite = elements(waiting[0]).find(item => item.props['data-prerequisite-task'] === 'task-a')
+  prerequisite.props.onClick(); assert.deepEqual(opened, ['task-a'])
+  button(tree, '查看目标任务：后续任务').props.onClick(); assert.deepEqual(opened, ['task-a', 'task-b'])
+  h.unmount()
+})
+
+test('关系调度状态只消费DTO，目标运行或完成都不能冒充调度成功', () => {
+  const labels = { pending: '等待调度', dispatched: '调度成功', failed: '调度失败', blocked: '调度受阻', cancelled: '调度已取消', paused: '调度已暂停', stale: '安排版本已变化', unknown: '调度结果未确认', future: '调度结果未确认' }
+  for (const [state, label] of Object.entries(labels)) for (const taskState of ['running', 'completed']) {
+    const relation = relationFixture({ state, dispatch: { status: state, reason: '真实调度原因', nextStep: '真实下一步' } })
+    const tree = harness('TaskSessionDetail', { task: { taskId: 'task-b', state: taskState, coordination: { relations: [relation] } }, onOpenTask() {} }).render()
+    const section = elements(tree).find(item => item.props['aria-label'] === '任务调度关系')
+    assert.match(text(section), new RegExp(`调度结果：${label}`))
+    assert.match(text(section), /原因：真实调度原因/); assert.match(text(section), /下一步：真实下一步/)
+    assert.doesNotMatch(text(section), /执行中|已正式完成|任务已完成|正式完成证明/)
+    assert.equal(elements(section).some(item => item.props['aria-label'] === '前置任务等待'), false)
+    if (state !== 'dispatched') assert.doesNotMatch(text(section), /调度成功/)
+  }
+  const empty = harness('TaskSessionDetail', { task: { taskId: 'none', coordination: { relations: [] } } }).render()
+  assert.equal(elements(empty).some(item => item.props['aria-label'] === '任务调度关系'), false)
+})
+
+test('协调关系跨实体链接保留原筛群分页work身份且证据不成为下一步', async () => {
+  const opened = [], h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', offset: 10, workId: 'trigger:a/b' }, onOpenTask: (...args) => opened.push(args) })
+  h.render()
+  const work = workFixture('trigger:a/b', { kind: 'trigger', title: '前置任务 → 后续任务', result: { code: 'dispatch_waiting', label: '等待前置任务完成', tone: 'warning' }, relations: [relationFixture()] })
+  h.requests[0].resolve({ works: [work], total: 11 })
+  h.requests[1].resolve(detailFixture(work, { relations: [relationFixture()], members: [{ instructionId: 'i-b', taskId: 'task-b', state: 'fulfilled', taskState: 'completed', completionProofCurrent: true, completionProof: { eventId: 'proof', commandId: 'complete' } }] })); await settle()
+  const tree = h.render(), relation = elements(tree).find(item => item.props['data-dispatch-target'] === 'task-b')
+  elements(relation).find(item => item.props['data-prerequisite-task'] === 'task-a').props.onClick()
+  assert.equal(opened[0][0].taskId, 'task-a'); assert.equal(opened[0][1].workId, 'trigger:a/b'); assert.equal(opened[0][1].offset, 10); assert.equal(opened[0][1].groupId, 'g')
+  assert.doesNotMatch(text(relation), /正式完成证明|已正式完成|已接纳，尚未完成/)
+  assert.match(text(tree), /正式完成证明引用/)
+  assert.match(h.requests[1].url, /trigger%3Aa%2Fb$/)
+  h.unmount()
+})
+
+test('once计划显示计划时区时间而不是浏览器本地时间，历史计划同样适用', async () => {
+  const old = process.env.TZ
+  try {
+    for (const timezone of ['UTC', 'America/New_York']) {
+      process.env.TZ = timezone
+      const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'schedule:tz' } })
+      h.render()
+      const rule = { kind: 'once', at: '2026-10-25T09:54:00Z' }
+      h.requests[1].resolve(detailFixture(workFixture('schedule:tz', { plan: { label: '单次', timezone: 'Asia/Shanghai', rule } }), { history: { changes: [{ action: 'schedule-revision', rule, timezone: 'Asia/Shanghai' }] } })); await settle()
+      const words = text(h.render())
+      assert.match(words, /周期：单次 2026\/10\/25 17:54:00 · 时区 Asia\/Shanghai/)
+      assert.match(words, /历史周期：单次 2026\/10\/25 17:54:00 · 时区 Asia\/Shanghai/)
+      h.unmount()
+    }
+  } finally { if (old === undefined) delete process.env.TZ; else process.env.TZ = old }
+})
+
+
+test('关系展示真实待触发时间和可读等待原因，不显示内部proof代码', () => {
+  const waiting = relationFixture({ prerequisites: [{ instructionId: 'i-a', taskId: 'task-a', title: '前置任务', fulfilled: false, reason: 'waiting_completion_proof' }], dispatch: { reason: 'waiting_dependency', nextStep: '等待前置完成', triggerAt: null } })
+  const pending = relationFixture({ id: 'scheduled', state: 'pending', dispatch: { nextStep: '等待已安排的触发时间', triggerAt: '2026-10-25T09:54:00Z' } })
+  const tree = harness('TaskSessionDetail', { task: { taskId: 'task-b', coordination: { relations: [waiting, pending] } }, onOpenTask() {} }).render()
+  const section = elements(tree).find(item => item.props['aria-label'] === '任务调度关系')
+  assert.match(text(section), /等待前置任务正式完成/)
+  assert.doesNotMatch(text(section), /waiting_completion_proof|waiting_dependency/)
+  assert.equal(elements(section).filter(item => item.type === 'p' && text(item).startsWith('已安排触发时间：')).length, 1)
+  assert.match(text(section), /已安排触发时间：/)
+})
+
+
+test('真实触发门禁原因显示中文且保留后端唯一状态', () => {
+  for (const [reason, state, label] of [
+    ['waiting_trigger', 'blocked', '等待约定触发条件满足'],
+    ['trigger_paused', 'paused', '触发安排已暂停'],
+    ['trigger_cancelled', 'cancelled', '触发安排已取消'],
+    ['trigger_superseded', 'stale', '触发安排已被替代'],
+  ]) {
+    const relation = relationFixture({ state, dispatch: { status: state, reason, nextStep: '等待真实触发安排' } })
+    const tree = harness('TaskSessionDetail', { task: { taskId: 'task-b', coordination: { relations: [relation] } }, onOpenTask() {} }).render()
+    const section = elements(tree).find(item => item.props['aria-label'] === '任务调度关系')
+    assert.match(text(section), new RegExp(`原因：${label}`))
+    assert.doesNotMatch(text(section), new RegExp(reason))
+    assert.equal(elements(section).find(item => item.props['data-dispatch-state']).props['data-dispatch-state'], state)
+  }
 })

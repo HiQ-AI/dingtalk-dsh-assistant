@@ -74,6 +74,25 @@ if (!values.empty) {
   await command('coordination.apply', { instructionId: 'instruction-synthetic-A', expectedRevision: 1 })
   const blocked = await command('coordination.apply', { instructionId: 'instruction-synthetic-B', expectedRevision: 1 })
   assert.deepEqual(blocked.result.waiting, ['instruction-synthetic-A'])
+  // Relationship scenarios use durable command receipts, never patched member/task states.
+  manifest.relationCases = [{ name: 'waiting', workId: 'dispatch:synthetic-chain', prerequisite: 'synthetic-A', target: 'synthetic-B' }]
+  for (const state of ['pending', 'dispatched']) {
+    const coordinationId = `synthetic-relation-${state}`, a = `${coordinationId}-A`, b = `${coordinationId}-B`
+    for (const taskId of [a, b]) {
+      await command('task.create', { taskId, groupId: 'synthetic-group', title: `[合成测试数据] ${state === 'pending' ? '待调度' : '已下发'}关系任务 ${taskId === a ? 'A' : 'B'}`,
+        request: '[合成测试数据] 仅验证前置完成与下发关系，不执行真实业务' })
+      manifest.tasks[taskId] = taskId
+    }
+    const source = await reserve(`relation-${state}`, '前置任务 A 正式完成后调度 B，台账不跟踪 B 的执行结果。')
+    await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId,
+      members: [member(a, [], coordinationId), member(b, [`instruction-${a}`], coordinationId)] })
+    await command('coordination.apply', { instructionId: `instruction-${a}`, expectedRevision: 1 })
+    const binding = (await command('task.claim', { taskId: a })).result.binding
+    await command('task.complete', { binding, summary: '[合成测试数据] 前置任务已正式完成', result: { evidence: [`synthetic-proof:${a}`] } })
+    await command('task.drained', { binding })
+    if (state === 'dispatched') await command('coordination.apply', { instructionId: `instruction-${b}`, expectedRevision: 1 })
+    manifest.relationCases.push({ name: state, workId: `dispatch:${coordinationId}`, prerequisite: a, target: b })
+  }
   const completed = await reserve('completed', '独立任务已有正式完成证据。')
   await command('coordination.accept', { sourceId: completed.id, fence: completed.fence, coordinationId: 'synthetic-completed', members: [member('synthetic-complete', [], 'synthetic-completed')] })
   await command('coordination.apply', { instructionId: 'instruction-synthetic-complete', expectedRevision: 1 })

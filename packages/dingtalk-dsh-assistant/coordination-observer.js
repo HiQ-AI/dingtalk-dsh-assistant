@@ -88,6 +88,80 @@ function workResult({ schedule, occurrence, members, tasks, executions, coordina
   return resultView('unknown', '状态未确认', 'warning')
 }
 
+const taskLink = taskId => '/state/tasks/' + encodeURIComponent(taskId) + '/detail'
+const dispatchLabels = {
+  waiting: '等待前置任务正式完成', pending: '等待调度任务', dispatched: '任务调度成功',
+  failed: '任务调度失败', cancelled: '后续调度已取消', paused: '后续调度已暂停',
+  stale: '调度版本已变化，需要核对', blocked: '任务调度受阻', unknown: '调度结果未确认',
+}
+function dispatchResult(relations) {
+  const states = relations.map(item => item.dispatch.status)
+  const state = ['failed', 'unknown', 'stale', 'blocked', 'waiting', 'paused', 'pending', 'cancelled'].find(value => states.includes(value)) ?? 'dispatched'
+  return resultView(state === 'failed' ? 'dispatch_failed' : state, dispatchLabels[state],
+    state === 'failed' ? 'danger' : ['unknown', 'stale', 'blocked'].includes(state) ? 'warning' : state === 'dispatched' ? 'success' : state === 'pending' ? 'info' : 'neutral')
+}
+function relationView(member, { coordination, memberById, taskById, coordinationById, receiptById, occurrences, jobs, schedule }) {
+  const targetTask = taskById.get(member.taskId)
+  const prerequisites = texts(member.dependencies).map(instructionId => {
+    const parent = memberById.get(instructionId), task = parent && taskById.get(parent.taskId)
+    const proofCurrent = Boolean(parent?.completionReceipt && currentProof(parent, task))
+    const state = !parent || !['active', 'paused', 'cancelled'].includes(parent.control ?? 'active')
+      || !['ready', 'applied', 'fulfilled', 'cancelled', 'superseded', 'template', 'observing'].includes(parent.state) ? 'unknown' : parent.control === 'cancelled' || ['cancelled', 'superseded'].includes(parent.state)
+      || coordinationById.get(parent.coordinationId)?.state === 'cancelled' ? 'cancelled'
+      : parent.control === 'paused' ? 'paused' : proofCurrent ? 'completed'
+      : parent.completionProof || parent.waitingReason?.code === 'target_version_changed' ? 'stale' : 'waiting'
+    return { instructionId, taskId: text(parent?.taskId), title: text(task?.title) ?? text(task?.request),
+      taskHref: parent ? taskLink(parent.taskId) : null, state, fulfilled: state === 'completed',
+      reason: state === 'completed' ? null : state === 'waiting' ? 'waiting_completion_proof' : state,
+      proof: proofCurrent ? proofView(parent.completionProof) : null }
+  })
+  const related = occurrences.filter(item => actionInstructions(item.action).includes(member.id)
+    && !item.replacedBy && !item.mergedInto && item.actionState !== 'superseded')
+    .sort((a, b) => String(a.acceptedAt).localeCompare(String(b.acceptedAt)) || a.id.localeCompare(b.id))
+  const occurrence = related.find(item => item.id === member.recurringOccurrenceId) ?? related.at(-1)
+  const job = jobs.find(item => item.occurrenceId === occurrence?.id)
+  const recorded = (occurrence?.result?.results ?? occurrence?.result?.conditionalCommands?.results)?.find(item => item.instructionId === member.id && item.commandId === member.command?.id)
+  // Receipt bodies have no command ID; the durable lookup key owns this acceptance.
+  const receipt = receiptById.get(member.command?.id), appliedTask = receipt?.result?.task
+  const accepted = (!occurrence || recorded) && appliedTask?.taskId === member.taskId && member.effectiveVersion
+    && ['requirementRevision', 'contextRevision', 'controlRevision', 'runSequence']
+      .every(key => (appliedTask[key] ?? (key === 'contextRevision' ? 0 : null)) === member.effectiveVersion[key])
+  const waitingReason = member.waitingReason?.code
+  let status, reason = null
+  if (accepted) status = 'dispatched'
+  else if (coordination.state === 'cancelled' || member.control === 'cancelled' || ['cancelled', 'superseded'].includes(member.state) || occurrence?.cancelledAt) status = 'cancelled'
+  else if (waitingReason === 'trigger_cancelled') status = 'cancelled'
+  else if (member.control === 'paused' || occurrence?.paused || schedule?.state === 'paused' || waitingReason === 'trigger_paused') status = 'paused'
+  else if (schedule?.state === 'cancelled') status = 'cancelled'
+  else if (['target_version_changed', 'trigger_superseded'].includes(waitingReason) || prerequisites.some(item => item.state === 'stale')) status = 'stale'
+  else if (['failed', 'blocked', 'expired', 'unknown'].includes(occurrence?.actionState)) {
+    status = occurrence.actionState === 'failed' ? 'failed' : occurrence.actionState === 'blocked' ? 'blocked' : 'unknown'
+    reason = failureCode(occurrence.failureReason ?? job?.waitingReason)
+  } else if (member.reorderAssessment && ['pending', 'needs_clarification'].includes(member.reorderAssessment.state)) {
+    status = 'blocked'; reason = 'reorder_' + member.reorderAssessment.state
+  } else if (prerequisites.some(item => item.state === 'unknown')) status = 'unknown'
+  else if (prerequisites.some(item => !item.fulfilled)) status = 'waiting'
+  else if (!['ready', 'template'].includes(member.state) || !['active', 'needs_clarification'].includes(coordination.state)
+    || !['active', 'paused', 'cancelled'].includes(member.control ?? 'active')
+    || schedule && !['active', 'paused', 'cancelled', 'completed', 'needs_clarification'].includes(schedule.state)) status = 'unknown'
+  else if (waitingReason === 'waiting_trigger') { status = 'blocked'; reason = 'waiting_trigger' }
+  else if (coordination.allTogether && coordination.pendingClarifications?.length) { status = 'blocked'; reason = 'waiting_batch_clarification' }
+  else status = 'pending'
+  reason ??= status === 'dispatched' ? null : code(waitingReason) ?? (status === 'waiting' ? 'waiting_dependency' : null)
+  let nextStep = { waiting: '等待前置任务正式完成后调度', pending: '等待协调器下发已接纳指令',
+    dispatched: '调度已成功，后续执行请查看任务', cancelled: '本安排不再下发后续指令', paused: '调度已暂停，等待明确恢复',
+    stale: '核对已变化的任务版本和授权', blocked: '核对已记录的调度阻塞原因', failed: '核对已记录的调度失败原因', unknown: '核实原指令是否已被接纳，勿重复下发' }[status]
+  const triggerAt = status === 'pending' && schedule?.state === 'active' ? instant(schedule.nextDueAt) : null
+  if (triggerAt) nextStep = '等待已安排的触发时间'
+  if (reason === 'waiting_trigger') nextStep = '等待已接纳的触发条件满足后调度'
+  return { id: JSON.stringify([coordination.id, member.id]), instructionId: member.id, coordinationId: coordination.id, condition: 'all',
+    target: { taskId: member.taskId, title: text(targetTask?.title) ?? text(targetTask?.request), taskHref: taskLink(member.taskId) },
+    prerequisites, state: status,
+    dispatch: { status, occurrenceId: text(occurrence?.id), jobId: text(job?.id), commandId: text(member.command?.id),
+      receipt: accepted ? recorded?.reconciled || receipt.replayed ? 'replayed' : 'accepted' : 'absent', reason, nextStep, triggerAt },
+    trigger: occurrence ? { kind: text(occurrence.triggerKind), eventId: text(occurrence.trigger?.eventId ?? occurrence.eventId) } : null }
+}
+
 // This reader receives only query, never a command capability or raw runtime DTO.
 export function createCoordinationObserver(query) {
   async function readWork(groupId) {
@@ -95,10 +169,18 @@ export function createCoordinationObserver(query) {
       query('coordination.list', { groupId }), query('coordination.schedule.list'), query('coordination.occurrence.list'),
       query('coordination.job.list'), query('notification.list'), query('coordination.source.list'), query('execution.list'),
     ])
+    const states = await Promise.all(coordinations.map(coordination => query('coordination.get', { coordinationId: coordination.id })))
+    const memberById = new Map(states.flatMap(state => state.members).map(member => [member.id, member]))
+    const allTasks = (await Promise.all([...new Set([...memberById.values()].map(member => member.taskId))]
+      .map(taskId => query('task.get', { taskId })))).filter(Boolean)
+    const taskById = new Map(allTasks.map(task => [task.taskId, task]))
+    const coordinationById = new Map(coordinations.map(coordination => [coordination.id, coordination]))
+    const commandIds = [...new Set([...memberById.values()].filter(member => !member.observation).map(member => member.command?.id).filter(Boolean))]
+    const receiptById = new Map(await Promise.all(commandIds.map(async id => [id, await query('receipt.get', { id })])))
     const entities = []
     for (const coordination of coordinations) {
-      const { members } = await query('coordination.get', { coordinationId: coordination.id })
-      const tasks = (await Promise.all([...new Set(members.map(member => member.taskId))].map(taskId => query('task.get', { taskId })))).filter(Boolean)
+      const { members } = states.find(state => state.coordination.id === coordination.id)
+      const tasks = members.map(member => taskById.get(member.taskId)).filter(Boolean)
       const ownSchedules = schedules.filter(schedule => schedule.coordinationId === coordination.id)
       const ownOccurrences = occurrences.filter(occurrence => occurrence.coordinationId === coordination.id)
       const covered = new Set()
@@ -111,15 +193,22 @@ export function createCoordinationObserver(query) {
         // A queued future slot must not erase the last actual delivery/execution result.
         const selected = candidates.filter(item => !['waiting', 'cancelled'].includes(item.actionState)).at(-1) ?? candidates.at(-1)
         const notification = selected ? notifications.find(item => item.id === selected.notificationId) : null
-        const cancelledBeforeSend = notification?.state === 'failed' && notification.reason === 'coordination_cancelled'
-          && !notification.sendPermit && !(notification.sendAttemptCount > 0) && !notification.ack && !notification.receipt
+        const cancelledBeforeSend = (notification?.state === 'failed' && notification.reason === 'coordination_cancelled'
+          || selected?.deliveryState === 'cancelled' && selected.action?.kind === 'message-reminder')
+          && !notification?.sendPermit && !(notification?.sendAttemptCount > 0) && !notification?.ack && !notification?.receipt
         // A denied permit is cancellation, not a send failure; real terminal effects survive later control changes.
         const occurrence = selected && !cancelledBeforeSend && ['delivered', 'failed', 'unknown'].includes(notification?.state)
           ? { ...selected, deliveryState: notification.state } : selected
         const ids = new Set(actionInstructions(occurrence?.action))
         const currentMembers = occurrence && ids.size ? entityMembers.filter(member => ids.has(member.id))
           : entityMembers.filter(member => member.state !== 'template' && !member.recurringOccurrenceId)
-        const result = workResult({ schedule, occurrence, members: currentMembers, tasks, executions, coordination, jobs: entityJobs, cancelledBeforeSend })
+        const relationMembers = currentMembers.length ? currentMembers : entityMembers.filter(member => member.state === 'template')
+        const relations = relationMembers.filter(member => !member.observation).map(member => relationView(member, {
+          coordination, memberById, taskById, coordinationById, receiptById, occurrences: entityOccurrences, jobs: entityJobs, schedule,
+        }))
+        const taskDispatch = kind === 'dispatch' || (occurrence?.action ?? schedule?.action)?.kind === 'task-command'
+        const result = taskDispatch && relations.length ? dispatchResult(relations)
+          : workResult({ schedule, occurrence, members: currentMembers, tasks, executions, coordination, jobs: entityJobs, cancelledBeforeSend })
         const state = coordination.state === 'cancelled' ? 'cancelled' : schedule?.state
           ?? (occurrence?.cancelledAt ? 'cancelled' : occurrence?.paused ? 'paused'
             : currentMembers.length && currentMembers.every(member => member.control === 'paused') ? 'paused'
@@ -143,17 +232,30 @@ export function createCoordinationObserver(query) {
         const blockedCount = pendingMembers.filter(member => member.waitingReason?.code === 'target_version_changed'
           || member.reorderAssessment?.state === 'needs_clarification' || tasks.find(task => task.taskId === member.taskId)?.lastDecision?.action === 'blocked').length
         const snap = coordinationSnapshot({ coordination, members: entityMembers, tasks, schedules: schedule ? [schedule] : [], occurrences: entityOccurrences, jobs: entityJobs })
-        const title = text(schedule?.action?.text ?? occurrence?.action?.text)
-          ?? (kind === 'trigger' ? occurrence?.action?.kind === 'read-query' ? '条件触发查询' : '条件触发任务调度'
+        const title = taskDispatch && relations.length ? relations.map(relation => {
+          const from = relation.prerequisites.length ? relation.prerequisites.map(item => item.title ?? item.taskId ?? '前置任务').join('、') : '约定条件'
+          return from + ' → ' + (relation.target.title ?? relation.target.taskId)
+        }).join('；') : text(schedule?.action?.text ?? occurrence?.action?.text)
+          ?? (kind === 'trigger' ? '条件触发查询'
             : currentMembers.map(member => text(tasks.find(task => task.taskId === member.taskId)?.title) ?? text(member.command?.args?.text)).filter(Boolean).join('、'))
         const updatedAt = lastStamp([coordination.createdAt, ...sourceHistory.map(source => source.createdAt),
           ...entityOccurrences.flatMap(item => [item.acceptedAt, item.cancelledAt]), ...entityJobs.map(item => item.updatedAt),
           ...(schedule?.history ?? []).map(item => item.changedAt),
           notification?.updatedAt, ...currentMembers.map(member => tasks.find(task => task.taskId === member.taskId)?.updatedAt)])
-        entities.push({ work: { id, kind, coordinationId: coordination.id, groupId: coordination.groupId, title: title || '任务调度', updatedAt,
+        const relationMeta = new Map(relations.map(relation => {
+          const item = entityOccurrences.find(candidate => candidate.id === relation.dispatch.occurrenceId)
+          return [relation.id, { occurrenceAt: Date.parse(item?.acceptedAt ?? item?.plannedAt ?? '') || -Infinity,
+            accepted: relation.dispatch.receipt !== 'absent', occurrenceId: relation.dispatch.occurrenceId }]
+        }))
+        entities.push({ relations, relationMeta, work: { id, kind, coordinationId: coordination.id, groupId: coordination.groupId, title: title || '任务调度', updatedAt,
           result, plan: { state, label: planLabel, recurrence, timezone: text(schedule?.timezone), rule: ruleView(schedule?.rule) },
-          nextStep: { triggerAt, sendRetryAt, readbackAt, label: nextLabel },
-          counts: { total: currentMembers.length, fulfilled, blocked: blockedCount, waiting: pendingMembers.length - blockedCount },
+          nextStep: { triggerAt, sendRetryAt, readbackAt, label: taskDispatch && relations.length
+            ? [...new Set(relations.map(item => item.dispatch.nextStep))].join('；') : nextLabel },
+          counts: taskDispatch && relations.length ? { total: relations.length, fulfilled: relations.filter(item => item.state === 'dispatched').length,
+            blocked: relations.filter(item => ['failed', 'blocked', 'stale', 'unknown'].includes(item.state)).length,
+            waiting: relations.filter(item => ['waiting', 'pending', 'paused'].includes(item.state)).length }
+            : { total: currentMembers.length, fulfilled, blocked: blockedCount, waiting: pendingMembers.length - blockedCount },
+          relations: bound(relations), relationCount: relations.length,
           scheduleId: text(schedule?.id), occurrenceId: text(occurrence?.id) },
           members: snap.members.map(item => {
             const member = entityMembers.find(member => member.id === item.instructionId), task = tasks.find(task => task.taskId === item.taskId)
@@ -206,12 +308,27 @@ export function createCoordinationObserver(query) {
       return { works: entities.slice(offset, offset + limit).map(item => item.work), total: entities.length, offset, limit, observedAt: new Date().toISOString() }
     },
     async coordinationWorkDetail(workId) {
-      if (typeof workId !== 'string' || !/^(schedule|dispatch|trigger):[^\s/\\\u0000-\u001f]{1,1000}$/u.test(workId)) throw new Error('coordination_query_invalid')
+      const identity = typeof workId === 'string' && /^(schedule|dispatch|trigger):/u.exec(workId)
+      if (!identity || !workId.slice(identity[0].length).trim() || workId.length - identity[0].length > 1000000) throw new Error('coordination_query_invalid')
       const entity = (await readWork()).find(item => item.work.id === workId)
       if (!entity) return null
       const { work, members, history } = entity
-      return { work, members: bound(members), history: Object.fromEntries(Object.entries(history).map(([key, values]) => [key, bound(values)])),
-        collections: { members: collection(members), ...Object.fromEntries(Object.entries(history).map(([key, values]) => [key, collection(values)])) }, observedAt: new Date().toISOString() }
+      return { work, relations: work.relations, members: bound(members), history: Object.fromEntries(Object.entries(history).map(([key, values]) => [key, bound(values)])),
+        collections: { relations: collection(entity.relations), members: collection(members), ...Object.fromEntries(Object.entries(history).map(([key, values]) => [key, collection(values)])) }, observedAt: new Date().toISOString() }
+    },
+    async taskCoordination(taskId, groupId) {
+      const entities = await readWork(groupId)
+      const byId = new Map()
+      for (const entity of entities) for (const relation of entity.relations) if (relation.target.taskId === taskId) {
+        const candidate = { relation, meta: entity.relationMeta.get(relation.id) }
+        const prior = byId.get(relation.id)
+        if (!prior || candidate.meta.occurrenceAt > prior.meta.occurrenceAt
+          || candidate.meta.occurrenceAt === prior.meta.occurrenceAt && (Number(candidate.meta.accepted) > Number(prior.meta.accepted)
+            || candidate.meta.accepted === prior.meta.accepted && String(candidate.meta.occurrenceId).localeCompare(String(prior.meta.occurrenceId)) > 0)) byId.set(relation.id, candidate)
+      }
+      const relations = [...byId.values()].sort((a, b) => b.meta.occurrenceAt - a.meta.occurrenceAt
+        || Number(b.meta.accepted) - Number(a.meta.accepted) || a.relation.id.localeCompare(b.relation.id)).map(item => item.relation)
+      return { condition: 'all', relations }
     },
     async coordinationSources({ groupId, offset = 0, limit = 20 } = {}) {
       if (groupId !== undefined && (typeof groupId !== 'string' || !groupId.trim())

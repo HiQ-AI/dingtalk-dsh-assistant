@@ -538,8 +538,23 @@ window.__ModuleLoader__.load({
             ))))
     }
     const coordinationState = state => ({ reserved: '等待判断', accepted: '已接纳', rejected: '未接纳', needs_clarification: '等待澄清', active: '进行中', completed: '已完成', partially_completed: '部分完成', needs_attention: '需要处理', cancelled: '已取消', paused: '已暂停', ready: '等待执行', applied: '已接纳，尚未完成', fulfilled: '已正式完成', observing: '等待原任务完成', template: '周期安排模板', superseded: '已被替代', version_changed: '任务版本已变化', waiting: '等待执行', running: '执行中', succeeded: '已执行', failed: '失败', blocked: '已阻塞', expired: '已过期', pending: '待确认', unknown: '结果未知', delivered: '已送达', prepared: '已准备', sending: '发送中' }[state] || '状态未记录')
-    const coordinationTone = state => ['fulfilled', 'completed', 'succeeded', 'delivered'].includes(state) ? 'done' : ['failed', 'blocked', 'needs_attention'].includes(state) ? 'error' : ['active', 'running'].includes(state) ? 'ongoing' : ['partially_completed', 'needs_clarification', 'paused', 'waiting', 'pending', 'unknown', 'version_changed'].includes(state) ? 'warning' : undefined
-    const coordinationReason = reason => ({ waiting_dependency: '等待前置事项正式完成', dependency_pending: '等待前置事项正式完成', waiting_batch_clarification: '等待本批安排澄清', waiting_completion_proof: '等待正式完成证明', target_version_changed: '任务版本已变化，需重新核对', reorder_pending: '正在核对新的处理顺序', reorder_needs_clarification: '处理顺序仍需澄清', paused: '安排已暂停', cancelled: '安排已取消', waiting_trigger: '等待约定条件满足', trigger_paused: '触发条件已暂停', trigger_cancelled: '触发条件已取消', trigger_superseded: '触发条件已被替代' }[reason?.code ?? reason] || (reason ? '存在等待条件，具体原因未记录' : '未记录等待条件'))
+    const dispatchReason = reason => ({ waiting_completion_proof: '等待前置任务正式完成', waiting_dependency: '等待前置任务正式完成', paused: '前置安排已暂停', cancelled: '前置安排已取消', stale: '前置任务版本已变化', unknown: '前置任务状态未确认', target_version_changed: '任务版本已变化，需核对安排', reorder_pending: '正在核对处理顺序', reorder_needs_clarification: '处理顺序需要澄清', waiting_batch_clarification: '等待本批安排澄清', waiting_trigger: '等待约定触发条件满足', trigger_paused: '触发安排已暂停', trigger_cancelled: '触发安排已取消', trigger_superseded: '触发安排已被替代' }[reason] || reason)
+    const coordinationRelations = (relations, onOpenTask) => relations?.length ? React.createElement('section', { 'aria-label': '任务调度关系', className: 'observer-coordination-section', style: { minWidth: 0, overflowWrap: 'anywhere' } },
+      React.createElement('h3', null, '任务调度关系'),
+      ...relations.map(relation => React.createElement('section', { key: relation.id, 'data-dispatch-target': relation.target.taskId, style: { padding: '12px 0', borderBottom: `1px solid ${colors.border}` } },
+        React.createElement('h4', null, `${relation.prerequisites.filter(item => relation.state !== 'waiting' || item.fulfilled === false).map(item => item.title || item.taskId).join('、') || '约定条件'} → ${relation.target.title || relation.target.taskId}`),
+        React.createElement('p', { className: 'observer-coordination-text' }, relation.prerequisites.length ? relation.condition === 'all' ? '触发条件：所有前置任务正式完成后调度目标任务。' : '触发条件：前置条件未确认。' : '触发条件：按已记录的调度安排。'),
+        React.createElement('p', { className: 'observer-coordination-text', 'data-dispatch-state': relation.state }, `调度结果：${({ waiting: '等待前置任务完成', pending: '等待调度', dispatched: '调度成功', failed: '调度失败', blocked: '调度受阻', cancelled: '调度已取消', paused: '调度已暂停', stale: '安排版本已变化', unknown: '调度结果未确认' })[relation.state] || '调度结果未确认'}`),
+        relation.state === 'waiting' ? React.createElement('section', { 'aria-label': '前置任务等待' }, React.createElement('p', null, '等待以下前置任务正式完成：'),
+          ...relation.prerequisites.filter(item => item.fulfilled === false).map(item => React.createElement('div', { key: item.instructionId },
+            React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'data-prerequisite-task': item.taskId, onClick: () => onOpenTask({ taskId: item.taskId }) }, item.title || item.taskId),
+            item.reason ? React.createElement('p', { className: 'observer-coordination-text' }, dispatchReason(item.reason)) : null))) : null,
+        relation.state !== 'waiting' && relation.prerequisites.length ? React.createElement('nav', { 'aria-label': '前置任务', style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+          ...relation.prerequisites.map(item => React.createElement(Button, { key: item.instructionId, type: 'button', variant: 'outline', size: 'sm', 'data-prerequisite-task': item.taskId, onClick: () => onOpenTask({ taskId: item.taskId }) }, item.title || item.taskId))) : null,
+        relation.dispatch.reason ? React.createElement('p', { className: 'observer-coordination-text' }, `原因：${dispatchReason(relation.dispatch.reason)}`) : null,
+        React.createElement('p', { className: 'observer-coordination-text' }, `下一步：${relation.dispatch.nextStep || '未记录下一步'}`),
+        relation.dispatch.triggerAt ? React.createElement('p', { className: 'observer-coordination-text' }, `已安排触发时间：${fmt(relation.dispatch.triggerAt)}`) : null,
+        React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenTask({ taskId: relation.target.taskId }) }, `查看目标任务：${relation.target.title || relation.target.taskId}`)))) : null
     // 每个读取范围独立轮询；换范围立即隔离旧内容，失败只保留同范围数据。
     function useCoordinationRead(path) {
       const [resource, setResource] = useState({ path, loading: Boolean(path) })
@@ -600,16 +615,14 @@ window.__ModuleLoader__.load({
       const text = value => React.createElement('p', { className: 'observer-coordination-text' }, value || '未记录')
       const section = (title, ...children) => React.createElement('section', { className: 'observer-coordination-section' }, React.createElement('h3', null, title), ...children)
       const evidence = (items, label) => React.createElement('div', { style: { margin: '12px 0' } }, React.createElement('strong', { style: { fontSize: 12, color: colors.muted } }, label), items?.length ? React.createElement('ul', { 'aria-label': label, style: { paddingLeft: 20, margin: '8px 0', overflowWrap: 'anywhere' } }, ...items.map((item, index) => React.createElement('li', { key: index }, item))) : text('未记录'))
-      const badge = state => statusTag(coordinationState(state), coordinationTone(state))
       const notice = (resource, label) => resource.error ? React.createElement('div', { role: 'alert', style: { ...card, marginBottom: 12, color: colors.danger } }, resource.error, resource.value ? ` 保留上次${label}，内容可能已过期。` : '', React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: resource.reload, style: { marginLeft: 8 } }, `重试${label}`)) : null
       const selectGroup = id => { focusWork.current = ''; setSelection({ groupId: id, offset: 0, workId: '' }) }
       const disclosure = (title, ...children) => React.createElement('details', { className: 'observer-coordination-disclosure' }, React.createElement('summary', null, title), ...children)
-      const nextAction = member => member.control === 'cancelled' ? '安排已取消，不再推进' : member.control === 'paused' ? '安排已暂停，等待恢复' : member.state === 'fulfilled' && member.completionProofCurrent && member.completionProof ? '当前指令已有正式完成证明' : member.waitingReason ? coordinationReason(member.waitingReason) : member.blocker ? `先处理阻塞：${member.blocker}` : '未记录下一动作'
       const inputState = state => ({ reserved: '等待判断', accepted: '已接纳', rejected: '未接纳', needs_clarification: '等待澄清' }[state] || '状态未确认')
       const resultTone = tone => ({ danger: 'error', warning: 'warning', info: 'ongoing', success: 'done' }[tone] || undefined)
       const resultBadge = result => React.createElement('span', { 'data-work-result': result?.code || 'unknown' }, statusTag(result?.label || '状态未确认', resultTone(result?.tone)))
       const kindLabel = kind => ({ schedule: '定时安排', dispatch: '任务调度', trigger: '触发调度' }[kind] || '协调工作')
-      const planRule = plan => `${plan.rule.kind === 'once' ? `单次 ${fmt(plan.rule.at)}` : plan.rule.kind === 'daily' ? `每日 ${plan.rule.time || '时间未记录'}` : plan.rule.kind === 'weekly' ? `每周${'日一二三四五六'[plan.rule.weekday] ?? '（星期未记录）'} ${plan.rule.time || '时间未记录'}` : '未记录'}${plan.timezone ? ` · 时区 ${plan.timezone}` : ''}`
+      const planRule = plan => `${plan.rule.kind === 'once' ? `单次 ${new Date(plan.rule.at).toLocaleString('zh-CN', { hour12: false, timeZone: plan.timezone })}` : plan.rule.kind === 'daily' ? `每日 ${plan.rule.time || '时间未记录'}` : plan.rule.kind === 'weekly' ? `每周${'日一二三四五六'[plan.rule.weekday] ?? '（星期未记录）'} ${plan.rule.time || '时间未记录'}` : '未记录'}${plan.timezone ? ` · 时区 ${plan.timezone}` : ''}`
       const proof = (item, label) => React.createElement('details', null, React.createElement('summary', null, label), text(`事件：${item.eventId || '未记录'}\n命令：${item.commandId || '未记录'}`))
       const listingPage = React.createElement('nav', { ref: navigation, 'aria-label': '协调工作列表' },
         notice(listing, '列表'),
@@ -639,12 +652,7 @@ window.__ModuleLoader__.load({
             text(`下次触发：${work.nextStep?.triggerAt ? fmt(work.nextStep.triggerAt) : '无后续触发安排'}`),
             text(`重试：${work.nextStep?.sendRetryAt ? fmt(work.nextStep.sendRetryAt) : '无重试安排'}`),
             text(`送达核实：${work.nextStep?.readbackAt ? fmt(work.nextStep.readbackAt) : '无核实安排'}`)),
-          work.counts?.total ? text(`本项任务：${work.counts.total} 项 · 正式完成 ${work.counts.fulfilled} 项 · 受阻 ${work.counts.blocked} 项 · 等待 ${work.counts.waiting} 项`) : null,
-          members.length ? section('任务调度', ...members.map(member => React.createElement('section', { key: member.instructionId, style: { padding: '12px 0', borderBottom: `1px solid ${colors.border}` }, 'aria-label': member.title || member.taskId },
-            React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, React.createElement('h4', null, member.title || member.taskId), badge(member.state), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask({ taskId: member.taskId }, { groupId, offset, workId }) }, '查看任务')),
-            member.dependencies?.length ? text(`前置事项：${member.dependencies.map(id => members.find(item => item.instructionId === id)?.title || id).join('、')}`) : null,
-            member.blocker ? text(`阻塞：${member.blocker}`) : null,
-            text(`下一动作：${nextAction(member)}`)))) : null,
+          coordinationRelations(value.relations, task => onOpenTask(task, { groupId, offset, workId })),
           disclosure('输入与变更历史',
             ...(history?.sources || []).map(source => React.createElement('section', { key: source.id, style: { padding: '8px 0' } }, text(`${fmt(source.createdAt)} · 输入判断：${inputState(source.state)}`), text(source.original), source.answerText ? text(`已记录答复：${source.answerText}`) : null, source.question ? text(`需要澄清：${source.question}`) : null, source.rejectionReason ? text(`未接纳原因：${source.rejectionReason}`) : null)),
             history?.changes?.length ? React.createElement('ol', { style: { paddingLeft: 20 } }, ...history.changes.map((item, index) => React.createElement('li', { key: index }, text(`${fmt(item.at)} · 修订 ${item.revision ?? '未记录'} · ${item.action === 'schedule-revision' ? '计划修订' : item.action || '已记录变更'}`), item.reason ? text(item.reason) : null,
@@ -653,6 +661,7 @@ window.__ModuleLoader__.load({
           members.length ? disclosure('任务要求与证据',
             ...members.map(member => React.createElement('section', { key: member.instructionId, style: { padding: '12px 0' } },
               React.createElement('h4', null, member.title || member.taskId),
+              React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask({ taskId: member.taskId }, { groupId, offset, workId }) }, '查看任务'),
               member.requirement ? text(member.requirement) : null,
               member.observation ? text('仅观察原任务完成，不追加要求或唤醒任务。') : member.progressImpact ? text(`协调方式：${member.progressImpact === 'preserve' ? '保留既有工作' : member.progressImpact === 'replan' ? '按新要求重新规划' : '未记录'}${member.impactReason ? `；${member.impactReason}` : ''}`) : null,
               member.reorderAssessment ? React.createElement('div', null, text(`顺序评估：${member.reorderAssessment.summary || '未记录摘要'}`), evidence(member.reorderAssessment.evidence, '顺序评估依据')) : null,
@@ -1465,7 +1474,7 @@ window.__ModuleLoader__.load({
             React.createElement(Button, { type: 'submit', disabled: busy || !writable || !draft.trim(), style: { justifySelf: 'start', minWidth: 90 } }, busy ? '保存中…' : '发送')))
           : null)
     }
-    function TaskSessionDetail({ task, onOpenSession, onBack, updatedAt, onOpenHumanRequest }) {
+    function TaskSessionDetail({ task, onOpenSession, onBack, updatedAt, onOpenHumanRequest, onOpenTask }) {
       const [dialogueTarget, setDialogueTarget] = useState('')
       const dialogueOpen = dialogueTarget === task.taskId
       const setDialogueOpen = value => setDialogueTarget(current => (typeof value === 'function' ? value(current === task.taskId) : value) ? task.taskId : '')
@@ -1483,6 +1492,7 @@ window.__ModuleLoader__.load({
           question ? React.createElement(HumanRequestContent, { request: humanRequest || { reason: traceReason(task.waitingReason), question, evidence: task.lastDecision?.evidence } })
             : React.createElement('p', null, ...linkedTaskText(traceReason(task.waitingReason))),
           question ? React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => onOpenHumanRequest(task.taskId) }, '查看人工介入问题') : null) : null,
+        coordinationRelations(task.coordination?.relations, onOpenTask),
         React.createElement('div', { className: 'detail-columns' },
           React.createElement('div', { className: 'detail-primary' },
             React.createElement('section', { className: 'detail-panel', 'aria-label': '目标与要求' }, React.createElement('h2', null, '目标与要求'), React.createElement('p', { className: 'detail-objective' }, task.objective || '尚未记录任务目标。'),
@@ -1860,7 +1870,7 @@ window.__ModuleLoader__.load({
       const tasksPage = selectedTaskId ? React.createElement('div', { className: 'observer-task-detail-route', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 16 } },
           React.createElement('style', null, taskDetailCss),
           detailError ? React.createElement('div', { className: 'detail-fetch-error', role: 'alert' }, `${selectedTask ? '详情刷新失败，已读取内容可能过期' : '详情读取失败'}：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
-          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, updatedAt, onOpenHumanRequest: taskId => { setSelectedAuthorizationId((data?.authorizations || []).find(item => item.taskId === taskId && item.taskSessionRequest && item.status === 'waiting-reply')?.requestId || ''); setActivePage('authorizations') } })
+          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, onOpenTask: task => openTask(task, taskCoordinationReturn ? coordinationTarget : undefined), updatedAt, onOpenHumanRequest: taskId => { setSelectedAuthorizationId((data?.authorizations || []).find(item => item.taskId === taskId && item.taskSessionRequest && item.status === 'waiting-reply')?.requestId || ''); setActivePage('authorizations') } })
             : React.createElement('section', { className: 'observer-session-detail detail-fetch-state', 'aria-label': '任务详情读取状态' }, React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: returnFromTask }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')), React.createElement('h1', null, '任务详情'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : React.createElement('p', { className: 'detail-muted' }, '未读取到任务内容，请重试或返回看板。')))
         : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
       const authorizationStatus = {

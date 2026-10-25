@@ -1,0 +1,34 @@
+{
+  "baselineHead": "ca7a3fddbe090eccd0863af174cbe0521c2e2ba5",
+  "pr": 259,
+  "state": "OPEN",
+  "mergedAt": null,
+  "nativeWorkCount": 10,
+  "reminderSchedules": 7,
+  "taskTriggers": 3,
+  "crossTriggerDependencyEdges": 2,
+  "leadEffortEnv": null,
+  "knownDefects": {
+    "legalSlashIdDetail": "coordination_query_invalid",
+    "beforeStartCancelledReminder": "dispatched/query-executed",
+    "onceTimezone": {
+      "UTC": "09:54",
+      "AsiaShanghai": "17:54"
+    }
+  },
+  "fixedAfterStartRegressions": {
+    "pass": 2,
+    "fail": 0
+  },
+  "productionWrites": 0,
+  "sourceHashes": {
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "sha256": "92d4a77cd611ed1a313c9183894653296c05a2c1c5f2cd515a36b804d25423f5",
+      "bytes": 27681
+    },
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "sha256": "8c3f396024506f58e069a9d0db14edae92ebd792b45929d952038c0f7d121bf1",
+      "bytes": 255660
+    }
+  }
+}

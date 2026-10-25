@@ -1,0 +1,1 @@
+{"ready":true,"pid":5452,"web":"http://127.0.0.1:19087","api":"http://127.0.0.1:19088","dataRoot":"C:\\Users\\64554\\.claude\\jobs\\f04ba2b1\\tmp\\relation-browser-round36","synthetic":true,"sourceCount":38,"limitation":"Minimal ModuleLoader/slots host with actual React 18, dsh primitives 0.2.1-alpha.2 and production task service read DTOs; model/session runs forbidden"}

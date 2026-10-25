@@ -1,0 +1,368 @@
+npm warn Unknown user config "disturl". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown user config "electron_mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+[
+  {
+    "id": "@zzusp/dingtalk-dsh-assistant@2.1.0",
+    "name": "@zzusp/dingtalk-dsh-assistant",
+    "version": "2.1.0",
+    "size": 396028,
+    "unpackedSize": 1541985,
+    "shasum": "bc81bad79268d0d7a64e58bc60ce97f0c9c9da3a",
+    "integrity": "sha512-X4Bmj+3XcNVQJLfC/8Y1f3jL+av3TV15/uxZomXOnrOpWrJGKcVIIa0NZVvJ4nlLD6smIe/Q76nz1g+yZN1RGQ==",
+    "filename": "zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+    "files": [
+      {
+        "path": "README.md",
+        "size": 4348,
+        "mode": 420
+      },
+      {
+        "path": "claude-execution-session.js",
+        "size": 49928,
+        "mode": 420
+      },
+      {
+        "path": "coordination-changes.js",
+        "size": 5425,
+        "mode": 420
+      },
+      {
+        "path": "coordination-context.js",
+        "size": 6129,
+        "mode": 420
+      },
+      {
+        "path": "coordination-ledger.js",
+        "size": 40436,
+        "mode": 420
+      },
+      {
+        "path": "coordination-migration-state.js",
+        "size": 1552,
+        "mode": 420
+      },
+      {
+        "path": "coordination-observer.js",
+        "size": 38896,
+        "mode": 420
+      },
+      {
+        "path": "coordination-resources.js",
+        "size": 10317,
+        "mode": 420
+      },
+      {
+        "path": "coordination-schedules.js",
+        "size": 42374,
+        "mode": 420
+      },
+      {
+        "path": "coordination-sessions.js",
+        "size": 11104,
+        "mode": 420
+      },
+      {
+        "path": "coordination-summary.js",
+        "size": 17890,
+        "mode": 420
+      },
+      {
+        "path": "coordination-task-commands.js",
+        "size": 5825,
+        "mode": 420
+      },
+      {
+        "path": "coordination-time.js",
+        "size": 5486,
+        "mode": 420
+      },
+      {
+        "path": "coordination-triggers.js",
+        "size": 1613,
+        "mode": 420
+      },
+      {
+        "path": "cordis.patch.yml",
+        "size": 94,
+        "mode": 420
+      },
+      {
+        "path": "decision.js",
+        "size": 30786,
+        "mode": 420
+      },
+      {
+        "path": "dws-adapter.js",
+        "size": 40899,
+        "mode": 420
+      },
+      {
+        "path": "dws-bridge.js",
+        "size": 53182,
+        "mode": 420
+      },
+      {
+        "path": "dws-runner.js",
+        "size": 1707,
+        "mode": 420
+      },
+      {
+        "path": "dynamic-filesystem-scope.js",
+        "size": 6617,
+        "mode": 420
+      },
+      {
+        "path": "dynamic-native-job.js",
+        "size": 2770,
+        "mode": 420
+      },
+      {
+        "path": "dynamic-operation-readback.js",
+        "size": 17024,
+        "mode": 420
+      },
+      {
+        "path": "dynamic-process-scope.js",
+        "size": 2996,
+        "mode": 420
+      },
+      {
+        "path": "dynamic-task-store.js",
+        "size": 148777,
+        "mode": 420
+      },
+      {
+        "path": "environment.js",
+        "size": 1451,
+        "mode": 420
+      },
+      {
+        "path": "execution-context.js",
+        "size": 878,
+        "mode": 420
+      },
+      {
+        "path": "execution-provider-failure.js",
+        "size": 2257,
+        "mode": 420
+      },
+      {
+        "path": "execution-session.js",
+        "size": 83479,
+        "mode": 420
+      },
+      {
+        "path": "fake-llm.js",
+        "size": 17439,
+        "mode": 420
+      },
+      {
+        "path": "group-coordinator-session.js",
+        "size": 35116,
+        "mode": 420
+      },
+      {
+        "path": "group-message.js",
+        "size": 14259,
+        "mode": 420
+      },
+      {
+        "path": "group-reply-format.js",
+        "size": 4858,
+        "mode": 420
+      },
+      {
+        "path": "host-context.js",
+        "size": 754,
+        "mode": 420
+      },
+      {
+        "path": "http.js",
+        "size": 43275,
+        "mode": 420
+      },
+      {
+        "path": "independent-coordination-planner.js",
+        "size": 21441,
+        "mode": 420
+      },
+      {
+        "path": "independent-coordination-service.js",
+        "size": 50548,
+        "mode": 420
+      },
+      {
+        "path": "index.js",
+        "size": 237,
+        "mode": 420
+      },
+      {
+        "path": "model-context.js",
+        "size": 32625,
+        "mode": 420
+      },
+      {
+        "path": "notification-delivery.js",
+        "size": 9206,
+        "mode": 420
+      },
+      {
+        "path": "package.json",
+        "size": 3560,
+        "mode": 420
+      },
+      {
+        "path": "performance.js",
+        "size": 19485,
+        "mode": 420
+      },
+      {
+        "path": "resident.js",
+        "size": 13751,
+        "mode": 420
+      },
+      {
+        "path": "resource-close.js",
+        "size": 451,
+        "mode": 420
+      },
+      {
+        "path": "session-persistence.js",
+        "size": 623,
+        "mode": 420
+      },
+      {
+        "path": "session-workspaces.js",
+        "size": 14846,
+        "mode": 420
+      },
+      {
+        "path": "store.js",
+        "size": 119288,
+        "mode": 420
+      },
+      {
+        "path": "task-artifact-scope.js",
+        "size": 5682,
+        "mode": 420
+      },
+      {
+        "path": "task-boundary-instructions.js",
+        "size": 1284,
+        "mode": 420
+      },
+      {
+        "path": "task-execution-timeline.js",
+        "size": 8936,
+        "mode": 420
+      },
+      {
+        "path": "task-input-contract.js",
+        "size": 1874,
+        "mode": 420
+      },
+      {
+        "path": "task-input-revision.js",
+        "size": 6120,
+        "mode": 420
+      },
+      {
+        "path": "task-message-projections.js",
+        "size": 8566,
+        "mode": 420
+      },
+      {
+        "path": "task-model-config.js",
+        "size": 1601,
+        "mode": 420
+      },
+      {
+        "path": "task-notification-readback.js",
+        "size": 7733,
+        "mode": 420
+      },
+      {
+        "path": "task-plan.js",
+        "size": 13023,
+        "mode": 420
+      },
+      {
+        "path": "task-progress.js",
+        "size": 12469,
+        "mode": 420
+      },
+      {
+        "path": "task-report-step-gate.js",
+        "size": 837,
+        "mode": 420
+      },
+      {
+        "path": "task-resident-runtime.js",
+        "size": 13249,
+        "mode": 420
+      },
+      {
+        "path": "task-result.js",
+        "size": 8726,
+        "mode": 420
+      },
+      {
+        "path": "task-session-observability.js",
+        "size": 4831,
+        "mode": 420
+      },
+      {
+        "path": "task-session-persistence.js",
+        "size": 16339,
+        "mode": 420
+      },
+      {
+        "path": "task-session-service.js",
+        "size": 135018,
+        "mode": 420
+      },
+      {
+        "path": "task-session.js",
+        "size": 42210,
+        "mode": 420
+      },
+      {
+        "path": "task-source-instructions.js",
+        "size": 2879,
+        "mode": 420
+      },
+      {
+        "path": "task-topic-coordinator.js",
+        "size": 19462,
+        "mode": 420
+      },
+      {
+        "path": "tool-schema.js",
+        "size": 4649,
+        "mode": 420
+      },
+      {
+        "path": "topic-model.js",
+        "size": 18912,
+        "mode": 420
+      },
+      {
+        "path": "topic-runtime.js",
+        "size": 129309,
+        "mode": 420
+      },
+      {
+        "path": "version-check.js",
+        "size": 3138,
+        "mode": 420
+      },
+      {
+        "path": "web-client.js",
+        "size": 39136,
+        "mode": 420
+      }
+    ],
+    "entryCount": 70,
+    "bundled": []
+  }
+]
