@@ -4,6 +4,28 @@ import { spawnSync } from 'node:child_process'
 import { resolve, sep } from 'node:path'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+test('原生双包部署为冷启动保留十分钟，仍要求双端口新PID且超时失败', { skip: process.platform !== 'win32' }, () => {
+ const script = resolve('docs/acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1').replaceAll("'", "''")
+ const command = String.raw`
+$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$null)
+$call=$ast.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'WaitFor' -and $n.Extent.Text.Contains("'DEPLOY_NEW_PROCESS_NOT_READY'")},$true)[0]
+if($call.CommandElements[-1].Value -ne 600){throw 'STARTUP_BUDGET_INCORRECT'}
+$ExpectedPid=111;$script:poll=0;$script:newPid=$null
+function PortOwners($port){$script:poll++;if($script:poll-lt3){return @(111)};if($port-eq3080 -and $script:poll-lt5){return @()};return @(222)}
+$condition=$call.CommandElements[1].ScriptBlock.GetScriptBlock()
+if((& $condition) -or (& $condition) -or (& $condition)){throw 'EARLY_READY'}
+if(-not(& $condition) -or $script:newPid-ne222){throw 'NEW_DUAL_PORT_REQUIRED'}
+$wait=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'WaitFor'},$true)[0]
+. ([scriptblock]::Create($wait.Extent.Text))
+try{WaitFor {$false} 'EXPECTED_TIMEOUT' 0;throw 'TIMEOUT_ACCEPTED'}catch{if($_.Exception.Message-ne'EXPECTED_TIMEOUT'){throw}}
+'PASS'
+`
+ const value = spawnSync('pwsh', ['-NoProfile', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 10000 })
+ assert.equal(value.status, 0, value.stderr || value.stdout)
+ assert.match(value.stdout, /PASS/)
+})
+
 const source = resolve('scripts/restart-web.ps1').replaceAll("'", "''")
 function scenario(mode, check = false) {
  const setup = String.raw`

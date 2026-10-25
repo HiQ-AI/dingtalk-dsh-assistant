@@ -2,13 +2,18 @@
 
 ## Delivery
 
-PR #258 is open: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/258
+PR #258 is MERGED: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/258
+
+- Merge: `22d57386ebb5a11b89ab30e461a0b95e7bfc7f53`, mergedAt `2026-10-25T03:35:04Z` (independent gh readback).
+- Subsequently authorized local deployment and real installed 3080 host read-only acceptance completed; see round-4/5/6 for preserved failures and final proof.
+- Original deployment script exited1 at the five-minute startup wait. Same new PID91732 became ready without reinstall/restart; original failure retained, independent final package/process/health readback PASS. A new source-only follow-up fixes the bounded wait to600s, with11 regression PASS.
+- Actual real-host default-light desktop/mobile each pass11 cases;18 existing sources,2 dependency members,3 proof members. Console/API/mutation requests0. Actual installed dark remains unverified because persisted Host light overrides browser preference; no Host settings changed.
 
 - Base: `main`
 - Head: `worktree-coordinator-work-visualization`
 - Implementation commit: `6c495d09a3c30381f29558a0068bb1ef88d2d910`
-- Remote state read independently with `gh pr view`: `OPEN`; the PR title, body, base, head and URL match the intended delivery.
-- No merge, deployment, shared resident modification, real DingTalk operation, CI dispatch, main push or force-push occurred.
+- Remote state read independently with `gh pr view`: `MERGED`; merge SHA/time match the intended delivery.
+- Local dual-package deployment performed under subsequent user authorization. No operator business write, real DingTalk test send, notification replay, CI dispatch, main push or force-push.
 
 ## What changed
 
@@ -48,14 +53,13 @@ The acceptance matrix in `docs/acceptance/coordinator-work-visualization/matrix.
 
 ## Boundaries
 
-The browser harness is a deliberately minimal ModuleLoader/slots/session adapter, not a complete installed DeepSeek Harness host. The following were not performed and are not claimed:
+The round-3 browser harness is a deliberately minimal ModuleLoader/slots/session adapter, not complete installed-host proof. Subsequent round-6 separately verified the actual installed host:
 
-- complete installed-host deployment;
-- shared resident or profile changes;
-- real model execution;
-- real DingTalk sending, notification reconciliation or external business effects;
-- CI dispatch or merge.
+- Assistant2.1.0 SHA256 `77eea78e705ee62085afc31baab956ce2f61d2f0dc8ad09dba98c2280c0fa2a9`, Observer2.1.0 SHA256 `b5a468c15c4c11c757a3275887a72e8c65a2bdf438f2266f2d64514ec9f135cd`.
+- New91732/parent93000 owns3080/18998; old84680 absent; profileSHA74fe100c unchanged, Host0.2.1-rc.2 unchanged, autostart enabled/running.
+- health=ok,recovery0,inbound true,bridge healthy,listeners ready/backfills ok; authenticatedWeb200. Retired maintenanceGET404 is expected; native disposal/autostart restoration, not a legacy Resume.
+- Not performed: real model inference, real DingTalk test send, operator notification reconciliation/replay, business mutation, actual installed dark-theme switch, production fault/empty-state injection or CI dispatch.
 
 Business input, requirements, summaries and evidence may contain sensitive local content. The projection is a local privileged observer view, not a public redacted export. It excludes actor/recipient IDs, prompts, commands, raw proposals, paths and raw diagnostics. GET operations are read-only and do not retry commands, notifications or business processing.
 
-Round-3 screenshots and results are in `docs/acceptance/coordinator-work-visualization/round-3/`; PNGs are gitignored, while result JSON, hash metadata, scripts and round summaries are retained for review and regeneration. The PR is ready for reviewer action but remains unmerged and undeployed.
+Round-3 isolated and round-4/5/6 actual-host results retain separate provenance. PNGs are local/gitignored; JSON/hash metadata/scripts/round summaries tracked. Final actual screenshots: `round-6/native-desktop-light-detail.png` and `round-6/native-mobile-light-detail.png`, masked business text and no Host sidebar. PR258 merged and local dual-package deployment verified; startup-wait source fix and evidence use a NEW follow-up branch/PR, never push the merged implementation branch.

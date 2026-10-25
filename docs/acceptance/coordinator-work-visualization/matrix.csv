@@ -1,11 +1,21 @@
-case,description,round-1,round-2,round-3
-baseline,Latest main and isolated feature branch,PASS,PASS,PASS
-contract,Recorded domain data and privacy contract,PENDING,PASS,PASS
-api,Real HTTP coordinator projection,PENDING,PASS,PASS
-ui,Dashboard entry and linked details,PENDING,PENDING,PASS
-refresh,Refresh with stale/error recovery,PENDING,PENDING,PASS
-empty,Empty coordinator state,PENDING,PASS,PASS
-responsive,Narrow screen with no overflow,PENDING,FAIL,PASS
-regression,Existing observer functionality preserved,PENDING,PASS,PASS
-review,Independent code review,PENDING,PASS,PASS
-pr,Scoped commit and independently read PR state,PENDING,PENDING,PASS
+case,description,round-1,round-2,round-3,round-4,round-5,round-6
+baseline,Latest main and isolated feature branch,PASS,PASS,PASS,PASS,PASS,PASS
+contract,Recorded domain data and privacy contract,PENDING,PASS,PASS,N/A,N/A,N/A
+api,Real HTTP coordinator projection,PENDING,PASS,PASS,PASS,PASS,PASS
+ui,Dashboard entry and linked details,PENDING,PENDING,PASS,PENDING,PASS,PASS
+refresh,Refresh with stale/error recovery in isolation,PENDING,PENDING,PASS,N/A,N/A,N/A
+empty,Empty coordinator state in isolation,PENDING,PASS,PASS,N/A,N/A,N/A
+responsive,Narrow screen with no overflow,PENDING,FAIL,PASS,PENDING,PASS,PASS
+regression,Existing observer functionality preserved,PENDING,PASS,PASS,N/A,N/A,N/A
+review,Independent code review,PENDING,PASS,PASS,N/A,N/A,N/A
+pr,Scoped commit and independently read PR state,PENDING,PENDING,PASS,PASS,PASS,PASS
+merge,Authorized PR258 merge with independent SHA and timestamp,N/A,N/A,N/A,PASS,PASS,PASS
+deploy-script,Original live deployment operation exit and readiness wait,N/A,N/A,N/A,FAIL,N/A,N/A
+install,Original exact dual-package install and native drain proof,N/A,N/A,N/A,PASS,PASS,PASS
+health,Independent same-new-process dual-port and health follow-up,N/A,N/A,N/A,PASS,PASS,PASS
+native-browser,Actual installed 3080 default-theme read-only core paths,N/A,N/A,N/A,FAIL,PASS,PASS
+native-refresh,Actual installed automatic and manual read-only refresh,N/A,N/A,N/A,FAIL,PASS,PASS
+native-proof,Existing dependencies and formal proof plus task return,N/A,N/A,N/A,PENDING,PASS,PASS
+native-no-write,Actual browser zero resident mutation requests,N/A,N/A,N/A,PENDING,PASS,PASS
+native-dark,Actual installed dark theme not switched to preserve Host settings,N/A,N/A,N/A,N/A,UNVERIFIED,UNVERIFIED
+startup-fix,Bounded 600s wait with new-PID dual-port and timeout tests,N/A,N/A,N/A,PENDING,N/A,PASS

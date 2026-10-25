@@ -1,0 +1,105 @@
+{
+  "result": "PASS",
+  "at": "2026-10-25T04:27:22.686660+00:00",
+  "actualHost": "http://127.0.0.1:3080",
+  "cases": [
+    "actual-authenticated-host-and-installed-coordination-entry",
+    "real-readonly-five-second-polling",
+    "manual-refresh-real-http",
+    "existing-source-pagination",
+    "actual-group-filter-and-reset",
+    "existing-source-details-focus-and-completion-boundary",
+    "existing-dependencies-visible",
+    "existing-version-bound-proof-visible",
+    "actual-task-service-drill-through-and-source-return",
+    "source-focus-restored",
+    "no-document-or-observer-horizontal-overflow"
+  ],
+  "unverified": [],
+  "screenshots": {
+    "native-mobile-light-list.png": {
+      "bytes": 24710,
+      "sha256": "866daf10ca37d7b7912080e3190148ff4098d42e6ac1ad058096e741a0f20d68"
+    },
+    "native-mobile-light-detail.png": {
+      "bytes": 13931,
+      "sha256": "37c75f3b83c2c9f65f05d6dee92f4f474c49a687e76c1cf989403497e5ebe1ed"
+    }
+  },
+  "credentialPrinted": false,
+  "synthetic": false,
+  "existingData": {
+    "sourceCount": 18,
+    "states": [
+      "accepted",
+      "needs_clarification"
+    ],
+    "associatedDetails": 1,
+    "dependencyMembers": 2,
+    "proofMembers": 3
+  },
+  "hostUpdateNoticeDismissed": true,
+  "widths": {
+    "document": {
+      "client": 390,
+      "scroll": 390
+    },
+    "observer": {
+      "client": 334,
+      "scroll": 334
+    }
+  },
+  "pageConsoleErrors": [],
+  "failedObserverApi": [],
+  "businessMutationRequests": [],
+  "coordinationReadResponses": [
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:27.131991+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:32.222383+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:37.208555+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:42.215183+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:42.828844+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:42.883249+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:43.323016+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:43.451299+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:43.588446+00:00"
+    },
+    {
+      "kind": "detail",
+      "time": "2026-10-25T04:27:43.866612+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:27:44.851902+00:00"
+    },
+    {
+      "kind": "detail",
+      "time": "2026-10-25T04:27:44.852974+00:00"
+    }
+  ]
+}

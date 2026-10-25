@@ -305,7 +305,7 @@ pwsh -NoProfile -File .\scripts\start-web.ps1
 4. 确认工作区根指引能通过 DSH 原生 `agent-instructions.projectRootMarkers` 被发现。插件不复制身份指引，也不把 Owner 提升为通用执行者。
 5. 核对实际安装包、唯一进程/PID、`GET /health`、`GET /state/dws-bridge`、新任务与执行日志、重启恢复和真实消息回读。任何一层证据不能替代其余层。
 
-启动脚本只负责启动，不证明旧工作已排空。既有 `restart-web.ps1`、`deploy-local.ps1` 及历史 maintenance/cutover 脚本可能依赖已退役接口，不能未经核对就用于这次架构切换。先执行[专用清洁启动步骤](docs/ops/task-session-clean-start.md#准备及隔离)。没有完成现场检查时，不报告部署或真实钉钉验收成功。
+启动脚本只负责启动，不证明旧工作已排空。既有 `restart-web.ps1`、`deploy-local.ps1` 及历史 maintenance/cutover 脚本可能依赖已退役接口，不能未经核对就用于这次架构切换。先执行[专用清洁启动步骤](docs/ops/task-session-clean-start.md#准备及隔离)。原生双包部署为冷启动保留十分钟有界等待；启动超时先回读原收据、同一新进程与健康，不重跑安装。没有完成现场检查时，不报告部署或真实钉钉验收成功。
 
 ## 开发与测试
 

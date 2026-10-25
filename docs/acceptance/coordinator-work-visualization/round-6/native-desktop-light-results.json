@@ -1,0 +1,107 @@
+{
+  "result": "PASS",
+  "at": "2026-10-25T04:32:20.338922+00:00",
+  "actualHost": "http://127.0.0.1:3080",
+  "cases": [
+    "actual-authenticated-host-and-installed-coordination-entry",
+    "real-readonly-five-second-polling",
+    "manual-refresh-real-http",
+    "existing-source-pagination",
+    "actual-group-filter-and-reset",
+    "existing-source-details-focus-and-completion-boundary",
+    "existing-dependencies-visible",
+    "existing-version-bound-proof-visible",
+    "actual-task-service-drill-through-and-source-return",
+    "source-focus-restored",
+    "no-document-or-observer-horizontal-overflow"
+  ],
+  "unverified": [],
+  "screenshots": {
+    "native-desktop-light-list.png": {
+      "bytes": 42661,
+      "sha256": "06f53a08a6a764d0f5813eb7b3d5da07c9e7625aeb4883f6df4bd06402fbd43e"
+    },
+    "native-desktop-light-detail.png": {
+      "bytes": 55880,
+      "sha256": "67ceb6084bd8757e432992ab906af879b23f513bcdf3bc2a8acf8ff7859a9510"
+    }
+  },
+  "credentialPrinted": false,
+  "synthetic": false,
+  "existingData": {
+    "sourceCount": 18,
+    "states": [
+      "accepted",
+      "needs_clarification"
+    ],
+    "associatedDetails": 1,
+    "dependencyMembers": 2,
+    "proofMembers": 3
+  },
+  "requestedColorScheme": "light",
+  "actualTheme": "light",
+  "hostUpdateNoticeDismissed": true,
+  "widths": {
+    "document": {
+      "client": 1440,
+      "scroll": 1440
+    },
+    "observer": {
+      "client": 1160,
+      "scroll": 1160
+    }
+  },
+  "pageConsoleErrors": [],
+  "failedObserverApi": [],
+  "businessMutationRequests": [],
+  "coordinationReadResponses": [
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:24.434577+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:29.544780+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:34.457268+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:39.648140+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:40.137416+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:40.255254+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:40.437664+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:40.569240+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:40.772850+00:00"
+    },
+    {
+      "kind": "detail",
+      "time": "2026-10-25T04:32:40.890966+00:00"
+    },
+    {
+      "kind": "list",
+      "time": "2026-10-25T04:32:41.753250+00:00"
+    },
+    {
+      "kind": "detail",
+      "time": "2026-10-25T04:32:41.754822+00:00"
+    }
+  ]
+}

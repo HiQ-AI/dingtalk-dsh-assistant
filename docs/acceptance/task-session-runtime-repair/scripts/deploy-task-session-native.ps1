@@ -160,7 +160,8 @@ try{
  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_PROFILE_RESTORE_MISMATCH'}
  if($wasEnabled){Enable-ScheduledTask -TaskName $taskName|Out-Null}
  $phase='start';Start-ScheduledTask -TaskName $taskName
- WaitFor {$owners=PortOwners 18998;if($owners.Count-ne1-or$owners[0]-eq$ExpectedPid){return $false};$script:newPid=$owners[0];return (PortOwners 3080)-contains$newPid} 'DEPLOY_NEW_PROCESS_NOT_READY' 300
+ # The installed cold profile graph can take over five minutes; retain a bounded wait.
+ WaitFor {$owners=PortOwners 18998;if($owners.Count-ne1-or$owners[0]-eq$ExpectedPid){return $false};$script:newPid=$owners[0];return (PortOwners 3080)-contains$newPid} 'DEPLOY_NEW_PROCESS_NOT_READY' 600
  WaitFor {
   try{$script:health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10;return $health.inboundProcessing -and $health.dwsBridge.healthy}catch{return $false}
  } 'DEPLOY_TRANSPORT_NOT_READY' 60
