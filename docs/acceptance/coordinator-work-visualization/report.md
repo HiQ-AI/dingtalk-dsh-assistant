@@ -63,3 +63,7 @@ The round-3 browser harness is a deliberately minimal ModuleLoader/slots/session
 Business input, requirements, summaries and evidence may contain sensitive local content. The projection is a local privileged observer view, not a public redacted export. It excludes actor/recipient IDs, prompts, commands, raw proposals, paths and raw diagnostics. GET operations are read-only and do not retry commands, notifications or business processing.
 
 Round-3 isolated and round-4/5/6 actual-host results retain separate provenance. PNGs are local/gitignored; JSON/hash metadata/scripts/round summaries tracked. Final actual screenshots: `round-6/native-desktop-light-detail.png` and `round-6/native-mobile-light-detail.png`, masked business text and no Host sidebar. PR258 merged and local dual-package deployment verified; startup-wait source fix and evidence use a NEW follow-up branch/PR, never push the merged implementation branch.
+
+## Follow-up Delivery
+
+Startup readiness wait300->600s and final deployment evidence are delivered in PR #259 (OPEN): https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Independent gh readback matched main/base,worktree-coordinator-work-deployment/head,implementation commit5ccfd218ed84711af21850526ed5586a4110b364 and complete checked local PR body. Local regression rerun11/11 PASS; no follow-up merge/redeploy or CI dispatch. PR258 remains MERGED and its implementation branch was not pushed. Final bookkeeping is a docs-only closure on PR259.

@@ -15,7 +15,7 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 | G5 | Final review, clean scoped commit and independently read PR | PASS | 6c495d09a3c30381f29558a0068bb1ef88d2d910 pushed; gh readback PR258 OPEN, main <- worktree-coordinator-work-visualization; report.md |
 | G6 | Authorized merge and native local dual-package deployment | PASS | PR258 MERGED22d5738; original deploy exit1/start timeout preserved, same91732 later ready without reinstall/restart; dual-package hashes/versions/profile/native drain/health independently verified; round-6/deployment-readback.json |
 | G7 | Read-only actual 3080 host acceptance and final deployment evidence | PASS | Actual default-light desktop/mobile each11 PASS,18 existing records,dependencies/proofs/task return/polling/filter/390px,errors0/mutations0; round-6. Actual installed dark unverified; preserve Host settings |
-| G8 | Deliver startup wait fix and final evidence in new follow-up PR | IN PROGRESS | Source-only wait300->600s,11 targeted tests PASS; original merged implementation branch not pushed |
+| G8 | Deliver startup wait fix and final evidence in new follow-up PR | PASS | PR259 OPEN independently read (main <- worktree-coordinator-work-deployment),implementation5ccfd218ed84711af21850526ed5586a4110b364; body/remote SHA matched; wait300->600s,11/11 targeted tests PASS; no push to merged PR258 branch |
 
 ## Decisions and Important Information
 
@@ -26,3 +26,5 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 - 2026-10-25: Main checkout contains user changes; only this worktree is writable for this task.
 - 2026-10-25 correction: native named Agent teammates ARE available (Agent with name/team_name/effort; ListAgents lists Teammates). coordinator-api and coordinator-ui-review are created at explicit low effort. Only visualization-worker type was lost from registry; actual general-purpose substitute and unverified lead runtime effort remain explicit. Workflow research is not counted as native team activity.
 - Browser verification must start the current source in an isolated port/data root and prove live HTTP data, not static mock UI. Any synthetic fixture is labelled test data.
+
+- 2026-10-25: Follow-up PR259 OPEN: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Independent read matched base/head/implementation SHA and complete local body. Delivered for review only; not merged and no further deployment/CI dispatch performed.

@@ -19,3 +19,4 @@ native-proof,Existing dependencies and formal proof plus task return,N/A,N/A,N/A
 native-no-write,Actual browser zero resident mutation requests,N/A,N/A,N/A,PENDING,PASS,PASS
 native-dark,Actual installed dark theme not switched to preserve Host settings,N/A,N/A,N/A,N/A,UNVERIFIED,UNVERIFIED
 startup-fix,Bounded 600s wait with new-PID dual-port and timeout tests,N/A,N/A,N/A,PENDING,N/A,PASS
+followup-pr,New PR259 OPEN with independently matched base head SHA and body,N/A,N/A,N/A,N/A,N/A,PASS

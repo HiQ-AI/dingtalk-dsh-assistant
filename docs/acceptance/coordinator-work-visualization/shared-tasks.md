@@ -1,6 +1,6 @@
 # Shared Tasks
 
-Updated: 2026-10-25T12:48+08:00, deployment and actual-host acceptance verified; follow-up PR delivery
+Updated: 2026-10-25T12:48+08:00, deployment, actual-host acceptance and follow-up PR independently verified
 
 All formal artifacts are relative to this worktree's `docs/acceptance/coordinator-work-visualization/`. Lead alone writes this ledger. Launcher/Codex control records in the original checkout are out of scope.
 
@@ -19,7 +19,7 @@ All formal artifacts are relative to this worktree's `docs/acceptance/coordinato
 | Authorized merge | original lead | DONE | PR258 MERGED, mergedAt 2026-10-25T03:35:04Z, merge22d57386ebb5a11b89ab30e461a0b95e7bfc7f53 | No main push/CI |
 | Native local deployment | original lead, sole deployment owner | VERIFIED WITH ORIGINAL TIMEOUT RETAINED | Check bpfbv3i6o exit0/writes0/signals0; deploy ba4b7mvd9 exit1 at five-minute start wait; same91732 later owns dual ports,health ok/recovery0/inbound true; pinned dual-package install69/4 files/profile unchanged | No reinstall/restart; round-4 failure retained,round-6 independent readbackPASS |
 | Actual 3080 browser acceptance | original lead | DONE | Round-6 actual default-light desktop/mobile each11 PASS;18 existing sources,2 dependency members,3 proofs,task return,polling/filter/390px; console/API/mutations0 | Actual installed dark unverified because persisted Host light overrides browser preference; configuration preserved |
-| Follow-up wait fix and evidence PR | original lead | IN PROGRESS | New worktree-coordinator-work-deployment branch; wait300->600s and11 regressionPASS | New PR only, never push merged implementation branch |
+| Follow-up wait fix and evidence PR | original lead | DONE | PR259 OPEN,main <- worktree-coordinator-work-deployment; implementation5ccfd218ed84711af21850526ed5586a4110b364; remoteSHA and complete body independently matched; wait300->600s and11/11 regressionPASS | Review pending; no merge/redeploy; merged PR258 branch untouched |
 
 ## Authorization And Historical Deployment Recovery
 
@@ -50,3 +50,5 @@ All formal artifacts are relative to this worktree's `docs/acceptance/coordinato
 
 - 2026-10-25T04:47:59Z: independent `native-deployment-readback.ps1 -Check` again matched the exact installed dual-package SHA/version/profile and same PID91732 on3080/18998,health ok,recovery0,inbound true,autostart enabled,authenticatedWeb200; writes/installs/restarts0. No deployment replay.
 - Follow-up local regression rerun: `node --test test/restart-web.test.js`11/11 PASS,0 fail/skip; suite-map308 files exactly once; `git diff --check`PASS.
+
+- Follow-up delivery: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259 independently read OPEN; main/base and worktree-coordinator-work-deployment/head correct,complete body exact after newline normalization. Commit5ccfd218ed84711af21850526ed5586a4110b364 matched remote branch and PR head. Temporary raw receipts were removed only after byte-identical comparison to tracked round-4 copies; PNGs remain local/gitignored.
