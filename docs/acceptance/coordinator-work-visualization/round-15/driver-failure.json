@@ -1,0 +1,9 @@
+{
+  "result": "FAIL",
+  "variant": "mobile-light",
+  "primaryFailure": "TimeoutError",
+  "failureLine": 203,
+  "failureSignal": "data-shell-overlay=true intercepts pointer events",
+  "reporterFailure": "Event loop is closed! Is Playwright already stopped?",
+  "remainingVariantsExecuted": false
+}

@@ -1,0 +1,48 @@
+{
+  "result": "FAIL",
+  "cases": [
+    "default-first-group-no-all-request",
+    "manual-selection-retained-on-refresh-and-poll",
+    "no-horizontal-overflow"
+  ],
+  "synthetic": true,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 25223,
+      "sha256": "e19cf6f856dc8e0b1dd7f18b0a664f57f40142d38f0f6c6b6c755acea0d0bc08"
+    }
+  },
+  "errors": [
+    "console-error"
+  ],
+  "mutations": [],
+  "firstGroupSourceCount": 25,
+  "dataShape": {
+    "groups": 2,
+    "taskSources": 2,
+    "scheduleSources": 0
+  },
+  "initialAllGroupRequests": 0,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  },
+  "failureType": "AssertionError"
+}

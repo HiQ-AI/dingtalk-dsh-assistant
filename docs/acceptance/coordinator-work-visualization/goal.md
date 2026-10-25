@@ -16,6 +16,11 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 | G6 | Authorized merge and native local dual-package deployment | PASS | PR258 MERGED22d5738; original deploy exit1/start timeout preserved, same91732 later ready without reinstall/restart; dual-package hashes/versions/profile/native drain/health independently verified; round-6/deployment-readback.json |
 | G7 | Read-only actual 3080 host acceptance and final deployment evidence | PASS | Actual default-light desktop/mobile each11 PASS,18 existing records,dependencies/proofs/task return/polling/filter/390px,errors0/mutations0; round-6. Actual installed dark unverified; preserve Host settings |
 | G8 | Deliver startup wait fix and final evidence in new follow-up PR | PASS | PR259 OPEN independently read (main <- worktree-coordinator-work-deployment),implementation5ccfd218ed84711af21850526ed5586a4110b364; body/remote SHA matched; wait300->600s,11/11 targeted tests PASS; no push to merged PR258 branch |
+| G9 | Current UI/data baseline and focused refinement plan | PASS | round-7 native before desktop1440x1000/mobile390x844:5/4 fully visible rows; first valid group10 sources,7 schedule sources; initial all-groups request observed; refinement-plan.md |
+| G10 | First valid group without all-flash and stable user selection | PASS | Preserve returned group order; handle async/empty/invalid/explicit all; retain refresh and task-return identity |
+| G11 | Compact source rows and type-prioritized progressive detail | PASS | Native tokens,soft selected surface,separate focus; schedule/dispatch facts first,no invented next action or completion |
+| G12 | Independent low review and related/browser acceptance | PASS | Native low2 confirmed issues+forced-colors blind spot fixed;136/136 relatedPASS;round11 five source browser variants7 cases eachPASS; same-native comparison in G13 |
+| G13 | Check then candidate local deployment and PR259 readback | PASS | Check bh9oacd7r PASS; candidate install bvasopdof exit0; independent readback new45548 owns3080/18998 with pinned package/profile hashes,health ok,autostart/inbound/bridge ready; round16 five actual browser variants PASS; PR259 remains OPEN and unmerged |
 
 ## Decisions and Important Information
 
@@ -28,3 +33,8 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 - Browser verification must start the current source in an isolated port/data root and prove live HTTP data, not static mock UI. Any synthetic fixture is labelled test data.
 
 - 2026-10-25: Follow-up PR259 OPEN: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Independent read matched base/head/implementation SHA and complete local body. Delivered for review only; not merged and no further deployment/CI dispatch performed.
+
+- 2026-10-25 UI feedback reopens implementation: current PR259 independently OPEN; extend this branch,not258. Original deployment evidence is historical,not evidence for new UI. Candidate local deployment is authorized after Check; merging PR259 is not authorized. frontend-design registry unavailable but installed skill read directly; premium not registered and no matching installed skill found. Native low reviewer coordinator-ui-refinement-review independently reviews; lead alone owns integration and ledgers.
+
+- 2026-10-25: Candidate deployment bvasopdof completed exit0. Independent readback matched both package hashes/versions, profileSHA74fe100c, Host0.2.1-rc.2, new45548 dual ports, old91732 exited, health ok/recovery0/inbound true, autostart enabled, authenticatedWeb200, sourceCount18.
+- 2026-10-25: Round12/13/15 browser failures are retained. Round12/13 exposed the real Host update notice intercepting an ordinary click; round14 proved ordinary dismissal and task-service HTTP200; round15 preserved the same mobile timing plus a driver reporting bug. Round16 fixed the driver with Playwright's ordinary locator handler and passed desktop/mobile light/dark plus forced-colors; no forced click or Host configuration change.

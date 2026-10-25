@@ -1,0 +1,48 @@
+{
+  "result": "PASS",
+  "cases": [
+    "source-focus-restoration",
+    "no-horizontal-overflow"
+  ],
+  "synthetic": false,
+  "screenshots": {
+    "before-desktop-light-list.png": {
+      "bytes": 25847,
+      "sha256": "d919608938e8ae4cfb45b56c4a6564e689bf4552ae7f6f5c00bdfe4ca99f8f1d"
+    },
+    "before-desktop-light-detail.png": {
+      "bytes": 37618,
+      "sha256": "bd9e556dc636c2b330ed281b9a5395ce908e47e93f47b7119aba5412f7deaf4d"
+    }
+  },
+  "errors": [],
+  "mutations": [],
+  "firstGroupSourceCount": 10,
+  "dataShape": {
+    "groups": 2,
+    "taskSources": 0,
+    "scheduleSources": 7
+  },
+  "initialAllGroupRequests": 1,
+  "visibleRows": 5,
+  "rowHeights": [
+    111,
+    153,
+    153,
+    132,
+    132,
+    132,
+    132,
+    132,
+    132,
+    132
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}

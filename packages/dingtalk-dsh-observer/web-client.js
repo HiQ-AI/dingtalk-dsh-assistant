@@ -127,12 +127,24 @@ window.__ModuleLoader__.load({
       [data-dingtalk-observer] .observer-coordination-layout { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; }
       [data-dingtalk-observer] .observer-coordination-layout :is(article, section, li, div) { min-width: 0; }
       [data-dingtalk-observer] .observer-coordination-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; margin: 8px 0; }
-      [data-dingtalk-observer] .observer-coordination-source { width: 100%; text-align: left; white-space: normal; font: inherit; color: inherit; background: ${colors.surface}; padding: 16px; border: 1px solid ${colors.border}; border-radius: ${ui.radiusSm}px; cursor: pointer; }
+      [data-dingtalk-observer] .observer-coordination-source { width: 100%; text-align: left; white-space: normal; font: inherit; color: inherit; background: transparent; padding: 9px 12px; border: 0; border-radius: 5px; cursor: pointer; }
       [data-dingtalk-observer] .observer-coordination-source:hover { background: ${colors.surface2}; }
-      [data-dingtalk-observer] .observer-coordination-source[aria-pressed=true] { border-color: ${colors.accent}; box-shadow: inset 3px 0 ${colors.accent}; }
-      [data-dingtalk-observer] .observer-coordination-section { padding: 20px 0; border-top: 1px solid ${colors.border}; }
-      [data-dingtalk-observer] .observer-coordination-section h3 { margin: 0 0 12px; font-size: 16px; }
+      [data-dingtalk-observer] .observer-coordination-source[aria-pressed=true] { background: ${colors.surface2}; box-shadow: inset 2px 0 ${colors.accent}; }
+      [data-dingtalk-observer] .observer-coordination-source:focus:not(:focus-visible) { outline: none; }
+      [data-dingtalk-observer] .observer-coordination-source:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: -2px; }
+      [data-dingtalk-observer] .observer-coordination-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 21px; font-weight: 500; }
+      [data-dingtalk-observer] .observer-coordination-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; color: ${colors.muted}; }
+      [data-dingtalk-observer] .observer-coordination-meta time { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+      [data-dingtalk-observer] .observer-coordination-section { padding: 14px 0; border-top: 1px solid ${colors.border}; }
+      [data-dingtalk-observer] .observer-coordination-section h3 { margin: 0 0 10px; font-size: 16px; }
       [data-dingtalk-observer] .observer-coordination-section h4 { margin: 0; font-size: 14px; }
+      [data-dingtalk-observer] .observer-coordination-disclosure { padding: 12px 0; border-top: 1px solid ${colors.border}; }
+      [data-dingtalk-observer] .observer-coordination-disclosure > summary { cursor: pointer; font-size: 12px; color: ${colors.muted}; }
+      [data-dingtalk-observer] .observer-coordination-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      @media (forced-colors: active) {
+        [data-dingtalk-observer] .observer-coordination-source[aria-pressed=true] { border-inline-start: 2px solid Highlight; padding-inline-start: 10px; background: Canvas; }
+        [data-dingtalk-observer] .observer-coordination-source:focus-visible { outline-color: Highlight; }
+      }
       @media (max-width: 720px) {
         [data-dingtalk-observer] .observer-coordination-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
         [data-dingtalk-observer] .observer-coordination-layout[data-selected=true] > nav { display: none; }
@@ -553,14 +565,22 @@ window.__ModuleLoader__.load({
       }, [path, retry])
       return { ...(resource.path === path ? resource : { loading: Boolean(path) }), reload: () => setRetry(value => value + 1) }
     }
-    function CoordinationBrowser({ groups, target, onOpenTask }) {
-      const [groupId, setGroupId] = useState(target?.groupId || '')
-      const [offset, setOffset] = useState(target?.offset || 0)
-      const [sourceId, setSourceId] = useState(target?.sourceId || '')
-      const navigation = useRef(null), detailHeading = useRef(null), focusDetail = useRef(false), focusSource = useRef('')
+    function CoordinationBrowser({ groups, groupsReady = true, target, onOpenTask }) {
+      const knownGroups = groups.filter((group, index) => typeof group.groupId === 'string' && group.groupId.trim() && groups.findIndex(item => item.groupId === group.groupId) === index).map(group => ({ id: group.groupId, label: group.name || group.groupId }))
+      const [selection, setSelection] = useState(() => ({ groupId: target?.groupId, offset: target?.offset || 0, sourceId: target?.sourceId || '' }))
+      // 未初始化不是全部群；先解析有效范围，避免异步加载闪出全部或旧群内容。
+      const groupId = !groupsReady || !knownGroups.length ? undefined : selection.groupId === '' || knownGroups.some(group => group.id === selection.groupId) ? selection.groupId : knownGroups[0].id
+      const scopeChanged = selection.groupId !== groupId
+      const offset = scopeChanged ? 0 : selection.offset, sourceId = groupId === undefined || scopeChanged ? '' : selection.sourceId
+      useEffect(() => {
+        if (groupsReady && scopeChanged) setSelection({ groupId, offset: 0, sourceId: '' })
+      }, [groupsReady, groupId, scopeChanged])
+      const setOffset = update => setSelection(current => ({ ...current, offset: typeof update === 'function' ? update(current.offset) : update, sourceId: '' }))
+      const setSourceId = id => setSelection({ groupId, offset, sourceId: id })
+      const navigation = useRef(null), detailHeading = useRef(null), focusDetail = useRef(Boolean(target?.sourceId)), focusSource = useRef('')
       const params = new URLSearchParams({ offset: String(offset), limit: '10' })
       if (groupId) params.set('groupId', groupId)
-      const listing = useCoordinationRead(`/state/coordination-sources?${params}`)
+      const listing = useCoordinationRead(groupId === undefined ? null : `/state/coordination-sources?${params}`)
       const detail = useCoordinationRead(sourceId ? `/state/coordination-sources/${encodeURIComponent(sourceId)}` : null)
       const value = detail.value, source = value?.source, snapshot = value?.snapshot
       const members = value?.members || [], sources = listing.value?.sources || []
@@ -572,7 +592,7 @@ window.__ModuleLoader__.load({
         }
       }, [sourceId, value])
       useEffect(() => {
-        if (listing.value?.total > 0 && offset >= listing.value.total) { setOffset(Math.floor((listing.value.total - 1) / 10) * 10); setSourceId('') }
+        if (listing.value && offset > 0 && offset >= listing.value.total) { setOffset(Math.max(0, Math.floor((listing.value.total - 1) / 10) * 10)) }
       }, [listing.value, offset])
       const choose = id => { focusDetail.current = true; setSourceId(id) }
       const back = () => { focusSource.current = sourceId; setSourceId('') }
@@ -582,30 +602,43 @@ window.__ModuleLoader__.load({
       const evidence = (items, label) => React.createElement('div', { style: { margin: '12px 0' } }, React.createElement('strong', { style: { fontSize: 12, color: colors.muted } }, label), items?.length ? React.createElement('ul', { 'aria-label': label, style: { paddingLeft: 20, margin: '8px 0', overflowWrap: 'anywhere' } }, ...items.map((item, index) => React.createElement('li', { key: index }, item))) : text('未记录'))
       const badge = state => statusTag(coordinationState(state), coordinationTone(state))
       const notice = (resource, label) => resource.error ? React.createElement('div', { role: 'alert', style: { ...card, marginBottom: 12, color: colors.danger } }, resource.error, resource.value ? ` 保留上次${label}，内容可能已过期。` : '', React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: resource.reload, style: { marginLeft: 8 } }, `重试${label}`)) : null
-      const knownGroups = groups.map(group => ({ id: group.groupId, label: group.name || group.groupId }))
-      const selectGroup = id => { setGroupId(id); setOffset(0); setSourceId('') }
+      const selectGroup = id => { focusSource.current = ''; setSelection({ groupId: id, offset: 0, sourceId: '' }) }
+      const disclosure = (title, ...children) => React.createElement('details', { className: 'observer-coordination-disclosure' }, React.createElement('summary', null, title), ...children)
+      const nextAction = member => member.control === 'cancelled' ? '安排已取消，不再推进' : member.control === 'paused' ? '安排已暂停，等待恢复' : member.state === 'fulfilled' ? '当前指令已有正式完成证明' : member.waitingReason ? coordinationReason(member.waitingReason) : member.blocker ? `先处理阻塞：${member.blocker}` : '未记录下一动作'
+      const schedules = snapshot?.schedules || []
       const listingPage = React.createElement('nav', { ref: navigation, 'aria-label': '协调输入列表' },
         notice(listing, '列表'),
+        !groupsReady ? React.createElement('p', { role: 'status' }, '正在读取群聊…') : !knownGroups.length ? emptyState('暂无可选群聊', { detail: '群聊列表为空，未读取全部群组。' }) : null,
         listing.loading && !listing.value ? React.createElement('p', { role: 'status' }, '正在读取协调输入…') : null,
-        ...sources.map(item => React.createElement('button', { key: item.id, type: 'button', className: 'observer-coordination-source', 'data-source-id': item.id, 'aria-pressed': item.id === sourceId, onClick: () => choose(item.id), style: { marginBottom: 8 } },
-          React.createElement('span', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 } }, badge(item.state), React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, fmt(item.createdAt))),
-          React.createElement('span', { style: { ...tableBodyContent, WebkitLineClamp: 3 } }, item.original || '输入正文未记录'),
-          React.createElement('span', { style: { display: 'block', marginTop: 8, color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, knownGroups.find(group => group.id === item.groupId)?.label || item.groupId))),
-        !listing.loading && !listing.error && !sources.length ? emptyState('暂无协调输入', { detail: '当前范围内没有已记录的协调输入；不代表群消息均已处理。' }) : null,
+        ...sources.map(item => React.createElement('button', { key: item.id, type: 'button', className: 'observer-coordination-source', 'data-source-id': item.id, 'aria-pressed': item.id === sourceId, onClick: () => choose(item.id), style: { marginBottom: 2 } },
+          React.createElement('span', { className: 'observer-coordination-title' }, (item.original || item.question || '输入正文未记录').replace(/\s+/g, ' ')),
+          React.createElement('span', { className: 'observer-coordination-meta' }, badge(item.state), groupId === '' ? React.createElement('span', { className: 'observer-coordination-group' }, knownGroups.find(group => group.id === item.groupId)?.label || item.groupId || '群归属未记录') : null, React.createElement('time', { dateTime: item.createdAt || undefined }, fmt(item.createdAt))))),
+        groupId !== undefined && !listing.loading && !listing.error && !sources.length ? emptyState('暂无协调输入', { detail: '当前群聊没有已记录的协调输入，保留当前选择。' }) : null,
         listing.value ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 12 } },
           React.createElement('span', { style: { fontSize: 12, color: colors.muted, marginRight: 'auto' } }, `共 ${listing.value.total} 条 · 第 ${Math.floor(offset / 10) + 1} 页`),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset === 0 || listing.loading, onClick: () => { setOffset(value => Math.max(0, value - 10)); setSourceId('') } }, '上一页'),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset + 10 >= listing.value.total || listing.loading, onClick: () => { setOffset(value => value + 10); setSourceId('') } }, '下一页')) : null)
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset === 0 || listing.loading, onClick: () => setOffset(value => Math.max(0, value - 10)) }, '上一页'),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset + 10 >= listing.value.total || listing.loading, onClick: () => setOffset(value => value + 10) }, '下一页')) : null)
       const reading = sourceId ? React.createElement('article', { 'aria-label': '协调工作详情', 'aria-busy': detail.loading, style: { ...card, overflowWrap: 'anywhere', minWidth: 0 } },
         React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', onClick: back }, '返回协调输入'),
         notice(detail, '详情'),
         !value && detail.loading ? React.createElement('p', { role: 'status' }, '正在读取协调详情…') : null,
         value ? React.createElement(React.Fragment, null,
-          React.createElement('h2', { ref: detailHeading, tabIndex: -1, style: { fontSize: 20, margin: '16px 0 12px' } }, '收到的输入'),
-          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, badge(source.state), snapshot ? badge(snapshot.state) : null, React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, `读取于 ${fmt(value.observedAt)}`)),
-          text(source.original),
-          React.createElement('p', { style: { color: colors.muted, fontSize: 12 } }, '这里只展示已保存的判断结果与事实，不展示或推测内部思维过程。'),
-          section('已记录的判断与变更',
+          React.createElement('h2', { ref: detailHeading, tabIndex: -1, className: 'observer-coordination-heading', style: { fontSize: 20, margin: '14px 0 10px', outline: 'none' } }, schedules.length ? '定时安排概览' : members.length ? '任务调度概览' : source.question ? '待澄清的安排' : source.rejectionReason ? '未接纳的输入' : '协调摘要'),
+          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, badge(source.state), snapshot ? badge(snapshot.state) : null),
+          React.createElement('p', { style: { color: colors.muted, fontSize: 12 } }, '已接纳不等于已完成；通知送达不等于任务完成。'),
+          React.createElement('p', { className: 'observer-coordination-group', style: { color: colors.muted, fontSize: 12 } }, `所属群聊：${knownGroups.find(group => group.id === source.groupId)?.label || source.groupId || '未记录'}`),
+          source.question || source.rejectionReason ? section(source.question ? '需要澄清' : '未接纳原因', text(source.question || source.rejectionReason)) : null,
+          source.answerText ? section('已记录摘要', React.createElement('p', { className: 'observer-coordination-text', style: { ...tableBodyContent, WebkitLineClamp: 3 } }, source.answerText)) : null,
+          schedules.length ? section('定时安排', ...schedules.map(item => React.createElement('div', { key: item.scheduleId, style: { marginBottom: 12 } }, badge(item.state), React.createElement('h4', { style: { margin: '8px 0' } }, item.reminderText || '定时安排'), text(`下次触发：${item.nextDueAt ? fmt(item.nextDueAt) : '未记录'}`), text(`周期：${item.rule?.kind === 'once' ? `单次 ${fmt(item.rule.at)}` : item.rule?.kind === 'daily' ? `每日 ${item.rule.time || '时间未记录'}` : item.rule?.kind === 'weekly' ? `每周${'日一二三四五六'[item.rule.weekday] ?? '（星期未记录）'} ${item.rule.time || '时间未记录'}` : '未记录'}${item.timezone ? ` · 时区 ${item.timezone}` : ''}`)))) : null,
+          members.length ? section('任务调度', ...members.map(member => React.createElement('section', { key: member.instructionId, style: { padding: '12px 0', borderBottom: `1px solid ${colors.border}` }, 'aria-label': member.title || member.taskId },
+            React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, React.createElement('h4', null, member.title || member.taskId), badge(member.state), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask({ taskId: member.taskId }, { groupId, offset, sourceId }) }, '查看任务')),
+            text(`任务状态：${member.taskState === 'active' ? '进行中' : coordinationState(member.taskState)}`),
+            member.dependencies?.length ? text(`前置事项：${member.dependencies.map(id => members.find(item => item.instructionId === id)?.title || id).join('、')}`) : null,
+            member.blocker ? text(`阻塞：${member.blocker}`) : null,
+            text(`下一动作：${nextAction(member)}`),
+            member.decision?.summary ? React.createElement('p', { className: 'observer-coordination-text', style: { color: colors.muted, fontSize: 12 } }, `最近结论：${member.decision.summary}`) : null))) : null,
+          disclosure('原始输入', text(source.original)),
+          source.acceptedKind || source.answerText || source.question || source.rejectionReason || source.failureCode || source.nextRetryAt || snapshot?.pendingClarifications?.length || value.coordination?.history?.length ? disclosure('判断与变更记录',
             source.acceptedKind ? text(`接纳类型：${({ arrangement: '协调安排', create: '新安排', change: '调整安排', schedule: '定时安排', 'schedule-change': '调整定时', 'occurrence-control': '本次触发控制', resolve: '澄清处理', query: '只读查询', accept: '接纳安排' })[source.acceptedKind] || source.acceptedKind} · 修订 ${source.acceptedRevision ?? '未记录'}；接纳不表示任务已完成。`) : text('尚未记录接纳结论。'),
             source.answerText ? text(`已记录答复：${source.answerText}`) : null,
             source.question ? text(`需要澄清：${source.question}`) : null,
@@ -614,31 +647,27 @@ window.__ModuleLoader__.load({
             source.nextRetryAt ? text(`下次重试时间：${fmt(source.nextRetryAt)}`) : null,
             evidence((snapshot?.pendingClarifications || []).map(item => item.question), '待澄清事项'),
             value.coordination?.history?.length ? React.createElement('ol', { style: { paddingLeft: 20 } }, ...value.coordination.history.map((item, index) => React.createElement('li', { key: index }, text(`${fmt(item.at)} · 修订 ${item.revision ?? '未记录'} · ${item.action || '已记录变更'}`), text(item.reason)))) : text('未记录安排变更。'),
-            !value.coordination ? text('该输入尚未关联协调安排。') : null),
-          section('任务与依赖',
-            ...members.map(member => React.createElement('section', { key: member.instructionId, style: { ...card, margin: '12px 0' }, 'aria-label': member.title || member.taskId },
-              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, React.createElement('h4', null, member.title || member.taskId), badge(member.state), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask({ taskId: member.taskId }, { groupId, offset, sourceId }) }, '查看任务')),
-              text(member.requirement),
-              member.observation ? text('协调方式：仅观察原任务完成，不追加要求或唤醒任务。') : member.progressImpact ? text(`协调方式：${member.progressImpact === 'preserve' ? '保留既有工作' : member.progressImpact === 'replan' ? '按新要求重新规划' : '未记录'}${member.impactReason ? `；已记录理由：${member.impactReason}` : ''}`) : null,
-              text(`任务状态：${member.taskState === 'active' ? '进行中' : coordinationState(member.taskState)}；${member.control === 'paused' ? '安排已暂停' : member.control === 'cancelled' ? '安排已取消' : coordinationReason(member.waitingReason)}`),
-              React.createElement('p', { className: 'observer-coordination-text', style: { color: colors.muted } }, member.dependencies?.length ? `前置事项：${member.dependencies.map(id => members.find(item => item.instructionId === id)?.title || id).join('、')}` : '无前置事项记录'),
-              member.blocker ? text(`阻塞：${member.blocker}`) : null,
-              member.reorderAssessment ? React.createElement('div', null, text(`顺序评估：${({ pending: '等待评估', assessed: '已记录评估', needs_clarification: '等待澄清' })[member.reorderAssessment.state] || '状态未记录'}；${member.reorderAssessment.summary || '未记录摘要'}`), evidence(member.reorderAssessment.evidence, '顺序评估依据')) : null,
-              member.decision ? React.createElement('div', null, text(`任务最近记录的结论（${member.decision.action || '未记录动作'}）：${member.decision.summary || '未记录摘要'}`), evidence(member.decision.evidence, '任务结论依据'), evidence(member.decision.limitations, '任务结论限制')) : text('任务尚无已记录结论。'),
-              member.completionProof ? React.createElement('details', null, React.createElement('summary', null, member.state === 'fulfilled' ? '正式完成证明引用' : '历史完成证明引用（不证明当前指令完成）'), text(`事件：${member.completionProof.eventId || '未记录'}\n命令：${member.completionProof.commandId || '未记录'}`)) : text('暂无当前指令的正式完成证明。'))),
-            !members.length ? text('该输入没有关联任务记录；纯提醒或未接纳输入也可能没有任务。') : null),
-          section('定时安排与触发',
-            ...(snapshot?.schedules || []).map(item => React.createElement('div', { key: item.scheduleId, style: { marginBottom: 12 } }, badge(item.state), text(`${item.reminderText || '定时安排'}\n规则：${item.rule?.kind === 'once' ? `单次 ${fmt(item.rule.at)}` : item.rule?.kind === 'daily' ? `每日 ${item.rule.time}` : item.rule?.kind === 'weekly' ? `每周${'日一二三四五六'[item.rule.weekday] ?? '?'} ${item.rule.time}` : '未记录'}${item.timezone ? `（约定时区 ${item.timezone}）` : ''}\n下次：${fmt(item.nextDueAt)}`))),
+            !value.coordination ? text('该输入尚未关联协调安排。') : null) : null,
+          members.length ? disclosure('任务要求与证据',
+            ...members.map(member => React.createElement('section', { key: member.instructionId, style: { padding: '12px 0' } },
+              React.createElement('h4', null, member.title || member.taskId),
+              member.requirement ? text(member.requirement) : null,
+              member.observation ? text('仅观察原任务完成，不追加要求或唤醒任务。') : member.progressImpact ? text(`协调方式：${member.progressImpact === 'preserve' ? '保留既有工作' : member.progressImpact === 'replan' ? '按新要求重新规划' : '未记录'}${member.impactReason ? `；${member.impactReason}` : ''}`) : null,
+              member.reorderAssessment ? React.createElement('div', null, text(`顺序评估：${member.reorderAssessment.summary || '未记录摘要'}`), evidence(member.reorderAssessment.evidence, '顺序评估依据')) : null,
+              member.decision ? React.createElement('div', null, text(`任务最近记录的结论（${member.decision.action || '未记录动作'}）：${member.decision.summary || '未记录摘要'}`), evidence(member.decision.evidence, '任务结论依据'), evidence(member.decision.limitations, '任务结论限制')) : null,
+              member.completionProof ? React.createElement('details', null, React.createElement('summary', null, member.state === 'fulfilled' ? '正式完成证明引用' : '历史完成证明引用（不证明当前指令完成）'), text(`事件：${member.completionProof.eventId || '未记录'}
+命令：${member.completionProof.commandId || '未记录'}`)) : text('暂无当前指令的正式完成证明。')))) : null,
+          snapshot?.occurrences?.length || snapshot?.jobs?.length ? disclosure('触发与送达记录',
             ...(snapshot?.occurrences || []).map(item => React.createElement('div', { key: item.occurrenceId, style: { ...card, marginBottom: 12 } }, text(`计划时间：${fmt(item.plannedAt)}${item.cancelledAt ? `\n本次已取消于 ${fmt(item.cancelledAt)}，既有执行/送达事实不被撤销。` : item.paused ? '\n本次已暂停。' : ''}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' } }, '执行：', badge(item.actionState), '通知：', badge(item.deliveryState)), item.resultRef ? text(`结果引用：${item.resultRef}`) : null, item.failureCode ? text('存在触发故障记录，需核对；不能视为已完成。') : null)),
             ...(snapshot?.jobs || []).map(item => React.createElement('p', { key: item.jobId }, '触发作业：', badge(item.state))),
-            !snapshot?.schedules?.length && !snapshot?.occurrences?.length && !snapshot?.jobs?.length ? text('暂无定时或触发记录。') : null),
-          section('证据与读取边界', text('已接纳不等于已完成；通知送达不等于任务完成。证据文字和引用仅表示已记录，不代表本看板已独立核验。各条查询并非同一事务快照。'),
-            ...Object.entries(value.collections || {}).filter(([, info]) => info.truncated).map(([key, info]) => text(`${{ history: '变更记录', members: '任务', schedules: '定时安排', occurrences: '触发记录', jobs: '作业', pendingClarifications: '澄清' }[key] || key}仅显示最近 ${info.returned} / ${info.total} 条；其余记录未在本页展开。`)))) : null) : emptyState('选择一条协调输入', { detail: '查看已记录的安排、任务依赖和完成证据。' })
+            null) : null,
+          ...Object.entries(value.collections || {}).filter(([, info]) => info.truncated).map(([key, info]) => React.createElement('p', { key, role: 'status', style: { color: colors.warning, fontSize: 12 } }, `${{ history: '变更记录', members: '任务', schedules: '定时安排', occurrences: '触发记录', jobs: '作业', pendingClarifications: '澄清' }[key] || key}仅显示最近 ${info.returned} / ${info.total} 条；其余记录未在本页展开。`)),
+          disclosure('证据与读取边界', text('这里只展示已保存的判断结果与事实，不展示或推测内部思维过程。证据文字和引用仅表示已记录，不代表本看板已独立核验。各条查询并非同一事务快照。'), text(`读取于 ${fmt(value.observedAt)}`))) : null) : emptyState('选择一条协调输入', { detail: '查看已记录的安排、任务依赖和完成证据。' })
       return React.createElement('section', { 'aria-label': '协调工作', style: { minWidth: 0 } },
         React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 20 } },
-          React.createElement(SelectMenu, { label: '筛选协调群组', value: groupId, options: [{ id: '', label: '全部群组' }, ...knownGroups], onChange: selectGroup }),
+          groupsReady && knownGroups.length ? React.createElement(SelectMenu, { label: '筛选协调群组', value: groupId, options: [...knownGroups, { id: '', label: '全部群组' }], onChange: selectGroup }) : null,
           React.createElement('span', { style: { color: colors.muted, fontSize: 12, marginRight: 'auto' } }, '只读 · 每 5 秒刷新', listing.value ? ` · 列表读取于 ${fmt(listing.value.observedAt)}` : ''),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: refresh, disabled: listing.loading || detail.loading }, listing.loading || detail.loading ? '正在刷新…' : '刷新协调记录')),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: refresh, disabled: groupId === undefined || listing.loading || detail.loading }, listing.loading || detail.loading ? '正在刷新…' : '刷新协调记录')),
         React.createElement('div', { className: 'observer-coordination-layout', 'data-selected': Boolean(sourceId) }, listingPage, reading))
     }
     function TaskStepOutput({ taskId, node, detailRevision }) {
@@ -1904,7 +1933,7 @@ window.__ModuleLoader__.load({
           alertView === 'resolved' ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredResolvedAlerts.length} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
       )
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: openTask, onOpenSession: navigate })
-      const coordinationPage = React.createElement(CoordinationBrowser, { groups: data?.groups || [], target: coordinationTarget, onOpenTask: openTask })
+      const coordinationPage = React.createElement(CoordinationBrowser, { groups: data?.groups || [], groupsReady: Boolean(data), target: coordinationTarget, onOpenTask: openTask })
       const pageContent = activePage === 'coordination' ? coordinationPage : activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, ...(activePage === 'groups' ? { minWidth: 0 } : {}), minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },

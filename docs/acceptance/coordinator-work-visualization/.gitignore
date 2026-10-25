@@ -4,3 +4,6 @@ round-*/*.webm
 round-*/*.zip
 round-*/*.sqlite*
 round-*/browser-run-*/
+
+# Raw native receipt contains local group identifiers; publish candidate-readback.json instead.
+round-*/native-deploy/

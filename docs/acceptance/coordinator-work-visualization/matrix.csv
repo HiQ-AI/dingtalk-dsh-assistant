@@ -1,22 +1,32 @@
-case,description,round-1,round-2,round-3,round-4,round-5,round-6
-baseline,Latest main and isolated feature branch,PASS,PASS,PASS,PASS,PASS,PASS
-contract,Recorded domain data and privacy contract,PENDING,PASS,PASS,N/A,N/A,N/A
-api,Real HTTP coordinator projection,PENDING,PASS,PASS,PASS,PASS,PASS
-ui,Dashboard entry and linked details,PENDING,PENDING,PASS,PENDING,PASS,PASS
-refresh,Refresh with stale/error recovery in isolation,PENDING,PENDING,PASS,N/A,N/A,N/A
-empty,Empty coordinator state in isolation,PENDING,PASS,PASS,N/A,N/A,N/A
-responsive,Narrow screen with no overflow,PENDING,FAIL,PASS,PENDING,PASS,PASS
-regression,Existing observer functionality preserved,PENDING,PASS,PASS,N/A,N/A,N/A
-review,Independent code review,PENDING,PASS,PASS,N/A,N/A,N/A
-pr,Scoped commit and independently read PR state,PENDING,PENDING,PASS,PASS,PASS,PASS
-merge,Authorized PR258 merge with independent SHA and timestamp,N/A,N/A,N/A,PASS,PASS,PASS
-deploy-script,Original live deployment operation exit and readiness wait,N/A,N/A,N/A,FAIL,N/A,N/A
-install,Original exact dual-package install and native drain proof,N/A,N/A,N/A,PASS,PASS,PASS
-health,Independent same-new-process dual-port and health follow-up,N/A,N/A,N/A,PASS,PASS,PASS
-native-browser,Actual installed 3080 default-theme read-only core paths,N/A,N/A,N/A,FAIL,PASS,PASS
-native-refresh,Actual installed automatic and manual read-only refresh,N/A,N/A,N/A,FAIL,PASS,PASS
-native-proof,Existing dependencies and formal proof plus task return,N/A,N/A,N/A,PENDING,PASS,PASS
-native-no-write,Actual browser zero resident mutation requests,N/A,N/A,N/A,PENDING,PASS,PASS
-native-dark,Actual installed dark theme not switched to preserve Host settings,N/A,N/A,N/A,N/A,UNVERIFIED,UNVERIFIED
-startup-fix,Bounded 600s wait with new-PID dual-port and timeout tests,N/A,N/A,N/A,PENDING,N/A,PASS
-followup-pr,New PR259 OPEN with independently matched base head SHA and body,N/A,N/A,N/A,N/A,N/A,PASS
+case,description,round-1,round-2,round-3,round-4,round-5,round-6,round-7,round-8,round-9,round-10,round-11,round-12,round-13,round-14,round-15,round-16
+baseline,Latest main and isolated feature branch,PASS,PASS,PASS,PASS,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+contract,Recorded domain data and privacy contract,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+api,Real HTTP coordinator projection,PENDING,PASS,PASS,PASS,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+ui,Dashboard entry and linked details,PENDING,PENDING,PASS,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+refresh,Refresh with stale/error recovery in isolation,PENDING,PENDING,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+empty,Empty coordinator state in isolation,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+responsive,Narrow screen with no overflow,PENDING,FAIL,PASS,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+regression,Existing observer functionality preserved,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+review,Independent code review,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+pr,Scoped commit and independently read PR state,PENDING,PENDING,PASS,PASS,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+merge,Authorized PR258 merge with independent SHA and timestamp,N/A,N/A,N/A,PASS,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+deploy-script,Original live deployment operation exit and readiness wait,N/A,N/A,N/A,FAIL,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+install,Original exact dual-package install and native drain proof,N/A,N/A,N/A,PASS,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+health,Independent same-new-process dual-port and health follow-up,N/A,N/A,N/A,PASS,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+native-browser,Actual installed 3080 default-theme read-only core paths,N/A,N/A,N/A,FAIL,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+native-refresh,Actual installed automatic and manual read-only refresh,N/A,N/A,N/A,FAIL,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+native-proof,Existing dependencies and formal proof plus task return,N/A,N/A,N/A,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+native-no-write,Actual browser zero resident mutation requests,N/A,N/A,N/A,PENDING,PASS,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+native-dark,Actual installed dark theme not switched to preserve Host settings,N/A,N/A,N/A,N/A,UNVERIFIED,UNVERIFIED,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+startup-fix,Bounded 600s wait with new-PID dual-port and timeout tests,N/A,N/A,N/A,PENDING,N/A,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+followup-pr,New PR259 OPEN with independently matched base head SHA and body,N/A,N/A,N/A,N/A,N/A,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+refine-baseline,Actual first-group same-size native baseline rows5 and4,N/A,N/A,N/A,N/A,N/A,N/A,PASS,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A
+refine-first-group,Stable first valid group and no implicit all-groups query,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PASS,PASS,PASS,PASS,PASS,PASS,PASS,FAIL,PASS
+refine-selection,Async empty invalid explicit-all selection and refresh preservation,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PASS,PASS,PASS,PASS,PASS,PASS,PASS,FAIL,PASS
+refine-density,Compact rows and separate selected versus keyboard focus,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PASS,PASS,PASS,PASS,N/A,PASS,FAIL,PASS
+refine-priority,Actual schedule or dispatch facts first with progressive details,N/A,N/A,N/A,N/A,N/A,N/A,N/A,FAIL,PASS,PASS,PASS,PASS,N/A,PASS,FAIL,PASS
+refine-browser,Actual source browser desktop390 lightdark no errors,N/A,N/A,N/A,N/A,N/A,N/A,N/A,FAIL,PASS,PASS,PASS,FAIL,FAIL,PASS,FAIL,PASS
+refine-regression,Risk-related tests and exact suite map,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PASS,PASS,PASS,N/A,N/A,N/A,PASS
+refine-review,Native low independent readability state interaction review,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PENDING,PASS,PASS,N/A,N/A,N/A,N/A
+refine-candidate,Native Check candidate deploy and independent package health browser,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PENDING,PENDING,PASS,N/A,N/A,N/A,PASS
+refine-native-dark,Installed Host dark not switched to preserve persisted setting,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,UNVERIFIED

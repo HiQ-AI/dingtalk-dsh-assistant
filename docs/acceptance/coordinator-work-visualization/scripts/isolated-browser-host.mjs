@@ -85,6 +85,11 @@ if (!values.empty) {
   await command('coordination.source.reject', { sourceId: rejected.id, fence: rejected.fence, reason: '[合成测试数据] 非协调职责，不创建任务' })
   const clarify = await reserve('clarification', '请继续那个任务（需要说明哪个任务）。')
   await command('coordination.source.clarify', { sourceId: clarify.id, fence: clarify.fence, coordinationId: 'synthetic-clarification', question: '[合成测试数据] 请确认具体任务', candidates: [] })
+  const scheduled = await reserve('schedule', '每日上午九点的合成提醒，只用于隔离阅读验收。')
+  await command('coordination.accept', { sourceId: scheduled.id, fence: scheduled.fence, coordinationId: 'synthetic-schedule', members: [], readOnly: true })
+  await command('coordination.schedule.create', { coordinationId: 'synthetic-schedule', scheduleId: 'synthetic-daily', timezone: 'Asia/Shanghai',
+    rule: { kind: 'daily', time: '09:00' }, action: { kind: 'message-reminder', text: '[合成测试数据] 每日核对待办安排' },
+    target: { conversationId: 'synthetic-group', recipientIds: [] } })
   for (let index = 0; index < 20; index++) await reserve(`paging-${String(index).padStart(2, '0')}`, `分页验证输入 ${index + 1}`)
 }
 await writeFile(join(dataRoot, 'manifest.json'), JSON.stringify(manifest, null, 2))
@@ -146,6 +151,7 @@ const web = createServer(async (req, res) => {
     res.writeHead(upstream.status, Object.fromEntries(upstream.headers))
     res.end(Buffer.from(await upstream.arrayBuffer())); return
   }
+  if (path === '/favicon.ico') { res.writeHead(204).end(); return }
   if (path === '/') { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(html); return }
   if (path === '/manifest.json') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(manifest)); return }
   if (path === '/observer.js') {

@@ -1,0 +1,66 @@
+{
+  "installs": 0,
+  "taskState": "Running",
+  "packages": {
+    "observer": {
+      "dependency": "file:D:/dsh_home/packages/coordinator-refinement-20261025-final/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "bytes": 59507,
+      "version": "2.1.0",
+      "sha256": "fa55a28849bc894fdd4e44b63e2d6cd4ae914675eb528dbca07a63b641ee35a4"
+    },
+    "assistant": {
+      "dependency": "file:D:/dsh_home/packages/coordinator-refinement-20261025-final/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "bytes": 389208,
+      "version": "2.1.0",
+      "sha256": "043b065f558be0de0c9deacab1f1caf54f0cf3b1db959ba55a0c68965339088d"
+    }
+  },
+  "observedAt": "2026-10-25T05:41:05.3985995Z",
+  "newPid": 45548,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 45548
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 45548
+    }
+  ],
+  "writes": 0,
+  "backupCreated": false,
+  "authenticatedWeb": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "normalizedExchangeTarget": "http://127.0.0.1:3080/",
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "maintenance": "Retired workflow API; native lifecycle restores inbound/autostart, no legacy Resume",
+  "oldPid": 91732,
+  "creationDate": "2026-10-25T13:32:33.666542+08:00",
+  "health": {
+    "listeners": [
+      "ready",
+      "ready"
+    ],
+    "bridgeHealthy": true,
+    "inboundProcessing": true,
+    "backfills": [
+      "ok",
+      "ok"
+    ],
+    "recoveryIssueCount": 0,
+    "status": "ok"
+  },
+  "oldProcessExited": true,
+  "autostartEnabled": true,
+  "checkOnly": true,
+  "hostVersion": "0.2.1-rc.2",
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "restarts": 0,
+  "sourceCount": 18,
+  "parentPid": 28284
+}

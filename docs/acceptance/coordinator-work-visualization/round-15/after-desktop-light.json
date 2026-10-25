@@ -1,0 +1,78 @@
+{
+  "sourceIdentity": {
+    "bytes": 255936,
+    "sha256": "588b4e356d9c59f1c67f3a3419d6963fa52202bcc16b89c5f56cc363b22f226f"
+  },
+  "result": "PASS",
+  "cases": [
+    "default-first-group-no-all-request",
+    "focus-type-priority-and-progressive-disclosure",
+    "source-focus-restoration",
+    "real-schedule-status-next-trigger-rule-no-empty-task",
+    "other-group-dispatch-and-task-return",
+    "manual-selection-retained-on-refresh-and-poll",
+    "no-horizontal-overflow"
+  ],
+  "synthetic": false,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 25280,
+      "sha256": "8ec985c4d63d23b65e056ad11a254573fc2afd644ef826e9da975279f6162b4e"
+    },
+    "after-desktop-light-detail.png": {
+      "bytes": 31791,
+      "sha256": "e43af77a39b081b0af15cf0dc91e22c843441310eecf14d1198dabe6aa2b5a92"
+    },
+    "after-desktop-light-schedule.png": {
+      "bytes": 31770,
+      "sha256": "0886fd1635be591db90e9436176d26671d0e80117c7f5d5e4b6ad990d4dd2676"
+    },
+    "after-desktop-light-dispatch.png": {
+      "bytes": 36044,
+      "sha256": "454104f7b1ae760081256c3f9fa68d25792e25031bce3a93a0d4c8fb95be42ef"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "firstGroupSourceCount": 10,
+  "dataShape": {
+    "groups": 2,
+    "taskSources": 0,
+    "scheduleSources": 7
+  },
+  "initialAllGroupRequests": 0,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "keyboardFocus": {
+    "visible": true,
+    "width": "2px"
+  },
+  "selectedStyle": {
+    "pressed": "true",
+    "border": "0px",
+    "marker": "rgb(15, 17, 21) 2px 0px 0px 0px inset",
+    "bg": "rgb(255, 255, 255)"
+  },
+  "hostUpdateNoticeDismissedBeforeTask": true,
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}

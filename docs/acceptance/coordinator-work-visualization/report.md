@@ -67,3 +67,14 @@ Round-3 isolated and round-4/5/6 actual-host results retain separate provenance.
 ## Follow-up Delivery
 
 Startup readiness wait300->600s and final deployment evidence are delivered in PR #259 (OPEN): https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Independent gh readback matched main/base,worktree-coordinator-work-deployment/head,implementation commit5ccfd218ed84711af21850526ed5586a4110b364 and complete checked local PR body. Local regression rerun11/11 PASS; no follow-up merge/redeploy or CI dispatch. PR258 remains MERGED and its implementation branch was not pushed. Final bookkeeping is a docs-only closure on PR259.
+
+
+## Refinement Closure (2026-10-25)
+
+The follow-up UI feedback is implemented on the unmerged PR259 branch. The first valid group is selected in stable returned order without an initial all-groups read; empty/invalid scopes, explicit all, refresh/poll retention and task return are covered. Source rows are compact 67px two-line entries at desktop and the detail pane prioritizes actual schedules or task dispatch before collapsed raw/history/evidence sections. Completion and delivery remain separate, and missing next actions are not invented.
+
+Candidate deployment was authorized after Check and completed once. `candidate-readback.json` independently verifies final Assistant/Observer 2.1.0 package hashes, profile SHA, new PID45548, old PID91732 exit, dual ports, autostart, health, inbound/bridge readiness and authenticated Web; no business writes, notification replay, DingTalk send or Host setting change occurred.
+
+Round16 is the final actual-host browser ground truth: five desktop/mobile/light/dark/forced-colors variants, 7 cases each, no console/API/mutation errors and no horizontal overflow. Round12/13/15 failures remain preserved with round14 diagnostic context; they are not rewritten as passes. PR259 remains OPEN and no merge or CI dispatch was performed.
+
+Final regression rerun101/101 PASS with exact command in round-16.md; earlier round11 risk scope136/136 is separately preserved. Source/hash check5/5 and screenshot hash/byte pairs20/20 MATCH. Same native size comparison: desktop5->10 and mobile4->8 visible rows; row height111-153px->67px. Actual installed dark remains UNVERIFIED (persisted light); source-isolated dark was verified separately. Native low reviewer re-read all three fixes and independently ran the cross-group/history test1/1PASS.

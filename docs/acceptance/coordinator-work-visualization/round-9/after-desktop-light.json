@@ -1,0 +1,53 @@
+{
+  "result": "PASS",
+  "cases": [
+    "default-first-group-no-all-request",
+    "focus-type-priority-and-progressive-disclosure",
+    "task-return-keeps-source-and-group",
+    "source-focus-restoration",
+    "manual-selection-retained-on-refresh-and-poll",
+    "no-horizontal-overflow"
+  ],
+  "synthetic": true,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 25012,
+      "sha256": "76cf1463cdc1afb6d65b845d9da0ee52c97bfa456f7f4663a830a317aa5a26b2"
+    },
+    "after-desktop-light-detail.png": {
+      "bytes": 31999,
+      "sha256": "b46f123c70130b7348c81ac41dfadc0151c6f83b1cef6489ad78eea70526b9af"
+    }
+  },
+  "errors": [],
+  "mutations": [],
+  "firstGroupSourceCount": 25,
+  "dataShape": {
+    "groups": 2,
+    "taskSources": 2,
+    "scheduleSources": 0
+  },
+  "initialAllGroupRequests": 0,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}
