@@ -1,0 +1,74 @@
+{
+  "backupCreated": false,
+  "health": {
+    "backfills": [
+      "ok",
+      "ok"
+    ],
+    "status": "ok",
+    "bridgeHealthy": true,
+    "recoveryIssueCount": 0,
+    "listeners": [
+      "ready",
+      "ready"
+    ],
+    "inboundProcessing": true
+  },
+  "checkOnly": false,
+  "taskState": "Running",
+  "authenticatedWeb": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "normalizedExchangeTarget": "http://127.0.0.1:3080/",
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "oldProcessExited": true,
+  "oldPid": 91256,
+  "autostartEnabled": true,
+  "hostVersion": "0.2.1-rc.2",
+  "restarts": 0,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 93604
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 93604
+    }
+  ],
+  "writes": 0,
+  "newPid": 93604,
+  "workCounts": {
+    "dispatches": 0,
+    "originalFailurePrimary": true,
+    "schedules": 7,
+    "triggers": 3,
+    "total": 10,
+    "failed": 2
+  },
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "parentPid": 84928,
+  "maintenance": "Retired workflow API; native lifecycle restores inbound/autostart, no legacy Resume",
+  "installs": 0,
+  "creationDate": "2026-10-26T00:08:25.574911+08:00",
+  "observedAt": "2026-10-25T16:31:24.9001618Z",
+  "packages": {
+    "assistant": {
+      "dependency": "file:D:/dsh_home/packages/coordinator-dispatch-relations-20261025/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "sha256": "0155343482f9a9c9c2418e1dec10ab123866310587c3fd4283a1764c75318c7e",
+      "version": "2.1.0",
+      "bytes": 396028
+    },
+    "observer": {
+      "dependency": "file:D:/dsh_home/packages/coordinator-dispatch-relations-20261025/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "sha256": "df12db71653213b1afe97c9b36a23c2037c808ad4f9b3cc0336b64a6f237b826",
+      "version": "2.1.0",
+      "bytes": 59781
+    }
+  },
+  "sourceCount": 18
+}

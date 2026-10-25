@@ -31,7 +31,7 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 | G19 | Receipt-owned A-completion to B-dispatch contract and direct defects | PASS | Dispatch-relations spec; keyed command/version receipts; ID/timezone/pre-start cancellation; round36 |
 | G20 | Named relation ledger and B task-page prerequisite links | PASS | Named A-to-B ledger and B task detail; unsatisfied all prerequisites, task links and actual nextStep; UI491123de |
 | G21 | Official-command relation matrix and real isolated browser | PASS | round36:164directed/135risk/14frozen-native-smoke; four browser9cases; reviewer dedup2PASS; generic failed-receipt chain explicitly unverified |
-| G22 | Check/native deployment actual3080 screenshots and OPEN PR delivery | IN_PROGRESS | round36 native93604/dualports/health/inbound/autostart/auth200; final round39 four7PASS and16source/28PNG matches; rounds37/38 visual FAIL retained; scoped PR delivery pending |
+| G22 | Check/native deployment actual3080 screenshots and OPEN PR delivery | PASS | round36 native93604/dualports/health/inbound/autostart/auth200; round39 four7PASS and16source/28PNG matches; round40 PR259 OPEN, local/remote/PR implementation5b0ffc3 and complete body matched; historical visual FAIL retained |
 
 ## Decisions and Important Information
 
@@ -59,3 +59,5 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 - 2026-10-25 authorized relation iteration: ledger explains prerequisite completion -> target dispatch, not target execution. Original native roster reused; lead owns deployment. Existing cross-trigger dependency edges allow real validation without production fixtures. Prior ID/timezone/pre-start-cancel defects are directly related. Historical G14-G18 do not certify this iteration.
 
 - 2026-10-26: Final dispatch-relations native installation93604 passed independent package/profile/Host/health/inbound/autostart/auth200 readback. Native existing relations both dispatched/accepted, waiting and failed dispatch absent. Round37 late Host notice and round38 incomplete mobile viewport are visual FAIL despite functional PASS; screenshot-only driver corrections lead to round39 full relation detail7PASS/four variants. Actual Host remains light under dark preference. Product source unchanged after freeze.
+
+- Final dispatch-relations delivery: implementation5b0ffc300dd1107f3ddbef168476441643a6083a independently equals local/remote/PR259 head; complete body matched, OPEN/unmerged,main base,clean before snapshot. round40/pr-readback.json precedes this docs-only closure. All relation cases have latest applicable PASS; native dark/waiting/failed and official failed-receipt limits retained. No merge or CI dispatch.
