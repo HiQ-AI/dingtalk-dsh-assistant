@@ -30,3 +30,4 @@ refine-regression,Risk-related tests and exact suite map,N/A,N/A,N/A,N/A,N/A,N/A
 refine-review,Native low independent readability state interaction review,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PENDING,PASS,PASS,N/A,N/A,N/A,N/A
 refine-candidate,Native Check candidate deploy and independent package health browser,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PENDING,PENDING,PASS,N/A,N/A,N/A,PASS
 refine-native-dark,Installed Host dark not switched to preserve persisted setting,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,UNVERIFIED
+refine-delivery,PR259 OPEN body and local remote implementation SHA matched,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,PASS
