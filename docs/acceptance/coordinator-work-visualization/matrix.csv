@@ -1,0 +1,11 @@
+case,description,round-1,round-2,round-3
+baseline,Latest main and isolated feature branch,PASS,PASS,PASS
+contract,Recorded domain data and privacy contract,PENDING,PASS,PASS
+api,Real HTTP coordinator projection,PENDING,PASS,PASS
+ui,Dashboard entry and linked details,PENDING,PENDING,PASS
+refresh,Refresh with stale/error recovery,PENDING,PENDING,PASS
+empty,Empty coordinator state,PENDING,PASS,PASS
+responsive,Narrow screen with no overflow,PENDING,FAIL,PASS
+regression,Existing observer functionality preserved,PENDING,PASS,PASS
+review,Independent code review,PENDING,PASS,PASS
+pr,Scoped commit and independently read PR state,PENDING,PENDING,PENDING

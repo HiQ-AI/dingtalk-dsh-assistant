@@ -1,0 +1,91 @@
+{
+  "pass": true,
+  "web": "http://127.0.0.1:19087",
+  "api": "http://127.0.0.1:19088",
+  "synthetic": true,
+  "hostIntegration": "Minimal ModuleLoader/slots host with actual React 18, dsh primitives 0.2.1-alpha.2 and production task service read DTOs; model/session runs forbidden",
+  "expectedTotal": 25,
+  "mobile": true,
+  "theme": "dark",
+  "cases": [
+    "actual-observer-native-primitives-and-http",
+    "real-source-pagination",
+    "reserved-detail-and-keyboard-focus",
+    "rejected-detail-and-keyboard-focus",
+    "clarification-detail-and-keyboard-focus",
+    "formal-completion-proof",
+    "accepted-dependency-and-waiting-not-completion",
+    "390px-detail-no-horizontal-overflow",
+    "production-task-service-drill-through-and-source-return",
+    "native-select-empty-filter-and-page-reset",
+    "network-failure-explicit-stale-state",
+    "network-recovery"
+  ],
+  "hostPid": 90020,
+  "dataRoot": "C:\\Users\\64554\\.claude\\jobs\\f04ba2b1\\tmp\\browser-round3-final-seeded",
+  "launchCommand": [
+    "D:\\soft\\node-v24.19.0\\node.exe",
+    "D:\\project\\dingtalk-dsh-assistant\\.claude\\worktrees\\coordinator-work-visualization\\docs\\acceptance\\coordinator-work-visualization\\scripts\\isolated-browser-host.mjs",
+    "--data-root",
+    "C:/Users/64554/.claude/jobs/f04ba2b1/tmp/browser-round3-final-seeded",
+    "--deps-root",
+    "C:/Users/64554/.claude/jobs/f04ba2b1/tmp/observer-browser-deps",
+    "--esbuild-module",
+    "D:/soft/node-v16.20.2/node_cache/_npx/fd45a72a545557e9/node_modules/esbuild/lib/main.js"
+  ],
+  "sourceHashes": {
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "sha256": "8c532c933605060841b88201f673aad0e40e0dac40a62e89b282ff153d94c0a2",
+      "bytes": 251275
+    },
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "sha256": "18b7f0b87c42eb0dece23c6f1f994028ac519a1359b1cfb8e1410e9a62e9bd68",
+      "bytes": 7398
+    },
+    "packages/dingtalk-dsh-assistant/http.js": {
+      "sha256": "8bf2b77883190cb20fb920fb5ffb32f96db93a527965180d03613247c00d54f0",
+      "bytes": 41352
+    },
+    "packages/dingtalk-dsh-assistant/task-session-service.js": {
+      "sha256": "efb49eee172853982f35f3e372a2c7490c2ed2441305bb5281afc631eecb0520",
+      "bytes": 134799
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/isolated-browser-host.mjs": {
+      "sha256": "9aed124a9f44d1e4be766c573e2c17473fb907264cb9e174cb6ba42e9c95d5e7",
+      "bytes": 15360
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/browser-acceptance.py": {
+      "sha256": "8a501bd216d8244cd8b64d699ea385bdeccec210497cdcb0ca1600cf4f04d0b9",
+      "bytes": 12523
+    }
+  },
+  "apiEvidence": {
+    "sourceList": {
+      "status": 200,
+      "total": 25,
+      "returned": 25,
+      "states": [
+        "accepted",
+        "needs_clarification",
+        "rejected",
+        "reserved"
+      ]
+    },
+    "invalidPaging": {
+      "status": 400,
+      "body": {
+        "error": "coordination_query_invalid"
+      }
+    }
+  },
+  "artifacts": {
+    "seeded-mobile-dark-detail.png": {
+      "bytes": 95943,
+      "sha256": "d393e3a7d2d52fbc6043a5104631555d024f711f78cd0edd5d0f06ac1539323c"
+    },
+    "seeded-mobile-dark-list.png": {
+      "bytes": 103283,
+      "sha256": "7616b45280755737e7c5b7b0133c6ddc57196dd0584c2b4ef7dd1d840f9ca084"
+    }
+  }
+}

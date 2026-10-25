@@ -1,0 +1,17 @@
+{
+  "round": 2,
+  "verifiedBy": "independent Get-ChildItem length and Get-FileHash SHA256 after Copy-Item into the worktree acceptance root",
+  "runtimeBoundary": "Original jobs/tmp locations were runtime staging only. These relative paths are the formal local evidence. PNGs are gitignored; small results and this inventory are tracked. Reproduce missing PNGs using scripts and a fresh runtime data root.",
+  "files": [
+    { "path": "desktop-dark-detail.png", "bytes": 159857, "sha256": "e915cb7e9a75066c2ea65d4622eeab48d158cf354b1f4cb137ebfad9d9dcea3b" },
+    { "path": "desktop-dark-list.png", "bytes": 116071, "sha256": "d9d52f0ae0c26850fb5869ea2879e61d585c4d7029a598175def417ed5f12ec5" },
+    { "path": "desktop-dark-results.json", "bytes": 727, "sha256": "54097b78e930427b0cd24df1e18037d797ad7f6940f415b685a246792daee0ed" },
+    { "path": "desktop-light-detail.png", "bytes": 159729, "sha256": "913eb180bda5d4fa72ef3c25dc4ed64c4a8bb65123ef1f29be1525b16d4c1a31" },
+    { "path": "desktop-light-list.png", "bytes": 111334, "sha256": "be8b52fc78b59cf67aa4044e6025169e98ad3dc4bd9a48dbce7e8c77362f3a0a" },
+    { "path": "desktop-light-results.json", "bytes": 728, "sha256": "d05c82ad05f9721b5de22ab482b7b1731f6072eda3a40cd728049a837e9759f1" },
+    { "path": "empty-desktop-light-list.png", "bytes": 35984, "sha256": "caa31667bf3e64acee82232d95099e7426165fe2dead8a7210635f4f4a43b1ce" },
+    { "path": "empty-desktop-light-results.json", "bytes": 375, "sha256": "fc8b8e7f1f6df0f5910aa76a6859f8f02cc740758eb1a53eed6a509d8827206e" },
+    { "path": "mobile-dark-list.png", "bytes": 102412, "sha256": "2ad665de6bb45c98310dba072497632137c111351fdf9521bf0ad5f5612955c6" }
+  ],
+  "mobileFailure": { "status": "FAIL", "viewportWidth": 390, "observerClientWidth": 390, "observerScrollWidth": 394, "headerRight": 393.5625, "note": "Only the list screenshot exists; failure interrupted before a detail screenshot or PASS result JSON. The round-3 fix-rerun must not overwrite this evidence." }
+}

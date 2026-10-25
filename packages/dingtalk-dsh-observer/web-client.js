@@ -124,6 +124,19 @@ window.__ModuleLoader__.load({
     }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
     const observerCss = `
+      [data-dingtalk-observer] .observer-coordination-layout { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; }
+      [data-dingtalk-observer] .observer-coordination-layout :is(article, section, li, div) { min-width: 0; }
+      [data-dingtalk-observer] .observer-coordination-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; margin: 8px 0; }
+      [data-dingtalk-observer] .observer-coordination-source { width: 100%; text-align: left; white-space: normal; font: inherit; color: inherit; background: ${colors.surface}; padding: 16px; border: 1px solid ${colors.border}; border-radius: ${ui.radiusSm}px; cursor: pointer; }
+      [data-dingtalk-observer] .observer-coordination-source:hover { background: ${colors.surface2}; }
+      [data-dingtalk-observer] .observer-coordination-source[aria-pressed=true] { border-color: ${colors.accent}; box-shadow: inset 3px 0 ${colors.accent}; }
+      [data-dingtalk-observer] .observer-coordination-section { padding: 20px 0; border-top: 1px solid ${colors.border}; }
+      [data-dingtalk-observer] .observer-coordination-section h3 { margin: 0 0 12px; font-size: 16px; }
+      [data-dingtalk-observer] .observer-coordination-section h4 { margin: 0; font-size: 14px; }
+      @media (max-width: 720px) {
+        [data-dingtalk-observer] .observer-coordination-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+        [data-dingtalk-observer] .observer-coordination-layout[data-selected=true] > nav { display: none; }
+      }
       .observer-human-modal { box-sizing: border-box; width: min(1040px, calc(100vw - 48px)); height: min(900px, calc(100dvh - 48px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 1px solid ${colors.border}; border-radius: 12px; background: ${colors.surface}; color: inherit; box-shadow: 0 24px 80px rgba(0,0,0,.22); overflow: hidden; }
       .observer-human-modal[open] { display: flex; flex-direction: column; }
       .observer-human-modal::backdrop { background: rgba(0,0,0,.28); backdrop-filter: blur(2px); }
@@ -281,7 +294,7 @@ window.__ModuleLoader__.load({
       { state: 'waiting', label: '等待中', tone: colors.warning, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary, #a56500) 8%, var(--dsw-alias-bg-layer-1, #fff))' },
       { state: 'completed', label: '已结束', tone: 'var(--dsw-alias-state-success-primary, #248a3d)', background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary, #248a3d) 8%, var(--dsw-alias-bg-layer-1, #fff))' }
     ]
-    const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '历史任务' }, { id: 'alerts', label: '告警' }]
+    const pages = [{ id: 'groups', label: '群消息' }, { id: 'coordination', label: '协调工作' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '历史任务' }, { id: 'alerts', label: '告警' }]
     const traceStatus = (status) => ({ succeeded: '已完成', applied: '已接纳', settled: '处理已结束', processed: '处理已结束', running: '处理中', claimed: '处理中', pending: '等待处理', queued: '等待处理', waiting: '等待继续', waiting_user: '待补充', interrupted: '待恢复', cancelling: '正在停止', ready: '等待执行', needs_attention: '需要处理', failed: '失败', blocked: '已阻塞', superseded: '已被新消息替代', cancelled: '已取消', rejected: '未接纳', accepted: '已接纳' }[status] || '状态未记录')
     const taskDisplayTitle = task => {
       const text = String(task.title || task.objective || '未命名任务').replace(/\s+/gu, ' ').trim() || '未命名任务'
@@ -511,6 +524,122 @@ window.__ModuleLoader__.load({
                 React.createElement('div', { style: { display: 'grid' } }, ...(context.messages?.length ? context.messages.map((message, index) => React.createElement('article', { key: `${message.messageId}:${index}`, style: { position: 'relative', minWidth: 0, padding: '10px 0 15px 22px', borderLeft: `1px solid ${colors.border}` } }, React.createElement('span', { 'aria-hidden': true, style: { position: 'absolute', top: 15, left: -4, width: 7, height: 7, borderRadius: '50%', background: index === 0 ? colors.accent : colors.cardSurface, border: `1px solid ${index === 0 ? colors.accent : colors.border}` } }), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', color: colors.muted, fontSize: 11 } }, React.createElement('strong', { style: { color: 'inherit', fontWeight: 600 } }, message.senderName || message.sourceKind || '未知发送人'), React.createElement('time', { dateTime: message.occurredAt || undefined, style: { fontVariantNumeric: 'tabular-nums' } }, fmt(message.occurredAt))), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, lineHeight: 1.7 } }, message.text || '（空消息）'), message.quotedMessage?.content ? React.createElement('details', { style: { marginTop: 9, color: colors.muted, fontSize: 12 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, '查看引用消息'), React.createElement('blockquote', { style: { margin: '7px 0 0', padding: '8px 10px', borderLeft: `2px solid ${colors.border}`, background: colors.surface2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.6 } }, message.quotedMessage.content)) : null)) : [emptyState('此版本没有消息')])),
                 pager(messageOffset, context.total, messagePageSize, setMessageOffset, detailLoading))
             ))))
+    }
+    const coordinationState = state => ({ reserved: '等待判断', accepted: '已接纳', rejected: '未接纳', needs_clarification: '等待澄清', active: '进行中', completed: '已完成', partially_completed: '部分完成', needs_attention: '需要处理', cancelled: '已取消', paused: '已暂停', ready: '等待执行', applied: '已接纳，尚未完成', fulfilled: '已正式完成', observing: '等待原任务完成', template: '周期安排模板', superseded: '已被替代', version_changed: '任务版本已变化', waiting: '等待执行', running: '执行中', succeeded: '已执行', failed: '失败', blocked: '已阻塞', expired: '已过期', pending: '待确认', unknown: '结果未知', delivered: '已送达', prepared: '已准备', sending: '发送中' }[state] || '状态未记录')
+    const coordinationTone = state => ['fulfilled', 'completed', 'succeeded', 'delivered'].includes(state) ? 'done' : ['failed', 'blocked', 'needs_attention'].includes(state) ? 'error' : ['active', 'running'].includes(state) ? 'ongoing' : ['partially_completed', 'needs_clarification', 'paused', 'waiting', 'pending', 'unknown', 'version_changed'].includes(state) ? 'warning' : undefined
+    const coordinationReason = reason => ({ waiting_dependency: '等待前置事项正式完成', dependency_pending: '等待前置事项正式完成', waiting_batch_clarification: '等待本批安排澄清', waiting_completion_proof: '等待正式完成证明', target_version_changed: '任务版本已变化，需重新核对', reorder_pending: '正在核对新的处理顺序', reorder_needs_clarification: '处理顺序仍需澄清', paused: '安排已暂停', cancelled: '安排已取消', waiting_trigger: '等待约定条件满足', trigger_paused: '触发条件已暂停', trigger_cancelled: '触发条件已取消', trigger_superseded: '触发条件已被替代' }[reason?.code ?? reason] || (reason ? '存在等待条件，具体原因未记录' : '未记录等待条件'))
+    // 每个读取范围独立轮询；换范围立即隔离旧内容，失败只保留同范围数据。
+    function useCoordinationRead(path) {
+      const [resource, setResource] = useState({ path, loading: Boolean(path) })
+      const [retry, setRetry] = useState(0)
+      useEffect(() => {
+        if (!path) return
+        let active = true, pending = false, controller
+        const read = async () => {
+          if (!active || pending) return
+          pending = true; controller = new AbortController()
+          const timeout = window.setTimeout(() => controller.abort(), 15000)
+          setResource(current => ({ path, value: current.path === path ? current.value : undefined, error: current.path === path ? current.error : '', loading: true }))
+          try {
+            const value = await get(path, { signal: controller.signal })
+            if (active) setResource({ path, value, error: '', loading: false })
+          } catch (cause) {
+            if (active) setResource(current => ({ ...current, loading: false, error: cause.message === 'coordination_observer_unavailable' ? '当前服务尚未提供协调工作读取，请核对安装版本。' : '协调记录读取失败，请重试；未能确认最新状态。' }))
+          } finally { window.clearTimeout(timeout); pending = false }
+        }
+        void read()
+        const timer = window.setInterval(read, 5000)
+        return () => { active = false; controller?.abort(); window.clearInterval(timer) }
+      }, [path, retry])
+      return { ...(resource.path === path ? resource : { loading: Boolean(path) }), reload: () => setRetry(value => value + 1) }
+    }
+    function CoordinationBrowser({ groups, target, onOpenTask }) {
+      const [groupId, setGroupId] = useState(target?.groupId || '')
+      const [offset, setOffset] = useState(target?.offset || 0)
+      const [sourceId, setSourceId] = useState(target?.sourceId || '')
+      const navigation = useRef(null), detailHeading = useRef(null), focusDetail = useRef(false), focusSource = useRef('')
+      const params = new URLSearchParams({ offset: String(offset), limit: '10' })
+      if (groupId) params.set('groupId', groupId)
+      const listing = useCoordinationRead(`/state/coordination-sources?${params}`)
+      const detail = useCoordinationRead(sourceId ? `/state/coordination-sources/${encodeURIComponent(sourceId)}` : null)
+      const value = detail.value, source = value?.source, snapshot = value?.snapshot
+      const members = value?.members || [], sources = listing.value?.sources || []
+      useEffect(() => {
+        if (sourceId && value && focusDetail.current) { detailHeading.current?.focus(); focusDetail.current = false }
+        if (!sourceId && focusSource.current) {
+          const button = [...(navigation.current?.querySelectorAll('[data-source-id]') || [])].find(item => item.dataset.sourceId === focusSource.current)
+          button?.focus(); focusSource.current = ''
+        }
+      }, [sourceId, value])
+      useEffect(() => {
+        if (listing.value?.total > 0 && offset >= listing.value.total) { setOffset(Math.floor((listing.value.total - 1) / 10) * 10); setSourceId('') }
+      }, [listing.value, offset])
+      const choose = id => { focusDetail.current = true; setSourceId(id) }
+      const back = () => { focusSource.current = sourceId; setSourceId('') }
+      const refresh = () => { listing.reload(); detail.reload() }
+      const text = value => React.createElement('p', { className: 'observer-coordination-text' }, value || '未记录')
+      const section = (title, ...children) => React.createElement('section', { className: 'observer-coordination-section' }, React.createElement('h3', null, title), ...children)
+      const evidence = (items, label) => React.createElement('div', { style: { margin: '12px 0' } }, React.createElement('strong', { style: { fontSize: 12, color: colors.muted } }, label), items?.length ? React.createElement('ul', { 'aria-label': label, style: { paddingLeft: 20, margin: '8px 0', overflowWrap: 'anywhere' } }, ...items.map((item, index) => React.createElement('li', { key: index }, item))) : text('未记录'))
+      const badge = state => statusTag(coordinationState(state), coordinationTone(state))
+      const notice = (resource, label) => resource.error ? React.createElement('div', { role: 'alert', style: { ...card, marginBottom: 12, color: colors.danger } }, resource.error, resource.value ? ` 保留上次${label}，内容可能已过期。` : '', React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: resource.reload, style: { marginLeft: 8 } }, `重试${label}`)) : null
+      const knownGroups = groups.map(group => ({ id: group.groupId, label: group.name || group.groupId }))
+      const selectGroup = id => { setGroupId(id); setOffset(0); setSourceId('') }
+      const listingPage = React.createElement('nav', { ref: navigation, 'aria-label': '协调输入列表' },
+        notice(listing, '列表'),
+        listing.loading && !listing.value ? React.createElement('p', { role: 'status' }, '正在读取协调输入…') : null,
+        ...sources.map(item => React.createElement('button', { key: item.id, type: 'button', className: 'observer-coordination-source', 'data-source-id': item.id, 'aria-pressed': item.id === sourceId, onClick: () => choose(item.id), style: { marginBottom: 8 } },
+          React.createElement('span', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 } }, badge(item.state), React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, fmt(item.createdAt))),
+          React.createElement('span', { style: { ...tableBodyContent, WebkitLineClamp: 3 } }, item.original || '输入正文未记录'),
+          React.createElement('span', { style: { display: 'block', marginTop: 8, color: colors.muted, fontSize: 12, overflowWrap: 'anywhere' } }, knownGroups.find(group => group.id === item.groupId)?.label || item.groupId))),
+        !listing.loading && !listing.error && !sources.length ? emptyState('暂无协调输入', { detail: '当前范围内没有已记录的协调输入；不代表群消息均已处理。' }) : null,
+        listing.value ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 12 } },
+          React.createElement('span', { style: { fontSize: 12, color: colors.muted, marginRight: 'auto' } }, `共 ${listing.value.total} 条 · 第 ${Math.floor(offset / 10) + 1} 页`),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset === 0 || listing.loading, onClick: () => { setOffset(value => Math.max(0, value - 10)); setSourceId('') } }, '上一页'),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset + 10 >= listing.value.total || listing.loading, onClick: () => { setOffset(value => value + 10); setSourceId('') } }, '下一页')) : null)
+      const reading = sourceId ? React.createElement('article', { 'aria-label': '协调工作详情', 'aria-busy': detail.loading, style: { ...card, overflowWrap: 'anywhere', minWidth: 0 } },
+        React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', onClick: back }, '返回协调输入'),
+        notice(detail, '详情'),
+        !value && detail.loading ? React.createElement('p', { role: 'status' }, '正在读取协调详情…') : null,
+        value ? React.createElement(React.Fragment, null,
+          React.createElement('h2', { ref: detailHeading, tabIndex: -1, style: { fontSize: 20, margin: '16px 0 12px' } }, '收到的输入'),
+          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, badge(source.state), snapshot ? badge(snapshot.state) : null, React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, `读取于 ${fmt(value.observedAt)}`)),
+          text(source.original),
+          React.createElement('p', { style: { color: colors.muted, fontSize: 12 } }, '这里只展示已保存的判断结果与事实，不展示或推测内部思维过程。'),
+          section('已记录的判断与变更',
+            source.acceptedKind ? text(`接纳类型：${({ arrangement: '协调安排', create: '新安排', change: '调整安排', schedule: '定时安排', 'schedule-change': '调整定时', 'occurrence-control': '本次触发控制', resolve: '澄清处理', query: '只读查询', accept: '接纳安排' })[source.acceptedKind] || source.acceptedKind} · 修订 ${source.acceptedRevision ?? '未记录'}；接纳不表示任务已完成。`) : text('尚未记录接纳结论。'),
+            source.answerText ? text(`已记录答复：${source.answerText}`) : null,
+            source.question ? text(`需要澄清：${source.question}`) : null,
+            source.rejectionReason ? text(`未接纳原因：${source.rejectionReason}`) : null,
+            source.failureCode ? text('本次判断存在故障记录，尚需核对；没有据此补造判断结论。') : null,
+            source.nextRetryAt ? text(`下次重试时间：${fmt(source.nextRetryAt)}`) : null,
+            evidence((snapshot?.pendingClarifications || []).map(item => item.question), '待澄清事项'),
+            value.coordination?.history?.length ? React.createElement('ol', { style: { paddingLeft: 20 } }, ...value.coordination.history.map((item, index) => React.createElement('li', { key: index }, text(`${fmt(item.at)} · 修订 ${item.revision ?? '未记录'} · ${item.action || '已记录变更'}`), text(item.reason)))) : text('未记录安排变更。'),
+            !value.coordination ? text('该输入尚未关联协调安排。') : null),
+          section('任务与依赖',
+            ...members.map(member => React.createElement('section', { key: member.instructionId, style: { ...card, margin: '12px 0' }, 'aria-label': member.title || member.taskId },
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, React.createElement('h4', null, member.title || member.taskId), badge(member.state), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask({ taskId: member.taskId }, { groupId, offset, sourceId }) }, '查看任务')),
+              text(member.requirement),
+              member.observation ? text('协调方式：仅观察原任务完成，不追加要求或唤醒任务。') : member.progressImpact ? text(`协调方式：${member.progressImpact === 'preserve' ? '保留既有工作' : member.progressImpact === 'replan' ? '按新要求重新规划' : '未记录'}${member.impactReason ? `；已记录理由：${member.impactReason}` : ''}`) : null,
+              text(`任务状态：${member.taskState === 'active' ? '进行中' : coordinationState(member.taskState)}；${member.control === 'paused' ? '安排已暂停' : member.control === 'cancelled' ? '安排已取消' : coordinationReason(member.waitingReason)}`),
+              React.createElement('p', { className: 'observer-coordination-text', style: { color: colors.muted } }, member.dependencies?.length ? `前置事项：${member.dependencies.map(id => members.find(item => item.instructionId === id)?.title || id).join('、')}` : '无前置事项记录'),
+              member.blocker ? text(`阻塞：${member.blocker}`) : null,
+              member.reorderAssessment ? React.createElement('div', null, text(`顺序评估：${({ pending: '等待评估', assessed: '已记录评估', needs_clarification: '等待澄清' })[member.reorderAssessment.state] || '状态未记录'}；${member.reorderAssessment.summary || '未记录摘要'}`), evidence(member.reorderAssessment.evidence, '顺序评估依据')) : null,
+              member.decision ? React.createElement('div', null, text(`任务最近记录的结论（${member.decision.action || '未记录动作'}）：${member.decision.summary || '未记录摘要'}`), evidence(member.decision.evidence, '任务结论依据'), evidence(member.decision.limitations, '任务结论限制')) : text('任务尚无已记录结论。'),
+              member.completionProof ? React.createElement('details', null, React.createElement('summary', null, member.state === 'fulfilled' ? '正式完成证明引用' : '历史完成证明引用（不证明当前指令完成）'), text(`事件：${member.completionProof.eventId || '未记录'}\n命令：${member.completionProof.commandId || '未记录'}`)) : text('暂无当前指令的正式完成证明。'))),
+            !members.length ? text('该输入没有关联任务记录；纯提醒或未接纳输入也可能没有任务。') : null),
+          section('定时安排与触发',
+            ...(snapshot?.schedules || []).map(item => React.createElement('div', { key: item.scheduleId, style: { marginBottom: 12 } }, badge(item.state), text(`${item.reminderText || '定时安排'}\n规则：${item.rule?.kind === 'once' ? `单次 ${fmt(item.rule.at)}` : item.rule?.kind === 'daily' ? `每日 ${item.rule.time}` : item.rule?.kind === 'weekly' ? `每周${'日一二三四五六'[item.rule.weekday] ?? '?'} ${item.rule.time}` : '未记录'}${item.timezone ? `（约定时区 ${item.timezone}）` : ''}\n下次：${fmt(item.nextDueAt)}`))),
+            ...(snapshot?.occurrences || []).map(item => React.createElement('div', { key: item.occurrenceId, style: { ...card, marginBottom: 12 } }, text(`计划时间：${fmt(item.plannedAt)}${item.cancelledAt ? `\n本次已取消于 ${fmt(item.cancelledAt)}，既有执行/送达事实不被撤销。` : item.paused ? '\n本次已暂停。' : ''}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' } }, '执行：', badge(item.actionState), '通知：', badge(item.deliveryState)), item.resultRef ? text(`结果引用：${item.resultRef}`) : null, item.failureCode ? text('存在触发故障记录，需核对；不能视为已完成。') : null)),
+            ...(snapshot?.jobs || []).map(item => React.createElement('p', { key: item.jobId }, '触发作业：', badge(item.state))),
+            !snapshot?.schedules?.length && !snapshot?.occurrences?.length && !snapshot?.jobs?.length ? text('暂无定时或触发记录。') : null),
+          section('证据与读取边界', text('已接纳不等于已完成；通知送达不等于任务完成。证据文字和引用仅表示已记录，不代表本看板已独立核验。各条查询并非同一事务快照。'),
+            ...Object.entries(value.collections || {}).filter(([, info]) => info.truncated).map(([key, info]) => text(`${{ history: '变更记录', members: '任务', schedules: '定时安排', occurrences: '触发记录', jobs: '作业', pendingClarifications: '澄清' }[key] || key}仅显示最近 ${info.returned} / ${info.total} 条；其余记录未在本页展开。`)))) : null) : emptyState('选择一条协调输入', { detail: '查看已记录的安排、任务依赖和完成证据。' })
+      return React.createElement('section', { 'aria-label': '协调工作', style: { minWidth: 0 } },
+        React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 20 } },
+          React.createElement(SelectMenu, { label: '筛选协调群组', value: groupId, options: [{ id: '', label: '全部群组' }, ...knownGroups], onChange: selectGroup }),
+          React.createElement('span', { style: { color: colors.muted, fontSize: 12, marginRight: 'auto' } }, '只读 · 每 5 秒刷新', listing.value ? ` · 列表读取于 ${fmt(listing.value.observedAt)}` : ''),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: refresh, disabled: listing.loading || detail.loading }, listing.loading || detail.loading ? '正在刷新…' : '刷新协调记录')),
+        React.createElement('div', { className: 'observer-coordination-layout', 'data-selected': Boolean(sourceId) }, listingPage, reading))
     }
     function TaskStepOutput({ taskId, node, detailRevision }) {
       return React.createElement(TaskStepOutputContent, { key: `${taskId}:${node.runId}:${node.nodeRunId}:${node.outputRef}`, taskId, node, detailRevision })
@@ -1362,6 +1491,8 @@ window.__ModuleLoader__.load({
         catch { /* 浏览器禁用存储时仍允许正常切页。 */ }
       }, [])
       const [topicTarget, setTopicTarget] = useState()
+      const [coordinationTarget, setCoordinationTarget] = useState()
+      const [taskCoordinationReturn, setTaskCoordinationReturn] = useState(false)
       const [data, setData] = useState()
       const [expandedTaskId, setExpandedTaskId] = useState('')
       const expansionInitialized = useRef(false)
@@ -1466,8 +1597,8 @@ window.__ModuleLoader__.load({
         catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
         finally { setNavigatingSessionId('') }
       }
-      const openTask = task => { setSelectedTaskId(task.taskId); setActivePage('tasks') }
-      const returnFromTask = () => setSelectedTaskId('')
+      const openTask = (task, returnTarget) => { setTaskCoordinationReturn(Boolean(returnTarget)); if (returnTarget) setCoordinationTarget(returnTarget); setSelectedTaskId(task.taskId); setActivePage('tasks') }
+      const returnFromTask = () => { setSelectedTaskId(''); if (taskCoordinationReturn && coordinationTarget) { setActivePage('coordination'); setTaskCoordinationReturn(false) } }
       const copyId = async (value) => {
         let copied = false
         try {
@@ -1658,9 +1789,9 @@ window.__ModuleLoader__.load({
       const menu = React.createElement('nav', { 'aria-label': '运行看板视图', style: { minWidth: 0, height: 27, display: 'flex', alignItems: 'stretch', gap: 36, overflowX: 'auto', padding: '0 0 0 8px' } },
         ...pages.map((page) => React.createElement('button', { key: page.id, type: 'button', onClick: () => setActivePage(page.id), 'aria-current': activePage === page.id ? 'page' : undefined, style: navigationTabStyle(activePage === page.id) }, page.label)))
       const refreshIcon = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: refreshState === 'refreshing' ? { animation: 'spin 800ms linear infinite' } : undefined }, React.createElement('path', { d: 'M20 11a8 8 0 1 0-2.34 5.66' }), React.createElement('path', { d: 'M20 4v7h-7' }))
-      const header = React.createElement('header', { style: { position: 'sticky', top: 0, zIndex: 2, boxSizing: 'border-box', display: 'grid', gap: 4, padding: '12px 28px 0 20px', borderBottom: `1px solid ${colors.border}`, background: colors.surface, pointerEvents: 'auto' } },
-        React.createElement('div', { style: { height: 32, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 } },
-          React.createElement('div', { 'aria-label': updatedAt ? `运行正常，最近更新 ${fmt(updatedAt)}` : '正在连接运行时', style: { minWidth: 0, display: 'flex', alignItems: 'center', gap: 12, color: colors.muted, fontSize: 12, lineHeight: '18px', whiteSpace: 'nowrap' } },
+      const header = React.createElement('header', { style: { position: 'sticky', top: 0, zIndex: 2, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 4, padding: '12px 28px 0 20px', borderBottom: `1px solid ${colors.border}`, background: colors.surface, pointerEvents: 'auto' } },
+        React.createElement('div', { style: { minHeight: 32, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 } },
+          React.createElement('div', { 'aria-label': updatedAt ? `运行正常，最近更新 ${fmt(updatedAt)}` : '正在连接运行时', style: { minWidth: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, color: colors.muted, fontSize: 12, lineHeight: '18px', whiteSpace: 'nowrap' } },
             React.createElement('span', { style: { boxSizing: 'border-box', padding: '4px 8px', fontSize: 14, fontWeight: 500, lineHeight: '20px', whiteSpace: 'nowrap' } }, '运行看板'),
             React.createElement('span', { 'aria-hidden': true, style: { width: 1, height: 12, background: colors.border } }),
             React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 7 } },
@@ -1773,7 +1904,8 @@ window.__ModuleLoader__.load({
           alertView === 'resolved' ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredResolvedAlerts.length} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
       )
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: openTask, onOpenSession: navigate })
-      const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
+      const coordinationPage = React.createElement(CoordinationBrowser, { groups: data?.groups || [], target: coordinationTarget, onOpenTask: openTask })
+      const pageContent = activePage === 'coordination' ? coordinationPage : activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, ...(activePage === 'groups' ? { minWidth: 0 } : {}), minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement(FeedbackNotice, { text: `无法连接 resident 插件：${error}`, error: true }) : null,

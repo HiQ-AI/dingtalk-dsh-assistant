@@ -17,6 +17,7 @@
   "files": [
     "coordination-context.js",
     "coordination-ledger.js",
+    "coordination-observer.js",
     "coordination-schedules.js",
     "coordination-time.js",
     "coordination-task-commands.js",
