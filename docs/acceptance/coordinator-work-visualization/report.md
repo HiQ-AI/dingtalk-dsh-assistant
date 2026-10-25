@@ -80,3 +80,37 @@ Round16 is the final actual-host browser ground truth: five desktop/mobile/light
 Final regression rerun101/101 PASS with exact command in round-16.md; earlier round11 risk scope136/136 is separately preserved. Source/hash check5/5 and screenshot hash/byte pairs20/20 MATCH. Same native size comparison: desktop5->10 and mobile4->8 visible rows; row height111-153px->67px. Actual installed dark remains UNVERIFIED (persisted light); source-isolated dark was verified separately. Native low reviewer re-read all three fixes and independently ran the cross-group/history test1/1PASS.
 
 - Final refinement delivery: PR259 https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259 independently read OPEN/unmerged,main <- worktree-coordinator-work-deployment. Implementation7cdf44d6141204aa3a0029598d6361062e322124 matches local/remote/PR head; complete body matched checked deployment-pr-body.md. Snapshot in round16/pr-readback.json precedes this docs-only closure; no merge or CI dispatch.
+
+## Entity Ledger Closure (2026-10-25)
+
+PR259 remains **OPEN / unmerged**: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Implementation `9844c48095af01272711243af1edd3f960b8fdb0` independently matched local/remote/PR head and the complete checked PR body (round32). This final documentation-only closure follows that snapshot. Every entity-ledger case has latest applicable PASS in the unique matrix; earlier failures remain preserved.
+
+### Delivered Behavior
+
+- Schedules retain one stable identity across revisions. Independent unscheduled triggers retain occurrence identity; remaining direct task members aggregate by coordination batch. Source inputs and changes become collapsed history, not duplicate work rows.
+- One backend-owned primary result separates actual delivery/action outcomes from plan controls and command acceptance. Formal task completion requires current version-bound proof, not active state or a completed job.
+- A denied permit before any send is cancellation, not a send failure. Cancelling an unsent result notice cannot erase current formal task completion. Both boundaries were reproduced as failing regressions before repair (round24/28).
+- Only recorded nextDue, send retry and readback times imply future actions. Missing records are explicit. Compact first-group UI retains scope isolation, pagination, separate selection/focus, manual and five-second refresh, and task-detail return; evidence/history default collapsed.
+
+### Final Verification
+
+- Directed tests: 76 PASS. Expanded relevant risk tests: 149 PASS, 0 FAIL, 0 SKIP. Release smoke: 12 PASS, 0 FAIL, 2 SKIP because the full native dsh-base profile was unavailable; not 14 PASS. Suite map: 308 files, each exactly once, historical3. Syntax, Python AST and diff checks pass; exact commands are in round29.
+- Final-source isolated React18/primitives/production HTTP/SQLite: four variants, eight cases each PASS, covering ten persisted reminder states including cancellation before send. Actual isolated dark, 390px, forced colors, first/empty/all scopes, focus, refresh and task return are covered. Twelve source and twelve screenshot identity checks match. The minimal slots adapter is not a full native Host.
+- Final native deployment round30 used runbook Check first: writes0/signals0,62 verified sessions drained, unknown operations/notifications0. Final candidate executed once. No operator business-ledger edit, schema migration, notification replay or real DingTalk test send.
+- Package root: `D:/dsh_home/packages/coordinator-entity-ledger-proof-20261025`. Assistant2.1.0: SHA256 `5bf60b8cb3446292b68d2323e56fa0c962b2c56ad3420ee327c3f12dc9862dee`,393380 bytes. Observer2.1.0: SHA256 `6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a`,59580 bytes. Seventy plus four source files independently byte-match the frozen packages.
+- New PID91256 owns3080/18998; old18784 exited. ProfileSHA74fe100c and Host0.2.1-rc.2 unchanged. Independent readback: autostart enabled/running,health ok,recovery0,inbound true,bridge/listeners ready,backfills ok,authenticated Web200.
+- Final installed round31: desktop1440/mobile390/dark preference/forced-colors each six cases PASS. Ten unique entities comprise seven schedules and three task triggers. Original failed reminder is primary `提醒发送失败`, with no invented next trigger/retry. TaskHTTP200/return, selection/focus/filter/manual+five-second refresh and no overflow are verified; console/page/API errors and resident mutations0. Twelve source plus twelve screenshot byte/hash identities match. Final desktop/mobile failed-reminder screenshots were personally inspected.
+
+### Screenshots And Limits
+
+Local, gitignored screenshots retain readable results, plan and next steps while masking business text:
+
+- `round-31/after-desktop-light-failed-reminder.png`
+- `round-31/after-mobile-light-failed-reminder.png`
+- `round-31/after-desktop-light-dispatch.png`
+
+Native Host retained light under dark preference; actual installed dark remains UNVERIFIED. Actual isolated dark passed separately. No real model/channel end-to-end send, production fault injection or notification replay was authorized or performed. Large screenshots/raw health are local and ignored; committed drivers and metadata support fresh-round regeneration. Isolated19087/19088 were stopped and independently had no listeners; native91256 was unaffected.
+
+Original named teammates returned no final report. An explicitly new native low-spawn reviewer found the completion/cancellation defect with prior75 directed PASS and query reproduction. Lead independently added a failing regression, repaired it, and verified76/149 PASS; the reviewer did not independently rerun the final diff/browser matrix. Extra skill-spawned execution was stopped and not used. Native roster and requested low spawn setting are evidenced; actual inference effort is not independently proven by an empty environment value. No resumed old process or invented workflow is claimed.
+
+No PR259 merge, manual CI dispatch, main push or force-push. Round32 closes the delivery evidence without rewriting earlier candidates or failures.

@@ -26,7 +26,7 @@ Deliver a real API-backed entry in the existing Web observer so users can inspec
 | G15 | Read-only unique schedule/dispatch projection with truthful result and next step | PASS | New native backend low owns projection/tests; no runtime state/schema mutation |
 | G16 | Entity UI with compact first-group list and result-first detail | PASS | Lead integration; source edits become collapsed history,not rows |
 | G17 | New-state matrix and independent native low review | PASS | New named low final reviewer found current-proof completion masked by cancelled unsent notice; lead independently reproduced FAIL then fixed precedence,76directed/149riskPASS; reviewer did not independently rerun newdiff; round28 |
-| G18 | Check/drain/install and real3080 result screenshots plus unmerged PR | IN_PROGRESS | Final round30 native91256/package5bf60b8c/health recovery0 verified;round31 four native6PASS/screenshots inspected;PR259 OPEN,scoped push/body readback pending |
+| G18 | Check/drain/install and real3080 result screenshots plus unmerged PR | PASS | Final round30 native91256/package5bf60b8c/recovery0;round31 four native6PASS/screenshots inspected;round32 PR259 OPEN/unmerged,implementation9844c48 local/remote/PR head and complete body matched |
 
 ## Decisions and Important Information
 
