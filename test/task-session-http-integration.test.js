@@ -32,7 +32,8 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 10; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
     executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult, onProgress }) => { await onSessionBound(); await onProgress({ summary: '已读取状态，开始验证', evidence: ['actual-evidence.txt'], activity: '验证状态', reportId: 'http-stage' }); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
   })
-  const runtime = { ...legacy, listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args), getTaskSessionDecisions: (...args) => service.taskDecisions(...args),
+  const runtime = { ...legacy, coordinationSources: service.coordinationSources, coordinationSourceDetail: service.coordinationSourceDetail,
+    listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args), getTaskSessionDecisions: (...args) => service.taskDecisions(...args),
     createTask: args => service.createTask(args), appendTaskContext: args => service.appendTaskContext(args), cancelTask: args => service.cancelTask(args),
     getTaskDialogue: id => service.taskDialogue(id), sendTaskDialogue: args => service.sendTaskDialogue(args) }
   const server = createServer((req, res) => handleRequest(req, res, runtime).catch(error => { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: error.message })) }))
@@ -40,6 +41,13 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
   const base = `http://127.0.0.1:${server.address().port}`
   const post = async (path, body) => { const response = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() } }
   try {
+    const emptyCoordination = await (await fetch(base + '/state/coordination-sources')).json()
+    assert.equal(emptyCoordination.total, 0)
+    const source = (await service.store.command({ id: 'observer-reserve', kind: 'coordination.reserve',
+      args: { unitId: 'synthetic-observer-source', revision: 1, groupId: 'g', original: 'Synthetic reserved input' } })).result.source
+    const sourceDetail = await (await fetch(base + `/state/coordination-sources/${source.id}`)).json()
+    assert.equal(sourceDetail.source.original, 'Synthetic reserved input')
+    assert.equal(sourceDetail.coordination, null)
     const input = { requestId: 'create', groupId: 'g', title: '核对服务', objective: '核对服务并保留证据', acceptanceCriteria: ['状态可查'] }
     const created = await post('/tasks', input)
     assert.equal(created.status, 200, JSON.stringify(created.body))

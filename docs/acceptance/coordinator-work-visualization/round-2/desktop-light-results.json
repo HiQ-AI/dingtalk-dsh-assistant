@@ -1,0 +1,22 @@
+{
+  "pass": true,
+  "web": "http://127.0.0.1:19087",
+  "api": "http://127.0.0.1:19088",
+  "synthetic": true,
+  "hostIntegration": "Minimal host adapter with actual React 18 and actual dsh primitives 0.2.1-alpha.2",
+  "expectedTotal": 25,
+  "mobile": false,
+  "theme": "light",
+  "cases": [
+    "actual-observer-native-primitives-and-http",
+    "real-source-pagination",
+    "reserved-detail-and-keyboard-focus",
+    "rejected-detail-and-keyboard-focus",
+    "clarification-detail-and-keyboard-focus",
+    "formal-completion-proof",
+    "accepted-dependency-and-waiting-not-completion",
+    "native-select-empty-filter-and-page-reset",
+    "network-failure-explicit-stale-state",
+    "network-recovery"
+  ]
+}

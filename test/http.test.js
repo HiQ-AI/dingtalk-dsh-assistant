@@ -94,6 +94,26 @@ test('消息列表投影当前版本首个完成判断原文与时间，后续�
   },{overrides:{listGroups:()=>[group],getGroup:()=>group,listTopics:()=>topics}})
 })
 
+test('协调工作只读路由透传筛选与编码身份，隐藏后端诊断', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const list = await fetch(base + '/state/coordination-sources?groupId=g&offset=2&limit=10')
+    assert.equal(list.status, 200)
+    assert.deepEqual(calls[0], { groupId: 'g', offset: 2, limit: 10 })
+    assert.equal((await fetch(base + '/state/coordination-sources/source%2Fone')).status, 200)
+    assert.equal(calls[1], 'source/one')
+    assert.equal((await fetch(base + '/state/coordination-sources/missing')).status, 404)
+    for (const suffix of ['', '/error']) {
+      const response = await fetch(base + '/state/coordination-sources' + suffix + (suffix ? '' : '?groupId=error'))
+      assert.equal(response.status, 503)
+      assert.deepEqual(await response.json(), { error: 'coordination_observer_unavailable' })
+    }
+  }, { overrides: {
+    coordinationSources: async options => { calls.push(options); if (options.groupId === 'error') throw new Error('private-path-secret'); return { sources: [], total: 0, ...options } },
+    coordinationSourceDetail: async id => { calls.push(id); if (id === 'error') throw new Error('private-path-secret'); return id === 'missing' ? null : { source: { id } } },
+  } })
+})
+
 test('任务列表保留任务会话投影，不再合成固定阶段进度', async () => {
   const task = { taskId: 't', engine: 'task-session', session: { sessionId: 's' }, executions: [{ executionId: 'e', status: 'running' }] }
   await withServer(false, async base => {

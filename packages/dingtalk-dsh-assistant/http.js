@@ -261,6 +261,29 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
     } catch (error) { return send(response, 400, { error: error.message }) }
   }
+  if (request.method === 'GET' && url.pathname === '/state/coordination-sources') {
+    if (!store.coordinationSources) return send(response, 503, { error: 'coordination_observer_unavailable' })
+    let options
+    try {
+      if ([...url.searchParams.keys()].some(key => !['groupId', 'offset', 'limit'].includes(key))
+        || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1))
+        return send(response, 400, { error: 'coordination_query_invalid' })
+      const groupId = url.searchParams.get('groupId') ?? undefined
+      if (groupId !== undefined && !groupId.trim()) return send(response, 400, { error: 'coordination_query_invalid' })
+      options = { groupId, offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) }
+    } catch { return send(response, 400, { error: 'coordination_query_invalid' }) }
+    try { return send(response, 200, await store.coordinationSources(options)) }
+    catch { return send(response, 503, { error: 'coordination_observer_unavailable' }) }
+  }
+  const coordinationSource = request.method === 'GET' && /^\/state\/coordination-sources\/([^/]+)$/u.exec(url.pathname)
+  if (coordinationSource) {
+    if (!store.coordinationSourceDetail) return send(response, 503, { error: 'coordination_observer_unavailable' })
+    try {
+      if (url.searchParams.size) return send(response, 400, { error: 'coordination_query_invalid' })
+      const value = await store.coordinationSourceDetail(decodeURIComponent(coordinationSource[1]))
+      return send(response, value ? 200 : 404, value ?? { error: 'coordination_source_not_found' })
+    } catch (error) { return send(response, error instanceof URIError ? 400 : 503, { error: error instanceof URIError ? 'coordination_query_invalid' : 'coordination_observer_unavailable' }) }
+  }
   if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, await (store.listTaskView?.() ?? store.listTasks()))
   const topicState = request.method === 'GET' && /^\/state\/topics\/([^/]+)\/context$/u.exec(url.pathname)
   if (topicState) {

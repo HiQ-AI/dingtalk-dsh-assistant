@@ -1,0 +1,6 @@
+# Regenerate screenshots and runtime data using scripts/; keep summaries in round-N.md.
+round-*/*.png
+round-*/*.webm
+round-*/*.zip
+round-*/*.sqlite*
+round-*/browser-run-*/

@@ -15,6 +15,7 @@ import { createTaskSessionObservability } from './task-session-observability.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { openIndependentCoordination } from './independent-coordination-service.js'
 import { coordinationModelSelection } from './independent-coordination-planner.js'
+import { createCoordinationObserver } from './coordination-observer.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
 import { resolveTopicMessages, stableId } from './topic-model.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from './task-message-projections.js'
@@ -85,6 +86,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   let sourceProcessingRevision = 0
   const sourceHeldNotifications = new Map()
   const query = (kind, args = {}) => store.query({ kind, ...args })
+  const coordinationObserver = createCoordinationObserver(query)
   const taskCache = new Map(), operationCache = new Map(), notificationCache = new Map(), executionCache = new Map()
   const documentTails = new Map()
   function publishExecutionDocument(executionId) {
@@ -1454,6 +1456,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   return {
     listAuthorizationRequests: listHumanRequests, respondHumanRequest, respondPrivateHumanReply,
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
+    coordinationSources: coordinationObserver.coordinationSources, coordinationSourceDetail: coordinationObserver.coordinationSourceDetail,
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,
     listAlerts: () => [
       ...residentStore.listGroups().flatMap(group => {
