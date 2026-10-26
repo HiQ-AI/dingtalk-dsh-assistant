@@ -31,19 +31,47 @@ const messages = [
   ['topic-pending', '旧话题尚在处理', 'routed'], ['topic-done', '旧话题已经判断', 'routed'],
   ['semantic', '新来源语义完成尚未收束', 'routed'], ['source-pending', '新来源尚未判断', 'routed'],
   ['history', '历史状态缺失', 'routed'], ['ignored', '纯忽略消息', 'routed'],
-  ['negative', '时钟异常消息', 'routed'], ['failed', '明确归类失败', 'failed'], ['routing', '尚待归类', 'pending'],
+  ['negative', '时钟异常消息', 'routed'], ['failed', '协议耗尽消息', 'routed'], ['routing', '尚待归类', 'pending'],
 ].map(([messageId, text, routingStatus], i) => ({ messageId, text, routingStatus, messageVersion: 1, sequence: i + 1, sourceKind: 'dingtalk', occurredAt: sent, senderName: '合成发送人',
   ...(messageId === 'ignored' ? { ignoredRanges: [{ reason: '无需办理' }], agentDeliveryStatus: 'delivered', agentDeliveryAt: done } : {}) }))
 const topic = (id, processed, completed) => ({ topicId: id, title: id, revision: 1, processedRevision: processed ? 1 : 0,
   entries: [{ messageId: id, messageVersion: 1, revision: 1, action: 'add' }], decisions: completed ? [{ decisionId: `decision-${id}`, status: 'completed', revision: 1, updatedAt: completed, decision: { reason: '已作语义判断' } }] : [] })
 const topics = [topic('topic-pending', false), topic('topic-done', true, done), topic('negative', true, '2026-10-25T23:58:59Z')]
-const group = { groupId: 'fixture-group', name: '收件箱隔离验收', messages, outbox: [] }
+const fixtureToken = 'a'.repeat(64)
+const failedRequest = { requestId: 'fixture-decision-exhausted', groupId: 'fixture-group', topicId: 'failed-topic', revision: 1, status: 'exhausted', attempt: 3, retryToken: fixtureToken, messages: [{ messageId: 'failed', messageVersion: 1 }] }
+const failedTopic = { ...topic('failed-topic', false), entries: [{ messageId: 'failed', messageVersion: 1, revision: 1, action: 'add' }] }
+topics.push(failedTopic)
+const fixtureCalls = []
+let recoveryBlocked = true
+const group = { groupId: 'fixture-group', name: '收件箱隔离验收', messages, outbox: [
+  { outboundId: 'fixture-send', sourceMessageId: 'fixture-source', text: '合成鉴权失败通知', status: 'pending', notificationState: 'failed', notificationKnownNotSent: true, notificationRecovery: { action: 'send', expectedToken: fixtureToken, reason: 'proven-not-sent' } },
+  { outboundId: 'fixture-unknown', sourceMessageId: 'fixture-source', text: '合成发送未知通知', status: 'pending', notificationState: 'unknown', notificationRecovery: { action: 'readback', expectedToken: fixtureToken, reason: 'delivery-unconfirmed' } },
+  { outboundId: 'fixture-delivered', sourceMessageId: 'fixture-source', text: '合成已送达通知', status: 'sent', notificationState: 'delivered', notificationRecovery: { action: null, expectedToken: fixtureToken, reason: 'terminal' } },
+] }
 const sourceRows = [
   { sourceId: 'source-semantic', groupId: group.groupId, messageId: 'semantic', version: 1, channel: 'im', routed: false, processingCompleted: { at: done }, receivedAt: sent, notifications: [], stages: [{ spanId: 'fixture-turn-1', stage: 'turn', requestId: 'fixture-request', attempt: 2, startedAt: sent, completedAt: done, quality: 'observed', shared: true }] },
   { sourceId: 'source-pending', groupId: group.groupId, messageId: 'source-pending', version: 1, channel: 'im', routed: false, notifications: [] },
 ]
 const runtime = { listRecoveryIssues: () => [], listGroups: () => [group], getGroup: () => group, listTopics: () => topics, listTaskView: () => [], listTasks: () => [], listAlerts: () => [],
-  listAuthorizationRequests: () => [], messageProcessingSources: async () => sourceRows }
+  listAuthorizationRequests: () => [], messageProcessingSources: async () => sourceRows, messageProcessingRequests: () => [failedRequest],
+  async retryDecisionFailedMessage(args) {
+    fixtureCalls.push({ kind: 'receive', ...args })
+    assert.equal(args.messageId, 'failed'); assert.equal(args.messageVersion, 1); assert.equal(args.token, failedRequest.retryToken)
+    if (recoveryBlocked) throw Object.assign(new Error('synthetic external authentication unavailable'), { code: 'FIXTURE_AUTH_BLOCKED' })
+    failedRequest.status = 'pending'; failedRequest.nextRetryAt = done
+    return { status: 'attempted' }
+  },
+  async retryNotification(args) {
+    fixtureCalls.push({ kind: 'notification', ...args })
+    const notification = group.outbox.find(item => item.outboundId === args.notificationId)
+    assert.ok(notification?.notificationRecovery.action)
+    assert.equal(args.expectedToken, notification.notificationRecovery.expectedToken)
+    if (recoveryBlocked) throw Object.assign(new Error('synthetic external authentication unavailable'), { code: 'FIXTURE_AUTH_BLOCKED' })
+    const action = notification.notificationRecovery.action
+    notification.notificationState = 'delivered'; notification.status = 'sent'; notification.deliveredAt = done
+    notification.notificationRecovery = { action: null, expectedToken: 'b'.repeat(64), reason: 'terminal' }
+    return { status: 'attempted', action }
+  } }
 const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>收件箱隔离验收</title><style>body{margin:0;font:14px "Microsoft YaHei",sans-serif}button{font:inherit}#app{height:calc(100dvh - 48px)}</style><div id="sidebar"></div><div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>
 const h=React.createElement, primitives={Button:({variant,size,children,...props})=>h('button',props,children),Pill:({children,...props})=>h('span',props,children),StateDot:({state,size})=>h('span',{'data-state':state}),Menu:({anchor,open,items,onSelect})=>h('span',null,anchor,open?h('div',{role:'menu'},items.map(item=>h('button',{key:item.id,role:'menuitem',onClick:()=>onSelect(item.id)},item.label))):null)};
 for(const name of ['IconChecklistOutlineRegular','IconChevronDownOutlineRegular','IconChevronUpOutlineRegular'])primitives[name]=props=>h('svg',{...props,width:14,height:14,'aria-hidden':true});
@@ -51,7 +79,7 @@ const roots={sidebar:ReactDOM.createRoot(document.getElementById('sidebar')),app
 window.__ModuleLoader__={load(def){const mod=def.factory(name=>name==='react'?React:primitives);mod.apply({slots:{inject(name,callback){return callback()},register(spec,Component){const target=spec.name==='main.conversation'?'app':'sidebar';roots[target].render(h(Component,{...(spec.inject?.()||{}),wide:true}));return()=>roots[target].render(null)}},layout:{selectPanel(){}},uiWorkspace:{openSession(){}},sessions:{subagentAddress(){},async refreshProjections(){},async refreshSubagents(){},async refresh(){},open(){}}})}};
 </script><script src="/observer.js"></script></html>`
 const server = createServer((request, response) => {
-  if (request.url.startsWith('/state/') || request.url === '/health') return void handleRequest(request, response, runtime).catch(error => { response.writeHead(500); response.end(JSON.stringify({ error: error.message })) })
+  if (request.url.startsWith('/state/') || request.url.startsWith('/config/') || request.url === '/health') return void handleRequest(request, response, runtime).catch(error => { response.writeHead(500); response.end(JSON.stringify({ error: error.message })) })
   response.setHeader('content-type', request.url === '/' ? 'text/html;charset=utf-8' : 'text/javascript;charset=utf-8')
   response.end(request.url === '/' ? html : routes.get(request.url) ?? '')
 })
@@ -64,9 +92,12 @@ page.on('pageerror', error => errors.push(error.message))
 await context.route('**/*', async route => {
   const target = new URL(route.request().url())
   if (target.origin === url) return route.continue()
-  if (target.origin !== 'http://127.0.0.1:18998') return route.abort()
-  if (route.request().method() !== 'GET') { writes.push(target.pathname); return route.abort() }
-  const response = await fetch(url + target.pathname + target.search)
+  if (target.origin !== 'http://127.0.0.1:18998') { writes.push(`blocked-origin:${target.origin}`); return route.abort() }
+  const method = route.request().method()
+  const recovery = method === 'POST' && /^\/config\/groups\/fixture-group\/(?:messages\/failed|notifications\/fixture-(?:send|unknown))\/retry$/u.test(target.pathname)
+  if (method !== 'GET' && !recovery) { writes.push(target.pathname); return route.abort() }
+  // Never forward a mutation to the real resident port; only the isolated loopback fixture receives it.
+  const response = await fetch(url + target.pathname + target.search, recovery ? { method, headers: { 'content-type': 'application/json' }, body: route.request().postData() } : {})
   return route.fulfill({ status: response.status, contentType: 'application/json', body: await response.text() })
 })
 const row = text => page.getByRole('row').filter({ hasText: text })
@@ -110,6 +141,59 @@ try {
     await row('旧话题尚在处理').waitFor()
     assert.match(await row('旧话题尚在处理').innerText(), /处理中/)
     checks.push('refresh-does-not-invent-success')
+    await filter.click(); await page.getByRole('menuitem', { name: '处理失败', exact: true }).click()
+    assert.equal(await row('旧话题已经判断').count(), 0)
+    assert.match(await row('协议耗尽消息').innerText(), /处理失败/)
+    assert.doesNotMatch(await row('协议耗尽消息').innerText(), /历时 \d/)
+    const failedSnapshot = (await (await fetch(url + '/state/groups')).json())[0].messages.find(message => message.messageId === 'failed')
+    assert.equal(failedSnapshot.processingCompletedAt, null)
+    assert.equal(failedSnapshot.processingFacts.semantic.quality, 'missing')
+    const failedDetails = row('协议耗尽消息').locator('details').filter({ hasText: '计时' }).first()
+    await failedDetails.locator('summary').click()
+    assert.match(await failedDetails.innerText(), /语义判断：处理失败；尝试 3/)
+    await page.getByRole('button', { name: /^(刷新|已刷新)$/ }).click()
+    assert.match(await row('协议耗尽消息').innerText(), /处理失败/)
+    await page.screenshot({ path: path.join(output, 'failure-details.png'), fullPage: true })
+    checks.push('protocol-failure-filter-details-refresh-no-completed-time')
+    const receiveRetry = row('协议耗尽消息').getByRole('button', { name: '重试原消息', exact: true })
+    await receiveRetry.evaluate(node => { node.click(); node.click() })
+    await row('协议耗尽消息').getByRole('status').filter({ hasText: '请先解决网络' }).waitFor()
+    assert.equal(fixtureCalls.filter(call => call.kind === 'receive').length, 1)
+    recoveryBlocked = false
+    await receiveRetry.click()
+    await page.waitForFunction(() => !document.body.innerText.includes('协议耗尽消息'))
+    assert.equal(fixtureCalls.filter(call => call.kind === 'receive').length, 2)
+    assert.deepEqual(fixtureCalls[1].activeUnitRefs, [])
+    checks.push('receive-retry-auth-block-then-recover-and-double-click-single-flight')
+    failedRequest.status = 'exhausted'; failedRequest.retryToken = 'b'.repeat(64)
+    failedRequest.failurePhase = 'startup'; failedRequest.nextRetryAt = done
+    await filter.click(); await page.getByRole('menuitem', { name: '全部处理状态', exact: true }).click()
+    await page.getByRole('button', { name: /^(刷新|已刷新)$/ }).click()
+    await page.waitForFunction(() => document.body.innerText.includes('等待自动重试，尚未完成'))
+    assert.match(await row('协议耗尽消息').innerText(), /处理中/)
+    failedTopic.processedRevision = 1; failedTopic.decisions = [{ status: 'completed', revision: 1, updatedAt: done, decision: { reason: '隔离恢复完成' } }]
+    await page.getByRole('button', { name: /^(刷新|已刷新)$/ }).click()
+    await page.waitForFunction(() => document.body.innerText.includes('隔离恢复完成'))
+    assert.match(await row('协议耗尽消息').innerText(), /语义完成/)
+    checks.push('startup-retry-then-completed-overrides-old-exhaustion')
+    await page.getByRole('tab', { name: /发信箱/ }).click()
+    assert.equal(await row('合成已送达通知').getByRole('button', { name: /重试原消息|核验发送结果/ }).count(), 0)
+    recoveryBlocked = true
+    await row('合成鉴权失败通知').getByRole('button', { name: '重试原消息', exact: true }).evaluate(node => { node.click(); node.click() })
+    await row('合成鉴权失败通知').getByRole('status').filter({ hasText: '请先解决网络' }).waitFor()
+    assert.equal(fixtureCalls.filter(call => call.notificationId === 'fixture-send').length, 1)
+    recoveryBlocked = false
+    await row('合成鉴权失败通知').getByRole('button', { name: '重试原消息', exact: true }).click()
+    await row('合成鉴权失败通知').getByText('已送达', { exact: true }).waitFor()
+    assert.equal(fixtureCalls.filter(call => call.notificationId === 'fixture-send').length, 2)
+    assert.equal(await row('合成发送未知通知').getByRole('button', { name: '重试原消息', exact: true }).count(), 0)
+    await row('合成发送未知通知').getByRole('button', { name: '核验发送结果', exact: true }).click()
+    await row('合成发送未知通知').getByText('已送达', { exact: true }).waitFor()
+    assert.equal(fixtureCalls.filter(call => call.notificationId === 'fixture-unknown').length, 1)
+    assert.equal(fixtureCalls.filter(call => call.notificationId === 'fixture-delivered').length, 0)
+    await page.screenshot({ path: path.join(output, 'outbound-recovery.png'), fullPage: true })
+    checks.push('outbound-auth-retry-unknown-readback-delivered-no-resend')
+    await page.getByRole('tab', { name: /收信箱/ }).click()
   }
   await page.screenshot({ path: path.join(output, 'desktop.png'), fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })

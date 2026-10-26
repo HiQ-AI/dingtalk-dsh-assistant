@@ -205,6 +205,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
+  const requestRecoveryToken = (requestId, state) => fingerprint([requestId, state?.status, state?.attempt ?? 0, state?.resumeEpoch ?? 0, state?.failurePhase ?? null, state?.failureCode ?? null, state?.startupAttempt ?? 0, state?.messageId ?? null, state?.nextRetryAt ?? null])
   const retire = request => { if (request) onRequestFinished?.(request) }
   for (const collection of collections) {
     const remove = collection.delete.bind(collection)
@@ -230,9 +231,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         ? candidate.matterUnitRefs.some((ref) => unitIds.has(unitKey(ref)))
         : sourceIds.has(candidate.sourceMessageId) || candidate.sourceMessages?.some((message) => sourceIds.has(message.messageId)))))
   }
+  const reviewRequired = request => ({ status: 'review-required', nextAction: 'group_reply_review_get', requestIds: [request.requestId] })
   const refreshReview = (request, identityOnly = false) => {
     const candidates = scopedCandidates(request.groupId, request.messages, request.topicRefs ?? request.task.topicRefs, request.task ? [request.task.taskId] : [])
-    const snapshot = (items) => JSON.stringify([...items].sort((left, right) => left.outboundId.localeCompare(right.outboundId)).map((item) => identityOnly ? item.outboundId : item))
+    // Task运行态不是回复事实；正文、来源、归属及投递证据仍参与审阅失效。
+    const snapshot = (items) => JSON.stringify([...items].sort((left, right) => left.outboundId.localeCompare(right.outboundId)).map((item) => identityOnly ? item.outboundId
+      : { ...item, ...(item.tasks ? { tasks: item.tasks.map(({ state, ...facts }) => ({ ...facts, state: ['running', 'waiting'].includes(state) ? 'active' : state })) } : {}) }))
     if (snapshot(candidates) === snapshot(request.candidates)) return false
     request.candidates = candidates
     request.readReview = false
@@ -924,20 +928,20 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       if (decision.actions.length && !decision.reply?.trim()) return { status: 'reply-required' }
       if (decision.reply?.trim()) {
         if (!decision.replyReview) return { status: 'review-required', error: 'reply_kind_required' }
-        if (refreshReview(request)) return { status: 'review-required' }
-        if (request.candidates.length && !request.readReview) return { status: 'review-required' }
+        if (refreshReview(request)) return reviewRequired(request)
+        if (request.candidates.length && !request.readReview) return reviewRequired(request)
         try { decision = { ...decision, replyReview: validateReplyReview(decision.replyReview, request.candidates, { confirmationTaskIds: decision.actions.map((action) => action.taskId).filter(Boolean) }) } }
         catch (error) { return { status: 'review-required', error: error.message } }
       }
       const result = await (validateSnapshot ? serializeTasks : (operation) => Promise.resolve().then(operation))(() => {
         if (validateSnapshot && validateSnapshot() !== true) return { status: 'task-stale' }
-        if (decision.reply?.trim() && refreshReview(request)) return { status: 'review-required' }
+        if (decision.reply?.trim() && refreshReview(request)) return reviewRequired(request)
         return store.acceptTopicDecision({ groupId, topicId: args.topicId, revision: args.revision, decisionId: args.requestId, decision,
         expectedTaskVersions: decision.actions.filter((action) => action.taskId).map((action) => ({ taskId: action.taskId, inputVersion: action.inputVersion, runSequence: action.runSequence })),
         preflight: () => {
           if (validateSnapshot && validateSnapshot() !== true) return { status: 'task-stale' }
           validateBasis(request, decision)
-          return decision.reply?.trim() && refreshReview(request) ? { status: 'review-required' } : undefined
+          return decision.reply?.trim() && refreshReview(request) ? reviewRequired(request) : undefined
         } })
       })
       if (result.status === 'accepted' || result.status === 'duplicate') {
@@ -1298,12 +1302,14 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     } catch (error) { replies.delete(request.requestId); reject(error) }
     return promise
   }
-  async function retryRequest(groupId, requestId) {
+  async function retryRequest(groupId, requestId, validateSnapshot) {
       const collection = [routes, decisions, reviews, replies, titleMigrations, summaryMigrations].find((items) => items.get(requestId)?.groupId === groupId)
       const request = collection?.get(requestId)
       if (!request) throw new Error('topic_request_unknown_or_wrong_group')
+      validateSnapshot?.()
       if (!request.exhausted) return { status: 'pending', requestId }
-      await store.updateCoordinationRequest(groupId, requestId, { status: 'pending', attempt: 0, resumeEpoch: (store.getCoordinationRequest(groupId, requestId)?.resumeEpoch ?? 0) + 1, nextRetryAt: new Date().toISOString(), lastError: undefined })
+      await store.updateCoordinationRequest(groupId, requestId, { status: 'pending', attempt: 0, resumeEpoch: (store.getCoordinationRequest(groupId, requestId)?.resumeEpoch ?? 0) + 1, nextRetryAt: new Date().toISOString(), lastError: undefined }, validateSnapshot)
+      if (!isCurrentRequest(request)) throw new Error('MESSAGE_RETRY_STALE')
       request.exhausted = false; request.attempt = 0
       if (request.reject) {
         collection.delete(requestId)
@@ -1312,8 +1318,52 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       } else monitor(send(groupId, request.text, request.images, request), request, collection)
       return { status: 'pending', requestId }
     }
+  function messageProcessingRequests(groupId) {
+      const group = store.getGroup(groupId)
+      if (!group) return []
+      const result = []
+      for (const request of [...routes.values(), ...decisions.values()]) {
+        if (request.groupId !== groupId) continue
+        const state = store.getCoordinationRequest?.(groupId, request.requestId)
+        if (['completed', 'superseded'].includes(state?.status)) continue
+        const topic = request.topicId ? group.topics.find(item => item.topicId === request.topicId) : null
+        if (request.topicId && (!topic || topic.mergedInto || topic.revision !== request.revision || topic.processedRevision >= request.revision)) continue
+        const entries = new Map()
+        for (const entry of topic?.entries ?? []) if (entry.revision <= request.revision) entries.set(entry.unitId ?? `legacy:${entry.messageId}`, entry)
+        const delta = [...entries.values()].filter(entry => entry.action === 'add' && entry.revision > topic.processedRevision)
+        const messages = request.messages.filter(message => {
+          const current = group.messages.find(item => item.messageId === message.messageId && item.messageVersion === message.messageVersion)
+          if (!current) return false
+          if (!topic) return current.routingStatus !== 'routed'
+          return current.routingStatus === 'routed'
+            && (!Array.isArray(current.activeUnitRefs) || current.activeUnitRefs.some(ref => ref.unitId === message.unitId && ref.unitRevision === message.unitRevision))
+            && delta.some(entry => entry.messageId === message.messageId && entry.messageVersion === message.messageVersion
+              && (!entry.unitId || entry.unitId === message.unitId && entry.unitRevision === message.unitRevision))
+        }).map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion,
+          ...(message.unitId !== undefined ? { unitId: message.unitId, unitRevision: message.unitRevision } : {}) }))
+        if (!messages.length) continue
+        result.push({ requestId: request.requestId, groupId,
+          ...(topic ? { topicId: topic.topicId, revision: request.revision } : {}),
+          status: state?.status ?? (request.exhausted ? 'exhausted' : 'pending'), attempt: state?.attempt ?? request.attempt ?? 0,
+          failurePhase: state?.failurePhase ?? (state?.status === 'exhausted' && state.attempt === 0 && !state.messageId ? 'startup' : null),
+          nextRetryAt: state?.nextRetryAt ?? null, retryToken: requestRecoveryToken(request.requestId, state), messages })
+      }
+      return result
+  }
   return {
-    register, schedule, prepareReview, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume, isCurrentRequest,
+    register, schedule, prepareReview, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume, isCurrentRequest, messageProcessingRequests,
+    async retryMessageRequest({ groupId, messageId, messageVersion, activeUnitRefs, requestId, token }) {
+      const validate = () => {
+        const message = store.getGroup(groupId)?.messages.find(item => item.messageId === messageId)
+        const request = messageProcessingRequests(groupId).find(item => item.requestId === requestId && item.status === 'exhausted'
+          && item.messages.some(source => source.messageId === messageId && source.messageVersion === messageVersion))
+        const keys = refs => refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision])).sort()
+        if (!message || message.messageVersion !== messageVersion || !request || request.retryToken !== token
+          || JSON.stringify(keys(message.activeUnitRefs ?? [])) !== JSON.stringify(keys(activeUnitRefs))) throw new Error('MESSAGE_RETRY_STALE')
+      }
+      validate()
+      return retryRequest(groupId, requestId, validate)
+    },
     async resetReviewRequest(groupId, requestId) {
       const state = store.getCoordinationRequest?.(groupId, requestId)
       const request = reviews.get(requestId) ?? replies.get(requestId)
@@ -1373,7 +1423,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       return pendingInput(task.groupId).length > 0 || (group?.taskReservations ?? []).some((item) => item.taskId === task.taskId)
         || task.topicRefs.some((ref) => { const topic = store.getTopic(task.groupId, ref.topicId); return !topic || topic.processedRevision < topic.revision })
     },
-    async retryOperation({ groupId, topicId, decisionId, operationId, resolution, reason }) {
+    async retryOperation({ groupId, topicId, decisionId, operationId, resolution, reason, validateSnapshot }) {
+      validateSnapshot?.()
       if (!reason?.trim() || !['not-applied', 'applied', 'reconsider'].includes(resolution)) throw new Error('decision_recovery_evidence_required')
       if (resolution === 'reconsider') {
         if (applying.has(decisionId)) throw new Error('decision_recovery_not_blocked')
@@ -1391,7 +1442,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const applied = operation ? store.getTask(operation.taskId)?.appliedOperations?.includes(operationId) : store.getGroup(groupId).outbox.some(item => item.outboundId === operationId)
       if (!applied && action && action.kind !== 'new-task' && (!task || task.stopRequest || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence)) throw new Error('decision_recovery_task_stale')
       if (resolution === 'applied' && !applied || resolution === 'not-applied' && applied) throw new Error('decision_recovery_evidence_conflict')
-      await store.updateTopicDecision({ groupId, topicId, decisionId, expectedStatus: 'blocked', patch: {
+      await store.updateTopicDecision({ groupId, topicId, decisionId, expectedStatus: 'blocked', validateSnapshot, patch: {
         status: 'accepted', retryBaseAttempt: record.attempt ?? 0, nextRetryAt: undefined, recoveryReason: reason.trim(),
         operations: record.operations.map(item => item.operationId === operationId ? { ...item, status: applied ? 'applied' : 'pending', recoveryResolution: resolution, recoveryReason: reason.trim() } : item),
       } })

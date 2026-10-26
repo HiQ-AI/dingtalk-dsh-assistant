@@ -28,6 +28,15 @@ export const stableId = (prefix, value) => `${prefix}-${createHash('sha256').upd
 export const fingerprint = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const isPendingDecision = record => !['completed', 'rejected'].includes(record.status)
 
+// Only durable pre-effect failures or an already applied outbound identity are safe to resume.
+export function topicDecisionRecovery(record) {
+  const sourceMissing = ['TASK_TOPIC_SOURCE_VERSION_MISSING', 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED'].includes(record.error)
+  const projectedReply = record.error === 'outbox_identity_duplicate' && record.failureOperationId === record.outboundId
+    && record.operations.every(operation => operation.status === 'applied')
+  return record.status === 'blocked' && (sourceMissing || projectedReply)
+    ? { token: fingerprint(record), resolution: projectedReply ? 'applied' : 'not-applied' } : null
+}
+
 // Only the former deterministic Web continuation path is eligible. Never merge by title.
 export function webTaskTopicReusePlan(group, tasks) {
   if (group.messages.some(message => message.routingStatus !== 'routed')) throw new Error('task_topic_reconcile_busy')

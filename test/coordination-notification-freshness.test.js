@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { deliverTaskNotification } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
+import { deliverTaskNotification, retryTaskNotification, taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 
 async function fixture(t) {
@@ -42,11 +42,28 @@ async function fixture(t) {
     notificationById: id => query('notification.get', { notificationId: id }),
     occurrenceNow: async () => (await query('coordination.occurrence.list'))[0],
     deliver: candidate => deliverTaskNotification({ notification: candidate, notifications, command }),
+    retry: candidate => retryTaskNotification({ notification: candidate, notifications, command,
+      expectedToken: taskNotificationRecovery(candidate).expectedToken }),
     get sends() { return sends },
     async close() { await store.close() },
     async restart() { await store.close(); store = await openDynamicTaskStore(options) },
   }
 }
+
+test('manual recovery cannot obtain a send permit for expired query facts without an automatic scan', async t => {
+  const f = await fixture(t)
+  f.expire()
+  await assert.rejects(f.retry(f.notification), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
+  assert.equal(f.sends, 0)
+  const rejected = await f.notificationById(f.notification.id)
+  assert.equal(rejected.state, 'prepared')
+  assert.equal(rejected.sendPermit, undefined)
+  assert.equal(rejected.sendAttemptCount, undefined)
+  await assert.rejects(f.command('notification.start', { notificationId: rejected.id }), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
+  const fresh = (await f.refresh()).result.notification
+  await f.retry(fresh)
+  assert.equal(f.sends, 1)
+})
 
 test('expired unpermitted candidate atomically supersedes with a fresh read and immutable old payload', async t => {
   const f = await fixture(t)

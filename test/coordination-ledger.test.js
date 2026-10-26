@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -26,6 +26,57 @@ async function fixture(t) {
     async close() { await store.close() },
     async migrate() { store = await openDynamicTaskStore({ ...options, migrate: true }) } }
 }
+
+test('explicit source retry requires exact exhausted generation and never resets accepted or applied coordination', async t => {
+  const f = await fixture(t)
+  let source = await f.reserve('manual-source')
+  const retryToken = item => createHash('sha256').update(JSON.stringify([item.id, item.fence, item.attemptCount ?? 0, item.retryEpoch ?? 0, item.nextRetryAt ?? null])).digest('hex')
+  for (let i = 0; i < 3; i++) source = (await f.command('coordination.source.failed', { sourceId: source.id, fence: source.fence, code: 'network-offline' })).result.source
+  const token = retryToken(source)
+  const args = { sourceId: source.id, fence: source.fence, token }
+  const results = await Promise.allSettled([f.command('coordination.source.retry', args), f.command('coordination.source.retry', args)])
+  assert.equal(results.filter(item => item.status === 'fulfilled').length, 1)
+  assert.equal(results.filter(item => item.status === 'rejected').length, 1)
+  source = (await f.query({ kind: 'coordination.source.list' }))[0]
+  assert.equal(source.attemptCount, 0); assert.equal(source.retryEpoch, 1); assert.equal(source.nextRetryAt, null)
+  assert.equal((await f.query({ kind: 'coordination.source.list' })).length, 1)
+  await assert.rejects(f.command('coordination.source.retry', args), /STALE/)
+  await assert.rejects(f.command('coordination.source.retry', { ...args, token: retryToken(source), fence: 99 }), /STALE/)
+  await f.command('coordination.source.clarify', { sourceId: source.id, fence: source.fence, coordinationId: 'clarify', question: '确认权限' })
+  await assert.rejects(f.command('coordination.source.retry', { ...args, token: retryToken(source) }), /STALE/)
+  await f.task('A')
+  const accepted = await f.reserve('accepted-manual-source')
+  await f.command('coordination.accept', { sourceId: accepted.id, fence: accepted.fence, coordinationId: 'batch', members: [f.member('A')] })
+  const readAccepted = async () => (await f.query({ kind: 'coordination.source.list' })).find(item => item.id === accepted.id)
+  const acceptedRetry = async () => {
+    const current = await readAccepted()
+    await assert.rejects(f.command('coordination.source.retry', { sourceId: current.id, fence: current.fence, token: retryToken(current) }), /STALE/)
+  }
+  await acceptedRetry()
+  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
+  await acceptedRetry()
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'A' })).contextRevision, 1)
+  assert.equal((await readAccepted()).retryEpoch, undefined)
+})
+
+test('runtime freeze atomically rejects an already-preflighted source retry without consuming its CAS', async t => {
+  const f = await fixture(t)
+  let source = await f.reserve('frozen-manual-source')
+  for (let i = 0; i < 3; i++) source = (await f.command('coordination.source.failed', { sourceId: source.id, fence: source.fence, code: 'network-offline' })).result.source
+  const token = createHash('sha256').update(JSON.stringify([source.id, source.fence, source.attemptCount ?? 0, source.retryEpoch ?? 0, source.nextRetryAt ?? null])).digest('hex')
+  const args = { sourceId: source.id, fence: source.fence, token }, commandId = 'retry-after-freeze'
+  await f.command('coordination.runtime.set', { mode: 'frozen', reason: 'freeze after successful read-only preflight' })
+  for (let i = 0; i < 2; i++) {
+    await assert.rejects(f.command('coordination.source.retry', args, commandId), { code: 'DYNAMIC_COORDINATION_FROZEN' })
+    assert.deepEqual((await f.query({ kind: 'coordination.source.list' }))[0], source)
+    assert.equal(await f.query({ kind: 'receipt.get', id: commandId }), null)
+    if (!i) await f.reopen()
+  }
+  await f.command('coordination.runtime.set', { mode: 'active', reason: 'explicitly unfreeze original source' })
+  const retried = (await f.command('coordination.source.retry', args, commandId)).result.source
+  assert.equal(retried.id, source.id); assert.equal(retried.fence, source.fence)
+  assert.equal(retried.attemptCount, 0); assert.equal(retried.retryEpoch, 1)
+})
 
 test('source reservation and fixed member apply survive restart without replaying task mutation', async t => {
   const f = await fixture(t)
@@ -210,13 +261,14 @@ for (const fakeNetworkCalled of [false,true]) test(`real SIGKILL after permit: f
   const marker=`${f.options.dbPath}.fake-network`
   await f.close()
   const moduleUrl=new URL('../packages/dingtalk-dsh-assistant/dynamic-task-store.js',import.meta.url).href
-  const script=`import {openDynamicTaskStore} from ${JSON.stringify(moduleUrl)};import {writeFileSync} from 'node:fs';
+  const script=`import {openDynamicTaskStore} from ${JSON.stringify(moduleUrl)};import {writeFileSync} from 'node:fs';import {mock} from 'node:test';
+    mock.timers.enable({apis:['Date'],now:Number(process.argv[5])});
     const store=await openDynamicTaskStore(JSON.parse(process.argv[1]));
     const permit=await store.command({id:'crash-permit',kind:'notification.start',args:{notificationId:process.argv[2]}});
     if(!permit.dispatchEligible)throw new Error('permit missing');
     if(process.argv[3]==='true')writeFileSync(process.argv[4],'one isolated fake send');
     process.stderr.write('kill-ready',()=>process.kill(process.pid,'SIGKILL'));`
-  const child=spawn(process.execPath,['--input-type=module','-e',script,JSON.stringify(f.options),notification.id,String(fakeNetworkCalled),marker],{stdio:['ignore','ignore','pipe']})
+  const child=spawn(process.execPath,['--input-type=module','-e',script,JSON.stringify(f.options),notification.id,String(fakeNetworkCalled),marker,String(Date.now())],{stdio:['ignore','ignore','pipe']})
   let errors='';child.stderr.on('data',chunk=>{errors+=chunk})
   t.after(()=>child.kill('SIGKILL'))
   const [code,signal]=await once(child,'exit');assert.ok(errors.includes('kill-ready'),errors)

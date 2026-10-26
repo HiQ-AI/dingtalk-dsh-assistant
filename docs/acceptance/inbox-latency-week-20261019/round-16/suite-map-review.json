@@ -1,0 +1,262 @@
+{
+  "files": 308,
+  "historical": 3,
+  "changedImportClosures": 30,
+  "removed": 0,
+  "reclassified": 0,
+  "publishedBoundaryChanged": false,
+  "changes": [
+    {
+      "file": "test/check-resident-storage.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-artifact-correction.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-concurrency-contracts.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-conditional-query.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-effective-graph.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-execution-proof.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-final-fault-matrix.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-latency-native.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-ledger.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-migration.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-model-config.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-native-lifecycle.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-observed-prerequisites.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-summary.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/coordination-trigger-commands.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/dynamic-execution-resources.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/dynamic-task-store.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/independent-coordination-changes.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/independent-coordination-recovery.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/performance.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/source-dispatch-ownership.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/store.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/task-ingress-epoch.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/task-message-projections.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/task-model-config.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/task-session-observability.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/task-topic-context-http.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/topic-runtime.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/topic-store.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    },
+    {
+      "file": "test/workflow-migration.test.js",
+      "added": {
+        "publishedImports": [
+          "packages/dingtalk-dsh-assistant/group-message.js",
+          "packages/dingtalk-dsh-assistant/notification-delivery.js"
+        ]
+      }
+    }
+  ]
+}

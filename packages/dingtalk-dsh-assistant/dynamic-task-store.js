@@ -1,5 +1,6 @@
 import { executionSessionTitle } from './session-workspaces.js'
 import { quotedSendRejectionProof } from './group-message.js'
+import { taskNotificationRecovery } from './notification-delivery.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
@@ -467,7 +468,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       return changed({ runtime })
     }
     const runtimeMode = db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value
-    if (runtimeMode && JSON.parse(runtimeMode).mode === 'frozen' && ['coordination.accept','coordination.apply','coordination.schedule.scan','coordination.job.claim','coordination.job.command'].includes(kind)) fail('DYNAMIC_COORDINATION_FROZEN')
+    if (runtimeMode && JSON.parse(runtimeMode).mode === 'frozen' && ['coordination.accept','coordination.apply','coordination.source.retry','coordination.schedule.scan','coordination.job.claim','coordination.job.command'].includes(kind)) fail('DYNAMIC_COORDINATION_FROZEN')
     if (kind === 'coordination.events.consume') {
       const consumerId = text(a.consumerId, 'consumerId'), previous = get('dynamic_coordination_consumers', consumerId, true)
       if ((previous?.cursor ?? 0) !== a.expectedCursor) fail('DYNAMIC_COORDINATION_CURSOR_STALE')
@@ -1440,10 +1441,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       notification.deliveryError = { ...notification.deliveryError, retryable: false }; notification.nextAttemptAt = null; notification.updatedAt = stamp
       put('dynamic_notifications', notification); return changed({ notification })
     }
+    if (kind === 'notification.recovery.start') {
+      const notification = get('dynamic_notifications', text(a.notificationId, 'notificationId'))
+      const recovery = taskNotificationRecovery(notification)
+      if (a.expectedToken !== recovery.expectedToken) throw Object.assign(new Error('DYNAMIC_NOTIFICATION_RECOVERY_STALE'), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE', statusCode: 409 })
+      if (!recovery.action) throw Object.assign(new Error('TASK_NOTIFICATION_RECOVERY_FORBIDDEN'), { code: 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN', statusCode: 409 })
+      // Consume the CAS even when a readback leaves the delivery state unchanged.
+      notification.recoveryToken = randomUUID(); notification.nextAttemptAt = null; notification.updatedAt = stamp
+      put('dynamic_notifications', notification); return changed({ notification })
+    }
     if (kind === 'notification.retry') {
       const notification = get('dynamic_notifications', a.notificationId)
       const proof = notification.deliveryError?.phase === 'send' && quotedSendRejectionProof(notification.deliveryError, { groupId: notification.payload.conversationId, replyToMessageId: notification.payload.sourceMessageId, replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id })
-      if (notification.ack || notification.receipt || !proof || notification.state !== 'failed' || notification.deliveryError?.knownNotSent !== true || notification.deliveryError?.retryable !== true
+      if (notification.retirement || notification.recall || notification.ack || notification.receipt || !proof || notification.state !== 'failed' || notification.deliveryError?.knownNotSent !== true || notification.deliveryError?.retryable !== true
         || Date.parse(notification.nextAttemptAt ?? '') > Date.now()) return changed({ notification })
       notification.state = 'prepared'; notification.updatedAt = stamp
       put('dynamic_notifications', notification); return changed({ notification })
@@ -1533,6 +1543,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             notification.state = 'failed'; notification.reason = 'coordination_cancelled'; put('dynamic_notifications', notification)
             return changed({ notification })
           }
+          // Freshness must hold at the permit transaction, not depend on an asynchronous scan winning first.
+          if (occurrence?.action.kind === 'read-query' && !notification.sendPermit
+            && Date.parse(stamp) - Date.parse(occurrence.result.observedAt) >= (occurrence.freshnessWindowMs ?? 300000)) fail('DYNAMIC_NOTIFICATION_RECOVERY_STALE')
         }
         const task = ['topic-reply','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
         const request = notification.kind === 'question' && task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)

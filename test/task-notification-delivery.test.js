@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { deliverTaskNotification, notificationRetryAt, safeNotificationDetail } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
+import * as notificationDelivery from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 import { readTaskNotificationDelivery } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 import { formatTaskGroupReply } from '../packages/dingtalk-dsh-assistant/group-reply-format.js'
@@ -379,4 +380,179 @@ test('send and readback phases observe independent attempts; unknown recovery me
   assert.equal(delivered.readbackAttemptCount, 2)
   assert.equal(delivered.sendAttemptCount, 1)
   assert.notEqual(stages[2].spanId, stages[4].spanId)
+})
+
+const recovery = notification => notificationDelivery.taskNotificationRecovery(notification)
+const retry = (f, notification, notifications, extra = {}) => notificationDelivery.retryTaskNotification({ notification,
+  expectedToken: recovery(notification).expectedToken, notifications, command: f.command, ...extra })
+
+function guardedNotifications(blocked, sends) {
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { async run(args) {
+    sends.push(args)
+    return blocked() ? { exitCode: 1, stdout: '', stderr: JSON.stringify({ error: { ...guardError, hint: 'upstream HTTP 401' } }) }
+      : { exitCode: 0, stdout: JSON.stringify({ openTaskId: 'recovered' }) }
+  } } })
+  return { send: notice => adapter.sendGroupReply({ groupId: notice.payload.conversationId, text: notice.payload.text,
+    replyToMessageId: notice.payload.sourceMessageId, replyToSenderOpenDingTalkId: notice.payload.actorId,
+    atOpenDingTalkIds: notice.payload.atOpenDingTalkIds, idempotencyKey: notice.id }),
+  readback: async () => ({ messageId: 'verified', conversationId: 'g' }) }
+}
+
+test('manual notification recovery descriptor is a private-data-free proof-gated whitelist', () => {
+  const base = { id: 'notice', state: 'failed', payload: { text: 'PRIVATE', actorId: 'PRIVATE', conversationId: 'g', sourceMessageId: 'source' },
+    deliveryError: { knownNotSent: true, retryable: true, message: 'PRIVATE' }, dispatchToken: 'PRIVATE', updatedAt: 'stamp' }
+  assert.equal(recovery(base).action, null, 'flags alone do not authorize a send')
+  assert.deepEqual(Object.keys(recovery(base)).sort(), ['action', 'expectedToken', 'reason'])
+  assert.doesNotMatch(JSON.stringify(recovery(base)), /PRIVATE|payload|dispatchToken|deliveryError/)
+  assert.match(recovery(base).expectedToken, /^[a-f0-9]{64}$/)
+  for (const row of [{ ...base, state: 'delivered' }, { ...base, state: 'superseded' },
+    { ...base, state: 'prepared', retirement: { reason: 'superseded' } }, { ...base, state: 'unknown', recall: { state: 'failed' } }])
+    assert.equal(recovery(row).action, null)
+  assert.equal(recovery({ ...base, state: 'unknown' }).action, 'readback')
+  assert.equal(recovery({ ...base, state: 'starting' }).action, 'readback')
+  assert.equal(recovery({ ...base, state: 'prepared' }).action, 'send')
+})
+
+test('manual notification recovery repeats proven 401 refusal safely and succeeds after authorization repair', async t => {
+  const f = await fixture(t), sends = [], stages = []
+  let blocked = true
+  const notifications = guardedNotifications(() => blocked, sends)
+  await assert.rejects(deliverTaskNotification({ notification: f.notification, command: f.command, notifications }), /dws_reply_failed/)
+  const failed = await f.read(), digest = failed.payloadDigest
+  assert.equal(recovery(failed).action, 'send'); assert.ok(Date.parse(failed.nextAttemptAt) > Date.now())
+  await assert.rejects(retry(f, failed, notifications), /dws_reply_failed/)
+  const refusedAgain = await f.read()
+  assert.equal(refusedAgain.state, 'failed'); assert.equal(refusedAgain.sendAttemptCount, 2)
+  assert.notEqual(recovery(refusedAgain).expectedToken, recovery(failed).expectedToken)
+  blocked = false
+  const result = await retry(f, refusedAgain, notifications, { onStage: async (_row, stage) => stages.push(stage) })
+  assert.equal(result.status, 'attempted'); assert.equal(result.action, 'send')
+  const delivered = await f.read()
+  assert.equal(delivered.state, 'delivered'); assert.equal(delivered.sendAttemptCount, 3)
+  assert.equal(delivered.payloadDigest, digest); assert.equal(sends.length, 3)
+  assert.deepEqual(sends[0], sends[1]); assert.deepEqual(sends[1], sends[2])
+  assert.deepEqual(stages.map(stage => stage.stage), ['send', 'send', 'readback', 'readback'])
+  await assert.rejects(retry(f, delivered, notifications), { code: 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN' })
+  assert.equal(sends.length, 3)
+})
+
+test('manual notification recovery never treats network timeout as not-sent and retries readback only', async t => {
+  const f = await fixture(t)
+  let sends = 0, reads = 0, broken = true
+  const notifications = { send: async () => { sends++; throw new Error('network timeout') }, readback: async () => {
+    reads++; if (broken) throw new Error('HTTP 401'); return { messageId: 'verified', conversationId: 'g' }
+  } }
+  await assert.rejects(deliverTaskNotification({ notification: f.notification, command: f.command, notifications }), /network timeout/)
+  const unknown = await f.read()
+  assert.equal(unknown.state, 'unknown'); assert.equal(unknown.deliveryError.knownNotSent, false)
+  await assert.rejects(retry(f, unknown, notifications), /HTTP 401/)
+  const stillUnknown = await f.read()
+  assert.equal(stillUnknown.state, 'unknown'); assert.equal(stillUnknown.readbackAttemptCount, 1)
+  broken = false
+  assert.equal((await retry(f, stillUnknown, notifications)).action, 'readback')
+  const delivered = await f.read()
+  assert.equal(delivered.state, 'delivered'); assert.equal(delivered.readbackAttemptCount, 2)
+  assert.equal(sends, 1); assert.equal(reads, 2)
+})
+
+test('manual notification recovery of starting and legacy guard-unknown remains readback-only', async t => {
+  for (const state of ['starting', 'unknown']) await t.test(state, async t => {
+    const f = await fixture(t)
+    const started = (await f.command('notification.start', { notificationId: 'notice' })).result.notification
+    if (state === 'unknown') await f.command('notification.receipt', { notificationId: 'notice', dispatchToken: started.dispatchToken,
+      state: 'unknown', receipt: null, error: { phase: 'send', exitCode: 1, stderr: JSON.stringify({ error: guardError }) } })
+    const result = await retry(f, await f.read(), { send: async () => assert.fail('must never send'), readback: async () => null })
+    assert.equal(result.action, 'readback')
+    const saved = await f.read()
+    assert.equal(saved.sendAttemptCount, 1); assert.equal(saved.readbackAttemptCount, 1)
+    assert.ok(['starting', 'unknown'].includes(saved.state))
+  })
+})
+
+test('manual notification recovery rejects stale CAS and concurrent clicks without duplicate effects', async t => {
+  const f = await fixture(t)
+  await deliverTaskNotification({ notification: f.notification, command: f.command, notifications: {
+    send: async () => ({ openTaskId: 'accepted' }), readback: async () => null,
+  } })
+  const stale = await f.read(), oldToken = recovery(stale).expectedToken
+  await f.command('notification.diagnostic', { notificationId: 'notice', nextAttemptAt: '2099-01-01T00:00:00Z' })
+  await assert.rejects(notificationDelivery.retryTaskNotification({ notification: stale, expectedToken: oldToken,
+    notifications: { readback: async () => assert.fail('stale state must not call channel') }, command: f.command }), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
+  const row = await f.read(), entered = Promise.withResolvers(), release = Promise.withResolvers()
+  t.after(() => release.resolve())
+  let reads = 0
+  const notifications = { readback: async () => { reads++; entered.resolve(); await release.promise; return null } }
+  const pending = retry(f, row, notifications)
+  await entered.promise
+  await assert.rejects(retry(f, row, notifications), { code: 'TASK_NOTIFICATION_RECOVERY_IN_PROGRESS' })
+  assert.deepEqual(await deliverTaskNotification({ notification: row, notifications, command: f.command }), { inProgress: true })
+  release.resolve(); await pending
+  assert.equal(reads, 1)
+  await assert.rejects(retry(f, row, notifications), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
+  await retry(f, await f.read(), { readback: async () => ({ messageId: 'verified' }) })
+  assert.equal((await f.read()).state, 'delivered')
+})
+
+test('manual notification recovery CAS refuses forged caller flags and retired original notifications', async t => {
+  const f = await fixture(t)
+  const started = (await f.command('notification.start', { notificationId: 'notice' })).result.notification
+  await f.command('notification.receipt', { notificationId: 'notice', dispatchToken: started.dispatchToken,
+    state: 'failed', error: { phase: 'send', knownNotSent: true, retryable: true } })
+  let row = await f.read()
+  await assert.rejects(f.command('notification.recovery.start', { notificationId: 'notice', expectedToken: recovery(row).expectedToken }),
+    { code: 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN' })
+  await f.command('notification.retireUnsent', { notificationId: 'notice', reason: 'superseded', evidenceRef: 'retirement-proof' })
+  row = await f.read()
+  assert.equal(recovery(row).action, null)
+  await assert.rejects(retry(f, row, { send: async () => assert.fail('retired never sends') }), { code: 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN' })
+})
+
+
+test('manual notification recovery consumes CAS across restart even at the same timestamp', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-26T12:00:00Z') })
+  const f = await fixture(t), row = await f.read(), expectedToken = recovery(row).expectedToken
+  const started = await f.command('notification.recovery.start', { notificationId: row.id, expectedToken })
+  assert.equal(started.result.notification.updatedAt, row.updatedAt)
+  assert.notEqual(recovery(started.result.notification).expectedToken, expectedToken)
+  await f.reopen()
+  await assert.rejects(f.command('notification.recovery.start', { notificationId: row.id, expectedToken }),
+    { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE', statusCode: 409 })
+})
+
+test('manual notification recovery uses persisted payload and rejects adapter absence without consuming CAS', async t => {
+  const f = await fixture(t), row = await f.read(), original = structuredClone(row.payload)
+  await assert.rejects(retry(f, row, {}), { code: 'TASK_NOTIFICATION_RECOVERY_UNAVAILABLE' })
+  assert.deepEqual(await f.read(), row)
+  row.payload.text = 'caller-forged'; row.payload.actorId = 'caller-forged'
+  await retry(f, row, { send: async notice => { assert.deepEqual(notice.payload, original); return { openTaskId: 'accepted' } },
+    readback: async () => ({ messageId: 'verified' }) })
+  assert.equal((await f.read()).state, 'delivered')
+})
+
+test('manual notification recovery cannot read back while the original automatic send is still in flight', async t => {
+  const f = await fixture(t), entered = Promise.withResolvers(), release = Promise.withResolvers()
+  t.after(() => release.resolve())
+  const notifications = { send: async () => { entered.resolve(); await release.promise; throw new Error('network timeout') },
+    readback: async () => ({ messageId: 'verified' }) }
+  const pending = deliverTaskNotification({ notification: f.notification, command: f.command, notifications })
+  const rejected = assert.rejects(pending, /network timeout/)
+  await entered.promise
+  await assert.rejects(retry(f, await f.read(), notifications), { code: 'TASK_NOTIFICATION_RECOVERY_IN_PROGRESS', statusCode: 409 })
+  release.resolve(); await rejected
+  await retry(f, await f.read(), notifications)
+  assert.equal((await f.read()).state, 'delivered')
+})
+
+
+test('manual notification recovery never replays effects from a replayed command receipt', async t => {
+  const f = await fixture(t)
+  await deliverTaskNotification({ notification: f.notification, command: f.command,
+    notifications: { send: async () => ({ openTaskId: 'accepted' }), readback: async () => null } })
+  const notification = await f.read(), expectedToken = recovery(notification).expectedToken
+  const command = (kind, args) => f.command(kind, args, kind === 'notification.recovery.start' ? 'same-recovery-command' : undefined)
+  let reads = 0
+  const options = { notification, expectedToken, command, notifications: { readback: async () => { reads++; return null } } }
+  await notificationDelivery.retryTaskNotification(options)
+  await assert.rejects(notificationDelivery.retryTaskNotification(options), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
+  assert.equal(reads, 1)
 })

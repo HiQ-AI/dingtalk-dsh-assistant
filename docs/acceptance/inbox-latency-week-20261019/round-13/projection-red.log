@@ -1,0 +1,56 @@
+✖ 当前精确请求耗尽与Host阻塞失败，不把共享群故障、旧版本和启动退避当终态 (52.9175ms)
+✖ 协调来源耗尽只影响当前事项，恢复成功与通知失败各自独立 (12.0631ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1959.3006
+
+✖ failing tests:
+
+test at test\http.test.js:46:1
+✖ 当前精确请求耗尽与Host阻塞失败，不把共享群故障、旧版本和启动退避当终态 (52.9175ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'processing'
+  - 'failed'
+  
+      at withServer.overrides.listGroups (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/http.test.js:58:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withServer (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/http.test.js:43:9)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/http.test.js:53:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'processing',
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\http.test.js:88:1
+✖ 协调来源耗尽只影响当前事项，恢复成功与通知失败各自独立 (12.0631ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'processing'
+  - 'failed'
+  
+      at withServer.overrides.listGroups.groupId (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/http.test.js:95:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withServer (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/http.test.js:43:9)
+      at async TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/http.test.js:93:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'processing',
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

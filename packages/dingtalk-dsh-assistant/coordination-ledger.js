@@ -236,7 +236,12 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         put('dynamic_coordination_sources', source); return { source }
       }
       if (source.frozen || source.state === 'accepted') fail('DYNAMIC_COORDINATION_SOURCE_STALE')
-      if (kind === 'coordination.source.failed') {
+      if (kind === 'coordination.source.retry') {
+        const token = digest([source.id, source.fence, source.attemptCount ?? 0, source.retryEpoch ?? 0, source.nextRetryAt ?? null])
+        if (source.state !== 'reserved' || source.resolvedBy || a.token !== token || !(source.attemptCount > 0)) fail('DYNAMIC_COORDINATION_SOURCE_STALE')
+        source.retryEpoch = (source.retryEpoch ?? 0) + 1
+        source.attemptCount = 0; source.nextRetryAt = null
+      } else if (kind === 'coordination.source.failed') {
         source.attemptCount = (source.attemptCount ?? 0) + 1; source.lastError = text(a.code, 'code')
         source.nextRetryAt = source.attemptCount < 3 ? new Date(Date.parse(now()) + [5000,60000][source.attemptCount - 1]).toISOString() : null
       } else if (kind === 'coordination.source.reject') {

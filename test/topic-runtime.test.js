@@ -177,6 +177,159 @@ test('连续启动失败增加独立退避次数，并发恢复只派发一次',
   assert.ok(Date.parse(capped.nextRetryAt) <= Date.now() + 300_000)
 })
 
+test('manual request recovery fences message version, units and request token and coalesces repeated clicks', async t => {
+  let offline = true
+  const h = await setup(t, { dispatchRequest: async () => { if (offline) throw startupFailure(); return pendingStartupAgent() } })
+  await ingest(h, 'manual-recovery'); await h.coordinator.schedule('g'); await settleStartup()
+  const first = h.coordinator.messageProcessingRequests('g')[0]
+  const args = { groupId: 'g', messageId: 'manual-recovery', messageVersion: 1, activeUnitRefs: [], requestId: first.requestId, token: first.retryToken }
+  await assert.rejects(h.coordinator.retryMessageRequest({ ...args, messageVersion: 2 }), /MESSAGE_RETRY_STALE/)
+  await assert.rejects(h.coordinator.retryMessageRequest({ ...args, activeUnitRefs: [{ unitId: 'foreign', unitRevision: 1 }] }), /MESSAGE_RETRY_STALE/)
+  await assert.rejects(h.coordinator.retryMessageRequest({ ...args, token: 'old' }), /MESSAGE_RETRY_STALE/)
+  const results = await Promise.allSettled([h.coordinator.retryMessageRequest(args), h.coordinator.retryMessageRequest(args)])
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+  assert.equal(results.filter(result => result.status === 'rejected').length, 1)
+  await settleStartup()
+  const second = h.coordinator.messageProcessingRequests('g')[0]
+  assert.equal(second.status, 'exhausted'); assert.notEqual(second.retryToken, first.retryToken)
+  await assert.rejects(h.coordinator.retryMessageRequest(args), /MESSAGE_RETRY_STALE/)
+  offline = false
+  await h.coordinator.retryMessageRequest({ ...args, token: second.retryToken }); await settleStartup()
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].status, 'pending')
+  await assert.rejects(h.coordinator.retryMessageRequest({ ...args, token: second.retryToken }), /MESSAGE_RETRY_STALE/)
+  assert.equal(h.store.getGroup('g').messages.length, 1)
+})
+
+test('messageProcessingRequests preserves startup compensation and exposes only detached read-only fields', async t => {
+  const h = await setup(t, { dispatchRequest: async () => { throw startupFailure() } })
+  await ingest(h, 'request-private', { text: 'PRIVATE-BODY', senderOpenDingTalkId: 'PRIVATE-ACTOR' })
+  await h.coordinator.schedule('g'); await settleStartup()
+  const before = structuredClone(h.snapshot), sent = h.sent.length, errors = h.errors.length
+  const requestId = Object.keys(h.store.getGroup('g').coordinationRequests)[0]
+  const [request] = h.coordinator.messageProcessingRequests('g')
+  assert.deepEqual(request, { requestId, groupId: 'g', status: 'exhausted', attempt: 0, failurePhase: 'startup',
+    nextRetryAt: h.store.getCoordinationRequest('g', requestId).nextRetryAt, retryToken: request.retryToken,
+    messages: [{ messageId: 'request-private', messageVersion: 1 }] })
+  assert.ok(Date.parse(request.nextRetryAt) > Date.now())
+  assert.doesNotMatch(JSON.stringify(request), /PRIVATE|lastError|failureCode|sender|text/)
+  request.messages[0].messageId = 'tampered'; request.messages.push({ messageId: 'foreign', messageVersion: 1 })
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].messages[0].messageId, 'request-private')
+  assert.deepEqual(h.snapshot, before); assert.equal(h.sent.length, sent); assert.equal(h.errors.length, errors)
+  assert.deepEqual(h.coordinator.messageProcessingRequests('other-group'), [])
+})
+
+test('messageProcessingRequests classifies legacy zero-input exhaustion by the existing startup recovery rule', async t => {
+  const h = await setup(t, { dispatchRequest: async () => { throw startupFailure() } })
+  await ingest(h, 'legacy-startup'); await h.coordinator.schedule('g'); await settleStartup()
+  const id = Object.keys(h.store.getGroup('g').coordinationRequests)[0]
+  await h.store.updateCoordinationRequest('g', id, { failurePhase: undefined, failureCode: undefined, startupAttempt: undefined })
+  const before = structuredClone(h.snapshot), persisted = h.store.getCoordinationRequest('g', id)
+  assert.equal(persisted.status, 'exhausted'); assert.equal(persisted.attempt, 0)
+  assert.equal(persisted.messageId, undefined); assert.ok(persisted.nextRetryAt)
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].failurePhase, 'startup')
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].nextRetryAt, persisted.nextRetryAt)
+  assert.deepEqual(h.snapshot, before)
+  await h.store.updateCoordinationRequest('g', id, { messageId: 'already-dispatched' })
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].failurePhase, null)
+  await h.store.updateCoordinationRequest('g', id, { messageId: undefined, attempt: 3 })
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].failurePhase, null)
+  await h.store.updateCoordinationRequest('g', id, { attempt: 0, failurePhase: 'dispatch' })
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].failurePhase, 'dispatch')
+})
+
+test('messageProcessingRequests route scope requires current unrouted message versions and live status', async t => {
+  const h = await setup(t)
+  await ingest(h, 'route-current'); await ingest(h, 'route-other'); await h.coordinator.schedule('g'); await settleStartup()
+  const id = h.envelope('[GROUP_TOPIC_ROUTE]').requestId
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g')[0].messages,
+    [{ messageId: 'route-current', messageVersion: 1 }, { messageId: 'route-other', messageVersion: 1 }])
+  await ingest(h, 'route-current', { text: 'new exact version', messageVersion: 2 })
+  assert.equal(h.store.getGroup('g').messages.find(message => message.messageId === 'route-current').messageVersion, 2)
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g')[0].messages, [{ messageId: 'route-other', messageVersion: 1 }])
+  await h.store.updateCoordinationRequest('g', id, { status: 'completed' })
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g'), [])
+  await h.store.updateCoordinationRequest('g', id, { status: 'superseded' })
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g'), [])
+  await h.store.updateCoordinationRequest('g', id, { status: 'pending' })
+  await h.store.routeMessages({ groupId: 'g', routeId: 'route-outside-runtime', routingRevision: h.store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'route-other', messageVersion: 1, topics: [], reason: 'background only' }] })
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g'), [])
+})
+
+test('messageProcessingRequests decision scope includes only current unprocessed delta units', async t => {
+  const h = await setup(t)
+  await ingest(h, 'history')
+  const first = (await route(h)).pendingDecisions[0]
+  await complete(h, first)
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g'), [])
+  await ingest(h, 'current', { text: 'PRIVATE-ONE;PRIVATE-TWO', senderOpenDingTalkId: 'PRIVATE-ACTOR' })
+  await h.coordinator.schedule('g')
+  const routing = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await h.call('group_topic_route_submit', { requestId: routing.requestId, routes: [{ messageId: 'current', messageVersion: 1, ignoredRefs: [], units: [
+    { unitKey: 'one', summary: 'one', sourceRefs: [{ quote: 'PRIVATE-ONE;' }], topics: [{ topicId: first.topicId }] },
+    { unitKey: 'two', summary: 'two', sourceRefs: [{ quote: 'PRIVATE-TWO' }], topics: [{ topicId: first.topicId }] },
+  ] }] })
+  await settleStartup()
+  const current = h.envelope('[GROUP_TOPIC_DECISION]'), topic = h.store.getTopic('g', first.topicId)
+  const expected = h.store.getGroup('g').messages.find(message => message.messageId === 'current').activeUnitRefs
+    .map(ref => ({ messageId: 'current', messageVersion: 1, ...ref }))
+  const [request] = h.coordinator.messageProcessingRequests('g')
+  assert.deepEqual(request, { requestId: current.requestId, groupId: 'g', topicId: topic.topicId, revision: topic.revision,
+    status: 'pending', attempt: 0, failurePhase: null, nextRetryAt: null, retryToken: request.retryToken, messages: expected })
+  assert.doesNotMatch(JSON.stringify(request), /PRIVATE|history|original|sender|text|lastError/)
+  await h.store.updateCoordinationRequest('g', request.requestId, { status: 'exhausted', attempt: 3, failurePhase: 'dispatch', lastError: 'PRIVATE-ERROR' })
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].status, 'exhausted')
+  assert.equal(h.coordinator.messageProcessingRequests('g')[0].attempt, 3)
+  await ingest(h, 'current', { text: 'new version', messageVersion: 2 })
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g'), [], 'old source facts cannot label the new message version')
+})
+
+test('messageProcessingRequests excludes replaced Topic revisions and removed Unit ownership before rescheduling', async t => {
+  const h = await setup(t)
+  await ingest(h, 'same-version', { text: 'source text' })
+  const first = (await route(h)).pendingDecisions[0]
+  const old = h.coordinator.messageProcessingRequests('g')[0]
+  await h.store.routeMessages({ groupId: 'g', routeId: 'revise-unit', routingRevision: h.store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'same-version', messageVersion: 1, ignoredRefs: [], units: [{ unitKey: 'whole-message', summary: 'revised semantic unit',
+      sourceRefs: [{ quote: 'source text' }], topics: [{ newTopicKey: 'replacement', title: 'replacement' }] }] }] })
+  assert.deepEqual(h.coordinator.messageProcessingRequests('g'), [])
+  await h.coordinator.schedule('g'); await settleStartup()
+  const requests = h.coordinator.messageProcessingRequests('g')
+  assert.equal(requests.some(request => request.requestId === first.requestId), false)
+  const messages = requests.flatMap(request => request.messages)
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].unitId, old.messages[0].unitId)
+  assert.equal(messages[0].unitRevision, old.messages[0].unitRevision + 1)
+  assert.equal(messages[0].messageVersion, 1)
+})
+
+for (const kind of ['route', 'decision']) test(`messageProcessingRequests rebuilds ${kind} scope for legacy exhausted state without replay`, async t => {
+  const h = await setup(t)
+  await ingest(h, 'restart-current')
+  if (kind === 'decision') await route(h)
+  else await h.coordinator.schedule('g')
+  await settleStartup()
+  const id = h.envelope(kind === 'route' ? '[GROUP_TOPIC_ROUTE]' : '[GROUP_TOPIC_DECISION]').requestId
+  await h.store.updateCoordinationRequest('g', id, { status: 'exhausted', attempt: 3, lastError: 'PRIVATE-OLD-ERROR' })
+  const persisted = structuredClone(h.store.getCoordinationRequest('g', id))
+  assert.equal(persisted.topicId, undefined); assert.equal(persisted.messages, undefined)
+  await h.coordinator.close(); await h.store.close()
+  const reopened = await setup(t, { snapshot: h.snapshot })
+  await reopened.coordinator.recover(); await settleStartup()
+  const recovered = structuredClone(reopened.store.getCoordinationRequest('g', id))
+  const [request] = reopened.coordinator.messageProcessingRequests('g')
+  assert.equal(request.requestId, id); assert.equal(request.status, 'exhausted'); assert.equal(request.attempt, 3)
+  assert.equal(request.failurePhase, null); assert.equal(request.nextRetryAt, null)
+  assert.equal(request.messages[0].messageId, 'restart-current'); assert.equal(request.messages[0].messageVersion, 1)
+  assert.equal(!!request.topicId, kind === 'decision')
+  assert.equal(Number.isInteger(request.messages[0].unitRevision), kind === 'decision')
+  assert.deepEqual(reopened.sent, [], 'snapshot and recovery do not resend exhausted protocol input')
+  assert.doesNotMatch(JSON.stringify(request), /PRIVATE|lastError|text|sender/)
+  assert.deepEqual(reopened.store.getCoordinationRequest('g', id), recovered)
+  assert.equal(recovered.status, persisted.status); assert.equal(recovered.attempt, persisted.attempt)
+  assert.equal(recovered.messageId, persisted.messageId)
+})
+
 test('Topic 固定版本投影在摘要缺失时仍是无损 JSON', () => {
   const projected = projectTopicContext({
     groupId: 'g', topicId: 'topic-a', revision: 1, messages: [{ messageId: 'm', quotedMessage: undefined, imageRefs: [{ id: 'a', optional: undefined }] }], total: 1, offset: 0, limit: 50, taskRefs: [],
@@ -1345,6 +1498,34 @@ test('审阅后历史候选变化必须重新读取，不能用旧快照发新�
 })
 
 
+
+test('审阅后的Task瞬态运行状态不使候选事实失效，正文来源和归属仍须重读', async (t) => {
+  for (const change of ['state', 'terminal-state', 'reply', 'source', 'ownership']) {
+    const candidates = [{ outboundId: 'old-a', sourceMessageId: 'a', reply: '旧结果', taskIds: ['task-a'],
+      tasks: [{ taskId: 'task-a', objective: '核验', state: 'running' }] }]
+    const h = await setup(t, { reviewCandidates: () => structuredClone(candidates) })
+    await ingest(h, 'a')
+    const request = (await route(h)).pendingDecisions[0]
+    await h.call('group_reply_review_get', { requestIds: [request.requestId] })
+    if (change === 'state') candidates[0].tasks[0].state = 'waiting'
+    else if (change === 'terminal-state') candidates[0].tasks[0].state = 'completed'
+    else if (change === 'reply') candidates[0].reply = '新结果'
+    else if (change === 'source') candidates[0].sourceMessages = [{ messageId: 'a', text: '更新来源' }]
+    else candidates[0].taskIds = ['task-b']
+    const args = submission(request, { reply: '新回复', replyReview: { kind: 'substantive', reviewedOutboundIds: ['old-a'], sameMatterOutboundIds: [], replaceOutboundIds: [] } })
+    const result = await h.call('group_decision_submit', args)
+    assert.equal(result.status, change === 'state' ? 'accepted' : 'review-required', change)
+    if (change !== 'state') {
+      assert.equal(result.nextAction, 'group_reply_review_get')
+      assert.deepEqual(result.requestIds, [request.requestId])
+      assert.equal(h.store.getTopic('g', request.topicId).decisions.length, 0)
+      await h.call(result.nextAction, { requestIds: result.requestIds })
+      assert.equal((await h.call('group_decision_submit', args)).status, 'accepted')
+    }
+    await h.coordinator.drain('g')
+    assert.equal(h.store.getGroup('g').outbox.length, 1)
+  }
+})
 
 test('无关 B 的新历史回复不使 A 的候选审阅失效', async (t) => {
   let candidates = [{ outboundId: 'old-a', sourceMessageId: 'a', reply: 'A 旧结果' }]

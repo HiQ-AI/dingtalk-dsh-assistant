@@ -1,0 +1,19 @@
+{
+  "sourceRoot": "D:\\project\\dingtalk-dsh-assistant",
+  "preimages": {
+    "docs/acceptance/inbox-latency-week-20261019/goal.md": {
+      "bytes": 6096,
+      "sha256": "3e7f295a498611913dea013d98fcad168b259a01d7d1290bd5a5f5ed9e2d575a"
+    },
+    "docs/acceptance/inbox-latency-week-20261019/shared-tasks.md": {
+      "bytes": 14241,
+      "sha256": "7a21a1701063662e899e5504a38077a0a09c672449af5ba5394559d563ed0b45"
+    },
+    "docs/acceptance/inbox-latency-week-20261019/matrix.csv": {
+      "bytes": 6811,
+      "sha256": "4737f32dfcc747e9bf5bd63eafd4d4cc90b8b4913ccb20dab3be750cafb6b431"
+    }
+  },
+  "patchSha256": "43add104be76d4756c716ed5dea174d1715ece5af4d0a396e32329c286f25090",
+  "appliedToAuthority": false
+}

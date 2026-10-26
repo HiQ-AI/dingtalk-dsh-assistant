@@ -14,6 +14,25 @@ function memoryFacility(seed = new Map(), onWrite = () => {}) {
   return { async open() { return { table, close: async () => undefined } } }
 }
 
+test('coordination processing DTO fences source versions and reservation generations without private errors', () => {
+  const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 2 }
+  const ref = { unitId: 'u', unitRevision: 2 }
+  const owner = { ...ref, reservationId: 'r', generation: 3, dispatchOwner: 'coordination', semanticState: 'reserved', sourceSnapshot: { messageId: 'm', messageVersion: 2 } }
+  const ledger = { id: 'c', groupId: 'g', sourceMessageId: 'm', sourceRefs: ['s'], unitId: 'u', revision: 2, reservationId: 'r', reservationGeneration: 3,
+    dispatchOwner: 'coordination', state: 'reserved', attemptCount: 3, nextRetryAt: null, original: 'private', actorId: 'private', lastError: 'private' }
+  const read = () => messageProcessingSources([source], [], 'g', [ledger], [owner])[0].coordination
+  assert.deepEqual(read(), [{ ...ref, reservationId: 'r', generation: 3, state: 'reserved', attempt: 3, nextRetryAt: null, retryToken: read()[0].retryToken, resolved: false, frozen: false }])
+  assert.match(read()[0].retryToken, /^[a-f0-9]{64}$/)
+  assert.equal(JSON.stringify(read()).includes('private'), false)
+  for (const change of [() => ledger.reservationGeneration--, () => ledger.revision--, () => ledger.sourceRefs = ['old'], () => ledger.groupId = 'other',
+    () => owner.sourceSnapshot.messageVersion--, () => owner.dispatchOwner = 'legacy-topic']) {
+    const originalLedger = structuredClone(ledger), originalOwner = structuredClone(owner)
+    change(); assert.deepEqual(read(), []); Object.assign(ledger, originalLedger); Object.assign(owner, originalOwner)
+  }
+  ledger.resolvedBy = 'new'; assert.equal(read()[0].resolved, true)
+  ledger.resolvedBy = undefined; owner.semanticState = 'accepted'; assert.equal(read()[0].resolved, true)
+})
+
 test('message processing DTO keeps exact source versions, unknown history and no private content', () => {
   const sources = [1, 2].map(version => ({ sourceId: `s${version}`, groupId: 'g', messageId: 'm', version, channel: 'im', text: 'private', actorId: 'private',
     routed: version === 1, updatedAt: 'not-a-stage', processingCompleted: version === 1 ? { at: 'completed', routingRevision: 3, activeUnitRefs: [{ unitId: 'u', unitRevision: 1 }] } : null }))

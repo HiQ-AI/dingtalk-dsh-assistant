@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { topicDecisionRecovery } from './topic-model.js'
 import { createTopicCoordinator } from './topic-runtime.js'
 import { createCoordinationSessions, createCoordinationStepGate, coordinationTools } from './coordination-sessions.js'
 import { createCoordinationResourceTools } from './coordination-resources.js'
@@ -194,15 +195,34 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
   })
   return {
     schedule: groupId => topics.schedule(groupId), applyAccepted: (...args) => topics.applyAccepted(...args), recover: () => topics.recover(),
+    messageProcessingRequests: groupId => topics.messageProcessingRequests(groupId),
+    retryMessageRequest: args => topics.retryMessageRequest(args),
+    async retryMessageHost({ groupId, messageId, messageVersion, activeUnitRefs, requestId, token }) {
+      const validate = () => {
+        const group = store.getGroup(groupId), message = group?.messages.find(item => item.messageId === messageId)
+        const topic = group?.topics.find(item => !item.mergedInto && item.decisions.some(record => record.decisionId === requestId))
+        const record = topic?.decisions.find(item => item.decisionId === requestId)
+        const keys = refs => refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision])).sort()
+        if (!message || message.messageVersion !== messageVersion || !Array.isArray(activeUnitRefs)
+          || JSON.stringify(keys(message.activeUnitRefs ?? [])) !== JSON.stringify(keys(activeUnitRefs))
+          || !record || topic.revision !== record.revision || topic.processedRevision >= record.revision || topicDecisionRecovery(record)?.token !== token
+          || !topic.entries.some(entry => entry.messageId === messageId && entry.messageVersion === messageVersion && entry.action === 'add'
+            && entry.revision <= record.revision && activeUnitRefs.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision)
+            && (!record.decision.basisUnitRefs?.length || record.decision.basisUnitRefs.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision)))) throw new Error('MESSAGE_RETRY_STALE')
+        return { topic, record, recovery: topicDecisionRecovery(record) }
+      }
+      const { topic, record, recovery } = validate()
+      await topics.retryOperation({ groupId, topicId: topic.topicId, decisionId: requestId, operationId: record.failureOperationId,
+        resolution: recovery.resolution, reason: '显式恢复原消息已核验的失败操作', validateSnapshot: validate })
+      return { status: 'attempted', requestId }
+    },
     async retryMessage(groupId, messageId) {
       // 该错误发生在任务写入之前；显式重试仍复用原动作的版本与已应用证据门禁。
       for (const topic of store.getGroup(groupId)?.topics ?? []) for (const record of topic.decisions) {
-        const sourceMissing = ['TASK_TOPIC_SOURCE_VERSION_MISSING', 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED'].includes(record.error)
-        const projectedReply = record.error === 'outbox_identity_duplicate' && record.failureOperationId === record.outboundId
-          && record.operations.every(operation => operation.status === 'applied')
-        if (record.status !== 'blocked' || !sourceMissing && !projectedReply || !record.decision.basisMessageIds.includes(messageId)) continue
+        const recovery = topicDecisionRecovery(record)
+        if (!recovery || !record.decision.basisMessageIds.includes(messageId)) continue
         await topics.retryOperation({ groupId, topicId: topic.topicId, decisionId: record.decisionId,
-          operationId: record.failureOperationId, resolution: projectedReply ? 'applied' : 'not-applied', reason: '显式重试原消息：重新核验准入来源、原动作版本及原回复身份' })
+          operationId: record.failureOperationId, resolution: recovery.resolution, reason: '显式重试原消息：重新核验准入来源、原动作版本及原回复身份' })
       }
       return topics.retryMessage(groupId, messageId)
     },

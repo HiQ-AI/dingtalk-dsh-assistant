@@ -1,0 +1,22 @@
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (26248.413ms)
+ℹ package begin: 0ms
+ℹ package staged: 178ms
+ℹ package packed: 2055ms
+ℹ package extracted: 2194ms
+ℹ package bytes-and-imports-verified: 6207ms
+ℹ package dependency-links-ready: 6422ms
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (9161.8231ms)
+ℹ package begin: 0ms
+ℹ package staged: 688ms
+ℹ package packed: 2768ms
+ℹ package extracted: 2861ms
+ℹ package bytes-and-imports-verified: 6730ms
+ℹ package dependency-links-ready: 6828ms
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 36146.6554

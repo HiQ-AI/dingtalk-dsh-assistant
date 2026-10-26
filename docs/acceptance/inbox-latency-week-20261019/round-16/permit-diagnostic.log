@@ -1,0 +1,72 @@
+✖ real SIGKILL after permit: fake network called=false; recovery never issues a new send (445.2874ms)
+✖ real SIGKILL after permit: fake network called=true; recovery never issues a new send (380.2076ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1199.273
+
+✖ failing tests:
+
+test at test\coordination-ledger.test.js:242:47
+✖ real SIGKILL after permit: fake network called=false; recovery never issues a new send (445.2874ms)
+  AssertionError [ERR_ASSERTION]: file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:39
+  const fail = (code, detail = code) => { throw Object.assign(new Error(detail), { code }) }
+                                                              ^
+  
+  Error: DYNAMIC_NOTIFICATION_RECOVERY_STALE
+      at fail (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:39:61)
+      at reduce (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1548:122)
+      at file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1742:28
+      at transaction (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:235:21)
+      at Object.command (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1732:20)
+      at file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/[eval1]:3:30 {
+    code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE'
+  }
+  
+  Node.js v24.19.0
+  
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/coordination-ledger.test.js:260:55)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test\coordination-ledger.test.js:242:47
+✖ real SIGKILL after permit: fake network called=true; recovery never issues a new send (380.2076ms)
+  AssertionError [ERR_ASSERTION]: file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:39
+  const fail = (code, detail = code) => { throw Object.assign(new Error(detail), { code }) }
+                                                              ^
+  
+  Error: DYNAMIC_NOTIFICATION_RECOVERY_STALE
+      at fail (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:39:61)
+      at reduce (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1548:122)
+      at file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1742:28
+      at transaction (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:235:21)
+      at Object.command (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1732:20)
+      at file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/[eval1]:3:30 {
+    code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE'
+  }
+  
+  Node.js v24.19.0
+  
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/coordination-ledger.test.js:260:55)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

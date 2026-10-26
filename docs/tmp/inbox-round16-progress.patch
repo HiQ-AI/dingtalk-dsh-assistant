@@ -1,0 +1,107 @@
+--- a/docs/acceptance/inbox-latency-week-20261019/goal.md
++++ b/docs/acceptance/inbox-latency-week-20261019/goal.md
+@@ -1,13 +1,15 @@
+ # 收件箱分阶段计时与状态修正
+ 
+-> 状态：COMPLETE  
++> 状态：IN_PROGRESS（PR260历史已完成；本轮续修验证完成，PR与权威同步分别回读）  
+ > Goal ID：inbox-latency-week-20261019-implementation  
+-> 最近维护：2026-10-26T13:30:21.0668739+08:00  
++> 最近维护：2026-10-26（round-16精确续修补丁）  
+ > 权威目标：D:/project/dingtalk-dsh-assistant/docs/acceptance/inbox-latency-week-20261019/goal.md
+ 
+ ## 总目标
+ 
+ 沿用原团队，核实已有来源续办/契约修复，补可关联的分阶段计时，修正看板状态及耗时口径；完成隔离验证并创建 PR；按用户2026-10-26后续授权审查PR #260，确认后合并、按runbook本地部署并验证计时和状态修正。
++
++本轮追加目标：修正原失败协议审阅缺陷和精确失败投影，实现收件/发件原身份安全手动恢复；只读分析两条attempt0成功慢消息。本轮新PR交付，不继承PR260的合并/部署授权；原SG1–SG7与历史证据冻结。
+ 
+ ## 完成条件
+ 
+@@ -35,11 +37,16 @@
+ | SG6 | 合并与本地部署 | MERGED、runbook预检/维护、安装哈希/版本/新进程/健康 | 完成 | PR260 MERGED；round-12：offline 80 sessions drained；双包2.1.0/69与4文件；新PID7132双端口/owner/profile/ok与零恢复告警 |
+ | SG7 | 部署功能核验 | 分阶段计时与看板状态实际验证、边界明确 | 完成（已安装隔离与生产只读验收） | round-12：installed-profile Edge五项PASS/errors与writes空；已安装合同四项PASS，生产GET 258条投影；非真实渠道/模型/性能验收 |
+ 
++| SG8 | 原协议根因与精确失败 | 可证缺陷最小反例；当前身份失败、startup补偿、后来成功、无伪完成历时 | 实现/隔离验证通过；真实五次单因未收敛 | round-13/15/16；test/topic-runtime.test.js:1502 |
++| SG9 | 收发安全恢复 | 原message/version/unit/request/reservation CAS；未知只回读、送达不重发、并发/冻结/队列门禁 | 源码与原生/HTTP/UI验证通过；未真实恢复 | round-16：312定向/35原生风险、Edge九项 |
++| SG10 | 成功慢样本取证 | 两条attempt0、按本次semantic截断；span不重算、空窗未知、反证与取舍 | 已脱敏落档；无性能提速承诺 | round-15 |
++| SG11 | 本轮验证与新PR | 映射守恒、原预算解包、最新回归、隐私审查、新PR回读、权威同步 | 验证通过；PR交付与本补丁应用分别回读 | round-16；原smoke失败保留、修后14/14 |
++
+ ## 当前检查点
+ 
+-- 当前子目标：SG6/SG7部署和已安装验收完成；历史失败保留，最终回读见工程round-12.md
+-- 唯一下一步：无。本轮补丁已合法同步并独立反向检查通过；部署与已安装验收完成，真实渠道/模型/性能不在本轮范围。
+-- 未闭环项：工程SG6/SG7无；真实渠道外发、模型效果及性能验收未做，不以隔离结果冒称通过。历史round9/10/11失败保留，不覆盖。
++- 当前子目标：SG11；原SG6/SG7完成是PR260历史，不等于本轮续修完成。
++- 唯一下一步：新PR独立回读及本三文件补丁由Codex合法应用、反向检查；本worktree不能直接写主仓。
++- 未闭环项：权威根实际同步前保持IN_PROGRESS；最初30秒超时具体原因和真实链逐次单因未收敛，不冒称性能/真实外发通过。
+ 
+ ## 进展
+ 
+@@ -66,3 +73,11 @@
+ 
+ - 2026-10-26 round-12：按新授权纠正过宽进程路径误判，90484为独立claude/raft-computer且无子进程，58884/42560已退出；原生离线80会话排空，官方CLI双包安装exit0，包版本2.1.0与69/4文件核验通过。原计划任务一次启动新PID7132，双端口/owner/profile一致，08:38:32Z status=ok/inbound=true/bridge=true/recoveryIssueCount=0。installed-profile真Edge五项PASS，合同四项PASS，生产只读GET投影258条。
+ 
++
++### 2026-10-26 round-13–16 续修
++
++- 当前工程分支 worktree-inbox-failure-fix，基线dc41f69f；不是已合并的PR260旧分支。原主仓修改与旧round9证据未碰。
++- 首次release-smoke有test_suite_map_stale及两项30000ms超时，FAIL/CANCELLED保留；既有脚本更新映射308文件/3历史、30闭包只追加，无删减/重分类；原命令修后14/14两次通过，未改预算/skip/并发策略。
++- 最终全部变更测试312/312，后加原生/队列/冻结回归35/35，先前风险412/412；组合重叠不相加。Edge九项PASS，errors/writes空。解包细阶段证据见round-16，无清理卡住证据但最初超时原因仍未知。
++- 原latency-data已交分析由lead脱敏落round-15；原latency-source静态复核两项通知修复未发现新增确定finding，不将静态判断当跨进程实测。原两成员保留，不新建/close/clear/compact。
++- 本轮不合并、不部署、不重放、不外发、不改账、不停服务、不触发CI；真实模型/渠道/性能验收均未做。
+--- a/docs/acceptance/inbox-latency-week-20261019/shared-tasks.md
++++ b/docs/acceptance/inbox-latency-week-20261019/shared-tasks.md
+@@ -1,6 +1,14 @@
+ # 上周收件箱耗时分析与实施 — 唯一团队进度
+ 
+-## 当前阶段：SG6双包部署和SG7已安装验收完成（2026-10-26）
++## 当前阶段：SG8–SG11精确失败与收发安全恢复续修（2026-10-26）
++
++- 本轮最新进度：SG8/9实现和隔离测试通过，SG10脱敏分析已落工程round-15；SG11验证通过，PR及权威同步分别回读。原SG6/7 COMPLETE仅为PR260历史，以下旧部署结论不扩大为本轮授权。
++- 工程 worktree-inbox-failure-fix / dc41f69f；lead整合收发及文档，latency-data只读分析由lead脱敏落档，latency-source原团队只读复核；不新增成员。
++- 最新证据：round-16变更文件312/312、原生/队列35/35、Edge九项；原smoke失败保留，映射308/历史3守恒后原30秒预算14/14两次通过。组合重叠不相加。
++- 下一步：新PR真实回读、Codex合法应用本补丁并独立反向check；不直接写主仓，不推PR260旧分支，不合并/部署/真实重放/外发/改账/停服务/触发CI。
++- 首次解包超时没有细阶段日志，环境资源竞争仅候选；B/C成功慢无性能改动与提速结论。
++
++以下SG6/7记录为冻结历史。
+ 
+ - 唯一权威goal/matrix仍为本根，原report/CSV冻结。此前三文件同步已由用户授权Codex合法应用并核实；本轮新补丁只有合法应用并独立回读后才算权威进度已更新。
+ - 原worktree及原两队友保留。lead修复同代重试queue/turn/host attempt错配；原latency-data/source已对本轮修复独立只读复核，未发现进一步确定遗漏或状态/版本/隐私回归，不沿旧finished冒称新审查。
+@@ -114,3 +122,9 @@
+ 
+ ### 监管最终回读
+ 2026-10-26：round12三文件补丁已在主仓合法应用，独立反向检查通过。最终实时health为ok/入站true/bridge true/恢复项0，PR260 MERGED；本轮目标完成，保留历史失败及真实渠道未验收边界。
++
++### round-16续修交付证据
++
++- 工程round-13红测、round-14浏览器旧断言FAIL、round-15协议与两成功慢样本分析、round-16最终验证均分开归档。原report与历史CSV不覆盖。
++- 通知续扫先释放同飞槽再drain，sourcePending用processingRevision；freshness在原生permit事务拦旧事实，unknown/starting仍只readback。原生测试保持permit-wins和SIGKILL零重发断言。
++- 权威同步只有本补丁实际由Codex合法应用后才成立；不能把生成补丁的回执说成已更新goal/shared/matrix。
+--- a/docs/acceptance/inbox-latency-week-20261019/matrix.csv
++++ b/docs/acceptance/inbox-latency-week-20261019/matrix.csv
+@@ -56,3 +56,24 @@
+ round12-installed-browser-ui,SG7,12,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-12.md
+ round12-installed-timing-state-contract,SG7,12,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-12.md
+ round12-live-readonly-state-projection,SG7,12,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-12.md
++round16-exact-failure-projection-red,SG8,13,FAIL,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-13.md
++round16-coordination-dto-red,SG8,13,FAIL,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-13.md
++round16-inbound-request-retry-red,SG9,13,FAIL,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-13.md
++round16-coordination-source-cas-red,SG9,13,FAIL,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-13.md
++round16-initial-focused-221,SG8,14,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-14.md
++round16-failure-ui-old-assertion,SG8,14,FAIL,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-14/ui/browser-result.json
++round16-protocol-and-slow-samples-analysis,SG10,15,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-15.md
++round16-risk-regression-412,SG9,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/risk-regression.log
++round16-child-permit-clock-diagnostic,SG9,16,FAIL,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/permit-diagnostic.log
++round16-release-map-stale,SG11,16,FAIL,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/release-smoke.log
++round16-package-native-task-original-budget,SG11,16,CANCELLED,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/release-smoke.log
++round16-package-native-resident-original-budget,SG11,16,CANCELLED,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/release-smoke.log
++round16-map-review-conservation,SG11,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/suite-map-review.json
++round16-package-isolated-stage-diagnostic,SG11,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/package-stage-diagnostic.log
++round16-release-smoke-original-command-rerun,SG11,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/release-smoke-rerun.log
++round16-release-smoke-full-stage-diagnostic,SG11,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/release-smoke-stage-final.log
++round16-latest-native-lock-frozen-35,SG9,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/final-targeted-rerun.log
++round16-latest-changed-files-312,SG11,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/final-changed-tests.log
++round16-edge-receive-send-recovery-nine,SG9,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/ui/browser-result.json
++round16-protocol-transient-and-strict-review,SG8,16,PASS,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16/final-changed-tests.log
++round16-new-pr-and-authority-sync,SG11,16,PENDING,.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/round-16.md
