@@ -324,6 +324,26 @@ test('human timeline uses task-owned request lifecycle times and preserves disti
   assert.equal(terminal.human.complete, false)
 })
 
+test('a specific objection after delivery reopens the original task without replaying completed execution', async t => {
+  const f = await fixture(t), owner = await f.task(), executor = await f.execution(owner.binding)
+  await f.command('execution.result', { binding: executor, output: { summary: '方案文件已交付，技术审核待定' } })
+  await f.command('execution.drained', { binding: executor })
+  await f.command('task.complete', { binding: owner.binding, summary: '方案文件已交付，技术审核待定' })
+  await f.command('task.drained', { binding: owner.binding })
+  const before = await f.query({ kind: 'task.get', taskId: 'task' })
+  const prior = await f.query({ kind: 'execution.list', taskId: 'task' })
+  // Scripted admission of a concrete objection; this does not test model intent recognition.
+  await f.command('task.reopen', { taskId: 'task', request: '原方案要求手工搬运数据，这与直接上传原文件的要求冲突；请核查并修订方案。',
+    expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision })
+  const after = await f.query({ kind: 'task.get', taskId: 'task' })
+  assert.equal(after.sessionId, before.sessionId)
+  assert.equal(after.runSequence, before.runSequence + 1)
+  assert.equal(after.status, 'active')
+  assert.deepEqual(await f.query({ kind: 'execution.list', taskId: 'task' }), prior)
+  assert.equal((await f.query({ kind: 'operation.list' })).length, 0)
+  assert.equal((await f.query({ kind: 'task.list' })).length, 1)
+})
+
 async function fixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dynamic-task-ledger-'))
   const config = { dbPath: join(root, 'dynamic.sqlite'), instanceId: 'fixture', initialize: true, ...options }
