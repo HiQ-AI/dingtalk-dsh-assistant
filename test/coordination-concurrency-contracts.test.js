@@ -74,12 +74,19 @@ for(const first of ['refresh','permit']) test(`concurrent stale-result replaceme
   const order=first==='refresh'?['refresh','permit']:['permit','refresh']
   const results=await Promise.allSettled(order.map(name=>actions[name]()))
   const byName=Object.fromEntries(order.map((name,i)=>[name,results[i]]))
-  assert.equal(byName.permit.status,'fulfilled')
-  assert.equal(byName.permit.value.dispatchEligible,first==='permit')
-  if(first==='permit') {assert.equal(byName.refresh.status,'rejected');assert.equal(byName.refresh.reason.code,'DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED')}
-  else assert.equal(byName.refresh.status,'fulfilled')
+  if(first==='permit') {
+    assert.equal(byName.permit.status,'rejected')
+    assert.equal(byName.permit.reason.code,'DYNAMIC_NOTIFICATION_RECOVERY_STALE')
+  } else {
+    assert.equal(byName.permit.status,'fulfilled')
+    assert.equal(byName.permit.value.dispatchEligible,false)
+  }
+  assert.equal(byName.refresh.status,'fulfilled','stale permit must not consume a sending attempt or prevent refresh')
   await f.restart()
   const candidates=await f.query('notification.list')
-  assert.equal(candidates.length,first==='refresh'?2:1)
+  assert.equal(candidates.length,2)
+  assert.equal(candidates.find(item=>item.id===notification.id).state,'superseded')
+  assert.equal(candidates.find(item=>item.id!==notification.id).state,'prepared')
+  assert.equal(candidates.find(item=>item.id!==notification.id).sendPermit,undefined)
   assert.equal((await f.command('notification.start',{notificationId:notification.id})).dispatchEligible,false)
 })

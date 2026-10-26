@@ -7,6 +7,7 @@ import { LlmRuntime, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import SandboxPolicy from '@deepseek-ai/dsh-sandbox-policy'
 import { createRequire } from 'node:module'
 const { SessionProjectionRegistry } = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))('@deepseek-ai/dsh-session-projection')
 export async function sdkHost(root, decide) {
@@ -15,6 +16,7 @@ export async function sdkHost(root, decide) {
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), compression: 'none', packChunks: false, writeBatchMaxDelayMs: 1 })
+  await ctx.plugin(SandboxPolicy, { mode: 'workspace-write', workspaceRoot: root })
   await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   let sequence = 0
   class Scripted extends LlmAdapter {

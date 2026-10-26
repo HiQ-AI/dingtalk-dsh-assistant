@@ -17,6 +17,7 @@ import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import { LlmRuntime, LlmAdapter, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import SandboxPolicy from '@deepseek-ai/dsh-sandbox-policy'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createExecutionSessions, inspectLegacyTurnFailure } from '../packages/dingtalk-dsh-assistant/execution-session.js'
@@ -62,6 +63,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
   new SystemPrompt(ctx, { includeRuntimeContext: false, includeHarnessIdentity: false })
   new LlmRuntime(ctx); new ToolRuntime(ctx)
   new JsonlSessionPersistence(ctx, { root: join(root, 'sessions'), packChunks: false, compression: 'none', writeBatchMaxDelayMs: 1 })
+  await ctx.plugin(SandboxPolicy, { mode: 'workspace-write', workspaceRoot: root })
   await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   const requests = [], reads = [], effects = [], handles = []
   await writeFile(join(root, 'fixture.txt'), 'NATIVE_READ_VALUE_922d')

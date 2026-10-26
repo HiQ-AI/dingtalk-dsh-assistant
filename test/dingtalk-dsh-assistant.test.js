@@ -3,6 +3,8 @@ import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { createServer } from 'node:http'
+import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
 import { available, reason, nativeTaskHost } from './fixtures/task-session-native-host.js'
 const { apply, name } = resident
@@ -63,9 +65,20 @@ test('旧任务来源和续接迁移配置在打开存储前明确拒绝', async
 })
 
 test('生产HTTP提供精确的单消息重试入口', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/http.js', import.meta.url), 'utf8')
-  assert.match(source, /\/messages\\\/\(\[\^\/\]\+\)\\\/retry/)
-  assert.match(source, /await store\.retryDecisionFailedMessage\(\{ groupId, messageId \}\)/)
+  const calls = []
+  const server = createServer((request, response) => handleRequest(request, response, {
+    retryDecisionFailedMessage: async value => { calls.push(value); return { retried: true } },
+  }, { testApiEnabled: false }))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const input = { messageVersion: 2, activeUnitRefs: [{ unitId: 'unit', unitRevision: 1 }], phase: 'decision', requestId: 'request', token: 'a'.repeat(64) }
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/config/groups/group/messages/message/retry`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { retried: true })
+    assert.deepEqual(calls, [{ ...input, groupId: 'group', messageId: 'message' }])
+  } finally { await new Promise(resolve => server.close(resolve)) }
 })
 
 test('叶子会话使用DSH原生descriptor且恢复旧会话时补齐', async () => {

@@ -10,16 +10,19 @@ const settle = () => new Promise(resolve => setImmediate(resolve))
 
 // Exercise the shipped bundle's state and callbacks; this is not a browser/DSH deployment test.
 function harness() {
-  const states = [], effects = [], scheduled = [], writes = []
+  const states = [], effects = [], scheduled = [], timers = [], writes = []
   let cursor = 0, component, config = { agentNames: ['资料助理'], model: 'fixture', workspaceDir: '/fixture' }, failSave = false
   const same = (a, b) => a && a.length === b.length && a.every((value, index) => value === b[index])
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }),
     useState(initial) { const index = cursor++; if (!(index in states)) states[index] = initial; return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value }] },
+    useRef(initial) { const index = cursor++; if (!(index in states)) states[index] = { current: initial }; return states[index] },
     useCallback(fn, deps) { const index = cursor++; if (!same(states[index]?.deps, deps)) states[index] = { fn, deps }; return states[index].fn },
     useEffect(fn, deps) { const index = cursor++; if (!same(effects[index], deps)) { effects[index] = deps; scheduled.push(fn) } },
   }
   runInNewContext(source, {
+    setTimeout: callback => { const timer = { callback }; timers.push(timer); return timer },
+    clearTimeout: timer => { timer.cancelled = true },
     async fetch(url, options) {
       const path = new URL(url).pathname
       if (path === '/config/agent') {
@@ -28,12 +31,13 @@ function harness() {
         config = { ...config, ...writes.at(-1) }
       }
       const value = path === '/state/agent-config' || path === '/config/agent' ? config
+        : path === '/state/task-model-options' ? { available: true, reasoning: { efforts: [{ id: 'low' }] } }
         : ['/state/groups', '/state/tasks', '/state/supervisor/alerts'].includes(path) ? [] : {}
-      return { ok: true, json: async () => structuredClone(value) }
+      return { ok: true, json: async () => structuredClone(path === '/state/agent-config' || path === '/config/agent' ? { taskSessionModel: { provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'explicit', reasoningEffort: 'low' }, ...value } : value) }
     },
     window: { __ModuleLoader__: { load: ({ factory }) => { component = factory(() => React).DingTalkDshAssistantCard } } },
   })
-  return { writes, setConfig: value => { config = value }, failSave: value => { failSave = value },
+  return { writes, flushTimers() { for (const timer of timers.splice(0)) if (!timer.cancelled) timer.callback() }, setConfig: value => { config = value }, failSave: value => { failSave = value },
     render() { cursor = 0; const tree = component(); scheduled.splice(0).forEach(effect => effect()); return tree },
   }
 }
@@ -42,7 +46,7 @@ const button = (tree, label) => elements(tree).find(item => item.type === 'butto
 
 test('settings bundle saves, clears and refreshes explicit personal signature while preserving failed drafts', async () => {
   const h = harness()
-  h.render(); await settle()
+  h.render(); await settle(); h.flushTimers(); await settle()
   let tree = h.render()
   assert.equal(field(tree).props.value, '')
   assert.equal(button(tree, '保存配置').props.disabled, true)
@@ -52,7 +56,7 @@ test('settings bundle saves, clears and refreshes explicit personal signature wh
   field(tree).props.onChange({ target: { value: '资料助理代回' } })
   tree = h.render()
   assert.equal(button(tree, '保存配置').props.disabled, false)
-  await button(tree, '保存配置').props.onClick()
+  await elements(tree).find(item => item.type === 'form').props.onSubmit()
   tree = h.render()
   assert.equal(h.writes.at(-1).replySignature, '资料助理代回')
   assert.equal(field(tree).props.value, '资料助理代回')
@@ -63,20 +67,21 @@ test('settings bundle saves, clears and refreshes explicit personal signature wh
   tree = h.render()
   assert.equal(field(tree).props.value, 'Ada Support')
   field(tree).props.onChange({ target: { value: '' } })
-  await button(h.render(), '保存配置').props.onClick()
+  await elements(h.render()).find(item => item.type === 'form').props.onSubmit()
   assert.equal(h.writes.at(-1).replySignature, '')
   await button(h.render(), '刷新').props.onClick()
   assert.equal(field(h.render()).props.value, '')
 
   h.failSave(true)
   field(h.render()).props.onChange({ target: { value: 'Mira Support' } })
-  await button(h.render(), '保存配置').props.onClick()
+  await elements(h.render()).find(item => item.type === 'form').props.onSubmit()
   tree = h.render()
   assert.equal(field(tree).props.value, 'Mira Support')
-  assert.match(text(tree), /模拟保存失败/u)
+  assert.match(text(tree), /保存未全部完成/u)
+  assert.match(text(tree), /草稿已保留/u)
   assert.equal(button(tree, '保存配置').props.disabled, false)
   h.failSave(false)
-  await button(tree, '保存配置').props.onClick()
+  await elements(tree).find(item => item.type === 'form').props.onSubmit()
   assert.equal(field(h.render()).props.value, 'Mira Support')
 
   h.setConfig({ agentNames: ['Unconfigured'], model: 'fixture', workspaceDir: '/clean-agent' })

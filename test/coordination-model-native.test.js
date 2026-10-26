@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { available, reason, nativeTaskHost, latestInput, topicSummaryResponse, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, contextReadResponse, nativeVerificationTeam, latestInput, topicSummaryResponse, waitUntil } from './fixtures/task-session-native-host.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -13,6 +13,7 @@ import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-
 test('saved coordination selection changes the next native plan only, with original cwd and independent Owner/executor selections',
   {skip:!available?reason:false,timeout:30000},async t=>{
     const root=await mkdtemp(join(tmpdir(),'coordination-model-native-')), requests=[]
+    const verification = nativeVerificationTeam()
     const entered=Promise.withResolvers(),release=Promise.withResolvers();let h,runtime,first=true,delegated=false
     t.after(async()=>{release.resolve();await h?.service?.close();await runtime?.close();await h?.close();await rm(root,{recursive:true,force:true})})
     h=await nativeTaskHost(root,async request=>{
@@ -27,6 +28,7 @@ test('saved coordination selection changes the next native plan only, with origi
     class Controlled extends LlmAdapter {
       resolveModel(provider,model){return {provider,id:model,name:model,reasoning:{efforts:['low','medium','high'].map(id=>({id,name:id})),defaultEffort:'medium'}}}
       async *stream(request){
+        if (yield* contextReadResponse(request)) return
         if (yield* topicSummaryResponse(request, h.auxiliaryRequests)) return
         requests.push(structuredClone(request));const names=request.tools.map(x=>x.name), input=latestInput(request);let calls=[]
         if(names.includes('group_topic_route_submit'))calls=[{name:'group_topic_route_submit',args:{requestId:input.requestId,routes:input.messages.map(m=>({messageId:m.messageId,messageVersion:m.messageVersion,
@@ -35,11 +37,14 @@ test('saved coordination selection changes the next native plan only, with origi
           if(first){first=false;entered.resolve();await release.promise}
           calls=[{name:'coordination_submit',args:{kind:'clarify',question:'请明确A和B',candidates:[]}}]
         } else if(names.includes('task_delegate')){
-          const done=input.executions.some(e=>e.status==='succeeded'&&e.drained)
+          const primary=input.executions.find(e=>e.key==='selection-isolation'), done=primary?.status==='succeeded'&&primary.drained
+          const review = verification.owner(input, primary)
+          if (review) calls=review
+          else
           calls=[...(delegated?[]:[{name:'task_delegate',args:{key:'selection-isolation',objective:'验证执行模型独立'}}]),
             {name:'task_session_submit',args:{decision:{action:done?'complete':'wait',summary:'核对原目标',evidence:[],limitations:[]}}}]
           delegated=true
-        } else if(names.includes('execution_submit'))calls=[{name:'execution_submit',args:{output:{status:'completed',summary:'已核对',evidence:[],limitations:[],artifacts:[]}}}]
+        } else if(names.includes('execution_submit'))calls=verification.execute(request,input) ?? [{name:'execution_submit',args:{output:{status:'completed',summary:'已核对',evidence:[],limitations:[],artifacts:[]}}}]
         for(const [index,call]of calls.entries()){
           const id=`coord-model-${++sequence}`,args=JSON.stringify(call.args)
           yield {type:'block-start',index,blockType:'tool-call'}

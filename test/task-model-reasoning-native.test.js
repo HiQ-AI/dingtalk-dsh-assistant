@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { available, reason, nativeTaskHost, latestInput } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, topicSummaryResponse, contextReadResponse, nativeVerificationTeam, latestInput } from './fixtures/task-session-native-host.js'
 import { createTaskSessions } from '../packages/dingtalk-dsh-assistant/task-session.js'
 import { taskModelSelection } from '../packages/dingtalk-dsh-assistant/task-model-config.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -16,10 +16,13 @@ function installModel(ctx, providers, decide, requests) {
   const native = createRequire(profile.resolve('@deepseek-ai/dsh-base'))
   const { LlmAdapter } = native('@deepseek-ai/dsh-llm')
   let sequence = 0
+  const auxiliaryRequests = []
   class ReasoningModel extends LlmAdapter {
     resolveModel(provider, model) { return { provider, id: model, name: model,
       reasoning: { efforts: ['low','medium','high'].map(id => ({ id, name:id })), defaultEffort: 'medium' } } }
     async *stream(request) {
+      if (yield* topicSummaryResponse(request, auxiliaryRequests)) return
+      if (yield* contextReadResponse(request)) return
       requests.push(structuredClone(request))
       const calls = await decide(request)
       for (const [index,call] of calls.entries()) {
@@ -69,17 +72,19 @@ test('native service sends explicit owner depth while delegated execution and it
   {skip:!available ? reason : false,timeout:30000},async t=>{
     const root=await mkdtemp(join(tmpdir(),'task-depth-isolation-')),requests=[]
     let h,delegated=false
+    const verification = nativeVerificationTeam()
     t.after(async()=>{try{await h?.close()}finally{await rm(root,{recursive:true,force:true})}})
     h=await nativeTaskHost(root,async()=>[],{agentConfig:{provider:'executor-test',model:'sol',reasoningEffort:'low',
       taskSessionModel:{provider:'owner-test',model:'astra',reasoningMode:'explicit',reasoningEffort:'high'}},
       serviceFactory:async options=>{
         installModel(options.ctx,['executor-test','owner-test'],async request=>{
           if(request.tools.some(x=>x.name==='task_delegate')){
-            const input=latestInput(request), done=input.executions.some(x=>x.status==='succeeded'&&x.drained)
+            const input=latestInput(request), primary=input.executions.find(x=>x.key==='depth-isolation'), done=primary?.status==='succeeded'&&primary.drained
+            const review=verification.owner(input,primary); if(review)return review
             const calls=delegated?[]:[{name:'task_delegate',args:{key:'depth-isolation',objective:'独立执行核对'}}]
             delegated=true;return [...calls,decision(done?'complete':'wait')]
           }
-          return [{name:'execution_submit',args:{output:{status:'completed',summary:'已核对',evidence:[],limitations:[],artifacts:[]}}}]
+          return verification.execute(request,latestInput(request)) ?? [{name:'execution_submit',args:{output:{status:'completed',summary:'已核对',evidence:[],limitations:[],artifacts:[]}}}]
         },requests)
         return openTaskSessionService(options)
       }})
