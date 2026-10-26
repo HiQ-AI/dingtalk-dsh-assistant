@@ -421,7 +421,7 @@ test('处理步骤直接展示事项、关联对象和动作结论，未知结�
 
 test('消息处理历时固定截止已记录状态时间，不使用发送时间回退或当前时钟',async()=>{
  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
- const code=source.slice(source.indexOf('const messageProcessingElapsed = ')+'const messageProcessingElapsed = '.length,source.indexOf('    function MessageProcessingFacts'))
+ const code=source.slice(source.indexOf('const messageProcessingElapsed = ')+'const messageProcessingElapsed = '.length,source.indexOf('    function MessageRecovery'))
  const elapsed=runInNewContext(`(${code})`)
  const row={processingSentAt:'2026-10-15T00:00:00Z',processingCompletedAt:'2026-10-15T00:01:23Z'}
  assert.equal(elapsed(row),'历时 1 分 23 秒')
@@ -442,6 +442,7 @@ test('收信箱计时详情分开负时、缺失阶段、多回合请求和未�
   const rendered = Details({ message: { processingFacts: { sourceState: 'unsettled', notificationState: 'unconfirmed',
     semantic: { quality: 'negative', durationMs: null }, notificationE2e: { quality: 'missing', durationMs: null },
     notifications: [{ notificationId: 'notice', state: 'delivered', versionMatched: false }],
+    issues: [{ phase: 'decision', status: 'failed', requestId: 'd', attempt: 3 }, { phase: 'host', status: 'retrying', retryAt: 'retry-time', attempt: 1 }],
     stages: [{ spanId: 'turn-1', stage: 'turn', requestId: 'request', attempt: 2, shared: true, startedAt: 'start', completedAt: null },
       { spanId: 'turn-2', stage: 'turn', requestId: 'request', attempt: 2, quality: 'negative', startedAt: 'later', completedAt: 'earlier' }],
   } } })
@@ -450,6 +451,8 @@ test('收信箱计时详情分开负时、缺失阶段、多回合请求和未�
   for (const expected of ['未收束', '时钟逆序', '未核实，不计端到端', '共享区间', '请求 request', '尝试 2', '时钟异常', '未记录阶段：Host接收、排队、Host动作、通知发送、送达回读', '不跨回合求包络']) assert.ok(visible.includes(expected), expected)
   assert.equal(rendered.children.flat().filter(item => item?.props?.key?.startsWith('turn-')).length, 2)
   assert.doesNotMatch(visible, /0ms/)
+  for (const expected of ['语义判断：处理失败；尝试 3', 'Host动作：等待自动重试；预计重试 retry-time']) assert.ok(visible.includes(expected), expected)
+  assert.doesNotMatch(source, /label: '归类失败'/)
 })
 
 test('步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时',async()=>{

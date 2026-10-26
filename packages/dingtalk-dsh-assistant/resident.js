@@ -128,6 +128,7 @@ export async function apply(ctx, config = {}) {
   runtime.isOwnNotification = tasks.isOwnNotification
   runtime.listTaskView = tasks.boardTasks
   runtime.messageProcessingSources = tasks.messageProcessingSources
+  runtime.messageProcessingRequests = tasks.messageProcessingRequests
   runtime.getTaskSessionDetail = tasks.taskDetail
   runtime.getTaskSessionExecutions = tasks.taskExecutions
   runtime.getTaskSessionDecisions = tasks.taskDecisions
@@ -146,7 +147,8 @@ export async function apply(ctx, config = {}) {
   runtime.respondTaskHumanRequest = tasks.respondHumanRequest
   runtime.reconcileWebTaskTopics = tasks.reconcileWebTaskTopics
   runtime.respondTaskPrivateHumanReply = tasks.respondPrivateHumanReply
-  runtime.retryDecisionFailedMessage = tasks.retryMessage
+  runtime.retryDecisionFailedMessage = tasks.retryMessageProcessing
+  runtime.retryNotification = tasks.retryNotification
   runtime.isTaskSessionMode = () => true
   const recoverTasks = () => tasks.recover().catch(error => ctx.logger.warn(error.message))
   const taskTimer = setInterval(recoverTasks, config.taskSessions?.recoveryIntervalMs ?? 5000)

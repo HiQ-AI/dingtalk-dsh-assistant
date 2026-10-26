@@ -1,0 +1,18 @@
+{
+  "passed": false,
+  "mode": "fixed",
+  "packageMode": "worktree",
+  "checks": [
+    "api-backed-topic-source-ignore-unknown-negative-and-cross-midnight",
+    "open-processing-facts-separates-settlement-and-notification",
+    "native-details-keyboard-toggle-and-stage-correlation",
+    "status-filter-uses-projected-state",
+    "refresh-does-not-invent-success"
+  ],
+  "browser": "156.0.4314.42",
+  "sourceSha256": "7730d8384529829e37ebb61b0cd9718642d5c9d3fc6184a187c7699c63b2e996",
+  "errors": [],
+  "writes": [],
+  "failure": "AssertionError [ERR_ASSERTION]: The input did not match the regular expression /历时未记录/. Input:\n\n'处理失败\\n' +\n  '\\t\\n' +\n  '合成发送人\\n' +\n  '2026/10/26 07:59:00\\n' +\n  '\\t\\n' +\n  'failed-topic\\n' +\n  '\\t\\n' +\n  '协议耗尽消息\\n' +\n  '未完成，需排查后按原请求恢复\\n' +\n  '—\\n' +\n  '\\t\\n' +\n  '#8 · failed\\n' +\n  '处理状态与计时'\n\n    at file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/docs/acceptance/inbox-latency-week-20261019/scripts/verify-inbox-browser.mjs:119:12",
+  "boundary": "Full observer + real React/ReactDOM + real HTTP handleRequest + synthetic runtime; host slots/primitives adapted. No production instance, models, database or channel writes."
+}

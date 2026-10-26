@@ -1,6 +1,6 @@
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
-import { isPendingDecision } from './topic-model.js'
+import { isPendingDecision, topicDecisionRecovery } from './topic-model.js'
 import { taskContextProgressImpactSchema, taskContextSemanticsProblem } from './task-input-contract.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
@@ -84,11 +84,12 @@ const timing = (start, end) => {
 }
 
 // 状态在拥有 Topic/来源账的后端判定，通知及业务 Task 完成不作语义完成门禁。
-function messageProcessingProjection(message, topics, source) {
+function messageProcessingProjection(message, topics, source, requests) {
+  const currentUnit = ref => !Array.isArray(message.activeUnitRefs) || message.activeUnitRefs.some(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
   const related = topics.flatMap(topic => {
     const latest = new Map()
     for (const entry of topic.entries ?? []) if (entry.messageId === message.messageId) latest.set(entry.unitId ?? 'legacy', entry)
-    return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === message.messageVersion).map(entry => ({ topic, entry }))
+    return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === message.messageVersion && currentUnit(entry)).map(entry => ({ topic, entry }))
   })
   const records = related.map(({ topic, entry }) => [...(topic.decisions ?? [])]
     .filter(record => record.status === 'completed' && record.revision >= entry.revision)
@@ -104,8 +105,42 @@ function messageProcessingProjection(message, topics, source) {
     const unit = message.units?.find(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
     return !unit || unit.dispatchOwner === 'coordination' && !sourceDone
   })
+  const issues = [], recovery = []
+  const issue = (phase, code, status, requestId, attempt, retryAt) => {
+    if (!issues.some(item => item.phase === phase && item.requestId === requestId)) issues.push({ phase, code, status, requestId, attempt: attempt ?? 0, retryAt: retryAt ?? null })
+  }
+  // Only current, unfinished owners can fail a message; group delivery errors are not ownership evidence.
+  for (const request of requests) {
+    if (!['pending', 'exhausted'].includes(request.status) || !request.messages.some(item => item.messageId === message.messageId
+      && item.messageVersion === message.messageVersion && (!request.topicId || currentUnit(item)))) continue
+    if (request.topicId ? !related.some(({ topic, entry }, i) => topic.topicId === request.topicId && topic.revision === request.revision
+      && (topic.processedRevision < entry.revision || !records[i])) : message.routingStatus === 'routed') continue
+    const startup = request.failurePhase === 'startup'
+    if (request.status === 'exhausted' && request.retryToken) recovery.push({ requestId: request.requestId, token: request.retryToken, phase: request.topicId ? 'decision' : 'routing' })
+    if (request.status === 'exhausted' || request.nextRetryAt) issue(request.topicId ? 'decision' : 'routing',
+      startup ? 'startup-recovery' : request.status === 'exhausted' ? request.failurePhase === 'dispatch' ? 'dispatch-failed' : 'protocol-exhausted' : 'protocol-retry',
+      startup || request.status === 'pending' ? 'retrying' : 'failed', request.requestId, request.attempt, request.nextRetryAt)
+  }
+  for (const { topic, entry } of related) {
+    if (topic.processedRevision >= entry.revision) continue
+    const record = topic.decisions?.findLast(isPendingDecision)
+    if (!record || record.revision < entry.revision || record.revision > topic.revision
+      || record.decision?.basisUnitRefs?.length && !record.decision.basisUnitRefs.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision)) continue
+    const hostRecovery = topicDecisionRecovery(record)
+    if (hostRecovery && record.revision === topic.revision) recovery.push({ requestId: record.decisionId, token: hostRecovery.token, phase: 'host' })
+    if (record.status === 'blocked' || record.status === 'failed') issue('host', record.status === 'blocked' ? 'decision-blocked' : 'decision-retry',
+      record.status === 'blocked' ? 'failed' : 'retrying', record.decisionId, record.attempt, record.nextRetryAt)
+  }
+  if (!sourceDone) for (const item of source?.coordination ?? []) {
+    if (!currentUnit(item) || !message.units?.some(unit => unit.unitId === item.unitId && unit.unitRevision === item.unitRevision && unit.dispatchOwner === 'coordination')
+      || item.state !== 'reserved' || item.resolved || item.frozen || !(item.attempt > 0)) continue
+    const exhausted = item.attempt >= 3 && !item.nextRetryAt
+    if (exhausted && item.retryToken) recovery.push({ requestId: item.reservationId, token: item.retryToken, phase: 'coordination' })
+    issue('coordination', exhausted ? 'coordination-exhausted' : 'coordination-retry', exhausted ? 'failed' : 'retrying', item.reservationId, item.attempt, item.nextRetryAt)
+  }
+  if (message.routingStatus === 'failed' && !issues.some(item => item.phase === 'routing')) issue('routing', 'routing-failed', 'failed', null, 0, null)
   let state = 'unknown', basis = 'unknown', completedAt = null, conclusion = null
-  if (message.routingStatus === 'failed') state = 'failed'
+  if (issues.some(item => item.status === 'failed')) state = 'failed'
   else if (message.routingStatus !== 'routed') state = 'routing'
   else if (topicPending || unitsPending) state = 'processing'
   else if (sourceDone || related.length || ignored) {
@@ -128,7 +163,7 @@ function messageProcessingProjection(message, topics, source) {
       notificationState: !notices.length ? 'unknown' : deliveredAt ? 'delivered' : 'unconfirmed', notifications: notices,
       semantic: timing(message.occurredAt, completedAt),
       notificationE2e: timing(source?.receivedAt ?? message.receivedAt, deliveredAt),
-      stages: source?.stages ?? [],
+      stages: source?.stages ?? [], issues, recovery,
     } }
 }
 
@@ -139,13 +174,14 @@ async function groupSummary(group, runtime, workflowMailboxes, workflowTopics = 
   if (coordinator) summary.coordinator = coordinator
   const topics = runtime.listTopics(group.groupId).filter(topic => !topic.mergedInto)
   const sources = await runtime.messageProcessingSources?.(group.groupId) ?? []
+  const requests = await runtime.messageProcessingRequests?.(group.groupId) ?? []
   const sourceFor = message => {
     const matches = sources.filter(source => source.groupId === group.groupId && source.messageId === message.messageId && source.version === message.messageVersion)
     return matches.length === 1 ? matches[0] : undefined
   }
   summary.messages = (summary.messages ?? []).map((message) => ({
     ...message,
-    ...messageProcessingProjection(message, topics, sourceFor(message)),
+    ...messageProcessingProjection(message, topics, sourceFor(message), requests.filter(request => request.groupId === group.groupId)),
     topicRefs: topics.flatMap((topic) => {
       const state = new Map()
       for (const entry of topic.entries?.filter((item) => item.messageId === message.messageId) ?? []) state.set(entry.unitId ?? `legacy:${entry.messageId}`, entry)
@@ -158,7 +194,7 @@ async function groupSummary(group, runtime, workflowMailboxes, workflowTopics = 
     // 补读的旧资料不能挡住原生控制账的会话入口和状态；缺省显示资料仍保留。
     const defined = Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined))
     const merged = { ...byMessageId.get(message.messageId), ...defined, sourceKind: 'workflow-v2' }
-    byMessageId.set(message.messageId, { ...merged, ...messageProcessingProjection(merged, topics, sourceFor(merged)) })
+    byMessageId.set(message.messageId, { ...merged, ...messageProcessingProjection(merged, topics, sourceFor(merged), requests.filter(request => request.groupId === group.groupId)) })
   }
   summary.messages = [...byMessageId.values()]
   const existingOutboundIds = new Set((summary.outbox ?? []).map((message) => message.outboundId))
@@ -190,11 +226,12 @@ const reopenTaskInputSchema = z.strictObject({ requestId: requiredText.max(200),
 
 export function residentErrorStatus(error) {
   const message = error instanceof Error ? error.message : String(error)
+  if (/^(?:MESSAGE_RETRY_|TASK_NOTIFICATION_RECOVERY_|DYNAMIC_NOTIFICATION_RECOVERY_)/.test(message)) return 409
   if (/^(?:DYNAMIC|TASK_SESSION)_.+(?:FORBIDDEN|AUTHENTICATED_SOURCE_REQUIRED|WEB_ACTOR_REQUIRED)$/.test(message)) return 403
   if (/^DYNAMIC_.*(?:STALE|CONFLICT|BUSY|TERMINAL|NOT_ACTIVE|NOT_QUIESCENT|UNRESOLVED|FENCED|RECONCILIATION_REQUIRED)$/.test(message)) return 409
   if (message === 'DYNAMIC_NOT_FOUND') return 404
   if (/TASK_(?:REQUIREMENT|CONTROL|REQUEST|SESSION).*?(?:CONFLICT|STALE|BUSY)|TASK_SESSION_TERMINAL/.test(message)) return 409
-  if (/TASK_(?:SESSION_)?NOT_FOUND/.test(message)) return 404
+  if (/TASK_(?:(?:SESSION|NOTIFICATION)_)?NOT_FOUND/.test(message)) return 404
   if (/LEGACY_TASK_READONLY|WORKFLOW_RETIRED/.test(message)) return 410
   return /^(group_has_(active_tasks|referenced_topics|pending_decisions|pending_outbox)|task-stale|task_input_version_(conflict|stale)|task_request_identity_conflict|task_input_pending|task_topic_version_invalid|task_result_context_changed|task_prompts_version_conflict|task_web_(task-stale|topic-stale|routing-required)|web_task_version_conflict)(:|$)/u.test(message) ? 409 : 400
 }
@@ -525,10 +562,29 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     return send(response, 200, await store.markMessagesAgentDelivery({ groupId, ...(await readJson(request)) }))
   }
   const messageRetry = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/messages\/([^/]+)\/retry$/u.exec(url.pathname) : null
-  if (messageRetry) {
-    const groupId = decodeURIComponent(messageRetry[1])
-    const messageId = decodeURIComponent(messageRetry[2])
-    return send(response, 200, await store.retryDecisionFailedMessage({ groupId, messageId }))
+  const notificationRetry = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/notifications\/([^/]+)\/retry$/u.exec(url.pathname) : null
+  if (messageRetry || notificationRetry) {
+    try {
+      if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+      const token = z.string().regex(/^[a-f0-9]{64}$/u)
+      const schema = messageRetry ? z.strictObject({ messageVersion: z.number().int().positive(),
+        activeUnitRefs: z.array(z.strictObject({ unitId: requiredText, unitRevision: z.number().int().positive() }))
+          .refine(refs => new Set(refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision]))).size === refs.length),
+        phase: z.enum(['routing', 'decision', 'coordination', 'host']), requestId: requiredText, token })
+        : z.strictObject({ expectedToken: token })
+      const parsed = schema.safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'MESSAGE_RECOVERY_REQUEST_INVALID' })
+      const match = messageRetry ?? notificationRetry
+      const identity = { groupId: decodeURIComponent(match[1]), [messageRetry ? 'messageId' : 'notificationId']: decodeURIComponent(match[2]) }
+      const value = await store[messageRetry ? 'retryDecisionFailedMessage' : 'retryNotification']({ ...parsed.data, ...identity })
+      return send(response, 200, value)
+    } catch (error) {
+      if (error instanceof SyntaxError) return send(response, 400, { error: 'MESSAGE_RECOVERY_REQUEST_INVALID' })
+      // 外部鉴权/网络异常不向浏览器透传正文；原账保留诊断，页面提示先解除阻塞。
+      const code = error.code ?? error.message
+      const safe = /^(?:MESSAGE_RETRY_|TASK_NOTIFICATION_RECOVERY_|DYNAMIC_NOTIFICATION_RECOVERY_|TASK_(?:SESSION|NOTIFICATION)_NOT_FOUND|DYNAMIC_COORDINATION_(?:SOURCE_STALE|FROZEN))/.test(code)
+      return send(response, safe ? residentErrorStatus(error) : 409, { error: safe ? code : 'MESSAGE_RECOVERY_BLOCKED' })
+    }
   }
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/cancel$/u.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/cancel'.length))

@@ -43,6 +43,102 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
 
+test('收发恢复HTTP要求本机身份、严格版本及CAS，拒绝伪造路径和敏感错误透传', async () => {
+  const calls = [], token = 'a'.repeat(64)
+  const input = { messageVersion: 2, activeUnitRefs: [{ unitId: 'u', unitRevision: 3 }], phase: 'decision', requestId: 'request', token }
+  let failure
+  const retry = async args => { calls.push(args); if (failure) throw failure; return { status: 'attempted' } }
+  await withServer(false, async base => {
+    const path = '/config/groups/g%2Fa/messages/m%2Bb/retry', notice = '/config/groups/g%2Fa/notifications/n%2Bb/retry'
+    const post = (url, body, headers) => fetch(base + url, { method: 'POST', body: JSON.stringify(body), headers })
+    for (const [url, body] of [[path, input], [notice, { expectedToken: token }]]) {
+      assert.equal((await post(url, body, { origin: 'https://foreign.invalid' })).status, 403)
+      assert.equal((await rawRequest(base + url, { method: 'POST', headers: { host: 'foreign.invalid' }, body: JSON.stringify(body) })).status, 403)
+      assert.equal((await post(url, { ...body, groupId: 'forged' })).status, 400)
+      assert.equal((await post(url, {})).status, 400)
+      assert.equal((await post(url, { ...body, payload: { text: 'forged' } })).status, 400)
+    }
+    assert.equal(calls.length, 0)
+    assert.equal((await post(path, input)).status, 200)
+    assert.deepEqual(calls.pop(), { ...input, groupId: 'g/a', messageId: 'm+b' })
+    assert.equal((await post(notice, { expectedToken: token })).status, 200)
+    assert.deepEqual(calls.pop(), { expectedToken: token, groupId: 'g/a', notificationId: 'n+b' })
+    for (const code of ['MESSAGE_RETRY_STALE', 'MESSAGE_RETRY_IN_PROGRESS', 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN', 'DYNAMIC_NOTIFICATION_RECOVERY_STALE']) {
+      failure = Object.assign(new Error(code), { code })
+      const response = await post(path, input)
+      assert.equal(response.status, 409)
+      assert.deepEqual(await response.json(), { error: code })
+    }
+    failure = new Error('private authentication detail bearer-secret')
+    const response = await post(path, input)
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), { error: 'MESSAGE_RECOVERY_BLOCKED' })
+  }, { overrides: { retryDecisionFailedMessage: retry, retryNotification: retry } })
+})
+
+test('当前精确请求耗尽与Host阻塞失败，不把共享群故障、旧版本和启动退避当终态', async () => {
+  const ref = { unitId: 'u', unitRevision: 2 }
+  const message = { messageId: 'failure-fixture', messageVersion: 2, routingStatus: 'routed', occurredAt: '2026-10-26T00:00:00Z', agentDeliveryStatus: 'decision-failed', activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'legacy-topic' }] }
+  const entry = { messageId: message.messageId, messageVersion: 2, ...ref, revision: 3, action: 'add' }
+  const topic = { topicId: 't', revision: 3, processedRevision: 2, entries: [entry], decisions: [] }
+  const group = { groupId: 'g', messages: [message] }, topics = [topic], requests = []
+  const request = { requestId: 'current-request', groupId: 'g', topicId: 't', revision: 3, status: 'exhausted', attempt: 3, messages: [{ messageId: message.messageId, messageVersion: 2, ...ref }] }
+  await withServer(false, async base => {
+    const read = async () => (await (await fetch(base + '/state/groups')).json())[0].messages[0]
+    assert.equal((await read()).processingState, 'processing', 'broadcast failure alone is not exact evidence')
+    requests.push(request)
+    let result = await read()
+    assert.equal(result.processingState, 'failed')
+    assert.equal(result.processingCompletedAt, null)
+    assert.equal(result.processingFacts.semantic.quality, 'missing')
+    assert.deepEqual(result.processingFacts.issues, [{ phase: 'decision', code: 'protocol-exhausted', status: 'failed', requestId: 'current-request', attempt: 3, retryAt: null }])
+    request.status = 'pending'; request.nextRetryAt = '2026-10-26T00:10:00Z'
+    result = await read(); assert.equal(result.processingState, 'processing'); assert.equal(result.processingFacts.issues[0].status, 'retrying')
+    request.status = 'exhausted'; request.failurePhase = 'startup'
+    result = await read(); assert.equal(result.processingState, 'processing'); assert.equal(result.processingFacts.issues[0].code, 'startup-recovery')
+    delete request.failurePhase; delete request.nextRetryAt
+    for (const change of [() => request.messages[0].messageVersion--, () => request.messages[0].unitRevision--, () => request.revision--, () => request.groupId = 'other', () => request.status = 'superseded']) {
+      const original = structuredClone(request); change(); assert.equal((await read()).processingState, 'processing'); Object.assign(request, original)
+    }
+    requests.length = 0
+    topic.decisions = [{ decisionId: 'host', revision: 3, status: 'blocked', attempt: 3, error: 'sensitive-private-text', decision: { basisUnitRefs: [ref] } }]
+    result = await read(); assert.equal(result.processingState, 'failed'); assert.equal(result.processingFacts.issues[0].phase, 'host')
+    assert.equal(JSON.stringify(result.processingFacts).includes('sensitive-private-text'), false)
+    topic.decisions[0].status = 'failed'; topic.decisions[0].nextRetryAt = '2026-10-26T00:11:00Z'
+    result = await read(); assert.equal(result.processingState, 'processing'); assert.equal(result.processingFacts.issues[0].status, 'retrying')
+    topic.decisions[0].status = 'completed'; topic.decisions[0].updatedAt = '2026-10-26T00:12:00Z'; topic.processedRevision = 3
+    requests.push(request)
+    assert.equal((await read()).processingState, 'processed', 'completed receipt overrides old request exhaustion')
+    topics.push({ ...topic, topicId: 't2', processedRevision: 2, decisions: [{ ...topic.decisions[0], status: 'blocked' }] })
+    assert.equal((await read()).processingState, 'failed', 'one complete topic cannot hide another blocked topic')
+    topics[1].mergedInto = 't'; assert.equal((await read()).processingState, 'processed')
+    topics[1].mergedInto = undefined; topics[1].entries = [{ ...entry, action: 'remove' }]; assert.equal((await read()).processingState, 'processed')
+    topic.decisions = []; topic.processedRevision = 2; message.activeUnitRefs = [{ unitId: 'u', unitRevision: 3 }]
+    assert.notEqual((await read()).processingState, 'failed', 'old unit entry/request cannot poison new unit revision')
+  }, { overrides: { listGroups: () => [group], listTopics: () => topics, messageProcessingRequests: () => requests } })
+})
+
+test('协调来源耗尽只影响当前事项，恢复成功与通知失败各自独立', async () => {
+  const ref = { unitId: 'u', unitRevision: 2 }
+  const message = { messageId: 'm', messageVersion: 2, routingStatus: 'routed', activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'coordination' }] }
+  const coordination = { ...ref, reservationId: 'r', generation: 1, state: 'reserved', attempt: 3, nextRetryAt: null }
+  const source = { groupId: 'g', messageId: 'm', version: 2, sourceId: 's', routed: false, coordination: [coordination], notifications: [{ notificationId: 'n', state: 'failed' }] }
+  await withServer(false, async base => {
+    const read = async () => (await (await fetch(base + '/state/groups')).json())[0].messages[0]
+    assert.equal((await read()).processingState, 'failed')
+    coordination.attempt = 1; coordination.nextRetryAt = '2026-10-26T00:01:00Z'
+    assert.equal((await read()).processingState, 'processing')
+    coordination.attempt = 3; coordination.nextRetryAt = null; coordination.state = 'accepted'
+    assert.equal((await read()).processingState, 'processing', 'accepted does not create a semantic timestamp')
+    coordination.state = 'reserved'; coordination.resolved = true; assert.equal((await read()).processingState, 'processing')
+    coordination.resolved = false; coordination.unitRevision = 1; assert.equal((await read()).processingState, 'processing')
+    coordination.unitRevision = 2; source.processingCompleted = { at: '2026-10-26T00:02:00Z', activeUnitRefs: [ref] }
+    let result = await read(); assert.equal(result.processingState, 'processed'); assert.deepEqual(result.processingFacts.issues, [])
+    assert.equal(result.processingFacts.notificationState, 'unconfirmed')
+    source.version = 1; result = await read(); assert.equal(result.processingState, 'processing'); assert.deepEqual(result.processingFacts.issues, [])
+  }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], messageProcessingSources: async () => [source] } })
+})
+
 test('旧话题关联修复入口全部410，预检、执行与身份变体均不能恢复旧服务', async () => {
   const calls = [], input = { sourceTopicId: 'source', targetTopicId: 'target',
     topicPresentation: { title: '数据集导入导出开发', summary: '依据已提供规则文档开发。' },
@@ -300,8 +396,9 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.equal(approval.status, 410)
   const reissued = await fetch(`${baseUrl}/authorizations/blocker-1/reissue`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: '迁移到统一授权审批' }) })
   assert.equal(reissued.status, 410)
-  const retried = await fetch(`${baseUrl}/config/groups/${encodeURIComponent('cid/a')}/messages/${encodeURIComponent('msg+b')}/retry`, { method: 'POST' })
-  assert.deepEqual(await retried.json(), { retried: true, groupId: 'cid/a', messageId: 'msg+b' })
+  const retryBody = { messageVersion: 2, activeUnitRefs: [], requestId: 'original-request', phase: 'routing', token: 'a'.repeat(64) }
+  const retried = await fetch(`${baseUrl}/config/groups/${encodeURIComponent('cid/a')}/messages/${encodeURIComponent('msg+b')}/retry`, { method: 'POST', body: JSON.stringify(retryBody) })
+  assert.deepEqual(await retried.json(), { retried: true, ...retryBody, groupId: 'cid/a', messageId: 'msg+b' })
   assert.equal((await fetch(`${baseUrl}/test/tasks`, { method: 'POST', body: '{}' })).status, 404)
 }))
 

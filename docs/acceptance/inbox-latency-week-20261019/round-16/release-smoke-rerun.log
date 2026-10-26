@@ -1,0 +1,38 @@
+
+> dingtalk-dsh-assistant@2.1.0 test:release-smoke D:\project\dingtalk-dsh-assistant\.claude\worktrees\inbox-stage-timing
+> node --test test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js
+
+✔ three actual tgz and source identity round-trip; publish retry reuses identical bytes (1758.342ms)
+✔ different run/SHA/tag, lock/profile/environment and manifest hashes all fail closed (7167.7858ms)
+✔ missing, extra and modified tarballs cannot reach publication (1893.4559ms)
+✔ dirty tracked source and untracked package content cannot claim a commit identity (1524.1304ms)
+✔ manual compatibility CI has no push, PR, schedule or publication side effects (7.9409ms)
+✔ release exact SHA validates all lanes before immutable build and same-run publication (3.9407ms)
+✔ every test file is mapped once; only reviewed historical registrations leave Release (977.5048ms)
+✔ release publishes three tgz plus identity manifest and verifies every attachment (2.4085ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (1.9861ms)
+✔ resident profile 只解析到最新版 DSH 依赖边界 (0.9647ms)
+✔ 常驻启动优先读取用户代理，避免为启动解析完整 resident 状态 (1.1847ms)
+✔ Web 启动优先使用当前 profile 的 DSH 入口 (0.7174ms)
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (25008.2272ms)
+ℹ package begin: 0ms
+ℹ package staged: 188ms
+ℹ package packed: 2434ms
+ℹ package extracted: 2566ms
+ℹ package bytes-and-imports-verified: 6166ms
+ℹ package dependency-links-ready: 6347ms
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (9178.2125ms)
+ℹ package begin: 0ms
+ℹ package staged: 737ms
+ℹ package packed: 2730ms
+ℹ package extracted: 2833ms
+ℹ package bytes-and-imports-verified: 6646ms
+ℹ package dependency-links-ready: 6751ms
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 34979.5187

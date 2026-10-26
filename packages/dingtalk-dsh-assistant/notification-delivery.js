@@ -35,7 +35,56 @@ const knownPreSendRejection = (error, notification) => error.knownNotSent === tr
   replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id,
 })
 
-export async function deliverTaskNotification({ notification, notifications, command, onStage = async () => {} }) {
+export function taskNotificationRecovery(notification) {
+  const expectedToken = createHash('sha256').update(JSON.stringify([
+    notification.id, notification.state, notification.sendAttemptCount ?? 0, notification.readbackAttemptCount ?? 0,
+    notification.dispatchToken ?? null, notification.updatedAt ?? null, notification.nextAttemptAt ?? null,
+    notification.recoveryToken ?? null, notification.payloadDigest ?? null, notification.ack ?? null,
+    notification.receipt ?? null, notification.deliveryError ?? null, notification.retirement ?? null, notification.recall ?? null,
+  ])).digest('hex')
+  let action = null, reason = 'not-recoverable'
+  if (notification.retirement || notification.recall || ['delivered', 'superseded'].includes(notification.state)) reason = 'terminal'
+  else if (['unknown', 'starting'].includes(notification.state)) { action = 'readback'; reason = 'delivery-unconfirmed' }
+  else if (notification.state === 'prepared') { action = 'send'; reason = 'not-started' }
+  else if (notification.state === 'failed' && !notification.ack && !notification.receipt
+    && notification.deliveryError?.phase === 'send' && notification.deliveryError.retryable === true
+    && knownPreSendRejection(notification.deliveryError, notification)) { action = 'send'; reason = 'proven-not-sent' }
+  return { action, expectedToken, reason }
+}
+
+const notificationFlights = new WeakMap()
+const recoveryError = code => Object.assign(new Error(code), { code, statusCode: 409 })
+async function notificationFlight({ notification, command }, manual, run) {
+  let active = notificationFlights.get(command)
+  if (!active) { active = new Set(); notificationFlights.set(command, active) }
+  if (active.has(notification.id)) {
+    if (manual) throw recoveryError('TASK_NOTIFICATION_RECOVERY_IN_PROGRESS')
+    return { inProgress: true }
+  }
+  active.add(notification.id)
+  try { return await run() }
+  finally { active.delete(notification.id) }
+}
+
+export async function retryTaskNotification(options) {
+  return notificationFlight(options, true, async () => {
+    const { notification, expectedToken, notifications, command } = options
+    const ready = action => notifications && (!action || typeof notifications[action === 'send' ? 'send' : 'readback'] === 'function')
+    if (!ready(taskNotificationRecovery(notification).action)) throw recoveryError('TASK_NOTIFICATION_RECOVERY_UNAVAILABLE')
+    const started = await command('notification.recovery.start', { notificationId: notification.id, expectedToken })
+    if (started.replayed) throw recoveryError('DYNAMIC_NOTIFICATION_RECOVERY_STALE')
+    const current = started.result.notification, { action } = taskNotificationRecovery(current)
+    if (!ready(action)) throw recoveryError('TASK_NOTIFICATION_RECOVERY_UNAVAILABLE')
+    const result = await deliverNotification({ ...options, notification: current, readbackOnly: action === 'readback' })
+    return { status: 'attempted', action, ...result }
+  })
+}
+
+export async function deliverTaskNotification(options) {
+  return notificationFlight(options, false, () => deliverNotification(options))
+}
+
+async function deliverNotification({ notification, notifications, command, onStage = async () => {}, readbackOnly = false }) {
   const measure = async (current, phase, action) => {
     const stage = { spanId: `${phase}:${current.id}:${randomUUID()}`, stage: phase, requestId: current.id,
       attempt: phase === 'send' ? current.sendAttemptCount ?? 1 : (current.readbackAttemptCount ?? 0) + 1,
@@ -46,13 +95,13 @@ export async function deliverTaskNotification({ notification, notifications, com
   }
   if (!notifications || notification.state === 'delivered') return
   const persistedRejection = persistedUuidSendRejectionProof(notification) ?? persistedMentionSendRejectionProof(notification)
-  if (persistedRejection) {
+  if (!readbackOnly && persistedRejection) {
     // 原尝试的完整参数拒绝证据只能结清为未发送失败，不能借升级重放历史提醒。
     await command('notification.reconcile', { notificationId: notification.id, state: 'failed', receipt: null,
       error: { ...notification.deliveryError, knownNotSent: true, retryable: false, proof: persistedRejection }, evidenceRef: evidence(persistedRejection) })
     return
   }
-  if (notification.state === 'unknown' && !notification.ack && !notification.receipt && notification.deliveryError?.phase === 'send'
+  if (!readbackOnly && notification.state === 'unknown' && !notification.ack && !notification.receipt && notification.deliveryError?.phase === 'send'
     && quotedSendRejectionProof(notification.deliveryError, { groupId: notification.payload.conversationId, replyToMessageId: notification.payload.sourceMessageId,
       replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id })) {
     notification = (await command('notification.rejectBeforeSend', { notificationId: notification.id })).result.notification

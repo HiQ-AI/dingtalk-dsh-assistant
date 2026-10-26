@@ -28,6 +28,44 @@ async function routed(store, withTopic = false) {
     ] }] })
 }
 
+test('explicit source recovery holds the message-version queue through the separate ledger CAS', async t => {
+  const { store } = await fixture(t)
+  await routed(store)
+  const owner = store.listSourceDispatchOwnership('g')[0], message = store.getGroup('g').messages[0]
+  const args = { groupId: 'g', messageId: message.messageId, messageVersion: 1, activeUnitRefs: message.activeUnitRefs, reservationId: owner.reservationId }
+  let calls = 0
+  for (const patch of [{ messageVersion: 2 }, { activeUnitRefs: [] }, { reservationId: 'foreign' }])
+    await assert.rejects(store.retrySourceDispatch({ ...args, ...patch }, () => { calls++ }), /MESSAGE_RETRY_STALE/)
+  assert.equal(calls, 0)
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const retry = store.retrySourceDispatch(args, async snapshot => { entered.resolve(); await release.promise; return snapshot })
+  await entered.promise
+  const changed = store.ingest({ groupId: 'g', messageId: message.messageId, messageVersion: 2, text: '已订正原消息', occurredAt: message.occurredAt, senderOpenDingTalkId: 'actor' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(store.getGroup('g').messages[0].messageVersion, 1)
+  release.resolve()
+  assert.equal((await retry).reservationId, owner.reservationId)
+  await changed
+  assert.equal(store.getGroup('g').messages[0].messageVersion, 2)
+  await assert.rejects(store.retrySourceDispatch(args, () => { calls++ }), /MESSAGE_RETRY_STALE/)
+  assert.equal(calls, 0)
+})
+
+for (const state of ['accepted', 'needs_clarification', 'frozen']) test(`explicit source recovery never resets ${state} ownership`, async t => {
+  const { store } = await fixture(t)
+  await routed(store)
+  const owner = store.listSourceDispatchOwnership('g')[0], message = store.getGroup('g').messages[0]
+  if (state === 'frozen') {
+    await store.updateSourceDispatch({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1, semanticState: 'rejected' })
+    await store.beginSourceDispatchHandoff({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1, freezeId: 'freeze', reason: 'fixture handoff' })
+  } else await store.updateSourceDispatch({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1, semanticState: state,
+    ...(state === 'accepted' ? { coordinationId: 'accepted', settled: true } : { clarification: '对象不明' }) })
+  const before = store.listSourceDispatchOwnership('g')
+  await assert.rejects(store.retrySourceDispatch({ groupId: 'g', messageId: message.messageId, messageVersion: 1,
+    activeUnitRefs: message.activeUnitRefs, reservationId: owner.reservationId }, () => assert.fail('must not reach ledger')), /MESSAGE_RETRY_STALE/)
+  assert.deepEqual(store.listSourceDispatchOwnership('g'), before)
+})
+
 test('route atomically reserves coordination unit; no Topic required and discussion remains separate', async t => {
   const { store } = await fixture(t)
   await routed(store)

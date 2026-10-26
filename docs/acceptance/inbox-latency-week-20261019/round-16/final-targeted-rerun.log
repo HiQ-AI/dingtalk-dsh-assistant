@@ -1,0 +1,43 @@
+✔ explicit source retry requires exact exhausted generation and never resets accepted or applied coordination (113.0441ms)
+✔ runtime freeze atomically rejects an already-preflighted source retry without consuming its CAS (92.7648ms)
+✔ source reservation and fixed member apply survive restart without replaying task mutation (93.9921ms)
+✔ real process SIGKILL after third member commit resumes original six receipts without replay (625.0173ms)
+✔ dependency gate rejects claim before resource acquisition and cancellation does not cancel task (70.4873ms)
+✔ scope, impact and cycles reject the complete batch before any member exists (65.7107ms)
+✔ six fixed members recover after the third apply; later conflict reports partial effects without compensation (120.1546ms)
+✔ formal current Owner completion releases B; reopening A invalidates its old proof (82.3045ms)
+✔ v1 migration requires opt in, validates identity and preserves history atomically (101.4708ms)
+✔ due scan is durable, read-query observes current facts without changing Task, no Topic required (122.1528ms)
+✔ cancel before permit prevents send; permit before cancel becomes unknown after restart and never replays (91.3977ms)
+✔ cancel wins send-permit CAS and stale query worker cannot publish after lease reclaim (68.474ms)
+✔ real SIGKILL after permit: fake network called=false; recovery never issues a new send (504.8512ms)
+✔ real SIGKILL after permit: fake network called=true; recovery never issues a new send (427.8562ms)
+✔ SIGKILL after job claim recovers the same occurrence and preserves the lease instead of inventing success (403.9551ms)
+✔ manual recovery cannot obtain a send permit for expired query facts without an automatic scan (179.8054ms)
+✔ expired unpermitted candidate atomically supersedes with a fresh read and immutable old payload (97.115ms)
+✔ permit wins: starting, recovered unknown and delivered candidates cannot be refreshed or resent (111.8282ms)
+✔ refresh wins: old payload and old outbox identity remain permanently unsendable after restart (112.0892ms)
+✔ cancellation wins before refresh and prevents all new send permits (73.7821ms)
+✔ freshness threshold, expected versions and replay preserve one immutable replacement identity (74.82ms)
+✔ SIGKILL after atomic supersede but before outbox creation recovers the new frozen identity only (650.2686ms)
+✔ explicit source recovery holds the message-version queue through the separate ledger CAS (43.386ms)
+✔ explicit source recovery never resets accepted ownership (9.1909ms)
+✔ explicit source recovery never resets needs_clarification ownership (5.2959ms)
+✔ explicit source recovery never resets frozen ownership (3.5698ms)
+✔ route atomically reserves coordination unit; no Topic required and discussion remains separate (4.2672ms)
+✔ needs clarification survives restart and Topic completion cannot settle it (18.012ms)
+✔ coordination ownership suppresses new Topic decisions and acknowledgement outbox (20.3933ms)
+✔ accepted legacy decision cannot be claimed by coordination and retains original operation identity (3.8006ms)
+✔ rejected source remains exclusive until frozen handoff with matching durable proof and generation CAS (4.1558ms)
+✔ Host exact recovery rejects unknown effects and queue-stale facts, then resumes the original pre-effect failure once (4259.132ms)
+✔ coordination exact recovery retains reservation generation and rejects old facts, frozen runtime and consumed CAS (951.5233ms)
+✔ 精确收件恢复沿原生会话处理：外部启动阻塞未修再次失败，修复后成功且不复制事实 (2365.703ms)
+✔ explicit background message retry admits original facts through topics once without opening automatic history ingress (2564.6663ms)
+ℹ tests 35
+ℹ suites 0
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11652.3537

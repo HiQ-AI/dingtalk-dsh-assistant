@@ -337,6 +337,33 @@ window.__ModuleLoader__.load({
           : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分 ${Math.floor(seconds % 60)} 秒`
       return `历时 ${value}`
     }
+    function MessageRecovery({ path, body, token, readback = false, onChanged }) {
+      const flight = useRef(false)
+      const consumed = useRef(null)
+      const [busy, setBusy] = useState(false)
+      const [feedback, setFeedback] = useState(null)
+      const retry = async () => {
+        if (flight.current || consumed.current === token) return
+        flight.current = true; setBusy(true); setFeedback(null)
+        try {
+          const result = await post(path, body)
+          consumed.current = token
+          setFeedback(result.sourcePending ? '原来源尚未收束，继续等待；本次未发送。' : readback ? '已尝试原生回读；未确认送达前不会重发。' : '已请求按原身份恢复；不代表处理完成或送达。')
+        } catch (cause) {
+          const code = cause instanceof Error ? cause.message : ''
+          setFeedback(/STALE|IN_PROGRESS/.test(code) ? '状态已变化或正在恢复，请刷新后核对。'
+            : '本次未能恢复；请先解决网络、鉴权或业务阻塞，再刷新后重试。未知效果不会重放。')
+        } finally {
+          await onChanged()
+          flight.current = false; setBusy(false)
+        }
+      }
+      return React.createElement('div', { style: { marginTop: 6, fontSize: 11, overflowWrap: 'anywhere' } },
+        React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || consumed.current === token,
+          onClick: retry }, busy ? '恢复中…' : readback ? '核验发送结果' : '重试原消息'),
+        React.createElement('div', { style: { marginTop: 3, color: colors.muted } }, readback ? '仅回读，不重新发送。' : '先解除网络、鉴权或其他阻塞；仅恢复原请求，不重做已完成效果。'),
+        feedback ? React.createElement('div', { role: 'status', style: { marginTop: 3 } }, feedback) : null)
+    }
     function MessageProcessingFacts({ message }) {
       const facts = message.processingFacts ?? {}
       const labels = { settled: '已收束', unsettled: '未收束', unknown: '未记录' }
@@ -349,6 +376,7 @@ window.__ModuleLoader__.load({
         React.createElement('p', null, `Host接收：${fmt(facts.receivedAt)}；语义完成：${fmt(message.processingCompletedAt)}`),
         React.createElement('p', null, `来源：${labels[facts.sourceState] || '未记录'}；通知：${facts.notificationState === 'unknown' && !facts.notifications?.length ? '未记录' : notification[facts.notificationState] || '未记录'}`),
         React.createElement('p', null, `发生至语义完成：${elapsed(facts.semantic)}；接收至关联通知全部送达：${elapsed(facts.notificationE2e)}`),
+        ...(facts.issues ?? []).map((issue, index) => React.createElement('p', { key: `issue-${issue.requestId || index}` }, `${issue.phase === 'host' ? 'Host动作' : issue.phase === 'coordination' ? '独立协调' : issue.phase === 'decision' ? '语义判断' : '归类'}：${issue.status === 'retrying' ? '等待自动重试' : '处理失败'}${issue.retryAt ? `；预计重试 ${fmt(issue.retryAt)}` : ''}${issue.attempt ? `；尝试 ${issue.attempt}` : ''}`)),
         ...(facts.notifications ?? []).map(notice => React.createElement('p', { key: notice.notificationId }, `通知：${notification[notice.state] || '未记录'}${notice.versionMatched !== true ? '（消息版本未核实，不计端到端）' : ''}；回读送达：${fmt(notice.deliveredAt)}`)),
         ...(facts.stages ?? []).map((stage, index) => React.createElement('p', { key: stage.spanId || `${stage.stage}:${stage.requestId}:${index}` }, `${stageLabels[stage.stage] || stage.stage}：${fmt(stage.startedAt)} → ${fmt(stage.completedAt)}${stage.quality === 'negative' ? '（时钟异常）' : ''}${stage.shared ? '（共享区间）' : ''}${stage.attempt ? `；尝试 ${stage.attempt}` : ''}；请求 ${stage.requestId}`)),
         React.createElement('p', null, `未记录阶段：${Object.entries(stageLabels).filter(([key]) => !facts.stages?.some(stage => stage.stage === key)).map(([, label]) => label).join('、') || '无'}；原生回合不是纯模型用时，不跨回合求包络。`))
@@ -1695,14 +1723,18 @@ window.__ModuleLoader__.load({
         routing: { label: '待归类', state: 'ongoing' },
         processing: { label: '处理中', state: 'ongoing' },
         processed: { label: '语义完成', state: 'done' },
-        failed: { label: '归类失败', state: 'error' },
+        failed: { label: '处理失败', state: 'error' },
         unknown: { label: '状态未知', state: 'waiting' },
       }
       const messageRows = visibleMessages.map((message, rowIndex) => {
         const workflowState = messageWorkflowState(message)
         const status = delivery[workflowState]
+        const recovery = message.processingFacts?.recovery?.[0]
+        const recoveryBody = recovery ? { messageVersion: message.messageVersion, activeUnitRefs: message.activeUnitRefs || [], phase: recovery.phase, requestId: recovery.requestId, token: recovery.token } : null
         const conclusion = workflowState === 'processed' ? message.processingConclusion ? `结论：${message.processingConclusion}` : '结论未记录'
-          : workflowState === 'unknown' ? '处理状态未记录' : '尚未处理完成'
+          : workflowState === 'failed' ? '未完成，需排查后按原请求恢复'
+            : message.processingFacts?.issues?.some(issue => issue.status === 'retrying') ? '等待自动重试，尚未完成'
+              : workflowState === 'unknown' ? '处理状态未记录' : '尚未处理完成'
         const notificationLabels = { prepared: '待发送', sending: '发送中', acknowledged: '已确认发送，待回读', unknown: '发送结果待核对', delivered: '已回读送达', superseded: '已失效' }
         const responsibilityLabels = { host: '助手读取和核对', requester: '请求人补充', system: '系统维护人员排查', approver: '审批人确认', acceptor: '验收人确认' }
         const messageFacts = message.waiting?.length || message.blockingSources?.length || message.notifications?.length
@@ -1723,7 +1755,7 @@ window.__ModuleLoader__.load({
             React.createElement('div', { 'aria-label': '处理结论与历时', style: { display: 'flex', gap: 12, minWidth: 0, marginTop: 4, height: 20, lineHeight: '20px', fontSize: 12, color: colors.muted } },
               React.createElement('span', { title: conclusion, style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, conclusion),
               React.createElement('span', { style: { flex: '0 0 auto', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, messageWorkflowState(message) === 'processed' ? messageProcessingElapsed(message) : '—'))),
-          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, React.createElement(MessageProcessingFacts, { message }), messageFacts))
+          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, React.createElement(MessageProcessingFacts, { message }), recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, '需先核实并解除原操作阻塞；未知效果不允许重放。') : null, messageFacts))
       })
       const selectedOutbox = [...(selectedGroup?.outbox || [])].reverse()
       const filteredOutbox = selectedOutbox.filter(message => outboxStatusFilter === 'all' || outboxDelivery(message).id === outboxStatusFilter)
@@ -1733,6 +1765,7 @@ window.__ModuleLoader__.load({
       const visibleOutbox = filteredOutbox.slice((currentOutboxPage - 1) * outboxPageSize, currentOutboxPage * outboxPageSize)
       const outboxRows = visibleOutbox.map((message, rowIndex) => {
         const status = outboxDelivery(message)
+        const recovery = message.notificationRecovery
         return React.createElement('tr', { key: message.outboundId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
           React.createElement('td', { title: status.hint, style: { ...tableBodyCell, width: 124 } }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { style: { ...tableBodyCell, width: 180 } }, message.deliveredAt ? fmt(message.deliveredAt) : '未记录'),
@@ -1744,6 +1777,7 @@ window.__ModuleLoader__.load({
             !status.retryDisabled && (status.id === 'confirmation' || status.id === 'failed' && message.notificationKnownNotSent === true) && message.notificationRetryAt ? React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, `计划${status.id === 'confirmation' ? '核验' : '重试'} ${fmt(message.notificationRetryAt)}`) : null),
           React.createElement('td', { style: { ...tableBodyCell, width: 220 } },
             singleLineTableContent(React.createElement('span', { style: { fontSize: 12, color: colors.muted } }, message.replyToMessageId ? '回复群消息' : message.notificationTaskId ? '任务通知' : message.sourceMessageId ? '群消息' : '来源未记录')),
+            recovery?.action && !status.retryDisabled ? React.createElement(MessageRecovery, { path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/notifications/${encodeURIComponent(message.outboundId)}/retry`, body: { expectedToken: recovery.expectedToken }, token: recovery.expectedToken, readback: recovery.action === 'readback', onChanged: refresh }) : null,
             React.createElement('details', { style: { marginTop: 5, fontSize: 11, color: colors.muted, overflowWrap: 'anywhere' } }, React.createElement('summary', { style: { cursor: 'pointer' } }, '消息记录'),
               React.createElement('div', null, `来源 ID：${message.sourceMessageId || '未记录'}`),
               message.replyToMessageId ? React.createElement('div', null, `引用消息 ID：${message.replyToMessageId}`) : null,
@@ -1867,7 +1901,7 @@ window.__ModuleLoader__.load({
           selectedGroup?.coordinator?.sessionId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: navigatingSessionId === selectedGroup.coordinator.sessionId,
             onClick: () => navigate(selectedGroup.coordinator.sessionId) }, navigatingSessionId === selectedGroup.coordinator.sessionId ? '正在打开…' : '打开群常驻会话') : null,
           groupTableView === 'messages'
-            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '处理中' }, { id: 'processed', label: '语义完成' }, { id: 'failed', label: '归类失败' }, { id: 'unknown', label: '状态未知' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
+            ? React.createElement(SelectMenu, { label: '筛选处理状态', value: messageDeliveryFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'routing', label: '待归类' }, { id: 'processing', label: '处理中' }, { id: 'processed', label: '语义完成' }, { id: 'failed', label: '处理失败' }, { id: 'unknown', label: '状态未知' }], onChange: (value) => { setMessageDeliveryFilter(value); setMessagePage(1) } })
             : React.createElement(SelectMenu, { label: '筛选发送状态', value: outboxStatusFilter, options: [{ id: 'all', label: '全部状态' }, ...[
               { notificationState: 'prepared' }, { notificationState: 'starting' }, { notificationState: 'unknown' }, { notificationState: 'delivered' }, { notificationState: 'superseded', notificationKnownNotSent: true }, { notificationState: 'failed' },
             ].map(message => { const { id, label } = outboxDelivery(message); return { id, label } })], onChange: value => { setOutboxStatusFilter(value); setOutboxPage(1) } })))

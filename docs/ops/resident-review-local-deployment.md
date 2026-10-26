@@ -8,6 +8,18 @@
 
 回退恢复旧双包，不删除新增事实或重放来源/通知；旧客户端/旧投影不能用于新的性能对比。历史最大空窗仍未收敛，不能以本地测试承诺线上节省。各轮实际合并、部署和功能验收结果记录于本特性验收轮次，不以源码测试冒称已安装或真实消息通过。
 
+## 精确失败与收发恢复续修
+
+本轮只交付源码和新 PR，不合并、不部署，不继承前轮部署授权；不操作真实失败消息、不外发、不改业务账、不停服务。Assistant 与 Observer 需后续另获授权一并更新，无 SQL schema 迁移，不清历史队列、请求预算或未知效果。部署仍按上节已初始化实例 runbook，先零副作用 `-Check`，保留原安装包供回退。
+
+先本地验证相关 HTTP/投影/Observer/Topic/通知/协调风险组与 `pnpm test:release-smoke`；原生集成显式提供已安装 native profile 的 package.json，仅作模块依赖，模型和渠道均用合成 adapter。浏览器使用验收目录 `scripts/verify-inbox-browser.mjs`，只连隔离 fixture HTTP；其 POST 白名单仅转 fixture，禁止转真实 resident 写 API。截图大文件本地保留，提交结果 JSON 与再生成命令。
+
+将来获授权安装后先只读 GET 核当前失败、startup 待补偿、后来成功、旧版本/事项与通知独立。失败主行/筛选/详情/刷新须一致，完成戳仍为空，不能用标记已处理来消除故障。审阅只忽略 Task running/waiting 的瞬态变化；正文、来源、归属、投递证据及 Task 终态变更仍要求重读，`review-required` 明确指向 `group_reply_review_get`。
+
+真正恢复前单独确认业务操作授权，先解除鉴权/网络/业务阻塞，从最新 GET 取原消息版本、activeUnitRefs、原请求/预约及 CAS。只用 [精确恢复接口](../api/task-decisions.md#消息处理投影与精确恢复)，不走宽泛历史 retry、不复制消息、不清 unknown-effect。Host 仅恢复原生安全证据支持的失败；协调冻结/已接纳/已澄清/移交不得清预算。通知 unknown/starting 仅核验原发送，已送达不重发；prepared 查询过期且无发送许可时先原生刷新，不发送旧结论。200 只说明已尝试，必须独立回读语义完成、来源收束、通知送达；状态变更/并发拒绝须刷新。外部错误对 UI 脱敏，原账保留诊断。
+
+回退只切旧双包，保留 resumeEpoch、retryEpoch、notification recoveryToken 与既有回执；不要删除这些事实、重新导入原消息或补发通知。回退旧客户端缺少精确恢复合同，不能继续用旧按钮操作当前失败。本轮慢成功样本只有实证拆解，没有性能改动或提速承诺。
+
 ## 统筹空返回自动恢复
 
 本次仅更新 Assistant，无 schema、权限或配置迁移。先运行 `test/task-session-provider-native.test.js` 与 `test/task-session-service-native.test.js`，核对空返回后原 wake 未 ack、技术失败 phase=decision、同 session 自动续办及重启预算保留；另核对有效决定不重复提交、已有执行不重派。按普通受控部署切换，独立验证包 SHA256、安装版本、新进程及健康。新发生的正常结束但未提交决定由现有退避计时器恢复；旧版已落 blocked 的普通空返回不自动改账。持续失败超过六次恢复机会后，检查 providerRecovery 的 suspended 和原生日志，不通过重启清预算或重放业务动作。

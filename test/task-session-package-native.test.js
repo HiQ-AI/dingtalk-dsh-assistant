@@ -18,8 +18,11 @@ const call = (name, args) => ({ name, args })
 const finish = action => call('task_session_submit', { decision: { action, summary: 'Package verification.', evidence: [], limitations: [] } })
 
 async function pack(t) {
+  const started = performance.now()
+  const stage = name => t.diagnostic(`package ${name}: ${Math.round(performance.now() - started)}ms`)
+  stage('begin')
   const root = await mkdtemp(join(tmpdir(), 'task-package-native-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
+  t.after(async () => { await rm(root, { recursive: true, force: true }); stage('temporary-files-removed') })
   let manifest
   if (process.env.RELEASE_PACKAGE_DIRECTORY) {
     const version = JSON.parse(await readFile(join(source, 'package.json'), 'utf8')).version
@@ -41,10 +44,13 @@ async function pack(t) {
   for (const entry of await readdir(source, { withFileTypes: true })) {
     if (entry.isFile()) await copyFile(join(source, entry.name), join(staging, entry.name))
   }
+  stage('staged')
   const { stdout } = await exec(process.execPath, [npm, 'pack', '--json', '--ignore-scripts', '--pack-destination', root, '--cache', join(root, 'npm-cache')], { cwd: staging })
+  stage('packed')
   ;[manifest] = JSON.parse(stdout)
   await exec('tar', ['-xzf', join(root, manifest.filename), '-C', root])
   }
+  stage('extracted')
   const dir = join(root, 'package'), pkg = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'))
   // Inspect the extracted artifact, never resolve missing runtime imports from source.
   // Cover static imports/re-exports and literal dynamic imports/require calls in every packed JS file.
@@ -73,6 +79,7 @@ async function pack(t) {
     assert.ok(!/SKILL\.md|source-map\.json|(?:^|\/)skills\//.test(entry.path))
     if (entry.path.endsWith('.js')) assert.doesNotMatch(await readFile(join(dir, entry.path), 'utf8'), /小小鹏|D:[/\\]baibu-agent|HiQ-AI\/dataset(?:-web)?|bytebase\.baibu/i)
   }
+  stage('bytes-and-imports-verified')
   // Use the already installed official dependency tree; no source fallback or dependency download.
   const installed = createRequire(join(source, 'package.json'))
   for (const name of Object.keys(pkg.dependencies)) {
@@ -81,15 +88,17 @@ async function pack(t) {
     await mkdir(dirname(link), { recursive: true })
     await symlink(await realpath(target), link, 'junction')
   }
+  stage('dependency-links-ready')
   const delivery = await import(pathToFileURL(join(dir, 'notification-delivery.js')).href)
   assert.equal(typeof delivery.deliverTaskNotification, 'function')
   assert.equal(typeof (await import(pathToFileURL(join(dir, 'dws-adapter.js')).href)).createDwsAdapter, 'function')
-  return { root, dir, pkg, manifest }
+  return { root, dir, pkg, manifest, stage }
 }
 
 test('actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files', async t => {
   const f = await pack(t), service = await import(pathToFileURL(join(f.dir, 'task-session-service.js')).href)
   assert.equal((await import(pathToFileURL(join(f.dir, 'index.js')).href)).name, 'dingtalk-dsh-assistant-web')
+  f.stage('runtime-imports-ready')
   const personal = join(f.root, 'personal'), work = join(f.root, 'runtime')
   await mkdir(join(personal, 'external-guide'), { recursive: true }); await mkdir(work)
   await writeFile(join(personal, 'external-guide', 'SKILL.md'), '---\nname: external-guide\ndescription: External user-owned guide.\n---\nPACKED_PERSONAL_BODY\n')
@@ -127,23 +136,28 @@ test('actual npm tarball has only the generic runtime and runs a personal-skill 
     assert.ok(JSON.stringify(request).includes('PACKED_PERSONAL_BODY'))
     return [call('execution_submit', { output: { status: 'completed', summary: 'Read actual external skill.', evidence: [], limitations: [], artifacts: [] } })]
   }, { skillDirs: [personal], serviceFactory: service.openTaskSessionService })
+  f.stage('native-host-ready')
   t.after(() => h.close())
   try {
     await h.service.ingest({ groupId: 'native-group', messageId: 'packed-skill', senderOpenDingTalkId: 'native-user', text: '测试助手，Read my external guide.', occurredAt: '2026-10-13T17:00:00Z', timestamp: '2026-10-13T17:00:00Z' })
+    f.stage('message-ingested')
     await h.service.whenIdle()
+    f.stage('native-task-idle')
     assert.equal((await h.query('task.list'))[0].status, 'completed')
     assert.equal((await h.query('task.list'))[0].topicRefs.length, 1)
     assert.equal(h.residentStore.listTopics('native-group').length, 1)
     assert.deepEqual(await h.query('operation.list'), [])
     assert.equal((await h.query('execution.list')).length, 3)
     assert.deepEqual((await h.service.recover()).failures, [])
-  } finally { await h.close() }
+    f.stage('native-task-verified')
+  } finally { await h.close(); f.stage('native-host-closed') }
 })
 
 test('actual extracted resident starts and serves health without legacy entrypoints or personal assets', async t => {
   const f = await pack(t), resident = await import(pathToFileURL(join(f.dir, 'resident.js')).href)
   const work = join(f.root, 'runtime'); await mkdir(work)
   const h = await nativeTaskHost(work, () => { throw new Error('Startup must not call a model') }, { resident: true })
+  f.stage('resident-host-ready')
   t.after(() => h.close())
   const probe = createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve))
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve))
@@ -154,11 +168,13 @@ test('actual extracted resident starts and serves health without legacy entrypoi
     fiber = await h.ctx.plugin(resident, { host: '127.0.0.1', port, proxyUrl: '', agentWorkspaceDir: work, agentPreset: 'native-test',
       dws: { enabled: false }, taskSessions: { dbPath: join(work, 'resident.db'), instanceId: 'packed-runtime', initialize: true,
         ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', recoveryIntervalMs: 60000 } })
+    f.stage('resident-listening')
     const health = await new Promise((resolve,reject) => get(`http://127.0.0.1:${port}/health`, { agent: false }, response => {
       let text = ''; response.on('data', chunk => { text += chunk }); response.on('end', () => resolve({ status: response.statusCode, body: JSON.parse(text) }))
     }).on('error', reject))
     assert.equal(health.status, 200); assert.equal(health.body.status, 'ok')
     assert.equal(h.requests.length, 0)
     for (const name of ['workflow', 'execution', 'goal']) assert.equal(h.ctx.get(name), undefined)
-  } finally { await fiber?.dispose(); await h.close() }
+    f.stage('resident-health-verified')
+  } finally { await fiber?.dispose(); await h.close(); f.stage('resident-closed') }
 })

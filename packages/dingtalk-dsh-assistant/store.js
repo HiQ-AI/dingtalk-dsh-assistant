@@ -88,6 +88,7 @@ const outboundSchema = z.object({
   notificationState: z.enum(['prepared','starting','unknown','delivered','failed','superseded']).optional(),
   notificationRetryAt: z.string().optional(), notificationFailurePhase: z.enum(['send', 'readback']).optional(), notificationKnownNotSent: z.boolean().optional(),
   notificationTaskId: z.string().min(1).optional(),
+  notificationRecovery: z.object({ action: z.enum(['send', 'readback']).nullable(), expectedToken: z.string().regex(/^[a-f0-9]{64}$/u), reason: z.string() }).optional(),
   deliveryAttemptCount: z.number().int().nonnegative().optional(), deliveryAttemptedAt: z.string().min(1).optional(),
   sendAttemptCount: z.number().int().nonnegative().optional(), readbackAttemptCount: z.number().int().nonnegative().optional(),
   deliveryPendingReason: z.string().min(1).optional(), deliveryError: z.string().min(1).optional(),
@@ -489,6 +490,19 @@ export async function openResidentStore(storageDomain) {
       const value = group ? sourceDispatchOwnershipFor(group, { unitId, unitRevision }) : undefined
       return value ? JSON.parse(JSON.stringify(value)) : undefined
     },
+    retrySourceDispatch: ({ groupId, messageId, messageVersion, activeUnitRefs, reservationId }, retry) => serialize(groupId, async () => {
+      const group = findGroupEntry(groupId)?.[1]
+      const message = group?.messages.find(item => item.messageId === messageId)
+      const keys = refs => refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision])).sort()
+      const owner = group?.sourceDispatchOwnership.find(item => item.reservationId === reservationId)
+      if (!message || message.messageVersion !== messageVersion || !Array.isArray(activeUnitRefs)
+        || JSON.stringify(keys(message.activeUnitRefs ?? [])) !== JSON.stringify(keys(activeUnitRefs))
+        || !owner || owner.dispatchOwner !== 'coordination' || owner.frozen || owner.semanticState !== 'reserved'
+        || owner.sourceSnapshot.messageId !== messageId || owner.sourceSnapshot.messageVersion !== messageVersion
+        || !message.activeUnitRefs?.some(ref => ref.unitId === owner.unitId && ref.unitRevision === owner.unitRevision)) throw new Error('MESSAGE_RETRY_STALE')
+      // Hold the message-version queue until the separate source-ledger CAS commits; never dispatch under this lock.
+      return retry(JSON.parse(JSON.stringify(owner)))
+    }),
     listSourceDispatchOwnership: groupId => JSON.parse(JSON.stringify(findGroupEntry(groupId)?.[1].sourceDispatchOwnership ?? [])),
     reserveSourceDispatch: ({ groupId, unitId, unitRevision, expectedGeneration = 0, sourceSnapshot }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -559,7 +573,8 @@ export async function openResidentStore(storageDomain) {
       })
       return JSON.parse(JSON.stringify(reservation))
     }),
-    updateCoordinationRequest: (groupId, requestId, patch) => serialize(groupId, async () => {
+    updateCoordinationRequest: (groupId, requestId, patch, validateSnapshot) => serialize(groupId, async () => {
+      validateSnapshot?.()
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_found:${groupId}`)
       const [key, group] = entry
@@ -970,7 +985,8 @@ export async function openResidentStore(storageDomain) {
       })
       return result
     }),
-    updateTopicDecision: ({ groupId, topicId, decisionId, patch, expectedStatus }) => serialize(groupId, async () => {
+    updateTopicDecision: ({ groupId, topicId, decisionId, patch, expectedStatus, validateSnapshot }) => serialize(groupId, async () => {
+      validateSnapshot?.()
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (Object.keys(patch).some((key) => !['status', 'operations', 'progress', 'error', 'attempt', 'retryBaseAttempt', 'nextRetryAt', 'recoveryReason', 'failureOperationId'].includes(key))) throw new Error('topic_decision_patch_invalid')

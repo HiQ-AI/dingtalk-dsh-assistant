@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { taskNotificationRecovery } from './notification-delivery.js'
 
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item)
@@ -76,11 +77,22 @@ export async function ingestTaskResidentMessage({ ctx, residentStore, message, r
 }
 
 /** Message-version facts only; mutable timestamps and notification bodies are not timing evidence. */
-export function messageProcessingSources(sources, notifications, groupId) {
+export function messageProcessingSources(sources, notifications, groupId, coordinationSources = [], ownerships = []) {
   return sources.filter(source => source.groupId === groupId).map(source => ({
     sourceId: source.sourceId, groupId: source.groupId, messageId: source.messageId, version: source.version, channel: source.channel,
     receivedAt: source.receivedAt ?? null, routed: source.routed === true, routedAt: source.routedAt ?? null,
     routePreparedAt: source.routePreparedAt ?? null,
+    coordination: coordinationSources.flatMap(item => {
+      if (item.groupId !== source.groupId || item.sourceMessageId !== source.messageId || !item.sourceRefs?.includes(source.sourceId)
+        || item.dispatchOwner !== 'coordination') return []
+      const owner = ownerships.find(owner => owner.reservationId === item.reservationId && owner.generation === item.reservationGeneration
+        && owner.unitId === item.unitId && owner.unitRevision === item.revision && owner.dispatchOwner === 'coordination'
+        && owner.sourceSnapshot.messageId === source.messageId && owner.sourceSnapshot.messageVersion === source.version)
+      return !owner ? [] : [{ unitId: item.unitId, unitRevision: item.revision, reservationId: item.reservationId,
+        generation: item.reservationGeneration, state: item.state, attempt: item.attemptCount ?? 0, nextRetryAt: item.nextRetryAt ?? null,
+        retryToken: createHash('sha256').update(JSON.stringify([item.id, item.fence, item.attemptCount ?? 0, item.retryEpoch ?? 0, item.nextRetryAt ?? null])).digest('hex'),
+        resolved: !!item.resolvedBy || ['accepted', 'needs_clarification'].includes(owner.semanticState), frozen: item.frozen === true || owner.frozen === true }]
+    }),
     processingCompleted: source.processingCompleted ? { at: source.processingCompleted.at,
       routingRevision: source.processingCompleted.routingRevision,
       activeUnitRefs: (source.processingCompleted.activeUnitRefs ?? []).map(({ unitId, unitRevision }) => ({ unitId, unitRevision })) } : null,
@@ -119,6 +131,7 @@ export function taskNotificationOutbound(notification) {
       : knownNotSent && notification.state === 'failed' ? 'pre-send-rejected' : notification.state
   return {
     outboundId: notification.id,
+    notificationRecovery: taskNotificationRecovery(notification),
     ...(notification.supersededBy ? { supersededByOutboundId: notification.supersededBy, supersededAt: notification.updatedAt } : {}),
     // One source can produce both a question and completion. Deduplicate by notification.
     sourceMessageId: `task-notification:${notification.id}`,

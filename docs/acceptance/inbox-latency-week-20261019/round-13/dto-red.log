@@ -1,0 +1,44 @@
+✖ coordination processing DTO fences source versions and reservation generations without private errors (2.9061ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 415.7158
+
+✖ failing tests:
+
+test at test\task-message-projections.test.js:17:1
+✖ coordination processing DTO fences source versions and reservation generations without private errors (2.9061ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + undefined
+  - [
+  -   {
+  -     attempt: 3,
+  -     frozen: false,
+  -     generation: 3,
+  -     nextRetryAt: null,
+  -     reservationId: 'r',
+  -     resolved: false,
+  -     state: 'reserved',
+  -     unitId: 'u',
+  -     unitRevision: 2
+  -   }
+  - ]
+  
+      at TestContext.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/inbox-stage-timing/test/task-message-projections.test.js:24:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: [ { unitId: 'u', unitRevision: 2, reservationId: 'r', generation: 3, state: 'reserved', attempt: 3, nextRetryAt: null, resolved: false, frozen: false } ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

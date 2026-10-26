@@ -1,4 +1,4 @@
-import { deliverTaskNotification, recallTaskOperatorNotification } from './notification-delivery.js'
+import { deliverTaskNotification, recallTaskOperatorNotification, retryTaskNotification, taskNotificationRecovery } from './notification-delivery.js'
 import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
 import { safeNotificationDetail } from './notification-delivery.js'
@@ -70,7 +70,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     throw error
   }
   const inflightTasks = new Map(), inflightExecutions = new Map(), inflightGroups = new Map(), inflightNotifications = new Map()
-  const failures = new Map(), taskSlots = new Set()
+  const failures = new Map(), taskSlots = new Set(), messageRecoveryFlights = new Set()
   const pendingDialogue = task => task.dialogue?.some(item => !item.reply)
   const taskLimit = () => legacy.getAgentConfig().maxConcurrentTasks ?? config.maxConcurrentTasks ?? 5
   const executionLimit = () => config.maxConcurrentExecutions ?? taskLimit()
@@ -1204,6 +1204,33 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       ctx.logger?.warn?.(`notification drain: ${error.code ?? error.message}`)
     })
   }
+  const notificationRecoveryError = (code, statusCode = 409) => Object.assign(new Error(code), { code, statusCode })
+  const notificationStage = (current, stage) => current.payload.conversationId && Number.isSafeInteger(current.payload.sourceVersion)
+    ? recordMessageStage({ groupId: current.payload.conversationId,
+      messages: [{ messageId: current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
+  async function notificationDeliveryGate(notification) {
+    if (notification.state === 'superseded') return false
+    const previousOutbound = residentStore?.getGroup(notification.payload.conversationId)?.outbox.find(item => item.outboundId === notification.id)
+    if (notification.state === 'failed' && notification.deliveryError?.knownNotSent === true && notification.deliveryError?.retryable === true) {
+      let reason, taskIds = previousOutbound?.taskIds ?? []
+      if (previousOutbound?.supersededByOutboundId || previousOutbound?.status === 'superseded' || previousOutbound?.recallStatus) reason = 'superseded'
+      else if ((notification.payload.replyKind ?? previousOutbound?.replyKind) === 'confirmation') {
+        const linked = await Promise.all(taskIds.map(taskId => query('task.get', { taskId })))
+        if (!taskIds.length || !previousOutbound?.decisionId || linked.some(task => !task || !task.appliedOperations?.some(id => id.startsWith(`${previousOutbound.decisionId}:action:`)))) reason = 'confirmation-reassessment-required'
+        else if (linked.every(task => task.status !== 'active' || task.control === 'cancelled')) reason = 'task-terminal'
+      } else if (!(notification.payload.replyKind ?? previousOutbound?.replyKind)) reason = 'confirmation-reassessment-required'
+      if (reason) {
+        const retired = await command('notification.retireUnsent', { notificationId: notification.id, reason, taskIds,
+          evidenceRef: `unsent-intent:${previousOutbound?.decisionId ?? notification.id}:${reason}` })
+        await projectTaskNotification({ residentStore, notification: retired.result.notification })
+        return false
+      }
+    }
+    const blocked = ['prepared', 'failed'].includes(notification.state)
+      && (previousOutbound?.supersededByOutboundId || previousOutbound?.status === 'superseded' || previousOutbound?.recallStatus)
+    if (blocked) await projectTaskNotification({ residentStore, notification })
+    return !blocked
+  }
   async function scanNotifications(attempted) {
     for (let notification of await query('notification.list')) {
       if (closed) return
@@ -1239,28 +1266,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         }
       }
 
-      const previousOutbound = residentStore?.getGroup(notification.payload.conversationId)?.outbox.find(item => item.outboundId === notification.id)
-      if (notification.state === 'failed' && notification.deliveryError?.knownNotSent === true && notification.deliveryError?.retryable === true) {
-        let reason, taskIds = previousOutbound?.taskIds ?? []
-        if (previousOutbound?.supersededByOutboundId || previousOutbound?.status === 'superseded' || previousOutbound?.recallStatus) reason = 'superseded'
-        else if ((notification.payload.replyKind ?? previousOutbound?.replyKind) === 'confirmation') {
-          const linked = await Promise.all(taskIds.map(taskId => query('task.get', { taskId })))
-          if (!taskIds.length || !previousOutbound?.decisionId || linked.some(task => !task || !task.appliedOperations?.some(id => id.startsWith(`${previousOutbound.decisionId}:action:`)))) reason = 'confirmation-reassessment-required'
-          else if (linked.every(task => task.status !== 'active' || task.control === 'cancelled')) reason = 'task-terminal'
-        } else if (!(notification.payload.replyKind ?? previousOutbound?.replyKind)) reason = 'confirmation-reassessment-required'
-        if (reason) {
-          const retired = await command('notification.retireUnsent', { notificationId: notification.id, reason, taskIds,
-            evidenceRef: `unsent-intent:${previousOutbound?.decisionId ?? notification.id}:${reason}` })
-          await projectTaskNotification({ residentStore, notification: retired.result.notification })
-          continue
-        }
-      }
+      if (!await notificationDeliveryGate(notification)) continue
       await projectTaskNotification({ residentStore, notification })
       // 投影的 await 期间原投递可能已完成；使用命令更新的当前态，不能再按旧 starting 快照回读。
       notification = notificationCache.get(notification.id) ?? notification
       if (notification.state === 'delivered' && failures.get(notification.id)?.code === 'TASK_NOTIFICATION_INCOMPLETE_READBACK')
         failures.delete(notification.id)
-      if (['prepared', 'failed'].includes(notification.state) && (previousOutbound?.supersededByOutboundId || previousOutbound?.status === 'superseded' || previousOutbound?.recallStatus)) continue
       if (notification.state === 'delivered' || notification.state === 'failed' && !(notification.deliveryError?.knownNotSent && notification.deliveryError?.retryable)
         || inflightNotifications.size > 0 || Date.now() < notificationTransportRetryAt || !retryReady(notification.id) || Date.parse(notification.nextAttemptAt ?? '') > Date.now() || inflightNotifications.has(notification.id) || attempted?.has(notification.id)) continue
       attempted?.add(notification.id)
@@ -1268,9 +1279,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const processingRevision = sourceProcessingRevision
         try {
           const result = await deliverTaskNotification({ notification, notifications, command,
-            onStage: (current, stage) => current.payload.conversationId && Number.isSafeInteger(current.payload.sourceVersion)
-              ? recordMessageStage({ groupId: current.payload.conversationId,
-              messages: [{ messageId: current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined })
+            onStage: notificationStage })
           if (result?.sourcePending) sourceHeldNotifications.set(notification.id, processingRevision)
           else sourceHeldNotifications.delete(notification.id)
         }
@@ -1520,11 +1529,65 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return taskDTO(result.result.task)
   }
   return {
+    async retryNotification({ groupId, notificationId, expectedToken }) {
+      const notification = typeof notificationId === 'string' && notificationId
+        ? await query('notification.get', { notificationId }) : null
+      if (!groupId || !legacy.getGroup(groupId) || !notification || notification.payload.audience === 'operator'
+        || notification.payload.conversationId !== groupId) throw notificationRecoveryError('TASK_NOTIFICATION_NOT_FOUND', 404)
+      if (inflightNotifications.has(notificationId)) throw notificationRecoveryError('TASK_NOTIFICATION_RECOVERY_IN_PROGRESS')
+      if (taskNotificationRecovery(notification).expectedToken !== expectedToken) throw notificationRecoveryError('DYNAMIC_NOTIFICATION_RECOVERY_STALE')
+      const pending = Promise.resolve().then(async () => {
+        if (!await notificationDeliveryGate(notification)) throw notificationRecoveryError('TASK_NOTIFICATION_RECOVERY_FORBIDDEN')
+        const processingRevision = sourceProcessingRevision
+        const result = await retryTaskNotification({ notification, expectedToken, notifications, command, onStage: notificationStage })
+        if (result?.sourcePending) sourceHeldNotifications.set(notificationId, processingRevision)
+        else sourceHeldNotifications.delete(notificationId)
+        failures.delete(notificationId)
+        return { groupId, notificationId, ...result }
+      })
+      // Expected CAS/gate refusals are not transport failures; effect diagnostics remain durable.
+      const settled = pending.finally(() => inflightNotifications.delete(notificationId))
+      inflightNotifications.set(notificationId, settled)
+      continueNotificationDelivery(settled, new Set([notificationId]))
+      return settled
+    },
     listAuthorizationRequests: listHumanRequests, respondHumanRequest, respondPrivateHumanReply,
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
+    messageProcessingRequests: groupId => topicCoordinator.messageProcessingRequests(groupId),
     async messageProcessingSources(groupId) {
-      const [sources, notifications] = await Promise.all([query('source.list', { groupId }), query('notification.list', { groupId })])
-      return messageProcessingSources(sources, notifications, groupId)
+      const [sources, notifications, coordinationSources] = await Promise.all([
+        query('source.list', { groupId }), query('notification.list', { groupId }), query('coordination.source.list', { groupId }),
+      ])
+      return messageProcessingSources(sources, notifications, groupId, coordinationSources, residentStore.listSourceDispatchOwnership(groupId))
+    },
+    async retryMessageProcessing(args) {
+      const { groupId, messageId, phase, requestId, token } = args
+      if (closed || !legacy.getGroup(groupId)) fail('MESSAGE_RETRY_UNAVAILABLE')
+      const key = JSON.stringify([groupId, messageId])
+      if (messageRecoveryFlights.has(key)) fail('MESSAGE_RETRY_IN_PROGRESS')
+      messageRecoveryFlights.add(key)
+      try {
+        if (phase === 'host') await topicCoordinator.retryMessageHost(args)
+        else if (phase === 'routing' || phase === 'decision') {
+          const request = topicCoordinator.messageProcessingRequests(groupId).find(item => item.requestId === requestId)
+          if (!request || Boolean(request.topicId) !== (phase === 'decision')) fail('MESSAGE_RETRY_STALE')
+          await topicCoordinator.retryMessageRequest(args)
+        } else if (phase === 'coordination') {
+          if (config.coordination?.enabled !== true || config.coordination?.mode === 'frozen'
+            || (await query('coordination.runtime'))?.mode === 'frozen') fail('MESSAGE_RETRY_UNAVAILABLE')
+          await residentStore.retrySourceDispatch({ ...args, reservationId: requestId }, async owner => {
+            const source = await query('coordination.source', { unitId: owner.unitId, revision: owner.unitRevision })
+            if (!source || source.reservationId !== owner.reservationId || source.reservationGeneration !== owner.generation
+              || source.sourceMessageId !== messageId || source.groupId !== groupId || source.resolvedBy
+              || source.state !== 'reserved' || (source.attemptCount ?? 0) < 3 || source.nextRetryAt) fail('MESSAGE_RETRY_STALE')
+            await command('coordination.source.retry', { sourceId: source.id, fence: source.fence, token })
+          })
+          // Dispatch outside the Resident lock; the native planner rechecks ownership before accepting any effect.
+          void independentCoordination.recoverGroup(groupId).catch(error => failures.set(requestId, { id: requestId, code: error.code ?? error.message }))
+        } else fail('MESSAGE_RETRY_STALE')
+        if (phase !== 'coordination') void kickGroup(groupId)
+        return { groupId, messageId, requestId, status: 'attempted' }
+      } finally { messageRecoveryFlights.delete(key) }
     },
     coordinationSources: coordinationObserver.coordinationSources, coordinationSourceDetail: coordinationObserver.coordinationSourceDetail,
     coordinationWork: coordinationObserver.coordinationWork, coordinationWorkDetail: coordinationObserver.coordinationWorkDetail,

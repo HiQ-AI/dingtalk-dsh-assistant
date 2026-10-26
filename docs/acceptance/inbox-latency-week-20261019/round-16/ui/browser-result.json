@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "mode": "fixed",
+  "packageMode": "worktree",
+  "checks": [
+    "api-backed-topic-source-ignore-unknown-negative-and-cross-midnight",
+    "open-processing-facts-separates-settlement-and-notification",
+    "native-details-keyboard-toggle-and-stage-correlation",
+    "status-filter-uses-projected-state",
+    "refresh-does-not-invent-success",
+    "protocol-failure-filter-details-refresh-no-completed-time",
+    "receive-retry-auth-block-then-recover-and-double-click-single-flight",
+    "startup-retry-then-completed-overrides-old-exhaustion",
+    "outbound-auth-retry-unknown-readback-delivered-no-resend"
+  ],
+  "browser": "156.0.4314.42",
+  "sourceSha256": "ce360493dd39c664e25e1bfa9c51b22d2d96cb7d62d235c0a9187ef837bce399",
+  "errors": [],
+  "writes": [],
+  "boundary": "Full observer + real React/ReactDOM + real HTTP handleRequest + synthetic runtime; host slots/primitives adapted. No production instance, models, database or channel writes."
+}
