@@ -351,3 +351,32 @@ test('failed rows with acceptance evidence cannot re-enter send dispatch', async
   assert.equal(sends, 0)
   assert.equal(taskNotificationOutbound(await f.read()).notificationKnownNotSent, false)
 })
+
+test('send and readback phases observe independent attempts; unknown recovery measures only readback', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-26T01:00:00Z') })
+  const f = await fixture(t), stages = []
+  let sends = 0, reads = 0
+  const onStage = async (_notification, stage) => stages.push(structuredClone(stage))
+  await deliverTaskNotification({ notification: f.notification, command: f.command, onStage, notifications: {
+    async send() { sends++; t.mock.timers.tick(20); return { messageId: 'ack' } },
+    async readback() { reads++; t.mock.timers.tick(30); return null },
+  } })
+  const saved = await f.read()
+  assert.equal(saved.state, 'unknown')
+  assert.deepEqual(stages.map(stage => stage.stage), ['send', 'send', 'readback', 'readback'])
+  assert.equal(Date.parse(stages[1].completedAt) - Date.parse(stages[1].startedAt), 20)
+  assert.equal(Date.parse(stages[3].completedAt) - Date.parse(stages[3].startedAt), 30)
+  t.mock.timers.tick(10000)
+  await deliverTaskNotification({ notification: await f.read(), command: f.command, onStage, notifications: {
+    async send() { assert.fail('unknown must never resend') },
+    async readback() { reads++; return { messageId: 'ack' } },
+  } })
+  assert.equal(sends, 1); assert.equal(reads, 2)
+  assert.deepEqual(stages.slice(4).map(stage => stage.stage), ['readback', 'readback'])
+  assert.equal(stages[4].attempt, 2)
+  const delivered = await f.read()
+  assert.equal(delivered.state, 'delivered')
+  assert.equal(delivered.readbackAttemptCount, 2)
+  assert.equal(delivered.sendAttemptCount, 1)
+  assert.notEqual(stages[2].spanId, stages[4].spanId)
+})

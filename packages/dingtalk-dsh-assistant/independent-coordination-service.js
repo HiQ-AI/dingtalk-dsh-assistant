@@ -11,7 +11,7 @@ const clone = value => JSON.parse(JSON.stringify(value))
 
 /** One Host-owned queue for independent source units; Topic is never its parent. */
 export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config = {}, residentStore, query, command,
-  ownerActorId, onApplied, onError, onRecovered = () => {}, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
+  ownerActorId, onApplied, onError, onStage = async () => {}, onRecovered = () => {}, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
   coordinationModelSelection(config)
   const observations = new Map(), catalogObservations = new Map(), arrangementObservations = new Map(), running = new Map(), admissions = new Set()
   let closed = false
@@ -443,10 +443,10 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     const snapshot = request.sourceSnapshot
     await command('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
       payload: { kind: 'coordination', conversationId: request.groupId, text, atOpenDingTalkIds: [], replyKind: 'substantive',
-        sourceMessageId: snapshot.messageId, actorId: snapshot.actorId,
+        sourceMessageId: snapshot.messageId, sourceVersion: snapshot.messageVersion, actorId: snapshot.actorId,
         fact: { coordinationId, eventId, sourceUnitId: request.unitId, sourceUnitRevision: request.unitRevision, ...fact } } }, `prepare:${notificationId}`)
   }
-  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config, context, submit,
+  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config, context, submit, onStage,
     isCurrent: request => { try { assertOwned(request); return true } catch { return false } } })
   async function acceptMemberTrigger(groupId, coordination, state, member) {
     if (coordination.allTogether && coordination.pendingClarifications?.length) return
@@ -516,6 +516,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     async recoverGroup(groupId) {
       if (closed) return
       if (running.has(groupId)) return running.get(groupId)
+      const queuedAt = new Date().toISOString()
       const work = (async () => {
         const frozen = await isFrozen()
         for (const entry of residentStore.listSourceDispatchOwnership(groupId)) {
@@ -555,7 +556,11 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
             } else if (ledger.state === 'reserved' && !frozen && config.enabled === true && !admissions.has(entry.reservationId)
               && (ledger.attemptCount ?? 0) < 3 && (!ledger.nextRetryAt || Date.parse(ledger.nextRetryAt) <= Date.now())) {
               admissions.add(entry.reservationId)
-              try { await planner.plan(request) }
+              try {
+                await onStage(request, { spanId: `queue:${request.reservationId}:${request.generation}:${queuedAt}`, stage: 'queue',
+                  requestId: request.reservationId, attempt: ledger.attemptCount ?? 0, startedAt: queuedAt, completedAt: new Date().toISOString() })
+                await planner.plan(request)
+              }
               catch (error) {
                 const current = await query('coordination.source', { unitId: request.unitId, revision: request.unitRevision })
                 if (current?.state === 'reserved' && !current.frozen)

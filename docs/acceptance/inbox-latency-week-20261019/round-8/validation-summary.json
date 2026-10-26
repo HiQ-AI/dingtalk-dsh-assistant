@@ -1,0 +1,41 @@
+{
+  "runs": {
+    "targeted": {
+      "tests": 248,
+      "pass": 248,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 16653.1685
+    },
+    "focused": {
+      "tests": 5,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 2385.3458
+    },
+    "native": {
+      "tests": 72,
+      "pass": 72,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 637751.6981
+    },
+    "releaseSmoke": {
+      "tests": 14,
+      "pass": 14,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 29807.9452
+    }
+  },
+  "overlappingRunsMustNotBeSummed": true,
+  "nativeProfile": "test/fixtures/native-profile/package.json",
+  "browserEvidence": "round-5/ui/browser-result.json",
+  "browserSourceUnchanged": true,
+  "boundary": "Isolated synthetic data, scripted model adapters and real native runtime/browser only. No production DB writes, deployment, real channel messages, live model or performance claim."
+}

@@ -120,7 +120,7 @@ append新增用户成员也可提供change.sourceOrder，局部ordinal从1开始
 错误归类、原文没有协调意图时可reject，Host将先冻结并核对无命令，只有安全CAS交回后旧链才可接管；不能把reject当作已交回或已执行。
 通过 coordination_submit 提交。accepted 表示安排已持久接纳，不是业务完成或群通知送达。`
 
-export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir = () => root, getModelSelection = () => coordinationModelSelection(config), agentPreset, config, context, submit, isCurrent = () => true }) {
+export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir = () => root, getModelSelection = () => coordinationModelSelection(config), agentPreset, config, context, submit, onStage = async () => {}, isCurrent = () => true }) {
   const handles = new Set()
   let closed = false
   return {
@@ -130,7 +130,8 @@ export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDi
       if (!isCurrent(request)) throw new Error('COORDINATION_SOURCE_FENCED')
       const resolvedCall = await ctx.llm.resolveCallConfig(selection)
       let submitted = false, steps = 0, result
-      const handle = await ctx.agents.create({ sessionId: `independent-${request.reservationId}-${request.generation}-${randomUUID().slice(0,8)}`,
+      const sessionId = `independent-${request.reservationId}-${request.generation}-${randomUUID().slice(0,8)}`
+      const handle = await ctx.agents.create({ sessionId,
         agentOptions: { ...selection, reasoningEffort: resolvedCall?.reasoningEffort ?? null }, meta: { cwd: await getWorkspaceDir(), origin: 'subagent', delegationDepth: 1, agentPreset },
         seed: [{ type: 'plugin:dingtalk/independent-coordination', seq: 0, time: Date.now(), ignorable: true,
           data: { reservationId: request.reservationId, generation: request.generation, groupId: request.groupId } }],
@@ -147,7 +148,11 @@ export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDi
             execute: async proposal => {
               if (submitted || closed) throw new Error('COORDINATION_REQUEST_SETTLED')
               const parsed = coordinationProposalSchema.parse(proposal)
-              result = await submit(request, parsed); submitted = true
+              const stage = { spanId: `host:${sessionId}:${randomUUID()}`, stage: 'host', requestId: request.reservationId,
+                sessionId, attempt: request.generation, startedAt: new Date().toISOString(), completedAt: null }
+              await onStage(request, stage)
+              try { result = await submit(request, parsed); submitted = true }
+              finally { await onStage(request, { ...stage, completedAt: new Date().toISOString() }) }
               return result
             } })
           agentCtx.tools.restrict({ allow: allowed.filter(name => agentCtx.tools.get(name)) })
@@ -156,13 +161,23 @@ export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDi
           agentCtx.systemPrompt.section({ name: 'independent-coordination', order: 120, text: coordinationPlannerInstructions })
         } })
       handles.add(handle)
+      let turn, timingTail = Promise.resolve()
+      const stopTiming = ctx.on('session/event', (session, event) => {
+        if (String(session.id) !== sessionId || !['turn/start', 'turn/end'].includes(event.type)) return
+        if (event.type === 'turn/start') turn = { spanId: `turn:${sessionId}:${event.seq}`, stage: 'turn',
+          requestId: request.reservationId, sessionId, attempt: request.generation, startedAt: new Date(event.time).toISOString(), completedAt: null }
+        if (!turn) return
+        const stage = { ...turn, ...(event.type === 'turn/end' ? { completedAt: new Date(event.time).toISOString() } : {}) }
+        timingTail = timingTail.then(() => onStage(request, stage))
+        if (event.type === 'turn/end') turn = undefined
+      })
       try {
         const initial = await context(request)
         handle.agent.steer(createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: JSON.stringify(initial) }] }))
         await handle.agent.whenIdle()
         if (!submitted) throw Object.assign(new Error('COORDINATION_NO_SUBMISSION'), { code: 'COORDINATION_NO_SUBMISSION' })
         return result
-      } finally { await handle.dispose(); handles.delete(handle) }
+      } finally { try { await timingTail } finally { stopTiming(); await handle.dispose(); handles.delete(handle) } }
     },
     async close() { closed = true; await Promise.allSettled([...handles].map(async h => { h.agent.cancel({ kind: 'user' }); await h.agent.whenIdle(); await h.dispose() })) },
   }

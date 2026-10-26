@@ -771,6 +771,83 @@ test('business completion creates a unique notification atomically; uncertain de
   assert.equal((await f.query({ kind: 'notification.list' })).length, 1)
 })
 
+test('notification timing separates acknowledgement from verified delivery and freezes both facts', async t => {
+  const f = await fixture(t), owner = await f.task()
+  const done = await f.command('task.complete', { binding: owner.binding, summary: 'done', notification: { destination: 'g', text: 'done' } })
+  const notificationId = done.result.notification.notificationId
+  const start = (await f.command('notification.start', { notificationId })).result.notification
+  await f.command('notification.ack', { notificationId, dispatchToken: start.dispatchToken, ack: { messageId: 'ack' } })
+  const acknowledged = await f.query({ kind: 'notification.get', notificationId })
+  assert.match(acknowledged.ackedAt, /^20/)
+  assert.equal(acknowledged.deliveredAt, undefined)
+  await f.command('notification.receipt', { notificationId, dispatchToken: start.dispatchToken, phase: 'readback', state: 'unknown' })
+  await f.command('notification.diagnostic', { notificationId, nextAttemptAt: '2099-01-01T00:00:00Z' })
+  assert.equal((await f.query({ kind: 'notification.get', notificationId })).ackedAt, acknowledged.ackedAt)
+  await f.command('notification.reconcile', { notificationId, state: 'delivered', evidenceRef: 'proof', receipt: { messageId: 'verified' } })
+  const delivered = await f.query({ kind: 'notification.get', notificationId })
+  assert.match(delivered.deliveredAt, /^20/)
+  await f.command('notification.reconcile', { notificationId, state: 'delivered', evidenceRef: 'same-proof' })
+  assert.equal((await f.query({ kind: 'notification.get', notificationId })).deliveredAt, delivered.deliveredAt)
+  assert.equal((await f.query({ kind: 'notification.get', notificationId })).ackedAt, acknowledged.ackedAt)
+})
+
+test('message stages retain observed intervals, interrupted opens and shared identity without content across restart', async t => {
+  const f = await fixture(t)
+  for (const sourceId of ['first', 'second']) await f.command('source.record', { sourceId, groupId: 'g', messageId: sourceId, actorId: 'a', text: 'private' })
+  const stage = { spanId: 'shared-turn', stage: 'turn', requestId: 'decision', sessionId: 'session', attempt: 0,
+    startedAt: '2026-10-26T01:00:00.000Z', completedAt: null, shared: true, text: 'secret', token: 'secret' }
+  const receipt = await f.command('source.stage', { sourceId: 'first', stage })
+  assert.equal(receipt.result.source, undefined)
+  assert.equal(JSON.stringify(receipt).includes('secret'), false)
+  assert.equal(JSON.stringify(receipt).includes('private'), false)
+  const open = (await f.query({ kind: 'source.get', sourceId: 'first' })).stages[0]
+  assert.equal(open.quality, 'open')
+  assert.equal(open.text, undefined)
+  assert.equal(open.token, undefined)
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'source.get', sourceId: 'first' })).stages[0].completedAt, null)
+  const finished = { ...stage, completedAt: '2026-10-26T01:00:01.000Z' }
+  for (const sourceId of ['first', 'second']) await f.command('source.stage', { sourceId, stage: finished })
+  await f.command('source.stage', { sourceId: 'first', stage: finished })
+  const saved = (await f.query({ kind: 'source.get', sourceId: 'first' })).stages
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0].quality, 'observed')
+  assert.equal(saved[0].spanId, (await f.query({ kind: 'source.get', sourceId: 'second' })).stages[0].spanId)
+  await assert.rejects(f.command('source.stage', { sourceId: 'first', stage: { ...finished, completedAt: '2026-10-26T02:00:00Z' } }), { code: 'DYNAMIC_SOURCE_STAGE_CONFLICT' })
+  await assert.rejects(f.command('source.stage', { sourceId: 'first', stage: { ...finished, spanId: 'invalid', startedAt: 'not-a-time' } }), { code: 'DYNAMIC_SOURCE_STAGE_INVALID' })
+  const negative = { ...finished, spanId: 'clock-reversed', completedAt: '2026-10-26T00:59:59.000Z' }
+  await f.command('source.stage', { sourceId: 'first', stage: { ...negative, completedAt: null } })
+  assert.equal((await f.query({ kind: 'source.get', sourceId: 'first' })).stages.find(item => item.spanId === negative.spanId).quality, 'open')
+  await f.command('source.stage', { sourceId: 'first', stage: negative })
+  await f.reopen()
+  const anomaly = (await f.query({ kind: 'source.get', sourceId: 'first' })).stages.find(item => item.spanId === negative.spanId)
+  assert.equal(anomaly.quality, 'negative')
+  assert.equal(anomaly.startedAt, negative.startedAt)
+  assert.equal(anomaly.completedAt, negative.completedAt)
+
+})
+
+test('source timing preserves first received and routed facts across idempotent replay', async t => {
+  const f = await fixture(t)
+  const args = { sourceId: 'timed-source', groupId: 'timed-group', messageId: 'timed-message', actorId: 'timed-user', text: 'timed',
+    receivedAt: '2026-10-26T01:00:00.000Z' }
+  await f.command('source.record', args, 'timed-record')
+  await f.command('source.record', { ...args, receivedAt: '2026-10-26T02:00:00.000Z' }, 'timed-replay')
+  const before = (await f.query({ kind: 'source.get', sourceId: args.sourceId }))
+  assert.equal(before.receivedAt, args.receivedAt)
+  assert.equal(before.routedAt, undefined)
+  await f.command('source.routed', { sourceId: args.sourceId, receipt: { routeId: 'timed-route' } }, 'timed-route')
+  const after = await f.query({ kind: 'source.get', sourceId: args.sourceId })
+  assert.equal(after.receivedAt, args.receivedAt)
+  assert.match(after.routedAt, /^20/)
+  await f.command('source.routed', { sourceId: args.sourceId, receipt: { routeId: 'timed-route' } }, 'timed-route-replay')
+  assert.equal((await f.query({ kind: 'source.get', sourceId: args.sourceId })).routedAt, after.routedAt)
+  const historical = { sourceId: 'legacy-source', groupId: args.groupId, messageId: 'legacy-message', actorId: args.actorId, text: 'legacy' }
+  await f.command('source.record', historical)
+  await f.command('source.record', { ...historical, receivedAt: args.receivedAt })
+  assert.equal((await f.query({ kind: 'source.get', sourceId: historical.sourceId })).receivedAt, undefined)
+})
+
 test('source route decisions are immutable and group sessions reclaim pending sources after restart', async t => {
   const f = await fixture(t)
   const args = { sourceId: 'source-1', groupId: 'group-1', messageId: 'msg-1', actorId: 'user-1', senderName: '真实作者', text: 'Do the work' }

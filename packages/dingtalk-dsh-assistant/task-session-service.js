@@ -18,7 +18,7 @@ import { coordinationModelSelection } from './independent-coordination-planner.j
 import { createCoordinationObserver } from './coordination-observer.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
 import { resolveTopicMessages, stableId } from './topic-model.js'
-import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from './task-message-projections.js'
+import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
@@ -481,39 +481,77 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     await Promise.all([taskSessions.cancel(taskId), ...list.filter(item => !item.drained).map(item => executionSessions.cancel(item.executionId))])
     await Promise.allSettled([inflightTasks.get(taskId), ...list.map(item => inflightExecutions.get(item.executionId))].filter(Boolean))
   }
+  async function recordMessageStage(request, stage) {
+    try {
+      const group = residentStore.getGroup(request.groupId)
+      const refs = request.sourceSnapshot ? [request.sourceSnapshot] : request.messages
+        ?? (request.topicId && request.revision ? resolveTopicMessages(group, request.topicId, request.revision) : [])
+      const sources = await query('source.list', { groupId: request.groupId })
+      const matched = sources.filter(source => refs.some(ref => ref.messageId === source.messageId
+        && (ref.messageVersion ?? ref.version) === source.version))
+      for (const source of matched) await command('source.stage', { sourceId: source.sourceId,
+        stage: { ...stage, shared: matched.length > 1 } })
+    } catch (error) {
+      failures.set(`timing:${stage.requestId}`, { id: `timing:${stage.requestId}`, code: error.code ?? error.message })
+      ctx.logger?.warn?.(`message timing: ${error.code ?? error.message}`)
+    }
+  }
+  const sameProcessingRefs = (source, refs) => hash((source.activeUnitRefs ?? source.processingCompleted?.activeUnitRefs ?? []).map(ref => [ref.unitId, ref.unitRevision]).sort())
+    === hash(refs.map(ref => [ref.unitId, ref.unitRevision]).sort()) && (source.activeUnitRefs !== undefined || source.processingCompleted !== undefined)
   async function projectSource(source) {
-    if (source.routed || source.channel === 'web' || !residentStore) return
+    if (source.channel === 'web' || !residentStore) return
     const group = residentStore.getGroup(source.groupId)
     const message = group?.messages.find(item => item.messageId === source.messageId)
     if (!message || message.routingStatus !== 'routed') return
     const coordinated = (residentStore.listSourceDispatchOwnership?.(source.groupId) ?? [])
       .filter(r => r.dispatchOwner === 'coordination' && r.sourceSnapshot.messageId === source.messageId && r.sourceSnapshot.messageVersion === source.version)
     if (source.version < message.messageVersion) {
-      await command('source.routed', { sourceId: source.sourceId, receipt: [{ supersededByVersion: message.messageVersion }] }, `topic-routed:${source.sourceId}`)
+      if (!source.routed || source.processingPending) await command('source.routed', { sourceId: source.sourceId,
+        receipt: source.routed ? source.routeReceipt : [{ supersededByVersion: message.messageVersion }],
+        supersededByVersion: message.messageVersion }, `source-superseded:${source.sourceId}:${message.messageVersion}`)
       return
     }
     if (source.version !== message.messageVersion) return
-    if (!source.processingCompleted && Array.isArray(message.activeUnitRefs)) {
+    const refs = residentStore.listTopics(source.groupId).filter(topic => resolveTopicMessages(group, topic.topicId, topic.revision)
+      .some(item => item.messageId === source.messageId && item.messageVersion === source.version))
+    const legacyComplete = refs.every(topic => {
+      const latest = new Map()
+      for (const entry of topic.entries) if (entry.messageId === source.messageId) latest.set(entry.unitId ?? 'legacy', entry)
+      return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === source.version).every(entry =>
+        topic.processedRevision >= entry.revision && topic.decisions.some(record => record.status === 'completed' && record.revision >= entry.revision))
+    })
+    if (Array.isArray(message.activeUnitRefs)) {
+      if (!sameProcessingRefs(source, message.activeUnitRefs) || source.processingCompleted && !legacyComplete)
+        source = (await command('source.processingStarted', { sourceId: source.sourceId, messageVersion: source.version,
+          activeUnitRefs: message.activeUnitRefs, legacyPending: !legacyComplete })).result.source
       const ownership = new Map((residentStore.listSourceDispatchOwnership?.(source.groupId) ?? [])
         .map(item => [`${item.unitId}:${item.unitRevision}`, item]))
       const units = message.activeUnitRefs.map(ref => {
         const unit = message.units?.find(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
-        return unit && { ...ref, dispatchOwner: ownership.get(`${ref.unitId}:${ref.unitRevision}`)?.dispatchOwner ?? unit.dispatchOwner ?? 'legacy-topic' }
+        return unit && { ...ref, processingComplete: legacyComplete, dispatchOwner: ownership.get(`${ref.unitId}:${ref.unitRevision}`)?.dispatchOwner ?? unit.dispatchOwner ?? 'legacy-topic' }
       })
       // route/units 是 Host 的持久事实；账本再次校验全部协调单元的决定，而非等待业务 settled。
-      if (units.every(Boolean)) {
+      if (!source.processingCompleted && legacyComplete && units.every(Boolean)) {
         try { await command('source.processingCompleted', { sourceId: source.sourceId, messageVersion: source.version,
-          routingRevision: group.routingRevision, activeUnitRefs: message.activeUnitRefs, units }, `source-processing:${source.sourceId}:${group.routingRevision}`) }
+          routingRevision: group.routingRevision, activeUnitRefs: message.activeUnitRefs, units }) }
         catch (error) { if (error.code !== 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE') throw error }
       }
     }
     if (coordinated.some(r => !r.settled)) return
-    const refs = residentStore.listTopics(source.groupId).filter(topic => resolveTopicMessages(residentStore.getGroup(source.groupId), topic.topicId, topic.revision).some(item => item.messageId === source.messageId && item.messageVersion === source.version))
-    if (refs.some(topic => topic.processedRevision < topic.revision)) return
+    if (source.routed || !legacyComplete) return
     await command('source.routed', { sourceId: source.sourceId, receipt: [...refs.map(topic => ({ topicId: topic.topicId, revision: topic.revision })),
       ...coordinated.map(r => ({ reservationId: r.reservationId, generation: r.generation, coordinationId: r.coordinationId }))] }, `topic-routed:${source.sourceId}`)
   }
   async function applyTopicAction(groupId, action, operation, record) {
+    if (action.kind === 'task-proposal' || await query('receipt.get', { id: `topic-operation:${operation.operationId}` })) return
+    const request = { groupId, messages: action.topicRefs.flatMap(ref => resolveTopicMessages(residentStore.getGroup(groupId), ref.topicId, ref.revision)) }
+    const stage = { spanId: `host:${operation.operationId}:${randomUUID()}`, stage: 'host', requestId: record.decisionId,
+      attempt: operation.attempt ?? 0, startedAt: new Date().toISOString(), completedAt: null }
+    await recordMessageStage(request, stage)
+    try { return await applyTopicActionBody(groupId, action, operation, record) }
+    finally { await recordMessageStage(request, { ...stage, completedAt: new Date().toISOString() }) }
+  }
+  async function applyTopicActionBody(groupId, action, operation, record) {
     if (action.kind === 'task-proposal') return
     // Also guard durable actions accepted by older schemas before any cancellation.
     if (action.kind === 'task-context') assertTaskContextSemantics(action)
@@ -607,7 +645,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       ...(await Promise.all(tasks.map(task => replyInternalIds(task)))).flat()].filter(Boolean)
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
-    coordinationEnabled: config.coordination?.enabled === true,
+    coordinationEnabled: config.coordination?.enabled === true, onStage: recordMessageStage,
+    onRouted: async (groupId, messageIds) => {
+      const group = residentStore.getGroup(groupId)
+      for (const source of await query('source.list', { groupId })) {
+        const message = group?.messages.find(item => item.messageId === source.messageId && item.messageVersion === source.version)
+        if (messageIds.includes(source.messageId) && Array.isArray(message?.activeUnitRefs) && !sameProcessingRefs(source, message.activeUnitRefs)) await command('source.processingStarted', { sourceId: source.sourceId,
+          messageVersion: source.version, activeUnitRefs: message.activeUnitRefs })
+      }
+    },
     quotedReminderContext: args => independentCoordination.quotedReminderContext(args),
     // 在接纳业务决定前拒绝泄漏正文，让原模型修改后重提，不能先创建任务再卡在外发。
     validateReply: async args => assertGroupReply(args.decision.reply, await topicReplyInternalIds(args)),
@@ -619,7 +665,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         void deliverNotifications()
         return group
       }
-      const sourceText = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)?.text
+      const replySource = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)
+      const sourceText = replySource?.text
       const previous = residentStore.getGroup(args.groupId)?.outbox.find(item => item.outboundId === args.outboundId)
       // The resident outbox can survive a crash before notification.prepare.
       const reply = previous ? { text: previous.text } : formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature, includeSignature: args.replyKind === 'substantive', internalIds: await topicReplyInternalIds(args) })
@@ -627,7 +674,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const group = await residentStore.appendOutbox(args)
       const notificationId = args.outboundId
       await command('notification.prepare', { notificationId, taskId: args.taskIds?.[0] ?? null, requirementRevision: 1, kind: 'topic-reply',
-        payload: { text: args.text, topicRefs: args.topicRefs, replyKind: args.replyKind, conversationId: args.groupId, sourceMessageId: args.replyToMessageId, actorId: args.replyToSenderOpenDingTalkId,
+        payload: { text: args.text, topicRefs: args.topicRefs, replyKind: args.replyKind, conversationId: args.groupId, sourceMessageId: args.replyToMessageId, ...(replySource ? { sourceVersion: replySource.messageVersion } : {}), actorId: args.replyToSenderOpenDingTalkId,
           replyToMessageId: args.replyToMessageId, replyToSenderOpenDingTalkId: args.replyToSenderOpenDingTalkId, atOpenDingTalkIds: args.atOpenDingTalkIds ?? [], fact: { topicRefs: args.topicRefs }, kind: 'topic-reply' } }, `prepare-notification:${notificationId}`)
       void deliverNotifications()
       return group
@@ -642,7 +689,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     getModelSelection: () => coordinationModelSelection({
       ...(residentStore.getCoordinationModelConfig?.() ?? config.coordination ?? legacy.getAgentConfig().coordinationModel ?? {}),
       enabled: config.coordination?.enabled === true }, models()),
-    config: config.coordination ?? {}, residentStore, query, command, ownerActorId: config.ownerActorId,
+    config: config.coordination ?? {}, residentStore, query, command, onStage: recordMessageStage, ownerActorId: config.ownerActorId,
     onError: (id, error) => failures.set(id, { id, code: error.code ?? error.message, at: new Date().toISOString() }),
     onRecovered: id => failures.delete(id),
     onHandoff: groupId => { rerouteGroups.add(groupId); if (!inflightGroups.has(groupId)) { rerouteGroups.delete(groupId); void kickGroup(groupId) } },
@@ -716,6 +763,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }).finally(() => { if (rerouteGroups.delete(groupId) && !closed) void kickGroup(groupId) })
   }
   async function ingest(message) {
+    const receivedAt = new Date().toISOString()
     if (closed) fail('TASK_SESSION_CLOSED')
     if (!legacy.getGroup(message.groupId)) fail('group_not_subscribed')
     const actorId = message.senderOpenDingTalkId ?? message.actorId
@@ -755,13 +803,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       version: previous.version, actorId: previous.actorId, senderName: previous.senderName, text: previous.text,
       quote: previous.quote, resources: previous.resources, timestamp: previous.timestamp }
       : { ...rawSource, sourceId: currentSourceId, version, senderName: projected.senderName ?? '', text: projected.text,
-        quote: projected.quotedMessage ?? null, resources: projected.resourceRefs ?? projected.imageRefs ?? [], timestamp: ingressTimestamp(projected.occurredAt) ?? actualTime ?? '' }
+        quote: projected.quotedMessage ?? null, resources: projected.resourceRefs ?? projected.imageRefs ?? [], timestamp: ingressTimestamp(projected.occurredAt) ?? actualTime ?? '', receivedAt }
     let stored = previous ? { result: { source: previous } } : await command('source.record', args, `source:${currentSourceId}`)
     if (previous) {
       const resources = mergeTaskResources(previous.resources, projected.resourceRefs ?? projected.imageRefs ?? previous.resources)
       if (hash(resources) !== hash(previous.resources)) stored = await command('source.enrich', { sourceId: currentSourceId, resources }, `enrich:${currentSourceId}:${hash(resources)}`)
     }
     if (stored.result.ignored) return { accepted: false, sourceId: currentSourceId, processing: 'quarantined', reason: stored.result.reason }
+    if (!previous) await recordMessageStage({ groupId: message.groupId, messages: [{ messageId: message.messageId, messageVersion: version }] },
+      { spanId: `ingress:${currentSourceId}`, stage: 'ingress', requestId: currentSourceId, attempt: 0, startedAt: receivedAt, completedAt: new Date().toISOString() })
     void kickGroup(message.groupId)
     return { accepted: true, sourceId: currentSourceId, processing: stored.result.source.routed ? 'routed' : 'pending' }
   }
@@ -1104,6 +1154,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       signature: legacy.getAgentConfig().replySignature, internalIds: await replyInternalIds(task) })
     await command('notification.prepare', { notificationId: id, taskId: task.taskId, requirementRevision: task.requirementRevision,
       kind, payload: { ...reply, conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId,
+        sourceId: source.sourceId, sourceVersion: source.version,
         ...(humanRequest ? { audience: humanRequest.audience, humanRequestId: humanRequest.requestId } : {}), fact: { taskId: task.taskId }, kind } }, `prepare-notification:${id}`)
     void deliverNotifications()
   }
@@ -1206,7 +1257,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       continueNotificationDelivery(track(inflightNotifications, notification.id, async () => {
         const processingRevision = sourceProcessingRevision
         try {
-          const result = await deliverTaskNotification({ notification, notifications, command })
+          const result = await deliverTaskNotification({ notification, notifications, command,
+            onStage: (current, stage) => current.payload.conversationId && Number.isSafeInteger(current.payload.sourceVersion)
+              ? recordMessageStage({ groupId: current.payload.conversationId,
+              messages: [{ messageId: current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined })
           if (result?.sourcePending) sourceHeldNotifications.set(notification.id, processingRevision)
           else sourceHeldNotifications.delete(notification.id)
         }
@@ -1281,7 +1335,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await recoverCoordination()
       for (const source of await query('source.list')) {
         await projectSource(source)
-        if (!source.routed) void kickGroup(source.groupId)
+        const current = await query('source.get', { sourceId: source.sourceId })
+        if (!current.routed || current.processingPending) void kickGroup(source.groupId)
       }
       for (const execution of await query('execution.list')) {
         const task = await query('task.get', { taskId: execution.taskId })
@@ -1457,6 +1512,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   return {
     listAuthorizationRequests: listHumanRequests, respondHumanRequest, respondPrivateHumanReply,
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
+    async messageProcessingSources(groupId) {
+      const [sources, notifications] = await Promise.all([query('source.list', { groupId }), query('notification.list', { groupId })])
+      return messageProcessingSources(sources, notifications, groupId)
+    },
     coordinationSources: coordinationObserver.coordinationSources, coordinationSourceDetail: coordinationObserver.coordinationSourceDetail,
     coordinationWork: coordinationObserver.coordinationWork, coordinationWorkDetail: coordinationObserver.coordinationWorkDetail,
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,

@@ -1,5 +1,13 @@
 # 常驻通知修复本地部署
 
+## 收件箱语义状态与分阶段计时
+
+本次源码同时更新 Assistant 和 Observer，在现有 JSON 来源/通知账与协调会话事件内追加无正文时间，不新增 SQL schema，不回填旧记录。发布前定向运行 HTTP、Observer、来源投影、动态账及协调计时回归；构建/健康通过不表示已部署或实际性能提升。仅在另获部署授权后按本文普通流程切包并刷新浏览器，核双包 SHA256、安装版本、新进程和健康，再以授权的新消息验证。
+
+只读 GET `/state/groups`：核当前版本 `processingState` 与 `processingFacts`；无 topics 不应误显成功，来源 processingCompleted 与 activeUnitRefs 必须一致，未结束的 Topic 不应被提前语义戳覆盖。`sourceState=settled`、语义完成和通知 delivered 独立；缺 receivedAt 或通知版本绑定时 E2E 应为 missing，负时为 negative。ACK 不能当送达，旧通知无时钟不按 updatedAt 回填。阶段时钟含共享/工具/Host区间，不作纯模型用时或累计成本。 核 `stages` 的六类 `ingress/queue/turn/host/send/readback`、精确来源版本和每 span 的 request/attempt/session 关联；未结束与重启前无结束事件的 span 不自动结清。新回读完成另写 `deliveredAt`，不复用后续可变 `updatedAt`。unknown 恢复成功回读也计入 `readbackAttemptCount`，但不增加发送次数；新版本替代旧 pending 来源时保留原路由收据、不造旧版完成戳，新版未完成仍须拦住旧通知。
+
+回退恢复旧双包，不删除新增事实或重放来源/通知；旧客户端/旧投影不能用于新的性能对比。历史最大空窗仍未收敛，不能以本地测试承诺线上节省。本轮仅 PR 交付，未执行部署、重启或真实消息验收。
+
 ## 统筹空返回自动恢复
 
 本次仅更新 Assistant，无 schema、权限或配置迁移。先运行 `test/task-session-provider-native.test.js` 与 `test/task-session-service-native.test.js`，核对空返回后原 wake 未 ack、技术失败 phase=decision、同 session 自动续办及重启预算保留；另核对有效决定不重复提交、已有执行不重派。按普通受控部署切换，独立验证包 SHA256、安装版本、新进程及健康。新发生的正常结束但未提交决定由现有退避计时器恢复；旧版已落 blocked 的普通空返回不自动改账。持续失败超过六次恢复机会后，检查 providerRecovery 的 suspended 和原生日志，不通过重启清预算或重放业务动作。

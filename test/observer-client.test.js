@@ -86,17 +86,20 @@ test('精简判断轨迹不包含技术详情，并展示容量受阻原因', as
   assert.match(reason('ENGINEERING_ACCEPTANCE_FAILED'), /业务验收未通过.*后续提交已停止/)
 })
 
-test('收信箱按当前归类和话题版本计算状态，不受旧工作流字段影响', async () => {
+test('收信箱只使用后端当前版本状态，不因缺少topics或routed字段假成功', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const start = source.indexOf('      const messageWorkflowState =')
   const end = source.indexOf('      const filteredMessages =', start)
-  const state = runInNewContext(`(() => { ${source.slice(start, end)}; return messageWorkflowState })()`, {
-    selectedGroup: { topics: [{ processedRevision: 2, entries: [{ messageId: 'm', messageVersion: 1, action: 'add', revision: 3 }] }] },
-  })
+  const state = runInNewContext(`(() => { ${source.slice(start, end)}; return messageWorkflowState })()`)
   assert.equal(state({ routingStatus: 'pending', workflowStatus: 'waiting_authorization' }), 'routing')
   assert.equal(state({ routingStatus: 'failed' }), 'failed')
-  assert.equal(state({ messageId: 'm', messageVersion: 1, routingStatus: 'routed' }), 'processing')
-  assert.equal(state({ messageId: 'other', routingStatus: 'routed', workflowStatus: 'intent_judging' }), 'processed')
+  assert.equal(state({ routingStatus: 'routed', processingState: 'processing' }), 'processing')
+  assert.equal(state({ routingStatus: 'routed', processingState: 'processed' }), 'processed')
+  for (const sourceKind of ['dingtalk', 'workflow-v2', 'task-session', 'web', undefined]) {
+    assert.equal(state({ routingStatus: 'routed', sourceKind, workflowStatus: 'completed' }), 'unknown')
+  }
+  assert.doesNotMatch(source.slice(start, end), /topics|processedRevision/)
+  assert.match(source, /unknown: \{ label: '状态未知'/)
   assert.doesNotMatch(source, /历史未记录处理过程|id: 'waiting_authorization', label: '等待授权'/)
 })
 
@@ -418,14 +421,35 @@ test('处理步骤直接展示事项、关联对象和动作结论，未知结�
 
 test('消息处理历时固定截止已记录状态时间，不使用发送时间回退或当前时钟',async()=>{
  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
- const code=source.slice(source.indexOf('const messageProcessingElapsed = ')+'const messageProcessingElapsed = '.length,source.indexOf('    const traceReason ='))
+ const code=source.slice(source.indexOf('const messageProcessingElapsed = ')+'const messageProcessingElapsed = '.length,source.indexOf('    function MessageProcessingFacts'))
  const elapsed=runInNewContext(`(${code})`)
  const row={processingSentAt:'2026-10-15T00:00:00Z',processingCompletedAt:'2026-10-15T00:01:23Z'}
  assert.equal(elapsed(row),'历时 1 分 23 秒')
  for(const value of [undefined,null,'', 'invalid'])assert.equal(elapsed({...row,processingCompletedAt:value}),'历时未记录')
  assert.equal(elapsed({...row,processingSentAt:undefined,occurredAt:row.processingSentAt}),'历时未记录')
- assert.equal(elapsed({...row,processingCompletedAt:'2026-10-14T00:00:00Z'}),'历时未记录')
+ assert.equal(elapsed({...row,processingCompletedAt:'2026-10-14T00:00:00Z'}),'历时异常（时钟逆序）')
  assert.equal(elapsed({processingSentAt:0,processingCompletedAt:2500}),'历时 2.5 秒')
+})
+
+test('收信箱计时详情分开负时、缺失阶段、多回合请求和未核版本通知', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('    function MessageProcessingFacts('), source.indexOf('    const traceReason ='))
+  const Details = runInNewContext(`${fragment}; MessageProcessingFacts`, {
+    React: { createElement: (type, props, ...children) => ({ type, props, children }) }, colors: {},
+    fmt: value => value ?? '未记录', fmtDuration: value => `${value}ms`,
+  })
+  const text = tree => typeof tree === 'string' ? tree : Array.isArray(tree) ? tree.map(text).join(' ') : (tree?.children ?? []).map(text).join(' ')
+  const rendered = Details({ message: { processingFacts: { sourceState: 'unsettled', notificationState: 'unconfirmed',
+    semantic: { quality: 'negative', durationMs: null }, notificationE2e: { quality: 'missing', durationMs: null },
+    notifications: [{ notificationId: 'notice', state: 'delivered', versionMatched: false }],
+    stages: [{ spanId: 'turn-1', stage: 'turn', requestId: 'request', attempt: 2, shared: true, startedAt: 'start', completedAt: null },
+      { spanId: 'turn-2', stage: 'turn', requestId: 'request', attempt: 2, quality: 'negative', startedAt: 'later', completedAt: 'earlier' }],
+  } } })
+  assert.equal(rendered.type, 'details')
+  const visible = text(rendered)
+  for (const expected of ['未收束', '时钟逆序', '未核实，不计端到端', '共享区间', '请求 request', '尝试 2', '时钟异常', '未记录阶段：Host接收、排队、Host动作、通知发送、送达回读', '不跨回合求包络']) assert.ok(visible.includes(expected), expected)
+  assert.equal(rendered.children.flat().filter(item => item?.props?.key?.startsWith('turn-')).length, 2)
+  assert.doesNotMatch(visible, /0ms/)
 })
 
 test('步骤耗时使用本次 startedAt，缺失或倒置时间不冒充零耗时',async()=>{
@@ -563,10 +587,11 @@ test('历史工作流消息按收信处理进度展示，不混入任务执行�
  const deliveryCode=source.slice(source.indexOf('const delivery = ')+'const delivery = '.length,source.indexOf('      const messageRows ='))
  const delivery=runInNewContext(`(${deliveryCode})`)
  const message={workflowStatus:'execution_blocked',routingStatus:'routed',sourceKind:'workflow-v2'}
- assert.equal(state(message),'processed')
- assert.equal(delivery[state(message)].label,'已处理')
- assert.equal(delivery[state({...message,workflowStatus:'waiting_system'})].label,'已处理')
- assert.equal([message].filter(item=>state(item)==='processed').length,1)
+ assert.equal(state(message),'unknown')
+ assert.equal(delivery[state(message)].label,'状态未知')
+ assert.equal(delivery[state({...message,workflowStatus:'waiting_system'})].label,'状态未知')
+ assert.equal([message].filter(item=>state(item)==='processed').length,0)
+ assert.equal(state({...message,processingState:'processed'}),'processed')
 })
 
 test('任务短名称合同拒绝超过30字，读模型回退截断不修改完整目标',async()=>{

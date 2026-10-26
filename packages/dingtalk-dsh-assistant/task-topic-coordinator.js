@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createTopicCoordinator } from './topic-runtime.js'
 import { createCoordinationSessions, createCoordinationStepGate, coordinationTools } from './coordination-sessions.js'
 import { createCoordinationResourceTools } from './coordination-resources.js'
@@ -27,7 +28,7 @@ export function taskIndexPage(tasks, offset, limit) {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, validateReply, quotedReminderContext, coordinationEnabled = false, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onStage = async () => {}, onError = () => {} }) {
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
   store = new Proxy(store, { get(target, key) {
@@ -35,10 +36,19 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
       if (args.decision.reply?.trim()) await validateReply(args)
       return target.acceptTopicDecision(args)
     }
-    if (key === 'routeMessages') return args => {
+    if (key === 'routeMessages') return async args => {
       if (!coordinationEnabled && args.routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))
         && !target.getGroup(args.groupId)?.routeHistory.some(record => record.routeId === args.routeId)) throw new Error('coordination_ingress_disabled')
-      return target.routeMessages(args)
+      const request = { groupId: args.groupId, messages: args.routes }
+      const stage = target.getGroup(args.groupId)?.routeHistory.some(record => record.routeId === args.routeId) ? null
+        : { spanId: `host:route:${args.routeId}:${randomUUID()}`, stage: 'host', requestId: args.routeId, attempt: 0,
+          startedAt: new Date().toISOString(), completedAt: null }
+      if (stage) await onStage(request, stage)
+      try {
+        const result = await target.routeMessages(args)
+        await onRouted(args.groupId, args.routes.map(route => route.messageId))
+        return result
+      } finally { if (stage) await onStage(request, { ...stage, completedAt: new Date().toISOString() }) }
     }
     return key === 'getTaskPrompts' ? () => [] : key === 'listTasks' ? () => target.listTasks().filter(task => !task.archivedAt) : Reflect.get(target, key)
   } })
@@ -51,7 +61,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     return result
   }
   const presence = Object.freeze({})
-  const sessions = createCoordinationSessions({ eventPrefix: null,
+  const sessions = createCoordinationSessions({ eventPrefix: null, onStage,
     isCurrent: request => !closed && topics.isCurrentRequest(request),
     onError: error => report(error.coordinationGroupId, error),
     create: async entry => {
@@ -117,6 +127,22 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
       permissions?.set(handle.agent.session, 'danger-full-access')
       return handle
     },
+  })
+  const turns = new Map()
+  let timingTail = Promise.resolve()
+  const stopTiming = ctx.on?.('session/event', (session, event) => {
+    if (!['turn/start', 'turn/end'].includes(event.type)) return
+    const entry = sessions.identity({ session })
+    if (!entry) return
+    const key = String(session.id)
+    if (event.type === 'turn/start') turns.set(key, { spanId: `turn:${key}:${event.seq}`, stage: 'turn',
+      requestId: entry.request.requestId, sessionId: key, attempt: entry.request.attempt ?? 0,
+      startedAt: new Date(event.time).toISOString(), completedAt: null })
+    const stage = turns.get(key)
+    if (!stage) return
+    const value = { ...stage, ...(event.type === 'turn/end' ? { completedAt: new Date(event.time).toISOString() } : {}) }
+    timingTail = timingTail.then(() => onStage(entry.request, value)).catch(error => report(entry.request.groupId, error))
+    if (event.type === 'turn/end') turns.delete(key)
   })
   function validateReplyReview(review, candidates, { confirmationTaskIds = [] } = {}) {
     if (candidates.length === 0 && review === undefined) return
@@ -189,7 +215,8 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
         await new Promise(resolve => setTimeout(resolve, 10))
       }
       await serial
+      await timingTail
     },
-    async close() { closed = true; await topics.close(); await sessions.close(); await serial },
+    async close() { closed = true; await topics.close(); await sessions.close(); await serial; await timingTail; stopTiming?.() },
   }
 }

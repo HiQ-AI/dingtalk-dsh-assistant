@@ -108,7 +108,8 @@ test('running reminder and coordinator clarification preserve one native shell j
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source?.executionFeedback).length, 2)
 })
 
-test('native completion race drains then resumes the original execution without replaying its shell effect', { timeout: 15000 }, async t => {
+// The real Windows shell and three independent verification sessions exceed the old 15s budget.
+test('native completion race drains then resumes the original execution without replaying its shell effect', { timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'native-feedback-completion-'))
   const team = nativeVerificationTeam({ filePath: 'effect.txt', expected: 'once' })
   let h, delegated = false, steps = 0, injected = false
@@ -338,6 +339,10 @@ test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保�
   await h.service.ingest(followup); await h.service.whenIdle()
   const blocked = h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1)
   assert.equal(blocked.error, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
+  assert.equal(blocked.status, 'blocked')
+  assert.equal(blocked.operations.length, 1)
+  assert.equal(blocked.operations[0].status, 'blocked')
+  assert.equal(blocked.operations[0].lastError, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
   assert.equal((await h.query('task.list'))[0].requirementRevision, 1)
   const sent = h.sent.length
   block = false
@@ -348,7 +353,14 @@ test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保�
   assert.equal(task.ownerActorId, 'native-user'); assert.equal(task.runSequence, 2)
   assert.equal(task.requirementRevision, 2); assert.equal(task.status, 'completed')
   assert.ok(h.sent.length > sent)
-  assert.equal(h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1).decisionId, blocked.decisionId)
+  const recovered = h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1)
+  assert.equal(recovered.decisionId, blocked.decisionId)
+  assert.equal(recovered.status, 'completed')
+  assert.equal(recovered.attempt, 2)
+  assert.equal(recovered.operations[0].operationId, blocked.operations[0].operationId)
+  assert.equal(recovered.operations[0].status, 'applied')
+  assert.equal(recovered.operations[0].recoveryResolution, 'not-applied')
+  assert.equal(recovered.operations[0].lastError, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED', '恢复不抹除原 Host 接纳失败证据')
   assert.equal(h.residentStore.getTopic(message.groupId, topicId).processedRevision, 2)
   await h.service.retryMessage({ groupId: message.groupId, messageId: followup.messageId }); await h.service.whenIdle()
   assert.equal((await h.query('task.list'))[0].runSequence, 2)
@@ -577,7 +589,8 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
     latestInputBytes: Buffer.byteLength(JSON.stringify(latestInput(last))), totalRequestBytes: Buffer.byteLength(JSON.stringify(last)) } }))
 })
 
-test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 120000 }, async t => {
+// Full baseline and current native runs need about 140s for 32 generations and independent verification.
+test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 240000 }, async t => {
   const fixture = await nativeCase(t, 'task-five-context-'), metrics = []
   const team = nativeVerificationTeam()
   let ownerSteps = 0

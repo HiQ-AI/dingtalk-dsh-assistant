@@ -1,0 +1,45 @@
+{
+  "runs": [
+    {
+      "case": "current-32-trace",
+      "adapterCalls": 222,
+      "all32GenerationsObserved": true,
+      "firstOwnerByGenerationMs": {
+        "1": 2722.8,
+        "5": 14924.9,
+        "16": 53429.7,
+        "24": 85383.4,
+        "30": 111726.6,
+        "31": 116237.2,
+        "32": 121066.7
+      },
+      "lastAdapterMs": 132090.2,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "durationMs": 139148.8862
+    },
+    {
+      "case": "clean-base-32-trace",
+      "adapterCalls": 220,
+      "all32GenerationsObserved": true,
+      "firstOwnerByGenerationMs": {
+        "1": 4605.1,
+        "5": 17222.4,
+        "16": 56853.8,
+        "24": 90133.4,
+        "30": 117113.8,
+        "31": 121604.0,
+        "32": 126369.1
+      },
+      "lastAdapterMs": 137764.1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "durationMs": 144834.8925
+    }
+  ],
+  "boundary": "Single local diagnostic observations with tracing and extended test deadlines; all business assertions preserved. Not a statistical benchmark, formal acceptance result, production improvement, or proof of all performance properties."
+}

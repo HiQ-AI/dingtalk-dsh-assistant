@@ -1,0 +1,9 @@
+{
+  "base": "0535038267adb31e710b87ef8b02a55cce9f3e8a",
+  "trackedBlobCount": 3314,
+  "exactBlobs": 81,
+  "lfToCrlfOnlyBlobs": 3233,
+  "allTrackedContentMatchesCommit": true,
+  "execution": "Original baseline test, fixtures and runtime from full git archive; independent pnpm frozen installation; no module replacement loader.",
+  "boundary": "Temporary isolated data; no production database, provider or message writes."
+}

@@ -39,6 +39,12 @@ All returned content is rendered as text. No raw HTML, auto-linked evidence, act
 
 Keyboard focus is visibly retained and restored to entity selection on return from narrow detail. Controls have stable accessible names. Preserve host reduced-motion and forced-colors conventions. No new autonomous animations, modal, chart or design-system primitive is needed.
 
+## Inbox processing contract
+
+Backend `processingState` owns the current message-version result. Missing group topics or `routingStatus=routed` is never proof of completion. Use the existing table and status primitives for routing, failed, processing, semantic completion and neutral unknown. Semantic completion is independent from business Task completion, source settlement and notification delivery. Never infer historical success from missing timing.
+
+Keep the compact conclusion/duration line; disclose version-bound clocks and delivery facts through keyboard-accessible native details. Negative clocks are anomalies, missing clocks remain unrecorded, terminal durations never use the current clock. Occurred-to-semantic is not queue/model latency. Received-to-all-linked-notifications E2E requires precise source-version binding and actual readback; ACK is not delivered. Shared/overlapping stages are not summed. Retain the existing narrow-table horizontal reading behavior; no new page-wide scroll or visual redesign.
+
 ## Verification
 
 Relevant observer tests and live isolated browser acceptance own behavior verification. Desktop, narrow 390px, keyboard, loading/empty/error/retry, stale and real HTTP-to-SQLite refresh are required for coordination changes. Static source assertions alone do not prove browser rendering. Host-adapter acceptance is explicitly distinct from installed-host deployment testing.

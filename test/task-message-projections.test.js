@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ingestTaskResidentMessage, taskNotificationOutbound, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
+import { ingestTaskResidentMessage, taskNotificationOutbound, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 
 function memoryFacility(seed = new Map(), onWrite = () => {}) {
@@ -13,6 +13,27 @@ function memoryFacility(seed = new Map(), onWrite = () => {}) {
   })
   return { async open() { return { table, close: async () => undefined } } }
 }
+
+test('message processing DTO keeps exact source versions, unknown history and no private content', () => {
+  const sources = [1, 2].map(version => ({ sourceId: `s${version}`, groupId: 'g', messageId: 'm', version, channel: 'im', text: 'private', actorId: 'private',
+    routed: version === 1, updatedAt: 'not-a-stage', processingCompleted: version === 1 ? { at: 'completed', routingRevision: 3, activeUnitRefs: [{ unitId: 'u', unitRevision: 1 }] } : null }))
+  const notices = [{ id: 'old', state: 'delivered', updatedAt: 'not-delivery', payload: { conversationId: 'g', sourceMessageId: 'm', text: 'secret' } },
+    { id: 'exact', state: 'delivered', deliveredAt: 'verified', payload: { conversationId: 'g', sourceMessageId: 'm', sourceId: 's1', sourceVersion: 1 } }]
+  sources[0].stages = [{ spanId: 'span', stage: 'turn', requestId: 'request', attempt: 0, startedAt: 'start', completedAt: null, quality: 'open', shared: true, text: 'secret' }]
+  const result = messageProcessingSources(sources, notices, 'g')
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[0].stages, [{ spanId: 'span', stage: 'turn', requestId: 'request', attempt: 0, startedAt: 'start', completedAt: null, quality: 'open', shared: true }])
+  assert.deepEqual(result[1].stages, [])
+  assert.equal(result[0].processingCompleted.at, 'completed')
+  assert.equal(result[1].processingCompleted, null)
+  for (const row of result) { assert.equal(row.receivedAt, null); assert.equal(row.routedAt, null); assert.equal(row.text, undefined); assert.equal(row.actorId, undefined) }
+  assert.equal(result[0].notifications.find(n => n.notificationId === 'old').deliveredAt, null)
+  assert.equal(result[0].notifications.find(n => n.notificationId === 'old').versionMatched, false)
+  assert.equal(result[0].notifications.find(n => n.notificationId === 'exact').versionMatched, true)
+  assert.equal(result[1].notifications.some(n => n.notificationId === 'exact'), false)
+  assert.equal(JSON.stringify(result).includes('secret'), false)
+  assert.deepEqual(messageProcessingSources(sources, notices, 'other'), [])
+})
 
 test('new inbound image bytes become existing attachment references without losing quote facts', async () => {
   const quote = { messageId: 'quoted', senderName: 'Alice', content: '事实' }

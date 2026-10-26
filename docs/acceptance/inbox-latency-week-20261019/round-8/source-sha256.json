@@ -1,0 +1,35 @@
+{
+  "base": "0535038267adb31e710b87ef8b02a55cce9f3e8a",
+  "packageSourceBytesEqual": true,
+  "sourceSha256": {
+    "packages/dingtalk-dsh-assistant/coordination-sessions.js": "6f7f32a9031638786d0de208226ceddf1cf4af8bb6b675acec5324a36845949c",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "730e3cd33043f5be7e2580034c7b244572f132aea8647d40f979134340413a66",
+    "packages/dingtalk-dsh-assistant/http.js": "4409fa5bc69a098962a73109a56c58a2410c3cfd4a984acdfc89ad97d9dbe69f",
+    "packages/dingtalk-dsh-assistant/independent-coordination-planner.js": "3cfe7749069ddf1fae6f41531c498b7e4929b3ce6abb170b80b2d26131348cc1",
+    "packages/dingtalk-dsh-assistant/independent-coordination-service.js": "d24c9efa61609ce9506b82cb221711c1fcb8e365453c77a47a4c11aeef8cf6a8",
+    "packages/dingtalk-dsh-assistant/notification-delivery.js": "40b36330993204a3202ca09d39ddfd2650963d3d50c281a4e5a50dbf3c75cc48",
+    "packages/dingtalk-dsh-assistant/resident.js": "100cf2a311b28dace7771bf13b08dc5c38bc8ed79f2cf0a981e905b69f9aff1b",
+    "packages/dingtalk-dsh-assistant/task-message-projections.js": "5179fbb442e1e538f4211f39daf4393fbcd76bb39ebaadd37b2d1f4ebb0e0026",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "fa3cbba56fd9948e0c2daeb81741ee558b64b8c26a6371cdac096c89962e6d87",
+    "packages/dingtalk-dsh-assistant/task-topic-coordinator.js": "b80c603a3ee72386f78c8fd3643edd46d5dc9395260ec24d8b94de426070afe2",
+    "packages/dingtalk-dsh-observer/web-client.js": "7fd401998f7df6671a40d7e9edc713923ab7c5002bdfb6c3345f618ca8f913d3"
+  },
+  "tarballs": {
+    "root": {
+      "file": "dingtalk-dsh-assistant-2.1.0.tgz",
+      "bytes": 39760,
+      "sha256": "89b3b78a18089822f5758de5392cc7bd7ea48813ec60928b5e8eb2663f3bea25"
+    },
+    "assistant": {
+      "file": "zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "bytes": 402024,
+      "sha256": "bb26acec07ddcd119ada2a334c3657e3559681448a1e137780bd402df597f9c7"
+    },
+    "observer": {
+      "file": "zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "bytes": 60975,
+      "sha256": "ce47ac789cff841e066e7d64249177fa8fc9351e110902b609d1a3b005ea9bff"
+    }
+  },
+  "boundary": "Local build only; no installation, deployment, production messages or performance claim."
+}

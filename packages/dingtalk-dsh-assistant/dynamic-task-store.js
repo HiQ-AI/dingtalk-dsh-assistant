@@ -1402,7 +1402,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const notification = get('dynamic_notifications', a.notificationId)
       if (kind === 'notification.ack') {
         if (a.dispatchToken !== notification.dispatchToken || notification.state !== 'starting') fail('DYNAMIC_NOTIFICATION_RECONCILIATION_REQUIRED')
-        notification.ack = clone(a.ack ?? null); notification.receipt = clone(a.ack ?? null)
+        notification.ack = clone(a.ack ?? null); notification.receipt = clone(a.ack ?? null); notification.ackedAt ??= stamp
       } else {
         if (!['unknown', 'starting'].includes(notification.state)) return changed({ notification })
         if (a.error) notification.lastReadbackError = clone(record(a.error))
@@ -1466,7 +1466,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
               // 抛出暂缓信号使事务回滚：不能缓存本次 start ID，也不能消耗发送次数。
               const pending = db.prepare(`SELECT id FROM dynamic_sources WHERE rowid>?
                 AND json_extract(body,'$.groupId')=? AND json_extract(body,'$.actorId')=?
-                AND coalesce(json_extract(body,'$.routed'),0)=0
+                AND (coalesce(json_extract(body,'$.routed'),0)=0 OR json_extract(body,'$.processingPending')=1)
                 AND json_type(body,'$.processingCompleted') IS NULL LIMIT 1`).get(origin.sequence, admitted.groupId, admitted.actorId)
               if (pending) fail('DYNAMIC_NOTIFICATION_SOURCE_PENDING')
             }
@@ -1508,7 +1508,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (['delivered','failed'].includes(notification.state)) return changed({ notification })
       if (a.phase === 'readback') notification.readbackAttemptCount = (notification.readbackAttemptCount ?? 0) + 1
       if (a.nextAttemptAt) notification.nextAttemptAt = text(a.nextAttemptAt, 'nextAttemptAt')
-      if (state === 'delivered') notification.nextAttemptAt = null
+      if (state === 'delivered') { notification.nextAttemptAt = null; notification.deliveredAt ??= stamp }
       if (a.error) notification.deliveryError = clone(record(a.error))
       notification.state = state; notification.receipt = a.receipt ?? null; notification.evidenceRef = a.evidenceRef ?? null; notification.updatedAt = stamp
       if (notification.kind === 'coordination' && notification.payload.fact.occurrenceId) {
@@ -1533,7 +1533,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const eventTimestamp = epochGated ? ingressTimestamp(a.timestamp ?? a.occurredAt) : a.timestamp ?? a.occurredAt ?? prior?.timestamp ?? stamp
       const source = { id: sourceId, sourceId, groupId: text(a.groupId, 'groupId'), messageId: text(a.messageId, 'messageId'),
         version: a.version ?? 1, actorId: text(a.actorId, 'actorId'), senderName: a.senderName ?? null, channel, text: a.text ?? '', quote: a.quote ?? null, resources: a.resources ?? [],
-        timestamp: eventTimestamp, initialRouteDecision: a.routeDecision === undefined ? null : clone(record(a.routeDecision)) }
+        timestamp: eventTimestamp, ...(a.receivedAt !== undefined ? { receivedAt: text(a.receivedAt, 'receivedAt') } : {}), initialRouteDecision: a.routeDecision === undefined ? null : clone(record(a.routeDecision)) }
+      if (a.receivedAt !== undefined && !ingressTimestamp(a.receivedAt)) fail('DYNAMIC_SOURCE_TIMESTAMP_REQUIRED')
       if (revisionBasis) source.admissionSourceId = revisionBasis.sourceId
       if (a.requestIdentity !== undefined) source.requestIdentity = clone(record(a.requestIdentity))
       integer(source.version, 'version'); array(source.resources)
@@ -1542,8 +1543,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (epochGated && !eventTimestamp) return changed({ ignored: true, reason: 'invalid-ingress-timestamp', source: null })
       if (epochGated && Date.parse(eventTimestamp) < Date.parse(boundIngressEpoch)) return changed({ ignored: true, reason: 'before-ingress-epoch', source: null })
       if (prior) {
-        const { routed: _routed, routeReceipt: _receipt, routeDecision: _decision, routePreparedAt: _prepared, processingCompleted: _processing, ...previous } = prior
-        if (digest(previous) !== digest(source)) fail('DYNAMIC_SOURCE_CONFLICT')
+        const { routed: _routed, routedAt: _routedAt, receivedAt: _receivedAt, routeReceipt: _receipt, routeDecision: _decision, routePreparedAt: _prepared, processingCompleted: _processing, processingHistory: _history, processingPending: _pending, activeUnitRefs: _activeRefs, stages: _stages, ...previous } = prior
+        const { receivedAt: _incomingReceivedAt, ...incoming } = source
+        if (digest(previous) !== digest(incoming)) fail('DYNAMIC_SOURCE_CONFLICT')
         return changed({ source: prior })
       }
       if (source.initialRouteDecision) { source.routeDecision = clone(source.initialRouteDecision); source.routePreparedAt = stamp }
@@ -1559,6 +1561,40 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const source = get('dynamic_sources', a.sourceId)
       if (source.routeDecision && digest(source.routeDecision) !== digest(a.decision)) fail('DYNAMIC_SOURCE_ROUTE_CONFLICT')
       source.routeDecision = clone(record(a.decision)); source.routePreparedAt ??= stamp
+      put('dynamic_sources', source); return changed({ source })
+    }
+    if (kind === 'source.stage') {
+      const source = get('dynamic_sources', a.sourceId), value = record(a.stage)
+      const stage = { spanId: text(value.spanId, 'spanId'), stage: text(value.stage, 'stage'),
+        requestId: text(value.requestId, 'requestId'), attempt: integer(value.attempt + 1, 'attempt') - 1,
+        startedAt: text(value.startedAt, 'startedAt'), completedAt: value.completedAt ?? null,
+        quality: value.completedAt ? 'observed' : 'open', shared: value.shared === true,
+        ...(value.sessionId ? { sessionId: text(value.sessionId, 'sessionId') } : {}) }
+      if (!['ingress', 'queue', 'turn', 'host', 'send', 'readback'].includes(stage.stage)
+        || !ingressTimestamp(stage.startedAt) || stage.completedAt !== null && !ingressTimestamp(stage.completedAt)) fail('DYNAMIC_SOURCE_STAGE_INVALID')
+      if (stage.completedAt !== null && Date.parse(stage.completedAt) < Date.parse(stage.startedAt)) stage.quality = 'negative'
+      source.stages ??= []
+      const previous = source.stages.find(item => item.spanId === stage.spanId)
+      if (previous) {
+        const { completedAt: _end, quality: _quality, ...identity } = previous
+        const { completedAt: _nextEnd, quality: _nextQuality, ...incoming } = stage
+        if (digest(identity) !== digest(incoming) || previous.completedAt && previous.completedAt !== stage.completedAt) fail('DYNAMIC_SOURCE_STAGE_CONFLICT')
+        if (!previous.completedAt && stage.completedAt) Object.assign(previous, stage)
+      } else source.stages.push(stage)
+      put('dynamic_sources', source); return changed({ sourceId: source.sourceId, stage })
+    }
+    if (kind === 'source.processingStarted') {
+      const source = get('dynamic_sources', a.sourceId), refs = array(a.activeUnitRefs)
+      if (source.version !== a.messageVersion) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+      const identity = refs => refs.map(ref => `${text(ref.unitId, 'unitId')}:${integer(ref.unitRevision, 'unitRevision')}`).sort()
+      const previous = source.activeUnitRefs ?? source.processingCompleted?.activeUnitRefs
+      if (new Set(identity(refs)).size !== refs.length) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+      if (!previous || digest(identity(previous)) !== digest(identity(refs)) || a.legacyPending === true && source.processingCompleted) {
+        if (source.processingCompleted) (source.processingHistory ??= []).push(source.processingCompleted)
+        delete source.processingCompleted
+        source.processingPending = true
+        source.activeUnitRefs = clone(refs)
+      }
       put('dynamic_sources', source); return changed({ source })
     }
     if (kind === 'source.processingCompleted') {
@@ -1578,15 +1614,32 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (unit.dispatchOwner === 'coordination') {
           if (!ledger || ledger.groupId !== source.groupId || ledger.sourceMessageId !== source.messageId
             || !(ledger.resolvedBy || ['accepted', 'needs_clarification'].includes(ledger.state))) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
-        } else if (unit.dispatchOwner !== 'legacy-topic' || ledger && ledger.dispatchOwner !== 'legacy-topic') fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+        } else if (unit.dispatchOwner !== 'legacy-topic' || unit.processingComplete !== true
+          || ledger && ledger.dispatchOwner !== 'legacy-topic') fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
       }
       // 完成本轮语义判定不等于业务 settled；已提出澄清的来源也不能永久阻塞其他回复。
+      if (source.activeUnitRefs && digest(source.activeUnitRefs.map(key).sort()) !== digest(refs.map(key).sort())) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+      if (source.processingCompleted && digest(source.processingCompleted.activeUnitRefs.map(key).sort()) !== digest(refs.map(key).sort())) {
+        (source.processingHistory ??= []).push(source.processingCompleted)
+        delete source.processingCompleted
+      }
       source.processingCompleted ??= { at: stamp, routingRevision: a.routingRevision, activeUnitRefs: clone(refs) }
+      source.processingPending = false
       put('dynamic_sources', source); return changed({ source })
     }
     if (kind === 'source.routed') {
       const source = get('dynamic_sources', a.sourceId)
+      if (a.supersededByVersion !== undefined) {
+        const version = integer(a.supersededByVersion, 'supersededByVersion')
+        const replacement = db.prepare(`SELECT id FROM dynamic_sources WHERE json_extract(body,'$.groupId')=?
+          AND json_extract(body,'$.messageId')=? AND json_extract(body,'$.actorId')=? AND json_extract(body,'$.version')=? LIMIT 1`)
+          .get(source.groupId, source.messageId, source.actorId, version)
+        if (version <= source.version || !replacement) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+        // Retiring an obsolete version is not evidence that its semantic processing completed.
+        source.processingPending = false
+      }
       if (source.routed && digest(source.routeReceipt) !== digest(a.receipt)) fail('DYNAMIC_SOURCE_ROUTE_CONFLICT')
+      if (!source.routed) source.routedAt = stamp
       source.routed = true; source.routeReceipt = clone(a.receipt); put('dynamic_sources', source); return changed({ source })
     }
     if (kind === 'group.claim') {
@@ -1723,7 +1776,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'operation.list') value = ops(q.taskId)
       else if (q.kind === 'wake.list') value = wakes(q.taskId).filter(item => !q.state || item.state === q.state)
       else if (q.kind === 'notification.get') value = get('dynamic_notifications', q.notificationId, true)
-      else if (q.kind === 'notification.list') value = all('dynamic_notifications').filter(item => (!q.taskId || item.taskId === q.taskId) && (!q.state || item.state === q.state))
+      else if (q.kind === 'notification.list') value = all('dynamic_notifications').filter(item => (!q.taskId || item.taskId === q.taskId) && (!q.groupId || item.payload?.conversationId === q.groupId) && (!q.state || item.state === q.state))
       else if (q.kind === 'legacy.list') value = all('dynamic_legacy_blockers')
       else if (q.kind === 'resource.list') value = db.prepare('SELECT resource_key AS resourceKey,holder FROM dynamic_resource_locks ORDER BY resource_key').all()
       else if (q.kind === 'source.get') value = get('dynamic_sources', q.sourceId, true)
