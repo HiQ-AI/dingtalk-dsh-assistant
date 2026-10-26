@@ -1,0 +1,13 @@
+{
+  "number": 259,
+  "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259",
+  "state": "OPEN",
+  "mergedAt": null,
+  "baseRefName": "main",
+  "headRefName": "worktree-coordinator-work-deployment",
+  "headRefOid": "7cdf44d6141204aa3a0029598d6361062e322124",
+  "title": "fix(observer): refine coordination reading and native startup validation",
+  "implementationSha": "7cdf44d6141204aa3a0029598d6361062e322124",
+  "remoteSha": "7cdf44d6141204aa3a0029598d6361062e322124",
+  "bodyMatched": true
+}

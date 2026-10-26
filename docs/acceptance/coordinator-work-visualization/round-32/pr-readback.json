@@ -1,0 +1,14 @@
+{
+  "baseRefName": "main",
+  "headRefName": "worktree-coordinator-work-deployment",
+  "headRefOid": "9844c48095af01272711243af1edd3f960b8fdb0",
+  "mergedAt": null,
+  "number": 259,
+  "state": "OPEN",
+  "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259",
+  "implementationSha": "9844c48095af01272711243af1edd3f960b8fdb0",
+  "remoteSha": "9844c48095af01272711243af1edd3f960b8fdb0",
+  "bodySha256": "915e64f30413665598eb80e134fd56502150110264991178d4a1ad176d22bbd9",
+  "bodyMatched": true,
+  "cleanBeforeClosure": true
+}

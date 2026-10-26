@@ -1,0 +1,74 @@
+{
+  "hostVersion": "0.2.1-rc.2",
+  "authenticatedWeb": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "normalizedExchangeTarget": "http://127.0.0.1:3080/",
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "creationDate": "2026-10-26T00:08:25.574911+08:00",
+  "workCounts": {
+    "failed": 2,
+    "dispatches": 0,
+    "triggers": 3,
+    "originalFailurePrimary": true,
+    "total": 10,
+    "schedules": 7
+  },
+  "health": {
+    "status": "ok",
+    "recoveryIssueCount": 0,
+    "backfills": [
+      "ok",
+      "ok"
+    ],
+    "inboundProcessing": true,
+    "bridgeHealthy": true,
+    "listeners": [
+      "ready",
+      "ready"
+    ]
+  },
+  "oldPid": 91256,
+  "maintenance": "Retired workflow API; native lifecycle restores inbound/autostart, no legacy Resume",
+  "autostartEnabled": true,
+  "writes": 0,
+  "installs": 0,
+  "sourceCount": 18,
+  "observedAt": "2026-10-25T16:13:07.0643425Z",
+  "checkOnly": false,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 93604
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 93604
+    }
+  ],
+  "packages": {
+    "observer": {
+      "bytes": 59781,
+      "dependency": "file:D:/dsh_home/packages/coordinator-dispatch-relations-20261025/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "sha256": "df12db71653213b1afe97c9b36a23c2037c808ad4f9b3cc0336b64a6f237b826",
+      "version": "2.1.0"
+    },
+    "assistant": {
+      "bytes": 396028,
+      "dependency": "file:D:/dsh_home/packages/coordinator-dispatch-relations-20261025/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "sha256": "0155343482f9a9c9c2418e1dec10ab123866310587c3fd4283a1764c75318c7e",
+      "version": "2.1.0"
+    }
+  },
+  "backupCreated": false,
+  "newPid": 93604,
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "parentPid": 84928,
+  "restarts": 0,
+  "taskState": "Running",
+  "oldProcessExited": true
+}

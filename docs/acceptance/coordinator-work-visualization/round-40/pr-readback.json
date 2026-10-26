@@ -1,0 +1,22 @@
+{
+  "observedAt": "2026-10-25T16:30:48.611978+00:00",
+  "pr": {
+    "baseRefName": "main",
+    "headRefName": "worktree-coordinator-work-deployment",
+    "headRefOid": "5b0ffc300dd1107f3ddbef168476441643a6083a",
+    "mergedAt": null,
+    "number": 259,
+    "state": "OPEN",
+    "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259"
+  },
+  "implementationSha": "5b0ffc300dd1107f3ddbef168476441643a6083a",
+  "localHead": "5b0ffc300dd1107f3ddbef168476441643a6083a",
+  "remoteHead": "5b0ffc300dd1107f3ddbef168476441643a6083a",
+  "allHeadsMatched": true,
+  "bodyMatched": true,
+  "bodySha256": "b28ea12b6ebb469c480f90a7424c7b80472bd97bad0811716fac46954264b200",
+  "bodyBytes": 8422,
+  "workingTreeCleanBeforeSnapshot": true,
+  "ciDispatched": false,
+  "merged": false
+}

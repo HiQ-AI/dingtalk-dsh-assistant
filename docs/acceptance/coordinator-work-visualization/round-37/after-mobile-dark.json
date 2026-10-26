@@ -1,0 +1,89 @@
+{
+  "result": "PASS",
+  "cases": [
+    "stable-entity-dedup-and-original-failure-api",
+    "default-first-group-no-all-request",
+    "failure-prominent-next-step-disclosure-and-focus",
+    "dispatch-task-return-manual-and-five-second-refresh",
+    "existing-native-dependency-relations-and-target-pages",
+    "explicit-all-selection-retained",
+    "no-overflow-console-api-errors-or-mutations"
+  ],
+  "synthetic": false,
+  "screenshots": {
+    "after-mobile-dark-list.png": {
+      "bytes": 26621,
+      "sha256": "c043548b66e329526c887444c406b5030efddb456331a4d969f45571a28d70b3"
+    },
+    "after-mobile-dark-failed-reminder.png": {
+      "bytes": 26763,
+      "sha256": "71edf6310c5a156f980fbeb7cf6f41fcfda77331af2df4268e8ec73d990d01bf"
+    },
+    "after-mobile-dark-dispatch.png": {
+      "bytes": 29442,
+      "sha256": "24d339d6cb485ab9cbff820455e51c6476de096f011fc4edc6c5d6ad5b302fa0"
+    },
+    "after-mobile-dark-native-relation-1.png": {
+      "bytes": 28802,
+      "sha256": "db5803dcc4b8a1af395ca750c650638af806cb10f8dcb2802e44d95cdf6e171f"
+    },
+    "after-mobile-dark-native-relation-2.png": {
+      "bytes": 25808,
+      "sha256": "c3bb28546e331126483d0c910aff7c5d8ee263a59e9de00364e81dda4944714d"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "sourceHashes": {
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "bytes": 255511,
+      "sha256": "491123de013823612789b12b8d909a994c86e2e606d36e2123ac029797615a57"
+    },
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "bytes": 38896,
+      "sha256": "403d95970e254ff8bf48cbea75708e3f8234a846b025e4277f792e8548c5a021"
+    },
+    "packages/dingtalk-dsh-assistant/task-session-service.js": {
+      "bytes": 135018,
+      "sha256": "6d792c0f6cd0fb0b86c2f7bb200b8c2d0557aa9db1813fb0afd01a0cf160af25"
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py": {
+      "bytes": 24610,
+      "sha256": "4d0caa34ec825e04f8d63240e8a251eb5f65d87804c66bf3b1d72afad856ed6e"
+    }
+  },
+  "firstGroupWorkCount": 3,
+  "originalFailureFacts": {
+    "sourceAccepted": true,
+    "planActive": true,
+    "nextDueAt": null,
+    "deliveryFailed": true,
+    "jobCompleted": true
+  },
+  "visibleRows": 3,
+  "rowHeights": [
+    67,
+    67,
+    67
+  ],
+  "nativeRelations": [
+    {
+      "prerequisiteCount": 1,
+      "state": "dispatched",
+      "receipt": "accepted",
+      "targetPageLinked": true
+    },
+    {
+      "prerequisiteCount": 1,
+      "state": "dispatched",
+      "receipt": "accepted",
+      "targetPageLinked": true
+    }
+  ],
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 390,
+    "scroll": 390
+  }
+}

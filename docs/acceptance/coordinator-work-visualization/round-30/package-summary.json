@@ -1,0 +1,19 @@
+{
+  "packageRoot": "D:\\dsh_home\\packages\\coordinator-entity-ledger-proof-20261025",
+  "packages": {
+    "assistant": {
+      "sha256": "5bf60b8cb3446292b68d2323e56fa0c962b2c56ad3420ee327c3f12dc9862dee",
+      "bytes": 393380,
+      "version": "2.1.0",
+      "sourceFilesMatched": 70
+    },
+    "observer": {
+      "sha256": "6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a",
+      "bytes": 59580,
+      "version": "2.1.0",
+      "sourceFilesMatched": 4
+    }
+  },
+  "oldPid": 18784,
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499"
+}

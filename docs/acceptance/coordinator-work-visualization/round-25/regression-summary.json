@@ -1,0 +1,31 @@
+{
+  "directed": {
+    "pass": 75,
+    "fail": 0
+  },
+  "expandedRisk": {
+    "pass": 148,
+    "fail": 0,
+    "skipped": 0
+  },
+  "releaseSmoke": {
+    "pass": 12,
+    "fail": 0,
+    "skipped": 2,
+    "reason": "Full native profile dsh-base missing"
+  },
+  "suiteMap": {
+    "files": 308,
+    "exactlyOnce": true,
+    "historical": 3
+  },
+  "independentHashChecks": 24,
+  "isolatedCleanup": {
+    "listeners": 0,
+    "ports": [
+      19087,
+      19088
+    ],
+    "ownHostStopped": true
+  }
+}

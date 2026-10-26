@@ -2,13 +2,18 @@
 
 ## Delivery
 
-PR #258 is open: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/258
+PR #258 is MERGED: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/258
+
+- Merge: `22d57386ebb5a11b89ab30e461a0b95e7bfc7f53`, mergedAt `2026-10-25T03:35:04Z` (independent gh readback).
+- Subsequently authorized local deployment and real installed 3080 host read-only acceptance completed; see round-4/5/6 for preserved failures and final proof.
+- Original deployment script exited1 at the five-minute startup wait. Same new PID91732 became ready without reinstall/restart; original failure retained, independent final package/process/health readback PASS. A new source-only follow-up fixes the bounded wait to600s, with11 regression PASS.
+- Actual real-host default-light desktop/mobile each pass11 cases;18 existing sources,2 dependency members,3 proof members. Console/API/mutation requests0. Actual installed dark remains unverified because persisted Host light overrides browser preference; no Host settings changed.
 
 - Base: `main`
 - Head: `worktree-coordinator-work-visualization`
 - Implementation commit: `6c495d09a3c30381f29558a0068bb1ef88d2d910`
-- Remote state read independently with `gh pr view`: `OPEN`; the PR title, body, base, head and URL match the intended delivery.
-- No merge, deployment, shared resident modification, real DingTalk operation, CI dispatch, main push or force-push occurred.
+- Remote state read independently with `gh pr view`: `MERGED`; merge SHA/time match the intended delivery.
+- Local dual-package deployment performed under subsequent user authorization. No operator business write, real DingTalk test send, notification replay, CI dispatch, main push or force-push.
 
 ## What changed
 
@@ -48,14 +53,94 @@ The acceptance matrix in `docs/acceptance/coordinator-work-visualization/matrix.
 
 ## Boundaries
 
-The browser harness is a deliberately minimal ModuleLoader/slots/session adapter, not a complete installed DeepSeek Harness host. The following were not performed and are not claimed:
+The round-3 browser harness is a deliberately minimal ModuleLoader/slots/session adapter, not complete installed-host proof. Subsequent round-6 separately verified the actual installed host:
 
-- complete installed-host deployment;
-- shared resident or profile changes;
-- real model execution;
-- real DingTalk sending, notification reconciliation or external business effects;
-- CI dispatch or merge.
+- Assistant2.1.0 SHA256 `77eea78e705ee62085afc31baab956ce2f61d2f0dc8ad09dba98c2280c0fa2a9`, Observer2.1.0 SHA256 `b5a468c15c4c11c757a3275887a72e8c65a2bdf438f2266f2d64514ec9f135cd`.
+- New91732/parent93000 owns3080/18998; old84680 absent; profileSHA74fe100c unchanged, Host0.2.1-rc.2 unchanged, autostart enabled/running.
+- health=ok,recovery0,inbound true,bridge healthy,listeners ready/backfills ok; authenticatedWeb200. Retired maintenanceGET404 is expected; native disposal/autostart restoration, not a legacy Resume.
+- Not performed: real model inference, real DingTalk test send, operator notification reconciliation/replay, business mutation, actual installed dark-theme switch, production fault/empty-state injection or CI dispatch.
 
 Business input, requirements, summaries and evidence may contain sensitive local content. The projection is a local privileged observer view, not a public redacted export. It excludes actor/recipient IDs, prompts, commands, raw proposals, paths and raw diagnostics. GET operations are read-only and do not retry commands, notifications or business processing.
 
-Round-3 screenshots and results are in `docs/acceptance/coordinator-work-visualization/round-3/`; PNGs are gitignored, while result JSON, hash metadata, scripts and round summaries are retained for review and regeneration. The PR is ready for reviewer action but remains unmerged and undeployed.
+Round-3 isolated and round-4/5/6 actual-host results retain separate provenance. PNGs are local/gitignored; JSON/hash metadata/scripts/round summaries tracked. Final actual screenshots: `round-6/native-desktop-light-detail.png` and `round-6/native-mobile-light-detail.png`, masked business text and no Host sidebar. PR258 merged and local dual-package deployment verified; startup-wait source fix and evidence use a NEW follow-up branch/PR, never push the merged implementation branch.
+
+## Follow-up Delivery
+
+Startup readiness wait300->600s and final deployment evidence are delivered in PR #259 (OPEN): https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Independent gh readback matched main/base,worktree-coordinator-work-deployment/head,implementation commit5ccfd218ed84711af21850526ed5586a4110b364 and complete checked local PR body. Local regression rerun11/11 PASS; no follow-up merge/redeploy or CI dispatch. PR258 remains MERGED and its implementation branch was not pushed. Final bookkeeping is a docs-only closure on PR259.
+
+
+## Refinement Closure (2026-10-25)
+
+The follow-up UI feedback is implemented on the unmerged PR259 branch. The first valid group is selected in stable returned order without an initial all-groups read; empty/invalid scopes, explicit all, refresh/poll retention and task return are covered. Source rows are compact 67px two-line entries at desktop and the detail pane prioritizes actual schedules or task dispatch before collapsed raw/history/evidence sections. Completion and delivery remain separate, and missing next actions are not invented.
+
+Candidate deployment was authorized after Check and completed once. `candidate-readback.json` independently verifies final Assistant/Observer 2.1.0 package hashes, profile SHA, new PID45548, old PID91732 exit, dual ports, autostart, health, inbound/bridge readiness and authenticated Web; no business writes, notification replay, DingTalk send or Host setting change occurred.
+
+Round16 is the final actual-host browser ground truth: five desktop/mobile/light/dark/forced-colors variants, 7 cases each, no console/API/mutation errors and no horizontal overflow. Round12/13/15 failures remain preserved with round14 diagnostic context; they are not rewritten as passes. PR259 remains OPEN and no merge or CI dispatch was performed.
+
+Final regression rerun101/101 PASS with exact command in round-16.md; earlier round11 risk scope136/136 is separately preserved. Source/hash check5/5 and screenshot hash/byte pairs20/20 MATCH. Same native size comparison: desktop5->10 and mobile4->8 visible rows; row height111-153px->67px. Actual installed dark remains UNVERIFIED (persisted light); source-isolated dark was verified separately. Native low reviewer re-read all three fixes and independently ran the cross-group/history test1/1PASS.
+
+- Final refinement delivery: PR259 https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259 independently read OPEN/unmerged,main <- worktree-coordinator-work-deployment. Implementation7cdf44d6141204aa3a0029598d6361062e322124 matches local/remote/PR head; complete body matched checked deployment-pr-body.md. Snapshot in round16/pr-readback.json precedes this docs-only closure; no merge or CI dispatch.
+
+## Entity Ledger Closure (2026-10-25)
+
+PR259 remains **OPEN / unmerged**: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Implementation `9844c48095af01272711243af1edd3f960b8fdb0` independently matched local/remote/PR head and the complete checked PR body (round32). This final documentation-only closure follows that snapshot. Every entity-ledger case has latest applicable PASS in the unique matrix; earlier failures remain preserved.
+
+### Delivered Behavior
+
+- Schedules retain one stable identity across revisions. Independent unscheduled triggers retain occurrence identity; remaining direct task members aggregate by coordination batch. Source inputs and changes become collapsed history, not duplicate work rows.
+- One backend-owned primary result separates actual delivery/action outcomes from plan controls and command acceptance. Formal task completion requires current version-bound proof, not active state or a completed job.
+- A denied permit before any send is cancellation, not a send failure. Cancelling an unsent result notice cannot erase current formal task completion. Both boundaries were reproduced as failing regressions before repair (round24/28).
+- Only recorded nextDue, send retry and readback times imply future actions. Missing records are explicit. Compact first-group UI retains scope isolation, pagination, separate selection/focus, manual and five-second refresh, and task-detail return; evidence/history default collapsed.
+
+### Final Verification
+
+- Directed tests: 76 PASS. Expanded relevant risk tests: 149 PASS, 0 FAIL, 0 SKIP. Release smoke: 12 PASS, 0 FAIL, 2 SKIP because the full native dsh-base profile was unavailable; not 14 PASS. Suite map: 308 files, each exactly once, historical3. Syntax, Python AST and diff checks pass; exact commands are in round29.
+- Final-source isolated React18/primitives/production HTTP/SQLite: four variants, eight cases each PASS, covering ten persisted reminder states including cancellation before send. Actual isolated dark, 390px, forced colors, first/empty/all scopes, focus, refresh and task return are covered. Twelve source and twelve screenshot identity checks match. The minimal slots adapter is not a full native Host.
+- Final native deployment round30 used runbook Check first: writes0/signals0,62 verified sessions drained, unknown operations/notifications0. Final candidate executed once. No operator business-ledger edit, schema migration, notification replay or real DingTalk test send.
+- Package root: `D:/dsh_home/packages/coordinator-entity-ledger-proof-20261025`. Assistant2.1.0: SHA256 `5bf60b8cb3446292b68d2323e56fa0c962b2c56ad3420ee327c3f12dc9862dee`,393380 bytes. Observer2.1.0: SHA256 `6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a`,59580 bytes. Seventy plus four source files independently byte-match the frozen packages.
+- New PID91256 owns3080/18998; old18784 exited. ProfileSHA74fe100c and Host0.2.1-rc.2 unchanged. Independent readback: autostart enabled/running,health ok,recovery0,inbound true,bridge/listeners ready,backfills ok,authenticated Web200.
+- Final installed round31: desktop1440/mobile390/dark preference/forced-colors each six cases PASS. Ten unique entities comprise seven schedules and three task triggers. Original failed reminder is primary `提醒发送失败`, with no invented next trigger/retry. TaskHTTP200/return, selection/focus/filter/manual+five-second refresh and no overflow are verified; console/page/API errors and resident mutations0. Twelve source plus twelve screenshot byte/hash identities match. Final desktop/mobile failed-reminder screenshots were personally inspected.
+
+### Screenshots And Limits
+
+Local, gitignored screenshots retain readable results, plan and next steps while masking business text:
+
+- `round-31/after-desktop-light-failed-reminder.png`
+- `round-31/after-mobile-light-failed-reminder.png`
+- `round-31/after-desktop-light-dispatch.png`
+
+Native Host retained light under dark preference; actual installed dark remains UNVERIFIED. Actual isolated dark passed separately. No real model/channel end-to-end send, production fault injection or notification replay was authorized or performed. Large screenshots/raw health are local and ignored; committed drivers and metadata support fresh-round regeneration. Isolated19087/19088 were stopped and independently had no listeners; native91256 was unaffected.
+
+Original named teammates returned no final report. An explicitly new native low-spawn reviewer found the completion/cancellation defect with prior75 directed PASS and query reproduction. Lead independently added a failing regression, repaired it, and verified76/149 PASS; the reviewer did not independently rerun the final diff/browser matrix. Extra skill-spawned execution was stopped and not used. Native roster and requested low spawn setting are evidenced; actual inference effort is not independently proven by an empty environment value. No resumed old process or invented workflow is claimed.
+
+No PR259 merge, manual CI dispatch, main push or force-push. Round32 closes the delivery evidence without rewriting earlier candidates or failures.
+
+## Dispatch Relation Closure (2026-10-26)
+
+PR259 remains OPEN and unmerged: https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/259. Implementation `5b0ffc300dd1107f3ddbef168476441643a6083a` independently matched local/remote/PR head and the complete self-contained body (`round-40/pr-readback.json`). This report and the green goal/matrix are a following docs-only closure, not another product edit or deployment. Historical sections describe earlier candidates, not current package identity.
+
+### Delivered Behavior
+
+- Coordination emphasizes named prerequisite completion -> target dispatch. It never uses B execution/status/completion to establish success; B task detail owns B execution. Target task detail also carries the same read-only relation DTO and clickable unsatisfied prerequisites. Only real all-prerequisite dependencies are supported, not invented any-of.
+- Success requires the frozen command lookup receipt, target ID and effective version match, and occurrence-scoped instruction/command acceptance when an occurrence exists. Cross-trigger outcomes cannot leak. Existing exact acceptance survives later target execution or prerequisite changes.
+- Latest relation on a task page follows actual occurrence time, not B.updatedAt or first entity order. Official cancelled->new success and old success->new cancelled cases preserve each work detail while selecting the latest attempt on the task page.
+- Waiting, pending, dispatched, failed, cancelled, paused, stale, blocked and unknown remain explicit; next step is grounded. Proof is collapsed evidence, not an internal-sounding next-action sentence. Legal opaque IDs, once timezone display and cancellation before notification.start are fixed without state-machine/schema edits.
+
+### Verification And Deployment
+
+- Final local directed164 PASS; risk135 PASS; frozen-package native release smoke14 PASS; each0FAIL/0SKIP. Exact commands/logs in round36. Suite map308files, historical3/deleted0, no release exits. Earlier default smoke skips and native30s timeout remain preserved; no CI dispatched.
+- Final-source isolated React18/primitives/production HTTP/SQLite: four variants each9PASS, including real waiting->pending->receipt dispatch and B page clicking A. It is a minimal slots adapter, not a full installed Host. Final native-driver-only screenshot changes do not invalidate the unchanged product-source identity.
+- Native Check first, writes0/signals0,62sessions drained,unknownoperations/notifications0. One native SIGINT disposal/install; old owner process exited, no remaining descendants. Stale-owner metadata retained, not falsely called released.
+- Final package root `D:/dsh_home/packages/coordinator-dispatch-relations-20261025`: Assistant2.1.0/396028bytes/SHA256 `0155343482f9a9c9c2418e1dec10ab123866310587c3fd4283a1764c75318c7e`; Observer2.1.0/59781bytes/SHA256 `df12db71653213b1afe97c9b36a23c2037c808ad4f9b3cc0336b64a6f237b826`. Inspector verifies69+4 whitelist files; Assistant archive70 includes auto README. PackageJSON is semantically compared, runtime bytes hashed.
+- Independent native readbacks in round36 and again round40: old91256 exited, new93604 owns3080/18998; profileSHA74fe100c and Host0.2.1-rc.2 unchanged; healthok/recovery0/inboundtrue/autostartenabled+running/bridgehealthy/listenersready/backfillsok/authWeb200. Original failed reminder remains primary,10unique entities unchanged. Self-owned isolated5452 stopped,19087/19088listeners0,nativeunaffected.
+- Final actual3080 round39: desktop1440 light/mobile390 light/mobile390 dark preference/desktop forced-colors each7PASS. Existing two cross-trigger relations dispatched/accepted and target-page state matches. Filters/selection/focus/taskreturn/manual+5srefresh/nooverflow,console/page/API errors0 andresidentwrites0. Independent16source+driver and28PNG byte/hash checks match. Personally inspected full desktop/mobile relation-detail images; condition/result/next step are unobstructed and legible.
+
+### Failure History, Screenshots And Limits
+
+- Round33 ID/browser FAIL and round35 first-wins FAIL remain. Round37 late Host notice occluded a mobile screenshot; round38 mobile viewport omitted the below-fold relation result. Both are visual FAIL despite functional PASS. Only driver capture was corrected: ordinary notice-dismiss click, absence assertion, complete existing relation element screenshot. Round39 is final, not overwritten evidence.
+- Local gitignored final screenshots: `round-39/after-mobile-light-native-relation-1-detail.png` and `round-39/after-desktop-light-native-relation-2-detail.png`. Full viewports are retained alongside complete relation captures; real task names masked without hiding condition/outcome/next step. Waiting screenshot is explicitly isolated: `round-36/after-mobile-light-task-waits-for-prerequisite.png`.
+- Production contains no waiting/failed-dispatch sample; neither was injected. Official stale rejection rolls back with no durable failed receipt, so real stale/absent and no mutation are verified, generic failed/unknown projection only pure-query covered. Historical full per-edge prerequisite proof snapshots do not exist; command acceptance is not a fabricated historical causality proof.
+- Native dark preference remained persisted light: actual installed dark UNVERIFIED, actual isolated dark PASS. No real model inference/DingTalk test send, replay, manual business mutation, migration or unrelated Host upgrade.
+- Original read-only reviewer discovered scope/gate/title/receipt and task-page dedup issues; backend repaired. Reviewer independently ran2 final dedup counterexamples, not full164/135 or native browser. Backend env reportedhigh despite requestedlow; lead envnull, actual inference effort not asserted.
+
+Every relation-* case has latest applicable PASS in the unique matrix, G19-G22 PASS. Final body, source references, test commands, deployment and explicit limits are self-contained on PR259. No merge, main push, force-push or CI dispatch.

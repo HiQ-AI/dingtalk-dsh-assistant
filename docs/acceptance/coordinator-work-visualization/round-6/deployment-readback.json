@@ -1,0 +1,76 @@
+{
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "writes": 0,
+  "backupCreated": false,
+  "newCreationDate": "2026-10-25T12:13:36.59625+08:00",
+  "autostartEnabled": true,
+  "originalOperation": "ba4b7mvd9",
+  "originalFailure": "DEPLOY_NEW_PROCESS_NOT_READY",
+  "observedAt": "2026-10-25T04:33:44.9145680Z",
+  "authenticatedWeb": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "normalizedExchangeTarget": "http://127.0.0.1:3080/",
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "oldProcessExited": true,
+  "hostVersion": "0.2.1-rc.2",
+  "taskState": "Running",
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 91732
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 91732
+    }
+  ],
+  "mergeCommit": "22d57386ebb5a11b89ab30e461a0b95e7bfc7f53",
+  "health": {
+    "listeners": [
+      "ready",
+      "ready"
+    ],
+    "status": "ok",
+    "recoveryIssueCount": 0,
+    "backfills": [
+      "ok",
+      "ok"
+    ],
+    "bridgeHealthy": true,
+    "inboundProcessing": true,
+    "humanReplies": "ready"
+  },
+  "parentPid": 93000,
+  "checkOnly": false,
+  "maintenance": {
+    "resume": "Not applicable to retired workflow API; native lifecycle restored inbound and autostart",
+    "status": 404,
+    "code": "workflow_maintenance_unavailable"
+  },
+  "installs": 0,
+  "originalExit": 1,
+  "packages": {
+    "observer": {
+      "sha256": "b5a468c15c4c11c757a3275887a72e8c65a2bdf438f2266f2d64514ec9f135cd",
+      "version": "2.1.0",
+      "installedDependency": "file:D:/dsh_home/packages/coordinator-work-22d5738/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "bytes": 58790
+    },
+    "assistant": {
+      "sha256": "77eea78e705ee62085afc31baab956ce2f61d2f0dc8ad09dba98c2280c0fa2a9",
+      "version": "2.1.0",
+      "installedDependency": "file:D:/dsh_home/packages/coordinator-work-22d5738/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "bytes": 390345
+    }
+  },
+  "originalPhase": "start",
+  "newPid": 91732,
+  "restarts": 0,
+  "oldPid": 84680,
+  "followup": "Same original new process became ready after five-minute wait expired; no reinstall/restart"
+}

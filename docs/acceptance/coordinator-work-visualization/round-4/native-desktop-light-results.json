@@ -1,0 +1,30 @@
+{
+  "result": "FAIL",
+  "at": "2026-10-25T04:19:37.501658+00:00",
+  "actualHost": "http://127.0.0.1:3080",
+  "cases": [
+    "actual-authenticated-host-and-installed-coordination-entry",
+    "real-readonly-five-second-polling"
+  ],
+  "unverified": [],
+  "screenshots": {
+    "native-desktop-light-list.png": {
+      "bytes": 101295,
+      "sha256": "ad66d2a498ed7215dd56570f86ede1fb648284e7604b43a38ff5a8164220117a"
+    }
+  },
+  "credentialPrinted": false,
+  "synthetic": false,
+  "existingData": {
+    "sourceCount": 18,
+    "states": [
+      "accepted",
+      "needs_clarification"
+    ],
+    "associatedDetails": 1,
+    "dependencyMembers": 2,
+    "proofMembers": 3
+  },
+  "failureType": "TimeoutError",
+  "failureStage": "real-readonly-five-second-polling"
+}

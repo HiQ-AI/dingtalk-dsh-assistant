@@ -1,0 +1,72 @@
+{
+  "sourceIdentity": {
+    "bytes": 255936,
+    "sha256": "588b4e356d9c59f1c67f3a3419d6963fa52202bcc16b89c5f56cc363b22f226f"
+  },
+  "result": "PASS",
+  "cases": [
+    "default-first-group-no-all-request",
+    "focus-type-priority-and-progressive-disclosure",
+    "task-return-keeps-source-and-group",
+    "source-focus-restoration",
+    "real-schedule-status-next-trigger-rule-no-empty-task",
+    "manual-selection-retained-on-refresh-and-poll",
+    "no-horizontal-overflow"
+  ],
+  "synthetic": true,
+  "screenshots": {
+    "after-desktop-light-forced-list.png": {
+      "bytes": 69974,
+      "sha256": "95d404ae0e9d9d80cf8f96746d2754ecad2de7b10c5a52427f9c854d08004f8b"
+    },
+    "after-desktop-light-forced-detail.png": {
+      "bytes": 73262,
+      "sha256": "58970f79e2ab61574757d09a5d3b05bd88c109b5b9a2d1f51e39313917af1424"
+    },
+    "after-desktop-light-forced-schedule.png": {
+      "bytes": 75703,
+      "sha256": "7f3c6436da5ae0b46d6f983a8da11b9045a048bfa0ab2c4aa1b3415b66fa3c91"
+    }
+  },
+  "errors": [],
+  "mutations": [],
+  "firstGroupSourceCount": 26,
+  "dataShape": {
+    "groups": 2,
+    "taskSources": 2,
+    "scheduleSources": 1
+  },
+  "initialAllGroupRequests": 0,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "keyboardFocus": {
+    "visible": true,
+    "width": "2px"
+  },
+  "selectedStyle": {
+    "pressed": "true",
+    "border": "0px 0px 0px 2px",
+    "marker": "none",
+    "bg": "rgb(255, 255, 255)"
+  },
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}

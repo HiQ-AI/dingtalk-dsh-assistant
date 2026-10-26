@@ -1,0 +1,68 @@
+{
+  "result": "PASS",
+  "cases": [
+    "default-first-group-no-all-request",
+    "focus-type-priority-and-progressive-disclosure",
+    "task-return-keeps-source-and-group",
+    "source-focus-restoration",
+    "real-schedule-status-next-trigger-rule-no-empty-task",
+    "manual-selection-retained-on-refresh-and-poll",
+    "no-horizontal-overflow"
+  ],
+  "synthetic": true,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 79307,
+      "sha256": "8f466a46177770477d4ccd052a9bdd5687074041932597fc2b19015a794a1997"
+    },
+    "after-desktop-light-detail.png": {
+      "bytes": 80103,
+      "sha256": "abb1acfc48671dfa1fc6883277c13c6cff3f7c4ca15477806cdf3f3fe26d68f9"
+    },
+    "after-desktop-light-schedule.png": {
+      "bytes": 80629,
+      "sha256": "6c4e49439a4271efb6cb2249f99e25d3e03fad54f9a5560de53b918bff50ed47"
+    }
+  },
+  "errors": [],
+  "mutations": [],
+  "firstGroupSourceCount": 26,
+  "dataShape": {
+    "groups": 2,
+    "taskSources": 2,
+    "scheduleSources": 1
+  },
+  "initialAllGroupRequests": 0,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "keyboardFocus": {
+    "visible": true,
+    "width": "2px"
+  },
+  "selectedStyle": {
+    "pressed": "true",
+    "border": "0px",
+    "marker": "rgb(77, 107, 254) 2px 0px 0px 0px inset",
+    "bg": "rgb(247, 247, 248)"
+  },
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}

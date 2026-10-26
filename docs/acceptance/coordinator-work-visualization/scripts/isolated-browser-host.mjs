@@ -74,6 +74,25 @@ if (!values.empty) {
   await command('coordination.apply', { instructionId: 'instruction-synthetic-A', expectedRevision: 1 })
   const blocked = await command('coordination.apply', { instructionId: 'instruction-synthetic-B', expectedRevision: 1 })
   assert.deepEqual(blocked.result.waiting, ['instruction-synthetic-A'])
+  // Relationship scenarios use durable command receipts, never patched member/task states.
+  manifest.relationCases = [{ name: 'waiting', workId: 'dispatch:synthetic-chain', prerequisite: 'synthetic-A', target: 'synthetic-B' }]
+  for (const state of ['pending', 'dispatched']) {
+    const coordinationId = `synthetic-relation-${state}`, a = `${coordinationId}-A`, b = `${coordinationId}-B`
+    for (const taskId of [a, b]) {
+      await command('task.create', { taskId, groupId: 'synthetic-group', title: `[合成测试数据] ${state === 'pending' ? '待调度' : '已下发'}关系任务 ${taskId === a ? 'A' : 'B'}`,
+        request: '[合成测试数据] 仅验证前置完成与下发关系，不执行真实业务' })
+      manifest.tasks[taskId] = taskId
+    }
+    const source = await reserve(`relation-${state}`, '前置任务 A 正式完成后调度 B，台账不跟踪 B 的执行结果。')
+    await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId,
+      members: [member(a, [], coordinationId), member(b, [`instruction-${a}`], coordinationId)] })
+    await command('coordination.apply', { instructionId: `instruction-${a}`, expectedRevision: 1 })
+    const binding = (await command('task.claim', { taskId: a })).result.binding
+    await command('task.complete', { binding, summary: '[合成测试数据] 前置任务已正式完成', result: { evidence: [`synthetic-proof:${a}`] } })
+    await command('task.drained', { binding })
+    if (state === 'dispatched') await command('coordination.apply', { instructionId: `instruction-${b}`, expectedRevision: 1 })
+    manifest.relationCases.push({ name: state, workId: `dispatch:${coordinationId}`, prerequisite: a, target: b })
+  }
   const completed = await reserve('completed', '独立任务已有正式完成证据。')
   await command('coordination.accept', { sourceId: completed.id, fence: completed.fence, coordinationId: 'synthetic-completed', members: [member('synthetic-complete', [], 'synthetic-completed')] })
   await command('coordination.apply', { instructionId: 'instruction-synthetic-complete', expectedRevision: 1 })
@@ -85,6 +104,50 @@ if (!values.empty) {
   await command('coordination.source.reject', { sourceId: rejected.id, fence: rejected.fence, reason: '[合成测试数据] 非协调职责，不创建任务' })
   const clarify = await reserve('clarification', '请继续那个任务（需要说明哪个任务）。')
   await command('coordination.source.clarify', { sourceId: clarify.id, fence: clarify.fence, coordinationId: 'synthetic-clarification', question: '[合成测试数据] 请确认具体任务', candidates: [] })
+  const scheduled = await reserve('schedule', '每日上午九点的合成提醒，只用于隔离阅读验收。')
+  await command('coordination.accept', { sourceId: scheduled.id, fence: scheduled.fence, coordinationId: 'synthetic-schedule', members: [], readOnly: true })
+  await command('coordination.schedule.create', { coordinationId: 'synthetic-schedule', scheduleId: 'synthetic-daily', timezone: 'Asia/Shanghai',
+    rule: { kind: 'daily', time: '09:00' }, action: { kind: 'message-reminder', text: '[合成测试数据] 每日核对待办安排' },
+    target: { conversationId: 'synthetic-group', recipientIds: [] } })
+  // Seed persisted outcomes through official commands only; no transport/model is attached.
+  manifest.ledgerCases = []
+  for (const scenario of [
+    { name: 'once-failed', delivery: 'failed' }, { name: 'once-delivered', delivery: 'delivered' },
+    { name: 'once-unknown', delivery: 'unknown' }, { name: 'once-pending', delivery: null },
+    { name: 'recurring-failed', delivery: 'failed', recurring: true },
+    { name: 'paused-failed', delivery: 'failed', recurring: true, control: 'paused' },
+    { name: 'cancelled-failed', delivery: 'failed', recurring: true, control: 'cancelled' },
+    { name: 'cancelled-delivered', delivery: 'delivered', recurring: true, control: 'cancelled' },
+    { name: 'cancelled-unknown', delivery: 'unknown', recurring: true, control: 'cancelled' },
+    { name: 'cancelled-unsent', delivery: null, cancelBeforeSend: true },
+  ]) {
+    const id = `synthetic-${scenario.name}`
+    const source = await reserve(scenario.name, `${scenario.name} 的持久提醒状态`)
+    await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: id, members: [], readOnly: true })
+    await command('coordination.schedule.create', { coordinationId: id, scheduleId: id, timezone: 'Asia/Shanghai',
+      rule: { kind: 'once', at: new Date(Math.floor(Date.now() / 1000) * 1000 - 1000).toISOString() },
+      action: { kind: 'message-reminder', text: `[合成测试数据] ${scenario.name}` }, target: { conversationId: 'synthetic-group', recipientIds: [] } })
+    const occurrence = (await command('coordination.schedule.scan')).result.occurrences.find(item => item.scheduleId === id)
+    assert.ok(occurrence)
+    const job = (await command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
+    await command('coordination.job.remind', { jobId: job.id, fence: job.fence })
+    if (scenario.recurring) await command('coordination.schedule.change', { scheduleId: id, expectedRevision: 1, rule: { kind: 'daily', time: '09:00' } })
+    if (scenario.cancelBeforeSend) {
+      const notice = (await command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
+      await command('coordination.schedule.change', { scheduleId: id, expectedRevision: 1, state: 'cancelled' })
+      const denied = await command('notification.start', { notificationId: notice.id })
+      assert.equal(denied.dispatchEligible, false)
+      assert.equal(denied.result.notification.sendAttemptCount ?? 0, 0)
+    }
+    if (scenario.delivery) {
+      const notice = (await command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
+      const permit = (await command('notification.start', { notificationId: notice.id })).result.notification
+      await command('notification.receipt', { notificationId: notice.id, dispatchToken: permit.dispatchToken, state: scenario.delivery,
+        ...(scenario.delivery === 'failed' ? { error: { phase: 'send', knownNotSent: true, retryable: false, message: 'Synthetic definitive failure' } } : {}) })
+    }
+    if (scenario.control) await command('coordination.schedule.change', { scheduleId: id, expectedRevision: 2, state: scenario.control })
+    manifest.ledgerCases.push({ ...scenario, workId: `schedule:${id}` })
+  }
   for (let index = 0; index < 20; index++) await reserve(`paging-${String(index).padStart(2, '0')}`, `分页验证输入 ${index + 1}`)
 }
 await writeFile(join(dataRoot, 'manifest.json'), JSON.stringify(manifest, null, 2))
@@ -146,6 +209,7 @@ const web = createServer(async (req, res) => {
     res.writeHead(upstream.status, Object.fromEntries(upstream.headers))
     res.end(Buffer.from(await upstream.arrayBuffer())); return
   }
+  if (path === '/favicon.ico') { res.writeHead(204).end(); return }
   if (path === '/') { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(html); return }
   if (path === '/manifest.json') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(manifest)); return }
   if (path === '/observer.js') {

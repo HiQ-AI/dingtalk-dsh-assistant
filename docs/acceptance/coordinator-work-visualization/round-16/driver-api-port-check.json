@@ -1,0 +1,19 @@
+{
+  "result": "PASS",
+  "cases": [
+    {
+      "port": 18998,
+      "result": "PASS",
+      "mutationsObserved": 1,
+      "apiFailuresObserved": 1,
+      "foreignPortIgnored": true
+    },
+    {
+      "port": 19088,
+      "result": "PASS",
+      "mutationsObserved": 1,
+      "apiFailuresObserved": 1,
+      "foreignPortIgnored": true
+    }
+  ]
+}

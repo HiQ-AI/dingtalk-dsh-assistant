@@ -1,0 +1,74 @@
+{
+  "newPid": 18784,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 18784
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 18784
+    }
+  ],
+  "taskState": "Running",
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "health": {
+    "inboundProcessing": true,
+    "recoveryIssueCount": 0,
+    "status": "ok",
+    "listeners": [
+      "ready",
+      "ready"
+    ],
+    "bridgeHealthy": true,
+    "backfills": [
+      "ok",
+      "ok"
+    ]
+  },
+  "packages": {
+    "observer": {
+      "sha256": "6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a",
+      "dependency": "file:D:/dsh_home/packages/coordinator-entity-ledger-final-20261025/zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+      "bytes": 59580,
+      "version": "2.1.0"
+    },
+    "assistant": {
+      "sha256": "270fb2acea6d638168696d28e762edf628a69b24c641f710de13058f36d2313c",
+      "dependency": "file:D:/dsh_home/packages/coordinator-entity-ledger-final-20261025/zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+      "bytes": 393380,
+      "version": "2.1.0"
+    }
+  },
+  "creationDate": "2026-10-25T22:09:15.100605+08:00",
+  "installs": 0,
+  "workCounts": {
+    "dispatches": 0,
+    "total": 10,
+    "schedules": 7,
+    "triggers": 3,
+    "failed": 2,
+    "originalFailurePrimary": true
+  },
+  "parentPid": 79612,
+  "writes": 0,
+  "oldPid": 69140,
+  "observedAt": "2026-10-25T14:14:07.7829163Z",
+  "backupCreated": false,
+  "autostartEnabled": true,
+  "authenticatedWeb": {
+    "recoveryIssueCount": 0,
+    "authenticatedWebStatus": 200,
+    "tokenExchangeStatus": 303,
+    "normalizedExchangeTarget": "http://127.0.0.1:3080/",
+    "controlHealth": "ok",
+    "inboundProcessing": true,
+    "credentialPrinted": false
+  },
+  "checkOnly": true,
+  "restarts": 0,
+  "sourceCount": 18,
+  "maintenance": "Retired workflow API; native lifecycle restores inbound/autostart, no legacy Resume",
+  "hostVersion": "0.2.1-rc.2",
+  "oldProcessExited": true
+}

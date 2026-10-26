@@ -1,0 +1,6 @@
+{
+  "error": "DEPLOY_NEW_PROCESS_NOT_READY",
+  "phase": "start",
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "autostartEnabled": true
+}

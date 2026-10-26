@@ -1,0 +1,97 @@
+{
+  "result": "PASS",
+  "cases": [
+    "stable-entity-dedup-and-original-failure-api",
+    "default-first-group-no-all-request",
+    "failure-prominent-next-step-disclosure-and-focus",
+    "dispatch-task-return-manual-and-five-second-refresh",
+    "existing-native-dependency-relations-and-target-pages",
+    "explicit-all-selection-retained",
+    "no-overflow-console-api-errors-or-mutations"
+  ],
+  "synthetic": false,
+  "screenshots": {
+    "after-desktop-light-forced-list.png": {
+      "bytes": 32722,
+      "sha256": "a74c2248794f8cb9b90580606efa2fcdb8059bf8deb2381165011d955000fb77"
+    },
+    "after-desktop-light-forced-failed-reminder.png": {
+      "bytes": 39478,
+      "sha256": "ee88020ed9a4ddf1b824f47d8e589cf1c6d67fb53c32f817c2dcc0e919baef3c"
+    },
+    "after-desktop-light-forced-dispatch.png": {
+      "bytes": 56923,
+      "sha256": "673d9d854798eddcffc48688fa84db7887b073ef8777379db13a86d6444e64ee"
+    },
+    "after-desktop-light-forced-native-relation-1-detail.png": {
+      "bytes": 9846,
+      "sha256": "1ebac2f2a54a196a586dbc456d4bfc64edd1429ef767a0d0134e3044713383b8"
+    },
+    "after-desktop-light-forced-native-relation-1.png": {
+      "bytes": 57088,
+      "sha256": "72283536ca66a43e336838f0a914f06a3e03b705fcdc1d939fa1fb36b68bce21"
+    },
+    "after-desktop-light-forced-native-relation-2-detail.png": {
+      "bytes": 9889,
+      "sha256": "f1dbde0fa9f914c8a06e8f745a9fa2d38eaef2ae1b9b57b9f57a8054f23be37f"
+    },
+    "after-desktop-light-forced-native-relation-2.png": {
+      "bytes": 57497,
+      "sha256": "85cb9cf940879945ad2c7362f7dfd6e3e567b211c304ef065e56a9fa7ae298b8"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "sourceHashes": {
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "bytes": 255511,
+      "sha256": "491123de013823612789b12b8d909a994c86e2e606d36e2123ac029797615a57"
+    },
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "bytes": 38896,
+      "sha256": "403d95970e254ff8bf48cbea75708e3f8234a846b025e4277f792e8548c5a021"
+    },
+    "packages/dingtalk-dsh-assistant/task-session-service.js": {
+      "bytes": 135018,
+      "sha256": "6d792c0f6cd0fb0b86c2f7bb200b8c2d0557aa9db1813fb0afd01a0cf160af25"
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py": {
+      "bytes": 25625,
+      "sha256": "e206da1d3079d05bb43c3032168b304b80c5796ba3c1562a747611b01c139535"
+    }
+  },
+  "firstGroupWorkCount": 3,
+  "originalFailureFacts": {
+    "sourceAccepted": true,
+    "planActive": true,
+    "nextDueAt": null,
+    "deliveryFailed": true,
+    "jobCompleted": true
+  },
+  "visibleRows": 3,
+  "rowHeights": [
+    67,
+    67,
+    67
+  ],
+  "nativeRelations": [
+    {
+      "prerequisiteCount": 1,
+      "state": "dispatched",
+      "receipt": "accepted",
+      "targetPageLinked": true
+    },
+    {
+      "prerequisiteCount": 1,
+      "state": "dispatched",
+      "receipt": "accepted",
+      "targetPageLinked": true
+    }
+  ],
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}

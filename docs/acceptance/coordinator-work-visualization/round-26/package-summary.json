@@ -1,0 +1,20 @@
+{
+  "packageRoot": "D:\\dsh_home\\packages\\coordinator-entity-ledger-final-20261025",
+  "packages": {
+    "assistant": {
+      "version": "2.1.0",
+      "bytes": 393380,
+      "sha256": "270fb2acea6d638168696d28e762edf628a69b24c641f710de13058f36d2313c",
+      "sourceFilesMatched": 70
+    },
+    "observer": {
+      "version": "2.1.0",
+      "bytes": 59580,
+      "sha256": "6f58d449e9af04e372e52dff5a3dff3b26656b292791ccd80bda1722f50d0c3a",
+      "sourceFilesMatched": 4
+    }
+  },
+  "oldPid": 69140,
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499",
+  "sourceFrozen": true
+}

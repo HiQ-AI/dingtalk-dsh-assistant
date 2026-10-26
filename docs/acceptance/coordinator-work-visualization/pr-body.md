@@ -42,7 +42,10 @@ return () => { active = false; controller?.abort(); window.clearInterval(timer) 
 - [x] 独立 backend/frontend 只读审查与反证核实 → 没有保留 confirmed 缺陷；“详情返回永久禁用刷新”候选被 path identity/cleanup 生命周期反证排除。
 - [x] 真实 Chrome 最终 round-3：seeded desktop light 13 cases、desktop dark/mobile light/mobile dark 各 12 cases，独立 empty desktop light/mobile dark 各 2 cases 全通过。覆盖真实生产 task service 详情→返回协调来源、生产 command→SQLite→5 秒轮询、慢响应隔离、失败恢复、焦点及 390px 无横溢出。lead 独立校验 6 JSON 的 36 次源码摘要/大小和 10 PNG 摘要/大小（合计 1,009,890 bytes），直接查看明暗手机/桌面暗色/空态截图；旧 394/390px 失败保留在 round-2。
 - [x] 脚本正式输出绑定本验收根的 round-N：外部路径与非 round-N 目标均实跑 exit 2；host `--check` PASS。四个隔离端口独立回读无监听，根目录无散落审计产物。
-- [ ] 完整已安装宿主、共享部署、真实模型和钉钉渠道验收未执行：本次只授权代码/PR及隔离运行，不声称已部署。另一次 native package 测试尝试有 2 项因缺完整 `@deepseek-ai/dsh-base` profile 跳过，不计入 167/167 通过结果，也不作为完整宿主通过证明。
+- [x] 后续用户明确授权合并与本地部署：PR258于2026-10-25T03:35:04Z合并，merge `22d57386ebb5a11b89ab30e461a0b95e7bfc7f53`；真实3080宿主 default-light 桌面/390px 各11项通过，18条既有协调来源、真实依赖/证明、任务详情往返、群筛选/分页、自动/手动刷新、焦点和无横溢出；控制台/API错误0，resident写请求0。证据 round-6。
+- [x] 本地双包均2.1.0：Assistant SHA256 `77eea78e705ee62085afc31baab956ce2f61d2f0dc8ad09dba98c2280c0fa2a9`；Observer SHA256 `b5a468c15c4c11c757a3275887a72e8c65a2bdf438f2266f2d64514ec9f135cd`。新91732同时监听3080/18998、旧84680退出，profileSHA74fe100c未变，Host0.2.1-rc.2未升级，计划任务enabled/running；health=ok、recovery0、inbound true、监听ready/回补ok、认证Web200。
+- [x] 如实保留部署失败：正式脚本ba4b7mvd9在五分钟启动等待报 `DEPLOY_NEW_PROCESS_NOT_READY`（exit1），同一新进程随后就绪，无重装/重启。原生排空/安装收据与失败收据在round-4，独立只读最终readback在round-6。当前task-session无旧maintenance API（GET404），使用原生SIGINT lifecycle和自启恢复，不伪造Resume。等待预算修复在新的后续PR交付，不推已合分支；相关11测试通过。
+- [ ] 不声称真实模型/钉钉发送、历史通知重放或业务写验收；也未切换真实宿主暗色配置（持久浅色覆盖浏览器暗色偏好，round-6明确actualTheme=light）。早先另一次native package测试2项因缺完整profile跳过，不计入167/167。
 
 验收唯一状态表：`docs/acceptance/coordinator-work-visualization/matrix.csv`；失败与修复前证据在 `round-2.md`，重跑另记轮次。截图/SQLite 大文件不入库，scripts 提供再生成配方；修改前浏览器截图未捕获，不制造前后对照。
 
@@ -51,7 +54,7 @@ return () => { active = false; controller?.abort(); window.clearInterval(timer) 
 - 最小 ModuleLoader/slots/session 适配器加载真实 React18、原生 primitives、生产 observer 与 HTTP/SQLite，但不是完整宿主集成证明。测试输入明确标注合成，未伪造 API 响应。
 - 沿用既有本机 Host/Origin 权限边界；投影不返回 actor/recipient、prompt、命令、raw proposal、路径与原始诊断。原文/判断/证据仍可能包含业务敏感文字，不是公共脱敏导出。
 - 多表查询不是同一事务快照，界面说明读取窗口；轮询不会写账、重试通知或唤醒业务。详情集合超过 100 条显式截断，列表分页独立。
-- 无 schema/config 迁移。实际部署需按既有 runbook 同步 Assistant 与 Observer 两包；回退为恢复原两包，不改业务账本、不重放输入。本 PR 未部署、未发送钉钉消息、未触发 CI；不合并、不推 main、不强推。
+- 无schema/config迁移。已按后续授权部署Assistant与Observer；原始五分钟等待失败保留，最终同进程健康另证。回退需沿原生排空流程恢复原两包，不改业务账本、不重放输入。未发送钉钉测试消息、未触发CI、未推main或强推。
 - 原生具名 teammates 已实际创建且 roster 可见，均显式 low；原 lead 保留，但工具未暴露其实时 effort，不能声明 high 已核实。辅助 Workflow 审查不冒充原生队友。
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

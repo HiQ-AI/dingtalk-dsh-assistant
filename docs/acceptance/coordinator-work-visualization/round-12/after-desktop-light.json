@@ -1,0 +1,66 @@
+{
+  "sourceIdentity": {
+    "bytes": 255936,
+    "sha256": "588b4e356d9c59f1c67f3a3419d6963fa52202bcc16b89c5f56cc363b22f226f"
+  },
+  "result": "FAIL",
+  "cases": [
+    "default-first-group-no-all-request",
+    "focus-type-priority-and-progressive-disclosure",
+    "source-focus-restoration",
+    "real-schedule-status-next-trigger-rule-no-empty-task"
+  ],
+  "synthetic": false,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 25180,
+      "sha256": "383038943d5cc87edd876a1340554c613c2805c6298ee198e8af777bc75e9692"
+    },
+    "after-desktop-light-detail.png": {
+      "bytes": 31699,
+      "sha256": "5b17c02ca00f5c124bc878e28d7718164798b4a4b1c87e445ad1518c675d4bf0"
+    },
+    "after-desktop-light-schedule.png": {
+      "bytes": 31668,
+      "sha256": "2563a524b901e9fe6c925e786bda67d918bcda80a45e5ae726e94735851d7c81"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "firstGroupSourceCount": 10,
+  "dataShape": {
+    "groups": 2,
+    "taskSources": 0,
+    "scheduleSources": 7
+  },
+  "initialAllGroupRequests": 0,
+  "visibleRows": 10,
+  "rowHeights": [
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67,
+    67
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "keyboardFocus": {
+    "visible": true,
+    "width": "2px"
+  },
+  "selectedStyle": {
+    "pressed": "true",
+    "border": "0px",
+    "marker": "rgb(15, 17, 21) 2px 0px 0px 0px inset",
+    "bg": "rgb(255, 255, 255)"
+  },
+  "failureType": "TimeoutError"
+}

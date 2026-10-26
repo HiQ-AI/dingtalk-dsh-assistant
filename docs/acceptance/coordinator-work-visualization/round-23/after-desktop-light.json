@@ -1,0 +1,62 @@
+{
+  "result": "PASS",
+  "cases": [
+    "stable-entity-dedup-and-original-failure-api",
+    "default-first-group-no-all-request",
+    "failure-prominent-next-step-disclosure-and-focus",
+    "dispatch-task-return-manual-and-five-second-refresh",
+    "explicit-all-selection-retained",
+    "no-overflow-console-api-errors-or-mutations"
+  ],
+  "synthetic": false,
+  "screenshots": {
+    "after-desktop-light-list.png": {
+      "bytes": 33661,
+      "sha256": "a1448d655c9ddcbf24e78b445c33547546f20763cd85ae91b83b34a4cebbbecb"
+    },
+    "after-desktop-light-failed-reminder.png": {
+      "bytes": 45460,
+      "sha256": "b06c5414fe789a16c8f6d8c01f770275db58a1e8cfab43f010dedc8378b2d15b"
+    },
+    "after-desktop-light-dispatch.png": {
+      "bytes": 60078,
+      "sha256": "ebd63b84ab61e5595d07e16aa01fa4e6e4b31b63968df06ef3962c28c3b42e7e"
+    }
+  },
+  "errors": [],
+  "failedObserverApi": [],
+  "mutations": [],
+  "sourceHashes": {
+    "packages/dingtalk-dsh-observer/web-client.js": {
+      "bytes": 255660,
+      "sha256": "8c3f396024506f58e069a9d0db14edae92ebd792b45929d952038c0f7d121bf1"
+    },
+    "packages/dingtalk-dsh-assistant/coordination-observer.js": {
+      "bytes": 27258,
+      "sha256": "d9b10f2a7e298c24949274b6f2e1accf1b0a970849f3ad004708d41c93350a83"
+    },
+    "docs/acceptance/coordinator-work-visualization/scripts/refinement-browser-acceptance.py": {
+      "bytes": 15347,
+      "sha256": "5e62a5aae36c7313d741f0ed7b82f43c229dcace38f454eb8c711b9328262944"
+    }
+  },
+  "firstGroupWorkCount": 3,
+  "originalFailureFacts": {
+    "sourceAccepted": true,
+    "planActive": true,
+    "nextDueAt": null,
+    "deliveryFailed": true,
+    "jobCompleted": true
+  },
+  "visibleRows": 3,
+  "rowHeights": [
+    67,
+    67,
+    67
+  ],
+  "actualTheme": "rgb(255, 255, 255)",
+  "widths": {
+    "client": 1440,
+    "scroll": 1440
+  }
+}

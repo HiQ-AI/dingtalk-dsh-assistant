@@ -1,0 +1,31 @@
+{
+  "console": {
+    "consolePids": [
+      8576,
+      91256,
+      21824
+    ],
+    "targetPid": 91256,
+    "signals": 0,
+    "checkOnly": true
+  },
+  "checkOnly": true,
+  "packageSha256": "0155343482f9a9c9c2418e1dec10ab123866310587c3fd4283a1764c75318c7e",
+  "writes": 0,
+  "signals": 0,
+  "ledger": {
+    "quiescent": true,
+    "candidateOnly": true,
+    "ownerReleased": false,
+    "ownerProcessExited": false,
+    "staleOwner": false,
+    "drained": true,
+    "unstartedTaskClaims": [],
+    "unstartedCliExecutions": [],
+    "verifiedSessions": 62,
+    "unknownOperations": 0,
+    "unknownNotifications": 0
+  },
+  "pid": 91256,
+  "profileSha256": "74fe100c0019f5e4c76c06903fdb622b0af5696afc60ab38cbd252ce8f948499"
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "assistant",
+    "path": "D:\\dsh_home\\packages\\coordinator-dispatch-relations-20261025\\zzusp-dingtalk-dsh-assistant-2.1.0.tgz",
+    "bytes": 396028,
+    "sha256": "0155343482f9a9c9c2418e1dec10ab123866310587c3fd4283a1764c75318c7e",
+    "version": "2.1.0"
+  },
+  {
+    "kind": "observer",
+    "path": "D:\\dsh_home\\packages\\coordinator-dispatch-relations-20261025\\zzusp-dingtalk-dsh-observer-2.1.0.tgz",
+    "bytes": 59781,
+    "sha256": "df12db71653213b1afe97c9b36a23c2037c808ad4f9b3cc0336b64a6f237b826",
+    "version": "2.1.0"
+  }
+]
