@@ -92,9 +92,21 @@ export function projectTaskTimeline(task, executions, wakes, lifecycle) {
   const rows = new Map()
   for (const execution of executions.filter(item => item.taskId === task.taskId)) {
     const rowId = execution.sessionId || execution.executionId
-    const row = rows.get(rowId) ?? { id: rowId, title: executionSessionTitle(execution), status: execution.status, complete: true, segments: [], milestones: [] }
+    const row = rows.get(rowId) ?? { id: rowId, title: executionSessionTitle(execution), status: execution.status, complete: true, segments: [], milestones: [], conclusions: [] }
     row.complete &&= execution.timeline?.complete === true
     row.status = execution.status
+    // Results survive continuation in results; state/latest progress are not final outputs.
+    for (const result of [...(execution.results ?? []), execution.result].filter(Boolean)) {
+      const output = result.payload?.output
+      if (result.payload?.error || output?.status !== 'completed' || typeof output.summary !== 'string' || !output.summary.trim()) continue
+      const id = `${execution.executionId}:${result.inputVersion ?? 'unknown'}:${result.leaseEpoch ?? 'unknown'}:${result.receivedAt ?? 'unknown'}`
+      if (row.conclusions.some(item => item.id === id)) continue
+      row.conclusions.push({ id, executionId: execution.executionId, inputVersion: result.inputVersion,
+        at: timestamp(result.receivedAt), summary: output.summary,
+        evidence: Array.isArray(output.evidence) ? [...output.evidence] : [],
+        limitations: Array.isArray(output.limitations) ? [...output.limitations] : [],
+        artifacts: Array.isArray(output.artifacts) ? [...output.artifacts] : [] })
+    }
     for (const [index, segment] of (execution.timeline?.segments ?? []).entries()) {
       const startedAt = timestamp(segment.startedAt), endedAt = timestamp(segment.endedAt)
       const active = segment.state === 'running' && execution.status === 'running' && !execution.drained && !execution.recovering

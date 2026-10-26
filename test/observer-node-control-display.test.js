@@ -105,7 +105,7 @@ test('协调筛群立即移除旧实体且拒绝迟到响应，新页空态不�
 })
 
 test('混排记录分页经过普通决定仍可续读，失败保留、重试去重、刷新与卸载防陈旧响应', async () => {
-  const h = harness('TaskOutcomeRecords', { taskId: 'task', timeline: { executions: [{ id: 'e', milestones: [{ id: 's', at: '2026-10-22T00:00:00Z', summary: '已有成果' }] }] } })
+  const h = harness('TaskOutcomeRecords', { taskId: 'task', timeline: { executions: [{ id: 'e', conclusions: [{ id: 'e:1', at: '2026-10-22T00:20:00Z', summary: '真实最终结论', evidence: ['核对依据'], limitations: ['仅当前小目标'], artifacts: ['result.md'] }], milestones: [{ id: 's', at: '2026-10-22T00:00:00Z', summary: '已有成果' }] }] } })
   let tree = h.render()
   assert.match(h.requests[0].url, /\/decisions\?limit=20$/)
   h.requests[0].resolve({ decisions: [{ id: 'ordinary', triggers: [], decision: { summary: '不能混入' } }], nextBefore: 10 }); await settle()
@@ -114,6 +114,7 @@ test('混排记录分页经过普通决定仍可续读，失败保留、重试�
   assert.equal(h.requests.length, 2); assert.match(h.requests[1].url, /before=10/)
   h.requests[1].reject(new Error('offline')); await settle(); tree = h.render()
   assert.match(text(tree), /已有成果/); assert.match(text(tree), /未全部读取/)
+  assert.match(text(tree), /真实最终结论/); assert.match(text(tree), /执行完成结论/); assert.match(text(tree), /产物：/); assert.match(text(tree), /result.md/)
   button(tree, '重试读取记录').props.onClick(); h.render()
   const review = { id: 'r', recordedAt: '2026-10-22T00:10:00Z', triggers: [{ kind: 'execution.progress.review' }], decision: { action: 'wait', summary: '无新动作，继续等待', evidence: ['日志'], limitations: [] } }
   h.requests[2].resolve({ decisions: [review, review], nextBefore: null }); await settle(); tree = h.render()
@@ -786,4 +787,53 @@ test('真实触发门禁原因显示中文且保留后端唯一状态', () => {
     assert.doesNotMatch(text(section), new RegExp(reason))
     assert.equal(elements(section).find(item => item.props['data-dispatch-state']).props['data-dispatch-state'], state)
   }
+})
+
+
+test('三类记录统一取最新十条，展开刷新及续页保留、切任务重置且不混淆未加载历史', async () => {
+  const at = i => new Date(Date.parse('2026-10-26T00:00:00Z') + i * 60000).toISOString()
+  const timeline = count => ({ executions: [{ id: 'e', title: '隔离执行',
+    milestones: Array.from({ length: count }, (_, i) => ({ id: `s${i}`, at: at(i), summary: `阶段${i}` })) }] })
+  const rows = tree => elements(tree).filter(item => item.type === 'li')
+  for (const count of [0, 9, 10, 11]) {
+    const h = harness('TaskOutcomeRecords', { taskId: 'boundary', readonly: true, timeline: timeline(count) })
+    const tree = h.render()
+    assert.equal(rows(tree).length, Math.min(count, 10))
+    assert.equal(!!button(tree, '展开更早记录（1 条）'), count === 11)
+    h.unmount()
+  }
+  const mixed = timeline(9)
+  mixed.executions[0].conclusions = [{ id: 'final', at: at(11), summary: '完成结论' }]
+  const props = { taskId: 'mixed', timeline: mixed }
+  const h = harness('TaskOutcomeRecords', props)
+  h.render()
+  const review = { id: 'review', recordedAt: at(10), triggers: [{ kind: 'execution.progress.review' }], decision: { summary: '巡查结论' } }
+  h.requests[0].resolve({ decisions: [review], nextBefore: 20 }); await settle()
+  let tree = h.render()
+  assert.equal(rows(tree).length, 10)
+  assert.match(text(rows(tree)[0]), /执行完成结论/)
+  assert.match(text(rows(tree)[1]), /统筹巡查/)
+  assert.doesNotMatch(text(tree), /阶段0/)
+  assert.match(text(tree), /还有更早的统筹决定/)
+  assert.ok(button(tree, '读取更早记录'))
+  button(tree, '展开更早记录（1 条）').props.onClick(); tree = h.render()
+  assert.equal(rows(tree).length, 11)
+  assert.equal(button(tree, '收起更早记录').props['aria-expanded'], true)
+  button(tree, '读取更早记录').props.onClick(); h.render()
+  const older = { ...review, id: 'older', recordedAt: at(-1), decision: { summary: '更早巡查' } }
+  h.requests[1].resolve({ decisions: [older], nextBefore: 5 }); await settle(); tree = h.render()
+  assert.equal(rows(tree).length, 12)
+  button(tree, '刷新记录').props.onClick(); tree = h.render()
+  assert.equal(rows(tree).length, 12)
+  h.requests[2].resolve({ decisions: [review], nextBefore: 20 }); await settle(); tree = h.render()
+  assert.equal(rows(tree).length, 12, '展开时刷新保留已读历史，避免列表突然缩短')
+  assert.match(text(tree), /更早巡查/)
+  button(tree, '收起更早记录').props.onClick(); tree = h.render()
+  assert.equal(rows(tree).length, 10)
+  assert.ok(button(tree, '展开更早记录（2 条）'))
+  button(tree, '展开更早记录（2 条）').props.onClick(); h.render()
+  h.render({ ...props, taskId: 'other' }); tree = h.render({ ...props, taskId: 'other' })
+  assert.equal(rows(tree).length, 10)
+  assert.equal(button(tree, '展开更早记录（2 条）').props['aria-expanded'], false)
+  h.unmount()
 })

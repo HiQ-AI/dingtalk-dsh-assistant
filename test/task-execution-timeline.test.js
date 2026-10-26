@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { readTaskLifecycle, projectTaskLifecycle } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
+import { readTaskLifecycle, projectTaskLifecycle, projectTaskTimeline } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
@@ -125,6 +125,13 @@ test('missing reopen history or terminal time remains incomplete; known cancella
 
 test('real detail HTTP reads multiple lifecycle intervals without creating jobs, logs or new state', async t => {
   const f = await fixture(t)
+  const owner = (await f.command('task.claim', { taskId: 't', force: true })).result.binding
+  const execution = (await f.command('execution.dispatch', { binding: owner, key: 'final-record', prompt: '只读核查' })).result.execution
+  const binding = (await f.command('execution.claim', { executionId: execution.executionId })).result.binding
+  f.at(5)
+  await f.command('execution.result', { binding, output: { status: 'completed', summary: '真实执行完成结论', evidence: ['fixture.txt'], limitations: [], artifacts: [] } })
+  await f.command('execution.drained', { binding })
+  await f.command('task.drained', { binding: owner })
   await f.complete(10); await f.reopen(15); await f.complete(20)
   const snapshot = { tables: {}, global: null }
   const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -148,6 +155,8 @@ test('real detail HTTP reads multiple lifecycle intervals without creating jobs,
     const response = await fetch(url)
     assert.equal(response.status, 200)
     const detail = await response.json()
+    assert.equal(detail.timeline.executions[0].conclusions[0].summary, '真实执行完成结论')
+    assert.equal(detail.timeline.executions[0].conclusions[0].at, iso(5))
     assert.equal(detail.timeline.task.complete, true)
     assert.equal(detail.timeline.task.segments.length, 2)
     assert.equal(detail.timeline.task.segments[1].endedAt, iso(20))
@@ -161,4 +170,27 @@ test('real detail HTTP reads multiple lifecycle intervals without creating jobs,
     assert.equal(current.timeline.task.events.filter(event => event.kind === 'reopened').length, 2)
     assert.equal(dispatches, 0)
   } finally { await new Promise(resolve => server.close(resolve)); await service.close(); await residentStore.close() }
+})
+
+
+test('完成结论仅投影真实completed输出，保留多执行与历史轮次、不借状态或摘要补齐', () => {
+  const final = (inputVersion, receivedAt, summary = '已核对') => ({ inputVersion, leaseEpoch: inputVersion, receivedAt,
+    payload: { output: { status: 'completed', summary, evidence: ['真实依据'], limitations: ['仅此小目标'], artifacts: ['output.txt'] } } })
+  const first = final(1, iso(10)), next = final(2, iso(20))
+  const executions = [
+    { taskId: 't', executionId: 'e', sessionId: 's', results: [first, first], result: next },
+    { taskId: 't', executionId: 'e2', sessionId: 's2', result: final(1, null, '历史有正文无时间') },
+    { taskId: 't', executionId: 'empty', status: 'succeeded', result: final(1, iso(30), '  '), stageProgress: { summary: '不是结论' } },
+    { taskId: 't', executionId: 'blocked', result: { payload: { output: { status: 'blocked', summary: '尚未完成' } } } },
+    { taskId: 't', executionId: 'failed', result: { ...first, payload: { ...first.payload, error: { code: 'FAILED' } } } },
+    { taskId: 'other', executionId: 'foreign', result: first },
+  ]
+  const before = JSON.stringify(executions)
+  const timeline = projectTaskTimeline({ taskId: 't' }, executions, [])
+  assert.equal(timeline.executions[0].conclusions.length, 2)
+  assert.deepEqual(timeline.executions[0].conclusions[1], { id: `e:2:2:${iso(20)}`, executionId: 'e', inputVersion: 2, at: iso(20), summary: '已核对', evidence: ['真实依据'], limitations: ['仅此小目标'], artifacts: ['output.txt'] })
+  assert.equal(timeline.executions[1].conclusions[0].at, null)
+  assert.ok(timeline.executions.slice(2).every(row => !row.conclusions.length))
+  assert.equal(JSON.stringify(executions), before)
+  assert.equal(projectTaskTimeline({ taskId: 't' }, [{ taskId: 't', executionId: 'legacy', status: 'succeeded' }], []).executions[0].conclusions.length, 0)
 })

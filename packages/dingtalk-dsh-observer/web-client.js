@@ -1177,6 +1177,11 @@ window.__ModuleLoader__.load({
     const taskOutcomeRecords = (timeline, decisions = []) => {
       const records = new Map()
       for (const row of [...(timeline?.executions || []), ...(timeline?.human ? [timeline.human] : [])]) {
+        for (const conclusion of row.conclusions || []) {
+          const id = `conclusion:${conclusion.id}`
+          records.set(id, { ...conclusion, id, type: '执行完成结论',
+            source: `${row.label || row.title || row.id}${conclusion.inputVersion ? ` · 第 ${conclusion.inputVersion} 轮` : ''}` })
+        }
         for (const event of row.milestones || []) {
           const id = `stage:${row.id}:${event.id}`
           records.set(id, { id, type: '阶段成果', at: event.at, summary: event.summary, source: row.label || row.title || row.id,
@@ -1196,6 +1201,8 @@ window.__ModuleLoader__.load({
       const [page, setPage] = useState({ decisions: [], nextBefore: null, loaded: false })
       const [loading, setLoading] = useState(false), [error, setError] = useState(''), [request, setRequest] = useState({ before: null, revision: 0 })
       const pending = useRef(false)
+      const [expanded, setExpanded] = useState(false)
+      useEffect(() => { setExpanded(false) }, [taskId])
       useEffect(() => {
         if (readonly) return
         const controller = new AbortController(); let active = true
@@ -1204,31 +1211,34 @@ window.__ModuleLoader__.load({
         get(`/state/tasks/${encodeURIComponent(taskId)}/decisions?${query}`, { signal: controller.signal }).then(value => {
           if (!active) return
           setPage(previous => {
-            const records = new Map((request.before === null ? [] : previous.decisions).map(item => [item.id, item]))
+            const records = new Map((request.before === null && !request.retainHistory ? [] : previous.decisions).map(item => [item.id, item]))
             for (const item of value.decisions || []) records.set(item.id, item)
             return { decisions: [...records.values()], nextBefore: value.nextBefore ?? null, loaded: true }
           })
         }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) { pending.current = false; setLoading(false) } })
         return () => { active = false; controller.abort() }
       }, [taskId, readonly, request])
-      const load = before => { if (!pending.current) { pending.current = true; setRequest(previous => ({ before, revision: previous.revision + 1 })) } }
+      const load = before => { if (!pending.current) { pending.current = true; setRequest(previous => ({ before, retainHistory: expanded, revision: previous.revision + 1 })) } }
       const records = taskOutcomeRecords(timeline, page.decisions)
+      const visibleRecords = expanded ? records : records.slice(0, 10)
       const actions = { wait: '继续等待', blocked: '需要介入', complete: '提交完成判断' }
       return React.createElement('div', { className: 'timeline-outcomes', 'aria-label': '阶段成果与统筹巡查' },
         React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h3', null, '阶段成果与统筹巡查'),
           !readonly ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(null) }, '刷新记录') : null),
-        React.createElement('p', { className: 'detail-muted' }, '阶段成果为执行会话报告；报告本身不代表已独立核验。'),
-        React.createElement('p', { className: 'detail-muted', role: 'status' }, loading ? '正在读取统筹记录…' : error ? '统筹记录未全部读取，已有成果和记录仍保留。' : page.nextBefore !== null ? '仅展示已加载记录，还有更早的统筹决定可读取。' : '仅展示已落账的成果与巡查结论；检查触发不代表统筹已形成结论。'),
+        React.createElement('p', { className: 'detail-muted' }, '阶段成果与执行完成结论为执行会话报告；报告本身不代表已独立核验或任务整体完成。'),
+        React.createElement('p', { className: 'detail-muted', role: 'status' }, loading ? '正在读取统筹记录…' : error ? '统筹记录未全部读取，已有成果和记录仍保留。' : page.nextBefore !== null ? '仅展示已加载记录，还有更早的统筹决定可读取。' : '仅展示已落账的阶段成果、执行完成结论与巡查结论；检查触发不代表统筹已形成结论。'),
         error ? React.createElement('p', { role: 'alert' }, `统筹记录读取失败：${error}`, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(request.before) }, '重试读取记录')) : null,
-        records.length ? React.createElement('ol', { style: { margin: 0, paddingLeft: 22, display: 'grid', gap: 16 } }, ...records.map(item => React.createElement('li', { key: item.id, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } },
+        records.length ? React.createElement('ol', { style: { margin: 0, paddingLeft: 22, display: 'grid', gap: 16 } }, ...visibleRecords.map(item => React.createElement('li', { key: item.id, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } },
           React.createElement('strong', null, `${item.type} · ${item.at ? fmt(item.at) : '时间未记录'}`),
           item.source ? React.createElement('p', { className: 'detail-muted' }, item.source) : null,
           React.createElement('p', null, ...linkedTaskText(item.summary)),
           item.activity ? React.createElement('p', { className: 'detail-muted' }, '报告时活动：', ...linkedTaskText(item.activity)) : null,
           item.action ? React.createElement('p', { className: 'detail-muted' }, `处理决定：${actions[item.action] || item.action}`) : null,
           ...(item.evidence || []).map((value, index) => React.createElement('p', { key: `e:${index}` }, '依据：', ...linkedTaskText(value))),
-          ...(item.limitations || []).map((value, index) => React.createElement('p', { key: `l:${index}` }, '限制：', ...linkedTaskText(value))))))
-          : React.createElement('p', { className: 'detail-muted' }, readonly ? '历史记录未提供成果与巡查结论。' : page.loaded ? '已加载范围内暂无阶段成果或巡查结论。' : '阶段成果与巡查结论尚未完整读取。'),
+          ...(item.limitations || []).map((value, index) => React.createElement('p', { key: `l:${index}` }, '限制：', ...linkedTaskText(value))),
+          ...(item.artifacts || []).map((value, index) => React.createElement('p', { key: `a:${index}` }, '产物：', ...linkedTaskText(value))))))
+          : React.createElement('p', { className: 'detail-muted' }, readonly ? '历史记录未提供阶段成果、执行完成结论与巡查结论。' : page.loaded ? '已加载范围内暂无阶段成果或巡查结论，也无执行完成结论。' : '阶段成果、执行完成结论与巡查结论尚未完整读取。'),
+        records.length > 10 ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'aria-expanded': expanded, onClick: () => setExpanded(value => !value) }, expanded ? '收起更早记录' : `展开更早记录（${records.length - 10} 条）`) : null,
         !readonly && page.nextBefore !== null ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(page.nextBefore) }, '读取更早记录') : null)
     }
     function TaskExecutionTimeline({ timeline, taskId, readonly = false }) {
