@@ -56,3 +56,10 @@ pnpm test:release-smoke
 > This session is isolated in the worktree D:\project\dingtalk-dsh-assistant\.claude\worktrees\inbox-stage-timing. Edit the worktree copy of this file instead of the shared-checkout path.
 
 `claude --help`原生支持`--add-dir <directories...>`（Additional directories to allow tool access to），但未验证其能覆盖此硬隔离；本会话无目录绑定工具，不擅自修改权限/config、不通过脚本或队友代写。仅需用户/宿主合法授权或绑定唯一验收目录，不能扩大到主仓源码；否则用户在非隔离的主仓上下文先校验再应用`docs/tmp/inbox-authority-progress.patch`。该补丁只触及原根三个文档，未实际应用不算同步完成。
+
+## PR真实交付回读
+
+- 代码提交：`0b71a5788c17d23db5020b6f4f400585afb49a81`，git log独立核身份/正文/署名。提交期间auto packing出现历史临时路径Filename too long警告；没有更改其数据或关闭校验，实际commit已存在。
+- push前独立gh pr view确认当前正常分支no pull requests found。显式直连push失败Recv failure: Connection was reset；沿现有默认网络配置的plain git push成功，未改持久代理设置。随后plain git ls-remote独立回读远端分支同代码SHA。
+- `gh pr view 260 --json number,url,state,mergedAt,headRefName,baseRefName`真实输出：`{"baseRefName":"main","headRefName":"worktree-inbox-stage-timing","mergedAt":null,"number":260,"state":"OPEN","url":"https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/260"}`。PR正文另独立回读，含248/72/14、五项Edge、基线对照及原根同步阻塞，不以创建命令成功回执代替状态。
+- 没有合并、部署、重启、CI触发、真实消息重放或渠道外发。原根三个文件仍未更新；只生成三文件补丁并核numstat，不造第二份goal。
