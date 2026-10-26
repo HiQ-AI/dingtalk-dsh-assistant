@@ -1,0 +1,56 @@
+{
+  "runner": "D:\\dsh_home\\skills\\business-development\\scripts\\verification_run.py",
+  "passed": 11,
+  "cases": [
+    {
+      "case": "check-zero-write-and-declared-manager",
+      "status": "PASS"
+    },
+    {
+      "case": "full-raw-output-and-valid-command",
+      "status": "PASS",
+      "stdoutBytes": 130000
+    },
+    {
+      "case": "nonzero-exit-propagation",
+      "status": "PASS",
+      "exitCode": 7
+    },
+    {
+      "case": "successful-command-does-not-hide-source-drift",
+      "status": "PASS"
+    },
+    {
+      "case": "start-failure-is-not-success",
+      "status": "PASS"
+    },
+    {
+      "case": "duplicate-round-preserves-original-evidence",
+      "status": "PASS"
+    },
+    {
+      "case": "stdout-readable-before-command-completes",
+      "status": "PASS"
+    },
+    {
+      "case": "same-round-concurrency-has-single-owner",
+      "status": "PASS"
+    },
+    {
+      "case": "ambiguous-manager-fails-without-writing",
+      "status": "PASS"
+    },
+    {
+      "case": "dirty-candidate-check-does-not-refresh-index",
+      "status": "PASS"
+    },
+    {
+      "case": "evidence-exclusion-cannot-hide-whole-candidate",
+      "status": "PASS"
+    }
+  ],
+  "boundaries": [
+    "本地一次性夹具；未连接真实数据库或业务服务",
+    "不替代技能的独立场景评估"
+  ]
+}

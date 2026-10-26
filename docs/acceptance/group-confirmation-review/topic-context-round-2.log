@@ -1,0 +1,10 @@
+✔ 同消息多事项的引用与原始点名只发送一次 (71.2907ms)
+✔ 拆分确认和条件后，各话题仍能读取完整同条原文且不取得其他事项效果所有权 (18.4628ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 847.019

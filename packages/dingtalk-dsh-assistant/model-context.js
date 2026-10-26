@@ -359,6 +359,7 @@ export function taskModelInput(input) {
   return { task: currentTask, sources: currentTaskSources(sources, task.metadata?.authorizationSourceId).map(source => taskSourceContext(source, (input.materials ?? []).find(material => material.sourceId === source.sourceId))), sourceCount: sources.length, sourceReviewRequired: true,
     ...(materials.length ? { materials } : {}), executionCount: executions.length,
     ...(input.dialogue ? { dialogue: input.dialogue } : {}),
+    ...(input.humanReview ? { humanReview: input.humanReview } : {}),
     ...(input.coordinationAssessments?.length ? {coordinationAssessments:input.coordinationAssessments} : {}),
     wakes: projectedWakes, executions: currentExecutions,
     // Ordinary pending operations need no coordinator decision yet; their exact

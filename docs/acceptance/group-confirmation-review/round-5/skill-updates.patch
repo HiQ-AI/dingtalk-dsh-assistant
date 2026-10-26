@@ -1,0 +1,277 @@
+--- a/business-development/SKILL.md
++++ b/business-development/SKILL.md
+@@ -17,6 +17,7 @@
+ - 修改依据当前实际文件，方案不冒充补丁；已有实现满足要求可不造修改，但仍验证。
+ - 能力或配置问答先确认目标版本及实际读取链；证据足以回答时先给直接结论，不把不会改变结论的变量值、重启或现场日志变成回答前置条件。版本未确认时限定结论，确有读取入口而仍未生效时继续必要排查。网关或登录未知只阻塞依赖它的判断。真实页面验收时按 [页面验收接入](references/page-verification.md) 使用当前账号权限、查询语义与可定位断言；截图须实际读图后才能交付。
+ - 默认实跑与改动直接相关的明确测试类/用例；先核对实际 profile、共享依赖及后台消费者，再执行原需求业务场景。验证期间固定候选，不同时编辑同一检出；共享交付资源按程序核对 Host 实际持有状态。保留候选身份、结果和清理证据，不因局部通过自动扩成全仓测试。
++- 业务确认连同条件和订正一起消费；最小方案须保留已确认的交互语义。明确工程约定的违反须在本次相关路径闭环，不能用“测试通过、未发现运行故障”降格放行。验证前先做包管理器/依赖就绪和低成本检查，执行时即时归档原始输出，具体做法见程序第 1、4、5、6 节。
+ - 获准交付后独立回读提交、远端分支和精确 PR；任何未知外部效果先核实再重试。
+ 
+ 迁移审计或查某个旧节点时读 [节点来源映射](references/source-map.json)。旧节点名仅解释业务责任来源，不规定新任务必须有多少步骤或会话。
+--- a/business-development/references/procedure.md
++++ b/business-development/references/procedure.md
+@@ -11,6 +11,7 @@
+ 对应 `createEngineeringStageContract`、`prepareTask`、`execution-session` 需求优先级与材料工具：
+ 
+ 1. 阅读当前完整业务目标、原需求正文、最新补充、约束、已取得查询证据和前序调查。材料分页未读全时不判断需求已满足；保留系统返回的完整证据引用，不能截短或杜撰。
++   同一方案的“可以，但是……”须连同条件、订正和引用一起解释；不能只消费确认词，或因消息被拆成不同事项就忽略影响当前方案的后半句。先核对原文和实际交互语义，再更新本任务范围；真正独立的新要求交回统筹关联，不能擅自丢弃或扩权。
+ 2. 按完整交办、有效补充及明确限制判断范围。用户要求完成某项交付时，其必要步骤沿用已有授权；任务会话交接原目标与授权来源，不按提交、推送、PR、UAT 集成和部署人为拆审批。后续技术恢复答复只限定该次恢复，除非用户明确收回，不撤销既有业务授权。只调查/方案或只本地修改仍止于原范围，技能不创造新权限。
+ 3. 先从材料和真实项目配置识别仓库、source、开发 head、交付 target、工作目录及验收环境。多个候选不能猜；缺少必需环境时继续已获准的只读调查，仅暂停依赖该信息的修改/验收/交付。旧 uat1–uat9 与固定分支映射仅适用于仍明确使用该配置的项目，不作为所有开发任务的新门槛。
+ 4. 当前原需求和用户指定环境高于旧 repair 方案、历史工件、项目默认场景。发现默认场景与需求冲突，报告其不适用并改正验证方法，不能按错测试改业务。真实权限拒绝与材料不完整应区分，不把工具/配置错误伪装成缺用户批准。
+@@ -56,6 +57,7 @@
+ 1. 按问题搜索文件名、正文、调用方、相关配置和测试，直到覆盖受影响路径，不依赖固定目录清单截断调查。阅读实际文件和已有实现，先判断复用能否满足目标。
+ 2. 结合已核实前序调查/查询事实重新检查当前基线；历史建议不是当前已修改或已验收的证明。
+ 3. 技术思路说明问题依据、实现方式、接口/数据/模块影响、必要依赖、验证方法及未知风险；复杂设计可配核心代码片段。方案应能指导实施，但不要求固定中文文件名、字数、scopePaths、重复标准数组或单独的审批元数据。
++   比较最小与标准方案时，两者都须满足已确认的业务动作、状态转换和验收。代码改动少不等于业务闭环最小，不能为少改代码增加一次用户未要求的保存、重新打开或审批步骤。尚未确定的业务选择与已有实现分别说明，确认已在原消息中提供时直接消费。
+ 4. 不用 before/after 列表、猜测补丁或完整重写大文件代替设计判断。实际编辑阶段须重新读当前代码；需求覆盖与路径权限按本次任务核对，不由计划里列出的路径自动放行。
+ 
+ ### 能力与配置问答的调查范围
+@@ -92,6 +94,7 @@
+ - 审查仅输出发现与材料限制；由原开发职责在当前授权范围内处理发现、修正必要问题，再调用该 skill 对修正及受影响项复审，之后继续原有构建、定向验证、业务验收及获准交付步骤。
+ - 首次固定验证候选前，审查本轮生产代码、测试、夹具及辅助代码，先处理已知 import、方法/行内注释等规范发现，避免测试通过后才补做已知整理。后续新发现仍应修正并按实际影响复验，不能以“冻结候选”为由保留问题，也不为规范检查扩大到全仓。
+ - 未解决的循环数据库访问发现由原实现职责闭环：补齐真实规模/深度上界、访问次数及必要成本证据，或修订有界实现，再复审受影响路径。说明顺序依赖、增加注释、mock 功能测试通过都不能替代成本依据。证据尚缺时明确缺口及下一步，交由任务统筹对照完整用户目标判断影响，不能自行改为“范围外”后声称解决；常规补证与修订在原授权内推进，不新增人工批准节点。
++- 对用户明确的工程约定，分别核对“实现符合约定”和“实际运行风险”。测试通过或未发现死锁反例不能关闭已确认的约定违反；新入口复用旧的禁用实现也须处理。发现旧项目说明冲突时核对来源、时效和适用范围，以当前有效要求修订本次方案及相关说明，不由执行或统筹自行降为一般偏好。先评估涉及冲突业务入口的最小一致性修复；必要取舍超出授权时明确交回，不用全仓重构或只留备注代替闭环。
+ - 审查本身不运行测试、构建、真实业务操作或发布，不增加重复验收或人工批准节点；后续验证仍按原职责和授权执行，审查结论不代替验收结果或发布许可。
+ 
+ ## 6. 实跑构建与代码检查
+@@ -99,10 +102,13 @@
+ 对应 `verify-candidate`、`createWorktreeVerificationJobCheck`：
+ 
+ 1. 固定本次待验证候选的实际目录、基线、源码树/差异身份和需求范围；未提交候选同时记录影响构建的源码、测试和配置内容身份，不仅记录 HEAD。构建/测试运行期间不在同一检出编辑、合并、切分支或生成会改动这些输入的文件；需要继续开发时等本轮终态，或使用独立检出。结束后再核对输入身份，除已明确的生成目录外若有变化，该轮不能证明最终候选；停止继续改动，修正根因并重新构建、验证受影响范围，保留为新一轮。真实检查在这份候选上运行，不能拿别的工作树、旧提交或另一任务的成功记录充数。
+-2. 默认选择与改动直接相关的测试，明确列出测试类/用例；通配符和项目默认命令先确认实际集合。只有用户要求、项目必需检查或定向验证存在具体覆盖缺口，且执行环境在授权内时才扩大；已有相关检查通过后不为“更全面”去掉过滤跑全仓。保留命令、目录、退出状态、日志、通过/失败/跳过项及候选身份；仅编译不算测试通过。
++2. 先读取实际 packageManager、锁文件和仓库运行指引，使用其对应工具，不先套默认安装命令试错。已有改动文件的语法、lint 等低成本检查先完成，再启动昂贵构建；多套锁文件而无明确工具来源时先查仓库配置，不自行删除锁文件或改依赖解冲突。默认选择与改动直接相关的测试，明确列出测试类/用例；通配符和项目默认命令先确认实际集合。只有用户要求、项目必需检查或定向验证存在具体覆盖缺口，且执行环境在授权内时才扩大；已有相关检查通过后不为“更全面”去掉过滤跑全仓。
+ 3. 启动前核对测试基类、Spring 扩展/实际 profile、数据源、中间件、定时任务与消息消费者。部分 mock、测试文件名或本机启动不证明隔离；local profile 也可能连接共享环境。无共享测试授权时采用本机专用依赖或替身并核验连接目标，不直接启动共享配置；当前修复范围允许的临时隔离验证无需另造审批。构建失败不靠改其他业务或扩大测试解决，凭据不复制/输出。
++   自建依赖须使用当前宿主能持续管理的进程；启动回执、端口监听不能替代独立连接。先按依赖自身协议确认真实目标/身份和可用性，再用一条代表性用例确认夹具元数据、loader 与资源清理可运行；失败时不启动整批依赖该环境的测试。只验证本次实际依赖，不引入无关数据库或服务。
+ 4. 可复用的验证记录必须证明属于同一实际候选、当前要求及相同有效检查配置；持久化 JSON、旧 PASS、其他需求下的报告不具备该证明时重跑。
+ 5. 构建失败先判断是代码、环境、命令还是检查配置问题。不要为了不适用的检查改错业务；修改真实原因后对受影响候选重新实跑。保留完整失败证据，不把截断日志当成全部事实。
++
++启动命令时即确定本轮原始输出路径，持续保存 stdout/stderr，并保留命令、工作目录、候选身份、起止时间和退出状态；不能等交接时从模型自述补造。优先使用项目已有的可靠命令记录器；缺少时可用 [verification_run.py](../scripts/verification_run.py)：`--check --cwd <检出>` 只读核对包管理器/锁文件及 Git 候选，运行时指定 `--evidence-dir <本轮目录> --name <检查名> -- <程序及参数>`。脚本只记录显式命令，不安装依赖、不连接数据库，也不替代业务断言；命令和输出不得包含凭据，证据目录使用任务产物目录。结果未知或缺终态时保留未完成，恢复先读原日志和当前进程，不为补证重复成功作业。
+ 
+ 下游合入或部署存在待澄清边界时，先完成不依赖该边界的本地验证。必要构建已启动且候选仍有效，应沿原作业读取日志、实际进程及终态；不能仅因耗时较长、准备交回问题或需要清理作业，就杀掉构建再重跑。确有取消要求、候选失效或资源/执行异常时才针对该原因停止，并区分人为中断与构建失败；交回前收集可独立完成的构建结果，不将缺失终态补写为成功。
+ 
+--- a/review-technical-plan/SKILL.md
++++ b/review-technical-plan/SKILL.md
+@@ -22,6 +22,7 @@
+ 3. 不适用必须基于实际未涉及，不能用“不适用”回避明确要求。MyBatis XML、禁止数据库专有方言等是此检查标准的明确约束；若目标项目技术栈与其冲突，明示冲突及影响，不能自行豁免或建议为满足清单无关地改造项目。
+ 4. 沿关键业务路径检查接口、字段、状态和异常处理的连贯性；发现问题后只追查能确认其影响的必要关联，不扩大实施范围。
+ 5. 已有失败、评审反例或用户复验反馈优先于旧通过结论。复审只依据实际修订内容与相关证据更新判断，保留仍成立的问题。
++6. 确认消息中的条件和订正须连同原方案理解；最小/标准方案都应满足当前已确认的业务动作与状态语义，不能为减少代码增加用户未要求的操作步骤。用户明确工程约定与旧项目说明冲突时，核对来源和适用范围并指出待修订处；未发生运行故障不是豁免依据，不把明确约定降格为偏好，也不默认要求全仓改造。
+ 
+ ## 输出
+ 
+--- a/review-technical-plan/references/checklist.md
++++ b/review-technical-plan/references/checklist.md
+@@ -53,6 +53,7 @@
+ 
+ ## 事务、并发与异步通知（涉及这些能力时）
+ 
++- 业务互斥不得设计为 `.last("for update")`、SQL `FOR UPDATE` 或等价显式数据库悲观锁；新增入口复用旧锁也需审查。需要锁时复用 Redis 业务锁并核对同资源竞争入口、获取顺序、持锁范围、事务提交后释放及失败路径，不能只换新入口的锁 key。旧项目说明冲突或未复现死锁不豁免当前明确约定，也不要求无关全仓迁移。
+ - 锁保护的判断和快照读取是否在取锁后进行？校验、状态更新、事件构造是否使用同份最新对象，未混用锁前数据？
+ - 幂等键、作用范围、并发控制及重复请求结果是否明确？是否错误地将唯一键报错等同幂等成功，或采用无锁先查后插？
+ - 关联业务写入是否同事务原子提交？拒绝、回滚时业务状态、关联记录、待发事件是否无非预期变化？
+@@ -62,6 +63,9 @@
+ - 是否区分入队幂等与下游去重？发送成功、状态未提交等窗口是否有处理或明确风险，未无依据承诺仅投递一次？
+ 
+ ## 测试与验证设计
++
++- 是否在昂贵构建或整批集成测试之前，安排实际包管理器/锁文件核对、依赖自身协议连接、夹具最小就绪及改动文件的低成本检查？启动回执不是依赖持续可用的证据。
++- 是否从执行开始记录原始命令、候选身份、stdout/stderr 和退出状态，并在恢复时复用原日志？不能等交接才用自述补证或无变化重跑。
+ 
+ - 用例是否来自需求与真实业务分支，覆盖正常、拒绝、空值及受影响路径，而非把现有错误行为作为预期？
+ - 是否安排针对最终修改版本的必要测试、静态检查、构建和业务交互？已有结果是否如实区分超时、中断、跳过、未完成？本次不运行这些操作。
+--- a/review-code-implementation/SKILL.md
++++ b/review-code-implementation/SKILL.md
+@@ -21,12 +21,15 @@
+ 3. 结合技术栈和改动范围，阅读 [实现审查检查方向](references/checklist.md) 中相关章节。通用范围、证据、方法与行内注释及变更边界始终适用；错误码契约、Java 编码、数据库及循环访问、前端、并发、国际化、部署等仅在实际涉及时展开。真正不涉及的项可标不适用，不必生成逐项打勾文件。
+ 4. 核对测试代码是否能发现对应缺陷，并审阅已有报告的版本、场景和结果。不要把源码断言、mock、真实数据库、真实接口、真实页面混为一种证据。要求在实现中可检验，但无需由审查者亲自执行验证。
+ 5. 查清疑点的最小必要上下文后给结论。优先报告确定问题；推断须写前提。复审仅复核修正及受影响路径，保留仍相关的失败事实，不重新要求全量验收或为“全绿”制造额外产物。
++6. 将明确约定的违反与运行缺陷分开判断。未发现运行故障、测试通过或缺少性能数据，不撤销已确认的约定违反；不得把用户明确要求改称一般偏好。引用旧项目说明作例外前核对其来源、适用范围与当前要求，冲突未解决时保留为待处理发现，由原实现者给出范围内修订，不能以备注替代解决。
+ 
+ ## 规则适用性
+ 
+ 检查方向中的 MyBatis XML、禁止数据库专有 SQL、禁止数据库业务函数/过程/触发器等，是本 skill 保留的用户要求，不能悄悄降级为可选建议。当前项目与这些要求冲突时，指出具体冲突及影响，不擅自改写要求，也不要求无关项目为满足条目引入 MyBatis。确实没有对应 SQL/数据库改动时才记不适用。
+ 
+ 业务互斥不得使用 `.last("for update")`、SQL `FOR UPDATE` 或等价的显式数据库悲观锁；需要加锁时使用 Redis 实现的业务锁，具体审查项见检查方向第 5 节。这是明确技术约定，不能通过改写 SQL 位置或 ORM 调用绕过；不要求移除正常数据库读写的内部锁、事务及完整性约束。
++
++本次新增入口、扩大临界区或新增调用复用既有禁用锁，同样属于本轮审查范围；“SQL 没新增”不能作为豁免。建议围绕同一业务资源的实际冲突入口修订一致的互斥和事务边界，不只给新入口换一个不同 Redis key，也不扩成无关的全仓锁迁移。
+ 
+ 凡涉及加锁或持锁等待，都必须审查死锁风险，包括 Redis 锁、本地线程锁、数据库正常写入产生的锁及跨层组合；不能只检查是否使用了某种锁 API。结合实际调用链检查获取顺序、嵌套等待、重入及释放路径，不以存在超时或租约代替风险分析。
+ 
+--- a/review-code-implementation/references/checklist.md
++++ b/review-code-implementation/references/checklist.md
+@@ -63,6 +63,7 @@
+ 
+ - 禁止使用 `.last("for update")`、SQL `FOR UPDATE` 及其变体或等价的显式数据库悲观锁实现业务互斥。检查 QueryWrapper 拼接、Mapper XML、SQL 注解、原生 SQL、存储访问封装及 ORM 悲观锁配置，不能只查某种方法名或大小写，也不能把锁语句挪进 XML 就认为符合要求。发现时指出位置、保护的业务操作及应复用的 Redis 业务锁入口；缺少现有入口时说明能力缺口，不建议退回数据库悲观锁。
+ - 业务确需加锁时，复用项目现有 Redis 业务锁实现。核对锁 key 是否按租户/业务资源正确隔离，同一资源的冲突操作是否使用一致的锁；避免无必要的全局锁。只有成功取得锁才能进入临界区，等待有界。
++- 追踪新增调用对既有锁实现的复用及持锁范围变化；没有新增 SQL 不代表未引入该禁用行为。明确约定违反独立于死锁是否已复现，旧项目规则冲突须标明来源和适用性。最小修订须覆盖同一资源的相关竞争入口与提交/释放顺序，不建议仅新增一把互不协调的锁或无关全仓迁移。
+ - 所有加锁相关路径都要分析死锁风险，包括 Redis 锁、本地线程锁、数据库正常写入的内部锁及其组合。沿本次相关入口、嵌套方法和回调检查锁/资源获取顺序是否一致，特别关注 A→B 与 B→A、批量资源顺序不稳定、非重入锁重复获取及读锁升级。跨层也要检查“持数据库锁等 Redis 锁”与“持 Redis 锁等数据库锁”的反向依赖；不能只审单个方法或认为更换锁实现就消除了循环等待。
+ - 检查临界区是否包含不必要的远程调用、慢操作，或等待需要同一把锁的线程、Future、回调；缩小持锁范围时仍须保留业务一致性和事务提交保护。核对获取失败、部分锁已取得、异常、提前返回、中断/取消时的退出与释放路径；只释放本次实际持有的锁，多锁按与获取相反的顺序释放，不能因等待后续锁失败而遗留先前的锁。
+ - 检查锁等待和重试是否有界；无法超时的锁尤其要从获取顺序和等待依赖上排除循环等待。有超时、TTL、自动续租或数据库死锁检测，不等于业务已避免死锁；失败后必须正确退出、回滚和释放，不能持锁无限重试。发现时给出具体持锁/等待链及触发条件；资料不足则标风险和所需证据，不无依据断言已发生死锁或绝无死锁。
+--- a/business-development/scripts/verification_run.py
++++ b/business-development/scripts/verification_run.py
+@@ -0,0 +1,165 @@
++"""只读预检或记录一次显式验证命令；不安装依赖或自动连接业务服务。"""
++
++import argparse
++import hashlib
++import json
++import re
++import subprocess
++import sys
++from datetime import datetime, timezone
++from pathlib import Path
++
++
++def timestamp():
++    return datetime.now(timezone.utc).isoformat()
++
++
++def digest(data):
++    return hashlib.sha256(data).hexdigest()
++
++
++def git(cwd, *args):
++    # 不改用户配置；启用 Windows 长路径读取，并禁止可选索引刷新。
++    result = subprocess.run(["git", "--no-optional-locks", "-c", "core.longpaths=true", "-C", str(cwd), *args],
++                            capture_output=True)
++    # Git 枚举路径遗漏时可能仍返回 0；有诊断就不能把摘要当作完整候选。
++    if result.returncode or result.stderr.strip():
++        raise ValueError(f"Git candidate read is incomplete or unconfirmed (exit={result.returncode}, "
++                         f"diagnosticBytes={len(result.stderr)}); inspect the read-only Git command")
++    return result.stdout
++
++
++def package_tools(cwd):
++    """声明优先；无声明时只在锁文件唯一指向一个工具时选择。"""
++    package = cwd / "package.json"
++    if not package.is_file():
++        return {"packageManager": None, "locks": []}
++    data = json.loads(package.read_text(encoding="utf-8-sig"))
++    lock_names = {"npm": ("package-lock.json", "npm-shrinkwrap.json"),
++                  "yarn": ("yarn.lock",), "pnpm": ("pnpm-lock.yaml",)}
++    locks = {manager: [name for name in names if (cwd / name).is_file()]
++             for manager, names in lock_names.items()}
++    declared = data.get("packageManager")
++    if declared:
++        if not isinstance(declared, str) or not re.fullmatch(r"(npm|yarn|pnpm)@[^\s]+", declared):
++            raise ValueError("unsupported packageManager declaration; inspect repository guidance")
++        manager = declared.split("@", 1)[0]
++        if not locks[manager]:
++            raise ValueError("declared packageManager has no matching lockfile")
++    else:
++        candidates = [manager for manager, files in locks.items() if files]
++        if len(candidates) != 1:
++            raise ValueError("packageManager is not declared and lockfiles are missing or ambiguous")
++        manager = candidates[0]
++    return {"packageManager": declared or manager, "locks": locks[manager],
++            "otherLocks": [name for key, names in locks.items() if key != manager for name in names]}
++
++
++def candidate(cwd, excluded=None):
++    """只保留身份摘要，包含未提交及未跟踪源码；不将源码正文写进证据。"""
++    root = Path(git(cwd, "rev-parse", "--show-toplevel").decode().strip()).resolve()
++    untracked = []
++    for raw in git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
++        if not raw:
++            continue
++        relative = raw.decode("utf-8")
++        path = root / relative
++        if excluded and path.resolve().is_relative_to(excluded):
++            continue
++        value = str(path.readlink()).encode() if path.is_symlink() else path.read_bytes()
++        untracked.append([relative, digest(value)])
++    return {"root": str(root), "head": git(root, "rev-parse", "HEAD").decode().strip(),
++            "trackedDiffSha256": digest(git(root, "-c", "diff.autoRefreshIndex=false", "diff",
++                                            "--no-ext-diff", "--no-textconv", "--binary", "HEAD")),
++            "untrackedSha256": digest(json.dumps(untracked, ensure_ascii=False).encode()),
++            "untrackedFiles": len(untracked)}
++
++
++def write_record(path, record):
++    temporary = path.with_suffix(".tmp")
++    temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
++    temporary.replace(path)
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--cwd", required=True, type=Path)
++    parser.add_argument("--check", action="store_true", help="零写预检，不运行命令")
++    parser.add_argument("--evidence-dir", type=Path)
++    parser.add_argument("--name")
++    parser.add_argument("command", nargs=argparse.REMAINDER)
++    args = parser.parse_args()
++    cwd = args.cwd.resolve(strict=True)
++    if not cwd.is_dir():
++        parser.error("cwd must be a directory")
++    evidence = args.evidence_dir.resolve() if args.evidence_dir else None
++    command = args.command[1:] if args.command[:1] == ["--"] else args.command
++    tools = package_tools(cwd)
++    before = candidate(cwd, evidence)
++    if evidence and Path(before["root"]).is_relative_to(evidence):
++        parser.error("evidence directory must not contain or equal the repository root")
++    if args.check:
++        if command:
++            parser.error("--check must not include a command")
++        print(json.dumps({"check": "passed", "tools": tools, "candidate": before}, ensure_ascii=False))
++        return 0
++    if not evidence or not args.name or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", args.name) or not command:
++        parser.error("run requires --evidence-dir, a lowercase --name and -- command arguments")
++    evidence.mkdir(parents=True, exist_ok=True)
++    record_path = evidence / (args.name + ".json")
++    stdout_path = evidence / (args.name + ".stdout.log")
++    stderr_path = evidence / (args.name + ".stderr.log")
++    paths = [record_path, stdout_path, stderr_path]
++    if any(path.exists() for path in paths):
++        raise ValueError("evidence already exists; use a new round/name, do not overwrite")
++    record = {"command": command, "cwd": str(cwd), "tools": tools, "candidateBefore": before,
++              "startedAt": timestamp(), "state": "starting", "exitCode": None,
++              "stdout": str(stdout_path), "stderr": str(stderr_path)}
++    # 同名并发启动只能有一个记录所有者，不能覆盖已有轮次。
++    with record_path.open("x", encoding="utf-8") as initial:
++        initial.write(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
++    process = None
++    try:
++        # 直接文件句柄持续接收完整原始字节，不受模型输出截断影响。
++        with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
++            process = subprocess.Popen(command, cwd=cwd, stdout=stdout, stderr=stderr, shell=False)
++            record.update(state="running", pid=process.pid)
++            write_record(record_path, record)
++            record["exitCode"] = process.wait()
++        record["state"] = "completed"
++    except KeyboardInterrupt:
++        if process and process.poll() is None:
++            process.terminate()
++            try:
++                process.wait(timeout=5)
++            except subprocess.TimeoutExpired:
++                process.kill()
++                process.wait()
++        record["state"] = "interrupted"
++    except OSError as error:
++        record.update(state="start-failed", errorType=type(error).__name__)
++    finally:
++        record["finishedAt"] = timestamp()
++        try:
++            record["candidateAfter"] = candidate(cwd, evidence)
++            record["candidateUnchanged"] = record["candidateAfter"] == before
++        except (OSError, ValueError):
++            record["candidateUnchanged"] = None
++        record["logs"] = {path.name: {"bytes": path.stat().st_size, "sha256": digest(path.read_bytes())}
++                          for path in (stdout_path, stderr_path) if path.is_file()}
++        record["validCommandEvidence"] = (record["state"] == "completed" and record["exitCode"] == 0
++                                          and record["candidateUnchanged"] is True)
++        write_record(record_path, record)
++    valid = record["validCommandEvidence"]
++    print(json.dumps({"record": str(record_path), "state": record["state"], "exitCode": record["exitCode"],
++                      "candidateUnchanged": record["candidateUnchanged"], "validCommandEvidence": valid}, ensure_ascii=False))
++    return 0 if valid else record["exitCode"] if isinstance(record["exitCode"], int) and 1 <= record["exitCode"] <= 255 else 1
++
++
++if __name__ == "__main__":
++    try:
++        sys.exit(main())
++    except (OSError, ValueError) as error:
++        # 诊断只报固定原因/类型，不打印可能含秘密的进程输出或文件正文。
++        print(json.dumps({"error": str(error) if isinstance(error, ValueError) else type(error).__name__}), file=sys.stderr)
++        sys.exit(2)

@@ -1378,9 +1378,13 @@ test('empty owner recovery reviews the retained execution without replaying its 
   await h.service.whenIdle()
   assert.equal((await h.query('task.get', { taskId: created.taskId })).providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
   assert.deepEqual((await h.query('task.events')).events, [], 'An empty Owner turn cannot publish a business completion event')
-  try { await waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).status === 'completed', 'retained execution review', 15000) }
+  try {
+    // 单独核对五秒退避后的恢复；后续成员核验沿真实调度排空，仍受外层三十秒总时限约束。
+    await waitUntil(() => reviewed, 'retained owner recovery', 10000)
+    await h.service.whenIdle()
+    assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
+  }
   catch (error) { throw new Error(JSON.stringify({ task: await h.query('task.get', { taskId: created.taskId }), executions: (await h.query('execution.list')).map(item => ({ key: item.key, status: item.status, error: item.result?.payload.error })), errors: h.toolResults.filter(item => item.result.isError) }), { cause: error }) }
-  await h.service.whenIdle()
   assert.equal(reviewed, true)
   assert.equal((await readFile(effect, 'utf8')).trim(), 'once')
   const executions = await h.query('execution.list', { taskId: created.taskId })

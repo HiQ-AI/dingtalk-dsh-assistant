@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { openDynamicTaskStore, pendingTaskHumanReview } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 
 test('执行后端固定于创建定义，续办及重启不改派；CLI反馈不伪称原生模型准入', async t => {
@@ -1142,15 +1142,140 @@ for (const testCase of ['other-actor','other-group','stale-requirement','stale-c
   await humanSource(f, testCase === 'other-actor' ? 'outsider' : 'owner', testCase === 'other-group' ? 'other' : 'g')
   if (testCase === 'stale-requirement') respond.expectedRequirementRevision = 2
   if (testCase === 'stale-control') respond.expectedControlRevision = 2
-  if (testCase === 'not-drained') await f.command('task.claim', { taskId: 'human-task', force: true })
+  if (testCase === 'not-drained') await f.command('task.claim', { taskId: 'human-task', dialogue: true, force: true })
   if (testCase === 'revised') { await f.command('task.revise', { taskId: 'human-task', request: 'new requirement' }); respond.expectedRequirementRevision = 2 }
   if (testCase === 'cancelled') { await f.command('task.control', { taskId: 'human-task', control: 'cancelled' }); respond.expectedControlRevision = 2 }
   if (testCase === 'completed') {
-    const claim = (await f.command('task.claim', { taskId: 'human-task', force: true })).result
-    await f.command('task.complete', { binding: claim.binding, summary: 'done' })
+    await f.command('task.human.respond', respond)
+    const claim = (await f.command('task.claim', { taskId: 'human-task' })).result
+    await f.command('task.complete', { binding: claim.binding, summary: '已按合法答复完成' })
   }
   await assert.rejects(f.command('task.human.respond', respond))
-  if (['revised','cancelled','completed'].includes(testCase)) assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests[0].status, 'superseded')
+  if (['revised','cancelled'].includes(testCase)) assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests[0].status, 'superseded')
+})
+
+test('群业务答复先只读复核，保存完整条件和审计，解除后独立轮恢复且重放不重复唤醒', async t => {
+  const f = await fixture(t), { owner } = await humanWaiting(f)
+  await assert.rejects(f.command('task.claim', { taskId: 'human-task', force: true }), { code: 'DYNAMIC_HUMAN_RESPONSE_REQUIRED' })
+  await humanSource(f, 'business-owner')
+  const accepted = { taskId: 'human-task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+    messageId: 'accepted-answer', text: '已确认', sourceRefs: ['human-answer'] }
+  await f.command('task.supplement', accepted, 'accept-answer')
+  await f.reopen()
+  const task = await f.query({ kind: 'task.get', taskId: 'human-task' })
+  assert.equal(task.humanRequests[0].status, 'waiting-reply')
+  const candidate = pendingTaskHumanReview(task, await f.query({ kind: 'wake.list', taskId: 'human-task' }))
+  assert.deepEqual(candidate.sourceIds, ['human-answer'])
+  const review = (await f.command('task.claim', { taskId: 'human-task', humanReview: true })).result
+  assert.equal(review.binding.sessionId, owner.binding.sessionId)
+  assert.deepEqual(review.wakes.map(wake => wake.kind), ['task.supplement'])
+  for (const kind of ['execution.dispatch', 'execution.continue', 'execution.feedback', 'task.complete'])
+    await assert.rejects(f.command(kind, { binding: review.binding }), { code: 'DYNAMIC_HUMAN_REVIEW_READ_ONLY' })
+  const resolve = { binding: review.binding, requestId: candidate.requestId, sourceId: 'human-answer',
+    reason: '业务负责人针对原环境问题明确答复，只允许 UAT3 执行已说明的修改', evidence: ['原交办确认该成员负责环境范围', '原文：仅在 UAT3 执行已说明的修改'] }
+  await assert.rejects(f.command('task.human.resolve', { ...resolve, sourceId: 'forged' }), { code: 'DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID' })
+  await assert.rejects(f.command('task.human.resolve', { ...resolve, binding: owner.binding }), { code: 'DYNAMIC_TASK_LEASE_STALE' })
+  await assert.rejects(f.command('task.human.resolve', { ...resolve, evidence: [] }), { code: 'DYNAMIC_ARGUMENT_INVALID' })
+  const resolved = await f.command('task.human.resolve', resolve, 'resolve-review')
+  assert.equal(resolved.result.request.reply, '仅在 UAT3 执行已说明的修改')
+  assert.equal(resolved.result.request.actorId, 'business-owner')
+  assert.equal(resolved.result.request.resolution.reason, resolve.reason)
+  assert.equal((await f.command('task.human.resolve', resolve, 'resolve-review')).replayed, true)
+  await assert.rejects(f.command('execution.dispatch', { binding: review.binding }), { code: 'DYNAMIC_HUMAN_REVIEW_READ_ONLY' })
+  await f.command('task.wait', { binding: review.binding, summary: resolve.reason, evidence: resolve.evidence })
+  await f.command('wake.ack', { binding: review.binding, wakeIds: review.wakeIds })
+  await f.command('task.drained', { binding: review.binding })
+  await f.reopen()
+  const resumed = (await f.command('task.claim', { taskId: 'human-task' })).result
+  assert.equal(resumed.humanReview, undefined)
+  assert.equal(resumed.wakes.filter(item => item.kind === 'human.responded').length, 1)
+  assert.ok(resumed.wakes.some(item => item.kind === 'task.created'), '旧工作唤醒未被复核消费')
+  assert.equal(resumed.task.humanRequests[0].resolution.leaseEpoch, review.binding.leaseEpoch)
+  assert.equal((await f.query({ kind: 'task.decisions', taskId: 'human-task' })).decisions[0].decision.summary, resolve.reason)
+  assert.equal(resumed.task.requirementRevision, 1)
+})
+
+for (const interrupted of ['crash', 'provider-failure', 'tool-limit', 'resolved-before-drain']) test(`群待答复核恢复不丢来源及下一轮事件：${interrupted}`, async t => {
+  const f = await fixture(t)
+  await humanWaiting(f)
+  await humanSource(f, 'business-owner')
+  await f.command('task.supplement', { taskId: 'human-task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+    messageId: 'recover-answer', text: '环境答复', sourceRefs: ['human-answer'] })
+  const review = (await f.command('task.claim', { taskId: 'human-task', humanReview: true })).result
+  if (interrupted === 'provider-failure') await f.command('task.provider-failure', { binding: review.binding,
+    failure: { code: 'TASK_SESSION_PROVIDER_TRANSIENT', phase: 'provider' } })
+  if (interrupted === 'tool-limit') {
+    await f.command('task.provider-failure', { binding: review.binding, failure: { code: 'TASK_SESSION_PROVIDER_TRANSIENT', phase: 'provider' } })
+    await f.command('task.wait', { binding: review.binding, action: 'blocked',
+      summary: '复核工具调用失败，等待新有效输入', limitations: ['DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID'], reviewFailureCode: 'DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID' })
+  }
+  if (interrupted === 'resolved-before-drain') await f.command('task.human.resolve', { binding: review.binding,
+    requestId: review.humanReview.requestId, sourceId: 'human-answer', reason: '已核对业务角色和 UAT3 条件', evidence: ['原文仅允许 UAT3'] })
+  await f.reopen()
+  const recovering = await f.query({ kind: 'task.get', taskId: 'human-task' })
+  assert.equal(recovering.recovering, true)
+  await f.command('task.drained', { binding: await f.query({ kind: 'task.binding', taskId: 'human-task' }) })
+  const task = await f.query({ kind: 'task.get', taskId: 'human-task' }), wakes = await f.query({ kind: 'wake.list', taskId: 'human-task' })
+  assert.ok(review.wakeIds.every(id => wakes.some(item => item.id === id && item.state !== 'acked')))
+  if (interrupted === 'tool-limit') {
+    assert.equal(task.humanRequests[0].reviewFailures[0].code, 'DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
+    assert.equal(task.providerRecovery.attempts, 1, '工具失败不能抹掉既有模型重试预算')
+    assert.equal(pendingTaskHumanReview(task, wakes), null)
+    for (const [sourceId, fields] of [['summary-only', {}], ['old', { timestamp: '2020-01-01T00:00:00Z' }], ['web', { channel: 'web' }]]) {
+      if (sourceId !== 'summary-only') await f.command('source.record', { sourceId, groupId: 'g', messageId: sourceId, actorId: 'owner', text: '非新候选', ...fields })
+      const current = await f.query({ kind: 'task.get', taskId: 'human-task' })
+      await f.command('task.supplement', { taskId: 'human-task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+        messageId: sourceId, text: '不构成新的有效候选', sourceRefs: [...current.sourceRefs, ...(sourceId === 'summary-only' ? [] : [sourceId])] })
+      assert.equal(pendingTaskHumanReview(await f.query({ kind: 'task.get', taskId: 'human-task' }), await f.query({ kind: 'wake.list', taskId: 'human-task' })), null)
+    }
+    await f.command('source.record', { sourceId: 'clarified', groupId: 'g', messageId: 'clarified', actorId: 'owner', text: '确认该成员负责环境答复' })
+    await f.command('task.supplement', { taskId: 'human-task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+      messageId: 'clarification', text: '确认该成员负责环境答复', sourceRefs: ['human-answer', 'clarified'] })
+    const next = pendingTaskHumanReview(await f.query({ kind: 'task.get', taskId: 'human-task' }), await f.query({ kind: 'wake.list', taskId: 'human-task' }))
+    assert.deepEqual(new Set(next.sourceIds), new Set(['human-answer', 'clarified']))
+    return
+  }
+  if (interrupted === 'provider-failure') {
+    assert.equal(task.providerRecovery.attempts, 1)
+    assert.deepEqual(pendingTaskHumanReview(task, wakes).sourceIds, ['human-answer'])
+    await assert.rejects(f.command('task.claim', { taskId: 'human-task', humanReview: true }), { code: 'DYNAMIC_TASK_PROVIDER_RETRY_NOT_DUE' })
+    return
+  }
+  const next = (await f.command('task.claim', { taskId: 'human-task', ...(interrupted === 'crash' ? { humanReview: true } : {}) })).result
+  assert.equal(next.binding.sessionId, review.binding.sessionId)
+  assert.equal(next.binding.leaseEpoch, review.binding.leaseEpoch + 1)
+  if (interrupted === 'crash') assert.deepEqual(next.humanReview.sourceIds, ['human-answer'])
+  else {
+    assert.equal(next.humanReview, undefined)
+    assert.equal(next.wakes.filter(item => item.kind === 'human.responded').length, 1)
+    assert.equal(next.task.humanRequests[0].reply, '仅在 UAT3 执行已说明的修改')
+  }
+})
+
+for (const variant of ['unrelated', 'old', 'future', 'other-group', 'web', 'operator']) test(`待答复核保留等待且不空转：${variant}`, async t => {
+  const f = await fixture(t), { owner } = await humanWaiting(f)
+  if (variant === 'operator') {
+    await f.command('task.revise', { taskId: 'human-task', request: '技术问题' })
+    const next = (await f.command('task.claim', { taskId: 'human-task' })).result
+    await f.command('task.wait', { binding: next.binding, summary: '等待技术修复', question: '恢复配置', humanRequest: { requestId: 'operator', audience: 'operator' } })
+    await f.command('task.drained', { binding: next.binding })
+  }
+  const current = await f.query({ kind: 'task.get', taskId: 'human-task' })
+  await f.command('source.record', { sourceId: 'candidate', groupId: variant === 'other-group' ? 'elsewhere' : 'g',
+    messageId: 'candidate', actorId: 'owner', text: '另外一件事', channel: variant === 'web' ? 'web' : 'im',
+    ...(variant === 'old' ? { timestamp: '2020-01-01T00:00:00Z' } : variant === 'future' ? { timestamp: '2099-01-01T00:00:00Z' } : {}) })
+  await f.command('task.supplement', { taskId: 'human-task', expectedRequirementRevision: current.requirementRevision,
+    expectedControlRevision: current.controlRevision, messageId: 'supplement', text: '另外一件事', sourceRefs: ['candidate'] })
+  if (variant === 'unrelated') {
+    const review = (await f.command('task.claim', { taskId: 'human-task', humanReview: true })).result
+    await f.command('task.wait', { binding: review.binding, summary: '来源未回答原环境问题，保留原问题', evidence: ['另外一件事'] })
+    await f.command('wake.ack', { binding: review.binding, wakeIds: review.wakeIds })
+    await f.command('task.drained', { binding: review.binding })
+    await f.reopen()
+  }
+  await assert.rejects(f.command('task.claim', { taskId: 'human-task', humanReview: true }), { code: 'DYNAMIC_HUMAN_REVIEW_NOT_PENDING' })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests.at(-1).status, 'waiting-reply')
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'human-task' })).filter(item => item.kind === 'human.responded').length, 0)
 })
 
 test('human request requires an explicit stable identity and accepts only configured web actor without impersonation', async t => {

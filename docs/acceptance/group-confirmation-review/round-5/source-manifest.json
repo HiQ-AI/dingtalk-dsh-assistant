@@ -1,0 +1,65 @@
+{
+  "base": "917a4a038fba6c8a3df771cfed470051d7fc151d",
+  "files": [
+    {
+      "sha256": "5E628C2C690CDE478AE5F12992111DED626307FD6A742DD04A21BC596F035C9B",
+      "path": "README.md",
+      "bytes": 66812
+    },
+    {
+      "sha256": "82DD0F047D111CB57CA8641DF09CE645B8E7508EACA329B2FAA31FEE7FDABE0F",
+      "path": "docs/api/task-session-human-requests.md",
+      "bytes": 8506
+    },
+    {
+      "sha256": "2955EDF0C221E1D39D9D0FA680B0E3419A130415175FFEEBF669E024C6C0236B",
+      "path": "docs/ops/task-session-clean-start.md",
+      "bytes": 59010
+    },
+    {
+      "sha256": "07CA0FFB3810641D954DB200484E6D14E1D3246A8514680D5DF30CFB334E29E1",
+      "path": "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "bytes": 158440
+    },
+    {
+      "sha256": "42B68827C9E3872C810E9BAED174D57EBB7402C6DC29199026678BF3CDDCD503",
+      "path": "packages/dingtalk-dsh-assistant/model-context.js",
+      "bytes": 32696
+    },
+    {
+      "sha256": "0A5D8E4FC6B4479BD610733CDF17222FA078ADBD4329F1ADAB3D1FB706DD39DE",
+      "path": "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
+      "bytes": 1761
+    },
+    {
+      "sha256": "19AFE91B1F7DF6221F4521361C2186B07CD130F04FC9E78435AED2B55D17C703",
+      "path": "packages/dingtalk-dsh-assistant/task-session-service.js",
+      "bytes": 141086
+    },
+    {
+      "sha256": "3B285B5137A77D89D316327CA975089CA6A736BC37D7C3D72B36282A666EC919",
+      "path": "packages/dingtalk-dsh-assistant/task-session.js",
+      "bytes": 44338
+    },
+    {
+      "sha256": "C2BB432DF1D80D97BEDC25BB43DBD480CE3DC1144B6B2F37ED88244E44A2CD79",
+      "path": "packages/dingtalk-dsh-assistant/task-source-instructions.js",
+      "bytes": 3489
+    },
+    {
+      "sha256": "C536358AB3724B56FC295AA0FFBCACDEFDE9617A38E203D4993BFF7FD865428A",
+      "path": "test/dynamic-task-store.test.js",
+      "bytes": 156441
+    },
+    {
+      "sha256": "57EAB9363E281DED0B480DD13363DD60A78F593E70C775DA623B90363E9A3955",
+      "path": "test/task-session-human-native.test.js",
+      "bytes": 37819
+    },
+    {
+      "sha256": "D0F5AF551534CA47CA840D07C6F08ABF3837F398E74EC1B05056253973B0561E",
+      "path": "test/topic-runtime.test.js",
+      "bytes": 178306
+    }
+  ]
+}

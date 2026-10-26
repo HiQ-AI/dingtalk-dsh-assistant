@@ -1,0 +1,20 @@
+--- round-4/business-development/scripts/verification_run.py
++++ round-5/business-development/scripts/verification_run.py
+@@ -19,10 +19,13 @@
+ 
+ 
+ def git(cwd, *args):
+-    # 禁用可选索引刷新，保证 --check 连 Git 索引的时间戳也不写。
+-    result = subprocess.run(["git", "--no-optional-locks", "-C", str(cwd), *args], capture_output=True)
+-    if result.returncode:
+-        raise ValueError("cannot read Git candidate; use the actual repository checkout")
++    # 不改用户配置；启用 Windows 长路径读取，并禁止可选索引刷新。
++    result = subprocess.run(["git", "--no-optional-locks", "-c", "core.longpaths=true", "-C", str(cwd), *args],
++                            capture_output=True)
++    # Git 枚举路径遗漏时可能仍返回 0；有诊断就不能把摘要当作完整候选。
++    if result.returncode or result.stderr.strip():
++        raise ValueError(f"Git candidate read is incomplete or unconfirmed (exit={result.returncode}, "
++                         f"diagnosticBytes={len(result.stderr)}); inspect the read-only Git command")
+     return result.stdout
+ 
+ 
