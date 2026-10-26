@@ -40,6 +40,108 @@ async function fixture(t, decide, options) {
 }
 async function pending(h) { return (await h.service.listAuthorizationRequests()).find(item => item.status === 'waiting-reply') }
 
+for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：${failure}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  let original, topicId, resumed, reviewStep = 0
+  const reviewLeases = [], answer = '测试助手，可以，但只允许 UAT2；点击编辑即持久化待提交，不能把变更延后到提交时。'
+  const wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
+  const h = await fixture(t, async request => {
+    const incoming = latestInput(request)
+    if (incoming.requestId?.startsWith('coord-title-')) return [call('group_topic_title_submit', { requestId: incoming.requestId, topicId: incoming.topicId, title: '核对编辑持久化方案' })]
+    const names = request.tools.map(tool => tool.name), routed = topicTaskCalls(request)
+    if (names.includes('group_topic_route_submit')) {
+      for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
+      return routed
+    }
+    if (names.includes('group_decision_submit')) {
+      const review = modelToolValues(request).find(value => Array.isArray(value.candidates))
+      if (!review) return [call('group_reply_review_get', { requestIds: [incoming.requestId] })]
+      const args = routed[0].args
+      args.decision.actions = [{ kind: 'task-context', taskId: original.taskId, inputVersion: original.requirementRevision,
+        runSequence: original.runSequence, context: '业务已确认', progressImpact: 'preserve',
+        topicRefs: [{ topicId: args.topicId, revision: args.revision }], basisUnitRefs: args.decision.basisUnitRefs }]
+      args.decision.reply = incoming.messages.at(-1).text.includes('另外一件事')
+        ? '已记录另一事项，原业务问题仍待答复。' : '已收到关于 UAT2 和编辑持久化条件的答复。'
+      args.decision.replyReview = { kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: review.candidates.map(item => item.outboundId), replaceOutboundIds: [] }
+      return routed
+    }
+    if (routed) return routed
+    const input = latestInput(request)
+    if (!input.task.humanRequests.length) return [requestHuman('requester')]
+    if (input.humanReview) {
+      const source = input.sources.find(item => input.humanReview.sourceIds.includes(item.sourceId))
+      assert.equal(input.task.humanRequests[0].status, 'waiting-reply')
+      reviewLeases.push(input.humanReview.requestId)
+      if (source.messageId === 'unrelated-owner') return [wait('原发起人说的是另一事项，未回答环境和编辑持久化条件，保留原问题')]
+      assert.equal(source.actorId, 'business-responsible')
+      assert.equal(source.text, answer, '完整限制不能被话题摘要代替')
+      assert.match(requestSystemText(request), /真实作者的业务角色和权限/)
+      if (failure === 'empty' && reviewStep++ === 0) return []
+      if (failure === 'tool-limit') return [call('task_human_resolve', { requestId: input.humanReview.requestId,
+        sourceId: 'forged-source', reason: '伪造来源必须拒绝', evidence: ['无效来源'] })]
+      if (failure === 'none' && reviewStep++ === 0) return [call('task_delegate', { key: 'forbidden', objective: '不得提前执行' }),
+        call('write', { file_path: join(h.root, 'forbidden.txt'), content: 'must not write' }), finish('不得提前完成')]
+      if (failure === 'none') assert.match(JSON.stringify(request.messages), /task_human_review_read_only/)
+      return [call('task_human_resolve', { requestId: input.humanReview.requestId, sourceId: source.sourceId,
+        reason: '原任务明确该成员负责业务条件，答复对应待答问题并限定 UAT2 及点击编辑即持久化；未新增权限', evidence: [answer] }),
+        call('task_delegate', { key: 'still-read-only', objective: '解除成功仍不能在复核轮执行' }),
+        wait('已保存完整业务答复，等待下一统筹轮继续原任务')]
+    }
+    resumed = input
+    return [wait('已在独立正常轮收到完整答复，按原目标及附加条件继续')]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'business-review', title: '编辑持久化核对', objective: '由业务负责人 business-responsible 确认编辑持久化方案，现有授权只在 UAT2 验证' })
+  await h.service.whenIdle()
+  original = await h.query('task.get', { taskId: created.taskId }); topicId = original.topicRefs[0].topicId
+  await h.service.ingest({ groupId: 'native-group', messageId: 'unrelated-owner', senderOpenDingTalkId: 'native-user', text: '测试助手，另外一件事下周讨论', occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  const kept = await h.query('task.get', { taskId: original.taskId })
+  assert.equal(kept.humanRequests[0].status, 'waiting-reply')
+  assert.equal(kept.humanRequests.length, 1)
+  assert.match(kept.lastDecision.summary, /未回答环境/)
+  const count = h.requests.length
+  await h.service.whenIdle()
+  assert.equal(h.requests.length, count, '未回答问题时消费本次来源，不主动空转')
+  await h.service.ingest({ groupId: 'native-group', messageId: 'business-answer', senderOpenDingTalkId: 'business-responsible', text: answer, occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  if (failure !== 'none') {
+    const interrupted = await h.query('task.get', { taskId: original.taskId }), wakes = await h.query('wake.list', { taskId: original.taskId })
+    assert.equal(interrupted.humanRequests[0].status, 'waiting-reply')
+    assert.ok(wakes.some(item => item.kind === 'task.supplement' && item.state !== 'acked'))
+    if (failure === 'tool-limit') {
+      const recorded = interrupted.humanRequests[0].reviewFailures.at(-1)
+      assert.equal(recorded.code, 'DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
+      assert.equal(interrupted.providerRecovery, null)
+      assert.deepEqual(interrupted.lastDecision.limitations, ['DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID'])
+      const count = h.requests.length
+      await h.service.recover(); await h.service.whenIdle()
+      assert.equal(h.requests.length, count, '工具错误上限不冒充空返回自动重试')
+      assert.equal((await h.query('execution.list')).length, 0)
+      return
+    }
+    assert.equal(interrupted.providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
+    await waitUntil(() => resumed, '空返回沿原会话在既有有界退避后重试', 15000)
+    await h.service.whenIdle()
+  }
+  const after = await h.query('task.get', { taskId: original.taskId })
+  assert.equal(after.humanRequests[0].status, 'answered')
+  assert.equal(after.humanRequests[0].reply, answer)
+  assert.ok(after.humanRequests[0].resolution.reason.includes('点击编辑即持久化'))
+  assert.equal(after.sessionId, original.sessionId)
+  assert.equal(after.requirementRevision, original.requirementRevision)
+  assert.equal(after.controlRevision, original.controlRevision)
+  assert.equal(after.humanRequests.length, 1)
+  assert.equal(resumed.humanReview, undefined)
+  assert.ok(resumed.wakes.some(item => item.kind === 'human.responded'))
+  assert.equal(resumed.sources.find(item => item.actorId === 'business-responsible').text, answer)
+  assert.equal((await h.query('execution.list')).length, 0, '复核工具无法派发执行')
+  assert.equal((await h.query('operation.list')).length, 0, '复核没有写操作')
+  if (failure === 'none') assert.match(JSON.stringify(h.toolResults.find(item => item.name === 'write')), /task_human_review_read_only/)
+  const decisions = await h.query('task.decisions', { taskId: original.taskId })
+  assert.ok(decisions.decisions.some(item => item.decision.summary.includes('未回答环境')))
+  assert.ok(decisions.decisions.some(item => item.decision.summary.includes('已保存完整业务答复')))
+  assert.ok(reviewLeases.length >= 2)
+})
+
 test('operator technical reply retains business sources and shared scope protocol in the same resumed execution', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const objective = '测试助手，修复后部署到UAT2，隔离验证，不操作真实申请'
   const reply = '技术已恢复；本答复不新增部署批准，不撤销此前明确交办范围。用户纠正：说了部署到UAT就部署到UAT，这个申请不应该提。'
@@ -303,6 +405,9 @@ for (const changed of [false, true]) test(`original-group human input preserves 
     const input = latestInput(request); ownerTurns++
     if (ownerTurns === 1) return [call('task_delegate', { key: 'live-original', objective: '保持原有只读核对' })]
     if (ownerTurns === 2) return [requestHuman('requester')]
+    if (input.humanReview) return [call('task_human_resolve', { requestId: input.humanReview.requestId,
+      sourceId: input.humanReview.sourceIds[0], reason: '原需求人对同一环境问题明确限定 UAT3，只读且不发布生产',
+      evidence: [replyText] }), call('task_session_submit', { decision: { action: 'wait', summary: '已核对完整范围限制，下一轮沿原任务继续', evidence: [replyText], limitations: [] } })]
     if (!input.executions.every(execution => execution.drained)) {
       answeredInput = input
       return [call('task_session_submit', { decision: { action: 'wait', summary: '已读取原群答复，等待原执行完成', evidence: [], limitations: [] } })]

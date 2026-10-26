@@ -1,0 +1,26 @@
+{
+  "head": "917a4a038fba6c8a3df771cfed470051d7fc151d",
+  "files": [
+    "README.md",
+    "docs/api/task-session-human-requests.md",
+    "docs/ops/task-session-clean-start.md",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+    "packages/dingtalk-dsh-assistant/model-context.js",
+    "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
+    "packages/dingtalk-dsh-assistant/task-session-service.js",
+    "packages/dingtalk-dsh-assistant/task-session.js",
+    "packages/dingtalk-dsh-assistant/task-source-instructions.js",
+    "test/dynamic-task-store.test.js",
+    "test/task-session-human-native.test.js",
+    "test/topic-runtime.test.js"
+  ],
+  "startedAt": "2026-10-26T15:40:30.0153227+08:00",
+  "command": [
+    "node",
+    "--test",
+    "test/topic-runtime.test.js",
+    "test/topic-store.test.js",
+    "test/model-context.test.js",
+    "test/task-topic-routing-native.test.js"
+  ]
+}

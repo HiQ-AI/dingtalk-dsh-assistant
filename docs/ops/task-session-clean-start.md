@@ -107,6 +107,8 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 人工介入核验：待答请求在/state/authorizations返回taskSessionRequest=true、status=waiting-reply，任务归等待中；POST /tasks/:taskId/human-requests/:requestId/reply只接纳本机受信Web请求，body含幂等requestId、reply及expectedRequirementRevision/expectedControlRevision。原文保留真实配置webActorId，旧版本/已答/非当前请求拒绝，成功后原task/session继续。修订或终态将旧申请superseded；不得通过手改账或伪造答复绕过边界。
 
+群业务确认更新无新配置和数据表，沿本页已初始化实例更新流程。隔离核验 A 交办、B 回答当前 requester 问题：同任务新群来源应先进入只读 humanReview，核对完整条件后保存 resolution，再由下一 human.responded 回合恢复；解除前及解除后本轮均不能委派、反馈或完成。另验无关内容、旧消息、跨群来源、重复事件、operator 问题、执行结果与定时巡检均不误解除，模型失败/重启不吞候选，已判断为不足的来源不循环唤醒。原 task/session、执行身份和既有完成效果应保持。业务角色与回答充分性仍需核对模型的实际决定，Host 来源门禁测试不能代替该判断。升级不会自动重评旧 supplement 或补造历史答复；需要处理的历史任务先核对原消息及当前问题，再通过正常接纳入口补充，禁止直接改账。完整协议见 [人工介入 API](../api/task-session-human-requests.md#群聊业务答复核对)。
+
 进度巡检核验：execution.progressReview.checkedAt为持久上次检查时间，running当前版本到期600000毫秒后由既有recovery tick读取原生日志；wake.kind=execution.progress.review。统筹未调用task_execution_progress就提交会收到TASK_EXECUTION_PROGRESS_REVIEW_REQUIRED纠正；该工具现在返回本轮document引用，统筹须用原生read读文档后判断，日常不再返回日志摘录。缺文件、身份/输入不匹配或无阶段报告如实呈现，不能仅查状态宣布推进。巡检不发额外群进度消息，不清unknown效果。
 
 协作质量更新沿本页现有部署流程，无新配置和数据库迁移。执行团队按 Task 按需拆分和复用，不设最低人数或固定总人数上限。核验零执行、单执行、双执行在成果齐备且排空后均可 complete，第11名及更多成员可正常登记；依赖未齐的工作延后派发，简单任务不凑人数。现有并发容量、同一执行单飞、资源互斥和未知效果/排空完成条件保持生效；人数不限不等于无限并发。历史成员继续按原身份读取和续办，不删除或重建。检查 objective/context 是否明确每成员本轮职责、任务、输入、负责范围、前置、交付物及验收方法，resourceKeys 是否对应真实冲突资源。独立就绪目标应在同轮登记后再 wait；高风险自证需固定产物版本后补独立只读核验，不能用重做外部写入来补证。隔离模型复验入口见 `docs/acceptance/task-collaboration-quality/scripts/evaluate-model.mjs`，结果与语义审阅记入同特性轮次；不能以提示词存在或会话数量增加代替行为验证。

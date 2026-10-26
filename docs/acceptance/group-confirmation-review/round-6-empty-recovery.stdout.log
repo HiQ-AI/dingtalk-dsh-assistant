@@ -1,0 +1,24 @@
+✖ empty owner recovery reviews the retained execution without replaying its completed native write (25985.695ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 27439.0834
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:50:38
+✖ empty owner recovery reviews the retained execution without replaying its completed native write (25985.695ms)
+  Error: {"task":{"appliedOperations":["decision-ab21eecccd8e995b464701df361fe650:action:0"],"claimContextRevision":0,"claimControlRevision":1,"claimRequirementRevision":1,"control":"active","controlRevision":1,"createdAt":"2026-10-26T08:07:35.511Z","drained":false,"groupId":"native-group","humanRequests":[],"humanReviewLease":null,"id":"task-a90e1956b0b7b5eb3e5f5a2ee90ad0e6","lastDecision":{"action":"wait","at":"2026-10-26T08:07:47.758Z","controlRevision":1,"decision":null,"evidence":[],"limitations":[],"question":null,"requirementRevision":1,"summary":"原作业已结束，等待结果版本和交付证据核验"},"leaseEpoch":4,"metadata":{"authorizationSourceId":"web:5ee2cc4dc5a71c7bfafa098d58443588f32ae5083d0f4946e3804e89380ed749","channel":"web"},"objective":"写一次后核对结果","ownerActorId":"native-user","providerRecovery":null,"recovering":false,"request":"写一次后核对结果","requirementRevision":1,"requirements":["写一次后核对结果"],"runSequence":1,"sessionBound":true,"sessionId":"task-session-b464bdbd-e283-4a6c-a69f-57bc5a692687","sourceRefs":["web:5ee2cc4dc5a71c7bfafa098d58443588f32ae5083d0f4946e3804e89380ed749"],"status":"active","taskId":"task-a90e1956b0b7b5eb3e5f5a2ee90ad0e6","title":"写一次后核对结果","topicRefs":[{"revision":1,"topicId":"topic-07c3d83e30b788e7f07fcf3c85a8919e"}],"updatedAt":"2026-10-26T08:07:55.145Z"},"executions":[{"key":"once","status":"succeeded","error":null},{"key":"verify-result-version","status":"succeeded","error":null},{"key":"verify-delivery-evidence","status":"succeeded","error":null}],"errors":[]}
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1382:25)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    [cause]: Error: Timed out: retained execution review
+        at waitUntil (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/fixtures/task-session-native-host.js:218:9)
+        at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1381:9)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  }

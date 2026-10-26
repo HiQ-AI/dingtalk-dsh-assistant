@@ -1,0 +1,69 @@
+{
+  "files": [
+    {
+      "file": "D:\\dsh_home\\skills\\business-development\\SKILL.md",
+      "beforeSha256": "306feda3bc31a05fc5dd213596bbead6189c5eaaaf253342a304793e92fad735",
+      "sha256": "7c43d69a4bf8b59a29b86a506cb2590461c40d024f367bd9741d21e436cfb550",
+      "bytes": 3226,
+      "unchangedSinceRound4": true
+    },
+    {
+      "file": "D:\\dsh_home\\skills\\business-development\\references\\procedure.md",
+      "beforeSha256": "99308c4df78dc90d367bf8e8c1c5697f859a7f305e54e55a7c46636845ca3ad7",
+      "sha256": "2cc43ecb9d07dd04fa65ab74afba85a9bf330638a68a6670b4293570442e20c9",
+      "bytes": 28486,
+      "unchangedSinceRound4": true
+    },
+    {
+      "file": "D:\\dsh_home\\skills\\review-technical-plan\\SKILL.md",
+      "beforeSha256": "c663657dd74d3bc7f6e30b5298fdb5760bc8a08be76bfa6e1fbbfa451be71662",
+      "sha256": "459d3761d65d720e2dade1c063dea9b374c3815a70d8d599603f1615a9404b06",
+      "bytes": 3692,
+      "unchangedSinceRound4": true
+    },
+    {
+      "file": "D:\\dsh_home\\skills\\review-technical-plan\\references\\checklist.md",
+      "beforeSha256": "818af71674847c6578bbcfeda750cca7cc12e6be38a5ecd868c3f382e3d3c914",
+      "sha256": "e5393d48c79e3432afc367c9cf8ae760d12a64898375ea22a9b6e026cf480d05",
+      "bytes": 11137,
+      "unchangedSinceRound4": true
+    },
+    {
+      "file": "D:\\dsh_home\\skills\\review-code-implementation\\SKILL.md",
+      "beforeSha256": "5525bdf1bb08e1b69c78a5f820a058ca0ced2fa8bc555637a8931f6edae5bbb1",
+      "sha256": "333c42ab224adf4a0da2e24959c636513aba5126ef9a733654d5070c3f034b28",
+      "bytes": 5390,
+      "unchangedSinceRound4": true
+    },
+    {
+      "file": "D:\\dsh_home\\skills\\review-code-implementation\\references\\checklist.md",
+      "beforeSha256": "8b41cf26929f9eef0de895a6cded6863ce81ee177a4f6f8e8c9cdaeb98a3c6f2",
+      "sha256": "bd1c89a2a0b7af23cb8c4fedd31ccf3f631177a087698a2a45c6058c7be710ac",
+      "bytes": 18286,
+      "unchangedSinceRound4": true
+    },
+    {
+      "file": "D:\\dsh_home\\skills\\business-development\\scripts\\verification_run.py",
+      "beforeSha256": null,
+      "sha256": "ff05514c9e95daf10db979429ed2c2f56a206d2ea457e90e771b6db16dfa4a06",
+      "bytes": 8331,
+      "unchangedSinceRound4": false
+    }
+  ],
+  "changedSkillValidation": {
+    "command": [
+      "python",
+      "-X",
+      "utf8",
+      "D:/codex-home/skills/.system/skill-creator/scripts/quick_validate.py",
+      "D:\\dsh_home\\skills\\business-development"
+    ],
+    "exitCode": 0,
+    "stdout": "Skill is valid!\r\n",
+    "stderr": ""
+  },
+  "unchangedSkillValidation": "round-4/skill-readback.json",
+  "pythonSyntax": "PASS (ast.parse; no pycache write)",
+  "targetedBehavior": "round-5/longpath-result.json",
+  "actualCheckoutCheck": "round-5/actual-check.stdout.json"
+}

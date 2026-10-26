@@ -1,0 +1,99 @@
+✔ chat reorder wakes the original Owner into a read-only assessment and commits the validated safe-point receipt (1795.9362ms)
+✔ dialogue uses the same native owner, answers questions without feedback, steers the original execution and refuses restart (5578.8263ms)
+✔ task model defaults and explicit selection preserve the execution selection (3.1422ms)
+✔ native create and resume use the current exact task model on the original session; missing model never creates or resumes (1530.4915ms)
+✔ native service isolates task model from delegated execution: old config (2346.3311ms)
+✔ native service isolates task model from delegated execution: explicit-owner (5129.4834ms)
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (0.9426ms)
+✔ native execution documents keep each input round and the owner reads the new duty and plan (9711.4886ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: false (15711.0992ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: true (16772.292ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (18002.155ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (18138.3524ms)
+✔ task provider transient classifier only accepts the exact verified provider errors (1.3775ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=false (1634.4652ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=true (178.1873ms)
+✔ service retries a transient native owner with its claimed wake and same session after cooldown (7069.5511ms)
+✔ normal empty owner completion resumes automatically with the same session and wake: restart=false (7529.2121ms)
+✔ normal empty owner completion resumes automatically with the same session and wake: restart=true (7760.9067ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: true (3527.417ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: false (2763.1051ms)
+✔ owner technical failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance: noSubmission=false (10898.4961ms)
+✔ owner technical failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance: noSubmission=true (11276.9236ms)
+✔ owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=true (857.4842ms)
+✔ owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=false (793.0824ms)
+✔ 原生网页工具错误不建立未知效果，仍可完成后续读取 (22813.9759ms)
+✔ running reminder and coordinator clarification preserve one native shell job with received and consumed receipts (22989.8359ms)
+✔ native completion race drains then resumes the original execution without replaying its shell effect (21006.5448ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: missing (5391.6242ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: preserve (8594.7579ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: replan (8774.8865ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: cancel (5835.5843ms)
+✔ owner injects one authoritative source body across task, Web identity and materials (2063.7584ms)
+ℹ {"scope":"actual native owner scripted adapter UTF-8 JSON bytes","bodyCopies":[0,0],"metrics":[{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":26323,"schemaBytes":13150,"adapterRequestBytes":56357},{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2488,"systemBytes":26323,"schemaBytes":13150,"adapterRequestBytes":59302}]}
+✔ 不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话 (4804.9096ms)
+✔ 话题历史自身通知不阻断人工补充-native-user (3072.9399ms)
+✔ 话题历史自身通知不阻断人工补充-colleague (3541.6079ms)
+✔ 话题历史未准入真实消息仍拒绝更新且不发送成功回复-native-user (5067.4955ms)
+✔ 180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay (615.1416ms)
+ℹ {"scope":"actual native foldSurface UTF-8 JSON message bytes; source/task identity retained","legacyHostCount":180,"beforeBytes":65206,"afterBytes":983,"newInputBytes":282,"retainedBaselineBytes":0,"afterCompactionBytes":1170,"rawAuditEvents":367}
+{"contextProof":{"ownerRequests":11,"latestInputBytes":4941,"totalRequestBytes":110757}}
+✔ owner keeps one current Host snapshot and delegates non-recursive execution context across three generations (16040.4251ms)
+✔ 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects (156046.6427ms)
+ℹ {"scope":"native owner scripted adapter, UTF-8 JSON bytes; no provider tokens","metrics":[{"lease":1,"inputVersion":0,"currentInputBytes":2198,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2844,"messagesBytes":32755,"adapterRequestBytes":59267},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":55055,"adapterRequestBytes":81567},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":56755,"adapterRequestBytes":83267},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":59956,"adapterRequestBytes":86468},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":61506,"adapterRequestBytes":88018},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":63083,"adapterRequestBytes":89595},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":159723,"adapterRequestBytes":186235},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":161423,"adapterRequestBytes":187935},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":164624,"adapterRequestBytes":191136},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":166174,"adapterRequestBytes":192686},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":167751,"adapterRequestBytes":194263},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":867343,"adapterRequestBytes":893855},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":869047,"adapterRequestBytes":895559},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":872251,"adapterRequestBytes":898763},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":873805,"adapterRequestBytes":900317},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":875385,"adapterRequestBytes":901897},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":910724,"adapterRequestBytes":937236},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":913928,"adapterRequestBytes":940440},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":915482,"adapterRequestBytes":941994},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":917062,"adapterRequestBytes":943574}]}
+✔ configured group responsibility reaches group and task models and its reply signature survives notification formatting (2241.0893ms)
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (21595.8802ms)
+✔ native sequential handoff preserves one executor before independent review of the fixed artifact (14018.1751ms)
+✔ native service runs eleven independent members within the configured concurrency and completes (48090.7616ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (11247.2581ms)
+✔ native service reopens an unknown notification for readback without resending completed business work (6255.2354ms)
+✔ native service cancellation stops the real execution process, drains the session, and rejects late completion (3486.7369ms)
+✔ native requirement update resumes the same owner with new sources and fences the interrupted old execution result (8375.3778ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (22339.8341ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (17573.7553ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (11285.0985ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (12402.0885ms)
+✔ native shared resources queue without occupying task capacity and promote on drain (24888.0928ms)
+✔ native delegation rejects changed keys on receipt replay and preserves omitted continuation keys (6236.6504ms)
+✔ recovering an idle owner with no pending wake does not consume a task slot (1059.2016ms)
+✔ native session creation failure has bounded recovery retries: persistent=false (2633.2885ms)
+✔ native session creation failure has bounded recovery retries: persistent=true (2468.5057ms)
+✔ native model failures settle without repeated owner requests: persistent=false (1092.4641ms)
+✔ native model failures settle without repeated owner requests: persistent=true (1109.8642ms)
+✖ empty owner recovery reviews the retained execution without replaying its completed native write (21237.8236ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=false (1800.3184ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=true (1712.6651ms)
+✔ native topic routing rejects incomplete source coverage and accepts correction in the same real session (2234.5751ms)
+✔ resident.apply boots and disposes with only its declared native service dependencies (1866.759ms)
+✔ resident listener startup failure disposes native resources and permits reopening the same task database (1742.0706ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (5530.3083ms)
+✔ native single-member completion keeps an unknown tool effect unresolved without replay (5844.6901ms)
+✔ native recovery no-op preserves an undrained task writer conflict alert (1350.0497ms)
+✔ execution document publication failure after claim drains the committed execution and exposes an alert (1900.8484ms)
+ℹ tests 68
+ℹ suites 0
+ℹ pass 67
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 626668.7237
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:50:38
+✖ empty owner recovery reviews the retained execution without replaying its completed native write (21237.8236ms)
+  Error: {"task":{"appliedOperations":["decision-ab21eecccd8e995b464701df361fe650:action:0"],"claimContextRevision":0,"claimControlRevision":1,"claimRequirementRevision":1,"control":"active","controlRevision":1,"createdAt":"2026-10-26T08:05:10.187Z","drained":false,"groupId":"native-group","humanRequests":[],"humanReviewLease":null,"id":"task-a90e1956b0b7b5eb3e5f5a2ee90ad0e6","lastDecision":{"action":"wait","at":"2026-10-26T08:05:19.094Z","controlRevision":1,"decision":null,"evidence":[],"limitations":[],"question":null,"requirementRevision":1,"summary":"原作业已结束，等待结果版本和交付证据核验"},"leaseEpoch":4,"metadata":{"authorizationSourceId":"web:5ee2cc4dc5a71c7bfafa098d58443588f32ae5083d0f4946e3804e89380ed749","channel":"web"},"objective":"写一次后核对结果","ownerActorId":"native-user","providerRecovery":null,"recovering":false,"request":"写一次后核对结果","requirementRevision":1,"requirements":["写一次后核对结果"],"runSequence":1,"sessionBound":true,"sessionId":"task-session-f324d985-99ec-452e-80cf-7782efbd33aa","sourceRefs":["web:5ee2cc4dc5a71c7bfafa098d58443588f32ae5083d0f4946e3804e89380ed749"],"status":"active","taskId":"task-a90e1956b0b7b5eb3e5f5a2ee90ad0e6","title":"写一次后核对结果","topicRefs":[{"revision":1,"topicId":"topic-07c3d83e30b788e7f07fcf3c85a8919e"}],"updatedAt":"2026-10-26T08:05:27.340Z"},"executions":[{"key":"once","status":"succeeded","error":null},{"key":"verify-result-version","status":"succeeded","error":null},{"key":"verify-delivery-evidence","status":"succeeded","error":null}],"errors":[]}
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1382:25)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at process.processTimers (node:internal/timers:568:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    [cause]: Error: Timed out: retained execution review
+        at waitUntil (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/fixtures/task-session-native-host.js:218:9)
+        at runNextTicks (node:internal/process/task_queues:65:5)
+        at process.processTimers (node:internal/timers:568:9)
+        at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-service-native.test.js:1381:9)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+  }

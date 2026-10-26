@@ -1,0 +1,50 @@
+{
+  "command": [
+    "node",
+    "--test",
+    "--test-name-pattern",
+    "empty owner recovery reviews",
+    "test/task-session-service-native.test.js"
+  ],
+  "cwd": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant",
+  "tools": {
+    "packageManager": "pnpm",
+    "locks": [
+      "pnpm-lock.yaml"
+    ],
+    "otherLocks": []
+  },
+  "candidateBefore": {
+    "root": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant",
+    "head": "917a4a038fba6c8a3df771cfed470051d7fc151d",
+    "trackedDiffSha256": "cb629a346b508ef285ea7b4e9a7f201400c323d17add0bb9c17f7587144dff8b",
+    "untrackedSha256": "535a4d837bb9c83eb6dd27cdc80a2ae9bdf6bcf27069e4353f9a8e910b515774",
+    "untrackedFiles": 792
+  },
+  "startedAt": "2026-10-26T08:07:32.447684+00:00",
+  "state": "completed",
+  "exitCode": 1,
+  "stdout": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\group-confirmation-review\\round-6-empty-recovery.stdout.log",
+  "stderr": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\group-confirmation-review\\round-6-empty-recovery.stderr.log",
+  "pid": 52988,
+  "finishedAt": "2026-10-26T08:08:00.040014+00:00",
+  "candidateAfter": {
+    "root": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant",
+    "head": "917a4a038fba6c8a3df771cfed470051d7fc151d",
+    "trackedDiffSha256": "cb629a346b508ef285ea7b4e9a7f201400c323d17add0bb9c17f7587144dff8b",
+    "untrackedSha256": "535a4d837bb9c83eb6dd27cdc80a2ae9bdf6bcf27069e4353f9a8e910b515774",
+    "untrackedFiles": 792
+  },
+  "candidateUnchanged": true,
+  "logs": {
+    "round-6-empty-recovery.stdout.log": {
+      "bytes": 2839,
+      "sha256": "a33a26b5e0b53fcae9d58bf3b1a137ddfef3e6e6c0b2208a82adad9d49fa38f1"
+    },
+    "round-6-empty-recovery.stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "validCommandEvidence": false
+}

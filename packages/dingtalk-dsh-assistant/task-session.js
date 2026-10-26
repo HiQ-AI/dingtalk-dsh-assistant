@@ -75,7 +75,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
     })()
     return entry.draining
   }
-  async function run({ binding, input, provider, model, reasoningEffort, agentPreset, groupResponsibility = '', onSessionBound, delegate, readExecution, readProgress, readDecisions, cancelExecution, reconcileOperation, assessCoordinationReorder, submit }) {
+  async function run({ binding, input, provider, model, reasoningEffort, agentPreset, groupResponsibility = '', onSessionBound, delegate, readExecution, readProgress, readDecisions, cancelExecution, reconcileOperation, assessCoordinationReorder, resolveHuman, submit }) {
     if (closed) throw fail('TASK_SESSION_CLOSED')
     if (!binding || binding.kind !== 'task-session' || !binding.taskId || !binding.sessionId || !Number.isSafeInteger(binding.leaseEpoch)
       || binding.leaseEpoch < 1 || !provider || !model) throw fail('TASK_SESSION_BINDING_INVALID')
@@ -114,7 +114,9 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           agentCtx.systemPrompt.section({ name: 'task:artifacts', order: 1,
             text: `本团队唯一业务产物目录为 ${input.artifactScope.artifactRoot}。全部成员只在此目录写业务产物；原任务工作目录、日志和Host阅读投影保持不变，不得写改。${input.artifactScope.authorizationSource ? `Host已核验较新受信技术答复，纠正来源为 ${JSON.stringify(input.artifactScope.authorizationSource)}；该纠正只将旧测试产物路径替换为本团队正式目录，其他目标、要求、任务身份和依赖不变。` : '旧来源若要求不同产物路径，先核对正式技术恢复答复中的路径纠正，不得默默忽略冲突要求。'}使用绝对路径读取和写入共同产物；未核验真实文件前不得称完成。` })
         }
-        const assessmentOnly = input.coordinationAssessments?.length > 0
+        const assessmentOnly = !input.humanReview && input.coordinationAssessments?.length > 0
+        if (input.humanReview) agentCtx.systemPrompt.section({ name: 'task-human-review', order: 123, text:
+          '本轮是等待人工业务答复时的新群来源只读核对。humanReview 给出本次问题和候选来源；保持 waiting-reply，先读取问题、来源完整原文及引用，核对是否回答同一事项、真实作者的业务角色和权限，以及确认、限制、订正的全部条件。无关消息、身份不足或条件未齐时不能解除，用 wait 保存具体判断和缺口；不能再次询问已经回答的信息。仅在证据充分时调用 task_human_resolve，写清角色依据、对应问题及完整条件，Host 会保存原来源和审计记录并另起正常统筹轮。即使解除成功，本轮仍只能只读并以 wait 结束，禁止委派、反馈、续办、取消、写操作或完成；不能把摘要中的“已确认”直接视为批准。' })
         if (assessmentOnly) agentCtx.systemPrompt.section({name:'coordination-preassessment',order:122,text:
           '本轮是已运行任务的顺序无破坏预评估。只读核验当前执行和原效果；用task_coordination_reorder_assess提交结构化判断，再wait。禁止业务写入、取消、委派、目标变更和完成任务；safe_point仅Host验证排空后生效，不能以模型声明代替。'})
         if (input.dialogue) agentCtx.systemPrompt.section({ name: 'task-dialogue', order: 121, text:
@@ -138,6 +140,8 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         agentCtx.tools.presentAs('native')
         entry.content.install(agentCtx, () => current(entry))
         agentCtx.tools.guard(exec => entry.submitted || entry.cancelled || closed ? 'task_session_inactive'
+          : input.humanReview && !['task_human_resolve', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image', 'glob', 'grep', 'ls'].includes(exec.name)
+            && !['read', 'pure'].includes(agentCtx.tools.get(exec.name, exec.agent)?.effectClass) ? 'task_human_review_read_only'
           : assessmentOnly && !['task_execution_read','task_execution_progress','task_decisions_read','task_coordination_reorder_assess','task_session_submit','model_content_read','skill','read','read_image','glob','grep','ls'].includes(exec.name)
             && !['read','pure'].includes(agentCtx.tools.get(exec.name,exec.agent)?.effectClass) ? 'coordination_preassessment_read_only'
           : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image', 'glob', 'grep', 'ls'].includes(exec.name)
@@ -202,6 +206,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           const issues = validateJsonSchemaValue(taskSessionDecisionSchema, decision)
           if (!decision.summary?.trim()) issues.push('summary must not be empty')
           if (assessmentOnly && decision.action !== 'wait') issues.push('coordination preassessment must end with wait')
+          if (input.humanReview && (decision.action !== 'wait' || decision.question?.trim())) issues.push('human review must end with wait without replacing the pending question')
           if (decision.action === 'blocked' && !decision.question?.trim()) issues.push('blocked requires a specific human question; use task_request_human')
           if (issues.length) throw fail('TASK_SESSION_DECISION_INVALID: ' + issues.join('; '))
           assertProgressReviewed()
@@ -210,6 +215,9 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
           entry.decision = decision
           return { received: true, ...result }
         })
+        if (input.humanReview) register('task_human_resolve', '核对当前业务待答问题与候选群消息的完整原文、真实作者角色和全部限制后，明确记录该问题已被回答。仅适用于本轮humanReview的真实来源；不接受任意文本替代来源、不新增授权。成功后本轮仍须wait，由下一统筹轮继续原任务。', { ...object({
+          requestId: text, sourceId: text, reason: text, evidence: { type: 'array', items: text, minItems: 1 },
+        }), required: ['requestId', 'sourceId', 'reason', 'evidence'] }, args => resolveHuman(args, binding))
         register('task_request_human', '先核对已有有权来源及答复，仅对确实无法自行解决的具体缺口申请人工介入。已授权的目标持续完成，不能把同一部署拆为准备与再次批准；规则要求批准时先判断已有授权是否满足。不能代替等待受控执行结果。结束本轮，等待原任务收到人工答复。', { ...object({
           reason: { ...text, description: '用简短业务语言先说已完成什么、尚未完成什么及卡在哪个具体缺口，不写“申请第一段精确授权”等流程术语。' },
           question: { ...text, description: '这是直接发给收件人的正文：说明具体事项、影响和需要的操作，不写任务/会话/执行/申请/操作ID；保留必要业务编号与链接。缺授权时说明已核对的原授权为何不足，独立问题使用真实换行。' },

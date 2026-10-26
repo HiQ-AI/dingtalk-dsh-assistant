@@ -5,7 +5,7 @@ import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { openDynamicTaskStore, ingressTimestamp } from './dynamic-task-store.js'
+import { openDynamicTaskStore, ingressTimestamp, pendingTaskHumanReview } from './dynamic-task-store.js'
 import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
 import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 import { inspectSession } from './session-persistence.js'
@@ -239,7 +239,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const task = await query('task.get', { taskId: id }).catch(() => null)
         again = !task?.archivedAt && task?.status === 'active' && task.control === 'active' && task.drained
           && retryReady(id)
-          && (pendingDialogue(task) || !task.humanRequests?.some(request => request.status === 'waiting-reply'))
+          && (pendingDialogue(task) || pendingTaskHumanReview(task, pending) || !task.humanRequests?.some(request => request.status === 'waiting-reply'))
           && pending.some(item => item.state !== 'acked')
       }
       map.delete(id)
@@ -326,9 +326,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         for (const task of await query('task.list')) {
           if (closed) return
           if (task.archivedAt || !retryReady(task.taskId) || inflightTasks.has(task.taskId) || !task.drained || task.recovering || task.status !== 'active' || task.control !== 'active') continue
-          if (!pendingDialogue(task) && task.humanRequests?.some(request => request.status === 'waiting-reply')) continue
+          const pending = await query('wake.list', { taskId: task.taskId })
+          if (!pendingDialogue(task) && !pendingTaskHumanReview(task, pending) && task.humanRequests?.some(request => request.status === 'waiting-reply')) continue
           if (!taskSlots.has(task.taskId) && taskSlots.size >= taskLimit()) continue
-          if ((await query('wake.list', { taskId: task.taskId })).some(item => item.state !== 'acked')) void kickTask(task.taskId)
+          if (pending.some(item => item.state !== 'acked')) void kickTask(task.taskId)
         }
         for (const execution of await query('execution.list')) {
           if (closed || inflightExecutions.size >= executionLimit()) break
@@ -604,16 +605,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         topicRefs, operationId: operation.operationId }
       const changesRequirements = action.authorizationChange === 'changed' || action.progressImpact === 'replan' || action.impactEvidence !== undefined
         || action.objective !== undefined || action.acceptanceCriteria !== undefined || action.stageTasks !== undefined
-      const pendingHuman = action.kind === 'task-context' && !changesRequirements ? task.humanRequests?.findLast(request => request.status === 'waiting-reply'
-        && request.audience === 'requester' && source.actorId === task.ownerActorId
-        && Date.parse(source.timestamp) >= Date.parse(request.createdAt)) : null
       const supplement = action.kind === 'task-context' && action.progressImpact === 'preserve' && action.authorizationChange !== 'changed'
         && !changesRequirements && (action.title === undefined || action.title === task.title)
       const receipt = action.kind === 'task-cancel'
         ? await command('task.control', { ...args, control: 'cancelled', reason: action.reason }, id)
-        : pendingHuman
-        ? await command('task.human.respond', { ...args, requestId: pendingHuman.requestId,
-          sourceId: source.sourceId }, id)
         : supplement
         ? await command('task.supplement', { ...args, messageId: id, text: action.context ?? source.text,
           request: `${task.request}\n\n[话题补充]\n${action.context ?? source.text}`,
@@ -624,8 +619,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           ...(action.title ? { title: action.title } : {}), ...(action.objective ? { objective: action.objective } : {}),
           ...(action.acceptanceCriteria ? { requirements: action.acceptanceCriteria } : {}) }, id)
       task = receipt.result.task
-      if (!pendingHuman && !supplement) await cancelLiveTask(task.taskId)
-      if (supplement) for (const execution of await query('execution.list', { taskId: task.taskId })) await executionSessions.feedback(execution.executionId)
+      if (!supplement) await cancelLiveTask(task.taskId)
+      if (supplement && !task.humanRequests?.some(request => request.status === 'waiting-reply'))
+        for (const execution of await query('execution.list', { taskId: task.taskId })) await executionSessions.feedback(execution.executionId)
     }
     for (const item of sources) await materializeSource(task.taskId, item)
     if (action.kind !== 'task-cancel') void kickTask(task.taskId)
@@ -930,11 +926,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return track(inflightTasks, taskId, async () => {
       let task = await requireTask(taskId)
       if (task.archivedAt || task.status !== 'active' || task.control !== 'active') { taskSlots.delete(taskId); return }
-      if (!pendingDialogue(task) && task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
       if (!task.drained) return
-      if (!(await query('wake.list', { taskId })).some(item => item.state !== 'acked')) return
-      const claimed = await command('task.claim', { taskId, ...(pendingDialogue(task) ? { dialogue: true } : {}) })
-      const { binding, wakeIds, wakes } = claimed.result
+      const pending = await query('wake.list', { taskId })
+      const reviewPending = pendingTaskHumanReview(task, pending)
+      if (!pendingDialogue(task) && !reviewPending && task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
+      if (!pending.some(item => item.state !== 'acked')) return
+      const claimed = await command('task.claim', { taskId, ...(pendingDialogue(task) ? { dialogue: true } : reviewPending ? { humanReview: true } : {}) })
+      const { binding, wakeIds, wakes, humanReview } = claimed.result
       task = claimed.result.task
       const dialogueMessage = wakes.find(item => item.kind === 'task.dialogue')?.payload.messageId
       const dialogue = dialogueMessage ? { ...task.dialogue.find(item => item.id === dialogueMessage),
@@ -945,7 +943,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const materials = await Promise.all(sources.map(source => materializeSource(taskId, source)))
         const operations = await query('operation.list', { taskId })
         const executions = await Promise.all((await query('execution.list', { taskId })).map(execution => documentedExecution(execution.executionId)))
-        const runResult = await taskSessions.run({ binding, input: { task, artifactScope: await resolveTaskArtifactScope({ root, task, query }), sources, ...(dialogue ? { dialogue } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions,
+        const runResult = await taskSessions.run({ binding, input: { task, artifactScope: await resolveTaskArtifactScope({ root, task, query }), sources, ...(dialogue ? { dialogue } : {}), ...(humanReview ? { humanReview } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions,
           operations, coordinationAssessments: await query('coordination.assessments', {taskId}),
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...taskModelSelection(models(), legacy.getAgentConfig().taskSessionModel ?? config), agentPreset: legacy.getAgentConfig().agentPreset,
@@ -953,6 +951,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           readDecisions: (args, current) => query('task.decisions', { ...args, taskId: current.taskId }),
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
+            if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
             if ((await query('coordination.assessments', {taskId})).length) fail('DYNAMIC_COORDINATION_ASSESSMENT_READ_ONLY')
             if (dialogue && (args.feedback !== true || !args.executionId)) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
             if (args.readbackOperationId) {
@@ -1026,6 +1025,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               document: current.document, ...(current.progressReview ? { progressReview: current.progressReview } : {}) }
           },
           reconcileOperation: async operationId => {
+            if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
             const operation = (await query('operation.list', { taskId })).find(item => item.operationId === operationId)
             if (!operation) fail('TASK_OPERATION_SCOPE_MISMATCH')
             if (operation.state !== 'unknown') return { operation }
@@ -1059,6 +1059,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             }
           },
           cancelExecution: async ({ executionId, reason }) => {
+            if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
             if ((await query('coordination.assessments', {taskId})).length) fail('DYNAMIC_COORDINATION_ASSESSMENT_READ_ONLY')
             if (dialogue) fail('TASK_DIALOGUE_CANNOT_CANCEL')
             const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
@@ -1067,13 +1068,20 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             return { executionId, cancellationRequested: true }
           },
           assessCoordinationReorder: async args => {
+            if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
             if (dialogue) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
             const result = (await command('coordination.reorder.assess', {binding,...args},
               `coordination-assessment:${args.assessmentId}:${binding.leaseEpoch}`)).result
             await command('coordination.aggregate',{coordinationId:result.coordination.id})
             return result
           },
+          resolveHuman: async args => {
+            if (!humanReview) fail('DYNAMIC_HUMAN_REVIEW_NOT_PENDING')
+            return (await command('task.human.resolve', { binding, ...args },
+              `human-review:${taskId}:${humanReview.requestId}:${binding.leaseEpoch}`)).result
+          },
           submit: async decision => {
+            if (humanReview && (decision.action !== 'wait' || decision.question?.trim())) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
             const publicInternalIds = decision.question?.trim() || decision.action === 'complete' || dialogue ? await replyInternalIds(task, sources) : []
             if (decision.question?.trim()) {
               // 人工问题和已尝试事项会外发；evidence 保留在内部账本，不拿调试 ID 当用户操作入口。
@@ -1110,11 +1118,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             return { accepted: true }
           } })
         if (!submitted && runResult.status === 'no_submission') {
+          // 复核未提交判断时保留候选唤醒，用既有有界退避恢复，不能把技术失败当成已审阅。
+          if (humanReview && !runResult.reason) throw Object.assign(new Error('TASK_SESSION_NO_SUBMISSION'), { code: 'TASK_SESSION_NO_SUBMISSION', phase: 'decision' })
           if (dialogue) fail('TASK_DIALOGUE_NO_REPLY')
           failures.set(taskId, { id: taskId, code: runResult.reason ?? 'TASK_SESSION_NO_SUBMISSION' })
           await command('task.wait', { binding, action: 'blocked', summary: '任务会话本轮未能提交有效决定，原任务和执行结果已保留。',
-            limitations: [runResult.reason ?? 'TASK_SESSION_NO_SUBMISSION'] }, `task-technical-block:${taskId}:${binding.leaseEpoch}`)
-          submitted = true
+            limitations: [runResult.reason ?? 'TASK_SESSION_NO_SUBMISSION'], ...(humanReview ? { reviewFailureCode: runResult.reason } : {}) }, `task-technical-block:${taskId}:${binding.leaseEpoch}`)
+          submitted = !humanReview
         }
         if (submitted) await command('wake.ack', { binding, wakeIds }, `wake-ack:${taskId}:${binding.leaseEpoch}`)
       } catch (error) {

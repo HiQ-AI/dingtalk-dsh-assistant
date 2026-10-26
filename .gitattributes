@@ -15,3 +15,6 @@ packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js -text whitesp
 packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js -text whitespace=cr-at-eol
 # 本地适配补丁按已验收的原始字节保留，避免Windows换行转换改变重建摘要。
 docs/acceptance/dsh-unified-upgrade/fixtures/*.patch -text whitespace=-blank-at-eol
+# 复盘补丁保留统一 diff 的空白上下文行和原始字节；不放宽源码检查。
+docs/acceptance/group-confirmation-review/*.patch -text whitespace=-blank-at-eol,-blank-at-eof
+docs/acceptance/group-confirmation-review/round-*/*.patch -text whitespace=-blank-at-eol,-blank-at-eof

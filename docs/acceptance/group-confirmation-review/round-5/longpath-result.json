@@ -1,0 +1,42 @@
+{
+  "runner": "D:\\dsh_home\\skills\\business-development\\scripts\\verification_run.py",
+  "runnerSha256": "ff05514c9e95daf10db979429ed2c2f56a206d2ea457e90e771b6db16dfa4a06",
+  "passed": 4,
+  "cases": [
+    {
+      "case": "deep-untracked-content-changes-candidate",
+      "status": "PASS",
+      "pathLength": 359,
+      "first": {
+        "root": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\group-confirmation-review\\longpath-fixture-6jbrykv8",
+        "head": "743bc274a869efedba0021aef524d6e9690c3650",
+        "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "untrackedSha256": "5608b9f12cbac29ce42208b95f8a4d2dc2018d5cc4b5285bf057da67a42cde7e",
+        "untrackedFiles": 1
+      },
+      "second": {
+        "root": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\group-confirmation-review\\longpath-fixture-6jbrykv8",
+        "head": "743bc274a869efedba0021aef524d6e9690c3650",
+        "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "untrackedSha256": "542ffc7aba4929b4c5f197c5db1ba1d38011403c195bcc465332fad9ee3593e6",
+        "untrackedFiles": 1
+      }
+    },
+    {
+      "case": "zero-exit-path-omission-is-rejected",
+      "status": "PASS",
+      "nativeExitCode": 0,
+      "nativeDiagnosticBytes": 202,
+      "wrapperDiagnostic": "Git candidate read is incomplete or unconfirmed (exit=0, diagnosticBytes=202); inspect the read-only Git command"
+    },
+    {
+      "case": "failed-git-read-is-rejected",
+      "status": "PASS"
+    },
+    {
+      "case": "per-command-longpaths-keeps-config-unchanged",
+      "status": "PASS"
+    }
+  ],
+  "scope": "本轮仅深路径定向检查；此前 11 项结果保留在 round-4"
+}

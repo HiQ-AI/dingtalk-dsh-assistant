@@ -1,0 +1,19 @@
+✔ 同消息多事项的引用与原始点名只发送一次 (52.8339ms)
+✖ 拆分确认和条件后，各话题仍能读取完整同条原文且不取得其他事项效果所有权 (13.8343ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3977.8664
+
+✖ failing tests:
+
+test at test\topic-runtime.test.js:365:1
+✖ 拆分确认和条件后，各话题仍能读取完整同条原文且不取得其他事项效果所有权 (13.8343ms)
+  TypeError: Cannot read properties of undefined (reading 'ownedDeltaUnitRefs')
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/topic-runtime.test.js:391:30)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

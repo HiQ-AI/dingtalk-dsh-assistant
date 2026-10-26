@@ -362,6 +362,35 @@ test('同消息多事项的引用与原始点名只发送一次', async (t) => {
   assert.equal(envelope.messages[1].quotedMessageId, 'quoted-multi')
 })
 
+test('拆分确认和条件后，各话题仍能读取完整同条原文且不取得其他事项效果所有权', async (t) => {
+  const h = await setup(t)
+  const confirmation = '可以，按原方案修复。'
+  const condition = '但是点击编辑就要变为待提交，刷新后也应保持。'
+  const unrelated = '另外统计本月报表。'
+  const original = confirmation + condition + unrelated
+  await ingest(h, 'conditional-answer', { text: original, quotedMessage: { messageId: 'proposal', content: '修复后部署 UAT，是否同意方案？' } })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{
+    messageId: 'conditional-answer', messageVersion: 1, ignoredRefs: [], units: [
+      { unitKey: 'confirmation', summary: '确认原修复', sourceRefs: [{ quote: confirmation }],
+        contextRefs: [{ quote: condition, purpose: '本次确认附带的状态要求' }], topics: [{ newTopicKey: 'fix', title: '编辑状态修复' }] },
+      { unitKey: 'condition', summary: '编辑状态持久化要求', sourceRefs: [{ quote: condition }],
+        contextRefs: [{ quote: confirmation, purpose: '订正所针对的已确认方案' }], topics: [{ newTopicKey: 'state', title: '状态持久化' }] },
+      { unitKey: 'report', summary: '独立报表统计', sourceRefs: [{ quote: unrelated }], topics: [{ newTopicKey: 'report', title: '月度报表' }] },
+    ],
+  }] })
+  const envelopes = h.sent.filter(text => text.startsWith('[GROUP_TOPIC_DECISION]')).map(text => JSON.parse(text.split('\n').find(line => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length)))
+  assert.equal(envelopes.length, 3)
+  const fix = envelopes.find(value => value.messages.some(message => message.unitSummary === '确认原修复'))
+  assert.equal(fix.messages.length, 1)
+  assert.equal(fix.sourceMessages[0].text, original, '完整原文可用于判断确认条件，不能被单元摘要替代')
+  assert.ok(fix.messages[0].text.includes(condition), '关联条件在现有 contextRefs 中随原事项传递')
+  assert.ok(!fix.messages[0].text.includes(unrelated), '独立事项不混入本单元的动作内容')
+  assert.equal(fix.quotedMessages.length, 1)
+  assert.equal(fix.ownedDeltaUnitRefs.length, 1, '完整原文可读不授予其他单元的效果所有权')
+})
+
 test('压缩移除已见决策正文后需重新取得必要增量', async (t) => {
   let visible = []
   const h = await setup(t, { session: { deriveMessages: () => visible } })

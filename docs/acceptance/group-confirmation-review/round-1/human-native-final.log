@@ -1,0 +1,20 @@
+✔ 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：none (7561.3905ms)
+✔ 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：empty (10879.3154ms)
+✔ 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：tool-limit (3153.8506ms)
+✔ operator technical reply retains business sources and shared scope protocol in the same resumed execution (3159.7092ms)
+✔ 技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问 (819.1732ms)
+✔ 人工外发问题在入账前拒绝已知运行标识，内部证据与业务链接原样保留 (502.1718ms)
+✔ native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text (1252.8068ms)
+✔ an execution result cannot bypass human waiting; reply reads the original execution and continues the original task (3731.2196ms)
+✔ a native blocked decision without a human question is corrected into an explicit durable request (567.6932ms)
+✔ original-group human input preserves clarification but fences explicit authorization change: changed=false (11017.112ms)
+✔ original-group human input preserves clarification but fences explicit authorization change: changed=true (10353.4948ms)
+✔ Web answer recalls its delivered operator notification once without recalling group replies (2849.5066ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 56784.1337

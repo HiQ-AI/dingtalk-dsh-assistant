@@ -1,0 +1,86 @@
+{
+  "head": "917a4a038fba6c8a3df771cfed470051d7fc151d",
+  "command": [
+    "node",
+    "--test",
+    "--test-concurrency=2",
+    "test/task-session-service-native.test.js",
+    "test/task-session-provider-native.test.js",
+    "test/task-session-progress-native.test.js",
+    "test/task-dialogue-native.test.js",
+    "test/coordination-reorder-native.test.js",
+    "test/task-session-model-native.test.js"
+  ],
+  "profile": "D:/dsh_home/profiles/web/package.json",
+  "candidate": [
+    {
+      "path": "D:/dsh_home/profiles/web/package.json",
+      "sha256": "609AEA05893E4C19F60A1A261C1F1809D203F10D9C489D2155FA715D1DF23FDF"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "sha256": "07CA0FFB3810641D954DB200484E6D14E1D3246A8514680D5DF30CFB334E29E1"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/model-context.js",
+      "sha256": "42B68827C9E3872C810E9BAED174D57EBB7402C6DC29199026678BF3CDDCD503"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
+      "sha256": "0A5D8E4FC6B4479BD610733CDF17222FA078ADBD4329F1ADAB3D1FB706DD39DE"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-session-service.js",
+      "sha256": "19AFE91B1F7DF6221F4521361C2186B07CD130F04FC9E78435AED2B55D17C703"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-session.js",
+      "sha256": "3B285B5137A77D89D316327CA975089CA6A736BC37D7C3D72B36282A666EC919"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-source-instructions.js",
+      "sha256": "C2BB432DF1D80D97BEDC25BB43DBD480CE3DC1144B6B2F37ED88244E44A2CD79"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "EB43B73A74B6EDC483D54F1A37B6EFCA178060F2C9400101ABD31D3C19930E16"
+    },
+    {
+      "path": "test/coordination-reorder-native.test.js",
+      "sha256": "3BB6397F635ADC76485396D6902B0C2448BB0C09B1F04AA08E415B2D599B6028"
+    },
+    {
+      "path": "test/dynamic-task-store.test.js",
+      "sha256": "C536358AB3724B56FC295AA0FFBCACDEFDE9617A38E203D4993BFF7FD865428A"
+    },
+    {
+      "path": "test/task-dialogue-native.test.js",
+      "sha256": "3458E83FF455D37EC3A58426218C28C86C5646D8FEBAE3983A8C9B757987F3DA"
+    },
+    {
+      "path": "test/task-session-human-native.test.js",
+      "sha256": "57EAB9363E281DED0B480DD13363DD60A78F593E70C775DA623B90363E9A3955"
+    },
+    {
+      "path": "test/task-session-model-native.test.js",
+      "sha256": "CF487604AE0FF5856376E4F1C2DC9ECB02C7344CEE7AFF935D179C5977AA2C8F"
+    },
+    {
+      "path": "test/task-session-progress-native.test.js",
+      "sha256": "42E8FFB1FF70C2413FEB358BF43887DA16BA19F03BDA877168C61E52BCA42785"
+    },
+    {
+      "path": "test/task-session-provider-native.test.js",
+      "sha256": "30B310CC5D1549732B8E77C586D6A77BE56F97D92618E744C00D01CB6539C358"
+    },
+    {
+      "path": "test/task-session-service-native.test.js",
+      "sha256": "CB33DD91719C06F3D5803AAE1EE44654BA4C903F7CAD9305EEE4E5AF169E0E5A"
+    },
+    {
+      "path": "test/topic-runtime.test.js",
+      "sha256": "D0F5AF551534CA47CA840D07C6F08ABF3837F398E74EC1B05056253973B0561E"
+    }
+  ],
+  "startedAt": "2026-10-26T15:55:28.8115684+08:00"
+}
