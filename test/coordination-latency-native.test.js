@@ -148,6 +148,11 @@ test('真实协调器中九次非法旧决策不挡住新图文任务，公平�
   assert.equal(results.filter(result => result.status === 'invalid-arguments').length, 9)
   assert.ok(results.slice(0, 9).every(result => result.issues.some(issue => issue.field === 'decision.reason')))
   assert.equal(store.listTasks().length, 1)
+  const [task] = store.listTasks()
+  const committed = store.getTopic('g', newRequest.topicId).decisions.find(record => record.revision === newRequest.revision)
+  assert.equal(committed.status, 'completed', '消息决策在 Host 动作接纳后结束，不等待业务 Task 执行完成')
+  assert.equal(task.state, 'queued', '业务 Task 尚未执行，不能把决策完成投影成业务完成')
+  assert.ok(committed.operations.every(operation => operation.status === 'applied'))
   assert.equal(applicationIds.length, 1)
   assert.equal(store.getGroup('g').outbox.length, 1, '只落库一次确认，不调用真实 DWS')
   for (const request of requests.values()) assert.equal(store.getCoordinationRequest('g', request.requestId).attempt, 0, '公平续行不是请求失败重试')
@@ -155,4 +160,50 @@ test('真实协调器中九次非法旧决策不挡住新图文任务，公平�
   assert.equal(store.listTasks().length, 1)
   assert.equal(applicationIds.length, 1)
   assert.deepEqual(errors, [])
+})
+
+test('Host 动作阻塞保留后续同话题消息，不能提前完成或当成模型处理', async t => {
+  const snapshot = { tables: {}, global: null }
+  const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
+    loadAll: async () => structuredClone(snapshot), close: async () => {},
+    async putRecord(table, key, value) { (snapshot.tables[table] ??= {})[key] = structuredClone(value) },
+    async deleteRecord(table, key) { delete snapshot.tables[table][key] },
+  } } } }) } } }, { backend: 'native-blocked-test' })
+  const store = await openResidentStore(facility)
+  let coordinator
+  t.after(async () => { await coordinator?.close(); await store.close() })
+  await store.subscribe({ groupId: 'g' })
+  const ingest = messageId => store.ingest({ groupId: 'g', messageId, text: messageId, occurredAt: '2026-10-19T08:00:00Z' })
+  await ingest('blocked-source')
+  await store.routeMessages({ groupId: 'g', routeId: 'initial-route', routingRevision: 0,
+    routes: [{ messageId: 'blocked-source', messageVersion: 1, topics: [{ newTopicKey: 'shared', title: '原任务续办' }] }] })
+  const topicId = store.listTopics('g')[0].topicId
+  const accepted = await store.acceptTopicDecision({ groupId: 'g', topicId, revision: 1, decisionId: 'blocked-decision',
+    decision: { actions: [{ kind: 'new-task', title: '原任务', objective: '仅接纳任务', acceptanceCriteria: ['保留原授权'] }] } })
+  assert.equal(accepted.status, 'accepted')
+  const operation = accepted.record.operations[0]
+  await store.updateTopicDecision({ groupId: 'g', topicId, decisionId: accepted.record.decisionId,
+    patch: { status: 'blocked', attempt: 1, error: 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED',
+      operations: [{ ...operation, status: 'blocked', attempt: 1, lastError: 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED' }] } })
+  await ingest('later-source')
+  await store.routeMessages({ groupId: 'g', routeId: 'later-route', routingRevision: 1,
+    routes: [{ messageId: 'later-source', messageVersion: 1, topics: [{ topicId, relationship: 'continuation', reason: '原事项补充' }] }] })
+  let modelDispatches = 0, hostActions = 0
+  coordinator = createTopicCoordinator({ store, getAgent: () => ({}), isClosing: () => false,
+    dispatchRequest() { modelDispatches++; throw new Error('blocked Topic must not dispatch another decision') },
+    serializeTasks: operation => operation(), applyAction() { hostActions++ }, appendOutbox: outbound => store.appendOutbox(outbound),
+    reviewCandidates: () => [], validateReplyReview: review => review, cancelTask() {}, onError(_groupId, error) { throw error } })
+  await coordinator.schedule('g')
+  await coordinator.drain('g')
+  const topic = store.getTopic('g', topicId)
+  assert.equal(topic.revision, 2)
+  assert.equal(topic.processedRevision, 0)
+  assert.equal(topic.decisions.length, 1)
+  assert.equal(topic.decisions[0].status, 'blocked')
+  assert.equal(topic.decisions[0].operations[0].lastError, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
+  assert.equal(modelDispatches, 0)
+  assert.equal(hostActions, 0)
+  assert.equal(store.listTasks().length, 0)
+  assert.equal(store.getGroup('g').outbox.length, 0)
+  await assert.rejects(store.completeTopicDecision({ groupId: 'g', topicId, decisionId: accepted.record.decisionId }), /topic_decision_operations_pending/)
 })

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { groupReplyScopeInstructions } from '../packages/dingtalk-dsh-assistant/group-message.js'
 import { taskIndexPage } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
@@ -202,7 +203,20 @@ testRunner('native task service preserves Topic routing, task association, ignor
   assert.equal(stored.taskSessionRefs, undefined)
   assert.equal(residentStore.getGroup('native-group').outbox[0].replyToMessageId, first.messageId)
   assert.equal(stored.taskIds, undefined)
-  assert.equal((await h.query('source.list'))[0].routed, true)
+  const firstSource = (await h.query('source.list'))[0]
+  assert.equal(firstSource.routed, true)
+  assert.ok(firstSource.processingCompleted)
+  const firstStages = firstSource.stages
+  for (const stage of ['ingress', 'queue', 'turn', 'host', 'send', 'readback']) {
+    assert.ok(firstStages.some(item => item.stage === stage && item.completedAt), `missing observed ${stage}: ${JSON.stringify(firstStages)}`)
+  }
+  assert.ok(firstStages.filter(item => item.stage === 'turn').every(item => item.sessionId && item.spanId.includes(item.sessionId)))
+  const dto = (await h.service.messageProcessingSources('native-group')).find(item => item.messageId === first.messageId)
+  assert.equal(dto.version, firstSource.version)
+  assert.deepEqual(dto.stages.map(item => item.spanId), firstStages.map(item => item.spanId))
+  assert.ok(dto.notifications.every(item => item.versionMatched && item.notificationId && item.deliveredAt))
+  assert.equal(dto.text, undefined)
+  assert.equal(h.service.listAlerts().some(item => item.id?.startsWith('timing:')), false)
   const second = message('second', '@助手 补充同一文件检查：只检查文件名称，不执行部署。')
   await h.service.ingest(second)
   await h.service.whenIdle()
@@ -220,6 +234,7 @@ testRunner('native task service preserves Topic routing, task association, ignor
   assert.equal((await h.query('task.list')).length, 1)
   assert.ok(residentStore.listTopics('native-group').every(topic => !resolveTopicMessages(residentStore.getGroup('native-group'), topic.topicId, topic.revision).some(item => item.messageId === 'noise')))
   const before = { requests: h.requests.length, tasks: (await h.query('task.list')).length, topics: residentStore.listTopics('native-group').length, revision: revised.requirementRevision }
+  const stagesBeforeReplay = (await h.query('source.list')).map(source => ({ sourceId: source.sourceId, stages: source.stages }))
   await h.service.ingest(first)
   await h.service.ingest(second)
   await h.service.recover()
@@ -228,8 +243,25 @@ testRunner('native task service preserves Topic routing, task association, ignor
   assert.equal(residentStore.listTopics('native-group').length, before.topics)
   assert.equal((await h.query('task.get', { taskId: task.taskId })).requirementRevision, before.revision)
   assert.equal(h.requests.length, before.requests)
+  assert.deepEqual((await h.query('source.list')).map(source => ({ sourceId: source.sourceId, stages: source.stages })), stagesBeforeReplay)
   await waitUntil(async () => (await h.query('source.list')).every(source => source.routed), 'all sources durably marked routed')
   assert.ok(h.toolResults.filter(item => ['group_topic_route_submit', 'group_decision_submit'].includes(item.name)).every(item => !item.result.isError))
+  const discussion = residentStore.getGroup('native-group').messages.find(item => item.messageId === 'discussion')
+  const discussionSource = (await h.query('source.list')).find(item => item.messageId === discussion.messageId)
+  assert.ok(discussionSource.processingCompleted)
+  assert.equal(discussionSource.routed, true)
+  const discussionTopic = residentStore.listTopics('native-group').find(topic => topic.title === '部署时间讨论')
+  await residentStore.routeMessages({ groupId: 'native-group', routeId: 'same-version-reclassification',
+    routingRevision: residentStore.getGroup('native-group').routingRevision, routes: [{ messageId: discussion.messageId,
+      messageVersion: discussion.messageVersion, units: [{ unitKey: 'whole-message', summary: '重新核对讨论语义',
+        sourceRefs: [{ quote: discussion.text }], topics: [{ topicId: discussionTopic.topicId }] }] }] })
+  await h.service.recover(); await h.service.whenIdle()
+  const reclassified = await h.query('source.get', { sourceId: discussionSource.sourceId })
+  assert.equal(reclassified.version, discussionSource.version)
+  assert.equal(reclassified.routed, true)
+  assert.deepEqual(reclassified.processingHistory, [discussionSource.processingCompleted])
+  assert.ok(reclassified.processingCompleted.activeUnitRefs.every(ref => ref.unitRevision === 2))
+  assert.equal((await h.query('task.list')).length, before.tasks)
 })
 
 async function extraHost(t, prefix, decide) {
@@ -398,4 +430,44 @@ testRunner('native Web reopen preserves task identity and rejects stale input; H
   assert.equal((await h.query('task.list')).length, 1)
   assert.equal(reopened.sourceRefs.length, original.sourceRefs.length + 1)
   assert.equal(h.residentStore.listTopics('native-group').length, 1)
+})
+
+testRunner('mixed native source waits for blocked legacy Host but not coordinated business settlement', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mixed-semantic-source-'))
+  let host, store, blocked = true
+  t.after(async () => { try { await host?.close(); await store?.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  host = await nativeTaskHost(root, async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request)
+    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
+      routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, ignoredRefs: [], units: [
+        { unitKey: 'reminder', summary: '查询提醒', sourceRefs: [{ quote: '测试助手，查询提醒；' }], dispatchOwner: 'coordination', topics: [], reason: '独立查询' },
+        { unitKey: 'file', summary: '核查文件', sourceRefs: [{ quote: '测试助手，核查文件。' }], topics: [{ newTopicKey: 'file', title: '文件核查' }] },
+      ] })) })]
+    if (names.includes('coordination_submit')) return [call('coordination_submit', { kind: 'clarify', question: '请提供查询对象。', candidates: [] })]
+    return topicTaskCalls(request) ?? [call('task_session_submit', { decision: { action: 'wait', summary: '等待业务核查', evidence: [], limitations: [] } })]
+  }, { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } }, serviceFactory: async args => {
+    store = await openDynamicTaskStore(args.config)
+    return openTaskSessionService({ ...args, store: { ...store, async command(input) {
+      if (blocked && input.kind === 'task.create') throw Object.assign(new Error('TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED'), { code: 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED' })
+      return store.command(input)
+    } } })
+  } })
+  await host.service.ingest(message('mixed', '测试助手，查询提醒；测试助手，核查文件。'))
+  await host.service.whenIdle()
+  const pending = (await host.query('source.list')).find(source => source.messageId === 'mixed')
+  assert.equal((await host.query('task.list')).length, 0)
+  assert.equal(pending.processingCompleted, undefined)
+  assert.equal(pending.processingPending, true)
+  const coordinated = (await host.query('coordination.source.list'))[0]
+  assert.equal(coordinated.state, 'needs_clarification')
+  assert.equal(coordinated.settled, false)
+  assert.equal(host.residentStore.listTopics('native-group')[0].decisions[0].status, 'blocked')
+  blocked = false
+  await host.service.retryMessage({ groupId: 'native-group', messageId: 'mixed' })
+  await host.service.whenIdle()
+  const completed = (await host.query('source.list')).find(source => source.messageId === 'mixed')
+  assert.ok(completed.processingCompleted, JSON.stringify({ completed: completed.processingCompleted, topicStatus: host.residentStore.listTopics('native-group').map(topic => ({ processedRevision: topic.processedRevision, decisions: topic.decisions.map(record => ({ status: record.status, error: record.error })) })), alerts: host.service.listAlerts() }))
+  assert.equal(completed.processingCompleted.activeUnitRefs.length, 2)
+  assert.equal((await host.query('coordination.source.list'))[0].settled, false)
+  assert.equal((await host.query('task.list'))[0].status, 'active')
 })

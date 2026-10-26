@@ -203,3 +203,22 @@ test('决策短事务连续三步完成而非每次读取重新排队，超时�
   const preempted = make(); preempted.yieldRequested = true
   assert.deepEqual(await createCoordinationStepGate(preempted, () => true)({ messages: [], agent: { inbox: {} } }, () => { throw new Error('route preempts before budget') }), { kind: 'reject' })
 })
+
+test('eventPrefix null still observes real queue intervals with no prompt and unchanged dispatch count', async t => {
+  const stages = [], events = []
+  let sequence = 0
+  const manager = createCoordinationSessions({ eventPrefix: null, isCurrent: () => true, onError(error) { throw error },
+    onStage: async (request, stage) => stages.push({ requestId: request.requestId, ...stage }),
+    create: async entry => ({ agent: { session: { id: entry.sessionId, snapshotEvents: () => events, append() { assert.fail('eventPrefix null must not append custom events') } },
+      inbox: {}, steer(message) { sequence++; events.push({ type: 'user/message', data: message }) }, whenIdle: async () => {} }, dispose: async () => {} }) })
+  t.after(() => manager.close())
+  const request = { groupId: 'g', requestId: 'coord-route-timing', messages: [{ messageId: 'm', messageVersion: 1, text: 'private' }] }
+  await manager.dispatch(request, { id: 'input', text: 'private' })
+  await manager.whenSettled(request)
+  assert.equal(sequence, 1)
+  assert.equal(stages.length, 2)
+  assert.equal(stages[0].completedAt, null)
+  assert.equal(stages[0].spanId, stages[1].spanId)
+  assert.ok(Date.parse(stages[1].completedAt) >= Date.parse(stages[1].startedAt))
+  assert.equal(JSON.stringify(stages).includes('private'), false)
+})

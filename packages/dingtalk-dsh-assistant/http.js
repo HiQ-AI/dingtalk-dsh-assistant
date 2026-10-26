@@ -77,42 +77,79 @@ function workflowTopicSummary(topic) {
     createdAt: topic.createdAt, updatedAt: topic.updatedAt, engine: 'workflow-v2' }
 }
 
-// 复用 Topic 已完成判断的原文与完成时间，不读取任务或通知回执。
-function messageProcessingProjection(message, topics) {
+const instant = value => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN
+const timing = (start, end) => {
+  const duration = instant(end) - instant(start)
+  return { quality: !Number.isFinite(duration) ? 'missing' : duration < 0 ? 'negative' : 'valid', durationMs: Number.isFinite(duration) && duration >= 0 ? duration : null }
+}
+
+// 状态在拥有 Topic/来源账的后端判定，通知及业务 Task 完成不作语义完成门禁。
+function messageProcessingProjection(message, topics, source) {
   const related = topics.flatMap(topic => {
-    const entry = [...(topic.entries ?? [])].reverse().find(item => item.messageId === message.messageId)
-    return entry?.action === 'add' && entry.messageVersion === message.messageVersion ? [{ topic, entry }] : []
+    const latest = new Map()
+    for (const entry of topic.entries ?? []) if (entry.messageId === message.messageId) latest.set(entry.unitId ?? 'legacy', entry)
+    return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === message.messageVersion).map(entry => ({ topic, entry }))
   })
-  const empty = { processingConclusion: null, processingCompletedAt: null, processingSentAt: message.occurredAt ?? null }
-  if (message.routingStatus !== 'routed' || related.some(({ topic, entry }) => topic.processedRevision < entry.revision)) return empty
-  if (!related.length) {
-    const reasons = [...new Set((message.ignoredRanges ?? []).map(range => range.reason).filter(reason => typeof reason === 'string' && reason.trim()))]
-    return { ...empty, processingConclusion: reasons.join('；') || null,
-      processingCompletedAt: reasons.length && message.agentDeliveryStatus === 'delivered' ? message.agentDeliveryAt ?? null : null }
-  }
   const records = related.map(({ topic, entry }) => [...(topic.decisions ?? [])]
     .filter(record => record.status === 'completed' && record.revision >= entry.revision)
     .sort((a, b) => a.revision - b.revision)[0])
-  const conclusions = records.map(record => record?.decision?.reason ?? record?.decision?.reply)
-    .filter(text => typeof text === 'string' && text.trim())
-  const times = records.map(record => typeof record?.updatedAt === 'string' ? Date.parse(record.updatedAt) : NaN)
-  return { ...empty, processingConclusion: [...new Set(conclusions)].join('；') || null,
-    processingCompletedAt: times.every(Number.isFinite) ? new Date(Math.max(...times)).toISOString() : null }
+  const topicPending = related.some(({ topic, entry }, i) => !(topic.processedRevision >= entry.revision) || !records[i])
+  const reasons = [...new Set((message.ignoredRanges ?? []).map(range => range.reason).filter(reason => typeof reason === 'string' && reason.trim()))]
+  const refsKey = refs => refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision])).sort()
+  const sourceDone = !!source?.processingCompleted && (!Array.isArray(message.activeUnitRefs)
+    || Array.isArray(source.processingCompleted.activeUnitRefs)
+      && JSON.stringify(refsKey(message.activeUnitRefs)) === JSON.stringify(refsKey(source.processingCompleted.activeUnitRefs)))
+  const ignored = !related.length && reasons.length > 0 && message.agentDeliveryStatus === 'delivered'
+  const unitsPending = message.activeUnitRefs?.some(ref => {
+    const unit = message.units?.find(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
+    return !unit || unit.dispatchOwner === 'coordination' && !sourceDone
+  })
+  let state = 'unknown', basis = 'unknown', completedAt = null, conclusion = null
+  if (message.routingStatus === 'failed') state = 'failed'
+  else if (message.routingStatus !== 'routed') state = 'routing'
+  else if (topicPending || unitsPending) state = 'processing'
+  else if (sourceDone || related.length || ignored) {
+    state = 'processed'
+    basis = sourceDone ? 'source-semantic' : related.length ? 'topic-decision' : 'ignored-delivered'
+    const times = [...records.map(record => record.updatedAt), ...(sourceDone ? [source.processingCompleted.at] : [])]
+    completedAt = times.length ? times.every(time => Number.isFinite(instant(time))) ? new Date(Math.max(...times.map(instant))).toISOString() : null : message.agentDeliveryAt ?? null
+    conclusion = [...new Set([...records.map(record => record?.decision?.reason ?? record?.decision?.reply), ...reasons].filter(text => typeof text === 'string' && text.trim()))].join('；') || null
+  } else if (source && source.routed !== true || related.length || reasons.length) state = 'processing'
+  const notices = source?.notifications ?? []
+  const noticeTimes = notices.map(notice => notice.deliveredAt)
+  const deliveredAt = notices.length && notices.every(notice => notice.versionMatched === true && notice.state === 'delivered') && noticeTimes.every(time => Number.isFinite(instant(time)))
+    ? new Date(Math.max(...noticeTimes.map(instant))).toISOString() : null
+  return { processingState: state, processingBasis: basis, processingConclusion: conclusion,
+    processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
+    processingFacts: {
+      sourceId: source?.sourceId ?? null, messageVersion: message.messageVersion ?? null,
+      sourceState: !source ? 'unknown' : source.routed === true ? 'settled' : 'unsettled', sourceSettledAt: source?.routedAt ?? null,
+      receivedAt: source?.receivedAt ?? message.receivedAt ?? null,
+      notificationState: !notices.length ? 'unknown' : deliveredAt ? 'delivered' : 'unconfirmed', notifications: notices,
+      semantic: timing(message.occurredAt, completedAt),
+      notificationE2e: timing(source?.receivedAt ?? message.receivedAt, deliveredAt),
+      stages: source?.stages ?? [],
+    } }
 }
 
-function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
+async function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
   const coordinator = workflowMailboxes?.coordinators?.[group.groupId]
   if (coordinator) summary.coordinator = coordinator
   const topics = runtime.listTopics(group.groupId).filter(topic => !topic.mergedInto)
+  const sources = await runtime.messageProcessingSources?.(group.groupId) ?? []
+  const sourceFor = message => {
+    const matches = sources.filter(source => source.groupId === group.groupId && source.messageId === message.messageId && source.version === message.messageVersion)
+    return matches.length === 1 ? matches[0] : undefined
+  }
   summary.messages = (summary.messages ?? []).map((message) => ({
     ...message,
-    ...messageProcessingProjection(message, topics),
+    ...messageProcessingProjection(message, topics, sourceFor(message)),
     topicRefs: topics.flatMap((topic) => {
       const state = new Map()
       for (const entry of topic.entries?.filter((item) => item.messageId === message.messageId) ?? []) state.set(entry.unitId ?? `legacy:${entry.messageId}`, entry)
-      return [...state.values()].filter((entry) => entry.action === 'add').map((entry) => ({ topicId: topic.topicId, revision: topic.revision, title: topic.title, unitId: entry.unitId, unitRevision: entry.unitRevision }))
+      return [...state.values()].filter((entry) => entry.action === 'add' && entry.messageVersion === message.messageVersion).map((entry) => ({ topicId: topic.topicId, revision: topic.revision, title: topic.title, unitId: entry.unitId, unitRevision: entry.unitRevision }))
     }),
   }))
   const workflowMessages = (workflowMailboxes?.messages ?? []).filter((message) => message.groupId === group.groupId)
@@ -120,8 +157,8 @@ function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   for (const message of workflowMessages) {
     // 补读的旧资料不能挡住原生控制账的会话入口和状态；缺省显示资料仍保留。
     const defined = Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined))
-    byMessageId.set(message.messageId, { ...byMessageId.get(message.messageId), ...defined, sourceKind: 'workflow-v2',
-      processingConclusion: null, processingCompletedAt: null, processingSentAt: message.occurredAt ?? null })
+    const merged = { ...byMessageId.get(message.messageId), ...defined, sourceKind: 'workflow-v2' }
+    byMessageId.set(message.messageId, { ...merged, ...messageProcessingProjection(merged, topics, sourceFor(merged)) })
   }
   summary.messages = [...byMessageId.values()]
   const existingOutboundIds = new Set((summary.outbox ?? []).map((message) => message.outboundId))
@@ -232,10 +269,13 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/recovery-issues') return send(response, 200, store.listRecoveryIssues())
   if (request.method === 'GET' && url.pathname === '/state/activity-audit') return send(response, 200, store.getActivityAuditStatus?.() ?? { total: 0, pending: 0, audited: 0, unavailable: [] })
   if (request.method === 'GET' && url.pathname === '/state/groups') {
-    const groupId = url.searchParams.get('groupId')
-    const workflowMailboxes = await store.getWorkflowMailboxes?.()
-    const workflowTopics = await store.listWorkflowTopics?.(groupId ?? undefined) ?? []
-    return send(response, 200, groupId ? groupSummary(store.getGroup(groupId), store, workflowMailboxes, workflowTopics) : store.listGroups().map((group) => groupSummary(group, store, workflowMailboxes, workflowTopics)))
+    try {
+      const groupId = url.searchParams.get('groupId')
+      const workflowMailboxes = await store.getWorkflowMailboxes?.()
+      const workflowTopics = await store.listWorkflowTopics?.(groupId ?? undefined) ?? []
+      return send(response, 200, groupId ? await groupSummary(store.getGroup(groupId), store, workflowMailboxes, workflowTopics)
+        : await Promise.all(store.listGroups().map(group => groupSummary(group, store, workflowMailboxes, workflowTopics))))
+    } catch { return send(response, 503, { error: 'message_processing_unavailable' }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/topics') {
     try {

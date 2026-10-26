@@ -127,6 +127,7 @@ export async function apply(ctx, config = {}) {
   runtime.ingest = tasks.ingest
   runtime.isOwnNotification = tasks.isOwnNotification
   runtime.listTaskView = tasks.boardTasks
+  runtime.messageProcessingSources = tasks.messageProcessingSources
   runtime.getTaskSessionDetail = tasks.taskDetail
   runtime.getTaskSessionExecutions = tasks.taskExecutions
   runtime.getTaskSessionDecisions = tasks.taskDecisions

@@ -82,8 +82,64 @@ test('全部协调units判定后才释放，rejected完成持久handoff后不永
   await assert.rejects(f.complete(newer, units), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
   const frozen = await f.command('coordination.source.freezeHandoff', { sourceId: second.id, fence: 1, freezeId: 'handoff-proof' })
   await f.command('coordination.source.completeHandoff', { sourceId: second.id, fence: 1, handoffProof: frozen.result.handoffProof })
+  await assert.rejects(f.complete(newer, units), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
+  units[1].processingComplete = true
   await f.complete(newer, units)
   assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, true)
+})
+
+test('同版重路由只按精确refs失效旧语义戳，已routed来源也重新拦住旧通知', async t => {
+  const f = await fixture(t), newer = await f.source('rerouted')
+  const first = { unitId: 'legacy', unitRevision: 1, dispatchOwner: 'legacy-topic', processingComplete: true }
+  await f.complete(newer, [first])
+  const original = (await f.query('source.get', { sourceId: newer.id })).processingCompleted
+  await f.command('source.routed', { sourceId: newer.id, receipt: [] })
+  await f.command('source.processingStarted', { sourceId: newer.id, messageVersion: 1, activeUnitRefs: original.activeUnitRefs })
+  assert.deepEqual((await f.query('source.get', { sourceId: newer.id })).processingCompleted, original)
+  const next = { ...first, unitRevision: 2 }
+  await f.command('source.processingStarted', { sourceId: newer.id, messageVersion: 1,
+    activeUnitRefs: [{ unitId: next.unitId, unitRevision: 2 }] })
+  const pending = await f.query('source.get', { sourceId: newer.id })
+  assert.equal(pending.routed, true)
+  assert.equal(pending.processingCompleted, undefined)
+  assert.deepEqual(pending.processingHistory, [original])
+  await assert.rejects(f.command('notification.start', { notificationId: f.notification.id }), { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
+  await assert.rejects(f.complete(newer, [first]), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
+  await assert.rejects(f.complete(newer, [{ ...next, processingComplete: false }]), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
+  await f.complete(newer, [next])
+  assert.deepEqual((await f.query('source.get', { sourceId: newer.id })).processingCompleted.activeUnitRefs, [{ unitId: 'legacy', unitRevision: 2 }])
+  assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, true)
+})
+
+for (const routed of [false, true]) test(`superseded pending source releases notifications without rewriting its route receipt: routed=${routed}`, async t => {
+  const f = await fixture(t), old = await f.source('later-v1', { messageId: 'later' })
+  const receipt = [{ topicId: 'original-topic', revision: 1 }]
+  if (routed) await f.command('source.routed', { sourceId: old.id, receipt }, `topic-routed:${old.id}`)
+  await f.command('source.processingStarted', { sourceId: old.id, messageVersion: 1, activeUnitRefs: [] })
+  const replacement = await f.source('later-v2', { messageId: 'later', version: 2 })
+  const args = { sourceId: old.id, receipt: routed ? receipt : [{ supersededByVersion: 2 }], supersededByVersion: 2 }
+  await f.command('source.routed', args, `source-superseded:${old.id}:2`)
+  await assert.rejects(f.command('notification.start', { notificationId: f.notification.id }), { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
+  await f.complete(replacement)
+  await f.restart()
+  await f.command('source.routed', args, `source-superseded:${old.id}:2`)
+  const retired = await f.query('source.get', { sourceId: old.id })
+  assert.equal(retired.routed, true)
+  assert.equal(retired.processingPending, false)
+  assert.equal(retired.processingCompleted, undefined)
+  assert.deepEqual(retired.routeReceipt, args.receipt)
+  assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, true)
+})
+
+test('supersession requires a newer source for the same group and message', async t => {
+  const f = await fixture(t), old = await f.source('later-v1', { messageId: 'later' })
+  await f.command('source.processingStarted', { sourceId: old.id, messageVersion: 1, activeUnitRefs: [] })
+  for (const [index, extra] of [{ groupId: 'other' }, { messageId: 'other' }, { actorId: 'other' }].entries()) {
+    await f.source(`unrelated-${index}`, { messageId: 'later', version: 2, ...extra })
+    await assert.rejects(f.command('source.routed', { sourceId: old.id, receipt: [], supersededByVersion: 2 }), { code: 'DYNAMIC_SOURCE_REVISION_CONFLICT' })
+  }
+  await assert.rejects(f.command('source.routed', { sourceId: old.id, receipt: [], supersededByVersion: 1 }), { code: 'DYNAMIC_SOURCE_REVISION_CONFLICT' })
+  assert.equal((await f.query('source.get', { sourceId: old.id })).processingPending, true)
 })
 
 for (const extra of [{ actorId: 'another' }, { groupId: 'another-group' }]) test(`不同作者或群不阻塞: ${JSON.stringify(extra)}`, async t => {
@@ -171,4 +227,46 @@ for (const correction of [true, false]) test(`原生同群慢规划期间后续�
     assert.equal(host.sent.filter(item => item.payload.sourceMessageId === 'newer').length, 1, diagnostics)
     const newer = (await host.query('source.list')).find(item => item.messageId === 'newer')
     assert.ok(newer.processingCompleted, 'needs_clarification也有本轮判定完成事实')
+    for (const stage of ['ingress', 'queue', 'turn', 'host', 'send', 'readback'])
+      assert.ok(newer.stages.some(item => item.stage === stage && item.completedAt), `missing ${stage}`)
+    assert.ok(newer.stages.some(item => item.stage === 'turn' && item.sessionId.startsWith('independent-')))
+    assert.ok(newer.stages.some(item => item.stage === 'host' && item.sessionId?.startsWith('independent-')))
+    assert.equal(host.service.listAlerts().some(item => item.id?.startsWith('timing:')), false)
+  })
+
+test('native enrichment retires an already routed pending version with an independent command identity',
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'notification-source-superseded-native-'))
+    let host
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, async request => {
+      const input = latestInput(request)
+      return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
+        routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
+          units: [], ignoredRefs: [{ quote: item.text, reason: '日常寒暄，无待执行事项' }] })) } }]
+    })
+    const envelope = { groupId: 'native-group', messageId: 'greeting', senderOpenDingTalkId: 'native-user',
+      timestamp: new Date().toISOString(), text: '测试助手，早上好。' }
+    await host.service.ingest(envelope)
+    await host.service.whenIdle()
+    const first = (await host.query('source.list'))[0]
+    assert.equal(first.routed, true)
+    assert.ok(await host.query('receipt.get', { id: `topic-routed:${first.sourceId}` }))
+    await host.service.store.command({ id: 'reroute-old-version', kind: 'source.processingStarted',
+      args: { sourceId: first.sourceId, messageVersion: 1, activeUnitRefs: [{ unitId: 'reclassified', unitRevision: 2 }] } })
+    assert.equal((await host.query('source.get', { sourceId: first.sourceId })).processingPending, true)
+    await host.service.ingest({ ...envelope, quotedMessage: { messageId: 'prior-greeting', content: '早安。' } })
+    await host.service.whenIdle()
+    await host.service.recover()
+    await host.service.whenIdle()
+    const retired = await host.query('source.get', { sourceId: first.sourceId })
+    const current = (await host.query('source.list')).find(item => item.version === 2)
+    assert.ok(current?.processingCompleted)
+    assert.equal(retired.processingPending, false)
+    assert.equal(retired.processingCompleted, undefined)
+    assert.deepEqual(retired.routeReceipt, first.routeReceipt)
+    assert.deepEqual(retired.processingHistory, [first.processingCompleted])
+    assert.ok(await host.query('receipt.get', { id: `source-superseded:${first.sourceId}:2` }))
+    assert.equal(host.service.listAlerts().length, 0)
+    assert.equal(host.sent.length, 0)
   })

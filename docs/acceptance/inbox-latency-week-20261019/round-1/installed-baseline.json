@@ -1,0 +1,15 @@
+{
+  "base": "0535038267adb31e710b87ef8b02a55cce9f3e8a",
+  "ancestorFixes": ["4444f6a", "3d9c85e"],
+  "archiveSha256": "0155343482f9a9c9c2418e1dec10ab123866310587c3fd4283a1764c75318c7e",
+  "comparison": "archive raw bytes = installed raw bytes = base Git source after LF-to-CRLF conversion; not raw Git blob identity",
+  "members": {
+    "task-session-service.js": "6d792c0f6cd0fb0b86c2f7bb200b8c2d0557aa9db1813fb0afd01a0cf160af25",
+    "task-topic-coordinator.js": "0d6225959ed69f8943ee69e6d7867c5213da44401a4572bc611297167e20e467",
+    "independent-coordination-planner.js": "6608dd8563e24f5154241ee4e3ecad733dc41a6aba851ae1b5ba5432f3795d0a",
+    "independent-coordination-service.js": "04e8c5bf3dab8c693bc5d7fb82f25a991a1fda11514f53127bd888f64b327dbe",
+    "decision.js": "f7dd6d569a1e48704379507a722118adcaccfb6ce4105c922df954d29fa64289",
+    "topic-runtime.js": "a4258454a03cd726a5bbf436d62c7733602a5282dedb5636b1fc887b604b6f9c"
+  },
+  "boundary": "Read-only verification of pre-implementation installed package; not deployment of this change, live recovery, or latency improvement. No business IDs or message bodies."
+}

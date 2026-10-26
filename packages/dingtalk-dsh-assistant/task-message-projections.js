@@ -75,6 +75,32 @@ export async function ingestTaskResidentMessage({ ctx, residentStore, message, r
     ...(unavailable.length || message.mediaUnavailable !== undefined ? { mediaUnavailable: unavailable } : {}) })
 }
 
+/** Message-version facts only; mutable timestamps and notification bodies are not timing evidence. */
+export function messageProcessingSources(sources, notifications, groupId) {
+  return sources.filter(source => source.groupId === groupId).map(source => ({
+    sourceId: source.sourceId, groupId: source.groupId, messageId: source.messageId, version: source.version, channel: source.channel,
+    receivedAt: source.receivedAt ?? null, routed: source.routed === true, routedAt: source.routedAt ?? null,
+    routePreparedAt: source.routePreparedAt ?? null,
+    processingCompleted: source.processingCompleted ? { at: source.processingCompleted.at,
+      routingRevision: source.processingCompleted.routingRevision,
+      activeUnitRefs: (source.processingCompleted.activeUnitRefs ?? []).map(({ unitId, unitRevision }) => ({ unitId, unitRevision })) } : null,
+    notifications: notifications.filter(notification => notification.payload?.conversationId === source.groupId
+      && notification.payload.sourceMessageId === source.messageId
+      && (!notification.payload.sourceId || notification.payload.sourceId === source.sourceId)
+      && (!notification.payload.sourceVersion || notification.payload.sourceVersion === source.version)).map(notification => ({
+      notificationId: notification.id, state: notification.state, sourceMessageId: notification.payload.sourceMessageId,
+      sourceVersion: notification.payload.sourceVersion ?? null,
+      versionMatched: notification.payload.sourceId === source.sourceId || notification.payload.sourceVersion === source.version,
+      sendStartedAt: notification.sendStartedAt ?? null, ackedAt: notification.ackedAt ?? null,
+      deliveredAt: notification.deliveredAt ?? null,
+      sendAttemptCount: notification.sendAttemptCount ?? null, readbackAttemptCount: notification.readbackAttemptCount ?? null,
+    })),
+    stages: (source.stages ?? []).map(stage => ({ spanId: stage.spanId, stage: stage.stage, requestId: stage.requestId, attempt: stage.attempt,
+      startedAt: stage.startedAt ?? null, completedAt: stage.completedAt ?? null, quality: stage.quality ?? 'unknown',
+      shared: stage.shared === true, ...(stage.sessionId ? { sessionId: stage.sessionId } : {}) })),
+  }))
+}
+
 export function taskNotificationOutbound(notification) {
   const payload = notification.payload
   const receipt = notification.receipt

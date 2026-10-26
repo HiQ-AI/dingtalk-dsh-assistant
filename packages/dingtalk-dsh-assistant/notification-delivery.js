@@ -1,5 +1,5 @@
 import { quotedSendRejectionProof, persistedUuidSendRejectionProof, persistedMentionSendRejectionProof } from './group-message.js'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 // Diagnostics are bounded and scrubbed before they cross the durable/UI boundary.
 export function safeNotificationDetail(value, depth = 0) {
@@ -35,7 +35,15 @@ const knownPreSendRejection = (error, notification) => error.knownNotSent === tr
   replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id,
 })
 
-export async function deliverTaskNotification({ notification, notifications, command }) {
+export async function deliverTaskNotification({ notification, notifications, command, onStage = async () => {} }) {
+  const measure = async (current, phase, action) => {
+    const stage = { spanId: `${phase}:${current.id}:${randomUUID()}`, stage: phase, requestId: current.id,
+      attempt: phase === 'send' ? current.sendAttemptCount ?? 1 : (current.readbackAttemptCount ?? 0) + 1,
+      startedAt: new Date().toISOString(), completedAt: null }
+    await onStage(current, stage)
+    try { return await action() }
+    finally { await onStage(current, { ...stage, completedAt: new Date().toISOString() }) }
+  }
   if (!notifications || notification.state === 'delivered') return
   const persistedRejection = persistedUuidSendRejectionProof(notification) ?? persistedMentionSendRejectionProof(notification)
   if (persistedRejection) {
@@ -59,8 +67,8 @@ export async function deliverTaskNotification({ notification, notifications, com
   }
   if (notification.state === 'unknown' || notification.state === 'starting') {
     try {
-      const proof = await notifications.readback?.({ ...notification, ack: notification.ack ?? notification.receipt })
-      if (deliveredProof(proof)) await command('notification.reconcile', { notificationId: notification.id, state: 'delivered', receipt: safeNotificationDetail(proof), evidenceRef: evidence(proof) })
+      const proof = notifications.readback ? await measure(notification, 'readback', () => notifications.readback({ ...notification, ack: notification.ack ?? notification.receipt })) : undefined
+      if (deliveredProof(proof)) await command('notification.reconcile', { notificationId: notification.id, phase: 'readback', state: 'delivered', receipt: safeNotificationDetail(proof), evidenceRef: evidence(proof) })
       else await command('notification.diagnostic', { notificationId: notification.id, nextAttemptAt: notificationRetryAt(notification, null, 'readback') })
     } catch (error) {
       error.notificationRetryAt = notificationRetryAt(notification, error, 'readback')
@@ -81,10 +89,10 @@ export async function deliverTaskNotification({ notification, notifications, com
   const claimed = started.result.notification
   let ack, phase = 'send'
   try {
-    ack = await notifications.send(claimed)
+    ack = await measure(claimed, 'send', () => notifications.send(claimed))
     await command('notification.ack', { notificationId: claimed.id, dispatchToken: claimed.dispatchToken, ack: safeNotificationDetail(ack) }, `notification-ack:${claimed.id}:${claimed.dispatchToken}`)
     phase = 'readback'
-    const proof = await notifications.readback?.({ ...claimed, ack })
+    const proof = notifications.readback ? await measure(claimed, 'readback', () => notifications.readback({ ...claimed, ack })) : undefined
     await command('notification.receipt', { notificationId: claimed.id, dispatchToken: claimed.dispatchToken,
       phase: 'readback', state: deliveredProof(proof) ? 'delivered' : 'unknown', receipt: safeNotificationDetail(deliveredProof(proof) ? proof : ack),
       ...(deliveredProof(proof) ? {} : { nextAttemptAt: notificationRetryAt(claimed, null, 'readback') }) }, `notification-receipt:${claimed.id}:${claimed.dispatchToken}`)
