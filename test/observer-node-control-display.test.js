@@ -105,7 +105,7 @@ test('协调筛群立即移除旧实体且拒绝迟到响应，新页空态不�
 })
 
 test('混排记录分页经过普通决定仍可续读，失败保留、重试去重、刷新与卸载防陈旧响应', async () => {
-  const h = harness('TaskOutcomeRecords', { taskId: 'task', timeline: { executions: [{ id: 'e', milestones: [{ id: 's', at: '2026-10-22T00:00:00Z', summary: '已有成果' }] }] } })
+  const h = harness('TaskOutcomeRecords', { taskId: 'task', timeline: { executions: [{ id: 'e', conclusions: [{ id: 'e:1', at: '2026-10-22T00:20:00Z', summary: '真实最终结论', evidence: ['核对依据'], limitations: ['仅当前小目标'], artifacts: ['result.md'] }], milestones: [{ id: 's', at: '2026-10-22T00:00:00Z', summary: '已有成果' }] }] } })
   let tree = h.render()
   assert.match(h.requests[0].url, /\/decisions\?limit=20$/)
   h.requests[0].resolve({ decisions: [{ id: 'ordinary', triggers: [], decision: { summary: '不能混入' } }], nextBefore: 10 }); await settle()
@@ -114,6 +114,7 @@ test('混排记录分页经过普通决定仍可续读，失败保留、重试�
   assert.equal(h.requests.length, 2); assert.match(h.requests[1].url, /before=10/)
   h.requests[1].reject(new Error('offline')); await settle(); tree = h.render()
   assert.match(text(tree), /已有成果/); assert.match(text(tree), /未全部读取/)
+  assert.match(text(tree), /真实最终结论/); assert.match(text(tree), /执行完成结论/); assert.match(text(tree), /产物：/); assert.match(text(tree), /result.md/)
   button(tree, '重试读取记录').props.onClick(); h.render()
   const review = { id: 'r', recordedAt: '2026-10-22T00:10:00Z', triggers: [{ kind: 'execution.progress.review' }], decision: { action: 'wait', summary: '无新动作，继续等待', evidence: ['日志'], limitations: [] } }
   h.requests[2].resolve({ decisions: [review, review], nextBefore: null }); await settle(); tree = h.render()

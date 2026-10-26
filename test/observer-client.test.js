@@ -665,3 +665,20 @@ test('unlinked retired confirmation explicitly requires manual verification inst
   assert.doesNotMatch(result.detail, /等待负责人|自动重评估|计划重试|计划核验/)
   assert.equal(result.retryDisabled, true)
 })
+
+
+test('执行完成结论与同文阶段成果分开标识，跨执行跨轮次按时间混排且稳定去重', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const code = source.slice(source.indexOf('    const taskOutcomeRecords ='), source.indexOf('    function TaskOutcomeRecords('))
+  const merge = runInNewContext(`${code}; taskOutcomeRecords`)
+  const conclusion = { id: 'e:1', inputVersion: 1, at: '2026-10-22T01:20:00Z', summary: '同一成果', artifacts: ['report.md'], limitations: ['未整体验收'] }
+  const timeline = { executions: [
+    { id: 'e', title: '核查', milestones: [{ id: 's', at: '2026-10-22T01:00:00Z', summary: '同一成果' }], conclusions: [conclusion, conclusion] },
+    { id: 'e2', title: '验证', conclusions: [{ ...conclusion, id: 'e2:1', at: null }] },
+  ] }
+  const records = merge(timeline, [{ id: 'r', recordedAt: '2026-10-22T01:10:00Z', triggers: [{ kind: 'execution.progress.review' }], decision: { summary: '继续核对' } }])
+  assert.deepEqual(Array.from(records, item => item.type), ['执行完成结论', '统筹巡查', '阶段成果', '执行完成结论'])
+  assert.equal(records[0].source, '核查 · 第 1 轮')
+  assert.equal(records[0].artifacts[0], 'report.md')
+  assert.equal(records[3].at, null)
+})
