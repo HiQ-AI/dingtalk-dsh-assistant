@@ -1,0 +1,54 @@
+{
+  "targeted": {
+    "tests": 46,
+    "pass": 46,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "duration_ms": 71405.1933
+  },
+  "release-smoke": {
+    "tests": 14,
+    "pass": 14,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "duration_ms": 32237.5452
+  },
+  "browser": {
+    "passed": true,
+    "mode": "fixed",
+    "packageMode": "worktree",
+    "checks": [
+      "api-backed-topic-source-ignore-unknown-negative-and-cross-midnight",
+      "open-processing-facts-separates-settlement-and-notification",
+      "native-details-keyboard-toggle-and-stage-correlation",
+      "status-filter-uses-projected-state",
+      "refresh-does-not-invent-success"
+    ],
+    "browser": "156.0.4314.42",
+    "sourceSha256": "7fd401998f7df6671a40d7e9edc713923ab7c5002bdfb6c3345f618ca8f913d3",
+    "errors": [],
+    "writes": [],
+    "boundary": "Full observer + real React/ReactDOM + real HTTP handleRequest + synthetic runtime; host slots/primitives adapted. No production instance, models, database or channel writes."
+  },
+  "packageSourceVerifiedFiles": {
+    "assistant": 69,
+    "observer": 4
+  },
+  "packages": {
+    "dingtalk-dsh-assistant-2.1.0.tgz": {
+      "bytes": 39795,
+      "sha256": "d957432b09194aa1ac3a0d45187ed7d4e208bc26a817459cdc0f37b2756578e1"
+    },
+    "zzusp-dingtalk-dsh-assistant-2.1.0.tgz": {
+      "bytes": 402041,
+      "sha256": "689aee6420c67efa8a6166baacdcf742046d424eb282c794d11071d5957c3ce9"
+    },
+    "zzusp-dingtalk-dsh-observer-2.1.0.tgz": {
+      "bytes": 60975,
+      "sha256": "ce47ac789cff841e066e7d64249177fa8fc9351e110902b609d1a3b005ea9bff"
+    }
+  },
+  "boundary": "Local targeted/package/browser checks; no production deployment or channel writes; combinations overlap."
+}

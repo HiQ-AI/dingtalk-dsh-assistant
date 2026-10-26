@@ -149,7 +149,7 @@ export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDi
               if (submitted || closed) throw new Error('COORDINATION_REQUEST_SETTLED')
               const parsed = coordinationProposalSchema.parse(proposal)
               const stage = { spanId: `host:${sessionId}:${randomUUID()}`, stage: 'host', requestId: request.reservationId,
-                sessionId, attempt: request.generation, startedAt: new Date().toISOString(), completedAt: null }
+                sessionId, attempt: request.attempt, startedAt: new Date().toISOString(), completedAt: null }
               await onStage(request, stage)
               try { result = await submit(request, parsed); submitted = true }
               finally { await onStage(request, { ...stage, completedAt: new Date().toISOString() }) }
@@ -165,7 +165,7 @@ export function createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDi
       const stopTiming = ctx.on('session/event', (session, event) => {
         if (String(session.id) !== sessionId || !['turn/start', 'turn/end'].includes(event.type)) return
         if (event.type === 'turn/start') turn = { spanId: `turn:${sessionId}:${event.seq}`, stage: 'turn',
-          requestId: request.reservationId, sessionId, attempt: request.generation, startedAt: new Date(event.time).toISOString(), completedAt: null }
+          requestId: request.reservationId, sessionId, attempt: request.attempt, startedAt: new Date(event.time).toISOString(), completedAt: null }
         if (!turn) return
         const stage = { ...turn, ...(event.type === 'turn/end' ? { completedAt: new Date(event.time).toISOString() } : {}) }
         timingTail = timingTail.then(() => onStage(request, stage))

@@ -6,12 +6,15 @@ import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-const { values } = parseArgs({ options: { root: { type: 'string' }, output: { type: 'string' }, baseline: { type: 'boolean' }, playwright: { type: 'string' }, 'react-dom': { type: 'string' } } })
+const { values } = parseArgs({ options: { root: { type: 'string' }, 'installed-profile': { type: 'string' }, output: { type: 'string' }, baseline: { type: 'boolean' }, playwright: { type: 'string' }, 'react-dom': { type: 'string' } } })
 assert.ok(values.root && values.output)
 const root = path.resolve(values.root), output = path.resolve(values.output), require = createRequire(path.join(root, 'package.json'))
 await mkdir(output, { recursive: true })
-const { handleRequest } = await import(pathToFileURL(path.join(root, 'packages/dingtalk-dsh-assistant/http.js')))
-const observer = await readFile(path.join(root, 'packages/dingtalk-dsh-observer/web-client.js'), 'utf8')
+const packageDirectory = name => values['installed-profile']
+  ? path.join(path.resolve(values['installed-profile']), 'node_modules/@zzusp', name)
+  : path.join(root, 'packages', name)
+const { handleRequest } = await import(pathToFileURL(path.join(packageDirectory('dingtalk-dsh-assistant'), 'http.js')))
+const observer = await readFile(path.join(packageDirectory('dingtalk-dsh-observer'), 'web-client.js'), 'utf8')
 const playwright = await import(values.playwright ? pathToFileURL(path.resolve(values.playwright)) : 'playwright')
 const reactPath = require.resolve('react/package.json'), reactVersion = JSON.parse(await readFile(reactPath, 'utf8')).version
 const domDirectory = (await readdir(path.join(root, 'node_modules/.pnpm'))).find(name => name.startsWith(`react-dom@${reactVersion}_`))
@@ -114,7 +117,7 @@ try {
   assert.deepEqual(errors, []); assert.deepEqual(writes, [])
 } catch (error) { failure = error.stack; await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {}) }
 finally {
-  const result = { passed: !failure, mode: values.baseline ? 'baseline' : 'fixed', checks, browser: await browser.version(), sourceSha256: createHash('sha256').update(observer).digest('hex'), errors, writes, failure,
+  const result = { passed: !failure, mode: values.baseline ? 'baseline' : 'fixed', packageMode: values['installed-profile'] ? 'installed' : 'worktree', checks, browser: await browser.version(), sourceSha256: createHash('sha256').update(observer).digest('hex'), errors, writes, failure,
     boundary: 'Full observer + real React/ReactDOM + real HTTP handleRequest + synthetic runtime; host slots/primitives adapted. No production instance, models, database or channel writes.' }
   await writeFile(path.join(output, 'browser-result.json'), JSON.stringify(result, null, 2))
   await browser.close(); await new Promise(resolve => server.close(resolve))

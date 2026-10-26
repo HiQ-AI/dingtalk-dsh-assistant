@@ -2,11 +2,11 @@
 
 ## 收件箱语义状态与分阶段计时
 
-本次源码同时更新 Assistant 和 Observer，在现有 JSON 来源/通知账与协调会话事件内追加无正文时间，不新增 SQL schema，不回填旧记录。发布前定向运行 HTTP、Observer、来源投影、动态账及协调计时回归；构建/健康通过不表示已部署或实际性能提升。仅在另获部署授权后按本文普通流程切包并刷新浏览器，核双包 SHA256、安装版本、新进程和健康，再以授权的新消息验证。
+本次源码同时更新 Assistant 和 Observer，在现有 JSON 来源/通知账与协调会话事件内追加无正文时间，不新增 SQL schema，不回填旧记录。发布前定向运行 HTTP、Observer、来源投影、动态账及协调计时回归；构建/健康通过不表示已部署或实际性能提升。仅在另获部署授权后切包并刷新浏览器。当前任务会话实例不支持旧 workflow maintenance，必须按 [已初始化实例更新核验](task-session-clean-start.md#已初始化实例更新核验) 的原生双包脚本先 `-Check`、确认静止、经 SIGINT disposal 排空后切换，不把 `workflow_maintenance_unavailable` 当成 Bootstrap 许可。核双包 SHA256、安装版本、新进程和健康，先用隔离夹具及已有条目只读核验；真实钉钉新消息仍需单独授权。
 
-只读 GET `/state/groups`：核当前版本 `processingState` 与 `processingFacts`；无 topics 不应误显成功，来源 processingCompleted 与 activeUnitRefs 必须一致，未结束的 Topic 不应被提前语义戳覆盖。`sourceState=settled`、语义完成和通知 delivered 独立；缺 receivedAt 或通知版本绑定时 E2E 应为 missing，负时为 negative。ACK 不能当送达，旧通知无时钟不按 updatedAt 回填。阶段时钟含共享/工具/Host区间，不作纯模型用时或累计成本。 核 `stages` 的六类 `ingress/queue/turn/host/send/readback`、精确来源版本和每 span 的 request/attempt/session 关联；未结束与重启前无结束事件的 span 不自动结清。新回读完成另写 `deliveredAt`，不复用后续可变 `updatedAt`。unknown 恢复成功回读也计入 `readbackAttemptCount`，但不增加发送次数；新版本替代旧 pending 来源时保留原路由收据、不造旧版完成戳，新版未完成仍须拦住旧通知。
+只读 GET `/state/groups`：核当前版本 `processingState` 与 `processingFacts`；无 topics 不应误显成功，来源 processingCompleted 与 activeUnitRefs 必须一致，未结束的 Topic 不应被提前语义戳覆盖。`sourceState=settled`、语义完成和通知 delivered 独立；缺 receivedAt 或通知版本绑定时 E2E 应为 missing，负时为 negative。ACK 不能当送达，旧通知无时钟不按 updatedAt 回填。阶段时钟含共享/工具/Host区间，不作纯模型用时或累计成本。 核 `stages` 的六类 `ingress/queue/turn/host/send/readback`、精确来源版本和每 span 的 request/attempt/session 关联；未结束与重启前无结束事件的 span 不自动结清。新回读完成另写 `deliveredAt`，不复用后续可变 `updatedAt`。独立协调同一 generation 重试时，queue/turn/host 的 attempt 均须对应账本零基 attemptCount，重试增加但不改 generation。unknown 恢复成功回读也计入 `readbackAttemptCount`，但不增加发送次数；新版本替代旧 pending 来源时保留原路由收据、不造旧版完成戳，新版未完成仍须拦住旧通知。
 
-回退恢复旧双包，不删除新增事实或重放来源/通知；旧客户端/旧投影不能用于新的性能对比。历史最大空窗仍未收敛，不能以本地测试承诺线上节省。本轮仅 PR 交付，未执行部署、重启或真实消息验收。
+回退恢复旧双包，不删除新增事实或重放来源/通知；旧客户端/旧投影不能用于新的性能对比。历史最大空窗仍未收敛，不能以本地测试承诺线上节省。各轮实际合并、部署和功能验收结果记录于本特性验收轮次，不以源码测试冒称已安装或真实消息通过。
 
 ## 统筹空返回自动恢复
 

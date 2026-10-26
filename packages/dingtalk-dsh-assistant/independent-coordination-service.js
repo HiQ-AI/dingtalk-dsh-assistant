@@ -559,7 +559,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
               try {
                 await onStage(request, { spanId: `queue:${request.reservationId}:${request.generation}:${queuedAt}`, stage: 'queue',
                   requestId: request.reservationId, attempt: ledger.attemptCount ?? 0, startedAt: queuedAt, completedAt: new Date().toISOString() })
-                await planner.plan(request)
+                await planner.plan({ ...request, attempt: ledger.attemptCount ?? 0 })
               }
               catch (error) {
                 const current = await query('coordination.source', { unitId: request.unitId, revision: request.unitRevision })

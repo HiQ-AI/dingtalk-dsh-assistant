@@ -83,7 +83,7 @@ DSH 模型故障冷却期间补充需求后，到期复核仍会沿原执行身�
 
 收信箱处理状态由后端按当前消息版本的来源账与话题决策投影，展示待归类、归类失败、处理中、语义完成、状态未知；不从群摘要缺失的 topics 或单独 routed 推断完成。语义完成不代表业务 Task 最终完成、来源收束或通知送达。新来源使用精确 activeUnitRefs 的语义戳，混合旧 Topic 还须覆盖当前 entry 的完成决策；旧记录无证据保持未知。被新版本替代的旧来源只解除 pending，不伪造语义完成戳；已存在的路由收据保持不变，新版本仍须独立完成判定。
 
-收信箱“历时”固定为消息 occurredAt 到当前语义完成时间（多 Topic 取 max），不是纯模型时间、Host 排队或任务总耗时。缺时显示未记录，负时显示时钟逆序异常，不归零或伪造历史时钟。“处理状态与计时”展开独立展示 Host 接收、来源收束、通知回读和接收到精确版本全部关联通知送达的 E2E；未绑定版本的历史通知不计 E2E。共享、重叠和多回合阶段不机械相加，通知 ACK 不等于送达。 `processingFacts.stages` 只投影无正文的 `spanId/stage/requestId/attempt/sessionId/startedAt/completedAt/quality/shared`：阶段为 `ingress/queue/turn/host/send/readback`，每个原生 turn 各有 span，不以整个会话首尾代替单次请求。未结束 span 保留空结束时间；未记录阶段明确缺失，重启不以当前时间补齐。入口仅表示本插件 `ingest` 开始接收，不是钉钉服务端接收或网络延迟。
+收信箱“历时”固定为消息 occurredAt 到当前语义完成时间（多 Topic 取 max），不是纯模型时间、Host 排队或任务总耗时。缺时显示未记录，负时显示时钟逆序异常，不归零或伪造历史时钟。“处理状态与计时”展开独立展示 Host 接收、来源收束、通知回读和接收到精确版本全部关联通知送达的 E2E；未绑定版本的历史通知不计 E2E。共享、重叠和多回合阶段不机械相加，通知 ACK 不等于送达。 `processingFacts.stages` 只投影无正文的 `spanId/stage/requestId/attempt/sessionId/startedAt/completedAt/quality/shared`：阶段为 `ingress/queue/turn/host/send/readback`，每个原生 turn 各有 span，不以整个会话首尾代替单次请求。未结束 span 保留空结束时间；未记录阶段明确缺失，重启不以当前时间补齐。入口仅表示本插件 `ingest` 开始接收，不是钉钉服务端接收或网络延迟。 独立协调的 queue/turn/host 共用账本的零基重试次数，不以来源 generation 代替 attempt。
 
 收信箱过滤已关联的自身通知及当前发送身份的 DWS 回流，保留底层历史；本人手动发送的正常消息仍经监听和历史补拉接纳。仅账号相同不能判定为通知。DWS 不返回原生 `@` 元数据时，精确成功发送回执路径记录 `mentionVerification=unavailable`，不声称 `@` 已核验；没有成功发送任务回执的历史匹配继续要求原生 `@` 证据。
 
