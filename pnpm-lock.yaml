@@ -9,10 +9,10 @@ importers:
   .:
     dependencies:
       '@zzusp/dingtalk-dsh-assistant':
-        specifier: workspace:2.1.0
+        specifier: workspace:2.2.0
         version: link:packages/dingtalk-dsh-assistant
       '@zzusp/dingtalk-dsh-observer':
-        specifier: workspace:2.1.0
+        specifier: workspace:2.2.0
         version: link:packages/dingtalk-dsh-observer
     devDependencies:
       '@deepseek-ai/cordis':
