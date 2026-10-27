@@ -1,0 +1,100 @@
+✖ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (3891.0033ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (12740.5316ms)
+✔ task session permits late native tools and configured read and shell alongside skills (4106.4845ms)
+✖ unconfigured native profiles expose no bundled personal skills (1839.5817ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (11999.346ms)
+✖ 已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计 (1990.9913ms)
+✖ 执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到 (7694.2746ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 3
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 44990.8097
+
+✖ failing tests:
+
+test at test\task-session-skills-native.test.js:9:29
+✖ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (3891.0033ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   {
+  +     at: '2026-10-27T01:43:04.827Z',
+  +     code: 'session "task-session-82b57f72-12fc-424e-aaf3-4a198c8971be" contains event type "plugin:dingtalk/skill-read" (seq 18) unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness (raw log: C:\\Users\\64554\\AppData\\Local\\Temp\\native-personal-skills-m0aS57\\tasks\\task-805e9357fb2568334c0f0a5d44421675\\.dsh\\sessions\\--C-Users-64554-AppData-Local-Temp-native-personal-skills-m0aS57-tasks-task-805e9357fb2568334c0f0a5d44421675--\\task-session-82b57f72-12fc-424e-aaf3-4a198c8971be\\session.v4.jsonl)',
+  +     id: 'task-805e9357fb2568334c0f0a5d44421675',
+  +     retryAfter: 1793065389827
+  +   }
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:92:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { id: 'task-805e9357fb2568334c0f0a5d44421675', code: 'session "task-session-82b57f72-12fc-424e-aaf3-4a198c8971be" contains event type "plugin:dingtalk/skill-read" (seq 18) unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness (raw log: C:\\Users\\64554\\AppData\\Local\\Temp\\native-personal-skills-m0aS57\\tasks\\task-805e9357fb2568334c0f0a5d44421675\\.dsh\\sessions\\--C-Users-64554-AppData-Local-Temp-native-personal-skills-m0aS57-tasks-task-805e9357fb2568334c0f0a5d44421675--\\task-session-82b57f72-12fc-424e-aaf3-4a198c8971be\\session.v4.jsonl)', at: '2026-10-27T01:43:04.827Z', retryAfter: 1793065389827 } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-skills-native.test.js:9:29
+✖ unconfigured native profiles expose no bundled personal skills (1839.5817ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:165:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-skills-native.test.js:9:29
+✖ 已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计 (1990.9913ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:226:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-skills-native.test.js:9:29
+✖ 执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到 (7694.2746ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:266:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

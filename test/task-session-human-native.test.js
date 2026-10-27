@@ -142,6 +142,138 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
   assert.ok(reviewLeases.length >= 2)
 })
 
+test('待实施批准期间事实追问立即引用回复，内部证据不外发且不恢复旧执行', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  let original, topicId, reviewStep = 0
+  const summary = '此前完成了 UPR 导入覆盖修复；当前点击编辑持久化只有方案，仍等你确认。'
+  const wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
+  const h = await fixture(t, async request => {
+    const incoming = latestInput(request), names = request.tools.map(tool => tool.name), routed = topicTaskCalls(request)
+    if (incoming.requestId?.startsWith('coord-title-')) return [call('group_topic_title_submit', { requestId: incoming.requestId, topicId: incoming.topicId, title: '核对编辑持久化方案' })]
+    if (names.includes('group_topic_route_submit')) {
+      for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
+      return routed
+    }
+    if (names.includes('group_decision_submit')) {
+      const review = modelToolValues(request).find(value => Array.isArray(value.candidates))
+      if (!review) return [call('group_reply_review_get', { requestIds: [incoming.requestId] })]
+      const args = routed[0].args
+      args.decision.actions = [{ kind: 'task-context', taskId: original.taskId, inputVersion: original.requirementRevision,
+        runSequence: original.runSequence, context: '追问此前已经实施的范围，未批准当前方案', progressImpact: 'preserve',
+        topicRefs: [{ topicId: args.topicId, revision: args.revision }], basisUnitRefs: args.decision.basisUnitRefs }]
+      args.decision.reply = '已收到，核对此前的实施记录。'
+      args.decision.replyReview = { kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: review.candidates.map(item => item.outboundId), replaceOutboundIds: [] }
+      return routed
+    }
+    if (routed) return routed
+    if (!names.includes('task_delegate')) return [call('execution_submit', { output: { status: 'completed', summary: '已核对此前 UPR 导入覆盖修复，当前编辑持久化仅提交方案。', evidence: ['既有提交与当前方案'], limitations: [], artifacts: [] } })]
+    if (!incoming.task.humanRequests.length) {
+      if (!incoming.executions.length) return [call('task_delegate', { key: 'original-review', objective: '核对此前已实施的范围' }), wait('等待实施范围核对结果')]
+      return [requestHuman('requester')]
+    }
+    assert.ok(incoming.humanReview, '事实追问不得触发普通实施轮')
+    const source = incoming.sources.find(item => incoming.humanReview.sourceIds.includes(item.sourceId))
+    if (source.messageId === 'unrelated-followup') return [wait('这是另一事项，没有回答原方案确认，也无需向本追问发送实施结论')]
+    assert.match(requestSystemText(request), /相关事实追问不是实施批准/)
+    const executionId = incoming.executions[0].executionId
+    const step = reviewStep++
+    if (step === 0) return [call('task_execution_read', { executionId }),
+      call('task_delegate', { executionId, key: 'forbidden-continuation', objective: '不得恢复实施' })]
+    if (step === 1) return [call('model_content_read', { contentRef: modelToolValues(request).findLast(value => value.executionId === executionId && value.record?.contentRef).record.contentRef, path: '/result/payload/output/summary' })]
+    assert.match(JSON.stringify(modelToolValues(request)), /此前 UPR 导入覆盖修复/)
+    const decision = { action: 'wait', summary, replySourceId: source.sourceId, evidence: [`已读取原执行 ${executionId} 的结果`], limitations: [] }
+    if (step === 2) return [call('task_session_submit', { decision: { ...decision, summary: `${summary} ${incoming.task.taskId}` } })]
+    assert.match(JSON.stringify(request.messages), /GROUP_REPLY_INTERNAL_DETAILS/)
+    return [call('task_session_submit', { decision })]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'fact-followup', title: '编辑持久化核对', objective: '核对当前方案，实施需要另行确认' })
+  await h.service.whenIdle()
+  original = await h.query('task.get', { taskId: created.taskId }); topicId = original.topicRefs[0].topicId
+  const execution = (await h.query('execution.list'))[0]
+  await h.service.ingest({ groupId: 'native-group', messageId: 'fact-question', senderOpenDingTalkId: 'native-user',
+    text: '测试助手，方案没确认，你前面改动的是什么？', occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  const after = await h.query('task.get', { taskId: original.taskId })
+  assert.equal(after.humanRequests[0].status, 'waiting-reply')
+  assert.equal(after.humanRequests.length, 1)
+  assert.equal(after.humanRequests[0].requestId, original.humanRequests[0].requestId)
+  assert.equal(after.requirementRevision, original.requirementRevision)
+  assert.equal(after.controlRevision, original.controlRevision)
+  assert.equal(after.sessionId, original.sessionId)
+  const replies = h.sent.filter(item => item.id.startsWith('human-followup:'))
+  assert.equal(replies.length, 1)
+  assert.equal(replies[0].payload.text, summary)
+  assert.equal(replies[0].payload.replyToMessageId, 'fact-question')
+  assert.deepEqual(replies[0].payload.atOpenDingTalkIds, ['native-user'])
+  assert.ok(h.readbacks.some(item => item.id === replies[0].id))
+  assert.equal((await h.query('notification.get', { notificationId: replies[0].id })).state, 'delivered')
+  assert.match(after.lastDecision.evidence[0], new RegExp(execution.executionId))
+  const saved = (await h.query('execution.list'))[0]
+  assert.equal(saved.executionId, execution.executionId)
+  assert.equal(saved.inputVersion, execution.inputVersion)
+  assert.equal(saved.status, execution.status)
+  assert.equal((await h.query('execution.list')).length, 1)
+  assert.equal((await h.query('operation.list')).length, 0)
+  assert.equal((await h.query('wake.list', { taskId: original.taskId })).filter(item => item.kind === 'human.responded').length, 0)
+  assert.match(JSON.stringify(h.toolResults.filter(item => item.name === 'task_delegate')), /task_human_review_read_only/)
+  await h.service.ingest({ groupId: 'native-group', messageId: 'unrelated-followup', senderOpenDingTalkId: 'native-user',
+    text: '测试助手，另外一件事下周再聊', occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  assert.equal(h.sent.filter(item => item.id.startsWith('human-followup:')).length, 1, '无关来源只记录判断，不发送事实答复')
+  const count = h.requests.length
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal(h.requests.length, count, '完成的事实追问不反复处理')
+  assert.equal((await h.query('task.get', { taskId: original.taskId })).humanRequests[0].status, 'waiting-reply')
+})
+
+for (const batched of [true, false]) test(`积压的两条事实追问均送达且无关来源不空转：同一唤醒=${batched}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const reviewed = [], sourceIds = ['batch-first', 'batch-second', 'batch-unrelated']
+  const h = await fixture(t, async request => {
+    const routed = topicTaskCalls(request)
+    if (routed) return routed
+    const input = latestInput(request)
+    if (!input.task.humanRequests.length) return [requestHuman('requester')]
+    assert.ok(input.humanReview, '未答原问题时只允许事实核对')
+    reviewed.push(input.humanReview.sourceIds)
+    const sourceId = input.humanReview.sourceIds[0]
+    const decision = { action: 'wait', summary: sourceId === sourceIds[0] ? '第一项目前只完成只读排查，仍待方案确认。'
+      : sourceId === sourceIds[1] ? '第二项已查到既有实现，本轮尚未实施变更。' : '该条与原问题无关，保留原待答问题。',
+      evidence: ['已核对当前待答问题和本条完整来源，未收到批准'], limitations: [] }
+    if (sourceId !== sourceIds[2]) decision.replySourceId = sourceId
+    return [call('task_session_submit', { decision })]
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: `batch-followup-${batched}`, title: '核对待答期间追问', objective: '方案等待确认，允许只读回答事实追问' })
+  await h.service.whenIdle()
+  const original = await h.query('task.get', { taskId: created.taskId })
+  // 在恢复调度前积压完整来源，精确覆盖一个 wake 含多来源和多个 wake 两种账本状态。
+  const command = (kind, args, id) => h.service.store.command({ id: `batch:${id}`, kind, args })
+  for (const [index, sourceId] of sourceIds.entries()) {
+    await command('source.record', { sourceId, groupId: 'native-group', messageId: `message-${index}`, actorId: `member-${index}`,
+      text: index < 2 ? `第 ${index + 1} 项目前已经实施了什么？` : '另一件事下周再聊', channel: 'im' }, `source-${index}`)
+    await command('source.routed', { sourceId, receipt: [{ taskId: original.taskId }] }, `routed-${index}`)
+  }
+  for (const [index, refs] of (batched ? [sourceIds] : sourceIds.map((_, index) => sourceIds.slice(0, index + 1))).entries())
+    await command('task.supplement', { taskId: original.taskId, expectedRequirementRevision: original.requirementRevision,
+      expectedControlRevision: original.controlRevision, messageId: `batch-${index}`, text: '待答期间收到新来源',
+      sourceRefs: [...original.sourceRefs, ...refs] }, `supplement-${index}`)
+  await h.service.recover(); await h.service.whenIdle()
+  assert.deepEqual(reviewed, [sourceIds, sourceIds.slice(1), sourceIds.slice(2)])
+  const after = await h.query('task.get', { taskId: original.taskId })
+  assert.equal(after.humanRequests[0].status, 'waiting-reply')
+  assert.equal(after.humanRequests[0].requestId, original.humanRequests[0].requestId)
+  assert.equal(after.sessionId, original.sessionId)
+  assert.deepEqual(after.humanRequests[0].followupReplies.map(item => item.sourceId), sourceIds.slice(0, 2))
+  const replies = h.sent.filter(item => item.id.startsWith('human-followup:'))
+  assert.deepEqual(replies.map(item => item.payload.replyToMessageId), ['message-0', 'message-1'])
+  assert.deepEqual(replies.map(item => item.payload.atOpenDingTalkIds), [['member-0'], ['member-1']])
+  for (const reply of replies) assert.equal((await h.query('notification.get', { notificationId: reply.id })).state, 'delivered')
+  assert.equal((await h.query('execution.list')).length, 0)
+  assert.equal((await h.query('operation.list')).length, 0)
+  const count = h.requests.length
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal(h.requests.length, count)
+  assert.equal(h.sent.filter(item => item.id.startsWith('human-followup:')).length, 2)
+})
+
 test('operator technical reply retains business sources and shared scope protocol in the same resumed execution', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const objective = '测试助手，修复后部署到UAT2，隔离验证，不操作真实申请'
   const reply = '技术已恢复；本答复不新增部署批准，不撤销此前明确交办范围。用户纠正：说了部署到UAT就部署到UAT，这个申请不应该提。'

@@ -1,0 +1,16 @@
+✔ 待答事实追问原子保存引用答复，原问题保留且崩溃恢复不重复答复 (92.9693ms)
+✖ 待实施批准期间事实追问立即引用回复，内部证据不外发且不恢复旧执行 (30259.0914ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 38010.4923
+
+✖ failing tests:
+
+test at test\task-session-human-native.test.js:145:1
+✖ 待实施批准期间事实追问立即引用回复，内部证据不外发且不恢复旧执行 (30259.0914ms)
+  'test timed out after 30000ms'

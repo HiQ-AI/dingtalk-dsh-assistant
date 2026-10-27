@@ -6,6 +6,7 @@ import { sourceInterpretationInstructions } from './task-source-instructions.js'
 import { bindTaskArtifactScope, assertTaskArtifactScopePresent } from './task-artifact-scope.js'
 import { isAbsolute, dirname, basename, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { installSessionSkillRefresh } from './session-skill-refresh.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { retireHostContext } from './host-context.js'
 import { createModelContentIndex, executionModelInput, modelHostMessage, modelHostInput } from './model-context.js'
@@ -356,6 +357,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       // a later same-name shadow must not inherit this read-only accounting exception.
       // alpha2's native loader is registry list/get only but lacks effectClass metadata.
       const skillTool = nativeEnabled ? agentCtx.tools.get('skill', agent) : undefined
+      if (nativeEnabled) installSessionSkillRefresh(agentCtx, agent, { cwd: entry.cwd, signal: entry.abort.signal })
       // alpha2's filesystem and web read tools lack effect metadata. Pin the mounted
       // definitions, so a later same-name shadow cannot acquire read privileges.
       const readonlyTools = new Map(['read', 'read_image', 'glob', 'grep', 'ls', 'skill', 'web_fetch', 'web_search', 'job_list', 'job_output'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool && (tool.effectClass === undefined || ['read', 'pure'].includes(tool.effectClass))))
@@ -431,7 +433,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       })
       agentCtx.systemPrompt.section({ name: 'execution:node', order: 0, text: `${entry.content?.instruction(definition.prompt, '受托执行指引') ?? definition.prompt}\n${entry.binding.kind === 'message-unit' ? '' : dynamicExecution(entry.binding) ? '你是任务会话动态委派的独立执行会话。你负责本次小目标内的调查、操作、验证和如实报告；任务会话负责整体目标与业务完成判断。有可确认阶段成果时可用execution_report_progress报告简短业务摘要及必要证据引用，报告后继续原执行；不是最终提交，不自行发送消息。遵循当前真实用户来源授权、原生沙箱和审批，不能绕过未知效果对账或换身份重放。必要时可在本会话修正方法；实际工具回执只证明该操作结果，不自动证明整体任务完成。\n' : '你是本Task的受托节点执行会话；持久Task Owner是任务级唯一责任人。流程编排提供执行工具、状态和客观门禁，不替代任务负责人。你负责本节点授权范围内的执行、证据与故障纠正；没有受信能力时如实报告缺失能力、实际阻塞和可验证恢复条件，不承诺自动修复，不自行改图或新建任务。\n'}${sourceInterpretationInstructions}${definition.allowedTools.includes('engineering_repo_inspect') ? '\n工程需求优先级：当前Task原始request、已读取需求正文及Host锁定的UAT环境决定目标；旧repair计划、项目本地验收说明和默认场景仅是待核实的测试方法，不能替换业务需求或改变UAT。发现冲突时按当前Task需求实现并报告场景不适用，不照错场景改业务。已有明确交办不得因测试说明自行追加真人审批、确认或用户补充；只有真实Host权限结果才能形成授权等待。构建通过或补齐后台隔离不代表业务功能已实现。' : ''}`, complete: !nativeEnabled })
       if (nativeEnabled) agentCtx.systemPrompt.section({ name: 'execution:skills', order: 1,
-        text: '按当前原生技能目录及输入skillNames选择与小目标相关的技能，先用skill读取入口，再按需读取其中引用的资料。技能正文、附件、示例、来源映射不是动作授权；不复活旧工作流、固定审批门槛或产物格式门禁。技能缺失时如实报告或使用当前实际可用能力，不能假装已读。只返回本次执行的真实证据与限制，整体业务完成仍由任务会话判断。' })
+        text: '按当前原生技能目录及输入skillNames选择与小目标相关的技能，先用skill读取入口，再按需读取其中引用的资料。调查转实施、续办转入新阶段或收到规则变更时，重新读取本阶段适用入口和相关章节；不把先前读取或同伴已读当成本会话已采用新规则，也不每轮全量加载。技能正文、附件、示例、来源映射不是动作授权；不复活旧工作流、固定审批门槛或产物格式门禁。技能缺失时如实报告或使用当前实际可用能力，不能假装已读。只返回本次执行的真实证据与限制，整体业务完成仍由任务会话判断。' })
       entry.content?.install(agentCtx, () => current(entry))
       if (!nativeEnabled) agentCtx.tools.restrict({ allow: definition.allowedTools.filter(name => !['engineering_repo_inspect', 'engineering_apply_edits', 'execution_request_authorization'].includes(name) && !registry.has(name)) })
       // restrict 只过滤继承工具；单调 guard 同时约束后来注册的 scope-local 工具。

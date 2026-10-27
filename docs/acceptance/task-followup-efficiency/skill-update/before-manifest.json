@@ -1,0 +1,37 @@
+{
+  "capturedAt": "2026-10-27T09:37:12.6768106+08:00",
+  "skillRoot": "D:/dsh_home/skills/business-development",
+  "files": [
+    {
+      "path": "D:\\dsh_home\\skills\\business-development\\SKILL.md",
+      "relativePath": "SKILL.md",
+      "beforeSha256": "7C43D69A4BF8B59A29B86A506CB2590461C40D024F367BD9741D21E436CFB550",
+      "bytes": 3226,
+      "snapshot": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\task-followup-efficiency\\skill-update\\before\\SKILL.md"
+    },
+    {
+      "path": "D:\\dsh_home\\skills\\business-development\\references\\procedure.md",
+      "relativePath": "references/procedure.md",
+      "beforeSha256": "08B7F89B731FAAAB30728BD1E9E1DD468883B2B80BF04961DEAEDA17E760A6B8",
+      "bytes": 29688,
+      "snapshot": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\task-followup-efficiency\\skill-update\\before\\references\\procedure.md"
+    },
+    {
+      "path": "D:\\dsh_home\\skills\\business-development\\references\\page-verification.md",
+      "relativePath": "references/page-verification.md",
+      "beforeSha256": "8C6E4B5C43C0F70B073916146D8AC854419004056A8A439E5385ECDAF271E7C8",
+      "bytes": 4236,
+      "snapshot": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\task-followup-efficiency\\skill-update\\before\\references\\page-verification.md"
+    }
+  ],
+  "unchangedScripts": [
+    {
+      "Path": "D:\\dsh_home\\skills\\business-development\\scripts\\verification_run.py",
+      "Hash": "FF05514C9E95DAF10DB979429ED2C2F56A206D2EA457E90E771B6DB16DFA4A06"
+    },
+    {
+      "Path": "D:\\dsh_home\\skills\\business-development\\scripts\\page_acceptance.py",
+      "Hash": "14D393ECCD468B40ABD9673F4209BF13EA435695A6CCC4EE2DB3627F0749FF62"
+    }
+  ]
+}

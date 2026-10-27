@@ -1,0 +1,65 @@
+✖ 已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计 (11303.1232ms)
+ℹ {"step":3,"tools":[{"name":"group_topic_summary_submit","failed":false},{"name":"skill","failed":false},{"name":"read","failed":false},{"name":"write","failed":false}],"reads":[]}
+✖ 执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到 (7080.4176ms)
+ℹ AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+  assert.ok(JSON.stringify(request).includes('本会话已读技能或引用有变化'))
+
+    at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:258:16
+    at nativeTaskHost.skillDirs (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:50:26)
+    at ScriptedModel.stream (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/fixtures/task-session-native-host.js:90:95)
+    at stream.next (<anonymous>)
+    at Proxy.adapterStream (file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-llm/lib/index.js:2359:35)
+    at adapterStream.next (<anonymous>)
+    at ReactLoopAgent.step (file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js:1088:22)
+    at async ReactLoopAgent.turn (file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js:980:22)
+    at async ReactLoopAgent.kick (file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js:889:11)
+ℹ {"tools":[{"name":"group_topic_summary_submit","failed":false},{"name":"task_delegate","failed":false},{"name":"task_session_submit","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"skill","failed":false},{"name":"read","failed":false},{"name":"execution_submit","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"task_delegate","failed":false},{"name":"task_session_submit","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"model_content_read","failed":false},{"name":"task_session_submit","failed":false}],"reads":[]}
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 21032.7836
+
+✖ failing tests:
+
+test at test\task-session-skills-native.test.js:9:29
+✖ 已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计 (11303.1232ms)
+  AssertionError [ERR_ASSERTION]: {"appliedOperations":["decision-5cd910a6cb720614e4767d62cfbc6be2:action:0"],"claimContextRevision":0,"claimControlRevision":1,"claimRequirementRevision":1,"control":"active","controlRevision":1,"createdAt":"2026-10-27T01:53:20.121Z","drained":true,"groupId":"native-group","humanRequests":[],"humanReviewLease":null,"id":"task-60e34258542f813f301d2e6406f86349","lastDecision":{"action":"blocked","at":"2026-10-27T01:53:22.317Z","controlRevision":1,"decision":null,"evidence":[],"limitations":["TASK_SESSION_NO_SUBMISSION"],"question":null,"requirementRevision":1,"summary":"任务会话本轮未能提交有效决定，原任务和执行结果已保留。"},"leaseEpoch":1,"metadata":{"authorizationSourceId":"web:0b699585126b740f21d2a6eebdaa46cfdfb702a9126aa89dc246b7b99bf995b0","channel":"web"},"objective":"只读核对规则更新","ownerActorId":"native-user","providerRecovery":null,"recovering":false,"request":"只读核对规则更新","requirementRevision":1,"requirements":["只读核对规则更新"],"runSequence":1,"sessionBound":true,"sessionId":"task-session-e7603c07-5e09-4279-afff-6932846dbef6","sourceRefs":["web:0b699585126b740f21d2a6eebdaa46cfdfb702a9126aa89dc246b7b99bf995b0"],"status":"active","taskId":"task-60e34258542f813f301d2e6406f86349","title":"只读核对规则更新","topicRefs":[{"revision":1,"topicId":"topic-55581c083534211fbda133558e2d7bd3"}],"updatedAt":"2026-10-27T01:53:22.324Z"}
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:229:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\task-session-skills-native.test.js:9:29
+✖ 执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到 (7080.4176ms)
+  AssertionError [ERR_ASSERTION]: {"appliedOperations":["decision-88aa3a0f0ca97d45d90328ef36e2b9fa:action:0"],"claimContextRevision":0,"claimControlRevision":1,"claimRequirementRevision":1,"control":"active","controlRevision":1,"createdAt":"2026-10-27T01:53:22.897Z","drained":true,"groupId":"native-group","humanRequests":[],"humanReviewLease":null,"id":"task-86ea4ddced073a9b4b4e33325f429178","lastDecision":{"action":"wait","at":"2026-10-27T01:53:29.231Z","controlRevision":1,"decision":null,"evidence":[],"limitations":[],"question":null,"requirementRevision":1,"summary":"等待原执行与独立核对结果。"},"leaseEpoch":3,"metadata":{"authorizationSourceId":"web:363ce157e11d83c9b4e2bbb89a30f5fd383ccaed4b95efc6470c00528ca6ccc1","channel":"web"},"objective":"分两阶段核对规则更新","ownerActorId":"native-user","providerRecovery":null,"recovering":false,"request":"分两阶段核对规则更新","requirementRevision":1,"requirements":["分两阶段核对规则更新"],"runSequence":1,"sessionBound":true,"sessionId":"task-session-36474961-9fa0-45de-8b46-2bca9c949890","sourceRefs":["web:363ce157e11d83c9b4e2bbb89a30f5fd383ccaed4b95efc6470c00528ca6ccc1"],"status":"active","taskId":"task-86ea4ddced073a9b4b4e33325f429178","title":"分两阶段核对规则更新","topicRefs":[{"revision":1,"topicId":"topic-b13b794bbc8418ad534381483971bf7b"}],"updatedAt":"2026-10-27T01:53:29.268Z"}
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-skills-native.test.js:271:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

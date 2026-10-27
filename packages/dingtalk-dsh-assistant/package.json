@@ -57,6 +57,7 @@
     "resident.js",
     "resource-close.js",
     "session-persistence.js",
+    "session-skill-refresh.js",
     "session-workspaces.js",
     "store.js",
     "task-artifact-scope.js",
