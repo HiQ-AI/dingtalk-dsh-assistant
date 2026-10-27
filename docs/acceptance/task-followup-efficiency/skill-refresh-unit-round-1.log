@@ -1,0 +1,32 @@
+✔ 普通步骤不重复加载技能正文，原生变更通知触发一次核对 (5.2154ms)
+✔ 切换技能根后不继续催读旧引用，旧审计仍可恢复 (1.3229ms)
+✔ 成功读取后的元数据故障不推翻 read 结果，缺口对下一模型步骤可见 (1.2885ms)
+✔ 旧会话成功技能调用只生成待核对提示，不冒充新版已读或自动加载正文 (0.5662ms)
+✖ 同名替换及失败结果不形成可信技能读取版本 (1.3799ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 4
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 266.5137
+
+✖ failing tests:
+
+test at test\session-skill-refresh.test.js:79:1
+✖ 同名替换及失败结果不形成可信技能读取版本 (1.3799ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/session-skill-refresh.test.js:83:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -12,6 +12,7 @@ const finish = (action, summary) => call('task_session_submit', { decision: { ac
 const message = { groupId: 'native-group', messageId: 'personal-skills-1', senderOpenDingTalkId: 'native-user',
   text: '测试助手，Read the relevant personal guide and verify its reference in an independent execution.', occurredAt: '2026-10-13T16:00:00Z', timestamp: '2026-10-13T16:00:00Z' }
 const names = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf'].map(name => 'personal-' + name)
+const currentRuntime = request => JSON.stringify(request.messages.findLast(message => message.source?.kind === 'runtime-context') ?? {})
 
 function completionReviews(reference) {
   const read = new Set(); let delegated = false
@@ -46,7 +47,10 @@ async function fixture(t) {
   }
   t.after(async () => { try { for (const host of hosts.toReversed()) await host.close() } finally { await rm(root, { recursive: true, force: true }) } })
   return { root, skillRoot, async host(decide, options = {}) {
-    const host = await nativeTaskHost(root, decide, { skillDirs: [skillRoot], ...options }); hosts.push(host); return host
+    const host = await nativeTaskHost(root, async (...args) => {
+      try { return await decide(...args) }
+      catch (error) { t.diagnostic(error.stack); throw error }
+    }, { skillDirs: [skillRoot], ...options }); hosts.push(host); return host
   } }
 }
 
@@ -195,4 +199,76 @@ test('an execution same-name replacement does not inherit the native loader read
   assert.equal(operations[0].state, 'succeeded')
   assert.equal((await h.query('task.list'))[0].status, 'completed')
   assert.equal((await h.query('execution.list')).length, 3)
+})
+
+test('已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计', async t => {
+  const f = await fixture(t), reference = join(f.skillRoot, names[0], 'references/procedure.md')
+  let step = 0
+  const h = await f.host(async request => {
+    const rendered = JSON.stringify(request)
+    switch (step++) {
+      case 0: return [call('skill', { name: names[0] })]
+      case 1: return [call('read', { file_path: reference })]
+      case 2:
+        await writeFile(reference, 'UPDATED_REFERENCE')
+        await writeFile(join(f.skillRoot, names[1], 'SKILL.md'), `---\nname: ${names[1]}\ndescription: Routing summary.\n---\nUNRELATED_BODY\n`)
+        return [call('write', { file_path: join(f.skillRoot, names[0], 'SKILL.md'), content: `---\nname: ${names[0]}\ndescription: Routing summary.\n---\nUPDATED_BODY\n` })]
+      case 3:
+        assert.ok(rendered.includes('本会话已读技能或引用有变化'))
+        assert.ok(rendered.includes(reference.replaceAll('\\', '\\\\')))
+        assert.ok(!rendered.includes('UPDATED_REFERENCE') && !rendered.includes('UNRELATED_BODY'), '变化提示不自动注入引用或无关正文')
+        return [call('skill', { name: names[0] }), call('read', { file_path: reference })]
+      default:
+        assert.ok(rendered.includes('UPDATED_BODY') && rendered.includes('UPDATED_REFERENCE'))
+        assert.ok(!currentRuntime(request).includes('本会话已读技能或引用有变化'), '重新读取后最新上下文清除提醒；历史提示仍保留')
+        return [finish('complete', '已核对最新相关规则')]
+    }
+  })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'skill-freshness', objective: '只读核对规则更新' })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(await h.query('task.get', { taskId: task.taskId })))
+  const log = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  assert.equal(log.events.filter(e => e.data.source?.kind === 'dingtalk-skill-read').length, 4)
+  assert.ok(log.events.some(e => e.type === 'tool/result' && JSON.stringify(e.data).includes(`BODY_ONLY_${names[0]}`)), '旧实际工具结果保留')
+})
+
+test('执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到', async t => {
+  const f = await fixture(t), reference = join(f.skillRoot, names[0], 'references/procedure.md')
+  const reviewers = completionReviews(reference), steps = new Map()
+  const h = await f.host(async request => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      const execution = input.executions[0]
+      if (!execution) return [call('task_delegate', { key: 'phase-one', objective: '调查阶段读取规则', skillNames: [names[0]] }), finish('wait', '等待调查结果')]
+      if (!execution.drained) return [finish('wait', '等待排空')]
+      if (execution.inputVersion === 1) {
+        await writeFile(reference, 'RESUMED_REFERENCE_VERSION')
+        return [call('task_delegate', { key: 'phase-two', executionId: execution.executionId, objective: '实施阶段核对新规则', skillNames: [names[0]] }), finish('wait', '等待续办')]
+      }
+      return reviewers.owner(input, '已核对续办接收新引用')
+    }
+    const review = reviewers.execution(input); if (review) return review
+    const phase = input.objective, step = steps.get(phase) ?? 0; steps.set(phase, step + 1)
+    if (phase === '调查阶段读取规则') {
+      if (step === 0) return [call('skill', { name: names[0] })]
+      if (step === 1) return [call('read', { file_path: reference })]
+    } else {
+      if (step === 0) {
+        assert.ok(JSON.stringify(request).includes('本会话已读技能或引用有变化'))
+        assert.ok(!JSON.stringify(request).includes('RESUMED_REFERENCE_VERSION'), '续办只提示相关引用，仍需实际读取')
+        return [call('read', { file_path: reference })]
+      }
+      assert.ok(JSON.stringify(request).includes('RESUMED_REFERENCE_VERSION'))
+      assert.ok(!currentRuntime(request).includes('本会话已读技能或引用有变化'))
+    }
+    return [call('execution_submit', { output: { status: 'completed', summary: '已读取本阶段相关规则', evidence: [reference], limitations: [], artifacts: [] } })]
+  })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'skill-resume', objective: '分两阶段核对规则更新' })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(await h.query('task.get', { taskId: task.taskId })))
+  const [execution] = await h.query('execution.list', { taskId: task.taskId })
+  assert.equal(execution.inputVersion, 2)
+  const log = await inspectSession(h.ctx.sessionPersistence, execution.sessionId)
+  assert.equal(log.events.filter(e => e.data.source?.kind === 'dingtalk-skill-read' && e.data.source.record.kind === 'reference').length, 2)
+  assert.deepEqual(await h.query('operation.list'), [], '技能检查不制造外部效果')
 })

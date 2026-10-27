@@ -1,0 +1,415 @@
+followup-created
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: undefined,
+  execution: undefined,
+  tools: [
+    'task_coordination_reorder_assess',
+    'task_decisions_read',
+    'task_delegate',
+    'task_execution_cancel',
+    'task_execution_progress',
+    'task_execution_read',
+    'task_operation_reconcile',
+    'task_request_human',
+    'task_session_submit'
+  ],
+  human: [],
+  last: undefined
+}
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: undefined,
+  execution: undefined,
+  tools: [
+    'execution_report_progress',
+    'execution_resources_read',
+    'execution_send_message',
+    'execution_submit',
+    'execution_team_read'
+  ],
+  human: undefined,
+  last: {
+    contentRef: 'bfb6342c83aa900aa634f541910ff9d88ec0603d8d594ebc3ea5e91838838434:sha256:27b83ed490bbac2720eb8ec3cf050bea1b2d4faef40faa8516796f6a183549e0',
+    path: '',
+    format: 'json-index',
+    valueKind: 'object',
+    totalEntries: 4,
+    entries: [ [Object], [Object], [Object], [Object] ],
+    nextOffset: null
+  }
+}
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: undefined,
+  execution: undefined,
+  tools: [
+    'task_coordination_reorder_assess',
+    'task_decisions_read',
+    'task_delegate',
+    'task_execution_cancel',
+    'task_execution_progress',
+    'task_execution_read',
+    'task_operation_reconcile',
+    'task_request_human',
+    'task_session_submit'
+  ],
+  human: [],
+  last: {
+    contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:766287ab7e18bf5f910ebce0a4135eaae52e8b6b3269ebe66605871f7a78a6c9',
+    path: '',
+    format: 'text',
+    offset: 0,
+    totalLength: 15,
+    text: 'original-review',
+    nextOffset: null,
+    resolvedRef: {
+      contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:766287ab7e18bf5f910ebce0a4135eaae52e8b6b3269ebe66605871f7a78a6c9',
+      path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\766287ab7e18bf5f910ebce0a4135eaae52e8b6b3269ebe66605871f7a78a6c9.json',
+      format: 'text',
+      bytes: 17
+    }
+  }
+}
+followup-initial-idle
+followup-step {
+  requestId: 'coord-route-951897a510f047931c38b1473bf3505dd307ab2fd932a82b427f4bd2d8064724',
+  taskId: undefined,
+  review: undefined,
+  execution: undefined,
+  tools: [],
+  human: undefined,
+  last: undefined
+}
+followup-step {
+  requestId: 'coord-decision-424c030ba5cac7046c14fe2b6a9099867f64ef9c69b37d39c41b141e77b80e97',
+  taskId: undefined,
+  review: undefined,
+  execution: undefined,
+  tools: [],
+  human: undefined,
+  last: undefined
+}
+followup-step {
+  requestId: 'coord-decision-424c030ba5cac7046c14fe2b6a9099867f64ef9c69b37d39c41b141e77b80e97',
+  taskId: undefined,
+  review: undefined,
+  execution: undefined,
+  tools: [],
+  human: undefined,
+  last: {
+    requestIds: [
+      'coord-decision-424c030ba5cac7046c14fe2b6a9099867f64ef9c69b37d39c41b141e77b80e97'
+    ],
+    candidates: [],
+    candidateCount: 0
+  }
+}
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: {
+    requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+    sourceIds: [
+      'im:a1b955270ed298e5ce615ba9b9a9cdcc70d784d651179e089a7c824b00c1f481'
+    ],
+    wakeIds: [
+      'wake:topic-operation:coord-decision-424c030ba5cac7046c14fe2b6a9099867f64ef9c69b37d39c41b141e77b80e97:action:0'
+    ]
+  },
+  execution: undefined,
+  tools: [
+    'task_coordination_reorder_assess',
+    'task_decisions_read',
+    'task_delegate',
+    'task_execution_cancel',
+    'task_execution_progress',
+    'task_execution_read',
+    'task_human_resolve',
+    'task_operation_reconcile',
+    'task_request_human',
+    'task_session_submit'
+  ],
+  human: [
+    {
+      audience: 'requester',
+      controlRevision: 1,
+      question: '请明确本次允许的环境和操作范围',
+      reason: '目标环境尚未明确，不能自行扩大授权',
+      requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+      requirementRevision: 1,
+      status: 'waiting-reply'
+    }
+  ],
+  last: {
+    contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:7ce5936667b5fd33277238ae623855cec8da6b725ac196975b9bf6742bbd8956',
+    path: '',
+    format: 'text',
+    offset: 0,
+    totalLength: 256,
+    text: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\a2bb3c6d313fdca7740b85cf38627b235d622a3674b124bcec07bd5e49c1e8a6.json',
+    nextOffset: null,
+    resolvedRef: {
+      contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:7ce5936667b5fd33277238ae623855cec8da6b725ac196975b9bf6742bbd8956',
+      path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\7ce5936667b5fd33277238ae623855cec8da6b725ac196975b9bf6742bbd8956.json',
+      format: 'text',
+      bytes: 270
+    }
+  }
+}
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: {
+    requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+    sourceIds: [
+      'im:a1b955270ed298e5ce615ba9b9a9cdcc70d784d651179e089a7c824b00c1f481'
+    ],
+    wakeIds: [
+      'wake:topic-operation:coord-decision-424c030ba5cac7046c14fe2b6a9099867f64ef9c69b37d39c41b141e77b80e97:action:0'
+    ]
+  },
+  execution: undefined,
+  tools: [
+    'task_coordination_reorder_assess',
+    'task_decisions_read',
+    'task_delegate',
+    'task_execution_cancel',
+    'task_execution_progress',
+    'task_execution_read',
+    'task_human_resolve',
+    'task_operation_reconcile',
+    'task_request_human',
+    'task_session_submit'
+  ],
+  human: [
+    {
+      audience: 'requester',
+      controlRevision: 1,
+      question: '请明确本次允许的环境和操作范围',
+      reason: '目标环境尚未明确，不能自行扩大授权',
+      requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+      requirementRevision: 1,
+      status: 'waiting-reply'
+    }
+  ],
+  last: {
+    executionId: '2002d76d-a069-4d78-bb89-9aec32f4685b',
+    inputVersion: 1,
+    status: 'succeeded',
+    resources: { state: 'none', keys: [], holder: null, blocking: [] },
+    document: {
+      contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:8c44e4f4bedcd7624d23e99c2056d09017cd5b5291fc6c147b44bcad37a334e5',
+      path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\8c44e4f4bedcd7624d23e99c2056d09017cd5b5291fc6c147b44bcad37a334e5.json',
+      format: 'json'
+    },
+    feedback: [],
+    record: {
+      contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:8ecb821c401010749c910e5e5104bd5e73c290ef3931b2368383bbf16276d611',
+      path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\8ecb821c401010749c910e5e5104bd5e73c290ef3931b2368383bbf16276d611.json',
+      format: 'json',
+      bytes: 6815
+    }
+  }
+}
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: {
+    requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+    sourceIds: [
+      'im:a1b955270ed298e5ce615ba9b9a9cdcc70d784d651179e089a7c824b00c1f481'
+    ],
+    wakeIds: [
+      'wake:topic-operation:coord-decision-424c030ba5cac7046c14fe2b6a9099867f64ef9c69b37d39c41b141e77b80e97:action:0'
+    ]
+  },
+  execution: undefined,
+  tools: [
+    'task_coordination_reorder_assess',
+    'task_decisions_read',
+    'task_delegate',
+    'task_execution_cancel',
+    'task_execution_progress',
+    'task_execution_read',
+    'task_human_resolve',
+    'task_operation_reconcile',
+    'task_request_human',
+    'task_session_submit'
+  ],
+  human: [
+    {
+      audience: 'requester',
+      controlRevision: 1,
+      question: '请明确本次允许的环境和操作范围',
+      reason: '目标环境尚未明确，不能自行扩大授权',
+      requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+      requirementRevision: 1,
+      status: 'waiting-reply'
+    }
+  ],
+  last: {
+    contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:8ecb821c401010749c910e5e5104bd5e73c290ef3931b2368383bbf16276d611',
+    path: '/result/payload/output/summary',
+    format: 'text',
+    offset: 0,
+    totalLength: 30,
+    text: '已核对此前 UPR 导入覆盖修复，当前编辑持久化仅提交方案。',
+    nextOffset: null,
+    resolvedRef: {
+      contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:d15fc95a1a321a35b000a2b6984d7be7ae5fdfe7d476395401c20b6e4fca0f92',
+      path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\d15fc95a1a321a35b000a2b6984d7be7ae5fdfe7d476395401c20b6e4fca0f92.json',
+      format: 'text',
+      bytes: 82
+    }
+  }
+}
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: {
+    requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+    sourceIds: [
+      'im:a1b955270ed298e5ce615ba9b9a9cdcc70d784d651179e089a7c824b00c1f481'
+    ],
+    wakeIds: [
+      'wake:topic-operation:coord-decision-424c030ba5cac7046c14fe2b6a9099867f64ef9c69b37d39c41b141e77b80e97:action:0'
+    ]
+  },
+  execution: undefined,
+  tools: [
+    'task_coordination_reorder_assess',
+    'task_decisions_read',
+    'task_delegate',
+    'task_execution_cancel',
+    'task_execution_progress',
+    'task_execution_read',
+    'task_human_resolve',
+    'task_operation_reconcile',
+    'task_request_human',
+    'task_session_submit'
+  ],
+  human: [
+    {
+      audience: 'requester',
+      controlRevision: 1,
+      question: '请明确本次允许的环境和操作范围',
+      reason: '目标环境尚未明确，不能自行扩大授权',
+      requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+      requirementRevision: 1,
+      status: 'waiting-reply'
+    }
+  ],
+  last: {
+    contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:8ecb821c401010749c910e5e5104bd5e73c290ef3931b2368383bbf16276d611',
+    path: '/result/payload/output/summary',
+    format: 'text',
+    offset: 0,
+    totalLength: 30,
+    text: '已核对此前 UPR 导入覆盖修复，当前编辑持久化仅提交方案。',
+    nextOffset: null,
+    resolvedRef: {
+      contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:d15fc95a1a321a35b000a2b6984d7be7ae5fdfe7d476395401c20b6e4fca0f92',
+      path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\d15fc95a1a321a35b000a2b6984d7be7ae5fdfe7d476395401c20b6e4fca0f92.json',
+      format: 'text',
+      bytes: 82
+    }
+  }
+}
+followup-step {
+  requestId: 'coord-route-ec0d8bcf5ba426e3a82452223f1695f1a60941d125e2b1447801ca7e27d20c23',
+  taskId: undefined,
+  review: undefined,
+  execution: undefined,
+  tools: [],
+  human: undefined,
+  last: undefined
+}
+followup-step {
+  requestId: 'coord-decision-d312fd1d343b5b19a3cff6bf7504418e4d85029cb54d037c1008ea9c4ffe2742',
+  taskId: undefined,
+  review: undefined,
+  execution: undefined,
+  tools: [],
+  human: undefined,
+  last: undefined
+}
+followup-step {
+  requestId: 'coord-decision-d312fd1d343b5b19a3cff6bf7504418e4d85029cb54d037c1008ea9c4ffe2742',
+  taskId: undefined,
+  review: undefined,
+  execution: undefined,
+  tools: [],
+  human: undefined,
+  last: {
+    requestIds: [
+      'coord-decision-d312fd1d343b5b19a3cff6bf7504418e4d85029cb54d037c1008ea9c4ffe2742'
+    ],
+    candidates: [ [Object], [Object] ],
+    candidateCount: 2
+  }
+}
+followup-step {
+  requestId: undefined,
+  taskId: 'task-ce759bf8843a532ba4b320d74ec68882',
+  review: {
+    requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+    sourceIds: [
+      'im:07b524c18fba671202cbfeae994283c8f7ff5f06675080c967d50d0a12fa1d0d'
+    ],
+    wakeIds: [
+      'wake:topic-operation:coord-decision-d312fd1d343b5b19a3cff6bf7504418e4d85029cb54d037c1008ea9c4ffe2742:action:0'
+    ]
+  },
+  execution: undefined,
+  tools: [
+    'task_coordination_reorder_assess',
+    'task_decisions_read',
+    'task_delegate',
+    'task_execution_cancel',
+    'task_execution_progress',
+    'task_execution_read',
+    'task_human_resolve',
+    'task_operation_reconcile',
+    'task_request_human',
+    'task_session_submit'
+  ],
+  human: [
+    {
+      audience: 'requester',
+      controlRevision: 1,
+      question: '请明确本次允许的环境和操作范围',
+      reason: '目标环境尚未明确，不能自行扩大授权',
+      requestId: 'human-9a80397883eb2d6cde7202d921ccc2ef6a1f689bf4c79a9e81dcaac80441047c',
+      requirementRevision: 1,
+      status: 'waiting-reply'
+    }
+  ],
+  last: {
+    contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:9f24d4276636f4388ab05092177ffcde78e0b6e86497e9d1a7ca92d3b2efd1a4',
+    path: '',
+    format: 'text',
+    offset: 0,
+    totalLength: 14,
+    text: '测试助手，另外一件事下周再聊',
+    nextOffset: null,
+    resolvedRef: {
+      contentRef: '251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297:sha256:9f24d4276636f4388ab05092177ffcde78e0b6e86497e9d1a7ca92d3b2efd1a4',
+      path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\task-human-native-qeQ0ku\\tasks\\task-ce759bf8843a532ba4b320d74ec68882\\.dsh\\model-content\\251eb9ea091fecb24e38fb37f43605659bf90cbcab5c6049b1516391bca98297\\9f24d4276636f4388ab05092177ffcde78e0b6e86497e9d1a7ca92d3b2efd1a4.json',
+      format: 'text',
+      bytes: 44
+    }
+  }
+}
+✔ 待实施批准期间事实追问立即引用回复，内部证据不外发且不恢复旧执行 (9295.3429ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10014.0536

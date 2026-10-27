@@ -1263,6 +1263,89 @@ test('群业务答复先只读复核，保存完整条件和审计，解除后�
   assert.equal(resumed.task.requirementRevision, 1)
 })
 
+test('待答事实追问原子保存引用答复，原问题保留且崩溃恢复不重复答复', async t => {
+  const f = await fixture(t), { owner } = await humanWaiting(f)
+  await f.command('source.record', { sourceId: 'fact-question', groupId: 'g', messageId: 'fact-message', actorId: 'owner', text: '方案没确认，你前面改动的是什么？' })
+  await f.command('task.supplement', { taskId: 'human-task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+    messageId: 'fact-context', text: '追问已经实施的范围，不是批准', sourceRefs: ['fact-question'] })
+  const review = (await f.command('task.claim', { taskId: 'human-task', humanReview: true })).result
+  const source = await f.query({ kind: 'source.get', sourceId: 'fact-question' })
+  const args = { binding: review.binding, action: 'wait', summary: '此前修复了导入覆盖；当前编辑持久化仍待方案确认。',
+    evidence: ['已核对原结果和对应提交'], limitations: [], humanReply: { requestId: review.humanReview.requestId, sourceId: source.sourceId,
+      notification: { conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId,
+        sourceId: source.sourceId, sourceVersion: source.version, replyToMessageId: source.messageId,
+        replyToSenderOpenDingTalkId: source.actorId, atOpenDingTalkIds: [source.actorId], text: '此前修复了导入覆盖；当前编辑持久化仍待方案确认。' } } }
+  for (const invalid of [
+    { ...args, binding: owner.binding }, { ...args, action: 'complete' }, { ...args, evidence: [] },
+    { ...args, humanReply: { ...args.humanReply, sourceId: 'forged' } },
+    { ...args, humanReply: { ...args.humanReply, requestId: 'another-request' } },
+    { ...args, humanReply: { ...args.humanReply, notification: { ...args.humanReply.notification, conversationId: 'other-group' } } },
+    { ...args, humanReply: { ...args.humanReply, notification: { ...args.humanReply.notification, sourceVersion: source.version + 1 } } },
+    { ...args, humanReply: { ...args.humanReply, notification: { ...args.humanReply.notification, replyToMessageId: 'another-message' } } },
+    { ...args, humanReply: { ...args.humanReply, notification: { ...args.humanReply.notification, atOpenDingTalkIds: ['someone-else'] } } },
+  ]) await assert.rejects(f.command('task.wait', invalid))
+  assert.equal((await f.query({ kind: 'notification.list' })).length, 0)
+  const saved = (await f.command('task.wait', args, 'fact-reply')).result
+  assert.equal(saved.task.humanRequests[0].status, 'waiting-reply')
+  assert.equal(saved.task.humanRequests[0].question, '请选择目标环境')
+  assert.equal(saved.task.humanRequests.length, 1)
+  assert.equal(saved.task.lastDecision.replySourceId, source.sourceId)
+  assert.equal(saved.notification.payload.sourceMessageId, 'fact-message')
+  assert.equal((await f.command('task.wait', args, 'fact-reply')).replayed, true)
+  await assert.rejects(f.command('task.wait', args), { code: 'DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID' })
+  for (const kind of ['execution.dispatch', 'execution.continue', 'execution.feedback', 'task.complete'])
+    await assert.rejects(f.command(kind, { binding: review.binding }), { code: 'DYNAMIC_HUMAN_REVIEW_READ_ONLY' })
+  await f.reopen() // 模拟落账成功、wake.ack 之前退出。
+  await f.command('task.drained', { binding: await f.query({ kind: 'task.binding', taskId: 'human-task' }) })
+  const task = await f.query({ kind: 'task.get', taskId: 'human-task' })
+  assert.equal(pendingTaskHumanReview(task, await f.query({ kind: 'wake.list', taskId: 'human-task' })), null)
+  assert.equal(task.humanRequests[0].followupReplies.length, 1)
+  assert.equal((await f.query({ kind: 'notification.list' })).length, 1)
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'human-task' })).filter(item => item.kind === 'human.responded').length, 0)
+  await assert.rejects(f.command('task.claim', { taskId: 'human-task', force: true }), { code: 'DYNAMIC_HUMAN_RESPONSE_REQUIRED' })
+  await humanSource(f)
+  await f.command('task.supplement', { taskId: 'human-task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+    messageId: 'real-answer', text: '现在正式回答原问题', sourceRefs: ['fact-question', 'human-answer'] })
+  const next = (await f.command('task.claim', { taskId: 'human-task', humanReview: true })).result
+  assert.deepEqual(next.humanReview.sourceIds, ['human-answer'])
+  await f.command('task.human.resolve', { binding: next.binding, requestId: next.humanReview.requestId, sourceId: 'human-answer',
+    reason: '新消息回答原环境问题', evidence: ['原文仅允许 UAT3'] })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'human-task' })).humanRequests[0].status, 'answered')
+  assert.equal((await f.query({ kind: 'task.decisions', taskId: 'human-task' })).decisions.filter(item => item.decision.replySourceId).length, 1)
+})
+
+for (const batched of [true, false]) test(`多来源事实追问逐条处置不吞消息，无关来源只消费一次：同一唤醒=${batched}`, async t => {
+  const f = await fixture(t)
+  await humanWaiting(f)
+  const sourceIds = ['first-question', 'second-question', 'unrelated-question']
+  for (const sourceId of sourceIds) await f.command('source.record', { sourceId, groupId: 'g', messageId: sourceId, actorId: 'owner', text: sourceId })
+  for (const [index, refs] of (batched ? [sourceIds] : sourceIds.map((_, index) => sourceIds.slice(0, index + 1))).entries())
+    await f.command('task.supplement', { taskId: 'human-task', expectedRequirementRevision: 1, expectedControlRevision: 1,
+      messageId: `batch-${index}`, text: '新增待核对来源', sourceRefs: refs })
+  for (let index = 0; index < sourceIds.length; index++) {
+    const review = (await f.command('task.claim', { taskId: 'human-task', humanReview: true })).result
+    assert.deepEqual(review.humanReview.sourceIds, sourceIds.slice(index))
+    const source = await f.query({ kind: 'source.get', sourceId: sourceIds[index] })
+    const args = { binding: review.binding, action: 'wait', summary: index < 2 ? '已核对本条追问，原问题仍待答' : '该来源与原事项无关，保存判断', evidence: ['对应原文与已有结果'] }
+    if (index < 2) args.humanReply = { requestId: review.humanReview.requestId, sourceId: source.sourceId,
+      notification: { conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId,
+        sourceId: source.sourceId, sourceVersion: source.version, replyToMessageId: source.messageId,
+        replyToSenderOpenDingTalkId: source.actorId, atOpenDingTalkIds: [source.actorId], text: args.summary } }
+    await f.command('task.wait', args)
+    const ack = (await f.command('wake.ack', { binding: review.binding, wakeIds: review.wakeIds })).result
+    if (index < 2) assert.ok(ack.remainingWakeIds.length > 0)
+    else assert.equal(ack.remainingWakeIds, undefined)
+    await f.command('task.drained', { binding: review.binding })
+    await f.reopen()
+  }
+  const task = await f.query({ kind: 'task.get', taskId: 'human-task' }), wakes = await f.query({ kind: 'wake.list', taskId: 'human-task' })
+  assert.equal(task.humanRequests[0].status, 'waiting-reply')
+  assert.deepEqual(task.humanRequests[0].followupReplies.map(item => item.sourceId), sourceIds.slice(0, 2))
+  assert.equal((await f.query({ kind: 'notification.list' })).length, 2)
+  assert.equal(pendingTaskHumanReview(task, wakes), null)
+  assert.equal(wakes.filter(item => item.kind === 'task.supplement' && item.state !== 'acked').length, 0)
+})
+
 for (const interrupted of ['crash', 'provider-failure', 'tool-limit', 'resolved-before-drain']) test(`群待答复核恢复不丢来源及下一轮事件：${interrupted}`, async t => {
   const f = await fixture(t)
   await humanWaiting(f)

@@ -1082,13 +1082,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           },
           submit: async decision => {
             if (humanReview && (decision.action !== 'wait' || decision.question?.trim())) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
-            const publicInternalIds = decision.question?.trim() || decision.action === 'complete' || dialogue ? await replyInternalIds(task, sources) : []
+            if (decision.replySourceId !== undefined && (!humanReview || decision.action !== 'wait' || !humanReview.sourceIds.includes(decision.replySourceId))) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
+            const publicInternalIds = decision.question?.trim() || decision.action === 'complete' || dialogue || decision.replySourceId ? await replyInternalIds(task, sources) : []
             if (decision.question?.trim()) {
               // 人工问题和已尝试事项会外发；evidence 保留在内部账本，不拿调试 ID 当用户操作入口。
               for (const text of [task.title, decision.question, ...(decision.attemptedActions ?? [])]) assertGroupReply(text, publicInternalIds)
             }
-            if (decision.action === 'complete' || dialogue)
-              for (const text of [decision.summary, ...(dialogue ? [] : [...(decision.evidence ?? []), ...(decision.limitations ?? [])])]) assertGroupReply(text, publicInternalIds)
+            if (decision.action === 'complete' || dialogue || decision.replySourceId)
+              for (const text of [decision.summary, ...(dialogue || decision.replySourceId ? [] : [...(decision.evidence ?? []), ...(decision.limitations ?? [])])]) assertGroupReply(text, publicInternalIds)
             if (dialogue) {
               if (decision.action !== 'wait' || decision.question?.trim()) fail('TASK_DIALOGUE_REPLY_ONLY')
               await command('task.dialogue.reply', { binding, messageId: dialogue.id, reply: decision.summary, decision }, `dialogue-reply:${taskId}:${dialogue.id}`)
@@ -1106,7 +1107,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               }
               await command('task.complete', { binding, summary: decision.summary, result: decision, ...(notification ? { notification } : {}) }, `complete:${taskId}:${binding.requirementRevision}`)
             } else {
-              await command('task.wait', { binding, ...decision, ...(decision.question?.trim() ? { humanRequest: {
+              let humanReply
+              if (decision.replySourceId) {
+                const source = sources.find(item => item.sourceId === decision.replySourceId)
+                if (!source) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
+                const reply = formatTaskGroupReply({ source: { groupId: source.groupId, messageId: source.messageId,
+                  senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text }, summary: decision.summary,
+                  signature: legacy.getAgentConfig().replySignature, internalIds: publicInternalIds })
+                humanReply = { requestId: humanReview.requestId, sourceId: source.sourceId, notification: { ...reply,
+                  conversationId: source.groupId, sourceMessageId: source.messageId, actorId: source.actorId,
+                  sourceId: source.sourceId, sourceVersion: source.version, replyKind: 'substantive',
+                  fact: { taskId, humanRequestId: humanReview.requestId }, kind: 'status' } }
+              }
+              await command('task.wait', { binding, ...decision, ...(humanReply ? { humanReply } : {}), ...(decision.question?.trim() ? { humanRequest: {
                 requestId: `human-${hash([taskId, binding.requirementRevision, binding.controlRevision, binding.leaseEpoch])}`,
                 reason: decision.summary, audience: decision.audience ?? 'operator', attemptedActions: decision.attemptedActions ?? [] } } : {}) }, `wait:${taskId}:${binding.leaseEpoch}`)
               if (decision.question?.trim()) {

@@ -28,12 +28,13 @@ export function pendingTaskHumanReview(task, wakes) {
   const request = task?.humanRequests?.findLast(item => item.status === 'waiting-reply')
   if (request?.audience !== 'requester' || request.requirementRevision !== task.requirementRevision
     || request.controlRevision !== task.controlRevision) return null
+  const replied = new Set((request.followupReplies ?? []).map(item => item.sourceId))
   const pending = wakes.filter(item => item.state !== 'acked' && item.kind === 'task.supplement'
-    && item.payload?.humanRequestId === request.requestId && item.payload.sourceIds?.length)
+    && item.payload?.humanRequestId === request.requestId && item.payload.sourceIds?.some(id => !replied.has(id)))
   if (!pending.length) return null
   const failed = request.reviewFailures?.at(-1)
   if (failed && pending.every(item => failed.wakeIds.includes(item.id))) return null
-  return { requestId: request.requestId, sourceIds: [...new Set(pending.flatMap(item => item.payload.sourceIds))],
+  return { requestId: request.requestId, sourceIds: [...new Set(pending.flatMap(item => item.payload.sourceIds).filter(id => !replied.has(id)))],
     wakeIds: pending.map(item => item.id) }
 }
 const fail = (code, detail = code) => { throw Object.assign(new Error(detail), { code }) }
@@ -800,17 +801,48 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (kind === 'wake.claim') return reduce('task.claim', a, commandId)
     if (kind === 'wake.ack') {
       const task = currentTask(a.binding, { active: false, current: false, allowHumanReview: true })
-      const ids = array(a.wakeIds)
+      const ids = array(a.wakeIds), acknowledged = [], remaining = []
+      const request = task.humanRequests?.findLast(item => item.status === 'waiting-reply')
+      const partialReply = task.humanReviewLease === a.binding.leaseEpoch
+        && request?.followupReplies?.some(item => item.leaseEpoch === a.binding.leaseEpoch)
+      const replied = new Set((request?.followupReplies ?? []).map(item => item.sourceId))
       for (const id of ids) {
         const item = get('dynamic_wakes', id)
         if (item.taskId !== task.taskId || item.leaseEpoch !== task.leaseEpoch || !['claimed','acked'].includes(item.state)) fail('DYNAMIC_WAKE_CLAIM_STALE')
+        // 一次事实答复只处置指定来源；同一唤醒或其他唤醒里的未答追问继续走原队列。
+        if (partialReply && item.payload?.humanRequestId === request.requestId && item.payload.sourceIds?.some(sourceId => !replied.has(sourceId))) {
+          remaining.push(id); continue
+        }
         item.state = 'acked'; item.ackedAt = stamp; put('dynamic_wakes', item)
+        acknowledged.push(id)
       }
-      return changed({ wakeIds: ids })
+      return changed({ wakeIds: acknowledged, ...(remaining.length ? { remainingWakeIds: remaining } : {}) })
     }
     if (kind === 'task.wait') {
       const task = currentTask(a.binding, { active: false, allowHumanReview: true })
       if (task.humanReviewLease === a.binding.leaseEpoch && (a.question?.trim() || a.decision?.question?.trim())) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
+      let notification = null
+      if (a.humanReply) {
+        if (task.humanReviewLease !== a.binding.leaseEpoch || a.action !== 'wait' || a.reviewFailureCode !== undefined) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
+        const review = pendingTaskHumanReview(task, wakes(task.taskId).filter(item => item.state === 'claimed' && item.leaseEpoch === a.binding.leaseEpoch))
+        if (!review || review.requestId !== a.humanReply.requestId || !review.sourceIds.includes(a.humanReply.sourceId)) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
+        const request = task.humanRequests.find(item => item.requestId === review.requestId)
+        const source = get('dynamic_sources', a.humanReply.sourceId), payload = clone(record(a.humanReply.notification))
+        if (task.status !== 'active' || task.control !== 'active' || source.groupId !== task.groupId || source.channel !== 'im'
+          || !task.sourceRefs.includes(source.sourceId) || !(Date.parse(source.timestamp) >= Date.parse(request.createdAt) && Date.parse(source.timestamp) <= Date.parse(stamp))) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
+        if (payload.conversationId !== source.groupId || payload.sourceMessageId !== source.messageId || payload.actorId !== source.actorId
+          || payload.sourceId !== source.sourceId || payload.sourceVersion !== source.version || payload.replyToMessageId !== source.messageId
+          || payload.replyToSenderOpenDingTalkId !== source.actorId || digest(payload.atOpenDingTalkIds ?? []) !== digest([source.actorId])) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
+        const evidence = array(a.evidence).map(item => text(item, 'evidence'))
+        if (!evidence.length) fail('DYNAMIC_ARGUMENT_INVALID', 'evidence')
+        const id = `human-followup:${task.taskId}:${request.requestId}:${source.sourceId}`
+        // 答复与待答状态在同一事务落账；发送前崩溃也不重跑同一追问或重新生成通知。
+        notification = { id, notificationId: id, kind: 'status', taskId: task.taskId, requirementRevision: task.requirementRevision,
+          payload, state: 'prepared', createdAt: stamp, updatedAt: stamp }
+        put('dynamic_notifications', notification)
+        ;(request.followupReplies ??= []).push({ sourceId: source.sourceId, notificationId: id,
+          sessionId: a.binding.sessionId, leaseEpoch: a.binding.leaseEpoch, recordedAt: stamp })
+      }
       if (a.reviewFailureCode !== undefined) {
         if (task.humanReviewLease !== a.binding.leaseEpoch || a.action !== 'blocked') fail('DYNAMIC_HUMAN_REVIEW_NOT_PENDING')
         const claimed = wakes(task.taskId).filter(item => item.state === 'claimed' && item.leaseEpoch === a.binding.leaseEpoch && item.payload?.humanRequestId)
@@ -850,9 +882,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         }
       }
       task.lastDecision = { action: a.action ?? 'wait', summary: text(a.summary, 'summary'), decision: a.decision ?? null, question: a.question ?? a.decision?.question ?? null,
-        evidence: a.evidence ?? [], limitations: a.limitations ?? [], requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, at: stamp }
+        evidence: a.evidence ?? [], limitations: a.limitations ?? [], ...(a.humanReply ? { replySourceId: a.humanReply.sourceId } : {}),
+        requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, at: stamp }
       if (a.reviewFailureCode === undefined) task.providerRecovery = null
-      saveTask(task); return changed({ task })
+      saveTask(task); return changed({ task, ...(notification ? { notification } : {}) })
     }
     if (kind === 'task.provider-failure') {
       const task = currentTask(a.binding, { active: false, current: false, allowHumanReview: true })

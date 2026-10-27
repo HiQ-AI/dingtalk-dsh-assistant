@@ -1,0 +1,57 @@
+✖ 普通步骤不重复加载技能正文，原生变更通知触发一次核对 (3.083ms)
+✖ 切换技能根后不继续催读旧引用，旧审计仍可恢复 (0.4429ms)
+✖ 成功读取后的元数据故障不推翻 read 结果，缺口对下一模型步骤可见 (0.3127ms)
+✔ 旧会话成功技能调用只生成待核对提示，不冒充新版已读或自动加载正文 (0.515ms)
+✔ 同名替换及失败结果不形成可信技能读取版本 (0.3398ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 2
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 199.7311
+
+✖ failing tests:
+
+test at test\session-skill-refresh.test.js:30:1
+✖ 普通步骤不重复加载技能正文，原生变更通知触发一次核对 (3.083ms)
+  Error: session event "user/message" is surface-eligible and requires a surfaceOp marker
+      at surfaceOpOf (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:305:27)
+      at validateSurfaceMetadata (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:356:13)
+      at planSurfaceEvent (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:425:20)
+      at SurfaceManager.validateNext (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:533:10)
+      at Session.commit (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:1578:23)
+      at Session.append (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:1534:8)
+      at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/session-skill-refresh.js:95:19
+      at Object.read (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/session-skill-refresh.test.js:24:30)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/session-skill-refresh.test.js:32:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+
+test at test\session-skill-refresh.test.js:43:1
+✖ 切换技能根后不继续催读旧引用，旧审计仍可恢复 (0.4429ms)
+  Error: session event "user/message" is surface-eligible and requires a surfaceOp marker
+      at surfaceOpOf (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:305:27)
+      at validateSurfaceMetadata (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:356:13)
+      at planSurfaceEvent (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:425:20)
+      at SurfaceManager.validateNext (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:533:10)
+      at Session.commit (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:1578:23)
+      at Session.append (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:1534:8)
+      at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/session-skill-refresh.js:95:19
+      at Object.read (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/session-skill-refresh.test.js:24:30)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/session-skill-refresh.test.js:45:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+
+test at test\session-skill-refresh.test.js:54:1
+✖ 成功读取后的元数据故障不推翻 read 结果，缺口对下一模型步骤可见 (0.3127ms)
+  Error: session event "user/message" is surface-eligible and requires a surfaceOp marker
+      at surfaceOpOf (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:305:27)
+      at validateSurfaceMetadata (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:356:13)
+      at planSurfaceEvent (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:425:20)
+      at SurfaceManager.validateNext (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:533:10)
+      at Session.commit (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:1578:23)
+      at Session.append (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/node_modules/.pnpm/@deepseek-ai+dsh-session@0._2f6e90015528321e57f5b21fac4f3d76/node_modules/@deepseek-ai/dsh-session/lib/index.js:1534:8)
+      at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/session-skill-refresh.js:95:19
+      at Object.read (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/session-skill-refresh.test.js:24:30)
+      at async TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/session-skill-refresh.test.js:56:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)

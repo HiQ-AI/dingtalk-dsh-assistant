@@ -1,0 +1,55 @@
+{
+  "base": "17491783f8291c0bab9453d84a9565c62b10b07b",
+  "branch": "worktree-task-followup-efficiency",
+  "node": "v24.19.0",
+  "files": [
+    {
+      "path": "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "sha256": "544519B427F725F07603B342D41568F83F86E6F3F70A1DA0217E75005F34D932"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-session-service.js",
+      "sha256": "3DC852B6D779BBD8570234BE1C09EA37BACB955F9E9CAF9436C37A1C64F8328E"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/task-session.js",
+      "sha256": "27408C98095C0E8EE50A4A65641DE56FF993DECFD11138869365B65125CB66DA"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/execution-session.js",
+      "sha256": "8DADF89375F3646A1F4FA6384D65BE82CDCB296DB9C32EF70F4AF1BFB2916460"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
+      "sha256": "70EDB96124113B8158682F60F64BF8A0F8DC698220A0A776A2FDA74785F9BF32"
+    },
+    {
+      "path": "packages/dingtalk-dsh-assistant/package.json",
+      "sha256": "9572C82AE1F2A0E3BF5177FC67137C41D71680978393C3EAFC0E90829CCB939B"
+    },
+    {
+      "path": "test/dynamic-task-store.test.js",
+      "sha256": "65C1E1B929E02B7B3E07CD52EFD45FAD266C1E31E0D325034E167ADE715168B5"
+    },
+    {
+      "path": "test/task-session-human-native.test.js",
+      "sha256": "EB04BDC12A3130B21695B6C3362EDB9048C46B157B8F2A28721EF63897747565"
+    },
+    {
+      "path": "test/task-session-skills-native.test.js",
+      "sha256": "1DBAC5DE1A1F3CC085F1BD0CF89812E56F7F63EAA42ACD14C0C6F7B076E198D1"
+    },
+    {
+      "path": "test/session-skill-refresh.test.js",
+      "sha256": "2C3C0372822787A260649F5DD1400834A18B4F513893FFA387FAACD2B7535C68"
+    },
+    {
+      "path": "test/task-session-package-native.test.js",
+      "sha256": "61EBB7FF4F4EFF3C2A9CF030F7040638CD5187BF8DC496BB1134738473F234D5"
+    },
+    {
+      "path": "test/suite-map.json",
+      "sha256": "F7DB7C54AC34CE995126ED51456C7D1BBBA38CF629006AEDFE433CE811F4D54A"
+    }
+  ]
+}
