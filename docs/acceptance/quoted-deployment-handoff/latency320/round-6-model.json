@@ -1,0 +1,147 @@
+{
+  "passed": true,
+  "provider": "cortex-gateway",
+  "model": "cortex-cowork",
+  "reasoningEffort": "low",
+  "elapsedMs": 32796.968700000005,
+  "imagePreparedToScheduleMs": 8.246299999998882,
+  "turnDurations": [
+    {
+      "phase": "route",
+      "durationMs": 14655.0
+    },
+    {
+      "phase": "decision",
+      "durationMs": 17761.0
+    }
+  ],
+  "standardStreams": 3,
+  "streamsByPhase": {
+    "route": 1,
+    "decision": 2
+  },
+  "invalidToolCallCount": 0,
+  "duplicateTaskListReadCount": 0,
+  "toolCalls": [
+    {
+      "phase": "route",
+      "name": "group_topic_route_submit",
+      "argumentFields": [
+        "requestId",
+        "routes"
+      ]
+    },
+    {
+      "phase": "decision",
+      "name": "group_task_list",
+      "argumentFields": []
+    },
+    {
+      "phase": "decision",
+      "name": "group_reply_review_get",
+      "argumentFields": []
+    },
+    {
+      "phase": "decision",
+      "name": "group_decision_submit",
+      "argumentFields": [
+        "requestId",
+        "topicId",
+        "revision",
+        "decision"
+      ]
+    }
+  ],
+  "capturedAction": {
+    "kind": "new-task",
+    "title": "只读排查草稿导入UPR后物料名称显示异常",
+    "objective": "根据请求及所附截图，只读排查草稿导入UPR后物料名称未正确显示的原因并报告；不修改代码或部署，不将排查扩展为修复实施。",
+    "count": 1
+  },
+  "candidates": {
+    "sameGroup": 27,
+    "crossGroup": 1,
+    "differentMatterKinds": [
+      "终审只读UPR导入覆盖",
+      "合并来源展示"
+    ]
+  },
+  "image": {
+    "bytes": 91098,
+    "sha256": "256569caee3a1187f2376b56c6ab56ad40c22e0f79449f629e310baa7b44c98d",
+    "prepared": true
+  },
+  "keyWire": [
+    {
+      "request": 1,
+      "name": "group_topic_context_get",
+      "rootType": "object",
+      "propertyNames": [
+        "topicId",
+        "revision",
+        "offset",
+        "limit",
+        "textOffset"
+      ],
+      "required": [
+        "topicId"
+      ]
+    },
+    {
+      "request": 2,
+      "name": "group_reply_review_get",
+      "rootType": "object",
+      "propertyNames": [
+        "requestIds"
+      ],
+      "required": []
+    },
+    {
+      "request": 2,
+      "name": "group_topic_context_get",
+      "rootType": "object",
+      "propertyNames": [
+        "topicId",
+        "revision",
+        "offset",
+        "limit",
+        "textOffset"
+      ],
+      "required": []
+    },
+    {
+      "request": 3,
+      "name": "group_reply_review_get",
+      "rootType": "object",
+      "propertyNames": [
+        "requestIds"
+      ],
+      "required": []
+    },
+    {
+      "request": 3,
+      "name": "group_topic_context_get",
+      "rootType": "object",
+      "propertyNames": [
+        "topicId",
+        "revision",
+        "offset",
+        "limit",
+        "textOffset"
+      ],
+      "required": []
+    }
+  ],
+  "credentialStoreUnchanged": true,
+  "realChannelSends": 0,
+  "realTaskWrites": 0,
+  "providerNetworkCalls": null,
+  "cost": null,
+  "sourceSha256": {
+    "task-topic-coordinator.js": "0dfcc58d62d2880ae5480db0c68dfb0dfb08f9ac99288e209a68175261c2e389",
+    "topic-runtime.js": "9c01581dd6308ca20d189e7926d3f33507140c5f636ca71c69072daaad2c1d93",
+    "store.js": "514d4b613e1a54fbe31596a0aa1142aaa2774842bf2087c69091aef5cb15581d"
+  },
+  "boundary": "One production route/decision coordinator chain, real prepared #320 image bytes and synthetic 27-task candidates; captured task handoff in isolated ResidentStore, no real TaskStore/Owner/channel. Timing starts after image prepared, excludes original DWS download. Historical timing is observational, not a controlled speedup comparison.",
+  "rawEvidence": "docs/tmp/quoted-deployment-handoff/latency320/model-round-6/"
+}

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { openDynamicTaskStore, ingressTimestamp, pendingTaskHumanReview } from './dynamic-task-store.js'
+import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
 import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 import { inspectSession } from './session-persistence.js'
@@ -70,6 +71,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     throw error
   }
   const inflightTasks = new Map(), inflightExecutions = new Map(), inflightGroups = new Map(), inflightNotifications = new Map()
+  const sourceProjections = new Set()
   const failures = new Map(), taskSlots = new Set(), messageRecoveryFlights = new Set()
   const pendingDialogue = task => task.dialogue?.some(item => !item.reply)
   const taskLimit = () => legacy.getAgentConfig().maxConcurrentTasks ?? config.maxConcurrentTasks ?? 5
@@ -642,6 +644,16 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
     coordinationEnabled: config.coordination?.enabled === true, onStage: recordMessageStage,
+    onInputSettled: groupId => {
+      if (closed) return
+      // Topic 首次完成后立即结算来源；不能等待整个群队列、业务执行或通知回读排空。
+      const work = Promise.resolve().then(async () => {
+        for (const source of await query('source.list', { groupId })) if (!source.routed || source.processingPending) await projectSource(source)
+        failures.delete(`source-projection:${groupId}`)
+      }).catch(error => failures.set(`source-projection:${groupId}`, { id: groupId, code: error.code ?? error.message }))
+      sourceProjections.add(work)
+      void work.finally(() => sourceProjections.delete(work))
+    },
     onRouted: async (groupId, messageIds) => {
       const group = residentStore.getGroup(groupId)
       for (const source of await query('source.list', { groupId })) {
@@ -766,6 +778,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   async function ingest(message) {
     const receivedAt = new Date().toISOString()
+    const loopDelay = monitorEventLoopDelay({ resolution: 10 })
+    loopDelay.enable()
+    const phases = []
+    try {
     if (closed) fail('TASK_SESSION_CLOSED')
     if (!legacy.getGroup(message.groupId)) fail('group_not_subscribed')
     const actorId = message.senderOpenDingTalkId ?? message.actorId
@@ -780,11 +796,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const envelopeTime = typeof rawTime === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/u.test(rawTime)
       ? rawTime.replace(' ', 'T') + '+08:00' : rawTime
     const actualTime = ingressTimestamp(envelopeTime)
+    const sourceReadStartedAt = new Date().toISOString()
     const original = await query('source.get', { sourceId })
     if (!original) {
       const priorAdmission = await query('receipt.get', { id: `source:${sourceId}` })
       if (priorAdmission?.result?.ignored) return { accepted: false, sourceId, processing: 'quarantined', reason: priorAdmission.result.reason }
     }
+    phases.push({ phase: 'source-read', startedAt: sourceReadStartedAt, completedAt: new Date().toISOString() })
     if (original && (original.actorId !== actorId || original.text !== (message.text ?? ''))) fail('DYNAMIC_SOURCE_CONFLICT')
     const rawSource = { sourceId, groupId: message.groupId, messageId: message.messageId,
       version: message.messageVersion ?? 1, actorId, senderName: message.senderName ?? '', text: message.text ?? '',
@@ -795,7 +813,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }
     // Reuse the existing message model's enrichment/version boundary before recording
     // immutable task-session sources. Replayed transport projections can enrich a quote.
-    await ingestTaskResidentMessage({ ctx, residentStore, message: { ...message, occurredAt: message.occurredAt ?? actualTime }, readResource })
+    await ingestTaskResidentMessage({ ctx, residentStore, message: { ...message, occurredAt: message.occurredAt ?? actualTime }, readResource,
+      onPhase: phase => phases.push(phase) })
     const projected = residentStore.getGroup(message.groupId).messages.find(item => item.messageId === message.messageId)
     const version = projected.messageVersion
     const currentSourceId = `im:${hash([message.groupId, message.messageId, version])}`
@@ -806,16 +825,30 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       quote: previous.quote, resources: previous.resources, timestamp: previous.timestamp }
       : { ...rawSource, sourceId: currentSourceId, version, senderName: projected.senderName ?? '', text: projected.text,
         quote: projected.quotedMessage ?? null, resources: projected.resourceRefs ?? projected.imageRefs ?? [], timestamp: ingressTimestamp(projected.occurredAt) ?? actualTime ?? '', receivedAt }
+    const sourceRecordStartedAt = new Date().toISOString()
     let stored = previous ? { result: { source: previous } } : await command('source.record', args, `source:${currentSourceId}`)
     if (previous) {
       const resources = mergeTaskResources(previous.resources, projected.resourceRefs ?? projected.imageRefs ?? previous.resources)
       if (hash(resources) !== hash(previous.resources)) stored = await command('source.enrich', { sourceId: currentSourceId, resources }, `enrich:${currentSourceId}:${hash(resources)}`)
     }
+    phases.push({ phase: 'source-record', startedAt: sourceRecordStartedAt, completedAt: new Date().toISOString() })
     if (stored.result.ignored) return { accepted: false, sourceId: currentSourceId, processing: 'quarantined', reason: stored.result.reason }
-    if (!previous) await recordMessageStage({ groupId: message.groupId, messages: [{ messageId: message.messageId, messageVersion: version }] },
-      { spanId: `ingress:${currentSourceId}`, stage: 'ingress', requestId: currentSourceId, attempt: 0, startedAt: receivedAt, completedAt: new Date().toISOString() })
+    if (!previous) {
+      const completedAt = new Date().toISOString()
+      const loopDelayMetadata = loopDelay.count > 0 ? { loopDelayMs: loopDelay.max / 1e6 } : {}
+      // The exact source is already known; timing must not re-read every group source per phase.
+      const spans = [{ spanId: `ingress:${currentSourceId}`, stage: 'ingress', requestId: currentSourceId, attempt: 0, startedAt: receivedAt, completedAt, ...loopDelayMetadata },
+        ...phases.map((phase, index) => ({ ...phase, spanId: `ingress:${currentSourceId}:${index}`, stage: 'ingress', requestId: currentSourceId, attempt: 0 }))]
+      try {
+        for (const stage of spans) await command('source.stage', { sourceId: currentSourceId, stage })
+      } catch (error) {
+        failures.set(`timing:${currentSourceId}`, { id: `timing:${currentSourceId}`, code: error.code ?? error.message })
+        ctx.logger?.warn?.(`message timing: ${error.code ?? error.message}`)
+      }
+    }
     void kickGroup(message.groupId)
     return { accepted: true, sourceId: currentSourceId, processing: stored.result.source.routed ? 'routed' : 'pending' }
+    } finally { loopDelay.disable() }
   }
 
   async function nativeOperation(event) {
@@ -1697,12 +1730,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await schedulePending()
       await deliverNotifications(notificationAttempts)
       do {
-        await Promise.allSettled([scheduling, notificationScan, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
+        await Promise.allSettled([scheduling, notificationScan, ...sourceProjections, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
         await independentCoordination.whenIdle()
         await recoverCoordination()
         await schedulePending()
         await deliverNotifications(notificationAttempts)
-      } while (scheduling || notificationScan || [inflightTasks,inflightExecutions,inflightGroups,inflightNotifications].some(map => map.size))
+      } while (scheduling || notificationScan || sourceProjections.size || [inflightTasks,inflightExecutions,inflightGroups,inflightNotifications].some(map => map.size))
     },
     async close() {
       closed = true
@@ -1712,7 +1745,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await topicCoordinator.close()
       await independentCoordination.close()
       await Promise.all([taskSessions.close(), executionSessions.close()])
-      await Promise.allSettled([scheduling, recovering, notificationScan, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
+      await Promise.allSettled([scheduling, recovering, notificationScan, ...sourceProjections, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
       await persistence.close()
       if (!suppliedStore) await store.close()
     },

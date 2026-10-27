@@ -6,6 +6,8 @@
 
 只读 GET `/state/groups`：核当前版本 `processingState` 与 `processingFacts`；无 topics 不应误显成功，来源 processingCompleted 与 activeUnitRefs 必须一致，未结束的 Topic 不应被提前语义戳覆盖。`sourceState=settled`、语义完成和通知 delivered 独立；缺 receivedAt 或通知版本绑定时 E2E 应为 missing，负时为 negative。ACK 不能当送达，旧通知无时钟不按 updatedAt 回填。阶段时钟含共享/工具/Host区间，不作纯模型用时或累计成本。 核 `stages` 的六类 `ingress/queue/turn/host/send/readback`、精确来源版本和每 span 的 request/attempt/session 关联；未结束与重启前无结束事件的 span 不自动结清。新回读完成另写 `deliveredAt`，不复用后续可变 `updatedAt`。独立协调同一 generation 重试时，queue/turn/host 的 attempt 均须对应账本零基 attemptCount，重试增加但不改 generation。unknown 恢复成功回读也计入 `readbackAttemptCount`，但不增加发送次数；新版本替代旧 pending 来源时保留原路由收据、不造旧版完成戳，新版未完成仍须拦住旧通知。
 
+入站慢消息还需核对 `ingress` 外层区间、`phase` 子阶段（`source-read/resource-read/image-save/resident-store/source-record`）与外层 `loopDelayMs`。资源读取按每个图片分别记录，消息存储包含群内串行等待；子阶段可能重叠，不相加。事件循环指标只有获得采样才记录，缺字段不等于没有阻塞；它是进程共享事件循环在此窗口内的最大采样延迟，不能单独归因于该消息。升级后仅新入站产生细分证据，不重放历史消息补造计时。
+
 回退恢复旧双包，不删除新增事实或重放来源/通知；旧客户端/旧投影不能用于新的性能对比。历史最大空窗仍未收敛，不能以本地测试承诺线上节省。各轮实际合并、部署和功能验收结果记录于本特性验收轮次，不以源码测试冒称已安装或真实消息通过。
 
 ## 精确失败与收发恢复续修

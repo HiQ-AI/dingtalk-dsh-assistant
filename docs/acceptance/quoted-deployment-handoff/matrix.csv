@@ -17,3 +17,17 @@ provider-object-schema,3,PASS,round-3.md
 actual-model-handoff,3,PASS,round-3-model.json
 already-undertaken-observe-only,3,PASS,round-3-model.json
 production-update-and-message313,3,BLOCKED,round-3.md
+actual-model-no-invalid-calls,4,FAIL,latency320/round-4-model.md
+actual-model-no-invalid-calls,5,FAIL,latency320/round-5-wire.md
+provider-argument-wire,5,PASS,latency320/round-5-wire.md
+actual-model-no-invalid-calls,6,PASS,latency320/round-6-model.md
+actual-model-no-duplicate-reads,6,PASS,latency320/round-6-model.md
+actual-model-correct-readonly-handoff,6,PASS,latency320/round-6-model.md
+ingress-phase-and-retry,6,PASS,latency320/ingress-evidence.md
+actual-image-native-ingress,6,PASS,latency320/native-ingress-probe.json
+historical-135s-exact-blocker,6,BLOCKED,latency320/ingress-evidence.md
+immutable-completion-time,6,PASS,round-6.md
+native-immediate-source-clock,6,PASS,round-6.md
+final-topic-native-regression,6,PASS,round-6.md
+artifact-release-smoke,6,PASS,round-6.md
+production-update-and-message320,6,BLOCKED,round-6.md

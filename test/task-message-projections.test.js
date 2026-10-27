@@ -364,3 +364,42 @@ test('任务等待小目标排队、执行或排空时仍在执行中，真正�
   assert.equal(taskBoardState({ ...task, control: 'cancelled' }, active), 'cancelled')
   assert.equal(taskBoardState({ ...task, status: 'completed' }, active), 'completed')
 })
+
+test('ingress phase facts include failed reads, retry attempts and concurrent store waiting without resource content', async () => {
+  const spans = [[], []]
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  let queued = Promise.resolve(), failRead = true
+  const store = { ingest(value) {
+    const work = queued.then(async () => { if (value.messageId === 'first') await gate; return value })
+    queued = work.catch(() => {})
+    return work
+  } }
+  const run = (messageId, index) => ingestTaskResidentMessage({
+    residentStore: store, ctx: { attachments: { saveImages: async () => [{ id: 'saved' }] } },
+    message: { groupId: 'g', messageId, resourceRefs: [{ type: 'mediaId', resourceId: 'private-media' }] },
+    readResource: async () => { if (failRead) throw Object.assign(new Error('offline'), { code: 'OFFLINE' }); return { image: { data: new Uint8Array([1]) } } },
+    onPhase: phase => spans[index].push(phase),
+  })
+  const first = run('first', 0)
+  await new Promise(resolve => setImmediate(resolve))
+  failRead = false
+  const second = run('retry', 1)
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(spans[1].some(item => item.phase === 'resident-store'), false)
+  release()
+  const results = await Promise.all([first, second])
+  assert.deepEqual(results[0].mediaUnavailable, ['private-media: OFFLINE'])
+  assert.equal(results[1].imageRefs[0].id, 'saved')
+  assert.deepEqual(spans.map(items => items.map(item => item.phase)), [['resource-read', 'resident-store'], ['resource-read', 'image-save', 'resident-store']])
+  const waiting = spans[1].find(item => item.phase === 'resident-store')
+  assert.ok(Date.parse(waiting.completedAt) - Date.parse(waiting.startedAt) >= 20)
+  for (const phase of spans.flat()) {
+    assert.deepEqual(Object.keys(phase).sort(), ['completedAt', 'phase', 'startedAt'])
+    assert.ok(Date.parse(phase.completedAt) >= Date.parse(phase.startedAt))
+  }
+  assert.equal(JSON.stringify(spans).includes('private-media'), false)
+  const projected = messageProcessingSources([{ sourceId: 's', groupId: 'g', stages: [{ ...waiting, spanId: 'stored', stage: 'ingress', loopDelayMs: 12.5 }] }], [], 'g')[0].stages[0]
+  assert.equal(projected.phase, 'resident-store')
+  assert.equal(projected.loopDelayMs, 12.5)
+})

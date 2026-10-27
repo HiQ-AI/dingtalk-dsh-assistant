@@ -55,7 +55,9 @@ const unitDirection = (message, sameMessageUnits, agentNames) => {
   if (/^\s*cc\s*:/iu.test(original) || isExplicitAgentDirection(message.text, agentNames)) return 'agent'
   return 'none'
 }
-const topicIndex = (topics) => topics.map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status, summary: summary?.slice(0, 240) }))
+const topicReadCall = ({ topicId, revision }) => ({ name: 'group_topic_context_get', arguments: { topicId, revision } })
+const topicIndex = (topics) => topics.map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status,
+  summary: summary?.slice(0, 240), readCall: topicReadCall({ topicId, revision }) }))
 const boundedItems = (items, maxChars, maxCount, required = () => false) => {
   const selected = items.filter(required)
   for (const item of items) {
@@ -492,6 +494,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.readUnitRefs = new Set()
     const pointer = (section) => ({ section, totalChars: request.sections[section].length, contentFingerprint: fingerprint(request.sections[section]), nextOffset: 0, hasMore: true })
     const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, processedRevision: topic.processedRevision,
+      readCalls: { topic: { name: 'group_topic_context_get', arguments: { topicId: topic.topicId, revision: topic.revision } },
+        replyReview: { name: 'group_reply_review_get', arguments: { requestIds: [requestId] } } },
       title: topic.title, promptIndex: promptCatalog, contextSections: DECISION_SECTIONS, summaryRevision: topic.summaryRevision, replyReviewCandidateCount: request.candidates.length,
       totalMessages: messages.length, historyAvailable: messages.length > deltaMessages.length,
       ownedDeltaUnitRefs: ownership.ownedDeltaUnitRefs, ownedDeltaMessageIds: ownership.ownedDeltaMessageIds,
@@ -569,11 +573,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     }).map(topic => topic.topicId))
     const linkedTasks = store.listTasks().filter(task => task.groupId === groupId && task.topicRefs.some(ref => relatedIds.has(ref.topicId)))
     for (const task of linkedTasks) for (const ref of task.topicRefs) relatedIds.add(ref.topicId)
-    const allRelatedTopics = allTopics.filter(topic => relatedIds.has(topic.topicId)).map(({ topicId, revision, summary }) => ({ topicId, revision, summary: summary?.slice(0, 240) }))
+    const allRelatedTopics = topicIndex(allTopics.filter(topic => relatedIds.has(topic.topicId)))
     request.relatedTopics = allRelatedTopics
     const relatedTopics = boundedItems(allRelatedTopics, 3_000, 20)
     const quotedReminderOnly = messages.length > 0 && quotedReminders.size === messages.length && allRelatedTopics.length === 0
-    const topics = quotedReminderOnly ? [] : boundedItems(allTopics.map(({ topicId, title, revision, status }) => ({ topicId, title, revision, status })), 5_000, 100)
+    const topics = quotedReminderOnly ? [] : boundedItems(topicIndex(allTopics).map(({ processedRevision: _processed, ...item }) => item), 5_000, 100)
     const visibleMessages = []
     for (const message of messages) {
       const base = { ...message, ...(quotedReminders.has(message.messageId) ? { quotedReminder: quotedReminders.get(message.messageId) } : {}), text: '' }
@@ -972,7 +976,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       if (requestId && (!route || route.groupId !== groupId)) throw new Error('topic_route_request_unknown')
       const selected = route ? route.relatedTopics : store.listTopics(groupId)
       const all = selected.filter((topic) => `${topic.title ?? ''}\n${topic.summary ?? ''}`.toLowerCase().includes(query.toLowerCase()))
-      const topics = route ? boundedItems(all.slice(offset), 3_000, limit) : topicIndex(all.slice(offset, offset + limit))
+      const topics = route ? boundedItems(topicIndex(all.slice(offset)), 3_000, limit) : topicIndex(all.slice(offset, offset + limit))
       const nextOffset = Math.min(all.length, offset + topics.length)
       return { topics, total: all.length, offset, limit, nextOffset, hasMore: nextOffset < all.length }
     })
@@ -998,8 +1002,16 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       return page
     })
-    tool('group_topic_context_get', '读取本群 Topic 固定版本及消息原文；返回不超过字符预算，按 nextOffset/nextTextOffset 连续读取完整历史。', { type: 'object', properties: { topicId: { type: 'string' }, revision: { type: 'integer', description: '固定Topic版本，整数1..当前Topic revision；省略使用当前版本。续读同一历史须保留原revision。' }, offset: { type: 'integer', description: '消息条目偏移，非负整数，默认0；续页使用返回的nextOffset。' }, limit: { type: 'integer', description: '请求的消息条数，非字符数，整数1..500，默认10；字符预算可能提前截断，按nextOffset/nextTextOffset续读。' }, textOffset: { type: 'integer', description: '本页首条消息的UTF-16字符偏移，非负整数且不超过该消息原文长度，默认0；仅按返回的nextTextOffset续读。' } }, required: ['topicId'], additionalProperties: false }, (args) => {
-      const context = boundedTopicContext(store.getTopicContext({ ...args, groupId, limit: args.limit ?? 10 }), { textOffset: args.textOffset ?? 0 })
+    const currentTopic = scope && coordinationRole(scope) === 'decision' ? { topicId: scope.topicId, revision: scope.revision } : null
+    tool('group_topic_context_get', `按需读取本群 Topic 固定版本及消息原文；摘要足以排除不同业务目标时直接路由，不因词面接近强读全文。返回不超过字符预算，按 nextOffset/nextTextOffset 连续读取完整历史。${currentTopic ? '本会话唯一当前Topic与revision由Host绑定，{}直接读取当前固定版本；显式topicId可读取本群其他历史。' : '当前会话没有唯一Topic；确需历史时从输入topics或group_topic_list选择对应候选，原样复制其readCall.arguments（含topicId/revision），不可传{}。'}`, { type: 'object', properties: { topicId: { type: 'string', description: '从明确候选readCall.arguments.topicId复制，不从标题猜ID。' }, revision: { type: 'integer', description: '固定Topic版本，整数1..当前Topic revision；当前决策省略使用Host绑定版本，其他Topic省略使用当前版本。续读同一历史须保留原revision。' }, offset: { type: 'integer', description: '消息条目偏移，非负整数，默认0；续页使用返回的nextOffset。' }, limit: { type: 'integer', description: '请求的消息条数，非字符数，整数1..500，默认10；字符预算可能提前截断，按nextOffset/nextTextOffset续读。' }, textOffset: { type: 'integer', description: '本页首条消息的UTF-16字符偏移，非负整数且不超过该消息原文长度，默认0；仅按返回的nextTextOffset续读。' } }, required: currentTopic ? [] : ['topicId'], additionalProperties: false }, (args) => {
+      const bound = currentTopic && (args.topicId === undefined || args.topicId === currentTopic.topicId)
+      if (bound && (!decisions.has(scope.requestId) || store.getTopic(groupId, currentTopic.topicId)?.revision !== currentTopic.revision
+        || args.revision !== undefined && args.revision !== currentTopic.revision)) throw new Error('decision_context_topic_stale')
+      if (!args.topicId && !bound) return { status: 'invalid-arguments', issues: [{ code: 'topic_id_required', field: 'topicId', message: '当前路由没有唯一Topic，请从输入topics或group_topic_list选择明确topicId。' }],
+        choices: boundedItems(topicIndex(store.listTopics(groupId).filter(topic => !topic.mergedInto)), 5_000, 100),
+        nextAction: 'group_topic_list', nextCall: { name: 'group_topic_list', arguments: { offset: 0, limit: 50 } } }
+      const input = { ...args, ...(bound ? { topicId: currentTopic.topicId, revision: args.revision ?? currentTopic.revision } : {}) }
+      const context = boundedTopicContext(store.getTopicContext({ ...input, groupId, limit: input.limit ?? 10 }), { textOffset: input.textOffset ?? 0 })
       for (const request of decisions.values()) {
         if (request.groupId !== groupId || request.topicId !== context.topic.topicId || request.revision !== context.topic.revision) continue
         request.readTextOffsets ??= new Map()
@@ -1013,7 +1025,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       return context
     })
-    tool('group_reply_review_get', '读取 Topic 判断或 Task 通知绑定的完整历史回复候选。', { type: 'object', properties: { requestIds: { type: 'array', items: { type: 'string' } } }, required: ['requestIds'], additionalProperties: false }, ({ requestIds }) => {
+    tool('group_reply_review_get', `读取 Topic 判断或 Task 通知绑定的完整历史回复候选。${scope ? '本会话唯一request由Host绑定，直接传{}；显式requestIds只能是当前请求。' : '必须显式提供requestIds。'}`, { type: 'object', properties: { requestIds: { type: 'array', items: { type: 'string' } } }, required: scope ? [] : ['requestIds'], additionalProperties: false }, ({ requestIds = scope ? [scope.requestId] : undefined }) => {
       if (!Array.isArray(requestIds) || !requestIds.length || requestIds.length > 8 || new Set(requestIds).size !== requestIds.length) throw new Error('topic_review_request_invalid')
       const requests = requestIds.map((id) => requestFor(groupId, id))
       for (const request of requests) { refreshReview(request); request.readReview = true }

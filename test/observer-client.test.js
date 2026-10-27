@@ -452,6 +452,8 @@ test('收信箱计时详情分开负时、缺失阶段、多回合请求和未�
   assert.match(visible, /待补充：要将哪项改动部署到UAT2？\n请核对已给材料。/)
   for (const expected of ['未收束', '时钟逆序', '未核实，不计端到端', '共享区间', '请求 request', '尝试 2', '时钟异常', '未记录阶段：Host接收、排队、Host动作、通知发送、送达回读', '不跨回合求包络']) assert.ok(visible.includes(expected), expected)
   assert.equal(rendered.children.flat().filter(item => item?.props?.key?.startsWith('turn-')).length, 2)
+  const phases = text(Details({ message: { processingFacts: { stages: [{ spanId: 'ingress', stage: 'ingress', requestId: 'image', loopDelayMs: 35.4 }, { spanId: 'read', stage: 'ingress', requestId: 'image', phase: 'resource-read' }, { spanId: 'store', stage: 'ingress', requestId: 'image', phase: 'resident-store' }] } } }))
+  for (const expected of ['Host接收 · 图片资源读取', 'Host接收 · 消息存储（含串行等待）', '事件循环最大延迟 35 毫秒', '不相加']) assert.ok(phases.includes(expected), expected)
   assert.doesNotMatch(visible, /0ms/)
   for (const expected of ['语义判断：处理失败；尝试 3', 'Host动作：等待自动重试；预计重试 retry-time']) assert.ok(visible.includes(expected), expected)
   assert.doesNotMatch(source, /label: '归类失败'/)

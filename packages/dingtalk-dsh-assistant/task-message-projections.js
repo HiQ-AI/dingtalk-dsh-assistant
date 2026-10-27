@@ -51,30 +51,35 @@ export function taskBoardState(task, executions = [], pendingWake = false) {
 }
 
 /** Thin adapters into the existing group timeline. No dispatch or retry policy lives here. */
-export async function ingestTaskResidentMessage({ ctx, residentStore, message, readResource }) {
+export async function ingestTaskResidentMessage({ ctx, residentStore, message, readResource, onPhase }) {
   if (!residentStore) return undefined
+  const measured = async (phase, action) => {
+    const startedAt = new Date().toISOString()
+    try { return await action() }
+    finally { onPhase?.({ phase, startedAt, completedAt: new Date().toISOString() }) }
+  }
   let imageRefs = message.imageRefs
   const previous = residentStore.getGroup?.(message.groupId)?.messages.find(item => item.messageId === message.messageId)
   const unavailable = [...(message.mediaUnavailable ?? [])]
   if (message.images?.length) {
-    imageRefs = await saveStableImages(ctx, message.images, previous?.imageRefs)
+    imageRefs = await measured('image-save', () => saveStableImages(ctx, message.images, previous?.imageRefs))
   } else if (!imageRefs?.length && readResource && message.mediaUnavailable === undefined) {
     // Documents remain lazy task materials; only image facts belong in this timeline.
     const images = []
     for (const resource of (message.resourceRefs ?? []).filter(item => item?.type === 'mediaId')) {
       try {
-        const value = await readResource(message.groupId, message.messageId, resource)
+        const value = await measured('resource-read', () => readResource(message.groupId, message.messageId, resource))
         if (value?.image) images.push(value.image)
         else if (value?.imageRefs?.length) imageRefs = [...(imageRefs ?? []), ...value.imageRefs]
         else unavailable.push(`${resource.resourceId}: image_resource_unavailable`)
       } catch (error) { unavailable.push(`${resource.resourceId}: ${error.code ?? error.message ?? 'RESOURCE_READ_FAILED'}`) }
     }
-    if (images.length) imageRefs = [...(imageRefs ?? []), ...await saveStableImages(ctx, images, previous?.imageRefs)]
+    if (images.length) imageRefs = [...(imageRefs ?? []), ...await measured('image-save', () => saveStableImages(ctx, images, previous?.imageRefs))]
   }
   const { images: _images, ...facts } = message
-  return residentStore.ingest({ ...facts,
+  return measured('resident-store', () => residentStore.ingest({ ...facts,
     ...(imageRefs !== undefined ? { imageRefs } : {}),
-    ...(unavailable.length || message.mediaUnavailable !== undefined ? { mediaUnavailable: unavailable } : {}) })
+    ...(unavailable.length || message.mediaUnavailable !== undefined ? { mediaUnavailable: unavailable } : {}) }))
 }
 
 /** Message-version facts only; mutable timestamps and notification bodies are not timing evidence. */
@@ -120,7 +125,8 @@ export function messageProcessingSources(sources, notifications, groupId, coordi
     })),
     stages: (source.stages ?? []).map(stage => ({ spanId: stage.spanId, stage: stage.stage, requestId: stage.requestId, attempt: stage.attempt,
       startedAt: stage.startedAt ?? null, completedAt: stage.completedAt ?? null, quality: stage.quality ?? 'unknown',
-      shared: stage.shared === true, ...(stage.sessionId ? { sessionId: stage.sessionId } : {}) })),
+      shared: stage.shared === true, ...(stage.sessionId ? { sessionId: stage.sessionId } : {}),
+      ...(stage.phase ? { phase: stage.phase } : {}), ...(stage.loopDelayMs !== undefined ? { loopDelayMs: stage.loopDelayMs } : {}) })),
   }))
 }
 

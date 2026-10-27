@@ -202,9 +202,9 @@ test('消息列表投影当前版本首个完成判断原文与时间，后续�
     {messageId:'pending',messageVersion:1,text:'待处理',occurredAt:sent,routingStatus:'pending'},
     {messageId:'history',messageVersion:1,text:'历史',occurredAt:sent,routingStatus:'routed'}],outbox:[]}
   const topic={topicId:'t',revision:5,processedRevision:5,updatedAt:later,entries:[{messageId:'m',messageVersion:1,revision:1,action:'add'}, {messageId:'m',messageVersion:2,revision:3,action:'add'}],
-    decisions:[{revision:1,status:'completed',updatedAt:sent,decision:{reason:'旧版本判断'}},
-      {revision:3,status:'completed',updatedAt:done,decision:{reason:'本条资料无需进一步处理'}},
-      {revision:5,status:'completed',updatedAt:later,decision:{reply:'后续判断不覆盖'}}]}
+    decisions:[{revision:1,status:'completed',completedAt:sent,updatedAt:sent,decision:{reason:'旧版本判断'}},
+      {revision:3,status:'completed',completedAt:done,updatedAt:done,decision:{reason:'本条资料无需进一步处理'}},
+      {revision:5,status:'completed',completedAt:later,updatedAt:later,decision:{reply:'后续判断不覆盖'}}]}
   const topics=[topic]
   await withServer(false,async base=>{
     const read=async()=>(await(await fetch(base+'/state/groups')).json())[0].messages
@@ -217,16 +217,55 @@ test('消息列表投影当前版本首个完成判断原文与时间，后续�
     assert.deepEqual((await read()).find(m=>m.messageId==='m'),row)
     topic.decisions[1].decision={reply:'判断时的确认原文'}
     assert.equal((await read()).find(m=>m.messageId==='m').processingConclusion,'判断时的确认原文')
-    topic.decisions[1].updatedAt=undefined
+    topic.decisions[1].updatedAt=later
+    assert.equal((await read()).find(m=>m.messageId==='m').processingCompletedAt,new Date(done).toISOString(), '通知后的updatedAt不能覆盖首次完成')
+    topic.decisions[1].completedAt=undefined
     assert.equal((await read()).find(m=>m.messageId==='m').processingCompletedAt,null)
     topic.processedRevision=2
     assert.equal((await read()).find(m=>m.messageId==='m').processingConclusion,null)
-    topic.processedRevision=5;topic.decisions[1].updatedAt=done
-    topics.push({...topic,topicId:'second',entries:[{messageId:'m',messageVersion:2,revision:1,action:'add'}],decisions:[{revision:1,status:'completed',updatedAt:'2026-10-15T00:02:00Z',decision:{reason:'另一事项的判断原文'}}]})
+    topic.processedRevision=5;topic.decisions[1].completedAt=done
+    topics.push({...topic,topicId:'second',entries:[{messageId:'m',messageVersion:2,revision:1,action:'add'}],decisions:[{revision:1,status:'completed',completedAt:'2026-10-15T00:02:00Z',updatedAt:'2026-10-15T00:02:00Z',decision:{reason:'另一事项的判断原文'}}]})
     const combined=(await read()).find(m=>m.messageId==='m')
     assert.equal(combined.processingConclusion,'判断时的确认原文；另一事项的判断原文')
     assert.equal(combined.processingCompletedAt,'2026-10-15T00:02:00.000Z')
   },{overrides:{listGroups:()=>[group],getGroup:()=>group,listTopics:()=>topics}})
+})
+
+test('当前来源戳优先且通知不推进时钟，历史缺时与矛盾证据不伪造数字', async () => {
+  const ref = { unitId: 'u', unitRevision: 1 }
+  const sent = '2026-10-27T05:30:27.636Z', decisionDone = '2026-10-27T05:36:12.000Z', sourceDone = '2026-10-27T05:36:12.100Z', delivery = '2026-10-27T05:37:09.512Z'
+  const message = { messageId: 'm', messageVersion: 1, routingStatus: 'routed', occurredAt: sent,
+    activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'legacy-topic' }] }
+  const topic = { topicId: 't', revision: 1, processedRevision: 1,
+    entries: [{ messageId: 'm', messageVersion: 1, ...ref, revision: 1, action: 'add' }],
+    decisions: [{ revision: 1, status: 'completed', completedAt: decisionDone, updatedAt: delivery, decision: { reason: '已承接' } }] }
+  const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1, routed: false,
+    processingCompleted: { at: sourceDone, activeUnitRefs: [ref] }, notifications: [] }
+  let sourcesAvailable = true
+  await withServer(false, async base => {
+    const read = async () => (await (await fetch(base + '/state/groups')).json())[0].messages[0]
+    let row = await read()
+    assert.equal(row.processingCompletedAt, sourceDone); assert.equal(row.processingFacts.semantic.durationMs, 344464)
+    topic.decisions[0].updatedAt = '2026-10-27T06:00:00Z'
+    source.notifications.push({ state: 'delivered', versionMatched: true, deliveredAt: delivery })
+    source.routed = true; source.routedAt = delivery
+    row = await read(); assert.equal(row.processingCompletedAt, sourceDone); assert.equal(row.processingFacts.semantic.durationMs, 344464)
+    source.processingCompleted = null
+    row = await read(); assert.equal(row.processingCompletedAt, null); assert.equal(row.processingFacts.semantic.quality, 'missing', '当前来源缺戳时等待自身终态，不先显示Topic的较早数字')
+    sourcesAvailable = false
+    assert.equal((await read()).processingCompletedAt, decisionDone, '完全无来源的旧投影才可使用真实首次决策终态')
+    sourcesAvailable = true
+    delete topic.decisions[0].completedAt
+    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingCompletedAt, null)
+    assert.equal(row.processingFacts.semantic.quality, 'missing', '历史updatedAt即使有值也不回填成功时间')
+    source.processingCompleted = { at: sourceDone, activeUnitRefs: [ref] }
+    assert.equal((await read()).processingCompletedAt, sourceDone, '真实来源戳可覆盖历史决策缺时')
+    topic.decisions[0].completedAt = delivery
+    row = await read(); assert.equal(row.processingCompletedAt, null); assert.equal(row.processingFacts.semantic.quality, 'missing')
+    topic.decisions[0].completedAt = decisionDone
+    topic.processedRevision = 0
+    row = await read(); assert.equal(row.processingState, 'processing'); assert.equal(row.processingCompletedAt, null)
+  }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], listTopics: () => [topic], messageProcessingSources: async () => sourcesAvailable ? [source] : [] } })
 })
 
 test('收件箱精确版本来源分开语义、收束、通知，旧版本与跨群不冒充当前完成', async () => {
@@ -281,7 +320,9 @@ test('混合协调与legacy Topic不接受提前语义戳，逐unit最新entry�
   await withServer(false, async base => {
     const read = async () => (await (await fetch(base + '/state/groups')).json())[0].messages[0]
     assert.equal((await read()).processingState, 'processing')
-    topic.processedRevision = 3; topic.decisions.push({ status: 'completed', revision: 3, updatedAt: later, decision: { reason: 'legacy complete' } })
+    topic.processedRevision = 3; topic.decisions.push({ status: 'completed', revision: 3, completedAt: later, updatedAt: later, decision: { reason: 'legacy complete' } })
+    assert.equal((await read()).processingCompletedAt, null, '来源戳早于明确决策终态，证据矛盾不凑数字')
+    source.processingCompleted.at = later
     assert.equal((await read()).processingCompletedAt, new Date(later).toISOString())
     source.processingCompleted = null
     assert.equal((await read()).processingState, 'processing')

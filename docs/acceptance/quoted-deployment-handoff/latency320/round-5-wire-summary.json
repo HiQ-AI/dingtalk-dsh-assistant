@@ -1,0 +1,75 @@
+{
+  "passed": false,
+  "elapsedMs": 39041.7765,
+  "standardStreams": 7,
+  "streamsByPhase": {
+    "route": 4,
+    "decision": 3
+  },
+  "invalidToolCalls": [
+    {
+      "name": "group_topic_context_get",
+      "phase": "route",
+      "seq": 18,
+      "status": "invalid-arguments",
+      "codes": [
+        "topic_id_required"
+      ]
+    },
+    {
+      "name": "group_topic_context_get",
+      "phase": "route",
+      "seq": 20,
+      "status": "invalid-arguments",
+      "codes": [
+        "topic_id_required"
+      ]
+    }
+  ],
+  "duplicateTaskListReads": 0,
+  "capturedProviderSseResponses": 7,
+  "firstRequestToolSchemas": [
+    {
+      "name": "group_topic_context_get",
+      "rootType": "object",
+      "propertyNames": [
+        "topicId",
+        "revision",
+        "offset",
+        "limit",
+        "textOffset"
+      ],
+      "required": [
+        "topicId"
+      ]
+    }
+  ],
+  "firstToolStarts": [
+    {
+      "request": 1,
+      "type": "content_block_start",
+      "index": 0,
+      "name": "group_topic_context_get",
+      "id": "call_19a4e65a8e4f45099e6542094906878b",
+      "input": {}
+    },
+    {
+      "request": 1,
+      "type": "content_block_start",
+      "index": 1,
+      "name": "group_topic_context_get",
+      "id": "call_5914e9932d6c42ce8c9a37b1a0dc9007",
+      "input": {}
+    }
+  ],
+  "firstRequestArgumentDeltaCount": 0,
+  "credentialStoreUnchanged": true,
+  "realChannelSends": 0,
+  "realTaskWrites": 0,
+  "sourceSha256": {
+    "task-topic-coordinator.js": "890080c5c7a6a5135c7ae1777e44efaa7d72751479c8153cc9b1d95812492f44",
+    "topic-runtime.js": "367407294cb6d9cb5b3f083e2c56ca0dc8d574e416da3d730aed74cb1dd90354",
+    "store.js": "514d4b613e1a54fbe31596a0aa1142aaa2774842bf2087c69091aef5cb15581d"
+  },
+  "boundary": "Only actual outgoing tool schemas and incoming tool_use/input_json_delta observed; no headers, image body, reasoning, credentials or production writes."
+}

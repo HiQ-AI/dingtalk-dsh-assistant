@@ -146,6 +146,17 @@ function messageProcessingProjection(message, topics, source, requests) {
   }
   if (message.routingStatus === 'failed' && !issues.some(item => item.phase === 'routing')) issue('routing', 'routing-failed', 'failed', null, 0, null)
   let state = 'unknown', basis = 'unknown', completedAt = null, conclusion = null
+  const semanticCompletionTime = () => {
+    const decisionTimes = records.map(record => instant(record?.completedAt))
+    if (sourceDone) {
+      const at = instant(source.processingCompleted.at)
+      // 来源戳在所有当前事项判断后落一次；若早于明确决策终态则证据矛盾，不拼出数字。
+      return Number.isFinite(at) && !decisionTimes.some(time => Number.isFinite(time) && time > at) ? new Date(at).toISOString() : null
+    }
+    // 当前来源尚未落精确终态时不能先报旧Topic时钟，再因迟到的来源戳改变历时。
+    if (source) return null
+    return records.length ? decisionTimes.every(Number.isFinite) ? new Date(Math.max(...decisionTimes)).toISOString() : null : message.agentDeliveryAt ?? null
+  }
   if (issues.some(item => item.status === 'failed')) state = 'failed'
   else if (message.routingStatus !== 'routed') state = 'routing'
   else if (topicPending || unitsPending) state = 'processing'
@@ -153,13 +164,11 @@ function messageProcessingProjection(message, topics, source, requests) {
   else if (sourceDone || related.length || ignored) {
     state = 'processed'
     basis = sourceDone ? 'source-semantic' : related.length ? 'topic-decision' : 'ignored-delivered'
-    const times = [...records.map(record => record.updatedAt), ...(sourceDone ? [source.processingCompleted.at] : [])]
-    completedAt = times.length ? times.every(time => Number.isFinite(instant(time))) ? new Date(Math.max(...times.map(instant))).toISOString() : null : message.agentDeliveryAt ?? null
+    completedAt = semanticCompletionTime()
   } else if (source && source.routed !== true || related.length || reasons.length) state = 'processing'
   if (state === 'needs_clarification' && sourceDone) {
     basis = 'source-semantic'
-    const times = [...records.map(record => record.updatedAt), source.processingCompleted.at]
-    completedAt = times.every(time => Number.isFinite(instant(time))) ? new Date(Math.max(...times.map(instant))).toISOString() : null
+    completedAt = semanticCompletionTime()
   }
   conclusion = [...new Set([...(topicPending ? [] : records.map(record => record?.decision?.reason ?? record?.decision?.reply)),
     ...coordination.map(item => item.conclusion), ...(['processed', 'needs_clarification'].includes(state) ? reasons : [])]
