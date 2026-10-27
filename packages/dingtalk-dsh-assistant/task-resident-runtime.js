@@ -86,10 +86,11 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
         }
         if (input.taskSessionModel !== undefined) patch.taskSessionModel = taskModelConfig(input.taskSessionModel)
         if (input.coordinationModel !== undefined) patch.coordinationModel = taskModelConfig(input.coordinationModel)
-        const old = selection(), changesDefault = input.model !== undefined || input.reasoningEffort !== undefined
+        const old = selection(), changesDefault = input.provider !== undefined || input.model !== undefined || input.reasoningEffort !== undefined
         if (input.model !== undefined && typeof input.model !== 'string') throw new Error('agent_model_required')
         if (input.reasoningEffort !== undefined && typeof input.reasoningEffort !== 'string') throw new Error('agent_reasoning_effort_invalid')
-        const proposedSelection = { provider: old.provider, model: input.model === undefined ? old.model : input.model.trim() }
+        if (input.provider !== undefined && (typeof input.provider !== 'string' || !input.provider.trim())) throw new Error('agent_provider_required')
+        const proposedSelection = { provider: input.provider === undefined ? old.provider : input.provider.trim(), model: input.model === undefined ? old.model : input.model.trim() }
         if (!proposedSelection.model) throw new Error('agent_model_required')
         const effort = input.reasoningEffort === undefined ? old.reasoningEffort : input.reasoningEffort
         if (effort) proposedSelection.reasoningEffort = effort

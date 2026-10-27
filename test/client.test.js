@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { apply, name, readResidentOverview, agentSaveSummary, ModelIdInput } from '../packages/dingtalk-dsh-assistant/client.js'
+import { apply, name, readResidentOverview, agentSaveSummary, createNativeModelBridge, createPickerDirectory } from '../packages/dingtalk-dsh-assistant/client.js'
 
 test('概览在已移除任务表格同步接口后仍加载完整状态', async (t) => {
   const responses = {
@@ -35,6 +35,8 @@ test('Web client使用dsh原生插件页签slot注册唯一状态卡', () => {
     inject(name, callback) { callback() },
     register(value, view) { registrations.push({ value, view }); return () => undefined },
   } }
+  ctx.locale = { bind: () => key => key }
+  ctx.remote = { session: {} }
   apply(ctx)
   const tab = registrations.find(({ value }) => value.name === 'settings.plugins.tab')
   assert.equal(name, 'dingtalk-dsh-assistant-client')
@@ -52,7 +54,7 @@ test('Web bundle patch只挂载无副作用host face，不启动第二份residen
   assert.equal(manifest.exports['./client'], './web-client.js')
   assert.match(patch, /id: dingtalk-dsh-assistant-web/)
   assert.match(patch, /name: '@zzusp\/dingtalk-dsh-assistant'/)
-  assert.match(bundle, /const inject = \['slots'\]/)
+  assert.match(bundle, /const inject = \['slots', 'locale', 'remote.session'\]/)
 })
 
 test('设置页异步展示版本状态且版本检查不阻塞核心配置加载', async () => {
@@ -125,27 +127,32 @@ test('添加常驻群在操作位置反馈前置条件、进度和请求结果',
 })
 
 
-test('三个模型字段使用 DSH 目录下拉框，名称与保存 ID 分离且不改写提供方', async () => {
-  let selected
-  const models = [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }, { id: 'gpt-6-astra', name: 'GPT-6 Astra' }]
-  const select = ModelIdInput({ id: 'task-model', label: '统筹模型', value: models[0].id, models,
-    onChange: event => { selected = event.target.value } })
-  assert.equal(select.type, 'select')
-  assert.equal(select.props.value, 'gpt-6.1-sol')
-  assert.equal(select.props.disabled, false)
-  const options = select.props.children.flat().filter(Boolean)
-  assert.deepEqual(options.map(option => [option.props.value, option.props.children]), models.map(model => [model.id, model.name]))
-  select.props.onChange({ target: { value: options[1].props.value } })
-  assert.equal(selected, 'gpt-6-astra')
-  for (const models of [undefined, []]) {
-    const pending = ModelIdInput({ id: 'model', label: '模型', value: 'saved-model', models })
-    assert.equal(pending.props.disabled, true)
-    assert.equal(pending.props.value, 'saved-model')
-  }
-  const unavailable = ModelIdInput({ id: 'model', label: '模型', value: 'saved-model', models })
-  assert.equal(unavailable.props.children[0].props.disabled, true)
-  assert.match(unavailable.props.children[0].props.children, /当前不可用/)
-  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /qualify|modelDraft|createElement\('datalist'/)
-  assert.match(source, /跟随默认推理深度/)
+test('原生选择桥共用全提供方目录、保留同名模型身份且不调用会话选择', async () => {
+  const component = () => null
+  let calls = 0, resolve
+  const groups = [{ id: 'gateway', name: 'Gateway', models: [{ id: 'sol', name: 'Sol' }] },
+    { id: 'codex', name: 'Codex', models: [{ id: 'sol', name: 'Sol' }] }]
+  const ctx = { slots: { entriesOfSlot: key => { assert.equal(key, 'conversation.input.model'); return [{ component }] } },
+    locale: { bind: () => key => key }, remote: { session: { modelCatalog() { calls++; return new Promise(done => { resolve = done }) }, selectModel() { assert.fail('不得修改当前会话') } } } }
+  const bridge = createNativeModelBridge(ctx)
+  assert.equal(bridge.component(), component)
+  const pending = bridge.load()
+  assert.equal(bridge.load(), pending)
+  assert.equal(calls, 1)
+  resolve({ ok: true, value: { groups, failures: [] } })
+  await pending
+  const directories = ['gateway', 'codex', 'codex'].map(provider => createPickerDirectory({ provider, model: 'sol' }, bridge.snapshot()))
+  for (const directory of directories) assert.equal(directory.getSnapshot().groups, groups)
+  assert.equal(directories[0].getSnapshot().current.provider, 'gateway')
+  assert.equal(directories[1].getSnapshot().current.provider, 'codex')
+  let updates = 0
+  const off = directories[0].subscribe(() => updates++)
+  directories[0].update({ provider: 'codex', model: 'sol' }, bridge.snapshot())
+  assert.equal(updates, 1); off()
+  assert.equal(directories[0].getSnapshot().routable, true)
+  ctx.remote.session.modelCatalog = async () => { throw Error('secret diagnostic') }
+  await bridge.load()
+  assert.equal(bridge.snapshot().status, 'error')
+  assert.equal(bridge.snapshot().groups, groups)
+  assert.doesNotMatch(bridge.snapshot().error, /secret/)
 })
