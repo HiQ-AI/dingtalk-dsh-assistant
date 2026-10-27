@@ -61,6 +61,8 @@ test('收发恢复HTTP要求本机身份、严格版本及CAS，拒绝伪造路�
     assert.equal(calls.length, 0)
     assert.equal((await post(path, input)).status, 200)
     assert.deepEqual(calls.pop(), { ...input, groupId: 'g/a', messageId: 'm+b' })
+    assert.equal((await post(path, { ...input, phase: 'coordination-context' })).status, 200)
+    assert.deepEqual(calls.pop(), { ...input, phase: 'coordination-context', groupId: 'g/a', messageId: 'm+b' })
     assert.equal((await post(notice, { expectedToken: token })).status, 200)
     assert.deepEqual(calls.pop(), { expectedToken: token, groupId: 'g/a', notificationId: 'n+b' })
     for (const code of ['MESSAGE_RETRY_STALE', 'MESSAGE_RETRY_IN_PROGRESS', 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN', 'DYNAMIC_NOTIFICATION_RECOVERY_STALE']) {
@@ -136,6 +138,43 @@ test('协调来源耗尽只影响当前事项，恢复成功与通知失败各�
     let result = await read(); assert.equal(result.processingState, 'processed'); assert.deepEqual(result.processingFacts.issues, [])
     assert.equal(result.processingFacts.notificationState, 'unconfirmed')
     source.version = 1; result = await read(); assert.equal(result.processingState, 'processing'); assert.deepEqual(result.processingFacts.issues, [])
+  }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], messageProcessingSources: async () => [source] } })
+})
+
+test('待澄清展示真实问题并保留本轮语义耗时，混合待办和旧版本不能冒充当前完成', async () => {
+  const ref = { unitId: 'deploy', unitRevision: 1 }, other = { unitId: 'other', unitRevision: 1 }
+  const message = { messageId: 'm', messageVersion: 1, routingStatus: 'routed', text: '部署到UAT2', occurredAt: '2026-10-27T04:15:53.180Z',
+    activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'coordination' }] }
+  const coordination = { ...ref, state: 'needs_clarification', semanticState: 'needs_clarification', conclusion: '要将哪项改动部署到UAT2？' }
+  const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1, routed: false,
+    processingCompleted: { at: '2026-10-27T04:17:24.539Z', activeUnitRefs: [ref] }, coordination: [coordination] }
+  await withServer(false, async base => {
+    const read = async () => (await (await fetch(base + '/state/groups')).json())[0].messages[0]
+    let row = await read()
+    assert.equal(row.processingState, 'needs_clarification'); assert.equal(row.processingConclusion, coordination.conclusion)
+    assert.equal(row.processingFacts.semantic.durationMs, 91359); assert.equal(row.processingFacts.sourceState, 'unsettled')
+    coordination.reservationId = 'original-reservation'; coordination.contextRecoveryToken = 'c'.repeat(64)
+    assert.deepEqual((await read()).processingFacts.recovery, [{ phase: 'coordination-context', requestId: 'original-reservation', token: 'c'.repeat(64) }])
+    delete coordination.contextRecoveryToken
+    const done = row.processingCompletedAt
+    const semanticStamp = source.processingCompleted
+    source.processingCompleted = null
+    row = await read(); assert.equal(row.processingState, 'needs_clarification'); assert.equal(row.processingConclusion, coordination.conclusion)
+    assert.equal(row.processingCompletedAt, null); assert.equal(row.processingFacts.semantic.quality, 'missing')
+    source.processingCompleted = semanticStamp
+    source.notifications = [{ state: 'delivered', versionMatched: true, deliveredAt: '2026-10-27T04:20:09.644Z' }]
+    assert.equal((await read()).processingCompletedAt, done, '送达不能改变语义耗时')
+    message.activeUnitRefs.push(other); message.units.push({ ...other, dispatchOwner: 'coordination' })
+    row = await read(); assert.equal(row.processingState, 'processing'); assert.equal(row.processingConclusion, coordination.conclusion)
+    assert.equal(row.processingCompletedAt, null, '其他事项尚未判断，不能冒充整条语义完成')
+    message.activeUnitRefs = [ref]; message.units = [{ ...ref, dispatchOwner: 'coordination' }]
+    coordination.unitRevision = 2
+    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, null, '过期协调不能污染当前结论')
+    coordination.unitRevision = 1; coordination.semanticState = 'accepted'; coordination.conclusion = '已接纳安排，执行结果另行核验'
+    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, coordination.conclusion)
+    assert.equal(row.processingCompletedAt, done)
+    source.version = 2
+    row = await read(); assert.equal(row.processingState, 'processing'); assert.equal(row.processingConclusion, null)
   }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], messageProcessingSources: async () => [source] } })
 })
 

@@ -101,11 +101,17 @@ function messageProcessingProjection(message, topics, source, requests) {
     || Array.isArray(source.processingCompleted.activeUnitRefs)
       && JSON.stringify(refsKey(message.activeUnitRefs)) === JSON.stringify(refsKey(source.processingCompleted.activeUnitRefs)))
   const ignored = !related.length && reasons.length > 0 && message.agentDeliveryStatus === 'delivered'
+  const coordination = (source?.coordination ?? []).filter(item => currentUnit(item)
+    && message.units?.some(unit => unit.unitId === item.unitId && unit.unitRevision === item.unitRevision && unit.dispatchOwner === 'coordination'))
+  const needsClarification = coordination.some(item => item.semanticState === 'needs_clarification')
   const unitsPending = message.activeUnitRefs?.some(ref => {
     const unit = message.units?.find(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
     return !unit || unit.dispatchOwner === 'coordination' && !sourceDone
+      && !coordination.some(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision && item.semanticState === 'needs_clarification')
   })
   const issues = [], recovery = []
+  for (const item of coordination) if (item.contextRecoveryToken)
+    recovery.push({ requestId: item.reservationId, token: item.contextRecoveryToken, phase: 'coordination-context' })
   const issue = (phase, code, status, requestId, attempt, retryAt) => {
     if (!issues.some(item => item.phase === phase && item.requestId === requestId)) issues.push({ phase, code, status, requestId, attempt: attempt ?? 0, retryAt: retryAt ?? null })
   }
@@ -143,13 +149,21 @@ function messageProcessingProjection(message, topics, source, requests) {
   if (issues.some(item => item.status === 'failed')) state = 'failed'
   else if (message.routingStatus !== 'routed') state = 'routing'
   else if (topicPending || unitsPending) state = 'processing'
+  else if (needsClarification) state = 'needs_clarification'
   else if (sourceDone || related.length || ignored) {
     state = 'processed'
     basis = sourceDone ? 'source-semantic' : related.length ? 'topic-decision' : 'ignored-delivered'
     const times = [...records.map(record => record.updatedAt), ...(sourceDone ? [source.processingCompleted.at] : [])]
     completedAt = times.length ? times.every(time => Number.isFinite(instant(time))) ? new Date(Math.max(...times.map(instant))).toISOString() : null : message.agentDeliveryAt ?? null
-    conclusion = [...new Set([...records.map(record => record?.decision?.reason ?? record?.decision?.reply), ...reasons].filter(text => typeof text === 'string' && text.trim()))].join('；') || null
   } else if (source && source.routed !== true || related.length || reasons.length) state = 'processing'
+  if (state === 'needs_clarification' && sourceDone) {
+    basis = 'source-semantic'
+    const times = [...records.map(record => record.updatedAt), source.processingCompleted.at]
+    completedAt = times.every(time => Number.isFinite(instant(time))) ? new Date(Math.max(...times.map(instant))).toISOString() : null
+  }
+  conclusion = [...new Set([...(topicPending ? [] : records.map(record => record?.decision?.reason ?? record?.decision?.reply)),
+    ...coordination.map(item => item.conclusion), ...(['processed', 'needs_clarification'].includes(state) ? reasons : [])]
+    .filter(text => typeof text === 'string' && text.trim()))].join('；') || null
   const notices = source?.notifications ?? []
   const noticeTimes = notices.map(notice => notice.deliveredAt)
   const deliveredAt = notices.length && notices.every(notice => notice.versionMatched === true && notice.state === 'delivered') && noticeTimes.every(time => Number.isFinite(instant(time)))
@@ -570,7 +584,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const schema = messageRetry ? z.strictObject({ messageVersion: z.number().int().positive(),
         activeUnitRefs: z.array(z.strictObject({ unitId: requiredText, unitRevision: z.number().int().positive() }))
           .refine(refs => new Set(refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision]))).size === refs.length),
-        phase: z.enum(['routing', 'decision', 'coordination', 'host']), requestId: requiredText, token })
+        phase: z.enum(['routing', 'decision', 'coordination', 'coordination-context', 'host']), requestId: requiredText, token })
         : z.strictObject({ expectedToken: token })
       const parsed = schema.safeParse(await readJson(request))
       if (!parsed.success) return send(response, 400, { error: 'MESSAGE_RECOVERY_REQUEST_INVALID' })

@@ -1,5 +1,11 @@
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 
+// 原来源、预约代、引用字节和安排修订共同构成显式重判 CAS，不复用失败重试预算令牌。
+export const coordinationContextRecoveryIdentity = (source, arrangement, original) => [source.id, source.fence,
+  source.reservationGeneration, arrangement.id, arrangement.revision, original.sourceId, original.version,
+  JSON.stringify(original.quote), JSON.stringify((original.activeUnitRefs ?? original.processingCompleted?.activeUnitRefs ?? [])
+    .map(ref => [ref.unitId, ref.unitRevision]).sort())]
+
 /** Source offsets refer to the immutable source-unit original (UTF-16 indices),
  * never to the candidate summary or a subsequently regenerated task directory. */
 export function freezeCoordinationSourceOrder(entries, source, members, pending) {

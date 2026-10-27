@@ -1,6 +1,7 @@
 import { z } from 'zod'
-import { toToolJsonSchema } from '../packages/dingtalk-dsh-assistant/tool-schema.js'
+import { toToolJsonSchema, toToolObjectJsonSchema } from '../packages/dingtalk-dsh-assistant/tool-schema.js'
 import { coordinatorDecisionSchema } from '../packages/dingtalk-dsh-assistant/message-coordinator.js'
+import { coordinationProposalSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { assertSupportedJsonSchema, validateJsonSchemaValue as violations } from '@deepseek-ai/dsh-tools'
@@ -10,6 +11,23 @@ import { taskPlanFixture, stageOutputFixture } from './fixtures/task-plan.js'
 const plan = taskPlanFixture()
 const stage = stageOutputFixture(plan)
 const validateJsonSchemaValue = (schema, value) => assert.deepEqual(violations(schema, value), [])
+
+test('根协调联合在只保留properties/required的提供方仍公开可填写合同，Zod继续拒绝空参数和错分支', () => {
+  const schema = toToolObjectJsonSchema(coordinationProposalSchema)
+  assert.doesNotThrow(() => assertSupportedJsonSchema(schema))
+  // 当前非strict Anthropic适配器的真实协议边界，见pi-ai anthropic-messages convertTools。
+  const providerSchema = { type: 'object', properties: schema.properties ?? {}, required: schema.required ?? [] }
+  assert.ok(providerSchema.required.includes('kind'))
+  for (const key of ['kind', 'members', 'question', 'coordinationId', 'expectedRevision']) assert.ok(providerSchema.properties[key])
+  assert.equal(schema.oneOf, undefined, 'DSH不支持根oneOf与properties并列，分支精确约束在执行时原Zod')
+  assert.ok(violations(providerSchema, {}).length)
+  const proposal = { kind: 'arrangement', members: [{ action: 'task-observe', taskId: 'original', inputVersion: 4, runSequence: 4 }] }
+  validateJsonSchemaValue(providerSchema, proposal)
+  validateJsonSchemaValue(schema, proposal)
+  assert.ok(coordinationProposalSchema.safeParse(proposal).success)
+  assert.equal(coordinationProposalSchema.safeParse({ kind: 'clarify', members: proposal.members }).success, false)
+  assert.equal(coordinationProposalSchema.safeParse({}).success, false)
+})
 
 test('真实DSH接受同源生成的工具契约，无Zod元属性或不支持关键字', () => {
   for (const schema of [taskCheckpointJsonSchema, taskResultJsonSchema, groupDecisionSubmissionJsonSchema, replyReviewJsonSchema]) assert.doesNotThrow(() => assertSupportedJsonSchema(schema))

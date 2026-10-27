@@ -51,6 +51,26 @@ test('explicit source recovery holds the message-version queue through the separ
   assert.equal(calls, 0)
 })
 
+test('引用重判只归还遗漏引用的旧澄清预约，原问题进审计且不接受新预约', async t => {
+  const { store } = await fixture(t)
+  await routed(store)
+  const owner = store.listSourceDispatchOwnership('g')[0], message = store.getGroup('g').messages[0]
+  await store.updateSourceDispatch({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1,
+    semanticState: 'needs_clarification', coordinationId: 'original-arrangement', clarification: '缺少具体对象' })
+  const args = { groupId: 'g', messageId: message.messageId, messageVersion: 1, activeUnitRefs: message.activeUnitRefs,
+    reservationId: owner.reservationId, phase: 'coordination-context' }
+  for (const patch of [{ messageVersion: 2 }, { activeUnitRefs: [] }, { reservationId: 'other' }])
+    await assert.rejects(store.retrySourceDispatch({ ...args, ...patch }, () => assert.fail('must not run')), /MESSAGE_RETRY_STALE/)
+  await assert.rejects(store.retrySourceDispatch(args, () => { throw new Error('ledger refused') }), /ledger refused/)
+  assert.equal(store.listSourceDispatchOwnership('g')[0].semanticState, 'needs_clarification')
+  await store.retrySourceDispatch(args, current => { assert.equal(current.generation, 1); return { accepted: true } })
+  const current = store.listSourceDispatchOwnership('g')[0]
+  assert.equal(current.semanticState, 'reserved'); assert.equal(current.generation, 1); assert.equal(current.reservationId, owner.reservationId)
+  assert.equal(current.coordinationId, 'original-arrangement'); assert.equal(current.clarification, '缺少具体对象')
+  assert.equal(current.history[0].kind, 'context-reconsideration'); assert.equal(current.history[0].question, '缺少具体对象')
+  await assert.rejects(store.retrySourceDispatch(args, () => assert.fail('cannot reset twice')), /MESSAGE_RETRY_STALE/)
+})
+
 for (const state of ['accepted', 'needs_clarification', 'frozen']) test(`explicit source recovery never resets ${state} ownership`, async t => {
   const { store } = await fixture(t)
   await routed(store)

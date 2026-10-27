@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { coordinationContextRecoveryIdentity } from '../packages/dingtalk-dsh-assistant/coordination-changes.js'
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'coordination-'))
@@ -26,6 +27,125 @@ async function fixture(t) {
     async close() { await store.close() },
     async migrate() { store = await openDynamicTaskStore({ ...options, migrate: true }) } }
 }
+
+async function contextReconsiderationFixture(t) {
+  const f = await fixture(t), refs = [{ unitId: 'quoted-unit', unitRevision: 1 }]
+  await f.command('source.record', { sourceId: 'original', groupId: 'group', messageId: 'message', version: 1,
+    actorId: 'author', text: '部署到UAT2', quote: { messageId: 'delivery', content: '后端 #417、前端 #389，尚未部署。' }, timestamp: '2026-10-27T04:15:53Z' })
+  const source = (await f.command('coordination.reserve', { unitId: refs[0].unitId, revision: 1, groupId: 'group', original: '部署到UAT2',
+    reservationId: 'reservation', reservationGeneration: 1, actorId: 'author', sourceRefs: ['original'], sourceMessageId: 'message' })).result.source
+  await f.command('coordination.source.failed', { sourceId: source.id, fence: 1, code: 'old-parse-error' })
+  await f.command('coordination.source.clarify', { sourceId: source.id, fence: 1, coordinationId: 'quoted-arrangement', question: '要部署哪项改动？' })
+  await f.command('source.processingStarted', { sourceId: 'original', messageVersion: 1, activeUnitRefs: refs })
+  await f.command('source.processingCompleted', { sourceId: 'original', messageVersion: 1, routingRevision: 1,
+    activeUnitRefs: refs, units: [{ ...refs[0], dispatchOwner: 'coordination' }] })
+  const current = await f.query({ kind: 'coordination.source', unitId: refs[0].unitId, revision: 1 })
+  const arrangement = (await f.query({ kind: 'coordination.get', coordinationId: 'quoted-arrangement' })).coordination
+  const original = (await f.query({ kind: 'source.list', groupId: 'group' }))[0]
+  const token = createHash('sha256').update(JSON.stringify(coordinationContextRecoveryIdentity(current, arrangement, original))).digest('hex')
+  const args = { sourceId: current.id, fence: 1, token, coordinationId: arrangement.id, expectedRevision: 1, messageSourceId: 'original',
+    messageVersion: 1, reservationId: 'reservation', generation: 1, activeUnitRefs: refs, quotedSnapshotMissing: true }
+  return { ...f, refs, current, arrangement, original, args }
+}
+
+test('缺引用旧澄清显式重判保留同来源、原安排、预算和旧语义戳审计，旧CAS不可重用', async t => {
+  const f = await contextReconsiderationFixture(t)
+  const oldQuestionId = `coordination:${f.arrangement.id}:clarification:reservation`
+  await f.command('notification.prepare', { notificationId: oldQuestionId, kind: 'coordination', requirementRevision: 1,
+    payload: { conversationId: 'group', sourceMessageId: 'message', sourceId: 'original', sourceVersion: 1, actorId: 'author',
+      text: '要部署哪项改动？', fact: { coordinationId: f.arrangement.id, eventId: 'clarification:reservation' } } })
+  const notification = (await f.command('notification.start', { notificationId: oldQuestionId })).result.notification
+  await f.command('notification.receipt', { notificationId: notification.id, dispatchToken: notification.dispatchToken,
+    state: 'delivered', evidenceRef: 'readback:old-question', receipt: { messageId: 'already-sent' } })
+  const beforeNotices = await f.query({ kind: 'notification.list' })
+  const result = (await f.command('coordination.source.reconsiderContext', f.args)).result.source
+  assert.equal(result.id, f.current.id); assert.equal(result.fence, 2); assert.equal(result.reservationGeneration, 1)
+  assert.equal(result.state, 'reserved'); assert.equal(result.attemptCount, 1); assert.equal(result.nextRetryAt, f.current.nextRetryAt)
+  assert.equal(result.contextReconsideration.coordinationId, f.arrangement.id)
+  assert.equal(result.contextReconsideration.expectedRevision, 1); assert.equal(result.contextReconsideration.question, '要部署哪项改动？')
+  const original = (await f.query({ kind: 'source.list', groupId: 'group' }))[0]
+  assert.equal(original.sourceId, 'original'); assert.equal(original.processingCompleted, undefined); assert.equal(original.processingPending, true)
+  assert.deepEqual(original.processingHistory, [f.original.processingCompleted]); assert.deepEqual(original.quote, f.original.quote)
+  assert.deepEqual(await f.query({ kind: 'notification.list' }), beforeNotices)
+  await assert.rejects(f.command('coordination.source.reconsiderContext', f.args), /SOURCE_STALE/)
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'coordination.source', unitId: f.refs[0].unitId, revision: 1 })).contextReconsideration.question, '要部署哪项改动？')
+  assert.equal((await f.query({ kind: 'coordination.list' })).length, 1)
+  assert.equal((await f.query({ kind: 'coordination.get', coordinationId: f.arrangement.id })).coordination.history[0].question, '要部署哪项改动？')
+})
+
+for (const patch of [{ fence: 2 }, { token: 'bad' }, { expectedRevision: 2 }, { generation: 2 }, { messageVersion: 2 },
+  { reservationId: 'other' }, { activeUnitRefs: [] }, { quotedSnapshotMissing: false }])
+test(`引用重判拒绝不匹配CAS且零写 ${JSON.stringify(patch)}`, async t => {
+  const f = await contextReconsiderationFixture(t)
+  await assert.rejects(f.command('coordination.source.reconsiderContext', { ...f.args, ...patch }), /STALE/)
+  assert.deepEqual(await f.query({ kind: 'coordination.source', unitId: f.refs[0].unitId, revision: 1 }), f.current)
+  assert.deepEqual((await f.query({ kind: 'source.list', groupId: 'group' }))[0], f.original)
+})
+
+test('引用重判仍需原澄清时保留旧问题及重判审计，重启不丢history', async t => {
+  const f = await contextReconsiderationFixture(t)
+  const source = (await f.command('coordination.source.reconsiderContext', f.args)).result.source
+  await f.command('coordination.source.clarify', { sourceId: source.id, fence: source.fence,
+    coordinationId: f.arrangement.id, question: source.question })
+  await f.reopen()
+  const current = (await f.query({ kind: 'coordination.get', coordinationId: f.arrangement.id })).coordination
+  assert.equal(current.revision, 1); assert.equal(current.sourceFence, 2); assert.equal(current.question, source.question)
+  assert.equal(current.history[0].kind, 'context-reconsideration'); assert.equal(current.history[0].question, '要部署哪项改动？')
+  assert.equal((await f.query({ kind: 'source.list', groupId: 'group' }))[0].processingHistory.length, 1)
+})
+
+for (const state of ['prepared', 'starting', 'unknown', 'acknowledged'])
+test(`引用重判精确处理旧澄清通知${state}，未知发送禁止重判`, async t => {
+  const f = await contextReconsiderationFixture(t), notificationId = `coordination:${f.arrangement.id}:clarification:reservation`
+  const payload = { conversationId: 'group', sourceMessageId: 'message', sourceId: 'original', sourceVersion: 1, actorId: 'author',
+    text: '要部署哪项改动？', fact: { coordinationId: f.arrangement.id, eventId: 'clarification:reservation', sourceUnitId: f.refs[0].unitId, sourceUnitRevision: 1 } }
+  await f.command('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1, payload })
+  if (state !== 'prepared') {
+    const started = (await f.command('notification.start', { notificationId })).result.notification
+    if (state === 'unknown') await f.command('notification.receipt', { notificationId, dispatchToken: started.dispatchToken, state: 'unknown' })
+    if (state === 'acknowledged') await f.command('notification.ack', { notificationId, dispatchToken: started.dispatchToken, ack: { messageId: 'send-ack' } })
+  }
+  const before = await f.query({ kind: 'notification.get', notificationId })
+  if (state !== 'prepared') {
+    await assert.rejects(f.command('coordination.source.reconsiderContext', f.args), /CONTEXT_RECONSIDERATION_UNSAFE/)
+    assert.deepEqual(await f.query({ kind: 'coordination.source', unitId: f.refs[0].unitId, revision: 1 }), f.current)
+    assert.deepEqual(await f.query({ kind: 'notification.get', notificationId }), before)
+  } else {
+    const reconsidered = (await f.command('coordination.source.reconsiderContext', f.args)).result
+    assert.equal(reconsidered.notification.state, 'superseded'); assert.equal(reconsidered.notification.reason, 'stale_question')
+    assert.deepEqual(reconsidered.notification.payload, payload)
+    assert.equal((await f.command('notification.start', { notificationId })).dispatchEligible, false)
+    await f.command('coordination.accept', { sourceId: f.current.id, fence: 2, coordinationId: f.arrangement.id,
+      replaceClarificationRevision: 1, members: [], readOnly: true, proposal: { kind: 'query', answerText: '已接纳安排' } })
+    const acceptedId = `coordination:${f.arrangement.id}:accepted:reservation`
+    await f.command('notification.prepare', { notificationId: acceptedId, kind: 'coordination', requirementRevision: 1,
+      payload: { ...payload, text: '已接纳安排', fact: { ...payload.fact, eventId: 'accepted:reservation' } } })
+    assert.equal((await f.command('notification.start', { notificationId: acceptedId })).dispatchEligible, true, '新接纳通知不能因同来源修复被退休')
+    assert.equal((await f.query({ kind: 'notification.get', notificationId })).state, 'superseded')
+  }
+})
+
+test('引用重判遵守运行冻结且不为旧来源读取新版本引用', async t => {
+  const f = await contextReconsiderationFixture(t)
+  await f.command('coordination.runtime.set', { mode: 'frozen', reason: '测试冻结' })
+  await assert.rejects(f.command('coordination.source.reconsiderContext', f.args), /FROZEN/)
+  await f.command('coordination.runtime.set', { mode: 'active', reason: '测试恢复' })
+  await f.command('source.record', { sourceId: 'v2', groupId: 'group', messageId: 'message', version: 2,
+    actorId: 'author', text: '改部署到UAT3', quote: { messageId: 'other', content: '另一项改动' } })
+  await assert.rejects(f.command('coordination.source.reconsiderContext', f.args), /STALE/)
+})
+
+for (const table of ['members', 'schedules', 'occurrences', 'jobs'])
+test(`引用重判拒绝已有${table}效果账，不能重做业务`, async t => {
+  const f = await contextReconsiderationFixture(t)
+  await f.close()
+  const db = new DatabaseSync(f.options.dbPath)
+  db.prepare(`INSERT INTO dynamic_coordination_${table}(id,body) VALUES (?,?)`).run('effect', JSON.stringify({ id: 'effect', coordinationId: f.arrangement.id }))
+  db.close(); await f.reopen()
+  await assert.rejects(f.command('coordination.source.reconsiderContext', f.args), /CONTEXT_RECONSIDERATION_UNSAFE/)
+  assert.deepEqual(await f.query({ kind: 'coordination.source', unitId: f.refs[0].unitId, revision: 1 }), f.current)
+})
 
 test('explicit source retry requires exact exhausted generation and never resets accepted or applied coordination', async t => {
   const f = await fixture(t)

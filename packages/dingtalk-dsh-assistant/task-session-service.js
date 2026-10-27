@@ -45,7 +45,7 @@ export const dynamicExecutionOutputSchema = { type: 'object', properties: {
   evidence: texts, limitations: texts, artifacts: texts, question: string,
 }, required: ['status','summary','evidence','limitations','artifacts'], additionalProperties: false }
 /** All model decisions pass through this Host boundary. No workflow catalog or staged plan exists here. */
-export async function openTaskSessionService({ ctx, config, legacy, residentStore, notifications, readResource,
+export async function openTaskSessionService({ ctx, config, legacy, residentStore, notifications, readMessage, readResource,
   taskSessions: suppliedTaskSessions, executionSessions: suppliedExecutionSessions, claudeExecutionSessions: suppliedClaudeExecutionSessions,
   store: suppliedStore, persistence: suppliedPersistence } = {}) {
   if (!config?.dbPath || !config?.instanceId) fail('TASK_SESSION_CONFIGURATION_REQUIRED')
@@ -140,7 +140,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (['execution.drained', 'execution.cancel', 'task.control', 'task.revise', 'task.reopen'].includes(kind)
       || kind.startsWith('operation.') && ['succeeded', 'failed', 'cancelled'].includes(receipt.result?.operation?.state)) void schedulePending()
     // 持久通知已可发送，无需等待协调规划、其他群恢复或下个轮询周期。
-    if (kind === 'source.processingCompleted' && !receipt.replayed) sourceProcessingRevision++
+    if (['source.processingCompleted', 'coordination.source.reconsiderContext'].includes(kind) && !receipt.replayed) sourceProcessingRevision++
     if (!closed && (receipt.result?.notification?.state === 'prepared'
       || kind === 'source.processingCompleted' && !receipt.replayed)) void deliverNotifications().catch(error => {
       ctx.logger?.warn?.(`notification scan: ${error.code ?? error.message}`)
@@ -681,6 +681,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         await residentStore.markMessageAgentDelivery({ groupId, messageId: message.messageId, status: 'decision-failed', error: error.code ?? error.message })
     } })
   const independentCoordination = openIndependentCoordination({ ctx, root, agentPreset: legacy.getAgentConfig().agentPreset,
+    readMessage,
+    readResource: readResource ? async (groupId, messageId, resource) => {
+      const value = await readResource(groupId, messageId, resource)
+      return value?.image ? { imageRefs: await ctx.attachments.saveImages([value.image]) } : value
+    } : undefined,
+    readImage: ctx.attachments?.readImage ? ref => ctx.attachments.readImage(ref) : undefined,
     getWorkspaceDir: () => legacy.getAgentConfig().workspaceDir,
     getModelSelection: () => coordinationModelSelection({
       ...(residentStore.getCoordinationModelConfig?.() ?? config.coordination ?? legacy.getAgentConfig().coordinationModel ?? {}),
@@ -1568,10 +1574,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
     messageProcessingRequests: groupId => topicCoordinator.messageProcessingRequests(groupId),
     async messageProcessingSources(groupId) {
-      const [sources, notifications, coordinationSources] = await Promise.all([
-        query('source.list', { groupId }), query('notification.list', { groupId }), query('coordination.source.list', { groupId }),
+      const [sources, notifications, coordinationSources, arrangements] = await Promise.all([
+        query('source.list', { groupId }), query('notification.list', { groupId }), query('coordination.source.list', { groupId }), query('coordination.list', { groupId }),
       ])
-      return messageProcessingSources(sources, notifications, groupId, coordinationSources, residentStore.listSourceDispatchOwnership(groupId))
+      return messageProcessingSources(sources, notifications, groupId, coordinationSources, residentStore.listSourceDispatchOwnership(groupId), arrangements)
     },
     async retryMessageProcessing(args) {
       const { groupId, messageId, phase, requestId, token } = args
@@ -1585,20 +1591,32 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           const request = topicCoordinator.messageProcessingRequests(groupId).find(item => item.requestId === requestId)
           if (!request || Boolean(request.topicId) !== (phase === 'decision')) fail('MESSAGE_RETRY_STALE')
           await topicCoordinator.retryMessageRequest(args)
-        } else if (phase === 'coordination') {
+        } else if (phase === 'coordination' || phase === 'coordination-context') {
           if (config.coordination?.enabled !== true || config.coordination?.mode === 'frozen'
             || (await query('coordination.runtime'))?.mode === 'frozen') fail('MESSAGE_RETRY_UNAVAILABLE')
+          if (phase === 'coordination-context' && independentCoordination.isPlanning(groupId)) fail('MESSAGE_RETRY_IN_PROGRESS')
           await residentStore.retrySourceDispatch({ ...args, reservationId: requestId }, async owner => {
             const source = await query('coordination.source', { unitId: owner.unitId, revision: owner.unitRevision })
             if (!source || source.reservationId !== owner.reservationId || source.reservationGeneration !== owner.generation
-              || source.sourceMessageId !== messageId || source.groupId !== groupId || source.resolvedBy
-              || source.state !== 'reserved' || (source.attemptCount ?? 0) < 3 || source.nextRetryAt) fail('MESSAGE_RETRY_STALE')
-            await command('coordination.source.retry', { sourceId: source.id, fence: source.fence, token })
+              || source.sourceMessageId !== messageId || source.groupId !== groupId || source.resolvedBy) fail('MESSAGE_RETRY_STALE')
+            if (phase === 'coordination-context') {
+              const originals = await query('source.list', { groupId })
+              const original = originals.find(item => item.messageId === messageId && item.version === args.messageVersion)
+              const arrangement = source.coordinationId && await query('coordination.get', { coordinationId: source.coordinationId })
+              if (!original || original.actorId !== owner.sourceSnapshot.actorId || !arrangement) fail('MESSAGE_RETRY_STALE')
+              await command('coordination.source.reconsiderContext', { sourceId: source.id, fence: source.fence, token,
+                coordinationId: arrangement.coordination.id, expectedRevision: arrangement.coordination.revision,
+                messageSourceId: original.sourceId, messageVersion: args.messageVersion, activeUnitRefs: args.activeUnitRefs,
+                reservationId: owner.reservationId, generation: owner.generation, quotedSnapshotMissing: owner.sourceSnapshot.quotedMessage === undefined })
+            } else {
+              if (source.state !== 'reserved' || (source.attemptCount ?? 0) < 3 || source.nextRetryAt) fail('MESSAGE_RETRY_STALE')
+              await command('coordination.source.retry', { sourceId: source.id, fence: source.fence, token })
+            }
           })
           // Dispatch outside the Resident lock; the native planner rechecks ownership before accepting any effect.
           void independentCoordination.recoverGroup(groupId).catch(error => failures.set(requestId, { id: requestId, code: error.code ?? error.message }))
         } else fail('MESSAGE_RETRY_STALE')
-        if (phase !== 'coordination') void kickGroup(groupId)
+        if (phase !== 'coordination' && phase !== 'coordination-context') void kickGroup(groupId)
         return { groupId, messageId, requestId, status: 'attempted' }
       } finally { messageRecoveryFlights.delete(key) }
     },
