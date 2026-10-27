@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
+import { isolationBinding, isolationDigest, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { openDynamicTaskStore, pendingTaskHumanReview } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 
@@ -1182,6 +1183,96 @@ async function humanWaiting(f, requestId = 'human-request') {
 async function humanSource(f, actorId = 'owner', groupId = 'g') {
   await f.command('source.record', { sourceId: 'human-answer', groupId, messageId: 'reply-original', actorId, text: '仅在 UAT3 执行已说明的修改', channel: actorId === 'web-user' ? 'web' : 'im' })
 }
+
+async function isolatedRestartLedger(t, drained) {
+ const f = await fixture(t, { webActorId: 'web-user' })
+ await f.command('task.create', { taskId: 'restart-task', groupId: 'g', ownerActorId: 'web-user', request: 'Continue without replay' })
+ const owner = (await f.command('task.claim', { taskId: 'restart-task' })).result
+ const binding = await f.execution(owner.binding, 'original-job'), operationId = 'original-isolated-operation'
+ await f.command('execution.sessionBound', { binding })
+ await f.command('operation.prepare', { binding, operationId, key: 'original-producer', definition: { toolName: 'pwsh', argumentsDigest: 'args' }, resourceKeys: ['local-source'] })
+ await f.command('operation.start', { binding, operationId })
+ await f.command('operation.job', { binding, operationId, job: { jobId: 'original-job', owner: binding.sessionId, startedAt: 1, status: 'running' } })
+ const readback = (await f.command('execution.dispatch', { binding: owner.binding, key: 'investigate', prompt: 'Read actual effects',
+  definition: { recoveryReadOnly: true }, input: { readbackOperationId: operationId } })).result.execution
+ const readBinding = (await f.command('execution.claim', { executionId: readback.executionId })).result.binding
+ await f.command('execution.result', { binding: readBinding, output: { observed: true } })
+ await f.command('execution.drained', { binding: readBinding })
+ if (drained) {
+  await f.command('execution.result', { binding, output: { status: 'blocked', reason: 'effects unknown' } })
+  await f.command('execution.drained', { binding })
+ } else await f.command('execution.cancel', { binding })
+ await f.command('task.wait', { binding: owner.binding, action: 'blocked', summary: 'Unknown job; inspect isolation', question: 'Confirm original scoped isolation only',
+  humanRequest: { requestId: 'restart-human', audience: 'operator', reason: 'Host restart', attemptedActions: ['Bound investigation completed'] } })
+ await f.command('task.drained', { binding: owner.binding })
+ await f.reopen()
+ const operation = await f.query({ kind: 'operation.get', operationId })
+ const challenge = isolationBinding(operation, 'original-call')
+ const proof = { kind: 'native-host-restart-isolated', ...challenge, callSequence: 2, registeredSequence: 3, commandDigest: isolationDigest('original-command'), exitStatus: 'unknown', noReplay: true, partialEffectsPossible: true,
+  observations: [{ executionId: readback.executionId, sessionId: readback.sessionId, inputVersion: 1, callId: 'observed', sequence: 5 }],
+  isolation: { kind: 'native-job-durable-isolation', receiptId: 'isolation', issuer: 'trusted-range-owner', fenceRef: 'retired-range', hostExitRef: 'host-fatal',
+   originalHostExited: true, durableFence: true, managedRangeEmpty: true, externalWritersExcluded: true, activeWriterCount: 0,
+   observedAt: '2026-10-27T09:00:00Z', binding: challenge } }
+ const source = { sourceId: 'restart-operator-source', groupId: 'g', messageId: 'restart-operator-reply', actorId: 'web-user', channel: 'web', text: 'Confirm isolation; retain unknown; no replay',
+  requestIdentity: { humanRequestId: 'restart-human', nativeRestartResolutions: [{ operationId, expectedOperationDigest: proof.operationDigest, expectedIsolationDigest: isolationDigest(proof.isolation) }] } }
+ const confirm = { taskId: binding.taskId, requestId: 'restart-human', expectedRequirementRevision: 1, expectedControlRevision: 1, source, resolutions: [{ operationId, proof }] }
+ return { ...f, owner, binding, operationId, operation, proof, source, confirm, readback }
+}
+
+for (const drained of [true, false]) test(`operator restart isolation retains unknown and is durable/idempotent without replay: drained=${drained}`, async t => {
+ const f = await isolatedRestartLedger(t, drained)
+ const result = await f.command('task.human.resolve-failures', f.confirm, 'confirm-isolation')
+ assert.equal(result.result.request.status, 'answered')
+ let audited = await f.query({ kind: 'operation.get', operationId: f.operationId })
+ const { recoverySettlement, ...original } = audited
+ assert.deepEqual(original, f.operation)
+ assert.equal(hasRestartIsolation(audited), true)
+ assert.equal(audited.state, 'unknown'); assert.equal(audited.job.status, 'running'); assert.equal(audited.result, f.operation.result)
+ assert.equal((await f.query({ kind: 'task.blockers', taskId: f.binding.taskId })).operations.length, 0)
+ if (!drained) {
+  const ref = { operationId: audited.operationId, auditDigest: isolationDigest(recoverySettlement) }
+  await assert.rejects(f.command('execution.drained', { binding: f.binding, isolationAuditRefs: [{ ...ref, auditDigest: 'stale' }] }), { code: 'DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT' })
+  await f.command('execution.drained', { binding: f.binding, isolationAuditRefs: [ref] })
+  const execution = await f.query({ kind: 'execution.get', executionId: f.binding.executionId })
+  assert.equal(execution.drained, true); assert.equal(execution.recovering, false)
+  assert.equal(execution.result, undefined, 'drain does not invent an execution or tool result')
+  assert.deepEqual(execution.recoveryDrainAudit.refs, [ref])
+ }
+ const wakes = await f.query({ kind: 'wake.list' })
+ assert.equal((await f.command('task.human.resolve-failures', f.confirm, 'confirm-isolation')).replayed, true)
+ await f.reopen()
+ assert.equal((await f.command('task.human.resolve-failures', f.confirm, 'confirm-isolation')).replayed, true)
+ audited = await f.query({ kind: 'operation.get', operationId: f.operationId })
+ assert.equal(hasRestartIsolation(audited), true)
+ assert.equal((await f.query({ kind: 'wake.list' })).length, wakes.length)
+ assert.equal((await f.query({ kind: 'resource.list' })).length, 0)
+ const owner = (await f.command('task.claim', { taskId: f.binding.taskId, force: true })).result.binding
+ await f.command('execution.continue', { binding: owner, executionId: f.binding.executionId, key: 'safe-next-step', prompt: 'Continue with isolated source excluded', input: {} })
+ const next = (await f.command('execution.claim', { executionId: f.binding.executionId })).result.binding
+ assert.notEqual((await f.command('operation.start', { binding: next, operationId: f.operationId })).dispatchEligible, true)
+ await assert.rejects(f.command('operation.prepare', { binding: next, operationId: 'alias-replay', key: 'new-key-same-producer', definition: { toolName: 'pwsh', commandDigest: f.proof.commandDigest, argumentsDigest: 'changed-description' } }), { code: 'DYNAMIC_ISOLATED_OPERATION_REPLAY_FORBIDDEN' })
+ assert.equal((await f.query({ kind: 'operation.list' })).length, 1)
+})
+
+for (const [name, alter] of Object.entries({
+ 'stale digest': a => { a.resolutions[0].proof.operationDigest = 'stale' },
+ 'foreign job': a => { a.resolutions[0].proof.isolation.binding.jobId = 'foreign' },
+ 'residual source': a => { a.resolutions[0].proof.isolation.activeWriterCount = 1 },
+ 'foreign task': a => { a.resolutions[0].proof.taskId = 'foreign' },
+ 'foreign investigator': a => { a.resolutions[0].proof.observations[0].executionId = 'foreign' },
+ 'untrusted operator': a => { a.source.actorId = 'other' },
+ 'new revision': a => { a.expectedControlRevision = 99 },
+})) test(`operator restart isolation rolls back all effects for ${name}`, async t => {
+ const f = await isolatedRestartLedger(t, false), args = structuredClone(f.confirm)
+ alter(args)
+ const sourceCount = (await f.query({ kind: 'source.list' })).length, wakeCount = (await f.query({ kind: 'wake.list' })).length
+ await assert.rejects(f.command('task.human.resolve-failures', args))
+ assert.deepEqual(await f.query({ kind: 'operation.get', operationId: f.operationId }), f.operation)
+ assert.equal((await f.query({ kind: 'source.list' })).length, sourceCount)
+ assert.equal((await f.query({ kind: 'wake.list' })).length, wakeCount)
+ assert.equal((await f.query({ kind: 'task.get', taskId: f.binding.taskId })).humanRequests[0].status, 'waiting-reply')
+ assert.ok((await f.query({ kind: 'resource.list' })).length > 0)
+})
 
 test('human request freezes the question and resumes the same task from its authorized original source idempotently', async t => {
   const f = await fixture(t), { owner, args, respond } = await humanWaiting(f)

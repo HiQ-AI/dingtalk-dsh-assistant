@@ -196,7 +196,7 @@ function validateHistory(events, binding) {
  * 补充递增 inputVersion；原生 step 事件累计预算，已结束执行间的等待不计耗时。
  * outputSchema 使用 dsh-tools 支持的 JSON Schema。工具仅提交 { output }，不接受模型身份。
  */
-export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, withPersistenceWriter = (_binding, action) => action() }) {
+export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, readRestartDrainProof, withPersistenceWriter = (_binding, action) => action() }) {
   if (typeof isCurrent !== 'function') throw failure('execution_current_check_required')
   if (getWorkspaceDir !== undefined && typeof getWorkspaceDir !== 'function') throw failure('execution_workspace_provider_invalid')
   if (!Array.isArray(tools)) throw failure('execution_tool_registry_invalid')
@@ -403,7 +403,10 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             if (background && call.jobReceipt && ['running', 'stopping'].includes(call.jobReceipt.status)) {
               (entry.backgroundJobs ??= []).push({ call, result, jobs, startedAt })
             }
-            if (hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
+            // Native file reads may contain serialized historical job receipts.
+            // Their data is not a new process launch. The structured native job
+            // identity above is still collected and validated for every tool.
+            if (!(exec.name === 'read' && isReadonly(exec)) && hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
             return result
           })
           const result = await (entry.fileScope ? entry.fileScope.run(dispatch, { readOnly: isReadonly(exec) }) : dispatch())
@@ -886,10 +889,15 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     const inputEvent = stored.events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
     const events = stored.events.filter(event => event.seq > (inputEvent?.seq ?? -1))
     const calls = events.filter(event => event.type === 'tool/call')
-    if (calls.some(call => !events.some(event => event.type === 'tool/result' && event.seq > call.seq
-      && toolResults(event).some(item => item.toolCallId === call.data.callId)))) throw notDrained('execution_recovery_tool_unresolved')
+    const pendingCalls = calls.filter(call => !events.some(event => event.type === 'tool/result' && event.seq > call.seq
+      && toolResults(event).some(item => item.toolCallId === call.data.callId)))
+    let isolationAuditRefs
+    if (pendingCalls.length) {
+      isolationAuditRefs = await readRestartDrainProof?.({ binding, calls: pendingCalls })
+      if (!Array.isArray(isolationAuditRefs) || isolationAuditRefs.length !== pendingCalls.length) throw notDrained('execution_recovery_tool_unresolved')
+    }
     assertDrained(binding)
-    return { drained: true, sessionBound: true }
+    return { drained: true, sessionBound: true, ...(isolationAuditRefs ? { isolationAuditRefs } : {}) }
   }
 
   return { run, cancel, async feedback(executionId) { const entry = entries.get(`task-execution:${executionId}`); if (entry) await deliverFeedback(entry) }, assertDrained, recoverDrained, prepareManagedSession, async close() {

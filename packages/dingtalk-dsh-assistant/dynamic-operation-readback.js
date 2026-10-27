@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { inspectSession } from './session-persistence.js'
 import { safeNotificationDetail } from './notification-delivery.js'
+import { isolationBinding, validIsolationReceipt } from './native-restart-isolation.js'
+import { restartScopeProbePlan, readRestartScopeProbe } from './native-restart-scope-probe.js'
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
@@ -39,7 +41,7 @@ export async function readNativeOperationContext({ ctx, operation }) {
 }
 
 /** 精确绑定原始错误与正常结束回合；错误文字、当前文件内容均不作为无效果证据。 */
-async function inspectFailedNativeOperation({ ctx, operation, execution }, { kind, accepts }) {
+async function inspectFailedNativeOperation({ ctx, operation, execution }, { kind, accepts, allowBlocked = false }) {
   const binding = operation.dispatchBinding
   if (operation.state !== 'unknown' || !binding
     || operation.executionId !== execution?.executionId || operation.taskId !== execution.taskId
@@ -57,7 +59,7 @@ async function inspectFailedNativeOperation({ ctx, operation, execution }, { kin
   const result = events.find(event => event.seq === original.resultSequence && event.type === 'tool/result')
   const end = events.find(event => event.seq > original.resultSequence && event.type === 'turn/end')
   if (!input || !start || input.seq < start.seq || !Number.isSafeInteger(start.data.turn) || result?.data.turn !== start.data.turn
-    || end?.data.turn !== start.data.turn || end.data.reason?.kind !== 'completed'
+    || end?.data.turn !== start.data.turn || !(end.data.reason?.kind === 'completed' || allowBlocked && end.data.reason?.kind === 'blocked')
     || events.some(event => event.seq > start.seq && event.seq < end.seq && (event.type === 'turn/end' || event.type === 'turn/start'))) return null
   return { kind, operationId: operation.operationId, operationDigest: hash(operation),
     taskId: operation.taskId, executionId: execution.executionId, sessionId: binding.sessionId,
@@ -111,10 +113,79 @@ async function boundReadbackObservations({ ctx, operation, execution, executions
 
 /** A completed error is a failed call, not proof that all effects were absent. */
 export async function inspectInvestigatedNativeFailure(args) {
-  const proof = await inspectFailedNativeOperation(args, { kind: 'native-investigated-failure', accepts: () => true })
+  const proof = await inspectFailedNativeOperation(args, { kind: 'native-investigated-failure', accepts: () => true, allowBlocked: true })
   if (!proof) return null
   const observations = await boundReadbackObservations(args, proof.resultSequence)
   return observations.length ? { ...proof, observations, partialEffectsPossible: true } : null
+}
+
+/** Read existing Host fence evidence; never create a fence or a process result here. */
+export async function inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence, planOnly = false }) {
+  const binding = operation.dispatchBinding, job = operation.job
+  if (operation.state !== 'unknown' || operation.recoveryReason !== 'host_restart' || operation.recoverySettlement
+    || !binding || !job || !['running', 'stopping'].includes(job.status) || operation.result != null
+    || !['pwsh', 'bash'].includes(operation.definition?.toolName)
+    || operation.taskId !== execution?.taskId || operation.executionId !== execution.executionId
+    || binding.sessionId !== execution.sessionId || job.owner !== execution.sessionId
+    || !execution.drained && !execution.recovering
+    || ctx.agents.get(execution.sessionId) || ctx.sessions.get(execution.sessionId)) return null
+  const jobs = ctx.get?.('jobs')
+  if (!jobs?.list || jobs.list(execution.sessionId).some(item => ['running', 'stopping'].includes(item.status))) return null
+  const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
+  if (!identity(events, binding)) return null
+  const input = inputFor(events, binding)
+  if (!input) return null
+  const calls = events.filter(event => event.seq > input.seq && event.type === 'tool/call'
+    && event.data.name === operation.definition.toolName
+    && operation.key === `native:${binding.executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${event.data.callId}`)
+  if (calls.length !== 1) return null
+  const call = calls[0], callId = call.data.callId
+  let args
+  try { args = JSON.parse(call.data.arguments) } catch { return null }
+  if (hash(args) !== operation.definition.argumentsDigest || typeof args.command !== 'string') return null
+  const registrations = events.filter(event => event.type === 'job/registered' && event.data.jobId === job.jobId)
+  if (registrations.length !== 1) return null
+  const registered = registrations[0], data = registered.data
+  if (registered.seq <= call.seq || data.owner !== job.owner || data.startedAt !== job.startedAt
+    || data.kind !== operation.definition.toolName || data.label !== args.command || data.toolCall?.callId !== callId
+    || data.toolCall.rootCallId && data.toolCall.rootCallId !== callId
+    || events.some(event => event.type === 'job/settled' && event.data.jobId === job.jobId)) return null
+  const responses = events.flatMap(event => event.seq > call.seq ? results(event).filter(result => result.toolCallId === callId) : [])
+  if (responses.length > 1) return null
+  if (responses.length) {
+    let receipt
+    try { receipt = JSON.parse(responses[0].content?.[0]?.text).nativeJobReceipt } catch { return null }
+    if (responses[0].isError !== false || !receipt || receipt.jobId !== job.jobId || receipt.owner !== job.owner
+      || receipt.startedAt !== job.startedAt || !['running', 'stopping'].includes(receipt.status)) return null
+  }
+  const observations = await boundReadbackObservations({ ctx, operation, execution, executions }, registered.seq)
+  if (!observations.length && !scopeEvidence) return null
+  const authority = ctx.get?.('nativeJobRecovery')
+  const challenge = isolationBinding(operation, callId)
+  let isolation
+  if (scopeEvidence) {
+    const plan = restartScopeProbePlan({ command: args.command, binding: challenge, evidence: scopeEvidence })
+    if (!plan) return null
+    if (planOnly) {
+      if (!executions.some(item => item.taskId === operation.taskId && item.status === 'succeeded' && item.drained && !item.recovering
+        && item.definition?.recoveryReadOnly === true && item.input?.readbackOperationId === operation.operationId)) return null
+      return { kind: 'native-host-restart-isolation-plan', ...challenge, probe: plan }
+    }
+    isolation = await readRestartScopeProbe({ ctx, plan, evidence: scopeEvidence, operation, executions })
+    if (isolation) {
+      const provenance = isolation.provenance, investigated = executions.find(item => item.executionId === provenance.executionId)
+      observations.push({ executionId: provenance.executionId, sessionId: provenance.sessionId, inputVersion: investigated.inputVersion,
+        callId: provenance.callId, toolName: 'pwsh', sequence: provenance.resultSequence,
+        callDigest: provenance.scriptDigest, resultDigest: hash(provenance.observation) })
+    }
+  } else {
+    if (typeof authority?.readIsolation !== 'function' || typeof authority.verifyIsolation !== 'function') return null
+    isolation = await authority.readIsolation({ binding: challenge })
+    if (await authority.verifyIsolation({ receipt: isolation, binding: challenge }) !== true) return null
+  }
+  if (!validIsolationReceipt(isolation, challenge) || !observations.length) return null
+  return { kind: 'native-host-restart-isolated', ...challenge, commandDigest: hash(args.command), callSequence: call.seq, registeredSequence: registered.seq,
+    observations, isolation, partialEffectsPossible: true, exitStatus: 'unknown', noReplay: true }
 }
 
 // Compatibility with the retired a5 promotion rejection only. That exact Host
