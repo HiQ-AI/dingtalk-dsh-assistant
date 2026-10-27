@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { checkedTaskDirectory, taskFilePath } from './session-workspaces.js'
 
 const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -42,16 +43,81 @@ export async function bindTaskArtifactScope(ctx, { root, scope, taskId, session 
   return bound
 }
 
+const taskCommand = action => action?.kind === 'task-command' ? action : action?.kind === 'read-query' ? action.onIncomplete : undefined
+
+// Recurrence changes instruction/slot identity, never the coordination's artifact owner.
+// Only persisted, frozen existing-Task commands can establish this stable membership.
+async function recurringArtifactMembers(coordination, members, active, schedules, query) {
+  const unsupported = () => fail('TASK_ARTIFACT_RECURRING_SCOPE_UNSUPPORTED')
+  const templates = new Map(), stable = active.filter(member => !member.templateInstructionId && !member.recurringOccurrenceId)
+  for (const schedule of schedules.filter(item => item.rule?.kind !== 'once')) {
+    if (schedule.coordinationId !== coordination.id || !['daily', 'weekly'].includes(schedule.rule?.kind)) unsupported()
+    const definitions = [...(schedule.history ?? []), schedule]
+    let taskIds
+    for (const definition of definitions) {
+      const action = taskCommand(definition.action)
+      if (!action) continue
+      if (action.kind !== 'task-command' || !Array.isArray(action.instructionIds) || !action.instructionIds.length
+        || new Set(action.instructionIds).size !== action.instructionIds.length
+        || action.frozenInstructions?.length !== action.instructionIds.length) unsupported()
+      const selected = action.instructionIds.map(id => {
+        const template = members.find(member => member.id === id)
+        const frozen = action.frozenInstructions.find(item => item.instructionId === id)
+        if (!template || !frozen || template.state !== 'template' || template.observation || template.createCommand
+          || template.coordinationId !== coordination.id || template.recurringTemplateScheduleId !== schedule.id
+          || template.templateInstructionId || template.recurringOccurrenceId
+          || template.command?.kind !== 'task.coordination.input'
+          || !['supplement', 'continue', 'reopen', 'cancel'].includes(template.command.args?.action)
+          || template.command.args.taskId !== template.taskId || frozen.taskId !== template.taskId
+          || template.command.id !== `coordination-command:${coordination.id}:${template.id}`
+          || template.commandDigest !== frozen.commandDigest || !isDeepStrictEqual(template.command, frozen.command)) unsupported()
+        templates.set(template.id, { template, schedule, definitions })
+        return template
+      })
+      const nextIds = selected.map(member => member.taskId).sort()
+      if (new Set(nextIds).size !== nextIds.length || taskIds && !isDeepStrictEqual(taskIds, nextIds)) unsupported()
+      taskIds = nextIds
+    }
+  }
+  if (stable.some(member => member.recurringTemplateScheduleId)) unsupported()
+  for (const { template } of templates.values()) {
+    const target = await query('task.get', { taskId: template.taskId })
+    if (!target || target.groupId !== coordination.groupId) unsupported()
+    // Retain cancelled/historical templates as part of the immutable logical team.
+    if (!stable.some(member => member.id === template.id)) stable.push(template)
+  }
+  for (const member of active.filter(item => item.templateInstructionId || item.recurringOccurrenceId)) {
+    const entry = templates.get(member.templateInstructionId)
+    if (!entry || !member.recurringOccurrenceId || member.createCommand
+      || member.coordinationId !== coordination.id || member.taskId !== entry.template.taskId) unsupported()
+    const occurrence = await query('coordination.occurrence.get', { occurrenceId: member.recurringOccurrenceId })
+    const accepted = entry.definitions.find(item => item.revision === occurrence?.acceptedScheduleRevision)
+    const original = taskCommand(occurrence?.templateAction), materialized = taskCommand(occurrence?.action)
+    const frozen = materialized?.frozenInstructions?.find(item => item.instructionId === member.id)
+    if (!occurrence || occurrence.coordinationId !== coordination.id || occurrence.scheduleId !== entry.schedule.id
+      || !accepted || !isDeepStrictEqual(original, taskCommand(accepted.action))
+      || member.id !== `${entry.template.id}:slot:${occurrence.slotId}`
+      || !original?.instructionIds?.includes(entry.template.id) || !materialized?.instructionIds?.includes(member.id)
+      || frozen?.taskId !== member.taskId || frozen.commandDigest !== member.commandDigest
+      || !isDeepStrictEqual(frozen.command, member.command)
+      || member.command?.kind !== entry.template.command.kind || member.command.args?.action !== entry.template.command.args.action
+      || !isDeepStrictEqual(member.authorizationSourceRefs, entry.template.command.args.sourceRefs ?? [])) unsupported()
+  }
+  return stable
+}
+
 export async function resolveTaskArtifactScope({ root, task, query }) {
   const candidates = []
   for (const coordination of await query('coordination.list', { groupId: task.groupId })) {
     if (coordination.state === 'cancelled') continue
     const state = await query('coordination.get', { coordinationId: coordination.id })
-    const active = state.members.filter(member => !member.observation && member.control !== 'cancelled'
+    let active = state.members.filter(member => !member.observation && member.control !== 'cancelled'
       && !['cancelled', 'superseded', 'template'].includes(member.state))
     if (active.some(member => member.taskId === task.taskId)) {
       const schedules = await query('coordination.schedule.list', { coordinationId: coordination.id })
-      if (schedules.some(schedule => schedule.rule?.kind !== 'once')) fail('TASK_ARTIFACT_RECURRING_SCOPE_UNSUPPORTED')
+      if (schedules.some(schedule => schedule.rule?.kind !== 'once'))
+        active = await recurringArtifactMembers(coordination, state.members, active, schedules, query)
+      else if (active.some(member => member.templateInstructionId || member.recurringOccurrenceId)) fail('TASK_ARTIFACT_RECURRING_SCOPE_UNSUPPORTED')
       candidates.push({ coordination, active })
     }
   }

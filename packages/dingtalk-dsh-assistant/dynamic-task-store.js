@@ -1153,10 +1153,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (kind === 'execution.sessionBound') execution.sessionBound = true
       if (kind === 'execution.cancel') { execution.cancelRequested = true; if (execution.drained) execution.status = 'cancelled' }
       if (kind === 'execution.drained') {
+        const wasDrained = execution.drained
         stopExecutionTiming(execution, stamp)
         execution.drained = true; execution.recovering = false
         if (execution.cancelRequested && !terminalExecutions.has(execution.status)) execution.status = 'cancelled'
         else if (execution.status === 'running' && !execution.result) execution.status = 'queued'
+        // An Owner may already have consumed the result while native drain was
+        // still pending. Preserve that result wake and give the proven drain a
+        // stable follow-up; an unclaimed result will read the drained state itself.
+        const resultWake = get('dynamic_wakes', `execution-result:${execution.executionId}:${execution.inputVersion}`, true)
+        if (!wasDrained && execution.result?.current && terminalExecutions.has(execution.status) && executionCurrent(execution)
+          && resultWake && resultWake.state !== 'pending')
+          wake(execution.taskId, 'execution.result', { executionId: execution.executionId, current: true, drained: true },
+            `execution-drained:${execution.executionId}:${execution.inputVersion}`)
       }
       if (kind === 'execution.result') {
         if (!a.error && (a.feedbackVersion ?? 0) !== (execution.feedback ?? []).filter(item => currentFeedback(execution, item)).length) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')

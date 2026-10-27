@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, access, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { coordinationArtifactScope, bindTaskArtifactScope } from '../packages/dingtalk-dsh-assistant/task-artifact-scope.js'
-import { available, reason, nativeTaskHost, nativeShell, latestInput, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, nativeShell, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 const quote = value => `'${value.replaceAll("'", "''")}'`
 test('official artifact binding makes native FS and shell share one root and reject outside writes',
@@ -125,4 +125,73 @@ for (const denyOutside of [false, true]) test(`one real ingress creates three na
     assert.deepEqual(state.members.map(member => member.state), ['fulfilled', 'fulfilled', 'fulfilled'])
     assert.deepEqual((await host.query('coordination.occurrence.list')).map(occurrence => occurrence.triggerKind), ['message', 'business-event', 'business-event'])
     for (const name of completed) assert.equal(await readFile(join(root, 'tasks', coordination.id, 'outputs', name + '.txt'), 'utf8'), name + '-material')
+  })
+
+test('two recurring slots keep original Owner and delegated executions inside the same fixed artifact root',
+  { skip: !available ? reason : false, timeout: 60000 }, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
+    const root = await mkdtemp(join(process.cwd(), 'docs', 'tmp', 'artifact-recurring-'))
+    let host, originalSessionId, latestOwnerRound = 0
+    const steps = new Map(), bindings = [], ownerRounds = []
+    const call = (name, args) => ({ name, args })
+    const wait = () => call('task_session_submit', { decision: { action: 'wait', summary: 'Fixed scoped fixture evidence retained', evidence: [], limitations: [] } })
+    const outside = label => join(root, 'tasks', 'A', 'outside-' + label + '.txt')
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, async (request, h) => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
+        routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
+          units: [{ unitKey: 'daily', summary: 'Daily fixed material', sourceRefs: [{ quote: message.text }], dispatchOwner: 'coordination', topics: [], reason: 'Accepted recurring material' }] })) })]
+      if (names.includes('coordination_submit')) {
+        const task = modelToolValues(request).find(value => value.taskContexts?.length)?.taskContexts[0]
+        if (!task) return [call('coordination_context_get', { taskIds: ['A'] })]
+        return [call('coordination_submit', { kind: 'schedule', actionKind: 'task-command', timezone: 'Asia/Shanghai', rule: { kind: 'daily', time: '09:00' },
+          members: [{ action: 'task-context', taskId: 'A', inputVersion: task.requirementRevision, runSequence: task.runSequence,
+            progressImpact: 'preserve', impactReason: 'Original authorization unchanged', context: 'Fixed daily material', afterTaskIds: [] }], recipientIds: [], interpretation: 'Daily fixed material for original Task' })]
+      }
+      const topic = topicTaskCalls(request); if (topic) return topic
+      const executionTurn = names.includes('execution_submit')
+      const execution = executionTurn && (await h.query('execution.list')).find(item => item.status === 'running')
+      const round = executionTurn ? Number(execution.input.objective.at(-1)) : (input.wakes.find(wake => wake.kind === 'task.supplement')?.payload.contextRevision ?? latestOwnerRound)
+      if (!round) return [wait()]
+      if (!executionTurn) latestOwnerRound = round
+      const session = h.ctx.sessions.get(executionTurn ? execution.sessionId : input.task.sessionId)
+      const bound = h.ctx.sessionProjections.stateOf(session, 'sandboxArtifactRoot')
+      assert.ok(bound, 'Host must persist the official native binding before model tools')
+      assert.equal(h.ctx.sandboxPolicy.resolve({ session }).workspaceRoot, bound.artifactRoot)
+      assert.equal(h.ctx.sandboxPolicy.resolve({ session }).mode, 'workspace-write')
+      bindings.push({ role: executionTurn ? 'execution' : 'owner', round, ownerId: bound.ownerId, root: bound.artifactRoot, cwd: session.header.cwd })
+      if (!executionTurn) {
+        originalSessionId ??= session.id; assert.equal(session.id, originalSessionId)
+        ownerRounds.push(round)
+      }
+      const key = executionTurn ? execution.executionId : 'owner-' + round, step = steps.get(key) ?? 0
+      steps.set(key, step + 1)
+      const label = (executionTurn ? 'execution-' : 'owner-') + round
+      if (step === 0) return [call('write', { file_path: join(bound.artifactRoot, label + '.txt'), content: 'scoped-' + label })]
+      if (!executionTurn && step === 1) return [call('task_delegate', { key: 'scoped-round-' + round, objective: 'Scoped round ' + round }), wait()]
+      if (round === 2 && step === (executionTurn ? 1 : 2)) return [call('write', { file_path: outside(label), content: 'forbidden' })]
+      if (executionTurn && round === 2 && step === 2) return [call(nativeShell, { description: 'Verify recurring execution rejects outside writes', command: process.platform === 'win32'
+        ? `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${quote(outside('shell'))},'forbidden')`
+        : `printf 'forbidden' > ${quote(outside('shell'))}` })]
+      return executionTurn ? [call('execution_submit', { output: { status: 'completed', summary: 'Scoped write and boundary evidence verified', evidence: [], limitations: [], artifacts: [] } })] : [wait()]
+    }, { fsSandbox: true, config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } } })
+    await host.service.store.command({ id: 'seed:A', kind: 'task.create', args: { taskId: 'A', groupId: 'native-group', ownerActorId: 'native-user', request: 'Original scoped fixture Task' } })
+    await host.service.ingest({ groupId: 'native-group', messageId: 'daily-scoped', senderOpenDingTalkId: 'native-user',
+      text: '每天九点向原任务A补充固定材料，保持原目标和授权。', timestamp: '2026-10-21T00:00:00Z' })
+    await host.service.whenIdle()
+    for (const elapsed of [3600000, 86400000]) { t.mock.timers.tick(elapsed); await host.service.recover(); await host.service.whenIdle() }
+    const occurrences = await host.query('coordination.occurrence.list'), [coordination] = await host.query('coordination.list')
+    assert.equal(occurrences.length, 2, JSON.stringify({ alerts: host.service.listAlerts(), occurrences, schedules: await host.query('coordination.schedule.list'), executions: await host.query('execution.list'), tools: host.toolResults.filter(item=>item.result.isError) }))
+    assert.ok(ownerRounds.includes(1)); assert.ok(ownerRounds.includes(2))
+    assert.equal(new Set(bindings.map(item => item.root)).size, 1)
+    assert.ok(bindings.every(item => item.ownerId === coordination.id && item.root === join(root, 'tasks', coordination.id, 'outputs') && item.cwd === join(root, 'tasks', 'A')))
+    for (const role of ['owner', 'execution']) for (const round of [1, 2]) {
+      assert.ok(bindings.some(item => item.role === role && item.round === round))
+      assert.equal(await readFile(join(bindings[0].root, `${role}-${round}.txt`), 'utf8'), `scoped-${role}-${round}`)
+    }
+    for (const label of ['owner-2', 'execution-2', 'shell']) await assert.rejects(access(outside(label)), { code: 'ENOENT' })
+    assert.equal(host.toolResults.filter(item => item.name === 'write' && item.result.isError).length, 2, JSON.stringify({ steps: [...steps], tools: host.toolResults.map(item => ({name:item.name,sessionId:item.sessionId,isError:item.result.isError,error:item.result.error})) }))
+    assert.ok(host.toolResults.some(item => item.name === nativeShell && item.result.value?.sandbox?.denied && item.result.value?.exitCode !== 0), JSON.stringify({ steps: [...steps], shell: host.toolResults.filter(item=>item.name === nativeShell), failures: host.toolResults.filter(item=>item.result.isError).map(item=>({name:item.name,result:item.result})) }))
+    assert.equal((await host.query('task.get', { taskId: 'A' })).requirementRevision, 1)
   })

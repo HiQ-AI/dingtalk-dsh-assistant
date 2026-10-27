@@ -344,6 +344,54 @@ test('a specific objection after delivery reopens the original task without repl
   assert.equal((await f.query({ kind: 'task.list' })).length, 1)
 })
 
+for (const drainAt of ['before-review', 'during-review', 'after-review']) test(`native drain preserves a result wake consumed ${drainAt}`, async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.command('task.wait', { binding: owner.binding, action: 'wait', summary: 'Wait for original execution' })
+  await f.command('wake.ack', { binding: owner.binding, wakeIds: owner.wakeIds })
+  await f.command('task.drained', { binding: owner.binding })
+  await f.command('execution.result', { binding, output: { summary: 'Original result' } })
+  const resultId = `execution-result:${binding.executionId}:${binding.inputVersion}`
+  const drainedId = `execution-drained:${binding.executionId}:${binding.inputVersion}`
+  if (drainAt === 'before-review') await f.command('execution.drained', { binding })
+  const review = (await f.command('task.claim', { taskId: 'task' })).result
+  assert.ok(review.wakeIds.includes(resultId))
+  if (drainAt === 'during-review') await f.command('execution.drained', { binding })
+  await f.command('task.wait', { binding: review.binding, action: 'wait', summary: 'Result observed before native drain' })
+  await f.command('wake.ack', { binding: review.binding, wakeIds: review.wakeIds })
+  await f.command('task.drained', { binding: review.binding })
+  if (drainAt === 'after-review') await f.command('execution.drained', { binding })
+  // Different command IDs and restart must not duplicate or re-arm the drain wake.
+  await f.command('execution.drained', { binding })
+  await f.reopen()
+  const wakes = await f.query({ kind: 'wake.list', taskId: 'task' })
+  assert.equal(wakes.filter(wake => wake.id === resultId).length, 1)
+  assert.equal(wakes.filter(wake => wake.id === drainedId).length, drainAt === 'before-review' ? 0 : 1)
+  if (drainAt !== 'before-review') {
+    const next = (await f.command('task.claim', { taskId: 'task' })).result
+    assert.deepEqual(next.wakeIds, [drainedId])
+    assert.equal(next.wakes[0].kind, 'execution.result')
+    assert.equal(next.wakes[0].payload.drained, true)
+    assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).drained, true)
+    await f.command('wake.ack', { binding: next.binding, wakeIds: next.wakeIds })
+    await f.command('execution.drained', { binding })
+    assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).find(wake => wake.id === drainedId).state, 'acked')
+  }
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).status, 'active', 'drain cannot complete the task or replay an execution')
+  assert.equal((await f.query({ kind: 'execution.list', taskId: 'task' })).length, 1)
+})
+
+for (const invalidated of ['cancelled', 'stale']) test(`native drain cannot wake an Owner for a ${invalidated} result`, async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  await f.command('execution.result', { binding, output: {} })
+  await f.command('wake.ack', { binding: owner.binding, wakeIds: owner.wakeIds })
+  await f.command('task.drained', { binding: owner.binding })
+  await f.command('task.claim', { taskId: 'task' })
+  if (invalidated === 'cancelled') await f.command('task.control', { taskId: 'task', control: 'cancelled' })
+  else await f.command('task.revise', { taskId: 'task', request: 'Changed objective' })
+  await f.command('execution.drained', { binding })
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).some(wake => wake.id === `execution-drained:${binding.executionId}:${binding.inputVersion}`), false)
+})
+
 async function fixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dynamic-task-ledger-'))
   const config = { dbPath: join(root, 'dynamic.sqlite'), instanceId: 'fixture', initialize: true, ...options }
