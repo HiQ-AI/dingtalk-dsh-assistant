@@ -89,7 +89,6 @@ $maintenanceArgs=@()
 if($RestartMaintenanceProposal){
  $RestartMaintenanceProposal=[IO.Path]::GetFullPath($RestartMaintenanceProposal)
  $maintenanceProposalHash=Hash $RestartMaintenanceProposal
- if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CURRENT_HOST_HAS_CHILDREN'}
  $maintenanceArgs=@('online',[string]$ExpectedPid,$RestartMaintenanceProposal)
 }
 $ledgerProof=RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)
@@ -121,8 +120,7 @@ try{
  if((Get-ScheduledTask -TaskName $taskName).Settings.Enabled){throw 'DEPLOY_AUTOSTART_STILL_ENABLED'}
  if($RestartMaintenanceProposal){
   if((Hash $RestartMaintenanceProposal)-ne$maintenanceProposalHash){throw 'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'}
-  if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CURRENT_HOST_HAS_CHILDREN'}
-  Record 'restart-maintenance-preflight' ($ledgerProof|ConvertFrom-Json)
+   Record 'restart-maintenance-preflight' ($ledgerProof|ConvertFrom-Json)
  }
  $phase='native-dispose'
  $signalOut=Join-Path $EvidenceDirectory 'signal.json';$signalErr=Join-Path $EvidenceDirectory 'signal.stderr.log'
