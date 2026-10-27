@@ -2,7 +2,7 @@
 
 原模型配置使用浏览器 select，统筹、协调候选还限定在各自当前提供方，与 DSH 原生菜单的搜索、分组和候选内容不同。本次三个字段直接复用宿主 ModelSelect，并共用同一份全提供方 catalog；各自保留选中项。
 
-## 实现与关键位置
+## 关键实现
 
 `packages/dingtalk-dsh-assistant/client.js:48`：通过宿主公开 SlotRegistry 注册视图取得现有组件，目录来自原生 RPC：
 
