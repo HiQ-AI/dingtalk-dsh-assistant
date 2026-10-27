@@ -11,5 +11,9 @@ reconsider-audit-and-cas,2,PASS,round-2.md
 native-reconsider-same-task,2,PASS,round-2.md
 final-recovery-regression,2,PASS,round-2.md
 package-native-smoke,2,PASS,round-2.md
-actual-model-handoff,2,PENDING,round-2.md
+actual-model-handoff,2,FAIL,round-2-model-analysis.md
 production-update-and-message313,2,BLOCKED,round-2.md
+provider-object-schema,3,PASS,round-3.md
+actual-model-handoff,3,PASS,round-3-model.json
+already-undertaken-observe-only,3,PASS,round-3-model.json
+production-update-and-message313,3,BLOCKED,round-3.md

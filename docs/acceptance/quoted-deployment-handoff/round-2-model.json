@@ -1,0 +1,86 @@
+{
+  "passed": false,
+  "provider": "cortex-gateway",
+  "model": "cortex-cowork",
+  "reasoningEffort": "high",
+  "realChannelSends": 0,
+  "realTaskWrites": 0,
+  "standardStreams": 8,
+  "providerNetworkCalls": null,
+  "cost": null,
+  "scenarios": [
+    {
+      "name": "completed-original-reopen",
+      "sourcePreserved": true,
+      "submitted": null,
+      "contextReads": [
+        {},
+        {
+          "offset": 20,
+          "limit": 20
+        },
+        {
+          "taskIds": [
+            "synthetic-original-task"
+          ]
+        }
+      ],
+      "errors": [],
+      "usage": [
+        {
+          "inputTokens": 7058,
+          "outputTokens": 153,
+          "totalTokens": 7211
+        },
+        {
+          "inputTokens": 8209,
+          "outputTokens": 25,
+          "totalTokens": 8234
+        },
+        {
+          "inputTokens": 2208,
+          "outputTokens": 92,
+          "totalTokens": 10364,
+          "cacheReadTokens": 8064
+        },
+        {
+          "inputTokens": 3663,
+          "outputTokens": 990,
+          "totalTokens": 11565,
+          "cacheReadTokens": 6912
+        },
+        {
+          "inputTokens": 3873,
+          "outputTokens": 914,
+          "totalTokens": 11699,
+          "cacheReadTokens": 6912
+        },
+        {
+          "inputTokens": 960,
+          "outputTokens": 288,
+          "totalTokens": 11488,
+          "cacheReadTokens": 10240
+        },
+        {
+          "inputTokens": 11297,
+          "outputTokens": 301,
+          "totalTokens": 11598
+        }
+      ],
+      "passed": false,
+      "failure": {
+        "name": "Error",
+        "code": "COORDINATION_NO_SUBMISSION",
+        "assertion": null
+      },
+      "elapsedMs": 120057
+    }
+  ],
+  "credentialMetadata": {
+    "reference": "CORTEX_GATEWAY_API_KEY",
+    "configured": true,
+    "migrationRequired": false
+  },
+  "credentialStoreUnchanged": true,
+  "boundary": "Production planner/context + real installed cortex-gateway/cortex-cowork high; synthetic 27-task catalog and captured-only submit. No production TaskStore/channel, no credential writes. Costs and provider retries unknown."
+}

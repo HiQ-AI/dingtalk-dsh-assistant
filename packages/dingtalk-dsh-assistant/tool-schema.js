@@ -61,3 +61,18 @@ export function toToolJsonSchema(schema) {
     if (zodSchema.def?.type === 'tuple' && !zodSchema.def.rest) jsonSchema.maxItems = zodSchema.def.items.length
   } }))))
 }
+
+// 工具参数须有可见的对象根；DSH不支持oneOf与properties并列，分支精确校验仍用原Zod。
+export function toToolObjectJsonSchema(schema) {
+  const output = toToolJsonSchema(schema)
+  if (output.type === 'object') return output
+  const branches = output.oneOf
+  if (branches?.every(branch => branch.type === 'object')) {
+    const keys = [...new Set(branches.flatMap(branch => Object.keys(branch.properties ?? {})))]
+    return { type: 'object', additionalProperties: branches.some(branch => branch.additionalProperties !== false),
+      properties: Object.fromEntries(keys.map(key => [key, union(branches.flatMap(branch => branch.properties?.[key] ? [branch.properties[key]] : []))])),
+      required: (branches[0].required ?? []).filter(key => branches.every(branch => branch.required?.includes(key))),
+      description: '对象联合的工具参数；各kind分支的完整必填、互斥与语义约束由执行时同源Zod校验。' }
+  }
+  throw new Error('tool_object_schema_required')
+}

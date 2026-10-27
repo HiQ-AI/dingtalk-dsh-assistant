@@ -1,0 +1,209 @@
+{
+  "passed": true,
+  "provider": "cortex-gateway",
+  "model": "cortex-cowork",
+  "reasoningEffort": "high",
+  "realChannelSends": 0,
+  "realTaskWrites": 0,
+  "standardStreams": 7,
+  "providerNetworkCalls": null,
+  "cost": null,
+  "scenarios": [
+    {
+      "name": "completed-original-reopen",
+      "sourcePreserved": true,
+      "submitted": {
+        "kind": "arrangement",
+        "commonContext": "用户引用合成交付人的原交付消息，要求将其中后端 https://github.com/HiQ-AI/dataset/pull/417 与前端 https://github.com/HiQ-AI/dataset-web/pull/389 对应的终审详情编辑状态持久化改动部署到UAT2。引用明确此前尚未合并或部署，不能视为部署证明；新UPR的UAT专有适配已随材料交付，集成时需应用。此前验证为隔离环境，未覆盖真实SSO、异步队列及外部计算引擎，不得将其描述为已验证。",
+        "allTogether": false,
+        "members": [
+          {
+            "taskId": "synthetic-original-task",
+            "action": "task-reopen",
+            "inputVersion": 3,
+            "runSequence": 3,
+            "progressImpact": "replan",
+            "impactReason": "原任务已完成PR交付，原范围不自行合并或部署；用户本次明确新增将该交付部署到UAT2的要求与授权，须沿原任务重开承接新增交付，不重复创建任务。",
+            "context": "结合用户完整原文“部署到UAT2”及其原始引用，部署对象明确为dataset#417和dataset-web#389，不是已部署的终审只读UPR导入覆盖修复。保留已有实施和交付成果，由原负责人承接UAT2部署；原不自行部署限制在本次明确授权的UAT2范围内更新，不扩展为其他环境或无关合并授权。",
+            "objective": "在原终审详情页编辑确认基础上实现并保留状态持久化：确认编辑后立即变为待提交，计算、刷新和重新进入仍可编辑，取消不改状态；保留新旧导入及保护路径必要验证与后端#417、前端#389交付成果，将上述改动部署到UAT2，并应用随材料交付的新UPR UAT专有适配。",
+            "requirements": [
+              "保留原业务要求：确认编辑后立即持久为待提交，无需保存；计算、刷新、重新进入仍可编辑；取消不改状态。",
+              "沿原交付后端 https://github.com/HiQ-AI/dataset/pull/417 和前端 https://github.com/HiQ-AI/dataset-web/pull/389 推进UAT2集成部署，保留既有新旧导入及相关保护路径必要验证成果，不另建后续阶段任务。",
+              "集成时应用已随材料交付的新UPR UAT专有适配；本次授权范围为上述交付部署到UAT2，不延伸到其他环境或无关变更。",
+              "依据真实集成、部署结果反馈UAT2交付情况；此前隔离环境验证不作为真实SSO、异步队列及外部计算引擎已验证的证明，不自行扩大验收范围。"
+            ],
+            "afterTaskIds": []
+          }
+        ],
+        "sourceOrder": [
+          {
+            "ordinal": 1,
+            "start": 0,
+            "end": 7,
+            "quote": "部署到UAT2",
+            "memberIndex": 0
+          }
+        ],
+        "pendingClarifications": []
+      },
+      "contextReads": [
+        {},
+        {
+          "offset": 20,
+          "limit": 50
+        },
+        {
+          "taskIds": [
+            "synthetic-original-task"
+          ]
+        }
+      ],
+      "errors": [],
+      "usage": [
+        {
+          "inputTokens": 12217,
+          "outputTokens": 24,
+          "totalTokens": 12241
+        },
+        {
+          "inputTokens": 1208,
+          "outputTokens": 25,
+          "totalTokens": 13393,
+          "cacheReadTokens": 12160
+        },
+        {
+          "inputTokens": 2119,
+          "outputTokens": 755,
+          "totalTokens": 16186,
+          "cacheReadTokens": 13312
+        }
+      ],
+      "passed": true,
+      "elapsedMs": 19636
+    },
+    {
+      "name": "reconsider-active-already-undertaken",
+      "sourcePreserved": true,
+      "submitted": {
+        "kind": "arrangement",
+        "commonContext": "原消息引用已明确部署对象为终审详情编辑状态持久化改动的后端 PR #417（https://github.com/HiQ-AI/dataset/pull/417）和前端 PR #389（https://github.com/HiQ-AI/dataset-web/pull/389）。当前原任务已承接沿原开发线集成部署UAT2、核验实际运行结果并报告证据及限制的完整要求，本次仅关联观察，不重复派发部署、不重开或重排。引用所述新UPR的UAT专有适配及隔离验证未覆盖真实SSO、异步队列和外部计算引擎是交付背景，不代表已经合并或部署。",
+        "allTogether": false,
+        "members": [
+          {
+            "action": "task-observe",
+            "taskId": "synthetic-original-task",
+            "inputVersion": 4,
+            "runSequence": 4
+          }
+        ],
+        "sourceOrder": [
+          {
+            "ordinal": 1,
+            "start": 0,
+            "end": 7,
+            "quote": "部署到UAT2",
+            "memberIndex": 0
+          }
+        ],
+        "pendingClarifications": []
+      },
+      "contextReads": [
+        {},
+        {
+          "offset": 20,
+          "limit": 50
+        },
+        {
+          "taskIds": [
+            "synthetic-original-task"
+          ]
+        }
+      ],
+      "errors": [],
+      "usage": [
+        {
+          "inputTokens": 12347,
+          "outputTokens": 24,
+          "totalTokens": 12371
+        },
+        {
+          "inputTokens": 3381,
+          "outputTokens": 25,
+          "totalTokens": 13646,
+          "cacheReadTokens": 10240
+        },
+        {
+          "inputTokens": 15806,
+          "outputTokens": 649,
+          "totalTokens": 16455
+        },
+        {
+          "inputTokens": 2727,
+          "outputTokens": 241,
+          "totalTokens": 16408,
+          "cacheReadTokens": 13440
+        }
+      ],
+      "passed": true,
+      "elapsedMs": 36560
+    }
+  ],
+  "sourceSha256": {
+    "independent-coordination-planner.js": "d051f4ef56821f98f6d25f072943f89080446599090f655a89488412ba9158a1",
+    "independent-coordination-service.js": "653f0e9231566df2108f8d8f23944151b12ea96266db6eb4c9f6e535067168ae",
+    "tool-schema.js": "ead7caba335c0fd04f1a9126fc65217c56f372f490e8a55ca25792894847559b"
+  },
+  "credentialMetadata": {
+    "reference": "CORTEX_GATEWAY_API_KEY",
+    "configured": true,
+    "migrationRequired": false
+  },
+  "submitToolSchema": {
+    "rootKeys": [
+      "type",
+      "additionalProperties",
+      "properties",
+      "required",
+      "description"
+    ],
+    "rootProperties": [
+      "kind",
+      "question",
+      "candidates",
+      "reason",
+      "commonContext",
+      "allTogether",
+      "members",
+      "sourceOrder",
+      "pendingClarifications",
+      "actionKind",
+      "timezone",
+      "rule",
+      "taskIds",
+      "reminderText",
+      "conditionalMembers",
+      "recipientIds",
+      "interpretation",
+      "coordinationIds",
+      "coordinationId",
+      "expectedRevision",
+      "change",
+      "clarificationIds",
+      "resolution",
+      "scheduleId",
+      "expectedScheduleRevision",
+      "scope",
+      "state",
+      "replacementPlannedAt",
+      "occurrenceId",
+      "expectedControlRevision",
+      "control"
+    ],
+    "rootRequired": [
+      "kind"
+    ],
+    "branchCount": 0
+  },
+  "credentialStoreUnchanged": true,
+  "boundary": "Production planner/context + real installed cortex-gateway/cortex-cowork high; synthetic 27-task catalog and captured-only submit. No production TaskStore/channel, no credential writes. Costs and provider retries unknown."
+}
