@@ -1,7 +1,10 @@
-# 原生模型选择器交付结果
+# 原生模型选择器最终验收
 
-本轮必需用例均通过，状态以 matrix.csv 为准；最终证据在 round-2.md。三字段复用宿主原生 ModelSelect，候选来自同一个全提供方目录，完整 provider/model 随唯一配置保存；不写当前聊天会话。
+第四轮已在实际认证DSH宿主完成部署与验收，状态以matrix.csv为准；第三轮失败及修复过程完整保留。
 
-定向 16/16、发布 smoke 14/14，全无跳过。Chrome 隔离主机验证三份候选相同、搜索/分组/勾选、跨提供方保存、空搜索与键盘选择。宿主材质已视觉核对。
+- 三个模型字段的触发器、原生弹层样式一致。
+- 三份全部候选均为2个提供方、9个模型；名称、provider、model、顺序完全一致，并与实际composer原生菜单基准一致。
+- 17定向测试、14发布smoke通过，无跳过；真实Cordis父级注入回归覆盖原错误。
+- 本地运行修复源码2981e7c6，新PID96580、health=ok、恢复问题0、入站与DWS健康。包摘要及安装bundle一致，模型配置未变化。
 
-本轮尚未部署到正式实例；完整宿主装配和窄屏仍未验证，详见 round-2.md。没有运行 CI、发送真实消息、重放任务或改变真实模型配置。
+证据：round-4.md、round-4/deployment-readback.json、round-4/live-menu-comparison.json、round-4/live-trigger-comparison.json。正式宿主已验证，不再仅靠隔离fixture。窄屏未验证；未触发CI或重放业务。

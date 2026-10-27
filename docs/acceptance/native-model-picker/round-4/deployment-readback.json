@@ -1,0 +1,13 @@
+{
+  "dwsHealthy": true,
+  "newPid": 96580,
+  "webBundleMatches": true,
+  "modelsUnchanged": true,
+  "sourceCommit": "2981e7c6",
+  "packageHashesMatch": true,
+  "recoveryIssueCount": 0,
+  "inboundProcessing": true,
+  "taskEnabled": true,
+  "oldPidExited": true,
+  "health": "ok"
+}
