@@ -7,3 +7,4 @@ PR272既有协调及完成时钟,1,PASS,pr272-baseline-tests.log 188/188
 关联目录前后工具读取,1,PASS,linked-read-comparison.json 5次到1次
 真实模型提速秒数,1,NOT_RUN,没有本轮真实模型实验
 现场部署与原消息验证,1,NOT_RUN,不在本轮执行范围
+单PR整合交付,1,PASS,代码61330414远端及PR272 head回读一致 OPEN Draft CI无run

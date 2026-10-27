@@ -59,6 +59,10 @@ node --test --test-name-pattern='来源语义戳在首次Topic' test/task-topic-
 
 倒数第二条是预期失败的对照，只替换原始适配器模块，不改生产文件。比较脚本临时提取原head模块到本工作树并在finally删除唯一临时文件；不写Git配置。
 
-## 边界
+## 交付回读
+
+代码提交 `613304141ad7b1c9580c5b03240685f842b30173` 已非强制推送到原 `worktree-inbox-latency-320`，没有创建第二个PR。Git远端ref与GitHub PR head分别回读一致；PR272保持OPEN/Draft，base main。正文经bug门禁校验后由GitHub连接器更新并回读；该代码SHA的statuses和workflow_runs均为空，未主动运行CI。命令行gh因其本地配置读取权限失败，未绕过配置文件访问拒绝。
+
+## 未验证边界
 
 未部署、未重放317–319；本轮没有新的真实模型测试，不沿用PR原有真实模型一次通过来宣称本次快照机制的真实秒数收益。#320历史135.405秒入站归因仍独立未收敛。保留PR Draft状态及原有失败证据，不触发CI。
