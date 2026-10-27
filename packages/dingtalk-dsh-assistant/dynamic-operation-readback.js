@@ -18,7 +18,7 @@ const inputFor = (events, binding) => events.findLast(event => event.type === 'u
   && event.data.source.executionSession.inputDigest === binding.inputDigest)
 
 /** 原调用作为调查材料提供，必须绑定真实日志和账本摘要；不把它当成效果成功证明。 */
-export async function readNativeOperationContext({ ctx, operation }) {
+export async function readNativeOperationContext({ ctx, operation, allowHostIdentityRendering = false }) {
   const binding = operation.dispatchBinding
   if (!binding || !operation.result?.callId) return null
   const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
@@ -32,7 +32,14 @@ export async function readNativeOperationContext({ ctx, operation }) {
   try { args = JSON.parse(call?.data.arguments) } catch { return null }
   if (hash(args) !== operation.definition.argumentsDigest) return null
   const resultEvent = events.find(event => event.seq > call.seq && results(event).some(result => result.toolCallId === callId
-    && result.isError === operation.result.isError && hash(result.content) === operation.result.resultDigest))
+    && result.isError === operation.result.isError && (hash(result.content) === operation.result.resultDigest
+      // The Host guard recorded Error.message before the native runtime rendered
+      // this exact Error with its prefix. Never strip prefixes from arbitrary errors.
+      || allowHostIdentityRendering && ['pwsh', 'bash'].includes(operation.definition.toolName)
+        && operation.result.errorCode === 'execution_background_identity_missing' && result.isError === true
+        && result.content?.length === 1 && result.content[0].type === 'text'
+        && result.content[0].text === 'Error: execution_background_identity_missing'
+        && operation.result.resultDigest === hash([{ type: 'text', text: 'execution_background_identity_missing' }]))))
   if (!resultEvent) return null
   return { operationId: operation.operationId, sessionId: binding.sessionId, toolName: call.data.name, arguments: args,
     result: results(resultEvent).find(result => result.toolCallId === callId), resultError: nativeFileError(call.data.name, args, results(resultEvent).find(result => result.toolCallId === callId), resultEvent.data.error),
@@ -51,7 +58,7 @@ async function inspectFailedNativeOperation({ ctx, operation, execution }, { kin
     || operation.result.toolName !== operation.definition.toolName) return null
   const jobs = ctx.get?.('jobs')
   if (!jobs?.list || jobs.list(execution.sessionId).some(job => ['running', 'stopping'].includes(job.status))) return null
-  const original = await readNativeOperationContext({ ctx, operation })
+  const original = await readNativeOperationContext({ ctx, operation, allowHostIdentityRendering: kind === 'native-investigated-failure' })
   if (!original || original.result.isError !== true || !accepts(original)) return null
   const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
   const input = inputFor(events, binding)
