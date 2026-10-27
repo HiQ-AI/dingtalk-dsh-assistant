@@ -41,3 +41,7 @@
 最终发行smoke使用原测试已支持的`RELEASE_PACKAGE_DIRECTORY`，先以`npm pack --json --ignore-scripts --pack-destination <docs/tmp下候选目录>`产出实际tgz，再设置该目录并运行同三文件`node --test --test-concurrency=1 ...`。共14/14 PASS、0 skip，原30秒门限未改；打包及解包后的全部运行文件逐字节核对当前源码。默认pnpm命令及无预打包串行轮均曾超时，日志保留，不能称默认命令一次通过。这是本地候选包验证，不是精确提交SHA的发行CI或已安装版本。
 
 已独立读取候选`zzusp-dingtalk-dsh-assistant-2.2.1.tgz`摘要为`c7135f07afa3c143b58a06b730f196106a80c33a1460651c77f7993a427d453e`。测试映射检查309文件各一次、历史3、删除0；没有调整分类退出覆盖，也没有主动触发CI。
+
+## 交付回读
+
+代码提交`75d46b338c62efbd5da3a795f73712f261e42aa3`。`gh pr view --json number,url,state,isDraft,baseRefName,headRefName,headRefOid`独立回读[PR #272](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/272)：OPEN、Draft，main ← worktree-inbox-latency-320，head为该代码提交；`git ls-remote`同名远端分支摘要一致。Draft保留历史135秒未收敛及现场未部署边界，不表示业务验收完成。
