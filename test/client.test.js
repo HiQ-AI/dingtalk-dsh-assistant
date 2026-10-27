@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { apply, name, readResidentOverview, agentSaveSummary } from '../packages/dingtalk-dsh-assistant/client.js'
+import { apply, name, readResidentOverview, agentSaveSummary, ModelIdInput } from '../packages/dingtalk-dsh-assistant/client.js'
 
 test('概览在已移除任务表格同步接口后仍加载完整状态', async (t) => {
   const responses = {
@@ -122,4 +122,30 @@ test('添加常驻群在操作位置反馈前置条件、进度和请求结果',
   assert.match(source, /添加失败：/u)
   assert.match(source, /常驻群已添加，会话已开始运行/u)
   assert.doesNotMatch(source, /disabled: !newGroup\.groupId\.trim\(\) \|\| !newGroup\.responsibility\.trim\(\)/u)
+})
+
+
+test('三个模型字段使用 DSH 目录下拉框，名称与保存 ID 分离且不改写提供方', async () => {
+  let selected
+  const models = [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }, { id: 'gpt-6-astra', name: 'GPT-6 Astra' }]
+  const select = ModelIdInput({ id: 'task-model', label: '统筹模型', value: models[0].id, models,
+    onChange: event => { selected = event.target.value } })
+  assert.equal(select.type, 'select')
+  assert.equal(select.props.value, 'gpt-6.1-sol')
+  assert.equal(select.props.disabled, false)
+  const options = select.props.children.flat().filter(Boolean)
+  assert.deepEqual(options.map(option => [option.props.value, option.props.children]), models.map(model => [model.id, model.name]))
+  select.props.onChange({ target: { value: options[1].props.value } })
+  assert.equal(selected, 'gpt-6-astra')
+  for (const models of [undefined, []]) {
+    const pending = ModelIdInput({ id: 'model', label: '模型', value: 'saved-model', models })
+    assert.equal(pending.props.disabled, true)
+    assert.equal(pending.props.value, 'saved-model')
+  }
+  const unavailable = ModelIdInput({ id: 'model', label: '模型', value: 'saved-model', models })
+  assert.equal(unavailable.props.children[0].props.disabled, true)
+  assert.match(unavailable.props.children[0].props.children, /当前不可用/)
+  const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /qualify|modelDraft|createElement\('datalist'/)
+  assert.match(source, /跟随默认推理深度/)
 })

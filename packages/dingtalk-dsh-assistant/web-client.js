@@ -50,10 +50,11 @@ window.__ModuleLoader__.load({
     }
 
     const effortLabel = value => ({ low: '轻度', medium: '中度', high: '高度', xhigh: '极高', max: '最高' })[value.id] ?? value.name ?? value.id
-    function ModelIdInput({ id, label, value, onChange, models, ...props }) {
-      return React.createElement(React.Fragment, null,
-        React.createElement('input', { id, 'aria-label': label, list: `${id}-list`, style: input, value, onChange, ...props }),
-        React.createElement('datalist', { id: `${id}-list` }, ...(models ?? []).map(model => React.createElement('option', { key: model.id, value: model.id }, model.name))))
+    function ModelIdInput({ id, label, value, onChange, models, disabled, ...props }) {
+      const listed = (models ?? []).some(model => model.id === value)
+      return React.createElement('select', { id, 'aria-label': label, style: input, value, onChange, disabled: disabled || !models?.length, ...props },
+        !listed ? React.createElement('option', { value, disabled: true }, models ? `${value || '未选择'}（当前不可用）` : '正在读取模型…') : null,
+        ...(models ?? []).map(model => React.createElement('option', { key: model.id, value: model.id }, model.name || model.id)))
     }
 
     const independentModelDefault = { provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'explicit', reasoningEffort: 'low' }
@@ -75,29 +76,18 @@ window.__ModuleLoader__.load({
       const efforts = options?.reasoning?.efforts ?? []
       const requested = value.reasoningMode === 'inherit' ? defaultEffort : value.reasoningMode === 'explicit' ? value.reasoningEffort : undefined
       const invalid = !!requested && !efforts.some(effort => effort.id === requested)
-      const qualify = model => model.startsWith(`${value.provider}/`) ? model : `${value.provider}/${model}`
-      const [modelDraft, setModelDraft] = useState(() => qualify(value.model))
-      const emittedModel = useRef(null)
-      useEffect(() => {
-        const key = JSON.stringify([value.provider, value.model])
-        if (emittedModel.current !== key) setModelDraft(qualify(value.model))
-      }, [value.provider, value.model])
       return React.createElement('div', { role: 'group', style: { display: 'grid', gap: ui.space3, minWidth: 0 }, 'aria-label': `${label}配置` },
         React.createElement('div', { 'data-model-row': true },
           React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: `${id}-model-id` }, label),
-            React.createElement(ModelIdInput, { id: `${id}-model-id`, label, value: modelDraft,
-              models: options?.models?.map(model => ({ ...model, id: qualify(model.id) })), disabled: busy,
-              'aria-invalid': !!error, 'aria-describedby': `${id}-options-status ${id}-model-help`, onChange: event => {
-                const entered = event.target.value, slash = entered.indexOf('/')
-                const provider = slash < 0 ? value.provider : entered.slice(0, slash), model = slash < 0 ? entered : entered.slice(slash + 1)
-                emittedModel.current = JSON.stringify([provider, model]); setModelDraft(entered)
-                change(current => ({ ...current, provider, model }))
-              }, onBlur: () => { if (value.provider && value.model) setModelDraft(qualify(value.model)) } })),
+            React.createElement(ModelIdInput, { id: `${id}-model-id`, label, value: value.model,
+              models: options?.models, disabled: busy,
+              'aria-invalid': !!error, 'aria-describedby': `${id}-options-status ${id}-model-help`,
+              onChange: event => change(current => ({ ...current, model: event.target.value })) })),
           React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: `${id}-reasoning` }, '推理深度'),
             React.createElement('select', { id: `${id}-reasoning`, style: input, disabled: busy || !options,
               'aria-invalid': invalid, 'aria-describedby': `${id}-options-status`, value: value.reasoningMode === 'explicit' ? value.reasoningEffort : value.reasoningMode,
               onChange: event => { const next = event.target.value; change(current => ({ ...current, reasoningMode: ['inherit','model-default'].includes(next) ? next : 'explicit', reasoningEffort: ['inherit','model-default'].includes(next) ? null : next })) } },
-              React.createElement('option', { value: 'inherit' }, `跟随默认处理（${defaultEffort || '模型默认'}）`),
+              React.createElement('option', { value: 'inherit' }, `跟随默认推理深度（${defaultEffort || '模型默认'}）`),
               React.createElement('option', { value: 'model-default' }, '模型默认'),
               ...efforts.map(effort => React.createElement('option', { key: effort.id, value: effort.id }, effortLabel(effort))),
               value.reasoningMode === 'explicit' && !efforts.some(effort => effort.id === value.reasoningEffort)
