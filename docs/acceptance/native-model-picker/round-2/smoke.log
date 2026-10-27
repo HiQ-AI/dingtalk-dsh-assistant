@@ -1,0 +1,50 @@
+
+> dingtalk-dsh-assistant@2.2.1 test:release-smoke D:\codex\worktrees\model-field-consistency\dingtalk-dsh-assistant
+> node --test test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js
+
+✔ three actual tgz and source identity round-trip; publish retry reuses identical bytes (3801.8824ms)
+✔ different run/SHA/tag, lock/profile/environment and manifest hashes all fail closed (9670.1669ms)
+✔ missing, extra and modified tarballs cannot reach publication (2614.5115ms)
+✔ dirty tracked source and untracked package content cannot claim a commit identity (2598.7468ms)
+✔ manual compatibility CI has no push, PR, schedule or publication side effects (24.6238ms)
+✔ release exact SHA validates all lanes before immutable build and same-run publication (65.5418ms)
+✔ every test file is mapped once; only reviewed historical registrations leave Release (2551.9936ms)
+✔ release publishes three tgz plus identity manifest and verifies every attachment (2.8833ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (16.1103ms)
+✔ resident profile 只解析到最新版 DSH 依赖边界 (22.3166ms)
+✔ 常驻启动优先读取用户代理，避免为启动解析完整 resident 状态 (24.9766ms)
+✔ Web 启动优先使用当前 profile 的 DSH 入口 (1.8331ms)
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (20284.5072ms)
+ℹ package begin: 0ms
+ℹ package staged: 393ms
+ℹ package packed: 7936ms
+ℹ package extracted: 8064ms
+ℹ package bytes-and-imports-verified: 11105ms
+ℹ package dependency-links-ready: 11223ms
+ℹ package runtime-imports-ready: 11524ms
+ℹ package native-host-ready: 13608ms
+ℹ package message-ingested: 13627ms
+ℹ package native-task-idle: 18726ms
+ℹ package native-task-verified: 20024ms
+ℹ package native-host-closed: 20072ms
+ℹ package temporary-files-removed: 20282ms
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (7818.073ms)
+ℹ package begin: 0ms
+ℹ package staged: 358ms
+ℹ package packed: 2954ms
+ℹ package extracted: 3184ms
+ℹ package bytes-and-imports-verified: 6467ms
+ℹ package dependency-links-ready: 6515ms
+ℹ package resident-host-ready: 7186ms
+ℹ package resident-listening: 7674ms
+ℹ package resident-health-verified: 7685ms
+ℹ package resident-closed: 7700ms
+ℹ package temporary-files-removed: 7817ms
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30230.6884

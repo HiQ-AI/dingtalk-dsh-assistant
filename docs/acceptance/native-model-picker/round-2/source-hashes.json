@@ -1,0 +1,18 @@
+[
+  {
+    "sha256": "e5404d8dffd7b5856e42bb40ead9bd24635ccd08d5b3662f378f6b008d046834",
+    "path": "packages/dingtalk-dsh-assistant/client.js"
+  },
+  {
+    "sha256": "0c080932515892ab911e7a59433d5fc9f6ff1614b953347bf6c4e0be2a693567",
+    "path": "packages/dingtalk-dsh-assistant/web-client.js"
+  },
+  {
+    "sha256": "18f6e74e203d50f66c8e30552d52e070d06941514cb0e72b149683c092a3ba2a",
+    "path": "D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js"
+  },
+  {
+    "sha256": "b4936b4661f416b32d17fd7fb2058f814876dcba9052fb1637ca66cd5dd4f8d2",
+    "path": "docs/tmp/native-model-menu-detail.png"
+  }
+]

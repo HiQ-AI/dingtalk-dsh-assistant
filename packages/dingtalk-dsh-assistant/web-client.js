@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useState, useRef } = React
 
     const name = 'dingtalk-dsh-assistant-client'
-    const inject = ['slots']
+    const inject = ['slots', 'locale', 'remote.session']
     const ENDPOINT = 'http://127.0.0.1:18998'
     const colors = { border: 'var(--dsw-alias-stroke-border-2, rgba(127,127,127,.28))', muted: 'var(--dsw-alias-label-secondary, #737373)', accent: 'var(--dsw-alias-brand-primary, #4d6bfe)', danger: 'var(--dsw-alias-status-error, #c33)' }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
@@ -49,12 +49,61 @@ window.__ModuleLoader__.load({
       return { health, groups, tasks, alerts, environment, agentConfig }
     }
 
-    const effortLabel = value => ({ low: '轻度', medium: '中度', high: '高度', xhigh: '极高', max: '最高' })[value.id] ?? value.name ?? value.id
-    function ModelIdInput({ id, label, value, onChange, models, disabled, ...props }) {
-      const listed = (models ?? []).some(model => model.id === value)
-      return React.createElement('select', { id, 'aria-label': label, style: input, value, onChange, disabled: disabled || !models?.length, ...props },
-        !listed ? React.createElement('option', { value, disabled: true }, models ? `${value || '未选择'}（当前不可用）` : '正在读取模型…') : null,
-        ...(models ?? []).map(model => React.createElement('option', { key: model.id, value: model.id }, model.name || model.id)))
+    // 复用宿主登记的组件，不使用会话 inject/select；选择只更新 Agent 配置草稿。
+    function createNativeModelBridge(ctx) {
+      const listeners = new Set()
+      let catalog = { groups: [], failures: [], status: 'idle', error: null }, inflight
+      const publish = next => { catalog = next; for (const listener of listeners) listener() }
+      return {
+        component: () => ctx.slots.entriesOfSlot('conversation.input.model')[0]?.component,
+        t: ctx.locale.bind('model'),
+        snapshot: () => catalog,
+        subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+        load() {
+          if (inflight) return inflight
+          publish({ ...catalog, status: 'loading', error: null })
+          inflight = ctx.remote.session.modelCatalog().then(result => {
+            if (!result.ok) throw new Error(result.error.message)
+            publish({ groups: result.value.groups, failures: result.value.failures, status: 'ready', error: null })
+          }).catch(() => publish({ ...catalog, status: 'error', error: '模型目录读取失败，请重试。' }))
+            .finally(() => { inflight = undefined })
+          return inflight
+        },
+      }
+    }
+
+    function createPickerDirectory(current, catalog) {
+      let snapshot = { ...catalog, current, pending: null, routable: null }
+      const listeners = new Set()
+      return {
+        getSnapshot: () => snapshot,
+        subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+        update(current, catalog) {
+          snapshot = { ...catalog, current, pending: null,
+            routable: catalog.groups.some(group => group.id === current.provider && group.models.some(model => model.id === current.model)) }
+          for (const listener of listeners) listener()
+        },
+      }
+    }
+
+    function NativeModelField({ label, value, onChange, bridge, busy }) {
+      const selection = { ...value, reasoningEffort: value.reasoningEffort || undefined }
+      const [directory] = useState(() => createPickerDirectory(selection, bridge.snapshot()))
+      const latest = useRef(selection)
+      latest.current = selection
+      useEffect(() => {
+        const update = () => directory.update(latest.current, bridge.snapshot())
+        update()
+        return bridge.subscribe(update)
+      }, [bridge, directory, value.provider, value.model, value.reasoningEffort])
+      useEffect(() => { if (bridge.snapshot().status === 'idle') bridge.load() }, [bridge])
+      const Picker = bridge.component()
+      return React.createElement('div', { role: 'group', 'aria-label': label, 'data-model-field': true },
+        React.createElement('strong', { style: { fontSize: 13 } }, label),
+        Picker ? React.createElement(Picker, { locked: busy, available: true, directory, load: () => bridge.load(),
+          select: async selection => { onChange(selection); return { ok: true, value: undefined } },
+          t: bridge.t, renderSlot: (key, owner, options) => options?.fallback ?? null })
+          : React.createElement('div', { role: 'alert' }, 'DSH 原生模型选择器未就绪，请刷新页面。'))
     }
 
     const independentModelDefault = { provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'explicit', reasoningEffort: 'low' }
@@ -72,35 +121,23 @@ window.__ModuleLoader__.load({
       }, [selection.provider, selection.model])
       return { options, error }
     }
-    function IndependentModelFields({ id, label, value, change, options, error, busy, defaultEffort, help }) {
-      const efforts = options?.reasoning?.efforts ?? []
+    function IndependentModelFields({ label, value, change, options, error, busy, defaultEffort, help, bridge }) {
       const requested = value.reasoningMode === 'inherit' ? defaultEffort : value.reasoningMode === 'explicit' ? value.reasoningEffort : undefined
-      const invalid = !!requested && !efforts.some(effort => effort.id === requested)
-      return React.createElement('div', { role: 'group', style: { display: 'grid', gap: ui.space3, minWidth: 0 }, 'aria-label': `${label}配置` },
-        React.createElement('div', { 'data-model-row': true },
-          React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: `${id}-model-id` }, label),
-            React.createElement(ModelIdInput, { id: `${id}-model-id`, label, value: value.model,
-              models: options?.models, disabled: busy,
-              'aria-invalid': !!error, 'aria-describedby': `${id}-options-status ${id}-model-help`,
-              onChange: event => change(current => ({ ...current, model: event.target.value })) })),
-          React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: `${id}-reasoning` }, '推理深度'),
-            React.createElement('select', { id: `${id}-reasoning`, style: input, disabled: busy || !options,
-              'aria-invalid': invalid, 'aria-describedby': `${id}-options-status`, value: value.reasoningMode === 'explicit' ? value.reasoningEffort : value.reasoningMode,
-              onChange: event => { const next = event.target.value; change(current => ({ ...current, reasoningMode: ['inherit','model-default'].includes(next) ? next : 'explicit', reasoningEffort: ['inherit','model-default'].includes(next) ? null : next })) } },
-              React.createElement('option', { value: 'inherit' }, `跟随默认推理深度（${defaultEffort || '模型默认'}）`),
-              React.createElement('option', { value: 'model-default' }, '模型默认'),
-              ...efforts.map(effort => React.createElement('option', { key: effort.id, value: effort.id }, effortLabel(effort))),
-              value.reasoningMode === 'explicit' && !efforts.some(effort => effort.id === value.reasoningEffort)
-                ? React.createElement('option', { value: value.reasoningEffort }, `${value.reasoningEffort}（当前模型不支持）`) : null))),
-        React.createElement('div', { id: `${id}-model-help`, style: { color: colors.muted, fontSize: ui.textSm } }, help),
-        React.createElement('div', { id: `${id}-options-status`, role: error || invalid ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: error || invalid ? colors.danger : colors.muted } },
-          error || (invalid ? '当前模型不支持所选或继承的深度，请改选模型默认或支持的深度。' : options ? '推理选项来自当前模型能力；不支持的深度不会静默替换。' : '正在读取模型能力…')))
+      const invalid = !!options && !!requested && !(options?.reasoning?.efforts ?? []).some(effort => effort.id === requested)
+      return React.createElement('div', { style: { display: 'grid', gap: ui.space3 } },
+        React.createElement(NativeModelField, { label, bridge, busy, value: { provider: value.provider, model: value.model, reasoningEffort: requested },
+          onChange: selection => change(current => ({ ...current, ...selection,
+            reasoningMode: selection.reasoningEffort === undefined ? 'model-default' : 'explicit', reasoningEffort: selection.reasoningEffort ?? null })) }),
+        React.createElement('label', null, React.createElement('input', { type: 'checkbox', disabled: busy, checked: value.reasoningMode === 'inherit',
+          onChange: event => change(current => ({ ...current, reasoningMode: event.target.checked ? 'inherit' : 'model-default', reasoningEffort: null })) }), '跟随默认推理深度'),
+        React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, help),
+        error || invalid ? React.createElement('div', { role: 'alert', style: { color: colors.danger, fontSize: ui.textSm } }, error || '当前模型不支持继承或指定的深度，请重新选择。') : null)
     }
 
     function agentSaveSummary(desired, actual) {
       if (!actual) return '保存结果未知，无法回读；请恢复连接后刷新核对，未自动重试。草稿已保留。'
       const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b)
-      const modelSaved = desired.model.trim() === actual.model && (desired.reasoningEffort || '') === (actual.reasoningEffort || '')
+      const modelSaved = (desired.provider === undefined || desired.provider === actual.provider) && desired.model.trim() === actual.model && (desired.reasoningEffort || '') === (actual.reasoningEffort || '')
       const pluginSaved = equal([...new Set(desired.agentNames)], actual.agentNames) && desired.replySignature.trim() === (actual.replySignature || '')
         && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel) && equal(desired.coordinationModel, actual.coordinationModel)
         && (desired.executionBackend ?? 'dsh') === (actual.executionBackend ?? 'dsh')
@@ -116,17 +153,16 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function DingTalkDshAssistantCard() {
+    function DingTalkDshAssistantCard({ modelBridge }) {
       const [overview, setOverview] = useState()
       const [drafts, setDrafts] = useState({})
       const [agentWorkspace, setAgentWorkspace] = useState('')
       const [agentNames, setAgentNames] = useState('')
       const [replySignature, setReplySignature] = useState('')
-      const [agentModel, setAgentModel] = useState({ model: '', reasoningEffort: 'low' })
+      const [agentModel, setAgentModel] = useState({ provider: '', model: '', reasoningEffort: 'low' })
       const [taskModel, setTaskModel] = useState(independentModelDefault)
       const [coordinationModel, setCoordinationModel] = useState(independentModelDefault)
       const [executionBackend, setExecutionBackend] = useState('dsh')
-      const [defaultOptions, setDefaultOptions] = useState(null)
       const { options: taskOptions, error: taskOptionsError } = useIndependentModelOptions(taskModel)
       const { options: coordinationOptions, error: coordinationOptionsError } = useIndependentModelOptions(coordinationModel)
       const [taskFeedback, setTaskFeedback] = useState(null)
@@ -148,7 +184,7 @@ window.__ModuleLoader__.load({
       const refreshGeneration = useRef(0)
       const refresh = useCallback(async () => {
         const generation = ++refreshGeneration.current
-        try { const next = await readResidentOverview(); if (generation !== refreshGeneration.current) return; setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); if (!taskDirty.current) { setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); } setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+        try { const next = await readResidentOverview(); if (generation !== refreshGeneration.current) return; setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); if (!taskDirty.current) { setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ provider: next.agentConfig.provider, model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); } setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
         catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       }, [])
       useEffect(() => { refresh() }, [refresh])
@@ -162,15 +198,6 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => setTaskFeedback(null), 5000)
         return () => clearTimeout(timer)
       }, [taskFeedback])
-      useEffect(() => {
-        let current = true
-        setDefaultOptions(null)
-        const timer = setTimeout(() => {
-          request(`/state/task-model-options?provider=${encodeURIComponent(overview?.agentConfig?.provider ?? '')}&model=${encodeURIComponent(agentModel.model)}`)
-            .then(value => { if (current) setDefaultOptions(value) }).catch(() => { if (current) setDefaultOptions(null) })
-        }, 300)
-        return () => { current = false; clearTimeout(timer) }
-      }, [overview?.agentConfig?.provider, agentModel.model])
       const taskEfforts = taskOptions?.reasoning?.efforts ?? []
       const requestedTaskEffort = taskModel.reasoningMode === 'inherit' ? agentModel.reasoningEffort
         : taskModel.reasoningMode === 'explicit' ? taskModel.reasoningEffort : undefined
@@ -194,7 +221,7 @@ window.__ModuleLoader__.load({
           taskDirty.current = false
           setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel); setCoordinationModel(saved.coordinationModel)
           setExecutionBackend(saved.executionBackend ?? 'dsh')
-          setAgentNames((saved.agentNames ?? []).join(',')); setReplySignature(saved.replySignature ?? ''); setAgentWorkspace(saved.workspaceDir); setAgentModel({ model: saved.model, reasoningEffort: saved.reasoningEffort ?? '' }); setProxyUrl(saved.proxyUrl ?? '')
+          setAgentNames((saved.agentNames ?? []).join(',')); setReplySignature(saved.replySignature ?? ''); setAgentWorkspace(saved.workspaceDir); setAgentModel({ provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort ?? '' }); setProxyUrl(saved.proxyUrl ?? '')
           setTaskFeedback({ kind: 'success', message: 'Agent 配置已保存；执行后端仅用于新执行，已有执行及续办保持原后端。' })
         } catch (cause) {
           refreshGeneration.current++
@@ -237,7 +264,7 @@ window.__ModuleLoader__.load({
         }
       }
       const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
-      const agentConfigChanged = agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '') || executionBackend !== (overview?.agentConfig?.executionBackend ?? 'dsh')
+      const agentConfigChanged = agentModel.provider !== overview?.agentConfig?.provider || agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '') || executionBackend !== (overview?.agentConfig?.executionBackend ?? 'dsh')
 
       return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
         React.createElement('section', { style: panel },
@@ -278,19 +305,14 @@ window.__ModuleLoader__.load({
           React.createElement('strong', { style: { fontSize: 13 } }, '工作目录'),
           React.createElement('input', { 'aria-label': 'Agent 工作区目录', disabled: taskBusy, placeholder: '现有绝对目录', style: input, value: agentWorkspace, onChange: (event) => setAgentWorkspace(event.target.value) }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '群常驻会话使用此工作区；每个任务及其动态执行使用独立工作目录。'),
-          React.createElement('div', { 'data-model-row': true, style: { borderTop: `1px solid ${colors.border}`, paddingTop: 12 } },
-            React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'agent-model-id' }, '默认处理模型'),
-              React.createElement(ModelIdInput, { id: 'agent-model-id', label: 'Agent 默认模型', disabled: taskBusy, models: defaultOptions?.models, value: agentModel.model, onChange: event => setAgentModel(current => ({ ...current, model: event.target.value })) })),
-            React.createElement('div', { 'data-model-field': true }, React.createElement('label', { htmlFor: 'agent-reasoning' }, '推理深度'),
-              React.createElement('select', { id: 'agent-reasoning', disabled: taskBusy, 'aria-label': 'Agent 推理深度', style: input, value: agentModel.reasoningEffort, onChange: (event) => setAgentModel((current) => ({ ...current, reasoningEffort: event.target.value })) },
-            React.createElement('option', { value: '' }, '模型默认'), ...(defaultOptions?.reasoning?.efforts ?? []).map(value => React.createElement('option', { key: value.id, value: value.id }, effortLabel(value))),
-            agentModel.reasoningEffort && !(defaultOptions?.reasoning?.efforts ?? []).some(value => value.id === agentModel.reasoningEffort) ? React.createElement('option', { value: agentModel.reasoningEffort }, agentModel.reasoningEffort) : null))),
+          React.createElement(NativeModelField, { label: '默认处理模型', bridge: modelBridge, busy: taskBusy, value: agentModel,
+            onChange: selection => { taskDirty.current = true; setAgentModel({ ...selection, reasoningEffort: selection.reasoningEffort ?? '' }); setTaskFeedback(null) } }),
           React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
         React.createElement(IndependentModelFields, { id: 'task', label: '统筹模型', value: taskModel, change: changeTask,
-          options: taskOptions, error: taskOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
+          bridge: modelBridge, options: taskOptions, error: taskOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
           help: '仅影响任务统筹的下一轮请求；DSH 原生执行和话题仍使用默认处理模型。' }),
         React.createElement(IndependentModelFields, { id: 'coordination', label: '协调模型', value: coordinationModel, change: changeCoordination,
-          options: coordinationOptions, error: coordinationOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
+          bridge: modelBridge, options: coordinationOptions, error: coordinationOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
           help: '仅影响下一次协调规划；保存模型不会启用协调功能，也不改变运行中的规划会话。' }),
           React.createElement('label', { htmlFor: 'dingtalk-execution-backend', style: { fontSize: 13, fontWeight: 600, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '执行后端'),
           React.createElement('select', { id: 'dingtalk-execution-backend', disabled: taskBusy, style: input, value: executionBackend, 'aria-describedby': 'dingtalk-execution-backend-help', onChange: event => { taskDirty.current = true; setExecutionBackend(event.target.value); setTaskFeedback(null) } },
@@ -327,7 +349,8 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
-      ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-dsh-assistant', order: 10, label: () => '钉钉个人助理', inject: () => ({}) }, DingTalkDshAssistantCard))
+      const modelBridge = createNativeModelBridge(ctx)
+      ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({ name: 'settings.plugins.tab', id: 'dingtalk-dsh-assistant', order: 10, label: () => '钉钉个人助理', inject: () => ({ modelBridge }) }, DingTalkDshAssistantCard))
     }
 
     module.exports = { apply, inject, name, readResidentOverview, DingTalkDshAssistantCard }

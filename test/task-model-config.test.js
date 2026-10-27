@@ -84,6 +84,7 @@ test('unified save preflights both models and reports readback on independent-st
   const {facility}=memoryFacility(), store=await openResidentStore(facility)
   let current={provider:'executor',model:'sol',reasoningEffort:'low'},defaultWrites=0,residentWrites=0,defaultFailure='',residentFailure=''
   const llm={async resolveCallConfig(value){
+    if(!['executor','gateway-next','openai-codex'].includes(value.provider))throw Error('PROVIDER_NOT_FOUND')
     if(!['sol','sol-next','gpt-6-astra'].includes(value.model))throw Error('MODEL_NOT_FOUND')
     if(value.reasoningEffort&&!['low','high'].includes(value.reasoningEffort))throw Error('UNSUPPORTED_REASONING_EFFORT')
     return value
@@ -94,11 +95,11 @@ test('unified save preflights both models and reports readback on independent-st
     defaultWrites++;if(defaultFailure==='before')throw Error('PROFILE_WRITE_FAILED');current={...value};if(defaultFailure==='after')throw Error('PROFILE_ACK_LOST')
   }}}
   const runtime=await openTaskResidentRuntime(ctx,store,root);t.after(()=>runtime.close())
-  const desired={model:'sol-next',reasoningEffort:'high',agentNames:['Ada'],proxyUrl:'',replySignature:'',executionBackend:'claude-code',taskSessionModel:{provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'explicit',reasoningEffort:'low'}}
-  for(const input of [{...desired,model:'missing'},{...desired,taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'ultra'}},{...desired,proxyUrl:'invalid'},{...desired,executionBackend:'unknown'}])await assert.rejects(runtime.updateAgentConfig(input))
+  const desired={provider:'gateway-next',model:'sol-next',reasoningEffort:'high',agentNames:['Ada'],proxyUrl:'',replySignature:'',executionBackend:'claude-code',taskSessionModel:{provider:'openai-codex',model:'gpt-6-astra',reasoningMode:'explicit',reasoningEffort:'low'}}
+  for(const input of [{...desired,provider:'missing'},{...desired,provider:''},{...desired,provider:2},{...desired,model:'missing'},{...desired,taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'ultra'}},{...desired,proxyUrl:'invalid'},{...desired,executionBackend:'unknown'}])await assert.rejects(runtime.updateAgentConfig(input))
   assert.equal(defaultWrites,0);assert.equal(residentWrites,0)
   const saved=await runtime.updateAgentConfig(desired)
-  assert.equal(saved.model,'sol-next');assert.equal(saved.reasoningEffort,'high');assert.equal(saved.taskSessionModel.reasoningEffort,'low')
+  assert.equal(saved.provider,'gateway-next');assert.equal(current.provider,'gateway-next');assert.equal(saved.model,'sol-next');assert.equal(saved.reasoningEffort,'high');assert.equal(saved.taskSessionModel.reasoningEffort,'low')
   assert.equal(saved.executionBackend,'claude-code')
   const next={...desired,model:'sol',reasoningEffort:'low',agentNames:['Grace'],executionBackend:'dsh',taskSessionModel:{...desired.taskSessionModel,reasoningEffort:'high'}}
   defaultFailure='before'
